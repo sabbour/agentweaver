@@ -402,6 +402,7 @@ public sealed class CoordinatorChildObservationTests : IAsyncDisposable
         public void EnsureFinalScribe(Run coordinatorRun) { }
         public bool IsAssemblyActive(string coordinatorRunId) => false;
         public void AbandonStaleReview(CoordinatorDispatchContext context) { }
+        public void FailAssembly(CoordinatorDispatchContext context, string reason) { }
     }
 
     private sealed class TestHostApplicationLifetime : IHostApplicationLifetime

@@ -256,6 +256,35 @@ public sealed class CoordinatorReconcilerTests : IAsyncDisposable
         _assembly.Started.Should().BeEmpty("an abandoned stale review is never re-armed");
     }
 
+    [Fact]
+    public async Task Sweep_OrphanedAwaitingAssembly_ReArmsUpToCap_ThenFailsRun()
+    {
+        var coord = RunId.New().ToString();
+        await SeedCoordinatorRunAsync(coord);
+        var (planId, _) = await SeedPlanAsync(coord, new[] { (SubtaskStatus.AssembleReady, (string?)null) });
+        await SetPlanStatusAsync(planId, WorkPlanStatus.AwaitingAssembly);
+
+        var reconciler = new CoordinatorReconciler(
+            _scopeFactory, _runStore, _streamStore, new RecordingDispatch(),
+            NullLogger<CoordinatorReconciler>.Instance, configuration: null, assembly: _assembly);
+
+        // The orphaned assembly keeps coming back awaiting_assembly (each re-arm fails). It is re-armed
+        // up to the cap, then the run is terminalized instead of looping forever.
+        for (var i = 0; i < CoordinatorReconciler.MaxAssemblyReArmAttempts; i++)
+            (await reconciler.SweepAsync(default)).Should().Be(1);
+
+        _assembly.Started.Should().HaveCount(CoordinatorReconciler.MaxAssemblyReArmAttempts,
+            "the assembly is re-armed up to the cap");
+        _assembly.Failed.Should().BeEmpty("the run is not failed until the cap is exceeded");
+
+        // The next sweep exceeds the cap → terminal fail, no further re-arm.
+        (await reconciler.SweepAsync(default)).Should().Be(1);
+        _assembly.Started.Should().HaveCount(CoordinatorReconciler.MaxAssemblyReArmAttempts,
+            "no re-arm happens once the cap is exceeded");
+        _assembly.Failed.Should().ContainSingle().Which.Context.CoordinatorRunId.Should().Be(coord);
+        _assembly.Failed[0].Reason.Should().Contain("exhausted");
+    }
+
     // -----------------------------------------------------------------------
     // Harness
     // -----------------------------------------------------------------------
@@ -444,6 +473,7 @@ public sealed class CoordinatorReconcilerTests : IAsyncDisposable
     {
         public List<CoordinatorDispatchContext> Started { get; } = [];
         public List<CoordinatorDispatchContext> Abandoned { get; } = [];
+        public List<(CoordinatorDispatchContext Context, string Reason)> Failed { get; } = [];
         private readonly HashSet<string> _active = new(StringComparer.Ordinal);
 
         public void MarkActive(string coordinatorRunId) => _active.Add(coordinatorRunId);
@@ -451,6 +481,7 @@ public sealed class CoordinatorReconcilerTests : IAsyncDisposable
         public void EnsureFinalScribe(Run coordinatorRun) { }
         public bool IsAssemblyActive(string coordinatorRunId) => _active.Contains(coordinatorRunId);
         public void AbandonStaleReview(CoordinatorDispatchContext context) => Abandoned.Add(context);
+        public void FailAssembly(CoordinatorDispatchContext context, string reason) => Failed.Add((context, reason));
     }
 
     private sealed class RecordingDispatch : ICoordinatorDispatch

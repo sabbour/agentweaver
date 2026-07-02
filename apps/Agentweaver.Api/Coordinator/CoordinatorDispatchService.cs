@@ -464,7 +464,28 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
             context.CoordinatorRunId,
             string.Join(", ", terminalCounts.Select(kv => $"{kv.Key}={kv.Value}")));
 
-        await SetWorkPlanStatusAsync(workPlanId, WorkPlanStatus.AwaitingAssembly, ct).ConfigureAwait(false);
+        // Guarded hand-off (multi-replica safety): only advance dispatching -> awaiting_assembly.
+        // With replicas: 2 both pods can run the dispatch loop to completion and both reach this
+        // hand-off. An UNCONDITIONAL status write would reset a live `assembling` (already claimed by
+        // the other replica) back to `awaiting_assembly`, defeating the D4 exactly-once assembly CAS
+        // and letting BOTH pods race the git integration merge (stale-lock deletion / lock-file
+        // contention). Advancing only from `dispatching` keeps the assembly CAS the single arbiter and
+        // guarantees the status can never regress once Phase 3 has started.
+        var advanced = await TryAdvanceWorkPlanStatusAsync(
+            workPlanId, WorkPlanStatus.Dispatching, WorkPlanStatus.AwaitingAssembly, ct).ConfigureAwait(false);
+        if (!advanced)
+        {
+            var current = await ReadWorkPlanStatusAsync(workPlanId, ct).ConfigureAwait(false);
+            if (current != WorkPlanStatus.AwaitingAssembly)
+            {
+                // Another replica already owns Phase 3 (assembling / in_review / terminal). Do NOT
+                // re-emit the hand-off or re-arm assembly — that replica drives the single git merge.
+                _logger.LogInformation(
+                    "Coordinator dispatch complete for run {RunId}: Phase 3 already owned by another replica (plan status {Status}); skipping hand-off.",
+                    context.CoordinatorRunId, current ?? "(missing)");
+                return;
+            }
+        }
 
         var finalEntry = _streamStore.Get(context.CoordinatorRunId);
         if (finalEntry is not null)
@@ -1699,6 +1720,39 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         if (coordinatorPodId is not null)
             plan.CoordinatorPodId = coordinatorPodId;
         await db.SaveChangesAsync(ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Guarded (compare-and-swap) work-plan status transition: atomically flips
+    /// <paramref name="fromStatus"/> → <paramref name="toStatus"/> and returns <c>true</c> only for the
+    /// single winner. Used for the Phase 3 hand-off so a second replica can never regress a live
+    /// <c>assembling</c> plan back to <c>awaiting_assembly</c> (which would defeat the exactly-once
+    /// assembly claim and let two pods race the git integration merge).
+    /// </summary>
+    private async Task<bool> TryAdvanceWorkPlanStatusAsync(
+        int workPlanId, string fromStatus, string toStatus, CancellationToken ct)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var now = DateTimeOffset.UtcNow;
+        var rows = await db.WorkPlans
+            .Where(w => w.Id == workPlanId && w.Status == fromStatus)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(w => w.Status, toStatus)
+                .SetProperty(w => w.UpdatedAt, now), ct)
+            .ConfigureAwait(false);
+        return rows > 0;
+    }
+
+    private async Task<string?> ReadWorkPlanStatusAsync(int workPlanId, CancellationToken ct)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        return await db.WorkPlans.AsNoTracking()
+            .Where(w => w.Id == workPlanId)
+            .Select(w => w.Status)
+            .FirstOrDefaultAsync(ct)
+            .ConfigureAwait(false);
     }
 
     // -----------------------------------------------------------------------

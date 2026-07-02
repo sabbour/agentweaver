@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using System.Collections.Concurrent;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Memory;
 using Agentweaver.Domain;
@@ -58,6 +59,18 @@ public sealed class CoordinatorReconciler
     /// </summary>
     private readonly TimeSpan _reviewAbandonTimeout;
 
+    /// <summary>
+    /// Per-run count of consecutive collective-assembly re-arm attempts by THIS pod. When a re-armed
+    /// assembly keeps failing the same way (e.g. a persistent git integration error), re-arming forever
+    /// is pointless. After <see cref="MaxAssemblyReArmAttempts"/> the run is terminalized as failed with
+    /// a clear reason instead of looping. Pruned each sweep for runs no longer in an assembly-recovery
+    /// state (so a legitimate re-dispatch wave starts fresh).
+    /// </summary>
+    private readonly ConcurrentDictionary<string, int> _assemblyReArmAttempts = new(StringComparer.Ordinal);
+
+    /// <summary>Max consecutive assembly re-arms before the reconciler gives up and fails the run.</summary>
+    internal const int MaxAssemblyReArmAttempts = 3;
+
     public CoordinatorReconciler(
         IServiceScopeFactory scopeFactory,
         IRunStore runStore,
@@ -110,6 +123,21 @@ public sealed class CoordinatorReconciler
         }
 
         var reArmed = 0;
+
+        // Prune re-arm counters for runs no longer in an assembly-recovery state (progressed to a
+        // terminal state, or re-dispatched back to `dispatching`) so a legitimate re-dispatch wave
+        // starts its re-arm budget fresh rather than inheriting a stale count.
+        var assemblyRunIds = candidates
+            .Where(c => c.Status is WorkPlanStatus.AwaitingAssembly
+                                 or WorkPlanStatus.Assembling
+                                 or WorkPlanStatus.InReview
+                     && !string.IsNullOrWhiteSpace(c.CoordinatorRunId))
+            .Select(c => c.CoordinatorRunId!)
+            .ToHashSet(StringComparer.Ordinal);
+        foreach (var key in _assemblyReArmAttempts.Keys)
+            if (!assemblyRunIds.Contains(key))
+                _assemblyReArmAttempts.TryRemove(key, out _);
+
         foreach (var plan in candidates)
         {
             ct.ThrowIfCancellationRequested();
@@ -135,7 +163,7 @@ public sealed class CoordinatorReconciler
                         break;
 
                     case WorkPlanStatus.AwaitingAssembly:
-                        if (await TryReArmAssemblyAsync(plan, ct).ConfigureAwait(false))
+                        if (await TryReArmAssemblyWithCapAsync(plan, ct).ConfigureAwait(false))
                             reArmed++;
                         break;
 
@@ -155,7 +183,7 @@ public sealed class CoordinatorReconciler
                         if (IsAssemblyActive(plan))
                             continue;
                         // Truly orphaned (no active loop): re-arm so the assembly can resume review.
-                        if (await TryReArmAssemblyAsync(plan, ct).ConfigureAwait(false))
+                        if (await TryReArmAssemblyWithCapAsync(plan, ct).ConfigureAwait(false))
                             reArmed++;
                         break;
 
@@ -164,7 +192,7 @@ public sealed class CoordinatorReconciler
                         // (same infinite-loop guard). Otherwise re-arm the orphaned assembly.
                         if (IsAssemblyActive(plan))
                             continue;
-                        if (await TryReArmAssemblyAsync(plan, ct).ConfigureAwait(false))
+                        if (await TryReArmAssemblyWithCapAsync(plan, ct).ConfigureAwait(false))
                             reArmed++;
                         break;
                 }
@@ -192,6 +220,37 @@ public sealed class CoordinatorReconciler
         !string.IsNullOrWhiteSpace(plan.CoordinatorRunId)
         && _assembly is not null
         && _assembly.IsAssemblyActive(plan.CoordinatorRunId);
+
+    /// <summary>
+    /// Re-arms an orphaned collective assembly, but caps consecutive re-arms per run at
+    /// <see cref="MaxAssemblyReArmAttempts"/>. When the cap is exceeded the assembly is clearly failing
+    /// every re-arm (e.g. a persistent git integration error), so the run is terminalized as failed via
+    /// <see cref="ICoordinatorAssembly.FailAssembly"/> instead of looping forever. Returns true when a
+    /// recovery action (re-arm OR terminal fail) was taken this sweep.
+    /// </summary>
+    private async Task<bool> TryReArmAssemblyWithCapAsync(PlanCandidate plan, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(plan.CoordinatorRunId) || _assembly is null)
+            return await TryReArmAssemblyAsync(plan, ct).ConfigureAwait(false);
+
+        var attempts = _assemblyReArmAttempts.AddOrUpdate(plan.CoordinatorRunId, 1, (_, n) => n + 1);
+        if (attempts > MaxAssemblyReArmAttempts)
+        {
+            var context = await TryBuildContextAsync(plan, ct).ConfigureAwait(false);
+            if (context is not null)
+            {
+                var reason = $"assembly_rearm_exhausted after {MaxAssemblyReArmAttempts} attempts";
+                _logger.LogError(
+                    "Coordinator reconciler: assembly re-arm exhausted for run {RunId} (status {Status}) after {Max} attempts; marking run failed",
+                    context.CoordinatorRunId, plan.Status, MaxAssemblyReArmAttempts);
+                _assembly.FailAssembly(context, reason);
+            }
+            _assemblyReArmAttempts.TryRemove(plan.CoordinatorRunId, out _);
+            return context is not null;
+        }
+
+        return await TryReArmAssemblyAsync(plan, ct).ConfigureAwait(false);
+    }
 
     /// <summary>
     /// Auto-resolves a run left in <see cref="WorkPlanStatus.InReview"/> with no operator action for

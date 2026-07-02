@@ -46,6 +46,15 @@ public interface ICoordinatorAssembly
     /// terminal path as the in-process review timeout.
     /// </summary>
     void AbandonStaleReview(CoordinatorDispatchContext context);
+
+    /// <summary>
+    /// Hard stop (reconciler-driven): terminalizes a run whose collective assembly could not be
+    /// recovered after repeated re-arm attempts (e.g. a persistent git integration failure that fails
+    /// every re-arm). Fire-and-forget and idempotent — marks the plan <c>assembly_failed</c> and the
+    /// coordinator run failed with <paramref name="reason"/>, then closes the stream. Prevents the
+    /// reconciler from re-arming a doomed assembly forever.
+    /// </summary>
+    void FailAssembly(CoordinatorDispatchContext context, string reason);
 }
 
 /// <summary>
@@ -299,6 +308,73 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
             "Collective assembly: run {RunId} parked in in_review with no operator action past the review timeout; abandoning",
             context.CoordinatorRunId);
         await AbandonReviewTerminalAsync(context, workPlanId, edges, ct).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
+    public void FailAssembly(CoordinatorDispatchContext context, string reason)
+    {
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await FailAssemblyAsync(context, reason, _appStopping).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (_appStopping.IsCancellationRequested)
+            {
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex,
+                    "Collective assembly: failed to terminalize exhausted assembly for run {RunId}",
+                    context.CoordinatorRunId);
+            }
+        }, _appStopping);
+    }
+
+    /// <summary>
+    /// Terminalizes a run whose assembly could not be recovered (reconciler re-arm cap reached). Skips
+    /// if the plan already reached a terminal/parked state (idempotent). Marks the plan failed, emits
+    /// the assembly-failed event + graph/topology, terminalizes the coordinator run, runs the scribe,
+    /// and completes the stream.
+    /// </summary>
+    internal async Task FailAssemblyAsync(CoordinatorDispatchContext context, string reason, CancellationToken ct)
+    {
+        var plan = await LoadPlanAsync(context.CoordinatorRunId, ct).ConfigureAwait(false);
+        if (plan is null)
+            return;
+
+        var (workPlanId, planStatus, _, edges) = plan.Value;
+        if (planStatus is WorkPlanStatus.Complete
+            or WorkPlanStatus.AssemblyFailed
+            or WorkPlanStatus.AssemblyDeclined)
+            return; // already terminal — nothing to do.
+
+        _logger.LogError(
+            "Collective assembly: run {RunId} could not be recovered ({Reason}); terminalizing as failed",
+            context.CoordinatorRunId, reason);
+
+        await _assemblyStore.SetStatusAndStageAsync(
+            workPlanId, WorkPlanStatus.AssemblyFailed, null, ct).ConfigureAwait(false);
+        Emit(context.CoordinatorRunId, EventTypes.CoordinatorAssemblyFailed, new
+        {
+            workPlanId,
+            reason,
+            phase = "reconciler_rearm",
+        });
+        await EmitGraphAsync(context.CoordinatorRunId, workPlanId, ct).ConfigureAwait(false);
+        await EmitTopologyAsync(context.CoordinatorRunId, workPlanId, WorkPlanStatus.AssemblyFailed, edges, ct)
+            .ConfigureAwait(false);
+        await TerminalizeCoordinatorRunAsync(
+            context.CoordinatorRunId, RunStatus.Failed, reason, ct).ConfigureAwait(false);
+        await CoordinatorAssemblyReviewPersistence.ClearAsync(_scopeFactory, context.CoordinatorRunId, ct)
+            .ConfigureAwait(false);
+        await RunCoordinatorScribeAsync(
+            context,
+            workPlanId,
+            terminalStatus: RunStatus.Failed.ToApiString(),
+            mergeResult: reason,
+            ct).ConfigureAwait(false);
+        await PersistAndCompleteStreamAsync(context.CoordinatorRunId).ConfigureAwait(false);
     }
 
     /// <summary>

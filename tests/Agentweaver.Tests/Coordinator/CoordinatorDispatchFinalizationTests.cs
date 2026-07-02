@@ -93,6 +93,42 @@ public sealed class CoordinatorDispatchFinalizationTests : IDisposable
         entry.IsCompleted.Should().BeFalse("the assembly pipeline now owns closing the coordinator stream");
     }
 
+    [Fact]
+    public async Task FinalizeDispatch_PlanAlreadyAssembling_DoesNotResetStatus_OrReHandOff()
+    {
+        // Multi-replica race: another pod already claimed Phase 3 (plan is `assembling`). This pod's
+        // finalize must NOT regress the status back to awaiting_assembly (which would defeat the D4
+        // exactly-once assembly CAS and let two pods race the git integration merge) and must NOT
+        // re-trigger the hand-off.
+        const string coordinatorRunId = "coord-final-race";
+        var (workPlanId, subtaskIds) = await SeedPlanAsync(coordinatorRunId);
+        _streamStore.Create(coordinatorRunId, "alice");
+
+        await using (var scope = _provider.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var plan = await db.WorkPlans.FirstAsync(w => w.Id == workPlanId);
+            plan.Status = WorkPlanStatus.Assembling; // the other replica already advanced Phase 3
+            await db.SaveChangesAsync();
+        }
+
+        var statusById = subtaskIds.ToDictionary(id => id, _ => SubtaskStatus.AssembleReady);
+        var context = new CoordinatorDispatchContext(coordinatorRunId, "repo", "main", "alice", null);
+
+        await _sut.FinalizeDispatchAsync(
+            context, workPlanId, statusById, edges: [], new CoordinatorDispatchService.SeqCounter(), default);
+
+        await using (var scope = _provider.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var plan = await db.WorkPlans.AsNoTracking().FirstAsync(w => w.Id == workPlanId);
+            plan.Status.Should().Be(WorkPlanStatus.Assembling,
+                "a live assembling plan must never be regressed to awaiting_assembly by a second replica");
+        }
+
+        _assembly.Started.Should().BeEmpty("the hand-off is skipped when another replica already owns Phase 3");
+    }
+
     private sealed class RecordingAssembly : ICoordinatorAssembly
     {
         public List<CoordinatorDispatchContext> Started { get; } = [];
@@ -100,6 +136,7 @@ public sealed class CoordinatorDispatchFinalizationTests : IDisposable
         public void EnsureFinalScribe(Run coordinatorRun) { }
         public bool IsAssemblyActive(string coordinatorRunId) => false;
         public void AbandonStaleReview(CoordinatorDispatchContext context) { }
+        public void FailAssembly(CoordinatorDispatchContext context, string reason) { }
     }
 
     private async Task<(int WorkPlanId, List<int> SubtaskIds)> SeedPlanAsync(string coordinatorRunId)

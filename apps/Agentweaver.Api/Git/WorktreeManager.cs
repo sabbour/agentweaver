@@ -26,6 +26,13 @@ public sealed class WorktreeManager
     private readonly ILogger<WorktreeManager> _logger;
     private readonly IServiceScopeFactory? _scopeFactory;
 
+    /// <summary>How old a git lock file must be before it is considered stale (left by a crashed
+    /// process) and safe to delete. A lock held by a CONCURRENTLY-RUNNING git operation is only a few
+    /// milliseconds old, so this threshold prevents one replica from deleting the lock another replica
+    /// is actively holding (the multi-pod integration-merge race). Configurable via
+    /// <c>Coordinator:StaleLockThresholdSeconds</c> (default 15 s).</summary>
+    private readonly TimeSpan _staleLockThreshold;
+
     // Short-lived cache for committed diff results (5 s TTL).
     // Committed changes only vary when the agent pushes a new commit, so caching
     // eliminates redundant LibGit2Sharp Patch comparisons during the 3-second poll.
@@ -55,6 +62,9 @@ public sealed class WorktreeManager
             string.IsNullOrWhiteSpace(authorName) ? "Agentweaver" : authorName,
             string.IsNullOrWhiteSpace(authorEmail) ? "agentweaver@localhost" : authorEmail,
             DateTimeOffset.UtcNow);
+
+        var staleLockSecs = configuration.GetValue("Coordinator:StaleLockThresholdSeconds", 15.0);
+        _staleLockThreshold = TimeSpan.FromSeconds(Math.Max(0.0, staleLockSecs));
     }
 
     public static string BranchNameFor(RunId runId) => $"agentweaver/{runId}";
@@ -501,29 +511,55 @@ public sealed class WorktreeManager
             // Per-ref lock file: .git/refs/heads/<branch>.lock
             var refRelPath = integrationBranch.Replace('/', Path.DirectorySeparatorChar);
             var refLockPath = Path.Combine(gitDir, "refs", "heads", refRelPath) + ".lock";
-            if (File.Exists(refLockPath))
-            {
-                File.Delete(refLockPath);
+            if (TryDeleteStaleLock(refLockPath))
                 _logger.LogInformation(
                     "WorktreeManager: deleted stale ref lock file for integration branch {Branch}",
                     integrationBranch);
-            }
 
             // Packed-refs lock (shared across all refs): .git/packed-refs.lock
             var packedRefsLock = Path.Combine(gitDir, "packed-refs.lock");
-            if (File.Exists(packedRefsLock))
-            {
-                File.Delete(packedRefsLock);
+            if (TryDeleteStaleLock(packedRefsLock))
                 _logger.LogInformation(
                     "WorktreeManager: deleted stale packed-refs lock file in repository {Path}",
                     repositoryPath);
-            }
         }
         catch (Exception ex)
         {
             _logger.LogWarning(ex,
                 "WorktreeManager: failed to clean stale git lock files for integration branch {Branch} in {Path} (best-effort)",
                 integrationBranch, repositoryPath);
+        }
+    }
+
+    /// <summary>
+    /// Deletes <paramref name="lockPath"/> ONLY if it exists and its last-write time is older than
+    /// <see cref="_staleLockThreshold"/> (i.e. it is genuinely stale, not an actively-held lock).
+    /// Returns true when a file was deleted. Never throws.
+    /// </summary>
+    private bool TryDeleteStaleLock(string lockPath)
+    {
+        try
+        {
+            if (!File.Exists(lockPath))
+                return false;
+
+            var age = DateTime.UtcNow - File.GetLastWriteTimeUtc(lockPath);
+            if (age < _staleLockThreshold)
+            {
+                _logger.LogDebug(
+                    "WorktreeManager: git lock file {Path} is only {AgeMs}ms old; not deleting (likely held by an active operation)",
+                    lockPath, (int)age.TotalMilliseconds);
+                return false;
+            }
+
+            File.Delete(lockPath);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "WorktreeManager: failed to delete git lock file {Path} (best-effort)", lockPath);
+            return false;
         }
     }
 

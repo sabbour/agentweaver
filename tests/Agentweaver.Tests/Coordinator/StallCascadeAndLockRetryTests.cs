@@ -99,6 +99,9 @@ public sealed class StallCascadeAndLockRetryTests : IAsyncDisposable
         var refLockPath = Path.Combine(gitDir, "refs", "heads", refRelPath) + ".lock";
         Directory.CreateDirectory(Path.GetDirectoryName(refLockPath)!);
         File.WriteAllText(refLockPath, "stale lock");
+        // Backdate so it is genuinely stale (older than the stale-lock threshold), not an
+        // actively-held lock that a concurrent replica's git operation might still need.
+        File.SetLastWriteTimeUtc(refLockPath, DateTime.UtcNow.AddMinutes(-5));
 
         // TryCleanIntegrationLockFiles must delete the lock file.
         manager.TryCleanIntegrationLockFiles(repoPath, integrationBranch);
@@ -125,11 +128,37 @@ public sealed class StallCascadeAndLockRetryTests : IAsyncDisposable
         var gitDir = Path.Combine(repoPath, ".git");
         var packedRefsLock = Path.Combine(gitDir, "packed-refs.lock");
         File.WriteAllText(packedRefsLock, "stale packed-refs lock");
+        // Backdate so it is genuinely stale (older than the stale-lock threshold).
+        File.SetLastWriteTimeUtc(packedRefsLock, DateTime.UtcNow.AddMinutes(-5));
 
         manager.TryCleanIntegrationLockFiles(repoPath, "agentweaver/integration/any-run");
 
         File.Exists(packedRefsLock).Should().BeFalse(
             "TryCleanIntegrationLockFiles must delete a stale packed-refs.lock");
+    }
+
+    [Fact]
+    public void TryCleanIntegrationLockFiles_DoesNotDeleteFreshLock_HeldByActiveOperation()
+    {
+        // Multi-replica safety: a freshly-created lock file is likely held by another replica's
+        // in-flight git operation. Deleting it caused the integration-merge race, so a lock younger
+        // than the stale threshold must be LEFT ALONE.
+        var repoPath = CreateTempGitRepo();
+        var manager = new WorktreeManager(
+            new ConfigurationBuilder().Build(), NullLogger<WorktreeManager>.Instance);
+
+        var gitDir = Path.Combine(repoPath, ".git");
+        var integrationBranch = "agentweaver/integration/live-run";
+        var refRelPath = integrationBranch.Replace('/', Path.DirectorySeparatorChar);
+        var refLockPath = Path.Combine(gitDir, "refs", "heads", refRelPath) + ".lock";
+        Directory.CreateDirectory(Path.GetDirectoryName(refLockPath)!);
+        File.WriteAllText(refLockPath, "fresh lock held by another replica");
+        // Fresh (just written) → within the stale threshold.
+
+        manager.TryCleanIntegrationLockFiles(repoPath, integrationBranch);
+
+        File.Exists(refLockPath).Should().BeTrue(
+            "a fresh lock file (likely actively held) must NOT be deleted");
     }
 
     // -----------------------------------------------------------------------
@@ -539,6 +568,7 @@ public sealed class StallCascadeAndLockRetryTests : IAsyncDisposable
         public void EnsureFinalScribe(Run coordinatorRun) { }
         public bool IsAssemblyActive(string coordinatorRunId) => false;
         public void AbandonStaleReview(CoordinatorDispatchContext context) { }
+        public void FailAssembly(CoordinatorDispatchContext context, string reason) { }
     }
 
     private sealed class TestHostApplicationLifetime : IHostApplicationLifetime

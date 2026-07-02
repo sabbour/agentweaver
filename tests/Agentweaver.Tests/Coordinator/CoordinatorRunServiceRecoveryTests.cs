@@ -287,6 +287,7 @@ public sealed class CoordinatorRunServiceRecoveryTests : IAsyncDisposable
         public void EnsureFinalScribe(Run coordinatorRun) { }
         public bool IsAssemblyActive(string coordinatorRunId) => false;
         public void AbandonStaleReview(CoordinatorDispatchContext context) { }
+        public void FailAssembly(CoordinatorDispatchContext context, string reason) { }
     }
 
     private sealed class ThrowingWorktreeOps : IWorktreeOperations
