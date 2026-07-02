@@ -140,12 +140,12 @@ public sealed class AppInsightsMetricsService
     {
         var query =
             $"""
-            customMetrics
-            | where name in ("agentweaver.run.created", "agentweaver.runs.created", "agentweaver.run.completed", "agentweaver.runs.completed")
-            | where timestamp between (datetime({from.UtcDateTime:O}) .. datetime({to.UtcDateTime:O}))
-            | where tostring(customDimensions["project.id"]) == "{EscapeKusto(projectId)}"
-            | summarize total = sum(value) by bin(timestamp, 1d), name
-            | order by timestamp asc
+            AppMetrics
+            | where Name in ("agentweaver.run.created", "agentweaver.runs.created", "agentweaver.run.completed", "agentweaver.runs.completed")
+            | where TimeGenerated between (datetime({from.UtcDateTime:O}) .. datetime({to.UtcDateTime:O}))
+            | where tostring(Properties["project.id"]) == "{EscapeKusto(projectId)}"
+            | summarize total = sum(Sum) by bin(TimeGenerated, 1d), Name
+            | order by TimeGenerated asc
             """;
 
         var result = await QueryAsync(workspaceId, query, from, to, ct).ConfigureAwait(false);
@@ -189,24 +189,24 @@ public sealed class AppInsightsMetricsService
     {
         var query =
             $"""
-            let leaderboard = dependencies
-            | where isnotempty(customDimensions["gen_ai.agent.name"])
-            | where timestamp between (datetime({from.UtcDateTime:O}) .. datetime({to.UtcDateTime:O}))
-            | where tostring(customDimensions["project.id"]) == "{EscapeKusto(projectId)}"
+            let leaderboard = AppDependencies
+            | where isnotempty(Properties["gen_ai.agent.name"])
+            | where TimeGenerated between (datetime({from.UtcDateTime:O}) .. datetime({to.UtcDateTime:O}))
+            | where tostring(Properties["project.id"]) == "{EscapeKusto(projectId)}"
             | summarize
                 runs_total = count(),
-                runs_this_week = countif(timestamp > ago(7d)),
-                success_count = countif(success == true),
-                avg_duration_ms = avg(toreal(duration / 1ms))
-              by agent_name = tostring(customDimensions["gen_ai.agent.name"]),
-                 role = tostring(customDimensions["gen_ai.agent.description"]);
-            let costs = customMetrics
-            | where name == "agentweaver.token.usage"
-            | where timestamp between (datetime({from.UtcDateTime:O}) .. datetime({to.UtcDateTime:O}))
-            | where tostring(customDimensions["project.id"]) == "{EscapeKusto(projectId)}"
-            | summarize cost_aic = sum(value) / 1000000000.0 by agent_name = coalesce(
-                tostring(customDimensions["agent_name"]),
-                tostring(customDimensions["gen_ai.agent.name"]),
+                runs_this_week = countif(TimeGenerated > ago(7d)),
+                success_count = countif(Success == true),
+                avg_duration_ms = avg(toreal(DurationMs))
+              by agent_name = tostring(Properties["gen_ai.agent.name"]),
+                 role = tostring(Properties["gen_ai.agent.description"]);
+            let costs = AppMetrics
+            | where Name == "agentweaver.token.usage"
+            | where TimeGenerated between (datetime({from.UtcDateTime:O}) .. datetime({to.UtcDateTime:O}))
+            | where tostring(Properties["project.id"]) == "{EscapeKusto(projectId)}"
+            | summarize cost_aic = sum(Sum) / 1000000000.0 by agent_name = coalesce(
+                tostring(Properties["agent_name"]),
+                tostring(Properties["gen_ai.agent.name"]),
                 "unknown");
             leaderboard
             | join kind=leftouter costs on agent_name
@@ -242,12 +242,12 @@ public sealed class AppInsightsMetricsService
     {
         var query =
             $"""
-            customMetrics
-            | where name in ("agentweaver.run.created", "agentweaver.runs.created")
-            | where timestamp between (datetime({from.UtcDateTime:O}) .. datetime({to.UtcDateTime:O}))
-            | where tostring(customDimensions["project.id"]) == "{EscapeKusto(projectId)}"
-            | summarize total = sum(value) by bin(timestamp, 1d)
-            | order by timestamp asc
+            AppMetrics
+            | where Name in ("agentweaver.run.created", "agentweaver.runs.created")
+            | where TimeGenerated between (datetime({from.UtcDateTime:O}) .. datetime({to.UtcDateTime:O}))
+            | where tostring(Properties["project.id"]) == "{EscapeKusto(projectId)}"
+            | summarize total = sum(Sum) by bin(TimeGenerated, 1d)
+            | order by TimeGenerated asc
             """;
 
         var result = await QueryAsync(workspaceId, query, from, to, ct).ConfigureAwait(false);
@@ -281,17 +281,17 @@ public sealed class AppInsightsMetricsService
     {
         var query =
             $"""
-            customMetrics
-            | where name == "agentweaver.token.usage"
-            | where timestamp between (datetime({from.UtcDateTime:O}) .. datetime({to.UtcDateTime:O}))
-            | where tostring(customDimensions["project.id"]) == "{EscapeKusto(projectId)}"
+            AppMetrics
+            | where Name == "agentweaver.token.usage"
+            | where TimeGenerated between (datetime({from.UtcDateTime:O}) .. datetime({to.UtcDateTime:O}))
+            | where tostring(Properties["project.id"]) == "{EscapeKusto(projectId)}"
             | extend model_name = coalesce(
-                tostring(customDimensions["model"]),
-                tostring(customDimensions["model_id"]),
-                tostring(customDimensions["gen_ai.request.model"]),
-                tostring(customDimensions["gen_ai.response.model"]),
+                tostring(Properties["model"]),
+                tostring(Properties["model_id"]),
+                tostring(Properties["gen_ai.request.model"]),
+                tostring(Properties["gen_ai.response.model"]),
                 "unknown")
-            | summarize invocation_count = count(), total_nano_aiu = sum(value) by model_name
+            | summarize invocation_count = count(), total_nano_aiu = sum(Sum) by model_name
             | order by total_nano_aiu desc, model_name asc
             """;
 
@@ -315,18 +315,18 @@ public sealed class AppInsightsMetricsService
     {
         var query =
             $"""
-            dependencies
-            | where timestamp between (datetime({from.UtcDateTime:O}) .. datetime({to.UtcDateTime:O}))
-            | where tostring(customDimensions["project.id"]) == "{EscapeKusto(projectId)}"
+            AppDependencies
+            | where TimeGenerated between (datetime({from.UtcDateTime:O}) .. datetime({to.UtcDateTime:O}))
+            | where tostring(Properties["project.id"]) == "{EscapeKusto(projectId)}"
             | extend model_name = coalesce(
-                tostring(customDimensions["model"]),
-                tostring(customDimensions["model_id"]),
-                tostring(customDimensions["gen_ai.request.model"]),
-                tostring(customDimensions["gen_ai.response.model"]),
-                tostring(target),
+                tostring(Properties["model"]),
+                tostring(Properties["model_id"]),
+                tostring(Properties["gen_ai.request.model"]),
+                tostring(Properties["gen_ai.response.model"]),
+                tostring(Target),
                 "unknown")
             | where isnotempty(model_name)
-            | summarize p50_ms = percentile(toreal(duration / 1ms), 50), p95_ms = percentile(toreal(duration / 1ms), 95) by model_name
+            | summarize p50_ms = percentile(toreal(DurationMs), 50), p95_ms = percentile(toreal(DurationMs), 95) by model_name
             | order by model_name asc
             """;
 
@@ -350,21 +350,21 @@ public sealed class AppInsightsMetricsService
     {
         var query =
             $"""
-            dependencies
-            | where timestamp between (datetime({from.UtcDateTime:O}) .. datetime({to.UtcDateTime:O}))
-            | where tostring(customDimensions["project.id"]) == "{EscapeKusto(projectId)}"
+            AppDependencies
+            | where TimeGenerated between (datetime({from.UtcDateTime:O}) .. datetime({to.UtcDateTime:O}))
+            | where tostring(Properties["project.id"]) == "{EscapeKusto(projectId)}"
             | extend model_name = coalesce(
-                tostring(customDimensions["model"]),
-                tostring(customDimensions["model_id"]),
-                tostring(customDimensions["gen_ai.request.model"]),
-                tostring(customDimensions["gen_ai.response.model"]),
-                tostring(target),
+                tostring(Properties["model"]),
+                tostring(Properties["model_id"]),
+                tostring(Properties["gen_ai.request.model"]),
+                tostring(Properties["gen_ai.response.model"]),
+                tostring(Target),
                 "unknown")
             | extend ttft_ms = coalesce(
-                todouble(customMeasurements["time_to_first_token_ms"]),
-                todouble(customMeasurements["ttft_ms"]),
-                todouble(customMeasurements["gen_ai.response.ttft_ms"]),
-                todouble(customMeasurements["gen_ai.server.time_to_first_token_ms"]))
+                todouble(Measurements["time_to_first_token_ms"]),
+                todouble(Measurements["ttft_ms"]),
+                todouble(Measurements["gen_ai.response.ttft_ms"]),
+                todouble(Measurements["gen_ai.server.time_to_first_token_ms"]))
             | where isnotempty(model_name) and isnotnull(ttft_ms) and ttft_ms > 0
             | summarize p50_ms = percentile(ttft_ms, 50), p95_ms = percentile(ttft_ms, 95) by model_name
             | order by model_name asc
@@ -390,15 +390,15 @@ public sealed class AppInsightsMetricsService
     {
         var query =
             $"""
-            customMetrics
-            | where name == "agentweaver.token.usage"
-            | where timestamp between (datetime({from.UtcDateTime:O}) .. datetime({to.UtcDateTime:O}))
-            | where tostring(customDimensions["project.id"]) == "{EscapeKusto(projectId)}"
+            AppMetrics
+            | where Name == "agentweaver.token.usage"
+            | where TimeGenerated between (datetime({from.UtcDateTime:O}) .. datetime({to.UtcDateTime:O}))
+            | where tostring(Properties["project.id"]) == "{EscapeKusto(projectId)}"
             | extend agent_name = coalesce(
-                tostring(customDimensions["agent_name"]),
-                tostring(customDimensions["gen_ai.agent.name"]),
+                tostring(Properties["agent_name"]),
+                tostring(Properties["gen_ai.agent.name"]),
                 "unknown")
-            | summarize invocation_count = count(), total_nano_aiu = sum(value) by agent_name
+            | summarize invocation_count = count(), total_nano_aiu = sum(Sum) by agent_name
             | order by total_nano_aiu desc, agent_name asc
             """;
 
@@ -424,24 +424,24 @@ public sealed class AppInsightsMetricsService
         var timeFrom = timeTo.AddDays(-30);
         var projectFilter = string.IsNullOrWhiteSpace(projectId)
             ? string.Empty
-            : $"| where tostring(customDimensions[\"project.id\"]) == \"{EscapeKusto(projectId)}\"";
+            : $"| where tostring(Properties[\"project.id\"]) == \"{EscapeKusto(projectId)}\"";
         var query =
             $"""
-            customMetrics
-            | where name == "agentweaver.token.usage"
-            | where timestamp between (datetime({timeFrom.UtcDateTime:O}) .. datetime({timeTo.UtcDateTime:O}))
+            AppMetrics
+            | where Name == "agentweaver.token.usage"
+            | where TimeGenerated between (datetime({timeFrom.UtcDateTime:O}) .. datetime({timeTo.UtcDateTime:O}))
             {projectFilter}
             | where
-                tostring(customDimensions["run_id"]) == "{EscapeKusto(runId)}"
-                or tostring(customDimensions["runId"]) == "{EscapeKusto(runId)}"
-                or tostring(customDimensions["run.id"]) == "{EscapeKusto(runId)}"
-                or tostring(customDimensions["parent_run_id"]) == "{EscapeKusto(runId)}"
-                or tostring(customDimensions["parentRunId"]) == "{EscapeKusto(runId)}"
+                tostring(Properties["run_id"]) == "{EscapeKusto(runId)}"
+                or tostring(Properties["runId"]) == "{EscapeKusto(runId)}"
+                or tostring(Properties["run.id"]) == "{EscapeKusto(runId)}"
+                or tostring(Properties["parent_run_id"]) == "{EscapeKusto(runId)}"
+                or tostring(Properties["parentRunId"]) == "{EscapeKusto(runId)}"
             | extend agent_name = coalesce(
-                tostring(customDimensions["agent_name"]),
-                tostring(customDimensions["gen_ai.agent.name"]),
+                tostring(Properties["agent_name"]),
+                tostring(Properties["gen_ai.agent.name"]),
                 "unknown")
-            | summarize invocation_count = count(), total_nano_aiu = sum(value) by agent_name
+            | summarize invocation_count = count(), total_nano_aiu = sum(Sum) by agent_name
             | order by total_nano_aiu desc, agent_name asc
             """;
 
@@ -465,36 +465,36 @@ public sealed class AppInsightsMetricsService
         var timeTo = DateTimeOffset.UtcNow;
         var timeFrom = timeTo.AddDays(-7);
         var escapedRunId = EscapeKusto(runId);
-        var runIdPredicate = BuildRunIdDimensionPredicate(runId, "customDimensions");
+        var runIdPredicate = BuildRunIdDimensionPredicate(runId, "Properties");
         var query =
             $"""
             let run_operations = materialize(
-                traces
-                | where timestamp > ago(7d)
-                | where {runIdPredicate} or message contains "{escapedRunId}"
-                | project operation_id = tostring(operation_Id)
+                AppTraces
+                | where TimeGenerated > ago(7d)
+                | where {runIdPredicate} or Message contains "{escapedRunId}"
+                | project operation_id = tostring(OperationId)
                 | where isnotempty(operation_id)
             );
             let correlated_ops = run_operations | distinct operation_id;
             union isfuzzy=true
-                (traces
-                 | where timestamp > ago(7d)
+                (AppTraces
+                 | where TimeGenerated > ago(7d)
                  | where {runIdPredicate}
-                     or message contains "{escapedRunId}"
-                     or operation_Id in (correlated_ops)
-                 | project id = tostring(itemId), name = message, timestamp, duration = totimespan(0), success = tobool(1), resultCode = tostring(""), operation_id = tostring(operation_Id), parent_operation_id = tostring(operation_ParentId), customDimensions),
-                (dependencies
-                 | where timestamp > ago(7d)
+                    or Message contains "{escapedRunId}"
+                    or OperationId in (correlated_ops)
+                 | project id = tostring(Id), name = Message, timestamp = TimeGenerated, duration = todouble(0), success = tobool(1), resultCode = tostring(""), operation_id = tostring(OperationId), parent_operation_id = tostring(ParentId), customDimensions = Properties),
+                (AppDependencies
+                 | where TimeGenerated > ago(7d)
                  | where {runIdPredicate}
-                     or operation_Id in (correlated_ops)
-                     or operation_ParentId in (correlated_ops)
-                 | project id, name, timestamp, duration, success, resultCode, operation_id = tostring(operation_Id), parent_operation_id = tostring(operation_ParentId), customDimensions),
-                (requests
-                 | where timestamp > ago(7d)
+                    or OperationId in (correlated_ops)
+                    or ParentId in (correlated_ops)
+                 | project id = tostring(Id), name = Name, timestamp = TimeGenerated, duration = DurationMs, success = Success, resultCode = ResultCode, operation_id = tostring(OperationId), parent_operation_id = tostring(ParentId), customDimensions = Properties),
+                (AppRequests
+                 | where TimeGenerated > ago(7d)
                  | where {runIdPredicate}
-                     or operation_Id in (correlated_ops)
-                     or operation_ParentId in (correlated_ops)
-                 | project id, name, timestamp, duration, success, resultCode, operation_id = tostring(operation_Id), parent_operation_id = tostring(operation_ParentId), customDimensions)
+                    or OperationId in (correlated_ops)
+                    or ParentId in (correlated_ops)
+                 | project id = tostring(Id), name = Name, timestamp = TimeGenerated, duration = DurationMs, success = Success, resultCode = ResultCode, operation_id = tostring(OperationId), parent_operation_id = tostring(ParentId), customDimensions = Properties)
             | project
                 id,
                 name,
