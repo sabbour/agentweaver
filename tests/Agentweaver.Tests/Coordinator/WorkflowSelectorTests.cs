@@ -206,6 +206,51 @@ public sealed class WorkflowSelectorTests
         (await Selector(byName).SelectAsync(context)).Selected.Should().BeSameAs(bug);
     }
 
+    [Fact]
+    public async Task MultiWorkflow_AcceptsBareTopLevelJsonString()
+    {
+        // The model answers with a bare top-level JSON string instead of an object.
+        var model = new FakeModel("\"bug-fix\"");
+        var def = Workflow("default", "Default", "The general-purpose pipeline.");
+        var bug = Workflow("bug-fix", "Bug Fix", "Fast remediation of a specific defect.");
+        var context = new WorkflowSelectionContext("p1", "Fix it", ["Implementer"], [def, bug]);
+
+        var result = await Selector(model).SelectAsync(context);
+
+        model.Calls.Should().Be(1);
+        result.Selected.Should().BeSameAs(bug);
+        result.WasAutoSelected.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task MultiWorkflow_AcceptsFencedTopLevelString()
+    {
+        var model = new FakeModel("```json\n\"bug-fix\"\n```");
+        var def = Workflow("default", "Default", "The general-purpose pipeline.");
+        var bug = Workflow("bug-fix", "Bug Fix", "Fast remediation of a specific defect.");
+        var context = new WorkflowSelectionContext("p1", "Fix it", ["Implementer"], [def, bug]);
+
+        var result = await Selector(model).SelectAsync(context);
+
+        model.Calls.Should().Be(1);
+        result.Selected.Should().BeSameAs(bug);
+    }
+
+    [Fact]
+    public async Task MultiWorkflow_NeverFallsBackToCodeReviewWorkflow()
+    {
+        // A stale code-review definition lingers first in the list; a parse failure must NOT select it.
+        var model = new FakeModel("no json here at all");
+        var codeReview = Workflow("code-review", "Code Review", "Review-only pipeline.");
+        var def = Workflow("default", "Default", "The general-purpose pipeline.");
+        var context = new WorkflowSelectionContext("p1", "Build a thing", ["Implementer"], [codeReview, def]);
+
+        var result = await Selector(model).SelectAsync(context);
+
+        result.Selected.Should().BeSameAs(def);
+        result.Selected.Id.Should().NotBe("code-review");
+    }
+
     [Theory]
     [InlineData("use bug-fix", "bug-fix")]
     [InlineData("  USE  software-delivery  ", "software-delivery")]

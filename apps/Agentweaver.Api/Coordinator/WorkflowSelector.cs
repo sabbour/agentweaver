@@ -135,9 +135,11 @@ public sealed class WorkflowSelector : IWorkflowSelector
                 selectedId, context.ProjectId, attempt, MaxAttempts);
         }
 
+        // Structured fallback log: the parse_failure property makes silent-wrong-workflow
+        // fallbacks queryable in AppInsights (customEvents/traces where parse_failure == true).
         _logger.LogWarning(
-            "Workflow selection could not obtain a usable choice for project {ProjectId} after {MaxAttempts} attempts; falling back to default '{WorkflowId}'. Last raw response (truncated): {Response}",
-            context.ProjectId, MaxAttempts, fallback.Id, Truncate(lastResponse));
+            "Workflow selection could not obtain a usable choice for project {ProjectId} after {MaxAttempts} attempts; falling back to default '{WorkflowId}'. parse_failure={parse_failure}. Last raw response (truncated): {Response}",
+            context.ProjectId, MaxAttempts, fallback.Id, true, Truncate(lastResponse));
         return new WorkflowSelectionResult(fallback,
             $"Defaulted to '{fallback.Name}' because the model response could not be parsed after {MaxAttempts} attempts.",
             WasAutoSelected: true);
@@ -160,9 +162,27 @@ public sealed class WorkflowSelector : IWorkflowSelector
         return true;
     }
 
-    /// <summary>The deterministic default: callers put the project default first.</summary>
-    private static WorkflowDefinition ResolveDefault(IReadOnlyList<WorkflowDefinition> available) =>
-        available[0];
+    /// <summary>
+    /// The deterministic default. Callers put the project default first, but the retired
+    /// <c>code-review</c> workflow must never be chosen as a fallback if a stale definition still
+    /// lingers in a project registry — a silent parse fallback into a review-only pipeline runs the
+    /// wrong process. Prefer a general-purpose <c>default</c>/<c>standard</c> workflow, then the first
+    /// non-code-review entry, and only as a last resort the first entry.
+    /// </summary>
+    private static WorkflowDefinition ResolveDefault(IReadOnlyList<WorkflowDefinition> available)
+    {
+        static bool IsCodeReview(WorkflowDefinition w) =>
+            string.Equals(Normalize(w.Id), "code-review", StringComparison.Ordinal);
+
+        var preferred = available.FirstOrDefault(w =>
+            !IsCodeReview(w)
+            && (string.Equals(Normalize(w.Id), "default", StringComparison.Ordinal)
+                || string.Equals(Normalize(w.Id), "standard", StringComparison.Ordinal)));
+
+        return preferred
+            ?? available.FirstOrDefault(w => !IsCodeReview(w))
+            ?? available[0];
+    }
 
     /// <summary>
     /// Resolves a model-supplied choice to an available workflow. Matches on id first, then falls back
@@ -218,8 +238,10 @@ public sealed class WorkflowSelector : IWorkflowSelector
         sb.AppendLine("- Prefer project/custom workflows over generic built-in/library workflows when a custom workflow can perform the requested process.");
         sb.AppendLine("- If no workflow is a good process fit, select the first listed workflow (the project default) instead of guessing.");
         sb.AppendLine();
-        sb.AppendLine("Reply with JSON: {\"selected\": \"<workflow-id>\", \"rationale\": \"<1-2 sentences why>\"}");
-        sb.Append("Select the workflow whose process best matches the task and team.");
+        sb.AppendLine("Respond with ONLY a single JSON object — no markdown, no code fences, no prose, no backticks.");
+        sb.AppendLine("Exact format (replace the placeholders):");
+        sb.AppendLine("{\"selected\": \"<workflow-id>\", \"rationale\": \"<1-2 sentences why>\"}");
+        sb.Append("The value of \"selected\" MUST be exactly one of the workflow ids listed above.");
         return sb.ToString();
     }
 
@@ -240,20 +262,57 @@ public sealed class WorkflowSelector : IWorkflowSelector
         return sb.ToString();
     }
 
-    /// <summary>Tolerant JSON extraction: pulls the first balanced object out of the model response.</summary>
+    /// <summary>
+    /// Tolerant extraction of the model's choice. Order of attempts, most-strict first:
+    /// (1) strip markdown code fences and surrounding whitespace, then <see cref="JsonSerializer"/>/
+    /// <see cref="JsonDocument"/>-parse the whole cleaned text — this accepts a well-formed object OR a
+    /// bare top-level JSON string (e.g. <c>"bug-fix"</c>); (2) if that fails, pull the first balanced
+    /// <c>{…}</c> object out of surrounding prose and parse that. Returns false only when nothing usable
+    /// can be recovered, so the caller can log the raw response and fall back.
+    /// </summary>
     private static bool TryParse(string? response, out string selectedId, out string rationale)
     {
         selectedId = string.Empty;
         rationale = string.Empty;
         if (string.IsNullOrWhiteSpace(response)) return false;
 
-        var json = ExtractFirstJsonObject(response);
-        if (json is null) return false;
+        var cleaned = StripCodeFences(response);
+
+        // (1) Fast path: the de-fenced text is itself valid JSON (object or bare string).
+        if (TryParseJson(cleaned, out selectedId, out rationale)) return true;
+
+        // (2) Tolerant path: recover the first balanced object embedded in prose and parse that.
+        var json = ExtractFirstJsonObject(cleaned);
+        if (json is not null && TryParseJson(json, out selectedId, out rationale)) return true;
+
+        return false;
+    }
+
+    /// <summary>
+    /// Parses a single JSON value into a workflow choice. Accepts a top-level JSON string (used
+    /// directly as the id) or an object carrying a string <c>selected</c> (and optional <c>rationale</c>).
+    /// </summary>
+    private static bool TryParseJson(string json, out string selectedId, out string rationale)
+    {
+        selectedId = string.Empty;
+        rationale = string.Empty;
+        if (string.IsNullOrWhiteSpace(json)) return false;
 
         try
         {
             using var doc = JsonDocument.Parse(json);
             var root = doc.RootElement;
+
+            // A bare top-level string is the selected id, e.g. "bug-fix".
+            if (root.ValueKind == JsonValueKind.String)
+            {
+                var value = root.GetString();
+                if (string.IsNullOrWhiteSpace(value)) return false;
+                selectedId = value!.Trim();
+                rationale = "Selected as the best fit for the task.";
+                return true;
+            }
+
             if (root.ValueKind != JsonValueKind.Object) return false;
 
             if (!root.TryGetProperty("selected", out var selectedEl)
@@ -275,6 +334,30 @@ public sealed class WorkflowSelector : IWorkflowSelector
         {
             return false;
         }
+    }
+
+    /// <summary>
+    /// Removes a fenced code block wrapper (```json … ``` / ``` … ```) and surrounding whitespace so the
+    /// enclosed JSON parses directly, and trims any stray leading/trailing backticks. Leaves plain text
+    /// untouched (the caller then falls back to balanced-object extraction).
+    /// </summary>
+    private static string StripCodeFences(string text)
+    {
+        var trimmed = text.Trim();
+
+        var fenced = Regex.Match(
+            trimmed,
+            "^```[A-Za-z0-9_-]*[ \\t]*\\r?\\n(?<body>.*?)\\r?\\n?```$",
+            RegexOptions.Singleline);
+        if (fenced.Success)
+            return fenced.Groups["body"].Value.Trim();
+
+        if (trimmed.StartsWith("```", StringComparison.Ordinal))
+            trimmed = trimmed.TrimStart('`').Trim();
+        if (trimmed.EndsWith("```", StringComparison.Ordinal))
+            trimmed = trimmed.TrimEnd('`').Trim();
+
+        return trimmed;
     }
 
     /// <summary>

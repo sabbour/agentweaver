@@ -22,7 +22,10 @@ public sealed class CopilotWorkflowSelectionModel : IWorkflowSelectionModel
     private const string SelectionCharter =
         "You are the Coordinator selecting the single best-fit functional workflow for a task. " +
         "Choose strictly from the provided candidate workflows by matching each workflow's description " +
-        "to the task and team. Respond with ONLY the requested JSON object — no prose, no code fences.";
+        "to the task and team. Respond with ONLY a single JSON object — no markdown, no code fences, " +
+        "no prose, no backticks. The value of \"selected\" MUST be exactly one of the candidate ids. " +
+        "Example of the exact expected format: " +
+        "{\"selected\": \"bug-fix\", \"rationale\": \"A one-line null check is a targeted defect fix.\"}";
 
     private readonly GitHubCopilotClientFactory _copilotClientFactory;
     private readonly IGitHubTokenScopeProvider _scopeProvider;
