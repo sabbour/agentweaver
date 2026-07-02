@@ -80,6 +80,38 @@ az keyvault secret set \
 
 echo ""
 echo "  [OK] Secret '${SECRET_NAME}' created successfully."
+
+# ── Provision mcp-api-key (internal service-to-service bearer token) ──────────
+# This 32-byte hex key is used as Auth:ApiKey by the API and worker to authenticate
+# internal loopback calls from agent tools (get_memory, list_decisions, etc.).
+# Without it, all agent memory/decision tool calls return 401 (root cause fix).
+API_KEY_SECRET_NAME="mcp-api-key"
+echo ""
+echo "=== Internal API key provisioning ==="
+echo "  Key Vault:   ${KEYVAULT_NAME}"
+echo "  Secret name: ${API_KEY_SECRET_NAME}"
+echo ""
+
+existing_api_key=$(az keyvault secret show \
+  --vault-name "${KEYVAULT_NAME}" \
+  --name "${API_KEY_SECRET_NAME}" \
+  --query "value" \
+  --output tsv 2>/dev/null || true)
+
+if [[ -n "${existing_api_key}" ]]; then
+  echo "  [SKIP] Secret '${API_KEY_SECRET_NAME}' already exists in Key Vault '${KEYVAULT_NAME}'."
+else
+  echo "  Generating 32-byte random hex key..."
+  GENERATED_API_KEY=$(openssl rand -hex 32)
+  az keyvault secret set \
+    --vault-name "${KEYVAULT_NAME}" \
+    --name "${API_KEY_SECRET_NAME}" \
+    --value "${GENERATED_API_KEY}" \
+    --content-type "text/plain" \
+    --output none
+  echo "  [OK] Secret '${API_KEY_SECRET_NAME}' created successfully."
+fi
+
 echo ""
 echo "  Next steps:"
 echo "    1. Run scripts/aks/30-deploy.sh to deploy the updated manifests."

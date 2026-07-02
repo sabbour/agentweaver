@@ -97,11 +97,13 @@ spec:
             - |
               set -eu
               # Worker needs GitHub credentials for repo operations (clone, worktree, PR).
-              # OAuth signing key and MCP API key are web-tier concerns — not read here.
+              # OAuth signing key read here too; Auth:ApiKey needed for agent tool loopback calls.
               export GitHub__ClientId="$(cat /mnt/secrets-store/github-client-id)"
               export GitHub__ClientSecret="$(cat /mnt/secrets-store/github-client-secret)"
               export Auth__GitHub__ClientId="${GitHub__ClientId}"
               export Auth__GitHub__ClientSecret="${GitHub__ClientSecret}"
+              export Auth__OAuth__SigningKey="$(cat /mnt/secrets-store/mcp-oauth-signing-key)"
+              export Auth__ApiKey="$(cat /mnt/secrets-store/mcp-api-key)"
               exec dotnet Agentweaver.Api.dll
           ports:
             - name: http-worker

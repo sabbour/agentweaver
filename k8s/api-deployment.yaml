@@ -94,6 +94,7 @@ spec:
               export Auth__GitHub__ClientId="${GitHub__ClientId}"
               export Auth__GitHub__ClientSecret="${GitHub__ClientSecret}"
               export Auth__OAuth__SigningKey="$(cat /mnt/secrets-store/mcp-oauth-signing-key)"
+              export Auth__ApiKey="$(cat /mnt/secrets-store/mcp-api-key)"
               exec dotnet Agentweaver.Api.dll
           ports:
             - name: http
