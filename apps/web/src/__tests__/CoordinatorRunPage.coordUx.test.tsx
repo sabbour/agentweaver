@@ -262,6 +262,38 @@ describe('CoordinatorRunPage — assembly review affordance (issues 3 & 4)', () 
     expect(text).toContain('Use the controls below to redirect the coordinator');
   });
 
+  it('keeps the review available (does NOT kick the operator out) when the run fails while the gate is open', async () => {
+    // The run terminated (failed) while the collective review gate was still open. The gate is
+    // preserved so the human can still view the changes — the UI must NOT show the old kick-out
+    // "the review gate is no longer open … Start a new coordinator run" message.
+    vi.mocked(apiClient.getRun).mockResolvedValue({
+      id: 'coord-run-1',
+      status: 'failed',
+    } as unknown as Awaited<ReturnType<typeof apiClient.getRun>>);
+    currentEvents = [
+      { sequence: 1, type: 'coordinator.assembly_review_requested', payload: {} },
+      { sequence: 2, type: 'coordinator.assembly_failed', payload: { reason: 'integration ref-lock race' } },
+      {
+        sequence: 3,
+        type: 'coordinator.assembly_review_preserved',
+        payload: { reason: 'assembly_rearm_exhausted after 3 attempts' },
+      },
+    ];
+
+    render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    await waitFor(
+      () => expect(document.body.textContent).toContain('your review is still available'),
+      { timeout: 4000 },
+    );
+
+    const text = document.body.textContent ?? '';
+    expect(text).toContain('approving will not trigger a new deployment');
+    // The old kick-out message must be gone.
+    expect(text).not.toContain('the review gate is no longer open');
+    expect(text).not.toContain('Start a new coordinator run to retry');
+  });
+
   it('explains an integration_conflict block and lists the conflicting files', async () => {
     currentEvents = [
       {

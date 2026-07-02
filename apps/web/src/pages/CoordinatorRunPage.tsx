@@ -303,6 +303,11 @@ function subtaskStatusHint(status: string): string {
 const ASSEMBLY_EVENT_PHASE: Record<string, OrchPhase> = {
   'coordinator.assembly_started': 'assembling',
   'coordinator.assembly_review_requested': 'in_review',
+  // The run failed while the review gate was still open, but the gate was DELIBERATELY preserved so
+  // the human can still view the changes. Keep the orchestration in the review phase (emitted after
+  // assembly_failed) so the UI shows the "review still available" message instead of kicking the
+  // operator out. Combined with a terminal run status this drives the preserved-review branch.
+  'coordinator.assembly_review_preserved': 'in_review',
   'coordinator.assembly_changes_requested': 'dispatching', // re-dispatch resets the phase
   'coordinator.assembly_completed': 'complete',
   'coordinator.assembly_failed': 'failed',
@@ -2243,11 +2248,11 @@ export function CoordinatorRunPage() {
           )}
 
           {orch.phase === 'in_review' && runTerminal && (
-            <MessageBar intent="error">
+            <MessageBar intent="warning" data-testid="review-preserved-bar">
               <MessageBarBody>
-                This orchestration ended ({runLevelStatus}) before the collective review could be
-                completed, so the review gate is no longer open. {orch.reason ?? ''} Start a new
-                coordinator run to retry.
+                The orchestration encountered an error, but your review is still available. You can view
+                the changes below. Note: approving will not trigger a new deployment — start a fresh run
+                to retry.{orch.reason ? ` (${orch.reason})` : ''}
               </MessageBarBody>
             </MessageBar>
           )}
