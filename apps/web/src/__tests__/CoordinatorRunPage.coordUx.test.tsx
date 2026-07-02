@@ -30,6 +30,15 @@ vi.mock('../api/apiClient', () => ({
     setAutopilot: vi.fn(),
     setAutoApprove: vi.fn(),
     retryRun: vi.fn(),
+    getRunTokenBreakdown: vi.fn().mockResolvedValue({
+      runId: 'coord-run-1',
+      source: 'events',
+      hasAgentData: false,
+      totalTokens: 0,
+      totalNanoAiu: 0,
+      breakdown: [],
+    }),
+    getRunTraces: vi.fn().mockResolvedValue({ runId: 'coord-run-1', spans: [] }),
     getRunFiles: vi.fn().mockResolvedValue([]),
     getRunWorkspace: vi.fn().mockResolvedValue([]),
     getRunFileDiff: vi.fn().mockResolvedValue(null),
@@ -84,6 +93,15 @@ beforeEach(() => {
   vi.mocked(apiClient.answerQuestion).mockResolvedValue({ run_id: 'child-run-2', request_id: 'q-1', answered: true });
   vi.mocked(apiClient.setAutopilot).mockResolvedValue({ run_id: 'coord-run-1', autopilot: true });
   vi.mocked(apiClient.setAutoApprove).mockResolvedValue({ run_id: 'coord-run-1', auto_approve_tools: true });
+  vi.mocked(apiClient.getRunTokenBreakdown).mockResolvedValue({
+    runId: 'coord-run-1',
+    source: 'events',
+    hasAgentData: false,
+    totalTokens: 0,
+    totalNanoAiu: 0,
+    breakdown: [],
+  });
+  vi.mocked(apiClient.getRunTraces).mockResolvedValue({ runId: 'coord-run-1', spans: [] });
 });
 
 afterEach(() => cleanup());

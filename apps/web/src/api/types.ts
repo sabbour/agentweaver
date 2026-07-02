@@ -1185,6 +1185,63 @@ export interface ProjectDashboardDto {
 export interface ProjectMetricsDto {
   throughput: ThroughputPointDto[];
   leaderboard: AgentLeaderboardEntryDto[];
+  invocationTrend?: DailyInvocationPointDto[];
+  modelUsage?: ModelUsageBreakdownDto[];
+  responseDuration?: MetricPercentilesDto[];
+  timeToFirstToken?: MetricPercentilesDto[];
+  agentBreakdown?: AgentUsageBreakdownDto[];
+}
+
+export interface DailyInvocationPointDto {
+  date: string;
+  count: number;
+}
+
+export interface ModelUsageBreakdownDto {
+  model: string;
+  invocationCount: number;
+  totalNanoAiu: number;
+}
+
+export interface MetricPercentilesDto {
+  label: string;
+  p50Ms?: number | null;
+  p95Ms?: number | null;
+}
+
+export interface AgentUsageBreakdownDto {
+  agentName: string;
+  invocationCount: number;
+  totalTokens: number;
+  totalNanoAiu: number;
+}
+
+export interface RunAgentTokenBreakdownDto {
+  runId: string;
+  source: string;
+  hasAgentData: boolean;
+  totalTokens: number;
+  totalNanoAiu: number;
+  breakdown: AgentUsageBreakdownDto[];
+}
+
+export interface RunTraceSpanDto {
+  id: string;
+  name: string;
+  timestamp: string;
+  durationMs: number;
+  success: boolean;
+  resultCode?: string | null;
+  agentName?: string | null;
+  model?: string | null;
+  inputTokens?: number | null;
+  outputTokens?: number | null;
+  operationName?: string | null;
+}
+
+export interface RunTraceDto {
+  runId: string;
+  spans: RunTraceSpanDto[];
 }
 
 // Global overview "at a glance" counters.

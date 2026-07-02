@@ -76,8 +76,72 @@ public sealed record ProjectDashboardDto
 /// <summary>Per-project dashboard widgets sourced from Application Insights.</summary>
 public sealed record ProjectMetricsDto
 {
-    [JsonPropertyName("throughput")]  public required IReadOnlyList<ThroughputPointDto> Throughput { get; init; }
+    [JsonPropertyName("throughput")] public required IReadOnlyList<ThroughputPointDto> Throughput { get; init; }
     [JsonPropertyName("leaderboard")] public required IReadOnlyList<AgentLeaderboardEntryDto> Leaderboard { get; init; }
+    [JsonPropertyName("invocationTrend")] public required IReadOnlyList<DailyInvocationPointDto> InvocationTrend { get; init; }
+    [JsonPropertyName("modelUsage")] public required IReadOnlyList<ModelUsageBreakdownDto> ModelUsage { get; init; }
+    [JsonPropertyName("responseDuration")] public required IReadOnlyList<MetricPercentilesDto> ResponseDuration { get; init; }
+    [JsonPropertyName("timeToFirstToken")] public required IReadOnlyList<MetricPercentilesDto> TimeToFirstToken { get; init; }
+    [JsonPropertyName("agentBreakdown")] public required IReadOnlyList<AgentUsageBreakdownDto> AgentBreakdown { get; init; }
+}
+
+public sealed record DailyInvocationPointDto
+{
+    [JsonPropertyName("date")] public required string Date { get; init; }
+    [JsonPropertyName("count")] public required int Count { get; init; }
+}
+
+public sealed record ModelUsageBreakdownDto
+{
+    [JsonPropertyName("model")] public required string Model { get; init; }
+    [JsonPropertyName("invocationCount")] public required int InvocationCount { get; init; }
+    [JsonPropertyName("totalNanoAiu")] public required long TotalNanoAiu { get; init; }
+}
+
+public sealed record MetricPercentilesDto
+{
+    [JsonPropertyName("label")] public required string Label { get; init; }
+    [JsonPropertyName("p50Ms")] public long? P50Ms { get; init; }
+    [JsonPropertyName("p95Ms")] public long? P95Ms { get; init; }
+}
+
+public sealed record AgentUsageBreakdownDto
+{
+    [JsonPropertyName("agentName")] public required string AgentName { get; init; }
+    [JsonPropertyName("invocationCount")] public required int InvocationCount { get; init; }
+    [JsonPropertyName("totalTokens")] public required long TotalTokens { get; init; }
+    [JsonPropertyName("totalNanoAiu")] public required long TotalNanoAiu { get; init; }
+}
+
+public sealed record RunAgentTokenBreakdownDto
+{
+    [JsonPropertyName("runId")] public required string RunId { get; init; }
+    [JsonPropertyName("source")] public required string Source { get; init; }
+    [JsonPropertyName("hasAgentData")] public required bool HasAgentData { get; init; }
+    [JsonPropertyName("totalTokens")] public required long TotalTokens { get; init; }
+    [JsonPropertyName("totalNanoAiu")] public required long TotalNanoAiu { get; init; }
+    [JsonPropertyName("breakdown")] public required IReadOnlyList<AgentUsageBreakdownDto> Breakdown { get; init; }
+}
+
+public sealed record RunTraceDto
+{
+    [JsonPropertyName("runId")] public required string RunId { get; init; }
+    [JsonPropertyName("spans")] public required IReadOnlyList<RunTraceSpanDto> Spans { get; init; }
+}
+
+public sealed record RunTraceSpanDto
+{
+    [JsonPropertyName("id")] public required string Id { get; init; }
+    [JsonPropertyName("name")] public required string Name { get; init; }
+    [JsonPropertyName("timestamp")] public required DateTimeOffset Timestamp { get; init; }
+    [JsonPropertyName("durationMs")] public required double DurationMs { get; init; }
+    [JsonPropertyName("success")] public required bool Success { get; init; }
+    [JsonPropertyName("resultCode")] public string? ResultCode { get; init; }
+    [JsonPropertyName("agentName")] public string? AgentName { get; init; }
+    [JsonPropertyName("model")] public string? Model { get; init; }
+    [JsonPropertyName("inputTokens")] public long? InputTokens { get; init; }
+    [JsonPropertyName("outputTokens")] public long? OutputTokens { get; init; }
+    [JsonPropertyName("operationName")] public string? OperationName { get; init; }
 }
 
 // =====================================================================================

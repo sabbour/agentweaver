@@ -2,9 +2,11 @@ using System.Globalization;
 using Agentweaver.Api.Diagnostics;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Memory;
+using Agentweaver.Api.Runs;
 using Agentweaver.Api.Security;
 using Agentweaver.Domain;
 using Microsoft.EntityFrameworkCore;
+using System.Text.Json;
 
 namespace Agentweaver.Api.Metrics;
 
@@ -117,6 +119,165 @@ public sealed class DashboardReadService
             ActiveProjects = ReadActiveProjects(runs, readyProjectIds, names),
             RecentActivity = ReadRecentActivity(runs, names),
         };
+    }
+
+    public async Task<RunAgentTokenBreakdownDto> GetRunAgentTokenBreakdownFallbackAsync(
+        string runId,
+        CancellationToken ct = default)
+    {
+        await using var scope = _scopeFactory.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+
+        var root = await db.Runs.AsNoTracking()
+            .Where(r => r.RunId == runId)
+            .Select(r => new { r.RunId, r.AgentName, r.ParentRunId })
+            .FirstOrDefaultAsync(ct)
+            .ConfigureAwait(false);
+        if (root is null)
+        {
+            return new RunAgentTokenBreakdownDto
+            {
+                RunId = runId,
+                Source = "events",
+                HasAgentData = false,
+                TotalTokens = 0,
+                TotalNanoAiu = 0,
+                Breakdown = [],
+            };
+        }
+
+        var includeChildren = root.ParentRunId is null;
+        var relatedRuns = await db.Runs.AsNoTracking()
+            .Where(r => r.RunId == runId || (includeChildren && r.ParentRunId == runId))
+            .Select(r => new { r.RunId, AgentName = r.AgentName ?? "unknown" })
+            .ToListAsync(ct)
+            .ConfigureAwait(false);
+
+        var agentByRunId = relatedRuns.ToDictionary(row => row.RunId, row => row.AgentName, StringComparer.Ordinal);
+        if (agentByRunId.Count == 0)
+            agentByRunId[runId] = root.AgentName ?? "unknown";
+
+        var relatedRunIds = agentByRunId.Keys.ToList();
+        var usageEvents = await db.RunEvents.AsNoTracking()
+            .Where(e => relatedRunIds.Contains(e.RunId) && e.EventType == EventTypes.AgentTurnUsage)
+            .ToListAsync(ct)
+            .ConfigureAwait(false);
+
+        var totals = new Dictionary<string, (long tokens, long nanoAiu, int invocations)>(StringComparer.Ordinal);
+        foreach (var evt in usageEvents)
+        {
+            var agentName = agentByRunId.GetValueOrDefault(evt.RunId, "unknown");
+            var payload = ParseUsagePayload(evt.PayloadJson);
+            var current = totals.GetValueOrDefault(agentName);
+            totals[agentName] = (
+                current.tokens + payload.TotalTokens,
+                current.nanoAiu + payload.TotalNanoAiu,
+                current.invocations + 1);
+        }
+
+        var breakdown = totals
+            .OrderByDescending(entry => entry.Value.tokens)
+            .ThenByDescending(entry => entry.Value.nanoAiu)
+            .ThenBy(entry => entry.Key, StringComparer.Ordinal)
+            .Select(entry => new AgentUsageBreakdownDto
+            {
+                AgentName = entry.Key,
+                InvocationCount = entry.Value.invocations,
+                TotalTokens = entry.Value.tokens,
+                TotalNanoAiu = entry.Value.nanoAiu,
+            })
+            .ToList();
+
+        return new RunAgentTokenBreakdownDto
+        {
+            RunId = runId,
+            Source = "events",
+            HasAgentData = breakdown.Count > 0,
+            TotalTokens = breakdown.Sum(entry => entry.TotalTokens),
+            TotalNanoAiu = breakdown.Sum(entry => entry.TotalNanoAiu),
+            Breakdown = breakdown,
+        };
+    }
+
+    public async Task<(IReadOnlyList<ModelUsageBreakdownDto> ModelUsage, IReadOnlyList<AgentUsageBreakdownDto> AgentBreakdown)>
+        GetProjectUsageFallbackAsync(
+            string projectId,
+            DateTimeOffset from,
+            DateTimeOffset to,
+            CancellationToken ct = default)
+    {
+        await using var scope = _scopeFactory.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+
+        var relatedRuns = await db.Runs.AsNoTracking()
+            .Where(r => r.ProjectId == projectId)
+            .Select(r => new
+            {
+                r.RunId,
+                AgentName = r.AgentName ?? "unknown",
+                ModelId = string.IsNullOrWhiteSpace(r.ModelId) ? "unknown" : r.ModelId,
+            })
+            .ToListAsync(ct)
+            .ConfigureAwait(false);
+
+        if (relatedRuns.Count == 0)
+            return ([], []);
+
+        var byRunId = relatedRuns.ToDictionary(
+            row => row.RunId,
+            row => (row.AgentName, row.ModelId),
+            StringComparer.Ordinal);
+        var relatedRunIds = byRunId.Keys.ToList();
+        var usageEvents = await db.RunEvents.AsNoTracking()
+            .Where(e =>
+                relatedRunIds.Contains(e.RunId)
+                && e.EventType == EventTypes.AgentTurnUsage
+                && e.CreatedAt >= from.UtcDateTime
+                && e.CreatedAt <= to.UtcDateTime)
+            .ToListAsync(ct)
+            .ConfigureAwait(false);
+
+        var modelTotals = new Dictionary<string, (long nanoAiu, int invocations)>(StringComparer.Ordinal);
+        var agentTotals = new Dictionary<string, (long tokens, long nanoAiu, int invocations)>(StringComparer.Ordinal);
+        foreach (var evt in usageEvents)
+        {
+            if (!byRunId.TryGetValue(evt.RunId, out var meta))
+                continue;
+
+            var payload = ParseUsagePayload(evt.PayloadJson);
+            var modelAcc = modelTotals.GetValueOrDefault(meta.ModelId);
+            modelTotals[meta.ModelId] = (modelAcc.nanoAiu + payload.TotalNanoAiu, modelAcc.invocations + 1);
+
+            var agentAcc = agentTotals.GetValueOrDefault(meta.AgentName);
+            agentTotals[meta.AgentName] = (
+                agentAcc.tokens + payload.TotalTokens,
+                agentAcc.nanoAiu + payload.TotalNanoAiu,
+                agentAcc.invocations + 1);
+        }
+
+        return (
+            modelTotals
+                .OrderByDescending(entry => entry.Value.nanoAiu)
+                .ThenBy(entry => entry.Key, StringComparer.Ordinal)
+                .Select(entry => new ModelUsageBreakdownDto
+                {
+                    Model = entry.Key,
+                    InvocationCount = entry.Value.invocations,
+                    TotalNanoAiu = entry.Value.nanoAiu,
+                })
+                .ToList(),
+            agentTotals
+                .OrderByDescending(entry => entry.Value.tokens)
+                .ThenByDescending(entry => entry.Value.nanoAiu)
+                .ThenBy(entry => entry.Key, StringComparer.Ordinal)
+                .Select(entry => new AgentUsageBreakdownDto
+                {
+                    AgentName = entry.Key,
+                    InvocationCount = entry.Value.invocations,
+                    TotalTokens = entry.Value.tokens,
+                    TotalNanoAiu = entry.Value.nanoAiu,
+                })
+                .ToList());
     }
 
     private AtAGlanceDto ReadAtAGlance(
@@ -327,6 +488,44 @@ public sealed class DashboardReadService
 
     private static DateTimeOffset ParseTs(string value) =>
         DateTimeOffset.Parse(value, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind);
+
+    private static (long TotalTokens, long TotalNanoAiu) ParseUsagePayload(string payloadJson)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(payloadJson);
+            var root = doc.RootElement;
+            return (
+                TotalTokens: ReadLong(root, "totalTokens", "total_tokens"),
+                TotalNanoAiu: ReadLong(root, "totalNanoAiu", "total_nano_aiu"));
+        }
+        catch
+        {
+            return (0, 0);
+        }
+    }
+
+    private static long ReadLong(JsonElement root, params string[] names)
+    {
+        foreach (var name in names)
+        {
+            if (!root.TryGetProperty(name, out var value))
+                continue;
+
+            if (value.ValueKind == JsonValueKind.Number)
+            {
+                if (value.TryGetInt64(out var int64)) return int64;
+                if (value.TryGetDouble(out var dbl)) return Convert.ToInt64(dbl);
+            }
+            else if (value.ValueKind == JsonValueKind.String
+                     && long.TryParse(value.GetString(), NumberStyles.Any, CultureInfo.InvariantCulture, out var parsed))
+            {
+                return parsed;
+            }
+        }
+
+        return 0;
+    }
 
     private const char Ellipsis = '\u2026';
 
