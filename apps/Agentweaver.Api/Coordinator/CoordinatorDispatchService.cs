@@ -1783,6 +1783,62 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
             topologySeq));
     }
 
+    /// <summary>
+    /// Builds the git "integration branch" contract injected into every coordinator child task
+    /// (bug #169). Each subtask runs in its own isolated sandbox, so the shared integration branch
+    /// (<see cref="CoordinatorAssemblyService.IntegrationBranchName"/>) is the ONLY channel that
+    /// carries one agent's file changes to the next. The child must PULL the branch before working
+    /// and COMMIT + PUSH it after, so sequential subtasks build on each other's output instead of
+    /// each starting from a fresh copy of the original workspace. Every git step is explicitly
+    /// non-fatal: a failure (no remote, missing branch, dirty tree, non-fast-forward push) is logged
+    /// and the agent continues rather than aborting the task.
+    /// </summary>
+    internal static string BuildIntegrationBranchContract(CoordinatorDispatchContext context, Subtask subtask)
+    {
+        var integrationBranch = CoordinatorAssemblyService.IntegrationBranchName(context.CoordinatorRunId);
+        var baseBranch = string.IsNullOrWhiteSpace(context.OriginatingBranch) ? "HEAD" : context.OriginatingBranch;
+        var commitDescription = ShellSafeSummary(subtask.Title, 100);
+
+        return
+            $"""
+            ## Workspace sync — git integration branch contract (REQUIRED)
+            Your workspace is an isolated sandbox. The other subtasks in this work plan run in
+            SEPARATE sandboxes, so the ONLY way their file changes reach you — and the only way your
+            changes reach the next subtask — is through the shared git integration branch
+            `{integrationBranch}`. You MUST follow this contract.
+
+            BEFORE you make any changes, sync the latest combined work of prior subtasks:
+                git fetch origin
+                git checkout {integrationBranch} || git checkout -B {integrationBranch} origin/{integrationBranch} || git checkout -B {integrationBranch} {baseBranch}
+                git pull --no-edit origin {integrationBranch} || true
+            If any of these fail (no remote configured, the branch does not exist yet, or a dirty
+            working tree), log the warning and continue with the workspace as-is: do NOT abort the task over a git error.
+
+            AFTER you finish your changes, publish them so the next subtask can see them:
+                git add -A
+                git commit -m "subtask {subtask.Id}: {commitDescription}"
+                git push origin HEAD:{integrationBranch}
+            If the commit reports "nothing to commit" or the push is rejected (no remote or
+            non-fast-forward), log a warning and finish normally: do NOT fail the task over a git error.
+            Your file changes are also captured from the workspace regardless.
+            """;
+    }
+
+    /// <summary>
+    /// Collapses a subtask title into a single-line, double-quote-free summary safe to embed inside
+    /// a <c>git commit -m "..."</c> instruction, trimmed to <paramref name="maxChars"/>.
+    /// </summary>
+    private static string ShellSafeSummary(string? value, int maxChars)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return "changes";
+        var compact = value.Replace('\r', ' ').Replace('\n', ' ').Replace('\t', ' ')
+            .Replace('"', '\'').Replace('`', '\'').Trim();
+        if (compact.Length == 0)
+            return "changes";
+        return compact.Length <= maxChars ? compact : compact[..maxChars] + "…";
+    }
+
     private async Task<string> ComposeChildTaskAsync(
         CoordinatorDispatchContext context,
         int workPlanId,
@@ -1799,6 +1855,17 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         var sb = new StringBuilder(baseTask);
         sb.AppendLine();
         sb.AppendLine();
+
+        // Bug #169: each subtask executes in its OWN isolated sandbox (a separate AgentHost pod /
+        // LXC filesystem). File edits made by one agent never reach the next agent's filesystem, so
+        // sequential subtasks were each starting from a fresh copy of the ORIGINAL workspace and
+        // could not see prior work. The shared git integration branch is the only channel between
+        // sandboxes, so the child MUST pull it before working and commit+push it after — this makes
+        // one subtask's output visible to the next. The instructions are self-healing and non-fatal
+        // (a git failure is logged, never aborts the task).
+        sb.Append(BuildIntegrationBranchContract(context, subtask));
+        sb.AppendLine();
+
         sb.AppendLine("## Coordinator context");
 
         using var scope = _scopeFactory.CreateScope();
