@@ -101,7 +101,7 @@ retag_image() {
   fi
   echo "--- Retagging ${image}:${source_tag} -> ${image}:${target_tag} ---"
   az acr import \
-    --registry "${ACR_NAME}" \
+    --name "${ACR_NAME}" \
     --resource-group "${RESOURCE_GROUP}" \
     --source "${ACR_LOGIN_SERVER}/${image}:${source_tag}" \
     --image "${image}:${target_tag}" \
