@@ -22,6 +22,7 @@ const useStyles = makeStyles({
     flexDirection: 'row',
     position: 'relative',
     overflow: 'hidden',
+    minHeight: 0,
     transition: 'width 0.15s ease',
     backgroundColor: tokens.colorNeutralBackground1,
     borderRight: `1px solid ${tokens.colorNeutralStroke2}`,
@@ -43,6 +44,7 @@ const useStyles = makeStyles({
     overflow: 'hidden',
     display: 'flex',
     flexDirection: 'column',
+    minHeight: 0,
     minWidth: 0,
   },
   toggleButton: {

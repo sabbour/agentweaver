@@ -187,6 +187,7 @@ const useFileTreeStyles = makeStyles({
     display: 'flex',
     flexDirection: 'column',
     height: '100%',
+    minHeight: 0,
     overflow: 'hidden',
   },
   tabListWrapper: {
@@ -287,6 +288,7 @@ const useFileTreeStyles = makeStyles({
   fileList: {
     overflowY: 'auto',
     flex: 1,
+    minHeight: 0,
   },
   treeRow: {
     display: 'flex',
