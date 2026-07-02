@@ -469,26 +469,30 @@ public sealed class AppInsightsMetricsService
             let run_operations = materialize(
                 traces
                 | where timestamp > ago(7d)
-                | where {runIdPredicate}
-                    or message contains "{escapedRunId}"
-                | project operation_id = tostring(operation_Id), parent_operation_id = tostring(operation_ParentId)
-            );
-            let correlated_operations = materialize(
-                union
-                    (run_operations | project operation_id),
-                    (run_operations | project operation_id = parent_operation_id)
+                | where {runIdPredicate} or message contains "{escapedRunId}"
+                | project operation_id = tostring(operation_Id)
                 | where isnotempty(operation_id)
-                | distinct operation_id
             );
+            let correlated_ops = run_operations | distinct operation_id;
             union isfuzzy=true
-                (traces | project id, name = message, timestamp, duration = totimespan(0), success = tobool(1), resultCode = tostring(""), operation_id = tostring(operation_Id), parent_operation_id = tostring(operation_ParentId), customDimensions),
-                (dependencies | project id, name, timestamp, duration, success, resultCode, operation_id = tostring(operation_Id), parent_operation_id = tostring(operation_ParentId), customDimensions),
-                (requests | project id, name, timestamp, duration, success, resultCode, operation_id = tostring(operation_Id), parent_operation_id = tostring(operation_ParentId), customDimensions)
-            | where timestamp > ago(7d)
-            | where
-                {runIdPredicate}
-                or operation_id in (correlated_operations)
-                or parent_operation_id in (correlated_operations)
+                (traces
+                 | where timestamp > ago(7d)
+                 | where {runIdPredicate}
+                     or message contains "{escapedRunId}"
+                     or operation_Id in (correlated_ops)
+                 | project id = tostring(itemId), name = message, timestamp, duration = totimespan(0), success = tobool(1), resultCode = tostring(""), operation_id = tostring(operation_Id), parent_operation_id = tostring(operation_ParentId), customDimensions),
+                (dependencies
+                 | where timestamp > ago(7d)
+                 | where {runIdPredicate}
+                     or operation_Id in (correlated_ops)
+                     or operation_ParentId in (correlated_ops)
+                 | project id, name, timestamp, duration, success, resultCode, operation_id = tostring(operation_Id), parent_operation_id = tostring(operation_ParentId), customDimensions),
+                (requests
+                 | where timestamp > ago(7d)
+                 | where {runIdPredicate}
+                     or operation_Id in (correlated_ops)
+                     or operation_ParentId in (correlated_ops)
+                 | project id, name, timestamp, duration, success, resultCode, operation_id = tostring(operation_Id), parent_operation_id = tostring(operation_ParentId), customDimensions)
             | project
                 id,
                 name,
