@@ -52,26 +52,42 @@ public sealed class RunOrchestrator
         """;
 
     /// <summary>
-    /// Concise "Browser Preview" capability note, injected into worker/child system prompts ONLY when
-    /// Sandbox:Preview:Enabled=true. Tells the agent that running an HTTP server on a port can be
-    /// surfaced to the user as a public HTTPS preview AND explicitly nudges the agent to call the
-    /// run-scoped <c>start_preview</c> tool once the server is actually listening. Wording matches the
-    /// real contract built on feat/sandbox-preview-proxy: Gateway -> per-preview HTTPRoute -> per-run
-    /// ClusterIP Service (port 80 -> the pod's listening port) -> sandbox pod; the URL is an
+    /// Assertive, imperative "Browser Preview" mandate, injected at the TOP of worker/child system
+    /// prompts ONLY when Sandbox:Preview:Enabled=true. This is deliberately forceful: earlier passive
+    /// wording ("if you start a server…") was routinely ignored, so the agent is now given explicit,
+    /// numbered, non-optional steps to launch, test, and preview its output before finishing. It calls
+    /// the run-scoped <c>start_preview(PORT)</c> tool once the server is actually listening. Wording
+    /// matches the real contract built on feat/sandbox-preview-proxy: Gateway -> per-preview HTTPRoute
+    /// -> per-run ClusterIP Service (port 80 -> the pod's listening port) -> sandbox pod; the URL is an
     /// unguessable capability host kept alive while viewed (idle ~30 min, hard max ~8 h).
     /// </summary>
     internal const string BrowserPreviewCapability =
         """
-        ## Browser Preview
-        
-        If you start an HTTP server listening on a TCP port inside this sandbox (a dev server, a
-        static file server, or your app), a live browser preview can be exposed to the user at a
-        public HTTPS URL. To enable it: bind your server to all interfaces (0.0.0.0), not just
-        127.0.0.1, on a port you choose; keep the process running; and once the server is actually
-        accepting TCP connections, call start_preview(PORT). Only call start_preview after the server
-        is ready to serve requests. If approved, the tool returns the public preview URL to share with
-        the user. The resulting URL is an unguessable capability link kept alive while it is viewed
-        (idle timeout ~30 minutes, hard maximum ~8 hours).
+        ## Browser Preview — REQUIRED before you finish
+
+        This sandbox can expose a live browser preview of your work to the user at a public HTTPS URL.
+        Making that preview work is part of the task, not an optional extra. Do NOT just write code and
+        stop: you MUST actually launch, test, and preview what you build.
+
+        When your work is functional (and before you report the task as done), you MUST:
+
+        1. START a server. Pick the command that fits what you built and run it as a long-lived process
+           (keep it running — do not let it exit):
+             - Web app / frontend  -> `npm start`, `npm run dev`, `vite`, `next dev`, etc.
+             - Static site / files -> `python -m http.server PORT` from the output directory.
+             - API / backend        -> run the server binary or `uvicorn`/`node server.js`/etc.
+           Bind to ALL interfaces (host 0.0.0.0), NOT just 127.0.0.1, on a port you choose (e.g. 3000).
+        2. TEST that it is actually serving. Confirm the port is accepting connections and returns a
+           real response, e.g. `curl -sSf http://localhost:PORT/` — fix errors until it responds.
+        3. REGISTER the preview: call start_preview(PORT) with the exact port your server listens on.
+           Only call it AFTER the server is up and responding to requests.
+        4. WAIT for the preview to be confirmed. If approved, the tool returns the public HTTPS URL —
+           share that URL with the user as part of your final summary.
+
+        Do NOT complete the task and stop without a running, tested, previewed server. If you cannot
+        start a preview (e.g. the task produces no runnable server), say so explicitly and explain why.
+        The resulting URL is an unguessable capability link kept alive while it is viewed (idle timeout
+        ~30 minutes, hard maximum ~8 hours).
         """;
 
     public RunOrchestrator(

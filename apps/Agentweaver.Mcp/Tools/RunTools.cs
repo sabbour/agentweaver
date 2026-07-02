@@ -112,7 +112,7 @@ public sealed class RunTools(AgentweaverApiClient api)
         catch (Exception ex) { throw new McpApiException(0, ex.Message); }
     }
 
-    [McpServerTool(Name = "start_preview"), Description("Expose a web server an agent started inside a run's sandbox pod (e.g. on port 3000) so it can be previewed at a public HTTPS URL. Routes through a human-in-the-loop approval gate; returns the preview_url once approved.")]
+    [McpServerTool(Name = "start_preview"), Description("Register a live browser preview for a web server the agent has ALREADY started and verified inside a run's sandbox pod. Call this AFTER your server is running and responding (e.g. you confirmed `curl http://localhost:PORT/` succeeds) — pass the exact port it listens on (e.g. 3000). You MUST call this whenever you start any server so the user gets a live preview link. Routes through a human-in-the-loop approval gate; returns the public HTTPS preview_url once approved. Do not finish the task without registering the preview for any server you started.")]
     public async Task<string> StartPreviewAsync(
         [Description("Run ID whose sandbox pod hosts the server to expose")] string run_id,
         [Description("Port the server is listening on inside the sandbox pod, e.g. 3000")] int port,
