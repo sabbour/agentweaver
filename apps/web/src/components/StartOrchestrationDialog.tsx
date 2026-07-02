@@ -43,16 +43,20 @@ export function StartOrchestrationDialog({ projectId, onStarted }: StartOrchestr
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [workflowOverride, setWorkflowOverride] = useState<string | null>(null);
-  const [manualWorkflows, setManualWorkflows] = useState<WorkflowSummaryDto[]>([]);
+  const [selectableWorkflows, setSelectableWorkflows] = useState<WorkflowSummaryDto[]>([]);
 
   useEffect(() => {
     if (!open) return;
     apiClient.listWorkflows(projectId)
       .then(res => {
-        const manual = res.workflows.filter(w => w.trigger?.type === 'manual' && w.id && w.valid);
-        setManualWorkflows(manual);
+        // Any valid workflow with an id can be run manually — including the project's active
+        // workflow and event/heartbeat-triggered catalog workflows (e.g. Software Delivery, Bug
+        // Fix). Filtering to trigger.type === 'manual' hid every workflow except the built-in
+        // Default Run Workflow.
+        const selectable = res.workflows.filter(w => w.id && w.valid);
+        setSelectableWorkflows(selectable);
       })
-      .catch(() => setManualWorkflows([]));
+      .catch(() => setSelectableWorkflows([]));
   }, [open, projectId]);
 
   const reset = () => {
@@ -60,7 +64,7 @@ export function StartOrchestrationDialog({ projectId, onStarted }: StartOrchestr
     setError(null);
     setSaving(false);
     setWorkflowOverride(null);
-    setManualWorkflows([]);
+    setSelectableWorkflows([]);
   };
 
   const handleSubmit = async () => {
@@ -107,14 +111,14 @@ export function StartOrchestrationDialog({ projectId, onStarted }: StartOrchestr
                   rows={4}
                 />
               </Field>
-              {manualWorkflows.length > 0 && (
+              {selectableWorkflows.length > 0 && (
                 <Field label="Workflow">
                   <Select
                     value={workflowOverride ?? ''}
                     onChange={(_, d) => setWorkflowOverride(d.value || null)}
                   >
                     <option value="">Auto (coordinator picks)</option>
-                    {manualWorkflows.map(w => (
+                    {selectableWorkflows.map(w => (
                       <option key={w.id} value={w.id!}>{w.name ?? w.id}</option>
                     ))}
                   </Select>
