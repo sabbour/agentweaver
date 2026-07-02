@@ -26,7 +26,9 @@ public sealed class AppInsightsMetricsService
             if (_client is not null) return _client;
             try
             {
-                _client = new LogsQueryClient(new DefaultAzureCredential());
+                _client = new LogsQueryClient(
+                    new DefaultAzureCredential(),
+                    new LogsQueryClientOptions());
             }
             catch (Exception ex)
             {
