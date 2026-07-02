@@ -462,16 +462,30 @@ public sealed class AppInsightsMetricsService
     {
         var timeTo = DateTimeOffset.UtcNow;
         var timeFrom = timeTo.AddDays(-7);
+        var runIdPredicate = BuildRunIdDimensionPredicate(runId, "customDimensions");
         var query =
             $"""
-            union dependencies, requests
+            let run_operations = materialize(
+                traces
+                | where timestamp > ago(7d)
+                | where {runIdPredicate}
+                | project operation_id = tostring(operation_Id), parent_operation_id = tostring(operation_ParentId)
+            );
+            let correlated_operations = materialize(
+                union
+                    (run_operations | project operation_id),
+                    (run_operations | project operation_id = parent_operation_id)
+                | where isnotempty(operation_id)
+                | distinct operation_id
+            );
+            union isfuzzy=true
+                (dependencies | project id, name, timestamp, duration, success, resultCode, operation_id = tostring(operation_Id), parent_operation_id = tostring(operation_ParentId), customDimensions),
+                (requests | project id, name, timestamp, duration, success, resultCode, operation_id = tostring(operation_Id), parent_operation_id = tostring(operation_ParentId), customDimensions)
             | where timestamp > ago(7d)
             | where
-                tostring(customDimensions["run_id"]) == "{EscapeKusto(runId)}"
-                or tostring(customDimensions["runId"]) == "{EscapeKusto(runId)}"
-                or tostring(customDimensions["run.id"]) == "{EscapeKusto(runId)}"
-                or tostring(customDimensions["parent_run_id"]) == "{EscapeKusto(runId)}"
-                or tostring(customDimensions["parentRunId"]) == "{EscapeKusto(runId)}"
+                {runIdPredicate}
+                or operation_id in (correlated_operations)
+                or parent_operation_id in (correlated_operations)
             | project
                 id,
                 name,
@@ -479,8 +493,6 @@ public sealed class AppInsightsMetricsService
                 duration,
                 success,
                 resultCode,
-                target,
-                type,
                 customDimensions
             | order by timestamp asc
             """;
@@ -491,12 +503,12 @@ public sealed class AppInsightsMetricsService
         return result.Table.Rows
             .Select((row, index) =>
             {
-                var customDimensions = ReadCustomDimensions(row[8]);
+                var customDimensions = ReadCustomDimensions(row[6]);
                 var timestamp = ReadDateTimeOffset(row[2]) ?? timeFrom;
                 return new RunTraceSpanDto
                 {
                     Id = ReadRequiredString(row[0], $"{runId}-{index}"),
-                    Name = ReadRequiredString(row[1], "dependency"),
+                    Name = ReadRequiredString(row[1], "span"),
                     Timestamp = timestamp,
                     DurationMs = ReadDurationMs(row[3]),
                     Success = ReadBool(row[4]),
@@ -583,6 +595,20 @@ public sealed class AppInsightsMetricsService
     }
 
     private static string EscapeKusto(string value) => value.Replace("\\", "\\\\").Replace("\"", "\\\"");
+
+    private static string BuildRunIdDimensionPredicate(string runId, string customDimensionsColumn)
+    {
+        var escapedRunId = EscapeKusto(runId);
+        return $"""
+            tostring({customDimensionsColumn}["run_id"]) == "{escapedRunId}"
+            or tostring({customDimensionsColumn}["runId"]) == "{escapedRunId}"
+            or tostring({customDimensionsColumn}["RunId"]) == "{escapedRunId}"
+            or tostring({customDimensionsColumn}["run.id"]) == "{escapedRunId}"
+            or tostring({customDimensionsColumn}["parent_run_id"]) == "{escapedRunId}"
+            or tostring({customDimensionsColumn}["parentRunId"]) == "{escapedRunId}"
+            or tostring({customDimensionsColumn}["ParentRunId"]) == "{escapedRunId}"
+            """;
+    }
 
     private static string ReadRequiredString(object? value, string fallback) =>
         string.IsNullOrWhiteSpace(value?.ToString()) ? fallback : value!.ToString()!;
