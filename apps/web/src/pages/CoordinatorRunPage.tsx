@@ -24,9 +24,8 @@ import {
   ArrowRepeatAllRegular,
   BotRegular,
   ChatRegular,
-  ChevronLeftRegular,
-  ChevronRightRegular,
   DismissRegular,
+  DocumentRegular,
   OpenRegular,
 } from '@fluentui/react-icons';
 import type { FluentIcon } from '@fluentui/react-icons';
@@ -765,71 +764,11 @@ const useStyles = makeStyles({
     padding: `${tokens.spacingVerticalS} 0`,
     borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
   },
-  // Two-column layout: outcome spec on the LEFT (collapsible), coordinator session on the RIGHT.
-  twoCol: {
-    display: 'grid',
-    gridTemplateColumns: 'minmax(300px, 360px) minmax(0, 1fr)',
-    gap: tokens.spacingHorizontalL,
-    alignItems: 'start',
-    '@media (max-width: 1024px)': {
-      gridTemplateColumns: '1fr',
-    },
-  },
-  twoColCollapsed: {
-    display: 'grid',
-    gridTemplateColumns: '44px minmax(0, 1fr)',
-    gap: tokens.spacingHorizontalL,
-    alignItems: 'start',
-  },
-  twoColSessionCollapsed: {
-    display: 'grid',
-    gridTemplateColumns: 'minmax(0, 1fr) 44px',
-    gap: tokens.spacingHorizontalL,
-    alignItems: 'start',
-    '@media (max-width: 1024px)': {
-      gridTemplateColumns: '1fr',
-    },
-  },
-  leftCol: {
+  // Single-column coordinator session layout. The outcome spec moved to a slide-in panel (#164).
+  sessionOnly: {
     display: 'flex',
     flexDirection: 'column',
-    gap: tokens.spacingVerticalS,
-    maxHeight: 'calc(100vh - 180px)',
-    overflowY: 'auto',
-    paddingRight: tokens.spacingHorizontalS,
-    '@media (max-width: 1024px)': {
-      maxHeight: 'none',
-    },
-  },
-  outcomeHeaderRow: {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: tokens.spacingHorizontalS,
-  },
-  sessionHeaderRow: {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'flex-end',
-  },
-  outcomeRail: {
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'center',
-    gap: tokens.spacingVerticalS,
-    paddingTop: tokens.spacingVerticalXS,
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: tokens.borderRadiusMedium,
-    backgroundColor: tokens.colorNeutralBackground1,
-    minHeight: '160px',
-  },
-  railLabel: {
-    writingMode: 'vertical-rl',
-    transform: 'rotate(180deg)',
-    fontSize: tokens.fontSizeBase200,
-    color: tokens.colorNeutralForeground3,
-    letterSpacing: '0.04em',
-    userSelect: 'none',
+    minWidth: 0,
   },
   centerCol: {
     display: 'flex',
@@ -1244,35 +1183,20 @@ export function CoordinatorRunPage() {
   const coordItems = useMemo(() => stripSerializedWorkPlanMessages(coordItemsRaw), [coordItemsRaw]);
   const liveRun = streamStatus === 'connecting' || streamStatus === 'streaming';
 
-  // Outcome column collapse — fold the spec to a thin left rail to give the session room.
-  const [outcomeCollapsed, setOutcomeCollapsed] = useState(false);
-
-  // Auto-collapse the outcome spec once it is confirmed (dispatch is unblocked from that point),
-  // freeing horizontal space for the session. Only auto-fires once so the user can re-expand.
+  // The outcome spec now lives in a slide-in panel opened from the [Spec] button under the
+  // Coordinator card. `specConfirmed` still drives spec-authoring gating below.
   const specConfirmed = useMemo(
     () => events.some((e) => e.type === 'coordinator.outcome_spec.confirmed'),
     [events],
   );
-  const autoCollapsedRef = useRef(false);
-  useEffect(() => {
-    if (specConfirmed && !autoCollapsedRef.current) {
-      autoCollapsedRef.current = true;
-      setOutcomeCollapsed(true);
-    }
-  }, [specConfirmed]);
 
-  // Session column collapse — symmetric to the outcome rail, but folds to a thin RIGHT rail. While
-  // the outcome spec is still being authored (no work plan yet) the session has nothing useful to
-  // show, so it defaults collapsed to hand the outcome panel the full width; it auto-expands once the
-  // orchestration moves past spec authoring (spec confirmed, subtasks dispatched, or any orch phase).
-  // A manual toggle takes over from the automatic default.
+  // While the outcome spec is still being authored (no work plan yet) the graph filters out the
+  // planned assembly nodes so the canvas stays uncluttered.
   const hasSubtaskNodes = useMemo(
     () => (effectiveDescriptor?.nodes ?? []).some((n) => n.node_type === 'subtask'),
     [effectiveDescriptor],
   );
   const inSpecAuthoring = !specConfirmed && !hasSubtaskNodes && orch.phase === 'unknown';
-  const [sessionCollapseOverride, setSessionCollapseOverride] = useState<boolean | null>(null);
-  const sessionCollapsed = sessionCollapseOverride ?? inSpecAuthoring;
 
   // Bubbled child questions + tool-approval requests re-projected onto the coordinator stream
   // (issue: make it easy to answer/approve from the all-up view). Each item records the source
@@ -1646,13 +1570,12 @@ export function CoordinatorRunPage() {
   // ---------------------------------------------------------------------------
 
   const [steerPanelOpen, setSteerPanelOpen] = useState(false);
+  const [specPanelOpen, setSpecPanelOpen] = useState(false);
 
   // ---------------------------------------------------------------------------
   // Session panel anchor — the coordinator node's "View session" scrolls here.
   const sessionRef = useRef<HTMLDivElement>(null);
   const scrollToSession = useCallback(() => {
-    // If the session column is collapsed, expand it first so the ref is in the DOM.
-    setSessionCollapseOverride(false);
     // Defer scroll by one animation frame so React re-renders the ref'd element before scrolling.
     requestAnimationFrame(() => {
       sessionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -1912,17 +1835,30 @@ export function CoordinatorRunPage() {
           course-correction to the coordinator or stop the orchestration.
         </Text>
 
-        {coordActive && (
+        {(!isChildRun || coordActive) && (
           <div className={styles.coordControls}>
-            <Button
-              appearance="primary"
-              size="small"
-              icon={<ChatRegular />}
-              onClick={() => setSteerPanelOpen(true)}
-              data-testid="open-steer-panel"
-            >
-              Steer
-            </Button>
+            {!isChildRun && (
+              <Button
+                appearance="secondary"
+                size="small"
+                icon={<DocumentRegular />}
+                onClick={() => setSpecPanelOpen(true)}
+                data-testid="open-spec-panel"
+              >
+                Spec
+              </Button>
+            )}
+            {coordActive && (
+              <Button
+                appearance="primary"
+                size="small"
+                icon={<ChatRegular />}
+                onClick={() => setSteerPanelOpen(true)}
+                data-testid="open-steer-panel"
+              >
+                Steer
+              </Button>
+            )}
           </div>
         )}
 
@@ -1994,58 +1930,11 @@ export function CoordinatorRunPage() {
         </div>
       )}
 
-      {/* Two-column layout: [Outcome (collapsible, auto-collapses on confirm)] [Coordinator session
-          (collapsible to a thin right rail; starts collapsed while the spec is authored)]. */}
-      <div className={
-        outcomeCollapsed
-          ? styles.twoColCollapsed
-          : sessionCollapsed
-            ? styles.twoColSessionCollapsed
-            : styles.twoCol
-      }>
-        {/* COL 1 — outcome spec, collapsible to a thin left rail. Hidden for child runs. */}
-        {!isChildRun && (outcomeCollapsed ? (
-          <div className={styles.outcomeRail}>
-            <Button
-              appearance="subtle"
-              size="small"
-              icon={<ChevronRightRegular />}
-              aria-label="Expand outcome spec"
-              onClick={() => setOutcomeCollapsed(false)}
-            />
-            <span className={styles.railLabel}>Outcome spec</span>
-          </div>
-        ) : (
-          <div className={styles.leftCol}>
-            <OutcomeSpecPanel runId={runId} projectId={projectId ?? undefined} events={events} streamStatus={streamStatus} onCollapse={() => setOutcomeCollapsed(true)} onReconnect={reconnectStream} />
-          </div>
-        ))}
-
-        {/* COL 2 — coordinator session: automation/actions controls, the rich run view, and steering.
-            Collapsible to a thin right rail (mirrors the outcome rail) to give the outcome panel the
-            full width while the spec is still being authored. */}
-        {sessionCollapsed ? (
-          <div className={styles.outcomeRail}>
-            <Button
-              appearance="subtle"
-              size="small"
-              icon={<ChevronLeftRegular />}
-              aria-label="Expand coordinator session"
-              onClick={() => setSessionCollapseOverride(false)}
-            />
-            <span className={styles.railLabel}>Coordinator session</span>
-          </div>
-        ) : (
+      {/* Coordinator session: automation/actions controls, the rich run view, and steering. The
+          outcome spec now lives in a slide-in panel opened from the [Spec] button under the
+          Coordinator card. */}
+      <div className={styles.sessionOnly}>
         <div ref={sessionRef} className={styles.centerCol}>
-          <div className={styles.sessionHeaderRow}>
-            <Button
-              appearance="subtle"
-              size="small"
-              icon={<ChevronRightRegular />}
-              aria-label="Collapse coordinator session"
-              onClick={() => setSessionCollapseOverride(true)}
-            />
-          </div>
           {/* Assembly review affordance — de-confuses the stuck state (issues 3 & 4). */}
           {(orch.phase === 'awaiting_assembly' || orch.phase === 'assembling') && (
             <div className={styles.panel}>
@@ -2248,7 +2137,6 @@ export function CoordinatorRunPage() {
           />
           </div>
         </div>
-        )}
       </div>
 
       {/* View-run modal — the standard run view (Changes/Files + timeline) for a child subtask,
@@ -2286,6 +2174,23 @@ export function CoordinatorRunPage() {
           runId={runId}
           canSteer={coordActive}
           onSteered={reconnectStream}
+        />
+      </SlidePanel>
+
+      {/* Outcome spec side panel (#164) */}
+      <SlidePanel
+        open={specPanelOpen}
+        onClose={() => setSpecPanelOpen(false)}
+        title="Outcome spec"
+        width="min(560px, 94vw)"
+      >
+        <OutcomeSpecPanel
+          runId={runId}
+          projectId={projectId ?? undefined}
+          events={events}
+          streamStatus={streamStatus}
+          onCollapse={() => setSpecPanelOpen(false)}
+          onReconnect={reconnectStream}
         />
       </SlidePanel>
 

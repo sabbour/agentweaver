@@ -684,6 +684,25 @@ describe('CoordinatorRunPage — automation toggles (autopilot + auto-approve)',
   });
 });
 
+describe('CoordinatorRunPage — outcome spec side panel (#164)', () => {
+  it('renders a Spec button that opens the outcome spec slide-in panel', async () => {
+    const { container } = render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    const specBtn = await waitFor(() => {
+      const btn = container.querySelector('[data-testid="open-spec-panel"]') as HTMLButtonElement | null;
+      expect(btn).not.toBeNull();
+      return btn as HTMLButtonElement;
+    }, { timeout: 4000 });
+
+    fireEvent.click(specBtn);
+
+    await waitFor(
+      () => expect(document.body.textContent).toContain('Outcome spec'),
+      { timeout: 4000 },
+    );
+  });
+});
+
 describe('CoordinatorRunPage — steering chat side panel (#163)', () => {
   it('opens the steering chat panel with a message input, Send, and Stop', async () => {
     const { container } = render(<Wrapper><CoordinatorRunPage /></Wrapper>);
