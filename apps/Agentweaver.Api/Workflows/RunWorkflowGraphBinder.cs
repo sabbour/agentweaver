@@ -268,7 +268,7 @@ internal static class RunWorkflowGraphBinder
         // per-node executor).
         if (IsComposedPolicyGate(b, edge.From) || IsComposedPolicyGate(b, edge.To))
         {
-            if (TryWirePolicyEdge(ctx.G, definition, edge, b))
+            if (TryWirePolicyEdge(ctx, edge))
                 return;
         }
 
@@ -721,23 +721,23 @@ internal static class RunWorkflowGraphBinder
     // per-node policy binding) route through this plumbing for parity with multi-gate review policies.
 
     private static bool TryWirePolicyEdge(
-        GraphDescriptorBuilder g,
-        WorkflowDefinition definition,
-        WorkflowEdge edge,
-        RunWorkflowBindings b)
+        WireContext ctx,
+        WorkflowEdge edge)
     {
+        var definition = ctx.Definition;
+        var b = ctx.B;
         var fromKind = GateKindOf(definition, edge.From);
         var toKind = GateKindOf(definition, edge.To);
 
         if (toKind is not null && b.PolicyGateBindings.ContainsKey(edge.To))
         {
-            WireIntoPolicyGate(g, definition, edge, b, toKind);
+            WireIntoPolicyGate(ctx.G, definition, edge, b, toKind);
             return true;
         }
 
         if (fromKind is not null && b.PolicyGateBindings.ContainsKey(edge.From))
         {
-            WireFromPolicyGate(g, edge, b, fromKind);
+            WireFromPolicyGate(ctx, edge, fromKind);
             return true;
         }
 
@@ -792,25 +792,37 @@ internal static class RunWorkflowGraphBinder
             $"Policy gate '{edge.To}' cannot consume edge from '{edge.From}'.", edge.To);
     }
 
-    private static void WireFromPolicyGate(GraphDescriptorBuilder g, WorkflowEdge edge, RunWorkflowBindings b, string sourceKind)
+    private static void WireFromPolicyGate(WireContext ctx, WorkflowEdge edge, string sourceKind)
     {
+        var g = ctx.G;
+        var b = ctx.B;
+        var definition = ctx.Definition;
         var source = b.PolicyGateBindings[edge.From];
+
+        // The composer routes a gate's revise/approved/terminal edges by TARGET. Resolve the target's
+        // effective kind rather than matching literal ids: a policy gate's "revise" loop points at the
+        // workflow's producer (its START node), which is the canonical "agent" only for the default
+        // workflow — catalog workflows (e.g. bug-fix) use their own start id (e.g. "triage"). Resolving
+        // the per-node agent executor binds the loop-back for ANY start id, and preserves golden
+        // descriptor parity because ResolveAgentNode returns b.AgentBinding for the canonical "agent" node.
+        var toNode = GetNode(definition, edge.To);
+        var toKind = EffectiveKind(definition, toNode);
 
         if (sourceKind == "rai")
         {
-            switch (edge.To)
+            switch (toKind)
             {
-                case "agent":
+                case NodeKind.Agent:
                     g.AddEdge<AgentTurnOutput>(source, b.RaiRevisionAdapter,
                             output => AgentTurnPredicate(output, edge.When, sourceKind, b.MaxIterations))
-                     .AddEdge(b.RaiRevisionAdapter, b.AgentBinding, idempotent: true);
+                     .AddEdge(b.RaiRevisionAdapter, ctx.S.ResolveAgentNode(toNode), idempotent: true);
                     return;
-                case "merge":
+                case NodeKind.Merge:
                     g.AddEdge<AgentTurnOutput>(source, b.PolicyDirectMergeAdapter,
                             output => AgentTurnPredicate(output, edge.When, sourceKind, b.MaxIterations))
                      .AddEdge(b.PolicyDirectMergeAdapter, b.MergeBinding);
                     return;
-                case var id when id.StartsWith("policy-terminal-safety-failed", StringComparison.Ordinal):
+                case NodeKind.Terminal when edge.To.StartsWith("policy-terminal-safety-failed", StringComparison.Ordinal):
                     g.AddEdge<AgentTurnOutput>(source, b.TerminalSafetyFailed,
                         output => AgentTurnPredicate(output, edge.When, sourceKind, b.MaxIterations));
                     return;
@@ -819,19 +831,19 @@ internal static class RunWorkflowGraphBinder
 
         if (sourceKind is "rubberduck" or "human-review")
         {
-            switch (edge.To)
+            switch (toKind)
             {
-                case "agent":
+                case NodeKind.Agent:
                     g.AddEdge<WorkflowReviewDecision>(source, b.ReviewChangesAdapter,
                             decision => ReviewDecisionPredicate(decision, edge.When))
-                     .AddEdge(b.ReviewChangesAdapter, b.AgentBinding, idempotent: true);
+                     .AddEdge(b.ReviewChangesAdapter, ctx.S.ResolveAgentNode(toNode), idempotent: true);
                     return;
-                case "merge":
+                case NodeKind.Merge:
                     g.AddEdge<WorkflowReviewDecision>(source, b.MergeAdapter,
                             decision => ReviewDecisionPredicate(decision, edge.When))
                      .AddEdge(b.MergeAdapter, b.MergeBinding);
                     return;
-                case var id when id.StartsWith("policy-terminal-declined", StringComparison.Ordinal):
+                case NodeKind.Terminal when edge.To.StartsWith("policy-terminal-declined", StringComparison.Ordinal):
                     g.AddEdge<WorkflowReviewDecision>(source, b.TerminalDeclined,
                         decision => ReviewDecisionPredicate(decision, edge.When));
                     return;
