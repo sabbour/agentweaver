@@ -2325,8 +2325,6 @@ export function CoordinatorRunPage() {
             <AgentTokenBreakdown data={tokenBreakdown} />
             <TransactionTracePanel
               runId={runId ?? ''}
-              events={events}
-              children={childrenData}
             />
           </div>
 

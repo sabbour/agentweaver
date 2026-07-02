@@ -1,22 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Badge, Spinner, Text, Title3, makeStyles, tokens } from '@fluentui/react-components';
-import type { CoordinatorChildResponse, PersistedRunEvent, RunDetail, RunTraceDto, RunTraceSpanDto } from '../../api/types';
+import { Badge, Text, Title3, makeStyles, tokens } from '@fluentui/react-components';
+import type { RunTraceDto, RunTraceSpanDto } from '../../api/types';
 import { apiClient } from '../../api/apiClient';
-
-type TraceEvent = Pick<PersistedRunEvent, 'sequence' | 'type' | 'payload'>;
-type TraceSource = 'appInsights' | 'eventStream';
-
-interface EventTraceBar {
-  key: string;
-  runId: string;
-  label: string;
-  secondary: string;
-  status: string;
-  startedAt: number;
-  endedAt: number;
-  kind: 'coordinator' | 'agent';
-  source: 'eventStream';
-}
 
 interface AppInsightsTraceBar {
   key: string;
@@ -30,7 +15,7 @@ interface AppInsightsTraceBar {
   level: number;
 }
 
-type TraceBar = EventTraceBar | AppInsightsTraceBar;
+type TraceBar = AppInsightsTraceBar;
 
 interface TraceLane {
   key: string;
@@ -39,17 +24,6 @@ interface TraceLane {
   bars: TraceBar[];
   levels: number;
 }
-
-interface DetailState {
-  loading?: boolean;
-  error?: string;
-  run?: RunDetail | null;
-  events?: PersistedRunEvent[];
-}
-
-const START_EVENTS = new Set(['subtask.dispatched', 'subtask.running']);
-const END_EVENTS = new Set(['subtask.completed', 'subtask.failed', 'subtask.assemble_ready', 'subtask.rai_flagged']);
-const COORDINATOR_END_EVENTS = new Set(['coordinator.assembly_completed', 'coordinator.assembly_failed', 'coordinator.assembly_declined', 'run.completed', 'run.failed']);
 
 const useStyles = makeStyles({
   panel: {
@@ -149,25 +123,6 @@ const useStyles = makeStyles({
   },
 });
 
-function readTimestamp(payload: Record<string, unknown>): number | null {
-  for (const key of ['timestamp_utc', 'timestampUtc', 'started_at', 'startedAt', 'ended_at', 'endedAt']) {
-    const raw = payload[key];
-    if (typeof raw === 'string') {
-      const parsed = new Date(raw).getTime();
-      if (!Number.isNaN(parsed)) return parsed;
-    }
-  }
-  return null;
-}
-
-function readString(payload: Record<string, unknown>, keys: string[]): string | undefined {
-  for (const key of keys) {
-    const value = payload[key];
-    if (typeof value === 'string' && value.trim() !== '') return value;
-  }
-  return undefined;
-}
-
 function formatDuration(startedAt: number, endedAt: number): string {
   return formatDurationMs(Math.max(0, endedAt - startedAt));
 }
@@ -190,79 +145,6 @@ function statusVariant(status: string, styles: ReturnType<typeof useStyles>) {
   return '';
 }
 
-function summariseEvents(events: PersistedRunEvent[] | undefined, fallback?: string | null): string {
-  if (events) {
-    for (const event of [...events].reverse()) {
-      const text = readString(event.payload, ['message', 'content', 'result', 'reason', 'detail']);
-      if (text) return text;
-    }
-  }
-  return fallback?.trim() || 'No agent output captured yet.';
-}
-
-function buildEventLanes(runId: string, events: TraceEvent[], children: CoordinatorChildResponse[]): TraceLane[] {
-  const now = Date.now();
-  const lanes: TraceLane[] = [];
-  const coordinatorStart = events.find((event) => event.type === 'coordinator.started');
-  const coordinatorEnd = [...events].reverse().find((event) => COORDINATOR_END_EVENTS.has(event.type));
-  const firstTs = coordinatorStart ? readTimestamp(coordinatorStart.payload) : null;
-  const endTs = coordinatorEnd ? readTimestamp(coordinatorEnd.payload) : null;
-  if (firstTs != null) {
-    lanes.push({
-      key: `coord-${runId}`,
-      label: 'Coordinator',
-      secondary: 'Plan + assembly',
-      levels: 1,
-      bars: [{
-        key: `coord-${runId}`,
-        runId,
-        label: 'Coordinator',
-        secondary: 'Plan + assembly',
-        status: coordinatorEnd?.type?.replace('coordinator.', '').replace(/\./g, ' ') ?? 'running',
-        startedAt: firstTs,
-        endedAt: endTs ?? now,
-        kind: 'coordinator',
-        source: 'eventStream',
-      }],
-    });
-  }
-
-  for (const child of children) {
-    let startedAt: number | null = null;
-    let endedAt: number | null = null;
-    for (const event of events) {
-      if (String(event.payload.subtaskId ?? '') !== String(child.subtaskId)
-        && String(event.payload.childRunId ?? event.payload.child_run_id ?? '') !== child.childRunId) {
-        continue;
-      }
-      const timestamp = readTimestamp(event.payload);
-      if (timestamp == null) continue;
-      if (START_EVENTS.has(event.type)) startedAt = startedAt == null ? timestamp : Math.min(startedAt, timestamp);
-      if (END_EVENTS.has(event.type)) endedAt = endedAt == null ? timestamp : Math.max(endedAt, timestamp);
-    }
-
-    if (startedAt == null) continue;
-    lanes.push({
-      key: child.childRunId,
-      label: child.assignedAgent,
-      secondary: `Subtask ${child.subtaskId} · ${child.selectedModelId}`,
-      levels: 1,
-      bars: [{
-        key: child.childRunId,
-        runId: child.childRunId,
-        label: child.assignedAgent,
-        secondary: `Subtask ${child.subtaskId} · ${child.selectedModelId}`,
-        status: child.childRunStatus ?? child.subtaskStatus,
-        startedAt,
-        endedAt: endedAt ?? now,
-        kind: 'agent',
-        source: 'eventStream',
-      }],
-    });
-  }
-
-  return lanes.sort((left, right) => left.bars[0].startedAt - right.bars[0].startedAt);
-}
 
 function buildAppInsightsLanes(spans: RunTraceSpanDto[]): TraceLane[] {
   if (!spans.length) return [];
@@ -326,21 +208,15 @@ function findSelectedBar(lanes: TraceLane[], key: string | null): TraceBar | nul
 
 export function TransactionTracePanel({
   runId,
-  events,
-  children,
   title = 'Transaction trace',
-  subtitle = 'Timeline of coordinator and child-agent activity for this run.',
+  subtitle = 'Timeline of agent activity from AppInsights distributed traces.',
 }: {
   runId: string;
-  events: TraceEvent[];
-  children: CoordinatorChildResponse[];
   title?: string;
   subtitle?: string;
 }) {
   const styles = useStyles();
-  const eventLanes = useMemo(() => buildEventLanes(runId, events, children), [children, events, runId]);
   const [selectedBarKey, setSelectedBarKey] = useState<string | null>(null);
-  const [details, setDetails] = useState<Record<string, DetailState>>({});
   const [appInsightsTrace, setAppInsightsTrace] = useState<RunTraceDto>({ runId, spans: [] });
 
   useEffect(() => {
@@ -358,15 +234,12 @@ export function TransactionTracePanel({
 
   useEffect(() => {
     setSelectedBarKey(null);
-    setDetails({});
   }, [runId]);
 
-  const appInsightsLanes = useMemo(
+  const lanes = useMemo(
     () => buildAppInsightsLanes(appInsightsTrace.spans),
     [appInsightsTrace.spans],
   );
-  const source: TraceSource = appInsightsLanes.length > 0 ? 'appInsights' : 'eventStream';
-  const lanes = source === 'appInsights' ? appInsightsLanes : eventLanes;
   const allBars = lanes.flatMap((lane) => lane.bars);
   const selectedBar = findSelectedBar(lanes, selectedBarKey);
 
@@ -374,24 +247,8 @@ export function TransactionTracePanel({
   const rangeEnd = allBars.length > 0 ? Math.max(...allBars.map((bar) => bar.endedAt)) : 0;
   const rangeDuration = Math.max(1, rangeEnd - rangeStart);
 
-  async function toggleBar(bar: TraceBar) {
+  function toggleBar(bar: TraceBar) {
     setSelectedBarKey((current) => current === bar.key ? null : bar.key);
-    if (bar.source !== 'eventStream') return;
-    if (details[bar.runId]?.run || details[bar.runId]?.loading) return;
-
-    setDetails((current) => ({ ...current, [bar.runId]: { loading: true } }));
-    try {
-      const [run, traceEvents] = await Promise.all([
-        apiClient.getRun(bar.runId),
-        apiClient.getRunEvents(bar.runId).catch(() => [] as PersistedRunEvent[]),
-      ]);
-      setDetails((current) => ({ ...current, [bar.runId]: { run, events: traceEvents } }));
-    } catch (error) {
-      setDetails((current) => ({
-        ...current,
-        [bar.runId]: { error: error instanceof Error ? error.message : String(error) },
-      }));
-    }
   }
 
   return (
@@ -401,20 +258,15 @@ export function TransactionTracePanel({
           <Title3>{title}</Title3>
           <Text className={styles.subtitle}>{subtitle}</Text>
         </div>
-        <Badge appearance="outline" size="small">
-          Source: {source === 'appInsights' ? 'AppInsights' : 'Event stream'}
-        </Badge>
+        <Badge appearance="outline" size="small">AppInsights</Badge>
       </div>
       {lanes.length === 0 ? (
-        <Text>No trace events are available for this run yet.</Text>
+        <Text>No AppInsights trace data available for this run yet.</Text>
       ) : (
         <div className={styles.rows}>
           {lanes.map((lane) => {
             const laneHeight = lane.levels > 1 ? lane.levels * 30 + 8 : 34;
             const isExpanded = lane.bars.some((bar) => bar.key === selectedBarKey);
-            const detail = selectedBar?.source === 'eventStream' && isExpanded
-              ? details[selectedBar.runId]
-              : undefined;
 
             return (
               <div key={lane.key}>
@@ -427,17 +279,15 @@ export function TransactionTracePanel({
                     {lane.bars.map((bar) => {
                       const left = ((bar.startedAt - rangeStart) / rangeDuration) * 100;
                       const width = Math.max(8, ((bar.endedAt - bar.startedAt) / rangeDuration) * 100);
-                      const top = bar.source === 'appInsights' ? 4 + (bar.level * 30) : 4;
-                      const label = bar.source === 'appInsights'
-                        ? `${bar.label} · ${formatDuration(bar.startedAt, bar.endedAt)}`
-                        : `${bar.status} · ${formatDuration(bar.startedAt, bar.endedAt)}`;
+                      const top = 4 + (bar.level * 30);
+                      const label = `${bar.label} · ${formatDuration(bar.startedAt, bar.endedAt)}`;
                       return (
                         <button
                           key={bar.key}
                           type="button"
                           className={`${styles.barButton} ${statusVariant(bar.status, styles)}`}
                           style={{ left: `${left}%`, width: `${width}%`, top: `${top}px` }}
-                          onClick={() => { void toggleBar(bar); }}
+                          onClick={() => { toggleBar(bar); }}
                           title={label}
                         >
                           {label}
@@ -446,7 +296,7 @@ export function TransactionTracePanel({
                     })}
                   </div>
                 </div>
-                {isExpanded && selectedBar?.source === 'appInsights' && (
+                {isExpanded && selectedBar && (
                   <div className={styles.expanded}>
                     <div className={styles.detailMeta}>
                       <span>{new Date(selectedBar.span.timestamp).toLocaleString()}</span>
@@ -461,24 +311,6 @@ export function TransactionTracePanel({
                       <Text>Duration: {formatDurationMs(selectedBar.span.durationMs)}</Text>
                       <Text>Operation: {selectedBar.span.operationName ?? '—'}</Text>
                     </div>
-                  </div>
-                )}
-                {isExpanded && selectedBar?.source === 'eventStream' && (
-                  <div className={styles.expanded}>
-                    {detail?.loading ? (
-                      <Spinner size="tiny" label="Loading agent detail" />
-                    ) : detail?.error ? (
-                      <Text>{detail.error}</Text>
-                    ) : (
-                      <>
-                        <div className={styles.detailMeta}>
-                          <span>{detail?.run?.status ?? selectedBar.status}</span>
-                          {detail?.run?.model_source && <span>{detail.run.model_source}</span>}
-                          <span>{new Date(selectedBar.startedAt).toLocaleString()}</span>
-                        </div>
-                        <Text>{summariseEvents(detail?.events, detail?.run?.result ?? null)}</Text>
-                      </>
-                    )}
                   </div>
                 )}
               </div>

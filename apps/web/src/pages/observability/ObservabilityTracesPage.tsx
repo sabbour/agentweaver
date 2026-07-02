@@ -4,7 +4,7 @@ import { Badge, Button, MessageBar, MessageBarBody, Spinner, Text, makeStyles, t
 import { ArrowSyncRegular } from '@fluentui/react-icons';
 import { apiClient } from '../../api/apiClient';
 import { ApiError } from '../../api/client';
-import type { CoordinatorChildResponse, PersistedRunEvent, Project, WorkflowRunDto } from '../../api/types';
+import type { Project, WorkflowRunDto } from '../../api/types';
 import { ObservabilityLayout } from '../../components/observability/ObservabilityLayout';
 import { TransactionTracePanel } from '../../components/runs/TransactionTracePanel';
 import { isCoordinatorRun } from '../../utils/runKind';
@@ -62,30 +62,18 @@ function badgeColor(status: string): 'success' | 'warning' | 'danger' | 'informa
 }
 
 function TracePreview({ runId }: { runId: string }) {
-  const [events, setEvents] = useState<PersistedRunEvent[]>([]);
-  const [children, setChildren] = useState<CoordinatorChildResponse[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
-    Promise.all([
-      apiClient.getRunEvents(runId).catch(() => [] as PersistedRunEvent[]),
-      apiClient.getCoordinatorChildren(runId).catch(() => [] as CoordinatorChildResponse[]),
-    ])
-      .then(([traceEvents, childRuns]) => {
-        if (cancelled) return;
-        setEvents(traceEvents);
-        setChildren(childRuns);
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-    return () => { cancelled = true; };
+    // Minimal delay so the spinner shows before panel fetches AppInsights data
+    const t = setTimeout(() => { if (!cancelled) setLoading(false); }, 300);
+    return () => { cancelled = true; clearTimeout(t); };
   }, [runId]);
 
   if (loading) return <Spinner label="Loading trace preview" />;
-  return <TransactionTracePanel runId={runId} events={events} children={children} subtitle="Recent trace preview. Click a bar to inspect the agent output." />;
+  return <TransactionTracePanel runId={runId} subtitle="Recent trace preview. Click a bar to inspect the agent output." />;
 }
 
 export function ObservabilityTracesPage() {
