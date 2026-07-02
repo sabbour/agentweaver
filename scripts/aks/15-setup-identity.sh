@@ -67,7 +67,8 @@ az role assignment create \
   --role "Key Vault Secrets User" \
   --assignee-object-id "${IDENTITY_OBJECT_ID}" \
   --assignee-principal-type ServicePrincipal \
-  --scope "${KEYVAULT_ID}"
+  --scope "${KEYVAULT_ID}" \
+  2>&1 | grep -v "already exists" || true
 
 # 'Key Vault Secrets Officer' — write access for the GitHub token store
 # (SetAsync / DeleteAsync via Azure SDK + workload identity, spec 006).
@@ -75,15 +76,24 @@ az role assignment create \
   --role "Key Vault Secrets Officer" \
   --assignee-object-id "${IDENTITY_OBJECT_ID}" \
   --assignee-principal-type ServicePrincipal \
-  --scope "${KEYVAULT_ID}"
+  --scope "${KEYVAULT_ID}" \
+  2>&1 | grep -v "already exists" || true
 
 echo ""
 echo "=== Step 5: Enable OIDC issuer + workload identity on cluster ==="
-az aks update \
-  --name "${CLUSTER_NAME}" \
-  --resource-group "${RESOURCE_GROUP}" \
-  --enable-oidc-issuer \
-  --enable-workload-identity
+OIDC_ENABLED=$(az aks show --name "${CLUSTER_NAME}" --resource-group "${RESOURCE_GROUP}" \
+  --query 'oidcIssuerProfile.enabled' -o tsv 2>/dev/null || echo "false")
+WI_ENABLED=$(az aks show --name "${CLUSTER_NAME}" --resource-group "${RESOURCE_GROUP}" \
+  --query 'securityProfile.workloadIdentity.enabled' -o tsv 2>/dev/null || echo "false")
+if [[ "${OIDC_ENABLED}" == "true" && "${WI_ENABLED}" == "true" ]]; then
+  echo "  [SKIP] OIDC issuer and workload identity already enabled."
+else
+  az aks update \
+    --name "${CLUSTER_NAME}" \
+    --resource-group "${RESOURCE_GROUP}" \
+    --enable-oidc-issuer \
+    --enable-workload-identity
+fi
 
 OIDC_ISSUER=$(az aks show \
   --name "${CLUSTER_NAME}" \

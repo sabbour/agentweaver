@@ -43,57 +43,69 @@ echo ""
 echo "Installing/upgrading aks-preview extension..."
 az extension add --upgrade --name aks-preview
 
-echo "Creating resource group '${RESOURCE_GROUP}' in ${LOCATION}..."
-az group create \
-  --name "${RESOURCE_GROUP}" \
-  --location "${LOCATION}" \
-  --output table
+# ── Resource group ────────────────────────────────────────────────────────────
+if az group exists --name "${RESOURCE_GROUP}" | grep -q true; then
+  echo "  [SKIP] Resource group '${RESOURCE_GROUP}' already exists."
+else
+  echo "Creating resource group '${RESOURCE_GROUP}' in ${LOCATION}..."
+  az group create --name "${RESOURCE_GROUP}" --location "${LOCATION}" --output table
+fi
 
-echo ""
-echo "Creating ACR '${ACR_NAME}'..."
-az acr create \
-  --resource-group "${RESOURCE_GROUP}" \
-  --name "${ACR_NAME}" \
-  --sku Standard \
-  --admin-enabled false \
-  --output table
+# ── ACR ───────────────────────────────────────────────────────────────────────
+if az acr show --name "${ACR_NAME}" --resource-group "${RESOURCE_GROUP}" &>/dev/null; then
+  echo "  [SKIP] ACR '${ACR_NAME}' already exists."
+else
+  echo ""
+  echo "Creating ACR '${ACR_NAME}'..."
+  az acr create \
+    --resource-group "${RESOURCE_GROUP}" \
+    --name "${ACR_NAME}" \
+    --sku Standard \
+    --admin-enabled false \
+    --output table
+fi
 
 ACR_ID=$(az acr show \
   --name "${ACR_NAME}" \
   --resource-group "${RESOURCE_GROUP}" \
   --query id \
   --output tsv)
-
 echo "  ACR resource ID: ${ACR_ID}"
 
-echo ""
-echo "Creating AKS cluster '${CLUSTER_NAME}' (~10-15 minutes)..."
-# System pool: CriticalAddonsOnly taint keeps app workloads off nodepool1.
-# App workloads (api, worker, mcp, frontend) land on apppool (added below, no taint).
-az aks create \
-  --resource-group "${RESOURCE_GROUP}" \
-  --name "${CLUSTER_NAME}" \
-  --location "${LOCATION}" \
-  --network-plugin azure \
-  --network-plugin-mode overlay \
-  --network-dataplane cilium \
-  --enable-acns \
-  --os-sku AzureLinux \
-  --node-vm-size Standard_D4s_v3 \
-  --node-count 2 \
-  --enable-cluster-autoscaler \
-  --min-count 1 \
-  --max-count 3 \
-  --nodepool-taints CriticalAddonsOnly=true:NoSchedule \
-  --enable-app-routing-istio \
-  --enable-gateway-api \
-  --enable-default-domain \
-  --enable-addons azure-keyvault-secrets-provider \
-  --enable-oidc-issuer \
-  --enable-workload-identity \
-  --attach-acr "${ACR_ID}" \
-  --generate-ssh-keys \
-  --output table
+# ── AKS cluster ───────────────────────────────────────────────────────────────
+if az aks show --name "${CLUSTER_NAME}" --resource-group "${RESOURCE_GROUP}" &>/dev/null; then
+  echo ""
+  echo "  [SKIP] AKS cluster '${CLUSTER_NAME}' already exists."
+else
+  echo ""
+  echo "Creating AKS cluster '${CLUSTER_NAME}' (~10-15 minutes)..."
+  # System pool: CriticalAddonsOnly taint keeps app workloads off nodepool1.
+  # App workloads (api, worker, mcp, frontend) land on apppool (added below, no taint).
+  az aks create \
+    --resource-group "${RESOURCE_GROUP}" \
+    --name "${CLUSTER_NAME}" \
+    --location "${LOCATION}" \
+    --network-plugin azure \
+    --network-plugin-mode overlay \
+    --network-dataplane cilium \
+    --enable-acns \
+    --os-sku AzureLinux \
+    --node-vm-size Standard_D4s_v3 \
+    --node-count 2 \
+    --enable-cluster-autoscaler \
+    --min-count 1 \
+    --max-count 3 \
+    --nodepool-taints CriticalAddonsOnly=true:NoSchedule \
+    --enable-app-routing-istio \
+    --enable-gateway-api \
+    --enable-default-domain \
+    --enable-addons azure-keyvault-secrets-provider \
+    --enable-oidc-issuer \
+    --enable-workload-identity \
+    --attach-acr "${ACR_ID}" \
+    --generate-ssh-keys \
+    --output table
+fi
 
 echo ""
 echo "Fetching kubeconfig..."
@@ -102,53 +114,64 @@ az aks get-credentials \
   --name "${CLUSTER_NAME}" \
   --overwrite-existing
 
-echo ""
-echo "Adding app user pool '${APP_POOL_NAME}' (cluster-autoscaler 1–5 nodes)..."
-# Receives all app workloads (api, worker, mcp, frontend, jobs).
-# No taint: pods schedule here without needing any toleration.
-az aks nodepool add \
-  --resource-group "${RESOURCE_GROUP}" \
-  --cluster-name "${CLUSTER_NAME}" \
-  --name "${APP_POOL_NAME}" \
-  --mode User \
-  --os-sku AzureLinux \
-  --node-vm-size Standard_D4s_v3 \
-  --enable-cluster-autoscaler \
-  --min-count 1 \
-  --max-count 5 \
-  --ssh-access disabled \
-  --output table
+# ── App node pool ─────────────────────────────────────────────────────────────
+if az aks nodepool show --cluster-name "${CLUSTER_NAME}" --resource-group "${RESOURCE_GROUP}" \
+    --name "${APP_POOL_NAME}" &>/dev/null; then
+  echo "  [SKIP] Node pool '${APP_POOL_NAME}' already exists."
+else
+  echo ""
+  echo "Adding app user pool '${APP_POOL_NAME}' (cluster-autoscaler 1–5 nodes)..."
+  az aks nodepool add \
+    --resource-group "${RESOURCE_GROUP}" \
+    --cluster-name "${CLUSTER_NAME}" \
+    --name "${APP_POOL_NAME}" \
+    --mode User \
+    --os-sku AzureLinux \
+    --node-vm-size Standard_D4s_v3 \
+    --enable-cluster-autoscaler \
+    --min-count 1 \
+    --max-count 5 \
+    --ssh-access disabled \
+    --output table
+fi
 
-echo ""
-echo "Adding dedicated Kata user pool '${KATA_POOL_NAME}' (cluster-autoscaler 1–5 nodes)..."
-# NAP and cluster-autoscaler are mutually exclusive; this cluster uses cluster-autoscaler.
-# katapool is the sole Kata-capable pool; sandbox/AgentHost SandboxTemplate pod specs
-# target it via toleration (sandbox=kata:NoSchedule) + preferred nodeAffinity
-# (agentweaver.io/kata=true). The system pool (nodepool1) is a standard pool.
-az aks nodepool add \
-  --resource-group "${RESOURCE_GROUP}" \
-  --cluster-name "${CLUSTER_NAME}" \
-  --name "${KATA_POOL_NAME}" \
-  --mode User \
-  --os-sku AzureLinux \
-  --workload-runtime KataVmIsolation \
-  --node-vm-size Standard_D4s_v3 \
-  --enable-cluster-autoscaler \
-  --min-count 1 \
-  --max-count 5 \
-  --node-taints sandbox=kata:NoSchedule \
-  --labels agentweaver.io/kata=true \
-  --ssh-access disabled \
-  --output table
+# ── Kata node pool ────────────────────────────────────────────────────────────
+if az aks nodepool show --cluster-name "${CLUSTER_NAME}" --resource-group "${RESOURCE_GROUP}" \
+    --name "${KATA_POOL_NAME}" &>/dev/null; then
+  echo "  [SKIP] Node pool '${KATA_POOL_NAME}' already exists."
+else
+  echo ""
+  echo "Adding dedicated Kata user pool '${KATA_POOL_NAME}' (cluster-autoscaler 1–5 nodes)..."
+  az aks nodepool add \
+    --resource-group "${RESOURCE_GROUP}" \
+    --cluster-name "${CLUSTER_NAME}" \
+    --name "${KATA_POOL_NAME}" \
+    --mode User \
+    --os-sku AzureLinux \
+    --workload-runtime KataVmIsolation \
+    --node-vm-size Standard_D4s_v3 \
+    --enable-cluster-autoscaler \
+    --min-count 1 \
+    --max-count 5 \
+    --node-taints sandbox=kata:NoSchedule \
+    --labels agentweaver.io/kata=true \
+    --ssh-access disabled \
+    --output table
+fi
 
-echo ""
-echo "Installing agent-sandbox CRDs/controller (${SANDBOX_CONTROLLER_VERSION})..."
+# ── Sandbox controller CRDs ───────────────────────────────────────────────────
 SANDBOX_EXTENSIONS_URL="https://github.com/kubernetes-sigs/agent-sandbox/releases/download/${SANDBOX_CONTROLLER_VERSION}/extensions.yaml"
-kubectl apply -f "${SANDBOX_CONTROLLER_MANIFEST_URL}"
-kubectl apply -f "${SANDBOX_EXTENSIONS_URL}"
-kubectl wait --for=condition=Established crd/sandboxclaims.extensions.agents.x-k8s.io --timeout=180s
-kubectl wait --for=condition=Established crd/sandboxtemplates.extensions.agents.x-k8s.io --timeout=180s
-kubectl wait --for=condition=Established crd/sandboxwarmpools.extensions.agents.x-k8s.io --timeout=180s
+if kubectl get crd sandboxclaims.extensions.agents.x-k8s.io &>/dev/null; then
+  echo "  [SKIP] Agent-sandbox CRDs already installed."
+else
+  echo ""
+  echo "Installing agent-sandbox CRDs/controller (${SANDBOX_CONTROLLER_VERSION})..."
+  kubectl apply -f "${SANDBOX_CONTROLLER_MANIFEST_URL}"
+  kubectl apply -f "${SANDBOX_EXTENSIONS_URL}"
+  kubectl wait --for=condition=Established crd/sandboxclaims.extensions.agents.x-k8s.io --timeout=180s
+  kubectl wait --for=condition=Established crd/sandboxtemplates.extensions.agents.x-k8s.io --timeout=180s
+  kubectl wait --for=condition=Established crd/sandboxwarmpools.extensions.agents.x-k8s.io --timeout=180s
+fi
 
 echo ""
 echo "--- Node status ---"

@@ -49,8 +49,7 @@ existing_value=$(az keyvault secret show \
 if [[ -n "${existing_value}" ]]; then
   echo "  [SKIP] Secret '${SECRET_NAME}' already exists in Key Vault '${KEYVAULT_NAME}'."
   echo "         To rotate, delete the secret version and re-run this script."
-  exit 0
-fi
+else
 
 echo "  Generating RSA-2048 private key..."
 
@@ -80,6 +79,7 @@ az keyvault secret set \
 
 echo ""
 echo "  [OK] Secret '${SECRET_NAME}' created successfully."
+fi
 
 # ── Provision mcp-api-key (internal service-to-service bearer token) ──────────
 # This 32-byte hex key is used as Auth:ApiKey by the API and worker to authenticate
