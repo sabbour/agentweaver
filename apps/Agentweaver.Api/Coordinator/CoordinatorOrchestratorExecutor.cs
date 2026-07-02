@@ -199,20 +199,57 @@ public sealed class CoordinatorOrchestratorExecutor
                 ?? await ResolveWorkflowOverrideIdAsync(backlogStore, input.RunId, ct).ConfigureAwait(false);
             if (!string.IsNullOrWhiteSpace(overrideId))
             {
+                // An EXPLICIT workflow choice (dialog dropdown or per-task override) is honored
+                // regardless of trigger eligibility: a person deliberately selected this workflow, so
+                // never silently substitute a different one because its declared trigger is
+                // event/heartbeat rather than manual. Trigger-eligibility filtering below governs only
+                // AUTOMATIC selection among un-pinned workflows.
                 var overrideResult = availableResults.FirstOrDefault(r =>
                     string.Equals(r.Definition!.Id, overrideId, StringComparison.OrdinalIgnoreCase));
-                if (overrideResult?.Definition is not null &&
-                    WorkflowTriggerEvaluator.IsEligible(overrideResult.Definition.Trigger, invocationKind))
+                if (overrideResult?.Definition is not null)
                 {
                     _logger.LogInformation(
-                        "Coordinator workflow selection for run {RunId}: using backlog task workflow override '{WorkflowId}'.",
+                        "Coordinator workflow selection for run {RunId}: using explicit workflow override '{WorkflowId}'.",
                         input.RunId, overrideResult.Definition.Id);
                     return overrideResult.Definition;
                 }
 
                 _logger.LogWarning(
-                    "Coordinator workflow selection for run {RunId}: workflow override '{WorkflowId}' was unavailable or trigger-ineligible for {Invocation}; falling back to eligible selection.",
-                    input.RunId, overrideId, invocationKind);
+                    "Coordinator workflow selection for run {RunId}: workflow override '{WorkflowId}' was not found among the project's workflows; falling back to selection.",
+                    input.RunId, overrideId);
+            }
+
+            // A conversational override ("use {workflow-id}") in the human's latest message always
+            // wins, matched against ALL of the project's workflows (not just trigger-eligible ones)
+            // so an explicit user request is never silently dropped.
+            if (WorkflowSelector.TryParseOverride(input.ReviseFeedback, out var requestedOverrideId))
+            {
+                var overridden = availableResults
+                    .FirstOrDefault(r => string.Equals(r.Definition!.Id, requestedOverrideId, StringComparison.OrdinalIgnoreCase))
+                    ?.Definition;
+                if (overridden is not null)
+                {
+                    EmitWorkflowSelectedEvent(input.RunId, overridden,
+                        $"Using '{overridden.Name}' as requested.", wasAutoSelected: false,
+                        availableResults.Select(r => r.Definition!).ToList());
+                    return overridden;
+                }
+            }
+
+            // A manual "Start task" honors the project's explicitly-configured active/default workflow
+            // even when its declared trigger is event/heartbeat: pinning a project default is a
+            // deliberate owner choice and must not be overridden by the trigger-eligibility filter
+            // (which would silently fall back to the built-in Default Run Workflow). Heartbeat pickups
+            // keep the existing event/heartbeat auto-selection.
+            if (invocationKind == WorkflowInvocationKind.Manual
+                && !string.IsNullOrWhiteSpace(project.DefaultWorkflowId)
+                && defaultDef is not null
+                && availableResults.Any(r => string.Equals(r.Definition!.Id, defaultDef.Id, StringComparison.Ordinal)))
+            {
+                _logger.LogInformation(
+                    "Coordinator workflow selection for run {RunId}: using the project's active workflow '{WorkflowId}' for a manual invocation.",
+                    input.RunId, defaultDef.Id);
+                return defaultDef;
             }
 
             var eligibleResults = availableResults
@@ -239,18 +276,6 @@ public sealed class CoordinatorOrchestratorExecutor
                 .Select(r => r.Definition!.Id)
                 .ToHashSet(StringComparer.Ordinal);
             var context = new WorkflowSelectionContext(input.ProjectId, spec.Goal, roles, available, customWorkflowIds);
-
-            // An explicit user override in the latest human message always wins.
-            if (WorkflowSelector.TryParseOverride(input.ReviseFeedback, out var requestedOverrideId))
-            {
-                var overridden = available.FirstOrDefault(d => string.Equals(d.Id, requestedOverrideId, StringComparison.OrdinalIgnoreCase));
-                if (overridden is not null)
-                {
-                    EmitWorkflowSelectedEvent(input.RunId, overridden,
-                        $"Using '{overridden.Name}' as requested.", wasAutoSelected: false, available);
-                    return overridden;
-                }
-            }
 
             var result = await selector.SelectAsync(context, ct).ConfigureAwait(false);
             EmitWorkflowSelectedEvent(input.RunId, result.Selected, result.Rationale, result.WasAutoSelected, available);
