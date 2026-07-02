@@ -9,13 +9,31 @@ public sealed class AppInsightsMetricsService
 {
     private readonly IConfiguration _configuration;
     private readonly ILogger<AppInsightsMetricsService> _logger;
-    private readonly LogsQueryClient _client;
+    private LogsQueryClient? _client;
+    private readonly object _clientLock = new();
 
     public AppInsightsMetricsService(IConfiguration configuration, ILogger<AppInsightsMetricsService> logger)
     {
         _configuration = configuration;
         _logger = logger;
-        _client = new LogsQueryClient(new DefaultAzureCredential());
+    }
+
+    private LogsQueryClient? GetClient()
+    {
+        if (_client is not null) return _client;
+        lock (_clientLock)
+        {
+            if (_client is not null) return _client;
+            try
+            {
+                _client = new LogsQueryClient(new DefaultAzureCredential());
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to initialize AppInsights LogsQueryClient; metrics will be unavailable.");
+            }
+            return _client;
+        }
     }
 
     public async Task<ProjectMetricsDto> GetProjectMetricsAsync(
@@ -501,9 +519,11 @@ public sealed class AppInsightsMetricsService
         DateTimeOffset to,
         CancellationToken ct)
     {
+        var client = GetClient();
+        if (client is null) return null;
         try
         {
-            var response = await _client.QueryWorkspaceAsync(
+            var response = await client.QueryWorkspaceAsync(
                 workspaceId,
                 query,
                 new QueryTimeRange(from, to),
