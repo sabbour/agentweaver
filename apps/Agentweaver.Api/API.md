@@ -375,7 +375,7 @@ array) instead of a single one.
   "description": "...",
   "roster": ["lead-architect", "backend-engineer", "qa-engineer"],
   "workflow": "software-delivery",
-  "workflows": ["software-delivery", "bug-fix", "code-review"],
+  "workflows": ["software-delivery", "bug-fix"],
   "review_policy": "default",
   "sandbox_profile": "default"
 }
@@ -396,7 +396,6 @@ description and node structure of each.
 |----|------|---------|
 | `software-delivery` | Software Delivery | New features with QA test gate + RAI + code review |
 | `bug-fix` | Bug Fix | Lightweight defect fix with QA verification |
-| `code-review` | Code Review | Standalone review, no merge |
 | `content-authoring` | Content Authoring | Research → draft → editorial review → publish |
 | `pm-discovery` | Product Management Discovery | User research → synthesis → stakeholder review |
 | `agent-evaluation` | Agent Evaluation | Parallel eval runs + safety gate |

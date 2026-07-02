@@ -89,7 +89,7 @@ Blueprints (verify with `list_blueprints`; sandbox in parens):
 |---|---|---|---|
 | `blueprint-content-authoring` | researcher, writer, editor | content-authoring | restricted |
 | `blueprint-product-management` | lead-pm, researcher, designer, PMM, UX, docs | pm-discovery, content-authoring | restricted |
-| `blueprint-software-development` | architect, FE, BE, security, DevOps, QA, docs | software-delivery, bug-fix, code-review | default |
+| `blueprint-software-development` | architect, FE, BE, security, DevOps, QA, docs | software-delivery, bug-fix | default |
 | `blueprint-pm-and-software-development` | combined PM + eng (12 roles) | pm-discovery, software-delivery, bug-fix | default |
 | `blueprint-ai-agent-engineering` | agent-architect, prompt-eng, evaluator, safety + eng | agent-evaluation, software-delivery, bug-fix | default |
 

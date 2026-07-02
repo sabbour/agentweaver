@@ -200,7 +200,7 @@ public sealed class CopilotWorkflowGenerator : IWorkflowGenerator
         """;
 
     /// <summary>Builds the few-shot section from the library workflows. Prefers the canonical
-    /// software-delivery / bug-fix / code-review patterns (FR-057); otherwise takes the first few.
+    /// software-delivery / bug-fix patterns (FR-057); otherwise takes the first few.
     /// agent-evaluation is deliberately excluded — it uses fan_out/fan_in, which have no runtime executor,
     /// so it must not be shown as a model to imitate.</summary>
     private string BuildFewShotExamples()
