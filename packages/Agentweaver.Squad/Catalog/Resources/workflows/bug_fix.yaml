@@ -1,6 +1,7 @@
 # Bug Fix Workflow (Feature 015 US3)
-# Lightweight bug fix pipeline: triage → fix → QA verification → merge → scribe.
-# No heavy planning or code review gate — optimized for quick turnaround on defects and patches.
+# Lightweight bug fix pipeline: triage → fix → QA verification → build & test → human review → merge → scribe.
+# Optimized for quick turnaround on defects and patches, with a mandatory build/test gate and human
+# review gate before merge.
 
 id: bug-fix
 name: Bug Fix
@@ -32,6 +33,25 @@ nodes:
     role: review
     kind: live
     agent: qa-engineer
+
+  - id: build-test
+    type: peer_review
+    label: Build & Test
+    role: review
+    kind: live
+    agent: qa-engineer
+    prompt: Run the project's build and test suite. Execute all available build commands and test runners for the repository. The step passes only if build succeeds AND all tests pass. Report any failures with full error output. Do not approve if there are compilation errors, test failures, or lint errors that indicate broken code. After tests pass, if the project is a web application or service, start the development/preview server on the declared preview port so stakeholders can access the running changes before human review. Check the project's `.agentweaver/agents.yaml` for a declared `preview.port` or `sandbox.port`. If one is declared, start the application on that port. If none is declared, attempt to start on port 8080 as the default.
+
+  - id: human-review
+    type: check
+    label: Human Review
+    role: review
+    kind: gate
+    gate_kind: human-review
+    branches:
+      - approved
+      - request-changes
+      - declined
 
   - id: merge
     type: merge
@@ -66,7 +86,7 @@ edges:
 
   # QA verification verdict routing.
   - from: verify
-    to: merge
+    to: build-test
     when: approved
 
   - from: verify
@@ -77,13 +97,39 @@ edges:
     to: terminal-declined
     when: declined
 
+  # Build & test gate: pass advances to human review; failures loop back to fix.
+  - from: build-test
+    to: human-review
+    when: approved
+
+  - from: build-test
+    to: fix
+    when: request-changes
+
+  - from: build-test
+    to: terminal-declined
+    when: declined
+
+  # Human review gate routing.
+  - from: human-review
+    to: merge
+    when: approved
+
+  - from: human-review
+    to: fix
+    when: request-changes
+
+  - from: human-review
+    to: terminal-declined
+    when: declined
+
   # Merge outcomes.
   - from: merge
     to: scribe
     when: merged
 
   - from: merge
-    to: verify
+    to: human-review
     when: blocked
 
   - from: scribe
