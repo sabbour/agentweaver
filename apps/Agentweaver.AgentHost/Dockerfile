@@ -44,23 +44,52 @@ ARG GIT_SHA=unknown
 LABEL org.opencontainers.image.version="${IMAGE_TAG}"
 LABEL org.opencontainers.image.revision="${GIT_SHA}"
 
-# Dev tools are installed in the agent-host image because the nested lxc-native-linux sandbox
-# bind-mounts host paths, making these tools available inside Copilot CLI runs as well.
+# Dev tools: the lxc-native-linux sandbox bind-mounts host paths, so everything
+# installed here is available inside Copilot CLI agent runs.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
+    apt-transport-https \
+    gnupg \
     curl \
     wget \
+    jq \
+    unzip \
+    zip \
     git \
+    git-lfs \
     sudo \
     build-essential \
+    cmake \
+    make \
     libgit2-1.7 \
     python3 \
     python3-pip \
     python3-venv \
+    && git lfs install --system \
     && rm -rf /var/lib/apt/lists/*
 
-RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+# GitHub CLI
+RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+        -o /usr/share/keyrings/githubcli-archive-keyring.gpg \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+        > /etc/apt/sources.list.d/github-cli.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends gh \
+    && rm -rf /var/lib/apt/lists/*
+
+# Node.js 24 LTS (matches ACA Copilot sandbox image) via NodeSource
+RUN curl -fsSL https://deb.nodesource.com/setup_24.x | bash - \
     && apt-get install -y --no-install-recommends nodejs \
+    && npm install -g nodemon \
+    && rm -rf /var/lib/apt/lists/*
+
+# .NET 10 SDK — agents need to build .NET projects, not just run them
+RUN curl -fsSL https://packages.microsoft.com/config/ubuntu/24.04/packages-microsoft-prod.deb \
+        -o /tmp/packages-microsoft-prod.deb \
+    && dpkg -i /tmp/packages-microsoft-prod.deb \
+    && rm -f /tmp/packages-microsoft-prod.deb \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends dotnet-sdk-10.0 \
     && rm -rf /var/lib/apt/lists/*
 
 RUN getent group 1000 || groupadd --gid 1000 appgroup; \
