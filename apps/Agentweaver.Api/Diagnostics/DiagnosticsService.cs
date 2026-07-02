@@ -453,36 +453,18 @@ public sealed class DiagnosticsService
         }
     }
 
-    /// <summary>Key Vault: resolves the mounted <c>mcp-oauth-signing-key</c> secret via
-    /// <see cref="ISecretStore"/>. healthy when it resolves; critical on any failure.</summary>
-    private async Task<DetailedHealthCheckDto> CheckKeyVaultAsync(CancellationToken ct)
+    /// <summary>Key Vault: verifies the CSI-mounted <c>mcp-oauth-signing-key</c> secret was loaded
+    /// into configuration (Auth:OAuth:SigningKey). Uses IConfiguration — ISecretStore applies
+    /// a "ghtok-" prefix intended for GitHub token storage, not raw KV secret probes.</summary>
+    private Task<DetailedHealthCheckDto> CheckKeyVaultAsync(CancellationToken ct)
     {
         var sw = Stopwatch.StartNew();
-        if (_secretStore is null)
-        {
-            sw.Stop();
-            return Detailed("key_vault", "unknown", "no secret store configured", sw.Elapsed.TotalMilliseconds);
-        }
-
-        try
-        {
-            var result = await _secretStore.GetSecretAsync(KeyVaultProbeSecretName, ct).ConfigureAwait(false);
-            sw.Stop();
-            var ms = sw.Elapsed.TotalMilliseconds;
-            return result.Found
-                ? Detailed("key_vault", "healthy", $"secret '{KeyVaultProbeSecretName}' resolved", ms)
-                : Detailed("key_vault", "critical", $"secret '{KeyVaultProbeSecretName}' not found", ms);
-        }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            sw.Stop();
-            return Detailed("key_vault", "critical",
-                $"secret read failed: {ex.Message}", sw.Elapsed.TotalMilliseconds);
-        }
+        var signingKey = _configuration["Auth:OAuth:SigningKey"];
+        sw.Stop();
+        var ms = sw.Elapsed.TotalMilliseconds;
+        return Task.FromResult(!string.IsNullOrWhiteSpace(signingKey)
+            ? Detailed("key_vault", "healthy", $"secret '{KeyVaultProbeSecretName}' resolved", ms)
+            : Detailed("key_vault", "critical", $"secret '{KeyVaultProbeSecretName}' not found", ms));
     }
 
     /// <summary>Agent-pod CPU quota with subtask PendingCapacity backlog. headroom &gt;= 4 → healthy,
