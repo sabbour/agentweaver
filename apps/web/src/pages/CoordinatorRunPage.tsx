@@ -34,6 +34,7 @@ import {
   SendRegular,
   StopRegular,
 } from '@fluentui/react-icons';
+import type { FluentIcon } from '@fluentui/react-icons';
 import {
   ReactFlow,
   Handle,
@@ -100,6 +101,7 @@ import {
   type TopologyNodeState,
 } from '../state/topologyReducer';
 import { useCtrlScrollZoom, ZoomControls } from '../components/board/useCtrlScrollZoom';
+import { formatModelLabel } from '../utils/agentIdentity';
 
 // ---------------------------------------------------------------------------
 // Steering context — page-level; lets the steer bar trigger the dialog
@@ -657,14 +659,14 @@ function SubtaskNode({ id, data }: NodeProps) {
       <div className={s.cardMain}>
         <span className={s.cardIcon} aria-hidden="true">
           {d.agent
-            ? <AgentAvatar name={d.agent as string} size={28} circle />
+            ? <AgentAvatar name={d.agent as string} size={28} circle badgeIcon={d.Icon as FluentIcon} badgeTitle={(d.agentRole as string | undefined) ?? 'Subtask Agent'} />
             : <BotRegular fontSize={22} />}
         </span>
         <div className={s.cardTitleGroup}>
           <span className={s.cardTitle}>{d.label as string}</span>
           <span className={s.cardRole}>{(d.agentRole as string | undefined) ?? 'Subtask Agent'}</span>
           {d.agent && <span className={s.cardSubText}>{d.agent as string}</span>}
-          {d.model && <span className={s.cardModel}>{d.model as string}</span>}
+          {d.model && <span className={s.cardModel}>{formatModelLabel(d.model as string)}</span>}
           {d.phase && <span className={s.cardSubText}>{d.phase as string}</span>}
         </div>
       </div>
@@ -2322,9 +2324,10 @@ export function CoordinatorRunPage() {
           )}
 
           <div className={styles.observabilityGrid}>
-            <AgentTokenBreakdown data={tokenBreakdown} />
+            <AgentTokenBreakdown data={tokenBreakdown} roleByAgent={roleByAgent} />
             <TransactionTracePanel
               runId={runId ?? ''}
+              roleByAgent={roleByAgent}
             />
           </div>
 

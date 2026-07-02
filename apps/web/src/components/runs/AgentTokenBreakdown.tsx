@@ -2,6 +2,7 @@ import { Text, makeStyles, tokens } from '@fluentui/react-components';
 import type { AgentUsageBreakdownDto, RunAgentTokenBreakdownDto } from '../../api/types';
 import { costChipLabel } from '../CostChip';
 import { MetricCardHeader, MetricEmptyState } from '../MetricTypography';
+import { AgentIdentity } from '../AgentIdentity';
 
 const useStyles = makeStyles({
   panel: {
@@ -32,7 +33,14 @@ const useStyles = makeStyles({
     display: 'flex',
     justifyContent: 'space-between',
     gap: tokens.spacingHorizontalS,
-    alignItems: 'center',
+    alignItems: 'flex-start',
+  },
+  identity: {
+    flex: 1,
+    minWidth: 0,
+  },
+  metric: {
+    whiteSpace: 'nowrap',
   },
   track: {
     height: '10px',
@@ -55,10 +63,12 @@ export function AgentTokenBreakdown({
   data,
   title = 'Agent token breakdown',
   subtitle = 'Per-agent usage for this orchestration run.',
+  roleByAgent,
 }: {
   data: RunAgentTokenBreakdownDto | null;
   title?: string;
   subtitle?: string;
+  roleByAgent?: Record<string, string>;
 }) {
   const styles = useStyles();
   const rows = data?.breakdown ?? [];
@@ -78,8 +88,8 @@ export function AgentTokenBreakdown({
           {rows.map((entry) => (
             <div key={entry.agentName} className={styles.row}>
               <div className={styles.rowHead}>
-                <Text>{entry.agentName}</Text>
-                <Text>{costChipLabel(entry.totalNanoAiu, entry.totalTokens) ?? `${entry.invocationCount} turns`}</Text>
+                <AgentIdentity label={entry.agentName} roleByAgent={roleByAgent} className={styles.identity} />
+                <Text className={styles.metric}>{costChipLabel(entry.totalNanoAiu, entry.totalTokens) ?? `${entry.invocationCount} turns`}</Text>
               </div>
               <div className={styles.track}>
                 <div className={styles.bar} style={{ width: `${Math.max(8, (usageValue(entry) / max) * 100)}%` }} />

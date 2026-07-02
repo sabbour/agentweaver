@@ -3,6 +3,8 @@ import { Badge, Text, makeStyles, tokens } from '@fluentui/react-components';
 import type { RunTraceDto, RunTraceSpanDto } from '../../api/types';
 import { apiClient } from '../../api/apiClient';
 import { MetricCardHeader, MetricEmptyState } from '../MetricTypography';
+import { AgentIdentity } from '../AgentIdentity';
+import { formatModelLabel } from '../../utils/agentIdentity';
 
 interface AppInsightsTraceBar {
   key: string;
@@ -207,10 +209,12 @@ export function TransactionTracePanel({
   runId,
   title = 'Transaction trace',
   subtitle = 'Timeline of agent activity from AppInsights distributed traces.',
+  roleByAgent,
 }: {
   runId: string;
   title?: string;
   subtitle?: string;
+  roleByAgent?: Record<string, string>;
 }) {
   const styles = useStyles();
   const [selectedBarKey, setSelectedBarKey] = useState<string | null>(null);
@@ -268,7 +272,7 @@ export function TransactionTracePanel({
               <div key={lane.key}>
                 <div className={styles.row}>
                   <div className={styles.rowMeta}>
-                    <Text className={styles.rowLabel}>{lane.label}</Text>
+                    <AgentIdentity label={lane.label} roleByAgent={roleByAgent} />
                     <Text className={styles.rowSecondary}>{lane.secondary}</Text>
                   </div>
                   <div className={styles.lane} style={{ height: `${laneHeight}px` }}>
@@ -299,9 +303,10 @@ export function TransactionTracePanel({
                       <span>{selectedBar.span.success ? 'success' : selectedBar.status}</span>
                       {selectedBar.span.resultCode && <span>Result {selectedBar.span.resultCode}</span>}
                     </div>
+                    <AgentIdentity label={selectedBar.span.agentName ?? lane.label} roleByAgent={roleByAgent} />
                     <Text>{selectedBar.span.name}</Text>
                     <div className={styles.detailGrid}>
-                      <Text>Model: {selectedBar.span.model ?? '—'}</Text>
+                      <Text>Model: {formatModelLabel(selectedBar.span.model)}</Text>
                       <Text>Input tokens: {formatNumber(selectedBar.span.inputTokens)}</Text>
                       <Text>Output tokens: {formatNumber(selectedBar.span.outputTokens)}</Text>
                       <Text>Duration: {formatDurationMs(selectedBar.span.durationMs)}</Text>

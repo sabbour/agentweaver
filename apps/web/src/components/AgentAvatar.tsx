@@ -1,4 +1,5 @@
 import { makeStyles, tokens } from '@fluentui/react-components';
+import type { FluentIcon } from '@fluentui/react-icons';
 
 const useStyles = makeStyles({
   root: {
@@ -66,9 +67,19 @@ interface AgentAvatarProps {
   isBuiltIn?: boolean;
   isRetired?: boolean;
   circle?: boolean;
+  badgeIcon?: FluentIcon;
+  badgeTitle?: string;
 }
 
-export function AgentAvatar({ name, size = 40, isBuiltIn = false, isRetired = false, circle = false }: AgentAvatarProps) {
+export function AgentAvatar({
+  name,
+  size = 40,
+  isBuiltIn = false,
+  isRetired = false,
+  circle = false,
+  badgeIcon: BadgeIcon,
+  badgeTitle,
+}: AgentAvatarProps) {
   const styles = useStyles();
   const pixels = generatePixels(name);
   const { bg, fg } = avatarColor(name);
@@ -102,11 +113,15 @@ export function AgentAvatar({ name, size = 40, isBuiltIn = false, isRetired = fa
           ),
         )}
       </svg>
-      {isBuiltIn && (
-        <div className={styles.badge} title="Built-in system agent">
-          <svg width="8" height="8" viewBox="0 0 8 8" aria-hidden="true">
-            <path d="M4 1 L5.2 3.2 L7.6 3.6 L5.8 5.4 L6.2 7.8 L4 6.7 L1.8 7.8 L2.2 5.4 L0.4 3.6 L2.8 3.2 Z" fill="white" />
-          </svg>
+      {(isBuiltIn || BadgeIcon) && (
+        <div className={styles.badge} title={badgeTitle ?? (isBuiltIn ? 'Built-in system agent' : undefined)}>
+          {BadgeIcon ? (
+            <BadgeIcon fontSize={8} aria-hidden="true" />
+          ) : (
+            <svg width="8" height="8" viewBox="0 0 8 8" aria-hidden="true">
+              <path d="M4 1 L5.2 3.2 L7.6 3.6 L5.8 5.4 L6.2 7.8 L4 6.7 L1.8 7.8 L2.2 5.4 L0.4 3.6 L2.8 3.2 Z" fill="white" />
+            </svg>
+          )}
         </div>
       )}
     </div>

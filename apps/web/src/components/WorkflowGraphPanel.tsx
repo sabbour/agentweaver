@@ -54,6 +54,7 @@ import { PodIndicator } from './PodIndicator';
 import { CostChip } from './CostChip';
 import type { GraphNodeType, WorkflowGraphDto } from '../api/types';
 import { DAG_NODE_SEP, NODE_W, NODE_H, NODE_TYPE_W, layoutDag, workflowNodeSizeHint } from '../utils/dagLayout';
+import { formatModelLabel } from '../utils/agentIdentity';
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -600,14 +601,14 @@ export function WorkflowNode({ data }: NodeProps) {
       <div className={s.cardMain}>
         <span className={s.cardIcon} aria-hidden="true">
           {key === 'agent' && agentName
-            ? <AgentAvatar name={agentName as string} size={28} circle />
+            ? <AgentAvatar name={agentName as string} size={28} circle badgeIcon={Icon} badgeTitle={roleText} />
             : <Icon fontSize={22} />}
         </span>
         <div className={s.cardTitleGroup}>
           <span className={s.cardTitle}>{label}</span>
           <span className={s.cardRole}>{roleText}</span>
           {agentName && <span className={s.cardSubText}>{agentName as string}</span>}
-          {modelId && key === 'agent' && <span className={s.cardModel}>{modelId as string}</span>}
+          {modelId && key === 'agent' && <span className={s.cardModel}>{formatModelLabel(modelId as string)}</span>}
           {subText && <span className={s.cardSubText}>{subText}</span>}
         </div>
       </div>
