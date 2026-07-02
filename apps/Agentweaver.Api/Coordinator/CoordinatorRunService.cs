@@ -802,16 +802,20 @@ public sealed class CoordinatorRunService
     // -----------------------------------------------------------------------
 
     /// <summary>
-    /// Recovers coordinator (parent) runs that were <see cref="RunStatus.InProgress"/> when the
-    /// process died. Called ONCE at startup, AFTER <c>WorkflowRestartService.RecoverAsync</c> (which
-    /// has already failed any stranded child runs), so a re-dispatched subtask always launches a
-    /// fresh child. Each interrupted coordinator is routed by its persisted work-plan status; a
-    /// failure to recover one run never aborts the others.
+    /// Recovers coordinator (parent) runs that were still ACTIVE when the process died
+    /// (<see cref="RunStatus.InProgress"/> or the collective-review parking state
+    /// <see cref="RunStatus.AwaitingReview"/>). Called ONCE at startup, AFTER
+    /// <c>WorkflowRestartService.RecoverAsync</c> (which has already failed any stranded child runs),
+    /// so a re-dispatched subtask always launches a fresh child. Each interrupted coordinator is
+    /// routed by its persisted work-plan status; a failure to recover one run never aborts the others.
     /// </summary>
     public async Task RecoverInterruptedRunsAsync(CancellationToken ct)
     {
-        var inProgress = await _runStore.GetByStatusAsync(RunStatus.InProgress, ct).ConfigureAwait(false);
-        foreach (var run in inProgress)
+        var activeRuns = (await _runStore.GetByStatusAsync(RunStatus.InProgress, ct).ConfigureAwait(false))
+            .Concat(await _runStore.GetByStatusAsync(RunStatus.AwaitingReview, ct).ConfigureAwait(false))
+            .GroupBy(r => r.Id)
+            .Select(g => g.First());
+        foreach (var run in activeRuns)
         {
             if (run.ParentRunId is not null || !string.Equals(run.AgentName, "Coordinator", StringComparison.Ordinal))
                 continue;

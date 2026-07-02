@@ -542,6 +542,7 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         IReadOnlyCollection<(int, int)> edges,
         CancellationToken ct)
     {
+        await MarkCoordinatorAwaitingReviewAsync(context.CoordinatorRunId, ct).ConfigureAwait(false);
         var decisionTask = _reviewGate.ArmAsync(context.CoordinatorRunId, context.SubmittingUser, ct);
         _ = PollDeferredAssemblyReviewDecisionAsync(context, ct);
         try
@@ -553,7 +554,9 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
                 return null;
             }
 
-            return await decisionTask.ConfigureAwait(false);
+            var decision = await decisionTask.ConfigureAwait(false);
+            await MarkCoordinatorInProgressAsync(context.CoordinatorRunId, ct).ConfigureAwait(false);
+            return decision;
         }
         catch (OperationCanceledException)
         {
@@ -1225,6 +1228,20 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         // review_timeout) the coordinator run terminates but its AgentHost pod (2 CPU / 4 Gi) would
         // otherwise keep running and eventually exhaust the namespace CPU quota. Release it best-effort.
         await ReleaseAgentHostPodSafeAsync(coordinatorRunId, ct).ConfigureAwait(false);
+    }
+
+    private async Task MarkCoordinatorAwaitingReviewAsync(string coordinatorRunId, CancellationToken ct)
+    {
+        await _runStore.UpdateStatusAsync(
+            RunId.Parse(coordinatorRunId), RunStatus.AwaitingReview, endedAt: null, ct).ConfigureAwait(false);
+        _streamStore.Get(coordinatorRunId)?.MarkAwaitingReview();
+    }
+
+    private async Task MarkCoordinatorInProgressAsync(string coordinatorRunId, CancellationToken ct)
+    {
+        await _runStore.UpdateStatusAsync(
+            RunId.Parse(coordinatorRunId), RunStatus.InProgress, endedAt: null, ct).ConfigureAwait(false);
+        _streamStore.Get(coordinatorRunId)?.ClearAwaitingReview();
     }
 
     /// <summary>

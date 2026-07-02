@@ -254,6 +254,32 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
     // ── Happy path: event sequence + node-flip ──────────────────────────────────────────────────
 
     [Fact]
+    public async Task RunAssembly_ReviewGate_KeepsCoordinatorAwaitingReviewUntilDecisionArrives()
+    {
+        var coordinatorRunId = RunId.New().ToString();
+        await SeedCoordinatorRunAsync(coordinatorRunId);
+        await SeedPlanAsync(coordinatorRunId, new[] { SubtaskStatus.Completed, SubtaskStatus.AssembleReady });
+        _streamStore.Create(coordinatorRunId, "alice");
+
+        var run = _sut.RunAssemblyAsync(Context(coordinatorRunId), default);
+        await WaitUntilArmedAsync(coordinatorRunId);
+
+        run.IsCompleted.Should().BeFalse("the coordinator must stay active while the collective review gate is open");
+        (await _runStore.GetAsync(RunId.Parse(coordinatorRunId), default))!.Status
+            .Should().Be(RunStatus.AwaitingReview);
+        _streamStore.Get(coordinatorRunId)!.IsAwaitingReview.Should().BeTrue();
+
+        _reviewGate.TrySubmit(coordinatorRunId, "alice",
+            new AssemblyReviewDecision(Approved: true, RequestChanges: false, Feedback: null,
+                TargetFiles: null, Reviewer: "alice"))
+            .Should().Be(AssemblyReviewSubmitResult.Accepted);
+        await run;
+
+        (await _runStore.GetAsync(RunId.Parse(coordinatorRunId), default))!.Status
+            .Should().Be(RunStatus.Completed);
+    }
+
+    [Fact]
     public async Task RunAssembly_ApprovedReview_EmitsAssemblySequenceInOrder_AndFlipsNodesToLive()
     {
         var coordinatorRunId = RunId.New().ToString();
@@ -318,9 +344,10 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
     [Fact]
     public async Task RunAssembly_AutoResolvedIntegrationConflict_EmitsCoordinatorEvent()
     {
-        const string coordinatorRunId = "coord-auto-resolve-1";
+        var coordinatorRunId = RunId.New().ToString();
         var (workPlanId, _) = await SeedPlanAsync(coordinatorRunId,
             new[] { SubtaskStatus.Completed, SubtaskStatus.AssembleReady });
+        await SeedCoordinatorRunAsync(coordinatorRunId);
         _streamStore.Create(coordinatorRunId, "alice");
         _pipeline.IntegrationResult = IntegrationBranchResult.Success(
             CoordinatorAssemblyService.IntegrationBranchName(coordinatorRunId),
@@ -350,9 +377,10 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
     [Fact]
     public async Task RunAssembly_DeferredReviewDecisionFromAnotherReplica_IsConsumedAndApplied()
     {
-        const string coordinatorRunId = "coord-deferred-review-1";
+        var coordinatorRunId = RunId.New().ToString();
         var (workPlanId, _) = await SeedPlanAsync(coordinatorRunId,
             new[] { SubtaskStatus.Completed, SubtaskStatus.AssembleReady });
+        await SeedCoordinatorRunAsync(coordinatorRunId);
         _streamStore.Create(coordinatorRunId, "alice");
 
         var run = _sut.RunAssemblyAsync(Context(coordinatorRunId), default);
@@ -425,7 +453,7 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
     [Fact]
     public async Task RunAssembly_RequestChanges_InfersAffectedChild_ResetsItToPending_AndRedispatches()
     {
-        const string coordinatorRunId = "coord-reject-1";
+        var coordinatorRunId = RunId.New().ToString();
 
         // Two independent eligible children with known, distinct touched-files.
         var childA = RunId.New();
@@ -436,6 +464,7 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         var (workPlanId, subtaskIds) = await SeedPlanAsync(coordinatorRunId,
             new[] { SubtaskStatus.AssembleReady, SubtaskStatus.AssembleReady },
             childRunIds: new[] { childA.ToString(), childB.ToString() });
+        await SeedCoordinatorRunAsync(coordinatorRunId);
         _streamStore.Create(coordinatorRunId, "alice");
         var subtaskA = subtaskIds[0];
         var subtaskB = subtaskIds[1];
@@ -471,6 +500,7 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
 
         // The plan returned to dispatching and re-dispatch was triggered.
         (await _assemblyStore.GetAsync(workPlanId, default))!.Status.Should().Be(WorkPlanStatus.Dispatching);
+        (await _runStore.GetAsync(RunId.Parse(coordinatorRunId), default))!.Status.Should().Be(RunStatus.InProgress);
         _dispatch.StartDispatchCalls.Should().ContainSingle().Which.CoordinatorRunId.Should().Be(coordinatorRunId);
     }
 
