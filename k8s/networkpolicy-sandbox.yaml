@@ -91,28 +91,22 @@ spec:
           port: 53
         - protocol: TCP
           port: 53
-    # Unrestricted public egress (all domains, all ports).
+    # Unrestricted outbound egress (all destinations, all ports) except IMDS/cloud metadata.
     #
     # Research/coding agents running in the sandbox need arbitrary outbound network access
-    # (package registries, APIs, git over various ports, etc.), so this is intentionally an
-    # allow-all-public-destinations rule rather than a domain/IP allowlist.
+    # (package registries, APIs, git over various ports, RFC1918/VNet resources, etc.), so this
+    # is intentionally an allow-all-destinations rule rather than a domain/IP allowlist.
     #
     # Why not Cilium toFQDNs: these pods run as kata VMs (Pod Sandboxing). Cilium intercepts
     # DNS for FQDN policy on the HOST kernel via eBPF; the kata guest kernel's DNS queries
     # never traverse those host hooks, so the FQDN->IP map never builds and listed hostnames
     # are still blocked. Only IP-based rules are enforced for kata pods (at the virtual NIC).
     #
-    # Two ranges remain blocked — these are NOT public "domains", they are security boundaries:
-    #   - RFC1918 (10/8, 172.16/12, 192.168/16): no pivot into cluster pod/service CIDRs or
-    #     the private VNet / internal services.
-    #   - 169.254.0.0/16 (link-local): blocks the cloud-metadata/IMDS endpoint
-    #     (169.254.169.254), preventing SSRF theft of the node's managed-identity token.
-    # kube-dns is re-allowed explicitly in the DNS rule above despite the 10/8 block.
+    # The only remaining block is 169.254.0.0/16 (link-local) to prevent access to the
+    # cloud-metadata/IMDS endpoint (169.254.169.254) and theft of the node's managed-identity
+    # token via SSRF. kube-dns remains explicitly allowed by the DNS rule above.
     - to:
         - ipBlock:
             cidr: 0.0.0.0/0
             except:
-              - 10.0.0.0/8
-              - 172.16.0.0/12
-              - 192.168.0.0/16
               - 169.254.0.0/16
