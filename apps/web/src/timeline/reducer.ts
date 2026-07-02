@@ -443,6 +443,7 @@ function processEvent(
     case 'coordinator.assembly_rai_completed':
     case 'coordinator.assembly_review_requested':
     case 'coordinator.assembly_review_approved':
+    case 'coordinator.assembly_review_preserved':
     case 'coordinator.assembly_changes_requested':
     case 'coordinator.assembly_merge_started':
     case 'coordinator.assembly_merge_completed':

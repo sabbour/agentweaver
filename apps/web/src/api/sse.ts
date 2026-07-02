@@ -118,6 +118,7 @@ export type EventType =
   | 'coordinator.assembly_rai_completed'
   | 'coordinator.assembly_review_requested'
   | 'coordinator.assembly_review_approved'
+  | 'coordinator.assembly_review_preserved'
   | 'coordinator.assembly_changes_requested'
   | 'coordinator.assembly_merge_started'
   | 'coordinator.assembly_merge_completed'
