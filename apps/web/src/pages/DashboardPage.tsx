@@ -388,7 +388,7 @@ export function DashboardPage() {
           <div className={styles.section}>
             <AgentInvocationChart
               points={metrics?.invocationTrend ?? []}
-              subtitle={`Coordinator and child run invocations across the ${timeRangeLabel(selectedRange)}.`}
+              subtitle={`Daily project run creations across the ${timeRangeLabel(selectedRange)}.`}
             />
           </div>
 

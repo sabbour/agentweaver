@@ -167,14 +167,14 @@ export function ModelPerformancePanels({ metrics }: { metrics: ProjectMetricsDto
   return (
     <div className={styles.grid}>
       <div className={`${styles.panel} ${styles.wide}`}>
-        <MetricCardHeader title="Operations over time" subtitle="Run creation volume for the selected range." />
-        {throughput.length === 0 ? <MetricEmptyState>No operations data yet.</MetricEmptyState> : <OperationsChart points={throughput} />}
+        <MetricCardHeader title="Runs created over time" subtitle="Daily project run creations for the selected range." />
+        {throughput.length === 0 ? <MetricEmptyState>No run-creation data yet.</MetricEmptyState> : <OperationsChart points={throughput} />}
       </div>
 
       <div className={styles.panel}>
-        <MetricCardHeader title="Token consumption by model" subtitle="Usage aggregated from Application Insights model metrics." />
+        <MetricCardHeader title="AI credit usage by model" subtitle="Total AI credit usage per model; badges show usage event counts." />
         {modelUsage.length === 0 ? (
-          <MetricEmptyState>No model token data yet.</MetricEmptyState>
+          <MetricEmptyState>No AI credit usage data yet.</MetricEmptyState>
         ) : (
           <BarList
             rows={modelUsage}
@@ -185,9 +185,9 @@ export function ModelPerformancePanels({ metrics }: { metrics: ProjectMetricsDto
       </div>
 
       <div className={styles.panel}>
-        <MetricCardHeader title="Model usage distribution" subtitle="Invocation share by model across the selected range." />
+        <MetricCardHeader title="Model invocation share" subtitle="Share of usage events attributed to each model across the selected range." />
         {modelUsage.length === 0 ? (
-          <MetricEmptyState>No model usage data yet.</MetricEmptyState>
+          <MetricEmptyState>No model invocation data yet.</MetricEmptyState>
         ) : (
           <BarList
             rows={modelUsage}
@@ -198,12 +198,12 @@ export function ModelPerformancePanels({ metrics }: { metrics: ProjectMetricsDto
       </div>
 
       <div className={styles.panel}>
-        <MetricCardHeader title="Response duration" subtitle="Model latency percentiles from dependency telemetry." />
+        <MetricCardHeader title="Response duration by model" subtitle="P50 and P95 model latency from dependency telemetry." />
         <PercentilesTable rows={responseDuration} emptyLabel="No response-duration data yet." />
       </div>
 
       <div className={styles.panel}>
-        <MetricCardHeader title="Time to first token" subtitle="TTFT percentiles when AppInsights exposes first-token measurements." />
+        <MetricCardHeader title="Time to first token by model" subtitle="P50 and P95 TTFT when first-token measurements are available." />
         <PercentilesTable rows={ttft} emptyLabel="No TTFT data available yet." />
       </div>
     </div>

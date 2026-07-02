@@ -105,7 +105,7 @@ export function ObservabilityOverviewPage() {
         <>
           <AgentInvocationChart
             points={metrics?.invocationTrend ?? []}
-            subtitle={`Coordinator and child run invocations across the ${timeRangeLabel(range)}.`}
+            subtitle={`Daily project run creations across the ${timeRangeLabel(range)}.`}
           />
           <ModelPerformancePanels metrics={metrics} />
           {!metrics && <Text>No observability data yet.</Text>}

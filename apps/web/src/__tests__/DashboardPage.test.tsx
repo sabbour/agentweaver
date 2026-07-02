@@ -74,6 +74,13 @@ describe('DashboardPage', () => {
     await waitFor(() => expect(screen.getByText('Active agents')).toBeDefined());
     expect(screen.getByText('Tasks done (7d)')).toBeDefined();
     expect(screen.getByText('Throughput')).toBeDefined();
+    expect(screen.getByText('Run creation count')).toBeDefined();
+    expect(screen.getByText('Daily project run creations across the last 30 days.')).toBeDefined();
+    expect(screen.getByText('Runs created over time')).toBeDefined();
+    expect(screen.getByText('AI credit usage by model')).toBeDefined();
+    expect(screen.getByText('Model invocation share')).toBeDefined();
+    expect(screen.getByText('Response duration by model')).toBeDefined();
+    expect(screen.getByText('Time to first token by model')).toBeDefined();
     expect(screen.getByText('Agent leaderboard')).toBeDefined();
     expect(screen.getByText('Ada')).toBeDefined();
     expect(screen.getByRole('link', { name: 'Ada' }).getAttribute('href'))

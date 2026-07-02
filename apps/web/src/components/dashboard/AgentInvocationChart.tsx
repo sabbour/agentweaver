@@ -54,8 +54,8 @@ function LineChart({ points, label }: { points: DailyInvocationPointDto[]; label
 
 export function AgentInvocationChart({
   points,
-  title = 'Agent invocation count',
-  subtitle = 'Coordinator and child run invocations across the selected range.',
+  title = 'Run creation count',
+  subtitle = 'Daily project run creations across the selected range.',
 }: {
   points?: DailyInvocationPointDto[];
   title?: string;
