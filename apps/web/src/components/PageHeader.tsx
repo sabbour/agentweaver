@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
-import { Text, Title2, makeStyles, tokens } from '@fluentui/react-components';
+import { Text, makeStyles, tokens } from '@fluentui/react-components';
 
-// Shared header for every main page: a Title2 with an optional subtitle block beneath it
+// Shared header for every main page: a Fluent 2 page title with an optional subtitle block beneath it
 // (consistent vertical rhythm via tokens) and an optional right-aligned actions slot. An
 // optional breadcrumb renders above the title. Centralizing this keeps page headers visually
 // consistent and gives every page a subtitle without per-page spacing drift.
@@ -24,10 +24,18 @@ const useStyles = makeStyles({
     gap: tokens.spacingVerticalXXS,
     minWidth: 0,
   },
+  title: {
+    display: 'block',
+    fontSize: '28px',
+    lineHeight: '36px',
+    fontWeight: tokens.fontWeightSemibold,
+  },
   subtitle: {
+    display: 'block',
     color: tokens.colorNeutralForeground3,
-    fontSize: tokens.fontSizeBase300,
-    lineHeight: tokens.lineHeightBase300,
+    fontSize: '14px',
+    lineHeight: '20px',
+    fontWeight: tokens.fontWeightRegular,
   },
   actions: {
     display: 'flex',
@@ -51,7 +59,7 @@ export function PageHeader({ title, subtitle, actions, breadcrumb }: PageHeaderP
       {breadcrumb}
       <div className={styles.row}>
         <div className={styles.titleBlock}>
-          <Title2>{title}</Title2>
+          <Text as="h1" className={styles.title}>{title}</Text>
           {subtitle && <Text className={styles.subtitle}>{subtitle}</Text>}
         </div>
         {actions && <div className={styles.actions}>{actions}</div>}

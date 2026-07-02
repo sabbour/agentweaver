@@ -1,6 +1,7 @@
-import { Text, Title3, makeStyles, tokens } from '@fluentui/react-components';
+import { Text, makeStyles, tokens } from '@fluentui/react-components';
 import type { AgentUsageBreakdownDto, RunAgentTokenBreakdownDto } from '../../api/types';
 import { costChipLabel } from '../CostChip';
+import { MetricCardHeader, MetricEmptyState } from '../MetricTypography';
 
 const useStyles = makeStyles({
   panel: {
@@ -12,13 +13,10 @@ const useStyles = makeStyles({
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     borderRadius: tokens.borderRadiusMedium,
   },
-  subtitle: {
-    color: tokens.colorNeutralForeground3,
-    fontSize: tokens.fontSizeBase200,
-  },
   note: {
     color: tokens.colorNeutralForeground3,
-    fontSize: tokens.fontSizeBase200,
+    fontSize: '14px',
+    lineHeight: '20px',
   },
   list: {
     display: 'flex',
@@ -69,15 +67,12 @@ export function AgentTokenBreakdown({
 
   return (
     <div className={styles.panel}>
-      <div>
-        <Title3>{title}</Title3>
-        <Text className={styles.subtitle}>{subtitle}</Text>
-      </div>
+      <MetricCardHeader title={title} subtitle={subtitle} />
 
       {!data ? (
-        <Text>Loading usage…</Text>
+        <MetricEmptyState>Loading usage…</MetricEmptyState>
       ) : rows.length === 0 && !hasFallbackTotal ? (
-        <Text>No agent usage data yet.</Text>
+        <MetricEmptyState>No agent usage data yet.</MetricEmptyState>
       ) : (
         <div className={styles.list}>
           {rows.map((entry) => (

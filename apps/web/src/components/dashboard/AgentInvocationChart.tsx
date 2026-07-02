@@ -1,5 +1,6 @@
-import { Text, Title3, makeStyles, tokens } from '@fluentui/react-components';
+import { makeStyles, tokens } from '@fluentui/react-components';
 import type { DailyInvocationPointDto } from '../../api/types';
+import { MetricCardHeader, MetricEmptyState } from '../MetricTypography';
 
 const useStyles = makeStyles({
   panel: {
@@ -10,10 +11,6 @@ const useStyles = makeStyles({
     backgroundColor: tokens.colorNeutralBackground1,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     borderRadius: tokens.borderRadiusMedium,
-  },
-  subtitle: {
-    color: tokens.colorNeutralForeground3,
-    fontSize: tokens.fontSizeBase200,
   },
 });
 
@@ -69,12 +66,9 @@ export function AgentInvocationChart({
 
   return (
     <div className={styles.panel}>
-      <div>
-        <Title3>{title}</Title3>
-        <Text className={styles.subtitle}>{subtitle}</Text>
-      </div>
+      <MetricCardHeader title={title} subtitle={subtitle} />
       {series.length === 0 ? (
-        <Text>No invocation data yet.</Text>
+        <MetricEmptyState>No invocation data yet.</MetricEmptyState>
       ) : (
         <LineChart points={series} label={title} />
       )}

@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Badge, Text, Title3, makeStyles, tokens } from '@fluentui/react-components';
+import { Badge, Text, makeStyles, tokens } from '@fluentui/react-components';
 import type { RunTraceDto, RunTraceSpanDto } from '../../api/types';
 import { apiClient } from '../../api/apiClient';
+import { MetricCardHeader, MetricEmptyState } from '../MetricTypography';
 
 interface AppInsightsTraceBar {
   key: string;
@@ -41,10 +42,6 @@ const useStyles = makeStyles({
     justifyContent: 'space-between',
     gap: tokens.spacingHorizontalM,
     flexWrap: 'wrap',
-  },
-  subtitle: {
-    color: tokens.colorNeutralForeground3,
-    fontSize: tokens.fontSizeBase200,
   },
   rows: {
     display: 'flex',
@@ -253,15 +250,14 @@ export function TransactionTracePanel({
 
   return (
     <div className={styles.panel}>
-      <div className={styles.header}>
-        <div>
-          <Title3>{title}</Title3>
-          <Text className={styles.subtitle}>{subtitle}</Text>
-        </div>
-        <Badge appearance="outline" size="small">AppInsights</Badge>
-      </div>
+      <MetricCardHeader
+        className={styles.header}
+        title={title}
+        subtitle={subtitle}
+        aside={<Badge appearance="outline" size="small">AppInsights</Badge>}
+      />
       {lanes.length === 0 ? (
-        <Text>No AppInsights trace data available for this run yet.</Text>
+        <MetricEmptyState>No AppInsights trace data available for this run yet.</MetricEmptyState>
       ) : (
         <div className={styles.rows}>
           {lanes.map((lane) => {

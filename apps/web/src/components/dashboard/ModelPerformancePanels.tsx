@@ -1,6 +1,7 @@
-import { Badge, Text, Title3, makeStyles, tokens } from '@fluentui/react-components';
+import { Badge, Text, makeStyles, tokens } from '@fluentui/react-components';
 import type { MetricPercentilesDto, ModelUsageBreakdownDto, ProjectMetricsDto, ThroughputPointDto } from '../../api/types';
 import { costChipLabel } from '../CostChip';
+import { MetricCardHeader, MetricEmptyState } from '../MetricTypography';
 
 const useStyles = makeStyles({
   grid: {
@@ -19,10 +20,6 @@ const useStyles = makeStyles({
     backgroundColor: tokens.colorNeutralBackground1,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     borderRadius: tokens.borderRadiusMedium,
-  },
-  subtitle: {
-    color: tokens.colorNeutralForeground3,
-    fontSize: tokens.fontSizeBase200,
   },
   list: {
     display: 'flex',
@@ -143,7 +140,7 @@ function PercentilesTable({ rows, emptyLabel }: { rows: MetricPercentilesDto[]; 
   const styles = useStyles();
 
   if (rows.length === 0) {
-    return <Text>{emptyLabel}</Text>;
+    return <MetricEmptyState>{emptyLabel}</MetricEmptyState>;
   }
 
   return (
@@ -170,20 +167,14 @@ export function ModelPerformancePanels({ metrics }: { metrics: ProjectMetricsDto
   return (
     <div className={styles.grid}>
       <div className={`${styles.panel} ${styles.wide}`}>
-        <div>
-          <Title3>Operations over time</Title3>
-          <Text className={styles.subtitle}>Run creation volume for the selected range.</Text>
-        </div>
-        {throughput.length === 0 ? <Text>No operations data yet.</Text> : <OperationsChart points={throughput} />}
+        <MetricCardHeader title="Operations over time" subtitle="Run creation volume for the selected range." />
+        {throughput.length === 0 ? <MetricEmptyState>No operations data yet.</MetricEmptyState> : <OperationsChart points={throughput} />}
       </div>
 
       <div className={styles.panel}>
-        <div>
-          <Title3>Token consumption by model</Title3>
-          <Text className={styles.subtitle}>Usage aggregated from Application Insights model metrics.</Text>
-        </div>
+        <MetricCardHeader title="Token consumption by model" subtitle="Usage aggregated from Application Insights model metrics." />
         {modelUsage.length === 0 ? (
-          <Text>No model token data yet.</Text>
+          <MetricEmptyState>No model token data yet.</MetricEmptyState>
         ) : (
           <BarList
             rows={modelUsage}
@@ -194,12 +185,9 @@ export function ModelPerformancePanels({ metrics }: { metrics: ProjectMetricsDto
       </div>
 
       <div className={styles.panel}>
-        <div>
-          <Title3>Model usage distribution</Title3>
-          <Text className={styles.subtitle}>Invocation share by model across the selected range.</Text>
-        </div>
+        <MetricCardHeader title="Model usage distribution" subtitle="Invocation share by model across the selected range." />
         {modelUsage.length === 0 ? (
-          <Text>No model usage data yet.</Text>
+          <MetricEmptyState>No model usage data yet.</MetricEmptyState>
         ) : (
           <BarList
             rows={modelUsage}
@@ -210,18 +198,12 @@ export function ModelPerformancePanels({ metrics }: { metrics: ProjectMetricsDto
       </div>
 
       <div className={styles.panel}>
-        <div>
-          <Title3>Response duration</Title3>
-          <Text className={styles.subtitle}>Model latency percentiles from dependency telemetry.</Text>
-        </div>
+        <MetricCardHeader title="Response duration" subtitle="Model latency percentiles from dependency telemetry." />
         <PercentilesTable rows={responseDuration} emptyLabel="No response-duration data yet." />
       </div>
 
       <div className={styles.panel}>
-        <div>
-          <Title3>Time to first token</Title3>
-          <Text className={styles.subtitle}>TTFT percentiles when AppInsights exposes first-token measurements.</Text>
-        </div>
+        <MetricCardHeader title="Time to first token" subtitle="TTFT percentiles when AppInsights exposes first-token measurements." />
         <PercentilesTable rows={ttft} emptyLabel="No TTFT data available yet." />
       </div>
     </div>

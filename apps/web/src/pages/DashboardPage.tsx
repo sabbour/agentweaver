@@ -15,7 +15,6 @@ import {
   TableHeaderCell,
   TableRow,
   Text,
-  Title3,
   makeStyles,
   tokens,
 } from '@fluentui/react-components';
@@ -25,6 +24,7 @@ import { ApiError } from '../api/client';
 import type { AgentLeaderboardEntryDto, ProjectDashboardDto, ProjectMetricsDto, ThroughputPointDto } from '../api/types';
 import { AgentInvocationChart } from '../components/dashboard/AgentInvocationChart';
 import { ModelPerformancePanels } from '../components/dashboard/ModelPerformancePanels';
+import { MetricEmptyState, MetricSectionHeading } from '../components/MetricTypography';
 import { PageHeader } from '../components/PageHeader';
 import { formatAic } from '../components/CostChip';
 import { RefreshCountdown } from '../hooks/useRefreshCountdown';
@@ -145,7 +145,7 @@ const useStyles = makeStyles({
   },
   sharedMetricsHeader: {
     display: 'flex',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     justifyContent: 'space-between',
     gap: tokens.spacingHorizontalM,
     flexWrap: 'wrap',
@@ -176,10 +176,6 @@ const useStyles = makeStyles({
   },
   successBasis: {
     minWidth: '34px',
-    color: tokens.colorNeutralForeground2,
-    fontSize: tokens.fontSizeBase200,
-  },
-  metricNote: {
     color: tokens.colorNeutralForeground2,
     fontSize: tokens.fontSizeBase200,
   },
@@ -366,7 +362,10 @@ export function DashboardPage() {
           </div>
 
           <div className={styles.section}>
-            <Title3>Throughput</Title3>
+            <MetricSectionHeading
+              title="Throughput"
+              subtitle="Created versus completed runs across the last 30 days."
+            />
             <div className={styles.panel}>
               <div className={styles.legend}>
                 <span className={styles.legendItem}>
@@ -379,7 +378,7 @@ export function DashboardPage() {
                 </span>
               </div>
               {(metrics?.throughput.length ?? 0) === 0 ? (
-                <Text>No throughput data yet.</Text>
+                <MetricEmptyState>No throughput data yet.</MetricEmptyState>
               ) : (
                 <ThroughputChart points={metrics?.throughput ?? []} />
               )}
@@ -394,15 +393,17 @@ export function DashboardPage() {
           </div>
 
           <div className={styles.section}>
-            <Title3>Model performance</Title3>
-            <Text className={styles.metricNote}>Operations, latency, and token usage are read from Application Insights.</Text>
+            <MetricSectionHeading
+              title="Model performance"
+              subtitle="Operations, latency, and token usage are read from Application Insights."
+            />
             <ModelPerformancePanels metrics={metrics} />
           </div>
 
           <div className={styles.sharedMetricsHeader}>
-            <Title3>Agent metrics</Title3>
+            <MetricSectionHeading title="Agent metrics" />
             <div className={styles.filterGroup}>
-              <Text className={styles.metricNote}>Range</Text>
+              <Text>Range</Text>
               <Select
                 value={selectedRange}
                 onChange={(_e, d) => setSelectedRange(d.value as TimeRange)}
@@ -418,10 +419,12 @@ export function DashboardPage() {
           </div>
 
           <div className={styles.section}>
-            <Title3>Agent leaderboard</Title3>
-            <Text className={styles.metricNote}>Success rate is reported directly from Application Insights telemetry.</Text>
+            <MetricSectionHeading
+              title="Agent leaderboard"
+              subtitle="Success rate is reported directly from Application Insights telemetry."
+            />
             {(metrics?.leaderboard.length ?? 0) === 0 ? (
-              <Text>No agent activity yet.</Text>
+              <MetricEmptyState>No agent activity yet.</MetricEmptyState>
             ) : (
               <div className={styles.leaderboardPanel}>
                 <Table aria-label="Agent leaderboard" size="small" className={styles.leaderboardTable}>
