@@ -182,10 +182,11 @@ spec:
                   name: agentweaver-secrets
                   key: appinsights-connection-string
                   optional: true
+            - name: APPLICATIONINSIGHTS_WORKSPACE_ID
+              value: "e09d6407-5c4c-4ebc-98db-10660f555507"
             - name: TMPDIR
               value: /tmp
             # A2A mTLS client cert (spec-018 H1) — the worker connects to each sandbox agent pod
-            # over A2A on TCP 8088 using mutual TLS.  The worker presents tls.crt/tls.key as the
             # client certificate; ca.crt is the trust anchor for the AgentHost server cert.
             # Transport: direct HTTPS/mTLS to the sandbox pod's A2A listener on port 8088
             # (NOT kube-exec-stdio — that option was rejected; A2A over TCP 8088 is the transport).
