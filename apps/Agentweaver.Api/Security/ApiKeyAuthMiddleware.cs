@@ -137,6 +137,7 @@ public sealed class GitHubTokenAuthMiddleware
         if (!context.Request.Path.StartsWithSegments("/api")
             || context.Request.Path.Equals("/api/ping", StringComparison.OrdinalIgnoreCase)
             || context.Request.Path.Equals("/api/health", StringComparison.OrdinalIgnoreCase)
+            || context.Request.Path.Equals("/api/version", StringComparison.OrdinalIgnoreCase)
             // Web sign-in bootstrap: the one-time code redemption is itself the credential
             // (endpoint is AllowAnonymous). It MUST be reachable without a Bearer token —
             // it is the call that EXCHANGES the code FOR the token. Without this exemption the
