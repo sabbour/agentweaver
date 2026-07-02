@@ -252,6 +252,14 @@ public sealed record SandboxStatusDto
 
     [JsonPropertyName("has_network_warning")]
     public bool HasNetworkWarning { get; init; }
+
+    /// <summary>
+    /// Live SandboxClaim phase: "Pending" (claim not yet bound), "Bound" (pod ready),
+    /// or "Lost" (reconciler error). Null when the Kubernetes client is unavailable
+    /// (non-cluster environments or when the claim has already been deleted).
+    /// </summary>
+    [JsonPropertyName("phase")]
+    public string? Phase { get; init; }
 }
 
 public sealed record SandboxPolicyDto

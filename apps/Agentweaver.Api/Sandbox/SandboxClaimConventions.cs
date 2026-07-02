@@ -123,6 +123,20 @@ public static class SandboxClaimConventions
         haystack is not null && haystack.Contains(needle, StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
+    /// Derives a human-readable phase string from a SandboxClaim JSON element.
+    /// Returns <c>"Bound"</c> when the <c>Ready</c> condition is <c>True</c>, <c>"Lost"</c>
+    /// when a reconciler error is present, or <c>"Pending"</c> otherwise.
+    /// </summary>
+    public static string GetPhase(JsonElement root)
+    {
+        if (TryGetReconcilerError(root) is not null)
+            return "Lost";
+        if (root.TryGetProperty("status", out var status) && IsReady(status))
+            return "Bound";
+        return "Pending";
+    }
+
+    /// <summary>
     /// Returns <see langword="true"/> when the claim's <c>status</c> carries a <c>Ready</c>
     /// condition with <c>status == "True"</c>. This is the authoritative readiness signal for the
     /// agent-sandbox CRD (there is no <c>status.phase</c>).

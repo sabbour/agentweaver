@@ -20,6 +20,8 @@ export type RunStatus =
 export interface RunSandboxInfo {
   backend: string;
   isRealIsolation: boolean;
+  /** Live SandboxClaim phase: "Pending" | "Bound" | "Lost". Null in non-k8s environments. */
+  phase?: string | null;
 }
 
 export interface SandboxPolicy {

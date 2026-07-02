@@ -1,4 +1,5 @@
 using System.Text.Encodings.Web;
+using k8s;
 using LibGit2Sharp;
 using Microsoft.EntityFrameworkCore;
 using Agentweaver.AgentRuntime;
@@ -106,6 +107,8 @@ app.MapGet("/api/runs/{id}", async (
     CoordinatorStatusReader coordinator,
     IRunOptionsStore runOptions,
     ILogger<Program> logger,
+    IKubernetes? k8sClient,
+    KubernetesSandboxOptions? k8sOptions,
     CancellationToken ct) =>
 {
     if (!RunId.TryParse(id, out var runId))
@@ -165,6 +168,37 @@ app.MapGet("/api/runs/{id}", async (
                     HasNetworkWarning = hasNetworkWarning,
                 };
             }
+        }
+    }
+
+    // Augment sandboxStatus with the live SandboxClaim phase from Kubernetes.
+    // Only attempted when the backend is kubernetes-sandbox-claim and an in-cluster
+    // Kubernetes client is available. Degrades gracefully (Phase stays null) when
+    // not in cluster, the claim doesn't exist yet, or the read fails.
+    if (sandboxStatus is not null
+        && sandboxStatus.Backend == "kubernetes-sandbox-claim"
+        && k8sClient is not null
+        && k8sOptions is not null)
+    {
+        try
+        {
+            var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(run.Id.ToString());
+            var raw = await k8sClient.CustomObjects.GetNamespacedCustomObjectAsync(
+                SandboxClaimConventions.ApiGroup,
+                SandboxClaimConventions.ApiVersion,
+                k8sOptions.Namespace,
+                SandboxClaimConventions.ClaimPlural,
+                claimName,
+                cancellationToken: ct);
+            var claimJson = System.Text.Json.JsonSerializer.Serialize(raw);
+            using var claimDoc = System.Text.Json.JsonDocument.Parse(claimJson);
+            var phase = SandboxClaimConventions.GetPhase(claimDoc.RootElement);
+            sandboxStatus = sandboxStatus with { Phase = phase };
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // Claim may not exist (non-k8s run, claim already deleted, or race at startup).
+            logger.LogDebug(ex, "Could not read SandboxClaim phase for run {RunId}", id);
         }
     }
 
