@@ -36,6 +36,16 @@ const list: WorkflowListResponse = {
   default_workflow_id: 'default',
   workflows: [
     {
+      id: 'default',
+      name: 'Generic Workflow',
+      description: null,
+      source: 'built-in',
+      valid: true,
+      error: null,
+      is_built_in: true,
+      is_default: true,
+    },
+    {
       id: 'nightly',
       name: 'Nightly Sweep',
       description: null,
@@ -101,5 +111,17 @@ describe('TaskCard workflow override', () => {
 
     await waitFor(() => expect(screen.getByText(/can no longer be changed/)).toBeDefined());
     expect(onMutated).toHaveBeenCalled();
+  });
+
+  it('shows the active badge for the default workflow option', async () => {
+    vi.mocked(apiClient.listWorkflows).mockResolvedValue(list);
+
+    renderCard();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Set workflow' }));
+
+    const activeWorkflow = await screen.findByRole('menuitem', { name: /Generic Workflow/i });
+    expect(activeWorkflow.textContent).toContain('Generic Workflow');
+    expect(activeWorkflow.textContent).toContain('Active');
   });
 });

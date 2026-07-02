@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import {
+  Badge,
   Button,
   Caption1,
   Field,
@@ -56,6 +57,11 @@ const useStyles = makeStyles({
   cardActions: {
     display: 'flex',
     gap: tokens.spacingHorizontalXXS,
+  },
+  workflowMenuItemTitle: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: '6px',
   },
   editFields: {
     display: 'flex',
@@ -219,7 +225,10 @@ export function TaskCard({ card, columnId, projectId, onMutated, onDragStartTask
                 {workflowsLoading && <MenuItem disabled>Loading workflows…</MenuItem>}
                 {!workflowsLoading && workflows?.filter((wf) => wf.valid && wf.id).map((wf) => (
                   <MenuItem key={wf.id} onClick={() => void handleSetOverride(wf.id)}>
-                    {wf.name ?? wf.id}{wf.is_default ? ' (default)' : ''}
+                    <span className={styles.workflowMenuItemTitle}>
+                      <span>{wf.name ?? wf.id}</span>
+                      {wf.is_default && <Badge appearance="filled" color="brand">Active</Badge>}
+                    </span>
                   </MenuItem>
                 ))}
                 {!workflowsLoading && workflows && workflows.filter((wf) => wf.valid && wf.id).length === 0 && (
