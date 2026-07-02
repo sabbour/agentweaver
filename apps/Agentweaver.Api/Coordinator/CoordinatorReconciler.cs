@@ -26,6 +26,14 @@ namespace Agentweaver.Api.Coordinator;
 /// steering at the next boundary. Genuinely stalled children are failed by the loop's TTL-based
 /// stall detection in <see cref="CoordinatorDispatchService"/>.</para>
 ///
+/// <para>A run in <see cref="WorkPlanStatus.InReview"/> is NOT treated as an orphan while a human
+/// review gate is pending. <c>in_review</c> means "awaiting a human decision", not "assembly failed":
+/// the reconciler checks the DURABLE, cross-pod review record (a pending
+/// <see cref="CoordinatorAssemblyReviewRecord"/> with no submitted decision) and, when present, simply
+/// waits silently. Only an <c>in_review</c> plan with NO pending gate (the gate was never armed, or a
+/// submitted decision's processing died) is re-armed. A 24 h escape hatch still terminalizes a review
+/// left idle forever.</para>
+///
 /// <para>The sweep is hosted on the existing <see cref="CoordinatorHeartbeatService"/> cadence (~10s)
 /// plus one immediate sweep at startup so a restart recovers fast. Each run is recovered under its own
 /// try/catch so one bad run never stalls the sweep.</para>
@@ -168,21 +176,27 @@ public sealed class CoordinatorReconciler
                         break;
 
                     case WorkPlanStatus.InReview:
-                        // Escape hatch: a run parked in in_review with no activity past the review
-                        // timeout is auto-resolved so it can't stay stuck forever (applies whether or
-                        // not an assembly loop is currently active).
+                        // Escape-hatch backstop: a run parked in in_review with no operator action past
+                        // the review timeout is auto-resolved so it can never stay stuck forever (e.g.
+                        // the in-process gate timer was lost to a pod restart).
                         if (await TryAbandonStaleReviewAsync(plan, ct).ConfigureAwait(false))
                         {
                             reArmed++;
                             continue;
                         }
-                        // Not expired: if a collective-assembly loop is already active IN THIS PROCESS,
-                        // the run is legitimately in review (the loop owns the open review gate) — it is
-                        // NOT orphaned. Skip it. Re-arming here would be a no-op that logs
-                        // "already active; skipping" every ~10 s sweep forever (the infinite loop bug).
-                        if (IsAssemblyActive(plan))
+                        // in_review means "awaiting a human review decision", NOT "assembly failed".
+                        // A pending review gate is the authoritative, DURABLE, cross-pod signal that the
+                        // wait is INTENTIONAL — the operator simply hasn't reviewed yet. Do NOT re-arm:
+                        // re-arming would churn/cancel the open gate and log "already active; skipping"
+                        // every ~10 s sweep forever (the infinite-loop bug). Just wait silently.
+                        // (IsAssemblyActive is an in-memory per-pod fast-path; the persisted gate check
+                        // is what makes this correct across replicas and restarts.)
+                        if (await HasPendingReviewGateAsync(plan, ct).ConfigureAwait(false)
+                            || IsAssemblyActive(plan))
                             continue;
-                        // Truly orphaned (no active loop): re-arm so the assembly can resume review.
+                        // No pending gate and no active loop → genuinely orphaned (the gate was never
+                        // armed, or a submitted decision's processing died). Re-arm so the assembly can
+                        // resume review / apply the decision.
                         if (await TryReArmAssemblyWithCapAsync(plan, ct).ConfigureAwait(false))
                             reArmed++;
                         break;
@@ -220,6 +234,32 @@ public sealed class CoordinatorReconciler
         !string.IsNullOrWhiteSpace(plan.CoordinatorRunId)
         && _assembly is not null
         && _assembly.IsAssemblyActive(plan.CoordinatorRunId);
+
+    /// <summary>
+    /// True when a DURABLE, cross-pod human review gate is pending for the run: a
+    /// <see cref="CoordinatorAssemblyReviewRecord"/> exists with no decision submitted yet
+    /// (<c>DecisionSubmittedAt is null</c>). This is the authoritative "the run is INTENTIONALLY
+    /// waiting for a human decision" signal. Unlike the in-memory per-pod
+    /// <see cref="ICoordinatorAssembly.IsAssemblyActive"/> guard, the persisted review record survives
+    /// a pod restart and is visible to EVERY replica, so no replica mistakes a legitimately in-review
+    /// run for an orphan and re-arms (which would churn/cancel the open gate). Once a decision has been
+    /// submitted the row's <c>DecisionSubmittedAt</c> is set, so a still-<c>in_review</c> plan with a
+    /// submitted decision is (correctly) NOT reported as pending — its stalled decision-processing is a
+    /// real orphan the reconciler should re-arm.
+    /// </summary>
+    private async Task<bool> HasPendingReviewGateAsync(PlanCandidate plan, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(plan.CoordinatorRunId))
+            return false;
+
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        return await db.AssemblyReviews
+            .AsNoTracking()
+            .AnyAsync(r => r.CoordinatorRunId == plan.CoordinatorRunId
+                        && r.DecisionSubmittedAt == null, ct)
+            .ConfigureAwait(false);
+    }
 
     /// <summary>
     /// Re-arms an orphaned collective assembly, but caps consecutive re-arms per run at

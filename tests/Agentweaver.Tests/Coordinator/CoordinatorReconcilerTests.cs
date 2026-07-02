@@ -220,7 +220,7 @@ public sealed class CoordinatorReconcilerTests : IAsyncDisposable
         await SeedCoordinatorRunAsync(coord);
         var (planId, _) = await SeedPlanAsync(coord, new[] { (SubtaskStatus.AssembleReady, (string?)null) });
         await SetPlanStatusAsync(planId, WorkPlanStatus.InReview);
-        // assembly NOT marked active → genuinely orphaned
+        // assembly NOT marked active AND no review record → genuinely orphaned
 
         var reconciler = new CoordinatorReconciler(
             _scopeFactory, _runStore, _streamStore, new RecordingDispatch(),
@@ -231,6 +231,56 @@ public sealed class CoordinatorReconcilerTests : IAsyncDisposable
         reArmed.Should().Be(1);
         _assembly.Started.Should().ContainSingle().Which.CoordinatorRunId.Should().Be(coord);
         _assembly.Abandoned.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Sweep_InReviewPlan_WithPendingReviewGate_DoesNotReArm_EvenWithoutActiveLoop()
+    {
+        // The correction: in_review with a pending HUMAN review gate is INTENTIONAL — the operator
+        // simply hasn't reviewed yet. This must hold even when no assembly loop is active IN THIS POD
+        // (e.g. the awaiting loop is on another replica, or this pod just restarted). The durable
+        // AssemblyReviews record — NOT the in-memory IsAssemblyActive guard — is the authoritative
+        // signal, so the reconciler must NOT re-arm and must NOT loop.
+        var coord = RunId.New().ToString();
+        await SeedCoordinatorRunAsync(coord);
+        var (planId, _) = await SeedPlanAsync(coord, new[] { (SubtaskStatus.AssembleReady, (string?)null) });
+        await SetPlanStatusAsync(planId, WorkPlanStatus.InReview);
+        await SeedReviewRecordAsync(coord, decisionSubmitted: false); // pending human decision
+        // deliberately do NOT MarkActive — simulate cross-pod / post-restart
+
+        var reconciler = new CoordinatorReconciler(
+            _scopeFactory, _runStore, _streamStore, new RecordingDispatch(),
+            NullLogger<CoordinatorReconciler>.Instance, configuration: null, assembly: _assembly);
+
+        // Multiple sweeps must remain a silent no-op (no infinite re-arm loop).
+        (await reconciler.SweepAsync(default)).Should().Be(0);
+        (await reconciler.SweepAsync(default)).Should().Be(0);
+
+        _assembly.Started.Should().BeEmpty("a run with a pending human review gate is not orphaned");
+        _assembly.Abandoned.Should().BeEmpty();
+        _assembly.Failed.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Sweep_InReviewPlan_WithSubmittedDecision_ButNoActiveLoop_ReArms()
+    {
+        // A decision WAS submitted (DecisionSubmittedAt set) but the run is still in_review with no
+        // active loop → the loop that should apply the decision died. This is a true orphan, so the
+        // reconciler re-arms so the submitted decision gets processed.
+        var coord = RunId.New().ToString();
+        await SeedCoordinatorRunAsync(coord);
+        var (planId, _) = await SeedPlanAsync(coord, new[] { (SubtaskStatus.AssembleReady, (string?)null) });
+        await SetPlanStatusAsync(planId, WorkPlanStatus.InReview);
+        await SeedReviewRecordAsync(coord, decisionSubmitted: true);
+
+        var reconciler = new CoordinatorReconciler(
+            _scopeFactory, _runStore, _streamStore, new RecordingDispatch(),
+            NullLogger<CoordinatorReconciler>.Instance, configuration: null, assembly: _assembly);
+
+        var reArmed = await reconciler.SweepAsync(default);
+
+        reArmed.Should().Be(1);
+        _assembly.Started.Should().ContainSingle().Which.CoordinatorRunId.Should().Be(coord);
     }
 
     [Fact]
@@ -459,6 +509,26 @@ public sealed class CoordinatorReconcilerTests : IAsyncDisposable
         var row = await db.WorkPlans.FirstAsync(w => w.Id == planId);
         row.Status = status;
         row.UpdatedAt = updatedAt ?? DateTimeOffset.UtcNow;
+        await db.SaveChangesAsync();
+    }
+
+    private async Task SeedReviewRecordAsync(string coordinatorRunId, bool decisionSubmitted)
+    {
+        using var scope = _provider.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var now = DateTimeOffset.UtcNow;
+        db.AssemblyReviews.Add(new CoordinatorAssemblyReviewRecord
+        {
+            CoordinatorRunId = coordinatorRunId,
+            OwnerUser = "tester",
+            IntegrationBranch = $"agentweaver/integration/{coordinatorRunId}",
+            AggregateTreeHash = "deadbeef",
+            DecisionJson = decisionSubmitted ? "{\"Approved\":true}" : null,
+            Reviewer = decisionSubmitted ? "tester" : null,
+            DecisionSubmittedAt = decisionSubmitted ? now : null,
+            CreatedAt = now,
+            UpdatedAt = now,
+        });
         await db.SaveChangesAsync();
     }
 
