@@ -14,7 +14,7 @@ COPY ["apps/Agentweaver.AgentHost/Agentweaver.AgentHost.csproj", "apps/Agentweav
 COPY ["packages/", "packages/"]
 COPY Directory.Build.props .
 
-ARG COPILOT_CLI_VERSION=1.0.57
+ARG COPILOT_CLI_VERSION=1.0.67
 RUN mkdir -p /copilot-bin && \
     curl -fsSL "https://registry.npmjs.org/@github/copilot-linux-x64/-/copilot-linux-x64-${COPILOT_CLI_VERSION}.tgz" | \
     tar -xz --strip-components=1 -C /copilot-bin && \
@@ -44,15 +44,30 @@ ARG GIT_SHA=unknown
 LABEL org.opencontainers.image.version="${IMAGE_TAG}"
 LABEL org.opencontainers.image.revision="${GIT_SHA}"
 
-# git/libgit2 for workspace operations; ca-certificates for the Copilot HTTP SDK (CopilotClient).
+# Dev tools are installed in the agent-host image because the nested lxc-native-linux sandbox
+# bind-mounts host paths, making these tools available inside Copilot CLI runs as well.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
+    curl \
+    wget \
     git \
+    sudo \
+    build-essential \
     libgit2-1.7 \
+    python3 \
+    python3-pip \
+    python3-venv \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/*
 
 RUN getent group 1000 || groupadd --gid 1000 appgroup; \
     id -u 1000 >/dev/null 2>&1 || useradd --uid 1000 --gid 1000 --shell /bin/bash --create-home appuser
+
+RUN echo "appuser ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/appuser \
+    && chmod 0440 /etc/sudoers.d/appuser
 
 RUN mkdir -p /workspace /app/config /app/logs && chown -R 1000:1000 /workspace /app
 
