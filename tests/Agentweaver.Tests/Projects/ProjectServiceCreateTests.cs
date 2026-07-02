@@ -203,11 +203,12 @@ public sealed class ProjectServiceCreateTests : IAsyncDisposable
     // =========================================================================
 
     // =========================================================================
-    // PC-09: CreateBlankAsync does NOT write default.yaml — the built-in
-    //   workflow provides 'default' without a reserved-id conflict
+    // PC-09: CreateBlankAsync materializes default.yaml into .agentweaver/workflows/
+    //   so the directory is visible/editable in the Workspace; the WorkflowRegistry
+    //   treats the on-disk 'default' as the built-in copy (no reserved-id conflict)
     // =========================================================================
     [Fact]
-    public async Task CreateBlankAsync_DoesNotMaterializeDefaultWorkflowYaml()
+    public async Task CreateBlankAsync_MaterializesDefaultWorkflowYaml()
     {
         await using var testDb = await TestSqliteDb.CreateAsync();
         var store   = new SqliteProjectStore(testDb.Db);
@@ -217,8 +218,8 @@ public sealed class ProjectServiceCreateTests : IAsyncDisposable
         var project = await service.CreateBlankAsync("Workflow Check", dir, null, null, null, "user");
 
         var defaultYaml = Path.Combine(project.WorkingDirectory, ".agentweaver", "workflows", "default.yaml");
-        File.Exists(defaultYaml).Should().BeFalse(
-            "materializing default.yaml causes a reserved-id conflict in WorkflowRegistry; the built-in default is provided without an on-disk copy");
+        File.Exists(defaultYaml).Should().BeTrue(
+            "the default workflow is materialized so .agentweaver/workflows/ is visible/editable in the Workspace");
     }
 
     // =========================================================================

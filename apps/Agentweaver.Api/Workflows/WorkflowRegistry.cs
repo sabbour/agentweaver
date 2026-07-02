@@ -155,6 +155,14 @@ public sealed class WorkflowRegistry
             result = ValidateBindable(result);
             if (result.Definition is not null && reservedIds.Contains(result.Definition.Id))
             {
+                // A materialized copy of the built-in default (same id) is expected on disk: it is
+                // written into each project's .agentweaver/workflows/ at creation so the directory is
+                // visible/editable in the Workspace. It is the byte-source of the built-in default, so
+                // it is neither a duplicate nor a conflict — silently skip it (the built-in already
+                // represents 'default'). Any OTHER reserved (catalog) id remains a hard conflict.
+                if (string.Equals(result.Definition.Id, BuiltInWorkflows.DefaultWorkflowId, StringComparison.OrdinalIgnoreCase))
+                    continue;
+
                 var message =
                     $"{result.Source}: workflow id '{result.Definition.Id}' is reserved by a built-in/catalog workflow and cannot be overridden by a project file.";
                 _logger?.LogError("{Message}", message);

@@ -85,6 +85,11 @@ public sealed class ProjectService
         // at runtime. A blank project is empty, so this always writes the default policy.
         TryMaterializeDefaultReviewPolicy(workingDir);
 
+        // Materialize the default workflow into the new project so .agentweaver/workflows/ exists and is
+        // visible/editable in the Workspace (mirrors the review-policy scaffold). The WorkflowRegistry
+        // treats this on-disk 'default' as the built-in copy, so it introduces no reserved-id conflict.
+        TryMaterializeDefaultWorkflow(workingDir);
+
         // Materialize the GitHub Copilot agent definition into the new project (agent-file-gen). Best-effort
         // and non-clobbering: the embedded template is a generated copy of .github/agents/agentweaver.agent.md.
         TryMaterializeAgentDefinition(workingDir);
@@ -180,6 +185,12 @@ public sealed class ProjectService
         // ships its own review policies is never overwritten. Never fails creation; the loader
         // regenerates the default from DefaultReviewPolicyTemplate at runtime.
         TryMaterializeDefaultReviewPolicy(workingDir);
+
+        // Materialize the default workflow into the cloned project so .agentweaver/workflows/ exists and
+        // is visible/editable in the Workspace (mirrors the review-policy scaffold). Non-clobbering: a
+        // repo that already ships a default.yaml is never overwritten. The WorkflowRegistry treats this
+        // on-disk 'default' as the built-in copy, so it introduces no reserved-id conflict.
+        TryMaterializeDefaultWorkflow(workingDir);
 
         // Materialize the GitHub Copilot agent definition into the cloned project (agent-file-gen). Best-effort
         // and non-clobbering: a repo that already ships its own .github/agents/agentweaver.agent.md is never
@@ -481,6 +492,27 @@ public sealed class ProjectService
             _logger.LogInformation(
                 "Materialized the default review policy into {Path}.",
                 Path.Combine(workingDir, ReviewPolicies.DefaultReviewPolicyTemplate.RelativeFilePath));
+    }
+
+    /// <summary>
+    /// Best-effort materialization of the default workflow into the project's working directory at
+    /// <c>.agentweaver/workflows/default.yaml</c> so the directory exists and is visible/editable in the
+    /// Workspace (mirrors <see cref="TryMaterializeDefaultReviewPolicy"/>). Non-clobbering and never
+    /// throws: project creation must not fail if this write fails, because the workflow registry
+    /// regenerates the default from <see cref="Workflows.DefaultWorkflowTemplate"/> at runtime and treats
+    /// this on-disk copy as the built-in default (no reserved-id conflict).
+    /// </summary>
+    private void TryMaterializeDefaultWorkflow(string workingDir)
+    {
+        var written = Workflows.DefaultWorkflowTemplate.TryMaterialize(workingDir, out var error);
+        if (error is not null)
+            _logger.LogWarning(
+                "Failed to materialize the default workflow into {Path} ({Error}); the runtime default will be used instead.",
+                Path.Combine(workingDir, Workflows.DefaultWorkflowTemplate.RelativeFilePath), error);
+        else if (written)
+            _logger.LogInformation(
+                "Materialized the default workflow into {Path}.",
+                Path.Combine(workingDir, Workflows.DefaultWorkflowTemplate.RelativeFilePath));
     }
 
     /// <summary>
