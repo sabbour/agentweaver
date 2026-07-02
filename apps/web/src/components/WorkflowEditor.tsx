@@ -32,9 +32,6 @@ name: My Workflow
 description: Describe what this workflow does and when to use it.
 version: "1.0"
 
-trigger:
-  type: manual
-
 start: agent
 
 nodes:

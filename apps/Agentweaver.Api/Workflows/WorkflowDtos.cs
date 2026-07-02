@@ -2,21 +2,12 @@ using System.Text.Json.Serialization;
 
 namespace Agentweaver.Api.Workflows;
 
-/// <summary>Trigger shape in API responses (snake_case).</summary>
-public sealed record WorkflowTriggerDto
-{
-    [JsonPropertyName("type")] public required string Type { get; init; }
-    [JsonPropertyName("event")] public string? Event { get; init; }
-    [JsonPropertyName("schedule")] public string? Schedule { get; init; }
-}
-
-/// <summary>A workflow in a list response: identity, trigger, and validation status (FR-002/039/040).</summary>
+/// <summary>A workflow in a list response: identity and validation status (FR-002/039/040).</summary>
 public sealed record WorkflowSummaryDto
 {
     [JsonPropertyName("id")] public string? Id { get; init; }
     [JsonPropertyName("name")] public string? Name { get; init; }
     [JsonPropertyName("description")] public string? Description { get; init; }
-    [JsonPropertyName("trigger")] public WorkflowTriggerDto? Trigger { get; init; }
     [JsonPropertyName("source")] public required string Source { get; init; }
     [JsonPropertyName("valid")] public required bool Valid { get; init; }
     [JsonPropertyName("error")] public string? Error { get; init; }
@@ -77,7 +68,6 @@ public sealed record WorkflowDetailDto
     [JsonPropertyName("id")] public required string Id { get; init; }
     [JsonPropertyName("name")] public required string Name { get; init; }
     [JsonPropertyName("description")] public string? Description { get; init; }
-    [JsonPropertyName("trigger")] public required WorkflowTriggerDto Trigger { get; init; }
     [JsonPropertyName("start")] public required string Start { get; init; }
     [JsonPropertyName("source")] public required string Source { get; init; }
     [JsonPropertyName("is_built_in")] public required bool IsBuiltIn { get; init; }
@@ -151,21 +141,6 @@ public sealed record GenerateWorkflowResponse
 /// <summary>Maps the workflow domain model to API DTOs (server-side only, Principles III/IV).</summary>
 public static class WorkflowDtoMapper
 {
-    public static string TriggerTypeToApi(WorkflowTriggerType t) => t switch
-    {
-        WorkflowTriggerType.Manual => "manual",
-        WorkflowTriggerType.Heartbeat => "heartbeat",
-        WorkflowTriggerType.Schedule => "schedule",
-        WorkflowTriggerType.Event => "event",
-        _ => "manual",
-    };
-
-    public static string EventTypeToApi(WorkflowEventType e) => e switch
-    {
-        WorkflowEventType.TaskAddedToReady => "task-added-to-ready",
-        _ => throw new ArgumentOutOfRangeException(nameof(e)),
-    };
-
     public static string NodeTypeToApi(WorkflowNodeType t) => t switch
     {
         WorkflowNodeType.Prompt => "prompt",
@@ -181,13 +156,6 @@ public static class WorkflowDtoMapper
         _ => throw new ArgumentOutOfRangeException(nameof(t)),
     };
 
-    public static WorkflowTriggerDto ToDto(WorkflowTrigger trigger) => new()
-    {
-        Type = TriggerTypeToApi(trigger.Type),
-        Event = trigger.Event is null ? null : EventTypeToApi(trigger.Event.Value),
-        Schedule = trigger.Schedule,
-    };
-
     public static WorkflowSummaryDto ToSummary(WorkflowLoadResult result, string effectiveDefaultId)
     {
         var def = result.Definition;
@@ -196,7 +164,6 @@ public static class WorkflowDtoMapper
             Id = def?.Id,
             Name = def?.Name,
             Description = def?.Description,
-            Trigger = def is null ? null : ToDto(def.Trigger),
             Source = result.Source,
             Valid = result.IsValid,
             Error = result.Error,
@@ -296,7 +263,6 @@ public static class WorkflowDtoMapper
             Id = def.Id,
             Name = def.Name,
             Description = def.Description,
-            Trigger = ToDto(def.Trigger),
             Start = def.Start,
             Source = result.Source,
             IsBuiltIn = result.IsBuiltIn,

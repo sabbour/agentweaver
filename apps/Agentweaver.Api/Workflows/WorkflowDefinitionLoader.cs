@@ -15,6 +15,7 @@ public static class WorkflowDefinitionLoader
 {
     private static readonly IDeserializer Deserializer = new DeserializerBuilder()
         .WithNamingConvention(UnderscoredNamingConvention.Instance)
+        .IgnoreUnmatchedProperties()
         .Build();
 
     /// <summary>Parses+validates a YAML document. Always returns a result (never throws).</summary>
@@ -27,9 +28,7 @@ public static class WorkflowDefinitionLoader
         }
         catch (YamlException ex)
         {
-            var message = $"{source}: malformed YAML — {ex.Message}";
-            var parseWarnings = IsUnmatchedPropertyError(ex) ? new[] { message } : Array.Empty<string>();
-            return WorkflowLoadResult.Invalid(source, message, warnings: parseWarnings);
+            return WorkflowLoadResult.Invalid(source, $"{source}: malformed YAML — {ex.Message}");
         }
 
         if (dto is null)
@@ -58,29 +57,6 @@ public static class WorkflowDefinitionLoader
             return Fail(source, "missing required field 'id'.", out error);
         if (string.IsNullOrWhiteSpace(dto.Name))
             return Fail(source, "missing required field 'name'.", out error);
-
-        // Trigger (FR-020/021/022/024).
-        if (dto.Trigger is null || string.IsNullOrWhiteSpace(dto.Trigger.Type))
-            return Fail(source, "missing required 'trigger.type' (manual | heartbeat | schedule | event).", out error);
-        if (!TryParseTriggerType(dto.Trigger.Type, out var triggerType))
-            return Fail(source, $"unsupported trigger type '{dto.Trigger.Type}' (expected manual | heartbeat | schedule | event).", out error);
-
-        WorkflowEventType? eventType = null;
-        string? schedule = null;
-        if (triggerType == WorkflowTriggerType.Event)
-        {
-            if (string.IsNullOrWhiteSpace(dto.Trigger.Event))
-                return Fail(source, "an event trigger requires 'trigger.event' (only 'task-added-to-ready' is supported).", out error);
-            if (!TryParseEventType(dto.Trigger.Event, out var ev))
-                return Fail(source, $"unsupported event '{dto.Trigger.Event}' (only 'task-added-to-ready' is supported this iteration).", out error);
-            eventType = ev;
-        }
-        else if (triggerType == WorkflowTriggerType.Schedule)
-        {
-            if (string.IsNullOrWhiteSpace(dto.Trigger.Schedule))
-                return Fail(source, "a schedule trigger requires 'trigger.schedule' (for example 'weekly:monday').", out error);
-            schedule = dto.Trigger.Schedule.Trim();
-        }
 
         // Nodes.
         if (dto.Nodes is null || dto.Nodes.Count == 0)
@@ -210,7 +186,6 @@ public static class WorkflowDefinitionLoader
             Name = dto.Name!,
             Description = dto.Description,
             Version = string.IsNullOrWhiteSpace(dto.Version) ? null : dto.Version.Trim(),
-            Trigger = new WorkflowTrigger { Type = triggerType, Event = eventType, Schedule = schedule },
             Start = dto.Start!,
             Nodes = nodes,
             Edges = edges,
@@ -218,10 +193,6 @@ public static class WorkflowDefinitionLoader
         };
         return true;
     }
-
-    private static bool IsUnmatchedPropertyError(YamlException ex) =>
-        ex.Message.Contains("not found on type", StringComparison.OrdinalIgnoreCase) ||
-        ex.Message.Contains("unmatched", StringComparison.OrdinalIgnoreCase);
 
     private static bool Fail(string source, string message, out string? error)
     {
@@ -231,28 +202,6 @@ public static class WorkflowDefinitionLoader
 
     private static string Normalize(string raw) =>
         raw.Trim().Replace('-', '_').Replace(' ', '_').ToLowerInvariant();
-
-    private static bool TryParseTriggerType(string raw, out WorkflowTriggerType type)
-    {
-        switch (Normalize(raw))
-        {
-            case "manual": type = WorkflowTriggerType.Manual; return true;
-            case "heartbeat":
-            case "heartbeat_schedule": type = WorkflowTriggerType.Heartbeat; return true;
-            case "schedule": type = WorkflowTriggerType.Schedule; return true;
-            case "event": type = WorkflowTriggerType.Event; return true;
-            default: type = default; return false;
-        }
-    }
-
-    private static bool TryParseEventType(string raw, out WorkflowEventType type)
-    {
-        switch (Normalize(raw))
-        {
-            case "task_added_to_ready": type = WorkflowEventType.TaskAddedToReady; return true;
-            default: type = default; return false;
-        }
-    }
 
     private static bool TryParseNodeType(string raw, out WorkflowNodeType type)
     {
@@ -283,18 +232,10 @@ internal sealed class WorkflowYamlDto
     public string? Name { get; set; }
     public string? Description { get; set; }
     public string? Version { get; set; }
-    public TriggerYamlDto? Trigger { get; set; }
     public string? Start { get; set; }
     public List<NodeYamlDto>? Nodes { get; set; }
     public List<EdgeYamlDto>? Edges { get; set; }
     public List<StageYamlDto>? Stages { get; set; }
-}
-
-internal sealed class TriggerYamlDto
-{
-    public string? Type { get; set; }
-    public string? Event { get; set; }
-    public string? Schedule { get; set; }
 }
 
 internal sealed class NodeYamlDto

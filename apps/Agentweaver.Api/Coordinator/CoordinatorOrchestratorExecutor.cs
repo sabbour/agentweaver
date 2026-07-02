@@ -189,21 +189,14 @@ public sealed class CoordinatorOrchestratorExecutor
                 .ThenBy(r => r.Definition!.Id, StringComparer.Ordinal)
                 .ToList();
 
-            // Filter candidates to workflows whose declared trigger matches HOW this run was invoked
-            // (manual interactive start vs. heartbeat backlog pickup). A workflow's trigger is no
-            // longer pure metadata: a manual run never selects a heartbeat/event workflow and a
-            // heartbeat pickup never selects a manual-only workflow. When NO workflow's trigger
-            // matches, fall back to the project default rather than picking a mismatched workflow.
-            var invocationKind = await ResolveInvocationKindAsync(scope, input.RunId, ct).ConfigureAwait(false);
+            // Workflows are trigger-agnostic (#158): every valid workflow in the Available set is a
+            // candidate regardless of how the run was invoked.
             var overrideId = input.WorkflowOverrideId
                 ?? await ResolveWorkflowOverrideIdAsync(backlogStore, input.RunId, ct).ConfigureAwait(false);
             if (!string.IsNullOrWhiteSpace(overrideId))
             {
-                // An EXPLICIT workflow choice (dialog dropdown or per-task override) is honored
-                // regardless of trigger eligibility: a person deliberately selected this workflow, so
-                // never silently substitute a different one because its declared trigger is
-                // event/heartbeat rather than manual. Trigger-eligibility filtering below governs only
-                // AUTOMATIC selection among un-pinned workflows.
+                // An EXPLICIT workflow choice (dialog dropdown or per-task override) is honored: a
+                // person deliberately selected this workflow.
                 var overrideResult = availableResults.FirstOrDefault(r =>
                     string.Equals(r.Definition!.Id, overrideId, StringComparison.OrdinalIgnoreCase));
                 if (overrideResult?.Definition is not null)
@@ -220,8 +213,8 @@ public sealed class CoordinatorOrchestratorExecutor
             }
 
             // A conversational override ("use {workflow-id}") in the human's latest message always
-            // wins, matched against ALL of the project's workflows (not just trigger-eligible ones)
-            // so an explicit user request is never silently dropped.
+            // wins, matched against ALL of the project's workflows so an explicit user request is never
+            // silently dropped.
             if (WorkflowSelector.TryParseOverride(input.ReviseFeedback, out var requestedOverrideId))
             {
                 var overridden = availableResults
@@ -236,38 +229,21 @@ public sealed class CoordinatorOrchestratorExecutor
                 }
             }
 
-            // A manual "Start task" honors the project's explicitly-configured active/default workflow
-            // even when its declared trigger is event/heartbeat: pinning a project default is a
-            // deliberate owner choice and must not be overridden by the trigger-eligibility filter
-            // (which would silently fall back to the built-in Default Run Workflow). Heartbeat pickups
-            // keep the existing event/heartbeat auto-selection.
-            if (invocationKind == WorkflowInvocationKind.Manual
-                && !string.IsNullOrWhiteSpace(project.DefaultWorkflowId)
+            // A project's explicitly-configured active/default workflow is honored: pinning a project
+            // default is a deliberate owner choice.
+            if (!string.IsNullOrWhiteSpace(project.DefaultWorkflowId)
                 && defaultDef is not null
                 && availableResults.Any(r => string.Equals(r.Definition!.Id, defaultDef.Id, StringComparison.Ordinal)))
             {
                 _logger.LogInformation(
-                    "Coordinator workflow selection for run {RunId}: using the project's active workflow '{WorkflowId}' for a manual invocation.",
+                    "Coordinator workflow selection for run {RunId}: using the project's active workflow '{WorkflowId}'.",
                     input.RunId, defaultDef.Id);
                 return defaultDef;
             }
 
-            var eligibleResults = availableResults
-                .Where(r => WorkflowTriggerEvaluator.IsEligible(r.Definition!.Trigger, invocationKind))
-                .ToList();
-            if (eligibleResults.Count == 0)
-            {
-                _logger.LogInformation(
-                    "Coordinator workflow selection for run {RunId}: no workflow declares a trigger matching a {Invocation} invocation; using the project default.",
-                    input.RunId, invocationKind);
-                return defaultDef;
-            }
-
-            availableResults = eligibleResults;
-
             var available = availableResults.Select(r => r.Definition!).ToList();
 
-            // Single (or zero) eligible workflow: skip selection silently, but still drive planning from it.
+            // Single (or zero) workflow: skip selection silently, but still drive planning from it.
             if (available.Count <= 1) return available.FirstOrDefault() ?? defaultDef;
 
             var roles = ResolveRoster(input.RepositoryPath).Select(r => r.RoleTitle).ToList();
@@ -300,34 +276,6 @@ public sealed class CoordinatorOrchestratorExecutor
         if (!RunId.TryParse(runId, out var rid)) return null;
         var task = await backlogStore.GetByRunIdAsync(rid, ct).ConfigureAwait(false);
         return string.IsNullOrWhiteSpace(task?.WorkflowOverrideId) ? null : task.WorkflowOverrideId;
-    }
-
-    /// <summary>
-    /// Resolves how this coordinator run was invoked so workflow selection only considers workflows
-    /// whose declared trigger matches. A run stamped <see cref="RunOrigin.BacklogPickup"/> was started
-    /// by the heartbeat picking up a Ready task (<see cref="WorkflowInvocationKind.Heartbeat"/>); every
-    /// other origin is treated as an explicit manual start (<see cref="WorkflowInvocationKind.Manual"/>).
-    /// Best-effort: any failure resolving the run defaults to a manual invocation.
-    /// </summary>
-    private static async Task<WorkflowInvocationKind> ResolveInvocationKindAsync(
-        IServiceScope scope, string runId, CancellationToken ct)
-    {
-        try
-        {
-            if (RunId.TryParse(runId, out var parsed))
-            {
-                var runStore = scope.ServiceProvider.GetRequiredService<IRunStore>();
-                var run = await runStore.GetAsync(parsed, ct).ConfigureAwait(false);
-                if (run is not null && run.Origin == RunOrigin.BacklogPickup)
-                    return WorkflowInvocationKind.Heartbeat;
-            }
-        }
-        catch
-        {
-            // Best-effort: fall through to a manual invocation on any lookup failure.
-        }
-
-        return WorkflowInvocationKind.Manual;
     }
 
     private void EmitWorkflowSelectedEvent(

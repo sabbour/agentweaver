@@ -7,10 +7,6 @@ name: Incident Response
 description: SRE incident response pipeline with triage, mitigation, verification, postmortem, and final recording. Use for production incidents, outages, and reliability events. Every run ends with a postmortem before the scribe records the outcome.
 version: "1.0"
 
-trigger:
-  type: event
-  event: task-added-to-ready
-
 start: triage
 
 nodes:

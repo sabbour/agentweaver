@@ -1,36 +1,6 @@
 namespace Agentweaver.Api.Workflows;
 
 /// <summary>
-/// How a workflow's runs are started (Feature 010, FR-020/021/022). Trigger is a property of the
-/// workflow and does NOT determine which workflow a project/task selects.
-/// </summary>
-public enum WorkflowTriggerType
-{
-    /// <summary>A person or client explicitly starts a run (FR-020).</summary>
-    Manual,
-
-    /// <summary>The coordinator picks up eligible work on its periodic heartbeat (FR-021).</summary>
-    Heartbeat,
-
-    /// <summary>The workflow starts from a declared recurring cadence.</summary>
-    Schedule,
-
-    /// <summary>The workflow starts in response to a declared event (FR-022).</summary>
-    Event,
-}
-
-/// <summary>
-/// Supported event triggers. For this iteration the ONLY valid event is "task added to Ready"
-/// (FR-022). The enum is intentionally narrow; any other declared event fails validation. The schema
-/// may grow new members in a future iteration without breaking existing definitions.
-/// </summary>
-public enum WorkflowEventType
-{
-    /// <summary>A task entered the project's Ready bucket (Feature 009).</summary>
-    TaskAddedToReady,
-}
-
-/// <summary>
 /// The typed building blocks a workflow node can be (Feature 010, FR-012..FR-017). The runtime does
 /// not yet execute every type; this foundation models and round-trips all of them so authored YAML is
 /// faithfully parsed and validated.
@@ -66,18 +36,6 @@ public enum WorkflowNodeType
 
     /// <summary>A terminal/no-op sink (FR-018 zero-subtask resolution, no-op, declined, capped, failed).</summary>
     Terminal,
-}
-
-/// <summary>The declared start condition of a workflow.</summary>
-public sealed record WorkflowTrigger
-{
-    public required WorkflowTriggerType Type { get; init; }
-
-    /// <summary>Set iff <see cref="Type"/> is <see cref="WorkflowTriggerType.Event"/>.</summary>
-    public WorkflowEventType? Event { get; init; }
-
-    /// <summary>Set iff <see cref="Type"/> is <see cref="WorkflowTriggerType.Schedule"/>.</summary>
-    public string? Schedule { get; init; }
 }
 
 /// <summary>A typed unit within a workflow definition. Carries render metadata equivalent to the
@@ -156,8 +114,8 @@ public sealed record WorkflowEdge
 
 /// <summary>
 /// A declarative, YAML-authored description of a run pipeline (Feature 010). Identified by a stable
-/// id/name, composed of typed nodes connected by edges, plus a declared trigger. Validated before use;
-/// the source of a project's effective run graph.
+/// id/name, composed of typed nodes connected by edges. Validated before use; the source of a
+/// project's effective run graph.
 /// </summary>
 public sealed record WorkflowDefinition
 {
@@ -165,7 +123,6 @@ public sealed record WorkflowDefinition
     public required string Name { get; init; }
     public string? Description { get; init; }
     public string? Version { get; init; }
-    public required WorkflowTrigger Trigger { get; init; }
 
     /// <summary>The id of the entry node where execution begins.</summary>
     public required string Start { get; init; }

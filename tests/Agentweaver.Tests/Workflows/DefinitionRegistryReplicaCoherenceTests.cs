@@ -79,8 +79,6 @@ public sealed class DefinitionRegistryReplicaCoherenceTests : IDisposable
         $$"""
         id: {{id}}
         name: {{id}}
-        trigger:
-          type: manual
         start: scribe
         nodes:
           - id: scribe

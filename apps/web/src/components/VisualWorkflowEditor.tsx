@@ -54,7 +54,6 @@ import {
   setEdgeFieldAt,
   setHeaderField,
   setNodeField,
-  setTriggerType,
   type WfModel,
 } from '../utils/workflowYaml';
 import {
@@ -453,20 +452,6 @@ export function VisualWorkflowEditor({
               onChange={(_, d) => setYamlText((t) => setHeaderField(t, 'description', d.value))}
               rows={2}
             />
-          </Field>
-          <Field label="Trigger">
-            <Dropdown
-              selectedOptions={[model?.triggerType ?? 'manual']}
-              value={model?.triggerType ?? 'manual'}
-              onOptionSelect={(_, d) => {
-                if (d.optionValue) setYamlText((t) => setTriggerType(t, d.optionValue as string));
-              }}
-            >
-              <Option value="manual">manual</Option>
-              <Option value="heartbeat">heartbeat</Option>
-              <Option value="schedule">schedule</Option>
-              <Option value="event">event</Option>
-            </Dropdown>
           </Field>
         </div>
         <Button appearance="subtle" icon={<DismissRegular />} onClick={handleClose}>Close</Button>

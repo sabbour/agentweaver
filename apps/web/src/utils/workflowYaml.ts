@@ -65,7 +65,6 @@ export interface WfModel {
   id: string;
   name: string;
   description: string;
-  triggerType: string;
   start: string;
   nodes: WfNode[];
   edges: WfEdge[];
@@ -128,14 +127,11 @@ export function parseWorkflowYaml(text: string): ParseResult {
       when: asString(e.when),
     }));
 
-  const trigger = (obj.trigger ?? {}) as Record<string, unknown>;
-
   return {
     model: {
       id: asString(obj.id) ?? '',
       name: asString(obj.name) ?? '',
       description: asString(obj.description) ?? '',
-      triggerType: asString(trigger.type) ?? 'manual',
       start: asString(obj.start) ?? '',
       nodes,
       edges,
@@ -179,12 +175,6 @@ export function setHeaderField(text: string, field: string, value: string): stri
     } else {
       doc.set(field, value);
     }
-  });
-}
-
-export function setTriggerType(text: string, value: string): string {
-  return withDoc(text, (doc) => {
-    doc.setIn(['trigger', 'type'], value);
   });
 }
 

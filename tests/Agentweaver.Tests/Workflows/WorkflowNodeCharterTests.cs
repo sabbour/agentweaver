@@ -16,8 +16,6 @@ public sealed class WorkflowNodeCharterTests
         var yaml = """
             id: trip
             name: Trip
-            trigger:
-              type: manual
             start: research
             nodes:
               - id: research
@@ -42,8 +40,6 @@ public sealed class WorkflowNodeCharterTests
         var yaml = """
             id: trip
             name: Trip
-            trigger:
-              type: manual
             start: research
             nodes:
               - id: research

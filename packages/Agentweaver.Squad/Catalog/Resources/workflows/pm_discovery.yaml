@@ -7,10 +7,6 @@ name: Product Management Discovery
 description: Product discovery pipeline for user research, synthesis, and stakeholder review. Use for product discovery, requirements gathering, and feature definition. Outputs are documents and specs, not deployable code.
 version: "1.0"
 
-trigger:
-  type: event
-  event: task-added-to-ready
-
 start: research
 
 nodes:

@@ -8,10 +8,6 @@ name: Content Authoring
 description: Content creation pipeline with research, drafting, editorial review, RAI safety check, and publishing. Use for articles, documentation, long-form content, and any work where the output is published text rather than merged code.
 version: "1.0"
 
-trigger:
-  type: event
-  event: task-added-to-ready
-
 start: research
 
 nodes:

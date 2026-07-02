@@ -8,10 +8,6 @@ name: Bug Fix
 description: Lightweight bug fix pipeline with triage, fix, and QA verification. Use for bug fixes, patches, and small targeted corrections that do not require a full delivery cycle.
 version: "1.0"
 
-trigger:
-  type: event
-  event: task-added-to-ready
-
 start: triage
 
 nodes:

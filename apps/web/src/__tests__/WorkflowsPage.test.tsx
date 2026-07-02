@@ -40,7 +40,6 @@ const sampleList: WorkflowListResponse = {
       id: 'default',
       name: 'Default Workflow',
       description: 'The built-in default.',
-      trigger: { type: 'manual', event: null },
       source: 'built-in',
       valid: true,
       error: null,
@@ -51,7 +50,6 @@ const sampleList: WorkflowListResponse = {
       id: 'nightly',
       name: 'Nightly Sweep',
       description: null,
-      trigger: { type: 'event', event: 'task-added-to-ready' },
       source: '.agentweaver/workflows/nightly.yaml',
       valid: false,
       error: 'Unknown node type: foo',
@@ -71,7 +69,7 @@ afterEach(() => {
 });
 
 describe('WorkflowsPage', () => {
-  it('lists workflows with default/validation badges and trigger info', async () => {
+  it('lists workflows with default/validation badges', async () => {
     vi.mocked(apiClient.listWorkflows).mockResolvedValue(sampleList);
 
     renderPage('proj-1');
@@ -87,7 +85,6 @@ describe('WorkflowsPage', () => {
     expect(screen.getByText('Invalid')).toBeDefined();
     // Content
     expect(screen.getByText('Unknown node type: foo')).toBeDefined();
-    expect(screen.getByText('Trigger: event (task-added-to-ready)')).toBeDefined();
   });
 
   it('shows an empty state when no workflows are found', async () => {

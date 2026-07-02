@@ -40,9 +40,6 @@ public static class DefaultWorkflowTemplate
         name: Default Run Workflow
         description: Behavior-preserving conversion of the built-in run pipeline (agent, rai, review, merge, scribe).
 
-        trigger:
-          type: manual
-
         start: agent
 
         nodes:

@@ -8,10 +8,6 @@ name: Software Delivery
 description: Full software delivery pipeline with QA test gate, RAI safety check, and code review before merge. Use for new features and significant changes that require a complete delivery cycle.
 version: "1.0"
 
-trigger:
-  type: event
-  event: task-added-to-ready
-
 start: plan
 
 nodes:

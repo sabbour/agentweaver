@@ -164,7 +164,6 @@ public sealed class CoordinatorRunWorkflowDefinitionBindingTests
     {
         Id = "direct-merge",
         Name = "Direct merge",
-        Trigger = BuiltInWorkflows.Default.Definition!.Trigger,
         Start = "agent",
         Nodes =
         [

@@ -1320,9 +1320,8 @@ public sealed class RunWorkflowFactory
         if (project is null)
             return ReviewPolicyComposer.ComposeForRuntime(fallback, BuiltInReviewPolicies.Default.Policy!).Effective;
 
-        var invocationKind = await ResolveInvocationKindAsync(runId, ct).ConfigureAwait(false);
         var overrideId = await ResolveWorkflowOverrideIdAsync(runId, ct).ConfigureAwait(false);
-        var workflowResult = ResolveWorkflowForRun(project, overrideId, invocationKind);
+        var workflowResult = ResolveWorkflowForRun(project, overrideId);
         if (!workflowResult.IsValid || workflowResult.Definition is null)
             throw new ReviewPolicyCompositionException(
                 "workflow_resolution_failed",
@@ -1346,17 +1345,6 @@ public sealed class RunWorkflowFactory
         }
     }
 
-    private async Task<WorkflowInvocationKind> ResolveInvocationKindAsync(string? runId, CancellationToken ct)
-    {
-        if (string.IsNullOrWhiteSpace(runId) || !RunId.TryParse(runId, out var rid))
-            return WorkflowInvocationKind.Manual;
-
-        var run = await _runStore.GetAsync(rid, ct).ConfigureAwait(false);
-        return run?.Origin == RunOrigin.BacklogPickup
-            ? WorkflowInvocationKind.Heartbeat
-            : WorkflowInvocationKind.Manual;
-    }
-
     private async Task<string?> ResolveWorkflowOverrideIdAsync(string? runId, CancellationToken ct)
     {
         if (_backlogTaskStore is null || string.IsNullOrWhiteSpace(runId) || !RunId.TryParse(runId, out var rid))
@@ -1368,8 +1356,7 @@ public sealed class RunWorkflowFactory
 
     private WorkflowLoadResult ResolveWorkflowForRun(
         Project project,
-        string? overrideId,
-        WorkflowInvocationKind invocationKind)
+        string? overrideId)
     {
         var set = _workflowRegistry!.GetOrLoad(project);
 
@@ -1380,10 +1367,6 @@ public sealed class RunWorkflowFactory
                 return WorkflowLoadResult.Invalid(
                     "workflow-override",
                     $"Workflow override '{overrideId}' could not be resolved for project '{project.Id}'.");
-            if (!WorkflowTriggerEvaluator.IsEligible(overrideResult.Definition.Trigger, invocationKind))
-                return WorkflowLoadResult.Invalid(
-                    overrideResult.Source,
-                    $"Workflow override '{overrideResult.Definition.Id}' is not eligible for a {invocationKind} invocation.");
             return overrideResult;
         }
 
@@ -1391,17 +1374,15 @@ public sealed class RunWorkflowFactory
             ? BuiltInWorkflows.DefaultWorkflowId
             : project.DefaultWorkflowId!;
         var configured = set.FindById(configuredId);
-        if (configured?.Definition is not null &&
-            WorkflowTriggerEvaluator.IsEligible(configured.Definition.Trigger, invocationKind))
+        if (configured?.Definition is not null)
             return configured;
 
-        var eligible = set.Available
-            .FirstOrDefault(r => r.Definition is not null &&
-                                 WorkflowTriggerEvaluator.IsEligible(r.Definition.Trigger, invocationKind));
-        return eligible
+        var firstValid = set.Available
+            .FirstOrDefault(r => r.Definition is not null);
+        return firstValid
             ?? WorkflowLoadResult.Invalid(
                 "workflow-selection",
-                $"No valid workflow is eligible for a {invocationKind} invocation in project '{project.Id}'.");
+                $"No valid workflow could be resolved in project '{project.Id}'.");
     }
 
     /// <summary>

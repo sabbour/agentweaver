@@ -29,8 +29,6 @@ public sealed class WorkflowGeneratorTests
         name: Generated Flow
         description: A generated workflow for tests.
         version: "1.0"
-        trigger:
-          type: manual
         start: agent
         nodes:
           - id: agent
@@ -49,7 +47,7 @@ public sealed class WorkflowGeneratorTests
             to: done
         """;
 
-    // YAML that parses but fails schema validation (no trigger/start/nodes) → drives a correction pass.
+    // YAML that parses but fails schema validation (no start/nodes) → drives a correction pass.
     private const string InvalidWorkflowYaml = "name: Broken Workflow\n";
 
     private static CopilotWorkflowGenerator CreateGenerator(IAgentRunner runner)
@@ -144,35 +142,6 @@ public sealed class WorkflowGeneratorTests
     }
 
     [Fact]
-    public async Task PromptAdvertisesScheduleTrigger_ForRecurringCadences()
-    {
-        var runner = new ScriptedAgentRunner(ValidWorkflowYaml);
-        var generator = CreateGenerator(runner);
-
-        await generator.GenerateAsync(new WorkflowGenerationRequest(
-            "Every Monday: triage github issues (http://github.com/Azure/aks/issues)"));
-
-        runner.LastTask.Should().Contain("type: schedule");
-        runner.LastTask.Should().Contain("schedule: weekly:monday");
-        runner.LastTask.Should().Contain("Do not drop the cadence");
-    }
-
-    [Fact]
-    public async Task RecurringCadence_CoercesManualResponseToScheduleTrigger()
-    {
-        var runner = new ScriptedAgentRunner(ValidWorkflowYaml);
-        var generator = CreateGenerator(runner);
-
-        var result = await generator.GenerateAsync(new WorkflowGenerationRequest(
-            "Every Monday: triage github issues (http://github.com/Azure/aks/issues), group and dedupe"));
-
-        result.Workflow.Trigger.Type.Should().Be(WorkflowTriggerType.Schedule);
-        result.Workflow.Trigger.Schedule.Should().Be("weekly:monday");
-        result.GeneratedYaml.Should().Contain("type: schedule");
-        result.GeneratedYaml.Should().Contain("schedule: weekly:monday");
-    }
-
-    [Fact]
     public async Task MissingId_IsDerivedFromDescriptionSlug()
     {
         // Same valid workflow body but without an `id:` line; the generator injects a slug from the
@@ -181,8 +150,6 @@ public sealed class WorkflowGeneratorTests
             name: No Id Flow
             description: A workflow with no id.
             version: "1.0"
-            trigger:
-              type: manual
             start: agent
             nodes:
               - id: agent

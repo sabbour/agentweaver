@@ -72,7 +72,6 @@ public sealed class RunWorkflowGraphBinderTests
         {
             Id = "fan",
             Name = "Fan",
-            Trigger = new WorkflowTrigger { Type = WorkflowTriggerType.Manual },
             Start = "agent",
             Nodes =
             [
@@ -99,8 +98,6 @@ public sealed class RunWorkflowGraphBinderTests
         var yaml = $"""
             id: custom
             name: Custom
-            trigger:
-              type: manual
             start: a
             nodes:
               - id: a
@@ -156,7 +153,6 @@ public sealed class RunWorkflowGraphBinderTests
     {
         Id = "renamed",
         Name = "Renamed",
-        Trigger = new WorkflowTrigger { Type = WorkflowTriggerType.Manual },
         Start = "plan",
         Nodes =
         [

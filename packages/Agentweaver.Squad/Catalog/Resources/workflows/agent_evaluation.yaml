@@ -8,10 +8,6 @@ name: Agent Evaluation
 description: AI agent evaluation pipeline with parallel evaluation runs, dedicated safety gate, and evaluation report. Use for evaluating AI agent capabilities, safety properties, and performance. The safety gate must pass before the evaluation report proceeds.
 version: "1.0"
 
-trigger:
-  type: event
-  event: task-added-to-ready
-
 start: eval-setup
 
 nodes:

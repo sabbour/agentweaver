@@ -1009,24 +1009,17 @@ export interface HeartbeatStatusDto {
 }
 
 // ── Workflow definitions (Spec 010, FR-039/041) ──────────────────────────────
-// Trigger descriptor in workflow responses (snake_case over the wire).
-export interface WorkflowTriggerDto {
-  type: string;
-  event?: string | null;
-  schedule?: string | null;
-}
 
 // Response body for GET raw YAML content of a project workflow file (US7).
 export interface WorkflowYamlResponse {
   yaml: string;
 }
 
-// A workflow in the project's list response: identity, trigger, validation.
+// A workflow in the project's list response: identity, validation.
 export interface WorkflowSummaryDto {
   id: string | null;
   name: string | null;
   description: string | null;
-  trigger: WorkflowTriggerDto | null;
   source: string;
   valid: boolean;
   error: string | null;
@@ -1073,7 +1066,6 @@ export interface WorkflowDetailDto {
   id: string;
   name: string;
   description: string | null;
-  trigger: WorkflowTriggerDto;
   start: string;
   source: string;
   is_built_in: boolean;

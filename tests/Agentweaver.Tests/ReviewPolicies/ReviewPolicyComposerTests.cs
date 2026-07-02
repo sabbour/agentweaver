@@ -237,7 +237,6 @@ public sealed class ReviewPolicyComposerTests
         {
             Id = "no-merge",
             Name = "No merge",
-            Trigger = new WorkflowTrigger { Type = WorkflowTriggerType.Manual },
             Start = "agent",
             Nodes =
             [

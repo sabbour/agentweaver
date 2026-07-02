@@ -25,9 +25,6 @@ public sealed class NewWorkflowFromScratchTests : IClassFixture<ProjectsWebAppli
         description: Describe what this workflow does and when to use it.
         version: "1.0"
 
-        trigger:
-          type: manual
-
         start: agent
 
         nodes:
@@ -71,7 +68,6 @@ public sealed class NewWorkflowFromScratchTests : IClassFixture<ProjectsWebAppli
         result.Definition.Should().NotBeNull();
         result.Definition!.Id.Should().Be("my-workflow");
         result.Definition.Name.Should().Be("My Workflow");
-        result.Definition.Trigger.Type.Should().Be(WorkflowTriggerType.Manual);
         result.Definition.Start.Should().Be("agent");
         result.Definition.Nodes.Should().HaveCount(3);
         result.Definition.Edges.Should().HaveCount(2);

@@ -52,7 +52,6 @@ public sealed class WorkflowSelectorTests
         Id = id,
         Name = name,
         Description = description,
-        Trigger = new WorkflowTrigger { Type = WorkflowTriggerType.Manual },
         Start = "start",
         Nodes = [new WorkflowNode { Id = "start", Type = WorkflowNodeType.Terminal, Label = "start" }],
         Edges = [],

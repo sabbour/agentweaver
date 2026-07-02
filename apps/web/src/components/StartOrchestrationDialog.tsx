@@ -49,10 +49,7 @@ export function StartOrchestrationDialog({ projectId, onStarted }: StartOrchestr
     if (!open) return;
     apiClient.listWorkflows(projectId)
       .then(res => {
-        // Any valid workflow with an id can be run manually — including the project's active
-        // workflow and event/heartbeat-triggered catalog workflows (e.g. Software Delivery, Bug
-        // Fix). Filtering to trigger.type === 'manual' hid every workflow except the built-in
-        // Default Run Workflow.
+        // Any valid workflow with an id can be run manually.
         const selectable = res.workflows.filter(w => w.id && w.valid);
         setSelectableWorkflows(selectable);
       })
