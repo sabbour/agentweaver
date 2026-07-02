@@ -537,6 +537,8 @@ public sealed class StallCascadeAndLockRetryTests : IAsyncDisposable
         public int Started { get; private set; }
         public void StartAssembly(CoordinatorDispatchContext context) => Started++;
         public void EnsureFinalScribe(Run coordinatorRun) { }
+        public bool IsAssemblyActive(string coordinatorRunId) => false;
+        public void AbandonStaleReview(CoordinatorDispatchContext context) { }
     }
 
     private sealed class TestHostApplicationLifetime : IHostApplicationLifetime

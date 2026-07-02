@@ -49,6 +49,15 @@ public sealed class CoordinatorReconciler
     /// </summary>
     private readonly TimeSpan _staleLeaseTtl;
 
+    /// <summary>
+    /// Escape hatch: a run parked in <see cref="WorkPlanStatus.InReview"/> with no operator action for
+    /// longer than this window auto-resolves (terminalized as failed/abandoned) so it can never stay
+    /// stuck forever — e.g. runs orphaned in <c>in_review</c> before the review gate was fully wired,
+    /// whose collective assembly can no longer resolve the open gate. Configurable via
+    /// <c>Runs:ReviewTimeoutHours</c> (default 24 h).
+    /// </summary>
+    private readonly TimeSpan _reviewAbandonTimeout;
+
     public CoordinatorReconciler(
         IServiceScopeFactory scopeFactory,
         IRunStore runStore,
@@ -73,6 +82,10 @@ public sealed class CoordinatorReconciler
         // the non-owning replica from stealing the coordinator lease during the probe wait window).
         var staleSecs = configuration?.GetValue("Coordinator:PodLeaseStaleTtlSeconds", 120) ?? 120;
         _staleLeaseTtl = TimeSpan.FromSeconds(Math.Max(10, staleSecs));
+
+        // Default 24 h: a run left in in_review with no operator action for this long is auto-resolved.
+        var reviewHours = configuration?.GetValue("Runs:ReviewTimeoutHours", 24.0) ?? 24.0;
+        _reviewAbandonTimeout = TimeSpan.FromHours(Math.Max(0.01, reviewHours));
     }
 
     /// <summary>
@@ -126,8 +139,31 @@ public sealed class CoordinatorReconciler
                             reArmed++;
                         break;
 
-                    case WorkPlanStatus.Assembling:
                     case WorkPlanStatus.InReview:
+                        // Escape hatch: a run parked in in_review with no activity past the review
+                        // timeout is auto-resolved so it can't stay stuck forever (applies whether or
+                        // not an assembly loop is currently active).
+                        if (await TryAbandonStaleReviewAsync(plan, ct).ConfigureAwait(false))
+                        {
+                            reArmed++;
+                            continue;
+                        }
+                        // Not expired: if a collective-assembly loop is already active IN THIS PROCESS,
+                        // the run is legitimately in review (the loop owns the open review gate) — it is
+                        // NOT orphaned. Skip it. Re-arming here would be a no-op that logs
+                        // "already active; skipping" every ~10 s sweep forever (the infinite loop bug).
+                        if (IsAssemblyActive(plan))
+                            continue;
+                        // Truly orphaned (no active loop): re-arm so the assembly can resume review.
+                        if (await TryReArmAssemblyAsync(plan, ct).ConfigureAwait(false))
+                            reArmed++;
+                        break;
+
+                    case WorkPlanStatus.Assembling:
+                        // assembling is a transient active state; if a loop already owns it, skip
+                        // (same infinite-loop guard). Otherwise re-arm the orphaned assembly.
+                        if (IsAssemblyActive(plan))
+                            continue;
                         if (await TryReArmAssemblyAsync(plan, ct).ConfigureAwait(false))
                             reArmed++;
                         break;
@@ -150,6 +186,36 @@ public sealed class CoordinatorReconciler
             _logger.LogInformation("Coordinator reconciler: re-armed {Count} orphaned coordinator loop(s)", reArmed);
 
         return reArmed;
+    }
+
+    private bool IsAssemblyActive(PlanCandidate plan) =>
+        !string.IsNullOrWhiteSpace(plan.CoordinatorRunId)
+        && _assembly is not null
+        && _assembly.IsAssemblyActive(plan.CoordinatorRunId);
+
+    /// <summary>
+    /// Auto-resolves a run left in <see cref="WorkPlanStatus.InReview"/> with no operator action for
+    /// longer than <see cref="_reviewAbandonTimeout"/>. Uses the plan's last-updated timestamp as the
+    /// idle marker (unchanged for the whole review wait). Returns true when it triggered an abandon so
+    /// the sweep can stop treating the run as an orphan to re-arm.
+    /// </summary>
+    private async Task<bool> TryAbandonStaleReviewAsync(PlanCandidate plan, CancellationToken ct)
+    {
+        if (_assembly is null || string.IsNullOrWhiteSpace(plan.CoordinatorRunId))
+            return false;
+
+        if (DateTimeOffset.UtcNow - plan.UpdatedAt < _reviewAbandonTimeout)
+            return false;
+
+        var context = await TryBuildContextAsync(plan, ct).ConfigureAwait(false);
+        if (context is null)
+            return false;
+
+        _logger.LogWarning(
+            "Coordinator reconciler: run {RunId} has been in_review with no operator action for over {TimeoutHours}h; abandoning",
+            context.CoordinatorRunId, _reviewAbandonTimeout.TotalHours);
+        _assembly.AbandonStaleReview(context);
+        return true;
     }
 
     private async Task<bool> TryReArmDispatchAsync(PlanCandidate plan, CancellationToken ct)

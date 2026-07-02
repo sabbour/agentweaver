@@ -98,6 +98,8 @@ public sealed class CoordinatorDispatchFinalizationTests : IDisposable
         public List<CoordinatorDispatchContext> Started { get; } = [];
         public void StartAssembly(CoordinatorDispatchContext context) => Started.Add(context);
         public void EnsureFinalScribe(Run coordinatorRun) { }
+        public bool IsAssemblyActive(string coordinatorRunId) => false;
+        public void AbandonStaleReview(CoordinatorDispatchContext context) { }
     }
 
     private async Task<(int WorkPlanId, List<int> SubtaskIds)> SeedPlanAsync(string coordinatorRunId)

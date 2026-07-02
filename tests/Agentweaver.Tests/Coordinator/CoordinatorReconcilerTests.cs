@@ -190,6 +190,73 @@ public sealed class CoordinatorReconcilerTests : IAsyncDisposable
     }
 
     // -----------------------------------------------------------------------
+    // in_review handling: legitimate-vs-orphaned + auto-abandon escape hatch.
+    // -----------------------------------------------------------------------
+
+    [Fact]
+    public async Task Sweep_InReviewPlan_WithActiveAssembly_DoesNotReArm()
+    {
+        var coord = RunId.New().ToString();
+        await SeedCoordinatorRunAsync(coord);
+        var (planId, _) = await SeedPlanAsync(coord, new[] { (SubtaskStatus.AssembleReady, (string?)null) });
+        await SetPlanStatusAsync(planId, WorkPlanStatus.InReview);
+        _assembly.MarkActive(coord); // an assembly loop already owns the open review gate
+
+        var reconciler = new CoordinatorReconciler(
+            _scopeFactory, _runStore, _streamStore, new RecordingDispatch(),
+            NullLogger<CoordinatorReconciler>.Instance, configuration: null, assembly: _assembly);
+
+        var reArmed = await reconciler.SweepAsync(default);
+
+        reArmed.Should().Be(0);
+        _assembly.Started.Should().BeEmpty("an in_review run with an active assembly is legitimately in review, not orphaned");
+        _assembly.Abandoned.Should().BeEmpty("it has not exceeded the review timeout");
+    }
+
+    [Fact]
+    public async Task Sweep_InReviewPlan_WithoutActiveAssembly_ReArmsAssembly()
+    {
+        var coord = RunId.New().ToString();
+        await SeedCoordinatorRunAsync(coord);
+        var (planId, _) = await SeedPlanAsync(coord, new[] { (SubtaskStatus.AssembleReady, (string?)null) });
+        await SetPlanStatusAsync(planId, WorkPlanStatus.InReview);
+        // assembly NOT marked active → genuinely orphaned
+
+        var reconciler = new CoordinatorReconciler(
+            _scopeFactory, _runStore, _streamStore, new RecordingDispatch(),
+            NullLogger<CoordinatorReconciler>.Instance, configuration: null, assembly: _assembly);
+
+        var reArmed = await reconciler.SweepAsync(default);
+
+        reArmed.Should().Be(1);
+        _assembly.Started.Should().ContainSingle().Which.CoordinatorRunId.Should().Be(coord);
+        _assembly.Abandoned.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Sweep_InReviewPlan_StaleBeyondTimeout_Abandons_WithoutReArming()
+    {
+        var coord = RunId.New().ToString();
+        await SeedCoordinatorRunAsync(coord);
+        var (planId, _) = await SeedPlanAsync(coord, new[] { (SubtaskStatus.AssembleReady, (string?)null) });
+        await SetPlanStatusAsync(planId, WorkPlanStatus.InReview, updatedAt: DateTimeOffset.UtcNow.AddHours(-48));
+        _assembly.MarkActive(coord); // even an "active" loop that is stuck must be abandoned past the timeout
+
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?> { ["Runs:ReviewTimeoutHours"] = "24" })
+            .Build();
+        var reconciler = new CoordinatorReconciler(
+            _scopeFactory, _runStore, _streamStore, new RecordingDispatch(),
+            NullLogger<CoordinatorReconciler>.Instance, configuration: config, assembly: _assembly);
+
+        var reArmed = await reconciler.SweepAsync(default);
+
+        reArmed.Should().Be(1);
+        _assembly.Abandoned.Should().ContainSingle().Which.CoordinatorRunId.Should().Be(coord);
+        _assembly.Started.Should().BeEmpty("an abandoned stale review is never re-armed");
+    }
+
+    // -----------------------------------------------------------------------
     // Harness
     // -----------------------------------------------------------------------
 
@@ -356,6 +423,16 @@ public sealed class CoordinatorReconcilerTests : IAsyncDisposable
         return (await db.WorkPlans.AsNoTracking().FirstAsync(w => w.Id == planId)).Status;
     }
 
+    private async Task SetPlanStatusAsync(int planId, string status, DateTimeOffset? updatedAt = null)
+    {
+        using var scope = _provider.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var row = await db.WorkPlans.FirstAsync(w => w.Id == planId);
+        row.Status = status;
+        row.UpdatedAt = updatedAt ?? DateTimeOffset.UtcNow;
+        await db.SaveChangesAsync();
+    }
+
     public async ValueTask DisposeAsync()
     {
         _provider.Dispose();
@@ -366,8 +443,14 @@ public sealed class CoordinatorReconcilerTests : IAsyncDisposable
     private sealed class RecordingAssembly : ICoordinatorAssembly
     {
         public List<CoordinatorDispatchContext> Started { get; } = [];
+        public List<CoordinatorDispatchContext> Abandoned { get; } = [];
+        private readonly HashSet<string> _active = new(StringComparer.Ordinal);
+
+        public void MarkActive(string coordinatorRunId) => _active.Add(coordinatorRunId);
         public void StartAssembly(CoordinatorDispatchContext context) => Started.Add(context);
         public void EnsureFinalScribe(Run coordinatorRun) { }
+        public bool IsAssemblyActive(string coordinatorRunId) => _active.Contains(coordinatorRunId);
+        public void AbandonStaleReview(CoordinatorDispatchContext context) => Abandoned.Add(context);
     }
 
     private sealed class RecordingDispatch : ICoordinatorDispatch

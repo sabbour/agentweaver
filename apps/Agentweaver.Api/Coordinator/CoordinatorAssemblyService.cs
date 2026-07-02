@@ -30,6 +30,22 @@ public interface ICoordinatorAssembly
 
     /// <summary>Ensures the coordinator's final Scribe activity exists and runs for an already-terminal run.</summary>
     void EnsureFinalScribe(Run coordinatorRun);
+
+    /// <summary>
+    /// True when a collective-assembly loop is currently active IN THIS PROCESS for the run (the
+    /// in-memory guard is populated). Lets the reconciler tell a legitimately in-flight assembly (e.g.
+    /// awaiting the open human-review gate) from a genuinely orphaned one, so it never re-arms an
+    /// already-owned run every sweep (the "already active; skipping" infinite loop).
+    /// </summary>
+    bool IsAssemblyActive(string coordinatorRunId);
+
+    /// <summary>
+    /// Escape hatch (reconciler-driven): terminalizes a run parked in <c>in_review</c> past the
+    /// operator review timeout with no action, so it can never stay stuck forever. Fire-and-forget and
+    /// idempotent (a no-op once the run is already terminal or no longer in review); reuses the same
+    /// terminal path as the in-process review timeout.
+    /// </summary>
+    void AbandonStaleReview(CoordinatorDispatchContext context);
 }
 
 /// <summary>
@@ -187,7 +203,7 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
     {
         if (!_active.TryAdd(context.CoordinatorRunId, 0))
         {
-            _logger.LogInformation(
+            _logger.LogDebug(
                 "Collective assembly already active for run {RunId}; skipping", context.CoordinatorRunId);
             return;
         }
@@ -237,8 +253,89 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         }, _appStopping);
     }
 
+    /// <inheritdoc />
+    public bool IsAssemblyActive(string coordinatorRunId) =>
+        !string.IsNullOrEmpty(coordinatorRunId) && _active.ContainsKey(coordinatorRunId);
+
+    /// <inheritdoc />
+    public void AbandonStaleReview(CoordinatorDispatchContext context)
+    {
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await AbandonStaleReviewAsync(context, _appStopping).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (_appStopping.IsCancellationRequested)
+            {
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex,
+                    "Collective assembly: failed to abandon stale in_review run {RunId}",
+                    context.CoordinatorRunId);
+            }
+        }, _appStopping);
+    }
+
     /// <summary>
-    /// Drives the collective pipeline end to end. Exposed (internal) so tests can await the full run
+    /// Terminalizes a run that has been parked in <c>in_review</c> past the operator review timeout.
+    /// Verifies the plan is still <see cref="WorkPlanStatus.InReview"/> (idempotent — a no-op if the
+    /// reviewer acted or another path already resolved it), then routes through the same terminal
+    /// machinery as the in-process <see cref="ReviewTimeoutAsync"/> so the run reaches a clean terminal
+    /// state (plan failed, coordinator run terminalized, scribe + stream completed, pod released).
+    /// </summary>
+    internal async Task AbandonStaleReviewAsync(CoordinatorDispatchContext context, CancellationToken ct)
+    {
+        var plan = await LoadPlanAsync(context.CoordinatorRunId, ct).ConfigureAwait(false);
+        if (plan is null)
+            return;
+
+        var (workPlanId, planStatus, _, edges) = plan.Value;
+        if (planStatus != WorkPlanStatus.InReview)
+            return; // reviewer acted or another path resolved it — nothing to abandon.
+
+        _logger.LogWarning(
+            "Collective assembly: run {RunId} parked in in_review with no operator action past the review timeout; abandoning",
+            context.CoordinatorRunId);
+        await AbandonReviewTerminalAsync(context, workPlanId, edges, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Common terminal path for an abandoned/timed-out collective review: mark the plan failed, emit
+    /// the timeout event + graph/topology, terminalize the coordinator run, run the scribe, and
+    /// complete the stream. Shared by <see cref="ReviewTimeoutAsync"/> (in-process 60 min) and
+    /// <see cref="AbandonStaleReviewAsync"/> (reconciler backstop, hours).
+    /// </summary>
+    private async Task AbandonReviewTerminalAsync(
+        CoordinatorDispatchContext context,
+        int workPlanId,
+        IReadOnlyCollection<(int, int)> edges,
+        CancellationToken ct)
+    {
+        await _assemblyStore.SetStatusAndStageAsync(
+            workPlanId, WorkPlanStatus.AssemblyFailed, null, ct).ConfigureAwait(false);
+        Emit(context.CoordinatorRunId, "run.review_timeout", new
+        {
+            workPlanId,
+            timeoutSeconds = (int)_reviewTimeout.TotalSeconds,
+            reason = "review_timeout_abandoned",
+        });
+        await EmitGraphAsync(context.CoordinatorRunId, workPlanId, ct).ConfigureAwait(false);
+        await EmitTopologyAsync(context.CoordinatorRunId, workPlanId, WorkPlanStatus.AssemblyFailed, edges, ct)
+            .ConfigureAwait(false);
+        await TerminalizeCoordinatorRunAsync(
+            context.CoordinatorRunId, RunStatus.Failed, "review_timeout_abandoned", ct).ConfigureAwait(false);
+        await CoordinatorAssemblyReviewPersistence.ClearAsync(_scopeFactory, context.CoordinatorRunId, ct)
+            .ConfigureAwait(false);
+        await RunCoordinatorScribeAsync(
+            context,
+            workPlanId,
+            terminalStatus: RunStatus.Failed.ToApiString(),
+            mergeResult: "review_timeout_abandoned",
+            ct).ConfigureAwait(false);
+        await PersistAndCompleteStreamAsync(context.CoordinatorRunId).ConfigureAwait(false);
+    }
     /// deterministically rather than racing the fire-and-forget background task.
     /// </summary>
     internal async Task RunAssemblyAsync(CoordinatorDispatchContext context, CancellationToken ct)
