@@ -123,6 +123,27 @@ public sealed record RunAgentTokenBreakdownDto
     [JsonPropertyName("breakdown")] public required IReadOnlyList<AgentUsageBreakdownDto> Breakdown { get; init; }
 }
 
+public sealed record RunTraceDto
+{
+    [JsonPropertyName("runId")] public required string RunId { get; init; }
+    [JsonPropertyName("spans")] public required IReadOnlyList<RunTraceSpanDto> Spans { get; init; }
+}
+
+public sealed record RunTraceSpanDto
+{
+    [JsonPropertyName("id")] public required string Id { get; init; }
+    [JsonPropertyName("name")] public required string Name { get; init; }
+    [JsonPropertyName("timestamp")] public required DateTimeOffset Timestamp { get; init; }
+    [JsonPropertyName("durationMs")] public required double DurationMs { get; init; }
+    [JsonPropertyName("success")] public required bool Success { get; init; }
+    [JsonPropertyName("resultCode")] public string? ResultCode { get; init; }
+    [JsonPropertyName("agentName")] public string? AgentName { get; init; }
+    [JsonPropertyName("model")] public string? Model { get; init; }
+    [JsonPropertyName("inputTokens")] public long? InputTokens { get; init; }
+    [JsonPropertyName("outputTokens")] public long? OutputTokens { get; init; }
+    [JsonPropertyName("operationName")] public string? OperationName { get; init; }
+}
+
 // =====================================================================================
 // ENDPOINT 2 — Global Overview ("Now"): GET /api/overview
 // =====================================================================================

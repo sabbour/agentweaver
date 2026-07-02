@@ -38,6 +38,7 @@ vi.mock('../api/apiClient', () => ({
       totalNanoAiu: 0,
       breakdown: [],
     }),
+    getRunTraces: vi.fn().mockResolvedValue({ runId: 'coord-run-1', spans: [] }),
     getRunFiles: vi.fn().mockResolvedValue([]),
     getRunWorkspace: vi.fn().mockResolvedValue([]),
     getRunFileDiff: vi.fn().mockResolvedValue(null),
@@ -100,6 +101,7 @@ beforeEach(() => {
     totalNanoAiu: 0,
     breakdown: [],
   });
+  vi.mocked(apiClient.getRunTraces).mockResolvedValue({ runId: 'coord-run-1', spans: [] });
 });
 
 afterEach(() => cleanup());

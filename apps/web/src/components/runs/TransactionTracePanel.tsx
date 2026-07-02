@@ -1,11 +1,12 @@
-import { useMemo, useState } from 'react';
-import { Spinner, Text, Title3, makeStyles, tokens } from '@fluentui/react-components';
-import type { CoordinatorChildResponse, PersistedRunEvent, RunDetail } from '../../api/types';
+import { useEffect, useMemo, useState } from 'react';
+import { Badge, Spinner, Text, Title3, makeStyles, tokens } from '@fluentui/react-components';
+import type { CoordinatorChildResponse, PersistedRunEvent, RunDetail, RunTraceDto, RunTraceSpanDto } from '../../api/types';
 import { apiClient } from '../../api/apiClient';
 
 type TraceEvent = Pick<PersistedRunEvent, 'sequence' | 'type' | 'payload'>;
+type TraceSource = 'appInsights' | 'eventStream';
 
-interface TraceRow {
+interface EventTraceBar {
   key: string;
   runId: string;
   label: string;
@@ -14,6 +15,29 @@ interface TraceRow {
   startedAt: number;
   endedAt: number;
   kind: 'coordinator' | 'agent';
+  source: 'eventStream';
+}
+
+interface AppInsightsTraceBar {
+  key: string;
+  runId: string;
+  label: string;
+  status: string;
+  startedAt: number;
+  endedAt: number;
+  source: 'appInsights';
+  span: RunTraceSpanDto;
+  level: number;
+}
+
+type TraceBar = EventTraceBar | AppInsightsTraceBar;
+
+interface TraceLane {
+  key: string;
+  label: string;
+  secondary: string;
+  bars: TraceBar[];
+  levels: number;
 }
 
 interface DetailState {
@@ -37,6 +61,13 @@ const useStyles = makeStyles({
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     borderRadius: tokens.borderRadiusMedium,
   },
+  header: {
+    display: 'flex',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: tokens.spacingHorizontalM,
+    flexWrap: 'wrap',
+  },
   subtitle: {
     color: tokens.colorNeutralForeground3,
     fontSize: tokens.fontSizeBase200,
@@ -50,7 +81,7 @@ const useStyles = makeStyles({
     display: 'grid',
     gridTemplateColumns: '180px minmax(0, 1fr)',
     gap: tokens.spacingHorizontalM,
-    alignItems: 'center',
+    alignItems: 'start',
   },
   rowMeta: {
     display: 'flex',
@@ -66,14 +97,12 @@ const useStyles = makeStyles({
   },
   lane: {
     position: 'relative',
-    height: '34px',
     borderRadius: tokens.borderRadiusMedium,
     backgroundColor: tokens.colorNeutralBackground3,
     overflow: 'hidden',
   },
   barButton: {
     position: 'absolute',
-    top: '4px',
     height: '26px',
     border: 'none',
     borderRadius: tokens.borderRadiusMedium,
@@ -113,6 +142,11 @@ const useStyles = makeStyles({
     color: tokens.colorNeutralForeground3,
     fontSize: tokens.fontSizeBase200,
   },
+  detailGrid: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))',
+    gap: tokens.spacingHorizontalM,
+  },
 });
 
 function readTimestamp(payload: Record<string, unknown>): number | null {
@@ -135,16 +169,24 @@ function readString(payload: Record<string, unknown>, keys: string[]): string | 
 }
 
 function formatDuration(startedAt: number, endedAt: number): string {
-  const seconds = Math.max(0, (endedAt - startedAt) / 1000);
+  return formatDurationMs(Math.max(0, endedAt - startedAt));
+}
+
+function formatDurationMs(durationMs: number): string {
+  const seconds = Math.max(0, durationMs / 1000);
   if (seconds < 60) return `${Math.round(seconds)}s`;
   if (seconds < 3600) return `${(seconds / 60).toFixed(1)}m`;
   return `${(seconds / 3600).toFixed(1)}h`;
 }
 
+function formatNumber(value: number | null | undefined): string {
+  return value == null ? '—' : value.toLocaleString();
+}
+
 function statusVariant(status: string, styles: ReturnType<typeof useStyles>) {
   if (/(failed|declined|blocked|error)/i.test(status)) return styles.barDanger;
   if (/(review|assembly|flagged|awaiting)/i.test(status)) return styles.barWarning;
-  if (/(complete|completed|merged|ready)/i.test(status)) return styles.barSuccess;
+  if (/(complete|completed|merged|ready|success|200)/i.test(status)) return styles.barSuccess;
   return '';
 }
 
@@ -158,23 +200,30 @@ function summariseEvents(events: PersistedRunEvent[] | undefined, fallback?: str
   return fallback?.trim() || 'No agent output captured yet.';
 }
 
-function buildRows(runId: string, events: TraceEvent[], children: CoordinatorChildResponse[]): TraceRow[] {
+function buildEventLanes(runId: string, events: TraceEvent[], children: CoordinatorChildResponse[]): TraceLane[] {
   const now = Date.now();
-  const rows: TraceRow[] = [];
+  const lanes: TraceLane[] = [];
   const coordinatorStart = events.find((event) => event.type === 'coordinator.started');
   const coordinatorEnd = [...events].reverse().find((event) => COORDINATOR_END_EVENTS.has(event.type));
   const firstTs = coordinatorStart ? readTimestamp(coordinatorStart.payload) : null;
   const endTs = coordinatorEnd ? readTimestamp(coordinatorEnd.payload) : null;
   if (firstTs != null) {
-    rows.push({
+    lanes.push({
       key: `coord-${runId}`,
-      runId,
       label: 'Coordinator',
       secondary: 'Plan + assembly',
-      status: coordinatorEnd?.type?.replace('coordinator.', '').replace(/\./g, ' ') ?? 'running',
-      startedAt: firstTs,
-      endedAt: endTs ?? now,
-      kind: 'coordinator',
+      levels: 1,
+      bars: [{
+        key: `coord-${runId}`,
+        runId,
+        label: 'Coordinator',
+        secondary: 'Plan + assembly',
+        status: coordinatorEnd?.type?.replace('coordinator.', '').replace(/\./g, ' ') ?? 'running',
+        startedAt: firstTs,
+        endedAt: endTs ?? now,
+        kind: 'coordinator',
+        source: 'eventStream',
+      }],
     });
   }
 
@@ -182,7 +231,8 @@ function buildRows(runId: string, events: TraceEvent[], children: CoordinatorChi
     let startedAt: number | null = null;
     let endedAt: number | null = null;
     for (const event of events) {
-      if (String(event.payload.subtaskId ?? '') !== String(child.subtaskId) && String(event.payload.childRunId ?? event.payload.child_run_id ?? '') !== child.childRunId) {
+      if (String(event.payload.subtaskId ?? '') !== String(child.subtaskId)
+        && String(event.payload.childRunId ?? event.payload.child_run_id ?? '') !== child.childRunId) {
         continue;
       }
       const timestamp = readTimestamp(event.payload);
@@ -192,19 +242,86 @@ function buildRows(runId: string, events: TraceEvent[], children: CoordinatorChi
     }
 
     if (startedAt == null) continue;
-    rows.push({
+    lanes.push({
       key: child.childRunId,
-      runId: child.childRunId,
       label: child.assignedAgent,
       secondary: `Subtask ${child.subtaskId} · ${child.selectedModelId}`,
-      status: child.childRunStatus ?? child.subtaskStatus,
-      startedAt,
-      endedAt: endedAt ?? now,
-      kind: 'agent',
+      levels: 1,
+      bars: [{
+        key: child.childRunId,
+        runId: child.childRunId,
+        label: child.assignedAgent,
+        secondary: `Subtask ${child.subtaskId} · ${child.selectedModelId}`,
+        status: child.childRunStatus ?? child.subtaskStatus,
+        startedAt,
+        endedAt: endedAt ?? now,
+        kind: 'agent',
+        source: 'eventStream',
+      }],
     });
   }
 
-  return rows.sort((left, right) => left.startedAt - right.startedAt);
+  return lanes.sort((left, right) => left.bars[0].startedAt - right.bars[0].startedAt);
+}
+
+function buildAppInsightsLanes(spans: RunTraceSpanDto[]): TraceLane[] {
+  if (!spans.length) return [];
+
+  const lanes = new Map<string, AppInsightsTraceBar[]>();
+  for (const span of spans) {
+    const startedAt = new Date(span.timestamp).getTime();
+    if (Number.isNaN(startedAt)) continue;
+    const durationMs = Number.isFinite(span.durationMs) ? span.durationMs : 0;
+    const endedAt = startedAt + Math.max(1, durationMs);
+    const laneKey = span.agentName?.trim() || 'Unknown agent';
+    const status = span.success ? 'success' : (span.resultCode?.trim() || 'failed');
+    const bar: AppInsightsTraceBar = {
+      key: `${span.id}-${startedAt}`,
+      runId: span.id,
+      label: span.name,
+      status,
+      startedAt,
+      endedAt,
+      source: 'appInsights',
+      span,
+      level: 0,
+    };
+    lanes.set(laneKey, [...(lanes.get(laneKey) ?? []), bar]);
+  }
+
+  return [...lanes.entries()]
+    .map(([label, laneBars]) => {
+      const sortedBars = [...laneBars].sort((left, right) => left.startedAt - right.startedAt);
+      const levelEnds: number[] = [];
+      for (const bar of sortedBars) {
+        let level = levelEnds.findIndex((endAt) => bar.startedAt >= endAt);
+        if (level === -1) {
+          level = levelEnds.length;
+          levelEnds.push(bar.endedAt);
+        } else {
+          levelEnds[level] = bar.endedAt;
+        }
+        bar.level = level;
+      }
+
+      return {
+        key: label,
+        label,
+        secondary: `${sortedBars.length} AppInsights span${sortedBars.length === 1 ? '' : 's'}`,
+        bars: sortedBars,
+        levels: Math.max(1, levelEnds.length),
+      };
+    })
+    .sort((left, right) => left.bars[0].startedAt - right.bars[0].startedAt);
+}
+
+function findSelectedBar(lanes: TraceLane[], key: string | null): TraceBar | null {
+  if (!key) return null;
+  for (const lane of lanes) {
+    const bar = lane.bars.find((candidate) => candidate.key === key);
+    if (bar) return bar;
+  }
+  return null;
 }
 
 export function TransactionTracePanel({
@@ -221,67 +338,132 @@ export function TransactionTracePanel({
   subtitle?: string;
 }) {
   const styles = useStyles();
-  const rows = useMemo(() => buildRows(runId, events, children), [children, events, runId]);
-  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const eventLanes = useMemo(() => buildEventLanes(runId, events, children), [children, events, runId]);
+  const [selectedBarKey, setSelectedBarKey] = useState<string | null>(null);
   const [details, setDetails] = useState<Record<string, DetailState>>({});
+  const [appInsightsTrace, setAppInsightsTrace] = useState<RunTraceDto>({ runId, spans: [] });
 
-  const rangeStart = rows.length > 0 ? Math.min(...rows.map((row) => row.startedAt)) : 0;
-  const rangeEnd = rows.length > 0 ? Math.max(...rows.map((row) => row.endedAt)) : 0;
+  useEffect(() => {
+    let cancelled = false;
+    setAppInsightsTrace({ runId, spans: [] });
+    void apiClient.getRunTraces(runId)
+      .then((trace) => {
+        if (!cancelled) setAppInsightsTrace(trace);
+      })
+      .catch(() => {
+        if (!cancelled) setAppInsightsTrace({ runId, spans: [] });
+      });
+    return () => { cancelled = true; };
+  }, [runId]);
+
+  useEffect(() => {
+    setSelectedBarKey(null);
+    setDetails({});
+  }, [runId]);
+
+  const appInsightsLanes = useMemo(
+    () => buildAppInsightsLanes(appInsightsTrace.spans),
+    [appInsightsTrace.spans],
+  );
+  const source: TraceSource = appInsightsLanes.length > 0 ? 'appInsights' : 'eventStream';
+  const lanes = source === 'appInsights' ? appInsightsLanes : eventLanes;
+  const allBars = lanes.flatMap((lane) => lane.bars);
+  const selectedBar = findSelectedBar(lanes, selectedBarKey);
+
+  const rangeStart = allBars.length > 0 ? Math.min(...allBars.map((bar) => bar.startedAt)) : 0;
+  const rangeEnd = allBars.length > 0 ? Math.max(...allBars.map((bar) => bar.endedAt)) : 0;
   const rangeDuration = Math.max(1, rangeEnd - rangeStart);
 
-  async function toggleRow(targetRunId: string) {
-    setExpandedId((current) => (current === targetRunId ? null : targetRunId));
-    if (details[targetRunId]?.run || details[targetRunId]?.loading) return;
+  async function toggleBar(bar: TraceBar) {
+    setSelectedBarKey((current) => current === bar.key ? null : bar.key);
+    if (bar.source !== 'eventStream') return;
+    if (details[bar.runId]?.run || details[bar.runId]?.loading) return;
 
-    setDetails((current) => ({ ...current, [targetRunId]: { loading: true } }));
+    setDetails((current) => ({ ...current, [bar.runId]: { loading: true } }));
     try {
       const [run, traceEvents] = await Promise.all([
-        apiClient.getRun(targetRunId),
-        apiClient.getRunEvents(targetRunId).catch(() => [] as PersistedRunEvent[]),
+        apiClient.getRun(bar.runId),
+        apiClient.getRunEvents(bar.runId).catch(() => [] as PersistedRunEvent[]),
       ]);
-      setDetails((current) => ({ ...current, [targetRunId]: { run, events: traceEvents } }));
+      setDetails((current) => ({ ...current, [bar.runId]: { run, events: traceEvents } }));
     } catch (error) {
       setDetails((current) => ({
         ...current,
-        [targetRunId]: { error: error instanceof Error ? error.message : String(error) },
+        [bar.runId]: { error: error instanceof Error ? error.message : String(error) },
       }));
     }
   }
 
   return (
     <div className={styles.panel}>
-      <div>
-        <Title3>{title}</Title3>
-        <Text className={styles.subtitle}>{subtitle}</Text>
+      <div className={styles.header}>
+        <div>
+          <Title3>{title}</Title3>
+          <Text className={styles.subtitle}>{subtitle}</Text>
+        </div>
+        <Badge appearance="outline" size="small">
+          Source: {source === 'appInsights' ? 'AppInsights' : 'Event stream'}
+        </Badge>
       </div>
-      {rows.length === 0 ? (
+      {lanes.length === 0 ? (
         <Text>No trace events are available for this run yet.</Text>
       ) : (
         <div className={styles.rows}>
-          {rows.map((row) => {
-            const left = ((row.startedAt - rangeStart) / rangeDuration) * 100;
-            const width = Math.max(8, ((row.endedAt - row.startedAt) / rangeDuration) * 100);
-            const detail = details[row.runId];
-            const isExpanded = expandedId === row.runId;
+          {lanes.map((lane) => {
+            const laneHeight = lane.levels > 1 ? lane.levels * 30 + 8 : 34;
+            const isExpanded = lane.bars.some((bar) => bar.key === selectedBarKey);
+            const detail = selectedBar?.source === 'eventStream' && isExpanded
+              ? details[selectedBar.runId]
+              : undefined;
+
             return (
-              <div key={row.key}>
+              <div key={lane.key}>
                 <div className={styles.row}>
                   <div className={styles.rowMeta}>
-                    <Text className={styles.rowLabel}>{row.label}</Text>
-                    <Text className={styles.rowSecondary}>{row.secondary}</Text>
+                    <Text className={styles.rowLabel}>{lane.label}</Text>
+                    <Text className={styles.rowSecondary}>{lane.secondary}</Text>
                   </div>
-                  <div className={styles.lane}>
-                    <button
-                      type="button"
-                      className={`${styles.barButton} ${statusVariant(row.status, styles)}`}
-                      style={{ left: `${left}%`, width: `${width}%` }}
-                      onClick={() => { void toggleRow(row.runId); }}
-                    >
-                      {row.status} · {formatDuration(row.startedAt, row.endedAt)}
-                    </button>
+                  <div className={styles.lane} style={{ height: `${laneHeight}px` }}>
+                    {lane.bars.map((bar) => {
+                      const left = ((bar.startedAt - rangeStart) / rangeDuration) * 100;
+                      const width = Math.max(8, ((bar.endedAt - bar.startedAt) / rangeDuration) * 100);
+                      const top = bar.source === 'appInsights' ? 4 + (bar.level * 30) : 4;
+                      const label = bar.source === 'appInsights'
+                        ? `${bar.label} · ${formatDuration(bar.startedAt, bar.endedAt)}`
+                        : `${bar.status} · ${formatDuration(bar.startedAt, bar.endedAt)}`;
+                      return (
+                        <button
+                          key={bar.key}
+                          type="button"
+                          className={`${styles.barButton} ${statusVariant(bar.status, styles)}`}
+                          style={{ left: `${left}%`, width: `${width}%`, top: `${top}px` }}
+                          onClick={() => { void toggleBar(bar); }}
+                          title={label}
+                        >
+                          {label}
+                        </button>
+                      );
+                    })}
                   </div>
                 </div>
-                {isExpanded && (
+                {isExpanded && selectedBar?.source === 'appInsights' && (
+                  <div className={styles.expanded}>
+                    <div className={styles.detailMeta}>
+                      <span>{new Date(selectedBar.span.timestamp).toLocaleString()}</span>
+                      <span>{selectedBar.span.success ? 'success' : selectedBar.status}</span>
+                      {selectedBar.span.resultCode && <span>Result {selectedBar.span.resultCode}</span>}
+                    </div>
+                    <Text>{selectedBar.span.name}</Text>
+                    <div className={styles.detailGrid}>
+                      <Text>Model: {selectedBar.span.model ?? '—'}</Text>
+                      <Text>Input tokens: {formatNumber(selectedBar.span.inputTokens)}</Text>
+                      <Text>Output tokens: {formatNumber(selectedBar.span.outputTokens)}</Text>
+                      <Text>Duration: {formatDurationMs(selectedBar.span.durationMs)}</Text>
+                      <Text>Operation: {selectedBar.span.operationName ?? '—'}</Text>
+                    </div>
+                  </div>
+                )}
+                {isExpanded && selectedBar?.source === 'eventStream' && (
                   <div className={styles.expanded}>
                     {detail?.loading ? (
                       <Spinner size="tiny" label="Loading agent detail" />
@@ -290,9 +472,9 @@ export function TransactionTracePanel({
                     ) : (
                       <>
                         <div className={styles.detailMeta}>
-                          <span>{detail?.run?.status ?? row.status}</span>
+                          <span>{detail?.run?.status ?? selectedBar.status}</span>
                           {detail?.run?.model_source && <span>{detail.run.model_source}</span>}
-                          <span>{new Date(row.startedAt).toLocaleString()}</span>
+                          <span>{new Date(selectedBar.startedAt).toLocaleString()}</span>
                         </div>
                         <Text>{summariseEvents(detail?.events, detail?.run?.result ?? null)}</Text>
                       </>

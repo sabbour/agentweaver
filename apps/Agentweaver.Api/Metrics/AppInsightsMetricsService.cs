@@ -1,6 +1,7 @@
 using Azure.Identity;
 using Azure.Monitor.Query;
 using Azure.Monitor.Query.Models;
+using System.Text.Json;
 
 namespace Agentweaver.Api.Metrics;
 
@@ -89,6 +90,24 @@ public sealed class AppInsightsMetricsService
             TotalTokens = 0,
             TotalNanoAiu = entries.Sum(entry => entry.TotalNanoAiu),
             Breakdown = entries,
+        };
+    }
+
+    public async Task<RunTraceDto> GetRunTracesAsync(string runId, CancellationToken ct = default)
+    {
+        var connectionString = _configuration["APPLICATIONINSIGHTS_CONNECTION_STRING"];
+        if (string.IsNullOrWhiteSpace(connectionString))
+            return EmptyRunTrace(runId);
+
+        var workspaceId = ResolveWorkspaceId(connectionString);
+        if (string.IsNullOrWhiteSpace(workspaceId))
+            return EmptyRunTrace(runId);
+
+        var spans = await QueryRunTracesAsync(workspaceId, runId, ct).ConfigureAwait(false);
+        return new RunTraceDto
+        {
+            RunId = runId,
+            Spans = spans,
         };
     }
 
@@ -418,6 +437,63 @@ public sealed class AppInsightsMetricsService
         }).ToList();
     }
 
+    private async Task<IReadOnlyList<RunTraceSpanDto>> QueryRunTracesAsync(
+        string workspaceId,
+        string runId,
+        CancellationToken ct)
+    {
+        var timeTo = DateTimeOffset.UtcNow;
+        var timeFrom = timeTo.AddDays(-7);
+        var query =
+            $"""
+            union dependencies, requests
+            | where timestamp > ago(7d)
+            | where
+                tostring(customDimensions["run_id"]) == "{EscapeKusto(runId)}"
+                or tostring(customDimensions["runId"]) == "{EscapeKusto(runId)}"
+                or tostring(customDimensions["run.id"]) == "{EscapeKusto(runId)}"
+                or tostring(customDimensions["parent_run_id"]) == "{EscapeKusto(runId)}"
+                or tostring(customDimensions["parentRunId"]) == "{EscapeKusto(runId)}"
+            | project
+                id,
+                name,
+                timestamp,
+                duration,
+                success,
+                resultCode,
+                target,
+                type,
+                customDimensions
+            | order by timestamp asc
+            """;
+
+        var result = await QueryAsync(workspaceId, query, timeFrom, timeTo, ct).ConfigureAwait(false);
+        if (result is null) return [];
+
+        return result.Table.Rows
+            .Select((row, index) =>
+            {
+                var customDimensions = ReadCustomDimensions(row[8]);
+                var timestamp = ReadDateTimeOffset(row[2]) ?? timeFrom;
+                return new RunTraceSpanDto
+                {
+                    Id = ReadRequiredString(row[0], $"{runId}-{index}"),
+                    Name = ReadRequiredString(row[1], "dependency"),
+                    Timestamp = timestamp,
+                    DurationMs = ReadDurationMs(row[3]),
+                    Success = ReadBool(row[4]),
+                    ResultCode = NullIfWhiteSpace(row[5]?.ToString()),
+                    AgentName = ReadDimension(customDimensions, "agent_name")
+                        ?? ReadDimension(customDimensions, "gen_ai.agent.name"),
+                    Model = ReadDimension(customDimensions, "gen_ai.request.model"),
+                    InputTokens = ReadDimensionLong(customDimensions, "gen_ai.usage.input_tokens"),
+                    OutputTokens = ReadDimensionLong(customDimensions, "gen_ai.usage.output_tokens"),
+                    OperationName = ReadDimension(customDimensions, "gen_ai.operation.name"),
+                };
+            })
+            .ToList();
+    }
+
     private async Task<LogsQueryResult?> QueryAsync(
         string workspaceId,
         string query,
@@ -462,6 +538,12 @@ public sealed class AppInsightsMetricsService
         Breakdown = [],
     };
 
+    private static RunTraceDto EmptyRunTrace(string runId) => new()
+    {
+        RunId = runId,
+        Spans = [],
+    };
+
     private static bool HasMeaningfulAgentBreakdown(IReadOnlyList<AgentUsageBreakdownDto> entries) =>
         entries.Any(entry => !string.Equals(entry.AgentName, "unknown", StringComparison.OrdinalIgnoreCase));
 
@@ -481,6 +563,99 @@ public sealed class AppInsightsMetricsService
     }
 
     private static string EscapeKusto(string value) => value.Replace("\\", "\\\\").Replace("\"", "\\\"");
+
+    private static string ReadRequiredString(object? value, string fallback) =>
+        string.IsNullOrWhiteSpace(value?.ToString()) ? fallback : value!.ToString()!;
+
+    private static string? NullIfWhiteSpace(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value;
+
+    private static bool ReadBool(object? value) =>
+        value switch
+        {
+            bool boolean => boolean,
+            string text when bool.TryParse(text, out var parsed) => parsed,
+            _ => false,
+        };
+
+    private static double ReadDurationMs(object? value) =>
+        value switch
+        {
+            TimeSpan span => span.TotalMilliseconds,
+            double number => number,
+            float number => number,
+            decimal number => (double)number,
+            int number => number,
+            long number => number,
+            string text when TimeSpan.TryParse(text, out var parsedSpan) => parsedSpan.TotalMilliseconds,
+            string text when double.TryParse(text, out var parsedDouble) => parsedDouble,
+            _ => 0d,
+        };
+
+    private static DateTimeOffset? ReadDateTimeOffset(object? value) =>
+        value switch
+        {
+            DateTimeOffset dto => dto,
+            DateTime dt => new DateTimeOffset(dt.ToUniversalTime()),
+            string text when DateTimeOffset.TryParse(text, out var parsed) => parsed,
+            _ => null,
+        };
+
+    private static IReadOnlyDictionary<string, string?> ReadCustomDimensions(object? value)
+    {
+        if (value is null)
+            return new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+
+        if (value is JsonElement element && element.ValueKind == JsonValueKind.Object)
+            return ReadCustomDimensionsFromJson(element);
+
+        if (value is BinaryData binaryData)
+            return ReadCustomDimensions(binaryData.ToString());
+
+        if (value is string text && !string.IsNullOrWhiteSpace(text))
+        {
+            try
+            {
+                using var document = JsonDocument.Parse(text);
+                return document.RootElement.ValueKind == JsonValueKind.Object
+                    ? ReadCustomDimensionsFromJson(document.RootElement)
+                    : new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+            }
+            catch (JsonException)
+            {
+                return new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+            }
+        }
+
+        if (value is IDictionary<string, object> dictionary)
+        {
+            return dictionary.ToDictionary(
+                pair => pair.Key,
+                pair => pair.Value?.ToString(),
+                StringComparer.OrdinalIgnoreCase);
+        }
+
+        return new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static IReadOnlyDictionary<string, string?> ReadCustomDimensionsFromJson(JsonElement element)
+    {
+        var values = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+        foreach (var property in element.EnumerateObject())
+            values[property.Name] = property.Value.ValueKind == JsonValueKind.Null ? null : property.Value.ToString();
+        return values;
+    }
+
+    private static string? ReadDimension(IReadOnlyDictionary<string, string?> dimensions, string key) =>
+        dimensions.TryGetValue(key, out var value) && !string.IsNullOrWhiteSpace(value)
+            ? value
+            : null;
+
+    private static long? ReadDimensionLong(IReadOnlyDictionary<string, string?> dimensions, string key)
+    {
+        var value = ReadDimension(dimensions, key);
+        return long.TryParse(value, out var parsed) ? parsed : null;
+    }
 
     private static string ReadDate(object? value) =>
         value switch

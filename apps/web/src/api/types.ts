@@ -1225,6 +1225,25 @@ export interface RunAgentTokenBreakdownDto {
   breakdown: AgentUsageBreakdownDto[];
 }
 
+export interface RunTraceSpanDto {
+  id: string;
+  name: string;
+  timestamp: string;
+  durationMs: number;
+  success: boolean;
+  resultCode?: string | null;
+  agentName?: string | null;
+  model?: string | null;
+  inputTokens?: number | null;
+  outputTokens?: number | null;
+  operationName?: string | null;
+}
+
+export interface RunTraceDto {
+  runId: string;
+  spans: RunTraceSpanDto[];
+}
+
 // Global overview "at a glance" counters.
 export interface AtAGlanceDto {
   in_flight: number;

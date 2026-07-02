@@ -126,6 +126,23 @@ public static class MetricsEndpoints
 
             return Results.Ok(await dashboard.GetRunAgentTokenBreakdownFallbackAsync(id, ct).ConfigureAwait(false));
         });
+
+        app.MapGet("/api/metrics/runs/{runId}/traces", async (
+            HttpContext httpContext,
+            string runId,
+            IRunStore runStore,
+            AppInsightsMetricsService metrics,
+            CancellationToken ct) =>
+        {
+            if (!RunId.TryParse(runId, out var parsedRunId))
+                return Results.BadRequest(new { error = "Invalid run id." });
+
+            var run = await runStore.GetAsync(parsedRunId, ct).ConfigureAwait(false);
+            if (run is null) return Results.NotFound();
+            if (!EndpointHelpers.IsOwner(httpContext, run)) return Results.StatusCode(StatusCodes.Status403Forbidden);
+
+            return Results.Ok(await metrics.GetRunTracesAsync(runId, ct).ConfigureAwait(false));
+        });
     }
 
     private static DateTimeOffset? ParseDateTimeOffset(string? value)

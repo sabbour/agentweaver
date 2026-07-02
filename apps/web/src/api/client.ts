@@ -93,6 +93,10 @@ export class AgentweaverApiClient {
     return this.request<import('./types').RunAgentTokenBreakdownDto>('GET', `/runs/${encodeURIComponent(runId)}/token-breakdown`);
   }
 
+  getRunTraces(runId: string): Promise<import('./types').RunTraceDto> {
+    return this.request<import('./types').RunTraceDto>('GET', `/metrics/runs/${encodeURIComponent(runId)}/traces`);
+  }
+
   getSandboxPolicy(repositoryPath: string): Promise<SandboxPolicy> {
     const encoded = encodeURIComponent(repositoryPath);
     return this.request<SandboxPolicy>('GET', `/sandbox-policy?repository_path=${encoded}`);

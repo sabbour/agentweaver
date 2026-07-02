@@ -29,6 +29,7 @@ vi.mock('../api/apiClient', () => ({
       totalNanoAiu: 0,
       breakdown: [],
     }),
+    getRunTraces: vi.fn().mockResolvedValue({ runId: 'coord-run-1', spans: [] }),
     // OutcomeSpecPanel uses these — return empty/null to avoid noise.
     getOutcomeSpec: vi.fn(),
     getTeam: vi.fn().mockResolvedValue({ members: [] }),
@@ -85,6 +86,7 @@ beforeEach(() => {
     totalNanoAiu: 0,
     breakdown: [],
   });
+  vi.mocked(apiClient.getRunTraces).mockResolvedValue({ runId: 'coord-run-1', spans: [] });
   vi.mocked(apiClient.reviewAssembly).mockResolvedValue(undefined);
 });
 
