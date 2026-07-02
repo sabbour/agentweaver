@@ -462,6 +462,7 @@ public sealed class AppInsightsMetricsService
     {
         var timeTo = DateTimeOffset.UtcNow;
         var timeFrom = timeTo.AddDays(-7);
+        var escapedRunId = EscapeKusto(runId);
         var runIdPredicate = BuildRunIdDimensionPredicate(runId, "customDimensions");
         var query =
             $"""
@@ -469,6 +470,7 @@ public sealed class AppInsightsMetricsService
                 traces
                 | where timestamp > ago(7d)
                 | where {runIdPredicate}
+                    or message contains "{escapedRunId}"
                 | project operation_id = tostring(operation_Id), parent_operation_id = tostring(operation_ParentId)
             );
             let correlated_operations = materialize(
@@ -479,6 +481,7 @@ public sealed class AppInsightsMetricsService
                 | distinct operation_id
             );
             union isfuzzy=true
+                (traces | project id, name = message, timestamp, duration = totimespan(0), success = tobool(1), resultCode = tostring(""), operation_id = tostring(operation_Id), parent_operation_id = tostring(operation_ParentId), customDimensions),
                 (dependencies | project id, name, timestamp, duration, success, resultCode, operation_id = tostring(operation_Id), parent_operation_id = tostring(operation_ParentId), customDimensions),
                 (requests | project id, name, timestamp, duration, success, resultCode, operation_id = tostring(operation_Id), parent_operation_id = tostring(operation_ParentId), customDimensions)
             | where timestamp > ago(7d)

@@ -1,5 +1,7 @@
 using Azure.Monitor.OpenTelemetry.AspNetCore;
+using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
+using OpenTelemetry.Trace;
 
 namespace Agentweaver.Api.Infrastructure;
 
@@ -12,9 +14,14 @@ internal static class AzureMonitorBootstrap
 {
     internal static void Configure(IServiceCollection services)
     {
+        services.AddHttpContextAccessor();
+        services.AddSingleton<RunIdActivityProcessor>();
+
         services.AddOpenTelemetry()
             .UseAzureMonitor()
             .WithMetrics(metrics => metrics.AddMeter("Agentweaver"))
-            .WithTracing(tracing => tracing.AddSource("Agentweaver"));
+            .WithTracing(tracing => tracing
+                .AddSource("Agentweaver")
+                .AddProcessor<RunIdActivityProcessor>());
     }
 }
