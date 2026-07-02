@@ -113,24 +113,14 @@ public sealed class WorkflowRegistry
             BuiltInWorkflows.DefaultWorkflowId,
         };
 
-        // Canonical YAML per reserved (built-in/catalog) id, keyed by workflow id. This is the single
-        // source of truth for a built-in workflow's content: a project-materialized copy that has
-        // drifted from it is treated as stale and refreshed back to this canonical text (#168).
-        var canonicalYaml = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
-        {
-            [BuiltInWorkflows.DefaultWorkflowId] = DefaultWorkflowTemplate.Yaml,
-        };
-
         // The built-in default is always available so a project always has at least one workflow
-        // (FR-005). Its content always comes from the shipped template — a project file with the same
-        // id never shadows it (built-in wins, #168).
+        // (FR-005). A project-authored file with the same id replaces it (project customization).
         results.Add(BuiltInWorkflows.Default);
         idToIndex[BuiltInWorkflows.Default.Definition!.Id] = 0;
 
         // Catalog library workflows (Feature 015 US3) are available to every project without
-        // requiring any project-local files. The catalog version ALWAYS wins over a project-level
-        // copy of the same id: a project created before a catalog update must not run the old version
-        // forever (#168). Project copies of these ids are treated as stale below.
+        // requiring any project-local files. A project-authored file with the same id overrides the
+        // catalog definition (project customization over library).
         if (_catalog is not null)
         {
             foreach (var (yaml, source) in _catalog.LoadAllWorkflowYamls())
@@ -138,10 +128,7 @@ public sealed class WorkflowRegistry
                 var catalogResult = ValidateBindable(
                     WorkflowDefinitionLoader.Load(yaml, source, isBuiltIn: true));
                 if (catalogResult.Definition is not null)
-                {
                     reservedIds.Add(catalogResult.Definition.Id);
-                    canonicalYaml[catalogResult.Definition.Id] = yaml;
-                }
                 AddResult(catalogResult, results, idToIndex, _logger);
             }
         }
@@ -151,11 +138,10 @@ public sealed class WorkflowRegistry
         {
             var source = Path.GetFileName(file);
             WorkflowLoadResult result;
-            string? rawYaml = null;
             try
             {
-                rawYaml = File.ReadAllText(file);
-                result = WorkflowDefinitionLoader.Load(rawYaml, source);
+                var yaml = File.ReadAllText(file);
+                result = WorkflowDefinitionLoader.Load(yaml, source);
             }
             catch (IOException ex)
             {
@@ -169,15 +155,22 @@ public sealed class WorkflowRegistry
             result = ValidateBindable(result);
             if (result.Definition is not null && reservedIds.Contains(result.Definition.Id))
             {
-                // A project-materialized copy of a built-in/catalog workflow (same id) is expected on
-                // disk: it is written into each project's .agentweaver/workflows/ so the directory is
-                // visible/editable in the Workspace. The catalog/built-in version is authoritative, so
-                // this on-disk copy is NEVER loaded as an override — it is skipped (catalog wins).
-                // When the on-disk copy has drifted from the canonical catalog text (e.g. a project
-                // created before a catalog update, or a hand-edit of a built-in), refresh it in place
-                // so the Workspace reflects the version that will actually run instead of silent stale
-                // state (#168).
-                RefreshStaleBuiltInCopy(file, result.Definition.Id, rawYaml, canonicalYaml);
+                // A materialized copy of the built-in default (same id) is expected on disk: it is
+                // written into each project's .agentweaver/workflows/ at creation so the directory is
+                // visible/editable in the Workspace. It is the byte-source of the built-in default, so
+                // it is neither a duplicate nor a conflict — silently skip it (the built-in already
+                // represents 'default'). Any OTHER reserved (catalog) id remains a hard conflict.
+                if (string.Equals(result.Definition.Id, BuiltInWorkflows.DefaultWorkflowId, StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                var message =
+                    $"{result.Source}: workflow id '{result.Definition.Id}' is reserved by a built-in/catalog workflow and cannot be overridden by a project file.";
+                _logger?.LogError("{Message}", message);
+                results.Add(WorkflowLoadResult.Invalid(
+                    result.Source,
+                    message,
+                    result.Definition,
+                    warnings: result.Warnings));
                 continue;
             }
 
@@ -268,50 +261,6 @@ public sealed class WorkflowRegistry
         idToIndex[id] = results.Count;
         results.Add(result);
     }
-
-    /// <summary>
-    /// Ensures a project-materialized copy of a built-in/catalog workflow on disk matches the
-    /// canonical catalog text. If the on-disk copy has drifted (e.g. the project was created before a
-    /// catalog update, or the built-in file was hand-edited), logs a warning and overwrites it with
-    /// the canonical version so the Workspace never shows silent stale state (#168). Best-effort: any
-    /// IO/permission failure is swallowed — the catalog version still wins at runtime regardless.
-    /// </summary>
-    private void RefreshStaleBuiltInCopy(
-        string file,
-        string workflowId,
-        string? onDiskYaml,
-        IReadOnlyDictionary<string, string> canonicalYaml)
-    {
-        if (onDiskYaml is null) return;
-        if (!canonicalYaml.TryGetValue(workflowId, out var canonical)) return;
-
-        // Compare on normalized line endings so a CRLF/LF difference alone is not treated as drift.
-        if (NormalizeContent(onDiskYaml) == NormalizeContent(canonical)) return;
-
-        _logger?.LogWarning(
-            "Workflow '{WorkflowId}' project copy '{File}' is stale (differs from the built-in/catalog version); refreshing it from the catalog.",
-            workflowId, Path.GetFileName(file));
-
-        try
-        {
-            File.WriteAllText(file, canonical);
-        }
-        catch (IOException ex)
-        {
-            _logger?.LogWarning(ex,
-                "Could not refresh stale workflow copy '{File}' from the catalog; the catalog version still runs.",
-                Path.GetFileName(file));
-        }
-        catch (UnauthorizedAccessException ex)
-        {
-            _logger?.LogWarning(ex,
-                "Could not refresh stale workflow copy '{File}' from the catalog; the catalog version still runs.",
-                Path.GetFileName(file));
-        }
-    }
-
-    private static string NormalizeContent(string value) =>
-        value.Replace("\r\n", "\n", StringComparison.Ordinal).Trim();
 
     private static WorkflowLoadResult ValidateBindable(WorkflowLoadResult result)
     {
