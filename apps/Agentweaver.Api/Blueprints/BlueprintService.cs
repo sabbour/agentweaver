@@ -540,7 +540,7 @@ public sealed class BlueprintService
         sandboxProfile.Trim().ToLowerInvariant() switch
         {
             "default" => SandboxPolicy.Default(repositoryPath),
-            "restricted" => SandboxPolicy.Default(repositoryPath) with { RequireApprovalForAllShell = true },
+            "restricted" => SandboxPolicy.Default(repositoryPath) with { RequireApprovalForAllShell = true, NetworkEnabled = false },
             _ => throw new ArgumentException($"Unknown sandbox profile '{sandboxProfile}'.", nameof(sandboxProfile)),
         };
 

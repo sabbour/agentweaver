@@ -22,10 +22,10 @@ public sealed record SandboxPolicy
 
     /// <summary>
     /// Allow outbound network access inside the sandbox.
-    /// Default: false (blocked — safer default for Agentweaver vs Copilot CLI which defaults to true).
+    /// Default: true (open) — matches Copilot CLI behaviour; users can restrict per-project.
     /// When true, passes <c>NetworkPolicy { AllowOutbound = true }</c> to the sandbox engine.
     /// </summary>
-    public bool NetworkEnabled { get; init; } = false;
+    public bool NetworkEnabled { get; init; } = true;
 
     /// <summary>
     /// Additional repository roots accessible as read-only inside the sandbox.

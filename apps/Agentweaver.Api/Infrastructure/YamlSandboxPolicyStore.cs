@@ -131,9 +131,9 @@ internal sealed class SandboxPolicyYamlDto
 
     /// <summary>
     /// Allow outbound network inside the sandbox.
-    /// Default: false (more restrictive than Copilot CLI which defaults to true).
+    /// Default: true (open) — matches Copilot CLI behaviour; users can restrict per-project.
     /// </summary>
-    public bool NetworkEnabled { get; set; } = false;
+    public bool NetworkEnabled { get; set; } = true;
 
     public List<string> AllowedRepositoryRoots { get; set; } = [];
     public List<string> DestructiveCommandPatterns { get; set; } =
