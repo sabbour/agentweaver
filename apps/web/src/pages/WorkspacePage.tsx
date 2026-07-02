@@ -82,10 +82,16 @@ const useStyles = makeStyles({
     flexShrink: 0,
     display: 'flex',
     flexDirection: 'column',
+    minHeight: 0,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     borderRadius: tokens.borderRadiusMedium,
     backgroundColor: tokens.colorNeutralBackground1,
     overflow: 'hidden',
+  },
+  leftPanelBody: {
+    flex: 1,
+    minHeight: 0,
+    overflowY: 'auto',
   },
   rightPanel: {
     flex: 1,
@@ -331,13 +337,15 @@ export function WorkspacePage() {
               <Spinner size="tiny" />
             </div>
           ) : (
-            <FilesTabPanel
-              workspaceFiles={nodes}
-              workspaceLoading={false}
-              workspaceError={nodesError}
-              selectedPath={selectedPath}
-              onFileClick={(path) => setSelectedPath(path)}
-            />
+            <div className={styles.leftPanelBody}>
+              <FilesTabPanel
+                workspaceFiles={nodes}
+                workspaceLoading={false}
+                workspaceError={nodesError}
+                selectedPath={selectedPath}
+                onFileClick={(path) => setSelectedPath(path)}
+              />
+            </div>
           )}
         </div>
         <div className={styles.rightPanel}>

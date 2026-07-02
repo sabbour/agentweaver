@@ -186,8 +186,10 @@ const useFileTreeStyles = makeStyles({
   root: {
     display: 'flex',
     flexDirection: 'column',
+    flex: 1,
     height: '100%',
     minHeight: 0,
+    minWidth: 0,
     overflow: 'hidden',
   },
   tabListWrapper: {
@@ -499,6 +501,7 @@ const useStyles = makeStyles({
     flexShrink: 0,
     display: 'flex',
     flexDirection: 'column',
+    minHeight: 0,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     borderRadius: tokens.borderRadiusMedium,
     backgroundColor: tokens.colorNeutralBackground1,
