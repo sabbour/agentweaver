@@ -21,6 +21,15 @@ vi.mock('../api/apiClient', () => ({
     steerCoordinator: vi.fn(),
     reviewAssembly: vi.fn(),
     getRun: vi.fn(),
+    getRunTokenBreakdown: vi.fn().mockResolvedValue({
+      runId: 'coord-run-1',
+      source: 'events',
+      hasAgentData: false,
+      totalTokens: 0,
+      totalNanoAiu: 0,
+      breakdown: [],
+    }),
+    getRunTraces: vi.fn().mockResolvedValue({ runId: 'coord-run-1', spans: [] }),
     // OutcomeSpecPanel uses these — return empty/null to avoid noise.
     getOutcomeSpec: vi.fn(),
     getTeam: vi.fn().mockResolvedValue({ members: [] }),
@@ -69,6 +78,15 @@ beforeEach(() => {
   vi.mocked(apiClient.getWorkPlan).mockRejectedValue(new Error('not found'));
   vi.mocked(apiClient.getCoordinatorChildren).mockRejectedValue(new Error('not found'));
   vi.mocked(apiClient.getRun).mockRejectedValue(new Error('not found'));
+  vi.mocked(apiClient.getRunTokenBreakdown).mockResolvedValue({
+    runId: 'coord-run-1',
+    source: 'events',
+    hasAgentData: false,
+    totalTokens: 0,
+    totalNanoAiu: 0,
+    breakdown: [],
+  });
+  vi.mocked(apiClient.getRunTraces).mockResolvedValue({ runId: 'coord-run-1', spans: [] });
   vi.mocked(apiClient.reviewAssembly).mockResolvedValue(undefined);
 });
 

@@ -167,7 +167,9 @@ export function BlueprintPicker({ active, value, onChange, targetRepository }: B
     setGenerating(true);
     setGenError(null);
     try {
-      const res = await apiClient.generateBlueprint(description.trim(), targetRepository);
+      const res = targetRepository
+        ? await apiClient.generateBlueprint(description.trim(), targetRepository)
+        : await apiClient.generateBlueprint(description.trim());
       setGenerated({ blueprint: res.blueprint, generatedWorkflowYaml: res.generated_workflow_yaml });
       // Auto-apply the freshly generated blueprint.
       onChange({ kind: 'generated', blueprint: res.blueprint, generatedWorkflowYaml: res.generated_workflow_yaml });
