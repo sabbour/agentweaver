@@ -80,6 +80,7 @@ public sealed record CollectiveScribeRequest(
     string CoordinatorRunId,
     string? ProjectId,
     string AgentName,
+    string SubmittingUser,
     string RepositoryPath,
     string ModelSource,
     string? ModelId,

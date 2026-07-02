@@ -38,7 +38,7 @@ public sealed class ProjectServiceRelinkTests : IAsyncDisposable
     }
 
     private static ProjectService BuildService(IProjectStore store) =>
-        new(store, new LocalFilesystemWorkspaceProvider(),
+        new(store, TestWorkspaceProviders.CreateLocal(),
             new NoOpGitInitializer(),
             new InMemoryGitHubTokenStore(), new FixedInstallationScopeProvider(),
             NullLogger<ProjectService>.Instance);
@@ -116,7 +116,7 @@ public sealed class ProjectServiceRelinkTests : IAsyncDisposable
         await tokenStore.SetAsync(scope, new GitHubToken("ghp_test", null, null, "user", null, ["repo"]));
 
         var svc = new ProjectService(
-            store, new LocalFilesystemWorkspaceProvider(),
+            store, TestWorkspaceProviders.CreateLocal(),
             new NoOpGitInitializer(), tokenStore,
             new FixedInstallationScopeProvider(),
             NullLogger<ProjectService>.Instance);

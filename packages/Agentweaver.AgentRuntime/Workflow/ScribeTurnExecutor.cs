@@ -197,7 +197,8 @@ public sealed class ScribeTurnExecutor : Executor<ScribeTurnInput, ScribeTurnInp
                 agentName: input.AgentName,
                 apiBaseUrl: _apiBaseUrl,
                 apiKey: _apiKey,
-                ct).ConfigureAwait(false);
+                ct,
+                input.SubmittingUser).ConfigureAwait(false);
 
             await agent.RunTurnAsync(task, isRevision: false, ct).ConfigureAwait(false);
         }

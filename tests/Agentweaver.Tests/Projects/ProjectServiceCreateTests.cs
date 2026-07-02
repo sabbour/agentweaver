@@ -47,7 +47,7 @@ public sealed class ProjectServiceCreateTests : IAsyncDisposable
         IGitHubTokenStore? tokenStore = null,
         IGitHubTokenScopeProvider? scopeProvider = null)
     {
-        workspace     ??= new LocalFilesystemWorkspaceProvider();
+        workspace     ??= TestWorkspaceProviders.CreateLocal();
         gitInit       ??= new NoOpGitInitializer();
         tokenStore    ??= new InMemoryGitHubTokenStore();
         scopeProvider ??= new FixedInstallationScopeProvider();
