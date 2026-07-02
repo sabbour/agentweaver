@@ -10,8 +10,8 @@ Conceptually, a workflow engine has five jobs:
 
 1. **Define** reusable process graphs as declarative workflow templates.
 2. **Discover** built-in, catalog, and project-authored workflow definitions.
-3. **Filter** definitions by trigger so a workflow is only used in an eligible invocation context.
-4. **Select** the best process fit when several eligible workflows are available.
+3. **Track** invocation context and automation metadata so runs carry the right operational context without changing workflow validity.
+4. **Select** the best process fit when several workflows are available.
 5. **Bind** the selected definition to real runtime executors, failing closed if any node or edge cannot run safely.
 
 ```mermaid
@@ -73,11 +73,11 @@ Workflows are one half of run orchestration. The coordinator and run lifecycle a
 
 These invariants are the backbone of the workflow engine:
 
-- **Definitions are data, not code.** YAML describes nodes, edges, triggers, and metadata. It does not execute directly.
+- **Definitions are data, not code.** YAML describes nodes, edges, and metadata. It does not execute directly.
 - **Discovery is server-side.** Clients list, render, and edit workflows, but loading, validation, selection, and binding happen in the API.
-- **Triggers are eligibility gates.** A manual workflow should not be picked up unattended merely because it exists.
-- **Overrides cannot bypass safety.** A requested workflow id is honored only if it resolves, validates, binds, and is trigger-eligible.
-- **Selection is bounded model authority.** The selector may choose among already-safe candidates; it may not invent ids or bypass filtering.
+- **Workflows are trigger-agnostic.** How a run starts is tracked separately from what pipeline definition it executes.
+- **Overrides cannot bypass safety.** A requested workflow id is honored only if it resolves, validates, and binds.
+- **Selection is bounded model authority.** The selector may choose among already-safe candidates; it may not invent ids or bypass availability and validation checks.
 - **Binding fails closed.** A node type, gate, or edge with no known executor mapping aborts the build instead of becoming a no-op.
 - **Runtime policy is composed before execution.** Review-policy gates are merged into the selected workflow before the executable graph is built.
 - **A built-in default is always available.** The default workflow is embedded in code and serves projects that ship no workflow files of their own, so every project has a valid workflow to run.
@@ -90,7 +90,6 @@ A workflow template is a declarative graph with:
 
 - a stable `id`,
 - a human-readable `name` and optional `description` / `version`,
-- a `trigger`,
 - a `start` node,
 - typed `nodes`,
 - directed `edges`,
@@ -103,19 +102,16 @@ The key abstraction is that a workflow describes **what process should happen**,
 %%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
 flowchart LR
     Template[Workflow YAML]
-    Trigger[Trigger]
     Start[Start node]
     Nodes[Typed nodes]
     Edges[Verdict edges]
     Metadata[Labels, lanes, agent hints]
     Binder[Binder expands to runtime graph]
 
-    Template --> Trigger
     Template --> Start
     Template --> Nodes
     Template --> Edges
     Template --> Metadata
-    Trigger --> Binder
     Start --> Binder
     Nodes --> Binder
     Edges --> Binder
@@ -128,11 +124,11 @@ flowchart LR
     classDef runtime fill:#DDF3DD,stroke:#107C10,stroke-width:1px,color:#242424;
     classDef evt fill:#D6F0F0,stroke:#038387,stroke-width:1px,color:#242424;
 
-    class Template,Trigger,Start,Nodes,Edges,Metadata svc;
+    class Template,Start,Nodes,Edges,Metadata svc;
     class Binder core;
 ```
 
-The loader validates the static shape first: required fields, valid trigger type, valid node type, unique node ids, known edge endpoints, check branches with matching outgoing edges, and valid references from structured node fields.
+The loader validates the static shape first: required fields, valid node type, unique node ids, known edge endpoints, check branches with matching outgoing edges, and valid references from structured node fields.
 
 The binder then validates runtime bindability. This second phase matters because the schema can represent graph concepts before the live executor graph has executor support for them.
 
@@ -152,7 +148,7 @@ Runtime binding supports prompt, peer-review, check gates with known gate kinds,
 
 ### The Default Workflow
 
-The default workflow encodes the standard run pipeline. Its canonical source is the code-embedded `DefaultWorkflowTemplate` (id `default`, trigger `manual`), loaded once through the real loader as `BuiltInWorkflows.Default` (`BuiltInWorkflows.DefaultWorkflowId == "default"`). `DefaultWorkflowTemplate.TryMaterialize` can also write a copy to a project's `.agentweaver/workflows/default.yaml` so users can inspect or customize it. The pipeline is `agent -> rai -> review -> merge -> scribe` (with terminal sinks for safety-failed, declined, and done).
+The default workflow encodes the standard run pipeline. Its canonical source is the code-embedded `DefaultWorkflowTemplate` (id `default`), loaded once through the real loader as `BuiltInWorkflows.Default` (`BuiltInWorkflows.DefaultWorkflowId == "default"`). `DefaultWorkflowTemplate.TryMaterialize` can also write a copy to a project's `.agentweaver/workflows/default.yaml` so users can inspect or customize it. The pipeline is `agent -> rai -> review -> merge -> scribe` (with terminal sinks for safety-failed, declined, and done).
 
 ```mermaid
 %%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
@@ -279,23 +275,18 @@ Reserved ids are protected: `WorkflowRegistry.Build` adds the built-in `default`
 Validation happens in layers:
 
 1. **YAML parse** — `WorkflowDefinitionLoader.Load` turns malformed YAML into a file-scoped invalid result.
-2. **Schema mapping** — trigger type, node type, start node, edge endpoints, branches, and references are checked.
+2. **Schema mapping** — node type, start node, edge endpoints, branches, and references are checked.
 3. **Bindability dry-run** — `WorkflowRegistry.ValidateBindable` runs `RunWorkflowGraphBinder.GetBindabilityErrors` to check whether every node and transition can map to real executor wiring.
 4. **Runtime composition** — review policies are composed, and the final effective graph is bound before a run starts.
 
 This layered design lets the UI show useful authoring errors while preserving runtime safety.
 
-## Trigger Evaluation
+## Invocation Context
 
-### Trigger Types
+`WorkflowInvocationKind` is tracked as run metadata, not as a workflow eligibility gate. The current kinds are:
 
-A workflow declares one `WorkflowTrigger` (`apps/Agentweaver.Api/Workflows/WorkflowDefinition.cs`):
-
-- **`Manual`** — eligible when a person or client explicitly starts the run.
-- **`Heartbeat`** — eligible when the coordinator heartbeat picks up ready backlog work.
-- **`Schedule`** — declares a recurring cadence such as `weekly:monday`; scheduled trigger-task
-  automation fires it rather than the existing manual/backlog-pickup selectors.
-- **`Event`** — eligible for a named `WorkflowEventType`. The current supported event is `TaskAddedToReady`.
+- **`Manual`** — the run was started explicitly or by a non-heartbeat origin.
+- **`Heartbeat`** — the coordinator heartbeat started the run through backlog pickup.
 
 The invocation context is derived from run origin by `CoordinatorOrchestratorExecutor.ResolveInvocationKindAsync`. A `RunOrigin.BacklogPickup` run is treated as `WorkflowInvocationKind.Heartbeat`; other origins (and lookup failures) are treated as `WorkflowInvocationKind.Manual`.
 
@@ -307,13 +298,12 @@ flowchart TD
     BacklogPickup[BacklogPickup]
     ManualKind[Invocation: Manual]
     HeartbeatKind[Invocation: Heartbeat]
-    ManualEligible[Eligible: trigger manual]
-    HeartbeatEligible[Eligible: trigger heartbeat<br/>or event task-added-to-ready]
-    ScheduleTrigger[Schedule trigger<br/>cadence metadata for trigger tasks]
+    Candidates[All valid available workflows]
+    Automation[Future automation rules<br/>when event/schedule fires -> invoke workflow]
 
-    RunOrigin --> ManualStart --> ManualKind --> ManualEligible
-    RunOrigin --> BacklogPickup --> HeartbeatKind --> HeartbeatEligible
-    ScheduleTrigger -. not selected by these paths .- HeartbeatEligible
+    RunOrigin --> ManualStart --> ManualKind --> Candidates
+    RunOrigin --> BacklogPickup --> HeartbeatKind --> Candidates
+    Automation -. invokes a workflow run .-> Candidates
 
     classDef client fill:#E8EEF9,stroke:#0F6CBD,stroke-width:1px,color:#242424;
     classDef svc fill:#F3F2F1,stroke:#8A8886,stroke-width:1px,color:#242424;
@@ -324,35 +314,28 @@ flowchart TD
     classDef evt fill:#D6F0F0,stroke:#038387,stroke-width:1px,color:#242424;
 
     class RunOrigin,ManualStart,BacklogPickup client;
-    class ManualKind,HeartbeatKind,ManualEligible,HeartbeatEligible svc;
+    class ManualKind,HeartbeatKind,Candidates,Automation svc;
 ```
 
-The important safety property is that trigger filtering happens before model selection. The selector only sees candidates that are eligible for the invocation kind.
+The important design property is that invocation kind does not filter workflow validity. The selector sees the project's valid available workflows regardless of whether the run started manually or from heartbeat pickup.
 
-### Candidate Filtering
-
-The evaluator (`WorkflowTriggerEvaluator.IsEligible`) maps:
-
-- `Manual` invocation → only `Manual`-trigger workflows.
-- `Heartbeat` invocation → `Heartbeat`-trigger workflows plus `Event`-trigger workflows whose event is `TaskAddedToReady`.
-
-`WorkflowTriggerEvaluator.Filter` preserves input order, so the default-first ordering survives. A backlog task can carry a `WorkflowOverrideId`. The override is honored only if the workflow exists, is valid, and is eligible for the invocation. Otherwise the system logs the mismatch and continues with eligible selection or safe fallback behavior.
+All valid workflows in the project's available set are candidates. A backlog task can carry a `WorkflowOverrideId`. The override is honored only if the workflow exists, is valid, and can bind safely. Otherwise the system logs the mismatch and continues with normal selection or safe fallback behavior.
 
 ```mermaid
 %%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
 flowchart TD
     Available[Available valid workflows]
     Kind[Invocation kind]
-    Eligible[Trigger-eligible workflows]
-    Override{Valid eligible override?}
+    Candidates[Available candidates]
+    Override{Valid override?}
     UseOverride[Use override]
-    None{Any eligible?}
-    Select[Select among eligible]
+    None{Any candidates?}
+    Select[Select among candidates]
     Fallback[Fallback / fail-safe resolution]
 
-    Available --> Eligible
-    Kind --> Eligible
-    Eligible --> Override
+    Available --> Candidates
+    Kind --> Candidates
+    Candidates --> Override
     Override -- yes --> UseOverride
     Override -- no --> None
     None -- yes --> Select
@@ -366,11 +349,11 @@ flowchart TD
     classDef runtime fill:#DDF3DD,stroke:#107C10,stroke-width:1px,color:#242424;
     classDef evt fill:#D6F0F0,stroke:#038387,stroke-width:1px,color:#242424;
 
-    class Available,Kind,Eligible,Override,UseOverride,None,Fallback svc;
+    class Available,Kind,Candidates,Override,UseOverride,None,Fallback svc;
     class Select core;
 ```
 
-Rebuild guidance: treat trigger eligibility as a hard boundary. If a selected id is not eligible, do not "helpfully" run it anyway.
+Rebuild guidance: treat invocation kind as observability and policy context, not as a candidate gate. If a selected id cannot resolve, validate, or bind, do not "helpfully" run it anyway.
 
 ## Workflow Library and Generation
 
@@ -426,16 +409,16 @@ Blueprint generation can also invoke workflow generation when no library workflo
 
 ## Selection Logic
 
-Workflow selection chooses a process for a task. It runs inside `CoordinatorOrchestratorExecutor.SelectWorkflowAsync` and is intentionally conservative: deterministic rules narrow the space first (registry ordering, trigger eligibility, overrides), and `WorkflowSelector.SelectAsync` only chooses among 2+ eligible definitions.
+Workflow selection chooses a process for a task. It runs inside `CoordinatorOrchestratorExecutor.SelectWorkflowAsync` and is intentionally conservative: deterministic rules narrow the space first (registry ordering, availability, overrides), and `WorkflowSelector.SelectAsync` only chooses among 2+ available definitions.
 
 ```mermaid
 %%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
 flowchart TD
     Registry[Registry available set]
     DefaultFirst[Order default first]
-    TriggerFilter[Filter by trigger eligibility]
-    OverrideCheck[Apply eligible backlog/user override]
-    Count{Eligible count}
+    Candidates[Use available workflow set]
+    OverrideCheck[Apply valid backlog/user override]
+    Count{Available count}
     Single[Use the only workflow<br/>no model call]
     Prompt[Build selector prompt<br/>goal + roles + candidates]
     Model[Model returns JSON id + rationale]
@@ -443,7 +426,7 @@ flowchart TD
     Selected[Selected workflow]
     Default[Default fallback]
 
-    Registry --> DefaultFirst --> TriggerFilter --> OverrideCheck --> Count
+    Registry --> DefaultFirst --> Candidates --> OverrideCheck --> Count
     OverrideCheck -- override wins --> Selected
     Count -- 0 --> Default
     Count -- 1 --> Single --> Selected
@@ -459,7 +442,7 @@ flowchart TD
     classDef runtime fill:#DDF3DD,stroke:#107C10,stroke-width:1px,color:#242424;
     classDef evt fill:#D6F0F0,stroke:#038387,stroke-width:1px,color:#242424;
 
-    class Registry,DefaultFirst,TriggerFilter,OverrideCheck,Count,Single,Prompt,Parse,Default svc;
+    class Registry,DefaultFirst,Candidates,OverrideCheck,Count,Single,Prompt,Parse,Default svc;
     class Model ext;
     class Selected core;
 ```
@@ -477,10 +460,10 @@ The model must return JSON with a `selected` workflow id and a short `rationale`
 
 There are two override channels:
 
-- **Backlog task override** — `BacklogTask.WorkflowOverrideId`, persisted on the task before it is claimed. `CoordinatorPickupService` prepends `use {id}` to the goal at pickup, and `SelectWorkflowAsync` also resolves the override id directly against the registry and trigger eligibility.
-- **Conversational override** — a human can send `use {workflow-id}`. `WorkflowSelector.TryParseOverride` checks for this pattern before normal selection and uses the requested workflow if it is among the available eligible candidates.
+- **Backlog task override** — `BacklogTask.WorkflowOverrideId`, persisted on the task before it is claimed. `CoordinatorPickupService` prepends `use {id}` to the goal at pickup, and `SelectWorkflowAsync` also resolves the override id directly against the registry and available set.
+- **Conversational override** — a human can send `use {workflow-id}`. `WorkflowSelector.TryParseOverride` checks for this pattern before normal selection and uses the requested workflow if it is among the available candidates.
 
-An explicit override wins only inside the candidate safety boundary. It does not let a user or backlog item execute a workflow that the registry cannot resolve or the trigger evaluator rejects.
+An explicit override wins only inside the candidate safety boundary. It does not let a user or backlog item execute a workflow that the registry cannot resolve or that cannot bind safely.
 
 ### Selection vs Runtime Resolution
 
@@ -596,10 +579,9 @@ This lets teams require additional review gates without copying every workflow t
 
 A workflow is selected at the point where a run needs an execution process. Different run origins use the same concepts but have different responsibility boundaries:
 
-- **Manual run** — usually uses a manual-trigger workflow.
-- **Backlog pickup coordinator run** — usually uses heartbeat or `task-added-to-ready` event workflows.
-- **Scheduled trigger-task run** — uses schedule workflows whose trigger carries a cadence such as
-  `weekly:monday`.
+- **Manual run** — an explicit start whose invocation metadata is `Manual`.
+- **Backlog pickup coordinator run** — a heartbeat-started run whose invocation metadata is `Heartbeat`.
+- **Scheduled or event-driven automation run** — future automation rules can invoke any workflow when their schedule or event condition fires.
 - **Coordinator parent run** — owns planning, assembly, review, merge, and scribe for coordinated work.
 - **Coordinator child run** — uses a trimmed child pipeline in an isolated child worktree: agent work terminating at assemble-ready. It does not perform per-child RAI, human review, merge, or scribe independently. Dependency outputs are merged forward through the coordinator integration branch before dependent children launch.
 
@@ -610,7 +592,7 @@ See [orchestration.md](orchestration.md) for the broader run lifecycle and coord
 ## Extension Points and Gotchas
 
 - **Do not execute by id alone.** Workflow ids identify definitions; node types and edge semantics determine bindability.
-- **Manual default does not make heartbeat safe.** If unattended pickup should use a workflow, it must declare a heartbeat or supported event trigger.
+- **Unattended pickup is governed outside the workflow YAML.** Use project settings and automation rules to decide when a workflow should start automatically.
 - **Keep generated examples bindable.** A generator that teaches unsupported node types will produce attractive but unrunnable YAML.
 - **Role metadata can be misleading.** Distinguish render lanes from concrete catalog agent ids and inline charters.
 - **Peer review must be verdict-routed.** A `peer_review` node needs verdict-labeled outgoing edges; otherwise bindability validation rejects it instead of guessing how to route it.
@@ -623,22 +605,22 @@ See [orchestration.md](orchestration.md) for the broader run lifecycle and coord
 
 If you were rebuilding the workflow engine from scratch, implement it in this order:
 
-1. Define the workflow schema: trigger, start, typed nodes, edges, branches, and metadata.
+1. Define the workflow schema: start, typed nodes, edges, branches, and metadata.
 2. Write a loader that returns valid and invalid load results without crashing the whole set.
 3. Embed a built-in default workflow and parse it through the same loader as user files.
 4. Build a registry that discovers built-in, catalog, and project workflows, caches per project with a shared-file signature, and syncs explicitly.
-5. Add trigger evaluation and make it the first candidate filter.
+5. Add invocation-context tracking and keep it separate from candidate availability.
 6. Add bindability validation that rejects unsupported node types and transitions before runtime.
 7. Implement node classification by type and gate kind, never by fixed ids.
 8. Implement edge expansion from `(from kind, to kind, when)` to concrete executor wiring.
 9. Compose review policies onto selected workflows before binding.
-10. Add default and override resolution that revalidates trigger eligibility.
-11. Add process-fit selection among eligible candidates with deterministic fallback.
+10. Add default and override resolution that revalidates availability and bindability.
+11. Add process-fit selection among available candidates with deterministic fallback.
 12. Add generation as a draft-only server-side prompt + validation + one correction pass.
 13. Surface graph descriptors and workflow-selected events for clients, but keep clients out of selection and binding.
 14. Add recovery tests that prove renamed nodes, invalid edges, invalid overrides, and unsupported types fail safely.
 
-The central design principle is simple: **load workflows as data, select only eligible process graphs, bind every edge to real executors, and fail closed whenever policy cannot be proven executable.**
+The central design principle is simple: **load workflows as data, select among valid available process graphs, bind every edge to real executors, and fail closed whenever policy cannot be proven executable.**
 
 ## Where this lives
 

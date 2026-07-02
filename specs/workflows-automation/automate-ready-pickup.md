@@ -9,7 +9,7 @@ As a project owner, I want Ready tasks to be claimed by background automation wi
 
 ## Context / problem
 
-Ready is a commitment signal. The coordinator heartbeat turns eligible Ready tasks into coordinator work according to project settings and workflow triggers.
+Ready is a commitment signal. The coordinator heartbeat turns eligible Ready tasks into coordinator work according to project settings and automation rules.
 
 ## Scope
 
