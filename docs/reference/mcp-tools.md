@@ -10,7 +10,7 @@
 This page is generated from the MCP server source. Do not edit it by hand — run `node scripts/gen-docs.mjs`. For the full parameter reference of each tool, see [MCP server reference](./mcp.md).
 :::
 
-The Agentweaver MCP server exposes **82 tools** across **13 categories**. This index is the authoritative list of tool names and one-line descriptions, derived directly from the `[McpServerTool]` attributes in the server source.
+The Agentweaver MCP server exposes **80 tools** across **13 categories**. This index is the authoritative list of tool names and one-line descriptions, derived directly from the `[McpServerTool]` attributes in the server source.
 
 MCP tool implementations URI-escape every route path parameter before calling the Agentweaver API. Segments such as `project_id`, `run_id`, `agent_name`, and task or workflow ids are encoded with `Uri.EscapeDataString()` so crafted ids cannot inject `../` or otherwise change the API path. Query-string parameters keep their normal query encoding.
 
@@ -101,7 +101,6 @@ MCP tool implementations URI-escape every route path parameter before calling th
 
 | Tool | Description |
 | --- | --- |
-| `get_project_usage` | Get token and AI Credit usage for a project over a time range (default: last 30 days). |
 | `project_configure` | Configure the AI model provider settings for a project. |
 | `project_create` | Create a new Agentweaver project. Supply blueprint_id to apply a predefined blueprint, or supply blueprint to apply an inline blueprint; the two options are mutually exclusive. |
 | `project_delete` | Delete a project by ID. |
@@ -115,7 +114,6 @@ MCP tool implementations URI-escape every route path parameter before calling th
 
 | Tool | Description |
 | --- | --- |
-| `get_run_usage` | Get token and AI Credit usage for a specific run. |
 | `run_archive` | Archive a run off active project board/list projections. |
 | `run_get_file` | Get the content or diff of a specific file changed by a run. |
 | `run_retry` | Retry a failed run by creating a fresh run from its original inputs. |
@@ -124,7 +122,7 @@ MCP tool implementations URI-escape every route path parameter before calling th
 | `run_status` | Get the current status of a run. |
 | `run_submit` | Submit a new agent run for a project. |
 | `run_watch` | Watch a run live, streaming progress until completion. |
-| `start_preview` | Expose a web server an agent started inside a run's sandbox pod (e.g. on port 3000) so it can be previewed at a public HTTPS URL. Routes through a human-in-the-loop approval gate; returns the preview_url once approved. |
+| `start_preview` | Register a live browser preview for a web server the agent has ALREADY started and verified inside a run's sandbox pod. Call this AFTER your server is running and responding (e.g. you confirmed `curl http://localhost:PORT/` succeeds) — pass the exact port it listens on (e.g. 3000). You MUST call this whenever you start any server so the user gets a live preview link. Routes through a human-in-the-loop approval gate; returns the public HTTPS preview_url once approved. Do not finish the task without registering the preview for any server you started. |
 
 ## Sandbox Policy
 
