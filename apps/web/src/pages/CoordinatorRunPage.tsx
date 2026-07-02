@@ -676,25 +676,15 @@ function SubtaskNode({ id, data }: NodeProps) {
         </div>
       </div>
 
-      {d.childGraphRef && (
+      {d.childGraphRef && d.childRunId && (
         <div className={`${s.cardActions} nopan nodrag`}>
           <Button
             appearance="outline"
             size="small"
-            aria-label={`${expanded ? 'Collapse' : 'Expand'} pipeline for ${d.label as string}`}
-            onClick={() => expandCtx?.toggle(id)}
+            onClick={() => viewRun?.(d.childRunId as string)}
           >
-            {expanded ? 'Collapse pipeline' : 'Expand pipeline'}
+            View run
           </Button>
-          {d.childRunId && (
-            <Button
-              appearance="outline"
-              size="small"
-              onClick={() => viewRun?.(d.childRunId as string)}
-            >
-              View run
-            </Button>
-          )}
         </div>
       )}
 

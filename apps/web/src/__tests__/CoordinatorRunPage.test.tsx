@@ -56,7 +56,7 @@ import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
 import { CoordinatorRunPage } from '../pages/CoordinatorRunPage';
 import { _resetRuntimeInfoCache } from '../hooks/useRuntimeInfo';
-import { COORDINATOR_GRAPH_DESCRIPTOR, CHILD_GRAPH_DESCRIPTOR, COORDINATOR_GRAPH_DRAFTING_DESCRIPTOR } from './fixtures/graphDescriptor';
+import { COORDINATOR_GRAPH_DESCRIPTOR, COORDINATOR_GRAPH_DRAFTING_DESCRIPTOR } from './fixtures/graphDescriptor';
 
 function Wrapper({ children }: { children: ReactNode }) {
   return (
@@ -143,19 +143,6 @@ describe('CoordinatorRunPage — unified coordinator graph view', () => {
     expect(html).toContain('data-node-type="subtask"');
   });
 
-  it('subtask nodes with child_graph_ref render an expand button', async () => {
-    render(<Wrapper><CoordinatorRunPage /></Wrapper>);
-
-    await waitFor(
-      () => expect(document.body.textContent).toContain('Subtask 1'),
-      { timeout: 4000 },
-    );
-
-    // Both subtasks in the fixture have child_graph_ref → both should have expand buttons.
-    const text = document.body.textContent ?? '';
-    expect(text).toContain('Expand pipeline');
-  });
-
   it('renders subtask nodes without showing API pod chip when no executionPodName is set', async () => {
     vi.mocked(apiClient.getSystemRuntime).mockResolvedValue({ kubernetes: true, podName: 'agentweaver-api-pod-1' });
 
@@ -221,43 +208,6 @@ describe('CoordinatorRunPage — unified coordinator graph view', () => {
     const text = document.body.textContent ?? '';
     expect(text).toContain('Subtask 1');
     expect(text).toContain('RAI Review');
-  });
-
-  it('Expand pipeline renders inline child node cards with live status, not static text', async () => {
-    // Return child descriptor for child run ids, coordinator descriptor for the coordinator.
-    vi.mocked(apiClient.getRunGraph).mockImplementation((runId: string) => {
-      if (runId === 'coord-run-1') return Promise.resolve(COORDINATOR_GRAPH_DESCRIPTOR);
-      return Promise.resolve(CHILD_GRAPH_DESCRIPTOR);
-    });
-
-    const { container } = render(<Wrapper><CoordinatorRunPage /></Wrapper>);
-
-    // Wait for the coordinator graph to render with subtask nodes.
-    await waitFor(
-      () => expect(document.body.textContent).toContain('Expand pipeline'),
-      { timeout: 4000 },
-    );
-
-    // Click the first Expand pipeline button.
-    const expandBtn = Array.from(container.querySelectorAll('button')).find(
-      (btn) => btn.textContent?.includes('Expand pipeline'),
-    );
-    expect(expandBtn).toBeTruthy();
-    expandBtn!.click();
-
-    // After expanding, the child descriptor nodes should appear as cards (not static text).
-    await waitFor(
-      () => expect(document.body.textContent).toContain('Assemble-ready'),
-      { timeout: 4000 },
-    );
-
-    const text = document.body.textContent ?? '';
-    expect(text).toContain('Agent');
-    expect(text).toContain('Rai');
-    expect(text).toContain('Assemble-ready');
-
-    // The expand button should have changed label to Collapse pipeline.
-    expect(text).toContain('Collapse pipeline');
   });
 });
 

@@ -513,38 +513,6 @@ describe('CoordinatorRunPage — assembly review affordance (issues 3 & 4)', () 
   });
 });
 
-describe('CoordinatorRunPage — parent aggregate elapsed (issue 2)', () => {
-  it('shows the sum of child pipeline step durations on the expanded subtask card', async () => {
-    // Child stream events (same mock feeds every useRunStream): agent 30s + rai 10s = 40s.
-    currentEvents = [
-      { sequence: 1, type: 'workflow.step', payload: { step: 'agent', status: 'started', timestamp_utc: '2026-06-18T15:00:10Z' } },
-      { sequence: 2, type: 'workflow.step', payload: { step: 'agent', status: 'completed', timestamp_utc: '2026-06-18T15:00:40Z' } },
-      { sequence: 3, type: 'workflow.step', payload: { step: 'rai', status: 'started', timestamp_utc: '2026-06-18T15:00:40Z' } },
-      { sequence: 4, type: 'workflow.step', payload: { step: 'rai', status: 'completed', timestamp_utc: '2026-06-18T15:00:50Z' } },
-    ];
-
-    const { container } = render(<Wrapper><CoordinatorRunPage /></Wrapper>);
-
-    await waitFor(
-      () => expect(document.body.textContent).toContain('Expand pipeline'),
-      { timeout: 4000 },
-    );
-
-    const expandBtn = Array.from(container.querySelectorAll('button')).find(
-      (btn) => btn.textContent?.includes('Expand pipeline'),
-    );
-    expect(expandBtn).toBeTruthy();
-    expandBtn!.click();
-
-    await waitFor(
-      () => expect(document.body.querySelector('[aria-label="Total child elapsed"]')).toBeTruthy(),
-      { timeout: 4000 },
-    );
-
-    const aggregate = document.body.querySelector('[aria-label="Total child elapsed"]');
-    expect(aggregate?.textContent).toContain('40s');
-  });
-});
 
 describe('CoordinatorRunPage — coordinator topology loopback labels', () => {
   it('derives role-based labels for the coordinator loopback back-edges', () => {
