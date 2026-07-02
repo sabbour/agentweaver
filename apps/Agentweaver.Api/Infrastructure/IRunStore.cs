@@ -28,6 +28,7 @@ public interface IRunStore
     Task UpdateToInProgressAsync(RunId runId, string worktreePath, string worktreeBranch, DateTimeOffset startedAt, CancellationToken ct = default);
     Task DeleteAsync(RunId runId, CancellationToken ct = default);
     Task UpdateWorktreeAsync(RunId runId, string worktreePath, string worktreeBranch, CancellationToken ct = default);
+    Task SetSandboxInfoAsync(RunId runId, string? backend, string? claimName, string? podName, string? @namespace, CancellationToken ct = default);
     Task<bool> ArchiveAsync(RunId runId, DateTimeOffset archivedAt, CancellationToken ct = default);
     Task<Run?> FindActiveChildAsync(string parentRunId, string subtaskId, CancellationToken ct = default);
     Task<IReadOnlyList<Run>> GetRunsByParentAsync(string parentRunId, CancellationToken ct = default);

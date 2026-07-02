@@ -274,6 +274,35 @@ public sealed class EfRunStore : IRunStore
                 .SetProperty(r => r.WorktreeBranch, worktreeBranch), ct);
     }
 
+    public async Task SetSandboxInfoAsync(
+        RunId runId,
+        string? backend,
+        string? claimName,
+        string? podName,
+        string? @namespace,
+        CancellationToken ct = default)
+    {
+        var id = runId.ToString();
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        var rec = await db.Runs.FirstOrDefaultAsync(r => r.RunId == id, ct);
+        if (rec is null)
+        {
+            WarnIfNoRows(0, runId, "set sandbox info");
+            return;
+        }
+
+        if (!string.IsNullOrWhiteSpace(backend))
+            rec.SandboxBackend = backend;
+        if (!string.IsNullOrWhiteSpace(claimName))
+            rec.SandboxClaimName = claimName;
+        if (!string.IsNullOrWhiteSpace(podName))
+            rec.SandboxPodName = podName;
+        if (!string.IsNullOrWhiteSpace(@namespace))
+            rec.SandboxNamespace = @namespace;
+
+        await db.SaveChangesAsync(ct);
+    }
+
     public async Task<bool> ArchiveAsync(RunId runId, DateTimeOffset archivedAt, CancellationToken ct = default)
     {
         var id = runId.ToString();
@@ -396,6 +425,10 @@ public sealed class EfRunStore : IRunStore
         Origin = r.Origin.ToApiString(),
         RetriedFrom = r.RetriedFrom,
         ArchivedAt = r.ArchivedAt,
+        SandboxBackend = r.SandboxBackend,
+        SandboxClaimName = r.SandboxClaimName,
+        SandboxPodName = r.SandboxPodName,
+        SandboxNamespace = r.SandboxNamespace,
         ReviewReadyAt = null,
     };
 
@@ -429,5 +462,9 @@ public sealed class EfRunStore : IRunStore
         Origin = RunOriginExtensions.ParseOrigin(r.Origin),
         RetriedFrom = r.RetriedFrom,
         ArchivedAt = r.ArchivedAt,
+        SandboxBackend = r.SandboxBackend,
+        SandboxClaimName = r.SandboxClaimName,
+        SandboxPodName = r.SandboxPodName,
+        SandboxNamespace = r.SandboxNamespace,
     };
 }

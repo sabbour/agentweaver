@@ -2,6 +2,7 @@ using System.Text.Encodings.Web;
 using k8s;
 using LibGit2Sharp;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 using Agentweaver.AgentRuntime;
 using Agentweaver.Api.Memory;
 using Agentweaver.AgentRuntime.Providers;
@@ -107,12 +108,13 @@ app.MapGet("/api/runs/{id}", async (
     CoordinatorStatusReader coordinator,
     IRunOptionsStore runOptions,
     ILogger<Program> logger,
-    IKubernetes? k8sClient,
-    KubernetesSandboxOptions? k8sOptions,
     CancellationToken ct) =>
 {
     if (!RunId.TryParse(id, out var runId))
         return Results.BadRequest(new { error = "Invalid run id." });
+
+    var k8sClient = httpContext.RequestServices.GetService<IKubernetes>();
+    var k8sOptions = httpContext.RequestServices.GetService<IOptions<KubernetesSandboxOptions>>()?.Value;
 
     Run? run;
     try
@@ -142,34 +144,9 @@ app.MapGet("/api/runs/{id}", async (
         ? run.Diff
         : null;
 
-    // Populate sandbox status from the in-memory event stream (sandbox.selected /
-    // sandbox.warning events emitted by the agent runner at startup).
-    // Returns null for older runs whose stream entries have been evicted.
-    SandboxStatusDto? sandboxStatus = null;
     var streamEntry = streamStore.Get(id);
     var streamEvents = streamEntry?.GetSnapshotSince(0).Events;
-    if (streamEntry is not null)
-    {
-        var selectedEvt = streamEvents!.FirstOrDefault(e => e.Type == "sandbox.selected");
-        if (selectedEvt is not null)
-        {
-            var json = System.Text.Json.JsonSerializer.Serialize(selectedEvt.Payload,
-                new System.Text.Json.JsonSerializerOptions { PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase });
-            var parsed = System.Text.Json.JsonSerializer.Deserialize<SandboxSelectedPayload>(json,
-                new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
-            if (parsed is not null)
-            {
-                var hasNetworkWarning = streamEvents!.Any(e => e.Type == "sandbox.warning");
-                sandboxStatus = new SandboxStatusDto
-                {
-                    Backend = parsed.Backend ?? string.Empty,
-                    IsRealIsolation = parsed.IsRealIsolation,
-                    SelectionReason = parsed.Reason,
-                    HasNetworkWarning = hasNetworkWarning,
-                };
-            }
-        }
-    }
+    var sandboxStatus = RunSandboxStatusReader.GetSandboxStatus(run, streamEvents);
 
     // Augment sandboxStatus with the live SandboxClaim phase from Kubernetes.
     // Only attempted when the backend is kubernetes-sandbox-claim and an in-cluster
@@ -182,11 +159,12 @@ app.MapGet("/api/runs/{id}", async (
     {
         try
         {
-            var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(run.Id.ToString());
+            var claimName = sandboxStatus.ClaimName ?? SandboxClaimConventions.DeriveAgentHostClaimName(run.Id.ToString());
+            var sandboxNamespace = sandboxStatus.Namespace ?? k8sOptions.Namespace;
             var raw = await k8sClient.CustomObjects.GetNamespacedCustomObjectAsync(
                 SandboxClaimConventions.ApiGroup,
                 SandboxClaimConventions.ApiVersion,
-                k8sOptions.Namespace,
+                sandboxNamespace,
                 SandboxClaimConventions.ClaimPlural,
                 claimName,
                 cancellationToken: ct);
@@ -2503,18 +2481,6 @@ static IReadOnlyList<WorkspaceFileEntry> ApplyLineCounts(
         };
     }).ToList();
 }
-}
-
-/// <summary>
-/// Typed record for deserializing the <c>sandbox.selected</c> event payload.
-/// The payload is stored as an anonymous object and serialized with camelCase,
-/// so <see cref="System.Text.Json.JsonSerializerOptions.PropertyNameCaseInsensitive"/> is used.
-/// </summary>
-file sealed class SandboxSelectedPayload
-{
-    public string? Backend { get; init; }
-    public bool IsRealIsolation { get; init; }
-    public string? Reason { get; init; }
 }
 
 /// <summary>

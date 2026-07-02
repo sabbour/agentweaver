@@ -36,4 +36,8 @@ public sealed class RunRecord
     public DateTimeOffset? HeartbeatAt { get; set; }
     public long FencingToken { get; set; }
     public int Attempt { get; set; }
+    public string? SandboxBackend { get; set; }
+    public string? SandboxClaimName { get; set; }
+    public string? SandboxPodName { get; set; }
+    public string? SandboxNamespace { get; set; }
 }

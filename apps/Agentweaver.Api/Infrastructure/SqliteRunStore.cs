@@ -26,12 +26,14 @@ public sealed class SqliteRunStore : IRunStore
                               submitting_user, status, started_at, ended_at, result,
                               worktree_path, worktree_branch, project_id, model_id,
                               agent_name, agent_charter, workflow_run_id, parent_run_id, subtask_id,
-                              origin, retried_from, archived_at)
+                              origin, retried_from, archived_at, sandbox_backend, sandbox_claim_name,
+                              sandbox_pod_name, sandbox_namespace)
             VALUES ($runId, $repo, $branch, $modelSource, $task,
                     $user, $status, $startedAt, $endedAt, $result,
                     $worktreePath, $worktreeBranch, $projectId, $modelId,
                     $agentName, $agentCharter, $workflowRunId, $parentRunId, $subtaskId,
-                    $origin, $retriedFrom, $archivedAt);
+                    $origin, $retriedFrom, $archivedAt, $sandboxBackend, $sandboxClaimName,
+                    $sandboxPodName, $sandboxNamespace);
             """;
         command.Parameters.AddWithValue("$runId", run.Id.ToString());
         command.Parameters.AddWithValue("$repo", run.RepositoryPath);
@@ -55,6 +57,10 @@ public sealed class SqliteRunStore : IRunStore
         command.Parameters.AddWithValue("$origin", run.Origin.ToApiString());
         command.Parameters.AddWithValue("$retriedFrom", (object?)run.RetriedFrom ?? DBNull.Value);
         command.Parameters.AddWithValue("$archivedAt", NullableTs(run.ArchivedAt));
+        command.Parameters.AddWithValue("$sandboxBackend", (object?)run.SandboxBackend ?? DBNull.Value);
+        command.Parameters.AddWithValue("$sandboxClaimName", (object?)run.SandboxClaimName ?? DBNull.Value);
+        command.Parameters.AddWithValue("$sandboxPodName", (object?)run.SandboxPodName ?? DBNull.Value);
+        command.Parameters.AddWithValue("$sandboxNamespace", (object?)run.SandboxNamespace ?? DBNull.Value);
         await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
     }
 
@@ -418,6 +424,34 @@ public sealed class SqliteRunStore : IRunStore
             }, ct).ConfigureAwait(false);
     }
 
+    public async Task SetSandboxInfoAsync(
+        RunId runId,
+        string? backend,
+        string? claimName,
+        string? podName,
+        string? @namespace,
+        CancellationToken ct = default)
+    {
+        var rows = await ExecuteNonQueryAsync(
+            """
+            UPDATE runs
+               SET sandbox_backend = COALESCE($backend, sandbox_backend),
+                   sandbox_claim_name = COALESCE($claimName, sandbox_claim_name),
+                   sandbox_pod_name = COALESCE($podName, sandbox_pod_name),
+                   sandbox_namespace = COALESCE($namespace, sandbox_namespace)
+             WHERE run_id = $runId;
+            """,
+            cmd =>
+            {
+                cmd.Parameters.AddWithValue("$backend", (object?)backend ?? DBNull.Value);
+                cmd.Parameters.AddWithValue("$claimName", (object?)claimName ?? DBNull.Value);
+                cmd.Parameters.AddWithValue("$podName", (object?)podName ?? DBNull.Value);
+                cmd.Parameters.AddWithValue("$namespace", (object?)@namespace ?? DBNull.Value);
+                cmd.Parameters.AddWithValue("$runId", runId.ToString());
+            }, ct).ConfigureAwait(false);
+        WarnIfNoRows(rows, runId, "set sandbox info");
+    }
+
     public async Task<bool> ArchiveAsync(RunId runId, DateTimeOffset archivedAt, CancellationToken ct = default)
     {
         await using var connection = await _db.OpenConnectionAsync(ct).ConfigureAwait(false);
@@ -579,7 +613,8 @@ public sealed class SqliteRunStore : IRunStore
     //           10=worktree_path 11=worktree_branch 12=tree_hash 13=diff 14=merge_conflicts
     //           15=project_id 16=model_id 17=agent_name 18=agent_charter 19=reviewed_by
     //           20=workflow_run_id 21=merged_commit_hash 22=parent_run_id 23=subtask_id
-    //           24=origin 25=retried_from 26=archived_at
+    //           24=origin 25=retried_from 26=archived_at 27=sandbox_backend 28=sandbox_claim_name
+    //           29=sandbox_pod_name 30=sandbox_namespace
     private const string SelectSql =
         """
         SELECT run_id, repository_path, originating_branch, model_source, task,
@@ -587,7 +622,8 @@ public sealed class SqliteRunStore : IRunStore
                worktree_path, worktree_branch, tree_hash, diff, merge_conflicts,
                project_id, model_id, agent_name, agent_charter, reviewed_by,
                workflow_run_id, merged_commit_hash, parent_run_id, subtask_id,
-               origin, retried_from, archived_at
+               origin, retried_from, archived_at, sandbox_backend, sandbox_claim_name,
+               sandbox_pod_name, sandbox_namespace
           FROM runs
         """;
 
@@ -621,6 +657,10 @@ public sealed class SqliteRunStore : IRunStore
         Origin           = RunOriginExtensions.ParseOrigin(r.IsDBNull(24) ? null : r.GetString(24)),
         RetriedFrom      = r.IsDBNull(25) ? null : r.GetString(25),
         ArchivedAt       = r.IsDBNull(26) ? null : DateTimeOffset.Parse(r.GetString(26), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
+        SandboxBackend   = r.IsDBNull(27) ? null : r.GetString(27),
+        SandboxClaimName = r.IsDBNull(28) ? null : r.GetString(28),
+        SandboxPodName   = r.IsDBNull(29) ? null : r.GetString(29),
+        SandboxNamespace = r.IsDBNull(30) ? null : r.GetString(30),
     };
 
     private static string Ts(DateTimeOffset v) => v.ToString("O", CultureInfo.InvariantCulture);

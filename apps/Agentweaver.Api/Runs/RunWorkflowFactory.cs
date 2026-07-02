@@ -12,6 +12,7 @@ using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Memory;
 using Agentweaver.Api.ReviewPolicies;
 using Agentweaver.Api.Runs.Graph;
+using Agentweaver.Api.Sandbox;
 using Agentweaver.Api.Workflows;
 using Agentweaver.Domain;
 using Agentweaver.SandboxExec;
@@ -47,6 +48,7 @@ public sealed class RunWorkflowFactory
     private readonly ICheckpointStoreFactory _checkpointStoreFactory;
     private readonly string? _apiBaseUrl;
     private readonly string? _apiKey;
+    private readonly string _kubernetesSandboxNamespace;
 
     // Per-run snapshot of executorId -> render metadata, captured when the run's workflow is built
     // (StartAsync/ResumeAsync). The watch loop uses it to translate MAF executor lifecycle events
@@ -168,6 +170,9 @@ public sealed class RunWorkflowFactory
         // so Scribe can always authenticate its self-calls regardless of which format the user uses.
         _apiKey = configuration["Auth:ApiKey"]
             ?? configuration.GetSection("Auth:Keys").GetChildren().FirstOrDefault()?["Token"];
+        _kubernetesSandboxNamespace =
+            configuration["Sandbox:Kubernetes:Namespace"]
+            ?? new KubernetesSandboxOptions().Namespace;
 
         // Production (Postgres) uses a shared, concurrency-safe checkpoint store so both replicas read
         // and write the same checkpoints; local/dev (sqlite) falls back to the per-pod file store.
@@ -249,7 +254,9 @@ public sealed class RunWorkflowFactory
     public ChannelWriter<RunEvent>? GetRecordingWriter(string runId)
     {
         var entry = _streamStore.Get(runId);
-        return entry is not null ? new RecordingChannelWriter(entry, runId, _eventStream) : null;
+        return entry is not null
+            ? new RecordingChannelWriter(entry, runId, _eventStream, _runStore, _kubernetesSandboxNamespace)
+            : null;
     }
 
     /// <summary>
@@ -266,7 +273,7 @@ public sealed class RunWorkflowFactory
         var parentEntry = _streamStore.Get(parentRunId);
         var owner = parentEntry?.Owner ?? "system";
         var entry = _streamStore.Create(subRunId, owner);
-        return new RecordingChannelWriter(entry, subRunId, _eventStream);
+        return new RecordingChannelWriter(entry, subRunId, _eventStream, _runStore, _kubernetesSandboxNamespace);
     }
 
     public void CompleteSubStream(string subRunId)
@@ -1469,25 +1476,35 @@ internal sealed class RecordingChannelWriter : ChannelWriter<RunEvent>
     private readonly RunStreamEntry _entry;
     private readonly string? _runId;
     private readonly IRunEventStream? _eventStream;
+    private readonly IRunStore? _runStore;
+    private readonly string? _kubernetesSandboxNamespace;
 
     public RecordingChannelWriter(RunStreamEntry entry)
-        : this(entry, null, null)
+        : this(entry, null, null, null, null)
     {
     }
 
-    public RecordingChannelWriter(RunStreamEntry entry, string? runId, IRunEventStream? eventStream)
+    public RecordingChannelWriter(
+        RunStreamEntry entry,
+        string? runId,
+        IRunEventStream? eventStream,
+        IRunStore? runStore,
+        string? kubernetesSandboxNamespace)
     {
         _entry = entry;
         _runId = runId;
         _eventStream = eventStream;
+        _runStore = runStore;
+        _kubernetesSandboxNamespace = kubernetesSandboxNamespace;
     }
 
     public override bool TryWrite(RunEvent item)
     {
-        var sequence = _entry.RecordNext(item.Type, item.Payload);
+        _entry.RecordNext(item.Type, item.Payload);
 
         // RunStreamEntry mirrors each append to IRunEventStream. Keep these fields for constructor
         // compatibility; terminal PersistRunEventsAsync remains the idempotent backfill safety net.
+        PersistSandboxInfoIfNeeded(item);
 
         return true;
     }
@@ -1496,4 +1513,34 @@ internal sealed class RecordingChannelWriter : ChannelWriter<RunEvent>
         ValueTask.FromResult(true);
 
     public override bool TryComplete(Exception? error = null) => true;
+
+    private void PersistSandboxInfoIfNeeded(RunEvent item)
+    {
+        if (!string.Equals(item.Type, "sandbox.selected", StringComparison.Ordinal)
+            || _runStore is null
+            || string.IsNullOrWhiteSpace(_runId)
+            || !RunId.TryParse(_runId, out var runId))
+        {
+            return;
+        }
+
+        var info = SandboxSelectionInfo.FromPayload(item.Payload);
+        if (string.IsNullOrWhiteSpace(info?.Backend))
+            return;
+
+        var claimName = info.ClaimName;
+        var @namespace = info.Namespace;
+        if (string.Equals(info.Backend, "kubernetes-sandbox-claim", StringComparison.Ordinal))
+        {
+            claimName ??= SandboxClaimConventions.DeriveAgentHostClaimName(_runId);
+            @namespace ??= _kubernetesSandboxNamespace;
+        }
+
+        _runStore.SetSandboxInfoAsync(
+            runId,
+            info.Backend,
+            claimName,
+            info.PodName,
+            @namespace).GetAwaiter().GetResult();
+    }
 }

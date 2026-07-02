@@ -224,7 +224,8 @@ public sealed class SqliteToPostgresMigrator
                   worktree_path, worktree_branch, tree_hash, diff,
                   merge_conflicts, project_id, model_id, agent_name, agent_charter,
                   reviewed_by, workflow_run_id, merged_commit_hash, parent_run_id, subtask_id,
-                  COALESCE(origin,'interactive'), retried_from, review_ready_at, archived_at
+                  COALESCE(origin,'interactive'), retried_from, review_ready_at, archived_at,
+                  sandbox_backend, sandbox_claim_name, sandbox_pod_name, sandbox_namespace
               FROM runs;
             """;
         await using var reader = await cmd.ExecuteReaderAsync(ct);
@@ -260,6 +261,10 @@ public sealed class SqliteToPostgresMigrator
                 RetriedFrom = reader.IsDBNull(25) ? null : reader.GetString(25),
                 ReviewReadyAt = reader.IsDBNull(26) ? null : ParseTs(reader.GetString(26)),
                 ArchivedAt = reader.IsDBNull(27) ? null : ParseTs(reader.GetString(27)),
+                SandboxBackend = reader.IsDBNull(28) ? null : reader.GetString(28),
+                SandboxClaimName = reader.IsDBNull(29) ? null : reader.GetString(29),
+                SandboxPodName = reader.IsDBNull(30) ? null : reader.GetString(30),
+                SandboxNamespace = reader.IsDBNull(31) ? null : reader.GetString(31),
             });
         }
         return results;

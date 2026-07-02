@@ -61,4 +61,8 @@ public sealed record Run
 
     /// <summary>When set, the run is archived off project board/list projections.</summary>
     public DateTimeOffset? ArchivedAt { get; init; }
+    public string? SandboxBackend { get; init; }
+    public string? SandboxClaimName { get; init; }
+    public string? SandboxPodName { get; init; }
+    public string? SandboxNamespace { get; init; }
 }

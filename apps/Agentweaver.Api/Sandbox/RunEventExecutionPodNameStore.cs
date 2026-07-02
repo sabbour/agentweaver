@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Memory;
+using Agentweaver.Domain;
 using Microsoft.EntityFrameworkCore;
 
 namespace Agentweaver.Api.Sandbox;
@@ -40,6 +41,13 @@ public sealed class RunEventExecutionPodNameStore : IExecutionPodNameStore
                 podName,
                 timestamp_utc = DateTimeOffset.UtcNow.ToString("O"),
             })).AsTask().GetAwaiter().GetResult();
+
+            if (RunId.TryParse(runId, out var parsedRunId))
+            {
+                using var scope = _scopeFactory.CreateScope();
+                var runStore = scope.ServiceProvider.GetRequiredService<IRunStore>();
+                runStore.SetSandboxInfoAsync(parsedRunId, null, null, podName, null).GetAwaiter().GetResult();
+            }
         }
         catch (Exception ex)
         {

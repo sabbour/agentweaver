@@ -260,6 +260,15 @@ public sealed record SandboxStatusDto
     /// </summary>
     [JsonPropertyName("phase")]
     public string? Phase { get; init; }
+
+    [JsonPropertyName("claim_name")]
+    public string? ClaimName { get; init; }
+
+    [JsonPropertyName("pod_name")]
+    public string? PodName { get; init; }
+
+    [JsonPropertyName("namespace")]
+    public string? Namespace { get; init; }
 }
 
 public sealed record SandboxPolicyDto

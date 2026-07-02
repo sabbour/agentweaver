@@ -86,6 +86,10 @@ public sealed class SqliteDb
         // Retry provenance (POST /api/runs/{id}/retry): the run_id of the failed run a fresh run was
         // retriggered from. Existing rows default to NULL (not produced by a retry).
         await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN retried_from TEXT;", ct);
+        await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN sandbox_backend TEXT;", ct);
+        await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN sandbox_claim_name TEXT;", ct);
+        await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN sandbox_pod_name TEXT;", ct);
+        await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN sandbox_namespace TEXT;", ct);
 
         // Per-project backlog pickup configuration (Feature 009, FR-008a + unattended seeding).
         await TryAlterAsync(connection, "ALTER TABLE projects ADD COLUMN max_ready_per_heartbeat INTEGER NOT NULL DEFAULT 3;", ct);
@@ -220,7 +224,11 @@ public sealed class SqliteDb
                 subtask_id         TEXT,
                 origin             TEXT NOT NULL DEFAULT 'interactive',
                 retried_from       TEXT,
-                archived_at        TEXT
+                archived_at        TEXT,
+                sandbox_backend    TEXT,
+                sandbox_claim_name TEXT,
+                sandbox_pod_name   TEXT,
+                sandbox_namespace  TEXT
             );
 
             INSERT INTO runs__new (
@@ -229,7 +237,8 @@ public sealed class SqliteDb
                 worktree_path, worktree_branch, tree_hash, diff, review_ready_at,
                 merge_conflicts, project_id, model_id, agent_name, agent_charter,
                 reviewed_by, workflow_run_id, merged_commit_hash, parent_run_id, subtask_id,
-                origin, retried_from, archived_at
+                origin, retried_from, archived_at, sandbox_backend, sandbox_claim_name,
+                sandbox_pod_name, sandbox_namespace
             )
             SELECT
                 run_id, repository_path, originating_branch, model_source, task,
@@ -237,7 +246,8 @@ public sealed class SqliteDb
                 worktree_path, worktree_branch, tree_hash, diff, review_ready_at,
                 merge_conflicts, project_id, model_id, agent_name, agent_charter,
                 reviewed_by, workflow_run_id, merged_commit_hash, parent_run_id, subtask_id,
-                COALESCE(origin, 'interactive'), retried_from, archived_at
+                COALESCE(origin, 'interactive'), retried_from, archived_at,
+                sandbox_backend, sandbox_claim_name, sandbox_pod_name, sandbox_namespace
             FROM runs;
 
             DROP TABLE runs;
@@ -283,7 +293,11 @@ public sealed class SqliteDb
             tree_hash          TEXT,
             diff               TEXT,
             review_ready_at    TEXT,
-            archived_at        TEXT
+            archived_at        TEXT,
+            sandbox_backend    TEXT,
+            sandbox_claim_name TEXT,
+            sandbox_pod_name   TEXT,
+            sandbox_namespace  TEXT
         );
 
         CREATE TABLE IF NOT EXISTS run_revisions (

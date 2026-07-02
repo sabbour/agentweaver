@@ -172,7 +172,11 @@ public sealed class DataMigratorTests : IDisposable
                 retried_from TEXT,
                 review_ready_at TEXT,
                 review_wait_ms INTEGER NOT NULL DEFAULT 0,
-                archived_at TEXT
+                archived_at TEXT,
+                sandbox_backend TEXT,
+                sandbox_claim_name TEXT,
+                sandbox_pod_name TEXT,
+                sandbox_namespace TEXT
             );
 
             CREATE TABLE IF NOT EXISTS run_revisions (
