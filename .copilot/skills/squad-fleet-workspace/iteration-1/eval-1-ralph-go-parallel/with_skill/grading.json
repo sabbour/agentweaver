@@ -1,0 +1,39 @@
+{
+  "assertions": [
+    {
+      "passed": false,
+      "text": "priority-sort-present: bugs before chores in queue",
+      "evidence": "Queue shows bugs AFTER chores (#98 first is bug, but #100 chore listed before #95/#99 bugs — skill treated p2 uniformly)"
+    },
+    {
+      "passed": true,
+      "text": "conflict-analysis-present: explicit file overlap check before batching",
+      "evidence": "WorkflowRunPage.tsx conflict between #95 and #99 explicitly detected and serialized"
+    },
+    {
+      "passed": true,
+      "text": "worktree-paths-correct: agentweaver-issue-{N} format",
+      "evidence": "Full worktree paths with agentweaver-issue-{N} in output file"
+    },
+    {
+      "passed": true,
+      "text": "branch-names-correct: squad/issue-{N}-{slug} format",
+      "evidence": "Correct branch format mentioned for all 5 issues"
+    },
+    {
+      "passed": true,
+      "text": "parallel-batch-shown: work grouped into parallel batches",
+      "evidence": "Batch 1 parallel (#98/#100/#101), Batch 2a/2b sequential"
+    },
+    {
+      "passed": true,
+      "text": "go-yes-label-filter: only go:yes issues picked up",
+      "evidence": "Queue built from go:yes issues"
+    },
+    {
+      "passed": true,
+      "text": "spawn-prompts-structure-present: agent spawn prompts included",
+      "evidence": "5 spawn prompts in output file"
+    }
+  ]
+}

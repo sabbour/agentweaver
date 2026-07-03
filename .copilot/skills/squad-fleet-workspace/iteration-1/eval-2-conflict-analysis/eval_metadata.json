@@ -1,0 +1,6 @@
+{
+  "assertions": [],
+  "eval_name": "conflict-analysis",
+  "eval_id": 2,
+  "prompt": "Squad, I need you to pick up issues #98 and #100 in parallel. #98 is a bug for Trinity and Tank, #100 is a chore for Trinity. Can those run at the same time?"
+}

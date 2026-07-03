@@ -1,0 +1,23 @@
+{
+  "skill_name": "squad-fleet",
+  "evals": [
+    {
+      "id": 0,
+      "prompt": "Squad, continue chipping at the GitHub issues. I want you to work on fixing the bugs first. Keep me updated with the status.",
+      "expected_output": "Agent produces: (1) a status board showing open issues, (2) a fleet plan grouping issues into parallel batches by conflict safety, (3) worktree creation commands for each issue in batch 1, (4) parallel agent spawn prompts for each issue with correct worktree paths/branches/commit format, (5) after completion: updated status board.",
+      "files": []
+    },
+    {
+      "id": 1,
+      "prompt": "Ralph, go. Work on the open issues in sabbour/agentweaver. Bugs first, then chores. Work in parallel where you can.",
+      "expected_output": "Agent produces: (1) fetches issues with go:yes label sorted by priority, (2) performs conflict analysis and groups into parallel batches, (3) creates worktrees at correct sibling paths (agentweaver-issue-N), (4) spawns agents in one turn with WORKTREE_PATH/TEAM_ROOT/BRANCH in each prompt, (5) commit format type(scope): desc (#N), (6) PRs created with correct format.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "Squad, I need you to pick up issues #98 and #100 in parallel. #98 is a bug for Trinity and Tank, #100 is a chore for Trinity. Can those run at the same time?",
+      "expected_output": "Agent performs conflict analysis: both #98 and #100 involve trinity (frontend), checks if they touch the same files (CoordinatorRunPage vs CoordinatorTopologyGraph — different files), concludes they CAN run in parallel, creates two worktrees, spawns two agents simultaneously.",
+      "files": []
+    }
+  ]
+}

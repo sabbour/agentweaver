@@ -1,0 +1,44 @@
+{
+  "assertions": [
+    {
+      "text": "priority-sort-present: bugs before chores in queue",
+      "passed": true,
+      "evidence": "Bugs #95/#98/#99 in Batch 1, chores #100/#101 in Batch 3"
+    },
+    {
+      "text": "conflict-analysis-present: explicit file overlap check before batching",
+      "passed": true,
+      "evidence": "#95 and #99 WorkflowRunPage.tsx conflict detected, serialized"
+    },
+    {
+      "text": "worktree-paths-correct: agentweaver-issue-{N} format",
+      "passed": true,
+      "evidence": "agentweaver-issue-95/98/100/101 all correct"
+    },
+    {
+      "text": "branch-names-correct: squad/issue-{N}-{slug} format",
+      "passed": true,
+      "evidence": "squad/issue-95-confirm-button-disable-on-click etc."
+    },
+    {
+      "text": "parallel-batch-shown: work grouped into parallel batches",
+      "passed": true,
+      "evidence": "Batch 1 parallel, Batch 2 stacked, Batch 3 chores"
+    },
+    {
+      "text": "go-yes-label-filter: only go:yes issues picked up",
+      "passed": true,
+      "evidence": "5 go:yes issues queued"
+    },
+    {
+      "text": "spawn-prompts-structure-present: agent spawn prompts included",
+      "passed": true,
+      "evidence": "Full spawn prompts for all 4 Batch 1 agents"
+    },
+    {
+      "text": "commit-pr-format-correct: type(scope): desc (#N) format",
+      "passed": true,
+      "evidence": "Commit format shown for all issues"
+    }
+  ]
+}

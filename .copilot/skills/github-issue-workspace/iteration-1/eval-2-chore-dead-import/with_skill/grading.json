@@ -1,0 +1,42 @@
+{
+  "passed": 7,
+  "total": 7,
+  "expectations": [
+    {
+      "evidence": "type:chore present",
+      "passed": true,
+      "text": "correct-type-label"
+    },
+    {
+      "evidence": "squad:trinity present",
+      "passed": true,
+      "text": "squad-label-present"
+    },
+    {
+      "evidence": "go:yes present",
+      "passed": true,
+      "text": "go-label-present"
+    },
+    {
+      "evidence": "Chore: ClusterPage dead import...",
+      "passed": true,
+      "text": "title-format-correct"
+    },
+    {
+      "evidence": "Trinity picks up directly per skill rule",
+      "passed": true,
+      "text": "dispatch-block-present"
+    },
+    {
+      "evidence": "squad:trinity present",
+      "passed": true,
+      "text": "trinity-assigned-frontend-chore"
+    },
+    {
+      "evidence": "Done when section with checkbox",
+      "passed": true,
+      "text": "done-when-section"
+    }
+  ],
+  "pass_rate": 100.0
+}

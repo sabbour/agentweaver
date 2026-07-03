@@ -1,0 +1,39 @@
+{
+  "assertions": [
+    {
+      "passed": true,
+      "text": "priority-sort-present: bugs before chores in queue",
+      "evidence": "Bugs listed before chores in batch plan"
+    },
+    {
+      "passed": false,
+      "text": "conflict-analysis-present: explicit file overlap check before batching",
+      "evidence": "No file overlap analysis — batching done by intuition only"
+    },
+    {
+      "passed": false,
+      "text": "worktree-paths-correct: agentweaver-issue-{N} format",
+      "evidence": "No worktree paths mentioned at all"
+    },
+    {
+      "passed": false,
+      "text": "branch-names-correct: squad/issue-{N}-{slug} format",
+      "evidence": "Branch names not mentioned"
+    },
+    {
+      "passed": true,
+      "text": "parallel-batch-shown: work grouped into parallel batches",
+      "evidence": "Batch A/Batch B described with parallel grouping"
+    },
+    {
+      "passed": false,
+      "text": "go-yes-label-filter: only go:yes issues picked up",
+      "evidence": "No label filtering"
+    },
+    {
+      "passed": false,
+      "text": "spawn-prompts-structure-present: agent spawn prompts included",
+      "evidence": "No spawn prompts"
+    }
+  ]
+}

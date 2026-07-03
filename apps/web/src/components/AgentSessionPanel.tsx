@@ -29,10 +29,10 @@ import { useRunStream, type EventType, type RunStreamEvent } from '../api/sse';
 import { AgentAvatar } from './AgentAvatar';
 import { DiffViewer } from './DiffViewer';
 import { FileViewerModal } from './FileViewerModal';
-import { formatModelLabel } from '../utils/agentIdentity';
 import { deriveHumanTitle } from '../timeline/reducer';
 
 const PANEL_TOP = '48px';
+const PANEL_HEIGHT = '60vh';
 const SEED_STATUSES: ReadonlySet<string> = new Set([
   'completed', 'failed', 'merged', 'declined', 'merge_failed',
   'parked', 'assemble_ready', 'assembled', 'cancelled', 'stopped',
@@ -42,39 +42,61 @@ const useStyles = makeStyles({
   backdrop: {
     position: 'fixed',
     top: PANEL_TOP,
-    left: 0,
-    right: '420px',
+    right: 0,
     bottom: 0,
-    backgroundColor: 'rgba(15, 23, 42, 0.08)',
+    left: 0,
+    backgroundColor: 'rgba(0, 0, 0, 0.12)',
+    opacity: 0,
     pointerEvents: 'none',
-    zIndex: 900,
+    transitionProperty: 'opacity',
+    transitionDuration: '220ms',
+    transitionTimingFunction: 'ease-out',
+    zIndex: 1098,
+  },
+  backdropOpen: {
+    opacity: 1,
+    pointerEvents: 'auto',
   },
   panel: {
     position: 'fixed',
-    top: PANEL_TOP,
+    left: 0,
     right: 0,
     bottom: 0,
-    width: '420px',
-    maxWidth: '92vw',
+    height: PANEL_HEIGHT,
+    maxHeight: `calc(100vh - ${PANEL_TOP})`,
     display: 'flex',
     flexDirection: 'column',
     backgroundColor: tokens.colorNeutralBackground1,
-    borderLeft: `1px solid ${tokens.colorNeutralStroke2}`,
-    boxShadow: tokens.shadow28,
-    transform: 'translateX(100%)',
+    borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
+    boxShadow: tokens.shadow64,
+    transform: 'translateY(100%)',
     transitionProperty: 'transform',
-    transitionDuration: tokens.durationNormal,
-    transitionTimingFunction: tokens.curveEasyEase,
-    zIndex: 901,
+    transitionDuration: '220ms',
+    transitionTimingFunction: 'ease-out',
+    pointerEvents: 'none',
+    zIndex: 1099,
   },
   panelOpen: {
-    transform: 'translateX(0)',
+    transform: 'translateY(0)',
+    pointerEvents: 'auto',
   },
-  panelInner: {
+  dragHandleWrap: {
+    display: 'flex',
+    justifyContent: 'center',
+    paddingTop: tokens.spacingVerticalXS,
+    paddingBottom: tokens.spacingVerticalXXS,
+  },
+  dragHandle: {
+    width: '64px',
+    height: '4px',
+    borderRadius: '999px',
+    backgroundColor: tokens.colorNeutralStroke3,
+  },
+  shell: {
     flex: 1,
     minHeight: 0,
     display: 'grid',
-    gridTemplateColumns: '180px minmax(0, 1fr)',
+    gridTemplateColumns: '260px minmax(0, 1fr)',
   },
   sidebar: {
     display: 'flex',
@@ -88,95 +110,60 @@ const useStyles = makeStyles({
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: tokens.spacingHorizontalS,
-    padding: tokens.spacingHorizontalM,
+    padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM}`,
     borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
   },
   sidebarTitle: {
-    fontSize: tokens.fontSizeBase200,
+    fontSize: tokens.fontSizeBase300,
     fontWeight: tokens.fontWeightSemibold,
   },
-  sidebarScroll: {
+  treeScroll: {
     flex: 1,
     minHeight: 0,
     overflowY: 'auto',
     padding: tokens.spacingHorizontalXS,
     display: 'flex',
     flexDirection: 'column',
-    gap: tokens.spacingVerticalXXS,
-  },
-  group: {
-    borderRadius: tokens.borderRadiusMedium,
-    overflow: 'hidden',
-    border: `1px solid ${tokens.colorNeutralStroke1}`,
-    backgroundColor: tokens.colorNeutralBackground1,
-  },
-  groupButton: {
-    width: '100%',
-    display: 'flex',
-    alignItems: 'center',
-    gap: tokens.spacingHorizontalXS,
-    padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalS}`,
-    backgroundColor: tokens.colorNeutralBackground1,
-    border: 'none',
-    textAlign: 'left',
-    cursor: 'pointer',
-  },
-  groupLabel: {
-    flex: 1,
-    minWidth: 0,
-    fontSize: tokens.fontSizeBase200,
-    fontWeight: tokens.fontWeightSemibold,
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
-    whiteSpace: 'nowrap',
-  },
-  groupItems: {
-    display: 'flex',
-    flexDirection: 'column',
-    padding: tokens.spacingHorizontalXXS,
     gap: '2px',
   },
-  itemButton: {
+  treeItem: {
     width: '100%',
-    display: 'grid',
-    gridTemplateColumns: '10px minmax(0, 1fr) auto',
-    alignItems: 'center',
-    gap: tokens.spacingHorizontalXS,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '2px',
     padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalS}`,
-    borderRadius: tokens.borderRadiusSmall,
+    borderRadius: tokens.borderRadiusMedium,
     border: 'none',
     backgroundColor: 'transparent',
+    color: tokens.colorNeutralForeground1,
     textAlign: 'left',
     cursor: 'pointer',
     ':hover': {
       backgroundColor: tokens.colorNeutralBackground1Hover,
     },
   },
-  itemSelected: {
+  treeItemSelected: {
     backgroundColor: tokens.colorBrandBackground2,
   },
-  itemTitle: {
-    minWidth: 0,
+  treeLinePrimary: {
+    fontFamily: tokens.fontFamilyMonospace,
+    fontSize: tokens.fontSizeBase200,
+    fontWeight: tokens.fontWeightRegular,
+    whiteSpace: 'pre',
     overflow: 'hidden',
     textOverflow: 'ellipsis',
-    whiteSpace: 'nowrap',
-    fontSize: tokens.fontSizeBase200,
   },
-  itemTime: {
+  treeLinePrimarySelected: {
+    fontWeight: tokens.fontWeightSemibold,
+  },
+  treeLineSecondary: {
+    fontFamily: tokens.fontFamilyMonospace,
     fontSize: tokens.fontSizeBase100,
     color: tokens.colorNeutralForeground3,
+    whiteSpace: 'pre',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
   },
-  statusDot: {
-    width: '8px',
-    height: '8px',
-    borderRadius: '999px',
-    display: 'inline-block',
-  },
-  dotPending: { backgroundColor: tokens.colorNeutralForeground4 },
-  dotRunning: { backgroundColor: tokens.colorBrandForeground1 },
-  dotCompleted: { backgroundColor: tokens.colorPaletteGreenForeground1 },
-  dotFailed: { backgroundColor: tokens.colorPaletteRedForeground1 },
-  dotWarning: { backgroundColor: tokens.colorPaletteMarigoldForeground1 },
   main: {
     minWidth: 0,
     minHeight: 0,
@@ -187,8 +174,8 @@ const useStyles = makeStyles({
     display: 'flex',
     alignItems: 'flex-start',
     justifyContent: 'space-between',
-    gap: tokens.spacingHorizontalS,
-    padding: tokens.spacingHorizontalM,
+    gap: tokens.spacingHorizontalM,
+    padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalL}`,
     borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
   },
   mainHeaderInfo: {
@@ -238,7 +225,7 @@ const useStyles = makeStyles({
     flexShrink: 0,
   },
   tabList: {
-    paddingLeft: tokens.spacingHorizontalS,
+    paddingLeft: tokens.spacingHorizontalM,
     borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
   },
   content: {
@@ -252,7 +239,7 @@ const useStyles = makeStyles({
     display: 'flex',
     flexDirection: 'column',
     gap: tokens.spacingVerticalM,
-    padding: tokens.spacingHorizontalM,
+    padding: tokens.spacingHorizontalL,
   },
   emptyState: {
     padding: tokens.spacingVerticalXL,
@@ -352,12 +339,15 @@ const useStyles = makeStyles({
     bottom: 0,
     display: 'flex',
     gap: tokens.spacingHorizontalS,
-    padding: tokens.spacingHorizontalM,
+    padding: tokens.spacingHorizontalL,
     borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground1,
   },
   composerInput: {
     flex: 1,
+  },
+  composerError: {
+    padding: `0 ${tokens.spacingHorizontalL} ${tokens.spacingVerticalS}`,
   },
   summaryRow: {
     display: 'flex',
@@ -442,36 +432,25 @@ const useStyles = makeStyles({
   },
 });
 
-export interface AgentSessionPanelItem {
+export interface RunSessionTree {
   nodeId: string;
-  runId: string;
-  title: string;
+  label: string;
   agentName?: string;
   agentRole?: string;
-  model?: string;
   status: string;
-  startedAt?: number;
-  completedAt?: number;
-  columnIndex: number;
-  columnLabel: string;
-  isCoordinator?: boolean;
+  childRunId?: string;
+  children: RunSessionTree[];
+  depth: number;
 }
 
-export interface AgentSessionPanelColumn {
-  index: number;
-  label: string;
-  items: AgentSessionPanelItem[];
-}
-
-interface AgentSessionPanelProps {
-  nodeId: string | null;
-  coordinatorRunId: string;
-  projectId?: string;
-  columns: AgentSessionPanelColumn[];
-  tabIndex: 0 | 1 | 2;
+export interface AgentSessionPanelProps {
+  open: boolean;
   onClose: () => void;
+  tree: RunSessionTree[];
+  selectedNodeId: string | null;
   onSelectNode: (nodeId: string) => void;
-  onTabChange: (index: 0 | 1 | 2) => void;
+  coordinatorRunId: string;
+  projectId: string;
   onCoordinatorFollowUp?: () => void;
   coordinatorActive?: boolean;
 }
@@ -495,6 +474,12 @@ interface ConversationTurn {
   rows: ConversationRow[];
   toolCalls: ConversationTool[];
   filePaths: string[];
+}
+
+interface FlatTreeNode extends RunSessionTree {
+  prefix: string;
+  detailPrefix: string;
+  isCoordinator: boolean;
 }
 
 function mergeRunEvents(seed: RunStreamEvent[], live: RunStreamEvent[]): RunStreamEvent[] {
@@ -540,11 +525,6 @@ function formatDurationMs(ms: number): string {
   return `${hrs}h ${m}m`;
 }
 
-function formatElapsed(startedAt?: number, completedAt?: number): string {
-  if (!startedAt) return '\u2014';
-  return formatDurationMs(Math.max(0, (completedAt ?? Date.now()) - startedAt));
-}
-
 function formatStartedMeta(startedAt?: string | null): string {
   if (!startedAt) return 'Started just now';
   const elapsed = Math.max(0, Date.now() - new Date(startedAt).getTime());
@@ -561,7 +541,7 @@ function formatTimestamp(ms?: number): string {
 
 function statusLabel(status: string): string {
   switch (status) {
-    case 'dispatched': return 'Dispatched';
+    case 'dispatched': return 'Dispatching';
     case 'running':
     case 'in_progress': return 'Running';
     case 'assemble_ready': return 'Awaiting assembly';
@@ -571,7 +551,32 @@ function statusLabel(status: string): string {
     case 'failed':
     case 'merge_failed': return 'Failed';
     case 'declined': return 'Declined';
+    case 'planned': return 'Planned';
     default: return status ? status.replace(/_/g, ' ') : 'Pending';
+  }
+}
+
+function statusIcon(status: string): string {
+  switch (status) {
+    case 'completed':
+    case 'merged':
+      return '✅';
+    case 'running':
+    case 'dispatched':
+    case 'dispatching':
+    case 'in_progress':
+      return '🔄';
+    case 'waiting':
+    case 'pending':
+    case 'assemble_ready':
+      return '⏳';
+    case 'failed':
+    case 'merge_failed':
+    case 'declined':
+    case 'rai_flagged':
+      return '❌';
+    default:
+      return '⚪';
   }
 }
 
@@ -667,29 +672,51 @@ function buildTurns(events: RunStreamEvent[]): ConversationTurn[] {
   return turns.filter((turn) => turn.rows.length > 0 || turn.toolCalls.length > 0);
 }
 
-function statusDotClass(status: string, styles: ReturnType<typeof useStyles>): string {
-  if (status === 'failed' || status === 'merge_failed' || status === 'declined') return styles.dotFailed;
-  if (status === 'completed' || status === 'merged') return styles.dotCompleted;
-  if (status === 'running' || status === 'dispatched' || status === 'in_progress') return styles.dotRunning;
-  if (status === 'assemble_ready' || status === 'rai_flagged') return styles.dotWarning;
-  return styles.dotPending;
+function flattenTree(
+  nodes: RunSessionTree[],
+  coordinatorNodeId: string | null,
+  ancestorsHasNext: boolean[] = [],
+): FlatTreeNode[] {
+  return nodes.flatMap((node, index) => {
+    const isLast = index === nodes.length - 1;
+    const prefix = ancestorsHasNext.length === 0
+      ? ''
+      : `${ancestorsHasNext.map((hasNext) => hasNext ? '│  ' : '   ').join('')}${isLast ? '└─ ' : '├─ '}`;
+    const detailPrefix = ancestorsHasNext.length === 0
+      ? ''
+      : `${ancestorsHasNext.map((hasNext) => hasNext ? '│  ' : '   ').join('')}${isLast ? '   ' : '│  '}`;
+    const current: FlatTreeNode = {
+      ...node,
+      prefix,
+      detailPrefix,
+      isCoordinator: node.nodeId === coordinatorNodeId,
+    };
+    return [current, ...flattenTree(node.children, coordinatorNodeId, [...ancestorsHasNext, !isLast])];
+  });
+}
+
+function badgeColor(status: string): 'danger' | 'success' | 'informative' | 'subtle' {
+  if (status === 'failed' || status === 'merge_failed' || status === 'declined' || status === 'rai_flagged') return 'danger';
+  if (status === 'completed' || status === 'merged') return 'success';
+  if (status === 'running' || status === 'dispatched' || status === 'dispatching' || status === 'in_progress') return 'informative';
+  return 'subtle';
 }
 
 export function AgentSessionPanel({
-  nodeId,
+  open,
+  onClose,
+  tree,
+  selectedNodeId,
+  onSelectNode,
   coordinatorRunId,
   projectId,
-  columns,
-  tabIndex,
-  onClose,
-  onSelectNode,
-  onTabChange,
   onCoordinatorFollowUp,
   coordinatorActive = false,
 }: AgentSessionPanelProps) {
   const styles = useStyles();
   const navigate = useNavigate();
-  const [collapsedColumns, setCollapsedColumns] = useState<Set<number>>(new Set());
+  const [isVisible, setIsVisible] = useState(open);
+  const [activeTab, setActiveTab] = useState<'messages' | 'changes' | 'files'>('messages');
   const [seedEvents, setSeedEvents] = useState<RunStreamEvent[]>([]);
   const [runDetailLoading, setRunDetailLoading] = useState(false);
   const [runDetailError, setRunDetailError] = useState<string | null>(null);
@@ -706,21 +733,42 @@ export function AgentSessionPanel({
   const [followUpBusy, setFollowUpBusy] = useState(false);
   const [followUpError, setFollowUpError] = useState<string | null>(null);
 
-  const items = useMemo(() => columns.flatMap((column) => column.items), [columns]);
+  const coordinatorNodeId = tree[0]?.nodeId ?? null;
+  const flatTree = useMemo(
+    () => flattenTree(tree, coordinatorNodeId),
+    [tree, coordinatorNodeId],
+  );
   const selectedItem = useMemo(
-    () => items.find((item) => item.nodeId === nodeId) ?? null,
-    [items, nodeId],
+    () => flatTree.find((item) => item.nodeId === selectedNodeId) ?? flatTree[0] ?? null,
+    [flatTree, selectedNodeId],
   );
-  const selectedRunId = selectedItem?.runId ?? '';
-  const { events: liveEvents } = useRunStream(selectedRunId);
-  const events = useMemo(
-    () => mergeRunEvents(seedEvents, liveEvents),
-    [seedEvents, liveEvents],
-  );
+  const selectedRunId = selectedItem
+    ? (selectedItem.isCoordinator ? coordinatorRunId : (selectedItem.childRunId ?? ''))
+    : '';
+  const { events: liveEvents } = useRunStream(open && selectedRunId ? selectedRunId : '');
+  const events = useMemo(() => mergeRunEvents(seedEvents, liveEvents), [seedEvents, liveEvents]);
   const turns = useMemo(() => buildTurns(events), [events]);
-  const selectedValue = tabIndex === 0 ? 'messages' : tabIndex === 1 ? 'changes' : 'files';
 
   useEffect(() => {
+    if (open) {
+      setIsVisible(true);
+      return undefined;
+    }
+    const timeoutId = window.setTimeout(() => setIsVisible(false), 220);
+    return () => window.clearTimeout(timeoutId);
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const onKeyDown = (evt: KeyboardEvent) => {
+      if (evt.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [open, onClose]);
+
+  useEffect(() => {
+    setActiveTab('messages');
     setSeedEvents([]);
     setFiles([]);
     setFilesError(null);
@@ -728,10 +776,11 @@ export function AgentSessionPanel({
     setDiffs({});
     setLoadingDiffs(new Set());
     setPreviewPath(null);
+    setFollowUpError(null);
   }, [selectedRunId]);
 
   useEffect(() => {
-    if (!selectedRunId) {
+    if (!open || !selectedRunId) {
       setRunDetail(null);
       setRunDetailError(null);
       return;
@@ -769,11 +818,10 @@ export function AgentSessionPanel({
     return () => {
       cancelled = true;
     };
-  }, [selectedRunId]);
+  }, [open, selectedRunId]);
 
   useEffect(() => {
-    if (!selectedRunId) return;
-    if (tabIndex === 0) return;
+    if (!open || !selectedRunId || activeTab === 'messages') return undefined;
     let cancelled = false;
     setFilesLoading(true);
     setFilesError(null);
@@ -790,15 +838,7 @@ export function AgentSessionPanel({
     return () => {
       cancelled = true;
     };
-  }, [selectedRunId, tabIndex]);
-
-  const toggleAll = useCallback(() => {
-    setCollapsedColumns((prev) => (
-      prev.size === columns.length
-        ? new Set()
-        : new Set(columns.map((column) => column.index))
-    ));
-  }, [columns]);
+  }, [activeTab, open, selectedRunId]);
 
   const loadDiff = useCallback(async (path: string) => {
     if (!selectedRunId || diffs[path] !== undefined || loadingDiffs.has(path)) return;
@@ -827,12 +867,16 @@ export function AgentSessionPanel({
     void loadDiff(path);
   }, [loadDiff]);
 
-  const openPreview = useCallback((path: string) => {
+  const openPreview = useCallback(async (path: string) => {
     setPreviewPath(path);
+    if (diffs[path] !== undefined || loadingDiffs.has(path)) return;
     setPreviewLoading(true);
-    void loadDiff(path);
-    setTimeout(() => setPreviewLoading(false), 0);
-  }, [loadDiff]);
+    try {
+      await loadDiff(path);
+    } finally {
+      setPreviewLoading(false);
+    }
+  }, [diffs, loadDiff, loadingDiffs]);
 
   const handleSendFollowUp = useCallback(async () => {
     const instruction = followUp.trim();
@@ -852,69 +896,56 @@ export function AgentSessionPanel({
 
   const totalAdded = files.reduce((sum, file) => sum + file.added_lines, 0);
   const totalRemoved = files.reduce((sum, file) => sum + file.removed_lines, 0);
-  const statusChip = selectedItem ? statusLabel(selectedItem.status) : 'Pending';
-  const dotClass = statusDotClass(selectedItem?.status ?? 'pending', styles);
   const runLink = selectedItem?.isCoordinator
-    ? `/projects/${projectId ?? ''}/orchestrations/${selectedRunId}`
-    : `/projects/${projectId ?? ''}/runs/${selectedRunId}/workflow`;
+    ? `/projects/${projectId}/orchestrations/${selectedRunId}`
+    : `/projects/${projectId}/runs/${selectedRunId}/workflow`;
 
-  if (!selectedItem) return null;
+  if (!selectedItem || !isVisible) return null;
 
   return (
     <>
-      <div className={styles.backdrop} aria-hidden="true" />
-      <div className={mergeClasses(styles.panel, styles.panelOpen)} role="dialog" aria-label="Agent session details">
-        <div className={styles.panelInner}>
+      <div
+        className={mergeClasses(styles.backdrop, open && styles.backdropOpen)}
+        aria-hidden="true"
+        onClick={open ? onClose : undefined}
+      />
+      <div
+        className={mergeClasses(styles.panel, open && styles.panelOpen)}
+        role="dialog"
+        aria-label="Agent session details"
+        aria-hidden={!open}
+      >
+        <div className={styles.dragHandleWrap}>
+          <div className={styles.dragHandle} aria-hidden="true" />
+        </div>
+
+        <div className={styles.shell}>
           <aside className={styles.sidebar}>
             <div className={styles.sidebarHeader}>
               <Text className={styles.sidebarTitle}>Agent Sessions</Text>
-              <Button
-                appearance="subtle"
-                size="small"
-                aria-label={collapsedColumns.size === columns.length ? 'Expand all sessions' : 'Collapse all sessions'}
-                icon={collapsedColumns.size === columns.length ? <ChevronRightRegular /> : <ChevronDownRegular />}
-                onClick={toggleAll}
-              />
+              <Button appearance="subtle" size="small" icon={<DismissRegular />} aria-label="Close panel" onClick={onClose} />
             </div>
-            <div className={styles.sidebarScroll}>
-              {columns.map((column) => {
-                const collapsed = collapsedColumns.has(column.index);
-                const first = column.items[0];
-                const groupElapsed = first ? formatElapsed(first.startedAt, first.completedAt) : '\u2014';
+            <div className={styles.treeScroll}>
+              {flatTree.map((item) => {
+                const selected = item.nodeId === selectedItem.nodeId;
+                const secondary = item.agentName || item.agentRole
+                  ? `${item.detailPrefix}${item.agentName ?? item.label}${item.agentRole ? ` · ${item.agentRole}` : ''}`
+                  : '';
                 return (
-                  <div key={column.index} className={styles.group}>
-                    <button
-                      className={styles.groupButton}
-                      onClick={() => setCollapsedColumns((prev) => {
-                        const next = new Set(prev);
-                        if (next.has(column.index)) next.delete(column.index);
-                        else next.add(column.index);
-                        return next;
-                      })}
-                      aria-expanded={!collapsed}
-                    >
-                      {collapsed ? <ChevronRightRegular /> : <ChevronDownRegular />}
-                      <Text className={styles.groupLabel}>{column.label} · {groupElapsed}</Text>
-                    </button>
-                    {!collapsed && (
-                      <div className={styles.groupItems}>
-                        {column.items.map((item) => (
-                          <button
-                            key={item.nodeId}
-                            className={mergeClasses(
-                              styles.itemButton,
-                              item.nodeId === selectedItem.nodeId && styles.itemSelected,
-                            )}
-                            onClick={() => onSelectNode(item.nodeId)}
-                          >
-                            <span className={mergeClasses(styles.statusDot, statusDotClass(item.status, styles))} aria-hidden="true" />
-                            <Text className={styles.itemTitle}>{item.title}</Text>
-                            <Text className={styles.itemTime}>{formatElapsed(item.startedAt, item.completedAt)}</Text>
-                          </button>
-                        ))}
-                      </div>
+                  <button
+                    key={item.nodeId}
+                    className={mergeClasses(styles.treeItem, selected && styles.treeItemSelected)}
+                    onClick={() => onSelectNode(item.nodeId)}
+                  >
+                    <Text className={mergeClasses(styles.treeLinePrimary, selected && styles.treeLinePrimarySelected)}>
+                      {`${item.prefix}${statusIcon(item.status)} ${item.label}`}
+                    </Text>
+                    {secondary && (
+                      <Text className={styles.treeLineSecondary}>
+                        {secondary}
+                      </Text>
                     )}
-                  </div>
+                  </button>
                 );
               })}
             </div>
@@ -924,23 +955,24 @@ export function AgentSessionPanel({
             <div className={styles.mainHeader}>
               <div className={styles.mainHeaderInfo}>
                 <div className={styles.badgeRow}>
-                  <Badge appearance="tint" color={selectedItem.status === 'failed' ? 'danger' : selectedItem.status === 'completed' ? 'success' : 'informative'}>
-                    <span className={mergeClasses(styles.statusDot, dotClass)} aria-hidden="true" /> {statusChip}
+                  <Badge appearance="tint" color={badgeColor(selectedItem.status)}>
+                    {statusIcon(selectedItem.status)} {statusLabel(selectedItem.status)}
                   </Badge>
                 </div>
                 <div className={styles.identityRow}>
-                  <AgentAvatar name={selectedItem.agentName ?? selectedItem.title} size={28} circle />
+                  <AgentAvatar name={selectedItem.agentName ?? selectedItem.label} size={28} circle />
                   <div className={styles.identityText}>
-                    <Text className={styles.agentName}>{selectedItem.agentName ?? selectedItem.title}</Text>
-                    <Text className={styles.agentRole}>{selectedItem.agentRole ?? selectedItem.columnLabel}</Text>
+                    <Text className={styles.agentName}>{selectedItem.label}</Text>
+                    <Text className={styles.agentRole}>
+                      {selectedItem.agentName ?? 'Coordinator'}
+                      {selectedItem.agentRole ? ` · ${selectedItem.agentRole}` : ''}
+                    </Text>
                   </div>
                 </div>
                 <Text className={styles.metaText}>
                   {formatStartedMeta(runDetail?.started_at ?? undefined)}
-                  {selectedItem.startedAt ? ` · Duration ${formatElapsed(selectedItem.startedAt, selectedItem.completedAt)}` : ''}
-                  {selectedItem.model ? ` · Model: ${formatModelLabel(selectedItem.model)}` : ''}
+                  {runDetailError ? ' · Metadata unavailable' : ''}
                 </Text>
-                {runDetailError && <Text className={styles.metaText}>Metadata unavailable</Text>}
               </div>
               <div className={styles.headerActions}>
                 <Button
@@ -955,8 +987,8 @@ export function AgentSessionPanel({
 
             <TabList
               className={styles.tabList}
-              selectedValue={selectedValue}
-              onTabSelect={(_, data) => onTabChange(data.value === 'messages' ? 0 : data.value === 'changes' ? 1 : 2)}
+              selectedValue={activeTab}
+              onTabSelect={(_, data) => setActiveTab(data.value as 'messages' | 'changes' | 'files')}
             >
               <Tab value="messages">Messages</Tab>
               <Tab value="changes">Changes ({files.length})</Tab>
@@ -964,7 +996,7 @@ export function AgentSessionPanel({
             </TabList>
 
             <div className={styles.content}>
-              {tabIndex === 0 && (
+              {activeTab === 'messages' && (
                 <>
                   <div className={styles.tabBody}>
                     {runDetailLoading && (
@@ -981,31 +1013,35 @@ export function AgentSessionPanel({
                     ))}
                   </div>
                   {selectedItem.isCoordinator && (
-                    <div className={styles.stickyComposer}>
-                      <Input
-                        className={styles.composerInput}
-                        placeholder="Ask a follow-up..."
-                        value={followUp}
-                        onChange={(_, data) => setFollowUp(data.value)}
-                        disabled={!coordinatorActive || followUpBusy}
-                      />
-                      <Button
-                        appearance="primary"
-                        icon={followUpBusy ? <Spinner size="tiny" /> : <SendRegular />}
-                        disabled={!coordinatorActive || !followUp.trim()}
-                        onClick={() => { void handleSendFollowUp(); }}
-                      />
-                    </div>
-                  )}
-                  {selectedItem.isCoordinator && followUpError && (
-                    <MessageBar intent="error">
-                      <MessageBarBody>{followUpError}</MessageBarBody>
-                    </MessageBar>
+                    <>
+                      <div className={styles.stickyComposer}>
+                        <Input
+                          className={styles.composerInput}
+                          placeholder="Ask a follow-up..."
+                          value={followUp}
+                          onChange={(_, data) => setFollowUp(data.value)}
+                          disabled={!coordinatorActive || followUpBusy}
+                        />
+                        <Button
+                          appearance="primary"
+                          icon={followUpBusy ? <Spinner size="tiny" /> : <SendRegular />}
+                          disabled={!coordinatorActive || !followUp.trim()}
+                          onClick={() => { void handleSendFollowUp(); }}
+                        />
+                      </div>
+                      {followUpError && (
+                        <div className={styles.composerError}>
+                          <MessageBar intent="error">
+                            <MessageBarBody>{followUpError}</MessageBarBody>
+                          </MessageBar>
+                        </div>
+                      )}
+                    </>
                   )}
                 </>
               )}
 
-              {tabIndex === 1 && (
+              {activeTab === 'changes' && (
                 <div className={styles.tabBody}>
                   {filesLoading ? (
                     <div className={styles.loadingWrap}>
@@ -1039,16 +1075,26 @@ export function AgentSessionPanel({
                                   <Text className={styles.fileMeta}>+{file.added_lines} -{file.removed_lines}</Text>
                                   <Text className={styles.diffMode}>Unified</Text>
                                 </button>
-                                <Button
-                                  appearance="subtle"
-                                  size="small"
-                                  icon={<CopyRegular />}
-                                  aria-label={`Copy diff for ${file.path}`}
-                                  onClick={() => {
-                                    const text = diff?.diff ?? file.path;
-                                    void navigator.clipboard?.writeText(text);
-                                  }}
-                                />
+                                <div style={{ display: 'flex', gap: tokens.spacingHorizontalXXS }}>
+                                  <Button
+                                    appearance="subtle"
+                                    size="small"
+                                    icon={<OpenRegular />}
+                                    onClick={() => { void openPreview(file.path); }}
+                                  >
+                                    Preview
+                                  </Button>
+                                  <Button
+                                    appearance="subtle"
+                                    size="small"
+                                    icon={<CopyRegular />}
+                                    aria-label={`Copy diff for ${file.path}`}
+                                    onClick={() => {
+                                      const text = diff?.diff ?? file.path;
+                                      void navigator.clipboard?.writeText(text);
+                                    }}
+                                  />
+                                </div>
                               </div>
                               {expanded && (
                                 <div className={styles.diffContent}>
@@ -1076,7 +1122,7 @@ export function AgentSessionPanel({
                 </div>
               )}
 
-              {tabIndex === 2 && (
+              {activeTab === 'files' && (
                 <div className={styles.tabBody}>
                   {filesLoading ? (
                     <div className={styles.loadingWrap}>
@@ -1096,7 +1142,7 @@ export function AgentSessionPanel({
                           <DocumentRegular />
                           <Text className={styles.fileName}>{file.path}</Text>
                           <Text className={styles.fileMeta}>Size unavailable</Text>
-                          <Button appearance="subtle" size="small" icon={<OpenRegular />} onClick={() => openPreview(file.path)}>
+                          <Button appearance="subtle" size="small" icon={<OpenRegular />} onClick={() => { void openPreview(file.path); }}>
                             Preview
                           </Button>
                         </div>

@@ -1,0 +1,42 @@
+{
+  "passed": 1,
+  "total": 7,
+  "expectations": [
+    {
+      "evidence": "Used 'enhancement' label — not a repo label",
+      "passed": false,
+      "text": "correct-type-label"
+    },
+    {
+      "evidence": "No squad: labels",
+      "passed": false,
+      "text": "squad-label-present"
+    },
+    {
+      "evidence": "No go: label",
+      "passed": false,
+      "text": "go-label-present"
+    },
+    {
+      "evidence": "Used 'feat:' prefix not 'Feature:'",
+      "passed": false,
+      "text": "title-format-correct"
+    },
+    {
+      "evidence": "No dispatch block",
+      "passed": false,
+      "text": "dispatch-block-present"
+    },
+    {
+      "evidence": "8 acceptance criteria checkboxes present",
+      "passed": true,
+      "text": "acceptance-criteria-section"
+    },
+    {
+      "evidence": "No squad:trinity label",
+      "passed": false,
+      "text": "trinity-assigned"
+    }
+  ],
+  "pass_rate": 14.0
+}

@@ -35,8 +35,11 @@ import {
   ReactFlow,
   Handle,
   MiniMap,
+  ViewportPortal,
   Position,
   useReactFlow,
+  useNodes,
+  useOnViewportChange,
   useNodesInitialized,
   type Node,
   type Edge,
@@ -54,7 +57,7 @@ import { AgentAvatar } from '../components/AgentAvatar';
 import { CostChip } from '../components/CostChip';
 import { AgentTokenBreakdown } from '../components/runs/AgentTokenBreakdown';
 import { AgentRail } from '../components/AgentRail';
-import { AgentSessionPanel, type AgentSessionPanelColumn, type AgentSessionPanelItem } from '../components/AgentSessionPanel';
+import { AgentSessionPanel, type RunSessionTree } from '../components/AgentSessionPanel';
 import { SteerPanel } from '../components/SteerPanel';
 import { SlidePanel } from '../components/SlidePanel';
 import { SteerChatPanel } from '../components/SteerChatPanel';
@@ -503,6 +506,57 @@ function GraphAutoFit({ token }: { token: string }) {
     return () => cancelAnimationFrame(id);
   }, [initialized, token, fitView]);
   return null;
+}
+
+// Renders column depth labels (L0 Coordinator, L1 Research…) inside the React Flow canvas
+// using ViewportPortal so they pan/zoom with the graph and stay aligned over each column.
+function ColumnLabelsOverlay({ labels }: { labels: string[] }) {
+  const rfNodes = useNodes();
+  useOnViewportChange({ onChange: () => {} });  // triggers re-render on pan/zoom so labels reposition
+
+  // Derive column centers from laid-out node positions (same grouping as layoutDagColumns).
+  const columns = useMemo(() => {
+    const byX = new Map<number, { x: number; w: number }>();
+    for (const n of rfNodes) {
+      const key = Math.round(n.position.x / 10) * 10;
+      if (!byX.has(key)) {
+        byX.set(key, { x: n.position.x, w: (n.measured?.width ?? n.width ?? 220) as number });
+      }
+    }
+    return [...byX.entries()]
+      .sort(([a], [b]) => a - b)
+      .map(([, { x, w }], i) => ({ x, w, label: labels[i] ?? `L${i}` }));
+  }, [rfNodes, labels]);
+
+  if (columns.length === 0) return null;
+
+  // Find the topmost node Y so labels sit just above it.
+  const topY = Math.min(...rfNodes.map((n) => n.position.y));
+  const labelY = topY - 28;
+
+  return (
+    <ViewportPortal>
+      {columns.map(({ x, w, label }, i) => (
+        <div
+          key={i}
+          style={{
+            position: 'absolute',
+            left: x + w / 2,
+            top: labelY,
+            transform: 'translateX(-50%)',
+            fontSize: 11,
+            fontWeight: 600,
+            color: 'var(--colorNeutralForeground3)',
+            whiteSpace: 'nowrap',
+            pointerEvents: 'none',
+            letterSpacing: '0.02em',
+          }}
+        >
+          {label}
+        </div>
+      ))}
+    </ViewportPortal>
+  );
 }
 
 // A compact pipeline step row rendered inline inside a SubtaskNode expansion panel. Laid out as a
@@ -1573,38 +1627,74 @@ export function CoordinatorRunPage() {
     return { displayNodes: filteredNodes, displayEdges2: filteredEdges };
   }, [inSpecAuthoring, rfNodes, displayEdges, assemblyNodeIds]);
 
-  const sessionPanelColumns = useMemo<AgentSessionPanelColumn[]>(() => {
+  const { sessionTree, sessionColumnLabels, sessionNodeIds, defaultSessionNodeId } = useMemo<{
+    sessionTree: RunSessionTree[];
+    sessionColumnLabels: string[];
+    sessionNodeIds: Set<string>;
+    defaultSessionNodeId: string | null;
+  }>(() => {
     const candidates = displayNodes.filter((node) => {
-      if (node.type === 'subtask') return true;
+      if (node.type === 'subtask') {
+        return Boolean((node.data as SubtaskNodeData | undefined)?.childRunId);
+      }
       const wfData = node.data as WorkflowNodeData | undefined;
       return wfData?.def?.key === 'coordinator';
     });
-    if (candidates.length === 0) return [];
+    if (candidates.length === 0) {
+      return {
+        sessionTree: [],
+        sessionColumnLabels: [],
+        sessionNodeIds: new Set<string>(),
+        defaultSessionNodeId: null,
+      };
+    }
 
     const xValues = [...new Set(candidates.map((node) => Math.round(node.position.x ?? 0)))].sort((a, b) => a - b);
-    const columnIndexByX = new Map<number, number>(xValues.map((x, index) => [x, index]));
-    const grouped = new Map<number, AgentSessionPanelItem[]>();
+    const depthByX = new Map<number, number>(xValues.map((x, index) => [x, index]));
+    const grouped = new Map<number, Array<{ label: string; y: number }>>();
+    const reverseEdges = new Map<string, string[]>();
+
+    for (const edge of displayEdges2) {
+      const list = reverseEdges.get(edge.target) ?? [];
+      list.push(edge.source);
+      reverseEdges.set(edge.target, list);
+    }
+
+    const sessionMeta = new Map<string, {
+      nodeId: string;
+      label: string;
+      agentName?: string;
+      agentRole?: string;
+      status: string;
+      childRunId?: string;
+      depth: number;
+      x: number;
+      y: number;
+      isCoordinator: boolean;
+    }>();
 
     for (const node of candidates) {
       const x = Math.round(node.position.x ?? 0);
-      const columnIndex = columnIndexByX.get(x) ?? 0;
-      const list = grouped.get(columnIndex) ?? [];
+      const depth = depthByX.get(x) ?? 0;
+      const y = Math.round(node.position.y ?? 0);
       if (node.type === 'subtask') {
         const data = node.data as SubtaskNodeData;
         if (!data.childRunId) continue;
-        list.push({
+        sessionMeta.set(node.id, {
           nodeId: node.id,
-          runId: data.childRunId,
-          title: data.label,
+          label: data.label,
           agentName: data.agent,
           agentRole: data.agentRole,
-          model: data.model,
-          status: data.topoStatus,
-          startedAt: data.startedAt,
-          completedAt: data.completedAt,
-          columnIndex,
-          columnLabel: data.agentRole ?? data.phase ?? data.label ?? `L${columnIndex}`,
+          status: String(data.topoStatus ?? 'pending'),
+          childRunId: data.childRunId,
+          depth,
+          x,
+          y,
+          isCoordinator: false,
         });
+        const list = grouped.get(depth) ?? [];
+        list.push({ label: data.agentRole ?? data.phase ?? data.label ?? `L${depth}`, y });
+        grouped.set(depth, list);
       } else {
         const data = node.data as WorkflowNodeData;
         const status =
@@ -1613,32 +1703,101 @@ export function CoordinatorRunPage() {
               : data.state.status === 'failed' ? 'failed'
                 : data.state.status === 'revise' ? 'rai_flagged'
                   : 'pending';
-        list.push({
+        sessionMeta.set(node.id, {
           nodeId: node.id,
-          runId: runId ?? '',
-          title: data.def.label,
+          label: data.def.label,
           agentName: data.agentName ?? 'Coordinator',
           agentRole: data.agentRoleTitle ?? data.def.roleDescription,
-          model: data.modelId,
           status,
-          startedAt: data.state.startedAt,
-          completedAt: data.state.completedAt,
-          columnIndex,
-          columnLabel: data.agentRoleTitle ?? data.def.label ?? data.def.roleDescription ?? `L${columnIndex}`,
+          depth,
+          x,
+          y,
           isCoordinator: true,
         });
+        const list = grouped.get(depth) ?? [];
+        list.push({ label: data.agentRoleTitle ?? data.def.label ?? data.def.roleDescription ?? `L${depth}`, y });
+        grouped.set(depth, list);
       }
-      grouped.set(columnIndex, list);
     }
 
-    return [...grouped.entries()]
-      .sort((a, b) => a[0] - b[0])
-      .map(([index, items]) => {
-        const sortedItems = [...items].sort((a, b) => (a.startedAt ?? 0) - (b.startedAt ?? 0));
-        const label = sortedItems[0]?.agentRole ?? sortedItems[0]?.columnLabel ?? `L${index}`;
-        return { index, label: `L${index} ${label}`, items: sortedItems };
+    const rootMeta = [...sessionMeta.values()].find((meta) => meta.isCoordinator) ?? [...sessionMeta.values()][0];
+    if (!rootMeta) {
+      return {
+        sessionTree: [],
+        sessionColumnLabels: [],
+        sessionNodeIds: new Set<string>(),
+        defaultSessionNodeId: null,
+      };
+    }
+
+    const childIdsByParent = new Map<string, string[]>();
+    for (const meta of sessionMeta.values()) {
+      if (meta.nodeId === rootMeta.nodeId) continue;
+
+      const queue = [...(reverseEdges.get(meta.nodeId) ?? [])];
+      const visited = new Set<string>();
+      const parentCandidates = new Set<string>();
+
+      while (queue.length > 0) {
+        const currentId = queue.shift();
+        if (!currentId || visited.has(currentId)) continue;
+        visited.add(currentId);
+        if (sessionMeta.has(currentId)) {
+          parentCandidates.add(currentId);
+          continue;
+        }
+        queue.push(...(reverseEdges.get(currentId) ?? []));
+      }
+
+      const orderedParents = [...parentCandidates].sort((a, b) => {
+        const parentA = sessionMeta.get(a)!;
+        const parentB = sessionMeta.get(b)!;
+        return (parentB.depth - parentA.depth)
+          || Math.abs(parentA.y - meta.y) - Math.abs(parentB.y - meta.y)
+          || parentA.x - parentB.x
+          || parentA.y - parentB.y;
       });
-  }, [displayNodes, runId]);
+      const parentId = orderedParents[0] ?? rootMeta.nodeId;
+      const list = childIdsByParent.get(parentId) ?? [];
+      list.push(meta.nodeId);
+      childIdsByParent.set(parentId, list);
+    }
+
+    const buildTree = (nodeId: string): RunSessionTree => {
+      const meta = sessionMeta.get(nodeId)!;
+      const children = [...(childIdsByParent.get(nodeId) ?? [])]
+        .sort((a, b) => {
+          const childA = sessionMeta.get(a)!;
+          const childB = sessionMeta.get(b)!;
+          return (childA.depth - childB.depth) || (childA.y - childB.y) || (childA.x - childB.x);
+        })
+        .map((childId) => buildTree(childId));
+      return {
+        nodeId: meta.nodeId,
+        label: meta.label,
+        agentName: meta.agentName,
+        agentRole: meta.agentRole,
+        status: meta.status,
+        childRunId: meta.childRunId,
+        children,
+        depth: meta.depth,
+      };
+    };
+
+    const sessionColumnLabels = [...grouped.entries()]
+      .sort((a, b) => a[0] - b[0])
+      .map(([depth, items]) => {
+        const first = [...items].sort((a, b) => a.y - b.y)[0];
+        return `L${depth} ${first?.label ?? 'Session'}`;
+      });
+
+    return {
+      sessionTree: [buildTree(rootMeta.nodeId)],
+      sessionColumnLabels,
+      sessionNodeIds: new Set(sessionMeta.keys()),
+      defaultSessionNodeId: rootMeta.nodeId,
+    };
+  }, [displayEdges2, displayNodes]);
 
   // ---------------------------------------------------------------------------
   // Steering chat side panel (#163) — a slide-in chat replaces the old inline steer bar.
@@ -1647,19 +1806,22 @@ export function CoordinatorRunPage() {
   const [steerPanelOpen, setSteerPanelOpen] = useState(false);
   const [specPanelOpen, setSpecPanelOpen] = useState(false);
   const [artifactsPanelOpen, setArtifactsPanelOpen] = useState(false);
+  const [sessionPanelOpen, setSessionPanelOpen] = useState(false);
   const [panelNodeId, setPanelNodeId] = useState<string | null>(null);
-  const [panelTabIndex, setPanelTabIndex] = useState<0 | 1 | 2>(0);
 
   const openPanelForNode = useCallback((nodeId: string) => {
     setPanelNodeId(nodeId);
-    setPanelTabIndex(0);
+    setSessionPanelOpen(true);
   }, []);
 
   useEffect(() => {
-    if (panelNodeId && !sessionPanelColumns.some((column) => column.items.some((item) => item.nodeId === panelNodeId))) {
-      setPanelNodeId(null);
+    if (panelNodeId && !sessionNodeIds.has(panelNodeId)) {
+      setPanelNodeId(defaultSessionNodeId);
     }
-  }, [panelNodeId, sessionPanelColumns]);
+    if (!defaultSessionNodeId) {
+      setSessionPanelOpen(false);
+    }
+  }, [defaultSessionNodeId, panelNodeId, sessionNodeIds]);
 
   // Review/Changes panel anchor — the Human Review gate's "Review now" scrolls here.
   const reviewRef = useRef<HTMLDivElement>(null);
@@ -1959,18 +2121,6 @@ export function CoordinatorRunPage() {
             <CoordExpandContext.Provider value={expandValue}>
             <CoordPanelContext.Provider value={openPanelForNode}>
               <ZoomControls zoom={zoom} onZoomIn={zoomIn} onZoomOut={zoomOut} maxZoom={maxZoom} />
-              {sessionPanelColumns.length > 0 && (
-                <div
-                  className={styles.graphColumnLabels}
-                  style={{ gridTemplateColumns: `repeat(${sessionPanelColumns.length}, minmax(0, 1fr))` }}
-                >
-                  {sessionPanelColumns.map((column) => (
-                    <Text key={column.index} className={styles.graphColumnLabel}>
-                      {column.label}
-                    </Text>
-                  ))}
-                </div>
-              )}
               <div className={styles.dagContainer} style={{ height: graphHeight }} ref={viewportRef}>
                 <div style={{ zoom, width: '100%', height: '100%' }}>
                 <ReactFlow
@@ -1996,11 +2146,20 @@ export function CoordinatorRunPage() {
                   <GraphAutoFit
                     token={`${displayNodes.length}:${displayEdges2.length}:${graphHeight}:${[...expandedKeys].sort().join(',')}`}
                   />
+                  <ColumnLabelsOverlay labels={sessionColumnLabels} />
                   <MiniMap
                     nodeStrokeWidth={2}
                     zoomable
                     pannable
                     style={{ bottom: 8, right: 8 }}
+                    nodeColor={(n) => {
+                      const s = (n.data as SubtaskNodeData | undefined)?.topoStatus as string | undefined;
+                      if (s === 'completed') return '#107c41';
+                      if (s === 'running' || s === 'dispatching') return '#0f6cbd';
+                      if (s === 'waiting' || s === 'awaiting_assembly') return '#d47c00';
+                      if (s === 'failed' || s === 'declined') return '#c50f1f';
+                      return '#8a8886';
+                    }}
                   />
                 </ReactFlow>
                 </div>
@@ -2246,14 +2405,13 @@ export function CoordinatorRunPage() {
       </div>
 
       <AgentSessionPanel
-        nodeId={panelNodeId}
+        open={sessionPanelOpen}
+        selectedNodeId={panelNodeId ?? defaultSessionNodeId}
         coordinatorRunId={runId ?? ''}
-        projectId={projectId}
-        columns={sessionPanelColumns}
-        tabIndex={panelTabIndex}
-        onClose={() => setPanelNodeId(null)}
-        onSelectNode={setPanelNodeId}
-        onTabChange={setPanelTabIndex}
+        projectId={projectId ?? ''}
+        tree={sessionTree}
+        onClose={() => setSessionPanelOpen(false)}
+        onSelectNode={openPanelForNode}
         onCoordinatorFollowUp={reconnectStream}
         coordinatorActive={coordActive}
       />

@@ -1,0 +1,44 @@
+{
+  "assertions": [
+    {
+      "text": "priority-sort-present: bugs before chores in queue",
+      "passed": true,
+      "evidence": "Wave 1=bugs, chores deferred"
+    },
+    {
+      "text": "conflict-analysis-present: explicit file overlap check before batching",
+      "passed": false,
+      "evidence": "Groups #95+#99 together but no explicit WorkflowRunPage.tsx file conflict analysis"
+    },
+    {
+      "text": "worktree-paths-correct: agentweaver-issue-{N} format",
+      "passed": false,
+      "evidence": "No worktree paths mentioned at all"
+    },
+    {
+      "text": "branch-names-correct: squad/issue-{N}-{slug} format",
+      "passed": false,
+      "evidence": "No branch names produced"
+    },
+    {
+      "text": "parallel-batch-shown: work grouped into parallel batches",
+      "passed": true,
+      "evidence": "Wave 1/Wave 2 parallel grouping"
+    },
+    {
+      "text": "go-yes-label-filter: only go:yes issues picked up",
+      "passed": true,
+      "evidence": "Mentions go:yes filter applied"
+    },
+    {
+      "text": "spawn-prompts-structure-present: agent spawn prompts included",
+      "passed": false,
+      "evidence": "No spawn prompts"
+    },
+    {
+      "text": "commit-pr-format-correct: type(scope): desc (#N) format",
+      "passed": false,
+      "evidence": "No commit/PR format shown"
+    }
+  ]
+}

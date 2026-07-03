@@ -1,0 +1,42 @@
+{
+  "passed": 1,
+  "total": 7,
+  "expectations": [
+    {
+      "evidence": "No type: label used",
+      "passed": false,
+      "text": "correct-type-label"
+    },
+    {
+      "evidence": "No squad: labels",
+      "passed": false,
+      "text": "squad-label-present"
+    },
+    {
+      "evidence": "No go: label",
+      "passed": false,
+      "text": "go-label-present"
+    },
+    {
+      "evidence": "Title present",
+      "passed": true,
+      "text": "title-format-correct"
+    },
+    {
+      "evidence": "No dispatch block",
+      "passed": false,
+      "text": "dispatch-block-present"
+    },
+    {
+      "evidence": "No squad:trinity",
+      "passed": false,
+      "text": "trinity-assigned-frontend-chore"
+    },
+    {
+      "evidence": "No done-when section",
+      "passed": false,
+      "text": "done-when-section"
+    }
+  ],
+  "pass_rate": 14.0
+}

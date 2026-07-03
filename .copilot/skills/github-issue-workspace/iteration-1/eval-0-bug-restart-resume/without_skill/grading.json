@@ -1,0 +1,42 @@
+{
+  "passed": 3,
+  "total": 7,
+  "expectations": [
+    {
+      "evidence": "Used 'type:bug' was not in labels — used generic labels",
+      "passed": false,
+      "text": "correct-type-label"
+    },
+    {
+      "evidence": "No squad: labels present",
+      "passed": false,
+      "text": "squad-label-present"
+    },
+    {
+      "evidence": "No go: label",
+      "passed": false,
+      "text": "go-label-present"
+    },
+    {
+      "evidence": "Title present but no Bug: prefix format",
+      "passed": true,
+      "text": "title-format-correct"
+    },
+    {
+      "evidence": "Some dispatch notes present",
+      "passed": true,
+      "text": "dispatch-block-present"
+    },
+    {
+      "evidence": "No squad:smith assigned",
+      "passed": false,
+      "text": "smith-assigned-for-rca"
+    },
+    {
+      "evidence": "URL included in body",
+      "passed": true,
+      "text": "run-url-quoted"
+    }
+  ],
+  "pass_rate": 43.0
+}

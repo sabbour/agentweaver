@@ -1,0 +1,39 @@
+{
+  "assertions": [
+    {
+      "passed": true,
+      "text": "priority-sort-present: bugs before chores in queue",
+      "evidence": "Bugs listed first in wave plan"
+    },
+    {
+      "passed": false,
+      "text": "conflict-analysis-present: explicit file overlap check before batching",
+      "evidence": "No explicit conflict analysis — just mentions 'own worktree' without checking file overlap"
+    },
+    {
+      "passed": false,
+      "text": "worktree-paths-correct: agentweaver-issue-{N} format",
+      "evidence": "Mentions worktrees vaguely (squad/issue-9X-...) with no actual paths"
+    },
+    {
+      "passed": false,
+      "text": "branch-names-correct: squad/issue-{N}-{slug} format",
+      "evidence": "squad/issue-9X-... is placeholder, not exact format"
+    },
+    {
+      "passed": false,
+      "text": "parallel-batch-shown: work grouped into parallel batches",
+      "evidence": "Wave 1/Wave 2 described in prose but no structured batch table"
+    },
+    {
+      "passed": false,
+      "text": "go-yes-label-filter: only go:yes issues picked up",
+      "evidence": "No label filtering mentioned — just open issues"
+    },
+    {
+      "passed": false,
+      "text": "spawn-prompts-structure-present: agent spawn prompts included",
+      "evidence": "No spawn prompts shown"
+    }
+  ]
+}

@@ -1,0 +1,1325 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Eval Review</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@500;600&family=Lora:wght@400;500&display=swap" rel="stylesheet">
+  <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js" integrity="sha384-EnyY0/GSHQGSxSgMwaIPzSESbqoOLSexfnSMN2AP+39Ckmn92stwABZynq1JyzdT" crossorigin="anonymous"></script>
+  <style>
+    :root {
+      --bg: #faf9f5;
+      --surface: #ffffff;
+      --border: #e8e6dc;
+      --text: #141413;
+      --text-muted: #b0aea5;
+      --accent: #d97757;
+      --accent-hover: #c4613f;
+      --green: #788c5d;
+      --green-bg: #eef2e8;
+      --red: #c44;
+      --red-bg: #fceaea;
+      --header-bg: #141413;
+      --header-text: #faf9f5;
+      --radius: 6px;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Lora', Georgia, serif;
+      background: var(--bg);
+      color: var(--text);
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ---- Header ---- */
+    .header {
+      background: var(--header-bg);
+      color: var(--header-text);
+      padding: 1rem 2rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-shrink: 0;
+    }
+    .header h1 {
+      font-family: 'Poppins', sans-serif;
+      font-size: 1.25rem;
+      font-weight: 600;
+    }
+    .header .instructions {
+      font-size: 0.8rem;
+      opacity: 0.7;
+      margin-top: 0.25rem;
+    }
+    .header .progress {
+      font-size: 0.875rem;
+      opacity: 0.8;
+      text-align: right;
+    }
+
+    /* ---- Main content ---- */
+    .main {
+      flex: 1;
+      overflow-y: auto;
+      padding: 1.5rem 2rem;
+      display: flex;
+      flex-direction: column;
+      gap: 1.25rem;
+    }
+
+    /* ---- Sections ---- */
+    .section {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      flex-shrink: 0;
+    }
+    .section-header {
+      font-family: 'Poppins', sans-serif;
+      padding: 0.75rem 1rem;
+      font-size: 0.75rem;
+      font-weight: 500;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-muted);
+      border-bottom: 1px solid var(--border);
+      background: var(--bg);
+    }
+    .section-body {
+      padding: 1rem;
+    }
+
+    /* ---- Config badge ---- */
+    .config-badge {
+      display: inline-block;
+      padding: 0.2rem 0.625rem;
+      border-radius: 9999px;
+      font-family: 'Poppins', sans-serif;
+      font-size: 0.6875rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+      margin-left: 0.75rem;
+      vertical-align: middle;
+    }
+    .config-badge.config-primary {
+      background: rgba(33, 150, 243, 0.12);
+      color: #1976d2;
+    }
+    .config-badge.config-baseline {
+      background: rgba(255, 193, 7, 0.15);
+      color: #f57f17;
+    }
+
+    /* ---- Prompt ---- */
+    .prompt-text {
+      white-space: pre-wrap;
+      font-size: 0.9375rem;
+      line-height: 1.6;
+    }
+
+    /* ---- Outputs ---- */
+    .output-file {
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+    }
+    .output-file + .output-file {
+      margin-top: 1rem;
+    }
+    .output-file-header {
+      padding: 0.5rem 0.75rem;
+      font-size: 0.8rem;
+      font-weight: 600;
+      color: var(--text-muted);
+      background: var(--bg);
+      border-bottom: 1px solid var(--border);
+      font-family: 'SF Mono', SFMono-Regular, Consolas, 'Liberation Mono', Menlo, monospace;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .output-file-header .dl-btn {
+      font-size: 0.7rem;
+      color: var(--accent);
+      text-decoration: none;
+      cursor: pointer;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      font-weight: 500;
+      opacity: 0.8;
+    }
+    .output-file-header .dl-btn:hover {
+      opacity: 1;
+      text-decoration: underline;
+    }
+    .output-file-content {
+      padding: 0.75rem;
+      overflow-x: auto;
+    }
+    .output-file-content pre {
+      font-size: 0.8125rem;
+      line-height: 1.5;
+      white-space: pre-wrap;
+      word-break: break-word;
+      font-family: 'SF Mono', SFMono-Regular, Consolas, 'Liberation Mono', Menlo, monospace;
+    }
+    .output-file-content img {
+      max-width: 100%;
+      height: auto;
+      border-radius: 4px;
+    }
+    .output-file-content iframe {
+      width: 100%;
+      height: 600px;
+      border: none;
+    }
+    .output-file-content table {
+      border-collapse: collapse;
+      font-size: 0.8125rem;
+      width: 100%;
+    }
+    .output-file-content table td,
+    .output-file-content table th {
+      border: 1px solid var(--border);
+      padding: 0.375rem 0.5rem;
+      text-align: left;
+    }
+    .output-file-content table th {
+      background: var(--bg);
+      font-weight: 600;
+    }
+    .output-file-content .download-link {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.5rem 1rem;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      color: var(--accent);
+      text-decoration: none;
+      font-size: 0.875rem;
+      cursor: pointer;
+    }
+    .output-file-content .download-link:hover {
+      background: var(--border);
+    }
+    .empty-state {
+      color: var(--text-muted);
+      font-style: italic;
+      padding: 2rem;
+      text-align: center;
+    }
+
+    /* ---- Feedback ---- */
+    .prev-feedback {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 0.625rem 0.75rem;
+      margin-top: 0.75rem;
+      font-size: 0.8125rem;
+      color: var(--text-muted);
+      line-height: 1.5;
+    }
+    .prev-feedback-label {
+      font-size: 0.7rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      margin-bottom: 0.25rem;
+      color: var(--text-muted);
+    }
+    .feedback-textarea {
+      width: 100%;
+      min-height: 100px;
+      padding: 0.75rem;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      font-family: inherit;
+      font-size: 0.9375rem;
+      line-height: 1.5;
+      resize: vertical;
+      color: var(--text);
+    }
+    .feedback-textarea:focus {
+      outline: none;
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+    }
+    .feedback-status {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      margin-top: 0.5rem;
+      min-height: 1.1em;
+    }
+
+    /* ---- Grades (collapsible) ---- */
+    .grades-toggle {
+      display: flex;
+      align-items: center;
+      cursor: pointer;
+      user-select: none;
+    }
+    .grades-toggle:hover {
+      color: var(--accent);
+    }
+    .grades-toggle .arrow {
+      margin-right: 0.5rem;
+      transition: transform 0.15s;
+      font-size: 0.75rem;
+    }
+    .grades-toggle .arrow.open {
+      transform: rotate(90deg);
+    }
+    .grades-content {
+      display: none;
+      margin-top: 0.75rem;
+    }
+    .grades-content.open {
+      display: block;
+    }
+    .grades-summary {
+      font-size: 0.875rem;
+      margin-bottom: 0.75rem;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+    .grade-badge {
+      display: inline-block;
+      padding: 0.125rem 0.5rem;
+      border-radius: 9999px;
+      font-size: 0.75rem;
+      font-weight: 600;
+    }
+    .grade-pass { background: var(--green-bg); color: var(--green); }
+    .grade-fail { background: var(--red-bg); color: var(--red); }
+    .assertion-list {
+      list-style: none;
+    }
+    .assertion-item {
+      padding: 0.625rem 0;
+      border-bottom: 1px solid var(--border);
+      font-size: 0.8125rem;
+    }
+    .assertion-item:last-child { border-bottom: none; }
+    .assertion-status {
+      font-weight: 600;
+      margin-right: 0.5rem;
+    }
+    .assertion-status.pass { color: var(--green); }
+    .assertion-status.fail { color: var(--red); }
+    .assertion-evidence {
+      color: var(--text-muted);
+      font-size: 0.75rem;
+      margin-top: 0.25rem;
+      padding-left: 1.5rem;
+    }
+
+    /* ---- View tabs ---- */
+    .view-tabs {
+      display: flex;
+      gap: 0;
+      padding: 0 2rem;
+      background: var(--bg);
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    .view-tab {
+      font-family: 'Poppins', sans-serif;
+      padding: 0.625rem 1.25rem;
+      font-size: 0.8125rem;
+      font-weight: 500;
+      cursor: pointer;
+      border: none;
+      background: none;
+      color: var(--text-muted);
+      border-bottom: 2px solid transparent;
+      transition: all 0.15s;
+    }
+    .view-tab:hover { color: var(--text); }
+    .view-tab.active {
+      color: var(--accent);
+      border-bottom-color: var(--accent);
+    }
+    .view-panel { display: none; }
+    .view-panel.active { display: flex; flex-direction: column; flex: 1; overflow: hidden; }
+
+    /* ---- Benchmark view ---- */
+    .benchmark-view {
+      padding: 1.5rem 2rem;
+      overflow-y: auto;
+      flex: 1;
+    }
+    .benchmark-table {
+      border-collapse: collapse;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      font-size: 0.8125rem;
+      width: 100%;
+      margin-bottom: 1.5rem;
+    }
+    .benchmark-table th, .benchmark-table td {
+      padding: 0.625rem 0.75rem;
+      text-align: left;
+      border: 1px solid var(--border);
+    }
+    .benchmark-table th {
+      font-family: 'Poppins', sans-serif;
+      background: var(--header-bg);
+      color: var(--header-text);
+      font-weight: 500;
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .benchmark-table tr:hover { background: var(--bg); }
+    .benchmark-table tr.benchmark-row-with { background: rgba(33, 150, 243, 0.06); }
+    .benchmark-table tr.benchmark-row-without { background: rgba(255, 193, 7, 0.06); }
+    .benchmark-table tr.benchmark-row-with:hover { background: rgba(33, 150, 243, 0.12); }
+    .benchmark-table tr.benchmark-row-without:hover { background: rgba(255, 193, 7, 0.12); }
+    .benchmark-table tr.benchmark-row-avg { font-weight: 600; border-top: 2px solid var(--border); }
+    .benchmark-table tr.benchmark-row-avg.benchmark-row-with { background: rgba(33, 150, 243, 0.12); }
+    .benchmark-table tr.benchmark-row-avg.benchmark-row-without { background: rgba(255, 193, 7, 0.12); }
+    .benchmark-delta-positive { color: var(--green); font-weight: 600; }
+    .benchmark-delta-negative { color: var(--red); font-weight: 600; }
+    .benchmark-notes {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 1rem;
+    }
+    .benchmark-notes h3 {
+      font-family: 'Poppins', sans-serif;
+      font-size: 0.875rem;
+      margin-bottom: 0.75rem;
+    }
+    .benchmark-notes ul {
+      list-style: disc;
+      padding-left: 1.25rem;
+    }
+    .benchmark-notes li {
+      font-size: 0.8125rem;
+      line-height: 1.6;
+      margin-bottom: 0.375rem;
+    }
+    .benchmark-empty {
+      color: var(--text-muted);
+      font-style: italic;
+      text-align: center;
+      padding: 3rem;
+    }
+
+    /* ---- Navigation ---- */
+    .nav {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 1rem 2rem;
+      border-top: 1px solid var(--border);
+      background: var(--surface);
+      flex-shrink: 0;
+    }
+    .nav-btn {
+      font-family: 'Poppins', sans-serif;
+      padding: 0.5rem 1.25rem;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--surface);
+      cursor: pointer;
+      font-size: 0.875rem;
+      font-weight: 500;
+      color: var(--text);
+      transition: all 0.15s;
+    }
+    .nav-btn:hover:not(:disabled) {
+      background: var(--bg);
+      border-color: var(--text-muted);
+    }
+    .nav-btn:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+    .done-btn {
+      font-family: 'Poppins', sans-serif;
+      padding: 0.5rem 1.5rem;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--surface);
+      color: var(--text);
+      cursor: pointer;
+      font-size: 0.875rem;
+      font-weight: 500;
+      transition: all 0.15s;
+    }
+    .done-btn:hover {
+      background: var(--bg);
+      border-color: var(--text-muted);
+    }
+    .done-btn.ready {
+      border: none;
+      background: var(--accent);
+      color: white;
+      font-weight: 600;
+    }
+    .done-btn.ready:hover {
+      background: var(--accent-hover);
+    }
+    /* ---- Done overlay ---- */
+    .done-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.5);
+      z-index: 100;
+      justify-content: center;
+      align-items: center;
+    }
+    .done-overlay.visible {
+      display: flex;
+    }
+    .done-card {
+      background: var(--surface);
+      border-radius: 12px;
+      padding: 2rem 3rem;
+      text-align: center;
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+      max-width: 500px;
+    }
+    .done-card h2 {
+      font-size: 1.5rem;
+      margin-bottom: 0.5rem;
+    }
+    .done-card p {
+      color: var(--text-muted);
+      margin-bottom: 1.5rem;
+      line-height: 1.5;
+    }
+    .done-card .btn-row {
+      display: flex;
+      gap: 0.5rem;
+      justify-content: center;
+    }
+    .done-card button {
+      padding: 0.5rem 1.25rem;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--surface);
+      cursor: pointer;
+      font-size: 0.875rem;
+    }
+    .done-card button:hover {
+      background: var(--bg);
+    }
+    /* ---- Toast ---- */
+    .toast {
+      position: fixed;
+      bottom: 5rem;
+      left: 50%;
+      transform: translateX(-50%);
+      background: var(--header-bg);
+      color: var(--header-text);
+      padding: 0.625rem 1.25rem;
+      border-radius: var(--radius);
+      font-size: 0.875rem;
+      opacity: 0;
+      transition: opacity 0.3s;
+      pointer-events: none;
+      z-index: 200;
+    }
+    .toast.visible {
+      opacity: 1;
+    }
+  </style>
+</head>
+<body>
+  <div id="app" style="height:100vh; display:flex; flex-direction:column;">
+    <div class="header">
+      <div>
+        <h1>Eval Review: <span id="skill-name"></span></h1>
+        <div class="instructions">Review each output and leave feedback below. Navigate with arrow keys or buttons. When done, copy feedback and paste into Claude Code.</div>
+      </div>
+      <div class="progress" id="progress"></div>
+    </div>
+
+    <!-- View tabs (only shown when benchmark data exists) -->
+    <div class="view-tabs" id="view-tabs" style="display:none;">
+      <button class="view-tab active" onclick="switchView('outputs')">Outputs</button>
+      <button class="view-tab" onclick="switchView('benchmark')">Benchmark</button>
+    </div>
+
+    <!-- Outputs panel (qualitative review) -->
+    <div class="view-panel active" id="panel-outputs">
+    <div class="main">
+      <!-- Prompt -->
+      <div class="section">
+        <div class="section-header">Prompt <span class="config-badge" id="config-badge" style="display:none;"></span></div>
+        <div class="section-body">
+          <div class="prompt-text" id="prompt-text"></div>
+        </div>
+      </div>
+
+      <!-- Outputs -->
+      <div class="section">
+        <div class="section-header">Output</div>
+        <div class="section-body" id="outputs-body">
+          <div class="empty-state">No output files found</div>
+        </div>
+      </div>
+
+      <!-- Previous Output (collapsible) -->
+      <div class="section" id="prev-outputs-section" style="display:none;">
+        <div class="section-header">
+          <div class="grades-toggle" onclick="togglePrevOutputs()">
+            <span class="arrow" id="prev-outputs-arrow">&#9654;</span>
+            Previous Output
+          </div>
+        </div>
+        <div class="grades-content" id="prev-outputs-content"></div>
+      </div>
+
+      <!-- Grades (collapsible) -->
+      <div class="section" id="grades-section" style="display:none;">
+        <div class="section-header">
+          <div class="grades-toggle" onclick="toggleGrades()">
+            <span class="arrow" id="grades-arrow">&#9654;</span>
+            Formal Grades
+          </div>
+        </div>
+        <div class="grades-content" id="grades-content"></div>
+      </div>
+
+      <!-- Feedback -->
+      <div class="section">
+        <div class="section-header">Your Feedback</div>
+        <div class="section-body">
+          <textarea
+            class="feedback-textarea"
+            id="feedback"
+            placeholder="What do you think of this output? Any issues, suggestions, or things that look great?"
+          ></textarea>
+          <div class="feedback-status" id="feedback-status"></div>
+          <div class="prev-feedback" id="prev-feedback" style="display:none;">
+            <div class="prev-feedback-label">Previous feedback</div>
+            <div id="prev-feedback-text"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="nav" id="outputs-nav">
+      <button class="nav-btn" id="prev-btn" onclick="navigate(-1)">&#8592; Previous</button>
+      <button class="done-btn" id="done-btn" onclick="showDoneDialog()">Submit All Reviews</button>
+      <button class="nav-btn" id="next-btn" onclick="navigate(1)">Next &#8594;</button>
+    </div>
+    </div><!-- end panel-outputs -->
+
+    <!-- Benchmark panel (quantitative stats) -->
+    <div class="view-panel" id="panel-benchmark">
+      <div class="benchmark-view" id="benchmark-content">
+        <div class="benchmark-empty">No benchmark data available. Run a benchmark to see quantitative results here.</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Done overlay -->
+  <div class="done-overlay" id="done-overlay">
+    <div class="done-card">
+      <h2>Review Complete</h2>
+      <p>Your feedback has been saved. Go back to your Claude Code session and tell Claude you're done reviewing.</p>
+      <div class="btn-row">
+        <button onclick="closeDoneDialog()">OK</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast -->
+  <div class="toast" id="toast"></div>
+
+  <script>
+    // ---- Embedded data (injected by generate_review.py) ----
+    const EMBEDDED_DATA = {"skill_name": "squad-fleet", "runs": [{"id": "eval-0-bug-first-backlog-with_skill", "prompt": "Squad, continue chipping at the GitHub issues. I want you to work on fixing the bugs first. Keep me updated with the status.", "eval_id": 0, "outputs": [{"name": "result.md", "type": "text", "content": "# Squad Fleet \u2014 Parallel Issue Execution\n**Triggered by:** \"Squad, continue chipping at the GitHub issues. I want you to work on fixing the bugs first. Keep me updated with the status.\"  \n**Datetime:** 2026-07-01T09:06:56-07:00  \n**Repo:** sabbour/agentweaver @ `C:\\Users\\asabbour\\Git\\agentweaver`\n\n---\n\n## Step 1 \u2014 Current Board\n\n```\n\ud83d\udccb Open issues (go:yes) \u2014 5 queued\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n #  \u2502 Title                                                   \u2502 Squad          \u2502 Priority \u2502 Type\n\u2500\u2500\u2500\u2500\u253c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u253c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u253c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u253c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n 95 \u2502 bug(run-page): confirm button does not disable on click  \u2502 Trinity        \u2502 p2       \u2502 bug\n 98 \u2502 bug(run-page): preview sandbox not available on orch\u2026   \u2502 Trinity + Tank \u2502 p2       \u2502 bug\n 99 \u2502 bug(run-page): preview button hidden for completed runs \u2502 Trinity        \u2502 p2       \u2502 bug\n100 \u2502 chore(graph-view): zoom-in, animated nav, scroll ind\u2026   \u2502 Trinity        \u2502 p2       \u2502 chore\n101 \u2502 docs(architecture): replace flowchart with block diagr\u2026 \u2502 Scribe         \u2502 p2       \u2502 chore\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nNo existing PRs. No active worktrees for these issues.\n```\n\n---\n\n## Step 2 \u2014 Work Queue (sorted bugs-first per user request)\n\nPriority sort applied:\n1. `priority:p2` bugs (all bugs here are p2, no p0/p1 in queue)\n2. Chores (after all bugs)\n\n| Rank | # | Title | Type | Priority | Note |\n|------|---|-------|------|----------|------|\n| 1 | #95 | confirm button does not disable on click | bug | p2 | Trinity / WorkflowRunPage.tsx |\n| 2 | #98 | preview sandbox not available on orchestration run page | bug | p2 | Trinity+Tank / CoordinatorRunPage.tsx |\n| 3 | #99 | preview button hidden for completed runs | bug | p2 | Trinity / WorkflowRunPage.tsx |\n| 4 | #100 | graph-view zoom/nav/scroll improvements | chore | p2 | Trinity / graph components |\n| 5 | #101 | replace AKS flowchart with block-beta diagrams | chore | p2 | Scribe / README + docs |\n\n---\n\n## Step 3 \u2014 Conflict Analysis\n\nChecking file ownership via routing table:\n\n| Issue | Files Touched | Domain |\n|-------|--------------|--------|\n| #95 | `apps/web/src/pages/WorkflowRunPage.tsx` | frontend |\n| #98 | `apps/web/src/pages/CoordinatorRunPage.tsx` | frontend + backend review |\n| #99 | `apps/web/src/pages/WorkflowRunPage.tsx` | frontend |\n| #100 | `apps/web/src/components/graph/` (graph-view components) | frontend |\n| #101 | `README.md`, `docs/guide/architecture-aks.md` | docs only |\n\n**Conflict matrix:**\n\n| | #95 | #98 | #99 | #100 | #101 |\n|--|-----|-----|-----|------|------|\n| **#95** | \u2014 | \u2705 safe | \u26a0\ufe0f CONFLICT | \u2705 safe | \u2705 safe |\n| **#98** | \u2705 safe | \u2014 | \u2705 safe | \u2705 safe | \u2705 safe |\n| **#99** | \u26a0\ufe0f CONFLICT | \u2705 safe | \u2014 | \u2705 safe | \u2705 safe |\n| **#100** | \u2705 safe | \u2705 safe | \u2705 safe | \u2014 | \u2705 safe |\n| **#101** | \u2705 safe | \u2705 safe | \u2705 safe | \u2705 safe | \u2014 |\n\n**\u26a0\ufe0f Conflict detected:** #95 and #99 both edit `apps/web/src/pages/WorkflowRunPage.tsx` \u2192 must serialize.  \n**Rule applied:** Older issue first \u2192 #95 runs in Batch 1, #99 waits for Batch 2 (after #95 merges).\n\n**Batching decision for #100:** No file conflicts with Batch 1, but user said \"bugs first\" \u2192 move to Batch 2 alongside #99 to keep clean bug-then-chore sequencing.\n\n```\n\ud83d\ude80 Fleet plan:\n   Batch 1 (parallel \u2014 bugs): #95 Trinity, #98 Trinity+Tank, #101 Scribe\n   Batch 2 (after batch 1 merges): #99 Trinity (\u26a0\ufe0f serialized after #95), #100 Trinity\n```\n\n---\n\n## Step 4 \u2014 Worktree Commands\n\n> \u26a0\ufe0f SIMULATION \u2014 commands shown, not executed.\n\n### Batch 1\n\n```bash\n# Issue #95\ngit -C \"C:\\Users\\asabbour\\Git\\agentweaver\" worktree add \\\n  \"C:\\Users\\asabbour\\Git\\agentweaver-issue-95\" \\\n  -b \"squad/issue-95-confirm-button-double-submit\" main\n\n# Issue #98\ngit -C \"C:\\Users\\asabbour\\Git\\agentweaver\" worktree add \\\n  \"C:\\Users\\asabbour\\Git\\agentweaver-issue-98\" \\\n  -b \"squad/issue-98-preview-sandbox-orchestration-run\" main\n\n# Issue #101\ngit -C \"C:\\Users\\asabbour\\Git\\agentweaver\" worktree add \\\n  \"C:\\Users\\asabbour\\Git\\agentweaver-issue-101\" \\\n  -b \"squad/issue-101-block-architecture-diagrams\" main\n\n# Link node_modules (Windows, avoid reinstall)\ncmd /c \"mklink /J C:\\Users\\asabbour\\Git\\agentweaver-issue-95\\apps\\web\\node_modules C:\\Users\\asabbour\\Git\\agentweaver\\apps\\web\\node_modules\" 2>nul || true\ncmd /c \"mklink /J C:\\Users\\asabbour\\Git\\agentweaver-issue-98\\apps\\web\\node_modules C:\\Users\\asabbour\\Git\\agentweaver\\apps\\web\\node_modules\" 2>nul || true\n```\n\n### Batch 2 (queued \u2014 run after Batch 1 merges)\n\n```bash\n# Issue #99\ngit -C \"C:\\Users\\asabbour\\Git\\agentweaver\" worktree add \\\n  \"C:\\Users\\asabbour\\Git\\agentweaver-issue-99\" \\\n  -b \"squad/issue-99-preview-button-hidden-completed\" main\n\n# Issue #100\ngit -C \"C:\\Users\\asabbour\\Git\\agentweaver\" worktree add \\\n  \"C:\\Users\\asabbour\\Git\\agentweaver-issue-100\" \\\n  -b \"squad/issue-100-graph-zoom-nav-indicator\" main\n\ncmd /c \"mklink /J C:\\Users\\asabbour\\Git\\agentweaver-issue-99\\apps\\web\\node_modules C:\\Users\\asabbour\\Git\\agentweaver\\apps\\web\\node_modules\" 2>nul || true\ncmd /c \"mklink /J C:\\Users\\asabbour\\Git\\agentweaver-issue-100\\apps\\web\\node_modules C:\\Users\\asabbour\\Git\\agentweaver\\apps\\web\\node_modules\" 2>nul || true\n```\n\n---\n\n## Step 5 \u2014 Agent Spawn Prompts (Batch 1)\n\n> Three agents spawned simultaneously (background mode).\n\n---\n\n### Agent 1 \u2014 Trinity on Issue #95\n\n```\nYou are Trinity, the Frontend Engineer.\nWORKTREE_PATH: C:\\Users\\asabbour\\Git\\agentweaver-issue-95\nTEAM_ROOT: C:\\Users\\asabbour\\Git\\agentweaver\\.squad\nBRANCH: squad/issue-95-confirm-button-double-submit\nCURRENT_DATETIME: 2026-07-01T09:06:56-07:00\n\nIssue #95: bug(run-page): confirm button does not disable immediately after click\n\n## Summary\nClicking the Confirm button on a run does not disable it immediately. The UI state lags,\nallowing the user to click Confirm multiple times before the server acknowledges the first click.\n\n## Expected behavior\nThe button should enter a disabled/loading state immediately on click and remain disabled\nuntil the confirmation response is received (success or error).\n\n## Actual behavior\nButton remains active after click \u2014 possible to submit duplicate confirmation requests.\n\n## Reported by\nAhmed Sabbour (asabbour) \u2014 2026-07-01\n\n---\n\nYour job:\n1. Work entirely inside WORKTREE_PATH \u2014 never switch branches or touch other worktrees.\n2. Locate the Confirm button in `apps/web/src/pages/WorkflowRunPage.tsx` (or related component).\n   Add a local `isConfirming` state (useState), set it to true on click, pass it as `disabled`\n   to the button, and reset it on promise settle (finally block).\n3. Run relevant tests:\n   cd WORKTREE_PATH && npm --prefix apps\\web test -- --run --testPathPattern=WorkflowRunPage\n4. Commit:\n   git -C WORKTREE_PATH commit -m \"bug(run-page): disable confirm button on click (#95)\"\n5. Push:\n   git -C WORKTREE_PATH push -u origin squad/issue-95-confirm-button-double-submit\n6. Open PR:\n   gh pr create \\\n     --title \"bug(run-page): disable confirm button on click (#95)\" \\\n     --body \"Closes #95\n\n## What changed\nAdded `isConfirming` local state to WorkflowRunPage. The Confirm button is disabled\nimmediately on click and re-enabled once the server response settles, preventing\nduplicate confirmation submissions.\n\n## Testing\nnpm --prefix apps/web test -- --run --testPathPattern=WorkflowRunPage\n[all tests pass]\" \\\n     --base main \\\n     --head squad/issue-95-confirm-button-double-submit\n7. Report: issue number, files changed, test results, PR URL.\n\nDomain: frontend-engineer. You own apps/web and apps/cli.\nCharter: TEAM_ROOT/agents/trinity/charter.md\nDocs disposition: No docs section in issue \u2014 internal UI hardening, no user-facing docs needed.\n```\n\n---\n\n### Agent 2 \u2014 Trinity + Tank on Issue #98\n\n```\nYou are Trinity, the Frontend Engineer (implementer).\nTank (Backend Engineer) will review the backend contract \u2014 you do not need to wait for\nTank's review before opening your PR; open it and request Tank as reviewer.\n\nWORKTREE_PATH: C:\\Users\\asabbour\\Git\\agentweaver-issue-98\nTEAM_ROOT: C:\\Users\\asabbour\\Git\\agentweaver\\.squad\nBRANCH: squad/issue-98-preview-sandbox-orchestration-run\nCURRENT_DATETIME: 2026-07-01T09:06:56-07:00\n\nIssue #98: bug(run-page): preview sandbox not available on orchestration run page\n\n## Summary\nCoordinatorRunPage has no Preview button; WorkflowRunPage already has the full dialog\n(lines 836\u2013845). Users on orchestration runs (/projects/:projectId/orchestrations/:runId)\nhave no way to launch a preview sandbox.\n\n## Technical notes\n- Backend API already implemented: POST /runs/{runId}/sandbox/port-forward in\n  apps/web/src/api/client.ts lines 741\u2013756. The startPortForward call exists \u2014 it just\n  hasn't been wired to CoordinatorRunPage.\n- Working implementation to copy from: apps/web/src/pages/WorkflowRunPage.tsx lines 836\u2013845\n  (Preview button + dialog).\n- **File to fix:** apps/web/src/pages/CoordinatorRunPage.tsx\n\n## Acceptance criteria\n- [ ] Preview button appears on orchestration run page for kubernetes-sandbox runs\n- [ ] Clicking it opens the port-forward dialog\n- [ ] Works for both active AND completed runs\n\n## Dispatch\n- squad:smith \u2014 RCA: confirm the POST /runs/{runId}/sandbox/port-forward endpoint\n  accepts orchestration runIds the same way it does workflow runIds\n- squad:trinity \u2014 implement: port the Preview button + dialog from WorkflowRunPage\n  into CoordinatorRunPage\n- squad:tank \u2014 review: confirm backend port-forward endpoint is agnostic to run type\n\n---\n\nYour job (Trinity \u2014 implementer):\n1. Work entirely inside WORKTREE_PATH.\n2. Copy the Preview button + port-forward dialog from WorkflowRunPage.tsx (lines 836\u2013845)\n   into CoordinatorRunPage.tsx. Wire it to the existing startPortForward API call.\n   Make the button visible for kubernetes-sandbox runs on both active and completed runs\n   (gate on isKubernetesSandbox alone, not on runActive).\n3. Run relevant tests:\n   cd WORKTREE_PATH && npm --prefix apps\\web test -- --run --testPathPattern=CoordinatorRunPage\n4. Commit:\n   git -C WORKTREE_PATH commit -m \"bug(run-page): add preview sandbox button to orchestration run page (#98)\"\n5. Push:\n   git -C WORKTREE_PATH push -u origin squad/issue-98-preview-sandbox-orchestration-run\n6. Open PR and request Tank as reviewer:\n   gh pr create \\\n     --title \"bug(run-page): add preview sandbox button to orchestration run page (#98)\" \\\n     --body \"Closes #98\n\n## What changed\nPorted the Preview button and port-forward dialog from WorkflowRunPage into\nCoordinatorRunPage. The button is gated on `isKubernetesSandbox` (both active and\ncompleted runs). Wired to the existing `startPortForward` API call in client.ts.\n\n## Testing\nnpm --prefix apps/web test -- --run --testPathPattern=CoordinatorRunPage\n[all tests pass]\n\n> Tank: please confirm the POST /runs/{runId}/sandbox/port-forward endpoint accepts\n> orchestration runIds identically to workflow runIds.\" \\\n     --base main \\\n     --head squad/issue-98-preview-sandbox-orchestration-run \\\n     --reviewer asabbour\n7. Report: issue number, files changed, test results, PR URL.\n\nDomain: frontend-engineer. You own apps/web and apps/cli.\nCharter: TEAM_ROOT/agents/trinity/charter.md\nDocs disposition: No docs section in issue \u2014 bug fix / feature parity, no new docs needed.\n```\n\n> **Tank (backend review) \u2014 parallel note:**  \n> Tank receives: \"Review PR for #98 once Trinity opens it. Confirm `POST /runs/{runId}/sandbox/port-forward` in `apps/api/` is run-type-agnostic (accepts both workflow runIds and orchestration runIds). If not, fix the backend in the same PR branch (coordinate with Trinity) or open a follow-up issue. No separate worktree needed for review-only.\"\n\n---\n\n### Agent 3 \u2014 Scribe on Issue #101\n\n```\nYou are Scribe, the Session Logger and Docs specialist.\nWORKTREE_PATH: C:\\Users\\asabbour\\Git\\agentweaver-issue-101\nTEAM_ROOT: C:\\Users\\asabbour\\Git\\agentweaver\\.squad\nBRANCH: squad/issue-101-block-architecture-diagrams\nCURRENT_DATETIME: 2026-07-01T09:06:56-07:00\n\nIssue #101: docs(architecture): replace AKS flowchart diagrams with block architecture diagrams in README and docs\n\n## Summary\nBoth README.md and docs/guide/architecture-aks.md use Mermaid `flowchart` syntax for the\n\"block diagram\" section, which renders as a flowchart with directional arrows \u2014 not a block\narchitecture diagram. Replace with true block architecture diagrams using Mermaid `block-beta`.\n\n## Files to update\n- README.md lines 113\u2013165: replace the table + flowchart section with a `block-beta` diagram\n- docs/guide/architecture-aks.md lines 13\u201369: replace the first `flowchart TB` (simple component\n  diagram) with a `block-beta` diagram. Keep the detailed networking flowcharts lower in the\n  doc \u2014 those show data flow and are intentionally flowcharts.\n\n## Done when\n- [ ] README \"Block diagram\" section uses `block-beta` Mermaid syntax with no directional arrows\n- [ ] `architecture-aks.md` \"Component diagram\" section uses `block-beta` syntax\n- [ ] Diagrams render correctly in GitHub markdown preview and VitePress\n- [ ] No broken links or missing sections\n\n---\n\nYour job:\n1. Work entirely inside WORKTREE_PATH.\n2. Update README.md lines 113\u2013165: replace the flowchart/table with a `block-beta` diagram\n   showing the component groupings (no directional arrows).\n3. Update docs/guide/architecture-aks.md lines 13\u201369: replace the first `flowchart TB`\n   with `block-beta`. Leave the networking flowcharts below intact.\n4. Verify `block-beta` syntax is valid Mermaid (check https://mermaid.js.org/syntax/block.html).\n5. No tests to run (docs-only change). Do a visual review of the Mermaid syntax.\n6. Commit:\n   git -C WORKTREE_PATH commit -m \"docs(architecture): replace AKS flowchart diagrams with block-beta (#101)\"\n7. Push:\n   git -C WORKTREE_PATH push -u origin squad/issue-101-block-architecture-diagrams\n8. Open PR:\n   gh pr create \\\n     --title \"docs(architecture): replace AKS flowchart diagrams with block-beta (#101)\" \\\n     --body \"Closes #101\n\n## What changed\nReplaced Mermaid `flowchart` sections in README.md and architecture-aks.md with\n`block-beta` diagrams that show component groupings without directional arrows.\nDetailed networking flowcharts in architecture-aks.md are unchanged.\n\n## Testing\nDocs-only change. Mermaid block-beta syntax manually verified.\" \\\n     --base main \\\n     --head squad/issue-101-block-architecture-diagrams\n9. Report: issue number, files changed, PR URL.\n\nDomain: docs/scribe.\nCharter: TEAM_ROOT/agents/scribe/charter.md\n```\n\n---\n\n## Step 6 \u2014 Commit and PR Format Reference\n\nEvery agent follows this format:\n\n| Field | Format |\n|-------|--------|\n| Commit message | `type(scope): short description (#N)` |\n| PR title | Identical to commit message |\n| PR body | `Closes #N` + `## What changed` + `## Testing` |\n| Docs note | `\ud83d\udcdd Docs needed \u2014 see issue for disposition` (if applicable) |\n\n**Batch 1 commits:**\n- `bug(run-page): disable confirm button on click (#95)`\n- `bug(run-page): add preview sandbox button to orchestration run page (#98)`\n- `docs(architecture): replace AKS flowchart diagrams with block-beta (#101)`\n\n---\n\n## Step 7 \u2014 Collect Results and Merge Protocol\n\nAs each agent completes, the Coordinator runs:\n\n```bash\n# For each completed PR {pr_number}:\ngh pr view {pr_number} --json state,statusCheckRollup\n\n# If CI green \u2192 merge + close + clean up\ngh pr merge {pr_number} --squash --delete-branch\ngh issue close {N} --comment \"Fixed in {PR_URL}\"\ngit -C \"C:\\Users\\asabbour\\Git\\agentweaver\" worktree remove \\\n  \"C:\\Users\\asabbour\\Git\\agentweaver-issue-{N}\" --force\ngit -C \"C:\\Users\\asabbour\\Git\\agentweaver\" branch -d \"squad/issue-{N}-{slug}\"\n```\n\n**Failure handling:** If an agent's tests fail or CI is red \u2192 do not merge. Report failure to Ahmed and queue for retry or manual review.\n\n---\n\n## Step 8 \u2014 Docs Pass\n\nAfter Batch 1 merges, check each closed issue for Docs disposition:\n\n| Issue | Docs disposition | Action |\n|-------|-----------------|--------|\n| #95 | No docs section \u2014 internal UI hardening | Skip |\n| #98 | No docs section \u2014 feature parity bug fix | Skip |\n| #101 | Is the docs issue itself | Already done |\n\nNo additional Scribe docs pass needed for Batch 1.\n\n---\n\n## Batch 2 \u2014 Queued (starts after Batch 1 merges)\n\n```\n\ud83d\udd04 Batch 2 queued: #99 Trinity (serialized \u2014 same file as #95), #100 Trinity (chore)\n   Starting after Batch 1 PRs merge...\n```\n\n### Batch 2 Agent Spawn Prompts (preview)\n\n---\n\n#### Agent 4 \u2014 Trinity on Issue #99\n\n```\nYou are Trinity, the Frontend Engineer.\nWORKTREE_PATH: C:\\Users\\asabbour\\Git\\agentweaver-issue-99\nTEAM_ROOT: C:\\Users\\asabbour\\Git\\agentweaver\\.squad\nBRANCH: squad/issue-99-preview-button-hidden-completed\nCURRENT_DATETIME: {datetime at batch 2 start}\n\nIssue #99: bug(run-page): preview sandbox button hidden for completed runs \u2014 no re-launch possible\n\n## Summary\nOn WorkflowRunPage, the Preview button is gated on `runActive || !!previewSession`.\nFor completed runs, runActive=false and previewSession resets to undefined on every\npage load, so users can never re-launch a preview after navigating away.\n\n## File to fix\napps/web/src/pages/WorkflowRunPage.tsx line 836\n\n## Suggested fix (option A \u2014 preferred)\nChange gate to `isKubernetesSandbox` alone \u2014 always show the button for k8s sandbox\nruns regardless of run state.\n\n## Suggested fix (option B \u2014 fallback)\nShow a disabled button with tooltip: \"Run is complete \u2014 sandbox may still be accessible\"\nwhen `!runActive && !previewSession`.\n\n## NOTE\nIssue #95 has already merged to main. Pull latest before starting:\ngit -C WORKTREE_PATH pull origin main\n\n---\n[standard job steps: implement \u2192 test \u2192 commit \u2192 push \u2192 PR]\n\nCommit: \"bug(run-page): keep preview button visible on completed k8s sandbox runs (#99)\"\n```\n\n---\n\n#### Agent 5 \u2014 Trinity on Issue #100\n\n```\nYou are Trinity, the Frontend Engineer.\nWORKTREE_PATH: C:\\Users\\asabbour\\Git\\agentweaver-issue-100\nTEAM_ROOT: C:\\Users\\asabbour\\Git\\agentweaver\\.squad\nBRANCH: squad/issue-100-graph-zoom-nav-indicator\nCURRENT_DATETIME: {datetime at batch 2 start}\n\nIssue #100: chore(graph-view): zoom-in button, animated card navigation, and scroll indicator\n\n## Summary\nAdd three UX improvements to the orchestration graph:\n1. Zoom-in button snapping to readable zoom level (~0.75\u20131.0 scale) + Fit View return\n2. Next/Prev card navigation with smooth CSS/spring animation (300\u2013400ms ease)\n3. Scroll indicator (fade-out edge, arrow badge, or minimap dot) when graph overflows viewport\n\n## Done when\n- [ ] \"Zoom in\" button snaps to ~0.75\u20131.0 scale\n- [ ] \"Fit view\" / \"Back to overview\" returns to full-graph view\n- [ ] Next/Prev navigation pans to next card with smooth animation (300\u2013400ms ease)\n- [ ] Scroll indicator visible when graph overflows\n- [ ] All existing graph tests pass\n\n---\n[standard job steps: implement \u2192 test \u2192 commit \u2192 push \u2192 PR]\n\nCommit: \"chore(graph-view): zoom-in button, animated card navigation, scroll indicator (#100)\"\n```\n\n---\n\n## Step 9 \u2014 Updated Board (post-Batch 1, projected)\n\n```\n\u2705 Batch 1 complete (projected) \u2014 3 issues merged, 0 failed\n\ud83d\udcca Updated board:\n\n #  \u2502 Title                                                   \u2502 Squad   \u2502 Status\n\u2500\u2500\u2500\u2500\u253c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u253c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u253c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n 95 \u2502 bug(run-page): confirm button does not disable on click  \u2502 Trinity \u2502 \u2705 merged\n 98 \u2502 bug(run-page): preview sandbox not on orchestration page \u2502 Trinity \u2502 \u2705 merged\n101 \u2502 docs(architecture): replace flowchart with block-beta   \u2502 Scribe  \u2502 \u2705 merged\n 99 \u2502 bug(run-page): preview button hidden for completed runs  \u2502 Trinity \u2502 \ud83d\udd04 batch 2 \u2014 starting now\n100 \u2502 chore(graph-view): zoom-in, animated nav, scroll ind\u2026   \u2502 Trinity \u2502 \ud83d\udd04 batch 2 \u2014 starting now\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n\n\ud83d\udd04 Batch 2 starting: #99 Trinity, #100 Trinity (parallel \u2014 different files, safe)\n```\n\n---\n\n## Summary\n\n| | Count |\n|-|-------|\n| Total issues queued | 5 |\n| Bugs queued | 3 (#95, #98, #99) |\n| Chores queued | 2 (#100, #101) |\n| Batch 1 agents spawned | 3 (Trinity\u00d72, Scribe\u00d71) |\n| Batch 2 agents queued | 2 (Trinity\u00d72) |\n| Conflicts detected | 1 (#95 \u2194 #99 \u2014 same file, serialized) |\n| Existing PRs skipped | 0 |\n| Existing worktrees reused | 0 |\n"}], "grading": {"assertions": [{"passed": true, "text": "priority-sort-present: bugs before chores in queue", "evidence": "Board shows bugs #95/#98/#99 before chores #100/#101"}, {"passed": true, "text": "conflict-analysis-present: explicit file overlap check before batching", "evidence": "WorkflowRunPage.tsx conflict detected, #95 and #99 serialized"}, {"passed": true, "text": "worktree-paths-correct: agentweaver-issue-{N} format", "evidence": "agentweaver-issue-95, agentweaver-issue-98, agentweaver-issue-101 shown"}, {"passed": true, "text": "branch-names-correct: squad/issue-{N}-{slug} format", "evidence": "squad/issue-95-confirm-button-double-submit, squad/issue-98-preview-sandbox-orchestration-run"}, {"passed": true, "text": "parallel-batch-shown: work grouped into parallel batches", "evidence": "Batch 1 parallel, Batch 2 queued after merge"}, {"passed": true, "text": "go-yes-label-filter: only go:yes issues picked up", "evidence": "Board snapshot notes 5 open go:yes issues"}, {"passed": true, "text": "spawn-prompts-structure-present: agent spawn prompts included", "evidence": "Full agent spawn prompts mentioned in output file"}]}}, {"id": "eval-0-bug-first-backlog-without_skill", "prompt": "Squad, continue chipping at the GitHub issues. I want you to work on fixing the bugs first. Keep me updated with the status.", "eval_id": 0, "outputs": [{"name": "result.md", "type": "text", "content": "# Squad Simulation \u2014 Bug-First Backlog Run\n_Baseline (no skill loaded) \u00b7 2026-07-01_\n\n---\n\n## 1. Backlog Scan\n\nFetched open issues from `sabbour/agentweaver`. Applying **bug-first** filter:\n\n| # | Priority | Title | Labels |\n|---|----------|-------|--------|\n| 97 | **p1** | `bug(orchestration)`: assembly failure shows opaque error with no retry | `squad:morpheus`, `squad:smith`, `go:needs-research` |\n| 98 | p2 | `bug(run-page)`: preview sandbox not available on orchestration run page | `squad:tank`, `squad:trinity`, `go:yes` |\n| 99 | p2 | `bug(run-page)`: preview sandbox button hidden for completed runs | `squad:trinity`, `go:yes` |\n| 95 | p2 | `bug(run-page)`: confirm button does not disable immediately after click | `squad:trinity`, `go:yes` |\n\nNon-bug issues (#100, #101, #59, #56, #53, etc.) are **deferred** \u2014 bugs take priority.\n\n---\n\n## 2. Triage & Routing\n\n### Issue #97 \u2014 p1 \u00b7 `assembly_blocked` opaque error + no retry\n- **RCA first (Smith):** Trace where `assembly_blocked: ineligible_subtasks` is set; determine if failure is transient or permanent.\n- **Fix (Morpheus):** Add auto-retry logic (capped) in the orchestration run-state machine; bubble up `ineligible_subtasks` list to the UI error surface.\n- **Note:** `go:needs-research` \u2014 Smith must complete RCA before Morpheus codes.\n\n### Issue #98 \u2014 p2 \u00b7 No Preview button on CoordinatorRunPage\n- **RCA (Smith):** Confirm `POST /runs/{runId}/sandbox/port-forward` accepts orchestration runIds identically to workflow runIds.\n- **Implement (Trinity):** Port the Preview button + port-forward dialog from `WorkflowRunPage.tsx` (lines 836\u2013845) into `CoordinatorRunPage.tsx`.\n- **Review (Tank):** Confirm backend port-forward endpoint is run-type agnostic.\n- Smith RCA can run **in parallel** with Trinity's implementation (implementation is low-risk port).\n\n### Issue #99 \u2014 p2 \u00b7 Preview button hidden after run completes\n- **Fix (Trinity):** In `WorkflowRunPage.tsx` line 836, change gate from `isKubernetesSandbox && (runActive || !!previewSession)` \u2192 `isKubernetesSandbox` (Option A), or add disabled state with tooltip (Option B).\n- Straightforward single-file change. Can start immediately.\n\n### Issue #95 \u2014 p2 \u00b7 Confirm button allows double-submit\n- **Fix (Trinity):** Add optimistic disabled state on the Confirm button \u2014 set `isConfirming = true` immediately on click, before the API response returns.\n- Note: branch `squad/issue-82-confirm-ui-freeze` already exists from a prior session \u2014 **check for relevant work there before starting fresh**.\n\n---\n\n## 3. Parallel Execution Plan\n\n```\nWave 1 \u2014 Launch in parallel (all independent start points):\n\n  [Smith]    issue-97-rca    \u2192  Trace assembly_blocked in codebase\n                                 Answer: what makes a subtask ineligible?\n                                 Output: RCA findings, then unblock Morpheus\n\n  [Trinity]  issue-98-impl   \u2192  Port Preview button to CoordinatorRunPage.tsx\n                                 Copy from WorkflowRunPage.tsx lines 836\u2013845\n                                 Wire startPortForward already in api/client.ts\n\n  [Trinity]  issue-99-fix    \u2192  Fix gate condition WorkflowRunPage.tsx:836\n                                 (Same file as #98 \u2014 sequence after #98 or branch from same base)\n\n  [Trinity]  issue-95-fix    \u2192  Disable Confirm button optimistically on click\n                                 Check squad/issue-82-confirm-ui-freeze for prior work\n\nWave 2 \u2014 Unblocked after Wave 1:\n\n  [Morpheus] issue-97-fix    \u2192  Implement retry logic + better error surfacing\n                                 Requires Smith's RCA output\n\n  [Tank]     issue-98-review \u2192  Review Tank's backend endpoint for run-type agnosticism\n                                 Requires Trinity's branch to review\n\n  [Seraph]   pre-merge-rai   \u2192  RAI scan all branches before merge\n```\n\n---\n\n## 4. Branch / Worktree Strategy\n\n> **Simulation only \u2014 no branches created**\n\n```\n# One worktree per issue (branches off main):\ngit worktree add .worktrees/issue-97  -b squad/issue-97-assembly-retry\ngit worktree add .worktrees/issue-98  -b squad/issue-98-coordinator-preview\ngit worktree add .worktrees/issue-99  -b squad/issue-99-preview-completed\ngit worktree add .worktrees/issue-95  -b squad/issue-95-confirm-disable\n\n# For issue-95: check if squad/issue-82-confirm-ui-freeze has reusable commits:\ngit --no-pager log --oneline squad/issue-82-confirm-ui-freeze\n# Cherry-pick or branch from it if relevant work already exists.\n```\n\nEach agent gets its own worktree \u2192 zero merge conflicts during parallel edits.\n\n---\n\n## 5. Key Files Involved\n\n| Issue | File(s) |\n|-------|---------|\n| #97 | Runtime orchestration source (needs Smith RCA to pinpoint); likely under `apps/api/` |\n| #98 | `apps/web/src/pages/CoordinatorRunPage.tsx` |\n| #99 | `apps/web/src/pages/WorkflowRunPage.tsx` line 836 |\n| #95 | `apps/web/src/pages/WorkflowRunPage.tsx` (Confirm button handler) |\n\n---\n\n## 6. Status Summary\n\n| Issue | Assigned | Status | Blocker |\n|-------|----------|--------|---------|\n| #97 | Smith \u2192 Morpheus | \ud83d\udd34 Needs RCA before fix | `go:needs-research` |\n| #98 | Trinity + Tank | \ud83d\udfe1 Ready (Trinity starts, Tank reviews after) | None |\n| #99 | Trinity | \ud83d\udfe2 Ready | None |\n| #95 | Trinity | \ud83d\udfe2 Ready (check issue-82 branch first) | None |\n\n**Recommended first wave:** Start #99 and #95 immediately (single-file, clear fixes). Run #98 Trinity impl in parallel. Dispatch Smith on #97 RCA concurrently \u2014 Morpheus queued behind it.\n\n---\n\n## 7. What's Missing Without a Skill\n\nWithout the Squad skill loaded, this simulation required:\n- **Manual issue triage** \u2014 no automatic routing engine; had to read labels/dispatch fields by hand\n- **No squad_state tools** \u2014 cannot read existing session state, memory, or prior decisions to avoid duplicating work already done in squad/issue-82 or other branches\n- **No parallel agent dispatch** \u2014 described the plan but cannot actually launch Trinity/Smith/Morpheus as concurrent agent sessions\n- **No Scribe auto-log** \u2014 session decisions and routing choices not persisted to `.squad/decisions.md`\n- **No worktree lifecycle management** \u2014 can describe but not execute `git worktree add` + cleanup hooks\n\nWith the Squad skill, the Coordinator would: read squad_state \u2192 check open worktrees \u2192 dispatch agents to worktrees \u2192 monitor completion \u2192 trigger Scribe \u2192 auto-clean finished worktrees.\n"}], "grading": {"assertions": [{"passed": true, "text": "priority-sort-present: bugs before chores in queue", "evidence": "Bugs listed first in wave plan"}, {"passed": false, "text": "conflict-analysis-present: explicit file overlap check before batching", "evidence": "No explicit conflict analysis \u2014 just mentions 'own worktree' without checking file overlap"}, {"passed": false, "text": "worktree-paths-correct: agentweaver-issue-{N} format", "evidence": "Mentions worktrees vaguely (squad/issue-9X-...) with no actual paths"}, {"passed": false, "text": "branch-names-correct: squad/issue-{N}-{slug} format", "evidence": "squad/issue-9X-... is placeholder, not exact format"}, {"passed": false, "text": "parallel-batch-shown: work grouped into parallel batches", "evidence": "Wave 1/Wave 2 described in prose but no structured batch table"}, {"passed": false, "text": "go-yes-label-filter: only go:yes issues picked up", "evidence": "No label filtering mentioned \u2014 just open issues"}, {"passed": false, "text": "spawn-prompts-structure-present: agent spawn prompts included", "evidence": "No spawn prompts shown"}]}}, {"id": "eval-1-ralph-go-parallel-with_skill", "prompt": "Ralph, go. Work on the open issues in sabbour/agentweaver. Bugs first, then chores. Work in parallel where you can.", "eval_id": 1, "outputs": [{"name": "result.md", "type": "text", "content": "# Ralph Fleet Plan \u2014 sabbour/agentweaver\n**Generated:** 2026-07-01T09:06:56-07:00  \n**Trigger:** \"Ralph, go. Work on the open issues in sabbour/agentweaver. Bugs first, then chores. Work in parallel where you can.\"  \n**Skill:** `.copilot/skills/squad-fleet/SKILL.md`\n\n---\n\n## Step 1 \u2014 Current Board\n\n| # | Title | Squad | Priority | Type |\n|---|-------|-------|----------|------|\n| 95 | bug(run-page): confirm button does not disable immediately after click | Trinity | \u2014 | bug |\n| 98 | bug(run-page): preview sandbox not available on orchestration run page | Trinity + Tank | p2 | bug |\n| 99 | bug(run-page): preview sandbox button hidden for completed runs \u2014 no re-launch possible | Trinity | p2 | bug |\n| 100 | chore(graph-view): zoom-in button, animated card navigation, and scroll indicator | Trinity | p2 | chore |\n| 101 | docs(architecture): replace AKS flowchart diagrams with block architecture diagrams in README and docs | Scribe | p2 | chore |\n\n**Existing PRs:** none  \n**Active worktrees:** none (main only)\n\n---\n\n## Step 2 \u2014 Priority-Sorted Work Queue\n\nSorting rule: p0 bugs \u2192 p1 bugs \u2192 p0/p1 chores \u2192 p2 bugs \u2192 features/remaining chores \u2192 spikes.  \nWithin each tier: issue number ascending (oldest first).  \n#95 carries no priority label; treated as p2 (same tier as the other bugs) given its bug type.\n\n| Queue | # | Title | Type | Priority | Agent |\n|-------|---|-------|------|----------|-------|\n| 1 | 95 | confirm button does not disable immediately after click | bug | (unset \u2192 p2) | Trinity |\n| 2 | 98 | preview sandbox not available on orchestration run page | bug | p2 | Trinity + Tank |\n| 3 | 99 | preview sandbox button hidden for completed runs | bug | p2 | Trinity |\n| 4 | 100 | zoom-in button, animated card navigation, scroll indicator | chore | p2 | Trinity |\n| 5 | 101 | replace AKS flowchart diagrams with block architecture diagrams | chore | p2 | Scribe |\n\n---\n\n## Step 3 \u2014 Conflict Analysis\n\n### File-domain mapping (from routing.md + issue bodies)\n\n| # | Files touched | Domain |\n|---|--------------|--------|\n| 95 | `apps/web/src/pages/WorkflowRunPage.tsx` (confirm button component) | frontend \u2014 run-page |\n| 98 | `apps/web/src/pages/CoordinatorRunPage.tsx` (Preview button port) | frontend \u2014 coordinator-page |\n| 98 | `apps/api/` port-forward endpoint review (read-only review, Tank) | backend |\n| 99 | `apps/web/src/pages/WorkflowRunPage.tsx` line 836 (gate condition) | frontend \u2014 run-page |\n| 100 | `apps/web/src/pages/` graph view component(s) (zoom/nav/indicator) | frontend \u2014 graph-view |\n| 101 | `README.md`, `docs/guide/architecture-aks.md` | docs |\n\n### Conflict matrix\n\n| Issues | Overlap? | Reason |\n|--------|----------|--------|\n| #95 \u2194 #99 | **CONFLICT** | Both edit `WorkflowRunPage.tsx` |\n| #95 \u2194 #98 | safe | Different page files |\n| #95 \u2194 #100 | safe | Different components |\n| #95 \u2194 #101 | safe | Code vs docs |\n| #98 \u2194 #99 | safe | `CoordinatorRunPage.tsx` vs `WorkflowRunPage.tsx` |\n| #98 \u2194 #100 | safe | Different UI areas (run-page vs graph-view) |\n| #99 \u2194 #100 | safe | `WorkflowRunPage.tsx` vs graph components |\n| #100 \u2194 #101 | safe | Code vs docs |\n| Any \u2194 #101 | safe | Docs-only, isolated file tree |\n\n### Conclusion\n\n#95 and #99 **must be serialized** \u2014 both write to `WorkflowRunPage.tsx`.  \nAll other combinations are safe to parallelize.\n\n---\n\n## Step 4 \u2014 Batch Grouping\n\n```\n\ud83d\ude80 Fleet plan:\n\n   Batch 1 (parallel \u2014 3 agents):\n     #98  Trinity  \u2014  bug(run-page): preview sandbox on CoordinatorRunPage\n     #100 Trinity  \u2014  chore(graph-view): zoom/navigation/scroll indicator\n     #101 Scribe   \u2014  docs(architecture): block architecture diagrams\n\n   Batch 2a (after Batch 1 merges \u2014 solo):\n     #95  Trinity  \u2014  bug(run-page): confirm button disable\n\n   Batch 2b (after Batch 2a merges \u2014 solo):\n     #99  Trinity  \u2014  bug(run-page): preview button for completed runs\n```\n\n> **Why bugs #95 and #99 are in Batch 2, not Batch 1:**  \n> Both edit `WorkflowRunPage.tsx`. Running them in parallel guarantees a merge conflict.  \n> Serializing them is the only safe path even though they are higher-tier work.  \n> #100 and #101 are conflict-safe with all other issues so they are pulled forward into Batch 1\n> to maximize throughput.\n\n---\n\n## Step 5 \u2014 Worktrees and Branch Names\n\n| # | Worktree path | Branch |\n|---|--------------|--------|\n| 95 | `C:\\Users\\asabbour\\Git\\agentweaver-issue-95` | `squad/issue-95-confirm-button-disable` |\n| 98 | `C:\\Users\\asabbour\\Git\\agentweaver-issue-98` | `squad/issue-98-preview-sandbox-coordinator` |\n| 99 | `C:\\Users\\asabbour\\Git\\agentweaver-issue-99` | `squad/issue-99-preview-button-completed-runs` |\n| 100 | `C:\\Users\\asabbour\\Git\\agentweaver-issue-100` | `squad/issue-100-graph-view-zoom-navigate` |\n| 101 | `C:\\Users\\asabbour\\Git\\agentweaver-issue-101` | `squad/issue-101-block-architecture-diagrams` |\n\n**Worktree creation commands (Batch 1 \u2014 run simultaneously):**\n\n```bash\ngit -C \"C:\\Users\\asabbour\\Git\\agentweaver\" worktree add \"C:\\Users\\asabbour\\Git\\agentweaver-issue-98\"  -b squad/issue-98-preview-sandbox-coordinator  main\ngit -C \"C:\\Users\\asabbour\\Git\\agentweaver\" worktree add \"C:\\Users\\asabbour\\Git\\agentweaver-issue-100\" -b squad/issue-100-graph-view-zoom-navigate      main\ngit -C \"C:\\Users\\asabbour\\Git\\agentweaver\" worktree add \"C:\\Users\\asabbour\\Git\\agentweaver-issue-101\" -b squad/issue-101-block-architecture-diagrams    main\n\n# Optional: junction node_modules to avoid reinstall\ncmd /c \"mklink /J C:\\Users\\asabbour\\Git\\agentweaver-issue-98\\apps\\web\\node_modules  C:\\Users\\asabbour\\Git\\agentweaver\\apps\\web\\node_modules\" 2>nul\ncmd /c \"mklink /J C:\\Users\\asabbour\\Git\\agentweaver-issue-100\\apps\\web\\node_modules C:\\Users\\asabbour\\Git\\agentweaver\\apps\\web\\node_modules\" 2>nul\n```\n\n**Worktree creation commands (Batch 2a \u2014 after Batch 1 merges):**\n\n```bash\ngit -C \"C:\\Users\\asabbour\\Git\\agentweaver\" worktree add \"C:\\Users\\asabbour\\Git\\agentweaver-issue-95\"  -b squad/issue-95-confirm-button-disable          main\ncmd /c \"mklink /J C:\\Users\\asabbour\\Git\\agentweaver-issue-95\\apps\\web\\node_modules  C:\\Users\\asabbour\\Git\\agentweaver\\apps\\web\\node_modules\" 2>nul\n```\n\n**Worktree creation commands (Batch 2b \u2014 after Batch 2a merges):**\n\n```bash\ngit -C \"C:\\Users\\asabbour\\Git\\agentweaver\" worktree add \"C:\\Users\\asabbour\\Git\\agentweaver-issue-99\"  -b squad/issue-99-preview-button-completed-runs    main\ncmd /c \"mklink /J C:\\Users\\asabbour\\Git\\agentweaver-issue-99\\apps\\web\\node_modules  C:\\Users\\asabbour\\Git\\agentweaver\\apps\\web\\node_modules\" 2>nul\n```\n\n---\n\n## Step 6 \u2014 Spawn Prompts (Batch 1)\n\n### Agent 1 \u2014 Trinity on #98\n\n```\nYou are Trinity, the Frontend Engineer.\nWORKTREE_PATH: C:\\Users\\asabbour\\Git\\agentweaver-issue-98\nTEAM_ROOT:     C:\\Users\\asabbour\\Git\\agentweaver\\.squad\nBRANCH:        squad/issue-98-preview-sandbox-coordinator\nCURRENT_DATETIME: 2026-07-01T09:06:56-07:00\n\nIssue #98: bug(run-page): preview sandbox not available on orchestration run page\n\n## Summary\nCoordinatorRunPage has no Preview button; WorkflowRunPage already has the full dialog\n(lines 836\u2013845). Users navigating to orchestration runs at /projects/:projectId/orchestrations/:runId\nhave no way to launch a preview sandbox.\n\n## Technical notes\n- Backend API already implemented: POST /runs/{runId}/sandbox/port-forward in\n  apps/web/src/api/client.ts lines 741\u2013756. The startPortForward call exists.\n- Working implementation to copy from: apps/web/src/pages/WorkflowRunPage.tsx lines 836\u2013845\n  (Preview button + dialog).\n- **File to fix:** apps/web/src/pages/CoordinatorRunPage.tsx\n- Acceptance criteria:\n  - [ ] Preview button appears on orchestration run page for kubernetes-sandbox runs\n  - [ ] Clicking it opens the port-forward dialog\n  - [ ] Works for both active AND completed runs\n\n## Dispatch for this agent (Trinity)\nImplement: port the Preview button + dialog from WorkflowRunPage into CoordinatorRunPage.\nNote: Tank will verify the backend endpoint is run-type agnostic (separate review task).\n\n## Your job\n1. Work entirely inside WORKTREE_PATH \u2014 never switch branches or touch other worktrees\n2. Read WorkflowRunPage.tsx lines 836\u2013845 for the reference implementation\n3. Port Preview button + port-forward dialog into CoordinatorRunPage.tsx\n4. Gate the button on isKubernetesSandbox \u2014 show for both active AND completed runs\n5. Run relevant tests:\n   npm --prefix apps\\web test -- --run --testPathPattern=CoordinatorRunPage\n6. Commit: git -C WORKTREE_PATH commit -m \"bug(run-page): add preview sandbox to orchestration run page (#98)\"\n7. Push: git -C WORKTREE_PATH push -u origin squad/issue-98-preview-sandbox-coordinator\n8. Open PR:\n   gh pr create \\\n     --title \"bug(run-page): add preview sandbox to orchestration run page (#98)\" \\\n     --body \"Closes #98\\n\\n## What changed\\nPorted Preview button and port-forward dialog from WorkflowRunPage into CoordinatorRunPage. Button gated on isKubernetesSandbox, visible for active and completed runs.\\n\\n## Testing\\nnpm --prefix apps/web test -- --run --testPathPattern=CoordinatorRunPage\" \\\n     --base main \\\n     --head squad/issue-98-preview-sandbox-coordinator\n9. Report: issue number, files changed, test results, PR URL\n\nDocs disposition: no docs needed (internal implementation parity fix).\n```\n\n---\n\n### Agent 2 \u2014 Trinity on #100\n\n```\nYou are Trinity, the Frontend Engineer.\nWORKTREE_PATH: C:\\Users\\asabbour\\Git\\agentweaver-issue-100\nTEAM_ROOT:     C:\\Users\\asabbour\\Git\\agentweaver\\.squad\nBRANCH:        squad/issue-100-graph-view-zoom-navigate\nCURRENT_DATETIME: 2026-07-01T09:06:56-07:00\n\nIssue #100: chore(graph-view): zoom-in button, animated card navigation, and scroll indicator\n\n## Summary\nThe orchestration graph has no way to zoom in or navigate between cards. Three improvements requested:\n1. Zoom-in button \u2014 snaps viewport to readable zoom (~0.75\u20131.0 scale); Back-to-overview returns\n   to full-graph fit-view.\n2. Animated card navigation \u2014 Next/Prev control (or arrow keys) pans to next card in pipeline\n   order with 300\u2013400ms ease animation.\n3. Scroll indicator \u2014 fade-out edge, arrow badge, or minimap dot when graph content overflows viewport.\n\n## Done when\n- [ ] \"Zoom in\" button snaps to readable zoom level (~0.75\u20131.0 scale)\n- [ ] \"Fit view\" / \"Back to overview\" returns to full-graph view\n- [ ] Next/Prev navigation pans to the next card with a smooth animation (300\u2013400ms ease)\n- [ ] Scroll indicator visible when graph overflows viewport\n- [ ] All existing graph tests pass\n\n## Your job\n1. Work entirely inside WORKTREE_PATH\n2. Locate the graph view component(s) in apps/web/src/ (likely under components/ or pages/)\n3. Implement the three features\n4. Run existing graph tests:\n   npm --prefix apps\\web test -- --run --testPathPattern=graph\n5. Commit: git -C WORKTREE_PATH commit -m \"chore(graph-view): zoom-in button, animated card navigation, and scroll indicator (#100)\"\n6. Push: git -C WORKTREE_PATH push -u origin squad/issue-100-graph-view-zoom-navigate\n7. Open PR:\n   gh pr create \\\n     --title \"chore(graph-view): zoom-in button, animated card navigation, and scroll indicator (#100)\" \\\n     --body \"Closes #100\\n\\n## What changed\\nAdded zoom-in/fit-view buttons, Next/Prev animated card navigation, and scroll overflow indicator to the orchestration graph view.\\n\\n## Testing\\nnpm --prefix apps/web test -- --run --testPathPattern=graph\" \\\n     --base main \\\n     --head squad/issue-100-graph-view-zoom-navigate\n8. Report: issue number, files changed, test results, PR URL\n\nDocs disposition: no docs needed (UI enhancement, internal).\n```\n\n---\n\n### Agent 3 \u2014 Scribe on #101\n\n```\nYou are Scribe, the Docs specialist.\nWORKTREE_PATH: C:\\Users\\asabbour\\Git\\agentweaver-issue-101\nTEAM_ROOT:     C:\\Users\\asabbour\\Git\\agentweaver\\.squad\nBRANCH:        squad/issue-101-block-architecture-diagrams\nCURRENT_DATETIME: 2026-07-01T09:06:56-07:00\n\nIssue #101: docs(architecture): replace AKS flowchart diagrams with block architecture diagrams in README and docs\n\n## Summary\nREADME.md and docs/guide/architecture-aks.md use Mermaid flowchart syntax for component overview\nsections. Replace these with Mermaid block-beta diagrams (component groupings, no flow arrows).\n\n## Files to update\n- README.md lines 113\u2013165: replace table + flowchart section with block-beta diagram\n- docs/guide/architecture-aks.md lines 13\u201369: replace first flowchart TB (simple component diagram)\n  with block-beta diagram. Keep the detailed networking flowcharts lower in the doc \u2014 those are\n  intentional data-flow diagrams.\n\n## Done when\n- [ ] README \"Block diagram\" section uses block-beta Mermaid syntax with no directional arrows\n- [ ] architecture-aks.md \"Component diagram\" section uses block-beta syntax\n- [ ] Diagrams render correctly in GitHub markdown preview and VitePress\n- [ ] No broken links or missing sections\n\n## Your job\n1. Work entirely inside WORKTREE_PATH\n2. Read README.md lines 113\u2013165 and docs/guide/architecture-aks.md lines 13\u201369\n3. Replace flowchart syntax with block-beta equivalents preserving all components/labels\n4. Verify Mermaid block-beta renders (check syntax against mermaid.js.org/syntax/block.html)\n5. Commit: git -C WORKTREE_PATH commit -m \"docs(architecture): replace AKS flowchart diagrams with block architecture diagrams (#101)\"\n6. Push: git -C WORKTREE_PATH push -u origin squad/issue-101-block-architecture-diagrams\n7. Open PR:\n   gh pr create \\\n     --title \"docs(architecture): replace AKS flowchart diagrams with block architecture diagrams (#101)\" \\\n     --body \"Closes #101\\n\\n## What changed\\nReplaced Mermaid flowchart syntax in README and architecture-aks.md component sections with block-beta diagrams. Detailed networking flowcharts preserved as-is.\\n\\n## Testing\\nManual: verified Mermaid block-beta renders in GitHub preview.\" \\\n     --base main \\\n     --head squad/issue-101-block-architecture-diagrams\n8. Report: issue number, files changed, PR URL\n\nDocs disposition: this IS the docs work. No secondary docs pass needed.\n```\n\n---\n\n## Spawn Prompts (Batch 2a \u2014 after Batch 1 merges)\n\n### Agent 4 \u2014 Trinity on #95\n\n```\nYou are Trinity, the Frontend Engineer.\nWORKTREE_PATH: C:\\Users\\asabbour\\Git\\agentweaver-issue-95\nTEAM_ROOT:     C:\\Users\\asabbour\\Git\\agentweaver\\.squad\nBRANCH:        squad/issue-95-confirm-button-disable\nCURRENT_DATETIME: {datetime at spawn time}\n\nIssue #95: bug(run-page): confirm button does not disable immediately after click\n\n## Summary\nClicking the Confirm button on a run does not disable it immediately. The UI state lags,\nallowing the user to click Confirm multiple times before the server acknowledges the first click.\n\n## Expected behavior\nButton enters disabled/loading state immediately on click and remains disabled until the\nconfirmation response is received (success or error).\n\n## Actual behavior\nButton remains active after click \u2014 duplicate confirmation requests are possible.\n\n## Your job\n1. Work entirely inside WORKTREE_PATH\n2. Locate the Confirm button in apps/web/src/pages/WorkflowRunPage.tsx (or its child component)\n3. Add an isConfirming local state; set to true on click, false on response/error\n4. Disable the button when isConfirming === true\n5. Run relevant tests:\n   npm --prefix apps\\web test -- --run --testPathPattern=WorkflowRunPage\n6. Commit: git -C WORKTREE_PATH commit -m \"bug(run-page): disable confirm button on click (#95)\"\n7. Push: git -C WORKTREE_PATH push -u origin squad/issue-95-confirm-button-disable\n8. Open PR:\n   gh pr create \\\n     --title \"bug(run-page): disable confirm button on click (#95)\" \\\n     --body \"Closes #95\\n\\n## What changed\\nAdded isConfirming state to disable the Confirm button immediately on click, preventing duplicate submissions.\\n\\n## Testing\\nnpm --prefix apps/web test -- --run --testPathPattern=WorkflowRunPage\" \\\n     --base main \\\n     --head squad/issue-95-confirm-button-disable\n9. Report: issue number, files changed, test results, PR URL\n\nDocs disposition: no docs needed (bug fix).\n```\n\n---\n\n## Spawn Prompts (Batch 2b \u2014 after Batch 2a merges)\n\n### Agent 5 \u2014 Trinity on #99\n\n```\nYou are Trinity, the Frontend Engineer.\nWORKTREE_PATH: C:\\Users\\asabbour\\Git\\agentweaver-issue-99\nTEAM_ROOT:     C:\\Users\\asabbour\\Git\\agentweaver\\.squad\nBRANCH:        squad/issue-99-preview-button-completed-runs\nCURRENT_DATETIME: {datetime at spawn time}\n\nIssue #99: bug(run-page): preview sandbox button hidden for completed runs \u2014 no re-launch possible\n\n## Summary\nWorkflowRunPage gates the Preview button on `runActive || !!previewSession`. For completed runs,\nrunActive=false and previewSession resets to undefined on every page load. Once a run completes\nthe Preview button is permanently hidden on reload.\n\n## Technical notes\n- File to fix: apps/web/src/pages/WorkflowRunPage.tsx line 836\n- Gate condition: {isKubernetesSandbox && (runActive || !!previewSession)}\n- Suggested fix Option A: Change gate to isKubernetesSandbox alone \u2014 always show for k8s sandbox\n- Suggested fix Option B: Show disabled button with tooltip when !runActive && !previewSession\n\n## Your job\n1. Work entirely inside WORKTREE_PATH\n2. Read WorkflowRunPage.tsx around line 836 to understand the full gate logic\n3. Implement Option A or B (prefer A \u2014 simpler, UX guidance from Ahmed)\n4. Ensure the sandbox pod may still be accessible message is clear if Option B\n5. Run relevant tests:\n   npm --prefix apps\\web test -- --run --testPathPattern=WorkflowRunPage\n6. Commit: git -C WORKTREE_PATH commit -m \"bug(run-page): show preview button for completed runs (#99)\"\n7. Push: git -C WORKTREE_PATH push -u origin squad/issue-99-preview-button-completed-runs\n8. Open PR:\n   gh pr create \\\n     --title \"bug(run-page): show preview button for completed runs (#99)\" \\\n     --body \"Closes #99\\n\\n## What changed\\nChanged Preview button gate from (runActive || !!previewSession) to isKubernetesSandbox alone so the button remains visible after run completion.\\n\\n## Testing\\nnpm --prefix apps/web test -- --run --testPathPattern=WorkflowRunPage\" \\\n     --base main \\\n     --head squad/issue-99-preview-button-completed-runs\n9. Report: issue number, files changed, test results, PR URL\n\nDocs disposition: no docs needed (bug fix).\n```\n\n---\n\n## Step 7 \u2014 Commit Format Summary\n\n| # | Commit / PR title |\n|---|-------------------|\n| 98 | `bug(run-page): add preview sandbox to orchestration run page (#98)` |\n| 100 | `chore(graph-view): zoom-in button, animated card navigation, and scroll indicator (#100)` |\n| 101 | `docs(architecture): replace AKS flowchart diagrams with block architecture diagrams (#101)` |\n| 95 | `bug(run-page): disable confirm button on click (#95)` |\n| 99 | `bug(run-page): show preview button for completed runs (#99)` |\n\n**PR body template (all agents):**\n```markdown\nCloses #{issue_number}\n\n## What changed\n{brief description}\n\n## Testing\n{test command + result}\n```\n\n---\n\n## Step 8 \u2014 Docs Pass (after all batches)\n\n| # | Docs disposition | Action |\n|---|-----------------|--------|\n| 95 | no docs needed | skip |\n| 98 | no docs needed | skip |\n| 99 | no docs needed | skip |\n| 100 | no docs needed | skip |\n| 101 | IS the docs work | no secondary pass needed |\n\nNo secondary Scribe pass required after this iteration.\n\n---\n\n## Execution Summary\n\n```\n\ud83d\udccb Open board: 5 issues (3 bugs, 2 chores)\n\n\ud83d\ude80 Fleet plan:\n\n   Batch 1 (parallel \u2014 start now):\n     #98  Trinity  bug(run-page): preview sandbox on CoordinatorRunPage\n     #100 Trinity  chore(graph-view): zoom/navigation/scroll indicator\n     #101 Scribe   docs(architecture): block-beta diagrams\n\n   Batch 2a (after Batch 1 merges \u2014 solo):\n     #95  Trinity  bug(run-page): confirm button disable\n\n   Batch 2b (after Batch 2a merges \u2014 solo):\n     #99  Trinity  bug(run-page): preview button for completed runs\n\n\u26a0\ufe0f  Serialization reason: #95 and #99 both edit WorkflowRunPage.tsx line 836 region.\n    Running them in parallel guarantees a merge conflict.\n\n\ud83d\udccc Note on #98 dispatch:\n    Tank (backend) performs a read-only review of the port-forward endpoint \u2014 no\n    separate worktree needed for Tank. Smith's RCA is a verification task that can\n    run as a quick probe before Trinity's PR merges.\n```\n"}], "grading": {"assertions": [{"passed": false, "text": "priority-sort-present: bugs before chores in queue", "evidence": "Queue shows bugs AFTER chores (#98 first is bug, but #100 chore listed before #95/#99 bugs \u2014 skill treated p2 uniformly)"}, {"passed": true, "text": "conflict-analysis-present: explicit file overlap check before batching", "evidence": "WorkflowRunPage.tsx conflict between #95 and #99 explicitly detected and serialized"}, {"passed": true, "text": "worktree-paths-correct: agentweaver-issue-{N} format", "evidence": "Full worktree paths with agentweaver-issue-{N} in output file"}, {"passed": true, "text": "branch-names-correct: squad/issue-{N}-{slug} format", "evidence": "Correct branch format mentioned for all 5 issues"}, {"passed": true, "text": "parallel-batch-shown: work grouped into parallel batches", "evidence": "Batch 1 parallel (#98/#100/#101), Batch 2a/2b sequential"}, {"passed": true, "text": "go-yes-label-filter: only go:yes issues picked up", "evidence": "Queue built from go:yes issues"}, {"passed": true, "text": "spawn-prompts-structure-present: agent spawn prompts included", "evidence": "5 spawn prompts in output file"}]}}, {"id": "eval-1-ralph-go-parallel-without_skill", "prompt": "Ralph, go. Work on the open issues in sabbour/agentweaver. Bugs first, then chores. Work in parallel where you can.", "eval_id": 1, "outputs": [{"name": "result.md", "type": "text", "content": "# Ralph \u2014 Baseline Approach: Open Issues in sabbour/agentweaver\n\n**Evaluation:** `eval-1-ralph-go-parallel` | **Mode:** `without_skill`  \n**Date:** 2026-07-01\n\n---\n\n## 1. Issue Triage\n\nOpen issues fetched from `gh issue list --repo sabbour/agentweaver --state open`:\n\n| # | Type | Title | Priority |\n|---|------|-------|----------|\n| 97 | **bug** | orchestration: assembly failure shows opaque error with no retry | 1 |\n| 98 | **bug** | run-page: preview sandbox not available on orchestration run page | 2 |\n| 99 | **bug** | run-page: preview sandbox button hidden for completed runs | 3 |\n| 95 | **bug** | run-page: confirm button does not disable immediately after click | 4 |\n| 100 | **chore** | graph-view: zoom-in button, animated card navigation, scroll indicator | 5 |\n| 101 | **docs** | architecture: replace AKS flowchart diagrams with block-beta diagrams | 6 |\n\n> Features (59, 56, 53, 52, 51, 50, 49, 48, 46, 44, 1) are deferred \u2014 task says \"bugs first, then chores.\"\n\n---\n\n## 2. Execution Plan\n\n### Parallelism model\n\nIssues 95, 99, and 97 all touch **different files** and are independent. Issue 98 depends on understanding issue 99's fix (both touch the Preview button, but in separate page files). Issues 100 and 101 are entirely independent of each other and of the bugs.\n\n**Proposed parallel batches:**\n\n```\nBatch A (parallel):\n  \u251c\u2500\u2500 #95  OutcomeSpecPanel.tsx (confirm button disabled state)\n  \u251c\u2500\u2500 #99  WorkflowRunPage.tsx  (preview button gate for completed runs)\n  \u2514\u2500\u2500 #97  CoordinatorRunPage.tsx + backend RCA (assembly_blocked retry)\n\nBatch B (after #99 is done, parallel):\n  \u251c\u2500\u2500 #98  CoordinatorRunPage.tsx (port the Preview button from WorkflowRunPage)\n  \u251c\u2500\u2500 #100 Graph view UI (zoom, navigation, scroll indicator)\n  \u2514\u2500\u2500 #101 README.md + docs/guide/architecture-aks.md (block-beta diagrams)\n```\n\n---\n\n## 3. Per-Issue Approach\n\n### Bug #95 \u2014 Confirm button does not disable immediately\n\n**File:** `apps/web/src/components/OutcomeSpecPanel.tsx`\n\n**Finding:** The code already has `confirmInFlightRef` as a synchronous guard (line 215) and `disabled={acting}` on the button (line 549). However `setActing(true)` is an async React state update, so the button stays visually enabled for one render cycle after the first click. The `confirmInFlightRef` ref blocks a second call from executing, but the button UI lags.\n\n**Fix:** Add `confirmInFlightRef.current` to the button's `disabled` expression so the button goes visually disabled synchronously on the first click without waiting for React to re-render:\n\n```tsx\n// line 549 \u2014 before\ndisabled={acting || revising || runInterrupted}\n\n// line 549 \u2014 after  \ndisabled={acting || confirmInFlightRef.current || revising || runInterrupted}\n```\n\nApply same change to line 557 (the Decline sibling button if sharing the acting guard). Verify with existing tests in `OutcomeSpecPanel.test.tsx`.\n\n**Estimated effort:** ~15 min, no new tests required (existing guard logic already tested).\n\n---\n\n### Bug #99 \u2014 Preview button hidden for completed runs\n\n**File:** `apps/web/src/pages/WorkflowRunPage.tsx` line 836\n\n**Finding:**\n```tsx\n// Current gate (line 836):\n{isKubernetesSandbox && (runActive || !!previewSession) && (\n```\n`runActive = !SEED_STATUSES.has(runStatus)` \u2014 `'completed'` is in `SEED_STATUSES`, so `runActive=false`. `previewSession` is component state that resets to `undefined` on every page load. Result: button disappears permanently once a run completes and the user navigates away.\n\n**Fix (Option A \u2014 always show for k8s sandbox):** Change gate to `isKubernetesSandbox` alone:\n```tsx\n{isKubernetesSandbox && (\n```\nThis keeps the button visible regardless of run state. The dialog already handles the case where no session is active (it shows the \"Start port-forward\" form).\n\n**Fix (Option B \u2014 disabled with tooltip for completed runs):** Show a disabled button:\n```tsx\n{isKubernetesSandbox && (\n  <Button\n    appearance=\"secondary\"\n    size=\"small\"\n    icon={<OpenRegular />}\n    disabled={!runActive && !previewSession}\n    title={!runActive && !previewSession ? 'Run is complete \u2014 sandbox may still be accessible' : undefined}\n    onClick={() => { setPreviewDialogOpen(true); setPreviewError(undefined); }}\n  >\n    Preview\n  </Button>\n)}\n```\n\n**Recommended:** Option A (simpler, the dialog already guards against calling port-forward on a non-existent session). Option B is safer if the intent is to discourage stale port-forward attempts.\n\n**Estimated effort:** ~10 min.\n\n---\n\n### Bug #98 \u2014 No Preview button on orchestration run page\n\n**File:** `apps/web/src/pages/CoordinatorRunPage.tsx`\n\n**Dependency:** Shares the same port-forward dialog logic as #99. Port the working implementation from `WorkflowRunPage.tsx` lines 836\u2013845.\n\n**Steps:**\n1. Add the same state variables to `CoordinatorRunPage`: `previewSession`, `previewDialogOpen`, `previewError`, `isKubernetesSandbox` (derive from run metadata, same as WorkflowRunPage line 798).\n2. Copy the port-forward dialog JSX (WorkflowRunPage lines ~960\u20131040) into CoordinatorRunPage.\n3. Add the Preview button to the CoordinatorRunPage header row, gated on `isKubernetesSandbox` (using Option A from #99).\n4. Wire `apiClient.startPortForward` / `stopPortForward` \u2014 backend already supports orchestration runIds per the issue notes.\n\n**Acceptance tests:** Verify the button appears for k8s sandbox orchestration runs (active and completed), dialog opens, port-forward starts.\n\n**Estimated effort:** ~60\u201390 min (copy + adapt + integration test).\n\n---\n\n### Bug #97 \u2014 Assembly failure shows opaque error, no retry\n\n**Files:** `apps/web/src/pages/CoordinatorRunPage.tsx` + potentially a backend service\n\n**Finding:** The `coordinator.assembly_blocked` event and `ineligible_subtasks` reason are already surfaced in the UI (lines 2223\u20132226 list blocking subtasks by name). The issue reports seeing \"The collective assembly could not complete.\" \u2014 a generic fallback message without the ineligible subtask detail.\n\n**Two sub-problems:**\n\n**A) UI surfacing (front-end):** The detailed panel at line 2223 is already present but gated on `ineligibleSubtasks.length > 0`. For runs where the SSE event was received but the payload lacked `ineligibleSubtasks` (only bare subtask IDs), it may fall back to the generic message. Ensure the ID-only fallback (line 2244) also renders something helpful (\"Subtask IDs: 59, 60, 61, 62\").\n\n**B) Auto-retry (back-end):** The coordinator should retry assembly after transient failures with backoff (capped at e.g. 3 retries). This requires a back-end change. The front-end should surface the retry count in the blocked panel.\n\n**Immediate front-end fix:** Guard the ID-only path to display subtask IDs when full detail rows are absent:\n```tsx\n{ineligibleSubtasks && ineligibleSubtasks.length > 0\n  ? /* existing detailed list */\n  : ineligibleSubtaskIds && ineligibleSubtaskIds.length > 0\n    ? <Text>Blocking subtask IDs: {ineligibleSubtaskIds.join(', ')}</Text>\n    : <Text>Assembly halted \u2014 see run log for details.</Text>\n}\n```\n\n**Back-end retry:** Requires RCA (per the issue's Smith dispatch) to confirm whether `ineligible_subtasks` is transient. Blocked on that investigation.\n\n**Estimated effort:** Front-end UI fix ~30 min. Back-end retry: TBD, depends on RCA.\n\n---\n\n### Chore #100 \u2014 Graph view: zoom button, animated navigation, scroll indicator\n\n**File:** `apps/web/src/pages/CoordinatorRunPage.tsx` (ReactFlow graph toolbar)\n\n**Three sub-tasks (can be done in one PR or split):**\n\n1. **Zoom-in button:** Add a \"Zoom to fit cards\" button to the existing ReactFlow toolbar. Use `useReactFlow().fitView({ padding: 0.1, maxZoom: 0.9 })` (already imported line 38). A \"Fit overview\" button using `fitView({ padding: 0.25 })` returns to full-graph view.\n\n2. **Animated card navigation:** Add Prev/Next buttons. On click, call `setCenter(node.position.x + NODE_W/2, node.position.y + NODE_H/2, { zoom: 0.9, duration: 350 })` using `useReactFlow().setCenter`. Walk nodes in pipeline order (already computed via `layoutDag`).\n\n3. **Scroll indicator:** Add a subtle fade-out CSS gradient on the graph container edges when content overflows. Use a ResizeObserver / intersection observer on the graph wrapper to toggle a CSS class.\n\n**Acceptance criteria from issue:** Zoom ~0.75\u20131.0, 300\u2013400ms animation, scroll indicator visible when overflow, all existing graph tests pass.\n\n**Estimated effort:** ~2\u20133 hours.\n\n---\n\n### Docs #101 \u2014 Replace flowchart diagrams with block-beta\n\n**Files:** `README.md` (lines 113\u2013165), `docs/guide/architecture-aks.md` (lines 13\u201369)\n\n**Approach:**\n1. Read the existing `flowchart TB` sections in both files.\n2. Re-author them as Mermaid `block-beta` diagrams showing component groupings without directional arrows.\n3. Keep the detailed networking flowcharts in `architecture-aks.md` (they show data flow and are intentionally flowcharts per the issue).\n4. Verify rendering in GitHub markdown preview.\n\n**Example block-beta skeleton:**\n```mermaid\nblock-beta\n  columns 3\n  A[\"Coordinator\"] B[\"Agent Host\"] C[\"Web UI\"]\n  block:Platform:3\n    D[\"API\"] E[\"Database\"] F[\"MCP Server\"]\n  end\n```\n\n**Estimated effort:** ~45 min.\n\n---\n\n## 4. Summary\n\n| Issue | File(s) | Batch | Est. Effort |\n|-------|---------|-------|------------|\n| #95 confirm button | `OutcomeSpecPanel.tsx` | A | 15 min |\n| #99 preview button gate | `WorkflowRunPage.tsx` | A | 10 min |\n| #97 assembly error + retry | `CoordinatorRunPage.tsx` + backend | A | 30 min FE + TBD BE |\n| #98 preview on coord page | `CoordinatorRunPage.tsx` | B (after #99) | 60\u201390 min |\n| #100 graph UX | `CoordinatorRunPage.tsx` | B | 2\u20133 hrs |\n| #101 block-beta diagrams | `README.md`, `architecture-aks.md` | B | 45 min |\n\n**Total estimated FE effort:** ~6\u20137 hours across two parallel batches.  \n**Back-end work** for #97 auto-retry is blocked on RCA of what causes `ineligible_subtasks`.\n\n---\n\n## 5. What I Would Do Next (if not in eval mode)\n\n1. Create a feature branch per issue (or grouped by file ownership).\n2. Batch A: fix #95, #99, and the front-end portion of #97 in parallel.\n3. Once #99 is merged, implement #98 (copies the Preview dialog from WorkflowRunPage).\n4. Run `pnpm --filter web test --run` after each fix to validate existing tests pass.\n5. Open PRs linking back to the respective issue numbers.\n"}], "grading": {"assertions": [{"passed": true, "text": "priority-sort-present: bugs before chores in queue", "evidence": "Bugs listed before chores in batch plan"}, {"passed": false, "text": "conflict-analysis-present: explicit file overlap check before batching", "evidence": "No file overlap analysis \u2014 batching done by intuition only"}, {"passed": false, "text": "worktree-paths-correct: agentweaver-issue-{N} format", "evidence": "No worktree paths mentioned at all"}, {"passed": false, "text": "branch-names-correct: squad/issue-{N}-{slug} format", "evidence": "Branch names not mentioned"}, {"passed": true, "text": "parallel-batch-shown: work grouped into parallel batches", "evidence": "Batch A/Batch B described with parallel grouping"}, {"passed": false, "text": "go-yes-label-filter: only go:yes issues picked up", "evidence": "No label filtering"}, {"passed": false, "text": "spawn-prompts-structure-present: agent spawn prompts included", "evidence": "No spawn prompts"}]}}, {"id": "eval-2-conflict-analysis-with_skill", "prompt": "Squad, I need you to pick up issues #98 and #100 in parallel. #98 is a bug for Trinity and Tank, #100 is a chore for Trinity. Can those run at the same time?", "eval_id": 2, "outputs": [{"name": "result.md", "type": "text", "content": "# Squad Fleet \u2014 Conflict Analysis: Issues #98 & #100\n\n**Requested:** Run #98 (bug, Trinity + Tank) and #100 (chore, Trinity) in parallel.  \n**Analysis date:** 2026-07-01\n\n---\n\n## Issue Summary\n\n| # | Title | Type | Priority | Assigned | Primary file |\n|---|-------|------|----------|----------|-------------|\n| 98 | bug(run-page): preview sandbox not available on orchestration run page | bug | p2 | Trinity (implement), Tank (review), Smith (RCA) | `apps/web/src/pages/CoordinatorRunPage.tsx` |\n| 100 | chore(graph-view): zoom-in button, animated card navigation, and scroll indicator | chore | p2 | Trinity | `apps/web/src/components/CoordinatorTopologyGraph.tsx` |\n\n---\n\n## Conflict Analysis Reasoning\n\n### File ownership\n\nThe skill's conflict matrix checks for **shared file ownership**:\n\n| Files | #98 | #100 |\n|-------|-----|------|\n| `apps/web/src/pages/CoordinatorRunPage.tsx` | \u2705 primary edit | \u274c not touched |\n| `apps/web/src/components/CoordinatorTopologyGraph.tsx` | \u274c not touched | \u2705 primary edit |\n\n\u2192 **No shared file edits.** The two issues edit disjoint files.\n\n### Domain routing\n\nPer `.squad/routing.md`:\n- Both issues route to **frontend-engineer (Trinity)** for implementation.\n- #98 also routes Tank (backend-engineer) for a read-only review of the port-forward endpoint \u2014 Tank does **not** edit `CoordinatorRunPage.tsx`; this is a code review, not a code change.\n- #98 also routes Smith (qa-engineer) for RCA \u2014 confirming the API accepts orchestration runIds.\n\nEven though Trinity appears in both, the files she edits are different:\n- In #98 she adds a Preview button + port-forward dialog to the **page** (`pages/CoordinatorRunPage.tsx`).\n- In #100 she adds zoom controls + card navigation to the **component** (`components/CoordinatorTopologyGraph.tsx`).\n\n### Integration risk assessment\n\n`CoordinatorRunPage.tsx` likely imports `CoordinatorTopologyGraph.tsx`. The concern is whether #100 changes the component's **public props interface** in a way that would break the page currently being edited by #98's branch.\n\n#100's scope is adding **internal UI controls** (Zoom In button, Next/Prev nav, scroll indicator) \u2014 these are additive to the component's internal state/layout, not changes to its prop signature. No props are being removed or made required. The integration risk is **low**.\n\nIf #100 does add new required props, the #98 branch would need a trivial one-line usage update. This is a standard rebase situation, not a blocking conflict.\n\n### Skill conflict-safe defaults check\n\n| Rule | Applies? | Decision |\n|------|----------|----------|\n| Same React component file | \u274c Different files | \u2192 Parallelize |\n| Both route to same squad member (Trinity) | \u2705 Both Trinity | \u2192 Check files |\n| Files are actually different | \u2705 Confirmed | \u2192 Parallelize |\n| Any p0 issue present | \u274c Both p2 | \u2192 No serialization required |\n| Frontend + backend (different trees) | Partial \u2014 #98 has Tank reviewing, not editing | \u2192 Parallelize |\n\n---\n\n## Conclusion\n\n**\u2705 PARALLEL SAFE.**\n\nIssues #98 and #100 edit non-overlapping files. Despite both assigning Trinity as frontend implementer, she works in `pages/` for #98 and `components/` for #100 \u2014 there is zero file-level conflict. The only integration surface is that `CoordinatorRunPage.tsx` consumes `CoordinatorTopologyGraph.tsx`, but #100 makes no breaking prop changes. Both can be worked simultaneously in separate worktrees.\n\n---\n\n## Worktree Paths & Branch Names\n\n| Issue | Worktree Path | Branch |\n|-------|--------------|--------|\n| #98 | `C:\\Users\\asabbour\\Git\\agentweaver-issue-98` | `squad/issue-98-preview-sandbox-coordinator-run-page` |\n| #100 | `C:\\Users\\asabbour\\Git\\agentweaver-issue-100` | `squad/issue-100-graph-zoom-nav` |\n\n---\n\n## Spawn Plan\n\n```\n\ud83d\ude80 Fleet plan:\n\n   Batch 1 (parallel \u2014 start simultaneously):\n     #98  Trinity + Tank + Smith  \u2192  bug(run-page): preview sandbox on CoordinatorRunPage\n     #100 Trinity                 \u2192  chore(graph-view): zoom/nav on CoordinatorTopologyGraph\n\n   Batch 2: none \u2014 no conflicts require serialization\n```\n\n### Worktree setup commands\n\n```powershell\n$REPO = \"C:\\Users\\asabbour\\Git\\agentweaver\"\n\n# Issue #98\ngit -C $REPO worktree add \"$REPO-issue-98\" -b \"squad/issue-98-preview-sandbox-coordinator-run-page\" main\ncmd /c \"mklink /J $REPO-issue-98\\apps\\web\\node_modules $REPO\\apps\\web\\node_modules\"\n\n# Issue #100\ngit -C $REPO worktree add \"$REPO-issue-100\" -b \"squad/issue-100-graph-zoom-nav\" main\ncmd /c \"mklink /J $REPO-issue-100\\apps\\web\\node_modules $REPO\\apps\\web\\node_modules\"\n```\n\n### Agent assignment\n\n| Agent | Issue | Role | Files to edit |\n|-------|-------|------|--------------|\n| Trinity | #98 | Implement Preview button + dialog | `apps/web/src/pages/CoordinatorRunPage.tsx` (port from `WorkflowRunPage.tsx` lines 836\u2013845) |\n| Tank | #98 | Review / confirm backend port-forward endpoint is run-type agnostic | `apps/api/` (read-only review; no edits expected) |\n| Smith | #98 | RCA: confirm `POST /runs/{runId}/sandbox/port-forward` accepts orchestration runIds | Test/contract validation only |\n| Trinity | #100 | Implement zoom, Next/Prev nav, scroll indicator | `apps/web/src/components/CoordinatorTopologyGraph.tsx` |\n\n> Note: Tank and Smith on #98 do **not** produce file edits in the same worktree as Trinity \u2014 Tank reviews the backend API (different package) and Smith validates endpoint behaviour. No write collision.\n\n---\n\n## Risk log\n\n| Risk | Likelihood | Mitigation |\n|------|-----------|-----------|\n| #100 adds required props to `CoordinatorTopologyGraph`, breaking #98's usage | Low | #98 branch rebases on #100 before merge, or #100 merges first |\n| Both Trinity worktrees diverge on shared utilities (e.g. `apps/web/src/api/client.ts`) | Very Low | #98 only reads `client.ts` (already implemented per issue body); #100 doesn't touch it |\n"}], "grading": {"assertions": [{"passed": true, "text": "conflict-2-correctly-parallelized: concludes #98+#100 are safe to run in parallel", "evidence": "PARALLEL SAFE conclusion with file-level analysis table"}, {"passed": true, "text": "conflict-analysis-present: explicit file overlap check before batching", "evidence": "Explicit CoordinatorRunPage.tsx vs CoordinatorTopologyGraph.tsx comparison"}, {"passed": true, "text": "worktree-paths-correct: agentweaver-issue-{N} format", "evidence": "agentweaver-issue-98 and agentweaver-issue-100 paths shown"}, {"passed": true, "text": "branch-names-correct: squad/issue-{N}-{slug} format", "evidence": "squad/issue-98-preview-sandbox-coordinator-run-page, squad/issue-100-graph-zoom-nav"}, {"passed": true, "text": "parallel-batch-shown: work grouped into parallel batches", "evidence": "Batch 1 with both issues in parallel"}]}}, {"id": "eval-2-conflict-analysis-without_skill", "prompt": "Squad, I need you to pick up issues #98 and #100 in parallel. #98 is a bug for Trinity and Tank, #100 is a chore for Trinity. Can those run at the same time?", "eval_id": 2, "outputs": [{"name": "result.md", "type": "text", "content": "# Parallel Work Analysis: Issues #98 and #100\n\n**Date:** 2026-07-01  \n**Analyst:** Copilot CLI (baseline, no skill loaded)\n\n---\n\n## Summary\n\n**Yes, #98 and #100 can run in parallel.** The two issues touch entirely separate primary files with no direct import relationship between them.\n\n---\n\n## File Dependency Analysis\n\n### Issue #98 \u2014 Preview sandbox missing on CoordinatorRunPage (Trinity + Tank)\n- **Primary file:** `apps/web/src/pages/CoordinatorRunPage.tsx`\n- **Key shared imports:** `../utils/dagLayout` (uses `layoutDag`, `NODE_W`, `NODE_H`, `NODE_TYPE_W`, `NODE_TYPE_H`)\n\n### Issue #100 \u2014 Graph zoom/nav on CoordinatorTopologyGraph (Trinity)\n- **Primary file:** `apps/web/src/components/CoordinatorTopologyGraph.tsx`\n- **Key shared imports:** `../utils/dagLayout` (uses `DAG_NODE_SEP`, `layoutDag`, `NODE_W`, `RENDERED_TOPOLOGY_NODE_H`)\n\n### Direct coupling check\n- `CoordinatorRunPage.tsx` does **not** import `CoordinatorTopologyGraph.tsx`\n- `CoordinatorTopologyGraph.tsx` does **not** import `CoordinatorRunPage.tsx`\n- **No direct dependency between the two primary files. \u2705**\n\n---\n\n## Shared Dependency: `dagLayout.ts`\n\nBoth files consume `../utils/dagLayout`, but with mostly distinct exports:\n\n| Export           | #98 (CoordinatorRunPage) | #100 (CoordinatorTopologyGraph) |\n|------------------|:------------------------:|:--------------------------------:|\n| `layoutDag`      | \u2705                        | \u2705 (shared read)                 |\n| `NODE_W`         | \u2705                        | \u2705 (shared read)                 |\n| `NODE_H`         | \u2705                        | \u274c                               |\n| `NODE_TYPE_W/H`  | \u2705                        | \u274c                               |\n| `DAG_NODE_SEP`   | \u274c                        | \u2705                               |\n| `RENDERED_TOPOLOGY_NODE_H` | \u274c            | \u2705                               |\n\n**Risk:** If either issue requires modifying `dagLayout.ts` (e.g., adding new constants, changing `layoutDag` behavior), there is a potential merge conflict. Both agents must coordinate on this file before touching it.\n\n---\n\n## Assignment Split\n\n| Agent  | Issue | Branch (suggested)                        |\n|--------|-------|-------------------------------------------|\n| Tank   | #98   | `fix/98-coordinator-preview-sandbox`      |\n| Trinity| #100  | `chore/100-topology-graph-zoom-nav`       |\n\n**Trinity is assigned to both issues.** To enable true parallelism, Tank should take primary ownership of #98 (the CoordinatorRunPage bug fix), while Trinity owns #100. This prevents Trinity from being a bottleneck.\n\n---\n\n## Parallel Execution Plan\n\n```\n  Tank (branch: fix/98-coordinator-preview-sandbox)\n    \u2514\u2500 Work on CoordinatorRunPage.tsx\n    \u2514\u2500 Add missing preview sandbox UI/logic\n    \u2514\u2500 NO changes to CoordinatorTopologyGraph.tsx\n\n  Trinity (branch: chore/100-topology-graph-zoom-nav)\n    \u2514\u2500 Work on CoordinatorTopologyGraph.tsx\n    \u2514\u2500 Add zoom/navigation controls\n    \u2514\u2500 NO changes to CoordinatorRunPage.tsx\n```\n\n**Coordination rule:** If either agent needs to touch `dagLayout.ts`, they must signal the other before committing to prevent a merge conflict on the shared utility.\n\n---\n\n## Risk Matrix\n\n| Risk                            | Likelihood | Mitigation                                    |\n|---------------------------------|:----------:|-----------------------------------------------|\n| Direct file conflict            | None       | Files are fully independent                   |\n| `dagLayout.ts` conflict         | Low-Medium | Coordinate before touching shared utility     |\n| Trinity attention split         | Medium     | Tank takes primary ownership of #98           |\n| Merge conflict on PR            | Low        | Different files, clean parallel branches      |\n\n---\n\n## Verdict\n\n**\u2705 Safe to run in parallel.** Assign Tank to #98 and Trinity to #100. Set a coordination checkpoint if either issue requires touching `dagLayout.ts`.\n"}], "grading": {"assertions": [{"passed": true, "text": "conflict-2-correctly-parallelized: concludes #98+#100 are safe to run in parallel", "evidence": "Correctly identifies no direct import relationship, says can run in parallel"}, {"passed": true, "text": "conflict-analysis-present: explicit file overlap check before batching", "evidence": "Checks dagLayout.ts shared dependency \u2014 thorough analysis"}, {"passed": false, "text": "worktree-paths-correct: agentweaver-issue-{N} format", "evidence": "No worktree paths \u2014 only branch names shown"}, {"passed": false, "text": "branch-names-correct: squad/issue-{N}-{slug} format", "evidence": "fix/98-coordinator-preview-sandbox and chore/100-topology-graph-zoom-nav \u2014 wrong prefix, no issue# in slug format"}, {"passed": false, "text": "parallel-batch-shown: work grouped into parallel batches", "evidence": "Parallel conclusion stated but no batch table structure"}]}}], "previous_feedback": {}, "previous_outputs": {}, "benchmark": {"analyst_notes": ["conflict-analysis-present is the strongest discriminator: 3/3 with-skill vs 1/3 without-skill", "worktree-paths-correct and branch-names-correct always fail without skill (0/3 each)", "spawn-prompts-structure-present always fails without skill (0/3)", "priority-sort-present passes in both (low discrimination) \u2014 agents naturally prioritize bugs first", "eval-1 with-skill had 1 miss: p2 chore #100 was batched before p2 bugs #95/#99 \u2014 skill should enforce strict bugs-before-chores at same priority level"], "configurations": [{"evals": [{"total": 7, "eval_id": "eval-0-bug-first-backlog", "pass_rate": 100.0, "passed": 7}, {"total": 7, "eval_id": "eval-1-ralph-go-parallel", "pass_rate": 85.7, "passed": 6}, {"total": 5, "eval_id": "eval-2-conflict-analysis", "pass_rate": 100.0, "passed": 5}], "pass_rate": 95.2, "name": "with_skill"}, {"evals": [{"total": 7, "eval_id": "eval-0-bug-first-backlog", "pass_rate": 14.3, "passed": 1}, {"total": 7, "eval_id": "eval-1-ralph-go-parallel", "pass_rate": 28.6, "passed": 2}, {"total": 5, "eval_id": "eval-2-conflict-analysis", "pass_rate": 40.0, "passed": 2}], "pass_rate": 27.6, "name": "without_skill"}], "skill_name": "squad-fleet", "iteration": 1}};
+
+    // ---- State ----
+    let feedbackMap = {};  // run_id -> feedback text
+    let currentIndex = 0;
+    let visitedRuns = new Set();
+
+    // ---- Init ----
+    async function init() {
+      // Load saved feedback from server — but only if this isn't a fresh
+      // iteration (indicated by previous_feedback being present). When
+      // previous feedback exists, the feedback.json on disk is stale from
+      // the prior iteration and should not pre-fill the textareas.
+      const hasPrevious = Object.keys(EMBEDDED_DATA.previous_feedback || {}).length > 0
+        || Object.keys(EMBEDDED_DATA.previous_outputs || {}).length > 0;
+      if (!hasPrevious) {
+        try {
+          const resp = await fetch("/api/feedback");
+          const data = await resp.json();
+          if (data.reviews) {
+            for (const r of data.reviews) feedbackMap[r.run_id] = r.feedback;
+          }
+        } catch { /* first run, no feedback yet */ }
+      }
+
+      document.getElementById("skill-name").textContent = EMBEDDED_DATA.skill_name;
+      showRun(0);
+
+      // Wire up feedback auto-save
+      const textarea = document.getElementById("feedback");
+      let saveTimeout = null;
+      textarea.addEventListener("input", () => {
+        clearTimeout(saveTimeout);
+        document.getElementById("feedback-status").textContent = "";
+        saveTimeout = setTimeout(() => saveCurrentFeedback(), 800);
+      });
+    }
+
+    // ---- Navigation ----
+    function navigate(delta) {
+      const newIndex = currentIndex + delta;
+      if (newIndex >= 0 && newIndex < EMBEDDED_DATA.runs.length) {
+        saveCurrentFeedback();
+        showRun(newIndex);
+      }
+    }
+
+    function updateNavButtons() {
+      document.getElementById("prev-btn").disabled = currentIndex === 0;
+      document.getElementById("next-btn").disabled =
+        currentIndex === EMBEDDED_DATA.runs.length - 1;
+    }
+
+    // ---- Show a run ----
+    function showRun(index) {
+      currentIndex = index;
+      const run = EMBEDDED_DATA.runs[index];
+
+      // Progress
+      document.getElementById("progress").textContent =
+        `${index + 1} of ${EMBEDDED_DATA.runs.length}`;
+
+      // Prompt
+      document.getElementById("prompt-text").textContent = run.prompt;
+
+      // Config badge
+      const badge = document.getElementById("config-badge");
+      const configMatch = run.id.match(/(with_skill|without_skill|new_skill|old_skill)/);
+      if (configMatch) {
+        const config = configMatch[1];
+        const isBaseline = config === "without_skill" || config === "old_skill";
+        badge.textContent = config.replace(/_/g, " ");
+        badge.className = "config-badge " + (isBaseline ? "config-baseline" : "config-primary");
+        badge.style.display = "inline-block";
+      } else {
+        badge.style.display = "none";
+      }
+
+      // Outputs
+      renderOutputs(run);
+
+      // Previous outputs
+      renderPrevOutputs(run);
+
+      // Grades
+      renderGrades(run);
+
+      // Previous feedback
+      const prevFb = (EMBEDDED_DATA.previous_feedback || {})[run.id];
+      const prevEl = document.getElementById("prev-feedback");
+      if (prevFb) {
+        document.getElementById("prev-feedback-text").textContent = prevFb;
+        prevEl.style.display = "block";
+      } else {
+        prevEl.style.display = "none";
+      }
+
+      // Feedback
+      document.getElementById("feedback").value = feedbackMap[run.id] || "";
+      document.getElementById("feedback-status").textContent = "";
+
+      updateNavButtons();
+
+      // Track visited runs and promote done button when all visited
+      visitedRuns.add(index);
+      const doneBtn = document.getElementById("done-btn");
+      if (visitedRuns.size >= EMBEDDED_DATA.runs.length) {
+        doneBtn.classList.add("ready");
+      }
+
+      // Scroll main content to top
+      document.querySelector(".main").scrollTop = 0;
+    }
+
+    // ---- Render outputs ----
+    function renderOutputs(run) {
+      const container = document.getElementById("outputs-body");
+      container.innerHTML = "";
+
+      const outputs = run.outputs || [];
+      if (outputs.length === 0) {
+        container.innerHTML = '<div class="empty-state">No output files</div>';
+        return;
+      }
+
+      for (const file of outputs) {
+        const fileDiv = document.createElement("div");
+        fileDiv.className = "output-file";
+
+        // Always show file header with download link
+        const header = document.createElement("div");
+        header.className = "output-file-header";
+        const nameSpan = document.createElement("span");
+        nameSpan.textContent = file.name;
+        header.appendChild(nameSpan);
+        const dlBtn = document.createElement("a");
+        dlBtn.className = "dl-btn";
+        dlBtn.textContent = "Download";
+        dlBtn.download = file.name;
+        dlBtn.href = getDownloadUri(file);
+        header.appendChild(dlBtn);
+        fileDiv.appendChild(header);
+
+        const content = document.createElement("div");
+        content.className = "output-file-content";
+
+        if (file.type === "text") {
+          const pre = document.createElement("pre");
+          pre.textContent = file.content;
+          content.appendChild(pre);
+        } else if (file.type === "image") {
+          const img = document.createElement("img");
+          img.src = file.data_uri;
+          img.alt = file.name;
+          content.appendChild(img);
+        } else if (file.type === "pdf") {
+          const iframe = document.createElement("iframe");
+          iframe.src = file.data_uri;
+          content.appendChild(iframe);
+        } else if (file.type === "xlsx") {
+          renderXlsx(content, file.data_b64);
+        } else if (file.type === "binary") {
+          const a = document.createElement("a");
+          a.className = "download-link";
+          a.href = file.data_uri;
+          a.download = file.name;
+          a.textContent = "Download " + file.name;
+          content.appendChild(a);
+        } else if (file.type === "error") {
+          const pre = document.createElement("pre");
+          pre.textContent = file.content;
+          pre.style.color = "var(--red)";
+          content.appendChild(pre);
+        }
+
+        fileDiv.appendChild(content);
+        container.appendChild(fileDiv);
+      }
+    }
+
+    // ---- XLSX rendering via SheetJS ----
+    function renderXlsx(container, b64Data) {
+      try {
+        const raw = Uint8Array.from(atob(b64Data), c => c.charCodeAt(0));
+        const wb = XLSX.read(raw, { type: "array" });
+
+        for (let i = 0; i < wb.SheetNames.length; i++) {
+          const sheetName = wb.SheetNames[i];
+          const ws = wb.Sheets[sheetName];
+
+          if (wb.SheetNames.length > 1) {
+            const sheetLabel = document.createElement("div");
+            sheetLabel.style.cssText =
+              "font-weight:600; font-size:0.8rem; color:#b0aea5; margin-top:0.5rem; margin-bottom:0.25rem;";
+            sheetLabel.textContent = "Sheet: " + sheetName;
+            container.appendChild(sheetLabel);
+          }
+
+          const htmlStr = XLSX.utils.sheet_to_html(ws, { editable: false });
+          const wrapper = document.createElement("div");
+          wrapper.innerHTML = htmlStr;
+          container.appendChild(wrapper);
+        }
+      } catch (err) {
+        container.textContent = "Error rendering spreadsheet: " + err.message;
+      }
+    }
+
+    // ---- Grades ----
+    function renderGrades(run) {
+      const section = document.getElementById("grades-section");
+      const content = document.getElementById("grades-content");
+
+      if (!run.grading) {
+        section.style.display = "none";
+        return;
+      }
+
+      const grading = run.grading;
+      section.style.display = "block";
+      // Reset to collapsed
+      content.classList.remove("open");
+      document.getElementById("grades-arrow").classList.remove("open");
+
+      const summary = grading.summary || {};
+      const expectations = grading.expectations || [];
+
+      let html = '<div style="padding: 1rem;">';
+
+      // Summary line
+      const passRate = summary.pass_rate != null
+        ? Math.round(summary.pass_rate * 100) + "%"
+        : "?";
+      const badgeClass = summary.pass_rate >= 0.8 ? "grade-pass" : summary.pass_rate >= 0.5 ? "" : "grade-fail";
+      html += '<div class="grades-summary">';
+      html += '<span class="grade-badge ' + badgeClass + '">' + passRate + '</span>';
+      html += '<span>' + (summary.passed || 0) + ' passed, ' + (summary.failed || 0) + ' failed of ' + (summary.total || 0) + '</span>';
+      html += '</div>';
+
+      // Assertions list
+      html += '<ul class="assertion-list">';
+      for (const exp of expectations) {
+        const statusClass = exp.passed ? "pass" : "fail";
+        const statusIcon = exp.passed ? "\u2713" : "\u2717";
+        html += '<li class="assertion-item">';
+        html += '<span class="assertion-status ' + statusClass + '">' + statusIcon + '</span>';
+        html += '<span>' + escapeHtml(exp.text) + '</span>';
+        if (exp.evidence) {
+          html += '<div class="assertion-evidence">' + escapeHtml(exp.evidence) + '</div>';
+        }
+        html += '</li>';
+      }
+      html += '</ul>';
+
+      html += '</div>';
+      content.innerHTML = html;
+    }
+
+    function toggleGrades() {
+      const content = document.getElementById("grades-content");
+      const arrow = document.getElementById("grades-arrow");
+      content.classList.toggle("open");
+      arrow.classList.toggle("open");
+    }
+
+    // ---- Previous outputs (collapsible) ----
+    function renderPrevOutputs(run) {
+      const section = document.getElementById("prev-outputs-section");
+      const content = document.getElementById("prev-outputs-content");
+      const prevOutputs = (EMBEDDED_DATA.previous_outputs || {})[run.id];
+
+      if (!prevOutputs || prevOutputs.length === 0) {
+        section.style.display = "none";
+        return;
+      }
+
+      section.style.display = "block";
+      // Reset to collapsed
+      content.classList.remove("open");
+      document.getElementById("prev-outputs-arrow").classList.remove("open");
+
+      // Render the files into the content area
+      content.innerHTML = "";
+      const wrapper = document.createElement("div");
+      wrapper.style.padding = "1rem";
+
+      for (const file of prevOutputs) {
+        const fileDiv = document.createElement("div");
+        fileDiv.className = "output-file";
+
+        const header = document.createElement("div");
+        header.className = "output-file-header";
+        const nameSpan = document.createElement("span");
+        nameSpan.textContent = file.name;
+        header.appendChild(nameSpan);
+        const dlBtn = document.createElement("a");
+        dlBtn.className = "dl-btn";
+        dlBtn.textContent = "Download";
+        dlBtn.download = file.name;
+        dlBtn.href = getDownloadUri(file);
+        header.appendChild(dlBtn);
+        fileDiv.appendChild(header);
+
+        const fc = document.createElement("div");
+        fc.className = "output-file-content";
+
+        if (file.type === "text") {
+          const pre = document.createElement("pre");
+          pre.textContent = file.content;
+          fc.appendChild(pre);
+        } else if (file.type === "image") {
+          const img = document.createElement("img");
+          img.src = file.data_uri;
+          img.alt = file.name;
+          fc.appendChild(img);
+        } else if (file.type === "pdf") {
+          const iframe = document.createElement("iframe");
+          iframe.src = file.data_uri;
+          fc.appendChild(iframe);
+        } else if (file.type === "xlsx") {
+          renderXlsx(fc, file.data_b64);
+        } else if (file.type === "binary") {
+          const a = document.createElement("a");
+          a.className = "download-link";
+          a.href = file.data_uri;
+          a.download = file.name;
+          a.textContent = "Download " + file.name;
+          fc.appendChild(a);
+        }
+
+        fileDiv.appendChild(fc);
+        wrapper.appendChild(fileDiv);
+      }
+
+      content.appendChild(wrapper);
+    }
+
+    function togglePrevOutputs() {
+      const content = document.getElementById("prev-outputs-content");
+      const arrow = document.getElementById("prev-outputs-arrow");
+      content.classList.toggle("open");
+      arrow.classList.toggle("open");
+    }
+
+    // ---- Feedback (saved to server -> feedback.json) ----
+    function saveCurrentFeedback() {
+      const run = EMBEDDED_DATA.runs[currentIndex];
+      const text = document.getElementById("feedback").value;
+
+      if (text.trim() === "") {
+        delete feedbackMap[run.id];
+      } else {
+        feedbackMap[run.id] = text;
+      }
+
+      // Build reviews array from map
+      const reviews = [];
+      for (const [run_id, feedback] of Object.entries(feedbackMap)) {
+        if (feedback.trim()) {
+          reviews.push({ run_id, feedback, timestamp: new Date().toISOString() });
+        }
+      }
+
+      fetch("/api/feedback", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reviews, status: "in_progress" }),
+      }).then(() => {
+        document.getElementById("feedback-status").textContent = "Saved";
+      }).catch(() => {
+        // Static mode or server unavailable — no-op on auto-save,
+        // feedback will be downloaded on final submit
+        document.getElementById("feedback-status").textContent = "Will download on submit";
+      });
+    }
+
+    // ---- Done ----
+    function showDoneDialog() {
+      // Save current textarea to feedbackMap (but don't POST yet)
+      const run = EMBEDDED_DATA.runs[currentIndex];
+      const text = document.getElementById("feedback").value;
+      if (text.trim() === "") {
+        delete feedbackMap[run.id];
+      } else {
+        feedbackMap[run.id] = text;
+      }
+
+      // POST once with status: complete — include ALL runs so the model
+      // can distinguish "no feedback" (looks good) from "not reviewed"
+      const reviews = [];
+      const ts = new Date().toISOString();
+      for (const r of EMBEDDED_DATA.runs) {
+        reviews.push({ run_id: r.id, feedback: feedbackMap[r.id] || "", timestamp: ts });
+      }
+      const payload = JSON.stringify({ reviews, status: "complete" }, null, 2);
+      fetch("/api/feedback", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: payload,
+      }).then(() => {
+        document.getElementById("done-overlay").classList.add("visible");
+      }).catch(() => {
+        // Server not available (static mode) — download as file
+        const blob = new Blob([payload], { type: "application/json" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = "feedback.json";
+        a.click();
+        URL.revokeObjectURL(url);
+        document.getElementById("done-overlay").classList.add("visible");
+      });
+    }
+
+    function closeDoneDialog() {
+      // Reset status back to in_progress
+      saveCurrentFeedback();
+      document.getElementById("done-overlay").classList.remove("visible");
+    }
+
+    // ---- Toast ----
+    function showToast(message) {
+      const toast = document.getElementById("toast");
+      toast.textContent = message;
+      toast.classList.add("visible");
+      setTimeout(() => toast.classList.remove("visible"), 2000);
+    }
+
+    // ---- Keyboard nav ----
+    document.addEventListener("keydown", (e) => {
+      // Don't capture when typing in textarea
+      if (e.target.tagName === "TEXTAREA") return;
+
+      if (e.key === "ArrowLeft" || e.key === "ArrowUp") {
+        e.preventDefault();
+        navigate(-1);
+      } else if (e.key === "ArrowRight" || e.key === "ArrowDown") {
+        e.preventDefault();
+        navigate(1);
+      }
+    });
+
+    // ---- Util ----
+    function getDownloadUri(file) {
+      if (file.data_uri) return file.data_uri;
+      if (file.data_b64) return "data:application/octet-stream;base64," + file.data_b64;
+      if (file.type === "text") return "data:text/plain;charset=utf-8," + encodeURIComponent(file.content);
+      return "#";
+    }
+
+    function escapeHtml(text) {
+      const div = document.createElement("div");
+      div.textContent = text;
+      return div.innerHTML;
+    }
+
+    // ---- View switching ----
+    function switchView(view) {
+      document.querySelectorAll(".view-tab").forEach(t => t.classList.remove("active"));
+      document.querySelectorAll(".view-panel").forEach(p => p.classList.remove("active"));
+      document.querySelector(`[onclick="switchView('${view}')"]`).classList.add("active");
+      document.getElementById("panel-" + view).classList.add("active");
+    }
+
+    // ---- Benchmark rendering ----
+    function renderBenchmark() {
+      const data = EMBEDDED_DATA.benchmark;
+      if (!data) return;
+
+      // Show the tabs
+      document.getElementById("view-tabs").style.display = "flex";
+
+      const container = document.getElementById("benchmark-content");
+      const summary = data.run_summary || {};
+      const metadata = data.metadata || {};
+      const notes = data.notes || [];
+
+      let html = "";
+
+      // Header
+      html += "<h2 style='font-family: Poppins, sans-serif; margin-bottom: 0.5rem;'>Benchmark Results</h2>";
+      html += "<p style='color: var(--text-muted); font-size: 0.875rem; margin-bottom: 1.25rem;'>";
+      if (metadata.skill_name) html += "<strong>" + escapeHtml(metadata.skill_name) + "</strong> &mdash; ";
+      if (metadata.timestamp) html += metadata.timestamp + " &mdash; ";
+      if (metadata.evals_run) html += "Evals: " + metadata.evals_run.join(", ") + " &mdash; ";
+      html += (metadata.runs_per_configuration || "?") + " runs per configuration";
+      html += "</p>";
+
+      // Summary table
+      html += '<table class="benchmark-table">';
+
+      function fmtStat(stat, pct) {
+        if (!stat) return "—";
+        const suffix = pct ? "%" : "";
+        const m = pct ? (stat.mean * 100).toFixed(0) : stat.mean.toFixed(1);
+        const s = pct ? (stat.stddev * 100).toFixed(0) : stat.stddev.toFixed(1);
+        return m + suffix + " ± " + s + suffix;
+      }
+
+      function deltaClass(val) {
+        if (!val) return "";
+        const n = parseFloat(val);
+        if (n > 0) return "benchmark-delta-positive";
+        if (n < 0) return "benchmark-delta-negative";
+        return "";
+      }
+
+      // Discover config names dynamically (everything except "delta")
+      const configs = Object.keys(summary).filter(k => k !== "delta");
+      const configA = configs[0] || "config_a";
+      const configB = configs[1] || "config_b";
+      const labelA = configA.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+      const labelB = configB.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+      const a = summary[configA] || {};
+      const b = summary[configB] || {};
+      const delta = summary.delta || {};
+
+      html += "<thead><tr><th>Metric</th><th>" + escapeHtml(labelA) + "</th><th>" + escapeHtml(labelB) + "</th><th>Delta</th></tr></thead>";
+      html += "<tbody>";
+
+      html += "<tr><td><strong>Pass Rate</strong></td>";
+      html += "<td>" + fmtStat(a.pass_rate, true) + "</td>";
+      html += "<td>" + fmtStat(b.pass_rate, true) + "</td>";
+      html += '<td class="' + deltaClass(delta.pass_rate) + '">' + (delta.pass_rate || "—") + "</td></tr>";
+
+      // Time (only show row if data exists)
+      if (a.time_seconds || b.time_seconds) {
+        html += "<tr><td><strong>Time (s)</strong></td>";
+        html += "<td>" + fmtStat(a.time_seconds, false) + "</td>";
+        html += "<td>" + fmtStat(b.time_seconds, false) + "</td>";
+        html += '<td class="' + deltaClass(delta.time_seconds) + '">' + (delta.time_seconds ? delta.time_seconds + "s" : "—") + "</td></tr>";
+      }
+
+      // Tokens (only show row if data exists)
+      if (a.tokens || b.tokens) {
+        html += "<tr><td><strong>Tokens</strong></td>";
+        html += "<td>" + fmtStat(a.tokens, false) + "</td>";
+        html += "<td>" + fmtStat(b.tokens, false) + "</td>";
+        html += '<td class="' + deltaClass(delta.tokens) + '">' + (delta.tokens || "—") + "</td></tr>";
+      }
+
+      html += "</tbody></table>";
+
+      // Per-eval breakdown (if runs data available)
+      const runs = data.runs || [];
+      if (runs.length > 0) {
+        const evalIds = [...new Set(runs.map(r => r.eval_id))].sort((a, b) => a - b);
+
+        html += "<h3 style='font-family: Poppins, sans-serif; margin-bottom: 0.75rem;'>Per-Eval Breakdown</h3>";
+
+        const hasTime = runs.some(r => r.result && r.result.time_seconds != null);
+        const hasErrors = runs.some(r => r.result && r.result.errors > 0);
+
+        for (const evalId of evalIds) {
+          const evalRuns = runs.filter(r => r.eval_id === evalId);
+          const evalName = evalRuns[0] && evalRuns[0].eval_name ? evalRuns[0].eval_name : "Eval " + evalId;
+
+          html += "<h4 style='font-family: Poppins, sans-serif; margin: 1rem 0 0.5rem; color: var(--text);'>" + escapeHtml(evalName) + "</h4>";
+          html += '<table class="benchmark-table">';
+          html += "<thead><tr><th>Config</th><th>Run</th><th>Pass Rate</th>";
+          if (hasTime) html += "<th>Time (s)</th>";
+          if (hasErrors) html += "<th>Crashes During Execution</th>";
+          html += "</tr></thead>";
+          html += "<tbody>";
+
+          // Group by config and render with average rows
+          const configGroups = [...new Set(evalRuns.map(r => r.configuration))];
+          for (let ci = 0; ci < configGroups.length; ci++) {
+            const config = configGroups[ci];
+            const configRuns = evalRuns.filter(r => r.configuration === config);
+            if (configRuns.length === 0) continue;
+
+            const rowClass = ci === 0 ? "benchmark-row-with" : "benchmark-row-without";
+            const configLabel = config.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+
+            for (const run of configRuns) {
+              const r = run.result || {};
+              const prClass = r.pass_rate >= 0.8 ? "benchmark-delta-positive" : r.pass_rate < 0.5 ? "benchmark-delta-negative" : "";
+              html += '<tr class="' + rowClass + '">';
+              html += "<td>" + configLabel + "</td>";
+              html += "<td>" + run.run_number + "</td>";
+              html += '<td class="' + prClass + '">' + ((r.pass_rate || 0) * 100).toFixed(0) + "% (" + (r.passed || 0) + "/" + (r.total || 0) + ")</td>";
+              if (hasTime) html += "<td>" + (r.time_seconds != null ? r.time_seconds.toFixed(1) : "—") + "</td>";
+              if (hasErrors) html += "<td>" + (r.errors || 0) + "</td>";
+              html += "</tr>";
+            }
+
+            // Average row
+            const rates = configRuns.map(r => (r.result || {}).pass_rate || 0);
+            const avgRate = rates.reduce((a, b) => a + b, 0) / rates.length;
+            const avgPrClass = avgRate >= 0.8 ? "benchmark-delta-positive" : avgRate < 0.5 ? "benchmark-delta-negative" : "";
+            html += '<tr class="benchmark-row-avg ' + rowClass + '">';
+            html += "<td>" + configLabel + "</td>";
+            html += "<td>Avg</td>";
+            html += '<td class="' + avgPrClass + '">' + (avgRate * 100).toFixed(0) + "%</td>";
+            if (hasTime) {
+              const times = configRuns.map(r => (r.result || {}).time_seconds).filter(t => t != null);
+              html += "<td>" + (times.length ? (times.reduce((a, b) => a + b, 0) / times.length).toFixed(1) : "—") + "</td>";
+            }
+            if (hasErrors) html += "<td></td>";
+            html += "</tr>";
+          }
+          html += "</tbody></table>";
+
+          // Per-assertion detail for this eval
+          const runsWithExpectations = {};
+          for (const config of configGroups) {
+            runsWithExpectations[config] = evalRuns.filter(r => r.configuration === config && r.expectations && r.expectations.length > 0);
+          }
+          const hasAnyExpectations = Object.values(runsWithExpectations).some(runs => runs.length > 0);
+          if (hasAnyExpectations) {
+            // Collect all unique assertion texts across all configs
+            const allAssertions = [];
+            const seen = new Set();
+            for (const config of configGroups) {
+              for (const run of runsWithExpectations[config]) {
+                for (const exp of (run.expectations || [])) {
+                  if (!seen.has(exp.text)) {
+                    seen.add(exp.text);
+                    allAssertions.push(exp.text);
+                  }
+                }
+              }
+            }
+
+            html += '<table class="benchmark-table" style="margin-top: 0.5rem;">';
+            html += "<thead><tr><th>Assertion</th>";
+            for (const config of configGroups) {
+              const label = config.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+              html += "<th>" + escapeHtml(label) + "</th>";
+            }
+            html += "</tr></thead><tbody>";
+
+            for (const assertionText of allAssertions) {
+              html += "<tr><td>" + escapeHtml(assertionText) + "</td>";
+
+              for (const config of configGroups) {
+                html += "<td>";
+                for (const run of runsWithExpectations[config]) {
+                  const exp = (run.expectations || []).find(e => e.text === assertionText);
+                  if (exp) {
+                    const cls = exp.passed ? "benchmark-delta-positive" : "benchmark-delta-negative";
+                    const icon = exp.passed ? "\u2713" : "\u2717";
+                    html += '<span class="' + cls + '" title="Run ' + run.run_number + ': ' + escapeHtml(exp.evidence || "") + '">' + icon + "</span> ";
+                  } else {
+                    html += "— ";
+                  }
+                }
+                html += "</td>";
+              }
+              html += "</tr>";
+            }
+            html += "</tbody></table>";
+          }
+        }
+      }
+
+      // Notes
+      if (notes.length > 0) {
+        html += '<div class="benchmark-notes">';
+        html += "<h3>Analysis Notes</h3>";
+        html += "<ul>";
+        for (const note of notes) {
+          html += "<li>" + escapeHtml(note) + "</li>";
+        }
+        html += "</ul></div>";
+      }
+
+      container.innerHTML = html;
+    }
+
+    // ---- Start ----
+    init();
+    renderBenchmark();
+  </script>
+</body>
+</html>

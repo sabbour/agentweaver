@@ -1,0 +1,47 @@
+{
+  "passed": 3,
+  "total": 8,
+  "expectations": [
+    {
+      "evidence": "type:bug present",
+      "passed": true,
+      "text": "correct-type-label"
+    },
+    {
+      "evidence": "No squad: labels — only type:bug,release:backlog",
+      "passed": false,
+      "text": "squad-label-present"
+    },
+    {
+      "evidence": "No go: label",
+      "passed": false,
+      "text": "go-label-present"
+    },
+    {
+      "evidence": "Used 'bug(orchestration):' format not 'Bug:'",
+      "passed": false,
+      "text": "title-format-correct"
+    },
+    {
+      "evidence": "No dispatch block",
+      "passed": false,
+      "text": "dispatch-block-present"
+    },
+    {
+      "evidence": "No squad:smith",
+      "passed": false,
+      "text": "smith-assigned-for-rca"
+    },
+    {
+      "evidence": "Run URL included",
+      "passed": true,
+      "text": "run-url-quoted"
+    },
+    {
+      "evidence": "Error code quoted verbatim",
+      "passed": true,
+      "text": "error-code-verbatim"
+    }
+  ],
+  "pass_rate": 38.0
+}

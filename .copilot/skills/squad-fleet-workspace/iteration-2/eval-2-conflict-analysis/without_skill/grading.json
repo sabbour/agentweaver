@@ -1,0 +1,29 @@
+{
+  "assertions": [
+    {
+      "text": "conflict-2-correctly-parallelized: concludes #98+#100 are safe to run in parallel",
+      "passed": true,
+      "evidence": "Correct parallel conclusion"
+    },
+    {
+      "text": "conflict-analysis-present: explicit file overlap check",
+      "passed": true,
+      "evidence": "File-level analysis done"
+    },
+    {
+      "text": "worktree-paths-correct: agentweaver-issue-{N} format",
+      "passed": false,
+      "evidence": "agentweaver-98 not agentweaver-issue-98 — missing -issue- segment"
+    },
+    {
+      "text": "branch-names-correct: squad/issue-{N}-{slug} format",
+      "passed": false,
+      "evidence": "squad/98-... not squad/issue-98-... — missing issue- prefix"
+    },
+    {
+      "text": "parallel-batch-shown: Batch 1 shows both issues parallel",
+      "passed": false,
+      "evidence": "Parallel stated but no batch table structure"
+    }
+  ]
+}

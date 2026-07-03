@@ -1,0 +1,42 @@
+{
+  "passed": 7,
+  "total": 7,
+  "expectations": [
+    {
+      "evidence": "type:bug present in labels",
+      "passed": true,
+      "text": "correct-type-label"
+    },
+    {
+      "evidence": "squad:morpheus,squad:tank,squad:smith all present",
+      "passed": true,
+      "text": "squad-label-present"
+    },
+    {
+      "evidence": "go:yes present",
+      "passed": true,
+      "text": "go-label-present"
+    },
+    {
+      "evidence": "Bug: API pod restart permanently breaks runs...",
+      "passed": true,
+      "text": "title-format-correct"
+    },
+    {
+      "evidence": "Dispatch block with Smith RCA, Morpheus fix, Tank support",
+      "passed": true,
+      "text": "dispatch-block-present"
+    },
+    {
+      "evidence": "squad:smith co-assignee present",
+      "passed": true,
+      "text": "smith-assigned-for-rca"
+    },
+    {
+      "evidence": "https://agentweaver.example.io/... in body",
+      "passed": true,
+      "text": "run-url-quoted"
+    }
+  ],
+  "pass_rate": 100.0
+}

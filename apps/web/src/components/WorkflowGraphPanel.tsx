@@ -564,6 +564,7 @@ export function WorkflowNode({ data }: NodeProps) {
   // message (from workflow.step payload) takes priority over the hardcoded statusDescription fallback.
   const subText    = degradedReason ?? ((key === 'agent' && effectiveStatus === 'started' && intent) ? intent : (message ?? rawSubText));
   const roleText   = key === 'agent' ? (agentRoleTitle ?? def.roleDescription) : def.roleDescription;
+  const coordinatorClickable = key === 'coordinator' && !isPlanned && Boolean(openSession);
 
   return (
     <>
@@ -573,6 +574,16 @@ export function WorkflowNode({ data }: NodeProps) {
         role="article"
         aria-label={`${label}: ${statusLabel(effectiveStatus)}`}
         data-node-type={nodeType ?? 'default'}
+        data-testid={coordinatorClickable ? 'coordinator-card' : undefined}
+        tabIndex={coordinatorClickable ? 0 : undefined}
+        onClick={coordinatorClickable ? () => openSession?.() : undefined}
+        onKeyDown={coordinatorClickable ? (e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            openSession?.();
+          }
+        } : undefined}
+        style={coordinatorClickable ? { cursor: 'pointer' } : undefined}
       >
       <Handle type="target" position={targetPos} style={handleStyle} />
       <Handle type="source" position={sourcePos} style={handleStyle} />
@@ -614,10 +625,25 @@ export function WorkflowNode({ data }: NodeProps) {
       </div>
 
       {key === 'coordinator' && !isPlanned && openSession && (
-        <div className={`${s.cardActions} nopan nodrag`}>
-          <Button appearance="outline" size="small" onClick={() => openSession()}>
-            View session
-          </Button>
+        <div
+          className={`${s.cardActions} nopan nodrag`}
+          style={{ fontSize: 'var(--fontSizeBase100)', color: 'var(--colorNeutralForeground3)', cursor: 'pointer' }}
+          role="button"
+          tabIndex={0}
+          onClick={(e) => {
+            e.stopPropagation();
+            openSession();
+          }}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              e.stopPropagation();
+              openSession();
+            }
+          }}
+          aria-label="View coordinator session"
+        >
+          View session ↗
         </div>
       )}
       {key === 'agent' && !isPlanned && (
@@ -838,7 +864,7 @@ export function forwardEdge(id: string, source: string, target: string, animated
     id,
     source,
     target,
-    type: 'smoothstep',
+    type: 'default',
     animated,
     style: { stroke: STROKE_MUTED, strokeWidth: 1.5 },
     markerEnd: { type: MarkerType.ArrowClosed, color: STROKE_MUTED, width: 12, height: 12 },

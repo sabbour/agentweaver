@@ -1,0 +1,6 @@
+{
+  "assertions": [],
+  "eval_name": "bug-first-backlog",
+  "eval_id": 0,
+  "prompt": "Squad, continue chipping at the GitHub issues. I want you to work on fixing the bugs first. Keep me updated with the status."
+}

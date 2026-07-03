@@ -1,0 +1,47 @@
+{
+  "passed": 8,
+  "total": 8,
+  "expectations": [
+    {
+      "evidence": "type:bug present",
+      "passed": true,
+      "text": "correct-type-label"
+    },
+    {
+      "evidence": "squad:tank,squad:smith present",
+      "passed": true,
+      "text": "squad-label-present"
+    },
+    {
+      "evidence": "go:yes present",
+      "passed": true,
+      "text": "go-label-present"
+    },
+    {
+      "evidence": "Bug: Collective assembly blocked...",
+      "passed": true,
+      "text": "title-format-correct"
+    },
+    {
+      "evidence": "Smith RCA > Tank fix dispatch",
+      "passed": true,
+      "text": "dispatch-block-present"
+    },
+    {
+      "evidence": "squad:smith present",
+      "passed": true,
+      "text": "smith-assigned-for-rca"
+    },
+    {
+      "evidence": "Run URL in body",
+      "passed": true,
+      "text": "run-url-quoted"
+    },
+    {
+      "evidence": "assembly_blocked: ineligible_subtasks [59,60,61,62] quoted verbatim",
+      "passed": true,
+      "text": "error-code-verbatim"
+    }
+  ],
+  "pass_rate": 100.0
+}

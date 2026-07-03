@@ -1,0 +1,61 @@
+{
+  "analyst_notes": [
+    "conflict-analysis-present is the strongest discriminator: 3/3 with-skill vs 1/3 without-skill",
+    "worktree-paths-correct and branch-names-correct always fail without skill (0/3 each)",
+    "spawn-prompts-structure-present always fails without skill (0/3)",
+    "priority-sort-present passes in both (low discrimination) — agents naturally prioritize bugs first",
+    "eval-1 with-skill had 1 miss: p2 chore #100 was batched before p2 bugs #95/#99 — skill should enforce strict bugs-before-chores at same priority level"
+  ],
+  "configurations": [
+    {
+      "evals": [
+        {
+          "total": 7,
+          "eval_id": "eval-0-bug-first-backlog",
+          "pass_rate": 100.0,
+          "passed": 7
+        },
+        {
+          "total": 7,
+          "eval_id": "eval-1-ralph-go-parallel",
+          "pass_rate": 85.7,
+          "passed": 6
+        },
+        {
+          "total": 5,
+          "eval_id": "eval-2-conflict-analysis",
+          "pass_rate": 100.0,
+          "passed": 5
+        }
+      ],
+      "pass_rate": 95.2,
+      "name": "with_skill"
+    },
+    {
+      "evals": [
+        {
+          "total": 7,
+          "eval_id": "eval-0-bug-first-backlog",
+          "pass_rate": 14.3,
+          "passed": 1
+        },
+        {
+          "total": 7,
+          "eval_id": "eval-1-ralph-go-parallel",
+          "pass_rate": 28.6,
+          "passed": 2
+        },
+        {
+          "total": 5,
+          "eval_id": "eval-2-conflict-analysis",
+          "pass_rate": 40.0,
+          "passed": 2
+        }
+      ],
+      "pass_rate": 27.6,
+      "name": "without_skill"
+    }
+  ],
+  "skill_name": "squad-fleet",
+  "iteration": 1
+}

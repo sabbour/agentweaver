@@ -1,0 +1,42 @@
+{
+  "passed": 7,
+  "total": 7,
+  "expectations": [
+    {
+      "evidence": "type:feature present",
+      "passed": true,
+      "text": "correct-type-label"
+    },
+    {
+      "evidence": "squad:trinity + squad:tank",
+      "passed": true,
+      "text": "squad-label-present"
+    },
+    {
+      "evidence": "go:needs-research (data contract unclear)",
+      "passed": true,
+      "text": "go-label-present"
+    },
+    {
+      "evidence": "Feature: Dashboard token usage...",
+      "passed": true,
+      "text": "title-format-correct"
+    },
+    {
+      "evidence": "Smith spec > Tank API > Trinity UI chain",
+      "passed": true,
+      "text": "dispatch-block-present"
+    },
+    {
+      "evidence": "Acceptance criteria with checkboxes",
+      "passed": true,
+      "text": "acceptance-criteria-section"
+    },
+    {
+      "evidence": "squad:trinity present",
+      "passed": true,
+      "text": "trinity-assigned"
+    }
+  ],
+  "pass_rate": 100.0
+}

@@ -1,0 +1,29 @@
+{
+  "skill_name": "github-issue",
+  "evals": [
+    {
+      "id": 0,
+      "prompt": "Squad: Reporting a bug for investigation and GitHub tracking: Whenever the API pod restarts, runs that were in the 'awaiting_confirmation' state become permanently stuck. The user sees 'This run was interrupted and can no longer be confirmed. Please start a new task.' This is unacceptable UX — the run should be resumable since MAF serializes everything to disk. Run: https://agentweaver.example.io/projects/abc123/orchestrations/run-xyz",
+      "expected_output": "A filed GitHub issue with type:bug label, squad:smith + squad:morpheus assigned (MAF/runtime domain), go:yes, priority:p1, well-structured body with summary/run URL/expected/actual sections, and a dispatch block telling Smith to RCA and Morpheus to fix.",
+      "files": []
+    },
+    {
+      "id": 1,
+      "prompt": "Squad: I'd like a feature where the dashboard shows AIC token usage over time — a line chart that lets me pick a date range (last 7 days, 30 days, 90 days). Should break down by model (gpt-4o, claude-sonnet, etc.) as a stacked area chart.",
+      "expected_output": "A filed GitHub issue with type:feature, squad:trinity (frontend/chart) + squad:tank (backend aggregation endpoint), go:needs-research or go:yes depending on skill judgment, priority:p2, body with summary/motivation/acceptance-criteria sections, and dispatch block.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "Chore: the ClusterPage still imports AgentPodsTable even though we removed the Active agent pods section. It's dead code. Clean it up.",
+      "expected_output": "A filed GitHub issue with type:chore, squad:trinity (frontend cleanup), go:yes, priority:p2, body with summary/why/done-when sections, dispatch block telling Trinity to pick it up directly.",
+      "files": []
+    },
+    {
+      "id": 3,
+      "prompt": "Squad: Reporting bug for investigation and GitHub tracking. The collective assembly stopped with this error: assembly_blocked: ineligible_subtasks [59,60,61,62]. Run: https://agentweaver.6a41f26c75d5cf00019ef7d7.westus2.staging.aksapp.io/projects/f88ff808-2efa-428e-8f6a-9e67a6296b70/orchestrations/2afef9f5-109f-4310-9fea-00db92f67ac7",
+      "expected_output": "A filed GitHub issue with type:bug, squad:smith (RCA) + squad:morpheus (assembly/runtime domain), go:yes, priority:p1, body includes run URL and exact error code 'assembly_blocked: ineligible_subtasks [59,60,61,62]' verbatim, dispatch block for Smith to investigate what makes subtasks ineligible and Morpheus to fix.",
+      "files": []
+    }
+  ]
+}

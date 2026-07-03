@@ -1,0 +1,29 @@
+{
+  "assertions": [
+    {
+      "passed": true,
+      "text": "conflict-2-correctly-parallelized: concludes #98+#100 are safe to run in parallel",
+      "evidence": "Correctly identifies no direct import relationship, says can run in parallel"
+    },
+    {
+      "passed": true,
+      "text": "conflict-analysis-present: explicit file overlap check before batching",
+      "evidence": "Checks dagLayout.ts shared dependency — thorough analysis"
+    },
+    {
+      "passed": false,
+      "text": "worktree-paths-correct: agentweaver-issue-{N} format",
+      "evidence": "No worktree paths — only branch names shown"
+    },
+    {
+      "passed": false,
+      "text": "branch-names-correct: squad/issue-{N}-{slug} format",
+      "evidence": "fix/98-coordinator-preview-sandbox and chore/100-topology-graph-zoom-nav — wrong prefix, no issue# in slug format"
+    },
+    {
+      "passed": false,
+      "text": "parallel-batch-shown: work grouped into parallel batches",
+      "evidence": "Parallel conclusion stated but no batch table structure"
+    }
+  ]
+}

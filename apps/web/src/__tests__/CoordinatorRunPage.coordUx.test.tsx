@@ -164,15 +164,18 @@ describe('CoordinatorRunPage — session run (issue 6)', () => {
 
     render(<Wrapper><CoordinatorRunPage /></Wrapper>);
 
-    const button = await waitFor(() => {
-      const el = Array.from(document.querySelectorAll('button')).find((candidate) => candidate.textContent === 'View session');
+    const card = await waitFor(() => {
+      const el = document.querySelector('[data-testid="coordinator-card"]');
       expect(el).toBeTruthy();
-      return el as HTMLButtonElement;
+      return el as HTMLElement;
     });
 
-    fireEvent.click(button);
+    fireEvent.click(card);
 
     await waitFor(() => expect(document.body.textContent).toContain('Agent Sessions'), { timeout: 4000 });
+    expect(document.body.textContent).toContain('Coordinator');
+    expect(document.body.textContent).toContain('Subtask 1');
+    expect(document.body.textContent).toContain('Subtask 2');
     expect(document.body.textContent).toContain('Messages');
     expect(document.body.textContent).toContain('Changes (0)');
     expect(document.body.textContent).toContain('Files (0)');
@@ -192,6 +195,7 @@ describe('CoordinatorRunPage — session run (issue 6)', () => {
 
     await waitFor(() => expect(document.body.textContent).toContain('Agent Sessions'), { timeout: 4000 });
     expect(document.body.textContent).toContain('Subtask 1');
+    expect(document.body.textContent).toContain('Coordinator');
   });
 });
 

@@ -1,0 +1,39 @@
+{
+  "assertions": [
+    {
+      "passed": true,
+      "text": "priority-sort-present: bugs before chores in queue",
+      "evidence": "Board shows bugs #95/#98/#99 before chores #100/#101"
+    },
+    {
+      "passed": true,
+      "text": "conflict-analysis-present: explicit file overlap check before batching",
+      "evidence": "WorkflowRunPage.tsx conflict detected, #95 and #99 serialized"
+    },
+    {
+      "passed": true,
+      "text": "worktree-paths-correct: agentweaver-issue-{N} format",
+      "evidence": "agentweaver-issue-95, agentweaver-issue-98, agentweaver-issue-101 shown"
+    },
+    {
+      "passed": true,
+      "text": "branch-names-correct: squad/issue-{N}-{slug} format",
+      "evidence": "squad/issue-95-confirm-button-double-submit, squad/issue-98-preview-sandbox-orchestration-run"
+    },
+    {
+      "passed": true,
+      "text": "parallel-batch-shown: work grouped into parallel batches",
+      "evidence": "Batch 1 parallel, Batch 2 queued after merge"
+    },
+    {
+      "passed": true,
+      "text": "go-yes-label-filter: only go:yes issues picked up",
+      "evidence": "Board snapshot notes 5 open go:yes issues"
+    },
+    {
+      "passed": true,
+      "text": "spawn-prompts-structure-present: agent spawn prompts included",
+      "evidence": "Full agent spawn prompts mentioned in output file"
+    }
+  ]
+}

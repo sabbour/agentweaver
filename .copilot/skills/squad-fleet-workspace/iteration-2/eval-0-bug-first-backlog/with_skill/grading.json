@@ -1,0 +1,44 @@
+{
+  "assertions": [
+    {
+      "text": "priority-sort-present: bugs before chores in queue",
+      "passed": true,
+      "evidence": "Batch 1=bugs, Batch 3=chores. Status board shows bugs first."
+    },
+    {
+      "text": "conflict-analysis-present: explicit file overlap check before batching",
+      "passed": true,
+      "evidence": "#95 and #99 WorkflowRunPage.tsx conflict explicitly called out, serialized"
+    },
+    {
+      "text": "worktree-paths-correct: agentweaver-issue-{N} format",
+      "passed": true,
+      "evidence": "agentweaver-issue-95, agentweaver-issue-98, agentweaver-issue-101"
+    },
+    {
+      "text": "branch-names-correct: squad/issue-{N}-{slug} format",
+      "passed": true,
+      "evidence": "squad/issue-95-confirm-button-disable-on-click, squad/issue-98-orchestration-run-preview-sandbox"
+    },
+    {
+      "text": "parallel-batch-shown: work grouped into parallel batches",
+      "passed": true,
+      "evidence": "Batch 1 parallel, Batch 2 serialized, Batch 3 chores"
+    },
+    {
+      "text": "go-yes-label-filter: only go:yes issues picked up",
+      "passed": true,
+      "evidence": "Board shows exactly 5 go:yes issues, no others"
+    },
+    {
+      "text": "spawn-prompts-structure-present: agent spawn prompts included",
+      "passed": true,
+      "evidence": "Full spawn prompts for Trinity x2, Tank, Scribe in output file"
+    },
+    {
+      "text": "commit-pr-format-correct: type(scope): desc (#N) format",
+      "passed": true,
+      "evidence": "bug(run-page): disable confirm button on click (#95) etc."
+    }
+  ]
+}

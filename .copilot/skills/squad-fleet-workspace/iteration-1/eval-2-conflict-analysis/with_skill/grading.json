@@ -1,0 +1,29 @@
+{
+  "assertions": [
+    {
+      "passed": true,
+      "text": "conflict-2-correctly-parallelized: concludes #98+#100 are safe to run in parallel",
+      "evidence": "PARALLEL SAFE conclusion with file-level analysis table"
+    },
+    {
+      "passed": true,
+      "text": "conflict-analysis-present: explicit file overlap check before batching",
+      "evidence": "Explicit CoordinatorRunPage.tsx vs CoordinatorTopologyGraph.tsx comparison"
+    },
+    {
+      "passed": true,
+      "text": "worktree-paths-correct: agentweaver-issue-{N} format",
+      "evidence": "agentweaver-issue-98 and agentweaver-issue-100 paths shown"
+    },
+    {
+      "passed": true,
+      "text": "branch-names-correct: squad/issue-{N}-{slug} format",
+      "evidence": "squad/issue-98-preview-sandbox-coordinator-run-page, squad/issue-100-graph-zoom-nav"
+    },
+    {
+      "passed": true,
+      "text": "parallel-batch-shown: work grouped into parallel batches",
+      "evidence": "Batch 1 with both issues in parallel"
+    }
+  ]
+}
