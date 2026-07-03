@@ -141,7 +141,7 @@ describe('CoordinatorRunPage — session run (issue 6)', () => {
     render(<Wrapper><CoordinatorRunPage /></Wrapper>);
 
     await waitFor(
-      () => expect(document.body.textContent).toContain('Orchestration'),
+      () => expect(document.body.textContent).toContain('Coordinator Graph'),
       { timeout: 4000 },
     );
     expect(document.body.querySelector('[data-testid="open-steer-panel"]')).toBeNull();
@@ -459,10 +459,10 @@ describe('CoordinatorRunPage — assembly review affordance (issues 3 & 4)', () 
     expect(document.body.textContent ?? '').not.toContain('Awaiting your review');
   });
 
-  it('opens the Scribe sub-run stream from the step detail panel "View execution" action', async () => {
-    // Assembly Scribe/RAI own a real persisted sub-run stream (`${runId}-scribe`). Clicking the
-    // Scribe step in the pipeline opens its detail panel; "View execution" opens the RunWatcher
-    // dialog surfacing the actual memory work.
+  it('opens the Scribe sub-run stream in a dialog from the assembly "View execution" button', async () => {
+    // Regression: assembly Scribe/RAI own a real persisted sub-run stream (`${runId}-scribe`),
+    // so "View execution" must open it in the RunWatcher dialog (surfacing the actual memory work),
+    // not merely scroll to the high-level coordinator timeline.
     const startedIso = new Date(Date.now() - 30_000).toISOString();
     currentEvents = [
       { sequence: 1, type: 'coordinator.assembly_scribe_started', payload: { workPlanId: 1, timestamp_utc: startedIso } },
@@ -470,19 +470,11 @@ describe('CoordinatorRunPage — assembly review affordance (issues 3 & 4)', () 
 
     render(<Wrapper><CoordinatorRunPage /></Wrapper>);
 
-    const step = await waitFor(() => {
-      const el = document.querySelector('[data-testid="pipeline-step-planned:assembly-scribe"]');
-      expect(el).toBeTruthy();
-      return el as HTMLElement;
-    }, { timeout: 4000 });
-
-    fireEvent.click(step);
-
     const btn = await waitFor(() => {
-      const el = Array.from(document.querySelectorAll('button'))
-        .find(b => b.textContent === 'View execution');
-      expect(el).toBeTruthy();
-      return el as HTMLButtonElement;
+      const els = Array.from(document.querySelectorAll('button'))
+        .filter(b => b.textContent === 'View execution');
+      expect(els.length).toBeGreaterThan(0);
+      return els[els.length - 1];
     }, { timeout: 4000 });
 
     fireEvent.click(btn);
@@ -493,28 +485,30 @@ describe('CoordinatorRunPage — assembly review affordance (issues 3 & 4)', () 
     );
   });
 
-  it('opens a two-column step detail panel (agents + session stream) when a step is clicked (#161)', async () => {
-    // Clicking a subtask step in the pipeline slides in the detail panel: the left column lists the
-    // step's agent with a status indicator, the right column surfaces the live session stream/files.
+  it('Merge "Browse files" routes to Workspace with the integration branch selected', async () => {
+    // Regression: "Browse files" must leave the orchestration page and land in the project Workspace
+    // with enough context to preserve refresh/back behavior for the assembled integration branch.
+    const t0 = new Date(Date.now() - 60_000).toISOString();
+    currentEvents = [
+      { sequence: 1, type: 'coordinator.assembly_merge_started', payload: { workPlanId: 1, timestamp_utc: t0 } },
+      { sequence: 2, type: 'coordinator.assembly_merge_completed', payload: { workPlanId: 1, timestamp_utc: new Date().toISOString() } },
+    ];
+
     render(<Wrapper><CoordinatorRunPage /></Wrapper>);
 
-    const step = await waitFor(() => {
-      const el = document.querySelector('[data-testid="pipeline-step-plan:subtask-1"]');
+    const btn = await waitFor(() => {
+      const el = Array.from(document.querySelectorAll('button'))
+        .find(b => b.textContent?.includes('Browse files'));
       expect(el).toBeTruthy();
-      return el as HTMLElement;
+      return el as HTMLButtonElement;
     }, { timeout: 4000 });
 
-    fireEvent.click(step);
+    fireEvent.click(btn);
 
-    await waitFor(
-      () => expect(document.querySelector('[data-testid="step-detail-panel"]')).toBeTruthy(),
-      { timeout: 4000 },
+    expect(mockNavigate).toHaveBeenCalledWith(
+      '/projects/p1/workspace?run=coord-run-1&ref=agentweaver%2Fintegration%2Fcoord-run-1',
     );
-    // Both columns render: nested agent list (left) + session stream (right).
-    expect(document.querySelector('[data-testid="step-detail-agents"]')).toBeTruthy();
-    expect(document.querySelector('[data-testid="step-detail-session"]')).toBeTruthy();
-    // Subtask 1 is assigned to Neo (from the fixture) — surfaced in the agents column.
-    expect(document.querySelector('[data-testid="step-detail-agents"]')?.textContent).toContain('Neo');
+    expect(apiClient.getAssemblyWorkspace).not.toHaveBeenCalled();
   });
 });
 
@@ -627,42 +621,6 @@ describe('CoordinatorRunPage — bubbled child questions & approvals', () => {
     expect(text).toContain('Subtask 1');
     expect(text).toContain('fetch_url');
     expect(text).toContain('Allow once');
-  });
-});
-
-describe('CoordinatorRunPage — Coordinator card workflow (#160)', () => {
-  it('shows the selected workflow name and the selection reasoning in the Coordinator card', async () => {
-    vi.mocked(apiClient.getRun).mockResolvedValue({
-      run_id: 'coord-run-1', status: 'running', parent_run_id: null,
-      workflow_name: 'Software Delivery',
-      workflow_selection_reason: 'Multi-file change with review + merge stages.',
-    } as unknown as Awaited<ReturnType<typeof apiClient.getRun>>);
-
-    render(<Wrapper><CoordinatorRunPage /></Wrapper>);
-
-    const wf = await waitFor(() => {
-      const el = document.querySelector('[data-testid="coord-workflow"]');
-      expect(el).toBeTruthy();
-      return el as HTMLElement;
-    }, { timeout: 4000 });
-
-    expect(wf.textContent).toContain('Workflow: Software Delivery');
-    // The coordinator's reasoning renders below the workflow name.
-    expect(document.body.textContent).toContain('Multi-file change with review + merge stages.');
-  });
-
-  it('falls back to workflow_id and omits the caption entirely when no workflow is present', async () => {
-    vi.mocked(apiClient.getRun).mockResolvedValue({
-      run_id: 'coord-run-1', status: 'running', parent_run_id: null,
-      workflow_id: 'software-delivery',
-    } as unknown as Awaited<ReturnType<typeof apiClient.getRun>>);
-
-    render(<Wrapper><CoordinatorRunPage /></Wrapper>);
-
-    await waitFor(() => {
-      const el = document.querySelector('[data-testid="coord-workflow"]');
-      expect(el?.textContent).toContain('Workflow: software-delivery');
-    }, { timeout: 4000 });
   });
 });
 

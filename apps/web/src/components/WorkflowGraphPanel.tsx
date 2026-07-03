@@ -838,7 +838,7 @@ export function forwardEdge(id: string, source: string, target: string, animated
     id,
     source,
     target,
-    type: 'default',
+    type: 'smoothstep',
     animated,
     style: { stroke: STROKE_MUTED, strokeWidth: 1.5 },
     markerEnd: { type: MarkerType.ArrowClosed, color: STROKE_MUTED, width: 12, height: 12 },

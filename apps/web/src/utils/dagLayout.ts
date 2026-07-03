@@ -54,6 +54,85 @@ export function workflowNodeSizeHint(nodeType?: string | null): NodeSizeHint {
 }
 
 /**
+ * Column-aligned DAG layout. Runs dagre to determine rank (depth) assignments,
+ * then snaps every node in the same rank to an exact virtual column X so cards
+ * line up in clean vertical columns. Within each column nodes are stacked
+ * top-to-bottom with uniform spacing, preserving dagre's vertical ordering.
+ *
+ * Use this for the coordinator run page where the "virtual column grid" look
+ * is required. Other surfaces can keep using layoutDag directly.
+ */
+export function layoutDagColumns(
+  nodes: Node[],
+  edges: Edge[],
+  opts: LayoutOpts = {},
+  nodeSizeHints?: Record<string, NodeSizeHint>,
+): Node[] {
+  if (nodes.length === 0) return nodes;
+
+  const g = new Dagre.graphlib.Graph();
+  g.setGraph({
+    rankdir: opts.rankdir ?? 'LR',
+    ranksep: opts.rankSep ?? 80,
+    nodesep: opts.nodeSep ?? 40,
+    marginx: 24,
+    marginy: 24,
+  });
+  g.setDefaultEdgeLabel(() => ({}));
+
+  for (const n of nodes) {
+    const hint = nodeSizeHints?.[n.id];
+    g.setNode(n.id, { width: hint?.width ?? NODE_W, height: hint?.height ?? NODE_H });
+  }
+  for (const e of edges) {
+    g.setEdge(e.source, e.target);
+  }
+
+  Dagre.layout(g);
+
+  // Group nodes by dagre-assigned rank. In LR mode all nodes at the same depth
+  // share the same X value from dagre. Round to absorb floating-point noise.
+  const byRank = new Map<number, string[]>();
+  for (const n of nodes) {
+    const key = Math.round(g.node(n.id).x);
+    if (!byRank.has(key)) byRank.set(key, []);
+    byRank.get(key)!.push(n.id);
+  }
+
+  const COL_GAP = 72; // horizontal gap between column edges
+  const ROW_GAP = 40; // vertical gap between stacked cards
+  const MARGIN = 24;
+
+  // Walk columns left → right, assign fixed X positions.
+  const posMap = new Map<string, { x: number; y: number }>();
+  let colX = MARGIN;
+  for (const rankKey of [...byRank.keys()].sort((a, b) => a - b)) {
+    const nodeIds = byRank.get(rankKey)!;
+    // Preserve dagre's vertical ordering within the column.
+    nodeIds.sort((a, b) => g.node(a).y - g.node(b).y);
+
+    // Column width = widest card in this column.
+    const colW = nodeIds.reduce((max, id) => {
+      return Math.max(max, nodeSizeHints?.[id]?.width ?? NODE_W);
+    }, 0);
+
+    let rowY = MARGIN;
+    for (const id of nodeIds) {
+      const hint = nodeSizeHints?.[id];
+      const h = hint?.height ?? NODE_H;
+      const w = hint?.width ?? NODE_W;
+      // Centre narrower cards within the column width.
+      posMap.set(id, { x: colX + (colW - w) / 2, y: rowY });
+      rowY += h + ROW_GAP;
+    }
+
+    colX += colW + COL_GAP;
+  }
+
+  return nodes.map((n) => ({ ...n, position: posMap.get(n.id) ?? n.position }));
+}
+
+/**
  * Runs dagre auto-layout on the given nodes and edges.
  * Returns a new nodes array with computed positions.
  * Pass only forward (non-loopback) edges so dagre doesn't try to route cycles.

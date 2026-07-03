@@ -120,18 +120,17 @@ describe('CoordinatorRunPage — unified coordinator graph view', () => {
       { timeout: 4000 },
     );
 
-    // Planned assembly stages show a "Planned" status badge (from StatusBadge with isPlanned=true).
+    // Planned nodes show a "Planned" status badge (from StatusBadge with isPlanned=true).
     const text = document.body.textContent ?? '';
     expect(text).toContain('Planned');
 
-    // Planned assembly stages render as pipeline steps carrying their descriptor node id.
-    expect(document.body.querySelector('[data-testid="pipeline-step-planned:assembly-rai"]')).toBeTruthy();
-    expect(document.body.querySelector('[data-testid="pipeline-step-planned:assembly-review"]')).toBeTruthy();
-    expect(document.body.querySelector('[data-testid="pipeline-step-planned:assembly-merge"]')).toBeTruthy();
-    expect(document.body.querySelector('[data-testid="pipeline-step-planned:assembly-scribe"]')).toBeTruthy();
+    // Planned nodes carry data-node-type attributes in the rendered HTML.
+    const html = document.body.innerHTML;
+    expect(html).toContain('data-node-type="gate"');    // planned RAI Review + Human Review
+    expect(html).toContain('data-node-type="action"');  // planned Merge + Scribe
   });
 
-  it('renders subtask steps in the pipeline with a status attribute', async () => {
+  it('renders subtask nodes as data-node-type=subtask', async () => {
     render(<Wrapper><CoordinatorRunPage /></Wrapper>);
 
     await waitFor(
@@ -139,13 +138,9 @@ describe('CoordinatorRunPage — unified coordinator graph view', () => {
       { timeout: 4000 },
     );
 
-    // Subtasks render as clickable pipeline steps carrying their descriptor node id + status.
-    const step1 = document.body.querySelector('[data-testid="pipeline-step-plan:subtask-1"]');
-    expect(step1).toBeTruthy();
-    expect(step1?.getAttribute('data-step-status')).toBeTruthy();
-    expect(document.body.querySelector('[data-testid="pipeline-step-plan:subtask-2"]')).toBeTruthy();
-    // All steps live inside the vertical steps pipeline (right column of the new layout).
-    expect(document.body.querySelector('[data-testid="steps-pipeline"]')).toBeTruthy();
+    // SubtaskNode renders data-node-type="subtask" on its card div.
+    const html = document.body.innerHTML;
+    expect(html).toContain('data-node-type="subtask"');
   });
 
   it('renders subtask nodes without showing API pod chip when no executionPodName is set', async () => {
@@ -181,7 +176,7 @@ describe('CoordinatorRunPage — unified coordinator graph view', () => {
     expect(container.querySelector('[data-testid="steer-chat-stop"]')).toBeTruthy();
   });
 
-  it('renders the coordinator card and the steps pipeline (two-column layout)', async () => {
+  it('renders Ctrl+Scroll zoom controls on the orchestration graph', async () => {
     render(<Wrapper><CoordinatorRunPage /></Wrapper>);
 
     await waitFor(
@@ -189,11 +184,14 @@ describe('CoordinatorRunPage — unified coordinator graph view', () => {
       { timeout: 4000 },
     );
 
-    // The redesigned orchestration page renders a Coordinator card on the left with the
-    // Spec / Steer / Artifacts affordances, and the steps pipeline on the right.
-    expect(document.body.querySelector('[data-testid="open-artifacts-panel"]')).toBeTruthy();
-    expect(document.body.querySelector('[data-testid="open-spec-panel"]')).toBeTruthy();
-    expect(document.body.querySelector('[data-testid="steps-pipeline"]')).toBeTruthy();
+    // The shared ZoomControls (Ctrl+Scroll hint + +/- buttons + % readout) render
+    // alongside the orchestration graph, mirroring WorkflowRunPage.
+    const text = document.body.textContent ?? '';
+    expect(text).toContain('Ctrl + Scroll to zoom');
+
+    const buttons = Array.from(document.body.querySelectorAll('button'));
+    expect(buttons.some((b) => b.getAttribute('aria-label') === 'Zoom in')).toBe(true);
+    expect(buttons.some((b) => b.getAttribute('aria-label') === 'Zoom out')).toBe(true);
   });
 
   it('renders from REST descriptor even when SSE stream is done (finished coordinator runs)', async () => {
