@@ -17,6 +17,7 @@ import {
   Text,
   Title2,
   Title3,
+  Tooltip,
   makeStyles,
   tokens,
 } from '@fluentui/react-components';
@@ -33,6 +34,7 @@ import type { FluentIcon } from '@fluentui/react-icons';
 import {
   ReactFlow,
   Handle,
+  MiniMap,
   Position,
   useReactFlow,
   useNodesInitialized,
@@ -49,7 +51,6 @@ import { layoutDagColumns, NODE_W, NODE_H, NODE_TYPE_W, NODE_TYPE_H } from '../u
 import type { NodeSizeHint } from '../utils/dagLayout';
 import { OutcomeSpecPanel } from '../components/OutcomeSpecPanel';
 import { AgentAvatar } from '../components/AgentAvatar';
-import { PodIndicator } from '../components/PodIndicator';
 import { CostChip } from '../components/CostChip';
 import { AgentTokenBreakdown } from '../components/runs/AgentTokenBreakdown';
 import { AgentRail } from '../components/AgentRail';
@@ -630,22 +631,35 @@ function SubtaskNode({ id, data }: NodeProps) {
 
   const stepStatus = topoStatusToStepStatus(d.topoStatus as string);
   const statusLabel = topoStatusToLabel(d.topoStatus as string);
+  const podName = d.executionPodName as string | null | undefined;
+
+  const handleCardClick = useCallback(() => {
+    if (d.childRunId) viewRun?.(d.childRunId as string);
+  }, [d.childRunId, viewRun]);
 
   return (
     <>
-      <PodIndicator podName={d.executionPodName as string | null | undefined} />
+      <Tooltip
+        content={podName ? `Pod: ${podName}` : ''}
+        relationship="description"
+        positioning="above"
+        withArrow
+      >
       <div
         className={`${s.card} ${s.cardSubtask}${stepStatus === 'started' ? ` ${s.cardActive}` : ''}`}
         data-node-type="subtask"
         role="article"
         aria-label={`${d.label as string}: ${d.topoStatus as string}`}
+        onClick={d.childRunId ? handleCardClick : undefined}
+        style={d.childRunId ? { cursor: 'pointer' } : undefined}
       >
       <Handle type="target" position={d.dir === 'TB' ? Position.Top : Position.Left} style={handleStyle} />
       <Handle type="source" position={d.dir === 'TB' ? Position.Bottom : Position.Right} style={handleStyle} />
 
+      {/* Top row: status chip left, cost right */}
       <div className={s.cardHeader}>
-        <CostChip totalNanoAiu={d.totalNanoAiu as number | null | undefined} totalTokens={d.totalTokens as number | null | undefined} />
         <StatusBadge status={stepStatus} label={statusLabel} />
+        <CostChip totalNanoAiu={d.totalNanoAiu as number | null | undefined} totalTokens={d.totalTokens as number | null | undefined} />
       </div>
 
       <div className={s.cardMain}>
@@ -662,18 +676,6 @@ function SubtaskNode({ id, data }: NodeProps) {
           {d.phase && <span className={s.cardSubText}>{d.phase as string}</span>}
         </div>
       </div>
-
-      {d.childGraphRef && d.childRunId && (
-        <div className={`${s.cardActions} nopan nodrag`}>
-          <Button
-            appearance="outline"
-            size="small"
-            onClick={() => viewRun?.(d.childRunId as string)}
-          >
-            View run
-          </Button>
-        </div>
-      )}
 
       {/* Inline child pipeline — compact vertical strip of step rows. Stays within the card width
           (grows only downward) so the expansion never overflows into neighbouring subtask columns. */}
@@ -712,6 +714,7 @@ function SubtaskNode({ id, data }: NodeProps) {
         </div>
       ))}
     </div>
+      </Tooltip>
     </>
   );
 }
@@ -1918,6 +1921,12 @@ export function CoordinatorRunPage() {
                 >
                   <GraphAutoFit
                     token={`${displayNodes.length}:${displayEdges2.length}:${graphHeight}:${[...expandedKeys].sort().join(',')}`}
+                  />
+                  <MiniMap
+                    nodeStrokeWidth={2}
+                    zoomable
+                    pannable
+                    style={{ bottom: 8, right: 8 }}
                   />
                 </ReactFlow>
                 </div>
