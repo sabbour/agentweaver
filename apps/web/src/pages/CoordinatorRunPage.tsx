@@ -54,6 +54,7 @@ import { AgentAvatar } from '../components/AgentAvatar';
 import { CostChip } from '../components/CostChip';
 import { AgentTokenBreakdown } from '../components/runs/AgentTokenBreakdown';
 import { AgentRail } from '../components/AgentRail';
+import { AgentSessionPanel, type AgentSessionPanelColumn, type AgentSessionPanelItem } from '../components/AgentSessionPanel';
 import { SteerPanel } from '../components/SteerPanel';
 import { SlidePanel } from '../components/SlidePanel';
 import { SteerChatPanel } from '../components/SteerChatPanel';
@@ -68,7 +69,6 @@ import { TransactionTracePanel } from '../components/runs/TransactionTracePanel'
 import { useTimelineItems } from '../timeline/useTimelineItems';
 import { stripSerializedWorkPlanMessages } from '../timeline/coordinatorPlanFilter';
 import { RunLayout } from '../components/RunLayout';
-import { RunWatcher } from '../components/RunWatcher';
 import type { ArtifactBrowserAdapter } from '../hooks/useArtifactBrowser';
 import {
   workflowNodeTypes,
@@ -106,9 +106,8 @@ import { formatModelLabel } from '../utils/agentIdentity';
 interface CoordExpandValue { expanded: Set<string>; toggle: (key: string) => void; }
 const CoordExpandContext = createContext<CoordExpandValue | undefined>(undefined);
 
-// "View run" on a subtask opens the child run in a modal (reusing the standard RunWatcher) rather
-// than navigating away from the orchestration.
-const CoordViewRunContext = createContext<((runId: string) => void) | undefined>(undefined);
+// Subtask-card clicks open the docked agent-session panel instead of navigating away.
+const CoordPanelContext = createContext<((nodeId: string) => void) | undefined>(undefined);
 
 // ---------------------------------------------------------------------------
 // Topology status helpers
@@ -566,7 +565,7 @@ function SubtaskNode({ id, data }: NodeProps) {
   const s = useNodeStyles();
   const d = data as SubtaskNodeData;
   const expandCtx = useContext(CoordExpandContext);
-  const viewRun = useContext(CoordViewRunContext);
+  const openPanel = useContext(CoordPanelContext);
   const expanded = expandCtx?.expanded.has(id) ?? false;
   const [childDescriptor, setChildDescriptor] = useState<GraphDescriptor | null>(null);
   const handleStyle: React.CSSProperties = { opacity: 0, pointerEvents: 'none' };
@@ -634,8 +633,8 @@ function SubtaskNode({ id, data }: NodeProps) {
   const podName = d.executionPodName as string | null | undefined;
 
   const handleCardClick = useCallback(() => {
-    if (d.childRunId) viewRun?.(d.childRunId as string);
-  }, [d.childRunId, viewRun]);
+    if (d.childRunId) openPanel?.(id);
+  }, [d.childRunId, id, openPanel]);
 
   return (
     <>
@@ -842,6 +841,20 @@ const useStyles = makeStyles({
     backgroundColor: tokens.colorNeutralBackground1,
     '& .react-flow__renderer': { borderRadius: '8px' },
   },
+  graphColumnLabels: {
+    display: 'grid',
+    gap: tokens.spacingHorizontalS,
+    alignItems: 'center',
+    padding: `0 ${tokens.spacingHorizontalS}`,
+  },
+  graphColumnLabel: {
+    fontSize: tokens.fontSizeBase100,
+    color: tokens.colorNeutralForeground3,
+    textAlign: 'center',
+    whiteSpace: 'nowrap',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+  },
   coordControls: {
     display: 'flex',
     alignItems: 'center',
@@ -853,22 +866,6 @@ const useStyles = makeStyles({
     alignItems: 'center',
     gap: tokens.spacingHorizontalS,
     marginBottom: tokens.spacingVerticalXS,
-  },
-  viewRunSurface: {
-    maxWidth: '92vw',
-    width: '1200px',
-    padding: tokens.spacingVerticalM,
-  },
-  viewRunBody: {
-    display: 'flex',
-    flexDirection: 'column',
-    height: '82vh',
-    gap: tokens.spacingVerticalS,
-  },
-  viewRunHeader: {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'space-between',
   },
   steerLabel: {
     fontSize: tokens.fontSizeBase200,
@@ -1576,6 +1573,73 @@ export function CoordinatorRunPage() {
     return { displayNodes: filteredNodes, displayEdges2: filteredEdges };
   }, [inSpecAuthoring, rfNodes, displayEdges, assemblyNodeIds]);
 
+  const sessionPanelColumns = useMemo<AgentSessionPanelColumn[]>(() => {
+    const candidates = displayNodes.filter((node) => {
+      if (node.type === 'subtask') return true;
+      const wfData = node.data as WorkflowNodeData | undefined;
+      return wfData?.def?.key === 'coordinator';
+    });
+    if (candidates.length === 0) return [];
+
+    const xValues = [...new Set(candidates.map((node) => Math.round(node.position.x ?? 0)))].sort((a, b) => a - b);
+    const columnIndexByX = new Map<number, number>(xValues.map((x, index) => [x, index]));
+    const grouped = new Map<number, AgentSessionPanelItem[]>();
+
+    for (const node of candidates) {
+      const x = Math.round(node.position.x ?? 0);
+      const columnIndex = columnIndexByX.get(x) ?? 0;
+      const list = grouped.get(columnIndex) ?? [];
+      if (node.type === 'subtask') {
+        const data = node.data as SubtaskNodeData;
+        if (!data.childRunId) continue;
+        list.push({
+          nodeId: node.id,
+          runId: data.childRunId,
+          title: data.label,
+          agentName: data.agent,
+          agentRole: data.agentRole,
+          model: data.model,
+          status: data.topoStatus,
+          startedAt: data.startedAt,
+          completedAt: data.completedAt,
+          columnIndex,
+          columnLabel: data.agentRole ?? data.phase ?? data.label ?? `L${columnIndex}`,
+        });
+      } else {
+        const data = node.data as WorkflowNodeData;
+        const status =
+          data.state.status === 'started' ? 'running'
+            : data.state.status === 'completed' ? 'completed'
+              : data.state.status === 'failed' ? 'failed'
+                : data.state.status === 'revise' ? 'rai_flagged'
+                  : 'pending';
+        list.push({
+          nodeId: node.id,
+          runId: runId ?? '',
+          title: data.def.label,
+          agentName: data.agentName ?? 'Coordinator',
+          agentRole: data.agentRoleTitle ?? data.def.roleDescription,
+          model: data.modelId,
+          status,
+          startedAt: data.state.startedAt,
+          completedAt: data.state.completedAt,
+          columnIndex,
+          columnLabel: data.agentRoleTitle ?? data.def.label ?? data.def.roleDescription ?? `L${columnIndex}`,
+          isCoordinator: true,
+        });
+      }
+      grouped.set(columnIndex, list);
+    }
+
+    return [...grouped.entries()]
+      .sort((a, b) => a[0] - b[0])
+      .map(([index, items]) => {
+        const sortedItems = [...items].sort((a, b) => (a.startedAt ?? 0) - (b.startedAt ?? 0));
+        const label = sortedItems[0]?.agentRole ?? sortedItems[0]?.columnLabel ?? `L${index}`;
+        return { index, label: `L${index} ${label}`, items: sortedItems };
+      });
+  }, [displayNodes, runId]);
+
   // ---------------------------------------------------------------------------
   // Steering chat side panel (#163) — a slide-in chat replaces the old inline steer bar.
   // ---------------------------------------------------------------------------
@@ -1583,16 +1647,19 @@ export function CoordinatorRunPage() {
   const [steerPanelOpen, setSteerPanelOpen] = useState(false);
   const [specPanelOpen, setSpecPanelOpen] = useState(false);
   const [artifactsPanelOpen, setArtifactsPanelOpen] = useState(false);
+  const [panelNodeId, setPanelNodeId] = useState<string | null>(null);
+  const [panelTabIndex, setPanelTabIndex] = useState<0 | 1 | 2>(0);
 
-  // ---------------------------------------------------------------------------
-  // Session panel anchor — the coordinator node's "View session" scrolls here.
-  const sessionRef = useRef<HTMLDivElement>(null);
-  const scrollToSession = useCallback(() => {
-    // Defer scroll by one animation frame so React re-renders the ref'd element before scrolling.
-    requestAnimationFrame(() => {
-      sessionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    });
+  const openPanelForNode = useCallback((nodeId: string) => {
+    setPanelNodeId(nodeId);
+    setPanelTabIndex(0);
   }, []);
+
+  useEffect(() => {
+    if (panelNodeId && !sessionPanelColumns.some((column) => column.items.some((item) => item.nodeId === panelNodeId))) {
+      setPanelNodeId(null);
+    }
+  }, [panelNodeId, sessionPanelColumns]);
 
   // Review/Changes panel anchor — the Human Review gate's "Review now" scrolls here.
   const reviewRef = useRef<HTMLDivElement>(null);
@@ -1612,20 +1679,15 @@ export function CoordinatorRunPage() {
     navigate(`/projects/${projectId}/workspace?${query.toString()}`);
   }, [navigate, projectId, runId]);
 
-  // "View run" modal — renders the selected child run (or a collective-assembly sub-run stream
-  // such as `${runId}-rai` / `${runId}-scribe`) via the standard RunWatcher in a dialog.
-  const [viewRunId, setViewRunId] = useState<string | null>(null);
-  const openChildRun = useCallback((id: string) => setViewRunId(id), []);
-
   // Collective-assembly "View execution": the RAI and Scribe stages run a real agent turn on their
   // own persisted sub-run stream (`${runId}-rai` / `${runId}-scribe`), so open that stream in the
   // RunWatcher dialog to surface the actual work (tool calls, inbox review, memory writes) — same
   // pattern the per-run page uses. Merge "Browse files" and Review "Review now" own no separate run,
   // so they jump to the reused Changes/Files review panel.
   const viewAssemblyExecution = useCallback((id: string) => {
-    if (id.endsWith('-rai') || id.endsWith('-scribe')) setViewRunId(id);
+    if (id.endsWith('-rai') || id.endsWith('-scribe')) navigate(`/projects/${projectId ?? ''}/runs/${id}/workflow`);
     else scrollToReview();
-  }, [scrollToReview]);
+  }, [navigate, projectId, scrollToReview]);
 
   // Option toggles — optimistic update, revert on error. Both cascade to children server-side.
   const toggleAutopilot = useCallback((next: boolean) => {
@@ -1893,10 +1955,22 @@ export function CoordinatorRunPage() {
             <ExecutionModalContext.Provider value={viewAssemblyExecution}>
             <BrowseFilesContext.Provider value={browseAssemblyFiles}>
             <ActiveEdgeContext.Provider value={activeLoopbackId}>
-            <CoordinatorSessionContext.Provider value={scrollToSession}>
+            <CoordinatorSessionContext.Provider value={() => openPanelForNode('coordinator')}>
             <CoordExpandContext.Provider value={expandValue}>
-            <CoordViewRunContext.Provider value={openChildRun}>
+            <CoordPanelContext.Provider value={openPanelForNode}>
               <ZoomControls zoom={zoom} onZoomIn={zoomIn} onZoomOut={zoomOut} maxZoom={maxZoom} />
+              {sessionPanelColumns.length > 0 && (
+                <div
+                  className={styles.graphColumnLabels}
+                  style={{ gridTemplateColumns: `repeat(${sessionPanelColumns.length}, minmax(0, 1fr))` }}
+                >
+                  {sessionPanelColumns.map((column) => (
+                    <Text key={column.index} className={styles.graphColumnLabel}>
+                      {column.label}
+                    </Text>
+                  ))}
+                </div>
+              )}
               <div className={styles.dagContainer} style={{ height: graphHeight }} ref={viewportRef}>
                 <div style={{ zoom, width: '100%', height: '100%' }}>
                 <ReactFlow
@@ -1936,7 +2010,7 @@ export function CoordinatorRunPage() {
                   The execution pipeline appears once you confirm the outcome spec.
                 </Text>
               )}
-            </CoordViewRunContext.Provider>
+            </CoordPanelContext.Provider>
             </CoordExpandContext.Provider>
             </CoordinatorSessionContext.Provider>
             </ActiveEdgeContext.Provider>
@@ -1966,7 +2040,7 @@ export function CoordinatorRunPage() {
           outcome spec now lives in a slide-in panel opened from the [Spec] button under the
           Coordinator card. */}
       <div className={styles.sessionOnly}>
-        <div ref={sessionRef} className={styles.centerCol}>
+        <div className={styles.centerCol}>
           {/* Assembly review affordance — de-confuses the stuck state (issues 3 & 4). */}
           {(orch.phase === 'awaiting_assembly' || orch.phase === 'assembling') && (
             <div className={styles.panel}>
@@ -2171,30 +2245,18 @@ export function CoordinatorRunPage() {
         </div>
       </div>
 
-      {/* View-run modal — the standard run view (Changes/Files + timeline) for a child subtask,
-          opened in a dialog so the user never leaves the orchestration. */}
-      <Dialog open={!!viewRunId} onOpenChange={(_, d) => { if (!d.open) setViewRunId(null); }}>
-        <DialogSurface className={styles.viewRunSurface}>
-          <DialogBody className={styles.viewRunBody}>
-            <div className={styles.viewRunHeader}>
-              <Title3>
-                {viewRunId?.endsWith('-rai')
-                  ? 'RAI review (collective assembly)'
-                  : viewRunId?.endsWith('-scribe')
-                    ? 'Scribe documentation (collective assembly)'
-                    : `Child run ${viewRunId ? viewRunId.slice(0, 8) : ''}`}
-              </Title3>
-              <Button
-                appearance="subtle"
-                icon={<DismissRegular />}
-                aria-label="Close run"
-                onClick={() => setViewRunId(null)}
-              />
-            </div>
-            {viewRunId && <RunWatcher runId={viewRunId} style={{ flex: 1, minHeight: 0 }} />}
-          </DialogBody>
-        </DialogSurface>
-      </Dialog>
+      <AgentSessionPanel
+        nodeId={panelNodeId}
+        coordinatorRunId={runId ?? ''}
+        projectId={projectId}
+        columns={sessionPanelColumns}
+        tabIndex={panelTabIndex}
+        onClose={() => setPanelNodeId(null)}
+        onSelectNode={setPanelNodeId}
+        onTabChange={setPanelTabIndex}
+        onCoordinatorFollowUp={reconnectStream}
+        coordinatorActive={coordActive}
+      />
 
       {/* Coordinator steering chat side panel (#163) */}
       <SlidePanel

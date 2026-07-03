@@ -30,11 +30,13 @@ vi.mock('../api/apiClient', () => ({
       breakdown: [],
     }),
     getRunTraces: vi.fn().mockResolvedValue({ runId: 'coord-run-1', spans: [] }),
+    getRunEvents: vi.fn().mockResolvedValue([]),
     // OutcomeSpecPanel uses these — return empty/null to avoid noise.
     getOutcomeSpec: vi.fn(),
     getTeam: vi.fn().mockResolvedValue({ members: [] }),
     // RunLayout artifact browser (Changes/Files rail) — empty results in tests.
     getRunFiles: vi.fn().mockResolvedValue([]),
+    getRunFileContent: vi.fn().mockResolvedValue({ path: 'file.txt', content: '', is_binary: false, language: 'text' }),
     getRunWorkspace: vi.fn().mockResolvedValue([]),
     getRunFileDiff: vi.fn().mockResolvedValue(null),
     getAssemblyFiles: vi.fn().mockResolvedValue([]),

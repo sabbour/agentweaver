@@ -39,7 +39,9 @@ vi.mock('../api/apiClient', () => ({
       breakdown: [],
     }),
     getRunTraces: vi.fn().mockResolvedValue({ runId: 'coord-run-1', spans: [] }),
+    getRunEvents: vi.fn().mockResolvedValue([]),
     getRunFiles: vi.fn().mockResolvedValue([]),
+    getRunFileContent: vi.fn().mockResolvedValue({ path: 'file.txt', content: '', is_binary: false, language: 'text' }),
     getRunWorkspace: vi.fn().mockResolvedValue([]),
     getRunFileDiff: vi.fn().mockResolvedValue(null),
     getAssemblyFiles: vi.fn().mockResolvedValue([]),
@@ -145,6 +147,51 @@ describe('CoordinatorRunPage — session run (issue 6)', () => {
       { timeout: 4000 },
     );
     expect(document.body.querySelector('[data-testid="open-steer-panel"]')).toBeNull();
+  });
+
+  it('opens the slide-in session panel from the coordinator card', async () => {
+    vi.mocked(apiClient.getRun).mockResolvedValue({
+      run_id: 'coord-run-1',
+      status: 'in_progress',
+      model_source: 'github-copilot',
+      started_at: new Date(Date.now() - 60_000).toISOString(),
+      ended_at: null,
+      result: null,
+      diff: null,
+      step_count: 0,
+      tree_hash: null,
+    });
+
+    render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    const button = await waitFor(() => {
+      const el = Array.from(document.querySelectorAll('button')).find((candidate) => candidate.textContent === 'View session');
+      expect(el).toBeTruthy();
+      return el as HTMLButtonElement;
+    });
+
+    fireEvent.click(button);
+
+    await waitFor(() => expect(document.body.textContent).toContain('Agent Sessions'), { timeout: 4000 });
+    expect(document.body.textContent).toContain('Messages');
+    expect(document.body.textContent).toContain('Changes (0)');
+    expect(document.body.textContent).toContain('Files (0)');
+    expect(document.querySelector('input[placeholder="Ask a follow-up..."]')).toBeTruthy();
+  });
+
+  it('opens the slide-in session panel when a subtask card is clicked', async () => {
+    render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    const card = await waitFor(() => {
+      const el = document.querySelector('[data-node-type="subtask"]');
+      expect(el).toBeTruthy();
+      return el as HTMLElement;
+    }, { timeout: 4000 });
+
+    fireEvent.click(card);
+
+    await waitFor(() => expect(document.body.textContent).toContain('Agent Sessions'), { timeout: 4000 });
+    expect(document.body.textContent).toContain('Subtask 1');
   });
 });
 
@@ -459,10 +506,7 @@ describe('CoordinatorRunPage — assembly review affordance (issues 3 & 4)', () 
     expect(document.body.textContent ?? '').not.toContain('Awaiting your review');
   });
 
-  it('opens the Scribe sub-run stream in a dialog from the assembly "View execution" button', async () => {
-    // Regression: assembly Scribe/RAI own a real persisted sub-run stream (`${runId}-scribe`),
-    // so "View execution" must open it in the RunWatcher dialog (surfacing the actual memory work),
-    // not merely scroll to the high-level coordinator timeline.
+  it('routes the Scribe "View execution" button to the child workflow page', async () => {
     const startedIso = new Date(Date.now() - 30_000).toISOString();
     currentEvents = [
       { sequence: 1, type: 'coordinator.assembly_scribe_started', payload: { workPlanId: 1, timestamp_utc: startedIso } },
@@ -480,7 +524,7 @@ describe('CoordinatorRunPage — assembly review affordance (issues 3 & 4)', () 
     fireEvent.click(btn);
 
     await waitFor(
-      () => expect(document.body.textContent).toContain('Scribe documentation (collective assembly)'),
+      () => expect(mockNavigate).toHaveBeenCalledWith('/projects/p1/runs/coord-run-1-scribe/workflow'),
       { timeout: 4000 },
     );
   });

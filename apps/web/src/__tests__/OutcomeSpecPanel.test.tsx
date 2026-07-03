@@ -141,13 +141,13 @@ describe('OutcomeSpecPanel clarify dialog', () => {
     await userEvent.click(openBtn);
 
     // Each clarifying question gets its own answer box (2) plus the additional-feedback box (1).
-    const boxes = await screen.findAllByRole('textbox');
+    const boxes = await screen.findAllByRole('textbox', { hidden: true });
     expect(boxes.length).toBe(3);
 
     await userEvent.type(boxes[0], 'Use /colors/grayscale and /colors/color');
     await userEvent.type(boxes[1], 'Keep it as-is');
 
-    await userEvent.click(screen.getByRole('button', { name: /^send$/i }));
+    await userEvent.click(screen.getByRole('button', { name: /^send$/i, hidden: true }));
 
     await waitFor(() => expect(vi.mocked(apiClient.reviseOutcomeSpec)).toHaveBeenCalledTimes(1));
     const composed = vi.mocked(apiClient.reviseOutcomeSpec).mock.calls[0][1] as string;

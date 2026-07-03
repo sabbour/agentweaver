@@ -132,7 +132,7 @@ describe('ProjectGalleryPage — blueprint selection', () => {
     expect(screen.getByRole('radio', { name: 'No blueprint' })).toBeDefined();
 
     fillNameAndFolder();
-    fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Create', hidden: true }));
 
     await waitFor(() => expect(apiClient.createProject).toHaveBeenCalled());
     const req = vi.mocked(apiClient.createProject).mock.calls[0][0];
@@ -170,7 +170,7 @@ describe('ProjectGalleryPage — blueprint selection', () => {
 
     fillNameAndFolder();
     fireEvent.click(screen.getByRole('radio', { name: /Backend Squad/ }));
-    fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Create', hidden: true }));
 
     await waitFor(() => expect(apiClient.createProject).toHaveBeenCalled());
     const req = vi.mocked(apiClient.createProject).mock.calls[0][0];
@@ -193,7 +193,7 @@ describe('ProjectGalleryPage — blueprint selection', () => {
     fireEvent.click(screen.getByRole('button', { name: /Generate blueprint/ }));
     await waitFor(() => expect(screen.getByLabelText('Generated blueprint preview')).toBeDefined());
 
-    const createButton = screen.getByRole('button', { name: 'Create' }) as HTMLButtonElement;
+    const createButton = await waitFor(() => screen.getByRole('button', { name: 'Create', hidden: true }) as HTMLButtonElement);
     expect(createButton.disabled).toBe(false);
     fireEvent.click(createButton);
 
@@ -218,7 +218,7 @@ describe('ProjectGalleryPage — blueprint selection', () => {
     fireEvent.click(screen.getByRole('button', { name: /Generate blueprint/ }));
 
     await waitFor(() => expect(screen.getByLabelText('Generated blueprint preview')).toBeDefined());
-    expect((screen.getByRole('button', { name: 'Create' }) as HTMLButtonElement).disabled).toBe(true);
+    await waitFor(() => expect((screen.getByRole('button', { name: 'Create', hidden: true }) as HTMLButtonElement).disabled).toBe(true));
   });
 
   it('creates with no blueprint when the user skips', async () => {
@@ -226,7 +226,7 @@ describe('ProjectGalleryPage — blueprint selection', () => {
     await waitFor(() => expect(screen.getByText('Backend Squad')).toBeDefined());
 
     fillNameAndFolder();
-    fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Create', hidden: true }));
 
     await waitFor(() => expect(apiClient.createProject).toHaveBeenCalled());
     const req = vi.mocked(apiClient.createProject).mock.calls[0][0];
@@ -265,7 +265,7 @@ describe('ProjectGalleryPage — workspace_auto_assigned', () => {
 
     // Only the name field is needed — no folder field to fill.
     fireEvent.change(screen.getByPlaceholderText('My project'), { target: { value: 'My Project' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Create', hidden: true }));
 
     await waitFor(() => expect(apiClient.createProject).toHaveBeenCalled());
     const req = vi.mocked(apiClient.createProject).mock.calls[0][0];
