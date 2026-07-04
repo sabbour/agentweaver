@@ -35,11 +35,8 @@ import {
   ReactFlow,
   Handle,
   MiniMap,
-  ViewportPortal,
   Position,
   useReactFlow,
-  useNodes,
-  useOnViewportChange,
   useNodesInitialized,
   type Node,
   type Edge,
@@ -510,55 +507,6 @@ function GraphAutoFit({ token }: { token: string }) {
 
 // Renders column depth labels (L0 Coordinator, L1 Research…) inside the React Flow canvas
 // using ViewportPortal so they pan/zoom with the graph and stay aligned over each column.
-function ColumnLabelsOverlay({ labels }: { labels: string[] }) {
-  const rfNodes = useNodes();
-  useOnViewportChange({ onChange: () => {} });  // triggers re-render on pan/zoom so labels reposition
-
-  // Derive column centers from laid-out node positions (same grouping as layoutDagColumns).
-  const columns = useMemo(() => {
-    const byX = new Map<number, { x: number; w: number }>();
-    for (const n of rfNodes) {
-      const key = Math.round(n.position.x / 10) * 10;
-      if (!byX.has(key)) {
-        byX.set(key, { x: n.position.x, w: (n.measured?.width ?? n.width ?? 220) as number });
-      }
-    }
-    return [...byX.entries()]
-      .sort(([a], [b]) => a - b)
-      .map(([, { x, w }], i) => ({ x, w, label: labels[i] ?? `L${i}` }));
-  }, [rfNodes, labels]);
-
-  if (columns.length === 0) return null;
-
-  // Find the topmost node Y so labels sit just above it.
-  const topY = Math.min(...rfNodes.map((n) => n.position.y));
-  const labelY = topY - 28;
-
-  return (
-    <ViewportPortal>
-      {columns.map(({ x, w, label }, i) => (
-        <div
-          key={i}
-          style={{
-            position: 'absolute',
-            left: x + w / 2,
-            top: labelY,
-            transform: 'translateX(-50%)',
-            fontSize: 11,
-            fontWeight: 600,
-            color: 'var(--colorNeutralForeground3)',
-            whiteSpace: 'nowrap',
-            pointerEvents: 'none',
-            letterSpacing: '0.02em',
-          }}
-        >
-          {label}
-        </div>
-      ))}
-    </ViewportPortal>
-  );
-}
-
 // A compact pipeline step row rendered inline inside a SubtaskNode expansion panel. Laid out as a
 // narrow VERTICAL strip (icon + label/role + status/timer) so the expansion stays within the card
 // width and only grows downward — avoiding the horizontal overflow that overlapped neighbour nodes.
@@ -1627,9 +1575,8 @@ export function CoordinatorRunPage() {
     return { displayNodes: filteredNodes, displayEdges2: filteredEdges };
   }, [inSpecAuthoring, rfNodes, displayEdges, assemblyNodeIds]);
 
-  const { sessionTree, sessionColumnLabels, sessionNodeIds, defaultSessionNodeId } = useMemo<{
+  const { sessionTree, sessionNodeIds, defaultSessionNodeId } = useMemo<{
     sessionTree: RunSessionTree[];
-    sessionColumnLabels: string[];
     sessionNodeIds: Set<string>;
     defaultSessionNodeId: string | null;
   }>(() => {
@@ -1643,7 +1590,6 @@ export function CoordinatorRunPage() {
     if (candidates.length === 0) {
       return {
         sessionTree: [],
-        sessionColumnLabels: [],
         sessionNodeIds: new Set<string>(),
         defaultSessionNodeId: null,
       };
@@ -1651,7 +1597,6 @@ export function CoordinatorRunPage() {
 
     const xValues = [...new Set(candidates.map((node) => Math.round(node.position.x ?? 0)))].sort((a, b) => a - b);
     const depthByX = new Map<number, number>(xValues.map((x, index) => [x, index]));
-    const grouped = new Map<number, Array<{ label: string; y: number }>>();
     const reverseEdges = new Map<string, string[]>();
 
     for (const edge of displayEdges2) {
@@ -1692,9 +1637,6 @@ export function CoordinatorRunPage() {
           y,
           isCoordinator: false,
         });
-        const list = grouped.get(depth) ?? [];
-        list.push({ label: data.agentRole ?? data.phase ?? data.label ?? `L${depth}`, y });
-        grouped.set(depth, list);
       } else {
         const data = node.data as WorkflowNodeData;
         const status =
@@ -1714,9 +1656,6 @@ export function CoordinatorRunPage() {
           y,
           isCoordinator: true,
         });
-        const list = grouped.get(depth) ?? [];
-        list.push({ label: data.agentRoleTitle ?? data.def.label ?? data.def.roleDescription ?? `L${depth}`, y });
-        grouped.set(depth, list);
       }
     }
 
@@ -1724,7 +1663,6 @@ export function CoordinatorRunPage() {
     if (!rootMeta) {
       return {
         sessionTree: [],
-        sessionColumnLabels: [],
         sessionNodeIds: new Set<string>(),
         defaultSessionNodeId: null,
       };
@@ -1784,16 +1722,8 @@ export function CoordinatorRunPage() {
       };
     };
 
-    const sessionColumnLabels = [...grouped.entries()]
-      .sort((a, b) => a[0] - b[0])
-      .map(([depth, items]) => {
-        const first = [...items].sort((a, b) => a.y - b.y)[0];
-        return `L${depth} ${first?.label ?? 'Session'}`;
-      });
-
     return {
       sessionTree: [buildTree(rootMeta.nodeId)],
-      sessionColumnLabels,
       sessionNodeIds: new Set(sessionMeta.keys()),
       defaultSessionNodeId: rootMeta.nodeId,
     };
@@ -2146,12 +2076,11 @@ export function CoordinatorRunPage() {
                   <GraphAutoFit
                     token={`${displayNodes.length}:${displayEdges2.length}:${graphHeight}:${[...expandedKeys].sort().join(',')}`}
                   />
-                  <ColumnLabelsOverlay labels={sessionColumnLabels} />
                   <MiniMap
                     nodeStrokeWidth={2}
                     zoomable
                     pannable
-                    style={{ bottom: 8, right: 8 }}
+                    style={{ bottom: 8, right: 8, width: 110, height: 72 }}
                     nodeColor={(n) => {
                       const s = (n.data as SubtaskNodeData | undefined)?.topoStatus as string | undefined;
                       if (s === 'completed') return '#107c41';

@@ -32,7 +32,6 @@ import { FileViewerModal } from './FileViewerModal';
 import { deriveHumanTitle } from '../timeline/reducer';
 
 const PANEL_TOP = '48px';
-const PANEL_HEIGHT = '60vh';
 const SEED_STATUSES: ReadonlySet<string> = new Set([
   'completed', 'failed', 'merged', 'declined', 'merge_failed',
   'parked', 'assemble_ready', 'assembled', 'cancelled', 'stopped',
@@ -44,7 +43,7 @@ const useStyles = makeStyles({
     top: PANEL_TOP,
     right: 0,
     bottom: 0,
-    left: 0,
+    left: 'var(--app-nav-width, 180px)',
     backgroundColor: 'rgba(0, 0, 0, 0.12)',
     opacity: 0,
     pointerEvents: 'none',
@@ -59,11 +58,10 @@ const useStyles = makeStyles({
   },
   panel: {
     position: 'fixed',
-    left: 0,
+    top: PANEL_TOP,
+    left: 'var(--app-nav-width, 180px)',
     right: 0,
     bottom: 0,
-    height: PANEL_HEIGHT,
-    maxHeight: `calc(100vh - ${PANEL_TOP})`,
     display: 'flex',
     flexDirection: 'column',
     backgroundColor: tokens.colorNeutralBackground1,

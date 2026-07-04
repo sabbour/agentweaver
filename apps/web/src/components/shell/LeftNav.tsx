@@ -1,4 +1,4 @@
-import { Fragment, useState } from 'react';
+import { Fragment, useEffect, useState } from 'react';
 import type { ReactElement } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import {
@@ -138,6 +138,14 @@ export function LeftNav({ projectId, activeKey }: LeftNavProps) {
       return next;
     });
   };
+
+  // Keep --app-nav-width in sync so fixed-position panels can offset correctly.
+  useEffect(() => {
+    document.documentElement.style.setProperty(
+      '--app-nav-width',
+      collapsed ? NAV_WIDTH_COLLAPSED : NAV_WIDTH,
+    );
+  }, [collapsed]);
 
   function handleSelect(_: unknown, data: OnNavItemSelectData) {
     const value = data.value as string;
