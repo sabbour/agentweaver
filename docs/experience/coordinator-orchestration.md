@@ -140,7 +140,7 @@ A workflow whose trigger does not match the invocation is never selected, even i
 
 ### What you'll see when the coordinator selects
 
-When a project has multiple eligible workflows, the coordinator surfaces its choice as a `coordinator.workflow_selected` event on the run stream. It carries:
+When a project has multiple eligible workflows, the coordinator surfaces its choice as a `coordinator.workflow_selected` event on the run stream. The orchestration header shows the chosen workflow as a **badge** next to the "Orchestration" title (workflow name, an `· auto` suffix when the coordinator picked it automatically, and the rationale on hover), so you can see at a glance which process this run is planned against. The badge is driven by the persisted event, so it survives page reloads. The event carries:
 
 - `selectedId` and `selectedName` — the workflow it chose.
 - `rationale` — a one- or two-sentence reason for the pick (or an explanation of why it fell back to the default).
