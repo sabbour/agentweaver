@@ -53,6 +53,13 @@ if ! az monitor app-insights component show --app agentweaver-insights -g "${RES
     bash "$(dirname "$0")/15-provision-monitoring.sh"
 fi
 
+APPINSIGHTS_WORKSPACE_ID="$(az monitor log-analytics workspace show \
+    --resource-group "${RESOURCE_GROUP}" \
+    --workspace-name agentweaver-logs \
+    --query customerId \
+    --output tsv 2>/dev/null || true)"
+export APPINSIGHTS_WORKSPACE_ID
+
 echo ""
 echo "Checking DefaultDomainCertificate 'cert' in namespace '${NAMESPACE}'..."
 if kubectl get defaultdomaincertificate cert --namespace "${NAMESPACE}" &>/dev/null; then
@@ -117,7 +124,7 @@ echo ""
 echo "Rendering manifests..."
 for yaml_file in "${REPO_ROOT}"/k8s/*.yaml; do
   fname="$(basename "${yaml_file}")"
-  envsubst '${HOST} ${ACR_LOGIN_SERVER} ${IMAGE_TAG} ${AGENTHOST_IMAGE_TAG} ${IDENTITY_CLIENT_ID} ${KEYVAULT_NAME} ${AGENTHOST_KEYVAULT_URI} ${TENANT_ID} ${PREVIEW_HOSTNAME} ${PREVIEW_TLS_SECRET} ${SANDBOX_PREVIEW_ENABLED} ${SANDBOX_PREVIEW_ZONE_SUFFIX}' \
+  envsubst '${HOST} ${ACR_LOGIN_SERVER} ${IMAGE_TAG} ${AGENTHOST_IMAGE_TAG} ${IDENTITY_CLIENT_ID} ${KEYVAULT_NAME} ${AGENTHOST_KEYVAULT_URI} ${TENANT_ID} ${PREVIEW_HOSTNAME} ${PREVIEW_TLS_SECRET} ${SANDBOX_PREVIEW_ENABLED} ${SANDBOX_PREVIEW_ZONE_SUFFIX} ${APPINSIGHTS_WORKSPACE_ID}' \
     < "${yaml_file}" > "${RENDERED_DIR}/${fname}"
   echo "  rendered: ${fname}"
 done
