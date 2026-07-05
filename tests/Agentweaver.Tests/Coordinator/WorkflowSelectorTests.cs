@@ -390,4 +390,30 @@ public sealed class WorkflowSelectorTests
         result.WasAutoSelected.Should().BeTrue();
         result.Rationale.Should().Contain("could not be parsed");
     }
+
+    // --- optional last-resort + think-block fix ---
+
+    [Fact]
+    public async Task MultiWorkflow_WorkflowIdInsideThinkBlockOnly_IsNotFalselySelected()
+    {
+        // A think block mentions one workflow id; the actual response has no JSON and no
+        // id outside the block. TryLastResortMatch must NOT select based on the think-block
+        // mention — it now runs on the stripped text, so the id is invisible to it.
+        var response =
+            "<think>\n" +
+            "Hmm, bug-fix would apply to a defect, but the task is feature delivery.\n" +
+            "</think>\n" +
+            "I cannot determine the best workflow from the description provided.";
+
+        var model = new FakeModel(response);
+        var def = Workflow("software-delivery", "Software Delivery", "Net-new feature pipeline.");
+        var bug = Workflow("bug-fix", "Bug Fix", "Fast remediation of a specific defect.");
+        var context = new WorkflowSelectionContext("p1", "Build a new feature", ["Implementer"], [def, bug]);
+
+        var result = await Selector(model).SelectAsync(context);
+
+        // Both attempts fail: TryParse finds no JSON; last-resort (on stripped text) finds no id.
+        model.Calls.Should().Be(2);
+        result.Selected.Id.Should().Be("software-delivery");  // first in list -> default
+    }
 }

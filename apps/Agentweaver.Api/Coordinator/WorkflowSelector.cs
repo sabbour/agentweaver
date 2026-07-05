@@ -132,7 +132,10 @@ public sealed class WorkflowSelector : IWorkflowSelector
                 // Last-resort: if exactly one candidate workflow id or normalized name appears
                 // verbatim as a whole word in the response, use it rather than defaulting —
                 // handles plain-prose answers such as "I recommend bug-fix for this task."
-                if (TryLastResortMatch(response, available, out var lastResort))
+                // Strip think blocks first so an id mentioned only inside a rejected reasoning
+                // block does not get falsely selected (mirrors TryParse's own stripping).
+                var responseForLastResort = response is not null ? StripThinkBlocks(response) : null;
+                if (TryLastResortMatch(responseForLastResort, available, out var lastResort))
                 {
                     _logger.LogInformation(
                         "Workflow selection last-resort verbatim match for project {ProjectId} (attempt {Attempt}): '{WorkflowId}'.",

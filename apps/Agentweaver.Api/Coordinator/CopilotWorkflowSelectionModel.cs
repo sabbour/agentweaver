@@ -2,6 +2,7 @@ using System.Text;
 using GitHub.Copilot;
 using Microsoft.Agents.AI;
 using Microsoft.Agents.AI.GitHub.Copilot;
+using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Agentweaver.AgentRuntime.Providers;
@@ -89,14 +90,8 @@ public sealed class CopilotWorkflowSelectionModel : IWorkflowSelectionModel
             agent = client.AsAIAgent(sessionConfig, ownsClient: false, id: null, name: null, description: null);
             var session = await agent.CreateSessionAsync(ct).ConfigureAwait(false);
 
-            var sb = new StringBuilder();
-            await foreach (var chunk in agent.RunStreamingAsync(prompt, session, options: null, ct).WithCancellation(ct))
-            {
-                if (chunk?.Text is { } text && text.Length > 0)
-                    sb.Append(text);
-            }
-
-            var result = sb.Length > 0 ? sb.ToString().Trim() : null;
+            var result = await CaptureResponseTextAsync(
+                agent.RunStreamingAsync(prompt, session, options: null, ct), ct).ConfigureAwait(false);
             _logger.LogInformation(
                 "Workflow selection model completed for project {ProjectId}: {Length} chars.",
                 context.ProjectId, result?.Length ?? 0);
@@ -116,5 +111,62 @@ public sealed class CopilotWorkflowSelectionModel : IWorkflowSelectionModel
             if (client is IAsyncDisposable disposableClient)
                 await disposableClient.DisposeAsync().ConfigureAwait(false);
         }
+    }
+
+    /// <summary>
+    /// Accumulates text from a streaming response using both paths the Copilot SDK may use:
+    /// <list type="bullet">
+    ///   <item>Incremental delta text carried as <see cref="AgentResponseUpdate.Text"/>.</item>
+    ///   <item>The consolidated final-message content delivered via an
+    ///     <see cref="AssistantMessageEvent"/> in <see cref="AIContent.RawRepresentation"/> when
+    ///     no delta text has been streamed yet — used only when deltas have not already covered the
+    ///     content, mirroring <c>CopilotAIAgent.ExecuteStreamingLoopAsync</c>'s alreadyStreamed guard.
+    ///   </item>
+    /// </list>
+    /// Exposed <see langword="internal"/> so the dual-path logic can be exercised in unit tests
+    /// without a live Copilot SDK session.
+    /// </summary>
+    internal static async Task<string?> CaptureResponseTextAsync(
+        IAsyncEnumerable<AgentResponseUpdate?> stream, CancellationToken ct)
+    {
+        var sb = new StringBuilder();
+        await foreach (var chunk in stream.WithCancellation(ct))
+        {
+            if (chunk is null) continue;
+
+            var deltaText = chunk.Text;
+            if (!string.IsNullOrEmpty(deltaText))
+            {
+                sb.Append(deltaText);
+            }
+
+            // When no delta text has been captured yet, also check for the consolidated
+            // final-message content delivered as an AssistantMessageEvent in RawRepresentation.
+            // The Copilot SDK does not always stream the answer as incremental Text deltas —
+            // some model configurations deliver the full response as a single non-delta event.
+            if (sb.Length == 0)
+            {
+                var finalContent = ExtractFinalMessageContent(chunk);
+                if (!string.IsNullOrEmpty(finalContent))
+                    sb.Append(finalContent);
+            }
+        }
+        return sb.Length > 0 ? sb.ToString().Trim() : null;
+    }
+
+    /// <summary>
+    /// Extracts the full assistant message text from the SDK <see cref="AssistantMessageEvent"/>
+    /// carried as the <see cref="AIContent.RawRepresentation"/> of a streaming chunk.
+    /// Mirrors <c>CopilotAIAgent.ExtractFinalMessageContent</c>.
+    /// </summary>
+    private static string? ExtractFinalMessageContent(AgentResponseUpdate chunk)
+    {
+        if (chunk.Contents is null) return null;
+        foreach (var content in chunk.Contents)
+        {
+            if (content.RawRepresentation is AssistantMessageEvent message)
+                return message.Data?.Content;
+        }
+        return null;
     }
 }
