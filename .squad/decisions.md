@@ -375,3 +375,87 @@ Local MCP auth failures (omitted Auth__Mcp__Issuer/Audience/JwksUri) cause JWKS 
 **Implementation:** Frontend surfaces AIC and token data via TokenUsagePanel component, live counter on WatchPage, time-range section on DashboardPage, app-level section on OverviewPage (admin-gated, degrades on 403). Display logic is pure presentation with no aggregation in UI. Backend API provides authoritative data. Frontend simply renders hierarchical breakdowns by org/project/run/turn for operator visibility into usage patterns and cost allocation. All UI tests pass; Feature 019 frontend components green.
 
 ---
+
+## 2026-07-05T20-29-22: Fix workflow save 500: extend AllowedWorkflowIds when saving a new workflow (#175)
+
+**Date:** 2026-07-05T20-29-22  
+**Author:** Tank  
+**Status:** PR OPEN — APPROVED
+
+**Decision:** When saving a new workflow for a project with restricted `AllowedWorkflowIds`, the PUT handler appends the new workflow id to the allowed set before syncing the workflow registry.
+
+**Rationale:** `WorkflowRegistry.FilterByAllowedSet` correctly drops ids absent from `AllowedWorkflowIds`, but a freshly written workflow is not yet in that set. Updating the allowed set before `Sync` keeps blueprint constraints intact while allowing newly saved workflows to reload. The 500 path now distinguishes validation/discovery failures and logs resolved path, allowed ids, and validation diagnostics.
+
+**References:** #175, PR #177, `apps/Agentweaver.Api/Workflows/WorkflowDefinitionEndpoints.cs`, `apps/Agentweaver.Api/Workflows/WorkflowRegistry.cs`
+
+---
+
+## 2026-07-05T20-44-43: Emit tool approval resolved SSE events on all approval resolution paths (#174)
+
+**Date:** 2026-07-05T20-44-43  
+**Author:** Tank  
+**Status:** PR OPEN — APPROVED
+
+**Decision:** `DurableToolApprovalGate` emits `tool.approval_resolved` on the child run stream for timeout, grant, and deny, and coordinator streams re-project that as `coordinator.child_approval_resolved`.
+
+**Rationale:** The server-side timeout previously resolved the approval request in storage without notifying the UI, leaving stale approval buttons whose late clicks returned 409. The fail-closed timeout remains; the fix is to notify clients and distinguish already-resolved/expired requests from unknown request ids via `IsKnownRequest`.
+
+**References:** #174, PR #182, `DurableToolApprovalGate.cs`, `docs/tool-approval-sse-contract.md`
+
+---
+
+## 2026-07-05T21-02-37: Represent server-timeout approval resolution as `resolvedScope='expired'` (#174)
+
+**Date:** 2026-07-05T21-02-37  
+**Author:** Trinity  
+**Status:** PR OPEN — APPROVED
+
+**Decision:** The frontend represents server-driven approval expiry as `resolvedScope='expired'` on `ApprovalRequestItem` and syncs `isResolved` prop changes into `ToolApprovalCard` local state with `useEffect`.
+
+**Rationale:** The card initialized local state from props but did not update after reducer-driven server resolution. Extending the existing string discriminant avoids a new boolean and lets the card disable/collapse consistently when expiry or another operator resolves the request.
+
+**References:** #174, PR #182, `docs/tool-approval-sse-contract.md`
+
+---
+
+## 2026-07-05T20-37-37: Blueprint library matching requires full process coverage before suppressing generation (#176)
+
+**Date:** 2026-07-05T20-37-37  
+**Author:** Morpheus  
+**Status:** PR OPEN — APPROVED
+
+**Decision:** Blueprint library-first matching now treats output-artifact overlap as insufficient process fit and requires full-stage coverage; partial matches return no match so the generator can create a specialized workflow.
+
+**Rationale:** A triage → dedupe → research/validate → PRD prompt under-selected the generic PM discovery workflow because both produced a PRD/spec. Library matching should be used only when the workflow covers the distinctive process stages; otherwise generation produces a more accurate topology. Prompt criteria were reconciled between `CopilotBlueprintGenerator` and `WorkflowSelector`, with deterministic prompt-content tests and an ADR.
+
+**References:** #176, PR #178, `CopilotBlueprintGenerator.cs`, `WorkflowSelector.cs`, `.squad/decisions/007-blueprint-match-vs-workflow-gen.md`
+
+---
+
+## 2026-07-05T21-31-41: Workflow auto-selection uses a tool-less direct completion (#183)
+
+**Date:** 2026-07-05T21-31-41  
+**Author:** Morpheus  
+**Status:** PR OPEN — REVISED AFTER REVIEWER REJECTION
+
+**Decision:** `CopilotWorkflowSelectionModel` performs workflow-selection classification with a direct, tool-less Copilot completion using `SessionConfig.Tools = []` and installation-scope auth, instead of running the full tool-enabled agentic loop.
+
+**Rationale:** The prior path called `CopilotAIAgent.SetupAsync` without a user id, swallowed the exception, returned null twice, and silently defaulted to Generic. Even when auth succeeded, the full agentic loop could emit prose or tool-loop output that the selector could not parse. Parsing was hardened by stripping think blocks, applying code-fence cleanup, and using a single-id last-resort match on stripped response text.
+
+**References:** #183, #176, PR #184, `WorkflowSelector.cs`, `CopilotWorkflowSelectionModel.cs`
+
+---
+
+## 2026-07-05T22-03-56: Reviewer rejection locked out original author; Tank owned final-message workflow-selection revision (#183)
+
+**Date:** 2026-07-05T22-03-56  
+**Author:** Tank  
+**Status:** PR OPEN — APPROVED AFTER RE-REVIEW
+
+**Decision:** After Smith rejected PR #184, Morpheus was locked out under Reviewer Rejection Protocol and Tank owned the revision. `CopilotWorkflowSelectionModel` now captures both delta text and final-message-only `AssistantMessageEvent` content, mirroring `CopilotAIAgent` response extraction.
+
+**Rationale:** Smith found that the initial streaming loop accumulated only `chunk.Text`; if the SDK returned a consolidated final assistant message with no delta text, the response stayed empty and the selector could fall back to Generic again. Tank added `CaptureResponseTextAsync`, final-message-only regression coverage, `InternalsVisibleTo` for tests, and applied Smith's optional stripped-text last-resort match. Build was clean and WorkflowSelect tests passed 41/41; Smith approved the re-review and Seraph had already approved security.
+
+**References:** #183, PR #184, commit `1a9accc`, Smith review, Seraph review
+
+---

@@ -70,3 +70,10 @@ Spec 018 locked the architecture Smith should validate: sandbox-all-agent-execut
 Smith added the Testcontainers `postgres:16` integration suite for Spec 018. Result: 26 passed, 1 skipped. The suite found the migration-discoverability production bug that Tank fixed before final validation.
 
 📌 Team update (2026-06-28T05:10:00-07:00): Smith re-reviewed Tank's preview fix (`298dc45`) after the B1 rejection and approved. The feature shipped to main (`373f544`) and deployed with `SANDBOX_PREVIEW_ENABLED=true`; B1 was the per-process `PodNameRegistry` at replicas:2, fixed via SandboxClaim resolution. Live AKS has no Istio CRDs.
+
+## 2026-07-05T13:17:12-07:00 — Review approvals for three PRs
+
+Smith approved PR #177 (#175 workflow save/reload), PR #182 (#174 tool approval expiry), and PR #178 (#176 blueprint matching). No PRs were merged; coordinator Ahmed will validate on staging before merge.
+
+## 2026-07-05T14:16:02-07:00 — Issue #183 rejection and re-review approval
+Smith rejected PR #184's first revision because workflow selection captured only delta text and dropped final-message-only `AssistantMessageEvent` responses. After Tank's lockout-driven revision added dual-path capture and regression coverage, Smith approved the re-review.

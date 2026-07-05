@@ -78,3 +78,10 @@ Security review follow-up: the OAuth broker split-brain was fixed by moving tran
 ## 2026-06-28: Copilot auth blocker / OAuth scope limit
 
 Auth finding: Agentweaver's custom GitHub App OAuth client (`Iv23lieRvX4I63VNekKS`) requests only `repo read:user read:org`; GitHub only issues Copilot-entitled tokens to blessed Copilot clients. User-scoped token lookup remains useful, but re-auth through this app cannot create a Copilot SDK-capable token. Recommended path: Microsoft Foundry.
+
+## 2026-07-05T13:17:12-07:00 — Security approval for tool approval expiry
+
+Seraph approved PR #182 / issue #174. Security finding: the backend remains fail-closed, timeout behavior is preserved, and using child run id plus full request id does not introduce IDOR. No merge yet; coordinator validates on staging first.
+
+## 2026-07-05T14:16:02-07:00 — Issue #183 security approval
+Seraph approved PR #184 for #183. The workflow-selection change reduced attack surface by making the classification turn tool-less while leaving runtime tool approval gates and sandbox behavior untouched.

@@ -72,3 +72,10 @@ await agent.SetupAsync(
 - Security audit: hardcoded admin removal validated
 
 **Build:** 0 errors, 0 warnings.
+
+## 2026-07-05T13:17:12-07:00 — Three-issue parallel fixes
+
+Tank completed backend fixes for #175 and #174. #175 adds newly saved workflow ids to `AllowedWorkflowIds` before registry sync and improves reload diagnostics; PR #177 approved by Smith. #174 emits approval-resolved SSE events on all resolution paths and improves request resolution diagnostics; PR #182 approved by Smith and Seraph. No PRs merged; coordinator validates on staging first.
+
+## 2026-07-05T14:16:02-07:00 — Issue #183 lockout revision owner
+Tank owned the #183 revision after Morpheus was locked out by Smith's rejection. Tank added dual-path workflow-selection response capture, final-message-only regression tests, `InternalsVisibleTo`, and Smith's stripped-text last-resort parse suggestion; build was clean and WorkflowSelect passed 41/41.

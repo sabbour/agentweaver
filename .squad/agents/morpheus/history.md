@@ -124,3 +124,10 @@ Root-caused the "no SandboxClaims" incident: a rolling deployment (`28d0cfb`) ca
 - A2A bearer token: Spec018P1Tests updated, lifecycle tests green.
 
 **Build:** 0 errors, all targeted tests passing.
+
+## 2026-07-05T13:17:12-07:00 — Blueprint matching full-coverage rule
+
+Morpheus completed #176 on PR #178. Blueprint library matching now rejects output-artifact-only overlap and requires full distinctive stage coverage; partial matches fall back to generated workflows. ADR recorded at `.squad/decisions/007-blueprint-match-vs-workflow-gen.md`. WorkflowSelect|Blueprint tests 49/49. No merge yet; coordinator validates on staging first.
+
+## 2026-07-05T14:16:02-07:00 — Issue #183 initial workflow-selection fix and lockout
+Morpheus owned the initial #183 fix in PR #184: workflow selection moved to a tool-less direct completion with installation-scope auth and hardened parsing. Smith rejected the revision for missing final-message-only SDK response capture, triggering Reviewer Rejection Protocol strict lockout for Morpheus as original author.

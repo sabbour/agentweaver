@@ -120,3 +120,7 @@ Reordered Kanban board columns to `Backlog → Ready → Active → Human Review
 - Component isolation: TokenUsagePanel tested independently
 
 **Build:** 0 TypeScript errors.
+
+## 2026-07-05T13:17:12-07:00 — Tool approval expiry UI
+
+Trinity completed the frontend portion of #174 on PR #182: approval cards now react to server resolution events, represent timeout as `resolvedScope='expired'`, disable/collapse stale controls, and post decisions to the child run id with full request id. Web tests: 466. No merge yet; coordinator validates on staging first.
