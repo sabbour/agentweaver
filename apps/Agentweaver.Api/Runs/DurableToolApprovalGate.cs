@@ -1,10 +1,15 @@
 using System.Text.Json;
 using Agentweaver.Api.Contracts;
+using Agentweaver.Api.Infrastructure;
 using Agentweaver.Domain;
+using Microsoft.Extensions.Logging;
 
 namespace Agentweaver.Api.Runs;
 
-public sealed class DurableToolApprovalGate(DurableRunControlState state) : IToolApprovalGate
+public sealed class DurableToolApprovalGate(
+    DurableRunControlState state,
+    RunStreamStore? streams = null,
+    ILogger<DurableToolApprovalGate>? logger = null) : IToolApprovalGate
 {
     private const string GlobalRunId = "__agentweaver_tool_approvals__";
     private const string RequestContext = "tool.approval_context";
@@ -40,7 +45,13 @@ public sealed class DurableToolApprovalGate(DurableRunControlState state) : IToo
         }
 
         if (LatestContext(runId, requestId) is not null && LatestResolution(runId, requestId) is null)
+        {
             _state.Append(runId, RequestResolved, new ApprovalResolution(requestId, false));
+            logger?.LogWarning(
+                "Tool approval timed out: runId={RunId} requestId={DisplayId}",
+                runId, requestId.Length >= 8 ? requestId[..8] : requestId);
+            EmitResolved(runId, requestId, approved: false, expired: true);
+        }
 
         return false;
     }
@@ -49,7 +60,13 @@ public sealed class DurableToolApprovalGate(DurableRunControlState state) : IToo
     {
         var context = LatestContext(runId, requestId);
         if (context is null || LatestResolution(runId, requestId) is not null)
+        {
+            var reason = context is null ? "no_context" : "already_resolved";
+            logger?.LogWarning(
+                "GrantAsync rejected: runId={RunId} requestId={DisplayId} reason={Reason}",
+                runId, requestId.Length >= 8 ? requestId[..8] : requestId, reason);
             return Task.FromResult(false);
+        }
 
         if (scope != ApprovalScope.Once)
         {
@@ -64,15 +81,23 @@ public sealed class DurableToolApprovalGate(DurableRunControlState state) : IToo
         }
 
         _state.Append(runId, RequestResolved, new ApprovalResolution(requestId, true));
+        EmitResolved(runId, requestId, approved: true, expired: false);
         return Task.FromResult(true);
     }
 
     public bool Deny(string runId, string requestId)
     {
         if (LatestContext(runId, requestId) is null || LatestResolution(runId, requestId) is not null)
+        {
+            logger?.LogWarning(
+                "Deny rejected: runId={RunId} requestId={DisplayId} reason={Reason}",
+                runId, requestId.Length >= 8 ? requestId[..8] : requestId,
+                LatestContext(runId, requestId) is null ? "no_context" : "already_resolved");
             return false;
+        }
 
         _state.Append(runId, RequestResolved, new ApprovalResolution(requestId, false));
+        EmitResolved(runId, requestId, approved: false, expired: false);
         return true;
     }
 
@@ -86,11 +111,23 @@ public sealed class DurableToolApprovalGate(DurableRunControlState state) : IToo
         return ParentOf(runId) is { } parentId && HasPolicy(parentId, key, toolKey);
     }
 
+    public bool IsKnownRequest(string runId, string requestId) =>
+        LatestContext(runId, requestId) is not null;
+
     public void Clear(string runId) =>
         _state.Append(runId, RunCleared, new { });
 
     public void RegisterParentRun(string childRunId, string parentRunId) =>
         _state.Append(childRunId, ParentRegistered, new ParentRegistration(parentRunId));
+
+    private void EmitResolved(string runId, string requestId, bool approved, bool expired) =>
+        streams?.Get(runId)?.RecordNext(EventTypes.ToolApprovalResolved, new
+        {
+            requestId,
+            runId,
+            approved,
+            expired,
+        });
 
     private ApprovalContext? LatestContext(string runId, string requestId) =>
         _state.Load(runId, RequestContext, RunCleared)

@@ -372,6 +372,23 @@ public static class EventTypes
     public const string CoordinatorChildApprovalRequired = "coordinator.child_approval_required";
 
     /// <summary>
+    /// Emitted on a run's own stream when a pending HITL tool-approval request is resolved —
+    /// whether by an operator granting, an operator denying, or the server-side timeout firing.
+    /// The frontend must disable and remove the approval card for this request_id on receipt.
+    /// Payload: { requestId, runId, approved: bool, expired: bool }.
+    /// </summary>
+    public const string ToolApprovalResolved = "tool.approval_resolved";
+
+    /// <summary>
+    /// Emitted on the COORDINATOR run's stream when a coordinator child run's pending HITL
+    /// tool-approval request is resolved (granted, denied, or timed out). This mirrors the
+    /// child's own <see cref="ToolApprovalResolved"/> event so the coordinator stream consumers
+    /// can also disable the approval card.
+    /// Payload: { childRunId, subtaskId, requestId, approved: bool, expired: bool }.
+    /// </summary>
+    public const string CoordinatorChildApprovalResolved = "coordinator.child_approval_resolved";
+
+    /// <summary>
     /// Audit event emitted on a run's own stream when the per-run <c>auto-approve-tools</c> option
     /// auto-grants an allow-with-approval tool request (e.g. <c>web_fetch</c>) at the HITL gate,
     /// instead of stalling for an operator. NEVER emitted for a policy-denied tool (those are
