@@ -186,14 +186,12 @@ describe('CoordinatorRunPage — unified coordinator graph view', () => {
       { timeout: 4000 },
     );
 
-    // The shared ZoomControls (Ctrl+Scroll hint + +/- buttons + % readout) render
-    // alongside the orchestration graph, mirroring WorkflowRunPage.
-    const text = document.body.textContent ?? '';
-    expect(text).toContain('Ctrl + Scroll to zoom');
-
+    // The shared ZoomControls (Ctrl+Scroll hint via tooltip + +/- buttons + % readout)
+    // render alongside the orchestration graph, mirroring WorkflowRunPage.
     const buttons = Array.from(document.body.querySelectorAll('button'));
     expect(buttons.some((b) => b.getAttribute('aria-label') === 'Zoom in')).toBe(true);
     expect(buttons.some((b) => b.getAttribute('aria-label') === 'Zoom out')).toBe(true);
+    expect(buttons.some((b) => b.getAttribute('aria-label') === 'Fit to view')).toBe(true);
   });
 
   it('renders from REST descriptor even when SSE stream is done (finished coordinator runs)', async () => {

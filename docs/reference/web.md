@@ -175,6 +175,22 @@ The coordinator node's status reflects the **orchestration lifecycle** rather th
 
 The coordinator node also carries a **View session** button that scrolls to the coordinator session panel (provided via `CoordinatorSessionContext`).
 
+#### Graph rendering affordances (edges, cards, minimap, zoom)
+
+The graph's visual layer is shared across the coordinator run page, the workflow run page, and inline editor previews via `WorkflowGraphPanel.tsx`:
+
+- **Spine edges** — forward edges use a custom `spine` edge type (`SpineEdge`) instead of React Flow's default bezier. Every edge in a fan-out (shared source) or fan-in (shared target) bundle is routed deterministically through a single shared rounded **junction dot** positioned between the columns, drawn as two smooth `getBezierPath` segments that enter/leave the junction horizontally. There are no hard arrowheads. Gate-condition labels (e.g. an editor edge's `when`) are rendered at the junction via `EdgeLabelRenderer`.
+- **Status accent bar** — both `WorkflowNode` and the coordinator `SubtaskNode` cards render a colored top-accent bar keyed to status (via the exported `accentClass` helper) with the status badge moved to the top-left of the card header.
+- **Node dimensions** — `layoutDag` / `layoutDagColumns` in `dagLayout.ts` seed each node's `initialWidth` / `initialHeight` from its size hint (falling back to `NODE_W` / `NODE_H`), so the minimap has authoritative geometry even before React Flow measures the DOM. These are `initial*` hints (not fixed `width` / `height`), so expandable cards are never clipped.
+- **MiniMap** — the coordinator run page renders a React Flow `MiniMap` in the bottom-right (172×116, rounded container with a subtle border and shadow). Each node is colored by its `topoStatus` (green complete, blue running/dispatching, amber waiting/awaiting-assembly, red failed/declined, neutral otherwise) with rounded corners, a light mask, and a brand-blue viewport outline.
+- **Zoom control** — `ZoomControls` (from `useCtrlScrollZoom.tsx`) is a compact segmented bar: an optional **fit-to-view** button (shown only when an `onFit` handler is passed; the graph pages wire it to `resetZoom`, which returns to 100% — the natural fitted size), minus/plus buttons, and a live percentage readout. The "Ctrl + Scroll to zoom" hint is a `title` tooltip rather than always-visible text. The hook applies zoom via CSS `zoom` (bounds: 50%–100% on the board, 50%–200% on the graph pages).
+
+#### Agent Sessions panel
+
+The **Agent Sessions** slide-in (`AgentSessionPanel.tsx`) opens from the graph and hosts a left sidebar tree of the coordinator plus its subtasks, alongside the selected node's live session stream. The tree is built in `CoordinatorRunPage.tsx` and includes **every subtask node** — both dispatched subtasks (with a `childRunId` and a streamable conversation) and still-planned/pending ones — rather than only dispatched children, so the full plan is visible from the moment it is confirmed.
+
+Each row renders indentation guide lines (vertical connectors and elbows) for its depth, a circular **status glyph** (filled green check for complete, filled red dismiss for failed, spinner for running, hollow circle for pending), the node label with a role subline, and a right-aligned duration derived from the node's `startedAt` / `completedAt`. Selecting a row streams that node's session; planned nodes with no child run simply show no conversation yet.
+
 #### Coordinator session panel and steering chat box
 
 The right column hosts an all-up **Coordinator session** panel:

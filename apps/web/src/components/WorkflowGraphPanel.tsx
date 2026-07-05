@@ -37,12 +37,13 @@ import {
 } from '@fluentui/react-icons';
 import {
   Handle,
-  MarkerType,
   Panel,
   Position,
   ReactFlow,
   useEdges,
   useNodes,
+  getBezierPath,
+  EdgeLabelRenderer,
   type Edge,
   type EdgeProps,
   type Node,
@@ -177,6 +178,25 @@ export const useNodeStyles = makeStyles({
     borderRadius: '8px',
     cursor: 'default',
   },
+  // Colored top-accent strip keyed to status (mockup look). Sits flush with the
+  // card's rounded top corners.
+  accentBar: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    height: '3px',
+    borderTopLeftRadius: '8px',
+    borderTopRightRadius: '8px',
+    pointerEvents: 'none',
+  },
+  accentPending:   { backgroundColor: tokens.colorNeutralStroke2 },
+  accentStarted:   { backgroundColor: tokens.colorBrandStroke1 },
+  accentAwaiting:  { backgroundColor: tokens.colorPaletteMarigoldBorderActive },
+  accentCompleted: { backgroundColor: tokens.colorPaletteGreenForeground1 },
+  accentSkipped:   { backgroundColor: tokens.colorPaletteLightTealForeground2 },
+  accentFailed:    { backgroundColor: tokens.colorPaletteRedForeground1 },
+  accentRevise:    { backgroundColor: tokens.colorStatusWarningForeground1 },
   // node_type=agent: primary / largest
   cardAgent: {
     width: `${NODE_TYPE_W.agent}px`,
@@ -254,7 +274,7 @@ export const useNodeStyles = makeStyles({
   },
   cardHeader: {
     display: 'flex',
-    justifyContent: 'flex-end',
+    justifyContent: 'space-between',
     alignItems: 'center',
     gap: tokens.spacingHorizontalXS,
     flexWrap: 'wrap',
@@ -374,6 +394,24 @@ function statusLabel(s: StepStatus): string {
   if (s === 'failed')    return 'Failed';
   if (s === 'revise')    return 'Revise';
   return s;
+}
+
+/** Pick the colored top-accent class for a node given its status flags. */
+export function accentClass(
+  s: ReturnType<typeof useNodeStyles>,
+  status: StepStatus,
+  opts?: { isPlanned?: boolean; isAwaiting?: boolean },
+): string {
+  if (opts?.isPlanned)  return s.accentPending;
+  if (opts?.isAwaiting) return s.accentAwaiting;
+  return {
+    pending:   s.accentPending,
+    started:   s.accentStarted,
+    completed: s.accentCompleted,
+    skipped:   s.accentSkipped,
+    failed:    s.accentFailed,
+    revise:    s.accentRevise,
+  }[status];
 }
 
 export function StatusBadge({
@@ -588,6 +626,11 @@ export function WorkflowNode({ data }: NodeProps) {
       <Handle type="target" position={targetPos} style={handleStyle} />
       <Handle type="source" position={sourcePos} style={handleStyle} />
 
+      <span
+        className={`${s.accentBar} ${accentClass(s, effectiveStatus, { isPlanned: !!isPlanned, isAwaiting: isHumanWaiting })}`}
+        aria-hidden="true"
+      />
+
       {hasPendingApproval && status === 'started' && (
         <div
           className={s.approvalBadge}
@@ -600,13 +643,13 @@ export function WorkflowNode({ data }: NodeProps) {
       )}
 
       <div className={s.cardHeader}>
-        <CostChip totalNanoAiu={totalNanoAiu as number | null | undefined} totalTokens={totalTokens as number | null | undefined} />
         <StatusBadge
           status={effectiveStatus}
           isAwaiting={isHumanWaiting}
           isPlanned={!!isPlanned}
           label={key === 'agent' && effectiveStatus === 'revise' ? 'Incomplete' : undefined}
         />
+        <CostChip totalNanoAiu={totalNanoAiu as number | null | undefined} totalTokens={totalTokens as number | null | undefined} />
       </div>
 
       <div className={s.cardMain}>
@@ -851,7 +894,99 @@ export function LoopbackEdge({ id, sourceX, sourceY, targetX, targetY, label, da
 }
 
 /** ReactFlow edge types map including the loopback edge. */
-export const workflowEdgeTypes = { loopback: LoopbackEdge };
+export const workflowEdgeTypes = { loopback: LoopbackEdge, spine: SpineEdge };
+
+// ---------------------------------------------------------------------------
+// SpineEdge — smooth forward edge routed through a shared "junction" dot.
+//
+// Every forward edge in a fan-out (one source → many targets) or fan-in (many
+// sources → one target) is drawn as two smooth bezier segments that meet at a
+// single rounded junction point placed between the two columns. Because the
+// junction point is computed deterministically from the source/target geometry,
+// all edges in the same bundle resolve to the *same* point and their dots and
+// shared segment overlap perfectly — producing the clean, symmetric curves in
+// the mockup instead of kinked default beziers.
+// ---------------------------------------------------------------------------
+
+const SPINE_STROKE   = 'var(--colorNeutralStroke2)';
+const SPINE_DOT_FILL = 'var(--colorNeutralStroke2)';
+
+function SpineEdge({
+  id,
+  source,
+  target,
+  sourceX,
+  sourceY,
+  targetX,
+  targetY,
+  label,
+}: EdgeProps) {
+  const allEdges = useEdges();
+
+  // How many forward edges share this edge's source / target? Fan-out anchors the
+  // junction at the source's vertical centre; fan-in anchors it at the target's.
+  const forwardSiblings = allEdges.filter((e) => e.type === 'spine');
+  const fanOut = forwardSiblings.filter((e) => e.source === source).length;
+  const fanIn = forwardSiblings.filter((e) => e.target === target).length;
+
+  const junctionX = (sourceX + targetX) / 2;
+  let junctionY: number;
+  if (fanOut > 1 && fanOut >= fanIn) {
+    junctionY = sourceY;
+  } else if (fanIn > 1) {
+    junctionY = targetY;
+  } else {
+    junctionY = (sourceY + targetY) / 2;
+  }
+
+  const [firstPath] = getBezierPath({
+    sourceX,
+    sourceY,
+    sourcePosition: Position.Right,
+    targetX: junctionX,
+    targetY: junctionY,
+    targetPosition: Position.Left,
+    curvature: 0.4,
+  });
+  const [secondPath] = getBezierPath({
+    sourceX: junctionX,
+    sourceY: junctionY,
+    sourcePosition: Position.Right,
+    targetX,
+    targetY,
+    targetPosition: Position.Left,
+    curvature: 0.4,
+  });
+
+  return (
+    <>
+      <path id={id} d={firstPath} fill="none" stroke={SPINE_STROKE} strokeWidth={1.5} />
+      <path d={secondPath} fill="none" stroke={SPINE_STROKE} strokeWidth={1.5} />
+      <circle cx={junctionX} cy={junctionY} r={3.5} fill={SPINE_DOT_FILL} stroke="none" />
+      {label != null && label !== '' && (
+        <EdgeLabelRenderer>
+          <div
+            className="nodrag nopan"
+            style={{
+              position: 'absolute',
+              transform: `translate(-50%, -50%) translate(${junctionX}px, ${junctionY}px)`,
+              background: 'var(--colorNeutralBackground1)',
+              border: '1px solid var(--colorNeutralStroke2)',
+              borderRadius: '4px',
+              padding: '1px 6px',
+              fontSize: '11px',
+              color: 'var(--colorNeutralForeground2)',
+              pointerEvents: 'none',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {label}
+          </div>
+        </EdgeLabelRenderer>
+      )}
+    </>
+  );
+}
 
 // ---------------------------------------------------------------------------
 // Edge builder helpers (exported so pages can build edge arrays)
@@ -864,10 +999,9 @@ export function forwardEdge(id: string, source: string, target: string, animated
     id,
     source,
     target,
-    type: 'default',
+    type: 'spine',
     animated,
     style: { stroke: STROKE_MUTED, strokeWidth: 1.5 },
-    markerEnd: { type: MarkerType.ArrowClosed, color: STROKE_MUTED, width: 12, height: 12 },
   };
 }
 

@@ -32,13 +32,44 @@ function ZoomHarnessWithMax({ maxZoom: max }: { maxZoom: number }) {
 }
 
 describe('useCtrlScrollZoom — shared Ctrl+Scroll zoom (workflow canvas + board)', () => {
-  it('renders the Ctrl+Scroll hint, +/- buttons, and a live % readout', () => {
+  it('renders the +/- buttons, a live % readout, and the Ctrl+Scroll hint as a tooltip', () => {
     render(<ZoomHarness />);
 
-    expect(screen.getByText('Ctrl + Scroll to zoom')).toBeTruthy();
+    expect(screen.getByTitle('Ctrl + Scroll to zoom')).toBeTruthy();
     expect(screen.getByText('100%')).toBeTruthy();
     expect(screen.getByLabelText('Zoom out')).toBeTruthy();
     expect(screen.getByLabelText('Zoom in')).toBeTruthy();
+  });
+
+  it('shows a fit-to-view button only when onFit is provided, and resets to 100% on click', () => {
+    function FitHarness() {
+      const { zoom, zoomIn, zoomOut, resetZoom, maxZoom } = useCtrlScrollZoom({ maxZoom: 2 });
+      return (
+        <FluentProvider theme={webLightTheme}>
+          <ZoomControls
+            zoom={zoom}
+            onZoomIn={zoomIn}
+            onZoomOut={zoomOut}
+            onFit={resetZoom}
+            maxZoom={maxZoom}
+          />
+        </FluentProvider>
+      );
+    }
+    render(<FitHarness />);
+    const fit = screen.getByLabelText('Fit to view') as HTMLButtonElement;
+    const zoomIn = screen.getByLabelText('Zoom in') as HTMLButtonElement;
+
+    fireEvent.click(zoomIn);
+    expect(screen.getByText('110%')).toBeTruthy();
+
+    fireEvent.click(fit);
+    expect(screen.getByText('100%')).toBeTruthy();
+  });
+
+  it('omits the fit-to-view button when onFit is not provided', () => {
+    render(<ZoomHarness />);
+    expect(screen.queryByLabelText('Fit to view')).toBeNull();
   });
 
   it('default (no options) — disables zoom-in at 100% and lowers the readout when zooming out', () => {

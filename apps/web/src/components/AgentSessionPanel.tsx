@@ -17,8 +17,11 @@ import {
 import {
   ChevronDownRegular,
   ChevronRightRegular,
+  CheckmarkCircleFilled,
+  CircleRegular,
   CopyRegular,
   DismissRegular,
+  DismissCircleFilled,
   DocumentRegular,
   OpenRegular,
   SendRegular,
@@ -127,8 +130,9 @@ const useStyles = makeStyles({
   treeItem: {
     width: '100%',
     display: 'flex',
-    flexDirection: 'column',
-    gap: '2px',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXS,
     padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalS}`,
     borderRadius: tokens.borderRadiusMedium,
     border: 'none',
@@ -136,6 +140,7 @@ const useStyles = makeStyles({
     color: tokens.colorNeutralForeground1,
     textAlign: 'left',
     cursor: 'pointer',
+    minHeight: '40px',
     ':hover': {
       backgroundColor: tokens.colorNeutralBackground1Hover,
     },
@@ -143,11 +148,74 @@ const useStyles = makeStyles({
   treeItemSelected: {
     backgroundColor: tokens.colorBrandBackground2,
   },
+  guides: {
+    display: 'flex',
+    flexDirection: 'row',
+    alignSelf: 'stretch',
+    flexShrink: 0,
+  },
+  guideCol: {
+    position: 'relative',
+    width: '16px',
+    alignSelf: 'stretch',
+    flexShrink: 0,
+  },
+  guideVertical: {
+    position: 'absolute',
+    top: 0,
+    bottom: 0,
+    left: '50%',
+    width: '1px',
+    backgroundColor: tokens.colorNeutralStroke2,
+  },
+  elbowTop: {
+    position: 'absolute',
+    top: 0,
+    height: '50%',
+    left: '50%',
+    width: '1px',
+    backgroundColor: tokens.colorNeutralStroke2,
+  },
+  elbowBottom: {
+    position: 'absolute',
+    top: '50%',
+    bottom: 0,
+    left: '50%',
+    width: '1px',
+    backgroundColor: tokens.colorNeutralStroke2,
+  },
+  elbowHorizontal: {
+    position: 'absolute',
+    top: '50%',
+    left: '50%',
+    right: 0,
+    height: '1px',
+    backgroundColor: tokens.colorNeutralStroke2,
+  },
+  statusGlyph: {
+    flexShrink: 0,
+    fontSize: '16px',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '18px',
+    height: '18px',
+  },
+  statusGlyphSuccess: { color: tokens.colorPaletteGreenForeground1 },
+  statusGlyphDanger: { color: tokens.colorPaletteRedForeground1 },
+  statusGlyphPending: { color: tokens.colorNeutralForeground4 },
+  treeLabelCol: {
+    display: 'flex',
+    flexDirection: 'column',
+    minWidth: 0,
+    flex: 1,
+    gap: '1px',
+  },
   treeLinePrimary: {
-    fontFamily: tokens.fontFamilyMonospace,
-    fontSize: tokens.fontSizeBase200,
+    fontSize: tokens.fontSizeBase300,
     fontWeight: tokens.fontWeightRegular,
-    whiteSpace: 'pre',
+    lineHeight: tokens.lineHeightBase300,
+    whiteSpace: 'nowrap',
     overflow: 'hidden',
     textOverflow: 'ellipsis',
   },
@@ -155,12 +223,22 @@ const useStyles = makeStyles({
     fontWeight: tokens.fontWeightSemibold,
   },
   treeLineSecondary: {
-    fontFamily: tokens.fontFamilyMonospace,
-    fontSize: tokens.fontSizeBase100,
+    fontSize: tokens.fontSizeBase200,
     color: tokens.colorNeutralForeground3,
-    whiteSpace: 'pre',
+    whiteSpace: 'nowrap',
     overflow: 'hidden',
     textOverflow: 'ellipsis',
+  },
+  treeMeta: {
+    flexShrink: 0,
+    marginLeft: tokens.spacingHorizontalXS,
+    fontSize: tokens.fontSizeBase200,
+    color: tokens.colorNeutralForeground3,
+    fontVariantNumeric: 'tabular-nums',
+    whiteSpace: 'nowrap',
+  },
+  treeMetaDanger: {
+    color: tokens.colorPaletteRedForeground1,
   },
   main: {
     minWidth: 0,
@@ -437,6 +515,8 @@ export interface RunSessionTree {
   agentRole?: string;
   status: string;
   childRunId?: string;
+  startedAt?: number;
+  completedAt?: number;
   children: RunSessionTree[];
   depth: number;
 }
@@ -475,8 +555,9 @@ interface ConversationTurn {
 }
 
 interface FlatTreeNode extends RunSessionTree {
-  prefix: string;
-  detailPrefix: string;
+  guides: boolean[];
+  isLast: boolean;
+  level: number;
   isCoordinator: boolean;
 }
 
@@ -578,6 +659,51 @@ function statusIcon(status: string): string {
   }
 }
 
+type StatusKind = 'success' | 'danger' | 'running' | 'pending';
+
+function statusKind(status: string): StatusKind {
+  switch (status) {
+    case 'completed':
+    case 'merged':
+      return 'success';
+    case 'failed':
+    case 'merge_failed':
+    case 'declined':
+    case 'rai_flagged':
+      return 'danger';
+    case 'running':
+    case 'dispatched':
+    case 'dispatching':
+    case 'in_progress':
+      return 'running';
+    default:
+      return 'pending';
+  }
+}
+
+function StatusGlyph({ status, className }: { status: string; className?: string }) {
+  const kind = statusKind(status);
+  if (kind === 'success') return <CheckmarkCircleFilled className={className} />;
+  if (kind === 'danger') return <DismissCircleFilled className={className} />;
+  if (kind === 'running') return <Spinner size="extra-tiny" className={className} />;
+  return <CircleRegular className={className} />;
+}
+
+function formatNodeDuration(startedAt?: number, completedAt?: number): string | null {
+  if (!startedAt) return null;
+  const end = completedAt ?? Date.now();
+  const ms = end - startedAt;
+  if (!Number.isFinite(ms) || ms < 0) return null;
+  const totalSeconds = Math.round(ms / 1000);
+  if (totalSeconds < 60) return `${totalSeconds}s`;
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (minutes < 60) return seconds ? `${minutes}m ${seconds}s` : `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  const mins = minutes % 60;
+  return mins ? `${hours}h ${mins}m` : `${hours}h`;
+}
+
 function buildTurns(events: RunStreamEvent[]): ConversationTurn[] {
   const turns: ConversationTurn[] = [];
   const pendingTools = new Map<string, ConversationTool>();
@@ -677,16 +803,11 @@ function flattenTree(
 ): FlatTreeNode[] {
   return nodes.flatMap((node, index) => {
     const isLast = index === nodes.length - 1;
-    const prefix = ancestorsHasNext.length === 0
-      ? ''
-      : `${ancestorsHasNext.map((hasNext) => hasNext ? '│  ' : '   ').join('')}${isLast ? '└─ ' : '├─ '}`;
-    const detailPrefix = ancestorsHasNext.length === 0
-      ? ''
-      : `${ancestorsHasNext.map((hasNext) => hasNext ? '│  ' : '   ').join('')}${isLast ? '   ' : '│  '}`;
     const current: FlatTreeNode = {
       ...node,
-      prefix,
-      detailPrefix,
+      guides: ancestorsHasNext,
+      isLast,
+      level: ancestorsHasNext.length,
       isCoordinator: node.nodeId === coordinatorNodeId,
     };
     return [current, ...flattenTree(node.children, coordinatorNodeId, [...ancestorsHasNext, !isLast])];
@@ -927,20 +1048,59 @@ export function AgentSessionPanel({
               {flatTree.map((item) => {
                 const selected = item.nodeId === selectedItem.nodeId;
                 const secondary = item.agentName || item.agentRole
-                  ? `${item.detailPrefix}${item.agentName ?? item.label}${item.agentRole ? ` · ${item.agentRole}` : ''}`
+                  ? `${item.agentName ?? item.label}${item.agentRole ? ` · ${item.agentRole}` : ''}`
                   : '';
+                const kind = statusKind(item.status);
+                const glyphClass = mergeClasses(
+                  styles.statusGlyph,
+                  kind === 'success' && styles.statusGlyphSuccess,
+                  kind === 'danger' && styles.statusGlyphDanger,
+                  kind === 'pending' && styles.statusGlyphPending,
+                );
+                const duration = formatNodeDuration(item.startedAt, item.completedAt);
                 return (
                   <button
                     key={item.nodeId}
                     className={mergeClasses(styles.treeItem, selected && styles.treeItemSelected)}
                     onClick={() => onSelectNode(item.nodeId)}
+                    title={secondary || item.label}
                   >
-                    <Text className={mergeClasses(styles.treeLinePrimary, selected && styles.treeLinePrimarySelected)}>
-                      {`${item.prefix}${statusIcon(item.status)} ${item.label}`}
-                    </Text>
-                    {secondary && (
-                      <Text className={styles.treeLineSecondary}>
-                        {secondary}
+                    {item.level > 0 && (
+                      <span className={styles.guides} aria-hidden="true">
+                        {Array.from({ length: item.level }).map((_, i) => {
+                          const isElbow = i === item.level - 1;
+                          return (
+                            <span key={i} className={styles.guideCol}>
+                              {isElbow ? (
+                                <>
+                                  <span className={styles.elbowTop} />
+                                  <span className={styles.elbowHorizontal} />
+                                  {!item.isLast && <span className={styles.elbowBottom} />}
+                                </>
+                              ) : (
+                                item.guides[i] && <span className={styles.guideVertical} />
+                              )}
+                            </span>
+                          );
+                        })}
+                      </span>
+                    )}
+                    <span className={glyphClass}>
+                      <StatusGlyph status={item.status} />
+                    </span>
+                    <span className={styles.treeLabelCol}>
+                      <Text className={mergeClasses(styles.treeLinePrimary, selected && styles.treeLinePrimarySelected)}>
+                        {item.label}
+                      </Text>
+                      {secondary && (
+                        <Text className={styles.treeLineSecondary}>
+                          {secondary}
+                        </Text>
+                      )}
+                    </span>
+                    {duration && (
+                      <Text className={mergeClasses(styles.treeMeta, kind === 'danger' && styles.treeMetaDanger)}>
+                        {duration}
                       </Text>
                     )}
                   </button>

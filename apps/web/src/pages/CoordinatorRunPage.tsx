@@ -80,6 +80,7 @@ import {
   iconForRole,
   useNodeStyles,
   StatusBadge,
+  accentClass,
   ElapsedTimer,
   CoordinatorSessionContext,
   ExecutionModalContext,
@@ -657,6 +658,8 @@ function SubtaskNode({ id, data }: NodeProps) {
       <Handle type="target" position={d.dir === 'TB' ? Position.Top : Position.Left} style={handleStyle} />
       <Handle type="source" position={d.dir === 'TB' ? Position.Bottom : Position.Right} style={handleStyle} />
 
+      <span className={`${s.accentBar} ${accentClass(s, stepStatus)}`} aria-hidden="true" />
+
       {/* Top row: status chip left, cost right */}
       <div className={s.cardHeader}>
         <StatusBadge status={stepStatus} label={statusLabel} />
@@ -939,7 +942,7 @@ export function CoordinatorRunPage() {
   const { events, status: streamStatus, reconnect: reconnectStream } = useRunStream(runId ?? '');
 
   // Ctrl+Scroll zoom for the orchestration graph, mirroring WorkflowRunPage.
-  const { zoom, zoomIn, zoomOut, viewportRef, maxZoom } = useCtrlScrollZoom({ maxZoom: 2 });
+  const { zoom, zoomIn, zoomOut, resetZoom, viewportRef, maxZoom } = useCtrlScrollZoom({ maxZoom: 2 });
 
   // REST seed: coordinator GraphDescriptor (GET /api/runs/{id}/graph, coordinator variant).
   const [restDescriptor, setRestDescriptor] = useState<GraphDescriptor | null>(null);
@@ -1581,8 +1584,11 @@ export function CoordinatorRunPage() {
     defaultSessionNodeId: string | null;
   }>(() => {
     const candidates = displayNodes.filter((node) => {
+      // Include every planned subtask — not only dispatched ones (with a childRunId) — so the
+      // session tree mirrors the full work plan. Planned/pending subtasks show their status but
+      // have no streamed conversation until they are dispatched.
       if (node.type === 'subtask') {
-        return Boolean((node.data as SubtaskNodeData | undefined)?.childRunId);
+        return true;
       }
       const wfData = node.data as WorkflowNodeData | undefined;
       return wfData?.def?.key === 'coordinator';
@@ -1612,6 +1618,8 @@ export function CoordinatorRunPage() {
       agentRole?: string;
       status: string;
       childRunId?: string;
+      startedAt?: number;
+      completedAt?: number;
       depth: number;
       x: number;
       y: number;
@@ -1624,7 +1632,6 @@ export function CoordinatorRunPage() {
       const y = Math.round(node.position.y ?? 0);
       if (node.type === 'subtask') {
         const data = node.data as SubtaskNodeData;
-        if (!data.childRunId) continue;
         sessionMeta.set(node.id, {
           nodeId: node.id,
           label: data.label,
@@ -1632,6 +1639,8 @@ export function CoordinatorRunPage() {
           agentRole: data.agentRole,
           status: String(data.topoStatus ?? 'pending'),
           childRunId: data.childRunId,
+          startedAt: data.startedAt,
+          completedAt: data.completedAt,
           depth,
           x,
           y,
@@ -1717,6 +1726,8 @@ export function CoordinatorRunPage() {
         agentRole: meta.agentRole,
         status: meta.status,
         childRunId: meta.childRunId,
+        startedAt: meta.startedAt,
+        completedAt: meta.completedAt,
         children,
         depth: meta.depth,
       };
@@ -2050,7 +2061,7 @@ export function CoordinatorRunPage() {
             <CoordinatorSessionContext.Provider value={() => openPanelForNode('coordinator')}>
             <CoordExpandContext.Provider value={expandValue}>
             <CoordPanelContext.Provider value={openPanelForNode}>
-              <ZoomControls zoom={zoom} onZoomIn={zoomIn} onZoomOut={zoomOut} maxZoom={maxZoom} />
+              <ZoomControls zoom={zoom} onZoomIn={zoomIn} onZoomOut={zoomOut} onFit={resetZoom} maxZoom={maxZoom} />
               <div className={styles.dagContainer} style={{ height: graphHeight }} ref={viewportRef}>
                 <div style={{ zoom, width: '100%', height: '100%' }}>
                 <ReactFlow
@@ -2077,17 +2088,30 @@ export function CoordinatorRunPage() {
                     token={`${displayNodes.length}:${displayEdges2.length}:${graphHeight}:${[...expandedKeys].sort().join(',')}`}
                   />
                   <MiniMap
-                    nodeStrokeWidth={2}
+                    nodeStrokeWidth={0}
+                    nodeBorderRadius={3}
                     zoomable
                     pannable
-                    style={{ bottom: 8, right: 8, width: 110, height: 72 }}
+                    bgColor="#ffffff"
+                    maskColor="rgba(15, 108, 189, 0.06)"
+                    maskStrokeColor="var(--colorBrandStroke1)"
+                    maskStrokeWidth={2}
+                    style={{
+                      bottom: 8,
+                      right: 8,
+                      width: 172,
+                      height: 116,
+                      border: '1px solid var(--colorNeutralStroke2)',
+                      borderRadius: '8px',
+                      boxShadow: 'var(--shadow8)',
+                    }}
                     nodeColor={(n) => {
                       const s = (n.data as SubtaskNodeData | undefined)?.topoStatus as string | undefined;
                       if (s === 'completed') return '#107c41';
                       if (s === 'running' || s === 'dispatching') return '#0f6cbd';
                       if (s === 'waiting' || s === 'awaiting_assembly') return '#d47c00';
                       if (s === 'failed' || s === 'declined') return '#c50f1f';
-                      return '#8a8886';
+                      return '#c8c6c4';
                     }}
                   />
                 </ReactFlow>

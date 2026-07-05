@@ -13,7 +13,7 @@
  */
 import { useCallback, useRef, useState } from 'react';
 import { Button, Caption1, makeStyles, tokens } from '@fluentui/react-components';
-import { ZoomInRegular, ZoomOutRegular } from '@fluentui/react-icons';
+import { ArrowMaximizeRegular, ZoomInRegular, ZoomOutRegular } from '@fluentui/react-icons';
 
 export const MIN_ZOOM = 0.5;
 export const MAX_ZOOM = 1;
@@ -34,6 +34,8 @@ export interface CtrlScrollZoom {
   zoomIn: () => void;
   /** Zoom out by one step (clamped to MIN_ZOOM). */
   zoomOut: () => void;
+  /** Reset zoom to 100% (the natural, fitted size). */
+  resetZoom: () => void;
   /** Callback ref to attach to the scroll viewport that receives the wheel gesture. */
   viewportRef: (node: HTMLElement | null) => void;
   /** Effective upper zoom bound for this hook instance. */
@@ -63,25 +65,33 @@ export function useCtrlScrollZoom(options?: CtrlScrollZoomOptions): CtrlScrollZo
 
   const zoomIn = useCallback(() => setZoom((z) => clampZoom(z + ZOOM_STEP, effectiveMax)), [effectiveMax]);
   const zoomOut = useCallback(() => setZoom((z) => clampZoom(z - ZOOM_STEP, effectiveMax)), [effectiveMax]);
+  const resetZoom = useCallback(() => setZoom(1), []);
 
-  return { zoom, zoomIn, zoomOut, viewportRef, maxZoom: effectiveMax };
+  return { zoom, zoomIn, zoomOut, resetZoom, viewportRef, maxZoom: effectiveMax };
 }
 
 const useControlStyles = makeStyles({
   zoomBar: {
     display: 'flex',
     alignItems: 'center',
-    justifyContent: 'flex-end',
-    gap: tokens.spacingHorizontalXS,
-  },
-  zoomHint: {
-    color: tokens.colorNeutralForeground3,
-    marginRight: tokens.spacingHorizontalS,
+    gap: '2px',
+    padding: '2px',
+    backgroundColor: tokens.colorNeutralBackground1,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusMedium,
+    boxShadow: tokens.shadow4,
   },
   zoomReadout: {
     color: tokens.colorNeutralForeground2,
-    minWidth: '40px',
+    minWidth: '44px',
     textAlign: 'center',
+    fontVariantNumeric: 'tabular-nums',
+  },
+  divider: {
+    width: '1px',
+    alignSelf: 'stretch',
+    margin: '3px 1px',
+    backgroundColor: tokens.colorNeutralStroke2,
   },
 });
 
@@ -89,16 +99,29 @@ export interface ZoomControlsProps {
   zoom: number;
   onZoomIn: () => void;
   onZoomOut: () => void;
+  /** Optional fit-to-view (reset to 100%) handler. When provided, a fit button is shown. */
+  onFit?: () => void;
   /** Effective max zoom; defaults to MAX_ZOOM (1 = 100%). */
   maxZoom?: number;
 }
 
-/** The shared "Ctrl + Scroll to zoom" hint, +/- buttons, and live % readout. */
-export function ZoomControls({ zoom, onZoomIn, onZoomOut, maxZoom = MAX_ZOOM }: ZoomControlsProps) {
+/** A compact segmented zoom control: optional fit button, −/+ buttons, and a live % readout. */
+export function ZoomControls({ zoom, onZoomIn, onZoomOut, onFit, maxZoom = MAX_ZOOM }: ZoomControlsProps) {
   const styles = useControlStyles();
   return (
-    <div className={styles.zoomBar}>
-      <Caption1 className={styles.zoomHint}>Ctrl + Scroll to zoom</Caption1>
+    <div className={styles.zoomBar} title="Ctrl + Scroll to zoom">
+      {onFit && (
+        <>
+          <Button
+            size="small"
+            appearance="subtle"
+            icon={<ArrowMaximizeRegular />}
+            aria-label="Fit to view"
+            onClick={onFit}
+          />
+          <span className={styles.divider} aria-hidden />
+        </>
+      )}
       <Button
         size="small"
         appearance="subtle"

@@ -89,7 +89,7 @@ describe('KanbanBoard — fixed columns (FR-013/015/016/019)', () => {
 
     await waitFor(() => expect(screen.getByTestId('column-backlog')).toBeTruthy());
 
-    expect(screen.getByText('Ctrl + Scroll to zoom')).toBeTruthy();
+    expect(screen.getByTitle('Ctrl + Scroll to zoom')).toBeTruthy();
     expect(screen.getByText('100%')).toBeTruthy();
     const zoomOut = screen.getByLabelText('Zoom out');
     const zoomIn = screen.getByLabelText('Zoom in') as HTMLButtonElement;

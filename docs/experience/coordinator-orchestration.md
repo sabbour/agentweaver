@@ -313,6 +313,8 @@ The page title is **Orchestration**. It shows a short id in the breadcrumb, live
 
 The **Coordinator Graph** is the full-width band at the top. It is built to be watched. The graph has zoom controls, auto-fit behavior, and expandable subtask cards. When the OutcomeSpec is still being authored, the graph avoids implying future work and shows a focused pre-dispatch state. Once confirmed, the execution pipeline appears.
 
+Nodes are connected by smooth **spine edges** — each fan-out and fan-in routes through a shared rounded junction dot with clean bezier curves instead of hard-angled arrows — and every card carries a **colored top-accent bar** keyed to its status (green complete, blue running, amber awaiting, red failed) with the status pill in the top-left corner. A **minimap** in the bottom-right corner shows the whole graph at a glance, coloring each node by its status and outlining the visible viewport, so you can orient yourself in a large orchestration. The **zoom control** in the corner has a **fit-to-view** button (resets to 100%, the natural fitted size), minus/plus buttons, and a live percentage readout; hold **Ctrl** while scrolling to zoom (shown as a tooltip).
+
 The graph includes the coordinator node, subtask nodes, dependency edges, and collective assembly stages when they are part of the descriptor. Assembly stages map to the overall orchestration phase: RAI starts during assembly, human review becomes actionable during **In review**, merge and scribe light up from their own assembly events, and completion turns the flow green.
 
 ### Agent rail

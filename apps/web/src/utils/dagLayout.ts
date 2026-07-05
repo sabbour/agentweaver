@@ -129,7 +129,15 @@ export function layoutDagColumns(
     colX += colW + COL_GAP;
   }
 
-  return nodes.map((n) => ({ ...n, position: posMap.get(n.id) ?? n.position }));
+  return nodes.map((n) => {
+    const hint = nodeSizeHints?.[n.id];
+    return {
+      ...n,
+      position: posMap.get(n.id) ?? n.position,
+      initialWidth: hint?.width ?? NODE_W,
+      initialHeight: hint?.height ?? NODE_H,
+    };
+  });
 }
 
 /**
@@ -169,6 +177,6 @@ export function layoutDag(
     const hint = nodeSizeHints?.[n.id];
     const w = hint?.width ?? NODE_W;
     const h = hint?.height ?? NODE_H;
-    return { ...n, position: { x: pos.x - w / 2, y: pos.y - h / 2 } };
+    return { ...n, position: { x: pos.x - w / 2, y: pos.y - h / 2 }, initialWidth: w, initialHeight: h };
   });
 }
