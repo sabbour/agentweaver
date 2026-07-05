@@ -111,6 +111,7 @@ export type EventType =
   | 'coordinator.topology'
   | 'coordinator.steering'
   | 'coordinator.graph'
+  | 'coordinator.workflow_selected'
   | 'coordinator.children_complete'
   | 'coordinator.assembly_started'
   | 'coordinator.integration_conflict_auto_resolved'

@@ -149,6 +149,33 @@ describe('CoordinatorRunPage — session run (issue 6)', () => {
     expect(document.body.querySelector('[data-testid="open-steer-panel"]')).toBeNull();
   });
 
+  it('shows the workflow the coordinator selected in the header', async () => {
+    currentEvents = [
+      { sequence: 1, type: 'coordinator.started', payload: { goal: 'Build it', timestamp_utc: '2026-06-18T15:00:00Z' } },
+      {
+        sequence: 2,
+        type: 'coordinator.workflow_selected',
+        payload: {
+          selectedId: 'pm-prd',
+          selectedName: 'Product Requirements',
+          rationale: 'Best fit for a PRD-writing task.',
+          wasAutoSelected: true,
+          timestamp_utc: '2026-06-18T15:00:02Z',
+        },
+      },
+    ];
+
+    render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    const badge = await waitFor(() => {
+      const el = document.querySelector('[data-testid="coordinator-selected-workflow"]');
+      expect(el).toBeTruthy();
+      return el as HTMLElement;
+    }, { timeout: 4000 });
+    expect(badge.textContent).toContain('Product Requirements');
+    expect(badge.textContent).toContain('auto');
+  });
+
   it('opens the slide-in session panel from the coordinator card', async () => {
     vi.mocked(apiClient.getRun).mockResolvedValue({
       run_id: 'coord-run-1',

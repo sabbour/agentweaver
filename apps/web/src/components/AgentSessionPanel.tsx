@@ -19,6 +19,7 @@ import {
   ChevronRightRegular,
   CheckmarkCircleFilled,
   CircleRegular,
+  ClockRegular,
   CopyRegular,
   DismissRegular,
   DismissCircleFilled,
@@ -203,6 +204,8 @@ const useStyles = makeStyles({
   },
   statusGlyphSuccess: { color: tokens.colorPaletteGreenForeground1 },
   statusGlyphDanger: { color: tokens.colorPaletteRedForeground1 },
+  statusGlyphWarning: { color: tokens.colorPaletteMarigoldForeground1 },
+  statusGlyphRunning: { color: tokens.colorBrandForeground1 },
   statusGlyphPending: { color: tokens.colorNeutralForeground4 },
   treeLabelCol: {
     display: 'flex',
@@ -659,18 +662,22 @@ function statusIcon(status: string): string {
   }
 }
 
-type StatusKind = 'success' | 'danger' | 'running' | 'pending';
+type StatusKind = 'success' | 'danger' | 'awaiting' | 'running' | 'pending';
 
 function statusKind(status: string): StatusKind {
   switch (status) {
     case 'completed':
     case 'merged':
+    case 'assemble_ready':
       return 'success';
     case 'failed':
     case 'merge_failed':
     case 'declined':
-    case 'rai_flagged':
       return 'danger';
+    case 'rai_flagged':
+    case 'waiting':
+    case 'awaiting_assembly':
+      return 'awaiting';
     case 'running':
     case 'dispatched':
     case 'dispatching':
@@ -685,6 +692,7 @@ function StatusGlyph({ status, className }: { status: string; className?: string
   const kind = statusKind(status);
   if (kind === 'success') return <CheckmarkCircleFilled className={className} />;
   if (kind === 'danger') return <DismissCircleFilled className={className} />;
+  if (kind === 'awaiting') return <ClockRegular className={className} />;
   if (kind === 'running') return <Spinner size="extra-tiny" className={className} />;
   return <CircleRegular className={className} />;
 }
@@ -1055,6 +1063,8 @@ export function AgentSessionPanel({
                   styles.statusGlyph,
                   kind === 'success' && styles.statusGlyphSuccess,
                   kind === 'danger' && styles.statusGlyphDanger,
+                  kind === 'awaiting' && styles.statusGlyphWarning,
+                  kind === 'running' && styles.statusGlyphRunning,
                   kind === 'pending' && styles.statusGlyphPending,
                 );
                 const duration = formatNodeDuration(item.startedAt, item.completedAt);

@@ -27,6 +27,7 @@ import {
   ChatRegular,
   DismissRegular,
   DocumentRegular,
+  FlowchartRegular,
   FolderRegular,
   OpenRegular,
 } from '@fluentui/react-icons';
@@ -1144,6 +1145,27 @@ export function CoordinatorRunPage() {
     return undefined;
   }, [events]);
 
+  // The workflow the coordinator selected/planned this orchestration against. Carried by the
+  // coordinator.workflow_selected event, which is persisted to the run event log and replayed on
+  // reconnect — so it survives page reloads. Latest event wins.
+  const selectedWorkflow = useMemo<{ name: string; auto: boolean; rationale?: string } | undefined>(() => {
+    let picked: { name: string; auto: boolean; rationale?: string } | undefined;
+    for (const evt of events) {
+      if (evt.type === 'coordinator.workflow_selected') {
+        const name = evt.payload['selectedName'] ?? evt.payload['selectedId'];
+        if (name != null && String(name).trim() !== '') {
+          const rationale = evt.payload['rationale'];
+          picked = {
+            name: String(name),
+            auto: evt.payload['wasAutoSelected'] === true,
+            rationale: rationale != null && String(rationale).trim() !== '' ? String(rationale) : undefined,
+          };
+        }
+      }
+    }
+    return picked;
+  }, [events]);
+
   // coordinator.graph SSE: highest-seq-wins over REST seed (same pattern as run.workflow_graph).
   const sseDescriptor = useMemo<GraphDescriptor | undefined>(() => {
     let best: { seq: number; desc: GraphDescriptor } | undefined;
@@ -1603,13 +1625,6 @@ export function CoordinatorRunPage() {
 
     const xValues = [...new Set(candidates.map((node) => Math.round(node.position.x ?? 0)))].sort((a, b) => a - b);
     const depthByX = new Map<number, number>(xValues.map((x, index) => [x, index]));
-    const reverseEdges = new Map<string, string[]>();
-
-    for (const edge of displayEdges2) {
-      const list = reverseEdges.get(edge.target) ?? [];
-      list.push(edge.source);
-      reverseEdges.set(edge.target, list);
-    }
 
     const sessionMeta = new Map<string, {
       nodeId: string;
@@ -1677,37 +1692,15 @@ export function CoordinatorRunPage() {
       };
     }
 
+    // The coordinator dispatches every subtask directly, so the session tree is flat:
+    // one Coordinator root with all subtasks as siblings. Data dependencies between
+    // subtasks are shown in the graph, not as session-tree nesting.
     const childIdsByParent = new Map<string, string[]>();
     for (const meta of sessionMeta.values()) {
       if (meta.nodeId === rootMeta.nodeId) continue;
-
-      const queue = [...(reverseEdges.get(meta.nodeId) ?? [])];
-      const visited = new Set<string>();
-      const parentCandidates = new Set<string>();
-
-      while (queue.length > 0) {
-        const currentId = queue.shift();
-        if (!currentId || visited.has(currentId)) continue;
-        visited.add(currentId);
-        if (sessionMeta.has(currentId)) {
-          parentCandidates.add(currentId);
-          continue;
-        }
-        queue.push(...(reverseEdges.get(currentId) ?? []));
-      }
-
-      const orderedParents = [...parentCandidates].sort((a, b) => {
-        const parentA = sessionMeta.get(a)!;
-        const parentB = sessionMeta.get(b)!;
-        return (parentB.depth - parentA.depth)
-          || Math.abs(parentA.y - meta.y) - Math.abs(parentB.y - meta.y)
-          || parentA.x - parentB.x
-          || parentA.y - parentB.y;
-      });
-      const parentId = orderedParents[0] ?? rootMeta.nodeId;
-      const list = childIdsByParent.get(parentId) ?? [];
+      const list = childIdsByParent.get(rootMeta.nodeId) ?? [];
       list.push(meta.nodeId);
-      childIdsByParent.set(parentId, list);
+      childIdsByParent.set(rootMeta.nodeId, list);
     }
 
     const buildTree = (nodeId: string): RunSessionTree => {
@@ -1738,7 +1731,7 @@ export function CoordinatorRunPage() {
       sessionNodeIds: new Set(sessionMeta.keys()),
       defaultSessionNodeId: rootMeta.nodeId,
     };
-  }, [displayEdges2, displayNodes]);
+  }, [displayNodes]);
 
   // ---------------------------------------------------------------------------
   // Steering chat side panel (#163) — a slide-in chat replaces the old inline steer bar.
@@ -1955,6 +1948,29 @@ export function CoordinatorRunPage() {
       <div className={styles.headerRow}>
         <Title2>Orchestration</Title2>
         {(isConnecting || isStreaming) && <Spinner size="extra-tiny" aria-label="Connecting" />}
+        {selectedWorkflow && (
+          <Tooltip
+            relationship="description"
+            content={
+              selectedWorkflow.rationale
+                ? `${selectedWorkflow.auto ? 'Auto-selected' : 'Selected'}: ${selectedWorkflow.rationale}`
+                : selectedWorkflow.auto
+                  ? 'Automatically selected by the coordinator'
+                  : 'Selected for this orchestration'
+            }
+          >
+            <Badge
+              appearance="tint"
+              color="brand"
+              size="large"
+              icon={<FlowchartRegular />}
+              data-testid="coordinator-selected-workflow"
+            >
+              {selectedWorkflow.name}
+              {selectedWorkflow.auto ? ' · auto' : ''}
+            </Badge>
+          </Tooltip>
+        )}
         {isRetryable && (
           <Button
             appearance="primary"
