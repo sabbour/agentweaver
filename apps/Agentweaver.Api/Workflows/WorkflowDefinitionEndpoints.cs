@@ -1,6 +1,7 @@
 using Agentweaver.Api.Security;
 using Agentweaver.Domain;
 using Agentweaver.Squad.Squad;
+using Microsoft.Extensions.Logging;
 using YamlDotNet.Core;
 
 namespace Agentweaver.Api.Workflows;
@@ -220,6 +221,7 @@ public static class WorkflowDefinitionEndpoints
             SaveWorkflowRequest request,
             IProjectStore projectStore,
             WorkflowRegistry registry,
+            ILoggerFactory loggerFactory,
             CancellationToken ct) =>
         {
             var (project, error) = await ResolveOwnedProjectAsync(httpContext, projectId, projectStore, ct);
@@ -294,13 +296,53 @@ public static class WorkflowDefinitionEndpoints
                     statusCode: StatusCodes.Status500InternalServerError);
             }
 
-            // Step 6: Sync the registry and return the reloaded definition.
-            var refreshedSet = registry.Sync(project);
+            // Step 6: Ensure the workflow id is in the project's allowed set before syncing.
+            // When a blueprint has restricted AllowedWorkflowIds, FilterByAllowedSet drops any valid
+            // workflow whose id is not in that set — including a freshly written file — causing
+            // FindById to return null even though the file exists on disk. Extend the allowed set now
+            // so the new workflow is immediately visible after Sync.
+            var syncProject = project!;
+            var allowedIds = project!.AllowedWorkflowIds;
+            if (allowedIds is { Count: > 0 } &&
+                !allowedIds.Contains(workflowId, StringComparer.OrdinalIgnoreCase))
+            {
+                var updatedIds = allowedIds.Append(workflowId).ToList();
+                await projectStore.UpdateAllowedWorkflowIdsAsync(project.Id, updatedIds, DateTimeOffset.UtcNow, ct);
+                syncProject = project with { AllowedWorkflowIds = updatedIds };
+            }
+
+            // Sync the registry and return the reloaded definition.
+            var refreshedSet = registry.Sync(syncProject);
             var saved = refreshedSet.FindById(workflowId);
             if (saved?.Definition is null)
+            {
+                var writtenPath = Path.Combine(project.WorkingDirectory, ".agentweaver", "workflows", $"{workflowId}.yaml");
+                var currentAllowed = syncProject.AllowedWorkflowIds is { Count: > 0 }
+                    ? string.Join(", ", syncProject.AllowedWorkflowIds)
+                    : "(unrestricted)";
+
+                // Distinguish a post-write validation failure from a genuine discovery gap.
+                var invalidEntry = refreshedSet.Results.FirstOrDefault(r =>
+                    r.Definition is not null &&
+                    string.Equals(r.Definition.Id, workflowId, StringComparison.OrdinalIgnoreCase));
+
+                var saveLogger = loggerFactory.CreateLogger("Agentweaver.Api.Workflows.WorkflowSave");
+                saveLogger.LogError(
+                    "Workflow '{WorkflowId}' was written to '{FilePath}' but was not returned by registry " +
+                    "after Sync. AllowedWorkflowIds: [{AllowedIds}]. Post-sync error: {Error}",
+                    workflowId, writtenPath, currentAllowed,
+                    invalidEntry?.Error ?? "(workflow not discovered)");
+
+                if (invalidEntry is not null)
+                    return Results.Problem(
+                        $"Workflow '{workflowId}' was written but failed validation on reload: {invalidEntry.Error}",
+                        statusCode: StatusCodes.Status500InternalServerError);
+
                 return Results.Problem(
-                    "Workflow was written but could not be re-loaded after sync. Check file permissions.",
+                    $"Workflow '{workflowId}' was written to disk but was not discovered by the registry. " +
+                    "Verify the file is readable and the id in the YAML matches the route.",
                     statusCode: StatusCodes.Status500InternalServerError);
+            }
 
             return Results.Ok(WorkflowDtoMapper.ToDetail(saved, EffectiveDefaultId(project)));
         });

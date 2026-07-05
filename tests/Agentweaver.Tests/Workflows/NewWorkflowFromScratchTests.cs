@@ -2,7 +2,9 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using FluentAssertions;
+using Microsoft.Extensions.DependencyInjection;
 using Agentweaver.Api.Workflows;
+using Agentweaver.Domain;
 using Agentweaver.Tests.Helpers;
 
 namespace Agentweaver.Tests.Workflows;
@@ -121,6 +123,70 @@ public sealed class NewWorkflowFromScratchTests : IClassFixture<ProjectsWebAppli
             because: "the blank template must pass validation so it is coordinator-selectable");
         myWorkflow.GetProperty("is_built_in").GetBoolean().Should().BeFalse(
             because: "a user-saved workflow is not built-in");
+    }
+
+    // ── Bug regression: allowed-set filtering (#175) ────────────────────────────────────────────
+
+    /// <summary>
+    /// Regression test for #175. When a blueprint has set AllowedWorkflowIds, a newly saved workflow
+    /// whose id is not yet in that set was silently filtered out by the registry, causing FindById to
+    /// return null and the PUT handler to 500 with a misleading "file permissions" message.
+    /// After the fix the handler adds the new id to AllowedWorkflowIds and the workflow becomes
+    /// immediately selectable.
+    /// </summary>
+    [Fact]
+    public async Task PutNewWorkflow_WhenAllowedSetExcludesNewId_AddsIdToAllowedSetAndSucceeds()
+    {
+        var (projectId, _) = await CreateProjectAsync();
+
+        // Simulate a blueprint having restricted the allowed workflow set to just "default".
+        var store = _factory.Services.GetRequiredService<IProjectStore>();
+        var pid = ProjectId.Parse(projectId);
+        await store.UpdateAllowedWorkflowIdsAsync(pid, ["default"], DateTimeOffset.UtcNow);
+
+        // PUT a new workflow whose id is NOT yet in the allowed set.
+        var putResp = await _client.PutAsJsonAsync(
+            $"/api/projects/{projectId}/workflows/my-workflow",
+            new { yaml = BlankTemplateYaml });
+
+        putResp.StatusCode.Should().Be(HttpStatusCode.OK,
+            "PUT must succeed even when the project's allowed set did not yet include the new workflow id");
+
+        var detail = await putResp.Content.ReadFromJsonAsync<JsonElement>();
+        detail.GetProperty("id").GetString().Should().Be("my-workflow");
+
+        // The workflow must now be in the list (registry reflects the updated allowed set).
+        var list = await _client.GetFromJsonAsync<JsonElement>($"/api/projects/{projectId}/workflows");
+        var workflows = list.GetProperty("workflows");
+        var ids = Enumerable.Range(0, workflows.GetArrayLength())
+            .Select(i => workflows[i].GetProperty("id").GetString())
+            .ToList();
+        ids.Should().Contain("my-workflow",
+            because: "the saved workflow id must be added to AllowedWorkflowIds and appear in the registry");
+    }
+
+    [Fact]
+    public async Task PutNewWorkflow_WhenAllowedSetAlreadyContainsId_SucceedsWithoutDuplicatingEntry()
+    {
+        var (projectId, _) = await CreateProjectAsync();
+
+        // Pre-populate AllowedWorkflowIds so the id is already present (idempotent save).
+        var store = _factory.Services.GetRequiredService<IProjectStore>();
+        var pid = ProjectId.Parse(projectId);
+        await store.UpdateAllowedWorkflowIdsAsync(pid, ["default", "my-workflow"], DateTimeOffset.UtcNow);
+
+        var putResp = await _client.PutAsJsonAsync(
+            $"/api/projects/{projectId}/workflows/my-workflow",
+            new { yaml = BlankTemplateYaml });
+
+        putResp.StatusCode.Should().Be(HttpStatusCode.OK, "PUT must succeed when the id is already allowed");
+
+        var list = await _client.GetFromJsonAsync<JsonElement>($"/api/projects/{projectId}/workflows");
+        var workflows = list.GetProperty("workflows");
+        var matchCount = Enumerable.Range(0, workflows.GetArrayLength())
+            .Select(i => workflows[i].GetProperty("id").GetString())
+            .Count(id => id == "my-workflow");
+        matchCount.Should().Be(1, "the workflow must appear exactly once, not duplicated");
     }
 
     // ── Helpers ─────────────────────────────────────────────────────────────────────────────────
