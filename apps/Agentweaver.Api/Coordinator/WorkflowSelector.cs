@@ -235,6 +235,7 @@ public sealed class WorkflowSelector : IWorkflowSelector
         sb.AppendLine("Selection rules:");
         sb.AppendLine("- Match on PROCESS FIT: what steps the workflow runs and what outputs it produces.");
         sb.AppendLine("- Do NOT select by name similarity or domain-word overlap. A closest-sounding built-in is a bad choice if its process does not fit.");
+        sb.AppendLine("- Producing the same KIND of output artifact (a PRD, spec, report, document) is NOT process fit: a workflow fits only if its STAGES cover the distinctive stages of the task (e.g. triage, dedupe, validation), not just its final deliverable.");
         sb.AppendLine("- Prefer project/custom workflows over generic built-in/library workflows when a custom workflow can perform the requested process.");
         sb.AppendLine("- If no workflow is a good process fit, select the first listed workflow (the project default) instead of guessing.");
         sb.AppendLine();

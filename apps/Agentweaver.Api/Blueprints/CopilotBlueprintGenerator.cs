@@ -95,13 +95,30 @@ public sealed class CopilotBlueprintGenerator : IBlueprintGenerator
             Available catalog roles (prefer these ids):
             {{rolesList}}
 
-            WORKFLOW SELECTION — match on PROCESS FIT, never on name similarity:
+            WORKFLOW SELECTION — match on PROCESS FIT, never on name similarity or output artifact:
             - A library workflow is ONLY appropriate if the PROCESS it defines matches what THIS team
               will actually DO. Example: a code-review workflow is for code-review work; a
               content-authoring workflow is for writing/editing work.
             - Do NOT pick the "closest-sounding" workflow. The word "planning" appearing in both a
               workflow name and the domain is NOT a reason to select it. "Product Management
               Discovery" is for software product discovery, NOT for travel planning.
+            - OUTPUT-ARTIFACT OVERLAP IS NOT PROCESS FIT. The fact that a workflow produces the same
+              KIND of deliverable the description mentions (a PRD, a spec, a report, a document) is NOT
+              a reason to select it. "Product Management Discovery" produces a spec/PRD via
+              research -> synthesis -> stakeholder review, but that does NOT make it a fit for every
+              process that ends in a PRD.
+            - FULL-COVERAGE TEST — a library workflow fits ONLY if its stages cover ALL of the
+              distinctive stages of the described process. If the description implies stages the
+              library workflow does not have (e.g. triage, deduplication, validation, monitoring),
+              the workflow is a PARTIAL/weak fit and you MUST return [] instead of selecting it.
+              Partial coverage is UNDER-SELECTION — returning [] triggers generation of a specialized
+              workflow whose topology covers every stage, which is strictly better than snapping to a
+              generic library workflow that drops stages.
+              Example: "triage open GitHub issues -> deduplicate -> identify pain points ->
+              research and validate -> write a PRD" is NOT Product Management Discovery. It has
+              distinctive triage, dedupe, and validation stages that pm-discovery lacks. Return []
+              so a specialized triage -> dedupe -> research -> PRD workflow is generated.
+            - When in doubt between a partial library match and generating, PREFER [] (generate).
             - For operational/domain-specific work that does not match the PROCESS of any library
               workflow, return an empty array []. An empty workflows array is the CORRECT answer when
               nothing fits — it is better than a wrong selection.
