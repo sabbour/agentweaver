@@ -12,6 +12,14 @@ KEYVAULT_NAME="${KEYVAULT_NAME:-agentweaver-kv}"
 AGENTHOST_KEYVAULT_URI="${AGENTHOST_KEYVAULT_URI:-https://${KEYVAULT_NAME}.vault.azure.net/}"
 TENANT_ID="${TENANT_ID:-}"
 IDENTITY_CLIENT_ID="${IDENTITY_CLIENT_ID:-}"
+APPINSIGHTS_WORKSPACE_ID="${APPINSIGHTS_WORKSPACE_ID:-}"
+if [[ -z "${APPINSIGHTS_WORKSPACE_ID}" ]] && command -v az >/dev/null 2>&1; then
+  APPINSIGHTS_WORKSPACE_ID="$(az monitor log-analytics workspace show \
+    --resource-group "${RESOURCE_GROUP}" \
+    --workspace-name agentweaver-logs \
+    --query customerId \
+    --output tsv 2>/dev/null || true)"
+fi
 
 # -- Kubernetes parameters ----------------------------------------------------
 NAMESPACE="${NAMESPACE:-agentweaver}"
@@ -78,6 +86,7 @@ export KEYVAULT_NAME
 export AGENTHOST_KEYVAULT_URI
 export TENANT_ID
 export IDENTITY_CLIENT_ID
+export APPINSIGHTS_WORKSPACE_ID
 
 # -- Display summary ----------------------------------------------------------
 echo "=== Agentweaver AKS variables ==="
@@ -94,3 +103,4 @@ echo "  Key Vault:       ${KEYVAULT_NAME}"
 echo "  AgentHost KV:    ${AGENTHOST_KEYVAULT_URI}"
 echo "  Tenant ID:       ${TENANT_ID:-<not set>}"
 echo "  Identity client: ${IDENTITY_CLIENT_ID:-<not set>}"
+echo "  AppInsights workspace: ${APPINSIGHTS_WORKSPACE_ID:-<not set>}"

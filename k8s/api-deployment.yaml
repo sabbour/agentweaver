@@ -180,7 +180,7 @@ spec:
                   key: appinsights-connection-string
                   optional: true
             - name: APPLICATIONINSIGHTS_WORKSPACE_ID
-              value: "e09d6407-5c4c-4ebc-98db-10660f555507"
+              value: "${APPINSIGHTS_WORKSPACE_ID}"
             - name: TMPDIR
               value: /tmp
             # H1 (spec-018): paths for worker mTLS client cert used by RemoteAgentProxy
