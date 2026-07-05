@@ -1606,7 +1606,13 @@ app.MapPost("/api/runs/{id}/tool-approvals", async (
 
     var resolved = await approvalGate.GrantAsync(id, body.RequestId, approvalScope);
     if (!resolved)
-        return Results.Conflict(new { error = "No pending approval found for this request_id. It may have already been resolved or timed out." });
+    {
+        var known = approvalGate.IsKnownRequest(id, body.RequestId);
+        var msg = known
+            ? "Tool approval request has already been resolved or timed out."
+            : "No pending approval found for this request_id. Verify you are posting to the child subtask run id and that the request_id matches exactly.";
+        return Results.Conflict(new { error = msg });
+    }
 
     return Results.Ok(new { run_id = id, request_id = body.RequestId, approved = true });
 });
@@ -1633,7 +1639,13 @@ app.MapPost("/api/runs/{id}/tool-denials", async (
 
     var resolved = approvalGate.Deny(id, body.RequestId);
     if (!resolved)
-        return Results.Conflict(new { error = "No pending denial found for this request_id. It may have already been resolved or timed out." });
+    {
+        var known = approvalGate.IsKnownRequest(id, body.RequestId);
+        var msg = known
+            ? "Tool approval request has already been resolved or timed out."
+            : "No pending denial found for this request_id. Verify you are posting to the child subtask run id and that the request_id matches exactly.";
+        return Results.Conflict(new { error = msg });
+    }
 
     return Results.Ok(new { run_id = id, request_id = body.RequestId, denied = true });
 });

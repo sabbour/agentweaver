@@ -132,6 +132,10 @@ public sealed class InMemoryToolApprovalGate : IToolApprovalGate
     }
 
     /// <inheritdoc />
+    public bool IsKnownRequest(string runId, string requestId) =>
+        _requestContext.TryGetValue(runId, out var runCtx) && runCtx.ContainsKey(requestId);
+
+    /// <inheritdoc />
     public void RegisterParentRun(string childRunId, string parentRunId) =>
         _parentRuns[childRunId] = parentRunId;
 

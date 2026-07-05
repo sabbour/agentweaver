@@ -470,8 +470,8 @@ export function WorkflowRunPage() {
   }, [events]);
 
   // Pending tool-approval detection: a `tool.approval_required` whose request has not yet been
-  // resolved. Resolution is tracked the same way the timeline reducer settles approvals — a
-  // `tool.result`/`tool.error` arriving for the matching callId (callId === requestId).
+  // resolved. Resolution signals: tool.approval_resolved (server expiry or operator action) or a
+  // tool.result/tool.error for the matching callId (original path when callId === requestId).
   const hasPendingApproval = useMemo<boolean>(() => {
     const requested = new Set<string>();
     const resolved = new Set<string>();
@@ -480,6 +480,9 @@ export function WorkflowRunPage() {
       if (evt.type === 'tool.approval_required') {
         const requestId = String(p['request_id'] ?? p['requestId'] ?? '');
         if (requestId) requested.add(requestId);
+      } else if (evt.type === 'tool.approval_resolved') {
+        const requestId = String(p['requestId'] ?? p['request_id'] ?? '');
+        if (requestId) resolved.add(requestId);
       } else if (evt.type === 'tool.result' || evt.type === 'tool.error') {
         const callId = String(p['callId'] ?? p['call_id'] ?? '');
         if (callId) resolved.add(callId);

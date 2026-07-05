@@ -54,6 +54,15 @@ public interface IToolApprovalGate
     /// </summary>
     bool IsAutoApproved(string runId, string toolName, string? url);
 
+    /// <summary>
+    /// Returns <see langword="true"/> if a tool-approval request with <paramref name="requestId"/>
+    /// was ever registered for <paramref name="runId"/> (regardless of whether it is still pending
+    /// or already resolved). Returns <see langword="false"/> only if the request is entirely unknown
+    /// or the run has been cleared. Used to produce accurate 409 error messages — distinguishing
+    /// "already resolved or expired" from "request_id never registered for this run".
+    /// </summary>
+    bool IsKnownRequest(string runId, string requestId) => true;
+
     /// <summary>Clears all pending approvals for a run (called on run completion).</summary>
     void Clear(string runId);
 

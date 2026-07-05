@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { render, screen, cleanup } from '@testing-library/react';
+import { render, screen, cleanup, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { FluentProvider, webLightTheme } from '@fluentui/react-components';
 import { type ReactNode } from 'react';
@@ -238,5 +238,73 @@ describe('LifecycleEventCard — coordinator.integration_conflict_auto_resolved'
     expect(screen.getByText('auto-resolved merge conflict')).toBeDefined();
     expect(screen.getByText(/Accepted changes from agentweaver\/child-b/)).toBeDefined();
     expect(screen.getByText(/shared\.txt, docs\/notes\.md/)).toBeDefined();
+  });
+});
+
+describe('LifecycleEventCard — tool.approval_required resolved/expired states', () => {
+  it('shows expired status when pre-rendered with isResolved=true and resolvedScope=expired', () => {
+    render(
+      <Wrapper>
+        <LifecycleEventCard
+          event={makeEvent('tool.approval_required', {
+            requestId: 'req-expired-pre',
+            toolName: 'web_fetch',
+          })}
+          runId="run-expired"
+          isResolved={true}
+          resolvedScope="expired"
+        />
+      </Wrapper>,
+    );
+
+    expect(screen.getByText('This approval request expired · web_fetch')).toBeDefined();
+    expect(screen.queryByRole('button', { name: 'Allow once' })).toBeNull();
+  });
+
+  it('shows expired status when isResolved prop changes to true with resolvedScope=expired after mount', async () => {
+    const event = makeEvent('tool.approval_required', {
+      requestId: 'req-expired-live',
+      toolName: 'web_fetch',
+    });
+
+    const { rerender } = render(
+      <Wrapper>
+        <LifecycleEventCard event={event} runId="run-live" isResolved={false} />
+      </Wrapper>,
+    );
+
+    // Buttons should be live initially
+    expect(screen.getByRole('button', { name: 'Allow once' })).toBeDefined();
+
+    // Simulate server sending tool.approval_resolved (expired)
+    await act(async () => {
+      rerender(
+        <Wrapper>
+          <LifecycleEventCard event={event} runId="run-live" isResolved={true} resolvedScope="expired" />
+        </Wrapper>,
+      );
+    });
+
+    expect(screen.getByText('This approval request expired · web_fetch')).toBeDefined();
+    expect(screen.queryByRole('button', { name: 'Allow once' })).toBeNull();
+  });
+
+  it('shows denied status when pre-rendered with isResolved=true and resolvedScope=deny', () => {
+    render(
+      <Wrapper>
+        <LifecycleEventCard
+          event={makeEvent('tool.approval_required', {
+            requestId: 'req-deny-pre',
+            toolName: 'web_fetch',
+          })}
+          runId="run-deny"
+          isResolved={true}
+          resolvedScope="deny"
+        />
+      </Wrapper>,
+    );
+
+    expect(screen.getByText('✗ Denied · web_fetch')).toBeDefined();
+    expect(screen.queryByRole('button', { name: 'Allow once' })).toBeNull();
   });
 });

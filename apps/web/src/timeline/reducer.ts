@@ -487,6 +487,27 @@ function processEvent(
       return { ...state, items: [...state.items, { kind: 'lifecycle', event }] };
     }
 
+    case 'tool.approval_resolved': {
+      // Server notifies that a HITL gate closed (operator action or timeout). Find the pending
+      // approval by requestId and mark it resolved so the card disables immediately.
+      const requestId = String(event.payload['requestId'] ?? event.payload['request_id'] ?? '');
+      const expired = Boolean(event.payload['expired']);
+      const approved = Boolean(event.payload['approved']);
+      const loc = state.pendingApprovals.get(requestId);
+      if (!loc) return state; // unknown or already resolved — ignore
+      const [ti, si] = loc;
+      const turn = state.items[ti] as TurnGroupItem;
+      const approvalStep = turn.steps[si] as ApprovalRequestItem;
+      const resolvedScope = expired ? 'expired' : approved ? 'once' : 'deny';
+      const resolved: ApprovalRequestItem = { ...approvalStep, resolved: true, resolvedScope };
+      const newSteps = [...turn.steps.slice(0, si), resolved, ...turn.steps.slice(si + 1)];
+      const newTurn: TurnGroupItem = { ...turn, steps: newSteps };
+      const items = [...state.items.slice(0, ti), newTurn, ...state.items.slice(ti + 1)];
+      const pendingApprovals = new Map(state.pendingApprovals);
+      pendingApprovals.delete(requestId);
+      return { ...state, items, pendingApprovals };
+    }
+
     default:
       return state;
   }

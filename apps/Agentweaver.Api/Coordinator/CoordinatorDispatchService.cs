@@ -1478,6 +1478,18 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
                 message = ReadString(evt.Payload, "message"),
             });
         }
+        else if (evt.Type == EventTypes.ToolApprovalResolved)
+        {
+            var entry = _streamStore.Get(coordinatorRunId);
+            entry?.RecordNext(EventTypes.CoordinatorChildApprovalResolved, new
+            {
+                childRunId,
+                subtaskId,
+                requestId = ReadString(evt.Payload, "requestId"),
+                approved = ReadBool(evt.Payload, "approved"),
+                expired = ReadBool(evt.Payload, "expired"),
+            });
+        }
     }
 
     private async Task ReEmitPodBindingDeltaAsync(

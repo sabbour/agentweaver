@@ -19,6 +19,7 @@ export interface ApprovalRequestItem {
   toolName: string;
   url: string | null;
   resolved: boolean;
+  /** 'once'|'run'|'tool'|'always' = operator approved; 'deny' = operator denied; 'expired' = server timeout */
   resolvedScope: string | null;
 }
 

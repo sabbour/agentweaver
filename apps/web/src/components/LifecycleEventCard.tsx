@@ -1,4 +1,4 @@
-import { memo, useState } from 'react';
+import { memo, useEffect, useState } from 'react';
 import { Badge, Button, Text, Tooltip, makeStyles, tokens } from '@fluentui/react-components';
 import {
   CheckmarkCircleFilled,
@@ -568,16 +568,28 @@ function scopeLabel(scope: string): string {
     case 'run': return 'Allowed (this run)';
     case 'always': return 'Allowed (always, this session)';
     case 'tool': return 'Allowed (all calls to tool)';
+    case 'approved': return 'Allowed';
     default: return `Allowed (${scope})`;
   }
 }
 function ToolApprovalCard({ styles, requestId, displayId, toolName, url, intention, runId, isResolved, resolvedScope: resolvedScopeProp }: ToolApprovalCardProps) {
   const [resolvedScope, setResolvedScope] = useState<string | null>(
-    isResolved ? (resolvedScopeProp ?? 'once') : null,
+    isResolved ? (resolvedScopeProp ?? 'expired') : null,
   );
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+
+  // Sync server-driven resolution (e.g. tool.approval_resolved expiry) into local state.
+  // Runs when isResolved or resolvedScopeProp change — covers the case where the SSE event
+  // arrives after the card is already mounted with isResolved=false.
+  useEffect(() => {
+    if (isResolved && resolvedScope === null) {
+      setResolvedScope(resolvedScopeProp ?? 'expired');
+    }
+  // resolvedScope is intentionally omitted: we only want to fire once when isResolved flips.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isResolved, resolvedScopeProp]);
 
   const handleAllow = async (scope: 'once' | 'run' | 'always' | 'tool') => {
     if (!runId || resolvedScope !== null || busy) return;
@@ -616,12 +628,21 @@ function ToolApprovalCard({ styles, requestId, displayId, toolName, url, intenti
 
   // Collapsed inline view — shown after action or when pre-resolved from reducer
   if (resolvedScope !== null) {
-    const label = resolvedScope === 'deny'
-      ? `\u2717 Denied \u00b7 ${toolName}`
-      : `\u2713 ${scopeLabel(resolvedScope)} \u00b7 ${toolName}`;
+    let label: string;
+    let color: string;
+    if (resolvedScope === 'expired') {
+      label = `This approval request expired \u00b7 ${toolName}`;
+      color = tokens.colorNeutralForeground3;
+    } else if (resolvedScope === 'deny') {
+      label = `\u2717 Denied \u00b7 ${toolName}`;
+      color = tokens.colorStatusDangerForeground1;
+    } else {
+      label = `\u2713 ${scopeLabel(resolvedScope)} \u00b7 ${toolName}`;
+      color = tokens.colorStatusSuccessForeground1;
+    }
     return (
       <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalS}` }}>
-        <Text size={200} style={{ color: resolvedScope === 'deny' ? tokens.colorStatusDangerForeground1 : tokens.colorStatusSuccessForeground1 }}>
+        <Text size={200} style={{ color }}>
           {label}
         </Text>
       </div>

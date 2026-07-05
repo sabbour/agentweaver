@@ -1,6 +1,12 @@
 using FluentAssertions;
 using Agentweaver.AgentRuntime;
+using Agentweaver.Api.Infrastructure;
+using Agentweaver.Api.Runs;
 using Agentweaver.Domain;
+using Microsoft.Data.Sqlite;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
+using Agentweaver.Api.Memory;
 
 namespace Agentweaver.Tests;
 
@@ -237,5 +243,230 @@ public sealed class ToolApprovalGateTests
 
         // Without a registered parent relationship, child B sees nothing.
         gate.IsAutoApproved(childB, "web_fetch", "https://example.com").Should().BeFalse();
+    }
+
+    // ── 409 / resolution guard (regression for issue #174) ─────────────────
+
+    [Fact]
+    public async Task GrantAsync_AfterAlreadyGranted_ReturnsFalse()
+    {
+        var gate = CreateGate();
+        var task = Register(gate, "run-r1", "req-r1");
+        await gate.GrantAsync("run-r1", "req-r1", ApprovalScope.Once);
+        (await task).Should().BeTrue();
+
+        // A second grant on the same resolved request must fail — this is the 409 path.
+        (await gate.GrantAsync("run-r1", "req-r1", ApprovalScope.Once)).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task GrantAsync_AfterTimeout_ReturnsFalse()
+    {
+        var gate = CreateGate();
+        // Use a tiny timeout so the gate expires before we try to grant.
+        var result = await gate.WaitForApprovalAsync(
+            "run-r2", "req-r2", "web_fetch", null, TimeSpan.FromMilliseconds(30), CancellationToken.None);
+
+        result.Should().BeFalse("timed out");
+
+        // After timeout the request is gone from the gate — grant must also fail.
+        (await gate.GrantAsync("run-r2", "req-r2", ApprovalScope.Once)).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task Deny_AfterAlreadyDenied_ReturnsFalse()
+    {
+        var gate = CreateGate();
+        var task = Register(gate, "run-r3", "req-r3");
+        gate.Deny("run-r3", "req-r3").Should().BeTrue();
+        (await task).Should().BeFalse();
+
+        gate.Deny("run-r3", "req-r3").Should().BeFalse();
+    }
+
+    [Fact]
+    public void IsKnownRequest_UnregisteredRequest_ReturnsFalse()
+    {
+        var gate = CreateGate();
+        gate.IsKnownRequest("run-r4", "never-registered").Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task IsKnownRequest_AfterResolution_StillReturnsTrue()
+    {
+        var gate = CreateGate();
+        var task = Register(gate, "run-r5", "req-r5");
+        gate.IsKnownRequest("run-r5", "req-r5").Should().BeTrue();
+        await gate.GrantAsync("run-r5", "req-r5", ApprovalScope.Once);
+        (await task).Should().BeTrue();
+        gate.IsKnownRequest("run-r5", "req-r5").Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task IsKnownRequest_AfterClear_ReturnsFalse()
+    {
+        var gate = CreateGate();
+        var task = Register(gate, "run-r6", "req-r6");
+        gate.IsKnownRequest("run-r6", "req-r6").Should().BeTrue();
+        gate.Clear("run-r6");
+        (await task).Should().BeFalse();
+        gate.IsKnownRequest("run-r6", "req-r6").Should().BeFalse();
+    }
+}
+
+/// <summary>
+/// Regression tests for <see cref="DurableToolApprovalGate"/> event emission (issue #174).
+/// Verifies that tool.approval_resolved is emitted on the run event stream on timeout and on
+/// explicit grant/deny so the frontend can always disable stale HITL cards.
+/// </summary>
+public sealed class DurableToolApprovalGateEventTests : IDisposable
+{
+    private readonly SqliteConnection _keepAlive;
+    private readonly string _connectionString;
+    private readonly List<ServiceProvider> _providers = [];
+
+    public DurableToolApprovalGateEventTests()
+    {
+        _connectionString = $"DataSource=file:tool-approval-events-{Guid.NewGuid():N}?mode=memory&cache=shared";
+        _keepAlive = new SqliteConnection(_connectionString);
+        _keepAlive.Open();
+
+        using var scope = NewProvider().CreateScope();
+        scope.ServiceProvider.GetRequiredService<MemoryDbContext>().Database.EnsureCreated();
+    }
+
+    [Fact]
+    public async Task Timeout_EmitsToolApprovalResolvedEvent_WithExpiredTrue()
+    {
+        var streams = new RunStreamStore();
+        var entry = streams.Create("run-e1", "owner");
+        var gate = new DurableToolApprovalGate(NewState(), streams);
+
+        var result = await gate.WaitForApprovalAsync(
+            "run-e1", "req-e1", "web_fetch", null, TimeSpan.FromMilliseconds(40), CancellationToken.None);
+
+        result.Should().BeFalse();
+
+        var evt = entry.GetSnapshotSince(0).Events
+            .FirstOrDefault(e => e.Type == EventTypes.ToolApprovalResolved);
+
+        evt.Should().NotBeNull("tool.approval_resolved must be emitted on timeout");
+
+        var payload = System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement>(
+            System.Text.Json.JsonSerializer.Serialize(evt!.Payload));
+        payload.GetProperty("expired").GetBoolean().Should().BeTrue();
+        payload.GetProperty("approved").GetBoolean().Should().BeFalse();
+        payload.GetProperty("requestId").GetString().Should().Be("req-e1");
+    }
+
+    [Fact]
+    public async Task Grant_EmitsToolApprovalResolvedEvent_WithApprovedTrue()
+    {
+        var streams = new RunStreamStore();
+        var entry = streams.Create("run-e2", "owner");
+        var gate = new DurableToolApprovalGate(NewState(), streams);
+
+        var waitTask = gate.WaitForApprovalAsync(
+            "run-e2", "req-e2", "web_fetch", null, TimeSpan.FromSeconds(10), CancellationToken.None);
+
+        await WaitUntilAsync(async () =>
+        {
+            await Task.CompletedTask;
+            return await gate.GrantAsync("run-e2", "req-e2", ApprovalScope.Once);
+        });
+
+        (await waitTask).Should().BeTrue();
+
+        var evt = entry.GetSnapshotSince(0).Events
+            .FirstOrDefault(e => e.Type == EventTypes.ToolApprovalResolved);
+
+        evt.Should().NotBeNull("tool.approval_resolved must be emitted on grant");
+
+        var payload = System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement>(
+            System.Text.Json.JsonSerializer.Serialize(evt!.Payload));
+        payload.GetProperty("approved").GetBoolean().Should().BeTrue();
+        payload.GetProperty("expired").GetBoolean().Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task Deny_EmitsToolApprovalResolvedEvent_WithApprovedFalseAndExpiredFalse()
+    {
+        var streams = new RunStreamStore();
+        var entry = streams.Create("run-e3", "owner");
+        var gate = new DurableToolApprovalGate(NewState(), streams);
+
+        var waitTask = gate.WaitForApprovalAsync(
+            "run-e3", "req-e3", "web_fetch", null, TimeSpan.FromSeconds(10), CancellationToken.None);
+
+        await WaitUntilAsync(async () =>
+        {
+            await Task.CompletedTask;
+            return gate.Deny("run-e3", "req-e3");
+        });
+
+        (await waitTask).Should().BeFalse();
+
+        var evt = entry.GetSnapshotSince(0).Events
+            .FirstOrDefault(e => e.Type == EventTypes.ToolApprovalResolved);
+
+        evt.Should().NotBeNull("tool.approval_resolved must be emitted on deny");
+
+        var payload = System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement>(
+            System.Text.Json.JsonSerializer.Serialize(evt!.Payload));
+        payload.GetProperty("approved").GetBoolean().Should().BeFalse();
+        payload.GetProperty("expired").GetBoolean().Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task GrantAfterTimeout_DoesNotEmitSecondEvent()
+    {
+        var streams = new RunStreamStore();
+        var entry = streams.Create("run-e4", "owner");
+        var gate = new DurableToolApprovalGate(NewState(), streams);
+
+        await gate.WaitForApprovalAsync(
+            "run-e4", "req-e4", "web_fetch", null, TimeSpan.FromMilliseconds(40), CancellationToken.None);
+
+        // Late grant after timeout — must return false.
+        (await gate.GrantAsync("run-e4", "req-e4", ApprovalScope.Once)).Should().BeFalse();
+
+        // Only one tool.approval_resolved event should exist (from the timeout).
+        var resolvedEvents = entry.GetSnapshotSince(0).Events
+            .Where(e => e.Type == EventTypes.ToolApprovalResolved)
+            .ToList();
+
+        resolvedEvents.Should().HaveCount(1, "only the timeout resolution fires; the late grant must not duplicate it");
+
+        var payload = System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement>(
+            System.Text.Json.JsonSerializer.Serialize(resolvedEvents[0].Payload));
+        payload.GetProperty("expired").GetBoolean().Should().BeTrue();
+    }
+
+    private DurableRunControlState NewState() =>
+        new(NewProvider().GetRequiredService<IServiceScopeFactory>());
+
+    private ServiceProvider NewProvider()
+    {
+        var services = new ServiceCollection();
+        services.AddDbContext<MemoryDbContext>(o => o.UseSqlite(_connectionString));
+        var provider = services.BuildServiceProvider();
+        _providers.Add(provider);
+        return provider;
+    }
+
+    private static async Task WaitUntilAsync(Func<Task<bool>> action)
+    {
+        for (var i = 0; i < 40; i++)
+        {
+            if (await action()) return;
+            await Task.Delay(50);
+        }
+        false.Should().BeTrue("the pending approval context should become visible within 2s");
+    }
+
+    public void Dispose()
+    {
+        foreach (var p in _providers) p.Dispose();
+        _keepAlive.Dispose();
     }
 }
