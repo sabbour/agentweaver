@@ -35,6 +35,36 @@ public sealed class CopilotBlueprintGeneratorTests
         runner.LastTask.Should().Contain("Available workflows");
     }
 
+    // Issue #176: the library-first matcher under-selected a generic workflow (pm-discovery) for a
+    // "triage -> dedupe -> research -> PRD" prompt instead of returning [] so a specialized workflow
+    // is generated. The prompt must now instruct the model that output-artifact overlap (both produce
+    // a PRD) is NOT process fit and that partial coverage requires returning [].
+    [Fact]
+    public async Task GenerateRawAsync_WorkflowSelection_RejectsOutputArtifactOverlap_AndPrefersGeneratingOnPartialFit()
+    {
+        var runner = new CapturingAgentRunner();
+        var config = new ConfigurationBuilder().Build();
+        var generator = new CopilotBlueprintGenerator(
+            runner,
+            new CatalogReader(),
+            config,
+            NullLogger<CopilotBlueprintGenerator>.Instance);
+
+        await generator.GenerateRawAsync(
+            "GitHub issue triage. Deduplicate open issues, identify customer pain points, do research and validation, then write a PRD.",
+            CancellationToken.None);
+
+        runner.LastTask.Should().NotBeNullOrWhiteSpace();
+        // Output-artifact overlap must be explicitly disqualified as a basis for matching.
+        runner.LastTask.Should().Contain("OUTPUT-ARTIFACT OVERLAP IS NOT PROCESS FIT");
+        // The full-coverage test forces partial matches to fall through to generation.
+        runner.LastTask.Should().Contain("FULL-COVERAGE TEST");
+        // The concrete triage -> dedupe -> research -> PRD example mirroring issue #176.
+        runner.LastTask.Should().Contain("triage");
+        runner.LastTask.Should().Contain("is NOT Product Management Discovery");
+        runner.LastTask.Should().Contain("PREFER [] (generate)");
+    }
+
     private sealed class CapturingAgentRunner : IAgentRunner
     {
         public string? LastTask { get; private set; }

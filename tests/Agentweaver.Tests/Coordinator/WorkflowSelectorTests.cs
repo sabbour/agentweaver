@@ -98,6 +98,8 @@ public sealed class WorkflowSelectorTests
         model.LastPrompt.Should().Contain("- software-delivery [built-in/library]: Software Delivery —");
         model.LastPrompt.Should().Contain("Match on PROCESS FIT");
         model.LastPrompt.Should().Contain("\"selected\"");
+        // Issue #176 reconciliation: output-artifact overlap is not process fit.
+        model.LastPrompt.Should().Contain("Producing the same KIND of output artifact");
     }
 
     [Fact]
