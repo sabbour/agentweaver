@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { timelineReducer, initialTimelineState, deriveHumanTitle } from '../timeline/reducer';
-import type { TimelineReducerState, TurnGroupItem, AgentMessageItem, ToolCallItem } from '../timeline/types';
+import type { TimelineReducerState, TurnGroupItem, AgentMessageItem, ToolCallItem, ApprovalRequestItem } from '../timeline/types';
 import type { RunStreamEvent } from '../api/sse';
 
 // ---------------------------------------------------------------------------
@@ -323,5 +323,57 @@ describe('timelineReducer', () => {
     const msg = turn.steps[0] as AgentMessageItem;
     expect(msg.streaming).toBe(false);
     expect(msg.content).toBe('partial');
+  });
+
+  // T-14: tool.approval_resolved with expired=true marks the card expired
+  it('tool.approval_resolved (expired) marks pending approval as expired', () => {
+    const s = fold([
+      makeEvent('agent.turn.start', { turnId: 'T1' }),
+      makeEvent('tool.approval_required', { requestId: 'req-abc', toolName: 'web_fetch', url: 'https://example.com' }),
+      makeEvent('tool.approval_resolved', { requestId: 'req-abc', runId: 'run-1', approved: false, expired: true }),
+    ]);
+    const turn = s.items[0] as TurnGroupItem;
+    const card = turn.steps[0] as ApprovalRequestItem;
+    expect(card.kind).toBe('approval-request');
+    expect(card.resolved).toBe(true);
+    expect(card.resolvedScope).toBe('expired');
+    expect(s.pendingApprovals.has('req-abc')).toBe(false);
+  });
+
+  // T-15: tool.approval_resolved with approved=false, expired=false marks as deny
+  it('tool.approval_resolved (denied) marks pending approval as deny', () => {
+    const s = fold([
+      makeEvent('agent.turn.start', { turnId: 'T1' }),
+      makeEvent('tool.approval_required', { requestId: 'req-deny', toolName: 'web_fetch' }),
+      makeEvent('tool.approval_resolved', { requestId: 'req-deny', approved: false, expired: false }),
+    ]);
+    const turn = s.items[0] as TurnGroupItem;
+    const card = turn.steps[0] as ApprovalRequestItem;
+    expect(card.resolved).toBe(true);
+    expect(card.resolvedScope).toBe('deny');
+  });
+
+  // T-16: tool.approval_resolved with approved=true, expired=false marks as approved
+  it('tool.approval_resolved (approved) marks pending approval as once', () => {
+    const s = fold([
+      makeEvent('agent.turn.start', { turnId: 'T1' }),
+      makeEvent('tool.approval_required', { requestId: 'req-ok', toolName: 'web_fetch' }),
+      makeEvent('tool.approval_resolved', { requestId: 'req-ok', approved: true, expired: false }),
+    ]);
+    const turn = s.items[0] as TurnGroupItem;
+    const card = turn.steps[0] as ApprovalRequestItem;
+    expect(card.resolved).toBe(true);
+    expect(card.resolvedScope).toBe('once');
+  });
+
+  // T-17: unknown requestId in tool.approval_resolved is a no-op (graceful)
+  it('tool.approval_resolved for unknown requestId is a no-op', () => {
+    const s = fold([
+      makeEvent('agent.turn.start', { turnId: 'T1' }),
+      makeEvent('tool.approval_resolved', { requestId: 'req-unknown', approved: false, expired: true }),
+    ]);
+    expect(s.items).toHaveLength(1);
+    const turn = s.items[0] as TurnGroupItem;
+    expect(turn.steps).toHaveLength(0);
   });
 });

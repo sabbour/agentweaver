@@ -1213,11 +1213,12 @@ export function CoordinatorRunPage() {
   // re-projected (or optimistically, inside QuestionAnswerCard). Defensive payload key reads.
   const childRequests = useMemo<Array<
     | { type: 'question'; requestId: string; childRunId: string; subtaskId?: string; question: string; answer?: string; timedOut?: boolean; seq: number }
-    | { type: 'approval'; requestId: string; childRunId: string; subtaskId?: string; toolName: string; url?: string; message?: string; seq: number }
+    | { type: 'approval'; requestId: string; childRunId: string; subtaskId?: string; toolName: string; url?: string; message?: string; resolved?: boolean; resolvedScope?: string; seq: number }
   >>(() => {
     const questions = new Map<string, { childRunId: string; subtaskId?: string; question: string; seq: number }>();
     const approvals = new Map<string, { childRunId: string; subtaskId?: string; toolName: string; url?: string; message?: string; seq: number }>();
     const answered = new Map<string, { answer: string; timedOut: boolean }>();
+    const resolvedApprovals = new Map<string, { approved: boolean; expired: boolean }>();
     for (const evt of events) {
       const p = evt.payload;
       if (evt.type === 'coordinator.child_question') {
@@ -1242,6 +1243,13 @@ export function CoordinatorRunPage() {
           message: readStr(p, ['message']),
           seq: evt.sequence,
         });
+      } else if (evt.type === 'coordinator.child_approval_resolved') {
+        const requestId = readStr(p, ['requestId', 'request_id']);
+        if (!requestId) continue;
+        resolvedApprovals.set(requestId, {
+          approved: Boolean(p['approved']),
+          expired: Boolean(p['expired']),
+        });
       } else if (evt.type === 'agent.question_answered') {
         const requestId = readStr(p, ['requestId', 'request_id']);
         if (!requestId) continue;
@@ -1253,14 +1261,20 @@ export function CoordinatorRunPage() {
     }
     const out: Array<
       | { type: 'question'; requestId: string; childRunId: string; subtaskId?: string; question: string; answer?: string; timedOut?: boolean; seq: number }
-      | { type: 'approval'; requestId: string; childRunId: string; subtaskId?: string; toolName: string; url?: string; message?: string; seq: number }
+      | { type: 'approval'; requestId: string; childRunId: string; subtaskId?: string; toolName: string; url?: string; message?: string; resolved?: boolean; resolvedScope?: string; seq: number }
     > = [];
     for (const [requestId, q] of questions) {
       const ans = answered.get(requestId);
       out.push({ type: 'question', requestId, ...q, answer: ans?.answer, timedOut: ans?.timedOut });
     }
     for (const [requestId, a] of approvals) {
-      out.push({ type: 'approval', requestId, ...a });
+      const res = resolvedApprovals.get(requestId);
+      if (res) {
+        const resolvedScope = res.expired ? 'expired' : res.approved ? 'once' : 'deny';
+        out.push({ type: 'approval', requestId, ...a, resolved: true, resolvedScope });
+      } else {
+        out.push({ type: 'approval', requestId, ...a });
+      }
     }
     return out.sort((x, y) => x.seq - y.seq);
   }, [events]);
@@ -2212,6 +2226,8 @@ export function CoordinatorRunPage() {
                           },
                         }}
                         runId={item.childRunId}
+                        isResolved={item.resolved}
+                        resolvedScope={item.resolvedScope}
                       />
                     </div>
                   );
