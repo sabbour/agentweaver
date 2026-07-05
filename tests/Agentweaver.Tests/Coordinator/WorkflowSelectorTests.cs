@@ -144,7 +144,9 @@ public sealed class WorkflowSelectorTests
     [Fact]
     public async Task MultiWorkflow_MalformedJson_RetriesThenFallsBackToDefault()
     {
-        var model = new FakeModel("I think you should use the bug-fix workflow, definitely.");
+        // Response has no JSON and no verbatim workflow id -> TryParse and last-resort both
+        // fail -> two attempts -> deterministic fallback.
+        var model = new FakeModel("I think you should just go with something simple, definitely.");
         var def = Workflow("default", "Default", "The general-purpose pipeline.");
         var bug = Workflow("bug-fix", "Bug Fix", "Fast remediation of a specific defect.");
         var context = new WorkflowSelectionContext("p1", "Do something", ["Implementer"], [def, bug]);
@@ -162,8 +164,10 @@ public sealed class WorkflowSelectorTests
     [Fact]
     public async Task MultiWorkflow_RetrySucceedsAfterUnparseableFirstReply()
     {
+        // First response has no JSON and no verbatim workflow id (so last-resort also fails),
+        // forcing a retry. The second response is valid JSON -> succeeds on attempt 2.
         var model = new SequenceModel(
-            "Sure! You probably want bug-fix.",
+            "The task seems complex and I need to think more carefully about the options.",
             """{"selected": "bug-fix", "rationale": "A targeted defect fix."}""");
         var def = Workflow("default", "Default", "The general-purpose pipeline.");
         var bug = Workflow("bug-fix", "Bug Fix", "Fast remediation of a specific defect.");
@@ -270,5 +274,148 @@ public sealed class WorkflowSelectorTests
     public void TryParseOverride_RejectsNonCommands(string? message)
     {
         WorkflowSelector.TryParseOverride(message, out _).Should().BeFalse();
+    }
+
+    // --- Parse hardening tests (issue #183) ---
+
+    [Fact]
+    public async Task MultiWorkflow_ThinkWrappedJson_ParsesCorrectly()
+    {
+        // The think block contains {braces} that would fool ExtractFirstJsonObject without
+        // think-block stripping: it would grab "{bug-fix, software-delivery}" (invalid JSON)
+        // and miss the actual answer, causing two failures and a fallback to default.
+        var response =
+            "<think>\n" +
+            "Candidates: {bug-fix, software-delivery}. The task is a defect fix, so bug-fix fits.\n" +
+            "</think>\n" +
+            "{\"selected\": \"bug-fix\", \"rationale\": \"Targeted defect remediation.\"}";
+
+        var model = new FakeModel(response);
+        var def = Workflow("software-delivery", "Software Delivery", "Net-new feature pipeline.");
+        var bug = Workflow("bug-fix", "Bug Fix", "Fast remediation of a specific defect.");
+        var context = new WorkflowSelectionContext("p1", "Fix the null check", ["Implementer"], [def, bug]);
+
+        var result = await Selector(model).SelectAsync(context);
+
+        // Should resolve on the first attempt — no fallback.
+        model.Calls.Should().Be(1);
+        result.Selected.Should().BeSameAs(bug);
+        result.WasAutoSelected.Should().BeTrue();
+        result.Rationale.Should().Contain("defect");
+    }
+
+    [Fact]
+    public async Task MultiWorkflow_ThinkingTagWrappedJson_ParsesCorrectly()
+    {
+        // Same as above but with <thinking> tags (alternate reasoning block name).
+        var response =
+            "<thinking>\n" +
+            "Options: {software-delivery, bug-fix}. Null-check fix -> bug-fix.\n" +
+            "</thinking>\n" +
+            "{\"selected\": \"bug-fix\", \"rationale\": \"Null-check is a defect fix.\"}";
+
+        var model = new FakeModel(response);
+        var def = Workflow("software-delivery", "Software Delivery", "Net-new feature pipeline.");
+        var bug = Workflow("bug-fix", "Bug Fix", "Fast remediation of a specific defect.");
+        var context = new WorkflowSelectionContext("p1", "Fix the null check", ["Implementer"], [def, bug]);
+
+        var result = await Selector(model).SelectAsync(context);
+
+        model.Calls.Should().Be(1);
+        result.Selected.Should().BeSameAs(bug);
+    }
+
+    [Fact]
+    public async Task MultiWorkflow_BareWorkflowIdInProse_ResolvesViaLastResort()
+    {
+        // The model responds with plain prose and no JSON at all. TryParse returns false on both
+        // attempts without the last-resort path. With it, the sole verbatim id in the response
+        // is identified and selected on the first attempt.
+        var model = new FakeModel("I recommend using the bug-fix workflow for this task.");
+        var def = Workflow("software-delivery", "Software Delivery", "Net-new feature pipeline.");
+        var bug = Workflow("bug-fix", "Bug Fix", "Fast remediation of a specific defect.");
+        var context = new WorkflowSelectionContext("p1", "Fix the null check", ["Implementer"], [def, bug]);
+
+        var result = await Selector(model).SelectAsync(context);
+
+        // Last-resort fires on attempt 1 — only 1 model call needed.
+        model.Calls.Should().Be(1);
+        result.Selected.Should().BeSameAs(bug);
+        result.WasAutoSelected.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task MultiWorkflow_BareWorkflowIdWithUnderscores_ResolvesViaLastResort()
+    {
+        // Model uses underscore variant of the id (common LLM hallucination).
+        var model = new FakeModel("The best choice is bug_fix for a targeted defect fix.");
+        var def = Workflow("software-delivery", "Software Delivery", "Net-new feature pipeline.");
+        var bug = Workflow("bug-fix", "Bug Fix", "Fast remediation of a specific defect.");
+        var context = new WorkflowSelectionContext("p1", "Fix it", ["Implementer"], [def, bug]);
+
+        var result = await Selector(model).SelectAsync(context);
+
+        model.Calls.Should().Be(1);
+        result.Selected.Should().BeSameAs(bug);
+    }
+
+    [Fact]
+    public async Task MultiWorkflow_AmbiguousProseMultipleIds_RetriesThenFallsBack()
+    {
+        // Both workflow ids appear in the response — ambiguous, last-resort must NOT guess.
+        var model = new FakeModel("Could be bug-fix or software-delivery, hard to say.");
+        var def = Workflow("software-delivery", "Software Delivery", "Net-new feature pipeline.");
+        var bug = Workflow("bug-fix", "Bug Fix", "Fast remediation of a specific defect.");
+        var context = new WorkflowSelectionContext("p1", "Do something", ["Implementer"], [def, bug]);
+
+        var result = await Selector(model).SelectAsync(context);
+
+        // Both attempts fail (no JSON, ambiguous last-resort) -> deterministic fallback.
+        model.Calls.Should().Be(2);
+        result.Selected.Id.Should().Be("software-delivery"); // first in list -> default
+    }
+
+    [Fact]
+    public async Task MultiWorkflow_EmptyResponse_FallsBackCleanly()
+    {
+        // Null response (e.g., model call failed) must not crash and must produce the correct
+        // rationale message so operators can diagnose the fallback.
+        var model = new FakeModel(null);
+        var def = Workflow("default", "Default", "The general-purpose pipeline.");
+        var bug = Workflow("bug-fix", "Bug Fix", "Fast remediation of a specific defect.");
+        var context = new WorkflowSelectionContext("p1", "Fix something", ["Implementer"], [def, bug]);
+
+        var result = await Selector(model).SelectAsync(context);
+
+        model.Calls.Should().Be(2);
+        result.Selected.Should().BeSameAs(def);
+        result.WasAutoSelected.Should().BeTrue();
+        result.Rationale.Should().Contain("could not be parsed");
+    }
+
+    // --- optional last-resort + think-block fix ---
+
+    [Fact]
+    public async Task MultiWorkflow_WorkflowIdInsideThinkBlockOnly_IsNotFalselySelected()
+    {
+        // A think block mentions one workflow id; the actual response has no JSON and no
+        // id outside the block. TryLastResortMatch must NOT select based on the think-block
+        // mention — it now runs on the stripped text, so the id is invisible to it.
+        var response =
+            "<think>\n" +
+            "Hmm, bug-fix would apply to a defect, but the task is feature delivery.\n" +
+            "</think>\n" +
+            "I cannot determine the best workflow from the description provided.";
+
+        var model = new FakeModel(response);
+        var def = Workflow("software-delivery", "Software Delivery", "Net-new feature pipeline.");
+        var bug = Workflow("bug-fix", "Bug Fix", "Fast remediation of a specific defect.");
+        var context = new WorkflowSelectionContext("p1", "Build a new feature", ["Implementer"], [def, bug]);
+
+        var result = await Selector(model).SelectAsync(context);
+
+        // Both attempts fail: TryParse finds no JSON; last-resort (on stripped text) finds no id.
+        model.Calls.Should().Be(2);
+        result.Selected.Id.Should().Be("software-delivery");  // first in list -> default
     }
 }

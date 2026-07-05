@@ -68,6 +68,15 @@ public sealed class WorkflowSelector : IWorkflowSelector
         new(@"^\s*use\s+(?<id>[A-Za-z0-9._-]+)\s*$",
             RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
+    /// <summary>
+    /// Matches reasoning blocks emitted by chain-of-thought / extended-thinking models before the
+    /// actual answer. Stripping these prevents the balanced-brace scanner from latching onto any
+    /// JSON-like text inside the reasoning and returning it instead of the intended answer object.
+    /// </summary>
+    private static readonly Regex ThinkBlockPattern =
+        new(@"<think>[\s\S]*?</think>|<thinking>[\s\S]*?</thinking>",
+            RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
     /// <summary>Total model attempts before falling back to the project default (1 initial + 1 retry).</summary>
     private const int MaxAttempts = 2;
 
@@ -120,6 +129,23 @@ public sealed class WorkflowSelector : IWorkflowSelector
 
             if (!TryParse(response, out var selectedId, out var rationale))
             {
+                // Last-resort: if exactly one candidate workflow id or normalized name appears
+                // verbatim as a whole word in the response, use it rather than defaulting —
+                // handles plain-prose answers such as "I recommend bug-fix for this task."
+                // Strip think blocks first so an id mentioned only inside a rejected reasoning
+                // block does not get falsely selected (mirrors TryParse's own stripping).
+                var responseForLastResort = response is not null ? StripThinkBlocks(response) : null;
+                if (TryLastResortMatch(responseForLastResort, available, out var lastResort))
+                {
+                    _logger.LogInformation(
+                        "Workflow selection last-resort verbatim match for project {ProjectId} (attempt {Attempt}): '{WorkflowId}'.",
+                        context.ProjectId, attempt, lastResort.Id);
+                    return new WorkflowSelectionResult(
+                        lastResort,
+                        "Selected as the only workflow mentioned by name in the model response.",
+                        WasAutoSelected: true);
+                }
+
                 _logger.LogWarning(
                     "Workflow selection model returned no parseable choice for project {ProjectId} (attempt {Attempt}/{MaxAttempts}). Raw response (truncated): {Response}",
                     context.ProjectId, attempt, MaxAttempts, Truncate(response));
@@ -265,11 +291,13 @@ public sealed class WorkflowSelector : IWorkflowSelector
 
     /// <summary>
     /// Tolerant extraction of the model's choice. Order of attempts, most-strict first:
-    /// (1) strip markdown code fences and surrounding whitespace, then <see cref="JsonSerializer"/>/
-    /// <see cref="JsonDocument"/>-parse the whole cleaned text — this accepts a well-formed object OR a
-    /// bare top-level JSON string (e.g. <c>"bug-fix"</c>); (2) if that fails, pull the first balanced
-    /// <c>{…}</c> object out of surrounding prose and parse that. Returns false only when nothing usable
-    /// can be recovered, so the caller can log the raw response and fall back.
+    /// (1) strip reasoning blocks (<c>&lt;think&gt;…&lt;/think&gt;</c>) that some models emit before
+    /// the answer, then strip markdown code fences and surrounding whitespace, then
+    /// <see cref="JsonSerializer"/>/<see cref="JsonDocument"/>-parse the whole cleaned text — this
+    /// accepts a well-formed object OR a bare top-level JSON string (e.g. <c>"bug-fix"</c>);
+    /// (2) if that fails, pull the first balanced <c>{…}</c> object out of surrounding prose and parse
+    /// that. Returns false only when nothing usable can be recovered, so the caller can try the
+    /// last-resort verbatim-id scan or log the raw response and fall back.
     /// </summary>
     private static bool TryParse(string? response, out string selectedId, out string rationale)
     {
@@ -277,7 +305,12 @@ public sealed class WorkflowSelector : IWorkflowSelector
         rationale = string.Empty;
         if (string.IsNullOrWhiteSpace(response)) return false;
 
-        var cleaned = StripCodeFences(response);
+        // Strip reasoning blocks before any other processing. Reasoning models (e.g., o3) emit
+        // <think>…</think> ahead of the answer; the thinking content may contain {braces} that
+        // would fool the balanced-object scanner and make it return an invalid fragment instead
+        // of the intended JSON answer.
+        var stripped = StripThinkBlocks(response);
+        var cleaned = StripCodeFences(stripped);
 
         // (1) Fast path: the de-fenced text is itself valid JSON (object or bare string).
         if (TryParseJson(cleaned, out selectedId, out rationale)) return true;
@@ -360,6 +393,73 @@ public sealed class WorkflowSelector : IWorkflowSelector
 
         return trimmed;
     }
+
+    /// <summary>
+    /// Strips reasoning blocks emitted by chain-of-thought models before the actual answer.
+    /// Handles <c>&lt;think&gt;…&lt;/think&gt;</c> and <c>&lt;thinking&gt;…&lt;/thinking&gt;</c>.
+    /// </summary>
+    private static string StripThinkBlocks(string text) =>
+        ThinkBlockPattern.Replace(text, string.Empty).Trim();
+
+    /// <summary>
+    /// Last-resort workflow identification when <see cref="TryParse"/> finds no JSON: if exactly one
+    /// candidate workflow id (or its normalized display name) appears verbatim as a whole word in the
+    /// response, select it. Zero matches or more than one match is ambiguous — the caller falls back
+    /// to the retry / default path.
+    /// </summary>
+    private static bool TryLastResortMatch(
+        string? response,
+        IReadOnlyList<WorkflowDefinition> available,
+        [NotNullWhen(true)] out WorkflowDefinition? match)
+    {
+        match = null;
+        if (string.IsNullOrWhiteSpace(response) || available.Count == 0) return false;
+
+        var lower = response.ToLowerInvariant();
+        WorkflowDefinition? found = null;
+
+        foreach (var wf in available)
+        {
+            var id = wf.Id.ToLowerInvariant();
+            // Also check the underscore variant (models sometimes swap - and _ in identifiers).
+            var idUnderscore = id.Replace('-', '_');
+            // And the normalized display name (e.g., "Bug Fix" -> "bug-fix").
+            var normName = Normalize(wf.Name);
+
+            var seen = ContainsWholeWord(lower, id)
+                || (idUnderscore != id && ContainsWholeWord(lower, idUnderscore))
+                || (normName != id && ContainsWholeWord(lower, normName));
+
+            if (!seen) continue;
+            if (found is not null) return false;  // more than one candidate mentioned -> ambiguous
+            found = wf;
+        }
+
+        if (found is null) return false;
+        match = found;
+        return true;
+    }
+
+    /// <summary>
+    /// Returns true when <paramref name="term"/> appears in <paramref name="text"/> as a whole word —
+    /// i.e. not immediately adjacent to an identifier character (letter, digit, <c>-</c>, or <c>_</c>).
+    /// Case sensitivity follows whatever normalization the caller applied.
+    /// </summary>
+    private static bool ContainsWholeWord(string text, string term)
+    {
+        if (string.IsNullOrEmpty(term)) return false;
+        var idx = 0;
+        while ((idx = text.IndexOf(term, idx, StringComparison.Ordinal)) >= 0)
+        {
+            var beforeOk = idx == 0 || !IsIdentifierChar(text[idx - 1]);
+            var afterOk = idx + term.Length >= text.Length || !IsIdentifierChar(text[idx + term.Length]);
+            if (beforeOk && afterOk) return true;
+            idx++;
+        }
+        return false;
+    }
+
+    private static bool IsIdentifierChar(char c) => char.IsLetterOrDigit(c) || c == '-' || c == '_';
 
     /// <summary>
     /// Returns the FIRST complete, balanced <c>{…}</c> object embedded in <paramref name="text"/> — string

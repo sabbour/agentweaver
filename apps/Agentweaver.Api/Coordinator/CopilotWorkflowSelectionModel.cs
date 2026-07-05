@@ -1,24 +1,35 @@
+using System.Text;
+using GitHub.Copilot;
+using Microsoft.Agents.AI;
+using Microsoft.Agents.AI.GitHub.Copilot;
+using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
-using Agentweaver.AgentRuntime;
 using Agentweaver.AgentRuntime.Providers;
 using Agentweaver.Domain;
-using Agentweaver.SandboxExec;
 
 namespace Agentweaver.Api.Coordinator;
 
 /// <summary>
-/// Production <see cref="IWorkflowSelectionModel"/>: runs a single, grounded Copilot coordinator turn
-/// to select a workflow. It resolves the project's repository path (so charters/tools resolve as in
-/// other coordinator turns), runs ONE non-streaming completion, and returns the raw text. Any failure
-/// (model unavailable, project missing, exception) is swallowed and returned as <c>null</c> so the
-/// <see cref="WorkflowSelector"/> falls back to the project default rather than failing the run —
-/// workflow selection is an optimization over the default, never a hard gate.
+/// Production <see cref="IWorkflowSelectionModel"/>: runs a single, constrained, tool-less Copilot
+/// completion to classify the best workflow for a task.
+///
+/// <para>
+/// The selection turn is intentionally non-agentic. A <see cref="GitHub.Copilot.SessionConfig"/> with
+/// an empty <c>Tools</c> list is used, which means the SDK sends no tool definitions to the model.
+/// The model is physically unable to emit tool calls, so the response is always plain text — never
+/// tool-call narration, reasoning scaffolding, or an empty turn caused by the model ending on a tool
+/// invocation. The full <see cref="Agentweaver.AgentRuntime.CopilotAIAgent"/> machinery (sandbox,
+/// permission handler, tool-approval gate, session store) is not involved at all.
+/// </para>
+///
+/// <para>
+/// Any failure is swallowed and returned as <c>null</c> so the <see cref="WorkflowSelector"/>
+/// falls back to the project default — workflow selection is an optimization, never a hard gate.
+/// </para>
 /// </summary>
 public sealed class CopilotWorkflowSelectionModel : IWorkflowSelectionModel
 {
-    private const string CoordinatorAgentName = "Coordinator";
-
     private const string SelectionCharter =
         "You are the Coordinator selecting the single best-fit functional workflow for a task. " +
         "Choose strictly from the provided candidate workflows by matching each workflow's description " +
@@ -29,76 +40,62 @@ public sealed class CopilotWorkflowSelectionModel : IWorkflowSelectionModel
 
     private readonly GitHubCopilotClientFactory _copilotClientFactory;
     private readonly IGitHubTokenScopeProvider _scopeProvider;
-    private readonly ISandboxExecutor _sandboxExecutor;
-    private readonly ISandboxPolicyStore _sandboxPolicyStore;
-    private readonly IShellApprovalStore _approvalStore;
-    private readonly IToolApprovalGate _toolApprovalGate;
-    private readonly IProjectStore _projectStore;
-    private readonly ILoggerFactory _loggerFactory;
     private readonly ILogger<CopilotWorkflowSelectionModel> _logger;
     private readonly string? _modelId;
-    private readonly string? _apiBaseUrl;
-    private readonly string? _apiKey;
 
     public CopilotWorkflowSelectionModel(
         GitHubCopilotClientFactory copilotClientFactory,
         IGitHubTokenScopeProvider scopeProvider,
-        ISandboxExecutor sandboxExecutor,
-        ISandboxPolicyStore sandboxPolicyStore,
-        IShellApprovalStore approvalStore,
-        IToolApprovalGate toolApprovalGate,
-        IProjectStore projectStore,
-        ILoggerFactory loggerFactory,
+        ILogger<CopilotWorkflowSelectionModel> logger,
         IConfiguration configuration)
     {
         _copilotClientFactory = copilotClientFactory;
         _scopeProvider = scopeProvider;
-        _sandboxExecutor = sandboxExecutor;
-        _sandboxPolicyStore = sandboxPolicyStore;
-        _approvalStore = approvalStore;
-        _toolApprovalGate = toolApprovalGate;
-        _projectStore = projectStore;
-        _loggerFactory = loggerFactory;
-        _logger = loggerFactory.CreateLogger<CopilotWorkflowSelectionModel>();
+        _logger = logger;
         _modelId = configuration["Providers:GitHubCopilot:Model"];
-        _apiBaseUrl = configuration["Agentweaver:ApiBaseUrl"] ?? "http://localhost:5000";
-        _apiKey = configuration["Auth:ApiKey"]
-            ?? configuration.GetSection("Auth:Keys").GetChildren().FirstOrDefault()?["Token"];
     }
 
     public async Task<string?> CompleteAsync(
         string prompt, WorkflowSelectionContext context, CancellationToken ct)
     {
-        var repositoryPath = await ResolveRepositoryPathAsync(context.ProjectId, ct).ConfigureAwait(false)
-                             ?? Directory.GetCurrentDirectory();
-
-        CopilotAIAgent? agent = null;
+        CopilotClient? client = null;
+        AIAgent? agent = null;
         try
         {
-            agent = new CopilotAIAgent(
-                _copilotClientFactory,
-                _scopeProvider,
-                _sandboxExecutor,
-                _sandboxPolicyStore,
-                _approvalStore,
-                _toolApprovalGate,
-                _loggerFactory.CreateLogger<CopilotAIAgent>());
+            // Use the installation scope — workflow selection is a system-level classification
+            // turn, not tied to any specific user's run. CallerTokenScopeProvider falls back to
+            // Installation when userId is null; FixedInstallationScopeProvider always returns it.
+            var scope = _scopeProvider.Resolve(null);
+            client = await _copilotClientFactory.CreateClientAsync(scope, _modelId, ct).ConfigureAwait(false);
+            await client.StartAsync(ct).ConfigureAwait(false);
 
-            await agent.SetupAsync(
-                workingDirectory: repositoryPath,
-                repositoryPath: repositoryPath,
-                runId: $"workflow-selection-{context.ProjectId}-{Guid.NewGuid():N}",
-                modelId: _modelId,
-                systemPromptContext: SelectionCharter,
-                streamWriter: null,
-                projectId: context.ProjectId,
-                agentName: CoordinatorAgentName,
-                apiBaseUrl: _apiBaseUrl,
-                apiKey: _apiKey,
-                ct).ConfigureAwait(false);
+            // Minimal session: empty Tools list means the SDK sends no tool definitions to the
+            // model. The model is physically unable to emit tool calls. No sandbox, no permission
+            // handler, no session store — this is a plain grounded single completion.
+            var sessionConfig = new SessionConfig
+            {
+                SystemMessage = new SystemMessageConfig
+                {
+                    Mode = SystemMessageMode.Append,
+                    Content = SelectionCharter,
+                },
+                Tools = [],
+                Model = _modelId,
+                EnableConfigDiscovery = false,
+                Streaming = true,
+                EnableSessionStore = false,
+                InfiniteSessions = new InfiniteSessionConfig { Enabled = false },
+            };
 
+            agent = client.AsAIAgent(sessionConfig, ownsClient: false, id: null, name: null, description: null);
             var session = await agent.CreateSessionAsync(ct).ConfigureAwait(false);
-            return await agent.ExecuteStreamingLoopAsync(prompt, session, ct).ConfigureAwait(false);
+
+            var result = await CaptureResponseTextAsync(
+                agent.RunStreamingAsync(prompt, session, options: null, ct), ct).ConfigureAwait(false);
+            _logger.LogInformation(
+                "Workflow selection model completed for project {ProjectId}: {Length} chars.",
+                context.ProjectId, result?.Length ?? 0);
+            return result;
         }
         catch (Exception ex)
         {
@@ -109,23 +106,67 @@ public sealed class CopilotWorkflowSelectionModel : IWorkflowSelectionModel
         }
         finally
         {
-            if (agent is not null)
-                await agent.DisposeAsync().ConfigureAwait(false);
+            if (agent is IAsyncDisposable disposableAgent)
+                await disposableAgent.DisposeAsync().ConfigureAwait(false);
+            if (client is IAsyncDisposable disposableClient)
+                await disposableClient.DisposeAsync().ConfigureAwait(false);
         }
     }
 
-    private async Task<string?> ResolveRepositoryPathAsync(string projectId, CancellationToken ct)
+    /// <summary>
+    /// Accumulates text from a streaming response using both paths the Copilot SDK may use:
+    /// <list type="bullet">
+    ///   <item>Incremental delta text carried as <see cref="AgentResponseUpdate.Text"/>.</item>
+    ///   <item>The consolidated final-message content delivered via an
+    ///     <see cref="AssistantMessageEvent"/> in <see cref="AIContent.RawRepresentation"/> when
+    ///     no delta text has been streamed yet — used only when deltas have not already covered the
+    ///     content, mirroring <c>CopilotAIAgent.ExecuteStreamingLoopAsync</c>'s alreadyStreamed guard.
+    ///   </item>
+    /// </list>
+    /// Exposed <see langword="internal"/> so the dual-path logic can be exercised in unit tests
+    /// without a live Copilot SDK session.
+    /// </summary>
+    internal static async Task<string?> CaptureResponseTextAsync(
+        IAsyncEnumerable<AgentResponseUpdate?> stream, CancellationToken ct)
     {
-        try
+        var sb = new StringBuilder();
+        await foreach (var chunk in stream.WithCancellation(ct))
         {
-            if (!Guid.TryParse(projectId, out var guid)) return null;
-            var project = await _projectStore.GetAsync(new ProjectId(guid), ct).ConfigureAwait(false);
-            return project?.WorkingDirectory;
+            if (chunk is null) continue;
+
+            var deltaText = chunk.Text;
+            if (!string.IsNullOrEmpty(deltaText))
+            {
+                sb.Append(deltaText);
+            }
+
+            // When no delta text has been captured yet, also check for the consolidated
+            // final-message content delivered as an AssistantMessageEvent in RawRepresentation.
+            // The Copilot SDK does not always stream the answer as incremental Text deltas —
+            // some model configurations deliver the full response as a single non-delta event.
+            if (sb.Length == 0)
+            {
+                var finalContent = ExtractFinalMessageContent(chunk);
+                if (!string.IsNullOrEmpty(finalContent))
+                    sb.Append(finalContent);
+            }
         }
-        catch (Exception ex)
+        return sb.Length > 0 ? sb.ToString().Trim() : null;
+    }
+
+    /// <summary>
+    /// Extracts the full assistant message text from the SDK <see cref="AssistantMessageEvent"/>
+    /// carried as the <see cref="AIContent.RawRepresentation"/> of a streaming chunk.
+    /// Mirrors <c>CopilotAIAgent.ExtractFinalMessageContent</c>.
+    /// </summary>
+    private static string? ExtractFinalMessageContent(AgentResponseUpdate chunk)
+    {
+        if (chunk.Contents is null) return null;
+        foreach (var content in chunk.Contents)
         {
-            _logger.LogWarning(ex, "Workflow selection: could not resolve repository for project {ProjectId}.", projectId);
-            return null;
+            if (content.RawRepresentation is AssistantMessageEvent message)
+                return message.Data?.Content;
         }
+        return null;
     }
 }
