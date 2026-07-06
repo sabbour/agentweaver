@@ -312,6 +312,25 @@ public sealed class ToolApprovalGateTests
         (await task).Should().BeFalse();
         gate.IsKnownRequest("run-r6", "req-r6").Should().BeFalse();
     }
+
+    [Fact]
+    public async Task GetRequestState_TracksPendingResolvedExpiredAndUnknown()
+    {
+        var gate = CreateGate();
+
+        var pendingTask = Register(gate, "run-s1", "req-s1");
+        gate.GetRequestState("run-s1", "req-s1").Should().Be(ToolApprovalRequestState.Pending);
+
+        await gate.GrantAsync("run-s1", "req-s1", ApprovalScope.Once);
+        (await pendingTask).Should().BeTrue();
+        gate.GetRequestState("run-s1", "req-s1").Should().Be(ToolApprovalRequestState.Approved);
+
+        await gate.WaitForApprovalAsync(
+            "run-s2", "req-s2", "web_fetch", null, TimeSpan.FromMilliseconds(30), CancellationToken.None);
+        gate.GetRequestState("run-s2", "req-s2").Should().Be(ToolApprovalRequestState.Expired);
+
+        gate.GetRequestState("run-s3", "req-never").Should().Be(ToolApprovalRequestState.Unknown);
+    }
 }
 
 /// <summary>
@@ -440,6 +459,33 @@ public sealed class DurableToolApprovalGateEventTests : IDisposable
         var payload = System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement>(
             System.Text.Json.JsonSerializer.Serialize(resolvedEvents[0].Payload));
         payload.GetProperty("expired").GetBoolean().Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task DurableGetRequestState_DistinguishesExpiredFromWrongRun()
+    {
+        var streams = new RunStreamStore();
+        streams.Create("run-e5", "owner");
+        var gate = new DurableToolApprovalGate(NewState(), streams);
+
+        var waitTask = gate.WaitForApprovalAsync(
+            "run-e5", "req-e5", "web_fetch", null, TimeSpan.FromSeconds(10), CancellationToken.None);
+
+        await WaitUntilAsync(async () =>
+        {
+            await Task.CompletedTask;
+            return gate.GetRequestState("run-e5", "req-e5") == ToolApprovalRequestState.Pending;
+        });
+
+        gate.GetRequestState("other-run", "req-e5").Should().Be(ToolApprovalRequestState.Unknown);
+
+        gate.Deny("run-e5", "req-e5").Should().BeTrue();
+        (await waitTask).Should().BeFalse();
+        gate.GetRequestState("run-e5", "req-e5").Should().Be(ToolApprovalRequestState.Denied);
+
+        await gate.WaitForApprovalAsync(
+            "run-e5", "req-expired", "web_fetch", null, TimeSpan.FromMilliseconds(40), CancellationToken.None);
+        gate.GetRequestState("run-e5", "req-expired").Should().Be(ToolApprovalRequestState.Expired);
     }
 
     private DurableRunControlState NewState() =>

@@ -16,6 +16,16 @@ public enum ApprovalScope
     Tool,
 }
 
+/// <summary>Server-visible lifecycle state for a HITL tool-approval request.</summary>
+public enum ToolApprovalRequestState
+{
+    Unknown,
+    Pending,
+    Approved,
+    Denied,
+    Expired,
+}
+
 /// <summary>
 /// Provides a per-tool-call HITL approval gate.
 /// When a blocked tool (e.g. web_fetch) fires, the permission handler atomically registers
@@ -54,12 +64,14 @@ public interface IToolApprovalGate
     /// </summary>
     bool IsAutoApproved(string runId, string toolName, string? url);
 
+    /// <summary>Returns the server-visible lifecycle state for a tool-approval request.</summary>
+    ToolApprovalRequestState GetRequestState(string runId, string requestId) =>
+        IsKnownRequest(runId, requestId) ? ToolApprovalRequestState.Pending : ToolApprovalRequestState.Unknown;
+
     /// <summary>
     /// Returns <see langword="true"/> if a tool-approval request with <paramref name="requestId"/>
-    /// was ever registered for <paramref name="runId"/> (regardless of whether it is still pending
-    /// or already resolved). Returns <see langword="false"/> only if the request is entirely unknown
-    /// or the run has been cleared. Used to produce accurate 409 error messages — distinguishing
-    /// "already resolved or expired" from "request_id never registered for this run".
+    /// was ever registered for <paramref name="runId"/>. Prefer <see cref="GetRequestState"/> when
+    /// a caller needs to distinguish pending, resolved, expired, and unknown requests.
     /// </summary>
     bool IsKnownRequest(string runId, string requestId) => true;
 

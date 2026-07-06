@@ -46,7 +46,7 @@ public sealed class DurableToolApprovalGate(
 
         if (LatestContext(runId, requestId) is not null && LatestResolution(runId, requestId) is null)
         {
-            _state.Append(runId, RequestResolved, new ApprovalResolution(requestId, false));
+            _state.Append(runId, RequestResolved, new ApprovalResolution(requestId, false, true));
             logger?.LogWarning(
                 "Tool approval timed out: runId={RunId} requestId={DisplayId}",
                 runId, requestId.Length >= 8 ? requestId[..8] : requestId);
@@ -80,7 +80,7 @@ public sealed class DurableToolApprovalGate(
                 _state.Append(parentId, PolicyGranted, new PolicyGrant(policy));
         }
 
-        _state.Append(runId, RequestResolved, new ApprovalResolution(requestId, true));
+        _state.Append(runId, RequestResolved, new ApprovalResolution(requestId, true, false));
         EmitResolved(runId, requestId, approved: true, expired: false);
         return Task.FromResult(true);
     }
@@ -96,7 +96,7 @@ public sealed class DurableToolApprovalGate(
             return false;
         }
 
-        _state.Append(runId, RequestResolved, new ApprovalResolution(requestId, false));
+        _state.Append(runId, RequestResolved, new ApprovalResolution(requestId, false, false));
         EmitResolved(runId, requestId, approved: false, expired: false);
         return true;
     }
@@ -113,6 +113,18 @@ public sealed class DurableToolApprovalGate(
 
     public bool IsKnownRequest(string runId, string requestId) =>
         LatestContext(runId, requestId) is not null;
+
+    public ToolApprovalRequestState GetRequestState(string runId, string requestId)
+    {
+        if (LatestResolutionRecord(runId, requestId) is { } resolution)
+            return resolution.Expired
+                ? ToolApprovalRequestState.Expired
+                : resolution.Approved ? ToolApprovalRequestState.Approved : ToolApprovalRequestState.Denied;
+
+        return LatestContext(runId, requestId) is not null
+            ? ToolApprovalRequestState.Pending
+            : ToolApprovalRequestState.Unknown;
+    }
 
     public void Clear(string runId) =>
         _state.Append(runId, RunCleared, new { });
@@ -137,12 +149,14 @@ public sealed class DurableToolApprovalGate(
             .LastOrDefault(c => c?.RequestId == requestId);
 
     private bool? LatestResolution(string runId, string requestId) =>
+        LatestResolutionRecord(runId, requestId)?.Approved;
+
+    private ApprovalResolution? LatestResolutionRecord(string runId, string requestId) =>
         _state.Load(runId, RequestResolved, RunCleared)
             .TakeLastAfterClear()
             .Where(e => e.EventType == RequestResolved)
             .Select(e => JsonSerializer.Deserialize<ApprovalResolution>(e.PayloadJson, JsonDefaults.Options))
-            .LastOrDefault(r => r?.RequestId == requestId)
-            ?.Approved;
+            .LastOrDefault(r => r?.RequestId == requestId);
 
     private string? ParentOf(string runId) =>
         _state.Load(runId, ParentRegistered, RunCleared)
@@ -163,7 +177,7 @@ public sealed class DurableToolApprovalGate(
         $"{toolName}:{url ?? ""}";
 
     private sealed record ApprovalContext(string RequestId, string ToolName, string? Url);
-    private sealed record ApprovalResolution(string RequestId, bool Approved);
+    private sealed record ApprovalResolution(string RequestId, bool Approved, bool Expired = false);
     private sealed record PolicyGrant(string PolicyKey);
     private sealed record ParentRegistration(string ParentRunId);
 }

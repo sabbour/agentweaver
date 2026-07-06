@@ -16,6 +16,9 @@ public sealed class InMemoryToolApprovalGate : IToolApprovalGate
     // runId → requestId → (toolName, url) — populated by SetRequestContext
     private readonly ConcurrentDictionary<string, ConcurrentDictionary<string, (string ToolName, string? Url)>> _requestContext = new();
 
+    // runId → requestId → terminal state
+    private readonly ConcurrentDictionary<string, ConcurrentDictionary<string, ToolApprovalRequestState>> _resolved = new();
+
     // Run-scoped allowlist: runId → set of "toolName:url" policy keys
     private readonly ConcurrentDictionary<string, HashSet<string>> _runScopedAllowlist = new();
 
@@ -56,8 +59,15 @@ public sealed class InMemoryToolApprovalGate : IToolApprovalGate
 
         try
         {
-            using var reg = cts.Token.Register(() => tcs.TrySetResult(false));
-            return await tcs.Task.ConfigureAwait(false);
+            using var reg = cts.Token.Register(() =>
+            {
+                if (tcs.TrySetResult(false))
+                    MarkResolved(runId, requestId, ToolApprovalRequestState.Expired);
+            });
+
+            var result = await tcs.Task.ConfigureAwait(false);
+            MarkResolved(runId, requestId, result ? ToolApprovalRequestState.Approved : ToolApprovalRequestState.Denied);
+            return result;
         }
         finally
         {
@@ -136,6 +146,21 @@ public sealed class InMemoryToolApprovalGate : IToolApprovalGate
         _requestContext.TryGetValue(runId, out var runCtx) && runCtx.ContainsKey(requestId);
 
     /// <inheritdoc />
+    public ToolApprovalRequestState GetRequestState(string runId, string requestId)
+    {
+        if (_resolved.TryGetValue(runId, out var runResolved) &&
+            runResolved.TryGetValue(requestId, out var state))
+            return state;
+
+        if (_pending.TryGetValue(runId, out var runPending) && runPending.ContainsKey(requestId))
+            return ToolApprovalRequestState.Pending;
+
+        return IsKnownRequest(runId, requestId)
+            ? ToolApprovalRequestState.Denied
+            : ToolApprovalRequestState.Unknown;
+    }
+
+    /// <inheritdoc />
     public void RegisterParentRun(string childRunId, string parentRunId) =>
         _parentRuns[childRunId] = parentRunId;
 
@@ -149,6 +174,7 @@ public sealed class InMemoryToolApprovalGate : IToolApprovalGate
         }
 
         _requestContext.TryRemove(runId, out _);
+        _resolved.TryRemove(runId, out _);
         _runScopedAllowlist.TryRemove(runId, out _);
         _parentRuns.TryRemove(runId, out _);
         // Always-allowed policies are intentionally not cleared — they survive run boundaries.
@@ -158,7 +184,24 @@ public sealed class InMemoryToolApprovalGate : IToolApprovalGate
     {
         if (!_pending.TryGetValue(runId, out var runPending)) return false;
         if (!runPending.TryGetValue(requestId, out var tcs)) return false;
-        return tcs.TrySetResult(result);
+        var resolved = tcs.TrySetResult(result);
+        if (resolved)
+            MarkResolved(runId, requestId, result ? ToolApprovalRequestState.Approved : ToolApprovalRequestState.Denied);
+        return resolved;
+    }
+
+    private void MarkResolved(string runId, string requestId, ToolApprovalRequestState state)
+    {
+        if (state is ToolApprovalRequestState.Denied &&
+            _resolved.TryGetValue(runId, out var existingRun) &&
+            existingRun.TryGetValue(requestId, out var existing) &&
+            existing is ToolApprovalRequestState.Expired)
+        {
+            return;
+        }
+
+        var runResolved = _resolved.GetOrAdd(runId, _ => new ConcurrentDictionary<string, ToolApprovalRequestState>());
+        runResolved[requestId] = state;
     }
 
     private void AddRunPolicy(string runId, string policyKey)
