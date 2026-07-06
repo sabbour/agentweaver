@@ -242,24 +242,10 @@ app.MapDelete("/api/runs/{id}", async (
     if (!caller.Owns(run.SubmittingUser))
         return Results.StatusCode(StatusCodes.Status403Forbidden);
 
-    var terminalStatuses = new[] { RunStatus.Merged, RunStatus.Declined, RunStatus.MergeFailed, RunStatus.Failed, RunStatus.Completed };
-    var isNonTerminal = !terminalStatuses.Contains(run.Status);
-
-    // For any non-terminal run: cancel the workflow, clean up worktree, force to Failed.
-    if (isNonTerminal)
+    // For any non-terminal run: cancel the workflow, clean up worktree, force to terminal.
+    if (!EndpointHelpers.IsTerminal(run.Status))
     {
-        registry.Abandon(id);
-        // Give the running agent a brief window to observe the cancellation signal before
-        // the worktree is torn down. Without this, a tool call in-flight may try to write
-        // to a path that is already deleted.
-        await Task.Delay(TimeSpan.FromMilliseconds(250), CancellationToken.None);
-        if (run.WorktreePath is not null && worktreeOps.WorktreeExists(run.WorktreePath))
-        {
-            try { worktreeOps.RemoveWorktree(run.RepositoryPath, run.WorktreePath, run.WorktreeBranch ?? string.Empty); }
-            catch (Exception ex) { logger.LogWarning(ex, "Best-effort worktree cleanup failed for deleted run {RunId}", id); }
-        }
-        await runStore.TrySetTerminalStatusAsync(runId, RunStatus.Failed, DateTimeOffset.UtcNow, "abandoned", ct);
-        streamStore.Complete(id);
+        await EndpointHelpers.CancelRunWorkAsync(run, runStore, streamStore, registry, worktreeOps, logger, ct);
     }
 
     try { await runStore.DeleteAsync(runId, ct); }
@@ -271,6 +257,51 @@ app.MapDelete("/api/runs/{id}", async (
 
     streamStore.Remove(id);
     return Results.NoContent();
+});
+
+app.MapPost("/api/runs/{id}/cancel", async (
+    HttpContext httpContext,
+    string id,
+    IRunStore runStore,
+    RunStreamStore streamStore,
+    RunWorkflowRegistry registry,
+    IWorktreeOperations worktreeOps,
+    ILogger<Program> logger,
+    CancellationToken ct) =>
+{
+    if (!RunId.TryParse(id, out var runId))
+        return Results.BadRequest(new { error = "Invalid run id." });
+
+    Run? run;
+    try { run = await runStore.GetAsync(runId, ct); }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "Failed to fetch run {RunId} for cancel", runId);
+        return Results.Problem("Failed to retrieve the run.", statusCode: 500);
+    }
+
+    if (run is null) return Results.NotFound();
+    var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
+    if (!caller.Owns(run.SubmittingUser))
+        return Results.StatusCode(StatusCodes.Status403Forbidden);
+
+    // Already-terminal runs have no live work to cancel: report the current state without acting.
+    if (EndpointHelpers.IsTerminal(run.Status))
+        return Results.Ok(new { run_id = id, status = run.Status.ToApiString(), cancelled = false, already_terminal = true });
+
+    // Cancel the live workflow (which also stops child subtask runs driven by the coordinator),
+    // clean up the worktree, and force the run to a terminal state — but KEEP the run row so the
+    // user can still inspect it. Same shared path the DELETE endpoint uses.
+    await EndpointHelpers.CancelRunWorkAsync(run, runStore, streamStore, registry, worktreeOps, logger, ct);
+
+    var updated = await runStore.GetAsync(runId, ct);
+    return Results.Ok(new
+    {
+        run_id = id,
+        status = (updated?.Status ?? RunStatus.Failed).ToApiString(),
+        cancelled = true,
+        already_terminal = false,
+    });
 });
 
 

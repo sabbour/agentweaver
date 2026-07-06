@@ -29,6 +29,52 @@ internal static bool IsOwner(HttpContext context, Run run) =>
     ApiKeyAuthMiddleware.GetCaller(context).Owns(run.SubmittingUser);
 
 /// <summary>
+/// The set of run statuses that represent a completed lifecycle. A run in any of these states
+/// has no live workflow to cancel and owns no worktree that needs tearing down.
+/// </summary>
+internal static readonly IReadOnlySet<RunStatus> TerminalRunStatuses = new HashSet<RunStatus>
+{
+    RunStatus.Merged, RunStatus.Declined, RunStatus.MergeFailed, RunStatus.Failed, RunStatus.Completed,
+};
+
+internal static bool IsTerminal(RunStatus status) => TerminalRunStatuses.Contains(status);
+
+/// <summary>
+/// Cancels a non-terminal run's live work: signals the MAF workflow to abandon (which also stops any
+/// child subtask runs the coordinator is driving through the same workflow), best-effort removes the
+/// worktree, forces the run to a terminal <see cref="RunStatus.Failed"/> state, and completes the
+/// live event stream. This is the SHARED cancellation path used by both the DELETE /api/runs/{id}
+/// endpoint (which then deletes the run row) and the POST /api/runs/{id}/cancel endpoint (which
+/// leaves the row so the user can still inspect it). Callers MUST verify the run is non-terminal
+/// before invoking (see <see cref="IsTerminal"/>).
+/// </summary>
+internal static async Task CancelRunWorkAsync(
+    Run run,
+    IRunStore runStore,
+    RunStreamStore streamStore,
+    RunWorkflowRegistry registry,
+    IWorktreeOperations worktreeOps,
+    ILogger logger,
+    CancellationToken ct)
+{
+    var id = run.Id.ToString();
+
+    registry.Abandon(id);
+    // Give the running agent a brief window to observe the cancellation signal before the worktree
+    // is torn down. Without this, a tool call in-flight may try to write to a path already deleted.
+    await Task.Delay(TimeSpan.FromMilliseconds(250), CancellationToken.None);
+
+    if (run.WorktreePath is not null && worktreeOps.WorktreeExists(run.WorktreePath))
+    {
+        try { worktreeOps.RemoveWorktree(run.RepositoryPath, run.WorktreePath, run.WorktreeBranch ?? string.Empty); }
+        catch (Exception ex) { logger.LogWarning(ex, "Best-effort worktree cleanup failed for cancelled run {RunId}", id); }
+    }
+
+    await runStore.TrySetTerminalStatusAsync(run.Id, RunStatus.Failed, DateTimeOffset.UtcNow, "abandoned", ct);
+    streamStore.Complete(id);
+}
+
+/// <summary>
 /// Authorizes either a human OWNER of the run (<see cref="IsOwner"/>) OR the run's own agent
 /// callback channel, which authenticates with the shared service API key and therefore resolves
 /// to the configured <c>Auth:User</c> identity (not the human owner). The agent-callback write

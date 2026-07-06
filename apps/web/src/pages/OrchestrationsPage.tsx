@@ -3,15 +3,22 @@ import { Link, useParams } from 'react-router-dom';
 import {
   Badge,
   Button,
+  Dialog,
+  DialogActions,
+  DialogBody,
+  DialogContent,
+  DialogSurface,
+  DialogTitle,
   MessageBar,
   MessageBarBody,
   Spinner,
   Text,
   Title3,
+  Tooltip,
   makeStyles,
   tokens,
 } from '@fluentui/react-components';
-import { ArrowSyncRegular } from '@fluentui/react-icons';
+import { ArrowSyncRegular, DeleteRegular, DismissCircleRegular } from '@fluentui/react-icons';
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
 import { isCoordinatorRun } from '../utils/runKind';
@@ -21,6 +28,15 @@ import { PageHeader } from '../components/PageHeader';
 // Orchestrations — a project-level list of coordinator orchestration runs. Each
 // row opens the existing coordinator topology view. Data comes from the project's
 // runs API (real data); coordinator runs are detected via isCoordinatorRun.
+
+// A run in any of these states has finished its lifecycle: there is no live workflow
+// to stop. Stop is only offered for non-terminal (running) orchestrations.
+const RUN_TERMINAL_STATUSES = new Set(['completed', 'failed', 'declined', 'merged', 'merge_failed']);
+
+function isRunTerminal(status: string | undefined): boolean {
+  if (!status) return false;
+  return RUN_TERMINAL_STATUSES.has(status.toLowerCase().replace(/[^a-z_]/g, ''));
+}
 
 function coordinatorStatusLabel(status: string | undefined): string | undefined {
   if (!status) return undefined;
@@ -81,6 +97,11 @@ const useStyles = makeStyles({
     flex: 1,
     minWidth: 0,
   },
+  actions: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalS,
+  },
   task: {
     fontWeight: tokens.fontWeightSemibold,
     overflow: 'hidden',
@@ -112,6 +133,8 @@ export function OrchestrationsPage() {
   const [project, setProject] = useState<Project | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<WorkflowRunDto | null>(null);
 
   const formatError = (err: unknown): string =>
     err instanceof ApiError
@@ -143,6 +166,33 @@ export function OrchestrationsPage() {
     return () => { cancelled = true; void cancelled; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId]);
+
+  const runIdOf = (run: WorkflowRunDto) => run.workflow_run_id ?? run.execution_id;
+
+  const handleStop = (run: WorkflowRunDto) => {
+    const runId = runIdOf(run);
+    if (!window.confirm('Stop this orchestration? The running work will be cancelled, but the run is kept so you can inspect it.')) return;
+    setBusyId(runId);
+    apiClient
+      .cancelRun(runId)
+      .then(() => load(false))
+      .catch((err) => setError(formatError(err)))
+      .finally(() => setBusyId(null));
+  };
+
+  const confirmDelete = () => {
+    if (!deleteTarget) return;
+    const runId = runIdOf(deleteTarget);
+    setBusyId(runId);
+    apiClient
+      .deleteRun(runId)
+      .then(() => {
+        setRuns((prev) => prev.filter((r) => runIdOf(r) !== runId));
+        setDeleteTarget(null);
+      })
+      .catch((err) => setError(formatError(err)))
+      .finally(() => setBusyId(null));
+  };
 
   if (!projectId) return null;
 
@@ -194,6 +244,8 @@ export function OrchestrationsPage() {
           {runs.map((run) => {
             const runId = run.workflow_run_id ?? run.execution_id;
             const coordLabel = coordinatorStatusLabel(run.coordinator_status);
+            const terminal = isRunTerminal(run.status);
+            const busy = busyId === runId;
             return (
               <div key={runId} className={styles.row}>
                 <Badge appearance="tint" color={badgeColor(coordLabel)}>
@@ -203,14 +255,63 @@ export function OrchestrationsPage() {
                   <Text className={styles.task}>{run.task ?? '(no task description)'}</Text>
                   <Text className={styles.meta}>{new Date(run.started_at).toLocaleString()}</Text>
                 </div>
-                <Link to={`/projects/${projectId}/orchestrations/${runId}`} style={{ textDecoration: 'none' }}>
-                  <Button appearance="secondary">Open</Button>
-                </Link>
+                <div className={styles.actions}>
+                  <Link to={`/projects/${projectId}/orchestrations/${runId}`} style={{ textDecoration: 'none' }}>
+                    <Button appearance="secondary">Open</Button>
+                  </Link>
+                  <Tooltip
+                    content={terminal ? 'This orchestration has already finished' : 'Stop this orchestration'}
+                    relationship="label"
+                  >
+                    <Button
+                      appearance="subtle"
+                      icon={<DismissCircleRegular />}
+                      aria-label="Stop orchestration"
+                      disabled={terminal || busy}
+                      onClick={() => handleStop(run)}
+                    >
+                      Stop
+                    </Button>
+                  </Tooltip>
+                  <Tooltip content="Delete this orchestration" relationship="label">
+                    <Button
+                      appearance="subtle"
+                      icon={<DeleteRegular />}
+                      aria-label="Delete orchestration"
+                      disabled={busy}
+                      onClick={() => setDeleteTarget(run)}
+                    >
+                      Delete
+                    </Button>
+                  </Tooltip>
+                </div>
               </div>
             );
           })}
         </div>
       )}
+
+      <Dialog open={deleteTarget !== null} onOpenChange={(_, data) => { if (!data.open) setDeleteTarget(null); }}>
+        <DialogSurface>
+          <DialogBody>
+            <DialogTitle>Delete orchestration</DialogTitle>
+            <DialogContent>
+              Delete this orchestration? This removes the run and its workspace.
+            </DialogContent>
+            <DialogActions>
+              <Button appearance="secondary" onClick={() => setDeleteTarget(null)}>Cancel</Button>
+              <Button
+                appearance="primary"
+                icon={<DeleteRegular />}
+                disabled={deleteTarget !== null && busyId === (deleteTarget.workflow_run_id ?? deleteTarget.execution_id)}
+                onClick={confirmDelete}
+              >
+                Delete
+              </Button>
+            </DialogActions>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
     </div>
   );
 }
