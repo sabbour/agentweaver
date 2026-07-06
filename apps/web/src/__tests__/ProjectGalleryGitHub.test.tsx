@@ -106,13 +106,11 @@ describe('ProjectGalleryPage — GitHub repo listing auth', () => {
     await waitFor(() => expect(apiClient.listGitHubRepos).toHaveBeenCalledWith('octocat'));
     expect(screen.queryByText(/Connect your GitHub account/)).toBeNull();
     expect(screen.getByText('@octocat')).toBeDefined();
-    expect(screen.getByText(/Browsing @octocat personal repositories/)).toBeDefined();
+    expect(screen.getByText(/Browsing @octocat repositories/)).toBeDefined();
 
-    // Opening the repo combobox surfaces the fetched repo — shows name only (no owner prefix).
+    // Opening the repo combobox surfaces the fetched repo with an owner/repo label.
     fireEvent.click(screen.getByRole('combobox', { name: 'Repository' }));
-    await waitFor(() => expect(screen.getByText('hello-world')).toBeDefined());
-    // Owner prefix must NOT appear as a standalone label.
-    expect(screen.queryByText('octocat/hello-world')).toBeNull();
+    await waitFor(() => expect(screen.getAllByText('octocat / hello-world').length).toBeGreaterThan(0));
   });
 
   it('does not render the repo description in the dropdown', async () => {
@@ -122,7 +120,7 @@ describe('ProjectGalleryPage — GitHub repo listing auth', () => {
 
     await waitFor(() => expect(apiClient.listGitHubRepos).toHaveBeenCalledWith('octocat'));
     fireEvent.click(screen.getByRole('combobox', { name: 'Repository' }));
-    await waitFor(() => expect(screen.getByText('hello-world')).toBeDefined());
+    await waitFor(() => expect(screen.getAllByText('octocat / hello-world').length).toBeGreaterThan(0));
     expect(screen.queryByText('A sample repo')).toBeNull();
   });
 
@@ -134,11 +132,11 @@ describe('ProjectGalleryPage — GitHub repo listing auth', () => {
     await waitFor(() => expect(apiClient.listGitHubRepos).toHaveBeenCalledWith('octocat'));
     fireEvent.click(screen.getByRole('combobox', { name: 'Repository' }));
 
-    await waitFor(() => expect(screen.getByText('aardvark')).toBeDefined());
+    await waitFor(() => expect(screen.getAllByText('octocat / aardvark').length).toBeGreaterThan(0));
 
     const options = screen.getAllByRole('option');
     const labels = options.map(o => o.textContent);
-    expect(labels).toEqual(['aardvark', 'hello-world', 'zebra']);
+    expect(labels).toEqual(['GHoctocat / aardvark', 'GHoctocat / hello-world', 'GHoctocat / zebra']);
   });
 
   it('still submits a manually typed owner/repo even when repos failed to load', async () => {

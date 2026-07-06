@@ -156,8 +156,8 @@ describe('ProjectGalleryPage — blueprint selection', () => {
 
     await openBlankDialog();
     await waitFor(() => expect(screen.getByText('Backend Squad')).toBeDefined());
-    expect(screen.getByText('Or describe the work Agentweaver should run')).toBeDefined();
-    expect(screen.getByText(/Generated blueprints configure Agentweaver agents/)).toBeDefined();
+    expect(screen.getByText(/Be specific about the problems/)).toBeDefined();
+    expect(screen.getByText(/Our AI will generate a tailored squad/)).toBeDefined();
 
     fireEvent.change(screen.getByLabelText('Describe your project'), {
       target: { value: 'handle job searches' },
