@@ -40,12 +40,6 @@ nodes:
       - request-changes
       - declined
 
-  - id: scribe
-    type: scribe
-    label: Scribe
-    role: scribe
-    kind: agent
-
   - id: terminal-declined
     type: terminal
     label: Declined
@@ -69,9 +63,9 @@ edges:
   - from: review
     to: review-gate
 
-  # Human review gate routing (no merge — approved goes directly to scribe).
+  # Human review gate routing (platform merge + scribe are appended by the coordinator).
   - from: review-gate
-    to: scribe
+    to: done
     when: approved
 
   - from: review-gate
@@ -81,6 +75,3 @@ edges:
   - from: review-gate
     to: terminal-declined
     when: declined
-
-  - from: scribe
-    to: done

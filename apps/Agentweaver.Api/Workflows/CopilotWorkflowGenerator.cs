@@ -122,7 +122,7 @@ public sealed class CopilotWorkflowGenerator : IWorkflowGenerator
             - nodes: list (required, >= 1). Each node: { id, type, label, role?, kind?, agent?, prompt?,
               charter?, target?, steps?, branches? }.
             - edges: list. Each edge: { from, to, when? }. `from`/`to` MUST reference existing node ids.
-              `when` guards the edge on a verdict (e.g. approved, request-changes, declined, merged, blocked).
+              `when` guards the edge on a verdict (e.g. approved, request-changes, declined, pass, revise).
 
             NODE TYPES — use the following supported types. peer_review HAS a runtime executor and is
             fully supported. Do NOT use fan_out, fan_in, serial, or coordinator_composed: those are accepted
@@ -136,9 +136,12 @@ public sealed class CopilotWorkflowGenerator : IWorkflowGenerator
               unconditional outgoing edge it is a plain producing review turn. Set `role` and `prompt`.
             - check: a routing gate. MUST declare `branches:` (the verdict strings it routes on) and
               have exactly one outgoing edge per declared branch. Optional `gate_kind` field for specialised
-              gates: `human-review` (human HITL review gate), `rai` (responsible-AI safety gate).
-            - merge: applies a produced change to the repository. Verdicts: merged | blocked.
-            - scribe: records the run outcome. Place before terminal `done` nodes.
+              gates: `rai` (responsible-AI safety gate), `rubberduck` (AI critique gate; verdicts
+              pass | revise), `human-review` (human HITL review gate).
+            - merge: platform-owned action. DO NOT author merge nodes in generated workflows; the
+              coordinator appends merge after authored gates.
+            - scribe: platform-owned final action. DO NOT author scribe nodes; the coordinator appends
+              scribe after merge for every run.
             - terminal: a no-op sink. Use for final states (done, declined, failed, etc.).
 
             MANDATORY BUILD & TEST STEP (software workflows): For any software-oriented workflow — one that
@@ -154,7 +157,9 @@ public sealed class CopilotWorkflowGenerator : IWorkflowGenerator
             Route its verdicts: `when: approved` advances to the human-review gate; `when: request-changes`
             loops back to the implementation node (e.g. implement/fix); `when: declined` goes to a terminal.
             If a software workflow has no human-review gate, add one (a `check` node with
-            `gate_kind: human-review`) placed immediately after build-test, before merge. Non-software
+            `gate_kind: human-review`) placed immediately after build-test. Consider adding `rai` before
+            human review for safety-sensitive work and `rubberduck` before human review for code-quality
+            critique. Non-software
             workflows (pure content authoring, discovery, incident response, evaluation) do NOT need this step.
 
             VALIDATION RULES (your output MUST satisfy all):
@@ -162,6 +167,8 @@ public sealed class CopilotWorkflowGenerator : IWorkflowGenerator
             - `start` and every edge `from`/`to` MUST reference declared node ids.
             - A `check` node MUST declare `branches:` and have a matching outgoing edge for each verdict.
             - Do NOT use fan_out, fan_in, serial, or coordinator_composed node types (no runtime executor).
+            - Author only workflow gates and work steps. Do NOT include merge or scribe nodes; end the last
+              authored step/gate at a terminal such as `done`, `declined`, or `safety-failed`.
 
             Available roles for the `agent`/`role` fields. PREFER these catalog ids — they have pre-built
             charters and are immediately runnable. Use a catalog id whenever one fits adequately:

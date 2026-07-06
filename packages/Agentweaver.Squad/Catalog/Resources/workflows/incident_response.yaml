@@ -1,10 +1,10 @@
 # Incident Response Workflow (Feature 015 US3)
 # SRE incident response pipeline: triage → mitigate → verify → postmortem → scribe.
-# Explicit postmortem step ensures every incident produces a recorded retrospective before the run closes.
+# Explicit postmortem step ensures every incident produces a recorded retrospective before the platform scribe records the outcome.
 
 id: incident-response
 name: Incident Response
-description: SRE incident response pipeline with triage, mitigation, verification, postmortem, and final recording. Use for production incidents, outages, and reliability events. Every run ends with a postmortem before the scribe records the outcome.
+description: SRE incident response pipeline with triage, mitigation, verification, postmortem, and final recording. Use for production incidents, outages, and reliability events. Every run ends with a postmortem before the platform scribe records the outcome.
 version: "1.0"
 
 start: triage
@@ -47,12 +47,6 @@ nodes:
     role: agent
     kind: live
 
-  - id: scribe
-    type: scribe
-    label: Scribe
-    role: scribe
-    kind: agent
-
   - id: terminal-declined
     type: terminal
     label: Declined
@@ -90,7 +84,4 @@ edges:
     when: declined
 
   - from: postmortem
-    to: scribe
-
-  - from: scribe
     to: done

@@ -1,7 +1,7 @@
 # Bug Fix Workflow (Feature 015 US3)
 # Lightweight bug fix pipeline: triage → fix → QA verification → build & test → human review → merge → scribe.
 # Optimized for quick turnaround on defects and patches, with a mandatory build/test gate and human
-# review gate before merge.
+# RAI and human review gates before platform merge.
 
 id: bug-fix
 name: Bug Fix
@@ -40,6 +40,18 @@ nodes:
     agent: qa-engineer
     prompt: Run the project's build and test suite. Execute all available build commands and test runners for the repository. The step passes only if build succeeds AND all tests pass. Report any failures with full error output. Do not approve if there are compilation errors, test failures, or lint errors that indicate broken code. After tests pass, if the project is a web application or service, start its development/preview server so stakeholders can access the running changes before human review. Do NOT assume a hardcoded or pre-configured port — the port is not known ahead of time and can differ per execution. Instead, discover how to run the app by inspecting the project itself (package.json scripts, Dockerfile, Makefile, README, framework defaults, etc.), start the server, and then observe the actual port it binds to from the process stdout/logs. Once the server is up and verified (e.g. with curl), register it by calling the `start_preview(port=PORT)` tool with the exact port the server actually bound to, so the preview sandbox attaches to the running process.
 
+  - id: rai-check
+    type: check
+    label: RAI Check
+    role: review
+    kind: gate
+    gate_kind: rai
+    branches:
+      - revise
+      - safety-failed
+      - no-changes
+      - review
+
   - id: human-review
     type: check
     label: Human Review
@@ -51,17 +63,11 @@ nodes:
       - request-changes
       - declined
 
-  - id: merge
-    type: merge
-    label: Merge
-    role: merge
-    kind: action
-
-  - id: scribe
-    type: scribe
-    label: Scribe
-    role: scribe
-    kind: agent
+  - id: terminal-safety-failed
+    type: terminal
+    label: Safety Failed
+    role: plumbing
+    kind: terminal
 
   - id: terminal-declined
     type: terminal
@@ -97,7 +103,7 @@ edges:
 
   # Build & test gate: pass advances to human review; failures loop back to fix.
   - from: build-test
-    to: human-review
+    to: rai-check
     when: approved
 
   - from: build-test
@@ -107,10 +113,27 @@ edges:
   - from: build-test
     to: terminal-declined
     when: declined
+
+  # RAI verdict routing.
+  - from: rai-check
+    to: fix
+    when: revise
+
+  - from: rai-check
+    to: terminal-safety-failed
+    when: safety-failed
+
+  - from: rai-check
+    to: done
+    when: no-changes
+
+  - from: rai-check
+    to: human-review
+    when: review
 
   # Human review gate routing.
   - from: human-review
-    to: merge
+    to: done
     when: approved
 
   - from: human-review
@@ -120,15 +143,3 @@ edges:
   - from: human-review
     to: terminal-declined
     when: declined
-
-  # Merge outcomes.
-  - from: merge
-    to: scribe
-    when: merged
-
-  - from: merge
-    to: human-review
-    when: blocked
-
-  - from: scribe
-    to: done

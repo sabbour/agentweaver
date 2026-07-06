@@ -1047,6 +1047,7 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
             return CoordinatorGraphDescriptor.DefaultAssemblyGates;
 
         var gates = workflow.Nodes
+            .Where(n => n.Type == WorkflowNodeType.Check)
             .Select(n => (Node: n, GateKind: NodeClassifier.NormalizeGateKind(n)))
             .Where(x => x.GateKind is "rai" or "rubberduck" or "human-review")
             .Select(x => new CoordinatorGraphDescriptor.AssemblyGateNode(
