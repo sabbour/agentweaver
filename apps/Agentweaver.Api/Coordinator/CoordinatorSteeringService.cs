@@ -430,7 +430,7 @@ public sealed class CoordinatorSteeringService
     {
         var relayedAt = DateTimeOffset.UtcNow;
         await UpdateDirectiveAsync(directiveId, SteeringStatus.Applied, relayedAt, ct).ConfigureAwait(false);
-        EmitSteering(coordinatorRunId, directiveId, SteeringKind.Send, targetChildRunId: null, SteeringStatus.Applied, instruction);
+        await EmitSteeringAsync(coordinatorRunId, directiveId, SteeringKind.Send, targetChildRunId: null, SteeringStatus.Applied, instruction, ct).ConfigureAwait(false);
         _waitRegistry.Signal(coordinatorRunId);
 
         _logger.LogInformation(
@@ -476,7 +476,7 @@ public sealed class CoordinatorSteeringService
 
         var relayedAt = DateTimeOffset.UtcNow;
         await UpdateDirectiveAsync(directiveId, SteeringStatus.Applied, relayedAt, ct).ConfigureAwait(false);
-        EmitSteering(coordinatorRunId, directiveId, SteeringKind.Stop, targetChildRunId, SteeringStatus.Applied, instruction);
+        await EmitSteeringAsync(coordinatorRunId, directiveId, SteeringKind.Stop, targetChildRunId, SteeringStatus.Applied, instruction, ct).ConfigureAwait(false);
         _waitRegistry.Signal(coordinatorRunId);
 
         // For a broadcast stop (no specific child target) also terminalize the coordinator run itself.
@@ -549,7 +549,7 @@ public sealed class CoordinatorSteeringService
         // dispatch loop on the pod owning this coordinator run drains it from Postgres at the target
         // child's next turn boundary (replica-safe — no in-memory hand-off that a second pod misses).
         await UpdateDirectiveAsync(directiveId, SteeringStatus.Queued, relayedAt: null, ct).ConfigureAwait(false);
-        EmitSteering(coordinatorRunId, directiveId, kind, targetChildRunId, SteeringStatus.Queued, instruction);
+        await EmitSteeringAsync(coordinatorRunId, directiveId, kind, targetChildRunId, SteeringStatus.Queued, instruction, ct).ConfigureAwait(false);
         _waitRegistry.Signal(coordinatorRunId);
 
         // For redirect targeting a specific in-progress child: force-complete that child's stream so
@@ -759,7 +759,7 @@ public sealed class CoordinatorSteeringService
 
         // directive: collapse to applied (the resume took effect immediately, like stop).
         await UpdateDirectiveAsync(directiveId, SteeringStatus.Applied, now, ct).ConfigureAwait(false);
-        EmitSteering(coordinatorRunId, directiveId, kind, targetChildRunId: null, SteeringStatus.Applied, instruction);
+        await EmitSteeringAsync(coordinatorRunId, directiveId, kind, targetChildRunId: null, SteeringStatus.Applied, instruction, ct).ConfigureAwait(false);
         _waitRegistry.Signal(coordinatorRunId);
 
         // Re-arm dispatch (idempotent). The loop re-dispatches the reset frontier; when those children
@@ -838,11 +838,42 @@ public sealed class CoordinatorSteeringService
         await db.SaveChangesAsync(ct).ConfigureAwait(false);
     }
 
-    private void EmitSteering(
-        string coordinatorRunId, int directiveId, string kind, string? targetChildRunId, string status, string instruction)
+    /// <summary>
+    /// Emits the <c>coordinator.steering</c> timeline event REPLICA-SAFELY. When this replica owns the
+    /// coordinator's in-memory stream, it records there (which best-effort mirrors to the durable
+    /// <c>RunEvents</c> table via <see cref="RunStreamEntry.RecordNext"/>). When it does not — i.e. the
+    /// <c>/steer</c> POST was load-balanced to a replica other than the one running the coordinator's
+    /// dispatch/assembly loop — it appends the event DIRECTLY to the durable <see cref="IRunEventStream"/>
+    /// so the operator's timeline still surfaces the message. Without this fallback the event was
+    /// silently dropped by the <c>entry?.RecordNext</c> null-conditional at <c>replicas:2</c>, so a
+    /// steered message never appeared in the session (the same cross-pod class of bug that
+    /// <see cref="CoordinatorSteeringQueue"/> already fixed for redirect/amend delivery). Mirrors the
+    /// durable fallback in <see cref="EmitChildCancelledAsync"/>.
+    /// </summary>
+    private async Task EmitSteeringAsync(
+        string coordinatorRunId, int directiveId, string kind, string? targetChildRunId, string status, string instruction,
+        CancellationToken ct)
     {
+        var payload = CoordinatorSteeringEvent.Payload(directiveId, kind, targetChildRunId, status, instruction);
+
         var entry = _streamStore.Get(coordinatorRunId);
-        entry?.RecordNext(EventTypes.CoordinatorSteering,
-            CoordinatorSteeringEvent.Payload(directiveId, kind, targetChildRunId, status, instruction));
+        if (entry is not null)
+        {
+            entry.RecordNext(EventTypes.CoordinatorSteering, payload);
+            return;
+        }
+
+        if (_eventStream is not null)
+        {
+            await _eventStream.AppendAsync(
+                coordinatorRunId,
+                new RunEvent(0, EventTypes.CoordinatorSteering, payload),
+                ct).ConfigureAwait(false);
+            return;
+        }
+
+        _logger.LogWarning(
+            "Steering {Kind} for coordinator {RunId} (directive {DirectiveId}) could not be surfaced: this replica does not own the stream and no durable event stream is configured",
+            kind, coordinatorRunId, directiveId);
     }
 }
