@@ -216,6 +216,14 @@ export interface GenerateBlueprintResponse {
   generated_workflow_yaml?: string | null;
 }
 
+export interface SuggestBlueprintResponse {
+  recommended_blueprint?: Blueprint | null;
+  rationale?: string | null;
+  confidence: number;
+  signals: string[];
+  fallback: boolean;
+}
+
 export interface CreateProjectRequest {
   name: string;
   origin: ProjectOrigin;

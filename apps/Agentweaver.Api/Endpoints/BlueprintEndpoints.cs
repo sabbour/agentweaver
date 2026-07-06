@@ -50,6 +50,23 @@ public static class BlueprintEndpoints
             });
         });
 
+        // POST /api/blueprints/suggest — analyze a GitHub repository and recommend a catalog blueprint.
+        app.MapPost("/api/blueprints/suggest", async (
+            HttpContext httpContext,
+            SuggestBlueprintRequest request,
+            GitHubRepoBlueprintSuggestionService suggestions,
+            CancellationToken ct) =>
+        {
+            if (string.IsNullOrWhiteSpace(request.Repository))
+                return Results.BadRequest(new { error = "repository is required." });
+
+            var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
+            var result = await suggestions
+                .SuggestAsync(request.Repository!, caller.User, ct)
+                .ConfigureAwait(false);
+            return Results.Ok(result);
+        });
+
         // POST /api/blueprints/validate — validate a file blueprint against the schema + role constraint.
         app.MapPost("/api/blueprints/validate", (
             ValidateBlueprintRequest request,

@@ -195,6 +195,31 @@ public sealed class GitHubApiEndpointsTests
 
         response.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
     }
+
+    [Fact]
+    public async Task SuggestBlueprint_ForCodeRepo_RecommendsSoftwareDevelopment()
+    {
+        var handler = new UrlDispatchHandler(new Dictionary<string, string>
+        {
+            ["https://api.github.com/repos/octocat/hello-world"] =
+                """{"name":"hello-world","description":"A TypeScript API service","topics":["api","service"],"has_issues":true}""",
+            ["https://api.github.com/repos/octocat/hello-world/languages"] =
+                """{"TypeScript":12500,"C#":8400}""",
+            ["https://api.github.com/repos/octocat/hello-world/contents"] =
+                """[{"name":"package.json"},{"name":"Dockerfile"},{"name":"src"}]""",
+        });
+        using var factory = new GitHubApiWebApplicationFactory(handler, "fake-github-token");
+        var client = factory.CreateAuthenticatedClient();
+
+        var response = await client.PostAsJsonAsync("/api/blueprints/suggest", new { repository = "octocat/hello-world" });
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("fallback").GetBoolean().Should().BeFalse();
+        body.GetProperty("recommended_blueprint").GetProperty("id").GetString()
+            .Should().Be("blueprint-software-development");
+        body.GetProperty("rationale").GetString().Should().Contain("software");
+    }
 }
 
 // =============================================================================

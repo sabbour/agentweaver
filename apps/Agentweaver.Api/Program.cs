@@ -600,6 +600,7 @@ builder.Services.AddSingleton<CastingService>();
 // Blueprints (Feature 012)
 builder.Services.AddSingleton<IBlueprintGenerator, CopilotBlueprintGenerator>();
 builder.Services.AddSingleton<BlueprintService>();
+builder.Services.AddSingleton<GitHubRepoBlueprintSuggestionService>();
 
 // Workflow generation (Feature 015 US10) — LLM → YAML draft, validated + one correction pass.
 builder.Services.AddSingleton<Agentweaver.Api.Workflows.IWorkflowGenerator, Agentweaver.Api.Workflows.CopilotWorkflowGenerator>();
