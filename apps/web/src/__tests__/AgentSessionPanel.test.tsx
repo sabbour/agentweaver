@@ -102,6 +102,85 @@ describe('AgentSessionPanel', () => {
     expect(vi.mocked(apiClient.approveTool)).toHaveBeenCalledWith('child-run-1', 'approval-1', 'once');
   });
 
+  // Regression for #196: from the COORDINATOR view a child subtask raises a tool approval that
+  // is bubbled as coordinator.child_approval_required. Approve/Deny must post to the child
+  // subtask run id (carried in the event payload), NOT the coordinator run id — otherwise the
+  // backend returns 404 "No approval request found for this request_id on this run".
+  it('routes a bubbled child approval to the child run id when the coordinator is selected', async () => {
+    currentEvents = [
+      {
+        sequence: 1,
+        type: 'coordinator.child_approval_required',
+        payload: {
+          childRunId: 'child-run-1',
+          subtaskId: 1,
+          requestId: 'toolu_01abcdef',
+          toolName: 'web_fetch',
+          url: 'https://api.github.com/search/issues',
+        },
+      },
+    ];
+
+    render(
+      <Wrapper>
+        <AgentSessionPanel
+          open
+          onClose={vi.fn()}
+          tree={tree}
+          selectedNodeId="coordinator"
+          onSelectNode={vi.fn()}
+          coordinatorRunId="coord-run-1"
+          projectId="p1"
+        />
+      </Wrapper>,
+    );
+
+    await waitFor(() => expect(screen.getByText('Tool Approval Required')).toBeDefined(), { timeout: 4000 });
+    await userEvent.click(screen.getByRole('button', { name: 'Allow once' }));
+
+    // Must target the child subtask run id, never the coordinator run id.
+    expect(vi.mocked(apiClient.approveTool)).toHaveBeenCalledWith('child-run-1', 'toolu_01abcdef', 'once');
+    expect(vi.mocked(apiClient.approveTool)).not.toHaveBeenCalledWith(
+      'coord-run-1', expect.anything(), expect.anything(),
+    );
+  });
+
+  it('routes a bubbled child approval DENY to the child run id when the coordinator is selected', async () => {
+    currentEvents = [
+      {
+        sequence: 1,
+        type: 'coordinator.child_approval_required',
+        payload: {
+          childRunId: 'child-run-1',
+          subtaskId: 1,
+          requestId: 'toolu_01abcdef',
+          toolName: 'web_fetch',
+          url: 'https://api.github.com/search/issues',
+        },
+      },
+    ];
+
+    render(
+      <Wrapper>
+        <AgentSessionPanel
+          open
+          onClose={vi.fn()}
+          tree={tree}
+          selectedNodeId="coordinator"
+          onSelectNode={vi.fn()}
+          coordinatorRunId="coord-run-1"
+          projectId="p1"
+        />
+      </Wrapper>,
+    );
+
+    await waitFor(() => expect(screen.getByText('Tool Approval Required')).toBeDefined(), { timeout: 4000 });
+    await userEvent.click(screen.getByRole('button', { name: 'Deny' }));
+
+    expect(vi.mocked(apiClient.denyTool)).toHaveBeenCalledWith('child-run-1', 'toolu_01abcdef');
+    expect(vi.mocked(apiClient.denyTool)).not.toHaveBeenCalledWith('coord-run-1', expect.anything());
+  });
+
   it('renders coordinator lifecycle, subtask, assembly, and child activity while collapsing repeated prompt scaffolding', async () => {
     currentEvents = [
       { sequence: 1, type: 'agent.turn.start', payload: { turnId: 't1' } },

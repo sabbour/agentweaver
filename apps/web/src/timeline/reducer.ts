@@ -462,16 +462,21 @@ function processEvent(
       return { ...state, runOutcome: { achieved, reason } };
     }
 
-    case 'tool.approval_required': {
+    case 'tool.approval_required':
+    // A coordinator bubbles a child subtask's tool approval as this type; its payload carries the
+    // owning child run id so approve/deny can target it (issue #196). Handled identically here.
+    case 'coordinator.child_approval_required': {
       // Server emits camelCase (requestId, toolName); accept both for resilience.
       const requestId = String(event.payload['request_id'] ?? event.payload['requestId'] ?? '');
       const toolName = String(event.payload['tool_name'] ?? event.payload['toolName'] ?? '');
       const url = event.payload['url'] != null ? String(event.payload['url']) : null;
+      const childRunId = event.payload['childRunId'] ?? event.payload['child_run_id'];
       const approvalItem: ApprovalRequestItem = {
         kind: 'approval-request',
         requestId,
         toolName,
         url,
+        childRunId: childRunId != null && String(childRunId).trim() !== '' ? String(childRunId) : null,
         resolved: false,
         resolvedScope: null,
       };
@@ -487,7 +492,9 @@ function processEvent(
       return { ...state, items: [...state.items, { kind: 'lifecycle', event }] };
     }
 
-    case 'tool.approval_resolved': {
+    case 'tool.approval_resolved':
+    // Coordinator mirror of tool.approval_resolved for a bubbled child approval (issue #196).
+    case 'coordinator.child_approval_resolved': {
       // Server notifies that a HITL gate closed (operator action or timeout). Find the pending
       // approval by requestId and mark it resolved so the card disables immediately.
       const requestId = String(event.payload['requestId'] ?? event.payload['request_id'] ?? '');

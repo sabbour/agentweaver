@@ -488,6 +488,66 @@ public sealed class DurableToolApprovalGateEventTests : IDisposable
         gate.GetRequestState("run-e5", "req-expired").Should().Be(ToolApprovalRequestState.Expired);
     }
 
+    // ── Coordinator child-subtask routing (regression for issue #196) ──────────
+    // A child subtask registers its tool approval under the CHILD run id. The web console must
+    // POST approve/deny to that child run id. Posting to the parent/coordinator run id finds no
+    // matching pending approval, which the endpoint surfaces as 404 state=unknown. These tests
+    // pin the run-id keying that the /tool-approvals and /tool-denials endpoints rely on.
+    [Fact]
+    public async Task ChildSubtaskApproval_GrantOnChildRunId_Succeeds_ButCoordinatorRunId_IsUnknown()
+    {
+        var streams = new RunStreamStore();
+        streams.Create("child-run", "owner");
+        var gate = new DurableToolApprovalGate(NewState(), streams);
+        gate.RegisterParentRun("child-run", "coordinator-run");
+
+        // Child subtask raises the gate under its own run id.
+        var waitTask = gate.WaitForApprovalAsync(
+            "child-run", "toolu_01abc", "web_fetch", "https://api.github.com", TimeSpan.FromSeconds(10), CancellationToken.None);
+
+        await WaitUntilAsync(async () =>
+        {
+            await Task.CompletedTask;
+            return gate.GetRequestState("child-run", "toolu_01abc") == ToolApprovalRequestState.Pending;
+        });
+
+        // Posting to the coordinator/parent run id must NOT resolve it, and reports Unknown → 404.
+        (await gate.GrantAsync("coordinator-run", "toolu_01abc", ApprovalScope.Once)).Should().BeFalse();
+        gate.GetRequestState("coordinator-run", "toolu_01abc").Should().Be(ToolApprovalRequestState.Unknown);
+
+        // Posting to the child subtask run id resolves it → 200.
+        (await gate.GrantAsync("child-run", "toolu_01abc", ApprovalScope.Once)).Should().BeTrue();
+        (await waitTask).Should().BeTrue();
+        gate.GetRequestState("child-run", "toolu_01abc").Should().Be(ToolApprovalRequestState.Approved);
+    }
+
+    [Fact]
+    public async Task ChildSubtaskApproval_DenyOnChildRunId_Succeeds_ButCoordinatorRunId_IsUnknown()
+    {
+        var streams = new RunStreamStore();
+        streams.Create("child-run-d", "owner");
+        var gate = new DurableToolApprovalGate(NewState(), streams);
+        gate.RegisterParentRun("child-run-d", "coordinator-run-d");
+
+        var waitTask = gate.WaitForApprovalAsync(
+            "child-run-d", "toolu_01def", "web_fetch", "https://api.github.com", TimeSpan.FromSeconds(10), CancellationToken.None);
+
+        await WaitUntilAsync(async () =>
+        {
+            await Task.CompletedTask;
+            return gate.GetRequestState("child-run-d", "toolu_01def") == ToolApprovalRequestState.Pending;
+        });
+
+        // Deny against the coordinator run id finds nothing → 404 unknown.
+        gate.Deny("coordinator-run-d", "toolu_01def").Should().BeFalse();
+        gate.GetRequestState("coordinator-run-d", "toolu_01def").Should().Be(ToolApprovalRequestState.Unknown);
+
+        // Deny against the owning child run id resolves it → 200.
+        gate.Deny("child-run-d", "toolu_01def").Should().BeTrue();
+        (await waitTask).Should().BeFalse();
+        gate.GetRequestState("child-run-d", "toolu_01def").Should().Be(ToolApprovalRequestState.Denied);
+    }
+
     private DurableRunControlState NewState() =>
         new(NewProvider().GetRequiredService<IServiceScopeFactory>());
 

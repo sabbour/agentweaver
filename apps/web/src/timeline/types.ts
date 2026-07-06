@@ -18,6 +18,13 @@ export interface ApprovalRequestItem {
   requestId: string;
   toolName: string;
   url: string | null;
+  /**
+   * The run id that OWNS this pending approval. For a coordinator orchestration this is the child
+   * subtask run id (carried on the bubbled event payload), which differs from the run whose stream
+   * is being rendered. Approve/deny must POST here, not the parent/coordinator run id (issue #196).
+   * Null when the approval belongs to the currently rendered run.
+   */
+  childRunId: string | null;
   resolved: boolean;
   /** 'once'|'run'|'tool'|'always' = operator approved; 'deny' = operator denied; 'expired' = server timeout */
   resolvedScope: string | null;
