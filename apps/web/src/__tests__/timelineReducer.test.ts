@@ -325,6 +325,37 @@ describe('timelineReducer', () => {
     expect(msg.content).toBe('partial');
   });
 
+  // #196: a bubbled coordinator.child_approval_required carries the owning child run id so
+  // approve/deny routes to the child subtask run, not the coordinator run.
+  it('coordinator.child_approval_required captures the owning childRunId', () => {
+    const s = fold([
+      makeEvent('agent.turn.start', { turnId: 'T1' }),
+      makeEvent('coordinator.child_approval_required', {
+        childRunId: 'child-run-9',
+        subtaskId: 2,
+        requestId: 'toolu_01xyz',
+        toolName: 'web_fetch',
+        url: 'https://api.github.com/search/issues',
+      }),
+    ]);
+    const turn = s.items[0] as TurnGroupItem;
+    const card = turn.steps[0] as ApprovalRequestItem;
+    expect(card.kind).toBe('approval-request');
+    expect(card.childRunId).toBe('child-run-9');
+    expect(card.requestId).toBe('toolu_01xyz');
+    expect(s.pendingApprovals.has('toolu_01xyz')).toBe(true);
+  });
+
+  it('tool.approval_required without a childRunId leaves childRunId null', () => {
+    const s = fold([
+      makeEvent('agent.turn.start', { turnId: 'T1' }),
+      makeEvent('tool.approval_required', { requestId: 'req-plain', toolName: 'web_fetch' }),
+    ]);
+    const turn = s.items[0] as TurnGroupItem;
+    const card = turn.steps[0] as ApprovalRequestItem;
+    expect(card.childRunId).toBeNull();
+  });
+
   // T-14: tool.approval_resolved with expired=true marks the card expired
   it('tool.approval_resolved (expired) marks pending approval as expired', () => {
     const s = fold([

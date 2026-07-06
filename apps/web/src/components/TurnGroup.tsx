@@ -294,6 +294,8 @@ export const TurnGroup = memo(function TurnGroup({ item, isLiveRun, streamStatus
                     request_id: aprStep.requestId,
                     tool_name: aprStep.toolName,
                     url: aprStep.url ?? '',
+                    // Route approve/deny to the owning child subtask run id when present (issue #196).
+                    ...(aprStep.childRunId ? { childRunId: aprStep.childRunId } : {}),
                   },
                 }}
                 runId={runId}
