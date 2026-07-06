@@ -49,11 +49,26 @@ with validation errors.
 ## Assign skills to agents
 
 Open the **Assignments** tab after the project has a cast team. Each skill row shows a checkbox per
-agent. Check an agent to assign the skill; clear it to unassign.
+agent. Check an agent to assign the skill; clear it to unassign. Each agent is labelled with its
+**role** alongside its name (for example, *Kai — Backend Engineer*) so you can tell cast members
+apart by what they do rather than only by name.
 
 Only assigned and active skills appear for that agent at run time. The prompt shows the skill name,
 description, and path to the materialized `SKILL.md`; the full skill body is available lazily in the
 run worktree only if the agent needs it.
+
+You can also drop skill files or a **folder** directly onto the Import dropzone. Single files come
+through the browser's normal file list, but folders are read through the FileSystem entry API and
+recursed so every `<name>/SKILL.md` inside is discovered with its correct relative path — dropping a
+whole `skills/` directory imports each skill it contains. Binary and oversized (>1 MiB) files are
+skipped automatically.
+
+## See assigned skills on an agent
+
+Assigned skills also appear on the agent itself. Open an agent from the **Team** page and its detail
+panel lists its **Assigned skills** — each skill's name and description — so you can review what an
+agent is equipped with without switching to the Skills page. If nothing is assigned, the panel says
+**No skills assigned**.
 
 ## See also
 

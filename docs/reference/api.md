@@ -42,7 +42,8 @@ Run endpoints are owner-scoped. The authenticated caller must own the run being 
 | `POST` | `/api/runs` | Submit a task and start a run |
 | `GET` | `/api/runs/{id}` | Get current run state |
 | `POST` | `/api/runs/{id}/archive` | Archive a run |
-| `DELETE` | `/api/runs/{id}` | Delete a run record |
+| `DELETE` | `/api/runs/{id}` | Cancel (if active) and delete a run record |
+| `POST` | `/api/runs/{id}/cancel` | Cancel a run's live work but keep the record |
 | `GET` | `/api/runs/{id}/stream` | Stream ordered run events over SSE |
 | `GET` | `/api/runs/{id}/events` | Return persisted run events |
 | `POST` | `/api/runs/{id}/review` | Record an approve or decline decision |
@@ -379,7 +380,29 @@ Archives a run for the owner. Response `200 OK`:
 
 ### DELETE /api/runs/{id}
 
-Deletes a run record. Active runs are abandoned and their worktree cleanup is best effort before deletion. Response `204 No Content`.
+Cancels and deletes a run record. For any **non-terminal** run, the shared cancellation path runs first (`EndpointHelpers.CancelRunWorkAsync`): the live MAF workflow is abandoned — which also stops any child subtask runs a coordinator is driving — the worktree is torn down best-effort, and the run is forced to a terminal `Failed` state. The run row is then removed and its in-memory stream entry is dropped. Runs already in a terminal state (`Merged`, `Declined`, `MergeFailed`, `Failed`, `Completed`) are deleted directly with no cancellation work.
+
+Response `204 No Content`.
+
+Errors: `400` invalid run id; `404` run not found; `403` caller is not the run owner; `500` fetch or delete failed.
+
+### POST /api/runs/{id}/cancel
+
+Cancels a run's live work but **keeps** the run record so the user can still inspect it. Runs the same shared cancellation path as `DELETE` — abandon the workflow (stopping coordinator child runs), best-effort worktree cleanup, force to terminal `Failed`, and complete the event stream — without deleting the row. This is what the **Stop** action on the Orchestrations list uses.
+
+For a non-terminal run, response `200 OK`:
+
+```json
+{ "run_id": "f36800fd-...", "status": "failed", "cancelled": true, "already_terminal": false }
+```
+
+An **already-terminal** run has no live work to cancel: the endpoint reports the current state without acting, response `200 OK`:
+
+```json
+{ "run_id": "f36800fd-...", "status": "completed", "cancelled": false, "already_terminal": true }
+```
+
+Errors: `400` invalid run id; `404` run not found; `403` caller is not the run owner; `500` fetch failed.
 
 ### GET /api/runs/{id}/stream
 
@@ -617,7 +640,9 @@ Request:
 
 Scope values: `once` = this call only; `run` = all calls to the same tool+url this run; `always` = all calls this server session; `tool` = all calls to this tool regardless of url.
 
-Response `200 OK` `{ "run_id", "request_id", "approved": true }`.
+Response `200 OK` `{ "run_id", "request_id", "approved": true }`. The returned `run_id` is the run that actually **owned** the approval, which may differ from `{id}` (see owning-run resolution below).
+
+**Owning-run resolution.** The approval context lives on the run that *raised* the tool call. In a coordinator orchestration that is a CHILD subtask run, not the coordinator itself — yet operators grant from the coordinator view and may POST the coordinator run id. When `{id}` is a coordinator run (`ParentRunId == null` and `AgentName == "Coordinator"`) that does not itself hold the pending `request_id`, the server searches its child subtask runs (`runStore.GetRunsByParentAsync`) and routes the grant to the child that owns the request. Approving therefore works whether the client posts the coordinator id or the child id (`EndpointHelpers.ResolveApprovalOwningRunIdAsync`, recurrence of #196).
 
 Errors: `400` invalid run id / missing `request_id`; `404` run not found; `403` caller is not the run owner; `409` no pending approval for this `request_id` or run is not active.
 
@@ -631,7 +656,7 @@ Request:
 { "request_id": "string" }
 ```
 
-Response `200 OK` `{ "run_id", "request_id", "denied": true }`.
+Response `200 OK` `{ "run_id", "request_id", "denied": true }`. Like approvals, the denial uses **owning-run resolution**: on a coordinator run the server routes the denial to the child subtask run that raised the tool call, so the returned `run_id` may differ from `{id}` (`EndpointHelpers.ResolveApprovalOwningRunIdAsync`).
 
 Errors: `400` invalid run id / missing `request_id`; `404` run not found; `403` caller is not the run owner; `409` no pending denial for this `request_id` or run is not active.
 

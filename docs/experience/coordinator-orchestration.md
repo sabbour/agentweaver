@@ -307,11 +307,20 @@ The project **Orchestrations** page is the user's project-level index of coordin
 - an orchestration status badge,
 - the task or goal text,
 - the start time,
-- and an **Open** button.
+- and **Open**, **Stop**, and **Delete** actions (see below).
 
 The page header is **Orchestrations** with the subtitle **Coordinator runs across this project.** Breadcrumbs take the user back to **Projects** and the project page. **Refresh** reloads the list. While loading, the page shows **Loading orchestrations**. If no coordinator runs exist, the empty state says **No orchestrations yet** and tells the user to start an orchestration from the Board to coordinate a squad of agents.
 
 Status labels are human-readable. Raw coordinator statuses are normalized into labels such as **Awaiting assembly**, **Assembling**, **In review**, **Dispatching**, **Complete**, **Declined**, **Blocked**, and **Failed**. The list uses those labels rather than forcing the user to interpret internal status strings.
+
+### Stopping vs deleting an orchestration
+
+Each row carries two destructive actions next to **Open**:
+
+- **Stop** (a dismiss-circle icon) cancels a *running* orchestration but keeps the record so the user can still inspect what happened. It first asks for confirmation — *"Stop this orchestration? The running work will be cancelled, but the run is kept so you can inspect it."* — then calls the cancel endpoint and reloads the list so the row settles into a terminal status. Stop is **disabled for orchestrations that have already finished** (completed, failed, declined, merged, merge-failed); its tooltip then reads *"This orchestration has already finished."*
+- **Delete** (a trash icon) removes the orchestration and its workspace entirely. It opens a confirmation dialog — **Delete orchestration** / *"Delete this orchestration? This removes the run and its workspace."* — with **Cancel** and **Delete** buttons. On confirm, the row is optimistically removed from the list. Delete is available for any run, running or finished; a running run is cancelled first as part of deletion.
+
+Under the hood, **Stop** posts `POST /api/runs/{id}/cancel` (cancel-only, keeps the row) and **Delete** issues `DELETE /api/runs/{id}` (cancel-if-active, then remove). Both run the same server-side cancellation path — abandon the coordinator workflow (which also stops its child subtask runs), tear down the worktree, and force the run to a terminal state — so stopping or deleting a live orchestration always leaves the underlying work halted. See the [Runs reference](../reference/api.md#delete-api-runs-id) for the exact routes, status codes, and the `already_terminal` response shape.
 
 ## Orchestration detail page
 
@@ -346,6 +355,14 @@ only through per-child runs.
 
 Coordinator-only artifacts are also intentionally quiet on misses. The page stops retrying `work-plan` or `outcome-spec` REST reads after the first `404`, because the live coordinator stream is enough to fill in those artifacts once they exist. Child runs skip those calls entirely: a child run never has its own work plan or outcome spec, so its page does not poll those coordinator-only endpoints at all.
 
+### Reading the session log
+
+The session log is tuned to read like a clean narrative rather than a machine trace. A **Show technical details** toggle sits above the timeline and is **OFF by default**. With it off, low-signal plumbing rows — system-prompt scaffolding, tool-call start/stop (shell, file view/edit, raw commands), and file-write rows — are collapsed, leaving agent and coordinator messages, instructions, narrative activity, and human-facing approvals. Nothing is deleted: flipping the toggle on reveals every technical row again. The classification is done entirely client-side from the shape of each event, so turning details on and off is instant.
+
+The session column is also wider than before so long tool output and messages have room to breathe, and the **Message coordinator** composer at the bottom of the panel is always visible — the input reserves clearance so the graph's minimap can never hide it. Use it to send a message to the coordinator (or the selected child) mid-run without leaving the page.
+
+The **Coordinator Graph** band reflows responsively: a resize observer re-fits the topology to the available width as the panel or window changes size, so the graph stays readable whether the session column is expanded, collapsed, or the browser is resized.
+
 ### Bubbled child actions
 
 When a child asks a question or needs a tool approval, the coordinator re-projects that action onto the coordinator stream. The detail page shows those items in the all-up view so the user does not have to hunt through every child run.
@@ -356,7 +373,7 @@ Question cards route answers to the child run that asked. Tool approval cards al
 
 After child subtasks settle, the coordinator assembles the collective output. During **Awaiting assembly** or **Assembling**, the page shows **Assembling collective output...** and explains that subtasks are complete and the coordinator is integrating their outputs for collective review.
 
-During **In review**, the page shows a warning that review is pending and directs the user to the Changes panel. The Changes/Files experience is reused for the coordinator's collective assembly output. Approve, request a change, or decline actions go to the assembly review gate, not to individual children.
+During **In review**, the page shows a warning that review is pending and directs the user to the Changes panel. The review stage node in the graph also surfaces a primary **Review now** button while review is action-required; clicking it opens the artifacts/review panel (the same Changes/Files modal) so the user can jump straight from the topology into the collective assembly output. The Changes/Files experience is reused for the coordinator's collective assembly output. Approve, request a change, or decline actions go to the assembly review gate, not to individual children.
 
 If assembly blocks or fails, the page explains why. It can show conflict files, blocking subtasks, status badges, and hints such as re-running affected subtasks or stopping the run. The important UX rule is that the user gets a reason and a recovery surface, not a bare failed state.
 
