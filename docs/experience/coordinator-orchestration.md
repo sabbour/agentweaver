@@ -2,7 +2,7 @@
 
 Coordinator orchestration is the Agentweaver experience for turning one plain-language goal into a confirmed outcome, a dependency-aware work plan, multiple specialist child runs, and one assembled result. The core interaction is deliberately human-accountable: the coordinator drafts an OutcomeSpec, suspends at a confirmation gate, and dispatches no subagent work until the user confirms. The web UI and MCP expose the same lifecycle, so a user can start, confirm, watch, drill in, steer, recover, and review an orchestration from either surface.
 
-Related experience docs: [Runs & board](./runs-board-watch.md), [MCP client](./mcp-client.md), [Projects](./projects.md), and [Review, workspace & merge](./review-workspace-merge.md). Related grounding references: [Coordinator reference](../reference/coordinator.md), [Coordinator internals](../deep-dive/coordinator-internals.md), [Orchestration engine](../deep-dive/orchestration.md), and [Team casting](../deep-dive/team-casting.md).
+Related experience docs: [Orchestration console & gates](./orchestration-console-and-gates.md), [Runs & board](./runs-board-watch.md), [MCP client](./mcp-client.md), [Projects](./projects.md), and [Review, workspace & merge](./review-workspace-merge.md). Related grounding references: [Orchestration console & gates reference](../reference/orchestration-console-and-gates.md), [Coordinator reference](../reference/coordinator.md), [Coordinator internals](../deep-dive/coordinator-internals.md), [Orchestration engine](../deep-dive/orchestration.md), and [Team casting](../deep-dive/team-casting.md).
 
 ```mermaid
 flowchart TD

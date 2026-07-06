@@ -11,6 +11,8 @@ The engine is intentionally split into two layers:
 
 The split matters. Planning and decomposition need durable state, idempotency, and team-level reasoning. Individual run execution needs streaming, review gates, restart loops, and terminal status handling. Keeping those concerns separate lets Agentweaver recover from partial progress without re-asking the model to re-invent the plan.
 
+For the v0.7.12 operator-console layout, first-class Outcome plan phase, Build & Test gate, and workflow-editor gate authoring, see [Orchestration console and gates](./orchestration-console-and-gates.md).
+
 ```mermaid
 flowchart TD
     Request[Human request or Ready backlog task]

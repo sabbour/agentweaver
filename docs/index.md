@@ -24,6 +24,12 @@ hero:
 features:
   - title: Coordinator orchestration
     details: Submit a goal. The coordinator drafts an OutcomeSpec, you confirm it, then a squad of specialists works in parallel — each in an isolated git worktree. You steer mid-run, review once, and approve.
+    link: /experience/orchestration-console-and-gates
+    linkText: See it in action
+  - title: Orchestration console & gates
+    details: Navigate coordinator runs through a four-zone operator console with run tree, graph, session pane, first-class Outcome plan, and platform-owned Build & Test with preview activation.
+    link: /experience/orchestration-console-and-gates
+    linkText: See it in action
   - title: Full observability
     details: Every agent message, tool call, and tool result streams live over SSE and is persisted before fan-out. Nothing is opaque. Reopen any run and see the full audit trail.
   - title: Human gates that matter

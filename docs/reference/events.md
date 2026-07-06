@@ -77,6 +77,7 @@ Clients should order and deduplicate events by `sequence`.
 | `coordinator.assembly_failed` | When the assembly background task hits an UNEXPECTED fault; the work plan moves to `assembly_failed` and the coordinator run ends with a human-readable `assembly_error: <message>` result | `workPlanId`, `reason`, `phase` |
 | `coordinator.child_question` | When a coordinator child run bubbles a question via `ask_question`; re-projected onto the coordinator stream so the operator can answer the child run | `childRunId`, `subtaskId`, `requestId`, `question` |
 | `coordinator.child_approval_required` | When a coordinator child run pauses on a tool-approval gate; re-projected onto the coordinator stream so the operator can grant/deny on the child run | `childRunId`, `subtaskId`, `requestId`, `toolName`, `url` (optional), `message` (optional) |
+| `coordinator.child_approval_resolved` | When a child approval resolves or is reported as already approved, denied, or expired; shown in the v0.7.12 session pane | `childRunId`, `subtaskId`, `requestId`, `approved`, `expired`, `state` |
 | `coordinator.autopilot_answered` | When the coordinator's Autopilot option is ON and the coordinator model auto-answers a clarifying question (its own or one bubbled from a child); the answer is also resolved on the child's question gate, so the normal `agent.question_answered` still surfaces | `runId`, `childRunId` (optional), `requestId`, `question`, `answer` |
 
 ## Tool event pairing

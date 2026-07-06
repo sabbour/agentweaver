@@ -113,6 +113,10 @@ The start-orchestration dialog (`StartOrchestrationDialog`) is opened from the *
 
 ### Coordinator run and outcome-spec gate
 
+::: tip v0.7.12 console
+The coordinator run page now uses the four-zone operator console and first-class Outcome plan phase. See [Orchestration console & gates](./orchestration-console-and-gates.md) for the current layout, session pane, and Build & Test gate reference.
+:::
+
 The coordinator run page (`/projects/:projectId/orchestrations/:runId`) streams the coordinator run live and hosts the outcome-spec review-and-confirm gate. The page header shows the shortened run id and the submitted goal (read from the `coordinator.started` event). The outcome-spec panel (`OutcomeSpecPanel`) renders below it.
 
 The panel derives the spec from two sources, with no spec logic in the client: it seeds from `GET /api/runs/{id}/outcome-spec` and overlays the live `coordinator.outcome_spec` and `coordinator.outcome_spec.confirmed` events from the run stream (ordered and deduplicated by `sequence`). A 404 from the snapshot before the coordinator drafts is expected. The panel stays visible in **Drafting** state and polls every 2 seconds until REST or SSE provides the spec; if the run reaches a failure/decline terminal status before content arrives, it shows a terminal error instead of disappearing (`apps/web/src/components/OutcomeSpecPanel.tsx:160`, `:233`, `:328`, `:401`, `:537`).

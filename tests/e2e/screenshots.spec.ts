@@ -486,6 +486,20 @@ test.describe('User Guide · Coordinator orchestration — pod chips', () => {
 });
 
 // ============================================================================
+// orchestration-console-and-gates.md
+// ============================================================================
+test.describe('User Guide · Orchestration console & gates', () => {
+  test('orchestration-console.png', async ({ page }) => {
+    test.skip(!PROJECT_ID || !RUN_ID, 'Set PROJECT_ID and RUN_ID (a coordinator run) to capture this screenshot.');
+    await captureAt(page, projectRoute(`/orchestrations/${RUN_ID}`), async () => {
+      await page.getByText('Coordinator').first().waitFor().catch(() => undefined);
+      await page.getByRole('tab', { name: 'Messages' }).waitFor().catch(() => undefined);
+      await page.getByPlaceholder('Message coordinator...').waitFor().catch(() => undefined);
+    }, 'orchestration-console');
+  });
+});
+
+// ============================================================================
 // token-usage-monitoring.md — token usage screenshots (spec-019 additions)
 // ============================================================================
 test.describe('User Guide · Token usage monitoring (spec-019)', () => {

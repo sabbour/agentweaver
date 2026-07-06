@@ -75,6 +75,7 @@ export default withMermaid({
             { text: 'Web UI', link: '/reference/web' },
             { text: 'Events', link: '/reference/events' },
             { text: 'Coordinator', link: '/reference/coordinator' },
+            { text: 'Orchestration console & gates', link: '/reference/orchestration-console-and-gates' },
             { text: 'Memory', link: '/reference/memory' },
             { text: 'Agent communication', link: '/reference/agent-communication' },
             { text: 'Sandbox pods', link: '/reference/sandbox-pods' },
@@ -100,6 +101,7 @@ export default withMermaid({
             { text: 'Agent definition', link: '/experience/agent-definition' },
             { text: 'Runs board & watch', link: '/experience/runs-board-watch' },
             { text: 'Coordinator & orchestration', link: '/experience/coordinator-orchestration' },
+            { text: 'Orchestration console & gates', link: '/experience/orchestration-console-and-gates' },
             { text: 'Review workspace & merge', link: '/experience/review-workspace-merge' },
             { text: 'Team casting & memory', link: '/experience/team-casting-memory' },
             { text: 'Workflows & backlog', link: '/experience/workflows-backlog' },
@@ -134,6 +136,7 @@ export default withMermaid({
           text: 'Orchestration & agents',
           items: [
             { text: 'Orchestration', link: '/deep-dive/orchestration' },
+            { text: 'Orchestration console & gates', link: '/deep-dive/orchestration-console-and-gates' },
             { text: 'Coordinator internals', link: '/deep-dive/coordinator-internals' },
             { text: 'Workflow engine', link: '/deep-dive/workflow-engine' },
             { text: 'Workflow selection', link: '/deep-dive/workflow-selection' },

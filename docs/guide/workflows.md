@@ -100,6 +100,8 @@ When a run executes against a workflow:
 
 The live topology view shows each workflow step as a node, with edges representing the data flow between steps.
 
+Software workflows can use the first-class `build_test` node for the platform-owned **Build & Test** gate. It runs build/test checks, routes `approved` / `request-changes` / `declined`, and can register sandbox preview before human review. See [Orchestration console & gates](../reference/orchestration-console-and-gates.md#build-test-workflow-node).
+
 ## Blueprints bundle workflows
 
 When you save a team as a **Blueprint**, the Blueprint bundles the team's roster, one or more workflows (with a designated default), and the project's review and sandbox policies. Instantiating the Blueprint into a new project automatically materializes the workflow files into the new project's `.agentweaver/workflows/` directory.
