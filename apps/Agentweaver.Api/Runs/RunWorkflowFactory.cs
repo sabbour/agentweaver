@@ -1066,6 +1066,18 @@ public sealed class RunWorkflowFactory
                 });
         }
 
+        public ExecutorBinding ReviewToTerminalAdapter(WorkflowEdge edge)
+        {
+            var id = EdgeId("review-to-terminal", edge);
+            return new VisualFunctionExecutor<WorkflowReviewDecision, NoChangesOutput>(
+                id, id, "Done", "plumbing", "terminal", true,
+                async (decision, ctx, ct) =>
+                {
+                    var produced = await ctx.ReadStateAsync<AgentTurnOutput>(MergeDataKey, MergeDataScope, ct).ConfigureAwait(false);
+                    return new NoChangesOutput(produced?.RunId ?? string.Empty);
+                });
+        }
+
         public ExecutorBinding AgentToMergeAdapter(WorkflowEdge edge)
         {
             var id = EdgeId("agent-to-merge", edge);
