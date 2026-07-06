@@ -85,7 +85,7 @@ public sealed class BacklogDecomposeService
     /// unavailable or returns unparseable output — callers map this to HTTP 500.
     /// </summary>
     public async Task<DecomposeAgentResult> DecomposeAsync(
-        Project project, string fileContent, CancellationToken ct)
+        Project project, string fileContent, string submittingUser, CancellationToken ct)
     {
         CopilotAIAgent? agent = null;
         try
@@ -100,6 +100,10 @@ public sealed class BacklogDecomposeService
                 _loggerFactory.CreateLogger<CopilotAIAgent>());
 
             var runId = $"{project.Id}-decompose-{Guid.NewGuid():N}";
+            if (string.IsNullOrWhiteSpace(submittingUser))
+                throw new InvalidOperationException(
+                    "Decomposition requires a submitting user identity; installation-scope Copilot auth is not permitted.");
+
             await agent.SetupAsync(
                 workingDirectory: project.WorkingDirectory,
                 repositoryPath: project.WorkingDirectory,
@@ -111,7 +115,8 @@ public sealed class BacklogDecomposeService
                 agentName: AgentName,
                 apiBaseUrl: _apiBaseUrl,
                 apiKey: _apiKey,
-                ct).ConfigureAwait(false);
+                ct,
+                userId: submittingUser).ConfigureAwait(false);
 
             // SECURITY: fileContent is untrusted data from the workspace file. Fence it in
             // clearly labeled delimiters so the model treats it as data, not instructions.

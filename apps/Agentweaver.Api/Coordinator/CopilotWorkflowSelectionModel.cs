@@ -62,10 +62,14 @@ public sealed class CopilotWorkflowSelectionModel : IWorkflowSelectionModel
         AIAgent? agent = null;
         try
         {
-            // Use the installation scope — workflow selection is a system-level classification
-            // turn, not tied to any specific user's run. CallerTokenScopeProvider falls back to
-            // Installation when userId is null; FixedInstallationScopeProvider always returns it.
-            var scope = _scopeProvider.Resolve(null);
+            // Copilot model turns require the submitting user's Copilot-entitled token. Do not fall
+            // back to the installation scope: GitHub App installation tokens are not Copilot model
+            // credentials and can yield empty/no-auth turns that look like parse failures.
+            if (string.IsNullOrWhiteSpace(context.SubmittingUser))
+                throw new InvalidOperationException(
+                    "Workflow selection requires a submitting user identity; installation-scope Copilot auth is not permitted.");
+
+            var scope = _scopeProvider.Resolve(context.SubmittingUser);
             client = await _copilotClientFactory.CreateClientAsync(scope, _modelId, ct).ConfigureAwait(false);
             await client.StartAsync(ct).ConfigureAwait(false);
 
@@ -93,8 +97,8 @@ public sealed class CopilotWorkflowSelectionModel : IWorkflowSelectionModel
             var result = await CaptureResponseTextAsync(
                 agent.RunStreamingAsync(prompt, session, options: null, ct), ct).ConfigureAwait(false);
             _logger.LogInformation(
-                "Workflow selection model completed for project {ProjectId}: {Length} chars.",
-                context.ProjectId, result?.Length ?? 0);
+                "Workflow selection model completed for project {ProjectId}: {Length} chars. Raw response (truncated): {Response}",
+                context.ProjectId, result?.Length ?? 0, Truncate(result));
             return result;
         }
         catch (Exception ex)
@@ -139,6 +143,12 @@ public sealed class CopilotWorkflowSelectionModel : IWorkflowSelectionModel
             {
                 sb.Append(deltaText);
             }
+            else
+            {
+                var contentText = ExtractTextContent(chunk);
+                if (!string.IsNullOrEmpty(contentText))
+                    sb.Append(contentText);
+            }
 
             // When no delta text has been captured yet, also check for the consolidated
             // final-message content delivered as an AssistantMessageEvent in RawRepresentation.
@@ -152,6 +162,23 @@ public sealed class CopilotWorkflowSelectionModel : IWorkflowSelectionModel
             }
         }
         return sb.Length > 0 ? sb.ToString().Trim() : null;
+    }
+
+    private static string? ExtractTextContent(AgentResponseUpdate chunk)
+    {
+        if (chunk.Contents is null) return null;
+
+        StringBuilder? text = null;
+        foreach (var content in chunk.Contents)
+        {
+            if (content is not TextContent textContent || string.IsNullOrEmpty(textContent.Text))
+                continue;
+
+            text ??= new StringBuilder();
+            text.Append(textContent.Text);
+        }
+
+        return text?.ToString();
     }
 
     /// <summary>
@@ -168,5 +195,12 @@ public sealed class CopilotWorkflowSelectionModel : IWorkflowSelectionModel
                 return message.Data?.Content;
         }
         return null;
+    }
+
+    private static string Truncate(string? value, int max = 500)
+    {
+        if (string.IsNullOrEmpty(value)) return "(empty)";
+        var collapsed = value.Trim();
+        return collapsed.Length <= max ? collapsed : collapsed[..max] + "…";
     }
 }

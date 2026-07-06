@@ -37,7 +37,8 @@ public sealed record WorkflowSelectionContext(
     string TaskDescription,
     IReadOnlyList<string> TeamRoles,
     IReadOnlyList<WorkflowDefinition> AvailableWorkflows,
-    IReadOnlySet<string>? CustomWorkflowIds = null);
+    IReadOnlySet<string>? CustomWorkflowIds = null,
+    string? SubmittingUser = null);
 
 /// <summary>
 /// The outcome of a selection: the chosen workflow, a 1–2 sentence rationale, and whether the model
@@ -126,6 +127,9 @@ public sealed class WorkflowSelector : IWorkflowSelector
             }
 
             lastResponse = response;
+            _logger.LogInformation(
+                "Workflow selection raw model response for project {ProjectId} (attempt {Attempt}/{MaxAttempts}, truncated): {Response}",
+                context.ProjectId, attempt, MaxAttempts, Truncate(response));
 
             if (!TryParse(response, out var selectedId, out var rationale))
             {
@@ -157,8 +161,8 @@ public sealed class WorkflowSelector : IWorkflowSelector
                 return new WorkflowSelectionResult(selected, rationale, WasAutoSelected: true);
 
             _logger.LogWarning(
-                "Workflow selection model chose unknown workflow id '{SelectedId}' for project {ProjectId} (attempt {Attempt}/{MaxAttempts}).",
-                selectedId, context.ProjectId, attempt, MaxAttempts);
+                "Workflow selection model chose unknown workflow id '{SelectedId}' for project {ProjectId} (attempt {Attempt}/{MaxAttempts}). Raw response (truncated): {Response}",
+                selectedId, context.ProjectId, attempt, MaxAttempts, Truncate(response));
         }
 
         // Structured fallback log: the parse_failure property makes silent-wrong-workflow

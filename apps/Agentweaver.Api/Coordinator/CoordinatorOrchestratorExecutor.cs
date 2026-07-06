@@ -262,8 +262,12 @@ public sealed class CoordinatorOrchestratorExecutor
                 .Where(r => !r.IsBuiltIn)
                 .Select(r => r.Definition!.Id)
                 .ToHashSet(StringComparer.Ordinal);
-            var context = new WorkflowSelectionContext(input.ProjectId, spec.Goal, roles, available, customWorkflowIds);
+            var context = new WorkflowSelectionContext(
+                input.ProjectId, spec.Goal, roles, available, customWorkflowIds, input.SubmittingUser);
 
+            _logger.LogInformation(
+                "Coordinator workflow selection for run {RunId}: invoking selector with {WorkflowCount} workflows ({WorkflowIds}).",
+                input.RunId, available.Count, string.Join(", ", available.Select(w => w.Id)));
             var result = await selector.SelectAsync(context, ct).ConfigureAwait(false);
             EmitWorkflowSelectedEvent(input.RunId, result.Selected, result.Rationale, result.WasAutoSelected, available);
             await PersistSelectionReasonAsync(runStore, input.RunId, result.Rationale, ct).ConfigureAwait(false);
