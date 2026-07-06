@@ -30,6 +30,7 @@ import { ObservabilityAgentsPage } from './pages/observability/ObservabilityAgen
 import { ObservabilityOverviewPage } from './pages/observability/ObservabilityOverviewPage';
 import { ObservabilityRedirectPage } from './pages/observability/ObservabilityRedirectPage';
 import { ObservabilityTracesPage } from './pages/observability/ObservabilityTracesPage';
+import { BrowserConsole } from './console/BrowserConsole';
 import { AppShell } from './components/shell/AppShell';
 import { apiClient } from './api/apiClient';
 import { bindSessionLogin, captureSessionAuthFromUrl, clearSessionAuth, getSessionLogin, getSessionToken } from './config';
@@ -42,6 +43,7 @@ function Shell() {
         <Route path="/" element={<OverviewPage />} />
         <Route path="/overview" element={<OverviewPage />} />
         <Route path="/projects" element={<ProjectGalleryPage />} />
+        <Route path="/console" element={<BrowserConsole />} />
         <Route path="/observability" element={<ObservabilityRedirectPage />} />
         <Route path="/observability/traces" element={<ObservabilityRedirectPage suffix="/traces" />} />
         <Route path="/observability/agents" element={<ObservabilityRedirectPage suffix="/agents" />} />
