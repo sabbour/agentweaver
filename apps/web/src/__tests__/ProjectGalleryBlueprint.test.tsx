@@ -137,7 +137,8 @@ describe('ProjectGalleryPage — blueprint selection', () => {
     await openBlankDialog();
 
     await waitFor(() => expect(apiClient.listBlueprints).toHaveBeenCalled());
-    expect(screen.getByRole('radio', { name: 'No blueprint' })).toBeDefined();
+    expect(screen.getByRole('button', { name: 'No blueprint' })).toBeDefined();
+    expect(screen.queryByRole('radio', { name: 'No blueprint' })).toBeNull();
 
     fillNameAndFolder();
     fireEvent.click(screen.getByRole('button', { name: 'Create', hidden: true }));

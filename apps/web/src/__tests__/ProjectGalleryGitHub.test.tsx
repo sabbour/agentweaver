@@ -105,6 +105,8 @@ describe('ProjectGalleryPage — GitHub repo listing auth', () => {
     // Accounts loaded → repos loaded for first account.
     await waitFor(() => expect(apiClient.listGitHubRepos).toHaveBeenCalledWith('octocat'));
     expect(screen.queryByText(/Connect your GitHub account/)).toBeNull();
+    expect(screen.getByText('@octocat')).toBeDefined();
+    expect(screen.getByText(/Browsing @octocat personal repositories/)).toBeDefined();
 
     // Opening the repo combobox surfaces the fetched repo — shows name only (no owner prefix).
     fireEvent.click(screen.getByRole('combobox', { name: 'Repository' }));

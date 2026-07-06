@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { type ReactElement, type ReactNode, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Badge,
@@ -19,8 +19,6 @@ import {
   MessageBarActions,
   MessageBarBody,
   Option,
-  Radio,
-  RadioGroup,
   Spinner,
   Text,
   Textarea,
@@ -34,13 +32,9 @@ import { ApiError } from '../api/client';
 import type { CreateProjectRequest, GitHubAccount, GitHubRepo, Project } from '../api/types';
 import { PageHeader } from '../components/PageHeader';
 import {
-  GenerateBlueprintBox,
-  GeneratedBlueprintPane,
-  StarterTemplatesSection,
-  SuggestedBlueprintPanel,
+  BlueprintPanel,
   applyBlueprintToRequest,
   NO_BLUEPRINT,
-  useBlueprintCatalog,
   useBlueprintGeneration,
   type BlueprintSelection,
 } from '../components/BlueprintPicker';
@@ -105,7 +99,8 @@ const useStyles = makeStyles({
   dialogTwoCol: {
     display: 'flex',
     gap: tokens.spacingHorizontalXXL,
-    alignItems: 'flex-start',
+    alignItems: 'stretch',
+    minHeight: '560px',
     '@media (max-width: 680px)': {
       flexDirection: 'column',
     },
@@ -115,8 +110,8 @@ const useStyles = makeStyles({
     flexDirection: 'column',
     gap: tokens.spacingVerticalM,
     flex: '0 0 auto',
-    width: '280px',
-    minWidth: '240px',
+    width: '430px',
+    minWidth: '360px',
     '@media (max-width: 680px)': {
       width: '100%',
     },
@@ -126,8 +121,9 @@ const useStyles = makeStyles({
     flexDirection: 'column',
     flex: '1 1 auto',
     minWidth: '360px',
-    maxHeight: '640px',
-    overflowY: 'auto',
+    height: '640px',
+    maxHeight: 'min(640px, calc(100vh - 220px))',
+    overflow: 'hidden',
     paddingRight: tokens.spacingHorizontalXS,
     gap: tokens.spacingVerticalM,
   },
@@ -261,21 +257,76 @@ function Counter({ value, max }: { value: string; max: number }) {
   return <Text className={styles.charCounter}>{value.length}/{max}</Text>;
 }
 
-function TabToggle<T extends string>({ value, options, onChange }: { value: T; options: T[]; onChange: (value: T) => void }) {
-  const styles = useStyles();
-  return (
-    <div className={styles.tabToggle}>
-      {options.map((option) => (
-        <Button key={option} size="small" appearance={value === option ? 'primary' : 'subtle'} onClick={() => onChange(option)}>
-          {option.charAt(0).toUpperCase() + option.slice(1)}
-        </Button>
-      ))}
-    </div>
-  );
-}
-
 function workspacePath(dataDir: string | null, slug: string) {
   return dataDir ? `${dataDir}/${slug}` : slug;
+}
+
+function CreateProjectDialogShell({
+  open,
+  onOpenChange,
+  trigger,
+  icon,
+  title,
+  subtitle,
+  left,
+  right,
+  saving,
+  canCreate,
+  onCreate,
+  onNoBlueprint,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  trigger: ReactElement;
+  icon: ReactNode;
+  title: string;
+  subtitle: string;
+  left: ReactNode;
+  right: ReactNode;
+  saving: boolean;
+  canCreate: boolean;
+  onCreate: () => void;
+  onNoBlueprint: () => void;
+}) {
+  const styles = useStyles();
+  return (
+    <Dialog open={open} onOpenChange={(_, state) => onOpenChange(state.open)}>
+      <DialogTrigger disableButtonEnhancement>{trigger}</DialogTrigger>
+      <DialogSurface style={{ maxWidth: '1180px' }}>
+        <DialogBody>
+          <div className={styles.dialogHeader}>
+            <div className={styles.titleBlock}>
+              <span className={styles.headerIcon}>{icon}</span>
+              <div>
+                <DialogTitle>{title}</DialogTitle>
+                <Text className={styles.subtitle}>{subtitle}</Text>
+              </div>
+            </div>
+            <DialogTrigger disableButtonEnhancement><Button appearance="subtle" aria-label="Close">×</Button></DialogTrigger>
+          </div>
+          <DialogContent>
+            <div className={styles.dialogTwoCol}>
+              <div className={styles.dialogLeftCol}>{left}</div>
+              <div className={styles.dialogRightCol}>{right}</div>
+            </div>
+          </DialogContent>
+          <DialogActions>
+            <div className={styles.footerSplit}>
+              <div className={styles.footerLeft}>
+                <Button appearance="secondary" onClick={onNoBlueprint}>No blueprint</Button>
+                <Text className={styles.tipLine}>Start with an empty project and add agents later.</Text>
+              </div>
+              <DialogTrigger disableButtonEnhancement><Button appearance="secondary" disabled={saving}>Cancel</Button></DialogTrigger>
+              <Button aria-label="Create" appearance="primary" disabled={!canCreate} onClick={onCreate}>
+                {saving ? 'Creating' : 'Create project'}
+              </Button>
+              {saving && <Spinner size="extra-tiny" aria-hidden="true" />}
+            </div>
+          </DialogActions>
+        </DialogBody>
+      </DialogSurface>
+    </Dialog>
+  );
 }
 
 function CreateBlankDialog({ onCreated, dataDir, workspaceAutoAssigned }: { onCreated: (p: Project) => void; dataDir: string | null; workspaceAutoAssigned: boolean }) {
@@ -285,116 +336,99 @@ function CreateBlankDialog({ onCreated, dataDir, workspaceAutoAssigned }: { onCr
   const [goal, setGoal] = useState('');
   const [folderName, setFolderName] = useState('');
   const [folderEdited, setFolderEdited] = useState(false);
-  const [tab, setTab] = useState<'generated' | 'templates'>('generated');
-  const catalog = useBlueprintCatalog(d.open);
   const generation = useBlueprintGeneration(d.setBlueprint);
   const canCreate = Boolean(d.name.trim() && d.workingDirectory.trim() && !d.saving);
 
-  const resetLocal = () => { d.reset(); setDescription(''); setGoal(''); setFolderName(''); setFolderEdited(false); setTab('generated'); generation.setGenerated(null); };
+  const resetLocal = () => { d.reset(); setDescription(''); setGoal(''); setFolderName(''); setFolderEdited(false); generation.setGenerated(null); };
   const setWorkspaceSlug = (slug: string) => {
     setFolderName(slug);
     d.setWorkingDirectory(workspaceAutoAssigned ? slug : workspacePath(dataDir, slug));
   };
 
+  const left = (
+    <>
+      <Text weight="semibold">Project basics</Text>
+      <Field label="Project name" required>
+        <Input
+          value={d.name}
+          onChange={(_, v) => { const slug = slugify(v.value); d.setName(v.value); if (!folderEdited) setWorkspaceSlug(slug); }}
+          placeholder="My project"
+        />
+      </Field>
+      {!workspaceAutoAssigned && (
+        <Field label="Repository folder" required hint={dataDir ? `Folder name inside ${dataDir}` : 'Workspace folder'}>
+          <Input
+            contentBefore={dataDir ? <Text size={200} style={{ color: tokens.colorNeutralForeground3, whiteSpace: 'nowrap' }}>{dataDir}/</Text> : undefined}
+            value={folderName}
+            onChange={(_, v) => { setFolderEdited(v.value !== ''); setWorkspaceSlug(v.value); }}
+            placeholder="my-repo"
+          />
+        </Field>
+      )}
+      <Field label="Description" hint="Optional">
+        <Textarea value={description} maxLength={500} onChange={(_, v) => setDescription(v.value)} placeholder="What is this project about?" resize="vertical" />
+      </Field>
+      <Counter value={description} max={500} />
+      <Field label="What do you want Agentweaver to help you accomplish?">
+        <Textarea
+          aria-label="Describe your project"
+          value={goal}
+          maxLength={1000}
+          onChange={(_, v) => setGoal(v.value)}
+          placeholder="Example: Track customer requests, triage incoming bugs, research options, draft fixes, and keep stakeholders updated."
+          resize="vertical"
+          style={{ minHeight: 130 }}
+        />
+      </Field>
+      <Text className={styles.tipLine}>Or describe the work Agentweaver should run</Text>
+      <Text className={styles.tipLine}>Generated blueprints configure Agentweaver agents, workflow, review policy, and sandbox posture.</Text>
+      <Counter value={goal} max={1000} />
+      <Text className={styles.tipLine}>Tip: include the type of work, expected outputs, and review needs.</Text>
+      <Button appearance="primary" icon={<SparkleRegular />} disabled={!goal.trim() || generation.generating} onClick={() => void generation.generate(goal)}>
+        {generation.generating ? 'Generating' : 'Generate blueprint'}
+      </Button>
+      {generation.error && <MessageBar intent="error"><MessageBarBody>{generation.error}</MessageBarBody></MessageBar>}
+      <Text className={styles.tipLine}>Agentweaver will propose a squad, workflows, and guardrails from your description.</Text>
+      <div className={styles.infoBox}>
+        <Text weight="semibold">What happens next?</Text>
+        {(['Generate a custom blueprint', 'Customize agents and workflow', 'Create the project'] as const).map((label, index) => (
+          <div key={label} className={styles.stepRow}><span className={styles.stepBadge}>{index + 1}</span><Text>{label}</Text></div>
+        ))}
+      </div>
+      {d.error && <MessageBar intent="error"><MessageBarBody>{d.error}</MessageBarBody></MessageBar>}
+    </>
+  );
+
+  const right = (
+    <BlueprintPanel
+      active={d.open}
+      tabs={['generated', 'templates']}
+      value={d.blueprint}
+      onChange={d.setBlueprint}
+      generated={generation.generated}
+      onGenerate={() => void generation.generate(goal)}
+      generating={generation.generating}
+      generationError={generation.error}
+      generateDescription={goal}
+      onGenerateDescriptionChange={setGoal}
+    />
+  );
+
   return (
-    <Dialog open={d.open} onOpenChange={(_, state) => { d.setOpen(state.open); if (!state.open) resetLocal(); }}>
-      <DialogTrigger disableButtonEnhancement>
-        <Button appearance="primary">Create blank project</Button>
-      </DialogTrigger>
-      <DialogSurface style={{ maxWidth: '1180px' }}>
-        <DialogBody>
-          <div className={styles.dialogHeader}>
-            <div className={styles.titleBlock}>
-              <span className={styles.headerIcon}><SparkleRegular /></span>
-              <div>
-                <DialogTitle>Create blank project</DialogTitle>
-                <Text className={styles.subtitle}>Start from scratch and let Agentweaver design the right squad and workflow for you.</Text>
-              </div>
-            </div>
-            <DialogTrigger disableButtonEnhancement><Button appearance="subtle" aria-label="Close">×</Button></DialogTrigger>
-          </div>
-          <DialogContent>
-            <div className={styles.dialogTwoCol}>
-              <div className={styles.dialogLeftCol} style={{ width: 430 }}>
-                <Text weight="semibold">Project basics</Text>
-                <Field label="Project name" required>
-                  <Input
-                    value={d.name}
-                    onChange={(_, v) => { const slug = slugify(v.value); d.setName(v.value); if (!folderEdited) setWorkspaceSlug(slug); }}
-                    placeholder="My project"
-                  />
-                </Field>
-                {!workspaceAutoAssigned && (
-                  <Field label="Repository folder" required hint={dataDir ? `Folder name inside ${dataDir}` : 'Workspace folder'}>
-                    <Input
-                      contentBefore={dataDir ? <Text size={200} style={{ color: tokens.colorNeutralForeground3, whiteSpace: 'nowrap' }}>{dataDir}/</Text> : undefined}
-                      value={folderName}
-                      onChange={(_, v) => { setFolderEdited(v.value !== ''); setWorkspaceSlug(v.value); }}
-                      placeholder="my-repo"
-                    />
-                  </Field>
-                )}
-                <Field label="Description" hint="Optional">
-                  <Textarea value={description} maxLength={500} onChange={(_, v) => setDescription(v.value)} placeholder="What is this project about?" resize="vertical" />
-                </Field>
-                <Counter value={description} max={500} />
-                <Field label="What do you want Agentweaver to help you accomplish?">
-                  <Textarea
-                    aria-label="Describe your project"
-                    value={goal}
-                    maxLength={1000}
-                    onChange={(_, v) => setGoal(v.value)}
-                    placeholder="Example: Track customer requests, triage incoming bugs, research options, draft fixes, and keep stakeholders updated."
-                    resize="vertical"
-                    style={{ minHeight: 130 }}
-                  />
-                </Field>
-                <Text className={styles.tipLine}>Or describe the work Agentweaver should run</Text>
-                <Text className={styles.tipLine}>Generated blueprints configure Agentweaver agents, workflow, review policy, and sandbox posture.</Text>
-                <Counter value={goal} max={1000} />
-                <Text className={styles.tipLine}>Tip: include the type of work, expected outputs, and review needs.</Text>
-                <Button appearance="primary" icon={<SparkleRegular />} disabled={!goal.trim() || generation.generating} onClick={() => void generation.generate(goal)}>
-                  {generation.generating ? 'Generating' : 'Generate blueprint'}
-                </Button>
-                {generation.error && <MessageBar intent="error"><MessageBarBody>{generation.error}</MessageBarBody></MessageBar>}
-                <Text className={styles.tipLine}>Agentweaver will propose a squad, workflows, and guardrails from your description.</Text>
-                <div className={styles.infoBox}>
-                  <Text weight="semibold">What happens next?</Text>
-                  {[['1', 'Generate a custom blueprint'], ['2', 'Customize agents and workflow'], ['3', 'Create the project']].map(([n, label]) => (
-                    <div key={n} className={styles.stepRow}><span className={styles.stepBadge}>{n}</span><Text>{label}</Text></div>
-                  ))}
-                </div>
-                {d.error && <MessageBar intent="error"><MessageBarBody>{d.error}</MessageBarBody></MessageBar>}
-              </div>
-              <div className={styles.dialogRightCol}>
-                <Text weight="semibold">Blueprint</Text>
-                <TabToggle value={tab} options={['generated', 'templates']} onChange={setTab} />
-                <RadioGroup aria-label="No blueprint selection" value={d.blueprint.kind === 'none' ? 'none' : 'selected'} onChange={() => d.setBlueprint(NO_BLUEPRINT)}>
-                  <Radio value="none" label="No blueprint" />
-                </RadioGroup>
-                {tab === 'generated' ? (
-                  <GeneratedBlueprintPane generated={generation.generated} />
-                ) : (
-                  <StarterTemplatesSection {...catalog} value={d.blueprint} onChange={d.setBlueprint} limit={4} />
-                )}
-                {tab === 'generated' && <StarterTemplatesSection {...catalog} value={d.blueprint} onChange={d.setBlueprint} limit={4} />}
-              </div>
-            </div>
-          </DialogContent>
-          <DialogActions>
-            <div className={styles.footerSplit}>
-              <div className={styles.footerLeft}>
-                <Button appearance="secondary" onClick={() => d.setBlueprint(NO_BLUEPRINT)}>No blueprint</Button>
-                <Text className={styles.tipLine}>Start with an empty project and add agents later.</Text>
-              </div>
-              <DialogTrigger disableButtonEnhancement><Button appearance="secondary" disabled={d.saving}>Cancel</Button></DialogTrigger>
-              <Button aria-label="Create" appearance="primary" disabled={!canCreate} onClick={() => void d.handleSubmit()}>{d.saving ? 'Creating' : 'Create project'}</Button>
-              {d.saving && <Spinner size="extra-tiny" aria-hidden="true" />}
-            </div>
-          </DialogActions>
-        </DialogBody>
-      </DialogSurface>
-    </Dialog>
+    <CreateProjectDialogShell
+      open={d.open}
+      onOpenChange={(open) => { d.setOpen(open); if (!open) resetLocal(); }}
+      trigger={<Button appearance="primary">Create blank project</Button>}
+      icon={<SparkleRegular />}
+      title="Create blank project"
+      subtitle="Start from scratch and let Agentweaver design the right squad and workflow for you."
+      left={left}
+      right={right}
+      saving={d.saving}
+      canCreate={canCreate}
+      onCreate={() => void d.handleSubmit()}
+      onNoBlueprint={() => d.setBlueprint(NO_BLUEPRINT)}
+    />
   );
 }
 
@@ -512,10 +546,8 @@ function CreateFromGitHubDialog({ onCreated, dataDir, workspaceAutoAssigned }: {
   const [folderName, setFolderName] = useState('');
   const [folderEdited, setFolderEdited] = useState(false);
   const [recentCleared, setRecentCleared] = useState(false);
-  const [showMoreOrgs, setShowMoreOrgs] = useState(false);
-  const [tab, setTab] = useState<'suggested' | 'templates' | 'generate'>('suggested');
+  const [showMoreSources, setShowMoreSources] = useState(false);
   const [generateDescription, setGenerateDescription] = useState('');
-  const catalog = useBlueprintCatalog(d.open);
   const generation = useBlueprintGeneration(d.setBlueprint, d.sourceRepository);
 
   const canCreate = Boolean(d.name.trim() && d.workingDirectory.trim() && d.sourceRepository.trim() && !d.saving);
@@ -536,7 +568,6 @@ function CreateFromGitHubDialog({ onCreated, dataDir, workspaceAutoAssigned }: {
       if (!folderEdited) setWorkspaceSlug(slugify(slug));
       if (!d.name.trim()) d.setName(slug.replace(/-/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()));
     }
-    setTab('suggested');
   };
 
   const filteredRepos = repos
@@ -547,151 +578,129 @@ function CreateFromGitHubDialog({ onCreated, dataDir, workspaceAutoAssigned }: {
       return nameA.localeCompare(nameB);
     });
   const recentRepos = recentCleared ? [] : repos.slice(0, 3);
-  const orgAccounts = accounts.filter(a => a.type === 'org');
-  const visibleOrgs = showMoreOrgs ? orgAccounts : orgAccounts.slice(0, 4);
+  const visibleSources = showMoreSources ? accounts : accounts.slice(0, 5);
 
   const resetLocal = () => {
-    d.reset(); setRepoFilter(''); setPasteRepo(''); setFolderName(''); setFolderEdited(false); setRecentCleared(false); setShowMoreOrgs(false); setTab('suggested'); setGenerateDescription(''); generation.setGenerated(null);
+    d.reset(); setRepoFilter(''); setPasteRepo(''); setFolderName(''); setFolderEdited(false); setRecentCleared(false); setShowMoreSources(false); setGenerateDescription(''); generation.setGenerated(null);
   };
 
-  return (
-    <Dialog open={d.open} onOpenChange={(_, state) => { d.setOpen(state.open); if (!state.open) resetLocal(); }}>
-      <DialogTrigger disableButtonEnhancement>
-        <Button appearance="secondary">Create from GitHub</Button>
-      </DialogTrigger>
-      <DialogSurface style={{ maxWidth: '1180px' }}>
-        <DialogBody>
-          <div className={styles.dialogHeader}>
-            <div className={styles.titleBlock}>
-              <span className={styles.headerIcon}>GH</span>
-              <div>
-                <DialogTitle>Create project from GitHub</DialogTitle>
-                <Text className={styles.subtitle}>Import an existing repository and configure a project with Agentweaver.</Text>
-              </div>
-            </div>
-            <DialogTrigger disableButtonEnhancement><Button appearance="subtle" aria-label="Close">×</Button></DialogTrigger>
+  const left = (
+    <div className={styles.repositoryPanel}>
+      <Text weight="semibold">Repository *</Text>
+      <Field label="Project name" required>
+        <Input
+          value={d.name}
+          onChange={(_, v) => { d.setName(v.value); if (!d.sourceRepository.trim() && !folderEdited) setWorkspaceSlug(slugify(v.value)); }}
+          placeholder="My project"
+        />
+      </Field>
+      <Field label="Search repositories" required>
+        <Combobox
+          aria-label="Repository"
+          freeform
+          placeholder={accountsLoading ? 'Loading...' : reposLoading ? 'Loading repositories...' : 'Start typing to search any owner/repository on GitHub'}
+          value={d.sourceRepository}
+          onInput={(e) => { const val = (e.target as HTMLInputElement).value; setRepoFilter(val); d.setSourceRepository(val); if (val.includes('/')) applyRepo(val); }}
+          onOptionSelect={(_, data) => { if (data.optionValue) applyRepo(data.optionValue); }}
+          disabled={accountsLoading}
+        >
+          {filteredRepos.map((repo) => {
+            const repoName = repo.fullName?.split('/').pop() ?? repo.fullName ?? '(unnamed)';
+            const repoUrl = repo.htmlUrl ?? `https://github.com/${repo.fullName ?? ''}`;
+            return <Option key={repo.fullName ?? ''} value={repoUrl} text={repo.fullName ?? ''}><Text weight="semibold">{repoName}</Text></Option>;
+          })}
+        </Combobox>
+      </Field>
+
+      {authRequired && (
+        <MessageBar intent="warning">
+          <MessageBarBody>Connect your GitHub account to list repositories, or paste any public owner/repo.</MessageBarBody>
+          <MessageBarActions><Button size="small" onClick={() => { window.location.href = '/auth/github/authorize'; }}>Connect GitHub</Button></MessageBarActions>
+        </MessageBar>
+      )}
+      {accountsError && <MessageBar intent="error"><MessageBarBody>Could not load accounts: {accountsError}</MessageBarBody><MessageBarActions><Button size="small" onClick={reloadAccounts}>Retry</Button></MessageBarActions></MessageBar>}
+      {reposError && <MessageBar intent="error"><MessageBarBody>Could not load repositories: {reposError}</MessageBarBody><MessageBarActions><Button size="small" onClick={reloadRepos}>Retry</Button></MessageBarActions></MessageBar>}
+
+      <div className={styles.listBlock}>
+        <div className={styles.listHeader}><Text weight="semibold">Recent</Text><Button appearance="transparent" size="small" onClick={() => setRecentCleared(true)}>Clear</Button></div>
+        {recentRepos.length === 0 ? <Text className={styles.tipLine}>No recent repositories.</Text> : recentRepos.map((repo) => (
+          <div key={repo.fullName} className={styles.recentRow}>
+            <div><Text>Recent repository</Text><br /><Text className={styles.tipLine}>{repo.defaultBranch}</Text></div>
+            <Button size="small" appearance="secondary" onClick={() => repo.fullName && applyRepo(repo.fullName)}>Use</Button>
           </div>
-          <DialogContent>
-            <div className={styles.dialogTwoCol}>
-              <div className={styles.dialogLeftCol} style={{ width: 430 }}>
-                <div className={styles.repositoryPanel}>
-                  <Text weight="semibold">Repository *</Text>
-                  <Field label="Project name" required>
-                    <Input
-                      value={d.name}
-                      onChange={(_, v) => { d.setName(v.value); if (!d.sourceRepository.trim() && !folderEdited) setWorkspaceSlug(slugify(v.value)); }}
-                      placeholder="My project"
-                    />
-                  </Field>
-                  <Field label="Search repositories" required>
-                    <Combobox
-                      aria-label="Repository"
-                      freeform
-                      placeholder={accountsLoading ? 'Loading...' : reposLoading ? 'Loading repositories...' : 'Start typing to search any owner/repository on GitHub'}
-                      value={d.sourceRepository}
-                      onInput={(e) => { const val = (e.target as HTMLInputElement).value; setRepoFilter(val); d.setSourceRepository(val); if (val.includes('/')) applyRepo(val); }}
-                      onOptionSelect={(_, data) => { if (data.optionValue) applyRepo(data.optionValue); }}
-                      disabled={accountsLoading}
-                    >
-                      {filteredRepos.map((repo) => {
-                        const repoName = repo.fullName?.split('/').pop() ?? repo.fullName ?? '(unnamed)';
-                        const repoUrl = repo.htmlUrl ?? `https://github.com/${repo.fullName ?? ''}`;
-                        return <Option key={repo.fullName ?? ''} value={repoUrl} text={repo.fullName ?? ''}><Text weight="semibold">{repoName}</Text></Option>;
-                      })}
-                    </Combobox>
-                  </Field>
+        ))}
+      </div>
 
-                  {authRequired && (
-                    <MessageBar intent="warning">
-                      <MessageBarBody>Connect your GitHub account to list repositories, or paste any public owner/repo.</MessageBarBody>
-                      <MessageBarActions><Button size="small" onClick={() => { window.location.href = '/auth/github/authorize'; }}>Connect GitHub</Button></MessageBarActions>
-                    </MessageBar>
-                  )}
-                  {accountsError && <MessageBar intent="error"><MessageBarBody>Could not load accounts: {accountsError}</MessageBarBody><MessageBarActions><Button size="small" onClick={reloadAccounts}>Retry</Button></MessageBarActions></MessageBar>}
-                  {reposError && <MessageBar intent="error"><MessageBarBody>Could not load repositories: {reposError}</MessageBarBody><MessageBarActions><Button size="small" onClick={reloadRepos}>Retry</Button></MessageBarActions></MessageBar>}
+      {!authRequired && (
+        <div className={styles.listBlock}>
+          <div className={styles.listHeader}>
+            <Text weight="semibold">Repository sources</Text>
+            {accounts.length > 5 && <Button appearance="transparent" size="small" onClick={() => setShowMoreSources(!showMoreSources)}>{showMoreSources ? 'Show less' : 'Show more'}</Button>}
+          </div>
+          {visibleSources.length === 0 ? <Text className={styles.tipLine}>{accountsLoading ? 'Loading sources…' : 'No GitHub sources found.'}</Text> : visibleSources.map((acc) => (
+            <button key={acc.login} className={styles.orgRow} type="button" onClick={() => { changeAccount(acc); setRepoFilter(''); d.setSourceRepository(''); }}>
+              <span className={styles.accountOption}><img src={acc.avatar_url} alt="" className={styles.accountAvatar} /><span>@{acc.login}</span>{acc.type === 'user' && <Badge size="small" appearance="outline">You</Badge>}</span><span>›</span>
+            </button>
+          ))}
+          {selectedAccount && <Text className={styles.tipLine}>Browsing @{selectedAccount.login}{selectedAccount.type === 'user' ? ' personal repositories' : ''}</Text>}
+        </div>
+      )}
 
-                  <div className={styles.listBlock}>
-                    <div className={styles.listHeader}><Text weight="semibold">Recent</Text><Button appearance="transparent" size="small" onClick={() => setRecentCleared(true)}>Clear</Button></div>
-                    {recentRepos.length === 0 ? <Text className={styles.tipLine}>No recent repositories.</Text> : recentRepos.map((repo) => (
-                      <div key={repo.fullName} className={styles.recentRow}>
-                        <div><Text>Recent repository</Text><br /><Text className={styles.tipLine}>{repo.defaultBranch}</Text></div>
-                        <Button size="small" appearance="secondary" onClick={() => repo.fullName && applyRepo(repo.fullName)}>Use</Button>
-                      </div>
-                    ))}
-                  </div>
+      <Field label="Or paste any repository" hint="owner/repo">
+        <div className={styles.pasteRow}>
+          <Input className={styles.growInput} value={pasteRepo} onChange={(_, v) => setPasteRepo(v.value)} placeholder="owner/repo" />
+          <Button appearance="secondary" disabled={!pasteRepo.trim()} onClick={() => applyRepo(pasteRepo)}>Go</Button>
+        </div>
+      </Field>
+      {!workspaceAutoAssigned && (
+        <Field label="Repository folder" required hint={dataDir ? `Folder name inside ${dataDir}` : 'Workspace folder'}>
+          <Input
+            contentBefore={dataDir ? <Text size={200} style={{ color: tokens.colorNeutralForeground3, whiteSpace: 'nowrap' }}>{dataDir}/</Text> : undefined}
+            value={folderName}
+            onChange={(_, v) => { setFolderEdited(v.value !== ''); setWorkspaceSlug(v.value); }}
+            placeholder="my-repo"
+          />
+        </Field>
+      )}
 
-                  {!authRequired && (
-                    <div className={styles.listBlock}>
-                      <div className={styles.listHeader}><Text weight="semibold">My organizations</Text>{orgAccounts.length > 4 && <Button appearance="transparent" size="small" onClick={() => setShowMoreOrgs(!showMoreOrgs)}>{showMoreOrgs ? 'Show less' : 'Show more'}</Button>}</div>
-                      {visibleOrgs.length === 0 ? <Text className={styles.tipLine}>{accountsLoading ? 'Loading organizations…' : 'No organizations found.'}</Text> : visibleOrgs.map((acc) => (
-                        <button key={acc.login} className={styles.orgRow} type="button" onClick={() => { changeAccount(acc); setRepoFilter(''); d.setSourceRepository(''); }}>
-                          <span className={styles.accountOption}><img src={acc.avatar_url} alt="" className={styles.accountAvatar} /><span>@{acc.login}</span></span><span>›</span>
-                        </button>
-                      ))}
-                      {selectedAccount && <Text className={styles.tipLine}>Browsing @{selectedAccount.login}</Text>}
-                    </div>
-                  )}
+      <div className={styles.infoBox}>
+        <Text>You can import any public repository on GitHub. Private repositories require connection.</Text>
+      </div>
+      {d.error && <MessageBar intent="error"><MessageBarBody>{d.error}</MessageBarBody></MessageBar>}
+    </div>
+  );
 
-                  <Field label="Or paste any repository" hint="owner/repo">
-                    <div className={styles.pasteRow}>
-                      <Input className={styles.growInput} value={pasteRepo} onChange={(_, v) => setPasteRepo(v.value)} placeholder="owner/repo" />
-                      <Button appearance="secondary" disabled={!pasteRepo.trim()} onClick={() => applyRepo(pasteRepo)}>Go</Button>
-                    </div>
-                  </Field>
-                  {!workspaceAutoAssigned && (
-                    <Field label="Repository folder" required hint={dataDir ? `Folder name inside ${dataDir}` : 'Workspace folder'}>
-                      <Input
-                        contentBefore={dataDir ? <Text size={200} style={{ color: tokens.colorNeutralForeground3, whiteSpace: 'nowrap' }}>{dataDir}/</Text> : undefined}
-                        value={folderName}
-                        onChange={(_, v) => { setFolderEdited(v.value !== ''); setWorkspaceSlug(v.value); }}
-                        placeholder="my-repo"
-                      />
-                    </Field>
-                  )}
+  const right = (
+    <BlueprintPanel
+      active={d.open}
+      tabs={['suggested', 'templates', 'generate']}
+      value={d.blueprint}
+      onChange={d.setBlueprint}
+      targetRepository={d.sourceRepository}
+      generated={generation.generated}
+      onGenerate={() => void generation.generate(generateDescription)}
+      generating={generation.generating}
+      generationError={generation.error}
+      generateDescription={generateDescription}
+      onGenerateDescriptionChange={setGenerateDescription}
+    />
+  );
 
-                  <div className={styles.infoBox}>
-                    <Text>You can import any public repository on GitHub. Private repositories require connection.</Text>
-                  </div>
-                  {d.error && <MessageBar intent="error"><MessageBarBody>{d.error}</MessageBarBody></MessageBar>}
-                </div>
-              </div>
-              <div className={styles.dialogRightCol}>
-                <Text weight="semibold">Blueprint</Text>
-                <TabToggle value={tab} options={['suggested', 'templates', 'generate']} onChange={setTab} />
-                {tab === 'suggested' && (
-                  <SuggestedBlueprintPanel
-                    active={d.open}
-                    repository={d.sourceRepository}
-                    blueprints={catalog.blueprints}
-                    value={d.blueprint}
-                    onChange={d.setBlueprint}
-                    onGenerateClick={() => setTab('generate')}
-                  />
-                )}
-                {tab === 'templates' && <StarterTemplatesSection {...catalog} value={d.blueprint} onChange={d.setBlueprint} limit={4} />}
-                {tab === 'generate' && (
-                  <>
-                    <GenerateBlueprintBox
-                      description={generateDescription}
-                      onDescriptionChange={setGenerateDescription}
-                      onGenerate={() => void generation.generate(generateDescription)}
-                      generating={generation.generating}
-                      error={generation.error}
-                    />
-                    {generation.generated && <GeneratedBlueprintPane generated={generation.generated} />}
-                  </>
-                )}
-              </div>
-            </div>
-          </DialogContent>
-          <DialogActions>
-            <DialogTrigger disableButtonEnhancement><Button appearance="secondary" disabled={d.saving}>Cancel</Button></DialogTrigger>
-            <Button aria-label="Create" appearance="primary" disabled={!canCreate} onClick={() => void d.handleSubmit()}>{d.saving ? 'Creating' : 'Create project'}</Button>
-            {d.saving && <Spinner size="extra-tiny" aria-hidden="true" />}
-          </DialogActions>
-        </DialogBody>
-      </DialogSurface>
-    </Dialog>
+  return (
+    <CreateProjectDialogShell
+      open={d.open}
+      onOpenChange={(open) => { d.setOpen(open); if (!open) resetLocal(); }}
+      trigger={<Button appearance="secondary">Create from GitHub</Button>}
+      icon="GH"
+      title="Create project from GitHub"
+      subtitle="Import an existing repository and configure a project with Agentweaver."
+      left={left}
+      right={right}
+      saving={d.saving}
+      canCreate={canCreate}
+      onCreate={() => void d.handleSubmit()}
+      onNoBlueprint={() => d.setBlueprint(NO_BLUEPRINT)}
+    />
   );
 }
 
