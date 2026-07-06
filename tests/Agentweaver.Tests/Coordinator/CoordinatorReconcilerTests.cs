@@ -81,13 +81,14 @@ public sealed class CoordinatorReconcilerTests : IAsyncDisposable
         (await GetSubtaskAsync(ids[0])).Status.Should().Be(SubtaskStatus.AssembleReady,
             "the re-armed loop store-resolves the orphaned child and applies the result");
 
-        // The dependent sibling became dispatchable once s0 reconciled and was dispatched (it then
-        // fails because this minimal harness has no worktree manager — the point is it left pending).
+        // The dependent sibling became dispatchable once s0 reconciled; in this minimal harness it
+        // then fails before a child stream is started because no worktree manager is wired. The point
+        // is it left pending and reached the dispatch attempt.
         var s1 = await GetSubtaskAsync(ids[1]);
         s1.ChildRunId.Should().NotBeNull("the unblocked dependent sibling was dispatched after recovery");
         var events = _streamStore.Get(coord)!.GetSnapshotSince(0).Events;
-        events.Should().Contain(e => e.Type == EventTypes.SubtaskDispatched,
-            "dispatching the dependent sibling emits its lifecycle event");
+        events.Should().Contain(e => e.Type == EventTypes.SubtaskFailed,
+            "the minimal harness records the attempted dependent dispatch as failed");
 
         // The plan advanced past dispatching to the assembly hand-off.
         (await GetPlanStatusAsync(planId)).Should().Be(WorkPlanStatus.AwaitingAssembly);

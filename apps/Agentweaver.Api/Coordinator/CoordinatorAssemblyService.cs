@@ -478,6 +478,11 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         {
             if (planStatus == WorkPlanStatus.AssemblyBlocked)
             {
+                if (await TryRecoverBlockedAssemblyIfEligibleAsync(
+                        context, workPlanId, subtasks, edges, "assembly_blocked_eligible_recovered", ct)
+                    .ConfigureAwait(false))
+                    return;
+
                 await WaitForBlockedAssemblySteeringAsync(
                     context, workPlanId, reason: null, edges, ct).ConfigureAwait(false);
                 return;
@@ -555,7 +560,7 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
 
         // D2 eligibility gate — NO partial assembly.
         var statusById = subtasks.ToDictionary(s => s.Id, s => s.Status);
-        var ineligible = AssemblyPlanning.IneligibleSubtasks(statusById);
+        var ineligible = AssemblyPlanning.TerminalIneligibleSubtasks(statusById);
         if (ineligible.Count > 0)
         {
             // Enrich the block with the offending subtasks (id + title + status + agent) so the UI can
@@ -581,6 +586,12 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
                 ineligibleSubtaskIds = ineligible,
                 ineligibleSubtasks,
             }, ct).ConfigureAwait(false);
+            return;
+        }
+
+        if (!AssemblyPlanning.AllEligible(statusById))
+        {
+            await AwaitMoreSubtasksAsync(context, workPlanId, edges, statusById, ct).ConfigureAwait(false);
             return;
         }
 
@@ -1305,6 +1316,32 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         await WaitForBlockedAssemblySteeringAsync(context, workPlanId, reason, edges, ct).ConfigureAwait(false);
     }
 
+    private async Task AwaitMoreSubtasksAsync(
+        CoordinatorDispatchContext context,
+        int workPlanId,
+        IReadOnlyCollection<(int, int)> edges,
+        IReadOnlyDictionary<int, string> statusById,
+        CancellationToken ct)
+    {
+        var notReady = AssemblyPlanning.IneligibleSubtasks(statusById);
+        await _assemblyStore.SetStatusAndStageAsync(
+            workPlanId, WorkPlanStatus.Dispatching, null, ct).ConfigureAwait(false);
+        Emit(context.CoordinatorRunId, EventTypes.CoordinatorRecovered, new
+        {
+            reason = "assembly_subtasks_not_ready",
+            workPlanId,
+            notReadySubtaskIds = notReady,
+        });
+        await EmitTopologyAsync(context.CoordinatorRunId, workPlanId, WorkPlanStatus.Dispatching, edges, ct)
+            .ConfigureAwait(false);
+
+        var dispatch = _serviceProvider.GetRequiredService<ICoordinatorDispatch>();
+        dispatch.StartDispatch(context);
+        _logger.LogInformation(
+            "Collective assembly: run {RunId} saw non-terminal subtasks [{Ids}]; returning to dispatch instead of latching assembly_blocked.",
+            context.CoordinatorRunId, string.Join(",", notReady));
+    }
+
     private async Task RaiBlockAsync(
         CoordinatorDispatchContext context,
         int workPlanId,
@@ -1637,6 +1674,7 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         Terminalized,
         DispatchResumed,
         RetryAssembly,
+        EligibilityRecovered,
     }
 
     private async Task WaitForBlockedAssemblySteeringAsync(
@@ -1651,6 +1689,13 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
 
         switch (outcome)
         {
+            case BlockedAssemblyOutcome.EligibilityRecovered:
+                var recoveredSubtasks = await ReloadSubtasksAsync(workPlanId, ct).ConfigureAwait(false);
+                await TryRecoverBlockedAssemblyIfEligibleAsync(
+                    context, workPlanId, recoveredSubtasks, edges.ToList(), "assembly_blocked_eligible_recovered", ct)
+                    .ConfigureAwait(false);
+                return;
+
             case BlockedAssemblyOutcome.RetryAssembly:
                 await _assemblyStore.SetStatusAndStageAsync(
                     workPlanId, WorkPlanStatus.AwaitingAssembly, null, ct).ConfigureAwait(false);
@@ -1699,6 +1744,9 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
             if (planStatus != WorkPlanStatus.AssemblyBlocked)
                 return BlockedAssemblyOutcome.DispatchResumed;
 
+            if (await AreSubtasksAssemblyEligibleAsync(workPlanId, ct).ConfigureAwait(false))
+                return BlockedAssemblyOutcome.EligibilityRecovered;
+
             var directives = await GetSteeringDirectivesAfterAsync(coordinatorRunId, lastDirectiveId, ct).ConfigureAwait(false);
             if (directives.Count > 0)
             {
@@ -1719,6 +1767,42 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         }
 
         throw new OperationCanceledException(ct);
+    }
+
+    private async Task<bool> TryRecoverBlockedAssemblyIfEligibleAsync(
+        CoordinatorDispatchContext context,
+        int workPlanId,
+        List<Subtask> subtasks,
+        List<(int, int)> edges,
+        string reason,
+        CancellationToken ct)
+    {
+        var statusById = subtasks.ToDictionary(s => s.Id, s => s.Status);
+        if (!AssemblyPlanning.AllEligible(statusById))
+            return false;
+
+        if (!await _assemblyStore.TryResetBlockedAssemblyAsync(workPlanId, ct).ConfigureAwait(false))
+            return false;
+
+        await MarkCoordinatorInProgressAsync(context.CoordinatorRunId, ct).ConfigureAwait(false);
+        Emit(context.CoordinatorRunId, EventTypes.CoordinatorRecovered, new
+        {
+            reason,
+            workPlanId,
+        });
+        _logger.LogInformation(
+            "Collective assembly: run {RunId} cleared stale assembly_blocked state because all subtasks are now eligible.",
+            context.CoordinatorRunId);
+
+        var retrySubtasks = await ReloadSubtasksAsync(workPlanId, ct).ConfigureAwait(false);
+        await RunAssemblyCoreAsync(context, workPlanId, retrySubtasks, edges, ct).ConfigureAwait(false);
+        return true;
+    }
+
+    private async Task<bool> AreSubtasksAssemblyEligibleAsync(int workPlanId, CancellationToken ct)
+    {
+        var subtasks = await ReloadSubtasksAsync(workPlanId, ct).ConfigureAwait(false);
+        return AssemblyPlanning.AllEligible(subtasks.ToDictionary(s => s.Id, s => s.Status));
     }
 
     private async Task<int> GetLatestSteeringDirectiveIdAsync(string coordinatorRunId, CancellationToken ct)

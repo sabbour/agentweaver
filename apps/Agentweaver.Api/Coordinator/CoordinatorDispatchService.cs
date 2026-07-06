@@ -476,6 +476,22 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         if (!advanced)
         {
             var current = await ReadWorkPlanStatusAsync(workPlanId, ct).ConfigureAwait(false);
+            if (current == WorkPlanStatus.AssemblyBlocked && AssemblyPlanning.AllEligible(statusById))
+            {
+                advanced = await TryAdvanceWorkPlanStatusAsync(
+                    workPlanId, WorkPlanStatus.AssemblyBlocked, WorkPlanStatus.AwaitingAssembly, ct)
+                    .ConfigureAwait(false);
+                current = advanced
+                    ? WorkPlanStatus.AwaitingAssembly
+                    : await ReadWorkPlanStatusAsync(workPlanId, ct).ConfigureAwait(false);
+                if (advanced)
+                {
+                    _logger.LogInformation(
+                        "Coordinator dispatch complete for run {RunId}: cleared stale assembly_blocked state after all subtasks became eligible.",
+                        context.CoordinatorRunId);
+                }
+            }
+
             if (current != WorkPlanStatus.AwaitingAssembly)
             {
                 // Another replica already owns Phase 3 (assembling / in_review / terminal). Do NOT

@@ -178,6 +178,38 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task RunAssembly_AssemblyBlockedThenAllChildrenReady_ClearsBlockAndContinuesWithoutSteering()
+    {
+        var coordinatorRunId = RunId.New().ToString();
+        await SeedCoordinatorRunAsync(coordinatorRunId);
+        var childRunId = RunId.New();
+        await SeedChildRunAsync(childRunId, "child/recovered", DiffTouching("src/recovered.cs"));
+        var (workPlanId, subtaskIds) = await SeedPlanAsync(
+            coordinatorRunId,
+            new[] { SubtaskStatus.Completed, SubtaskStatus.Failed },
+            new[] { null, childRunId.ToString() });
+        _streamStore.Create(coordinatorRunId, "alice");
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        var run = _sut.RunAssemblyAsync(Context(coordinatorRunId), cts.Token);
+        await WaitForEventAsync(coordinatorRunId, EventTypes.CoordinatorAssemblyBlocked, cts.Token);
+
+        await SetSubtaskStatusAsync(subtaskIds[1], SubtaskStatus.AssembleReady);
+
+        await WaitUntilArmedAsync(coordinatorRunId);
+        _reviewGate.TrySubmit(coordinatorRunId, "alice",
+            new AssemblyReviewDecision(Approved: true, RequestChanges: false, Feedback: null,
+                TargetFiles: null, Reviewer: "alice"))
+            .Should().Be(AssemblyReviewSubmitResult.Accepted);
+        await run;
+
+        (await _assemblyStore.GetAsync(workPlanId, default))!.Status.Should().Be(WorkPlanStatus.Complete);
+        _pipeline.IntegrationBuilds.Should().Be(1);
+        EventTypes_(coordinatorRunId).Should().Contain(EventTypes.CoordinatorRecovered);
+        EventTypes_(coordinatorRunId).Should().Contain(EventTypes.CoordinatorAssemblyCompleted);
+    }
+
+    [Fact]
     public async Task RunAssembly_RetriesTransientIntegrationBuildFailures_AndContinues()
     {
         var coordinatorRunId = RunId.New().ToString();
@@ -804,6 +836,16 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         await db.SaveChangesAsync();
     }
 
+    private async Task SetSubtaskStatusAsync(int subtaskId, string status)
+    {
+        using var scope = _provider.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var subtask = await db.Subtasks.FirstAsync(s => s.Id == subtaskId);
+        subtask.Status = status;
+        subtask.UpdatedAt = DateTimeOffset.UtcNow;
+        await db.SaveChangesAsync();
+    }
+
     private async Task SeedDeferredAssemblyDecisionAsync(string coordinatorRunId, AssemblyReviewDecision decision)
     {
         await CoordinatorAssemblyReviewPersistence.PersistDecisionAsync(
@@ -845,7 +887,7 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
     }
 
     private async Task<(int WorkPlanId, List<int> SubtaskIds)> SeedPlanAsync(
-        string coordinatorRunId, IReadOnlyList<string> subtaskStatuses, IReadOnlyList<string>? childRunIds = null)
+        string coordinatorRunId, IReadOnlyList<string> subtaskStatuses, IReadOnlyList<string?>? childRunIds = null)
     {
         using var scope = _provider.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();

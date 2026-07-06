@@ -44,6 +44,25 @@ public sealed class CoordinatorAssemblyStore
     }
 
     /// <summary>
+    /// Clears a previously blocked assembly verdict once durable subtask state proves the plan is now
+    /// assembly-eligible. Guarded by status so another replica cannot regress an already-owned phase.
+    /// </summary>
+    public async Task<bool> TryResetBlockedAssemblyAsync(int workPlanId, CancellationToken ct)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var now = DateTimeOffset.UtcNow;
+        var rows = await db.WorkPlans
+            .Where(w => w.Id == workPlanId && w.Status == WorkPlanStatus.AssemblyBlocked)
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(w => w.Status, WorkPlanStatus.AwaitingAssembly)
+                .SetProperty(w => w.AssemblyStage, (string?)null)
+                .SetProperty(w => w.UpdatedAt, now), ct)
+            .ConfigureAwait(false);
+        return rows > 0;
+    }
+
+    /// <summary>
     /// Cross-pod idempotency guard for the reset path. An <c>assembling</c> plan is normally owned by a
     /// LIVE assembly loop on some replica. This reclaims it back to <c>awaiting_assembly</c> ONLY when
     /// the claim is stale — <see cref="WorkPlan.AssemblyStartedAt"/> is null or older than

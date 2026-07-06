@@ -14,15 +14,27 @@ public static class AssemblyPlanning
     /// D2 eligibility gate. A subtask is <em>assembly-eligible</em> only when it reached
     /// <see cref="SubtaskStatus.AssembleReady"/> (produced changes to assemble) or
     /// <see cref="SubtaskStatus.Completed"/> (terminated with no changes — still a valid, mergeable
-    /// no-op). Anything else — <c>pending</c>, <c>dispatched</c>, <c>running</c>,
-    /// <c>rai_flagged</c>, or <c>failed</c> — makes the WHOLE plan ineligible (NO partial assembly).
-    /// Returns the ids of every NON-eligible subtask (empty ⇒ the plan may assemble).
+    /// no-op). Returns the ids of every NON-eligible subtask (empty ⇒ the plan may assemble).
     /// </summary>
     public static IReadOnlyList<int> IneligibleSubtasks(IReadOnlyDictionary<int, string> statusById)
     {
         var ineligible = new List<int>();
         foreach (var (id, status) in statusById)
             if (!IsEligible(status))
+                ineligible.Add(id);
+        ineligible.Sort();
+        return ineligible;
+    }
+
+    /// <summary>
+    /// Returns only subtasks that are both terminal and assembly-ineligible. Pending/running children
+    /// are "not ready yet", not a permanent assembly_blocked verdict.
+    /// </summary>
+    public static IReadOnlyList<int> TerminalIneligibleSubtasks(IReadOnlyDictionary<int, string> statusById)
+    {
+        var ineligible = new List<int>();
+        foreach (var (id, status) in statusById)
+            if (SubtaskStatus.IsTerminal(status) && !IsEligible(status))
                 ineligible.Add(id);
         ineligible.Sort();
         return ineligible;

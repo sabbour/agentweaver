@@ -40,6 +40,21 @@ public sealed class AssemblyPlanningTests
     }
 
     [Fact]
+    public void TerminalIneligibleSubtasks_IgnoresChildrenThatAreOnlyNotReadyYet()
+    {
+        var statusById = new Dictionary<int, string>
+        {
+            [1] = SubtaskStatus.Pending,
+            [2] = SubtaskStatus.Running,
+            [3] = SubtaskStatus.Failed,
+            [4] = SubtaskStatus.Blocked,
+            [5] = SubtaskStatus.Completed,
+        };
+
+        AssemblyPlanning.TerminalIneligibleSubtasks(statusById).Should().Equal(3, 4);
+    }
+
+    [Fact]
     public void AllEligible_True_WhenEverySubtaskAssembleReadyOrCompleted()
     {
         var statusById = new Dictionary<int, string>
