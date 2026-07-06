@@ -1803,15 +1803,12 @@ export function CoordinatorRunPage() {
     navigate(`/projects/${projectId}/workspace?${query.toString()}`);
   }, [navigate, projectId, runId]);
 
-  // Collective-assembly "View execution": the RAI and Scribe stages run a real agent turn on their
-  // own persisted sub-run stream (`${runId}-rai` / `${runId}-scribe`), so open that stream in the
-  // RunWatcher dialog to surface the actual work (tool calls, inbox review, memory writes) — same
-  // pattern the per-run page uses. Merge "Browse files" and Review "Review now" own no separate run,
-  // so they jump to the reused Changes/Files review panel.
+  // Collective-assembly "View execution": RAI/Scribe have their own persisted sub-run streams, so
+  // focus that session in the slide-up instead of leaving the orchestration page.
   const viewAssemblyExecution = useCallback((id: string) => {
-    if (id.endsWith('-rai') || id.endsWith('-scribe')) navigate(`/projects/${projectId ?? ''}/runs/${id}/workflow`);
+    if (id.endsWith('-rai') || id.endsWith('-scribe')) openPanelForNode(id);
     else scrollToReview();
-  }, [navigate, projectId, scrollToReview]);
+  }, [openPanelForNode, scrollToReview]);
 
   // Option toggles — optimistic update, revert on error. Both cascade to children server-side.
   const toggleAutopilot = useCallback((next: boolean) => {
