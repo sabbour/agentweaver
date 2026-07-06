@@ -474,4 +474,59 @@ describe('timelineReducer', () => {
     expect(s.items).toHaveLength(1);
     expect(s.items[0].kind).toBe('lifecycle');
   });
+
+  // ---- Settling / "perpetual clock" root cause fixes --------------------
+
+  // S-01: a tool.result carrying snake_case call_id still settles a camelCase tool.call
+  it('settles a tool call when the completion uses snake_case call_id', () => {
+    const s = fold([
+      makeEvent('agent.turn.start', { turnId: 'T1' }),
+      makeEvent('tool.call', { callId: 'C1', toolName: 'read_file', arguments: { path: 'a.ts' } }),
+      makeEvent('tool.result', { call_id: 'C1', content: 'data' }),
+    ]);
+    const call = (s.items[0] as TurnGroupItem).steps[0] as ToolCallItem;
+    expect(call.settled).toBe(true);
+    expect(call.result?.content).toBe('data');
+  });
+
+  // S-02: a tool.call whose completion never arrives is grace-settled at agent.turn.end
+  it('grace-settles a still-pending tool call when the turn ends (no perpetual spinner)', () => {
+    const s = fold([
+      makeEvent('agent.turn.start', { turnId: 'T1' }),
+      makeEvent('tool.call', { callId: 'C1', toolName: 'read_file', arguments: { path: 'a.ts' } }),
+      makeEvent('agent.turn.end', { turnId: 'T1' }),
+    ]);
+    const turn = s.items[0] as TurnGroupItem;
+    const call = turn.steps[0] as ToolCallItem;
+    expect(turn.active).toBe(false);
+    expect(call.settled).toBe(true);
+    // Grace-settled with no error → renders as a completed (checkmark) row, not an error.
+    expect(call.error).toBeNull();
+    expect(s.pendingToolCalls.size).toBe(0);
+  });
+
+  // S-03: a still-pending tool call is grace-settled when the run terminates
+  it('grace-settles pending tool calls when the run completes', () => {
+    const s = fold([
+      makeEvent('agent.turn.start', { turnId: 'T1' }),
+      makeEvent('tool.call', { callId: 'C9', toolName: 'search_files', arguments: { pattern: 'x' } }),
+      makeEvent('run.completed', {}),
+    ]);
+    const call = (s.items[0] as TurnGroupItem).steps[0] as ToolCallItem;
+    expect(call.settled).toBe(true);
+    expect(s.pendingToolCalls.size).toBe(0);
+  });
+
+  // S-04: a real completion still wins over the grace fallback (result preserved)
+  it('keeps the real result when a completion arrives before turn end', () => {
+    const s = fold([
+      makeEvent('agent.turn.start', { turnId: 'T1' }),
+      makeEvent('tool.call', { callId: 'C1', toolName: 'read_file', arguments: {} }),
+      makeEvent('tool.result', { callId: 'C1', content: 'real output' }),
+      makeEvent('agent.turn.end', { turnId: 'T1' }),
+    ]);
+    const call = (s.items[0] as TurnGroupItem).steps[0] as ToolCallItem;
+    expect(call.settled).toBe(true);
+    expect(call.result?.content).toBe('real output');
+  });
 });

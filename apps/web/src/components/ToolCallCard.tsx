@@ -11,10 +11,19 @@ import {
   CheckmarkCircleFilled,
   ChevronDownRegular,
   ChevronRightRegular,
+  CodeRegular,
+  DeleteRegular,
+  DocumentArrowDownRegular,
+  DocumentEditRegular,
+  DocumentRegular,
   ErrorCircleFilled,
+  FolderRegular,
+  InfoRegular,
+  SearchRegular,
   WarningFilled,
   WrenchRegular,
 } from '@fluentui/react-icons';
+import type { FluentIcon } from '@fluentui/react-icons';
 import type { ToolCallItem } from '../timeline/types';
 import type { StreamStatus } from '../api/sse';
 
@@ -69,6 +78,20 @@ const useStyles = makeStyles({
     fontFamily: tokens.fontFamilyMonospace,
     fontSize: tokens.fontSizeBase200,
     color: tokens.colorNeutralForeground2,
+    flexShrink: 1,
+    minWidth: 0,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  },
+  meta: {
+    fontFamily: tokens.fontFamilyMonospace,
+    fontSize: tokens.fontSizeBase100,
+    color: tokens.colorNeutralForeground4,
+    flexShrink: 0,
+    whiteSpace: 'nowrap',
+  },
+  spacer: {
     flexGrow: 1,
   },
   badge: {
@@ -114,6 +137,72 @@ function truncate(text: string) {
   return { display: truncated ? text.slice(0, BLOCK_MAX) : text, truncated, total: text.length };
 }
 
+/** Tool-name groups used to pick a calm, action-appropriate leading icon. */
+const READ_TOOLS = new Set(['read_file', 'read', 'view', 'open', 'cat', 'get_file_contents']);
+const SEARCH_TOOLS = new Set(['search_files', 'grep_search', 'grep', 'search', 'search_code', 'ripgrep']);
+const FIND_TOOLS = new Set(['file_search', 'find_files', 'glob', 'find']);
+const EDIT_TOOLS = new Set([
+  'write_file', 'create_file', 'create', 'edit_file', 'edit',
+  'str_replace_editor', 'apply_patch', 'move_file',
+]);
+const DELETE_TOOLS = new Set(['delete_file', 'delete', 'remove_file']);
+const LIST_TOOLS = new Set(['list_directory', 'list_dir', 'ls']);
+const CODE_EXT = /\.(tsx?|jsx?|mjs|cjs|py|go|rs|java|kt|rb|cs|cpp|cc|c|h|hpp|swift|php|scala)$/i;
+
+/**
+ * Choose a leading action icon that varies by the tool's action type, matching a
+ * calm CLI/Copilot transcript: read = document/down-arrow, code file = code glyph,
+ * search = magnifier, edit/write = document-edit, list = folder, delete = trash,
+ * info = info circle. Constitution VIII: FluentUI icons only.
+ */
+function leadingIcon(item: ToolCallItem): FluentIcon {
+  const name = item.toolName;
+  if (name === 'report_intent' || name === 'report_outcome') return InfoRegular;
+  if (LIST_TOOLS.has(name)) return FolderRegular;
+  if (DELETE_TOOLS.has(name)) return DeleteRegular;
+  if (SEARCH_TOOLS.has(name)) return SearchRegular;
+  if (FIND_TOOLS.has(name)) return SearchRegular;
+  if (name === 'run_command') return CodeRegular;
+  const path = pathArgOf(item);
+  if (READ_TOOLS.has(name)) return path && CODE_EXT.test(path) ? CodeRegular : DocumentArrowDownRegular;
+  if (EDIT_TOOLS.has(name)) return DocumentEditRegular;
+  if (path && CODE_EXT.test(path)) return CodeRegular;
+  if (path) return DocumentRegular;
+  return WrenchRegular;
+}
+
+function pathArgOf(item: ToolCallItem): string | null {
+  const a = item.args ?? {};
+  const p = a['path'] ?? a['file'] ?? a['dir'] ?? a['filename'];
+  return p != null ? String(p) : null;
+}
+
+/** Count non-empty lines in a block of text. */
+function countLines(text: string): number {
+  const trimmed = text.replace(/\n+$/, '');
+  if (trimmed === '') return 0;
+  return trimmed.split('\n').length;
+}
+
+/**
+ * Derive a short, MUTED secondary metadata label shown after the primary title
+ * (e.g. "220 lines", "28 matches", "6 results"). Returns null when nothing
+ * meaningful can be derived, so ordinary rows stay clean.
+ */
+function deriveMeta(item: ToolCallItem): string | null {
+  if (!item.settled || item.error || !item.result) return null;
+  const content = item.result.content;
+  if (!content || content.trim() === '' || content.trim() === 'ok') return null;
+  const name = item.toolName;
+  const n = countLines(content);
+  if (n === 0) return null;
+  if (SEARCH_TOOLS.has(name)) return `${n} match${n === 1 ? '' : 'es'}`;
+  if (FIND_TOOLS.has(name)) return `${n} result${n === 1 ? '' : 's'}`;
+  if (LIST_TOOLS.has(name)) return `${n} item${n === 1 ? '' : 's'}`;
+  if (READ_TOOLS.has(name)) return `${n} line${n === 1 ? '' : 's'}`;
+  return null;
+}
+
 export const ToolCallCard = memo(function ToolCallCard({ item, streamStatus, hasFollowingErrors }: ToolCallCardProps) {
   const styles = useStyles();
   const [expanded, setExpanded] = useState(false);
@@ -149,6 +238,9 @@ export const ToolCallCard = memo(function ToolCallCard({ item, streamStatus, has
     item.error
   );
 
+  const LeadIcon = leadingIcon(item);
+  const meta = deriveMeta(item);
+
   return (
     <div>
       {/* SECURITY (Y-3): all user-controlled strings rendered as text nodes */}
@@ -168,9 +260,11 @@ export const ToolCallCard = memo(function ToolCallCard({ item, streamStatus, has
               : <ChevronRightRegular className={styles.chevron} aria-hidden="true" />)
           : <span style={{ width: 10, display: 'inline-block', flexShrink: 0 }} aria-hidden="true" />
         }
-        <WrenchRegular className={styles.icon} aria-hidden="true" />
+        <LeadIcon className={styles.icon} aria-hidden="true" />
         <StatusIcon />
         <Text className={styles.title}>{item.humanTitle}</Text>
+        {meta && <Text className={styles.meta} aria-hidden="true">{meta}</Text>}
+        <span className={styles.spacer} aria-hidden="true" />
         {isSandbox && <Badge className={styles.badge} color="warning" shape="rounded" size="small">sandbox</Badge>}
         {isError && <Badge className={styles.badge} color="danger" shape="rounded" size="small">error</Badge>}
       </button>

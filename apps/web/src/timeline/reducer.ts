@@ -44,6 +44,22 @@ function cap(text: string): string {
 }
 
 /**
+ * Extract the tool call id from an event payload, accepting BOTH camelCase
+ * (`callId`, live SSE wire format) and snake_case (`call_id`, some persisted /
+ * replayed sources — the backend's own BoardProjectionService reads both).
+ *
+ * ROOT CAUSE of the "perpetual clock/spinner" bug: a `tool.result`/`tool.error`
+ * whose id key differs from the originating `tool.call` never matched in
+ * pendingToolCalls, so `settled` stayed false forever. Normalising the key on
+ * BOTH the call and its completion guarantees they pair regardless of casing.
+ */
+function extractCallId(payload: Record<string, unknown>): unknown {
+  const camel = payload['callId'];
+  if (camel != null) return camel;
+  return payload['call_id'];
+}
+
+/**
  * Strip common worktree / home path prefixes from a string for display (Y-2).
  * Full content is still available on expand — this only affects the header label.
  */
@@ -233,6 +249,47 @@ function settleToolCall(
 }
 
 /**
+ * Grace-settle every still-pending tool call that belongs to the given turn.
+ *
+ * A tool call stays `settled:false` if the backend never emits a matching
+ * completion (e.g. the SDK provided no ToolCallId, so the runner minted a fresh
+ * random id for the completion that cannot pair with the call). Once the turn
+ * has ended or the run has terminated, the agent has demonstrably moved on, so
+ * any such call IS finished — leaving it unsettled shows a perpetual running
+ * spinner for work that is actually done. We mark it settled with no error, so
+ * the row resolves to a normal completed (checkmark) state rather than spinning
+ * forever. This is the intentional fallback for genuinely-missing completions;
+ * real completions still settle immediately via their callId match.
+ */
+function settlePendingCallsInTurn(
+  state: TimelineReducerState,
+  turnIndex: number,
+): TimelineReducerState {
+  const stale: unknown[] = [];
+  for (const [callId, [ti]] of state.pendingToolCalls) {
+    if (ti === turnIndex) stale.push(callId);
+  }
+  if (stale.length === 0) return state;
+
+  const turn = state.items[turnIndex] as TurnGroupItem;
+  const steps = [...turn.steps];
+  const pendingToolCalls = new Map(state.pendingToolCalls);
+  for (const callId of stale) {
+    const loc = pendingToolCalls.get(callId);
+    if (!loc) continue;
+    const si = loc[1];
+    const call = steps[si] as ToolCallItem;
+    if (call && call.kind === 'tool-call' && !call.settled) {
+      steps[si] = { ...call, settled: true };
+    }
+    pendingToolCalls.delete(callId);
+  }
+  const newTurn: TurnGroupItem = { ...turn, steps };
+  const items = [...state.items.slice(0, turnIndex), newTurn, ...state.items.slice(turnIndex + 1)];
+  return { ...state, items, pendingToolCalls };
+}
+
+/**
  * Settle any still-streaming message and close the open turn.
  * Safe no-op when no turn is open and no streaming message exists.
  * Always settle BEFORE closing — mirrors the agent.turn.end pattern.
@@ -250,6 +307,8 @@ function closeOpenTurn(state: TimelineReducerState): TimelineReducerState {
   // 2. Close the open turn (no-op when already closed).
   if (s.currentTurnIndex === null) return s;
   const ti = s.currentTurnIndex;
+  // Grace-settle any tool calls whose completion never arrived (no perpetual spinner).
+  s = settlePendingCallsInTurn(s, ti);
   const turn = s.items[ti] as TurnGroupItem;
   const closedTurn: TurnGroupItem = { ...turn, active: false };
   const items = [...s.items.slice(0, ti), closedTurn, ...s.items.slice(ti + 1)];
@@ -286,10 +345,13 @@ function processEvent(
 
       // Targeted single-item update — do NOT use items.map() (fix RD-7)
       const ti = smState.currentTurnIndex;
-      const turn = smState.items[ti] as TurnGroupItem;
+      // Grace-settle any tool calls whose completion never arrived so finished
+      // work never shows a perpetual running spinner (see settlePendingCallsInTurn).
+      const settledState = settlePendingCallsInTurn(smState, ti);
+      const turn = settledState.items[ti] as TurnGroupItem;
       const closedTurn: TurnGroupItem = { ...turn, active: false };
-      const items = [...smState.items.slice(0, ti), closedTurn, ...smState.items.slice(ti + 1)];
-      return { ...smState, items, currentTurnIndex: null, streamingMessage: null };
+      const items = [...settledState.items.slice(0, ti), closedTurn, ...settledState.items.slice(ti + 1)];
+      return { ...settledState, items, currentTurnIndex: null, streamingMessage: null };
     }
 
     case 'agent.message.delta': {
@@ -336,7 +398,7 @@ function processEvent(
     }
 
     case 'tool.call': {
-      const callId = event.payload['callId'];
+      const callId = extractCallId(event.payload);
       const toolName = String(event.payload['toolName'] ?? 'tool');
       const args = (event.payload['arguments'] as Record<string, unknown>) ?? {};
       const callItem: ToolCallItem = {
@@ -353,7 +415,7 @@ function processEvent(
     }
 
     case 'tool.result': {
-      const callId = event.payload['callId'];
+      const callId = extractCallId(event.payload);
       const content = cap(String(event.payload['content'] ?? ''));
       return settleToolCall(state, callId, {
         result: { content },
@@ -363,7 +425,7 @@ function processEvent(
     }
 
     case 'tool.error': {
-      const callId = event.payload['callId'];
+      const callId = extractCallId(event.payload);
       const errorMessage = String(event.payload['errorMessage'] ?? '');
       // RD-B2: derive isSandboxViolation from errorMessage — there is NO errorCode field.
       const lower = errorMessage.toLowerCase();

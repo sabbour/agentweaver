@@ -134,4 +134,74 @@ describe('ToolCallCard', () => {
     await user.click(btn);
     expect(btn.getAttribute('aria-expanded')).toBe('false');
   });
+
+  // C-08: a settled read shows NO clock/spinner and NO error affordance (completed work resolves)
+  it('settled completed call shows no pending spinner', () => {
+    const item = makeCall({ settled: true, result: { content: 'a\nb\nc' } });
+    const { container } = render(
+      <Wrapper>
+        <ToolCallCard item={item} streamStatus="done" />
+      </Wrapper>,
+    );
+    // The "Pending" spinner and "Result not received" warning must be gone once settled.
+    expect(container.querySelector('[aria-label="Pending"]')).toBeNull();
+    expect(container.querySelector('[aria-label="Result not received"]')).toBeNull();
+  });
+
+  // C-09: muted metadata (line/match counts) renders after the label
+  it('renders muted line-count metadata for a settled read', () => {
+    const item = makeCall({
+      toolName: 'read_file',
+      settled: true,
+      result: { content: 'line1\nline2\nline3\nline4' },
+    });
+    render(
+      <Wrapper>
+        <ToolCallCard item={item} streamStatus="done" />
+      </Wrapper>,
+    );
+    expect(screen.getByText('4 lines')).toBeDefined();
+  });
+
+  it('renders match-count metadata for a settled search', () => {
+    const item = makeCall({
+      toolName: 'grep_search',
+      humanTitle: 'Search \u00b7 TODO',
+      args: { pattern: 'TODO' },
+      settled: true,
+      result: { content: 'a.ts:1\nb.ts:2' },
+    });
+    render(
+      <Wrapper>
+        <ToolCallCard item={item} streamStatus="done" />
+      </Wrapper>,
+    );
+    expect(screen.getByText('2 matches')).toBeDefined();
+  });
+
+  // C-10: an unsettled call during a live stream shows the running spinner (never a bare clock)
+  it('unsettled call in a live stream shows a running spinner, not a clock', () => {
+    const { container } = render(
+      <Wrapper>
+        <ToolCallCard item={makeCall({ settled: false })} streamStatus="streaming" />
+      </Wrapper>,
+    );
+    expect(container.querySelector('[aria-label="Pending"]')).not.toBeNull();
+  });
+
+  // C-11: a long title stays a single line via CSS ellipsis (no wrap class)
+  it('applies single-line ellipsis styling to the title', () => {
+    const item = makeCall({
+      humanTitle: 'View ' + 'src/very/deeply/nested/path/'.repeat(6) + 'Component.tsx:1-260',
+      settled: true,
+      result: { content: 'x' },
+    });
+    render(
+      <Wrapper>
+        <ToolCallCard item={item} streamStatus="done" />
+      </Wrapper>,
+    );
+    const titleEl = screen.getByText(item.humanTitle);
+    expect(getComputedStyle(titleEl).whiteSpace).toBe('nowrap');
+  });
 });
