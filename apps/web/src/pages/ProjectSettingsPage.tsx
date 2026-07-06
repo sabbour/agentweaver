@@ -600,12 +600,12 @@ export function ProjectSettingsPage() {
 
                 <div className={styles.subBlock}>
                   <Title3>Relink repository</Title3>
-                  <Text>Update the server-side path if the repository has moved on the Agentweaver server.</Text>
+                  <Text>Update the server-side path if the repository moved within this project&apos;s workspace.</Text>
                   <Field
                     label="Repository path"
                     hint={dataDir
-                      ? `Path to a git repository accessible from the server's data folder: ${dataDir}`
-                      : 'Absolute path to a git repository on the machine running the Agentweaver server'}
+                      ? `Must resolve inside this project's workspace under the server data folder: ${dataDir}`
+                      : "Must resolve inside this project's workspace on the Agentweaver server"}
                   >
                     <Input value={newDir} onChange={(_, v) => setNewDir(v.value)} />
                   </Field>
