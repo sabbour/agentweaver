@@ -42,7 +42,6 @@ import {
   ReactFlow,
   useEdges,
   useNodes,
-  getBezierPath,
   EdgeLabelRenderer,
   type Edge,
   type EdgeProps,
@@ -939,24 +938,13 @@ function SpineEdge({
     junctionY = (sourceY + targetY) / 2;
   }
 
-  const [firstPath] = getBezierPath({
-    sourceX,
-    sourceY,
-    sourcePosition: Position.Right,
-    targetX: junctionX,
-    targetY: junctionY,
-    targetPosition: Position.Left,
-    curvature: 0.4,
-  });
-  const [secondPath] = getBezierPath({
-    sourceX: junctionX,
-    sourceY: junctionY,
-    sourcePosition: Position.Right,
-    targetX,
-    targetY,
-    targetPosition: Position.Left,
-    curvature: 0.4,
-  });
+  const smoothSegment = (sx: number, sy: number, tx: number, ty: number): string => {
+    const dx = Math.max(48, Math.abs(tx - sx) * 0.5);
+    return `M ${sx},${sy} C ${sx + dx},${sy} ${tx - dx},${ty} ${tx},${ty}`;
+  };
+
+  const firstPath = smoothSegment(sourceX, sourceY, junctionX, junctionY);
+  const secondPath = smoothSegment(junctionX, junctionY, targetX, targetY);
 
   return (
     <>

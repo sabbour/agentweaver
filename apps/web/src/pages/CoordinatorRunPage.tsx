@@ -37,8 +37,6 @@ import {
   Handle,
   MiniMap,
   Position,
-  useReactFlow,
-  useNodesInitialized,
   type Node,
   type Edge,
   type NodeProps,
@@ -125,6 +123,14 @@ function topoStatusToStepStatus(status: string): StepStatus {
     case 'failed':         return 'failed';
     default:               return 'pending';
   }
+}
+
+function graphNodeSize(node: Node): { width: number; height: number } {
+  const nt = (node.data as { nodeType?: string } | undefined)?.nodeType;
+  return {
+    width: node.measured?.width ?? node.initialWidth ?? NODE_TYPE_W[nt ?? ''] ?? NODE_W,
+    height: node.measured?.height ?? node.initialHeight ?? NODE_TYPE_H[nt ?? ''] ?? NODE_H,
+  };
 }
 
 function topoStatusToLabel(status: string): string {
@@ -488,25 +494,6 @@ const EXPANDED_PIPELINE_RESERVE = 188;
 // for fan-out columns.
 const COORDINATOR_GRAPH_NODE_SEP = 96;
 
-// Refits the graph to the viewport AFTER React Flow has measured the node DOM. The bare `fitView`
-// prop only fits once at mount using estimated sizes, so on the initial pre-spec load the wide
-// linear chain (Coordinator → RAI → Review → Merge → Scribe) was fitted before measurement and the
-// last node (Scribe) ended up clipped off the right edge. Re-fitting once nodes are initialized —
-// and whenever the layout token changes (node/edge count, expansion, height) — keeps the whole
-// pipeline in view without leaving stale vertical whitespace.
-function GraphAutoFit({ token }: { token: string }) {
-  const { fitView } = useReactFlow();
-  const initialized = useNodesInitialized();
-  useEffect(() => {
-    if (!initialized) return;
-    const id = requestAnimationFrame(() => {
-      void fitView({ padding: 0.12, maxZoom: 1.1, duration: 150 });
-    });
-    return () => cancelAnimationFrame(id);
-  }, [initialized, token, fitView]);
-  return null;
-}
-
 // Renders column depth labels (L0 Coordinator, L1 Research…) inside the React Flow canvas
 // using ViewportPortal so they pan/zoom with the graph and stay aligned over each column.
 // A compact pipeline step row rendered inline inside a SubtaskNode expansion panel. Laid out as a
@@ -845,7 +832,20 @@ const useStyles = makeStyles({
     borderRadius: '8px',
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground1,
+    overflow: 'auto',
     '& .react-flow__renderer': { borderRadius: '8px' },
+    '& .react-flow__minimap': {
+      opacity: 0,
+      transform: 'scale(0.92)',
+      transformOrigin: 'bottom right',
+      transition: 'opacity 120ms ease, transform 120ms ease',
+      pointerEvents: 'none',
+    },
+    '&:hover .react-flow__minimap': {
+      opacity: 1,
+      transform: 'scale(1)',
+      pointerEvents: 'auto',
+    },
   },
   graphColumnLabels: {
     display: 'grid',
@@ -1914,6 +1914,41 @@ export function CoordinatorRunPage() {
     const loopHeadroom = hasLoopback ? 132 : 0;
     return Math.max(180, maxY - minY + 56 + loopHeadroom);
   }, [rfNodes, expandedKeys, displayEdges]);
+
+  const graphViewport = useMemo(() => {
+    if (displayNodes.length === 0) {
+      return {
+        width: '100%',
+        height: graphHeight,
+        defaultViewport: { x: 0, y: 0, zoom: 1 },
+      };
+    }
+    const paddingX = 64;
+    const paddingTop = displayEdges2.some((e) => e.type === 'loopback') ? 132 : 64;
+    const paddingBottom = 64;
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    for (const node of displayNodes) {
+      const size = graphNodeSize(node);
+      minX = Math.min(minX, node.position.x);
+      minY = Math.min(minY, node.position.y);
+      maxX = Math.max(maxX, node.position.x + size.width);
+      maxY = Math.max(maxY, node.position.y + size.height);
+    }
+    const width = Math.max(960, maxX - minX + paddingX * 2);
+    const height = Math.max(graphHeight, maxY - minY + paddingTop + paddingBottom);
+    return {
+      width,
+      height,
+      defaultViewport: {
+        x: paddingX - minX,
+        y: paddingTop - minY,
+        zoom: 1,
+      },
+    };
+  }, [displayNodes, displayEdges2, graphHeight]);
   // The toggle endpoints 409 on a non-active run, so only offer them while the orchestration is live.
   const coordActive     = !['complete', 'failed', 'blocked', 'declined'].includes(orch.phase);
 
@@ -2104,16 +2139,16 @@ export function CoordinatorRunPage() {
             <CoordPanelContext.Provider value={openPanelForNode}>
               <ZoomControls zoom={zoom} onZoomIn={zoomIn} onZoomOut={zoomOut} onFit={resetZoom} maxZoom={maxZoom} />
               <div className={styles.dagContainer} style={{ height: graphHeight }} ref={viewportRef}>
-                <div style={{ zoom, width: '100%', height: '100%' }}>
+                <div style={{ zoom, width: graphViewport.width, minWidth: '100%', height: graphViewport.height }}>
                 <ReactFlow
-                  key={`${displayNodes.length}:${displayEdges2.length}`}
+                  key={`${displayNodes.length}:${displayEdges2.length}:${graphHeight}:${[...expandedKeys].sort().join(',')}`}
                   nodes={displayNodes}
                   edges={displayEdges2}
                   nodeTypes={coordinatorNodeTypes}
                   edgeTypes={workflowEdgeTypes}
-                  fitView
-                  fitViewOptions={{ padding: 0.12, maxZoom: 1.1 }}
-                  minZoom={0.4}
+                  defaultViewport={graphViewport.defaultViewport}
+                  minZoom={1}
+                  maxZoom={1}
                   nodesDraggable={false}
                   nodesConnectable={false}
                   nodesFocusable={false}
@@ -2125,9 +2160,6 @@ export function CoordinatorRunPage() {
                   panOnDrag
                   proOptions={{ hideAttribution: true }}
                 >
-                  <GraphAutoFit
-                    token={`${displayNodes.length}:${displayEdges2.length}:${graphHeight}:${[...expandedKeys].sort().join(',')}`}
-                  />
                   <MiniMap
                     nodeStrokeWidth={0}
                     nodeBorderRadius={3}
@@ -2140,11 +2172,11 @@ export function CoordinatorRunPage() {
                     style={{
                       bottom: 8,
                       right: 8,
-                      width: 172,
-                      height: 116,
+                      width: 104,
+                      height: 72,
                       border: '1px solid var(--colorNeutralStroke2)',
-                      borderRadius: '8px',
-                      boxShadow: 'var(--shadow8)',
+                      borderRadius: '6px',
+                      boxShadow: 'var(--shadow4)',
                     }}
                     nodeColor={(n) => {
                       const s = (n.data as SubtaskNodeData | undefined)?.topoStatus as string | undefined;
