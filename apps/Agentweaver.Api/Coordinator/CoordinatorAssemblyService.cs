@@ -643,7 +643,7 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         Emit(context.CoordinatorRunId, EventTypes.CoordinatorAssemblyRaiStarted, new { workPlanId, integrationBranch });
 
         var rai = await _pipeline.RunRaiAsync(
-            new CollectiveRaiRequest(context.CoordinatorRunId, context.RepositoryPath, aggregateDiff), ct)
+            new CollectiveRaiRequest(context.CoordinatorRunId, context.RepositoryPath, aggregateDiff, context.SubmittingUser), ct)
             .ConfigureAwait(false);
 
         Emit(context.CoordinatorRunId, EventTypes.CoordinatorAssemblyRaiCompleted, new

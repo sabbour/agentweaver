@@ -142,7 +142,8 @@ public sealed class RubberduckTurnExecutor : Executor<AgentTurnOutput, WorkflowR
                 agentName: _reviewAgentId,
                 apiBaseUrl: null,
                 apiKey: null,
-                ct).ConfigureAwait(false);
+                ct,
+                userId: input.SubmittingUser).ConfigureAwait(false);
 
             var response = await agent.RunTurnAsync(task, isRevision: false, ct).ConfigureAwait(false);
             if (TryParseVerdict(response, out var revise))

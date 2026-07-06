@@ -156,7 +156,8 @@ public sealed class RaiTurnExecutor : Executor<AgentTurnOutput, AgentTurnOutput>
                 agentName: null,
                 apiBaseUrl: null,
                 apiKey: null,
-                ct).ConfigureAwait(false);
+                ct,
+                userId: input.SubmittingUser).ConfigureAwait(false);
 
             var response = await agent.RunTurnAsync(task, isRevision: false, ct).ConfigureAwait(false);
 

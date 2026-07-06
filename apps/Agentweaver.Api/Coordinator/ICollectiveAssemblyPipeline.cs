@@ -42,7 +42,8 @@ public sealed record CollectiveIntegrationRequest(
 public sealed record CollectiveRaiRequest(
     string CoordinatorRunId,
     string RepositoryPath,
-    string AggregateDiff);
+    string AggregateDiff,
+    string SubmittingUser);
 
 /// <summary>Outcome of the collective RAI review.</summary>
 public sealed record CollectiveRaiResult(bool SafetyFlagged);
