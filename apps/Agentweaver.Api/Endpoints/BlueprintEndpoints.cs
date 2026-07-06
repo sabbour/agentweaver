@@ -38,8 +38,9 @@ public static class BlueprintEndpoints
                 return Results.UnprocessableEntity(new
                 {
                     error = "blueprint_generation_failed",
-                    message = "The generated blueprint could not be validated.",
+                    message = "The generated blueprint could not be validated. You can regenerate with a more specific prompt or edit the draft fields and validate again.",
                     details = result.Errors,
+                    options = new[] { "regenerate", "edit" },
                 });
 
             return Results.Ok(new GenerateBlueprintResponse

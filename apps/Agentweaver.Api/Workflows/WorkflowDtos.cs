@@ -126,6 +126,10 @@ public sealed record WorkflowGraphDto
 public sealed record GenerateWorkflowRequest
 {
     [JsonPropertyName("description")] public required string Description { get; init; }
+    /// <summary>Optional saved/built-in workflow id to edit instead of creating from scratch.</summary>
+    [JsonPropertyName("base_workflow_id")] public string? BaseWorkflowId { get; init; }
+    /// <summary>Optional current draft YAML for iterative edits before the draft is saved.</summary>
+    [JsonPropertyName("base_yaml")] public string? BaseYaml { get; init; }
 }
 
 /// <summary>Response body for a generated workflow draft (US10). The YAML is unsaved — the client opens
@@ -136,6 +140,9 @@ public sealed record GenerateWorkflowResponse
     [JsonPropertyName("yaml")] public required string Yaml { get; init; }
     [JsonPropertyName("workflowId")] public required string WorkflowId { get; init; }
     [JsonPropertyName("wasCorrected")] public required bool WasCorrected { get; init; }
+    [JsonPropertyName("mode")] public string Mode { get; init; } = "create";
+    [JsonPropertyName("base_workflow_id")] public string? BaseWorkflowId { get; init; }
+    [JsonPropertyName("base_workflow_is_built_in")] public bool BaseWorkflowIsBuiltIn { get; init; }
 }
 
 /// <summary>Maps the workflow domain model to API DTOs (server-side only, Principles III/IV).</summary>

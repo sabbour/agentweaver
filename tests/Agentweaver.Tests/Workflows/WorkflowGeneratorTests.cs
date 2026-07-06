@@ -130,6 +130,47 @@ public sealed class WorkflowGeneratorTests
     }
 
     [Fact]
+    public async Task EditModePrompt_PreservesBaseWorkflowAndRequiresCustomizedCopyForBuiltIns()
+    {
+        var runner = new ScriptedAgentRunner(ValidWorkflowYaml.Replace("id: generated-flow", "id: custom-default"));
+        var generator = CreateGenerator(runner);
+
+        await generator.GenerateAsync(new WorkflowGenerationRequest(
+            "Add a build and test gate before human review.",
+            BaseWorkflowId: "default",
+            BaseWorkflowYaml: DefaultWorkflowTemplate.Yaml,
+            BaseWorkflowIsBuiltIn: true));
+
+        runner.LastTask.Should().Contain("EDIT MODE");
+        runner.LastTask.Should().Contain("Return a DRAFT preview only");
+        runner.LastTask.Should().Contain("Apply ONLY the requested natural-language change");
+        runner.LastTask.Should().Contain("built-in/library and immutable");
+        runner.LastTask.Should().Contain("MUST fork it into a project-owned customized copy");
+        runner.LastTask.Should().Contain("BASE WORKFLOW YAML");
+        runner.LastTask.Should().Contain("SELF-CHECK BEFORE RETURNING");
+        runner.LastTask.Should().Contain("MANDATORY BUILD & TEST STEP (software workflows)");
+    }
+
+    [Fact]
+    public async Task EditModeBuiltInReturningSameId_TriggersCorrectionPass()
+    {
+        var invalidSameId = ValidWorkflowYaml.Replace("id: generated-flow", "id: default");
+        var correctedCopy = ValidWorkflowYaml.Replace("id: generated-flow", "id: default-custom");
+        var runner = new ScriptedAgentRunner(invalidSameId, correctedCopy);
+        var generator = CreateGenerator(runner);
+
+        var result = await generator.GenerateAsync(new WorkflowGenerationRequest(
+            "Add a QA gate.",
+            BaseWorkflowId: "default",
+            BaseWorkflowYaml: DefaultWorkflowTemplate.Yaml,
+            BaseWorkflowIsBuiltIn: true));
+
+        result.WasCorrected.Should().BeTrue();
+        result.Workflow.Id.Should().Be("default-custom");
+        runner.CallCount.Should().Be(2);
+    }
+
+    [Fact]
     public async Task PromptExtractsTargetRepositoryContext_FromDescriptionUrl()
     {
         var runner = new ScriptedAgentRunner(ValidWorkflowYaml);
@@ -216,6 +257,75 @@ public sealed class WorkflowGeneratorTests
         generator.CallCount.Should().Be(1);
         generator.LastRequest.Should().NotBeNull();
         generator.LastRequest!.Description.Should().Be("A manual review-and-merge workflow.");
+    }
+
+    [Fact]
+    public async Task GenerateEndpoint_WithBaseWorkflowId_ReturnsEditDraftWithoutSaving()
+    {
+        await using var factory = new StubWorkflowGeneratorFactory();
+        var client = factory.CreateAuthenticatedClient();
+
+        var dir = factory.NewWorkingDirectory();
+        var create = await client.PostAsJsonAsync("/api/projects", new
+        {
+            name = $"WfEdit Test {Guid.NewGuid():N}",
+            origin = "blank",
+            working_directory = dir,
+        });
+        create.StatusCode.Should().Be(HttpStatusCode.Created);
+        var projectId = (await create.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("project_id").GetString()!;
+
+        var resp = await client.PostAsJsonAsync(
+            $"/api/projects/{projectId}/workflows/generate",
+            new { description = "Add a QA gate.", base_workflow_id = "default" });
+
+        resp.StatusCode.Should().Be(HttpStatusCode.OK, await resp.Content.ReadAsStringAsync());
+        var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("mode").GetString().Should().Be("edit");
+        body.GetProperty("base_workflow_id").GetString().Should().Be("default");
+        body.GetProperty("base_workflow_is_built_in").GetBoolean().Should().BeTrue();
+        body.GetProperty("workflowId").GetString().Should().Be("generated-flow");
+
+        var workflowsDir = Path.Combine(dir, ".agentweaver", "workflows");
+        File.Exists(Path.Combine(workflowsDir, "generated-flow.yaml")).Should().BeFalse(
+            "generation returns a preview draft and must not save it");
+
+        var generator = factory.Services.GetRequiredService<IWorkflowGenerator>()
+            .Should().BeOfType<StubWorkflowGenerator>().Subject;
+        generator.LastRequest.Should().NotBeNull();
+        generator.LastRequest!.IsEdit.Should().BeTrue();
+        generator.LastRequest.BaseWorkflowId.Should().Be("default");
+        generator.LastRequest.BaseWorkflowIsBuiltIn.Should().BeTrue();
+        generator.LastRequest.BaseWorkflowYaml.Should().Contain("id: default");
+    }
+
+    [Fact]
+    public async Task GenerateEndpoint_WithBaseYaml_SupportsIterativeDraftEditing()
+    {
+        await using var factory = new StubWorkflowGeneratorFactory();
+        var client = factory.CreateAuthenticatedClient();
+
+        var dir = factory.NewWorkingDirectory();
+        var create = await client.PostAsJsonAsync("/api/projects", new
+        {
+            name = $"WfDraftEdit Test {Guid.NewGuid():N}",
+            origin = "blank",
+            working_directory = dir,
+        });
+        create.StatusCode.Should().Be(HttpStatusCode.Created);
+        var projectId = (await create.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("project_id").GetString()!;
+
+        var resp = await client.PostAsJsonAsync(
+            $"/api/projects/{projectId}/workflows/generate",
+            new { description = "Rename the first step.", base_yaml = ValidWorkflowYaml });
+
+        resp.StatusCode.Should().Be(HttpStatusCode.OK, await resp.Content.ReadAsStringAsync());
+        var generator = factory.Services.GetRequiredService<IWorkflowGenerator>()
+            .Should().BeOfType<StubWorkflowGenerator>().Subject;
+        generator.LastRequest.Should().NotBeNull();
+        generator.LastRequest!.IsEdit.Should().BeTrue();
+        generator.LastRequest.BaseWorkflowId.Should().Be("generated-flow");
+        generator.LastRequest.BaseWorkflowYaml.Should().Be(ValidWorkflowYaml);
     }
 
     [Fact]
