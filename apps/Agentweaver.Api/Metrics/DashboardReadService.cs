@@ -49,6 +49,12 @@ public sealed class DashboardReadService
         DateTimeOffset StartedAt,
         DateTimeOffset? EndedAt);
 
+    private readonly record struct UsageRunRow(
+        string RunId,
+        string AgentName,
+        string? ParentRunId,
+        string ModelId);
+
     public async Task<ProjectDashboardDto> GetProjectDashboardAsync(Project project, CancellationToken ct = default)
     {
         var now = DateTimeOffset.UtcNow;
@@ -125,15 +131,8 @@ public sealed class DashboardReadService
         string runId,
         CancellationToken ct = default)
     {
-        await using var scope = _scopeFactory.CreateAsyncScope();
-        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
-
-        var root = await db.Runs.AsNoTracking()
-            .Where(r => r.RunId == runId)
-            .Select(r => new { r.RunId, r.AgentName, r.ParentRunId })
-            .FirstOrDefaultAsync(ct)
-            .ConfigureAwait(false);
-        if (root is null)
+        var relatedRuns = await LoadUsageRunsForTokenBreakdownAsync(runId, ct).ConfigureAwait(false);
+        if (relatedRuns.Count == 0)
         {
             return new RunAgentTokenBreakdownDto
             {
@@ -146,17 +145,9 @@ public sealed class DashboardReadService
             };
         }
 
-        var includeChildren = root.ParentRunId is null;
-        var relatedRuns = await db.Runs.AsNoTracking()
-            .Where(r => r.RunId == runId || (includeChildren && r.ParentRunId == runId))
-            .Select(r => new { r.RunId, AgentName = r.AgentName ?? "unknown" })
-            .ToListAsync(ct)
-            .ConfigureAwait(false);
-
+        await using var scope = _scopeFactory.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
         var agentByRunId = relatedRuns.ToDictionary(row => row.RunId, row => row.AgentName, StringComparer.Ordinal);
-        if (agentByRunId.Count == 0)
-            agentByRunId[runId] = root.AgentName ?? "unknown";
-
         var relatedRunIds = agentByRunId.Keys.ToList();
         var usageEvents = await db.RunEvents.AsNoTracking()
             .Where(e => relatedRunIds.Contains(e.RunId) && e.EventType == EventTypes.AgentTurnUsage)
@@ -206,19 +197,7 @@ public sealed class DashboardReadService
             DateTimeOffset to,
             CancellationToken ct = default)
     {
-        await using var scope = _scopeFactory.CreateAsyncScope();
-        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
-
-        var relatedRuns = await db.Runs.AsNoTracking()
-            .Where(r => r.ProjectId == projectId)
-            .Select(r => new
-            {
-                r.RunId,
-                AgentName = r.AgentName ?? "unknown",
-                ModelId = string.IsNullOrWhiteSpace(r.ModelId) ? "unknown" : r.ModelId,
-            })
-            .ToListAsync(ct)
-            .ConfigureAwait(false);
+        var relatedRuns = await LoadUsageRunsForProjectAsync(projectId, ct).ConfigureAwait(false);
 
         if (relatedRuns.Count == 0)
             return ([], []);
@@ -228,6 +207,9 @@ public sealed class DashboardReadService
             row => (row.AgentName, row.ModelId),
             StringComparer.Ordinal);
         var relatedRunIds = byRunId.Keys.ToList();
+
+        await using var scope = _scopeFactory.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
         var usageEvents = await db.RunEvents.AsNoTracking()
             .Where(e =>
                 relatedRunIds.Contains(e.RunId)
@@ -279,6 +261,113 @@ public sealed class DashboardReadService
                 })
                 .ToList());
     }
+
+    private async Task<IReadOnlyList<UsageRunRow>> LoadUsageRunsForTokenBreakdownAsync(string runId, CancellationToken ct)
+    {
+        if (_isPostgres)
+        {
+            await using var scope = _scopeFactory.CreateAsyncScope();
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var root = await db.Runs.AsNoTracking()
+                .Where(r => r.RunId == runId)
+                .Select(r => new { r.RunId, r.AgentName, r.ParentRunId, r.ModelId })
+                .FirstOrDefaultAsync(ct)
+                .ConfigureAwait(false);
+            if (root is null) return [];
+
+            var includeChildren = root.ParentRunId is null;
+            return await db.Runs.AsNoTracking()
+                .Where(r => r.RunId == runId || (includeChildren && r.ParentRunId == runId))
+                .Select(r => new UsageRunRow(
+                    r.RunId,
+                    r.AgentName ?? "unknown",
+                    r.ParentRunId,
+                    string.IsNullOrWhiteSpace(r.ModelId) ? "unknown" : r.ModelId))
+                .ToListAsync(ct)
+                .ConfigureAwait(false);
+        }
+
+        await using var conn = await _db.OpenConnectionAsync(ct).ConfigureAwait(false);
+        var rows = new List<UsageRunRow>();
+        await using (var rootCmd = conn.CreateCommand())
+        {
+            rootCmd.CommandText =
+                """
+                SELECT run_id, agent_name, parent_run_id, model_id
+                  FROM runs
+                 WHERE run_id = $runId;
+                """;
+            rootCmd.Parameters.AddWithValue("$runId", runId);
+
+            await using var reader = await rootCmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+            while (await reader.ReadAsync(ct).ConfigureAwait(false))
+                rows.Add(ReadUsageRunRow(reader));
+        }
+
+        if (rows.Count == 0 || rows[0].ParentRunId is not null)
+            return rows;
+
+        await using (var childCmd = conn.CreateCommand())
+        {
+            childCmd.CommandText =
+                """
+                SELECT run_id, agent_name, parent_run_id, model_id
+                  FROM runs
+                 WHERE parent_run_id = $runId;
+                """;
+            childCmd.Parameters.AddWithValue("$runId", runId);
+
+            await using var reader = await childCmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+            while (await reader.ReadAsync(ct).ConfigureAwait(false))
+                rows.Add(ReadUsageRunRow(reader));
+        }
+
+        return rows;
+    }
+
+    private async Task<IReadOnlyList<UsageRunRow>> LoadUsageRunsForProjectAsync(string projectId, CancellationToken ct)
+    {
+        if (_isPostgres)
+        {
+            await using var scope = _scopeFactory.CreateAsyncScope();
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            return await db.Runs.AsNoTracking()
+                .Where(r => r.ProjectId == projectId)
+                .Select(r => new UsageRunRow(
+                    r.RunId,
+                    r.AgentName ?? "unknown",
+                    r.ParentRunId,
+                    string.IsNullOrWhiteSpace(r.ModelId) ? "unknown" : r.ModelId))
+                .ToListAsync(ct)
+                .ConfigureAwait(false);
+        }
+
+        await using var conn = await _db.OpenConnectionAsync(ct).ConfigureAwait(false);
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText =
+            """
+            SELECT run_id, agent_name, parent_run_id, model_id
+              FROM runs
+             WHERE project_id = $projectId;
+            """;
+        cmd.Parameters.AddWithValue("$projectId", projectId);
+
+        var rows = new List<UsageRunRow>();
+        await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+        while (await reader.ReadAsync(ct).ConfigureAwait(false))
+            rows.Add(ReadUsageRunRow(reader));
+
+        return rows;
+    }
+
+    private static UsageRunRow ReadUsageRunRow(System.Data.Common.DbDataReader reader) =>
+        new(
+            RunId: reader.GetString(0),
+            AgentName: reader.IsDBNull(1) ? "unknown" : reader.GetString(1),
+            ParentRunId: reader.IsDBNull(2) ? null : reader.GetString(2),
+            ModelId: reader.IsDBNull(3) || string.IsNullOrWhiteSpace(reader.GetString(3))
+                ? "unknown"
+                : reader.GetString(3));
 
     private AtAGlanceDto ReadAtAGlance(
         IReadOnlyList<RunRow> runs, IReadOnlyList<string> readyProjectIds, DateTime todayUtc)
