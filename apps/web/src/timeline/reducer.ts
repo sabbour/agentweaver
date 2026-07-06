@@ -421,12 +421,11 @@ function processEvent(
     case 'agent.tools':
     case 'agent.intent':
     case 'tool.auto_approved':
-    // Bubbled child HITL gates on the coordinator stream — surface inline so the
-    // operator can act (LifecycleEventCard routes the answer/approval to the
-    // childRunId). Resolution state is paired at render time (Timeline).
-    // falls through
-    case 'coordinator.child_approval_required':
-    case 'coordinator.child_approval_resolved':
+    // NOTE: coordinator.child_approval_required / _resolved are intentionally NOT
+    // handled here. They have dedicated cases below that build an ApprovalRequestItem
+    // carrying the owning childRunId so approve/deny routes to the child subtask run
+    // (issue #196). Listing them in this fall-through group would shadow those cases
+    // (first-match-wins) and lose childRunId routing.
     // Coordinator orchestration milestones — surface as lifecycle cards so the
     // coordinator session timeline narrates the run (spec → plan → dispatch →
     // assembly) even when no agent-turn content is streamed. Normal runs never
