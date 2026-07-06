@@ -1544,11 +1544,26 @@ app.MapPost("/api/runs/{id}/tool-approvals", async (
     var resolved = await approvalGate.GrantAsync(id, body.RequestId, approvalScope);
     if (!resolved)
     {
-        var known = approvalGate.IsKnownRequest(id, body.RequestId);
-        var msg = known
-            ? "Tool approval request has already been resolved or timed out."
-            : "No pending approval found for this request_id. Verify you are posting to the child subtask run id and that the request_id matches exactly.";
-        return Results.Conflict(new { error = msg });
+        var state = approvalGate.GetRequestState(id, body.RequestId);
+        if (state is ToolApprovalRequestState.Approved or ToolApprovalRequestState.Denied or ToolApprovalRequestState.Expired)
+            return Results.Ok(new
+            {
+                run_id = id,
+                request_id = body.RequestId,
+                approved = state is ToolApprovalRequestState.Approved,
+                resolved = true,
+                expired = state is ToolApprovalRequestState.Expired,
+                state = FormatApprovalState(state),
+            });
+
+        if (state is ToolApprovalRequestState.Unknown)
+            return Results.NotFound(new
+            {
+                error = "No approval request found for this request_id on this run. Verify you are posting to the child subtask run id and that the request_id matches exactly.",
+                state = "unknown",
+            });
+
+        return Results.Conflict(new { error = "Tool approval request is pending but could not be resolved. Retry the request.", state = "pending" });
     }
 
     return Results.Ok(new { run_id = id, request_id = body.RequestId, approved = true });
@@ -1577,11 +1592,26 @@ app.MapPost("/api/runs/{id}/tool-denials", async (
     var resolved = approvalGate.Deny(id, body.RequestId);
     if (!resolved)
     {
-        var known = approvalGate.IsKnownRequest(id, body.RequestId);
-        var msg = known
-            ? "Tool approval request has already been resolved or timed out."
-            : "No pending denial found for this request_id. Verify you are posting to the child subtask run id and that the request_id matches exactly.";
-        return Results.Conflict(new { error = msg });
+        var state = approvalGate.GetRequestState(id, body.RequestId);
+        if (state is ToolApprovalRequestState.Approved or ToolApprovalRequestState.Denied or ToolApprovalRequestState.Expired)
+            return Results.Ok(new
+            {
+                run_id = id,
+                request_id = body.RequestId,
+                denied = state is ToolApprovalRequestState.Denied or ToolApprovalRequestState.Expired,
+                resolved = true,
+                expired = state is ToolApprovalRequestState.Expired,
+                state = FormatApprovalState(state),
+            });
+
+        if (state is ToolApprovalRequestState.Unknown)
+            return Results.NotFound(new
+            {
+                error = "No approval request found for this request_id on this run. Verify you are posting to the child subtask run id and that the request_id matches exactly.",
+                state = "unknown",
+            });
+
+        return Results.Conflict(new { error = "Tool approval request is pending but could not be resolved. Retry the request.", state = "pending" });
     }
 
     return Results.Ok(new { run_id = id, request_id = body.RequestId, denied = true });
@@ -2453,6 +2483,15 @@ static IReadOnlyList<WorkspaceFileEntry> ApplyLineCounts(
         };
     }).ToList();
 }
+
+static string FormatApprovalState(ToolApprovalRequestState state) => state switch
+{
+    ToolApprovalRequestState.Approved => "approved",
+    ToolApprovalRequestState.Denied => "denied",
+    ToolApprovalRequestState.Expired => "expired",
+    ToolApprovalRequestState.Pending => "pending",
+    _ => "unknown",
+};
 }
 
 /// <summary>

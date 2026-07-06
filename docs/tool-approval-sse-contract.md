@@ -13,11 +13,10 @@ server state.
    after timeout returned 409. Fix: the gate now emits `tool.approval_resolved` (with
    `expired: true`) on the child run's stream whenever a timeout fires.
 
-2. **Better 409 messages.** The endpoint now distinguishes "already resolved or timed out" (known
-   request_id) from "request_id never registered for this run" (unknown — likely a wrong run id or
-   truncated request_id). The new `error` strings are:
-   - `"Tool approval request has already been resolved or timed out."` — expired/double-click
-   - `"No pending approval found for this request_id. Verify you are posting to the child subtask run id and that the request_id matches exactly."` — wrong run id or bad request_id
+2. **Explicit API state.** The endpoint now distinguishes resolved/expired requests from unknown
+   request IDs. A second click or late click returns HTTP 200 with `resolved: true`,
+   `state: "approved" | "denied" | "expired"`, and `expired`; a wrong run id or bad request id
+   returns HTTP 404 with `state: "unknown"`.
 
 ---
 
@@ -121,5 +120,7 @@ tool.approval_resolved  →  disable / remove card
    (arrived after operator acts: approved=true or approved=false, expired=false)
 ```
 
-If the client receives a 409 with `"already resolved or timed out"`, it means a
-`tool.approval_resolved` is in-flight or was missed on reconnect. The card should be hidden.
+If the client receives a resolved response from `POST /tool-approvals` or `POST /tool-denials`
+with `state: "approved" | "denied" | "expired"`, it means a `tool.approval_resolved` event is
+in-flight or was missed on reconnect. The card should be hidden. HTTP 404 with `state: "unknown"`
+means the client posted to the wrong run id or used a request id that was never registered there.
