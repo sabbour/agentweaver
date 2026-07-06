@@ -1183,12 +1183,15 @@ export interface RunAgentTokenBreakdownDto {
 
 export interface RunTraceSpanDto {
   id: string;
+  parentId?: string | null;
   name: string;
+  spanType?: string | null;
   timestamp: string;
   durationMs: number;
   success: boolean;
   resultCode?: string | null;
   agentName?: string | null;
+  toolName?: string | null;
   model?: string | null;
   inputTokens?: number | null;
   outputTokens?: number | null;

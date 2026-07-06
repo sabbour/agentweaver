@@ -543,25 +543,30 @@ public sealed class AppInsightsMetricsService
                 | where TimeGenerated > ago(7d)
                 | where {runIdPredicate} or OperationId in (correlated_ops) or ParentId in (correlated_ops)
                 | where tostring(Properties["agentweaver.span.kind"]) == "agent_turn"
+                    or tostring(Properties["agentweaver.span.kind"]) == "tool_call"
                     or isnotempty(tostring(Properties["gen_ai.operation.name"]))
                     or isnotempty(tostring(Properties["gen_ai.agent.name"]))
+                    or isnotempty(tostring(Properties["gen_ai.tool.name"]))
                     or isnotempty(tostring(Properties["agent_name"]))
                     or isnotempty(tostring(Properties["gen_ai.request.model"]))
                     or isnotempty(tostring(Properties["gen_ai.response.model"]))
-                | project id = tostring(Id), name = Name, timestamp = TimeGenerated, duration = DurationMs, success = Success, resultCode = ResultCode, operation_id = tostring(OperationId), parent_operation_id = tostring(ParentId), customDimensions = Properties;
+                | project id = tostring(Id), parentId = tostring(ParentId), name = Name, timestamp = TimeGenerated, duration = DurationMs, success = Success, resultCode = ResultCode, customDimensions = Properties;
             let agentic_traces = AppTraces
                 | where TimeGenerated > ago(7d)
                 | where {runIdPredicate} or OperationId in (correlated_ops)
                 | where tostring(Properties["agentweaver.span.kind"]) == "agent_turn"
+                    or tostring(Properties["agentweaver.span.kind"]) == "tool_call"
                     or isnotempty(tostring(Properties["gen_ai.operation.name"]))
                     or isnotempty(tostring(Properties["gen_ai.agent.name"]))
+                    or isnotempty(tostring(Properties["gen_ai.tool.name"]))
                     or isnotempty(tostring(Properties["agent_name"]))
-                | project id = tostring(Id), name = Message, timestamp = TimeGenerated, duration = todouble(0), success = tobool(1), resultCode = tostring(""), operation_id = tostring(OperationId), parent_operation_id = tostring(ParentId), customDimensions = Properties;
+                | project id = tostring(Id), parentId = tostring(ParentId), name = Message, timestamp = TimeGenerated, duration = todouble(0), success = tobool(1), resultCode = tostring(""), customDimensions = Properties;
             union isfuzzy=true
                 (agentic_dependencies),
                 (agentic_traces)
             | project
                 id,
+                parentId,
                 name,
                 timestamp,
                 duration,
@@ -577,32 +582,61 @@ public sealed class AppInsightsMetricsService
         return result.Table.Rows
             .Select((row, index) =>
             {
-                var customDimensions = ReadCustomDimensions(row[6]);
-                var timestamp = ReadDateTimeOffset(row[2]) ?? timeFrom;
+                var customDimensions = ReadCustomDimensions(row[7]);
+                var timestamp = ReadDateTimeOffset(row[3]) ?? timeFrom;
                 var spanRunId = ReadDimension(customDimensions, "run_id")
                     ?? ReadDimension(customDimensions, "run.id")
                     ?? ReadDimension(customDimensions, "runId");
+                var spanKind = ReadDimension(customDimensions, "agentweaver.span.kind");
+                var toolName = ReadDimension(customDimensions, "gen_ai.tool.name")
+                    ?? ReadDimension(customDimensions, "tool_name");
+                var operationName = ReadDimension(customDimensions, "gen_ai.operation.name");
+                var model = ReadDimension(customDimensions, "gen_ai.response.model")
+                    ?? ReadDimension(customDimensions, "gen_ai.request.model")
+                    ?? ReadDimension(customDimensions, "model")
+                    ?? ReadDimension(customDimensions, "model_id");
                 return new RunTraceSpanDto
                 {
                     Id = ReadRequiredString(row[0], $"{runId}-{index}"),
-                    Name = ReadRequiredString(row[1], "span"),
+                    ParentId = NullIfWhiteSpace(row[1]?.ToString()),
+                    Name = ReadRequiredString(row[2], "span"),
+                    SpanType = ClassifySpanType(spanKind, toolName, operationName, model),
                     Timestamp = timestamp,
-                    DurationMs = ReadDurationMs(row[3]),
-                    Success = ReadBool(row[4]),
-                    ResultCode = NullIfWhiteSpace(row[5]?.ToString()),
+                    DurationMs = ReadDurationMs(row[4]),
+                    Success = ReadBool(row[5]),
+                    ResultCode = NullIfWhiteSpace(row[6]?.ToString()),
+                    ToolName = toolName,
                     AgentName = ReadDimension(customDimensions, "agent_name")
                         ?? ReadDimension(customDimensions, "gen_ai.agent.name")
                         ?? ResolveFallbackAgentName(agentNameByRunId, spanRunId, runId),
-                    Model = ReadDimension(customDimensions, "gen_ai.response.model")
-                        ?? ReadDimension(customDimensions, "gen_ai.request.model")
-                        ?? ReadDimension(customDimensions, "model")
-                        ?? ReadDimension(customDimensions, "model_id"),
+                    Model = model,
                     InputTokens = ReadDimensionLong(customDimensions, "gen_ai.usage.input_tokens"),
                     OutputTokens = ReadDimensionLong(customDimensions, "gen_ai.usage.output_tokens"),
-                    OperationName = ReadDimension(customDimensions, "gen_ai.operation.name"),
+                    OperationName = operationName,
                 };
             })
             .ToList();
+    }
+
+    /// <summary>
+    /// Classifies a trace span into the three transaction-trace node types the UI renders:
+    /// <c>invoke-agent</c>, <c>llm</c>, or <c>tool</c>. Uses the Agentweaver span-kind marker when
+    /// present, then falls back to gen AI semantic-convention hints (tool name / operation name /
+    /// model). Defaults to <c>invoke-agent</c> so an unclassified agentic span still renders.
+    /// </summary>
+    internal static string ClassifySpanType(string? spanKind, string? toolName, string? operationName, string? model)
+    {
+        if (string.Equals(spanKind, "tool_call", StringComparison.OrdinalIgnoreCase)
+            || !string.IsNullOrWhiteSpace(toolName)
+            || string.Equals(operationName, "execute_tool", StringComparison.OrdinalIgnoreCase))
+            return "tool";
+        if (string.Equals(spanKind, "agent_turn", StringComparison.OrdinalIgnoreCase))
+            return "invoke-agent";
+        if (string.Equals(operationName, "chat", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(operationName, "text_completion", StringComparison.OrdinalIgnoreCase)
+            || !string.IsNullOrWhiteSpace(model))
+            return "llm";
+        return "invoke-agent";
     }
 
     private async Task<LogsQueryResult?> QueryAsync(
