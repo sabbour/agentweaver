@@ -92,6 +92,30 @@ public sealed class CopilotBlueprintGeneratorTests
         runner.LastTask.Should().Contain("generic ungated catalog workflow");
     }
 
+    [Fact]
+    public async Task GenerateRawAsync_IncludesStructuralSelfCritiqueChecklist()
+    {
+        var runner = new CapturingAgentRunner();
+        var config = new ConfigurationBuilder().Build();
+        var generator = new CopilotBlueprintGenerator(
+            runner,
+            new CatalogReader(),
+            config,
+            NullLogger<CopilotBlueprintGenerator>.Instance);
+
+        await generator.GenerateRawAsync(
+            "Create a multi-agent content studio for public release notes.",
+            CancellationToken.None);
+
+        runner.LastTask.Should().Contain("STRUCTURAL VALIDATION CHECKLIST");
+        runner.LastTask.Should().Contain("Role completeness");
+        runner.LastTask.Should().Contain("Workflow graph fit");
+        runner.LastTask.Should().Contain("Review-policy coherence");
+        runner.LastTask.Should().Contain("Sandbox validity");
+        runner.LastTask.Should().Contain("missing coordinator/owner role");
+        runner.LastTask.Should().Contain("missing review gate for user-facing output");
+    }
+
     private sealed class CapturingAgentRunner : IAgentRunner
     {
         public string? LastTask { get; private set; }

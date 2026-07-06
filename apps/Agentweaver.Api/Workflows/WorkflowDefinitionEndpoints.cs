@@ -362,6 +362,7 @@ public static class WorkflowDefinitionEndpoints
             string projectId,
             GenerateWorkflowRequest request,
             IProjectStore projectStore,
+            WorkflowRegistry registry,
             IWorkflowGenerator generator,
             CancellationToken ct) =>
         {
@@ -375,6 +376,46 @@ public static class WorkflowDefinitionEndpoints
             // immediately runnable. Falls back to the full catalog inside the generator when none exist.
             var teamRoles = TryReadTeamRoles(project!);
             var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
+            var baseWorkflowId = Normalize(request.BaseWorkflowId);
+            var baseYaml = string.IsNullOrWhiteSpace(request.BaseYaml) ? null : request.BaseYaml;
+            var baseWorkflowIsBuiltIn = false;
+
+            if (!string.IsNullOrWhiteSpace(baseYaml))
+            {
+                var load = WorkflowDefinitionLoader.Load(baseYaml!, "draft");
+                if (!load.IsValid || load.Definition is null)
+                    return Results.BadRequest(new
+                    {
+                        error = "base_yaml is not a valid workflow draft.",
+                        validation_errors = new[] { load.Error ?? "Workflow validation failed." },
+                    });
+
+                var bindErrors = RunWorkflowGraphBinder.GetBindabilityErrors(load.Definition);
+                if (bindErrors.Count > 0)
+                    return Results.BadRequest(new
+                    {
+                        error = "base_yaml is not runnable.",
+                        validation_errors = bindErrors,
+                    });
+
+                baseWorkflowId ??= load.Definition.Id;
+            }
+            else if (baseWorkflowId is not null)
+            {
+                if (!IsValidWorkflowId(baseWorkflowId))
+                    return Results.BadRequest(new { error = "Invalid base_workflow_id." });
+
+                var baseWorkflow = registry.Get(project!, baseWorkflowId);
+                if (baseWorkflow?.Definition is null)
+                    return Results.BadRequest(new { error = "unknown_base_workflow_id" });
+
+                baseWorkflowIsBuiltIn = baseWorkflow.IsBuiltIn;
+                baseYaml = await TryReadWorkflowYamlAsync(
+                    Path.Combine(project!.WorkingDirectory, ".agentweaver", "workflows"),
+                    baseWorkflowId,
+                    ct);
+                baseYaml ??= WorkflowDefinitionYamlSerializer.Serialize(baseWorkflow.Definition);
+            }
 
             try
             {
@@ -384,7 +425,10 @@ public static class WorkflowDefinitionEndpoints
                         project!.Id.ToString(),
                         teamRoles,
                         UserId: caller.User,
-                        TargetRepository: project.Origin.SourceRepository),
+                        TargetRepository: project.Origin.SourceRepository,
+                        BaseWorkflowId: baseWorkflowId,
+                        BaseWorkflowYaml: baseYaml,
+                        BaseWorkflowIsBuiltIn: baseWorkflowIsBuiltIn),
                     ct);
 
                 return Results.Ok(new GenerateWorkflowResponse
@@ -392,6 +436,9 @@ public static class WorkflowDefinitionEndpoints
                     Yaml = result.GeneratedYaml,
                     WorkflowId = result.Workflow.Id,
                     WasCorrected = result.WasCorrected,
+                    Mode = baseYaml is null ? "create" : "edit",
+                    BaseWorkflowId = baseWorkflowId,
+                    BaseWorkflowIsBuiltIn = baseWorkflowIsBuiltIn,
                 });
             }
             catch (WorkflowGenerationException ex)

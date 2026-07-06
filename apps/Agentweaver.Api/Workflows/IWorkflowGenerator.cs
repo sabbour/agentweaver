@@ -26,8 +26,15 @@ public record WorkflowGenerationRequest(
     string? ProjectId = null,              // for role context
     IReadOnlyList<string>? TeamRoles = null, // cast roles available in the project
     string? UserId = null,                 // submitting user — required for Copilot token resolution
-    string? TargetRepository = null        // owner/repo or URL the workflow should operate against
-);
+    string? TargetRepository = null,       // owner/repo or URL the workflow should operate against
+    string? BaseWorkflowId = null,         // edit mode: saved/built-in workflow being edited
+    string? BaseWorkflowYaml = null,       // edit mode: YAML for the saved workflow or current draft
+    bool BaseWorkflowIsBuiltIn = false     // edit mode: true when editing a built-in/catalog workflow
+)
+{
+    public bool IsEdit => !string.IsNullOrWhiteSpace(BaseWorkflowId) ||
+                          !string.IsNullOrWhiteSpace(BaseWorkflowYaml);
+}
 
 /// <summary>The outcome of a successful generation: a validated draft plus the YAML used to render it.</summary>
 public record WorkflowGenerationResult(

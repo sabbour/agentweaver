@@ -1,5 +1,8 @@
 using FluentAssertions;
 using Agentweaver.Api.Blueprints;
+using Agentweaver.Api.Workflows;
+using Agentweaver.Squad.Catalog;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Agentweaver.Tests.Blueprints;
 
@@ -102,5 +105,41 @@ public sealed class BlueprintGenerationParserTests
         var result = BlueprintGenerationParser.Parse(raw);
         result.Succeeded.Should().BeTrue();
         result.Blueprint!.BespokeRoles.Should().BeEmpty();
+    }
+
+    public static IEnumerable<object[]> PersonaDrivenBlueprints()
+    {
+        yield return ["ambiguous travel operations", """{"id":"travel-ops","name":"Travel Ops","description":"Coordinates trip research, itinerary writing, and review.","roster":["customer-researcher","docs-writer","quality-reviewer"],"workflows":["default"],"review_policy":"default","sandbox_profile":"default"}"""];
+        yield return ["job search pipeline", """{"id":"job-search","name":"Job Search","description":"Tracks job leads, drafts materials, and reviews outreach.","roster":["customer-researcher","docs-writer","quality-reviewer"],"workflows":["default"],"review_policy":"default","sandbox_profile":"restricted"}"""];
+        yield return ["software bug fix", """{"id":"bug-fix-team","name":"Bug Fix Team","description":"Implements and reviews software fixes.","roster":["backend-engineer","qa-engineer","security-engineer"],"workflows":["software-delivery"],"review_policy":"default","sandbox_profile":"default"}"""];
+        yield return ["public content release", """{"id":"release-notes","name":"Release Notes","description":"Drafts user-facing release notes and reviews them before publishing.","roster":["docs-writer","quality-reviewer"],"workflows":["default"],"review_policy":"default","sandbox_profile":"default"}"""];
+        yield return ["incident response", """{"id":"incident-response","name":"Incident Response","description":"Triages incidents, gathers evidence, and writes summaries.","roster":["triage-lead","customer-researcher","docs-writer"],"workflows":["default"],"review_policy":"default","sandbox_profile":"restricted"}"""];
+        yield return ["security review", """{"id":"security-review","name":"Security Review","description":"Reviews implementation risk and records findings.","roster":["security-engineer","backend-engineer","quality-reviewer"],"workflows":["default"],"review_policy":"default","sandbox_profile":"default"}"""];
+        yield return ["research report", """{"id":"research-report","name":"Research Report","description":"Researches a topic, synthesizes findings, and reviews the report.","roster":["customer-researcher","docs-writer","quality-reviewer"],"workflows":["default"],"review_policy":"default","sandbox_profile":"default"}"""];
+        yield return ["frontend polish", """{"id":"frontend-polish","name":"Frontend Polish","description":"Implements UI polish with QA review.","roster":["frontend-engineer","qa-engineer","docs-writer"],"workflows":["software-delivery"],"review_policy":"default","sandbox_profile":"default"}"""];
+        yield return ["data cleanup", """{"id":"data-cleanup","name":"Data Cleanup","description":"Plans cleanup, implements scripts, and validates results.","roster":["backend-engineer","qa-engineer"],"workflows":["software-delivery"],"review_policy":"default","sandbox_profile":"restricted"}"""];
+        yield return ["bespoke event planning", """{"id":"event-planning","name":"Event Planning","description":"Plans logistics and communications for an event.","roster":["event-coordinator","docs-writer","quality-reviewer"],"bespoke_roles":[{"id":"event-coordinator","title":"Event Coordinator","charter":"You coordinate event logistics, owners, and timelines. You identify dependencies and escalate risks clearly."}],"workflows":["default"],"review_policy":"default","sandbox_profile":"default"}"""];
+    }
+
+    [Theory]
+    [MemberData(nameof(PersonaDrivenBlueprints))]
+    public void PersonaDrivenGeneratedBlueprints_PassStructuralValidation(string persona, string raw)
+    {
+        var parsed = BlueprintGenerationParser.Parse(raw);
+        parsed.Succeeded.Should().BeTrue(persona);
+
+        var catalog = new CatalogReader();
+        var service = new BlueprintService(
+            catalog,
+            casting: null!,
+            projectStore: null!,
+            sandboxPolicyStore: null!,
+            workflowRegistry: new WorkflowRegistry(catalog),
+            generator: null!,
+            workflowGenerator: null!,
+            logger: NullLogger<BlueprintService>.Instance);
+
+        var validation = service.Validate(parsed.Blueprint!);
+        validation.Valid.Should().BeTrue($"{persona}: {string.Join("; ", validation.Errors)}");
     }
 }

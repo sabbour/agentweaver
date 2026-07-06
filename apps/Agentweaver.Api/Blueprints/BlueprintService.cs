@@ -81,6 +81,8 @@ public sealed class BlueprintService
         if (string.IsNullOrWhiteSpace(blueprint.Id)) errors.Add("id is required.");
         if (string.IsNullOrWhiteSpace(blueprint.Name)) errors.Add("name is required.");
         if (string.IsNullOrWhiteSpace(blueprint.ReviewPolicy)) errors.Add("review_policy is required.");
+        else if (!string.Equals(blueprint.ReviewPolicy, "default", StringComparison.OrdinalIgnoreCase))
+            errors.Add($"review_policy '{blueprint.ReviewPolicy}' is not available. Use 'default'.");
 
         project ??= ValidationProject();
 
@@ -100,8 +102,15 @@ public sealed class BlueprintService
                 }
                 // A freshly generated workflow is valid even before it is materialized to disk.
                 if (extraKnownWorkflowIds?.Contains(wfId) == true) continue;
-                if (_workflowRegistry.Get(project, wfId) is null)
+                var workflow = _workflowRegistry.Get(project, wfId);
+                if (workflow?.Definition is null)
+                {
                     errors.Add($"workflow '{wfId}' is not available for this project.");
+                    continue;
+                }
+
+                errors.AddRange(ValidateWorkflowGraphCompleteness(workflow.Definition)
+                    .Select(e => $"workflow '{wfId}' is structurally invalid: {e}"));
             }
         }
         if (string.IsNullOrWhiteSpace(blueprint.SandboxProfile))
@@ -134,6 +143,15 @@ public sealed class BlueprintService
                            "Roster roles must be catalog roles or declared in 'bespoke_roles'.");
             }
 
+            var duplicateRoles = blueprint.Roster
+                .Where(r => !string.IsNullOrWhiteSpace(r))
+                .GroupBy(r => r, StringComparer.OrdinalIgnoreCase)
+                .Where(g => g.Count() > 1)
+                .Select(g => g.Key)
+                .ToList();
+            foreach (var roleId in duplicateRoles)
+                errors.Add($"roster contains duplicate role '{roleId}'.");
+
             // Validate each bespoke role's shape and that it is actually rostered.
             var rosterSet = new HashSet<string>(blueprint.Roster, StringComparer.OrdinalIgnoreCase);
             foreach (var b in blueprint.BespokeRoles)
@@ -153,6 +171,57 @@ public sealed class BlueprintService
         }
 
         return errors.Count == 0 ? BlueprintValidationResult.Ok() : new BlueprintValidationResult(false, errors);
+    }
+
+    private static IReadOnlyList<string> ValidateWorkflowGraphCompleteness(WorkflowDefinition workflow)
+    {
+        var errors = new List<string>();
+        var nodeIds = workflow.Nodes.Select(n => n.Id).ToHashSet(StringComparer.Ordinal);
+        if (!nodeIds.Contains(workflow.Start))
+            errors.Add($"start node '{workflow.Start}' is not declared.");
+
+        foreach (var edge in workflow.Edges)
+        {
+            if (!nodeIds.Contains(edge.From))
+                errors.Add($"edge source '{edge.From}' is not declared.");
+            if (!nodeIds.Contains(edge.To))
+                errors.Add($"edge target '{edge.To}' is not declared.");
+        }
+
+        var reachable = new HashSet<string>(StringComparer.Ordinal);
+        var queue = new Queue<string>();
+        if (nodeIds.Contains(workflow.Start))
+        {
+            reachable.Add(workflow.Start);
+            queue.Enqueue(workflow.Start);
+        }
+
+        var outgoing = workflow.Edges
+            .GroupBy(e => e.From, StringComparer.Ordinal)
+            .ToDictionary(g => g.Key, g => g.Select(e => e.To).ToList(), StringComparer.Ordinal);
+        while (queue.Count > 0)
+        {
+            var current = queue.Dequeue();
+            foreach (var next in outgoing.GetValueOrDefault(current, []))
+            {
+                if (reachable.Add(next))
+                    queue.Enqueue(next);
+            }
+        }
+
+        var unreachable = workflow.Nodes
+            .Select(n => n.Id)
+            .Where(id => !reachable.Contains(id))
+            .OrderBy(id => id, StringComparer.Ordinal)
+            .ToList();
+        if (unreachable.Count > 0)
+            errors.Add($"unreachable node(s): {string.Join(", ", unreachable)}.");
+
+        var bindErrors = RunWorkflowGraphBinder.GetBindabilityErrors(workflow);
+        foreach (var bindError in bindErrors)
+            errors.Add(bindError);
+
+        return errors;
     }
 
     /// <summary>
