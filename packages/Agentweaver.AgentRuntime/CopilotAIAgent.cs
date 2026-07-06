@@ -1,4 +1,6 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
+using System.Diagnostics.Metrics;
 using System.Text;
 using System.Text.Json;
 using System.Threading.Channels;
@@ -40,6 +42,11 @@ namespace Agentweaver.AgentRuntime;
 /// </summary>
 public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnAgent
 {
+    private static readonly ActivitySource ActivitySource = new("Agentweaver");
+    private static readonly Meter Meter = new("Agentweaver", "1.0.0");
+    private static readonly Counter<long> TokenUsage =
+        Meter.CreateCounter<long>("agentweaver.token.usage", "nano_aiu", "AI credit usage by agent and model");
+
     /// <summary>
     /// Agentweaver API/MCP-equivalent tool names that are auto-approved without sandbox governance.
     /// The HTTP call executes in the function body after approval and still authenticates against
@@ -115,6 +122,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
     private long _turnOutputTokens;
     private long _turnNanoAiu;
     private string? _turnModelId;
+    private long? _turnTimeToFirstTokenMs;
     private readonly object _emitLock = new();
     private int _deltaCount;
     private HashSet<string> _streamedMessageIds = new(StringComparer.Ordinal);
@@ -207,6 +215,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         _turnOutputTokens = 0;
         _turnNanoAiu = 0;
         _turnModelId = null;
+        _turnTimeToFirstTokenMs = null;
 
         _logger.LogInformation(
             "SetupAsync entered — workingDirectory={WorkingDirectory}, runId={RunId}, streamIsNull={StreamIsNull}",
@@ -466,59 +475,68 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
             });
         }
 
-        var rateLimitRetryAttempt = 0;
-        var unauthorizedRetried = false;
-        while (true)
+        using var turnActivity = StartModelTurnActivity();
+        var turnStarted = Stopwatch.GetTimestamp();
+        try
         {
-            try
+            var rateLimitRetryAttempt = 0;
+            var unauthorizedRetried = false;
+            while (true)
             {
-                session = await EnsureFreshClientForAiCallAsync(session, ct).ConfigureAwait(false);
-                await StreamTurnOnceAsync(task, session, ct).ConfigureAwait(false);
-                break;
-            }
-            catch (Exception ex) when (GitHubCopilotClientFactory.IsUnauthorized(ex) && !unauthorizedRetried)
-            {
-                unauthorizedRetried = true;
-                _logger.LogWarning(ex, "GitHub Copilot streaming call returned 401 for run {RunId}; refreshing token and retrying once", _runId);
-                session = await RecreateInnerAgentSessionAsync(ct).ConfigureAwait(false);
-            }
-            catch (Exception ex) when (GitHubCopilotClientFactory.IsRateLimited(ex)
-                                       && GitHubCopilotClientFactory.GetRateLimitRetryDelay(rateLimitRetryAttempt + 1) is { } delay)
-            {
-                rateLimitRetryAttempt++;
-                _factory.LogAiRetry(ex, rateLimitRetryAttempt, delay, "HTTP 429/rate limit");
-                await Task.Delay(delay, ct).ConfigureAwait(false);
-            }
-            catch (Exception ex) when (IsMissingCopilotAuth(ex))
-            {
-                // Deliverable: replace the opaque SDK "Session was not created with authentication
-                // info or custom provider" with a clear, actionable failure. This happens when the
-                // pod resolved a non-Copilot token (typically the installation fallback because no
-                // submitting user / AgentHost__UserId was available).
-                _logger.LogError(
-                    ex,
-                    "Run {RunId} could not authenticate to GitHub Copilot: the resolved GitHub token " +
-                    "is not Copilot-entitled (likely the installation fallback). Ensure the submitting " +
-                    "user is signed in and AgentHost__UserId is injected into the pod.",
-                    _runId);
-                Emit("run.failed", new
+                try
                 {
-                    message = $"Run {_runId} has no Copilot-entitled credentials: the GitHub token available " +
-                              "to the agent is not authorized for GitHub Copilot. Sign in the submitting user " +
-                              "and ensure their identity is propagated to the run.",
-                });
-                throw new InvalidOperationException(
-                    $"Run {_runId} has no Copilot-entitled credentials: the resolved GitHub token is not " +
-                    "authorized for GitHub Copilot. Ensure the submitting user is signed in and " +
-                    "AgentHost__UserId is injected into the pod.",
-                    ex);
+                    session = await EnsureFreshClientForAiCallAsync(session, ct).ConfigureAwait(false);
+                    await StreamTurnOnceAsync(task, session, turnStarted, ct).ConfigureAwait(false);
+                    break;
+                }
+                catch (Exception ex) when (GitHubCopilotClientFactory.IsUnauthorized(ex) && !unauthorizedRetried)
+                {
+                    unauthorizedRetried = true;
+                    _logger.LogWarning(ex, "GitHub Copilot streaming call returned 401 for run {RunId}; refreshing token and retrying once", _runId);
+                    session = await RecreateInnerAgentSessionAsync(ct).ConfigureAwait(false);
+                }
+                catch (Exception ex) when (GitHubCopilotClientFactory.IsRateLimited(ex)
+                                           && GitHubCopilotClientFactory.GetRateLimitRetryDelay(rateLimitRetryAttempt + 1) is { } delay)
+                {
+                    rateLimitRetryAttempt++;
+                    _factory.LogAiRetry(ex, rateLimitRetryAttempt, delay, "HTTP 429/rate limit");
+                    await Task.Delay(delay, ct).ConfigureAwait(false);
+                }
+                catch (Exception ex) when (IsMissingCopilotAuth(ex))
+                {
+                    // Deliverable: replace the opaque SDK "Session was not created with authentication
+                    // info or custom provider" with a clear, actionable failure. This happens when the
+                    // pod resolved a non-Copilot token (typically the installation fallback because no
+                    // submitting user / AgentHost__UserId was available).
+                    _logger.LogError(
+                        ex,
+                        "Run {RunId} could not authenticate to GitHub Copilot: the resolved GitHub token " +
+                        "is not Copilot-entitled (likely the installation fallback). Ensure the submitting " +
+                        "user is signed in and AgentHost__UserId is injected into the pod.",
+                        _runId);
+                    Emit("run.failed", new
+                    {
+                        message = $"Run {_runId} has no Copilot-entitled credentials: the GitHub token available " +
+                                  "to the agent is not authorized for GitHub Copilot. Sign in the submitting user " +
+                                  "and ensure their identity is propagated to the run.",
+                    });
+                    throw new InvalidOperationException(
+                        $"Run {_runId} has no Copilot-entitled credentials: the resolved GitHub token is not " +
+                        "authorized for GitHub Copilot. Ensure the submitting user is signed in and " +
+                        "AgentHost__UserId is injected into the pod.",
+                        ex);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "RunStreamingAsync threw for workingDirectory={WorkingDirectory}", _workingDirectory);
+                    Emit("run.failed", new { message = "The agent encountered an internal error." });
+                    throw;
+                }
             }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "RunStreamingAsync threw for workingDirectory={WorkingDirectory}", _workingDirectory);
-                Emit("run.failed", new { message = "The agent encountered an internal error." });
-                throw;
-            }
+        }
+        finally
+        {
+            CompleteModelTurnTelemetry(turnActivity);
         }
 
         // Guaranteed flush: if the sandbox denied any tool call this turn, ensure run.degraded
@@ -537,7 +555,9 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
             outputTokens = _turnOutputTokens,
             totalTokens = _turnInputTokens + _turnOutputTokens,
             totalNanoAiu = _turnNanoAiu,
-            modelId = _turnModelId ?? _modelId
+            modelId = _turnModelId ?? _modelId,
+            durationMs = Stopwatch.GetElapsedTime(turnStarted).TotalMilliseconds,
+            timeToFirstTokenMs = _turnTimeToFirstTokenMs
         });
 
         Emit("agent.turn.end", new { turnId = "0" });
@@ -553,7 +573,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         return result;
     }
 
-    private async Task StreamTurnOnceAsync(string task, AgentSession session, CancellationToken ct)
+    private async Task StreamTurnOnceAsync(string task, AgentSession session, long turnStarted, CancellationToken ct)
     {
         if (_inner is null)
             throw new InvalidOperationException("SetupAsync must be called before ExecuteStreamingLoopAsync.");
@@ -568,6 +588,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
             var deltaText = chunk.Text;
             if (!string.IsNullOrEmpty(deltaText))
             {
+                _turnTimeToFirstTokenMs ??= (long)Stopwatch.GetElapsedTime(turnStarted).TotalMilliseconds;
                 EmitDelta(deltaText, messageId);
                 if (messageId is not null) _streamedMessageIds.Add(messageId);
             }
@@ -609,9 +630,74 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
                         _turnOutputTokens += usageEvent.Data.OutputTokens ?? 0;
                         _turnNanoAiu += (long)(usageEvent.Data.CopilotUsage?.TotalNanoAiu ?? 0.0);
                         _turnModelId ??= usageEvent.Data.Model;
+                        Activity.Current?.SetTag("gen_ai.response.model", usageEvent.Data.Model);
+                        Activity.Current?.SetTag("model", usageEvent.Data.Model);
                     }
                 }
             }
+        }
+    }
+
+    private Activity? StartModelTurnActivity()
+    {
+        var activity = ActivitySource.StartActivity("Agentweaver model turn", ActivityKind.Client);
+        if (activity is null) return null;
+
+        activity.SetTag("agentweaver.span.kind", "agent_turn");
+        activity.SetTag("run_id", _runId);
+        activity.SetTag("run.id", _runId);
+        activity.SetTag("agent_name", string.IsNullOrWhiteSpace(_agentName) ? "unknown" : _agentName);
+        activity.SetTag("gen_ai.agent.name", string.IsNullOrWhiteSpace(_agentName) ? "unknown" : _agentName);
+        activity.SetTag("gen_ai.operation.name", "chat");
+        activity.SetTag("model", _modelId);
+        activity.SetTag("model_id", _modelId);
+        activity.SetTag("gen_ai.request.model", _modelId);
+        if (!string.IsNullOrWhiteSpace(_projectId))
+            activity.SetTag("project.id", _projectId);
+        return activity;
+    }
+
+    private void CompleteModelTurnTelemetry(Activity? activity)
+    {
+        var model = _turnModelId ?? _modelId ?? "unknown";
+        var agent = string.IsNullOrWhiteSpace(_agentName) ? "unknown" : _agentName!;
+        activity?.SetTag("agentweaver.span.kind", "agent_turn");
+        activity?.SetTag("agent_name", agent);
+        activity?.SetTag("gen_ai.agent.name", agent);
+        activity?.SetTag("model", model);
+        activity?.SetTag("model_id", model);
+        activity?.SetTag("gen_ai.request.model", model);
+        activity?.SetTag("gen_ai.response.model", model);
+        activity?.SetTag("gen_ai.usage.input_tokens", _turnInputTokens);
+        activity?.SetTag("gen_ai.usage.output_tokens", _turnOutputTokens);
+        activity?.SetTag("gen_ai.usage.total_tokens", _turnInputTokens + _turnOutputTokens);
+        activity?.SetTag("agentweaver.aiu.nano", _turnNanoAiu);
+        if (_turnTimeToFirstTokenMs is { } ttft)
+        {
+            activity?.SetTag("time_to_first_token_ms", ttft);
+            activity?.SetTag("ttft_ms", ttft);
+            activity?.SetTag("gen_ai.response.ttft_ms", ttft);
+        }
+
+        if (_turnNanoAiu > 0)
+        {
+            var tags = new List<KeyValuePair<string, object?>>
+            {
+                new("agent_name", agent),
+                new("gen_ai.agent.name", agent),
+                new("model", model),
+                new("model_id", model),
+                new("gen_ai.request.model", model),
+                new("gen_ai.response.model", model),
+                new("run_id", _runId),
+                new("run.id", _runId),
+                new("gen_ai.usage.input_tokens", _turnInputTokens),
+                new("gen_ai.usage.output_tokens", _turnOutputTokens),
+            };
+            if (!string.IsNullOrWhiteSpace(_projectId))
+                tags.Add(new("project.id", _projectId));
+
+            TokenUsage.Add(_turnNanoAiu, tags.ToArray());
         }
     }
 

@@ -1,16 +1,13 @@
 import { Badge, Text, makeStyles, tokens } from '@fluentui/react-components';
-import type { MetricPercentilesDto, ModelUsageBreakdownDto, ProjectMetricsDto, ThroughputPointDto } from '../../api/types';
+import type { AiCreditUsagePointDto, DailyInvocationPointDto, MetricPercentilesDto, ModelUsageBreakdownDto, ProjectMetricsDto } from '../../api/types';
 import { costChipLabel } from '../CostChip';
 import { MetricCardHeader, MetricEmptyState } from '../MetricTypography';
 
 const useStyles = makeStyles({
   grid: {
     display: 'grid',
-    gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
+    gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))',
     gap: tokens.spacingHorizontalL,
-  },
-  wide: {
-    gridColumn: '1 / -1',
   },
   panel: {
     display: 'flex',
@@ -64,21 +61,31 @@ const useStyles = makeStyles({
   },
 });
 
-function OperationsChart({ points }: { points: ThroughputPointDto[] }) {
-  const width = 720;
-  const height = 180;
+function LineChart({
+  points,
+  valueOf,
+  formatMax,
+  label,
+}: {
+  points: Array<DailyInvocationPointDto | AiCreditUsagePointDto>;
+  valueOf: (point: DailyInvocationPointDto | AiCreditUsagePointDto) => number;
+  formatMax?: (value: number) => string;
+  label: string;
+}) {
+  const width = 360;
+  const height = 132;
   const pad = { top: 12, right: 12, bottom: 24, left: 28 };
   const innerW = width - pad.left - pad.right;
   const innerH = height - pad.top - pad.bottom;
-  const max = Math.max(1, ...points.map((point) => point.created));
+  const max = Math.max(1, ...points.map(valueOf));
   const x = (index: number) => pad.left + ((points.length <= 1 ? 0 : index / (points.length - 1)) * innerW);
   const y = (value: number) => pad.top + innerH - ((value / max) * innerH);
   const path = points
-    .map((point, index) => `${index === 0 ? 'M' : 'L'}${x(index).toFixed(1)},${y(point.created).toFixed(1)}`)
+    .map((point, index) => `${index === 0 ? 'M' : 'L'}${x(index).toFixed(1)},${y(valueOf(point)).toFixed(1)}`)
     .join(' ');
 
   return (
-    <svg viewBox={`0 0 ${width} ${height}`} width="100%" height={height} role="img" aria-label="Operations over time">
+    <svg viewBox={`0 0 ${width} ${height}`} width="100%" height={height} role="img" aria-label={label}>
       <line
         x1={pad.left}
         y1={pad.top + innerH}
@@ -88,7 +95,7 @@ function OperationsChart({ points }: { points: ThroughputPointDto[] }) {
         strokeWidth={1}
       />
       <text x={pad.left - 6} y={pad.top + 8} fontSize={10} fill={tokens.colorNeutralForeground3} textAnchor="end">
-        {max}
+        {formatMax ? formatMax(max) : max}
       </text>
       <text x={pad.left} y={pad.top + innerH + 16} fontSize={10} fill={tokens.colorNeutralForeground3}>
         {points[0]?.date ?? ''}
@@ -158,17 +165,38 @@ function PercentilesTable({ rows, emptyLabel }: { rows: MetricPercentilesDto[]; 
 
 export function ModelPerformancePanels({ metrics }: { metrics: ProjectMetricsDto | null }) {
   const styles = useStyles();
-  const throughput = metrics?.throughput ?? [];
+  const invocationTrend = metrics?.invocationTrend ?? [];
+  const aiCreditUsageTrend = metrics?.aiCreditUsageTrend ?? [];
   const modelUsage = metrics?.modelUsage ?? [];
   const responseDuration = metrics?.responseDuration ?? [];
   const ttft = metrics?.timeToFirstToken ?? [];
   const totalInvocations = modelUsage.reduce((sum, row) => sum + row.invocationCount, 0);
+  const hasInvocationTrend = invocationTrend.some((point) => point.count > 0);
+  const hasAiCreditTrend = aiCreditUsageTrend.some((point) => point.totalNanoAiu > 0);
 
   return (
     <div className={styles.grid}>
-      <div className={`${styles.panel} ${styles.wide}`}>
+      <div className={styles.panel}>
         <MetricCardHeader title="Runs created over time" subtitle="Daily project run creations for the selected range." />
-        {throughput.length === 0 ? <MetricEmptyState>No run-creation data yet.</MetricEmptyState> : <OperationsChart points={throughput} />}
+        {invocationTrend.length === 0 || !hasInvocationTrend ? (
+          <MetricEmptyState>No run-creation data yet.</MetricEmptyState>
+        ) : (
+          <LineChart points={invocationTrend} valueOf={(point) => 'count' in point ? point.count : 0} label="Runs created over time" />
+        )}
+      </div>
+
+      <div className={styles.panel}>
+        <MetricCardHeader title="AI credit usage over time" subtitle="Daily AI credit usage across the selected range." />
+        {aiCreditUsageTrend.length === 0 || !hasAiCreditTrend ? (
+          <MetricEmptyState>No AI credit usage data yet.</MetricEmptyState>
+        ) : (
+          <LineChart
+            points={aiCreditUsageTrend}
+            valueOf={(point) => 'totalNanoAiu' in point ? point.totalNanoAiu : 0}
+            formatMax={(value) => costChipLabel(value, 0)?.replace(' AIC', '') ?? String(value)}
+            label="AI credit usage over time"
+          />
+        )}
       </div>
 
       <div className={styles.panel}>

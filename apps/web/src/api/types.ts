@@ -1192,11 +1192,17 @@ export interface ProjectMetricsDto {
   responseDuration?: MetricPercentilesDto[];
   timeToFirstToken?: MetricPercentilesDto[];
   agentBreakdown?: AgentUsageBreakdownDto[];
+  aiCreditUsageTrend?: AiCreditUsagePointDto[];
 }
 
 export interface DailyInvocationPointDto {
   date: string;
   count: number;
+}
+
+export interface AiCreditUsagePointDto {
+  date: string;
+  totalNanoAiu: number;
 }
 
 export interface ModelUsageBreakdownDto {

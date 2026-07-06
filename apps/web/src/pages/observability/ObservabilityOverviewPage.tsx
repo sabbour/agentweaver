@@ -5,7 +5,6 @@ import { useParams } from 'react-router-dom';
 import { apiClient } from '../../api/apiClient';
 import { ApiError } from '../../api/client';
 import type { Project, ProjectMetricsDto } from '../../api/types';
-import { AgentInvocationChart } from '../../components/dashboard/AgentInvocationChart';
 import { ModelPerformancePanels } from '../../components/dashboard/ModelPerformancePanels';
 import { ObservabilityLayout } from '../../components/observability/ObservabilityLayout';
 
@@ -19,17 +18,6 @@ function timeRangeDates(range: TimeRange): { from: string; to: string } {
   else from.setDate(from.getDate() - 89);
   from.setUTCHours(0, 0, 0, 0);
   return { from: from.toISOString(), to: to.toISOString() };
-}
-
-function timeRangeLabel(range: TimeRange): string {
-  switch (range) {
-    case '7d':
-      return 'last 7 days';
-    case '30d':
-      return 'last 30 days';
-    case '90d':
-      return 'last 90 days';
-  }
 }
 
 function formatError(error: unknown): string {
@@ -103,10 +91,6 @@ export function ObservabilityOverviewPage() {
         <Spinner label="Loading observability overview" />
       ) : (
         <>
-          <AgentInvocationChart
-            points={metrics?.invocationTrend ?? []}
-            subtitle={`Daily project run creations across the ${timeRangeLabel(range)}.`}
-          />
           <ModelPerformancePanels metrics={metrics} />
           {!metrics && <Text>No observability data yet.</Text>}
         </>
