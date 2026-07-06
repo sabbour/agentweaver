@@ -65,6 +65,33 @@ public sealed class CopilotBlueprintGeneratorTests
         runner.LastTask.Should().Contain("PREFER [] (generate)");
     }
 
+    [Fact]
+    public async Task GenerateRawAsync_WorkflowSelection_IsGateAware_AndPrefersGeneratingSpecializedGatedWorkflows()
+    {
+        var runner = new CapturingAgentRunner();
+        var config = new ConfigurationBuilder().Build();
+        var generator = new CopilotBlueprintGenerator(
+            runner,
+            new CatalogReader(),
+            config,
+            NullLogger<CopilotBlueprintGenerator>.Instance);
+
+        await generator.GenerateRawAsync(
+            "Build a web service that triages support tickets and requires sign-off before shipping.",
+            CancellationToken.None);
+
+        runner.LastTask.Should().NotBeNullOrWhiteSpace();
+        runner.LastTask.Should().Contain("GATE-AWARE WORKFLOW SELECTION");
+        runner.LastTask.Should().Contain("`build_test` is the platform-owned Build & Test gate that also lights up preview");
+        runner.LastTask.Should().Contain("`rai` is a `check` gate_kind");
+        runner.LastTask.Should().Contain("`rubberduck` is a `check` gate_kind");
+        runner.LastTask.Should().Contain("`human-review` is a `check` gate_kind");
+        runner.LastTask.Should().Contain("MANDATORY BUILD & TEST STEP (software workflows)");
+        runner.LastTask.Should().Contain("build_test gate IMMEDIATELY before the human-review gate");
+        runner.LastTask.Should().Contain("PREFER [] (generate)");
+        runner.LastTask.Should().Contain("generic ungated catalog workflow");
+    }
+
     private sealed class CapturingAgentRunner : IAgentRunner
     {
         public string? LastTask { get; private set; }

@@ -124,6 +124,10 @@ public sealed class CopilotBlueprintGenerator : IBlueprintGenerator
               nothing fits — it is better than a wrong selection.
             - Use the exact workflow ids as written.
 
+            {{WorkflowGatePromptGuidance.BlueprintGateAwareness}}
+
+            {{WorkflowGatePromptGuidance.SoftwareBuildTestRequirement}}
+
             Available workflows (select only those whose PROCESS actually fits, or [] if none):
             {{workflowsTable}}
 
