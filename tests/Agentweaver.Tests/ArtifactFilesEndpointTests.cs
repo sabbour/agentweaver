@@ -48,7 +48,11 @@ public sealed class ArtifactFilesEndpointTests : IClassFixture<ReviewWebApplicat
     // =========================================================================
     // Helper: insert a run owned by the owner user and return its id string.
     // =========================================================================
-    private async Task<string> InsertOwnerRunAsync(RunStatus status = RunStatus.Pending)
+    private async Task<string> InsertOwnerRunAsync(
+        RunStatus status = RunStatus.Pending,
+        string? diff = null,
+        string? worktreePath = null,
+        string? worktreeBranch = null)
     {
         var store = _factory.Services.GetRequiredService<SqliteRunStore>();
         var run = new Run
@@ -61,8 +65,15 @@ public sealed class ArtifactFilesEndpointTests : IClassFixture<ReviewWebApplicat
             SubmittingUser    = ReviewWebApplicationFactory.OwnerUser,
             Status            = status,
             StartedAt         = DateTimeOffset.UtcNow,
+            Diff              = diff,
+            WorktreePath      = worktreePath,
+            WorktreeBranch    = worktreeBranch,
         };
         await store.InsertAsync(run);
+        if (diff is not null)
+        {
+            await store.SetAssembleReadyAsync(run.Id, "tree-for-test", "agentweaver-run-test", diff, 1, DateTimeOffset.UtcNow);
+        }
         return run.Id.ToString();
     }
 
@@ -207,6 +218,85 @@ public sealed class ArtifactFilesEndpointTests : IClassFixture<ReviewWebApplicat
                     $"status '{status}' in API response must not contain emoji (NFR-002)");
             }
         }
+    }
+
+    [Fact]
+    public async Task AssembleReadyRun_ReturnsFilesFromPersistedDiff()
+    {
+        const string diff =
+            "diff --git a/src/worker.ts b/src/worker.ts\n" +
+            "index abc1234..def5678 100644\n" +
+            "--- a/src/worker.ts\n" +
+            "+++ b/src/worker.ts\n" +
+            "@@ -1 +1,2 @@\n" +
+            "-old\n" +
+            "+new\n" +
+            "+line\n";
+        var runId = await InsertOwnerRunAsync(RunStatus.InProgress, diff);
+
+        var response = await _ownerClient.GetAsync($"/api/runs/{runId}/files");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK,
+            "assemble_ready child runs are terminal handoff artifacts and must not depend on a live worktree");
+        var body = await response.Content.ReadAsStringAsync();
+        using var parsed = JsonDocument.Parse(body);
+        parsed.RootElement.GetArrayLength().Should().Be(1);
+        var entry = parsed.RootElement[0];
+        entry.GetProperty("path").GetString().Should().Be("src/worker.ts");
+        entry.GetProperty("status").GetString().Should().Be("modified");
+    }
+
+    [Fact]
+    public async Task AssembleReadyRun_ReturnsPerFileDiffFromPersistedDiff()
+    {
+        const string diff =
+            "diff --git a/src/worker.ts b/src/worker.ts\n" +
+            "index abc1234..def5678 100644\n" +
+            "--- a/src/worker.ts\n" +
+            "+++ b/src/worker.ts\n" +
+            "@@ -1 +1 @@\n" +
+            "-old\n" +
+            "+new\n";
+        var runId = await InsertOwnerRunAsync(RunStatus.InProgress, diff);
+
+        var response = await _ownerClient.GetAsync($"/api/runs/{runId}/files/src/worker.ts");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK,
+            "the slide-up Changes tab expands per-child diffs via the same run file endpoint");
+        var body = await response.Content.ReadAsStringAsync();
+        using var parsed = JsonDocument.Parse(body);
+        parsed.RootElement.GetProperty("path").GetString().Should().Be("src/worker.ts");
+        parsed.RootElement.GetProperty("status").GetString().Should().Be("modified");
+        parsed.RootElement.GetProperty("diff").GetString().Should().Contain("+new");
+    }
+
+    [Fact]
+    public async Task InWorktreeAbsolutePath_IsRelativizedBeforeValidation()
+    {
+        const string diff =
+            "diff --git a/discovered-issues.md b/discovered-issues.md\n" +
+            "new file mode 100644\n" +
+            "index 0000000..e965047\n" +
+            "--- /dev/null\n" +
+            "+++ b/discovered-issues.md\n" +
+            "@@ -0,0 +1 @@\n" +
+            "+issue list\n";
+        const string worktreeRoot = "/workspace/.home/.local/share/agentweaver/worktrees/fake-run";
+        var runId = await InsertOwnerRunAsync(
+            RunStatus.InProgress,
+            diff,
+            worktreePath: worktreeRoot,
+            worktreeBranch: "agentweaver-run-test");
+
+        var absolute = $"{worktreeRoot}/discovered-issues.md";
+        var response = await _ownerClient.GetAsync($"/api/runs/{runId}/files/{absolute}");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK,
+            "legacy tool payloads can leak absolute worktree paths, but in-workspace paths should resolve safely");
+        var body = await response.Content.ReadAsStringAsync();
+        using var parsed = JsonDocument.Parse(body);
+        parsed.RootElement.GetProperty("path").GetString().Should().Be("discovered-issues.md");
+        parsed.RootElement.GetProperty("diff").GetString().Should().Contain("+issue list");
     }
 
     // Returns true when the string contains any emoji or symbol-range Unicode code point.
