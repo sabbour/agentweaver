@@ -244,7 +244,13 @@ describe('AgentSessionPanel', () => {
     expect(screen.getByText('Child question from Research multi-agent orchestration (Stark · Lead Researcher): Which source should I use?')).toBeDefined();
     expect(screen.getByText('Tool approval required from Research multi-agent orchestration (Stark · Lead Researcher): web_fetch — Fetch docs')).toBeDefined();
     expect(screen.getByText('Tool Approval Required')).toBeDefined();
-    expect(screen.getAllByText('System prompt')).toHaveLength(1);
+    // #122: system-prompt scaffolding is technical and hidden by default; the coordinator
+    // instruction is high-signal and stays visible so the stream reads like a narrative.
+    expect(screen.queryByText('System prompt')).toBeNull();
+    expect(screen.getAllByText('Coordinator instruction')).toHaveLength(1);
+    // Revealing technical details brings the collapsed system prompt back (collapsed, not deleted).
+    await userEvent.click(screen.getByRole('switch', { name: 'Show technical details' }));
+    await waitFor(() => expect(screen.getAllByText('System prompt')).toHaveLength(1));
     expect(screen.getAllByText('Coordinator instruction')).toHaveLength(1);
   });
 
@@ -273,7 +279,48 @@ describe('AgentSessionPanel', () => {
 
     await waitFor(() => expect(screen.getByText('I found the implementation details.')).toBeDefined(), { timeout: 4000 });
     expect(screen.getByText('Worker response')).toBeDefined();
-    expect(screen.getByText('System prompt')).toBeDefined();
+    // #122: system prompt is technical and collapsed by default; the coordinator instruction stays.
+    expect(screen.queryByText('System prompt')).toBeNull();
     expect(screen.getByText('Coordinator instruction')).toBeDefined();
+    await userEvent.click(screen.getByRole('switch', { name: 'Show technical details' }));
+    await waitFor(() => expect(screen.getByText('System prompt')).toBeDefined());
+    expect(screen.getByText('Coordinator instruction')).toBeDefined();
+  });
+
+  it('collapses low-signal technical tool plumbing by default and reveals it via the toggle (#122)', async () => {
+    currentEvents = [
+      { sequence: 1, type: 'agent.turn.start', payload: { turnId: 'worker-turn' } },
+      { sequence: 2, type: 'agent.message', payload: { content: 'Applying the requested fix.' } },
+      { sequence: 3, type: 'tool.call', payload: { callId: 'c1', toolName: 'edit_file', arguments: { path: 'apps/web/src/App.tsx' } } },
+      { sequence: 4, type: 'tool.result', payload: { callId: 'c1' } },
+      { sequence: 5, type: 'agent.turn.end', payload: {} },
+    ];
+
+    render(
+      <Wrapper>
+        <AgentSessionPanel
+          open
+          onClose={vi.fn()}
+          tree={tree}
+          selectedNodeId="subtask-1"
+          onSelectNode={vi.fn()}
+          coordinatorRunId="coord-run-1"
+          projectId="p1"
+        />
+      </Wrapper>,
+    );
+
+    // The high-signal agent message reads as a clean narrative by default.
+    await waitFor(() => expect(screen.getByText('Applying the requested fix.')).toBeDefined(), { timeout: 4000 });
+    // Tool-call plumbing and file-write rows are hidden by default.
+    expect(screen.queryByText(/Tool calls/)).toBeNull();
+    expect(screen.queryByText('Workspace file')).toBeNull();
+
+    // Toggling technical details on reveals the collapsed plumbing (not deleted, just collapsed).
+    await userEvent.click(screen.getByRole('switch', { name: 'Show technical details' }));
+    await waitFor(() => expect(screen.queryByText(/Tool calls/)).not.toBeNull());
+    expect(screen.getByText('Workspace file')).toBeDefined();
+    // The narrative message remains visible alongside the revealed technical rows.
+    expect(screen.getByText('Applying the requested fix.')).toBeDefined();
   });
 });

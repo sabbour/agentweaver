@@ -869,7 +869,7 @@ const useStyles = makeStyles({
   bodyGrid: {
     minHeight: 0,
     display: 'grid',
-    gridTemplateColumns: '300px minmax(460px, 1fr) minmax(380px, 440px)',
+    gridTemplateColumns: '280px minmax(420px, 1fr) clamp(480px, 34vw, 640px)',
   },
   leftZone: {
     minHeight: 0,
@@ -1020,6 +1020,26 @@ export function CoordinatorRunPage() {
 
   // Ctrl+Scroll zoom for the orchestration graph, mirroring WorkflowRunPage.
   const { zoom, zoomIn, zoomOut, resetZoom, viewportRef, maxZoom } = useCtrlScrollZoom({ maxZoom: 2 });
+
+  // Responsive DAG reflow: observe the graph viewport so the fixed-size canvas re-fits
+  // the available width instead of leaving whitespace (wide panel) or forcing a scroll
+  // (narrow panel). The measured width drives an auto fit-scale that is combined with the
+  // user's Ctrl+Scroll zoom below.
+  const [dagScrollNode, setDagScrollNode] = useState<HTMLElement | null>(null);
+  const [dagContainerWidth, setDagContainerWidth] = useState(0);
+  const setDagViewportRef = useCallback((node: HTMLElement | null) => {
+    viewportRef(node);
+    setDagScrollNode(node);
+    if (node) setDagContainerWidth(node.clientWidth);
+  }, [viewportRef]);
+  useEffect(() => {
+    if (!dagScrollNode || typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver((entries) => {
+      for (const entry of entries) setDagContainerWidth(entry.contentRect.width);
+    });
+    ro.observe(dagScrollNode);
+    return () => ro.disconnect();
+  }, [dagScrollNode]);
 
   // REST seed: coordinator GraphDescriptor (GET /api/runs/{id}/graph, coordinator variant).
   const [restDescriptor, setRestDescriptor] = useState<GraphDescriptor | null>(null);
@@ -2071,6 +2091,18 @@ export function CoordinatorRunPage() {
       },
     };
   }, [displayNodes, displayEdges2, graphHeight]);
+
+  // Fit the natural graph width to the measured container width so the DAG fills the
+  // available space (scales up to remove side whitespace on a wide panel, down to avoid
+  // horizontal scroll on a narrow one). Clamped to keep nodes readable, then combined with
+  // the user's Ctrl+Scroll zoom. Uniform CSS `zoom` scales height proportionally; tall graphs
+  // still scroll vertically as before.
+  const graphFitScale = useMemo(() => {
+    const naturalWidth = typeof graphViewport.width === 'number' ? graphViewport.width : 0;
+    if (!dagContainerWidth || !naturalWidth) return 1;
+    return Math.min(1.5, Math.max(0.5, dagContainerWidth / naturalWidth));
+  }, [dagContainerWidth, graphViewport.width]);
+  const effectiveGraphZoom = zoom * graphFitScale;
   // The toggle endpoints 409 on a non-active run, so only offer them while the orchestration is live.
   const coordActive     = !['complete', 'failed', 'blocked', 'declined'].includes(orch.phase);
 
@@ -2290,8 +2322,8 @@ export function CoordinatorRunPage() {
                 <CoordExpandContext.Provider value={expandValue}>
                 <CoordPanelContext.Provider value={openPanelForNode}>
                   <ZoomControls zoom={zoom} onZoomIn={zoomIn} onZoomOut={zoomOut} onFit={resetZoom} maxZoom={maxZoom} />
-                  <div className={`${styles.dagContainer} ${styles.centerDag}`} ref={viewportRef}>
-                    <div style={{ zoom, width: graphViewport.width, minWidth: '100%', height: graphViewport.height }}>
+                  <div className={`${styles.dagContainer} ${styles.centerDag}`} ref={setDagViewportRef}>
+                    <div style={{ zoom: effectiveGraphZoom, width: graphViewport.width, height: graphViewport.height }}>
                     <ReactFlow
                       key={`${displayNodes.length}:${displayEdges2.length}:${graphHeight}:${[...expandedKeys].sort().join(',')}`}
                       nodes={displayNodes}

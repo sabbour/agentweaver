@@ -7,6 +7,7 @@ import {
   MessageBar,
   MessageBarBody,
   Spinner,
+  Switch,
   Tab,
   TabList,
   Text,
@@ -331,6 +332,18 @@ const useStyles = makeStyles({
     gap: tokens.spacingVerticalS,
     padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM}`,
   },
+  narrativeToolbar: {
+    position: 'sticky',
+    top: 0,
+    zIndex: 1,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    gap: tokens.spacingHorizontalS,
+    padding: `${tokens.spacingVerticalXS} 0`,
+    backgroundColor: tokens.colorNeutralBackground1,
+    borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
+  },
   emptyState: {
     padding: tokens.spacingVerticalXL,
     color: tokens.colorNeutralForeground3,
@@ -603,6 +616,12 @@ const useStyles = makeStyles({
     borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground1,
   },
+  // In the docked run-console layout the global "Start task" FAB is fixed to the
+  // viewport's bottom-right corner and overlaps the composer's send control. Reserve
+  // bottom clearance so the "Message coordinator" input is never hidden behind it.
+  dockedComposerStack: {
+    paddingBottom: '84px',
+  },
   composerContext: {
     padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalL} 0`,
     fontSize: tokens.fontSizeBase200,
@@ -666,6 +685,17 @@ interface ConversationTurn {
   toolCalls: ConversationTool[];
   approvals: Array<{ event: RunStreamEvent; isResolved: boolean; resolvedScope: string | null }>;
   filePaths: string[];
+}
+
+// #122: Distinguish high-signal narrative from low-signal technical plumbing so the
+// stream can read like a clean narrative by default. System-prompt scaffolding, tool
+// calls (shell start/stop, file view/edit, raw commands), and file-write rows are
+// technical; agent/coordinator messages, instructions, narrative activity lines, and
+// human-facing approvals are high-signal. Classified client-side from event shape only
+// (thin client) — nothing is deleted, only collapsed behind the "Show technical" toggle.
+function turnHasSignalContent(turn: ConversationTurn): boolean {
+  if (turn.approvals.length > 0) return true;
+  return turn.rows.some((row) => row.role !== 'system');
 }
 
 interface FlatTreeNode extends RunSessionTree {
@@ -1367,6 +1397,8 @@ export function AgentSessionPanel({
   const docked = variant === 'docked';
   const [isVisible, setIsVisible] = useState(open);
   const [activeTab, setActiveTab] = useState<'messages' | 'changes' | 'files'>('messages');
+  // #122: low-signal technical events are collapsed by default; this reveals them.
+  const [showTechnical, setShowTechnical] = useState(false);
   const [seedEvents, setSeedEvents] = useState<RunStreamEvent[]>([]);
   const [runDetailLoading, setRunDetailLoading] = useState(false);
   const [runDetailError, setRunDetailError] = useState<string | null>(null);
@@ -1726,6 +1758,16 @@ export function AgentSessionPanel({
               {activeTab === 'messages' && (
                 <>
                   <div className={styles.tabBody}>
+                    {selectedItem.nodeId !== 'outcome-plan' && !runDetailLoading && turns.length > 0 && (
+                      <div className={styles.narrativeToolbar}>
+                        <Switch
+                          checked={showTechnical}
+                          onChange={(_, data) => setShowTechnical(data.checked)}
+                          label="Show technical details"
+                          data-testid="toggle-technical-details"
+                        />
+                      </div>
+                    )}
                     {runDetailLoading && (
                       <div className={styles.loadingWrap}>
                         <Spinner size="tiny" />
@@ -1746,12 +1788,19 @@ export function AgentSessionPanel({
                     ) : !runDetailLoading && turns.length === 0 && (
                       <Text className={styles.emptyState}>No streamed messages yet for this session.</Text>
                     )}
-                    {selectedItem.nodeId !== 'outcome-plan' && turns.map((turn) => (
-                      <ConversationTurnBlock key={turn.key} turn={turn} runId={selectedRunId} onPreviewFile={openPreview} />
-                    ))}
+                    {selectedItem.nodeId !== 'outcome-plan' &&
+                      (showTechnical ? turns : turns.filter(turnHasSignalContent)).map((turn) => (
+                        <ConversationTurnBlock
+                          key={turn.key}
+                          turn={turn}
+                          runId={selectedRunId}
+                          onPreviewFile={openPreview}
+                          showTechnical={showTechnical}
+                        />
+                      ))}
                   </div>
                   <>
-                      <div className={styles.composerStack}>
+                      <div className={mergeClasses(styles.composerStack, docked && styles.dockedComposerStack)}>
                         {(pendingApprovalCount > 0 || pendingQuestionCount > 0) && (
                           <MessageBar intent="warning" className={styles.stickyNeedInput}>
                             <MessageBarBody>
@@ -1847,15 +1896,20 @@ function ConversationTurnBlock({
   turn,
   runId,
   onPreviewFile,
+  showTechnical = true,
 }: {
   turn: ConversationTurn;
   runId: string;
   onPreviewFile: (path: string) => void;
+  showTechnical?: boolean;
 }) {
   const styles = useStyles();
   const [toolsOpen, setToolsOpen] = useState(false);
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
   const completedTools = turn.toolCalls.filter((tool) => tool.settled).length;
+  // #122: with technical details hidden, drop system-prompt scaffolding rows so the
+  // narrative reads cleanly; the rows are revealed (not deleted) when the toggle is on.
+  const visibleRows = showTechnical ? turn.rows : turn.rows.filter((row) => row.role !== 'system');
   const toggleRow = (key: string) => {
     setExpandedRows((prev) => {
       const next = new Set(prev);
@@ -1867,7 +1921,7 @@ function ConversationTurnBlock({
 
   return (
     <div className={styles.conversationTurn}>
-      {turn.rows.map((row) => {
+      {visibleRows.map((row) => {
         const author = authorForRole(row.role);
         const collapsible = row.role === 'system' || row.role === 'user';
         const expanded = !collapsible || expandedRows.has(row.key);
@@ -1904,7 +1958,7 @@ function ConversationTurnBlock({
         );
       })}
 
-      {turn.toolCalls.length > 0 && (
+      {showTechnical && turn.toolCalls.length > 0 && (
         <div className={styles.toolsBox}>
           <button className={styles.toolsButton} onClick={() => setToolsOpen((value) => !value)} aria-expanded={toolsOpen}>
             {toolsOpen ? <ChevronDownRegular /> : <ChevronRightRegular />}
@@ -1937,7 +1991,7 @@ function ConversationTurnBlock({
         />
       ))}
 
-      {turn.filePaths.length > 0 && (
+      {showTechnical && turn.filePaths.length > 0 && (
         <div className={styles.fileRows}>
           {turn.filePaths.map((path) => {
             const relPath = normalizeWorkspacePath(path, runId);

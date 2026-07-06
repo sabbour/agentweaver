@@ -135,7 +135,10 @@ describe('CoordinatorRunPage operator console redesign', () => {
 
     await waitFor(() => expect(document.body.textContent).toContain('hello world'), { timeout: 4000 });
     expect((document.body.textContent?.match(/hello world/g) ?? [])).toHaveLength(1);
-    expect(document.body.textContent).toContain('Tool calls');
+    // #122: tool-call plumbing is collapsed by default; reveal it via the toggle.
+    expect(document.body.textContent).not.toContain('Tool calls');
+    fireEvent.click(screen.getByRole('switch', { name: 'Show technical details' }));
+    await waitFor(() => expect(document.body.textContent).toContain('Tool calls'), { timeout: 4000 });
   });
 
   it('keeps Changes and Files as the only artifact tabs beside Messages', async () => {
