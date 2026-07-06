@@ -1572,14 +1572,20 @@ app.MapPost("/api/runs/{id}/tool-approvals", async (
         _ => ApprovalScope.Once,
     };
 
-    var resolved = await approvalGate.GrantAsync(id, body.RequestId, approvalScope);
+    // The approval context lives on the run that RAISED the tool call. When {id} is a coordinator
+    // run and the request was raised by a child subtask, resolve to that child so the grant lands
+    // on the owning run instead of 404ing on the parent (recurrence of #196).
+    var targetRunId = await EndpointHelpers.ResolveApprovalOwningRunIdAsync(
+        id, run, body.RequestId, approvalGate, runStore, ct) ?? id;
+
+    var resolved = await approvalGate.GrantAsync(targetRunId, body.RequestId, approvalScope);
     if (!resolved)
     {
-        var state = approvalGate.GetRequestState(id, body.RequestId);
+        var state = approvalGate.GetRequestState(targetRunId, body.RequestId);
         if (state is ToolApprovalRequestState.Approved or ToolApprovalRequestState.Denied or ToolApprovalRequestState.Expired)
             return Results.Ok(new
             {
-                run_id = id,
+                run_id = targetRunId,
                 request_id = body.RequestId,
                 approved = state is ToolApprovalRequestState.Approved,
                 resolved = true,
@@ -1597,7 +1603,7 @@ app.MapPost("/api/runs/{id}/tool-approvals", async (
         return Results.Conflict(new { error = "Tool approval request is pending but could not be resolved. Retry the request.", state = "pending" });
     }
 
-    return Results.Ok(new { run_id = id, request_id = body.RequestId, approved = true });
+    return Results.Ok(new { run_id = targetRunId, request_id = body.RequestId, approved = true });
 });
 
 app.MapPost("/api/runs/{id}/tool-denials", async (
@@ -1620,14 +1626,19 @@ app.MapPost("/api/runs/{id}/tool-denials", async (
     if (run.Status != RunStatus.InProgress)
         return Results.Conflict(new { error = "Run is not active." });
 
-    var resolved = approvalGate.Deny(id, body.RequestId);
+    // Same owning-run resolution as tool-approvals: deny must land on the child subtask run that
+    // raised the tool call, not the parent coordinator run the operator is viewing (#196).
+    var targetRunId = await EndpointHelpers.ResolveApprovalOwningRunIdAsync(
+        id, run, body.RequestId, approvalGate, runStore, ct) ?? id;
+
+    var resolved = approvalGate.Deny(targetRunId, body.RequestId);
     if (!resolved)
     {
-        var state = approvalGate.GetRequestState(id, body.RequestId);
+        var state = approvalGate.GetRequestState(targetRunId, body.RequestId);
         if (state is ToolApprovalRequestState.Approved or ToolApprovalRequestState.Denied or ToolApprovalRequestState.Expired)
             return Results.Ok(new
             {
-                run_id = id,
+                run_id = targetRunId,
                 request_id = body.RequestId,
                 denied = state is ToolApprovalRequestState.Denied or ToolApprovalRequestState.Expired,
                 resolved = true,
@@ -1645,7 +1656,7 @@ app.MapPost("/api/runs/{id}/tool-denials", async (
         return Results.Conflict(new { error = "Tool approval request is pending but could not be resolved. Retry the request.", state = "pending" });
     }
 
-    return Results.Ok(new { run_id = id, request_id = body.RequestId, denied = true });
+    return Results.Ok(new { run_id = targetRunId, request_id = body.RequestId, denied = true });
 });
 
 app.MapPost("/api/runs/{id}/questions/{requestId}/answer", async (

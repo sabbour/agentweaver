@@ -29,6 +29,46 @@ internal static bool IsOwner(HttpContext context, Run run) =>
     ApiKeyAuthMiddleware.GetCaller(context).Owns(run.SubmittingUser);
 
 /// <summary>
+/// Resolves the run that actually OWNS a tool-approval <paramref name="requestId"/>. The approval
+/// context is registered (via <c>WaitForApprovalAsync</c>) on the run that RAISED the tool call —
+/// for a Coordinator orchestration that is a CHILD subtask run, not the coordinator itself. Yet
+/// operators grant/deny from the coordinator view and the request may be POSTed to the parent
+/// coordinator run id. When the posted run does not own the request and it is a coordinator/parent
+/// run, this searches its child subtask runs and returns the child that owns the request. Returns
+/// the posted run id when it already owns the request, or <see langword="null"/> when no parent or
+/// child run knows the request_id. This is the server-side, definitive owning-run resolution that
+/// makes tool approval robust regardless of which run id the client targets (recurrence of #196).
+/// </summary>
+internal static async Task<string?> ResolveApprovalOwningRunIdAsync(
+    string postedRunId,
+    Run postedRun,
+    string requestId,
+    IToolApprovalGate gate,
+    IRunStore runStore,
+    CancellationToken ct)
+{
+    if (gate.GetRequestState(postedRunId, requestId) != ToolApprovalRequestState.Unknown)
+        return postedRunId;
+
+    // Only a coordinator/parent run (ParentRunId == null && AgentName == "Coordinator") fans out to
+    // child subtask runs; a plain run or a child never owns another run's approval requests.
+    var isCoordinator = postedRun.ParentRunId is null
+        && string.Equals(postedRun.AgentName, "Coordinator", StringComparison.Ordinal);
+    if (!isCoordinator)
+        return null;
+
+    var children = await runStore.GetRunsByParentAsync(postedRunId, ct).ConfigureAwait(false);
+    foreach (var child in children)
+    {
+        var childId = child.Id.ToString();
+        if (gate.GetRequestState(childId, requestId) != ToolApprovalRequestState.Unknown)
+            return childId;
+    }
+
+    return null;
+}
+
+/// <summary>
 /// The set of run statuses that represent a completed lifecycle. A run in any of these states
 /// has no live workflow to cancel and owns no worktree that needs tearing down.
 /// </summary>
