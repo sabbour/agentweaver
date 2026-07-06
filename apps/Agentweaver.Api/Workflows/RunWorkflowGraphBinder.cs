@@ -80,6 +80,7 @@ internal static class RunWorkflowGraphBinder
         public required RunWorkflowBindings B { get; init; }
         public IRunWorkflowWiringSupport S => B.Wiring;
         public List<ExecutorBinding> ScribeOutputs { get; } = new();
+        public List<ExecutorBinding> DirectTerminalOutputs { get; } = new();
     }
 
     /// <summary>The edge verdicts that make a peer-review node a real verdict GATE (vs. a plain turn).</summary>
@@ -514,6 +515,17 @@ internal static class RunWorkflowGraphBinder
                     decision => decision is null || (!decision.Approved && !decision.RequestChanges));
                 return true;
 
+            // Peer-review APPROVED / PASS -> terminal (simple generated workflows with no merge/scribe tail).
+            case (NodeKind.PeerReview, NodeKind.Terminal, "approved"):
+            case (NodeKind.PeerReview, NodeKind.Terminal, "pass"):
+            {
+                var terminal = s.ReviewToTerminalAdapter(edge);
+                g.AddEdge<WorkflowReviewDecision>(s.ResolvePeerReviewNode(fromNode), terminal,
+                    decision => decision is not null && decision.Approved);
+                ctx.DirectTerminalOutputs.Add(terminal);
+                return true;
+            }
+
             // Peer-review APPROVED / PASS -> next AI peer-review verdict gate (e.g. code review -> build/test).
             case (NodeKind.PeerReview, NodeKind.PeerReview, "approved"):
             case (NodeKind.PeerReview, NodeKind.PeerReview, "pass"):
@@ -555,6 +567,16 @@ internal static class RunWorkflowGraphBinder
                  .AddEdge(path.Input, path.Scribe)
                  .AddEdge(path.Scribe, path.Output);
                 ctx.ScribeOutputs.Add(path.Output);
+                return true;
+            }
+
+            // Human review APPROVED -> terminal (workflow-authored final approval without merge/scribe).
+            case (NodeKind.HumanReview, NodeKind.Terminal, "approved"):
+            {
+                var terminal = s.ReviewToTerminalAdapter(edge);
+                g.AddEdge<WorkflowReviewDecision>(ResolveReview(fromNode, b), terminal,
+                    decision => decision is not null && decision.Approved);
+                ctx.DirectTerminalOutputs.Add(terminal);
                 return true;
             }
 
@@ -706,7 +728,7 @@ internal static class RunWorkflowGraphBinder
             (NodeKind.PeerReview, NodeKind.Rai, "approved" or "pass") => true,
             (NodeKind.PeerReview, NodeKind.Rubberduck, "pass") => true,
             (NodeKind.PeerReview, NodeKind.Agent, "request-changes" or "fail") => true,
-            (NodeKind.PeerReview, NodeKind.Terminal, "declined") => true,
+            (NodeKind.PeerReview, NodeKind.Terminal, "approved" or "pass" or "declined") => true,
             (NodeKind.HumanReview, NodeKind.Agent, "approved") => true,
             (NodeKind.HumanReview, NodeKind.Scribe, "approved") => true,
             (NodeKind.HumanReview, NodeKind.Terminal, "approved") => true,
@@ -767,6 +789,17 @@ internal static class RunWorkflowGraphBinder
         if (incoming.Any(e => string.Equals(e.When, "declined", StringComparison.Ordinal)))
         {
             g.WithOutputFrom(b.TerminalDeclined);
+            return;
+        }
+        if (incoming.Any(e => string.Equals(e.When, "approved", StringComparison.Ordinal)
+                           || string.Equals(e.When, "pass", StringComparison.Ordinal)))
+        {
+            var outputs = ctx.DirectTerminalOutputs.Distinct().ToArray();
+            if (outputs.Length == 0)
+                throw new WorkflowBindException(
+                    $"Cannot bind outputs for terminal node '{terminal.Id}': it is reached from an approved/pass " +
+                    "review verdict but no direct terminal output executor was wired.", terminal.Id);
+            g.WithOutputFrom(outputs);
             return;
         }
         // A terminal reached from a scribe stage is the run's "done" sink; every scribe-output executor

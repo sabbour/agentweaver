@@ -62,6 +62,10 @@ internal interface IRunWorkflowWiringSupport
     /// build/test gate — that flows straight into a human-review gate).</summary>
     ExecutorBinding ReviewToReviewRequestAdapter(WorkflowEdge edge);
 
+    /// <summary><c>WorkflowReviewDecision → NoChangesOutput</c>: complete a review-gated workflow directly
+    /// at a terminal node when the approved verdict is the authored final state.</summary>
+    ExecutorBinding ReviewToTerminalAdapter(WorkflowEdge edge);
+
     /// <summary><c>AgentTurnOutput → WorkflowReviewRequest</c>: store the diff and raise a human review
     /// request directly from an agent turn (a producer that flows straight into a human-review gate).</summary>
     ExecutorBinding AgentToReviewRequestAdapter(WorkflowEdge edge);
