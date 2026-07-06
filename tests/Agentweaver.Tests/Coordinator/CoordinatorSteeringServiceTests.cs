@@ -223,6 +223,108 @@ public sealed class CoordinatorSteeringServiceTests : IDisposable
     }
 
     // -----------------------------------------------------------------------
+    // Cross-pod event surfacing (regression, #lost-coordinator-messages).
+    // When the /steer POST lands on a replica that does NOT own the coordinator's
+    // in-memory stream (RunStreamStore.Get -> null), the coordinator.steering event
+    // must still be surfaced by falling back to the durable IRunEventStream. Before
+    // the fix the `entry?.RecordNext(...)` null-conditional silently dropped the event
+    // at replicas:2, so a steered message never appeared in the operator's session.
+    // -----------------------------------------------------------------------
+
+    [Fact]
+    public async Task Send_WhenReplicaDoesNotOwnStream_SurfacesEventViaDurableEventStream()
+    {
+        var durable = new RecordingEventStream();
+        var sut = new CoordinatorSteeringService(
+            _streamStore, _registry, _scopeFactory, NullLogger<CoordinatorSteeringService>.Instance,
+            eventStream: durable);
+
+        // NOTE: intentionally do NOT call _streamStore.Create — this replica does not own the
+        // coordinator run's in-memory stream (the dispatch/assembly loop runs on another pod).
+        _streamStore.Get("coord-xpod-send").Should().BeNull("precondition: this replica is not the stream owner");
+
+        var view = await sut.SteerAsync("coord-xpod-send", "send", null, "cross-pod nudge", "alice", default);
+
+        view.Status.Should().Be(SteeringStatus.Applied);
+
+        // The event must have been appended to the durable (cross-replica) stream so the operator's
+        // timeline — served by whichever replica owns the SSE connection — still surfaces it.
+        durable.Appended.Should().ContainSingle(e =>
+            e.RunId == "coord-xpod-send" && e.Event.Type == EventTypes.CoordinatorSteering,
+            "a send that lands on a non-owner replica must fall back to the durable event stream");
+    }
+
+    [Fact]
+    public async Task RedirectQueued_WhenReplicaDoesNotOwnStream_SurfacesQueuedEventViaDurableEventStream()
+    {
+        var durable = new RecordingEventStream();
+        var sut = new CoordinatorSteeringService(
+            _streamStore, _registry, _scopeFactory, NullLogger<CoordinatorSteeringService>.Instance,
+            eventStream: durable);
+
+        // No _streamStore.Create — non-owner replica.
+        var view = await sut.SteerAsync("coord-xpod-redirect", "redirect", "child-x", "switch to v2", "alice", default);
+
+        view.Status.Should().Be(SteeringStatus.Queued);
+        durable.Appended.Should().ContainSingle(e =>
+            e.RunId == "coord-xpod-redirect" && e.Event.Type == EventTypes.CoordinatorSteering,
+            "a queued redirect on a non-owner replica must still surface its queued state durably");
+    }
+
+    [Fact]
+    public async Task Send_WhenReplicaOwnsStream_UsesInMemoryStream_NotDurableFallback()
+    {
+        var durable = new RecordingEventStream();
+        var sut = new CoordinatorSteeringService(
+            _streamStore, _registry, _scopeFactory, NullLogger<CoordinatorSteeringService>.Instance,
+            eventStream: durable);
+
+        // This replica owns the in-memory stream.
+        _streamStore.Create("coord-owner-send", "alice");
+
+        await sut.SteerAsync("coord-owner-send", "send", null, "owned nudge", "alice", default);
+
+        // Owner path records in-memory (which the RunStreamStore itself mirrors durably when wired);
+        // the service's own durable fallback must NOT fire (no double-append from this seam).
+        durable.Appended.Should().NotContain(e => e.RunId == "coord-owner-send",
+            "when this replica owns the stream, the service records in-memory and does not double-append via its fallback");
+        _streamStore.Get("coord-owner-send")!.GetSnapshotSince(0).Events
+            .Should().Contain(e => e.Type == EventTypes.CoordinatorSteering);
+    }
+
+    /// <summary>
+    /// A minimal recording <see cref="IRunEventStream"/> test double (a fake, not a mock framework)
+    /// that captures every <see cref="AppendAsync"/> so cross-pod durable-fallback surfacing can be
+    /// asserted deterministically without a file-backed stream.
+    /// </summary>
+    private sealed class RecordingEventStream : IRunEventStream
+    {
+        private readonly List<(string RunId, RunEvent Event)> _appended = [];
+        private readonly Lock _lock = new();
+
+        public IReadOnlyList<(string RunId, RunEvent Event)> Appended
+        {
+            get { lock (_lock) return _appended.ToList(); }
+        }
+
+        public ValueTask AppendAsync(string runId, RunEvent evt, CancellationToken ct = default)
+        {
+            lock (_lock) _appended.Add((runId, evt));
+            return ValueTask.CompletedTask;
+        }
+
+        public async IAsyncEnumerable<RunEvent> SubscribeAsync(
+            string runId, int fromSequence = 0,
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+        {
+            await Task.CompletedTask;
+            yield break;
+        }
+
+        public ValueTask CompleteAsync(string runId, CancellationToken ct = default) => ValueTask.CompletedTask;
+    }
+
+    // -----------------------------------------------------------------------
     // -----------------------------------------------------------------------
     // Redirect vs Amend on parked coordinator: distinct subtask-reset behavior.
     // These tests live in CoordinatorSteeringRecoveryTests (which has the full
