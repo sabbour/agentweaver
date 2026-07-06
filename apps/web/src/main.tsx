@@ -3,6 +3,15 @@ import { createRoot } from 'react-dom/client'
 import './index.css'
 import App from './App.tsx'
 
+if (import.meta.env.DEV) {
+  const focusGuardModule = '/src/dev/impeccableLiveFocusGuard.ts';
+  void import(/* @vite-ignore */ focusGuardModule).then((module: typeof import('./dev/impeccableLiveFocusGuard')) => {
+    const { installImpeccableLiveFocusGuard } = module;
+    const cleanup = installImpeccableLiveFocusGuard();
+    import.meta.hot?.dispose(cleanup);
+  });
+}
+
 class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
   state = { error: null };
 

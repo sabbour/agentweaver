@@ -19,3 +19,44 @@ body,
 body {
   background-color: #f5f5f5;
 }
+
+/* Impeccable live-mode compatibility.
+   These rules are inert unless the local live toolbar is injected. */
+body:has(#impeccable-live-global-bar) [id^='impeccable-live-'] {
+  z-index: 2147483647 !important;
+}
+
+body:has(#impeccable-live-global-bar) #impeccable-live-highlight,
+body:has(#impeccable-live-global-bar) #impeccable-live-tooltip,
+body:has(#impeccable-live-global-bar) #impeccable-live-edit-badge,
+body:has(#impeccable-live-global-bar) #impeccable-live-annot,
+body:has(#impeccable-live-global-bar) #impeccable-live-annot-svg,
+body:has(#impeccable-live-global-bar) #impeccable-live-annot-pins,
+body:has(#impeccable-live-global-bar) #impeccable-live-annot-clear,
+body:has(#impeccable-live-global-bar) #impeccable-live-placeholder-resize,
+body:has(#impeccable-live-global-bar) #impeccable-live-bar,
+body:has(#impeccable-live-global-bar) #impeccable-live-picker,
+body:has(#impeccable-live-global-bar) #impeccable-live-params-panel,
+body:has(#impeccable-live-global-bar) #impeccable-live-pending-dock,
+body:has(#impeccable-live-global-bar) #impeccable-live-design-host {
+  pointer-events: none !important;
+}
+
+body:has(#impeccable-live-global-bar) #impeccable-live-global-bar,
+body:has(#impeccable-live-global-bar) #impeccable-live-global-bar * {
+  pointer-events: auto !important;
+}
+
+body:has(#impeccable-live-global-bar) .fui-DialogSurface__backdrop,
+body:has(#impeccable-live-global-bar) [class*='DialogSurface__backdrop'],
+body:has(#impeccable-live-global-bar) [class*='dialogSurfaceBackdrop'],
+body:has(#impeccable-live-global-bar) [class*='backdrop'] {
+  z-index: 100000 !important;
+  pointer-events: none !important;
+}
+
+body:has(#impeccable-live-global-bar) .fui-DialogSurface,
+body:has(#impeccable-live-global-bar) [role='dialog'][aria-modal='true'] {
+  z-index: 100001 !important;
+  pointer-events: auto !important;
+}
