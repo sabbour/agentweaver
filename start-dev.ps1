@@ -8,8 +8,8 @@
                           (picks up the bwrap sandbox executor automatically)
       - Web UI          — runs on Windows via Vite dev server
 
-    The API listens on http://localhost:5000 (CORS allows localhost:8080).
-    The Web UI listens on http://localhost:8080.
+    The API listens on http://localhost:5000 (CORS allows localhost:5173).
+    The Web UI listens on http://localhost:5173.
 
 .PARAMETER SkipBuild
     Skip `dotnet build` before launching the API.
@@ -33,7 +33,7 @@ $repoRoot   = $PSScriptRoot
 $apiProject = "apps/Agentweaver.Api"
 $webDir     = Join-Path $repoRoot "apps\web"
 $apiUrl     = "http://localhost:5000"
-$webUrl     = "http://localhost:8080"
+$webUrl     = "http://localhost:5173"
 $apiPort    = ([Uri]$apiUrl).Port
 
 # Convert Windows repo root to WSL path (C:\... -> /mnt/c/...)
@@ -135,7 +135,10 @@ while ($elapsed -lt $maxWait) {
     Start-Sleep -Seconds 2
     $elapsed += 2
     try {
-        $resp = Invoke-WebRequest -Uri "$apiUrl/" -TimeoutSec 2 -UseBasicParsing -ErrorAction Stop
+        # Probe the unauthenticated /health endpoint. The root path "/" now
+        # requires auth and returns 401, which made the old 200-only check
+        # report a false "did not respond" timeout even though the API was up.
+        $resp = Invoke-WebRequest -Uri "$apiUrl/health" -TimeoutSec 2 -UseBasicParsing -ErrorAction Stop
         if ($resp.StatusCode -eq 200) { $apiReady = $true; break }
     } catch {
         Write-Host "  ... ($elapsed s)" -ForegroundColor DarkGray
@@ -157,7 +160,7 @@ while ($viteWait -lt 20) {
     Start-Sleep -Seconds 1
     $viteWait++
     $log = Receive-Job $webJob 2>&1
-    if ($log -match "localhost:8080") { $viteReady = $true; break }
+    if ($log -match "localhost:5173") { $viteReady = $true; break }
 }
 
 if ($viteReady) {
