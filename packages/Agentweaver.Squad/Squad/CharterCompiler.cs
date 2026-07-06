@@ -72,6 +72,9 @@ public sealed class CharterCompiler
             sb.Append("- ").Append(r).Append('\n');
         sb.Append('\n');
 
+        sb.Append("## Previewable delivery\n\n");
+        sb.Append("When a task produces a runnable artifact outside a platform `build_test` gate, build and start it in the sandbox, discover or choose a non-conflicting port, verify it responds, call `start_preview(port=PORT)` with the actual bound port, and include the preview URL in your completion message. If sandbox preview is unavailable, explain how to run it locally.\n\n");
+
         sb.Append("## Boundaries\n\n");
         foreach (var b in boundaries)
             sb.Append("- ").Append(b).Append('\n');
