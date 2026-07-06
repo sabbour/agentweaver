@@ -29,7 +29,7 @@ import {
   makeStyles,
   tokens,
 } from '@fluentui/react-components';
-import { Dismiss24Regular, PersonAddRegular } from '@fluentui/react-icons';
+import { Dismiss24Regular, PersonAddRegular, PuzzlePiece20Regular } from '@fluentui/react-icons';
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
 import { AgentAvatar } from '../components/AgentAvatar';
@@ -42,6 +42,8 @@ import type {
   RoleDto,
   ReroleRequest,
   Project,
+  SkillDto,
+  SkillStatus,
 } from '../api/types';
 import { SyncPanel } from '../components/SyncPanel';
 import { PageHeader } from '../components/PageHeader';
@@ -196,6 +198,38 @@ const useStyles = makeStyles({
     maxHeight: '250px',
     overflowY: 'auto',
     border: `1px solid ${tokens.colorNeutralStroke2}`,
+  },
+  skillList: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalS,
+  },
+  skillItem: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalXXS,
+    padding: tokens.spacingVerticalS,
+    backgroundColor: tokens.colorNeutralBackground2,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusSmall,
+  },
+  skillItemHeader: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXS,
+  },
+  skillName: {
+    fontWeight: tokens.fontWeightSemibold,
+    fontSize: tokens.fontSizeBase300,
+    color: tokens.colorBrandForeground1,
+    textDecoration: 'none',
+    ':hover': {
+      textDecoration: 'underline',
+    },
+  },
+  skillDescription: {
+    fontSize: tokens.fontSizeBase200,
+    color: tokens.colorNeutralForeground2,
   },
   drawerFooterRow: {
     display: 'flex',
@@ -448,6 +482,12 @@ function AddMemberDialog({
   );
 }
 
+function skillStatusColor(status: SkillStatus): 'warning' | 'danger' | 'subtle' {
+  if (status === 'missing') return 'warning';
+  if (status === 'malformed') return 'danger';
+  return 'subtle';
+}
+
 function AgentDetailPanel({
   projectId,
   member,
@@ -476,9 +516,15 @@ function AgentDetailPanel({
   const [saving, setSaving] = useState(false);
   const [charterLoaded, setCharterLoaded] = useState(false);
 
+  const [skills, setSkills] = useState<SkillDto[]>([]);
+  const [skillsError, setSkillsError] = useState<string | null>(null);
+  const [skillsLoaded, setSkillsLoaded] = useState(false);
+
   // Derived loading states avoid synchronous setState calls inside effects
   const historyLoading = panelTab === 'overview' && !historyLoaded && historyError === null;
   const charterLoading = panelTab === 'charter' && !charterLoaded && charterError === null;
+  const skillsTabActive = panelTab === 'overview' || panelTab === 'capabilities';
+  const skillsLoading = skillsTabActive && !skillsLoaded && skillsError === null;
 
   useEffect(() => {
     if (panelTab !== 'overview' || historyLoaded || historyError !== null) return;
@@ -529,6 +575,28 @@ function AgentDetailPanel({
     return () => { cancelled = true; };
   }, [projectId, member.name, panelTab, charterLoaded, charterError]);
 
+  useEffect(() => {
+    if (!skillsTabActive || skillsLoaded || skillsError !== null) return;
+    let cancelled = false;
+    apiClient.listSkills(projectId)
+      .then((all) => {
+        if (!cancelled) {
+          setSkills(all.filter((s) => s.assigned_agents.includes(member.name)));
+          setSkillsLoaded(true);
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setSkillsError(
+            err instanceof ApiError
+              ? `API error ${err.status}: ${err.body}`
+              : err instanceof Error ? err.message : String(err),
+          );
+        }
+      });
+    return () => { cancelled = true; };
+  }, [projectId, member.name, skillsTabActive, skillsLoaded, skillsError]);
+
   const handleSaveCharter = async () => {
     setSaving(true);
     try {
@@ -547,6 +615,46 @@ function AgentDetailPanel({
 
   // suppress unused variable warning — charter state is managed for side-effects
   void charter;
+
+  const skillsSection = (
+    <div className={styles.panelSection}>
+      <Text className={styles.panelSectionLabel}>Assigned skills</Text>
+      {skillsLoading && <Spinner label="Loading skills" size="small" />}
+      {skillsError && (
+        <MessageBar intent="error">
+          <MessageBarBody>{skillsError}</MessageBarBody>
+        </MessageBar>
+      )}
+      {!skillsLoading && !skillsError && skills.length === 0 && (
+        <Text style={{ color: tokens.colorNeutralForeground3 }}>No skills assigned</Text>
+      )}
+      {!skillsLoading && !skillsError && skills.length > 0 && (
+        <div className={styles.skillList}>
+          {skills.map((skill) => (
+            <div key={skill.id} className={styles.skillItem}>
+              <div className={styles.skillItemHeader}>
+                <PuzzlePiece20Regular aria-hidden="true" />
+                <Link
+                  className={styles.skillName}
+                  to={`/projects/${projectId}/skills`}
+                >
+                  {skill.name}
+                </Link>
+                {skill.status !== 'active' && (
+                  <Badge appearance="tint" color={skillStatusColor(skill.status)} size="small">
+                    {skill.status}
+                  </Badge>
+                )}
+              </div>
+              {skill.description && (
+                <Text className={styles.skillDescription}>{skill.description}</Text>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 
   return (
     <>
@@ -618,6 +726,7 @@ function AgentDetailPanel({
                   </div>
                 )}
               </div>
+              {skillsSection}
             </>
           )}
 
@@ -667,9 +776,7 @@ function AgentDetailPanel({
                 <Text className={styles.panelSectionLabel}>Model</Text>
                 <Text className={styles.monoText}>{member.default_model}</Text>
               </div>
-              <Text style={{ color: tokens.colorNeutralForeground3, fontStyle: 'italic' }}>
-                Capabilities are defined in the agent&apos;s charter.
-              </Text>
+              {skillsSection}
             </>
           )}
         </div>
