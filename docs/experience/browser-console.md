@@ -7,6 +7,15 @@ title: Browser console
 The browser console is a terminal-styled, full-screen chat interface for operating Agentweaver from
 the web app. Open it with the **Console** button in the top bar or navigate to `/console`.
 
+## Terminal interface
+
+The console renders as a true terminal, not a chat panel. It uses a dark terminal surface with a
+monospace font and a full-height scrollback region that fills the viewport, so long sessions read
+like a shell log. Input sits at the bottom on a fixed CLI prompt row, prefixed by a prompt glyph and
+trailed by a blinking block cursor. The prompt input itself is borderless and transparent so it reads
+as part of the terminal line rather than a form field. New output appends to the scrollback and the
+view follows the latest line while you stay near the bottom.
+
 ## Prose and commands
 
 The console has two input modes:
@@ -47,7 +56,8 @@ planned in issue #201.
 | Concern | Source |
 | --- | --- |
 | `/console` route | `apps/web/src/App.tsx:47` |
-| Top-bar Console button | `apps/web/src/components/shell/TopBar.tsx:70` |
+| Top-bar Console button | `apps/web/src/components/shell/TopBar.tsx:69` |
+| Terminal surface, scrollback, prompt, and blinking cursor | `apps/web/src/console/BrowserConsole.tsx:69`, `apps/web/src/console/BrowserConsole.tsx:180`, `apps/web/src/console/BrowserConsole.tsx:624` |
 | Console architecture and gate reuse | `apps/web/src/console/BrowserConsole.tsx:32` |
 | Slash command catalog | `apps/web/src/console/consoleCommands.ts:18` |
 

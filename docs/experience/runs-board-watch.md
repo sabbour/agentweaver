@@ -223,6 +223,16 @@ The watch page shows:
 
 The watch surface auto-scrolls while the user stays near the bottom; if the user scrolls up, new events continue arriving without forcing the viewport down.
 
+### Browsing artifacts
+
+Run artifacts are shown through a shared **Artifact Browser** used everywhere a workspace is
+inspected — the per-run panel, each per-agent session panel, and the coordinator run view. It has two
+views: a compact **Changes** list that flattens the run's changed files for a quick scan, and a
+**Files** tab that renders the workspace as a real folder tree you can expand and drill into.
+Selecting a file opens its diff or content. Because the coordinator run now uses the same browser,
+its assembled collective artifacts are inspectable in the same way as any child run's, rather than
+only through the timeline.
+
 ### The run header
 
 The run header shows **Run** followed by the short run id. While the SSE connection is opening, the header says **Connecting**. Once events are flowing, it says **Streaming**. A terminal stream shows **done**. A stream failure shows **error** and the current error text, such as a reconnect notice or final failure message.
@@ -271,7 +281,15 @@ Agent messages can stream as deltas before becoming a settled message. The UI sh
 
 A tool-call card answers what tool was called, whether it is pending or settled, what arguments were passed, and what result or error came back.
 
-The card header uses a wrench icon, a status icon, and a human-readable title. Pending calls show a spinner. Successful calls show a check. Tool errors show an error badge. Sandbox violations show a warning style and a **sandbox** badge. A `run_command` result with a non-zero exit code also shows a warning, even when the tool call itself returned a result.
+Each row is a single compact line: an action-specific FluentUI icon, a human-readable title, and
+muted secondary metadata. The leading icon reflects the kind of action — for example a document icon
+for reads, a magnifier for searches, a folder for listings, an edit glyph for edits, and a trash
+glyph for deletes — so a cluster of calls is scannable at a glance. The status icon settles once the
+call resolves: only genuinely pending calls show a spinner, while completed calls show a check (or an
+error or warning state). Completed tool calls no longer show a stuck clock or a perpetual spinner,
+because still-pending calls are force-settled when the turn closes. Sandbox violations show a warning
+style and a **sandbox** badge, and a `run_command` result with a non-zero exit code also shows a
+warning even when the tool call itself returned a result.
 
 Selecting an expandable card reveals **args**, result output when it is more than a plain `ok`, and error or violation text. Large blocks are truncated with the total character count so the page stays responsive.
 

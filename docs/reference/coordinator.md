@@ -217,13 +217,14 @@ A user steers the coordinator while subagents run, and the coordinator relays th
 
 | Verb | Effect | Timing |
 | --- | --- | --- |
+| `send` | Delivers an informational message or note to the coordinator without changing the chosen direction. | Queued and delivered at the next safe boundary; if collective assembly is blocked, it wakes the coordinator and retries assembly with the new context. |
 | `stop` | Cancels the targeted child run's in-flight turn. | Immediate. |
 | `redirect` | Relays new direction the subagent applies as a revised task turn. | At the subagent's next turn boundary; no restart. |
 | `amend` | Relays an adjustment the subagent folds into its next turn. | At the subagent's next turn boundary; no restart. |
 
-An in-flight agent turn cannot be interrupted mid-turn under the run model, so only `stop` reaches a subagent during a turn. A `redirect` or `amend` is queued and applied when the child's current turn completes (or when it next suspends at a gate), without restarting the run. Omitting the target broadcasts to every active child. Directives progress through `coordinator.steering` events (`pending -> queued -> relayed -> applied`).
+An in-flight agent turn cannot be interrupted mid-turn under the run model, so only `stop` reaches a subagent during a turn. `send`, `redirect`, and `amend` are queued and applied when the child's current turn completes (or when it next suspends at a gate), without restarting the run. The queue is DB-backed and replica-safe: a queued directive transitions `queued -> relayed` under a compare-and-swap so a mid-run message is delivered exactly once even across API replicas. `stop` bypasses the queue entirely — it is the only hard interrupt. Omitting the target broadcasts to every active child. Directives progress through `coordinator.steering` events (`pending -> queued -> relayed -> applied`).
 
-**Pause is not supported in Phase 2.** No hold-before-next-turn primitive exists in the run model; the steering surface is `stop`, `redirect`, and `amend` only. Pause is deferred to a later phase.
+**Pause is not supported.** No hold-before-next-turn primitive exists in the run model; the steering surface is `send`, `stop`, `redirect`, and `amend` only. Pause is deferred to a later phase.
 
 ### Asking the human: ask_question
 

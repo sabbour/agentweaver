@@ -180,7 +180,11 @@ The hint explains the graph's job: **Live view of the coordinator and its subtas
 
 Subtask cards show the subtask title, assigned agent, role label when available, selected model, phase, status badge, and elapsed time. Status labels are direct and operational: **Pending**, **Dispatched**, **Running**, **Awaiting assembly**, **RAI flagged**, **Completed**, **Failed**, and **Blocked**. A subtask that has finished its part but is waiting for the parent shows the note **Finished its part — waiting for collective assembly**.
 
-The graph uses left-to-right dependency layout. Root subtasks appear after the coordinator; dependent subtasks appear after their prerequisites. The user can see which work is parallel, which work is serial, and which node is blocking the rest.
+The graph uses a top-down dependency layout. The coordinator sits at the top and subtasks flow
+downward, each rank appearing below its prerequisites. Ranks are centered and aligned, so parallel
+subtasks line up horizontally under their shared parent, and dependency edges are drawn as clean
+vertical connectors rather than wavy S-curves. The result reads as a tidy spine: the user can see at
+a glance which work is parallel, which work is serial, and which node is blocking the rest.
 
 ### Live topology updates
 
@@ -321,7 +325,7 @@ The page title is **Orchestration**. It shows a short id in the breadcrumb, live
 
 The **Coordinator Graph** is the full-width band at the top. It is built to be watched. The graph has zoom controls, auto-fit behavior, and expandable subtask cards. When the OutcomeSpec is still being authored, the graph avoids implying future work and shows a focused pre-dispatch state. Once confirmed, the execution pipeline appears.
 
-Nodes are connected by smooth **spine edges** — each fan-out and fan-in routes through a shared rounded junction dot with clean bezier curves instead of hard-angled arrows — and every card carries a **colored top-accent bar** keyed to its status (green complete, blue running, amber awaiting, red failed) with the status pill in the top-left corner. A **minimap** in the bottom-right corner shows the whole graph at a glance, coloring each node by its status and outlining the visible viewport, so you can orient yourself in a large orchestration. The **zoom control** in the corner has a **fit-to-view** button (resets to 100%, the natural fitted size), minus/plus buttons, and a live percentage readout; hold **Ctrl** while scrolling to zoom (shown as a tooltip).
+Nodes are connected by clean **spine edges** — each fan-out and fan-in routes through a shared rounded junction dot, drawn as straight vertical connectors rather than wavy S-curves — and every card carries a **colored top-accent bar** keyed to its status (green complete, blue running, amber awaiting, red failed) with the status pill in the top-left corner. Ranks are centered and aligned, so parallel subtasks line up horizontally directly under their shared parent. A **minimap** in the bottom-right corner shows the whole graph at a glance, coloring each node by its status and outlining the visible viewport, so you can orient yourself in a large orchestration. The **zoom control** in the corner has a **fit-to-view** button (resets to 100%, the natural fitted size), minus/plus buttons, and a live percentage readout; hold **Ctrl** while scrolling to zoom (shown as a tooltip).
 
 The graph includes the coordinator node, subtask nodes, dependency edges, and collective assembly stages when they are part of the descriptor. Assembly stages map to the overall orchestration phase: RAI starts during assembly, human review becomes actionable during **In review**, merge and scribe light up from their own assembly events, and completion turns the flow green.
 
@@ -334,6 +338,11 @@ When the work plan exists, the page shows an **Agents** rail below the graph. It
 Below the graph, the page uses two columns. The left column is the **Outcome spec** panel. It can collapse to a rail labeled **Outcome spec**, and it auto-collapses after confirmation to give more space to live execution. The right column is the **Coordinator session**, which can also collapse to a rail while the spec is still being authored.
 
 The coordinator session reuses the standard run timeline. It shows the coordinator's own messages, lifecycle cards, tool activity, and stream state. It filters out raw serialized work-plan JSON when the structured plan is already visible in the graph and panels.
+
+The coordinator run also surfaces its assembled artifacts through the same **Artifact Browser** used
+on child runs — a compact **Changes** list plus a **Files** tab with a real folder tree — so the
+collective output of an orchestration is inspectable directly from the coordinator view rather than
+only through per-child runs.
 
 Coordinator-only artifacts are also intentionally quiet on misses. The page stops retrying `work-plan` or `outcome-spec` REST reads after the first `404`, because the live coordinator stream is enough to fill in those artifacts once they exist. Child runs skip those calls entirely: a child run never has its own work plan or outcome spec, so its page does not poll those coordinator-only endpoints at all.
 

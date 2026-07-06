@@ -38,6 +38,12 @@ instructions, and sorted resources, so re-syncing or re-importing unchanged cont
 synced skill disappears from the connected repository, it is marked `missing`; if a previously valid
 same-source skill becomes malformed, it is marked `malformed`. Only `active` skills can be injected.
 
+Git and raw imports pass through an SSRF guard before anything is cloned or fetched. The source
+parser accepts only the `owner/repo` shorthand, public `https://github.com` repo/tree/blob URLs, and
+raw `https://raw.githubusercontent.com/.../SKILL.md` URLs; every other host, scheme, non-default port,
+or embedded-credential form is rejected. Multi-skill sources return every discovered candidate from a
+preview pass so the caller selects which locations to import.
+
 ## Assignment and prompt assembly
 
 Assignments are project-scoped links between a skill and an agent name. Prompt assembly queries only
@@ -51,6 +57,7 @@ in agent diffs.
 | --- | --- |
 | REST routes for catalog, acquisition, upload, and assignment | `apps/Agentweaver.Api/Endpoints/SkillEndpoints.cs:15` |
 | Catalog DTOs, idempotent upsert, missing/malformed handling, repository discovery | `apps/Agentweaver.Api/Skills/SkillCatalogService.cs:16`, `apps/Agentweaver.Api/Skills/SkillCatalogService.cs:350` |
+| Import source allow-list / SSRF guard (`github.com`, `raw.githubusercontent.com`) | `apps/Agentweaver.Api/Skills/SkillCatalogService.cs:772` |
 | `SKILL.md` frontmatter, recognized directories, size limits, content hash | `apps/Agentweaver.Api/Skills/SkillParser.cs:33` |
 | Path safety for uploads, zip extraction, and resources | `apps/Agentweaver.Api/Skills/SkillPaths.cs:3` |
 | Progressive-disclosure prompt block and materialization | `apps/Agentweaver.Api/Skills/SkillPromptComposer.cs:8` |

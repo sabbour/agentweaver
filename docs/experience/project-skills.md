@@ -23,14 +23,23 @@ The Catalog toolbar supports three acquisition paths:
    `SKILL.md` with `name` and `description` frontmatter.
 2. **Generate Skill**: describe the skill. The server generates a draft, then you review and edit it
    before creating the catalog skill.
-3. **Import Skill**: upload `.md` skill files, upload a folder with `SKILL.md`, or paste a raw
-   `SKILL.md` URL, `owner/repo`, GitHub repo URL, GitHub tree/blob folder URL, or `git@` SSH URL.
+3. **Import Skill**: upload `.md` skill files, upload a folder with `SKILL.md`, or paste one of the
+   supported source URLs — `owner/repo`, a `https://github.com` repo URL, a GitHub `tree`/`blob`
+   folder URL, or a raw `https://raw.githubusercontent.com/.../SKILL.md` URL. Preview lists every
+   candidate skill discovered at the source so you can select which ones to import.
 4. **Sync connected repo**: scans `.github/skills`, `.copilot/skills`, `.claude/skills`, and
    `.agents/skills` in the project repository.
 
 Imports accept a single `SKILL.md`, a folder of `<name>/SKILL.md` directories, or recognized repo
-folders under `.github/skills`, `.copilot/skills`, `.claude/skills`, and `.agents/skills`. Only import
-skills from sources you trust because imported instructions can change how an agent behaves.
+folders under `.github/skills`, `.copilot/skills`, `.claude/skills`, and `.agents/skills`.
+
+::: warning Only GitHub sources are accepted
+For safety against server-side request forgery, imports are restricted to two hosts:
+`github.com` (public HTTPS, default port, no embedded credentials) and
+`raw.githubusercontent.com`. Any other host — including `http://`, `git@` SSH URLs, non-default
+ports, or `user@host` tricks — is rejected before anything is cloned or fetched. Only import skills
+from sources you trust, because imported instructions can change how an agent behaves.
+:::
 
 Each catalog card shows status, provenance, updated time, source location, assigned agents, and a
 **View** action for the full instructions. Repeating an acquisition is safe: unchanged content is

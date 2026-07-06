@@ -19,12 +19,22 @@ All routes are project-scoped under `/api/projects/{id}/skills`.
 | `DELETE` | `/api/projects/{id}/skills/{skillId}` | Delete a skill and its assignments. |
 | `POST` | `/api/projects/{id}/skills/generate` | Generate an unsaved skill draft server-side from `description` or `prompt`. |
 | `POST` | `/api/projects/{id}/skills/sync` | Discover and sync skills from the connected repository. |
-| `POST` | `/api/projects/{id}/skills/import/preview` | Preview candidates from owner/repo, GitHub repo/tree/blob URLs, raw SKILL.md URLs, or git@ SSH URLs. |
-| `POST` | `/api/projects/{id}/skills/import` | Import selected candidates from owner/repo, GitHub repo/tree/blob URLs, raw SKILL.md URLs, or git@ SSH URLs. |
+| `POST` | `/api/projects/{id}/skills/import/preview` | Preview candidate skills from `owner/repo`, a `https://github.com` repo/tree/blob URL, or a raw `https://raw.githubusercontent.com` SKILL.md URL. |
+| `POST` | `/api/projects/{id}/skills/import` | Import selected candidates from `owner/repo`, a `https://github.com` repo/tree/blob URL, or a raw `https://raw.githubusercontent.com` SKILL.md URL. |
 | `POST` | `/api/projects/{id}/skills/upload` | Upload files, folders, or a `.zip` archive as skill content. |
 | `GET` | `/api/projects/{id}/skills/assignments` | List all skill-to-agent assignments in the project. |
 | `PUT` | `/api/projects/{id}/skills/{skillId}/assignments/{agentName}` | Assign a skill to an agent. |
 | `DELETE` | `/api/projects/{id}/skills/{skillId}/assignments/{agentName}` | Unassign a skill from an agent. |
+
+### Import source restrictions
+
+`import` and `import/preview` parse the supplied source through an allow-list before any clone or
+fetch. Only two hosts are accepted: `github.com` (HTTPS only, default port, no `userinfo`) and
+`raw.githubusercontent.com` (which must point directly at a `SKILL.md`). The `owner/repo` shorthand
+maps to the canonical `https://github.com/{owner}/{repo}.git` clone URL. Any other scheme (`http`,
+`git`, `ssh`, `file`), a non-default port, embedded credentials, or a different host is rejected with
+a `400` and a message such as *"Unsupported skill source host … Only github.com and
+raw.githubusercontent.com are allowed."* This is an SSRF guard, not a convenience limit.
 
 ## DTOs
 
