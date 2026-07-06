@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   Badge,
   Button,
@@ -6,8 +6,6 @@ import {
   Field,
   MessageBar,
   MessageBarBody,
-  Radio,
-  RadioGroup,
   Spinner,
   Text,
   Textarea,
@@ -26,35 +24,34 @@ export type BlueprintSelection =
 
 export const NO_BLUEPRINT: BlueprintSelection = { kind: 'none' };
 
-const NONE_KEY = '__none__';
-const GENERATED_KEY = '__generated__';
+export type BlueprintPanelTab = 'generated' | 'suggested' | 'templates' | 'generate';
 
 const useStyles = makeStyles({
-  root: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM },
-  tabs: { display: 'inline-flex', gap: tokens.spacingHorizontalXS, padding: tokens.spacingVerticalXXS, backgroundColor: tokens.colorNeutralBackground3, borderRadius: tokens.borderRadiusXLarge },
+  root: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minHeight: 0 },
+  panel: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minHeight: 0, height: '100%' },
+  tabStrip: { display: 'inline-flex', gap: tokens.spacingHorizontalXS, padding: tokens.spacingVerticalXXS, backgroundColor: tokens.colorNeutralBackground3, borderRadius: tokens.borderRadiusXLarge, alignSelf: 'flex-start' },
   tabButton: { minWidth: '96px' },
+  panelBody: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minHeight: 0, overflowY: 'auto', paddingRight: tokens.spacingHorizontalXS },
   sectionHeader: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: tokens.spacingHorizontalM },
   subtle: { color: tokens.colorNeutralForeground3 },
-  emptyCard: { display: 'flex', flexDirection: 'column', alignItems: 'center', gap: tokens.spacingVerticalS, padding: tokens.spacingVerticalXXL, textAlign: 'center', backgroundColor: tokens.colorNeutralBackground2 },
-  templateGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: tokens.spacingHorizontalM },
-  radioCard: { width: '100%' },
+  emptyCard: { display: 'flex', flexDirection: 'column', alignItems: 'center', gap: tokens.spacingVerticalS, padding: tokens.spacingVerticalXXL, textAlign: 'center', backgroundColor: tokens.colorNeutralBackground2, minHeight: '160px', justifyContent: 'center', overflowWrap: 'anywhere' },
+  templateGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: tokens.spacingHorizontalM, alignItems: 'stretch' },
+  radioCard: { width: '100%', minHeight: '180px', cursor: 'pointer' },
+  selectedCard: { border: `2px solid ${tokens.colorBrandStroke1}` },
   cardLabel: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS, width: '100%' },
   cardTitleRow: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: tokens.spacingHorizontalS },
   cardTitle: { fontWeight: tokens.fontWeightSemibold },
-  cardDescription: { color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200 },
+  cardDescription: { color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200, lineHeight: tokens.lineHeightBase200 },
   chips: { display: 'flex', flexWrap: 'wrap', gap: tokens.spacingHorizontalXS, marginTop: tokens.spacingVerticalXXS },
   roleRows: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS, marginTop: tokens.spacingVerticalXS },
   roleRow: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200 },
-  iconBubble: { width: '28px', height: '28px', borderRadius: tokens.borderRadiusCircular, backgroundColor: tokens.colorBrandBackground2, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' },
+  iconBubble: { width: '28px', height: '28px', borderRadius: tokens.borderRadiusCircular, backgroundColor: tokens.colorBrandBackground2, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
   previewCard: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, padding: tokens.spacingVerticalM },
   metaRow: { display: 'flex', flexWrap: 'wrap', gap: tokens.spacingHorizontalS, color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200 },
   generateBox: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS },
   generateBar: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
   suggestedCard: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, border: `1px solid ${tokens.colorPaletteGreenBorderActive}`, boxShadow: tokens.shadow4, padding: tokens.spacingVerticalM },
   suggestedHeader: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: tokens.spacingHorizontalS },
-  compactList: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS },
-  compactCard: { padding: tokens.spacingVerticalS },
-  customRow: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: tokens.spacingHorizontalM, padding: tokens.spacingVerticalM, border: `1px dashed ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium },
 });
 
 export function useBlueprintCatalog(active: boolean) {
@@ -146,24 +143,33 @@ export function BlueprintPreviewCard({ blueprint, generated }: { blueprint: Blue
   );
 }
 
-function BlueprintRadioCard({ blueprint }: { blueprint: Blueprint }) {
+function BlueprintCard({ blueprint, selected, onSelect }: { blueprint: Blueprint; selected: boolean; onSelect: () => void }) {
   const styles = useStyles();
   const visibleRoles = blueprint.roster.slice(0, 3);
   return (
-    <div className={styles.cardLabel}>
-      <div className={styles.cardTitleRow}>
-        <span className={styles.iconBubble}>✦</span>
-        <Text className={styles.cardTitle}>{blueprint.name}</Text>
-        <Badge appearance="outline" size="small">{blueprint.roster.length} agents</Badge>
+    <Card
+      className={`${styles.radioCard} ${selected ? styles.selectedCard : ''}`}
+      onClick={onSelect}
+      role="radio"
+      aria-checked={selected}
+      tabIndex={0}
+      onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onSelect(); } }}
+    >
+      <div className={styles.cardLabel}>
+        <div className={styles.cardTitleRow}>
+          <span className={styles.iconBubble}>✦</span>
+          <Text className={styles.cardTitle}>{blueprint.name}</Text>
+          <Badge appearance="outline" size="small">{blueprint.roster.length} agents</Badge>
+        </div>
+        <Text className={styles.cardDescription}>{blueprint.description}</Text>
+        <div className={styles.roleRows}>
+          {visibleRoles.map((role) => (
+            <div className={styles.roleRow} key={role}><span>●</span><span>{roleLabel(role)}</span></div>
+          ))}
+        </div>
+        <BlueprintRosterChips roster={blueprint.roster} limit={3} />
       </div>
-      <Text className={styles.cardDescription}>{blueprint.description}</Text>
-      <div className={styles.roleRows}>
-        {visibleRoles.map((role) => (
-          <div className={styles.roleRow} key={role}><span>●</span><span>{roleLabel(role)}</span></div>
-        ))}
-      </div>
-      <BlueprintRosterChips roster={blueprint.roster} limit={3} />
-    </div>
+    </Card>
   );
 }
 
@@ -174,7 +180,6 @@ export function BlueprintTemplatePicker({
   value,
   onChange,
   limit,
-  showNoBlueprint = true,
 }: {
   blueprints: Blueprint[];
   loading: boolean;
@@ -182,45 +187,41 @@ export function BlueprintTemplatePicker({
   value: BlueprintSelection;
   onChange: (selection: BlueprintSelection) => void;
   limit?: number;
-  showNoBlueprint?: boolean;
 }) {
   const styles = useStyles();
   const visible = typeof limit === 'number' ? blueprints.slice(0, limit) : blueprints;
-  const selectedKey = value.kind === 'none' ? NONE_KEY : value.kind === 'generated' ? GENERATED_KEY : value.blueprint.id;
-
-  const handleRadio = (key: string) => {
-    if (key === NONE_KEY) return onChange(NO_BLUEPRINT);
-    const bp = blueprints.find((b) => b.id === key);
-    if (bp) onChange({ kind: 'predefined', blueprint: bp });
-  };
 
   return (
-    <div className={styles.root}>
+    <div className={styles.root} role="radiogroup" aria-label="Blueprint templates">
       {error && <MessageBar intent="warning"><MessageBarBody>Could not load blueprints: {error}</MessageBarBody></MessageBar>}
       {loading && <div className={styles.generateBar}><Spinner size="extra-tiny" /> <Text size={200}>Loading blueprints…</Text></div>}
-      <RadioGroup aria-label="Blueprint" value={selectedKey} onChange={(_, data) => handleRadio(data.value)}>
-        {showNoBlueprint && <Radio value={NONE_KEY} label="No blueprint" />}
-        <div className={styles.templateGrid}>
-          {visible.map((bp) => (
-            <Card key={bp.id} className={styles.radioCard}>
-              <Radio value={bp.id} label={<BlueprintRadioCard blueprint={bp} />} />
-            </Card>
-          ))}
-        </div>
-      </RadioGroup>
+      <div className={styles.templateGrid}>
+        {visible.map((bp) => (
+          <BlueprintCard
+            key={bp.id}
+            blueprint={bp}
+            selected={value.kind === 'predefined' && value.blueprint.id === bp.id}
+            onSelect={() => onChange({ kind: 'predefined', blueprint: bp })}
+          />
+        ))}
+      </div>
     </div>
   );
 }
 
-export function StarterTemplatesSection(props: Omit<Parameters<typeof BlueprintTemplatePicker>[0], 'showNoBlueprint'> & { title?: string }) {
+export function StarterTemplatesSection({
+  title,
+  onViewAllTemplates,
+  ...props
+}: Omit<Parameters<typeof BlueprintTemplatePicker>[0], 'showNoBlueprint'> & { title?: string; onViewAllTemplates?: () => void }) {
   const styles = useStyles();
   return (
     <div className={styles.root}>
       <div className={styles.sectionHeader}>
-        <Text weight="semibold">{props.title ?? 'Starter templates'}</Text>
-        <Button appearance="transparent" size="small">View all templates →</Button>
+        <Text weight="semibold">{title ?? 'Starter templates'}</Text>
+        <Button appearance="transparent" size="small" onClick={onViewAllTemplates}>View all templates →</Button>
       </div>
-      <BlueprintTemplatePicker {...props} showNoBlueprint={false} />
+      <BlueprintTemplatePicker {...props} />
     </div>
   );
 }
@@ -281,14 +282,14 @@ export function SuggestedBlueprintPanel({
   blueprints,
   value,
   onChange,
-  onGenerateClick,
+  onViewTemplates,
 }: {
   active: boolean;
   repository: string;
   blueprints: Blueprint[];
   value: BlueprintSelection;
   onChange: (selection: BlueprintSelection) => void;
-  onGenerateClick: () => void;
+  onViewTemplates: () => void;
 }) {
   const styles = useStyles();
   const [loading, setLoading] = useState(false);
@@ -309,10 +310,6 @@ export function SuggestedBlueprintPanel({
   }, [active, normalizedRepo]);
 
   const recommended = suggestion?.recommended_blueprint ?? null;
-  const otherBlueprints = useMemo(() => {
-    const recId = recommended?.id;
-    return blueprints.filter((bp) => bp.id !== recId).slice(0, 3);
-  }, [blueprints, recommended]);
 
   if (!normalizedRepo) {
     return <Card className={styles.emptyCard}><Text weight="semibold">Select a repository first</Text><Text className={styles.subtle}>Agentweaver will analyze it and suggest a matching blueprint.</Text></Card>;
@@ -324,7 +321,7 @@ export function SuggestedBlueprintPanel({
     return (
       <div className={styles.root}>
         <MessageBar intent="warning"><MessageBarBody>{error ? `Could not analyze repo: ${error}` : suggestion?.rationale ?? 'Repository analysis unavailable. Choose a template instead.'}</MessageBarBody></MessageBar>
-        <StarterTemplatesSection blueprints={blueprints} loading={false} error={null} value={value} onChange={onChange} limit={3} title="Templates" />
+        <Button appearance="secondary" onClick={onViewTemplates}>View all templates →</Button>
       </div>
     );
   }
@@ -352,30 +349,93 @@ export function SuggestedBlueprintPanel({
         )}
         <Button appearance="primary" onClick={() => onChange({ kind: 'predefined', blueprint: recommended })}>Use this blueprint</Button>
       </Card>
+      <Button appearance="transparent" onClick={onViewTemplates}>View all templates →</Button>
+      {blueprints.length === 0 && value.kind !== 'predefined' ? null : null}
+    </div>
+  );
+}
 
-      <div className={styles.sectionHeader}>
-        <Text weight="semibold">Other blueprints</Text>
-        <Button appearance="transparent" size="small">View all templates →</Button>
-      </div>
-      <div className={styles.compactList}>
-        {otherBlueprints.map((bp) => (
-          <Card key={bp.id} className={styles.compactCard}>
-            <div className={styles.cardTitleRow}>
-              <div className={styles.cardLabel}>
-                <Text className={styles.cardTitle}>{bp.name}</Text>
-                <Text className={styles.cardDescription}>{bp.description}</Text>
-              </div>
-              <Button appearance={value.kind === 'predefined' && value.blueprint.id === bp.id ? 'primary' : 'secondary'} onClick={() => onChange({ kind: 'predefined', blueprint: bp })}>Use</Button>
-            </div>
-          </Card>
-        ))}
-      </div>
-      <div className={styles.customRow}>
-        <div>
-          <Text weight="semibold">Custom blueprint</Text><br />
-          <Text className={styles.subtle}>Describe what you want to build and we'll generate it for you.</Text>
-        </div>
-        <Button appearance="secondary" icon={<SparkleRegular />} onClick={onGenerateClick}>Generate</Button>
+function BlueprintTabStrip({ tabs, value, onChange }: { tabs: BlueprintPanelTab[]; value: BlueprintPanelTab; onChange: (tab: BlueprintPanelTab) => void }) {
+  const styles = useStyles();
+  return (
+    <div className={styles.tabStrip}>
+      {tabs.map((tab) => (
+        <Button key={tab} className={styles.tabButton} size="small" appearance={value === tab ? 'primary' : 'subtle'} onClick={() => onChange(tab)}>
+          {tab.charAt(0).toUpperCase() + tab.slice(1)}
+        </Button>
+      ))}
+    </div>
+  );
+}
+
+export function BlueprintPanel({
+  active,
+  tabs,
+  value,
+  onChange,
+  targetRepository,
+  generated,
+  onGenerate,
+  generating,
+  generationError,
+  generateDescription,
+  onGenerateDescriptionChange,
+}: {
+  active: boolean;
+  tabs: BlueprintPanelTab[];
+  value: BlueprintSelection;
+  onChange: (selection: BlueprintSelection) => void;
+  targetRepository?: string | null;
+  generated: { blueprint: Blueprint; generatedWorkflowYaml?: string | null } | null;
+  onGenerate: () => void;
+  generating: boolean;
+  generationError: string | null;
+  generateDescription: string;
+  onGenerateDescriptionChange: (value: string) => void;
+}) {
+  const styles = useStyles();
+  const catalog = useBlueprintCatalog(active);
+  const [selectedTab, setSelectedTab] = useState<BlueprintPanelTab>(tabs[0]);
+
+  useEffect(() => {
+    if (!tabs.includes(selectedTab)) setSelectedTab(tabs[0]);
+  }, [selectedTab, tabs]);
+
+  const viewTemplates = () => setSelectedTab('templates');
+  const showStarterTemplates = selectedTab === 'generated' && tabs.includes('generated');
+
+  return (
+    <div className={styles.panel}>
+      <Text weight="semibold">Blueprint</Text>
+      <BlueprintTabStrip tabs={tabs} value={selectedTab} onChange={setSelectedTab} />
+      <div className={styles.panelBody}>
+        {selectedTab === 'generated' && <GeneratedBlueprintPane generated={generated} />}
+        {selectedTab === 'suggested' && (
+          <SuggestedBlueprintPanel
+            active={active}
+            repository={targetRepository ?? ''}
+            blueprints={catalog.blueprints}
+            value={value}
+            onChange={onChange}
+            onViewTemplates={viewTemplates}
+          />
+        )}
+        {selectedTab === 'templates' && <StarterTemplatesSection {...catalog} value={value} onChange={onChange} onViewAllTemplates={viewTemplates} />}
+        {selectedTab === 'generate' && (
+          <>
+            <GenerateBlueprintBox
+              description={generateDescription}
+              onDescriptionChange={onGenerateDescriptionChange}
+              onGenerate={onGenerate}
+              generating={generating}
+              error={generationError}
+            />
+            {generated && <GeneratedBlueprintPane generated={generated} />}
+          </>
+        )}
+        {showStarterTemplates && (
+          <StarterTemplatesSection {...catalog} value={value} onChange={onChange} limit={4} onViewAllTemplates={viewTemplates} />
+        )}
       </div>
     </div>
   );
@@ -387,33 +447,23 @@ export function BlueprintPicker({ active, value, onChange, targetRepository }: {
   onChange: (selection: BlueprintSelection) => void;
   targetRepository?: string | null;
 }) {
-  const styles = useStyles();
-  const catalog = useBlueprintCatalog(active);
-  const [tab, setTab] = useState<'templates' | 'generate'>('templates');
   const [description, setDescription] = useState('');
   const generation = useBlueprintGeneration(onChange, targetRepository);
 
   return (
-    <div className={styles.root}>
-      <div className={styles.tabs}>
-        <Button className={styles.tabButton} size="small" appearance={tab === 'templates' ? 'primary' : 'subtle'} onClick={() => setTab('templates')}>Templates</Button>
-        <Button className={styles.tabButton} size="small" appearance={tab === 'generate' ? 'primary' : 'subtle'} onClick={() => setTab('generate')}>Generate</Button>
-      </div>
-      {tab === 'templates' ? (
-        <BlueprintTemplatePicker {...catalog} value={value} onChange={onChange} />
-      ) : (
-        <>
-          <GenerateBlueprintBox
-            description={description}
-            onDescriptionChange={setDescription}
-            onGenerate={() => void generation.generate(description)}
-            generating={generation.generating}
-            error={generation.error}
-          />
-          {generation.generated && <BlueprintPreviewCard blueprint={generation.generated.blueprint} generated />}
-        </>
-      )}
-    </div>
+    <BlueprintPanel
+      active={active}
+      tabs={['templates', 'generate']}
+      value={value}
+      onChange={onChange}
+      targetRepository={targetRepository}
+      generated={generation.generated}
+      onGenerate={() => void generation.generate(description)}
+      generating={generation.generating}
+      generationError={generation.error}
+      generateDescription={description}
+      onGenerateDescriptionChange={setDescription}
+    />
   );
 }
 
