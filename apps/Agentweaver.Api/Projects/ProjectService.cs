@@ -5,6 +5,7 @@ using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Runs;
 using Agentweaver.Api.Workflows;
 using Agentweaver.Domain;
+using Agentweaver.SandboxFs;
 
 namespace Agentweaver.Api.Projects;
 
@@ -268,9 +269,7 @@ public sealed class ProjectService
         var project = await _store.GetAsync(id, ct).ConfigureAwait(false);
         if (project is null) return false;
 
-        var canonicalPath = Path.GetFullPath(newPath);
-        if (!Directory.Exists(canonicalPath))
-            throw new ArgumentException($"Directory '{canonicalPath}' does not exist.", nameof(newPath));
+        var canonicalPath = await ResolveRelinkTargetAsync(id, newPath, ct).ConfigureAwait(false);
 
         // Validate it is a git repository
         if (!Repository.IsValid(canonicalPath))
@@ -306,6 +305,57 @@ public sealed class ProjectService
         await _store.UpdateWorkingDirectoryAsync(id, canonicalPath, defaultBranch, DateTimeOffset.UtcNow, ct)
             .ConfigureAwait(false);
         return true;
+    }
+
+    private async Task<string> ResolveRelinkTargetAsync(ProjectId id, string newPath, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(newPath))
+            throw new ArgumentException("working_directory is required.", nameof(newPath));
+
+        var workspaceRoot = await _workspace.ResolveWorkingDirectoryAsync(id, string.Empty, ct)
+            .ConfigureAwait(false);
+        var workspaceRootFull = Path.GetFullPath(workspaceRoot);
+        if (!Directory.Exists(workspaceRootFull))
+            throw new InvalidOperationException(
+                $"Project workspace root '{workspaceRootFull}' is not available.");
+
+        var requestedFull = Path.IsPathRooted(newPath)
+            ? Path.GetFullPath(newPath)
+            : Path.GetFullPath(Path.Combine(workspaceRootFull, newPath));
+
+        if (!Directory.Exists(requestedFull))
+            throw new ArgumentException($"Directory '{requestedFull}' does not exist.", nameof(newPath));
+
+        string resolvedWorkspaceRoot;
+        string resolvedRequested;
+        try
+        {
+            resolvedWorkspaceRoot = RealPath.Resolve(workspaceRootFull)
+                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            resolvedRequested = RealPath.Resolve(requestedFull)
+                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        }
+        catch (IOException ex)
+        {
+            throw new ArgumentException(
+                "Repository path could not be resolved inside the project workspace root.",
+                nameof(newPath),
+                ex);
+        }
+
+        var comparison = OperatingSystem.IsWindows()
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
+
+        if (!string.Equals(resolvedRequested, resolvedWorkspaceRoot, comparison) &&
+            !resolvedRequested.StartsWith(resolvedWorkspaceRoot + Path.DirectorySeparatorChar, comparison))
+        {
+            throw new ArgumentException(
+                "Repository path must resolve inside this project's workspace root.",
+                nameof(newPath));
+        }
+
+        return resolvedRequested;
     }
 
     // -----------------------------------------------------------------------

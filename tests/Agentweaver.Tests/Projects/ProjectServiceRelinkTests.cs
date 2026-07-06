@@ -37,8 +37,8 @@ public sealed class ProjectServiceRelinkTests : IAsyncDisposable
         return path;
     }
 
-    private static ProjectService BuildService(IProjectStore store) =>
-        new(store, TestWorkspaceProviders.CreateLocal(),
+    private static ProjectService BuildService(IProjectStore store, string? workspaceRoot = null) =>
+        new(store, TestWorkspaceProviders.CreateLocal(workspaceRoot),
             new NoOpGitInitializer(),
             new InMemoryGitHubTokenStore(), new FixedInstallationScopeProvider(),
             NullLogger<ProjectService>.Instance);
@@ -63,14 +63,15 @@ public sealed class ProjectServiceRelinkTests : IAsyncDisposable
     {
         await using var testDb = await TestSqliteDb.CreateAsync();
         var store   = new SqliteProjectStore(testDb.Db);
-        var svc     = BuildService(store);
-        var origDir = NewDir();
+        var root    = NewDir();
+        var svc     = BuildService(store, root);
 
         // Create project (blank, no-op git)
-        var project = await svc.CreateBlankAsync("Relink Test", origDir, null, null, null, "user");
+        var project = await svc.CreateBlankAsync("Relink Test", string.Empty, null, null, null, "user");
 
         // Simulate "move": create a new directory with a real git repo
-        var movedDir = NewDir();
+        var movedDir = Path.Combine(project.WorkingDirectory, "moved-repo");
+        Directory.CreateDirectory(movedDir);
         InitRealGitRepo(movedDir);
 
         var result = await svc.RelinkAsync(project.Id, movedDir);
@@ -88,13 +89,14 @@ public sealed class ProjectServiceRelinkTests : IAsyncDisposable
     {
         await using var testDb = await TestSqliteDb.CreateAsync();
         var store   = new SqliteProjectStore(testDb.Db);
-        var svc     = BuildService(store);
-        var origDir = NewDir();
+        var root    = NewDir();
+        var svc     = BuildService(store, root);
 
-        var project = await svc.CreateBlankAsync("Relink Test", origDir, null, null, null, "user");
+        var project = await svc.CreateBlankAsync("Relink Test", string.Empty, null, null, null, "user");
 
         // Target is a plain directory with no .git
-        var plainDir = NewDir();
+        var plainDir = Path.Combine(project.WorkingDirectory, "plain");
+        Directory.CreateDirectory(plainDir);
         File.WriteAllText(Path.Combine(plainDir, "readme.txt"), "not a git repo");
 
         var act = async () => await svc.RelinkAsync(project.Id, plainDir);
@@ -111,22 +113,23 @@ public sealed class ProjectServiceRelinkTests : IAsyncDisposable
     {
         await using var testDb = await TestSqliteDb.CreateAsync();
         var store      = new SqliteProjectStore(testDb.Db);
+        var root       = NewDir();
         var tokenStore = new InMemoryGitHubTokenStore();
         var scope      = GitHubTokenScope.Installation;
         await tokenStore.SetAsync(scope, new GitHubToken("ghp_test", null, null, "user", null, ["repo"]));
 
         var svc = new ProjectService(
-            store, TestWorkspaceProviders.CreateLocal(),
+            store, TestWorkspaceProviders.CreateLocal(root),
             new NoOpGitInitializer(), tokenStore,
             new FixedInstallationScopeProvider(),
             NullLogger<ProjectService>.Instance);
 
-        var origDir = NewDir();
         var project = await svc.CreateFromGitHubAsync(
-            "GH Project", "https://github.com/owner/my-repo", origDir, null, null, null, "user");
+            "GH Project", "https://github.com/owner/my-repo", string.Empty, null, null, null, "user");
 
         // Create a git repo pointing at a different remote
-        var wrongDir = NewDir();
+        var wrongDir = Path.Combine(project.WorkingDirectory, "wrong-repo");
+        Directory.CreateDirectory(wrongDir);
         InitRealGitRepo(wrongDir, "https://github.com/owner/DIFFERENT-repo.git");
 
         var act = async () => await svc.RelinkAsync(project.Id, wrongDir);
@@ -143,13 +146,109 @@ public sealed class ProjectServiceRelinkTests : IAsyncDisposable
     {
         await using var testDb = await TestSqliteDb.CreateAsync();
         var store = new SqliteProjectStore(testDb.Db);
-        var svc   = BuildService(store);
+        var root  = NewDir();
+        var svc   = BuildService(store, root);
         var dir   = NewDir();
         InitRealGitRepo(dir);
 
         var result = await svc.RelinkAsync(ProjectId.New(), dir);
 
         result.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task RelinkAsync_RejectsTraversalOutsideProjectWorkspaceRoot()
+    {
+        await using var testDb = await TestSqliteDb.CreateAsync();
+        var store = new SqliteProjectStore(testDb.Db);
+        var root  = NewDir();
+        var svc   = BuildService(store, root);
+        var project = await svc.CreateBlankAsync("Relink Test", string.Empty, null, null, null, "user");
+
+        var siblingRepo = Path.Combine(root, "sibling-repo");
+        Directory.CreateDirectory(siblingRepo);
+        InitRealGitRepo(siblingRepo);
+
+        var traversalPath = Path.Combine(project.WorkingDirectory, "..", "sibling-repo");
+        var act = async () => await svc.RelinkAsync(project.Id, traversalPath);
+
+        await act.Should().ThrowAsync<ArgumentException>()
+            .WithMessage("*workspace root*");
+    }
+
+    [Fact]
+    public async Task RelinkAsync_RejectsAbsolutePathOutsideProjectWorkspaceRoot()
+    {
+        await using var testDb = await TestSqliteDb.CreateAsync();
+        var store = new SqliteProjectStore(testDb.Db);
+        var root  = NewDir();
+        var svc   = BuildService(store, root);
+        var project = await svc.CreateBlankAsync("Relink Test", string.Empty, null, null, null, "user");
+
+        var serverHomeRepo = NewDir();
+        InitRealGitRepo(serverHomeRepo);
+
+        var act = async () => await svc.RelinkAsync(project.Id, serverHomeRepo);
+
+        await act.Should().ThrowAsync<ArgumentException>()
+            .WithMessage("*workspace root*");
+    }
+
+    [Fact]
+    public async Task RelinkAsync_RejectsCrossProjectWorkspacePath()
+    {
+        await using var testDb = await TestSqliteDb.CreateAsync();
+        var store = new SqliteProjectStore(testDb.Db);
+        var root  = NewDir();
+        var svc   = BuildService(store, root);
+
+        var projectA = await svc.CreateBlankAsync("Relink A", string.Empty, null, null, null, "user");
+        var projectB = await svc.CreateBlankAsync("Relink B", string.Empty, null, null, null, "user");
+        InitRealGitRepo(projectB.WorkingDirectory);
+
+        var act = async () => await svc.RelinkAsync(projectA.Id, projectB.WorkingDirectory);
+
+        await act.Should().ThrowAsync<ArgumentException>()
+            .WithMessage("*workspace root*");
+    }
+
+    [Fact]
+    public async Task RelinkAsync_RejectsSymlinkEscapingProjectWorkspaceRoot()
+    {
+        await using var testDb = await TestSqliteDb.CreateAsync();
+        var store = new SqliteProjectStore(testDb.Db);
+        var root  = NewDir();
+        var svc   = BuildService(store, root);
+        var project = await svc.CreateBlankAsync("Relink Test", string.Empty, null, null, null, "user");
+
+        var outsideTarget = NewDir();
+        InitRealGitRepo(outsideTarget);
+        var symlinkPath = Path.Combine(project.WorkingDirectory, "escaped-link");
+
+        try
+        {
+            Directory.CreateSymbolicLink(symlinkPath, outsideTarget);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return;
+        }
+        catch (IOException)
+        {
+            return;
+        }
+
+        try
+        {
+            var act = async () => await svc.RelinkAsync(project.Id, symlinkPath);
+
+            await act.Should().ThrowAsync<ArgumentException>()
+                .WithMessage("*workspace root*");
+        }
+        finally
+        {
+            try { Directory.Delete(symlinkPath); } catch { /* best effort */ }
+        }
     }
 
     // =========================================================================
