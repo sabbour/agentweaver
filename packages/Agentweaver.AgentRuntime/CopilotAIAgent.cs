@@ -131,6 +131,12 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
     private ConcurrentDictionary<string, byte> _emittedTerminals = new(StringComparer.Ordinal);
     private HashSet<string> _suppressedCallIds = new(StringComparer.Ordinal);
 
+    // Active OpenTelemetry child spans for in-flight tool executions, keyed by tool call id.
+    // A "execute_tool" span is opened when the SDK reports ToolExecutionStart and closed on the
+    // matching ToolExecutionComplete, giving each tool call a proper child span under the agent
+    // turn span (gen_ai.* semantic conventions) so the transaction trace tree can render it.
+    private readonly ConcurrentDictionary<string, Activity> _activeToolSpans = new(StringComparer.Ordinal);
+
     // Sandbox-degradation tracking. The permission handler (which fires on SDK callback
     // threads) records that at least one tool call was denied, plus the first deny reason.
     // run.degraded is emitted exactly once via EmitRunDegradedOnce; _runDegradedEmitted is
@@ -536,6 +542,10 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         }
         finally
         {
+            // Close any tool spans still open (e.g. a tool whose completion event never arrived
+            // because the turn faulted) so no span is leaked as perpetually in-flight.
+            foreach (var callId in _activeToolSpans.Keys.ToArray())
+                CompleteToolSpan(callId, success: false, error: "Tool execution did not report completion.");
             CompleteModelTurnTelemetry(turnActivity);
         }
 
@@ -831,7 +841,9 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
                     _suppressedCallIds.Add(callId);
                     break;
                 }
-                EmitToolCallOnce(callId, toolName.Length > 0 ? toolName : "unknown", start.Data.Arguments);
+                var resolvedToolName = toolName.Length > 0 ? toolName : "unknown";
+                StartToolSpan(callId, resolvedToolName);
+                EmitToolCallOnce(callId, resolvedToolName, start.Data.Arguments);
                 break;
             }
             case ToolExecutionCompleteEvent complete when complete.Data is not null:
@@ -840,12 +852,68 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
                 if (_suppressedCallIds.Contains(callId))
                     break;
                 if (complete.Data.Success)
+                {
+                    CompleteToolSpan(callId, success: true, error: null);
                     EmitToolResultOnce(callId, complete.Data.Result?.Content ?? string.Empty);
+                }
                 else
-                    EmitToolErrorOnce(callId, complete.Data.Error?.Message ?? "Tool execution failed.");
+                {
+                    var error = complete.Data.Error?.Message ?? "Tool execution failed.";
+                    CompleteToolSpan(callId, success: false, error: error);
+                    EmitToolErrorOnce(callId, error);
+                }
                 break;
             }
         }
+    }
+
+    /// <summary>
+    /// Opens an OpenTelemetry <c>execute_tool</c> child span for a tool call as a child of the
+    /// current agent-turn span. Tags follow the gen AI semantic conventions
+    /// (<c>gen_ai.tool.name</c>, <c>gen_ai.operation.name = execute_tool</c>) plus the
+    /// Agentweaver span-kind marker so the transaction-trace tree can classify it as a tool node.
+    /// </summary>
+    private void StartToolSpan(string callId, string toolName)
+    {
+        var activity = ActivitySource.StartActivity($"execute_tool {toolName}", ActivityKind.Internal);
+        if (activity is null) return;
+        ConfigureToolSpanTags(activity, toolName, callId, _agentName, _runId);
+        if (!_activeToolSpans.TryAdd(callId, activity))
+            activity.Dispose();
+    }
+
+    /// <summary>
+    /// Applies the gen AI semantic-convention tags to an <c>execute_tool</c> span. Extracted as an
+    /// internal static helper so it can be unit-tested independently of the (heavyweight) agent
+    /// lifecycle.
+    /// </summary>
+    internal static void ConfigureToolSpanTags(Activity activity, string toolName, string callId, string? agentName, string? runId)
+    {
+        activity.SetTag("agentweaver.span.kind", "tool_call");
+        activity.SetTag("gen_ai.operation.name", "execute_tool");
+        activity.SetTag("gen_ai.tool.name", toolName);
+        activity.SetTag("tool_name", toolName);
+        activity.SetTag("tool.call.id", callId);
+        activity.SetTag("run_id", runId);
+        activity.SetTag("run.id", runId);
+        if (!string.IsNullOrWhiteSpace(agentName))
+            activity.SetTag("gen_ai.agent.name", agentName);
+    }
+
+    /// <summary>
+    /// Closes the <c>execute_tool</c> span previously opened for <paramref name="callId"/>,
+    /// recording success/error status. No-op if the span was never opened (e.g. defensive
+    /// call-before-result paths or suppressed tools).
+    /// </summary>
+    private void CompleteToolSpan(string callId, bool success, string? error)
+    {
+        if (!_activeToolSpans.TryRemove(callId, out var activity))
+            return;
+        activity.SetTag("gen_ai.tool.call.success", success);
+        activity.SetStatus(success ? ActivityStatusCode.Ok : ActivityStatusCode.Error, error);
+        if (!success && !string.IsNullOrWhiteSpace(error))
+            activity.SetTag("error.message", error);
+        activity.Dispose();
     }
 
     /// <summary>

@@ -139,12 +139,15 @@ public sealed record RunTraceDto
 public sealed record RunTraceSpanDto
 {
     [JsonPropertyName("id")] public required string Id { get; init; }
+    [JsonPropertyName("parentId")] public string? ParentId { get; init; }
     [JsonPropertyName("name")] public required string Name { get; init; }
+    [JsonPropertyName("spanType")] public string? SpanType { get; init; }
     [JsonPropertyName("timestamp")] public required DateTimeOffset Timestamp { get; init; }
     [JsonPropertyName("durationMs")] public required double DurationMs { get; init; }
     [JsonPropertyName("success")] public required bool Success { get; init; }
     [JsonPropertyName("resultCode")] public string? ResultCode { get; init; }
     [JsonPropertyName("agentName")] public string? AgentName { get; init; }
+    [JsonPropertyName("toolName")] public string? ToolName { get; init; }
     [JsonPropertyName("model")] public string? Model { get; init; }
     [JsonPropertyName("inputTokens")] public long? InputTokens { get; init; }
     [JsonPropertyName("outputTokens")] public long? OutputTokens { get; init; }

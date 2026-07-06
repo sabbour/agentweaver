@@ -73,7 +73,7 @@ function TracePreview({ runId }: { runId: string }) {
   }, [runId]);
 
   if (loading) return <Spinner label="Loading trace preview" />;
-  return <TransactionTracePanel runId={runId} subtitle="Recent trace preview. Click a bar to inspect the agent output." />;
+  return <TransactionTracePanel runId={runId} subtitle="Recent trace preview. Expand the tree and click a span to inspect its Generative AI properties." />;
 }
 
 export function ObservabilityTracesPage() {
