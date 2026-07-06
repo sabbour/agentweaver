@@ -116,25 +116,6 @@ public sealed class SqliteProjectStore : IProjectStore
         await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
     }
 
-    public async Task UpdateWorkingDirectoryAsync(ProjectId id, string workingDirectory, string defaultBranch, DateTimeOffset updatedAt, CancellationToken ct = default)
-    {
-        await using var connection = await _db.OpenConnectionAsync(ct).ConfigureAwait(false);
-        await using var command = connection.CreateCommand();
-        command.CommandText =
-            """
-            UPDATE projects
-               SET working_directory = $workingDirectory,
-                   default_branch = $defaultBranch,
-                   updated_at = $updatedAt
-             WHERE project_id = $projectId;
-            """;
-        command.Parameters.AddWithValue("$workingDirectory", workingDirectory);
-        command.Parameters.AddWithValue("$defaultBranch", defaultBranch);
-        command.Parameters.AddWithValue("$updatedAt", Ts(updatedAt));
-        command.Parameters.AddWithValue("$projectId", id.ToString());
-        await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
-    }
-
     public async Task<bool> TryBeginDeleteAsync(ProjectId id, CancellationToken ct = default)
     {
         await using var connection = await _db.OpenConnectionAsync(ct).ConfigureAwait(false);

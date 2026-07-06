@@ -191,10 +191,6 @@ export class AgentweaverApiClient {
     return this.request<void>('PUT', `/projects/${encodeURIComponent(projectId)}/provider-settings`, req);
   }
 
-  relinkProject(projectId: string, workingDirectory: string): Promise<void> {
-    return this.request<void>('POST', `/projects/${encodeURIComponent(projectId)}/relink`, { working_directory: workingDirectory });
-  }
-
   deleteProject(projectId: string): Promise<void> {
     return this.request<void>('DELETE', `/projects/${encodeURIComponent(projectId)}?confirm=true`);
   }

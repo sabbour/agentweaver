@@ -1,16 +1,14 @@
-using LibGit2Sharp;
 using Microsoft.Extensions.Logging;
 using Agentweaver.Api.Git;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Runs;
 using Agentweaver.Api.Workflows;
 using Agentweaver.Domain;
-using Agentweaver.SandboxFs;
 
 namespace Agentweaver.Api.Projects;
 
 /// <summary>
-/// Application service for project lifecycle: create, rename, configure, relink, delete.
+/// Application service for project lifecycle: create, rename, configure, delete.
 /// All create paths wrap in a CreationScope for rollback compensation (plan section 3.4 E).
 /// Delete uses TryBeginDeleteAsync for race-safe Active->Deleting CAS before cancel sweep.
 /// </summary>
@@ -254,111 +252,6 @@ public sealed class ProjectService
     }
 
     // -----------------------------------------------------------------------
-    // Relink
-    // -----------------------------------------------------------------------
-
-    /// <summary>
-    /// Relinks a project to a moved or restored working directory. Accepts a non-empty
-    /// directory (unlike creation). Validates that it is a valid git repository and,
-    /// where determinable, that the origin matches the project's recorded origin.
-    /// Re-derives DefaultBranch from HEAD.
-    /// </summary>
-    public async Task<bool> RelinkAsync(
-        ProjectId id, string newPath, CancellationToken ct = default)
-    {
-        var project = await _store.GetAsync(id, ct).ConfigureAwait(false);
-        if (project is null) return false;
-
-        var canonicalPath = await ResolveRelinkTargetAsync(id, newPath, ct).ConfigureAwait(false);
-
-        // Validate it is a git repository
-        if (!Repository.IsValid(canonicalPath))
-            throw new InvalidOperationException(
-                $"Directory '{canonicalPath}' is not a valid git repository.");
-
-        // Validate origin matches where possible (from-GitHub projects)
-        if (project.Origin.Kind == ProjectOriginKind.FromGitHub
-            && !string.IsNullOrWhiteSpace(project.Origin.SourceRepository))
-        {
-            using var repo = new Repository(canonicalPath);
-            var remote = repo.Network.Remotes["origin"];
-            if (remote is not null)
-            {
-                var remoteUrl = remote.Url ?? string.Empty;
-                var expected = project.Origin.SourceRepository!;
-                // Accept both "owner/repo" and full HTTPS URL
-                if (!remoteUrl.Contains(expected, StringComparison.OrdinalIgnoreCase)
-                    && !expected.Contains(remoteUrl, StringComparison.OrdinalIgnoreCase))
-                    throw new InvalidOperationException(
-                        $"Directory '{canonicalPath}' has remote '{remoteUrl}' which does not match " +
-                        $"the project's source repository '{expected}'.");
-            }
-        }
-
-        // Re-derive default branch
-        string defaultBranch;
-        using (var repo = new Repository(canonicalPath))
-        {
-            defaultBranch = repo.Head.FriendlyName;
-        }
-
-        await _store.UpdateWorkingDirectoryAsync(id, canonicalPath, defaultBranch, DateTimeOffset.UtcNow, ct)
-            .ConfigureAwait(false);
-        return true;
-    }
-
-    private async Task<string> ResolveRelinkTargetAsync(ProjectId id, string newPath, CancellationToken ct)
-    {
-        if (string.IsNullOrWhiteSpace(newPath))
-            throw new ArgumentException("working_directory is required.", nameof(newPath));
-
-        var workspaceRoot = await _workspace.ResolveWorkingDirectoryAsync(id, string.Empty, ct)
-            .ConfigureAwait(false);
-        var workspaceRootFull = Path.GetFullPath(workspaceRoot);
-        if (!Directory.Exists(workspaceRootFull))
-            throw new InvalidOperationException(
-                $"Project workspace root '{workspaceRootFull}' is not available.");
-
-        var requestedFull = Path.IsPathRooted(newPath)
-            ? Path.GetFullPath(newPath)
-            : Path.GetFullPath(Path.Combine(workspaceRootFull, newPath));
-
-        if (!Directory.Exists(requestedFull))
-            throw new ArgumentException($"Directory '{requestedFull}' does not exist.", nameof(newPath));
-
-        string resolvedWorkspaceRoot;
-        string resolvedRequested;
-        try
-        {
-            resolvedWorkspaceRoot = RealPath.Resolve(workspaceRootFull)
-                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-            resolvedRequested = RealPath.Resolve(requestedFull)
-                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        }
-        catch (IOException ex)
-        {
-            throw new ArgumentException(
-                "Repository path could not be resolved inside the project workspace root.",
-                nameof(newPath),
-                ex);
-        }
-
-        var comparison = OperatingSystem.IsWindows()
-            ? StringComparison.OrdinalIgnoreCase
-            : StringComparison.Ordinal;
-
-        if (!string.Equals(resolvedRequested, resolvedWorkspaceRoot, comparison) &&
-            !resolvedRequested.StartsWith(resolvedWorkspaceRoot + Path.DirectorySeparatorChar, comparison))
-        {
-            throw new ArgumentException(
-                "Repository path must resolve inside this project's workspace root.",
-                nameof(newPath));
-        }
-
-        return resolvedRequested;
-    }
-
-    // -----------------------------------------------------------------------
     // Race-safe delete
     // -----------------------------------------------------------------------
 
@@ -470,7 +363,7 @@ public sealed class ProjectService
         if (Directory.EnumerateFileSystemEntries(path).Any())
             throw new InvalidOperationException(
                 $"Working directory '{path}' already exists and is not empty. " +
-                "Use relink to associate an existing repository, or choose an empty or non-existent directory.");
+                "Choose an empty or non-existent directory.");
     }
 
     private static ProjectProviderSettings BuildProviderSettings(

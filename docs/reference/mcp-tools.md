@@ -107,7 +107,6 @@ MCP tool implementations URI-escape every route path parameter before calling th
 | `project_get` | Get a project by ID. |
 | `project_list` | List all Agentweaver projects. |
 | `project_list_runs` | List all runs for a project. |
-| `project_relink` | Relink a project to a new local working directory path. |
 | `project_rename` | Rename an existing project. |
 
 ## Run

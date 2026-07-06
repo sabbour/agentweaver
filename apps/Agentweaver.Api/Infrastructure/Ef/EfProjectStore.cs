@@ -59,17 +59,6 @@ public sealed class EfProjectStore : IProjectStore
                 .SetProperty(p => p.UpdatedAt, updatedAt), ct);
     }
 
-    public async Task UpdateWorkingDirectoryAsync(ProjectId id, string workingDirectory, string defaultBranch, DateTimeOffset updatedAt, CancellationToken ct = default)
-    {
-        var pid = id.ToString();
-        await using var db = await _factory.CreateDbContextAsync(ct);
-        await db.Projects.Where(p => p.ProjectId == pid)
-            .ExecuteUpdateAsync(s => s
-                .SetProperty(p => p.WorkingDirectory, workingDirectory)
-                .SetProperty(p => p.DefaultBranch, defaultBranch)
-                .SetProperty(p => p.UpdatedAt, updatedAt), ct);
-    }
-
     public async Task<bool> TryBeginDeleteAsync(ProjectId id, CancellationToken ct = default)
     {
         var pid = id.ToString();

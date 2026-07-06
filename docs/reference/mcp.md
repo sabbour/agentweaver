@@ -104,19 +104,6 @@ Rename a project.
 
 ---
 
-### `project_relink`
-
-Update the working directory for a project (e.g., after moving the repository on disk).
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `project_id` | string | yes | Project ID |
-| `working_directory` | string | yes | New absolute path to the working directory |
-
-**Returns**: Updated project object.
-
----
-
 ### `project_delete`
 
 Delete a project.

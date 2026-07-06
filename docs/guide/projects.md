@@ -20,7 +20,7 @@ Each card shows:
 - **Availability badge** — green **Available** or amber **Unavailable**
 
 ::: tip Unavailable projects
-A project is marked **Unavailable** when its working directory has moved or is no longer accessible on the server. Open the project's Settings to relink it to the correct path.
+A project is marked **Unavailable** when its working directory has moved or is no longer accessible on the server. Create a new project for the replacement workspace, or delete the unavailable project record if it is no longer needed.
 :::
 
 Click **Open** on any card to enter a project.
@@ -73,7 +73,6 @@ Settings are organized into four sections, accessible from the left rail:
 ### General
 
 - **Project name** — rename the project.
-- **Working directory** — relink the project to a different path (useful when the directory has moved).
 - **Default model** — set the AI model used by default for this project's runs.
 
 ### Sandbox policy
@@ -113,5 +112,5 @@ If the project has active runs, Agentweaver will cancel them before deleting the
 A project is **Available** when its working directory is accessible on the server. If the directory is moved or deleted:
 
 - The project card shows **Unavailable**.
-- Runs are blocked until the project is relinked.
-- Go to **Settings → General** to update the working directory path.
+- Runs are blocked while the workspace is unavailable.
+- Create a new project for the replacement workspace or delete the unavailable record if it is no longer needed.

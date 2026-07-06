@@ -285,31 +285,6 @@ app.MapPut("/api/projects/{id}/provider-settings", async (
     return updated ? Results.NoContent() : Results.NotFound();
 });
 
-// POST /api/projects/{id}/relink — relink to moved directory
-app.MapPost("/api/projects/{id}/relink", async (
-    HttpContext httpContext,
-    string id,
-    RelinkProjectRequest request,
-    ProjectService projectService,
-    CancellationToken ct) =>
-{
-    if (!ProjectId.TryParse(id, out var projectId))
-        return Results.BadRequest(new { error = "Invalid project id." });
-
-    if (string.IsNullOrWhiteSpace(request.WorkingDirectory))
-        return Results.BadRequest(new { error = "working_directory is required." });
-
-    var view = await projectService.GetViewAsync(projectId, ct);
-    if (view is null) return Results.NotFound();
-    if (!IsProjectOwner(httpContext, view.Project)) return Results.StatusCode(StatusCodes.Status403Forbidden);
-
-    bool updated;
-    try { updated = await projectService.RelinkAsync(projectId, request.WorkingDirectory!, ct); }
-    catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
-    catch (InvalidOperationException ex) { return Results.BadRequest(new { error = ex.Message }); }
-    return updated ? Results.NoContent() : Results.NotFound();
-});
-
 // DELETE /api/projects/{id}?confirm=true — record-only delete
 app.MapDelete("/api/projects/{id}", async (
     HttpContext httpContext,
@@ -493,7 +468,7 @@ app.MapPost("/api/projects/{id}/runs", async (
 
     // Reject if workspace unavailable
     if (!workspaceProvider.IsAvailable(project.WorkingDirectory))
-        return Results.Conflict(new { error = "workspace_unavailable", message = "The project workspace is not available. Use relink to reconnect the project." });
+        return Results.Conflict(new { error = "workspace_unavailable", message = "The project workspace is not available." });
 
     // Resolve provider (explicit -> project default)
     ModelSource modelSource;
@@ -654,7 +629,7 @@ app.MapPost("/api/projects/{id}/orchestrations", async (
         return Results.Conflict(new { error = "project_deleting", message = "The project is being deleted and cannot accept new runs." });
 
     if (!workspaceProvider.IsAvailable(project.WorkingDirectory))
-        return Results.Conflict(new { error = "workspace_unavailable", message = "The project workspace is not available. Use relink to reconnect the project." });
+        return Results.Conflict(new { error = "workspace_unavailable", message = "The project workspace is not available." });
 
     // The coordinator provider is fixed to GitHub Copilot (Constitution Principle II). Resolve the
     // model id the same way the run-start endpoint does: explicit override -> project default ->

@@ -42,7 +42,7 @@ For production hosting, the Vite build output is served by the ASP.NET Core stat
 | `/projects/:projectId/flow` | Flow | Live view of what each agent is working on |
 | `/projects/:projectId/orchestrations` | Orchestrations | Coordinator orchestration run list |
 | `/projects/:projectId/workspace` | Workspace | Project repository and run worktree browser |
-| `/projects/:projectId/settings` | Project settings | Provider/model defaults, rename, relink, delete |
+| `/projects/:projectId/settings` | Project settings | Provider/model defaults, rename, and delete |
 | `/projects/:projectId/team` | Team | Current team roster, member management, charter editor, and sync panel |
 | `/projects/:projectId/team/cast` | Casting wizard | Single-page casting wizard with Formulate, Template, and Analyze tabs |
 | `/projects/:projectId/memories` | Team Memory | Decisions, the decision inbox, and agent memory recorded across runs |
@@ -92,8 +92,6 @@ The project settings page (`/projects/:projectId/settings`) has three sections:
 **Provider defaults** — select `github-copilot` as the default provider and enter an optional model override. Changes are saved immediately on submit.
 
 **Rename** — enter a new display name for the project.
-
-**Relink** — enter a new working directory path. Use this after moving the repository to a different location.
 
 **Delete** — permanently deletes the project record after confirmation. The working directory and git history are not affected.
 
@@ -529,7 +527,7 @@ src/
   pages/
     ProjectGalleryPage.tsx  project gallery: card grid, create-blank and create-from-GitHub dialogs
     ProjectPage.tsx         board: project detail, Kanban board, run list, start-run dialog
-    ProjectSettingsPage.tsx provider defaults, rename, relink, delete
+    ProjectSettingsPage.tsx provider defaults, rename, delete
     TeamPage.tsx            team roster, member management, charter dialogs, sync panel
     CastingWizardPage.tsx   Single-page casting wizard (Formulate / Template / Analyze tabs)
     DashboardPage.tsx       project dashboard counters, throughput, and leaderboard

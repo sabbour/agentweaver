@@ -75,7 +75,6 @@ Run endpoints are owner-scoped. The authenticated caller must own the run being 
 | `GET` | `/api/projects/{id}` | Get a project by id |
 | `PATCH` | `/api/projects/{id}` | Rename a project |
 | `PUT` | `/api/projects/{id}/provider-settings` | Update provider and model defaults |
-| `POST` | `/api/projects/{id}/relink` | Relink a project to a moved directory |
 | `DELETE` | `/api/projects/{id}` | Delete a project (record only; cancels active runs) |
 | `GET` | `/api/projects/{id}/runs` | List runs for a project |
 | `GET` | `/api/projects/{id}/runs/{workflowRunId}` | Get a project workflow-run summary |
@@ -1081,18 +1080,6 @@ Request:
 
 All fields are optional. Omitting a field leaves it unchanged. Response `204 No Content` on success.
 
-### POST /api/projects/{id}/relink
-
-Updates the working directory path for a caller-owned project. Use this after moving a repository to a new location.
-
-Request:
-
-```json
-{ "working_directory": "D:/new-location/my-project" }
-```
-
-Response `204 No Content` on success. `400` when the new path is missing or not a valid git repository.
-
 ### DELETE /api/projects/{id}
 
 Deletes a caller-owned project record. Does not touch the working directory or git history. Active runs for the project are cancelled; each cancelled run emits a `run.cancelled` event on its stream.
@@ -1169,7 +1156,7 @@ Response `202 Accepted`:
 ```
 
 `409 Conflict` with `error: "project_deleting"` when the project is being deleted.
-`409 Conflict` with `error: "workspace_unavailable"` when the working directory is not accessible. Use `POST /api/projects/{id}/relink` to reconnect the project to its new location.
+`409 Conflict` with `error: "workspace_unavailable"` when the working directory is not accessible.
 
 ## Coordinator endpoints
 

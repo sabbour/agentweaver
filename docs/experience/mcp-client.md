@@ -142,7 +142,7 @@ The catalog below is grouped by the 13 MCP tool domains. Each tool name is the r
 
 ### Projects
 
-Purpose: create, find, configure, relink, delete, and inspect Agentweaver projects and their run lists.
+Purpose: create, find, configure, delete, and inspect Agentweaver projects and their run lists.
 
 | Tool | What it does for the user |
 |---|---|
@@ -150,7 +150,6 @@ Purpose: create, find, configure, relink, delete, and inspect Agentweaver projec
 | `project_get` | Gets one project by ID. |
 | `project_create` | Creates a project from a local working directory; can apply either a predefined `blueprint_id` or an inline `blueprint`, and can carry generated workflow YAML. |
 | `project_rename` | Renames an existing project. |
-| `project_relink` | Points a project at a new local working directory path after a repository moves. |
 | `project_delete` | Deletes a project by ID with confirmation handled by the API call. |
 | `project_configure` | Updates the project's default model provider and provider-specific model IDs. |
 | `project_list_runs` | Lists all runs for a project. |
