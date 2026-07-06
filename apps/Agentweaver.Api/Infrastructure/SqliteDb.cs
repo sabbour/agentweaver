@@ -156,6 +156,42 @@ public sealed class SqliteDb
         // source_file_path, title). NULL for tasks captured manually or through other methods.
         await TryAlterAsync(connection, "ALTER TABLE backlog_tasks ADD COLUMN source_file_path TEXT;", ct);
 
+        // Per-project skill catalog + skill→agent assignments (issues #51/#56). Skills are
+        // standards-compatible SKILL.md modules acquired via repo import, file upload, or
+        // connected-repo sync, then assigned to specific agents for progressive-disclosure prompting.
+        await TryAlterAsync(connection,
+            """
+            CREATE TABLE IF NOT EXISTS skills (
+                skill_id          TEXT PRIMARY KEY,
+                project_id        TEXT NOT NULL,
+                name              TEXT NOT NULL,
+                description       TEXT NOT NULL,
+                instructions      TEXT NOT NULL,
+                resources         TEXT,
+                provenance        TEXT NOT NULL,
+                source_repository TEXT,
+                source_location   TEXT,
+                content_hash      TEXT NOT NULL,
+                status            TEXT NOT NULL DEFAULT 'active',
+                created_at        TEXT NOT NULL,
+                updated_at        TEXT NOT NULL
+            );
+            """, ct);
+        await TryAlterAsync(connection,
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_skills_project_name ON skills (project_id, name COLLATE NOCASE);", ct);
+        await TryAlterAsync(connection,
+            """
+            CREATE TABLE IF NOT EXISTS skill_assignments (
+                project_id  TEXT NOT NULL,
+                skill_id    TEXT NOT NULL,
+                agent_name  TEXT NOT NULL,
+                created_at  TEXT NOT NULL,
+                PRIMARY KEY (project_id, skill_id, agent_name)
+            );
+            """, ct);
+        await TryAlterAsync(connection,
+            "CREATE INDEX IF NOT EXISTS idx_skill_assignments_agent ON skill_assignments (project_id, agent_name);", ct);
+
         await MigrateLegacyMetricsSchemaAsync(connection, ct).ConfigureAwait(false);
     }
 

@@ -16,6 +16,7 @@ import { CoordinatorRunRoute } from './routes/CoordinatorRunRoute';
 import { TeamPage } from './pages/TeamPage';
 import { CastingWizardPage } from './pages/CastingWizardPage';
 import { MemoriesPage } from './pages/MemoriesPage';
+import { SkillsPage } from './pages/SkillsPage';
 import { WorkflowsPage } from './pages/WorkflowsPage';
 import { SignInPage } from './pages/SignInPage';
 import { DiagnosticsPage } from './pages/DiagnosticsPage';
@@ -56,6 +57,7 @@ function Shell() {
         <Route path="/projects/:projectId/team" element={<TeamPage />} />
         <Route path="/projects/:projectId/team/cast" element={<CastingWizardPage />} />
         <Route path="/projects/:projectId/memories" element={<MemoriesPage />} />
+        <Route path="/projects/:projectId/skills" element={<SkillsPage />} />
         <Route path="/projects/:projectId/observability" element={<ObservabilityOverviewPage />} />
         <Route path="/projects/:projectId/observability/traces" element={<ObservabilityTracesPage />} />
         <Route path="/projects/:projectId/observability/agents" element={<ObservabilityAgentsPage />} />

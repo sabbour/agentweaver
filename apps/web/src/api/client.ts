@@ -369,6 +369,63 @@ export class AgentweaverApiClient {
     return this.request<import('./types').AgentMemoryDto>('PUT', `/projects/${encodeURIComponent(projectId)}/agents/${encodeURIComponent(agentName)}/memory/${encodeURIComponent(memoryId)}`, body);
   }
 
+  // Skills (issues #51/#56) — per-project catalog + agent assignments.
+  listSkills(projectId: string): Promise<import('./types').SkillDto[]> {
+    return this.request<import('./types').SkillDto[]>('GET', `/projects/${encodeURIComponent(projectId)}/skills`);
+  }
+
+  getSkill(projectId: string, skillId: string): Promise<import('./types').SkillDetailDto> {
+    return this.request<import('./types').SkillDetailDto>('GET', `/projects/${encodeURIComponent(projectId)}/skills/${encodeURIComponent(skillId)}`);
+  }
+
+  deleteSkill(projectId: string, skillId: string): Promise<void> {
+    return this.request<void>('DELETE', `/projects/${encodeURIComponent(projectId)}/skills/${encodeURIComponent(skillId)}`);
+  }
+
+  syncSkills(projectId: string): Promise<import('./types').SkillAcquisitionResponse> {
+    return this.request<import('./types').SkillAcquisitionResponse>('POST', `/projects/${encodeURIComponent(projectId)}/skills/sync`, {});
+  }
+
+  previewSkillImport(projectId: string, repoUrl: string): Promise<import('./types').SkillImportPreviewResponse> {
+    return this.request<import('./types').SkillImportPreviewResponse>('POST', `/projects/${encodeURIComponent(projectId)}/skills/import/preview`, { repoUrl });
+  }
+
+  importSkills(projectId: string, repoUrl: string, locations?: string[]): Promise<import('./types').SkillAcquisitionResponse> {
+    return this.request<import('./types').SkillAcquisitionResponse>('POST', `/projects/${encodeURIComponent(projectId)}/skills/import`, { repoUrl, locations });
+  }
+
+  // Multipart upload of skill file(s)/folder/archive. Bypasses request<T> to send FormData.
+  async uploadSkills(projectId: string, files: File[]): Promise<import('./types').SkillAcquisitionResponse> {
+    const form = new FormData();
+    for (const file of files) {
+      form.append('files', file, file.name);
+      // Preserve folder-relative paths (webkitRelativePath) so nested SKILL.md dirs survive upload.
+      const rel = (file as File & { webkitRelativePath?: string }).webkitRelativePath;
+      if (rel) form.append(`path:files`, rel);
+    }
+    const response = await fetch(`${this.baseUrl}/projects/${encodeURIComponent(projectId)}/skills/upload`, {
+      method: 'POST',
+      headers: this.authHeaders(),
+      credentials: 'include',
+      body: form,
+    });
+    const text = typeof response.text === 'function' ? await response.text() : '';
+    if (!response.ok) throw new ApiError(response.status, text);
+    return text ? JSON.parse(text) as import('./types').SkillAcquisitionResponse : { results: [], marked_missing: [] };
+  }
+
+  listSkillAssignments(projectId: string): Promise<import('./types').SkillAssignmentDto[]> {
+    return this.request<import('./types').SkillAssignmentDto[]>('GET', `/projects/${encodeURIComponent(projectId)}/skills/assignments`);
+  }
+
+  assignSkill(projectId: string, skillId: string, agentName: string): Promise<void> {
+    return this.request<void>('PUT', `/projects/${encodeURIComponent(projectId)}/skills/${encodeURIComponent(skillId)}/assignments/${encodeURIComponent(agentName)}`, {});
+  }
+
+  unassignSkill(projectId: string, skillId: string, agentName: string): Promise<void> {
+    return this.request<void>('DELETE', `/projects/${encodeURIComponent(projectId)}/skills/${encodeURIComponent(skillId)}/assignments/${encodeURIComponent(agentName)}`);
+  }
+
   // Sync
   getSyncStatus(projectId: string): Promise<SyncStatusDto> {
     return this.request<SyncStatusDto>('GET', `/projects/${encodeURIComponent(projectId)}/team/sync`);

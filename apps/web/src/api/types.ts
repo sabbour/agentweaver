@@ -1294,3 +1294,80 @@ export interface PortForwardSessionDto {
   keepalive_url?: string | null;
   keepaliveUrl?: string | null;
 }
+
+// ── Issues #51/#56 — Per-project skill catalog + agent assignments ───────────
+export type SkillProvenance = 'repo-import' | 'file-upload' | 'connected-repo-sync';
+export type SkillStatus = 'active' | 'missing' | 'malformed';
+
+// GET /api/projects/{id}/skills — one row per catalog skill (with assignments).
+export interface SkillDto {
+  id: string;
+  name: string;
+  description: string;
+  provenance: SkillProvenance;
+  source_repository?: string | null;
+  source_location?: string | null;
+  status: SkillStatus;
+  content_hash: string;
+  resource_count: number;
+  assigned_agents: string[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SkillResourceDto {
+  relative_path: string;
+  content: string;
+}
+
+// GET /api/projects/{id}/skills/{skillId} — full skill incl. instructions + resources.
+export interface SkillDetailDto {
+  id: string;
+  name: string;
+  description: string;
+  instructions: string;
+  resources: SkillResourceDto[];
+  provenance: SkillProvenance;
+  source_repository?: string | null;
+  source_location?: string | null;
+  status: SkillStatus;
+  content_hash: string;
+  created_at: string;
+  updated_at: string;
+}
+
+// A skill discovered in a repo during import preview (before it is imported).
+export interface SkillCandidateDto {
+  location: string;
+  name?: string | null;
+  description?: string | null;
+  valid: boolean;
+  resource_count: number;
+  errors: string[];
+}
+
+export interface SkillImportPreviewResponse {
+  candidates: SkillCandidateDto[];
+}
+
+// Per-skill outcome of a sync/import/upload operation.
+export interface SkillUpsertResultDto {
+  location?: string | null;
+  name?: string | null;
+  kind: 'Added' | 'Updated' | 'Unchanged' | 'Rejected';
+  skill_id?: string | null;
+  errors: string[];
+}
+
+// Aggregate result of a sync/import/upload operation.
+export interface SkillAcquisitionResponse {
+  results: SkillUpsertResultDto[];
+  marked_missing: string[];
+}
+
+// GET /api/projects/{id}/skills/assignments — flat list of skill→agent links.
+export interface SkillAssignmentDto {
+  skill_id: string;
+  skill_name: string;
+  agent_name: string;
+}

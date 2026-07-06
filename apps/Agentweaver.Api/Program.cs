@@ -256,6 +256,28 @@ builder.Services.AddSingleton<ProjectService>();
         builder.Services.AddSingleton<IBacklogTaskStore>(sp => sp.GetRequiredService<SqliteBacklogTaskStore>());
     }
 }
+
+// Per-project skill catalog + skill→agent assignments (issues #51/#56).
+// Provider-aware: Postgres uses EfSkillStore; SQLite uses SqliteSkillStore.
+{
+    var _provider = builder.Configuration["Database:Provider"]?.ToLowerInvariant() ?? "sqlite";
+    var _isPostgres = _provider is "postgres" or "postgresql";
+    if (_isPostgres)
+    {
+        builder.Services.AddSingleton<Agentweaver.Api.Infrastructure.Ef.EfSkillStore>();
+        builder.Services.AddSingleton<Agentweaver.Domain.Skills.ISkillStore>(
+            sp => sp.GetRequiredService<Agentweaver.Api.Infrastructure.Ef.EfSkillStore>());
+    }
+    else
+    {
+        builder.Services.AddSingleton<SqliteSkillStore>();
+        builder.Services.AddSingleton<Agentweaver.Domain.Skills.ISkillStore>(
+            sp => sp.GetRequiredService<SqliteSkillStore>());
+    }
+}
+builder.Services.AddSingleton<Agentweaver.Api.Skills.SkillParser>();
+builder.Services.AddSingleton<Agentweaver.Api.Skills.SkillCatalogService>();
+builder.Services.AddScoped<Agentweaver.Api.Skills.SkillPromptComposer>();
 builder.Services.AddSingleton<Agentweaver.Api.Runs.WorkflowStageProjector>();
 builder.Services.AddSingleton<Agentweaver.Api.Runs.IWorkflowStageProjector>(
     sp => sp.GetRequiredService<Agentweaver.Api.Runs.WorkflowStageProjector>());
@@ -755,6 +777,7 @@ else
     app.MapRunEndpoints();
     app.MapProjectEndpoints();
     app.MapProjectWorkspaceEndpoints();
+    app.MapSkillEndpoints();
     app.MapBacklogEndpoints();
     app.MapBacklogDecomposeEndpoints();
     app.MapCoordinatorEndpoints();

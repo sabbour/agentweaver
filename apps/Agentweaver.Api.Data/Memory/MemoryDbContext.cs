@@ -43,6 +43,8 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
     public DbSet<BacklogTaskRecord> BacklogTasks => Set<BacklogTaskRecord>();
     public DbSet<WorkflowRunRecord> WorkflowRuns => Set<WorkflowRunRecord>();
     public DbSet<CastProposalRecord> CastProposals => Set<CastProposalRecord>();
+    public DbSet<SkillRecord> Skills => Set<SkillRecord>();
+    public DbSet<SkillAssignmentRecord> SkillAssignments => Set<SkillAssignmentRecord>();
 
     protected override void OnModelCreating(ModelBuilder model)
     {
@@ -132,6 +134,8 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
             model.Ignore<WorkflowRunRecord>();
             model.Ignore<CastProposalRecord>();
             model.Ignore<WorkflowCheckpointRecord>();
+            model.Ignore<SkillRecord>();
+            model.Ignore<SkillAssignmentRecord>();
             return;
         }
 
@@ -275,6 +279,39 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
             e.Property(c => c.ExpiresAt).HasColumnName("expires_at");
             e.Property(c => c.ProposalJson).HasColumnName("proposal_json");
             e.HasIndex(c => c.ProjectId).HasDatabaseName("IX_cast_proposals_project_id");
+        });
+
+        model.Entity<SkillRecord>(e =>
+        {
+            e.ToTable("skills").HasKey(s => s.SkillId);
+            e.Property(s => s.SkillId).HasColumnName("skill_id");
+            e.Property(s => s.ProjectId).HasColumnName("project_id");
+            e.Property(s => s.Name).HasColumnName("name");
+            e.Property(s => s.Description).HasColumnName("description");
+            e.Property(s => s.Instructions).HasColumnName("instructions");
+            e.Property(s => s.Resources).HasColumnName("resources");
+            e.Property(s => s.Provenance).HasColumnName("provenance");
+            e.Property(s => s.SourceRepository).HasColumnName("source_repository");
+            e.Property(s => s.SourceLocation).HasColumnName("source_location");
+            e.Property(s => s.ContentHash).HasColumnName("content_hash");
+            e.Property(s => s.Status).HasColumnName("status").HasDefaultValue("active");
+            e.Property(s => s.CreatedAt).HasColumnName("created_at");
+            e.Property(s => s.UpdatedAt).HasColumnName("updated_at");
+            e.HasIndex(s => new { s.ProjectId, s.Name })
+                .HasDatabaseName("IX_skills_project_name")
+                .IsUnique();
+        });
+
+        model.Entity<SkillAssignmentRecord>(e =>
+        {
+            e.ToTable("skill_assignments")
+                .HasKey(a => new { a.ProjectId, a.SkillId, a.AgentName });
+            e.Property(a => a.ProjectId).HasColumnName("project_id");
+            e.Property(a => a.SkillId).HasColumnName("skill_id");
+            e.Property(a => a.AgentName).HasColumnName("agent_name");
+            e.Property(a => a.CreatedAt).HasColumnName("created_at");
+            e.HasIndex(a => new { a.ProjectId, a.AgentName })
+                .HasDatabaseName("IX_skill_assignments_agent");
         });
 
         // Shared MAF workflow checkpoints. Each row is an independent, unique-PK checkpoint so the two
