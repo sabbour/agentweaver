@@ -1887,34 +1887,31 @@ app.MapGet("/api/runs/{id}/files/{**path}", async (
     // --- Content endpoint branch ---
     if (isContentRequest)
     {
-        // Merged runs: read blob from git commit tree (worktree has been deleted).
-        if (run.Status is RunStatus.Merged)
+        // Runs whose changes are committed to a durable git branch/commit (merged, or a coordinator
+        // child that reached assemble_ready/completed) are served from the git object database so the
+        // file remains previewable AFTER the ephemeral worktree/sandbox has been torn down. This is
+        // the root fix for issue #197 symptom C — a file a child demonstrably produced must never
+        // 409 "Worktree not available" once its sandbox is gone.
+        if (run.Status is RunStatus.Merged or RunStatus.AssembleReady or RunStatus.Completed)
         {
             if (string.IsNullOrEmpty(run.RepositoryPath))
                 return Results.NotFound();
             try
             {
-                using var repo = new Repository(run.RepositoryPath);
-                Commit? commit = null;
-                if (!string.IsNullOrEmpty(run.MergedCommitHash))
-                    commit = repo.Lookup<Commit>(run.MergedCommitHash);
-                if (commit is null && !string.IsNullOrEmpty(run.WorktreeBranch))
-                    commit = repo.Branches[run.WorktreeBranch]?.Tip;
-                if (commit is null)
+                var durable = worktreeManager.TryReadCommittedFileContent(
+                    run.RepositoryPath, run.WorktreeBranch, run.MergedCommitHash, normalizedPath, out _);
+                if (durable is not null)
+                    return Results.Json(durable);
+
+                // The committed branch/commit could not resolve the file. Fall back to the live
+                // worktree if it still exists (e.g. assemble_ready run not yet torn down); otherwise
+                // the file genuinely does not exist in this run's output.
+                if (string.IsNullOrEmpty(run.WorktreePath) || !Directory.Exists(run.WorktreePath))
                     return Results.NotFound();
-
-                var gitPath = normalizedPath.Replace('\\', '/');
-                var treeEntry = commit[gitPath];
-                if (treeEntry is null || treeEntry.TargetType != TreeEntryTargetType.Blob)
-                    return Results.NotFound();
-
-                var blob = (Blob)treeEntry.Target;
-
-                return Results.Json(EndpointHelpers.BuildBlobContent(blob, normalizedPath));
             }
             catch (Exception ex)
             {
-                logger.LogError(ex, "Failed to read git blob for merged run {RunId} path {Path}", runId, normalizedPath);
+                logger.LogError(ex, "Failed to read git blob for run {RunId} path {Path}", runId, normalizedPath);
                 return Results.Problem("Failed to read file content.", statusCode: 500);
             }
         }

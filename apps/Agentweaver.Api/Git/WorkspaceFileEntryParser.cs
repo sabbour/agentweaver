@@ -86,6 +86,17 @@ public static class WorkspaceFileEntryParser
             if (filePath is not null)
             {
                 CountDiffLines(section, out int added, out int removed);
+
+                // Drop "+0 -0" phantom rows: a genuinely MODIFIED file always has at least one
+                // added or removed line. A modified entry with no line changes is a mode-only diff
+                // (e.g. an executable-bit flip introduced by a cross-platform headless merge) that
+                // the run never actually authored — excluding it stops the Changes/Files tab from
+                // listing dozens of untouched files (issue #197 symptom C). Binary modifications and
+                // added/deleted files (which can legitimately be empty) are always kept.
+                bool isBinarySection = section.Contains("Binary files", StringComparison.Ordinal);
+                if (status == "modified" && added == 0 && removed == 0 && !isBinarySection)
+                    continue;
+
                 entries.Add(new WorkspaceFileEntry
                 {
                     Path         = filePath,

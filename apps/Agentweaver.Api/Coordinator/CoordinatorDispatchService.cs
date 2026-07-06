@@ -698,9 +698,19 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         var integrationBranch = CoordinatorAssemblyService.IntegrationBranchName(context.CoordinatorRunId);
         try
         {
-            return _worktreeManager.BranchExists(context.RepositoryPath, integrationBranch)
-                ? integrationBranch
-                : context.OriginatingBranch;
+            if (_worktreeManager.BranchExists(context.RepositoryPath, integrationBranch))
+                return integrationBranch;
+
+            // A dependent subtask reached dispatch but the integration branch its upstreams should
+            // have produced does not exist. This is NOT a normal fallback: the child would start
+            // from the coordinator's originating branch and silently miss upstream artifacts
+            // (issue #197 symptom B). Surface it loudly so the degradation is visible instead of
+            // masquerading as a clean run built on the parent goal.
+            _logger.LogError(
+                "Coordinator dispatch: dependent subtask {SubtaskId} found no integration branch {IntegrationBranch} for run {RunId}; " +
+                "upstream artifacts may be missing. Falling back to originating branch {Origin} — investigate assembly rebuild.",
+                subtaskId, integrationBranch, context.CoordinatorRunId, context.OriginatingBranch);
+            return context.OriginatingBranch;
         }
         catch (Exception ex)
         {
@@ -1828,59 +1838,50 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
     }
 
     /// <summary>
-    /// Builds the git "integration branch" contract injected into every coordinator child task
-    /// (bug #169). Each subtask runs in its own isolated sandbox, so the shared integration branch
-    /// (<see cref="CoordinatorAssemblyService.IntegrationBranchName"/>) is the ONLY channel that
-    /// carries one agent's file changes to the next. The child must PULL the branch before working
-    /// and COMMIT + PUSH it after, so sequential subtasks build on each other's output instead of
-    /// each starting from a fresh copy of the original workspace. Every git step is explicitly
-    /// non-fatal: a failure (no remote, missing branch, dirty tree, non-fast-forward push) is logged
-    /// and the agent continues rather than aborting the task.
+    /// Builds the workspace-sync note injected into every coordinator child task (bug #169, fixed
+    /// for #197). Each subtask runs in its own AgentHost sandbox, but every sandbox operates on the
+    /// SAME shared worktree the API host provisions for the child run, and the API captures the
+    /// child's file changes automatically (WorktreeManager.CommitChanges → the run's worktree branch
+    /// <c>agentweaver/{childRunId}</c>) and merges them into the shared integration branch
+    /// (<see cref="CoordinatorAssemblyService.IntegrationBranchName"/>) via
+    /// RebuildDependencyBaseBranchAsync. A dependent subtask's worktree is CREATED from that
+    /// integration branch, so prior subtasks' committed files are already present on disk before the
+    /// agent starts — no git commands are required to see them.
+    /// <para>
+    /// Issue #197 root cause: the previous contract told the agent to <c>git checkout</c>/<c>commit</c>/
+    /// <c>push</c> the integration branch itself. Checking out the integration branch DETACHED the
+    /// worktree from its run branch, so the API's capture committed to the wrong ref and the run's
+    /// diff came back empty — the child's output was silently dropped from assembly. The
+    /// <c>git push origin …</c> also always failed with "no remote configured" because the shared-
+    /// workspace model has no remote and needs none. We therefore do NOT ask the agent to run any
+    /// git branch/commit/push commands; propagation is entirely API-managed and lossless.
+    /// </para>
     /// </summary>
     internal static string BuildIntegrationBranchContract(CoordinatorDispatchContext context, Subtask subtask)
     {
         var integrationBranch = CoordinatorAssemblyService.IntegrationBranchName(context.CoordinatorRunId);
-        var baseBranch = string.IsNullOrWhiteSpace(context.OriginatingBranch) ? "HEAD" : context.OriginatingBranch;
-        var commitDescription = ShellSafeSummary(subtask.Title, 100);
 
         return
             $"""
-            ## Workspace sync — git integration branch contract (REQUIRED)
-            Your workspace is an isolated sandbox. The other subtasks in this work plan run in
-            SEPARATE sandboxes, so the ONLY way their file changes reach you — and the only way your
-            changes reach the next subtask — is through the shared git integration branch
-            `{integrationBranch}`. You MUST follow this contract.
+            ## Workspace sync — how your work is shared (READ THIS)
+            You are one of several subtasks in a coordinated work plan. Each subtask runs in its own
+            sandbox, but they all operate on a SHARED workspace and the platform propagates file
+            changes between them automatically through the run's integration branch `{integrationBranch}`.
 
-            BEFORE you make any changes, sync the latest combined work of prior subtasks:
-                git fetch origin
-                git checkout {integrationBranch} || git checkout -B {integrationBranch} origin/{integrationBranch} || git checkout -B {integrationBranch} {baseBranch}
-                git pull --no-edit origin {integrationBranch} || true
-            If any of these fail (no remote configured, the branch does not exist yet, or a dirty
-            working tree), log the warning and continue with the workspace as-is: do NOT abort the task over a git error.
+            What this means for you:
+            - Files produced by the subtasks you depend on are ALREADY present in your workspace when
+              you start — just read them like any other file (e.g. open `research-domain.md`). If a
+              file an upstream subtask was supposed to create is missing, treat that as a real error:
+              report it via your outcome and do NOT silently substitute the parent task's goal text
+              for the missing artifact.
+            - Your own file changes are captured and published automatically after your turn. You do
+              NOT need to — and must NOT — run any git commands (no `git checkout`, `git commit`,
+              `git branch`, `git push`, `git pull`, or `git reset`). Manually switching branches or
+              committing breaks the platform's change capture and can cause your output to be lost.
 
-            AFTER you finish your changes, publish them so the next subtask can see them:
-                git add -A
-                git commit -m "subtask {subtask.Id}: {commitDescription}"
-                git push origin HEAD:{integrationBranch}
-            If the commit reports "nothing to commit" or the push is rejected (no remote or
-            non-fast-forward), log a warning and finish normally: do NOT fail the task over a git error.
-            Your file changes are also captured from the workspace regardless.
+            Simply create and edit files in your workspace as normal; the platform handles versioning,
+            propagation to the next subtask, and assembly for you.
             """;
-    }
-
-    /// <summary>
-    /// Collapses a subtask title into a single-line, double-quote-free summary safe to embed inside
-    /// a <c>git commit -m "..."</c> instruction, trimmed to <paramref name="maxChars"/>.
-    /// </summary>
-    private static string ShellSafeSummary(string? value, int maxChars)
-    {
-        if (string.IsNullOrWhiteSpace(value))
-            return "changes";
-        var compact = value.Replace('\r', ' ').Replace('\n', ' ').Replace('\t', ' ')
-            .Replace('"', '\'').Replace('`', '\'').Trim();
-        if (compact.Length == 0)
-            return "changes";
-        return compact.Length <= maxChars ? compact : compact[..maxChars] + "…";
     }
 
     private async Task<string> ComposeChildTaskAsync(
@@ -1900,13 +1901,12 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         sb.AppendLine();
         sb.AppendLine();
 
-        // Bug #169: each subtask executes in its OWN isolated sandbox (a separate AgentHost pod /
-        // LXC filesystem). File edits made by one agent never reach the next agent's filesystem, so
-        // sequential subtasks were each starting from a fresh copy of the ORIGINAL workspace and
-        // could not see prior work. The shared git integration branch is the only channel between
-        // sandboxes, so the child MUST pull it before working and commit+push it after — this makes
-        // one subtask's output visible to the next. The instructions are self-healing and non-fatal
-        // (a git failure is logged, never aborts the task).
+        // Bug #169 / issue #197: each subtask executes in its OWN AgentHost sandbox, but every
+        // sandbox operates on the SAME shared worktree the API host provisions for the child run.
+        // A dependent subtask's worktree is created from the run's integration branch, so prior
+        // subtasks' committed files are already on disk. The API captures the child's changes and
+        // merges them into the integration branch automatically — the agent must NOT run git
+        // commands (doing so previously stranded output; see BuildIntegrationBranchContract).
         sb.Append(BuildIntegrationBranchContract(context, subtask));
         sb.AppendLine();
 

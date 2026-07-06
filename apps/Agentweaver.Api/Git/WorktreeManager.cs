@@ -822,6 +822,10 @@ public sealed class WorktreeManager
         foreach (var change in diff)
         {
             if (change.Status == ChangeKind.Unmodified) continue;
+            // Skip mode-only changes (identical blob content, e.g. an executable-bit flip that a
+            // cross-platform headless merge introduces). These are the "+0 -0" phantom rows the run
+            // never actually produced (issue #197 symptom C).
+            if (IsContentIdenticalModeChange(change)) continue;
             entries.Add(new WorkspaceFileEntry
             {
                 Path   = NormalizePathSeparators(change.Path),
@@ -835,6 +839,114 @@ public sealed class WorktreeManager
         _committedCache[cacheKey] = (DateTime.UtcNow.Add(CommittedCacheTtl), result,
             new Dictionary<string, (int, int)>(StringComparer.Ordinal));
         return result;
+    }
+
+    /// <summary>
+    /// True when a tree change has identical blob content on both sides (same <see cref="TreeEntryChanges.Oid"/>
+    /// as <see cref="TreeEntryChanges.OldOid"/>) — i.e. only the file mode changed. Such entries carry no
+    /// line additions/removals and must be excluded from a run's changed-file set so the Changes/Files tab
+    /// does not surface "+0 -0" phantom rows for files the run never actually modified (issue #197).
+    /// </summary>
+    private static bool IsContentIdenticalModeChange(TreeEntryChanges change)
+        => change.Status == ChangeKind.Modified
+           && change.Oid == change.OldOid
+           && change.Oid != null
+           && !change.Oid.Equals(ObjectId.Zero);
+
+    /// <summary>
+    /// Reads a single file's content from a durable git source (a run's committed worktree branch tip,
+    /// or an explicit merged commit hash) WITHOUT needing the ephemeral worktree directory on disk.
+    /// Used by the file Preview endpoint so a file a child subtask created remains previewable after
+    /// its sandbox/worktree has been torn down (issue #197 symptom C — no more 409 "Worktree not
+    /// available" for a file the run demonstrably produced). Returns null when the repository, branch,
+    /// commit, or file path cannot be resolved; sets <paramref name="isBinary"/> when the blob is binary.
+    /// </summary>
+    public WorkspaceFileContent? TryReadCommittedFileContent(
+        string repositoryPath,
+        string? worktreeBranch,
+        string? commitHash,
+        string relativeFilePath,
+        out bool isBinary)
+    {
+        isBinary = false;
+        if (string.IsNullOrEmpty(repositoryPath) || !Repository.IsValid(repositoryPath))
+            return null;
+
+        using var repo = new Repository(repositoryPath);
+
+        Commit? commit = null;
+        if (!string.IsNullOrEmpty(commitHash))
+            commit = repo.Lookup<Commit>(commitHash);
+        if (commit is null && !string.IsNullOrEmpty(worktreeBranch))
+            commit = repo.Branches[worktreeBranch]?.Tip;
+        if (commit is null)
+            return null;
+
+        var gitPath = relativeFilePath.Replace('\\', '/');
+        var treeEntry = commit[gitPath];
+        if (treeEntry is null || treeEntry.TargetType != TreeEntryTargetType.Blob)
+            return null;
+
+        var blob = (Blob)treeEntry.Target;
+        isBinary = blob.IsBinary;
+        return EndpointBlobContent(blob, NormalizePathSeparators(relativeFilePath));
+    }
+
+    private static WorkspaceFileContent EndpointBlobContent(Blob blob, string path)
+    {
+        if (blob.IsBinary)
+        {
+            return new WorkspaceFileContent
+            {
+                Path     = path,
+                Content  = null,
+                IsBinary = true,
+                Language = DetectLanguageFromPath(path),
+            };
+        }
+
+        const long maxContentBytes = 1 * 1024 * 1024; // 1 MB — mirrors the filesystem content endpoint.
+        if (blob.Size > maxContentBytes)
+        {
+            return new WorkspaceFileContent
+            {
+                Path     = path,
+                Content  = null,
+                IsBinary = false,
+                Language = "too_large",
+            };
+        }
+
+        return new WorkspaceFileContent
+        {
+            Path     = path,
+            Content  = blob.GetContentText(),
+            IsBinary = false,
+            Language = DetectLanguageFromPath(path),
+        };
+    }
+
+    private static string DetectLanguageFromPath(string path)
+    {
+        var ext = Path.GetExtension(path).ToLowerInvariant();
+        return ext switch
+        {
+            ".ts" or ".tsx" => "typescript",
+            ".js" or ".jsx" => "javascript",
+            ".cs"           => "csharp",
+            ".py"           => "python",
+            ".go"           => "go",
+            ".rs"           => "rust",
+            ".java"         => "java",
+            ".json"         => "json",
+            ".md"           => "markdown",
+            ".html" or ".htm" => "html",
+            ".css"          => "css",
+            ".yml" or ".yaml" => "yaml",
+            ".xml"          => "xml",
+            ".sh"           => "shell",
+            _               => "plaintext",
+        };
     }
 
     /// <summary>
@@ -900,6 +1012,7 @@ public sealed class WorktreeManager
         foreach (var change in diff)
         {
             if (change.Status == ChangeKind.Unmodified) continue;
+            if (IsContentIdenticalModeChange(change)) continue;
             entries.Add(new WorkspaceFileEntry
             {
                 Path   = NormalizePathSeparators(change.Path),
