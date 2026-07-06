@@ -159,7 +159,7 @@ describe('CoordinatorRunPage — unified coordinator graph view', () => {
     expect(document.body.querySelector('[aria-label^="Executing in pod agentweaver-api-pod-1"]')).toBeNull();
   });
 
-  it('shows a Steer button that opens the steering chat side panel', async () => {
+  it('shows a Message button that focuses the persistent coordinator composer', async () => {
     const { container } = render(<Wrapper><CoordinatorRunPage /></Wrapper>);
 
     const steerBtn = await waitFor(() => {
@@ -167,15 +167,14 @@ describe('CoordinatorRunPage — unified coordinator graph view', () => {
       expect(btn).not.toBeNull();
       return btn as HTMLButtonElement;
     }, { timeout: 4000 });
-
+    steerBtn.click();
     steerBtn.click();
 
-    await waitFor(
-      () => expect(container.querySelector('[data-testid="steer-chat-panel"]')).toBeTruthy(),
-      { timeout: 4000 },
-    );
-    expect(container.querySelector('[data-testid="steer-chat-send"]')).toBeTruthy();
-    expect(container.querySelector('[data-testid="steer-chat-stop"]')).toBeTruthy();
+    await waitFor(() => {
+      const input = container.querySelector('input[placeholder="Message coordinator..."]') as HTMLInputElement | null;
+      expect(input).toBeTruthy();
+      expect(document.activeElement).toBe(input);
+    }, { timeout: 4000 });
   });
 
   it('renders Ctrl+Scroll zoom controls on the orchestration graph', async () => {
