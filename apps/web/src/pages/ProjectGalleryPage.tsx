@@ -26,7 +26,18 @@ import {
   makeStyles,
   tokens,
 } from '@fluentui/react-components';
-import { ChevronRightRegular, DismissRegular, DocumentRegular, InfoRegular, SparkleRegular } from '@fluentui/react-icons';
+import {
+  ChevronDownRegular,
+  ChevronRightRegular,
+  ChevronUpRegular,
+  DismissCircleRegular,
+  DismissRegular,
+  DocumentRegular,
+  InfoRegular,
+  LightbulbRegular,
+  SettingsRegular,
+  SparkleRegular,
+} from '@fluentui/react-icons';
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
 import type { CreateProjectRequest, GitHubAccount, GitHubRepo, Project } from '../api/types';
@@ -161,6 +172,7 @@ const useStyles = makeStyles({
   sectionTitle: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS },
   charCounter: { alignSelf: 'flex-end', color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200 },
   tipLine: { color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200 },
+  tipIconLine: { display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalXXS, color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200 },
   fieldWithCounter: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS },
   subsectionHeader: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
   infoBox: {
@@ -337,7 +349,7 @@ function CreateProjectDialogShell({
           <DialogActions>
             <div className={styles.footerSplit}>
               <div className={styles.footerLeft}>
-                <Button appearance="outline" aria-label="No blueprint" onClick={onNoBlueprint}>⊘ No blueprint</Button>
+                <Button appearance="outline" aria-label="No blueprint" icon={<DismissCircleRegular />} onClick={onNoBlueprint}>No blueprint</Button>
                 <Text className={styles.tipLine}>Start with an empty project and add agents later.</Text>
               </div>
               <div className={styles.footerActions}>
@@ -404,7 +416,7 @@ function CreateBlankDialog({ onCreated, dataDir, workspaceAutoAssigned }: { onCr
       </div>
       <div className={styles.fieldWithCounter}>
         <div className={styles.subsectionHeader}>
-          <span aria-hidden="true">⚙</span>
+          <SettingsRegular aria-hidden="true" />
           <Text weight="semibold">What do you want Agentweaver to help you accomplish?</Text>
         </div>
         <Text className={styles.tipLine}>Be specific about the problems you're trying to solve or the outcomes you want.</Text>
@@ -418,7 +430,7 @@ function CreateBlankDialog({ onCreated, dataDir, workspaceAutoAssigned }: { onCr
           style={{ minHeight: 130 }}
         />
         <Counter value={goal} max={1000} />
-        <Text className={styles.tipLine}>💡 Tip: The more context you provide, the better the blueprint.</Text>
+        <Text className={styles.tipIconLine}><LightbulbRegular /> <span>Tip: The more context you provide, the better the blueprint.</span></Text>
       </div>
       <Button appearance="primary" icon={<SparkleRegular />} aria-label="Generate blueprint" disabled={!goal.trim() || generation.generating} onClick={() => void generation.generate(goal)}>
         {generation.generating ? 'Generating' : 'Generate Blueprint'}
@@ -702,7 +714,17 @@ function CreateFromGitHubDialog({ onCreated, dataDir, workspaceAutoAssigned }: {
         <div className={styles.listBlock}>
           <div className={styles.listHeader}>
             <Text weight="semibold">My organizations</Text>
-            {accounts.length > 5 && <Button appearance="transparent" size="small" onClick={() => setShowMoreSources(!showMoreSources)}>{showMoreSources ? 'Show less ⌃' : 'Show more ⌄'}</Button>}
+            {accounts.length > 5 && (
+              <Button
+                appearance="transparent"
+                size="small"
+                icon={showMoreSources ? <ChevronUpRegular /> : <ChevronDownRegular />}
+                iconPosition="after"
+                onClick={() => setShowMoreSources(!showMoreSources)}
+              >
+                {showMoreSources ? 'Show less' : 'Show more'}
+              </Button>
+            )}
           </div>
           {visibleSources.length === 0 ? <Text className={styles.tipLine}>{accountsLoading ? 'Loading sources…' : 'No GitHub sources found.'}</Text> : visibleSources.map((acc) => (
             <button key={acc.login} className={styles.orgRow} type="button" onClick={() => { changeAccount(acc); setRepoFilter(''); d.setSourceRepository(''); }}>
