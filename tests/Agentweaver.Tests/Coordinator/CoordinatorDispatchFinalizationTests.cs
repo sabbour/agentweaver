@@ -129,6 +129,37 @@ public sealed class CoordinatorDispatchFinalizationTests : IDisposable
         _assembly.Started.Should().BeEmpty("the hand-off is skipped when another replica already owns Phase 3");
     }
 
+    [Fact]
+    public async Task FinalizeDispatch_PlanAssemblyBlockedButChildrenNowEligible_ClearsBlockAndHandsOff()
+    {
+        const string coordinatorRunId = "coord-final-blocked-recovered";
+        var (workPlanId, subtaskIds) = await SeedPlanAsync(coordinatorRunId);
+        _streamStore.Create(coordinatorRunId, "alice");
+
+        await using (var scope = _provider.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var plan = await db.WorkPlans.FirstAsync(w => w.Id == workPlanId);
+            plan.Status = WorkPlanStatus.AssemblyBlocked;
+            await db.SaveChangesAsync();
+        }
+
+        var statusById = subtaskIds.ToDictionary(id => id, _ => SubtaskStatus.AssembleReady);
+        var context = new CoordinatorDispatchContext(coordinatorRunId, "repo", "main", "alice", null);
+
+        await _sut.FinalizeDispatchAsync(
+            context, workPlanId, statusById, edges: [], new CoordinatorDispatchService.SeqCounter(), default);
+
+        await using (var scope = _provider.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var plan = await db.WorkPlans.AsNoTracking().FirstAsync(w => w.Id == workPlanId);
+            plan.Status.Should().Be(WorkPlanStatus.AwaitingAssembly);
+        }
+
+        _assembly.Started.Should().ContainSingle().Which.CoordinatorRunId.Should().Be(coordinatorRunId);
+    }
+
     private sealed class RecordingAssembly : ICoordinatorAssembly
     {
         public List<CoordinatorDispatchContext> Started { get; } = [];

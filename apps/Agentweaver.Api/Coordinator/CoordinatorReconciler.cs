@@ -125,7 +125,8 @@ public sealed class CoordinatorReconciler
                 .Where(w => w.Status == WorkPlanStatus.Dispatching
                          || w.Status == WorkPlanStatus.AwaitingAssembly
                          || w.Status == WorkPlanStatus.Assembling
-                         || w.Status == WorkPlanStatus.InReview)
+                         || w.Status == WorkPlanStatus.InReview
+                         || w.Status == WorkPlanStatus.AssemblyBlocked)
                 .Select(w => new PlanCandidate(w.Id, w.CoordinatorRunId, w.Status, w.CoordinatorPodId, w.UpdatedAt))
                 .ToListAsync(ct).ConfigureAwait(false);
         }
@@ -139,6 +140,7 @@ public sealed class CoordinatorReconciler
             .Where(c => c.Status is WorkPlanStatus.AwaitingAssembly
                                  or WorkPlanStatus.Assembling
                                  or WorkPlanStatus.InReview
+                                 or WorkPlanStatus.AssemblyBlocked
                      && !string.IsNullOrWhiteSpace(c.CoordinatorRunId))
             .Select(c => c.CoordinatorRunId!)
             .ToHashSet(StringComparer.Ordinal);
@@ -211,6 +213,13 @@ public sealed class CoordinatorReconciler
                         if (IsAssemblyActive(plan))
                             continue;
                         if ((DateTimeOffset.UtcNow - plan.UpdatedAt) < _staleLeaseTtl)
+                            continue;
+                        if (await TryReArmAssemblyWithCapAsync(plan, ct).ConfigureAwait(false))
+                            reArmed++;
+                        break;
+
+                    case WorkPlanStatus.AssemblyBlocked:
+                        if (IsAssemblyActive(plan))
                             continue;
                         if (await TryReArmAssemblyWithCapAsync(plan, ct).ConfigureAwait(false))
                             reArmed++;
