@@ -563,7 +563,12 @@ public sealed class RunOrchestrator
                 }
             }
 
-            return (run.Task, AppendCapabilities(AppendMemoryProtocol(ComposeChildSystemPrompt(childCharter, childDecisions)), run));
+            var childPrompt = ComposeChildSystemPrompt(childCharter, childDecisions);
+            // Progressive disclosure: coordinator-dispatched workers ARE child runs (ParentRunId set)
+            // and do the actual work, so their assigned skills must reach them too. Child runs carry
+            // AgentName/ProjectId/WorktreePath — everything the composer needs.
+            childPrompt = await AppendAssignedSkillsAsync(run, childPrompt, ct);
+            return (run.Task, AppendCapabilities(AppendMemoryProtocol(childPrompt), run));
         }
 
         // Compile memory context (progressive disclosure — layer 1-4)
@@ -604,9 +609,42 @@ public sealed class RunOrchestrator
                     Path.Combine(run.RepositoryPath ?? "(null)", ".squad", "agents",
                         (run.AgentName ?? "").ToLowerInvariant(), "charter.md"));
             }
+
+            // Progressive disclosure: append the NAME+DESCRIPTION metadata for skills assigned to this
+            // agent and materialize their full SKILL.md bodies into the worktree for on-demand reading.
+            // Only Active assigned skills are surfaced, so removed/malformed skills never remain active.
+            systemPromptContext = await AppendAssignedSkillsAsync(run, systemPromptContext, ct);
         }
 
         return (run.Task, AppendCapabilities(AppendMemoryProtocol(systemPromptContext), run));
+    }
+
+    /// <summary>
+    /// Appends the assigned-skill progressive-disclosure block to a worker/single-agent system prompt.
+    /// Resolved through a scope so the orchestrator does not take a hard dependency on the skill store.
+    /// Best-effort: skill failures never block a run.
+    /// </summary>
+    private async Task<string?> AppendAssignedSkillsAsync(Run run, string? systemPromptContext, CancellationToken ct)
+    {
+        if (string.IsNullOrEmpty(run.AgentName) || !run.ProjectId.HasValue || string.IsNullOrEmpty(run.WorktreePath))
+            return systemPromptContext;
+
+        try
+        {
+            using var scope = _scopeFactory.CreateScope();
+            var composer = scope.ServiceProvider.GetRequiredService<Skills.SkillPromptComposer>();
+            var block = await composer.ComposeAsync(run.ProjectId.Value, run.AgentName, run.WorktreePath, ct);
+            if (string.IsNullOrEmpty(block))
+                return systemPromptContext;
+            return string.IsNullOrEmpty(systemPromptContext)
+                ? block
+                : systemPromptContext + "\n\n---\n\n" + block;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Skill context composition failed for run {RunId} — proceeding without", run.Id);
+            return systemPromptContext;
+        }
     }
 
     /// <summary>

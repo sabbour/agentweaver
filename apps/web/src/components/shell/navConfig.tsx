@@ -9,6 +9,7 @@ import {
   Code24Regular,
   Bot24Regular,
   Brain24Regular,
+  BookToolbox24Regular,
   Flowchart24Regular,
   Settings24Regular,
   Server24Regular,
@@ -79,6 +80,7 @@ export const NAV_SECTIONS: NavSectionDef[] = [
     items: [
       // Agents reuses the existing Team page at /team (label adaptation only).
       { key: 'agents', label: 'Agents', icon: <Bot24Regular />, segment: 'team' },
+      { key: 'skills', label: 'Skills', icon: <BookToolbox24Regular />, segment: 'skills' },
       { key: 'memories', label: 'Memories', icon: <Brain24Regular />, segment: 'memories' },
     ],
   },
