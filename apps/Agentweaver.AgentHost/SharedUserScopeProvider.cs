@@ -4,16 +4,15 @@ using Microsoft.Extensions.Logging;
 namespace Agentweaver.AgentHost;
 
 /// <summary>
-/// Token-scope provider for the shared-store path (spec-018 P1.5). Unlike
-/// <see cref="PodInstallationScopeProvider"/> (which always returns the installation scope), this
-/// resolves the per-user scope that matches what the API persisted, so
+/// Token-scope provider for the shared-store path (spec-018 P1.5). Resolves the
+/// per-user scope that matches what the API persisted, so
 /// <see cref="SharedHomeGitHubTokenStore"/> reads the correct <c>user_&lt;id&gt;.json</c>.
 ///
 /// <para>Resolution order:</para>
 /// <list type="number">
 ///   <item>An explicitly configured user id (<c>AgentHost:UserId</c> / the run's submitting user),
 ///   if present, -&gt; <see cref="GitHubTokenScope.ForUser(string)"/>.</item>
-///   <item>Fall back to <see cref="GitHubTokenScope.Installation"/> if no user id is configured.</item>
+///   <item>Fail closed if no user id is configured; installation tokens cannot authorize Copilot model turns.</item>
 /// </list>
 /// </summary>
 internal sealed class SharedUserScopeProvider : IGitHubTokenScopeProvider
@@ -36,7 +35,9 @@ internal sealed class SharedUserScopeProvider : IGitHubTokenScopeProvider
         if (effective is not null)
             return GitHubTokenScope.ForUser(effective);
 
-        _logger?.LogWarning("AgentHost userId not configured — falling back to installation scope");
-        return GitHubTokenScope.Installation;
+        _logger?.LogError("AgentHost userId not configured — refusing installation-scope Copilot auth");
+        throw new InvalidOperationException(
+            "AgentHost cannot resolve a Copilot token scope without the submitting user identity; " +
+            "installation-scope Copilot auth is not permitted.");
     }
 }

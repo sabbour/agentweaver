@@ -38,7 +38,9 @@ public sealed record AgentTurnOutput(
     /// <summary>Rai's feedback text when <see cref="RaiRevisionRequired"/> is true.</summary>
     string? RaiFeedback = null,
     /// <summary>Carried through from <see cref="AgentTurnInput.Iteration"/> for edge conditions.</summary>
-    int Iteration = 0);
+    int Iteration = 0,
+    /// <summary>The accountable human whose Copilot-entitled token must be used by downstream model turns.</summary>
+    string? SubmittingUser = null);
 
 /// <summary>Data surfaced to the external caller via the review request port.</summary>
 public sealed record WorkflowReviewRequest(

@@ -70,6 +70,10 @@ public sealed class CopilotWorkflowSelectionModel : IWorkflowSelectionModel
                     "Workflow selection requires a submitting user identity; installation-scope Copilot auth is not permitted.");
 
             var scope = _scopeProvider.Resolve(context.SubmittingUser);
+            if (string.Equals(scope.Key, GitHubTokenScope.Installation.Key, StringComparison.Ordinal))
+                throw new InvalidOperationException(
+                    "Workflow selection requires a user Copilot token scope; installation-scope Copilot auth is not permitted.");
+
             client = await _copilotClientFactory.CreateClientAsync(scope, _modelId, ct).ConfigureAwait(false);
             await client.StartAsync(ct).ConfigureAwait(false);
 

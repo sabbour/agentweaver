@@ -105,6 +105,12 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
         using var governance = SandboxGovernance.Create(workingDirectory, runId, executor, sandboxPolicy, _logger);
 
         var scope = _scopeProvider.Resolve(userId);
+        if (string.Equals(scope.Key, GitHubTokenScope.Installation.Key, StringComparison.Ordinal))
+            throw new InvalidOperationException(
+                $"Run {runId} cannot use the GitHub Copilot model with the installation token scope. " +
+                "GitHub App installation tokens are not Copilot model credentials; configure a " +
+                "user-token scope provider and pass the submitting user.");
+
         await using var client = await _factory.CreateClientAsync(scope, modelId, ct).ConfigureAwait(false);
         await client.StartAsync(ct);
 

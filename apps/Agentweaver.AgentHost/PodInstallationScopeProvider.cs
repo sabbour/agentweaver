@@ -3,11 +3,13 @@ using Agentweaver.Domain;
 namespace Agentweaver.AgentHost;
 
 /// <summary>
-/// Token-scope provider for the in-pod AgentHost: always returns
-/// <see cref="GitHubTokenScope.Installation"/> since the pod runs under a single
-/// workload identity / claim-time token (§5 credential model).
+/// Legacy fallback scope provider. AgentHost executes Copilot model turns, so installation
+/// tokens must never be used as model credentials.
 /// </summary>
 internal sealed class PodInstallationScopeProvider : IGitHubTokenScopeProvider
 {
-    public GitHubTokenScope Resolve(string? userId) => GitHubTokenScope.Installation;
+    public GitHubTokenScope Resolve(string? userId) =>
+        throw new InvalidOperationException(
+            "AgentHost is configured with an installation-token scope provider, but Copilot model " +
+            "turns require a submitting user token. Configure Key Vault or shared user-token storage.");
 }

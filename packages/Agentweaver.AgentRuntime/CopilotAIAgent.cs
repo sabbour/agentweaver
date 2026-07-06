@@ -394,7 +394,14 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
                 "Pass the authenticated user's ID to SetupAsync so the correct Copilot-entitled " +
                 "token is resolved. Using the installation token is not permitted.");
 
-        return _scopeProvider.Resolve(userId);
+        var scope = _scopeProvider.Resolve(userId);
+        if (string.Equals(scope.Key, GitHubTokenScope.Installation.Key, StringComparison.Ordinal))
+            throw new InvalidOperationException(
+                $"Run {_runId} cannot start: the token scope provider resolved the installation " +
+                "scope for a Copilot model turn. GitHub App installation tokens are not Copilot " +
+                "model credentials; configure a user-token scope provider and pass the submitting user.");
+
+        return scope;
     }
 
     /// <summary>

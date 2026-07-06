@@ -101,7 +101,8 @@ public sealed class CollectiveAssemblyPipeline : ICollectiveAssemblyPipeline
             WorktreeBranch: string.Empty,
             RepositoryPath: request.RepositoryPath,
             OriginatingBranch: string.Empty,
-            ContentSafetyFlagged: false);
+            ContentSafetyFlagged: false,
+            SubmittingUser: request.SubmittingUser);
 
         var output = await rai.HandleAsync(input, NoOpWorkflowContext.Instance, ct).ConfigureAwait(false);
         return new CollectiveRaiResult(SafetyFlagged: output.ContentSafetyFlagged);
