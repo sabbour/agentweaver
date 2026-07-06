@@ -196,8 +196,8 @@ export function OverviewPage() {
 
   const attention = useMemo<AttentionItem[]>(() => {
     const items: AttentionItem[] = [];
-    if (overview?.at_a_glance.health && overview.at_a_glance.health !== 'healthy') items.push({ key: 'health', severity: 'error', title: 'System health degraded', subtitle: 'Overview health is reporting degraded.', action: 'Open diagnostics', to: '/diagnostics' });
-    for (const activity of overview?.recent_activity ?? []) if (isFailure(activity.kind)) items.push({ key: `${activity.project_id}-${activity.timestamp_utc}-${activity.kind}`, severity: 'error', title: activity.label, subtitle: activity.project_name, time: activity.timestamp_utc, action: 'View logs', to: `/projects/${activity.project_id}/runs` });
+    if (overview?.at_a_glance.health && overview.at_a_glance.health !== 'healthy') items.push({ key: 'health', severity: 'error', title: 'System health degraded', subtitle: 'Overview health is reporting degraded.', action: 'View projects', to: '/projects' });
+    for (const activity of overview?.recent_activity ?? []) if (isFailure(activity.kind)) items.push({ key: `${activity.project_id}-${activity.timestamp_utc}-${activity.kind}`, severity: 'error', title: activity.label, subtitle: activity.project_name, time: activity.timestamp_utc, action: 'View logs', to: `/projects/${activity.project_id}/orchestrations` });
     for (const rollup of rollups) if (rollup.queuedCount > 0) items.push({ key: `queued-${rollup.project.project_id}`, severity: 'warning', title: `${rollup.queuedCount} queued ${rollup.queuedCount === 1 ? 'item' : 'items'}`, subtitle: rollup.project.name, time: rollup.lastActivityUtc, action: 'Open project', to: `/projects/${rollup.project.project_id}` });
     return items.slice(0, 5);
   }, [overview, rollups]);
@@ -227,11 +227,10 @@ export function OverviewPage() {
           {groupedActivity.length === 0 ? emptyState('No recent activity.', styles) : <div className={styles.timeline}>{groupedActivity.map(([day, entries]) => <div key={day} className={styles.list}><Text className={styles.dayLabel}>{day}</Text>{entries.map((entry, index) => <div key={`${entry.project_id}-${entry.timestamp_utc}-${index}`} className={styles.timelineItem}><span className={styles.timelineIcon}>{activityIcon(entry.kind)}</span><div><Text className={styles.timelineTitle}>{entry.project_name}</Text><Text> {entry.label}</Text><div className={styles.timelineBadges}><Badge appearance="tint" color={isFailure(entry.kind) ? 'danger' : entry.kind === 'completed' ? 'success' : 'informative'}>{humanizeKind(entry.kind)}</Badge></div></div><Text className={styles.muted}>{timeAgo(entry.timestamp_utc)}</Text></div>)}</div>)}</div>}
           <Link className={styles.link} to="/overview">View all activity →</Link>
         </section>
-        <section className={`${styles.section} ${styles.panel}`}><div className={styles.sectionHeader}><MetricSectionHeading title="Needs Attention" /><Link className={styles.link} to="/diagnostics">View all →</Link></div>
+        <section className={`${styles.section} ${styles.panel}`}><div className={styles.sectionHeader}><MetricSectionHeading title="Needs Attention" /></div>
           {attention.length === 0 ? emptyState('Nothing needs attention.', styles) : <div className={styles.attentionList}>{attention.map((item) => <div key={item.key} className={`${styles.alertCard} ${item.severity === 'error' ? styles.alertError : styles.alertWarning}`}>{item.severity === 'error' ? <ErrorCircleRegular className={styles.alertErrorIcon} /> : <WarningRegular className={styles.alertWarningIcon} />}<div><Text weight="semibold">{item.title}</Text><br /><Text className={styles.muted}>{item.subtitle}{item.time ? ` · ${timeAgo(item.time)}` : ''}</Text></div><Button as="a" href={item.to} appearance="secondary" size="small" icon={<OpenRegular />}>{item.action}</Button></div>)}</div>}
         </section>
       </div>
     </> : null}
   </div>;
 }
-
