@@ -59,11 +59,11 @@ For production hosting, the Vite build output is served by the ASP.NET Core stat
 
 The project gallery (`/projects`) shows all projects as a card grid. Each card displays the project name, origin (blank or GitHub), working directory, and availability. An unavailable project — one whose working directory cannot be found on the server — renders with a warning indicator.
 
-Two dialogs let you create a project:
+Two dialogs let you create a project. Both use the shared `CreateProjectDialogShell` with project/repository fields on the left, a height-bounded scrollable **Blueprint** panel on the right, and one footer **No blueprint** action (`apps/web/src/pages/ProjectGalleryPage.tsx:119`, `:264`, `:310`):
 
-**Create blank project** — collects a name and a local working directory path. The directory must already exist and be a git repository.
+**Create blank project** — collects a name and a local working directory path, then opens the shared Blueprint panel on **Generated | Templates** (`ProjectGalleryPage.tsx:405`). The directory must already exist and be a git repository.
 
-**Create from GitHub** — collects a name, GitHub repository URL, and a local path. The server clones the repository into that path.
+**Create from GitHub** — collects a name, GitHub repository URL, and a local path, then opens the shared Blueprint panel on **Suggested | Templates | Generate** (`ProjectGalleryPage.tsx:676`). The server clones the repository into that path. The repository-source list starts with the signed-in user's personal account (`@{login}` plus **You**) before organizations, and repository search uses the selected account's repositories (`ProjectGalleryPage.tsx:471`, `:501`, `:642`).
 
 Clicking a project card navigates to the project dashboard.
 
@@ -115,17 +115,17 @@ The start-orchestration dialog (`StartOrchestrationDialog`) is opened from the *
 
 The coordinator run page (`/projects/:projectId/orchestrations/:runId`) streams the coordinator run live and hosts the outcome-spec review-and-confirm gate. The page header shows the shortened run id and the submitted goal (read from the `coordinator.started` event). The outcome-spec panel (`OutcomeSpecPanel`) renders below it.
 
-The panel derives the spec from two sources, with no spec logic in the client: it seeds from `GET /api/runs/{id}/outcome-spec` and overlays the live `coordinator.outcome_spec` and `coordinator.outcome_spec.confirmed` events from the run stream (ordered and deduplicated by `sequence`). A 404 from the snapshot before the coordinator drafts is expected — the stream fills it in.
+The panel derives the spec from two sources, with no spec logic in the client: it seeds from `GET /api/runs/{id}/outcome-spec` and overlays the live `coordinator.outcome_spec` and `coordinator.outcome_spec.confirmed` events from the run stream (ordered and deduplicated by `sequence`). A 404 from the snapshot before the coordinator drafts is expected. The panel stays visible in **Drafting** state and polls every 2 seconds until REST or SSE provides the spec; if the run reaches a failure/decline terminal status before content arrives, it shows a terminal error instead of disappearing (`apps/web/src/components/OutcomeSpecPanel.tsx:160`, `:233`, `:328`, `:401`, `:537`).
 
 The panel shows:
 
 - A **status badge**: `Drafting`, `Awaiting confirmation`, `Confirmed`, or `Declined`.
 - A **dispatch-gate notice**: while drafting or awaiting confirmation, an info bar states that no subagent work is dispatched until the outcome spec is confirmed. Once confirmed, a success bar notes that dispatch is unblocked (and who confirmed); if declined, a warning bar notes that no work was dispatched.
-- The drafted **Goal**, **Desired outcome**, **Scope**, **Assumptions**, and any **Clarifying questions**. While the coordinator is still drafting and no content has arrived, a spinner with "Coordinator is drafting the outcome spec..." is shown.
+- The drafted **Goal**, **Desired outcome**, **Scope**, **Assumptions**, and any **Clarifying questions**. While the coordinator is still drafting and no content has arrived, a spinner with "Drafting the outcome spec..." is shown.
 
 When the spec is awaiting confirmation, two actions appear:
 
-- **Confirm** — calls `POST /api/runs/{id}/outcome-spec/confirm`, resuming the run past the gate.
+- **Confirm** — calls `POST /api/runs/{id}/outcome-spec/confirm`, resuming the run past the gate. During submit it disables both gate actions, changes the label to **Confirming...**, shows a spinner, guards against double-click re-entry, retries the short-lived `409 no_pending_gate` gate-arming race, refreshes the spec on 409, and surfaces terminal/non-active errors as panel feedback (`OutcomeSpecPanel.tsx:237`, `:338`, `:345`, `:360`, `:578`, `:588`).
 - **Request changes** — opens a dialog with a required **Feedback** field and calls `POST /api/runs/{id}/outcome-spec/revise`. The coordinator re-drafts and re-presents the spec without dispatching any work.
 
 The confirm/revise gate is the safety property of the Phase 1 flow: no dispatch occurs before a human confirms.

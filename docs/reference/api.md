@@ -143,7 +143,8 @@ Memory is scoped to projects. Decisions and memories feed the `MemoryContextComp
 | `POST` | `/api/auth/github/device` | Start the GitHub device authorization flow |
 | `POST` | `/api/auth/github/poll` | Poll the device flow for completion |
 | `GET` | `/api/auth/github` | Get current GitHub authentication status |
-| `GET` | `/api/github/repos` | List repositories for the signed-in GitHub user |
+| `GET` | `/api/github/accounts` | List the signed-in user's personal account followed by organizations |
+| `GET` | `/api/github/repos` | List repositories for the signed-in GitHub user or selected account |
 | `POST` | `/api/auth/github/sign-out` | Sign out and delete the stored token |
 
 ### Team casting
@@ -1510,9 +1511,23 @@ Response `200 OK`:
 | `signed_out` | The user explicitly signed out |
 | `never_signed_in` | No sign-in has been completed for this user |
 
+### GET /api/github/accounts
+
+Lists GitHub repository sources for the signed-in user. The first entry is always the authenticated user's personal account (`type: "user"`); subsequent entries are organizations (`type: "org"`).
+
+Response `200 OK` is an array of:
+
+```json
+{ "login": "octocat", "name": "The Octocat", "avatar_url": "https://...", "type": "user" }
+```
+
+Returns `401 Unauthorized` when no valid GitHub access token is stored.
+
 ### GET /api/github/repos
 
-Lists repositories for the signed-in GitHub user. Response `200 OK` is an array of:
+Lists repositories for the signed-in GitHub user. Optional `?account={login}` selects the repository source: omitted or the user's own login reads personal repositories via GitHub `/user/repos?affiliation=owner`; an organization login reads `/orgs/{org}/repos?type=all`.
+
+Response `200 OK` is an array of:
 
 ```json
 { "full_name": "owner/repo", "description": "string", "private": true, "default_branch": "main" }

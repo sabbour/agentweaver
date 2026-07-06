@@ -187,7 +187,7 @@ test.describe('User Guide · Projects', () => {
   test('create-from-github-dialog.png', async ({ page }) => {
     await page.goto(`${BASE_URL}/projects`, { waitUntil: 'domcontentloaded' });
     await page.getByRole('button', { name: 'Create from GitHub' }).click();
-    await page.getByLabel('Organization').waitFor();
+    await page.getByText('Repository sources').waitFor();
     await page.screenshot({ path: shot('create-from-github-dialog') });
   });
 

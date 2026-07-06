@@ -78,7 +78,18 @@ Fallback returns:
 }
 ```
 
-The selected fallback blueprint is the first predefined catalog entry when available (`GitHubRepoBlueprintSuggestionService.cs:93`). The UI treats `fallback: true`, a missing recommendation, or a client error the same way: show a warning and a short Templates list (`apps/web/src/components/BlueprintPicker.tsx:323`).
+The selected fallback blueprint is the first predefined catalog entry when available (`GitHubRepoBlueprintSuggestionService.cs:93`). The UI treats `fallback: true`, a missing recommendation, or a client error the same way: show a warning and offer **View all templates →**, which switches to the shared Templates tab (`apps/web/src/components/BlueprintPicker.tsx:323`, `:371`).
+
+## Related GitHub source endpoints
+
+The suggestion route is unchanged, but the GitHub project picker that feeds it uses these existing endpoints:
+
+| Method & path | Returns | Notes |
+|---|---|---|
+| `GET /api/github/accounts` | `GitHubAccountResponse[]` | Returns the authenticated user first with `type: "user"`, then organizations. The web UI renders user accounts as `@{login}` with a **You** badge. |
+| `GET /api/github/repos?account={login}` | `GitHubRepoResponse[]` | For the signed-in user's own login or omitted `account`, calls GitHub `/user/repos?affiliation=owner`; for org accounts, calls `/orgs/{org}/repos?type=all`. |
+
+Sources: `apps/Agentweaver.Api/Endpoints/AuthEndpoints.cs:207`, `:249`, `:295`, `:333`; `apps/web/src/api/client.ts:263`.
 
 ## See also
 

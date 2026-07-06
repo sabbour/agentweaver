@@ -52,6 +52,8 @@ The gate is the safety property of the flow: **no subagent work is dispatched be
 
 Both clients are thin: all orchestration logic lives in the API's coordinator service, and clients hold no spec logic.
 
+Web client edge states are intentionally visible. Before the coordinator has persisted the draft, `GET /api/runs/{id}/outcome-spec` may return a transient `404`; `OutcomeSpecPanel` keeps rendering a **Drafting** state and polls every 2 seconds until the draft arrives, unless the run reaches a terminal failure first (`apps/web/src/components/OutcomeSpecPanel.tsx:160`, `:233`, `:328`, `:401`). Confirm is guarded with an in-flight ref plus disabled actions and a **Confirming...** label; it retries only the short `409 no_pending_gate` gate-arming race and otherwise surfaces 409/non-active errors after refreshing the spec (`OutcomeSpecPanel.tsx:237`, `:338`, `:345`, `:360`, `:578`).
+
 ## Phase 2 orchestration
 
 Confirming the outcome spec carries the coordinator run through Phase 2: **confirm -> select workflow -> decompose -> dispatch -> observe -> steer**. No work begins before confirmation, so the Phase 1 gate stays the single safety property.

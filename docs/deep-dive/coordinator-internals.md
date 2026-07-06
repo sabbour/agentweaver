@@ -203,6 +203,8 @@ Backlog pickup runs also go through the same gate. When autopilot is on (`Pickup
 
 There is a small ordering race between "the spec was persisted and emitted" and "the framework request port is armed." The resume seam handles this by waiting briefly for the pending gate while the spec remains `awaiting_confirmation`, preserving double-submit protection without rejecting a fast confirm.
 
+The web gate mirrors that race tolerance without hiding the safety state. `OutcomeSpecPanel` treats an early `404` from `GET /api/runs/{id}/outcome-spec` as "draft not persisted yet", keeps the panel visible in **Drafting**, and polls every two seconds until REST or SSE supplies the spec. If the run reaches a failure/decline terminal status before content exists, it shows a terminal drafting error (`apps/web/src/components/OutcomeSpecPanel.tsx:160`, `:233`, `:328`, `:401`, `:537`). The confirm button has both React state and a synchronous ref guard, disables confirm/revise while submitting, shows **Confirming...**, retries only `409 no_pending_gate`, refreshes the snapshot on 409, and surfaces non-active conflicts instead of allowing duplicate confirmation attempts (`OutcomeSpecPanel.tsx:237`, `:338`, `:345`, `:360`, `:578`).
+
 ## Workflow selection and WorkPlan decomposition
 
 ### Workflow selection as shape guidance

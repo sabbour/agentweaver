@@ -64,7 +64,7 @@ This is the safety property of coordinator orchestration. The system may draft, 
 
 In the UI, the graph area remains intentionally quiet while the spec is being authored. The detail page may show the live coordinator node and a hint that the execution pipeline appears once the OutcomeSpec is confirmed. The coordinator session can stream planning activity, but the subtask graph and child pipelines are not active yet.
 
-The left-side **Outcome spec** panel carries the action. It shows a status badge such as **Drafting** or **Awaiting confirmation**, then displays the goal, desired outcome, scope, assumptions, and clarifying questions. While the coordinator is still drafting, the panel shows a spinner with **Coordinator is drafting the outcome spec...**. During revision, it shows **Coordinator is incorporating your changes and re-drafting the spec...**.
+The left-side **Outcome spec** panel carries the action from the start of the run. It no longer disappears when `GET /api/runs/{id}/outcome-spec` returns an expected early `404`; instead it stays visible with a **Drafting** badge and polls until REST or SSE delivers the draft (`apps/web/src/components/OutcomeSpecPanel.tsx:160`, `:233`, `:328`). It displays the goal, desired outcome, scope, assumptions, and clarifying questions once they arrive. While the coordinator is still drafting, the panel shows a spinner with **Drafting the outcome spec...**. During revision, it shows **Coordinator is incorporating your changes and re-drafting the spec...**. If the run fails, is declined, or merge-fails before any draft content lands, the panel shows **The run failed before the outcome spec could be drafted.** rather than hiding the gate (`OutcomeSpecPanel.tsx:162`, `:401`, `:537`).
 
 ### What the gate prevents
 
@@ -94,13 +94,13 @@ Over MCP, `coordinator_outcome_spec_get` is the snapshot tool. It is useful afte
 
 ### Confirming the spec
 
-When the status is **Awaiting confirmation**, the UI offers **Confirm**. Clicking it confirms the spec and resumes the suspended coordinator run. The panel switches to **Confirmed** immediately and shows **Outcome spec confirmed... Dispatch is unblocked.** The detail page then makes room for the coordinator graph and child execution experience.
+When the status is **Awaiting confirmation**, the UI offers **Confirm**. Clicking it confirms the spec and resumes the suspended coordinator run. While the request is in flight, both actions are disabled, the button label changes to **Confirming...**, and a spinner appears so a double-click cannot submit the gate twice (`apps/web/src/components/OutcomeSpecPanel.tsx:237`, `:338`, `:578`, `:588`). On success, the panel switches to **Confirmed** and shows **Outcome spec confirmed... Dispatch is unblocked.** The detail page then makes room for the coordinator graph and child execution experience.
 
 Over MCP, `coordinator_outcome_spec_confirm` performs the same action. It confirms the current drafted OutcomeSpec for the coordinator run and resumes the run past the gate. This is the transition that allows the coordinator to select a workflow shape, decompose the work plan, persist subtasks and dependencies, and begin dispatching ready children.
 
 Confirmation is not just an acknowledgement. It is the user's approval that the coordinator's interpretation is the execution contract for the rest of the orchestration.
 
-After the user clicks **Confirm**, the web UI automatically reconnects the live stream. The coordinator stream closed at the `awaiting_confirmation` gate; confirmation resumes the run and reopens the stream so the topology, subtask graph, and coordinator session update in real time without a manual page refresh. If the confirming SSE event arrives slightly later, the panel still keeps the terminal **Confirmed** state instead of briefly flipping back to an older drafting or awaiting-confirmation snapshot. The **View session** link in the spec authoring state also works correctly: it expands the coordinator session column if it was collapsed before scrolling to the session content.
+After the user clicks **Confirm**, the web UI automatically reconnects the live stream. The coordinator stream closed at the `awaiting_confirmation` gate; confirmation resumes the run and reopens the stream so the topology, subtask graph, and coordinator session update in real time without a manual page refresh. If the confirming SSE event arrives slightly later, the panel still keeps the terminal **Confirmed** state instead of briefly flipping back to an older drafting or awaiting-confirmation snapshot. A fast click that reaches the backend before the in-memory gate is fully armed can return `409 no_pending_gate`; the UI retries that short race, refreshes the spec on 409 conflicts, and shows a clear error if the run is no longer active (`OutcomeSpecPanel.tsx:345`, `:360`, `:186`).
 
 ### Requesting a revision
 

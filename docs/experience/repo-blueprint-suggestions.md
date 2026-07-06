@@ -6,7 +6,7 @@ For the API contract see the [reference](../reference/repo-blueprint-suggestions
 
 ## When it appears
 
-Open **Projects** → **Create from GitHub**. The dialog has repository fields on the left and blueprint choices on the right. The right side defaults to **Suggested** (`apps/web/src/pages/ProjectGalleryPage.tsx:516`) and offers three tabs: **Suggested**, **Templates**, and **Generate** (`ProjectGalleryPage.tsx:660`).
+Open **Projects** → **Create from GitHub**. The dialog has repository fields on the left and the shared **Blueprint** panel on the right. The right side defaults to **Suggested** and offers three tabs: **Suggested**, **Templates**, and **Generate** (`apps/web/src/pages/ProjectGalleryPage.tsx:676`).
 
 The Suggested panel only analyzes when both are true:
 
@@ -18,11 +18,11 @@ If no repository is selected, the card says **Select a repository first** and ex
 ## Step by step
 
 1. Click **Create from GitHub**.
-2. Choose a repository from search/recent/org results, or paste an `owner/repo` value. Selecting a repo autofills the project name and folder slug when those fields have not been edited (`apps/web/src/pages/ProjectGalleryPage.tsx:529`).
+2. Choose a repository from search/recent/account results, or paste an `owner/repo` value. The account list starts with the signed-in user's personal account, shown as `@{login}` with a **You** badge, then lists organizations; selecting any account reloads its repositories (`apps/web/src/pages/ProjectGalleryPage.tsx:471`, `:501`, `:642`, `:645`). Selecting a repo autofills the project name and folder slug when those fields have not been edited (`ProjectGalleryPage.tsx:559`).
 3. Stay on **Suggested**. The panel shows **Analyzing repository...** while `apiClient.suggestBlueprint` calls `POST /api/blueprints/suggest` (`BlueprintPicker.tsx:305`).
 4. Review the **Recommended** card. It shows the blueprint name, rationale, roster chips, agent count, and confidence percentage (`BlueprintPicker.tsx:337`).
 5. Expand details to see repository signals such as description, topics, languages, root files, and issues-enabled (`BlueprintPicker.tsx:350`).
-6. Click **Use this blueprint** to apply it, or choose **Other blueprints** / **Generate** if the recommendation is not right (`BlueprintPicker.tsx:352`).
+6. Click **Use this blueprint** to apply it. If the recommendation is not right, click **View all templates →** to switch to **Templates**, or choose **Generate** for a custom blueprint (`BlueprintPicker.tsx:350`, `:352`, `:371`).
 7. Click **Create project**. The create request carries the chosen catalog blueprint id or generated inline blueprint through the existing project creation path (`BlueprintPicker.tsx:371`).
 
 ## How the recommendation is chosen
@@ -33,7 +33,11 @@ That means the recommendation is fast and predictable. If you want a bespoke tea
 
 ## Fallback to Templates
 
-If repository analysis cannot run, the experience does not block project creation. The panel shows a warning such as **Repository analysis unavailable. Choose a template instead.** and renders a **Templates** section with starter choices (`BlueprintPicker.tsx:323`). The same fallback appears for invalid repository strings, unavailable GitHub metadata, network failures, and service fallback responses (`GitHubRepoBlueprintSuggestionService.cs:89`, `:93`).
+If repository analysis cannot run, the experience does not block project creation. The panel shows a warning such as **Repository analysis unavailable. Choose a template instead.** and offers **View all templates →**, which switches to the shared **Templates** tab (`BlueprintPicker.tsx:323`, `:371`). The same fallback appears for invalid repository strings, unavailable GitHub metadata, network failures, and service fallback responses (`GitHubRepoBlueprintSuggestionService.cs:89`, `:93`).
+
+## Personal repositories
+
+The GitHub picker now includes personal repositories, not only organization repositories. `GET /api/github/accounts` returns the authenticated user first with `type: "user"`, and the UI labels that entry **You** (`apps/Agentweaver.Api/Endpoints/AuthEndpoints.cs:207`, `:249`; `apps/web/src/pages/ProjectGalleryPage.tsx:642`). `GET /api/github/repos?account=<login>` uses GitHub `/user/repos?affiliation=owner` when the account is the signed-in user, so search, recent repositories, and manual selection all surface personal repositories too (`AuthEndpoints.cs:295`, `:333`; `apps/web/src/api/client.ts:267`).
 
 ## Related reading
 

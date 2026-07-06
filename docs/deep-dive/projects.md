@@ -120,6 +120,8 @@ A GitHub project is a project whose base workspace is cloned from GitHub. Concep
 
 The token is used to perform the clone; it is not meant to become project metadata. The project stores repository identity and defaults, not the user's secret. This keeps long-lived project state safer and lets token refresh/sign-in remain an authentication concern rather than a project-storage concern.
 
+The web picker now exposes the caller's personal GitHub account as a first-class repository source before organizations. `GET /api/github/accounts` fetches `https://api.github.com/user`, returns that account first with `type: "user"`, then appends orgs from `/user/orgs`. `GET /api/github/repos?account=<login>` treats the signed-in user's own login as personal scope and calls `/user/repos?affiliation=owner`; other account values call `/orgs/{org}/repos?type=all` (`apps/Agentweaver.Api/Endpoints/AuthEndpoints.cs:207`, `:249`, `:295`, `:333`). This changes repository discovery only; project creation still records the selected GitHub URL and goes through the same clone path.
+
 Project creation requires the API input to be a full `https://github.com/...` URL. Although the lower-level Git initializer can normalize `owner/repo` into a GitHub URL, service-level validation happens first, so `owner/repo` fails validation rather than cloning.
 
 Failure during clone rolls back the workspace directory created for that attempt. Failure after clone but before database insert also removes the newly-created checkout. The intended user-facing invariant is simple: after a failed create, there should be no usable project record and no misleading partial project workspace.

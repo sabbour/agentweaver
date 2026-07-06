@@ -68,7 +68,7 @@ The action is **Sign in with GitHub**. This is not the same as an unavailable pr
 
 ## Creating a project in the web UI
 
-Creation starts from the gallery. Users choose a blank repository or a GitHub-backed repository, then optionally apply a blueprint. Both redesigned dialogs use the same shape: project and repository fields on the left, blueprint selection and generation on the right (`apps/web/src/pages/ProjectGalleryPage.tsx:330`, `:516`).
+Creation starts from the gallery. Users choose a blank repository or a GitHub-backed repository, then optionally apply a blueprint. Both dialogs now use the same shell: project and repository fields on the left, one shared **Blueprint** panel on the right, and a single footer **No blueprint** action for the empty-project path (`apps/web/src/pages/ProjectGalleryPage.tsx:264`, `:310`, `:405`, `:676`).
 
 ```mermaid
 flowchart TD
@@ -133,22 +133,21 @@ Creation is for a new controlled workspace. The target directory must be empty o
 ![Create project from GitHub dialog with Organization and Source repository pickers](/screenshots/create-from-github-dialog.png)
 
 > 📸 **Screenshot — `create-from-github-dialog.png`**
-> *Shows:* the **Create project from GitHub** dialog with the **Name** field, the **Organization** picker (`aria-label="Organization"`, showing avatars and an **Org** badge), the searchable **Source repository** field (`aria-label="Repository"`), and the auto-filled **Repository folder** field, plus **Cancel** / **Create**. If GitHub is not connected, the **Connect GitHub** action appears instead of the repository list.
+> *Shows:* the **Create project from GitHub** dialog with the **Name** field, the searchable **Repository** combobox, **Repository sources** (personal `@{login}` with **You**, then organizations), and the auto-filled **Repository folder** field, plus **Cancel** / **Create**. If GitHub is not connected, the **Connect GitHub** action appears instead of the repository list.
 > *Path:* `/projects` → click **Create from GitHub**.
 
 Required fields:
 
 - **Name**
-- **Organization**, when GitHub accounts are loaded
 - **Source repository**
 - **Repository folder**, unless the workspace is auto-assigned
 
-The redesigned repository column supports three ways to choose a source (`apps/web/src/pages/ProjectGalleryPage.tsx:567`):
+The repository column supports three ways to choose a source (`apps/web/src/pages/ProjectGalleryPage.tsx:597`):
 
-- **Search repositories** — a freeform combobox that accepts any `owner/repo` or GitHub URL and also lists repositories from the selected account (`ProjectGalleryPage.tsx:590`).
-- **Recent** — the first three loaded repositories, with **Clear** and per-row **Use** actions (`ProjectGalleryPage.tsx:619`).
-- **My organizations** — organization accounts with avatars; **Show more** expands beyond the first four and selecting an organization reloads its repositories (`ProjectGalleryPage.tsx:628`).
-- **Or paste any repository** — a direct `owner/repo` field and **Go** button (`ProjectGalleryPage.tsx:643`).
+- **Search repositories** — a freeform combobox that accepts any `owner/repo` or GitHub URL and lists repositories from the selected account (`ProjectGalleryPage.tsx:597`).
+- **Recent** — the first three loaded repositories, with **Clear** and per-row **Use** actions (`ProjectGalleryPage.tsx:625`).
+- **Repository sources** — the signed-in user appears first as `@{login}` with a **You** badge, followed by organizations; selecting a source reloads that account's repositories (`ProjectGalleryPage.tsx:637`, `:642`, `:645`).
+- **Or paste any repository** — a direct `owner/repo` field and **Go** button (`ProjectGalleryPage.tsx:648`).
 
 If GitHub is not connected, the dialog says:
 
@@ -184,15 +183,15 @@ A **blueprint** is the fastest way to turn a repository into a working Agentweav
 - **Review policy** — the gates that review or approve work
 - **Sandbox profile** — the command and network posture for agent execution
 
-Both creation dialogs now share the same blueprint components (`apps/web/src/components/BlueprintPicker.tsx:74`). The blank-project dialog starts on **Generated** and also shows **Templates** plus **No blueprint** so users can either describe the work, choose a starter template, or create an empty project (`apps/web/src/pages/ProjectGalleryPage.tsx:330`). The GitHub dialog starts on **Suggested** and adds **Templates** and **Generate** tabs beside it (`ProjectGalleryPage.tsx:516`, `:660`).
+Both creation dialogs share the same blueprint components and tab strip (`apps/web/src/components/BlueprintPicker.tsx:371`). The blank-project dialog starts on **Generated** and also shows **Templates** so users can either describe the work or choose the same starter-template grid used elsewhere (`apps/web/src/pages/ProjectGalleryPage.tsx:405`). The GitHub dialog starts on **Suggested** and adds **Templates** and **Generate** tabs beside it (`ProjectGalleryPage.tsx:676`). The right column is height-bounded and scrolls internally, so long generated previews or template grids do not overlap the dialog footer (`ProjectGalleryPage.tsx:119`).
 
 ### Suggested
 
-**Suggested** appears in **Create project from GitHub** after a repository is selected. Agentweaver analyzes GitHub repository metadata, topics, languages, root files, and issues-enabled, then recommends a catalog blueprint. The card shows rationale, roster chips, confidence, expandable signals, **Use this blueprint**, **Other blueprints**, and **Generate** for a custom alternative (`apps/web/src/components/BlueprintPicker.tsx:278`, `:337`, `:350`). If analysis fails or the service returns `fallback: true`, the tab shows a warning and a compact **Templates** list instead (`BlueprintPicker.tsx:323`). See [Repository blueprint suggestions](./repo-blueprint-suggestions.md).
+**Suggested** appears in **Create project from GitHub** after a repository is selected. Agentweaver analyzes GitHub repository metadata, topics, languages, root files, and issues-enabled, then recommends a catalog blueprint. The tab now stays focused on the single recommendation: rationale, roster chips, confidence, expandable signals, **Use this blueprint**, and a compact **View all templates →** link (`apps/web/src/components/BlueprintPicker.tsx:279`, `:324`, `:350`, `:352`). The older duplicate "Other blueprints" list and custom/generate row moved to the **Templates** and **Generate** tabs.
 
 ### Templates
 
-**Templates** lists predefined catalog blueprints with name, description, role chips, workflow, review policy, and sandbox profile. It is available in both blank and GitHub flows via the same `StarterTemplatesSection` (`apps/web/src/components/BlueprintPicker.tsx:212`).
+**Templates** lists predefined catalog blueprints with name, description, role chips, workflow, review policy, and sandbox profile. It is identical in the blank and GitHub dialogs via the same `StarterTemplatesSection` (`apps/web/src/components/BlueprintPicker.tsx:209`). Any **View all templates →** link switches to this tab instead of acting as a dead link (`BlueprintPicker.tsx:222`, `:371`).
 
 ### Generate
 
