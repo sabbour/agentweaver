@@ -237,19 +237,19 @@ export class AgentweaverApiClient {
   }
 
   startGitHubDeviceFlow(): Promise<GitHubDeviceFlow> {
-    return this.request<GitHubDeviceFlow>('POST', '/auth/github/device', {});
+    return this.request<GitHubDeviceFlow>('POST', '/api/auth/github/device', {});
   }
 
   pollGitHubAuth(): Promise<GitHubPollResult> {
-    return this.request<GitHubPollResult>('POST', '/auth/github/poll', {});
+    return this.request<GitHubPollResult>('POST', '/api/auth/github/poll', {});
   }
 
   getGitHubAuthStatus(): Promise<GitHubAuthStatusResponse> {
-    return this.request<GitHubAuthStatusResponse>('GET', '/auth/github');
+    return this.request<GitHubAuthStatusResponse>('GET', '/api/auth/github');
   }
 
   signOutGitHub(): Promise<void> {
-    return this.request<void>('POST', '/auth/github/sign-out', {});
+    return this.request<void>('POST', '/api/auth/github/sign-out', {});
   }
 
   listGitHubAccounts(): Promise<GitHubAccount[]> {
@@ -411,7 +411,7 @@ export class AgentweaverApiClient {
       const rel = (file as File & { webkitRelativePath?: string }).webkitRelativePath;
       if (rel) form.append(`path:files`, rel);
     }
-    const response = await fetch(`${this.baseUrl}/projects/${encodeURIComponent(projectId)}/skills/upload`, {
+    const response = await fetch(`${this.baseUrl}/api/projects/${encodeURIComponent(projectId)}/skills/upload`, {
       method: 'POST',
       headers: this.authHeaders(),
       credentials: 'include',
@@ -616,7 +616,7 @@ export class AgentweaverApiClient {
       'Content-Type': 'application/json',
     };
     const response = await fetch(
-      `${this.baseUrl}/runs/${encodeURIComponent(runId)}/review`,
+      `${this.baseUrl}/api/runs/${encodeURIComponent(runId)}/review`,
       { method: 'POST', headers, credentials: 'include', body: JSON.stringify(body) },
     );
     const text = await response.text();
@@ -641,7 +641,7 @@ export class AgentweaverApiClient {
   async checkHealth(): Promise<boolean> {
     const headers = this.authHeaders();
     try {
-      const res = await fetch(`${this.baseUrl}/health`, { method: 'GET', headers, credentials: 'include' });
+      const res = await fetch(`${this.baseUrl}/api/health`, { method: 'GET', headers, credentials: 'include' });
       if (res.status !== 404) return res.ok;
     } catch {
       // /api/health unreachable; fall through to the root probe.
@@ -820,7 +820,8 @@ export class AgentweaverApiClient {
     };
     if (body !== undefined) headers['Content-Type'] = 'application/json';
 
-    const response = await fetch(`${this.baseUrl}${path}`, {
+    const apiPath = path.startsWith('/api/') ? path : `/api${path}`;
+    const response = await fetch(`${this.baseUrl}${apiPath}`, {
       method,
       headers,
       credentials: 'include',

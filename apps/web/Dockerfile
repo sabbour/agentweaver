@@ -41,6 +41,9 @@ EXPOSE 8080
 
 ENV ASPNETCORE_URLS=http://+:8080
 ENV ASPNETCORE_ENVIRONMENT=Production
-ENV AGENTWEAVER_API_URL=/api
+# API_URL is the API ORIGIN only (no `/api` suffix). Empty string means "same origin as the
+# served frontend" — the deployed gateway forwards `/api/*` (XHR) and `/auth/*` (redirects)
+# to the API on the same host, so the client resolves relative `/api/...` and `/auth/...` URLs.
+ENV AGENTWEAVER_API_URL=""
 
 ENTRYPOINT ["/bin/sh", "/app/docker-entrypoint.sh"]

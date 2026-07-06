@@ -30,8 +30,11 @@ spec:
               containerPort: 8080
               protocol: TCP
           env:
+            # Empty string = same origin. The gateway (httproute-api.yaml) forwards /api/* (XHR)
+            # and /auth/* (GitHub OAuth redirect + callback) to the API on this host without a
+            # path rewrite, so the frontend resolves relative /api/... and /auth/... URLs.
             - name: AGENTWEAVER_API_URL
-              value: /api
+              value: ""
           resources:
             requests:
               cpu: 100m

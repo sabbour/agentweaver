@@ -1,0 +1,70 @@
+import { describe, it, expect, vi, afterEach } from 'vitest';
+import { AgentweaverApiClient } from '../api/client';
+
+// The `/api` base-path convention: API_URL is the ORIGIN ONLY (no `/api` suffix). The API
+// client owns the single `/api` prefix for XHR endpoints, while GitHub OAuth redirect
+// endpoints live at the origin root (`/auth/github/authorize`). These tests lock in that
+// convention for both localhost dev (absolute origin) and the deployed gateway (same origin,
+// empty API_URL) so a regression can never reintroduce the sign-in "unauthorized" bug.
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.resetModules();
+  delete (window as unknown as { __AGENTWEAVER_CONFIG__?: unknown }).__AGENTWEAVER_CONFIG__;
+});
+
+async function loadConfigWith(apiUrl: string | undefined) {
+  vi.resetModules();
+  if (apiUrl === undefined) {
+    delete (window as unknown as { __AGENTWEAVER_CONFIG__?: unknown }).__AGENTWEAVER_CONFIG__;
+  } else {
+    (window as unknown as { __AGENTWEAVER_CONFIG__?: { API_URL?: string } }).__AGENTWEAVER_CONFIG__ = { API_URL: apiUrl };
+  }
+  return import('../config');
+}
+
+describe('config GITHUB_AUTHORIZE_URL (origin root, never /api)', () => {
+  it('resolves to <origin>/auth/github/authorize for an absolute origin (localhost dev)', async () => {
+    const cfg = await loadConfigWith('http://localhost:5000');
+    expect(cfg.API_URL).toBe('http://localhost:5000');
+    expect(cfg.GITHUB_AUTHORIZE_URL).toBe('http://localhost:5000/auth/github/authorize');
+  });
+
+  it('resolves to same-origin /auth/github/authorize when API_URL is "" (deployed gateway)', async () => {
+    const cfg = await loadConfigWith('');
+    // Empty string is a VALID value meaning "same origin" — it must NOT fall through to a default.
+    expect(cfg.API_URL).toBe('');
+    expect(cfg.GITHUB_AUTHORIZE_URL).toBe('/auth/github/authorize');
+  });
+
+  it('treats an empty runtime API_URL as same-origin, not as unset (no localhost fallback)', async () => {
+    const cfg = await loadConfigWith('');
+    expect(cfg.API_URL).not.toBe('http://localhost:5000');
+  });
+});
+
+describe('ApiClient request() single /api prefix', () => {
+  function spyFetch() {
+    return vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('{}', { status: 200 }));
+  }
+
+  it('prepends exactly one /api for an absolute origin baseUrl (localhost dev)', async () => {
+    const fetchSpy = spyFetch();
+    const client = new AgentweaverApiClient('http://localhost:5000', () => null);
+    await client.getRun('abc');
+    expect(fetchSpy).toHaveBeenCalledWith(
+      'http://localhost:5000/api/runs/abc',
+      expect.anything(),
+    );
+  });
+
+  it('yields a single same-origin /api prefix when baseUrl is "" (deployed gateway)', async () => {
+    const fetchSpy = spyFetch();
+    const client = new AgentweaverApiClient('', () => null);
+    await client.getRun('abc');
+    expect(fetchSpy).toHaveBeenCalledWith('/api/runs/abc', expect.anything());
+    // Must never double-prefix to /api/api/... under the same-origin convention.
+    const calledUrl = String(fetchSpy.mock.calls[0][0]);
+    expect(calledUrl).not.toContain('/api/api/');
+  });
+});

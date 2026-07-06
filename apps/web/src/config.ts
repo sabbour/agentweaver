@@ -10,7 +10,22 @@ declare global {
 
 const runtimeConfig = typeof window !== 'undefined' ? window.__AGENTWEAVER_CONFIG__ : undefined;
 
-export const API_URL = runtimeConfig?.API_URL || import.meta.env.VITE_API_URL || 'http://localhost:5000';
+// API_URL is the API ORIGIN only (no `/api` suffix). The API client (client.ts request())
+// and the raw fetch call sites own the single `/api` prefix for XHR endpoints, while the
+// browser-redirect endpoints (`/auth/github/*`) live at the origin root.
+//
+// A runtime-config value of "" is VALID and means "same origin as the served app" (used on
+// the deployed gateway where the frontend and API share a host). Because "" is falsy, we
+// must check for a defined string rather than rely on `||` truthiness — otherwise an empty
+// deployed value would incorrectly fall through to the localhost dev default.
+function resolveApiUrl(): string {
+  if (runtimeConfig && typeof runtimeConfig.API_URL === 'string') return runtimeConfig.API_URL;
+  if (import.meta.env.VITE_API_URL) return import.meta.env.VITE_API_URL;
+  return 'http://localhost:5000';
+}
+
+export const API_URL = resolveApiUrl();
+export const GITHUB_AUTHORIZE_URL = `${API_URL.replace(/\/$/, '')}/auth/github/authorize`;
 
 export const SESSION_TOKEN_STORAGE_KEY = 'agentweaver.sessionToken';
 export const SESSION_LOGIN_STORAGE_KEY = 'agentweaver.sessionLogin';
@@ -86,7 +101,7 @@ export async function captureSessionAuthFromUrl(): Promise<void> {
   }
 
   try {
-    const response = await fetch(`${API_URL}/auth/session/exchange`, {
+    const response = await fetch(`${API_URL.replace(/\/$/, '')}/api/auth/session/exchange`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
