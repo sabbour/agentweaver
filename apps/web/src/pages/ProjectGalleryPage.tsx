@@ -27,7 +27,10 @@ import {
   tokens,
 } from '@fluentui/react-components';
 import {
+  ChevronDownRegular,
   ChevronRightRegular,
+  ChevronUpRegular,
+  DismissCircleRegular,
   DismissRegular,
   DocumentRegular,
   InfoRegular,
@@ -346,7 +349,7 @@ function CreateProjectDialogShell({
           <DialogActions>
             <div className={styles.footerSplit}>
               <div className={styles.footerLeft}>
-                <Button appearance="outline" aria-label="No blueprint" onClick={onNoBlueprint}>⊘ No blueprint</Button>
+                <Button appearance="outline" aria-label="No blueprint" icon={<DismissCircleRegular />} onClick={onNoBlueprint}>No blueprint</Button>
                 <Text className={styles.tipLine}>Start with an empty project and add agents later.</Text>
               </div>
               <div className={styles.footerActions}>
@@ -711,7 +714,17 @@ function CreateFromGitHubDialog({ onCreated, dataDir, workspaceAutoAssigned }: {
         <div className={styles.listBlock}>
           <div className={styles.listHeader}>
             <Text weight="semibold">My organizations</Text>
-            {accounts.length > 5 && <Button appearance="transparent" size="small" onClick={() => setShowMoreSources(!showMoreSources)}>{showMoreSources ? 'Show less ⌃' : 'Show more ⌄'}</Button>}
+            {accounts.length > 5 && (
+              <Button
+                appearance="transparent"
+                size="small"
+                icon={showMoreSources ? <ChevronUpRegular /> : <ChevronDownRegular />}
+                iconPosition="after"
+                onClick={() => setShowMoreSources(!showMoreSources)}
+              >
+                {showMoreSources ? 'Show less' : 'Show more'}
+              </Button>
+            )}
           </div>
           {visibleSources.length === 0 ? <Text className={styles.tipLine}>{accountsLoading ? 'Loading sources…' : 'No GitHub sources found.'}</Text> : visibleSources.map((acc) => (
             <button key={acc.login} className={styles.orgRow} type="button" onClick={() => { changeAccount(acc); setRepoFilter(''); d.setSourceRepository(''); }}>
