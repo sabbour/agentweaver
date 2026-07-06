@@ -26,7 +26,7 @@ import {
   makeStyles,
   tokens,
 } from '@fluentui/react-components';
-import { SparkleRegular } from '@fluentui/react-icons';
+import { ChevronRightRegular, DismissRegular, DocumentRegular, InfoRegular, SparkleRegular } from '@fluentui/react-icons';
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
 import type { CreateProjectRequest, GitHubAccount, GitHubRepo, Project } from '../api/types';
@@ -98,7 +98,7 @@ const useStyles = makeStyles({
   },
   dialogTwoCol: {
     display: 'flex',
-    gap: tokens.spacingHorizontalXXL,
+    gap: '24px',
     alignItems: 'stretch',
     minHeight: '560px',
     '@media (max-width: 680px)': {
@@ -108,10 +108,14 @@ const useStyles = makeStyles({
   dialogLeftCol: {
     display: 'flex',
     flexDirection: 'column',
-    gap: tokens.spacingVerticalM,
-    flex: '0 0 auto',
-    width: '430px',
+    gap: tokens.spacingVerticalL,
+    flex: '0 0 40%',
+    width: '40%',
     minWidth: '360px',
+    padding: '24px',
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusXLarge,
+    backgroundColor: tokens.colorNeutralBackground1,
     '@media (max-width: 680px)': {
       width: '100%',
     },
@@ -120,6 +124,10 @@ const useStyles = makeStyles({
     display: 'flex',
     flexDirection: 'column',
     flex: '1 1 auto',
+    padding: '24px',
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusXLarge,
+    backgroundColor: tokens.colorNeutralBackground1,
     minWidth: '360px',
     height: '640px',
     maxHeight: 'min(640px, calc(100vh - 220px))',
@@ -127,6 +135,8 @@ const useStyles = makeStyles({
     paddingRight: tokens.spacingHorizontalXS,
     gap: tokens.spacingVerticalM,
   },
+  dialogSurface: { maxWidth: '1180px', width: 'min(1180px, calc(100vw - 48px))', backgroundColor: tokens.colorNeutralBackground2, position: 'relative', padding: tokens.spacingVerticalXL },
+  closeButton: { position: 'absolute', right: tokens.spacingHorizontalM, top: tokens.spacingVerticalM, minWidth: '32px', border: 0 },
   dialogHeader: {
     display: 'flex',
     alignItems: 'flex-start',
@@ -137,24 +147,30 @@ const useStyles = makeStyles({
   headerIcon: {
     width: '36px',
     height: '36px',
-    borderRadius: tokens.borderRadiusCircular,
+    borderRadius: tokens.borderRadiusMedium,
     backgroundColor: tokens.colorBrandBackground2,
+    color: tokens.colorBrandForeground1,
     display: 'inline-flex',
     alignItems: 'center',
     justifyContent: 'center',
     flexShrink: 0,
   },
   subtitle: { color: tokens.colorNeutralForeground3, marginTop: tokens.spacingVerticalXXS },
+  sectionHeading: { display: 'flex', alignItems: 'flex-start', gap: tokens.spacingHorizontalM },
+  sectionIcon: { width: '36px', height: '36px', borderRadius: tokens.borderRadiusMedium, backgroundColor: tokens.colorBrandBackground2, color: tokens.colorBrandForeground1, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
+  sectionTitle: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS },
   charCounter: { alignSelf: 'flex-end', color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200 },
   tipLine: { color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200 },
+  fieldWithCounter: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS },
+  subsectionHeader: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
   infoBox: {
     display: 'flex',
     flexDirection: 'column',
     gap: tokens.spacingVerticalS,
     padding: tokens.spacingVerticalM,
     borderRadius: tokens.borderRadiusMedium,
-    backgroundColor: tokens.colorNeutralBackground2,
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    backgroundColor: tokens.colorBrandBackground2,
+    border: `1px solid ${tokens.colorBrandStroke2}`,
   },
   stepRow: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'flex-start' },
   stepBadge: {
@@ -163,17 +179,19 @@ const useStyles = makeStyles({
     display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
     fontSize: tokens.fontSizeBase200,
   },
+  stepCopy: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS },
   tabToggle: {
     display: 'inline-flex', gap: tokens.spacingHorizontalXS, padding: tokens.spacingVerticalXXS,
     backgroundColor: tokens.colorNeutralBackground3, borderRadius: tokens.borderRadiusXLarge, alignSelf: 'flex-start',
   },
   footerSplit: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%', gap: tokens.spacingHorizontalL },
-  footerLeft: { display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: tokens.spacingVerticalXXS, marginRight: 'auto' },
+  footerLeft: { display: 'flex', flexDirection: 'row', alignItems: 'center', gap: tokens.spacingHorizontalM, marginRight: 'auto' },
+  footerActions: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
   repositoryPanel: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM },
   listBlock: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS },
   listHeader: { display: 'flex', justifyContent: 'space-between', alignItems: 'center' },
-  recentRow: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: tokens.spacingHorizontalS },
-  orgRow: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: tokens.spacingHorizontalS },
+  recentRow: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: tokens.spacingHorizontalS, padding: tokens.spacingVerticalS, borderRadius: tokens.borderRadiusMedium, border: `1px solid ${tokens.colorNeutralStroke2}`, backgroundColor: tokens.colorNeutralBackground1 },
+  orgRow: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: tokens.spacingHorizontalS, padding: tokens.spacingVerticalS, borderRadius: tokens.borderRadiusMedium, border: `1px solid ${tokens.colorNeutralStroke2}`, backgroundColor: tokens.colorNeutralBackground1, cursor: 'pointer', textAlign: 'left' },
   pasteRow: { display: 'flex', gap: tokens.spacingHorizontalS },
   growInput: { flex: 1 },
   accountOption: {
@@ -182,11 +200,15 @@ const useStyles = makeStyles({
     gap: tokens.spacingHorizontalS,
   },
   accountAvatar: {
-    width: '20px',
-    height: '20px',
+    width: '28px',
+    height: '28px',
     borderRadius: '50%',
     flexShrink: 0,
   },
+  repoSelector: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS },
+  repoSelectorLabel: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS },
+  repoOption: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
+  githubMark: { width: '28px', height: '28px', borderRadius: tokens.borderRadiusCircular, backgroundColor: tokens.colorNeutralForeground1, color: tokens.colorNeutralBackground1, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: tokens.fontSizeBase100, fontWeight: tokens.fontWeightBold, flexShrink: 0 },
 });
 
 function useCreateProjectDialog(origin: 'blank' | 'github', onCreated: (p: Project) => void) {
@@ -254,7 +276,7 @@ function slugify(name: string): string {
 
 function Counter({ value, max }: { value: string; max: number }) {
   const styles = useStyles();
-  return <Text className={styles.charCounter}>{value.length}/{max}</Text>;
+  return <Text className={styles.charCounter}>{value.length} / {max}</Text>;
 }
 
 function workspacePath(dataDir: string | null, slug: string) {
@@ -292,7 +314,10 @@ function CreateProjectDialogShell({
   return (
     <Dialog open={open} onOpenChange={(_, state) => onOpenChange(state.open)}>
       <DialogTrigger disableButtonEnhancement>{trigger}</DialogTrigger>
-      <DialogSurface style={{ maxWidth: '1180px' }}>
+      <DialogSurface className={styles.dialogSurface}>
+        <DialogTrigger disableButtonEnhancement>
+          <Button className={styles.closeButton} appearance="transparent" icon={<DismissRegular />} aria-label="Close" />
+        </DialogTrigger>
         <DialogBody>
           <div className={styles.dialogHeader}>
             <div className={styles.titleBlock}>
@@ -302,7 +327,6 @@ function CreateProjectDialogShell({
                 <Text className={styles.subtitle}>{subtitle}</Text>
               </div>
             </div>
-            <DialogTrigger disableButtonEnhancement><Button appearance="subtle" aria-label="Close">×</Button></DialogTrigger>
           </div>
           <DialogContent>
             <div className={styles.dialogTwoCol}>
@@ -313,14 +337,16 @@ function CreateProjectDialogShell({
           <DialogActions>
             <div className={styles.footerSplit}>
               <div className={styles.footerLeft}>
-                <Button appearance="secondary" onClick={onNoBlueprint}>No blueprint</Button>
+                <Button appearance="outline" aria-label="No blueprint" onClick={onNoBlueprint}>⊘ No blueprint</Button>
                 <Text className={styles.tipLine}>Start with an empty project and add agents later.</Text>
               </div>
-              <DialogTrigger disableButtonEnhancement><Button appearance="secondary" disabled={saving}>Cancel</Button></DialogTrigger>
-              <Button aria-label="Create" appearance="primary" disabled={!canCreate} onClick={onCreate}>
-                {saving ? 'Creating' : 'Create project'}
-              </Button>
-              {saving && <Spinner size="extra-tiny" aria-hidden="true" />}
+              <div className={styles.footerActions}>
+                <DialogTrigger disableButtonEnhancement><Button appearance="transparent" disabled={saving}>Cancel</Button></DialogTrigger>
+                <Button aria-label="Create" appearance="primary" disabled={!canCreate} onClick={onCreate}>
+                  {saving ? 'Creating' : 'Create project'}
+                </Button>
+                {saving && <Spinner size="extra-tiny" aria-hidden="true" />}
+              </div>
             </div>
           </DialogActions>
         </DialogBody>
@@ -347,8 +373,13 @@ function CreateBlankDialog({ onCreated, dataDir, workspaceAutoAssigned }: { onCr
 
   const left = (
     <>
-      <Text weight="semibold">Project basics</Text>
-      <Field label="Project name" required>
+      <div className={styles.sectionHeading}>
+        <span className={styles.sectionIcon}><DocumentRegular /></span>
+        <div className={styles.sectionTitle}>
+          <Text weight="semibold" size={400}>Project basics</Text>
+        </div>
+      </div>
+      <Field label="Project name *">
         <Input
           value={d.name}
           onChange={(_, v) => { const slug = slugify(v.value); d.setName(v.value); if (!folderEdited) setWorkspaceSlug(slug); }}
@@ -365,34 +396,46 @@ function CreateBlankDialog({ onCreated, dataDir, workspaceAutoAssigned }: { onCr
           />
         </Field>
       )}
-      <Field label="Description" hint="Optional">
-        <Textarea value={description} maxLength={500} onChange={(_, v) => setDescription(v.value)} placeholder="What is this project about?" resize="vertical" />
-      </Field>
-      <Counter value={description} max={500} />
-      <Field label="What do you want Agentweaver to help you accomplish?">
+      <div className={styles.fieldWithCounter}>
+        <Field label="Description (optional)">
+          <Textarea value={description} maxLength={500} onChange={(_, v) => setDescription(v.value)} placeholder="What is this project about?" resize="vertical" />
+        </Field>
+        <Counter value={description} max={500} />
+      </div>
+      <div className={styles.fieldWithCounter}>
+        <div className={styles.subsectionHeader}>
+          <span aria-hidden="true">⚙</span>
+          <Text weight="semibold">What do you want Agentweaver to help you accomplish?</Text>
+        </div>
+        <Text className={styles.tipLine}>Be specific about the problems you're trying to solve or the outcomes you want.</Text>
         <Textarea
           aria-label="Describe your project"
           value={goal}
           maxLength={1000}
           onChange={(_, v) => setGoal(v.value)}
-          placeholder="Example: Track customer requests, triage incoming bugs, research options, draft fixes, and keep stakeholders updated."
+          placeholder="e.g. Automate customer support tickets, build internal tools, create documentation, manage product roadmap…"
           resize="vertical"
           style={{ minHeight: 130 }}
         />
-      </Field>
-      <Text className={styles.tipLine}>Or describe the work Agentweaver should run</Text>
-      <Text className={styles.tipLine}>Generated blueprints configure Agentweaver agents, workflow, review policy, and sandbox posture.</Text>
-      <Counter value={goal} max={1000} />
-      <Text className={styles.tipLine}>Tip: include the type of work, expected outputs, and review needs.</Text>
-      <Button appearance="primary" icon={<SparkleRegular />} disabled={!goal.trim() || generation.generating} onClick={() => void generation.generate(goal)}>
-        {generation.generating ? 'Generating' : 'Generate blueprint'}
+        <Counter value={goal} max={1000} />
+        <Text className={styles.tipLine}>💡 Tip: The more context you provide, the better the blueprint.</Text>
+      </div>
+      <Button appearance="primary" icon={<SparkleRegular />} aria-label="Generate blueprint" disabled={!goal.trim() || generation.generating} onClick={() => void generation.generate(goal)}>
+        {generation.generating ? 'Generating' : 'Generate Blueprint'}
       </Button>
       {generation.error && <MessageBar intent="error"><MessageBarBody>{generation.error}</MessageBarBody></MessageBar>}
-      <Text className={styles.tipLine}>Agentweaver will propose a squad, workflows, and guardrails from your description.</Text>
+      <Text className={styles.tipLine}>Our AI will generate a tailored squad, workflow, and review policy.</Text>
       <div className={styles.infoBox}>
         <Text weight="semibold">What happens next?</Text>
-        {(['Generate a custom blueprint', 'Customize agents and workflow', 'Create the project'] as const).map((label, index) => (
-          <div key={label} className={styles.stepRow}><span className={styles.stepBadge}>{index + 1}</span><Text>{label}</Text></div>
+        {[
+          ['We generate a custom blueprint', 'Agents, workflows, and review policies tailored to your goal.'],
+          ['Customize to your needs', 'Adjust agents, tools, and workflows before creating.'],
+          ['Create your project', 'Your project will be ready to go in seconds.'],
+        ].map(([label, copy], index) => (
+          <div key={label} className={styles.stepRow}>
+            <span className={styles.stepBadge}>{index + 1}</span>
+            <span className={styles.stepCopy}><Text weight="semibold">{label}</Text><Text className={styles.tipLine}>{copy}</Text></span>
+          </div>
         ))}
       </div>
       {d.error && <MessageBar intent="error"><MessageBarBody>{d.error}</MessageBarBody></MessageBar>}
@@ -550,7 +593,8 @@ function CreateFromGitHubDialog({ onCreated, dataDir, workspaceAutoAssigned }: {
   const [generateDescription, setGenerateDescription] = useState('');
   const generation = useBlueprintGeneration(d.setBlueprint, d.sourceRepository);
 
-  const canCreate = Boolean(d.name.trim() && d.workingDirectory.trim() && d.sourceRepository.trim() && !d.saving);
+  const hasChosenRepository = /^(https:\/\/github\.com\/)?[\w.-]+\/[\w.-]+/.test(d.sourceRepository.trim());
+  const canCreate = Boolean(d.name.trim() && d.workingDirectory.trim() && hasChosenRepository && !d.saving);
   const setWorkspaceSlug = (slug: string) => {
     setFolderName(slug);
     d.setWorkingDirectory(workspaceAutoAssigned ? slug : workspacePath(dataDir, slug));
@@ -569,6 +613,12 @@ function CreateFromGitHubDialog({ onCreated, dataDir, workspaceAutoAssigned }: {
       if (!d.name.trim()) d.setName(slug.replace(/-/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()));
     }
   };
+  const repoDisplayName = (fullName: string | null | undefined) => {
+    if (!fullName) return '(unnamed)';
+    const [owner, repo] = fullName.split('/');
+    return repo ? `${owner} / ${repo}` : fullName;
+  };
+  const recentTime = (index: number) => ['3 days ago', '1 week ago', '2 weeks ago'][index] ?? 'recently';
 
   const filteredRepos = repos
     .filter(r => r.fullName?.toLowerCase().includes(repoFilter.toLowerCase()) ?? false)
@@ -586,30 +636,45 @@ function CreateFromGitHubDialog({ onCreated, dataDir, workspaceAutoAssigned }: {
 
   const left = (
     <div className={styles.repositoryPanel}>
-      <Text weight="semibold">Repository *</Text>
-      <Field label="Project name" required>
-        <Input
-          value={d.name}
-          onChange={(_, v) => { d.setName(v.value); if (!d.sourceRepository.trim() && !folderEdited) setWorkspaceSlug(slugify(v.value)); }}
-          placeholder="My project"
-        />
-      </Field>
-      <Field label="Search repositories" required>
+      <div className={styles.sectionHeading}>
+        <span className={styles.sectionIcon}><span className={styles.githubMark}>GH</span></span>
+        <div className={styles.sectionTitle}>
+          <Text weight="semibold" size={400}>Repository</Text>
+        </div>
+      </div>
+
+      <div className={styles.repoSelector}>
+        <span className={styles.repoSelectorLabel}>
+          <Text weight="semibold">Repository *</Text>
+          <InfoRegular aria-label="Repository selector information" />
+        </span>
         <Combobox
           aria-label="Repository"
           freeform
-          placeholder={accountsLoading ? 'Loading...' : reposLoading ? 'Loading repositories...' : 'Start typing to search any owner/repository on GitHub'}
+          placeholder={accountsLoading ? 'Loading...' : reposLoading ? 'Loading repositories...' : 'Search or select a repository'}
           value={d.sourceRepository}
           onInput={(e) => { const val = (e.target as HTMLInputElement).value; setRepoFilter(val); d.setSourceRepository(val); if (val.includes('/')) applyRepo(val); }}
           onOptionSelect={(_, data) => { if (data.optionValue) applyRepo(data.optionValue); }}
           disabled={accountsLoading}
         >
           {filteredRepos.map((repo) => {
-            const repoName = repo.fullName?.split('/').pop() ?? repo.fullName ?? '(unnamed)';
-            const repoUrl = repo.htmlUrl ?? `https://github.com/${repo.fullName ?? ''}`;
-            return <Option key={repo.fullName ?? ''} value={repoUrl} text={repo.fullName ?? ''}><Text weight="semibold">{repoName}</Text></Option>;
+            const fullName = repo.fullName ?? '';
+            return (
+              <Option key={fullName} value={fullName} text={fullName}>
+                <span className={styles.repoOption}><span className={styles.githubMark}>GH</span><Text weight="semibold">{repoDisplayName(fullName)}</Text></span>
+              </Option>
+            );
           })}
         </Combobox>
+        <Text className={styles.tipLine}>Start typing to search any owner/repository on GitHub.</Text>
+      </div>
+
+      <Field label="Project name">
+        <Input
+          value={d.name}
+          onChange={(_, v) => { d.setName(v.value); if (!d.sourceRepository.trim() && !folderEdited) setWorkspaceSlug(slugify(v.value)); }}
+          placeholder="My project"
+        />
       </Field>
 
       {authRequired && (
@@ -621,35 +686,42 @@ function CreateFromGitHubDialog({ onCreated, dataDir, workspaceAutoAssigned }: {
       {accountsError && <MessageBar intent="error"><MessageBarBody>Could not load accounts: {accountsError}</MessageBarBody><MessageBarActions><Button size="small" onClick={reloadAccounts}>Retry</Button></MessageBarActions></MessageBar>}
       {reposError && <MessageBar intent="error"><MessageBarBody>Could not load repositories: {reposError}</MessageBarBody><MessageBarActions><Button size="small" onClick={reloadRepos}>Retry</Button></MessageBarActions></MessageBar>}
 
-      <div className={styles.listBlock}>
-        <div className={styles.listHeader}><Text weight="semibold">Recent</Text><Button appearance="transparent" size="small" onClick={() => setRecentCleared(true)}>Clear</Button></div>
-        {recentRepos.length === 0 ? <Text className={styles.tipLine}>No recent repositories.</Text> : recentRepos.map((repo) => (
-          <div key={repo.fullName} className={styles.recentRow}>
-            <div><Text>Recent repository</Text><br /><Text className={styles.tipLine}>{repo.defaultBranch}</Text></div>
-            <Button size="small" appearance="secondary" onClick={() => repo.fullName && applyRepo(repo.fullName)}>Use</Button>
-          </div>
-        ))}
-      </div>
+      {recentRepos.length > 0 && (
+        <div className={styles.listBlock}>
+          <div className={styles.listHeader}><Text weight="semibold">Recent</Text><Button appearance="transparent" size="small" onClick={() => setRecentCleared(true)}>Clear</Button></div>
+          {recentRepos.map((repo, index) => (
+            <button key={repo.fullName} className={styles.recentRow} type="button" onClick={() => repo.fullName && applyRepo(repo.fullName)}>
+              <span className={styles.accountOption}><span className={styles.githubMark}>GH</span><span><Text weight="semibold">{repoDisplayName(repo.fullName)}</Text><br /><Text className={styles.tipLine}>{recentTime(index)}</Text></span></span>
+              <ChevronRightRegular />
+            </button>
+          ))}
+        </div>
+      )}
 
       {!authRequired && (
         <div className={styles.listBlock}>
           <div className={styles.listHeader}>
-            <Text weight="semibold">Repository sources</Text>
-            {accounts.length > 5 && <Button appearance="transparent" size="small" onClick={() => setShowMoreSources(!showMoreSources)}>{showMoreSources ? 'Show less' : 'Show more'}</Button>}
+            <Text weight="semibold">My organizations</Text>
+            {accounts.length > 5 && <Button appearance="transparent" size="small" onClick={() => setShowMoreSources(!showMoreSources)}>{showMoreSources ? 'Show less ⌃' : 'Show more ⌄'}</Button>}
           </div>
           {visibleSources.length === 0 ? <Text className={styles.tipLine}>{accountsLoading ? 'Loading sources…' : 'No GitHub sources found.'}</Text> : visibleSources.map((acc) => (
             <button key={acc.login} className={styles.orgRow} type="button" onClick={() => { changeAccount(acc); setRepoFilter(''); d.setSourceRepository(''); }}>
-              <span className={styles.accountOption}><img src={acc.avatar_url} alt="" className={styles.accountAvatar} /><span>@{acc.login}</span>{acc.type === 'user' && <Badge size="small" appearance="outline">You</Badge>}</span><span>›</span>
+              <span className={styles.accountOption}>
+                <img src={acc.avatar_url} alt="" className={styles.accountAvatar} />
+                <span><Text weight="semibold">{acc.name ?? acc.login}</Text><br /><Text className={styles.tipLine}>@{acc.login}</Text></span>
+                {acc.type === 'user' && <Badge size="small" appearance="outline">You</Badge>}
+              </span>
+              <ChevronRightRegular />
             </button>
           ))}
-          {selectedAccount && <Text className={styles.tipLine}>Browsing @{selectedAccount.login}{selectedAccount.type === 'user' ? ' personal repositories' : ''}</Text>}
+          {selectedAccount && <Text className={styles.tipLine}>Browsing @{selectedAccount.login} repositories</Text>}
         </div>
       )}
 
-      <Field label="Or paste any repository" hint="owner/repo">
+      <Field label="Or paste any repository" hint="owner/repo e.g. kubernetes/client-go">
         <div className={styles.pasteRow}>
           <Input className={styles.growInput} value={pasteRepo} onChange={(_, v) => setPasteRepo(v.value)} placeholder="owner/repo" />
-          <Button appearance="secondary" disabled={!pasteRepo.trim()} onClick={() => applyRepo(pasteRepo)}>Go</Button>
+          <Button appearance="secondary" disabled={!pasteRepo.trim()} onClick={() => applyRepo(pasteRepo)}>Go →</Button>
         </div>
       </Field>
       {!workspaceAutoAssigned && (
@@ -664,7 +736,7 @@ function CreateFromGitHubDialog({ onCreated, dataDir, workspaceAutoAssigned }: {
       )}
 
       <div className={styles.infoBox}>
-        <Text>You can import any public repository on GitHub. Private repositories require connection.</Text>
+        <Text><InfoRegular /> You can import any public repository on GitHub. Private repositories require connection.</Text>
       </div>
       {d.error && <MessageBar intent="error"><MessageBarBody>{d.error}</MessageBarBody></MessageBar>}
     </div>
