@@ -812,7 +812,7 @@ const useStyles = makeStyles({
   console: {
     display: 'grid',
     gridTemplateRows: 'auto minmax(0, 1fr)',
-    height: 'calc(100vh - 150px)',
+    height: 'calc(100vh - 96px)',
     minHeight: '680px',
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     borderRadius: tokens.borderRadiusLarge,
@@ -824,22 +824,30 @@ const useStyles = makeStyles({
     gridTemplateColumns: 'minmax(0, 1fr) auto',
     gap: tokens.spacingHorizontalL,
     alignItems: 'center',
-    padding: `${tokens.spacingVerticalM} ${tokens.spacingHorizontalL}`,
+    padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalL}`,
     borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground1,
   },
   titleStack: {
     display: 'flex',
     flexDirection: 'column',
-    gap: tokens.spacingVerticalXS,
+    gap: tokens.spacingVerticalXXS,
     minWidth: 0,
+  },
+  titleText: {
+    minWidth: 0,
+    whiteSpace: 'nowrap',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    fontSize: tokens.fontSizeBase500,
+    lineHeight: tokens.lineHeightBase500,
   },
   topTitleRow: {
     display: 'flex',
     alignItems: 'center',
     gap: tokens.spacingHorizontalS,
     minWidth: 0,
-    flexWrap: 'wrap',
+    flexWrap: 'nowrap',
   },
   statsStrip: {
     display: 'flex',
@@ -958,8 +966,15 @@ const useStyles = makeStyles({
 // Page
 // ---------------------------------------------------------------------------
 
-function flattenRunTree(nodes: RunSessionTree[]): RunSessionTree[] {
-  return nodes.flatMap((node) => [node, ...flattenRunTree(node.children)]);
+// Flatten the run tree into display rows. Depth is derived from the ACTUAL parent/child
+// nesting level (recursion depth), NOT from graph column position. This prevents the
+// cascading-staircase regression where sequential sibling rows each indented one level
+// deeper than the last.
+function flattenRunTree(nodes: RunSessionTree[], depth = 0): RunSessionTree[] {
+  return nodes.flatMap((node) => [
+    { ...node, depth },
+    ...flattenRunTree(node.children, depth + 1),
+  ]);
 }
 
 function runTreeStatusIcon(status: string) {
@@ -1550,7 +1565,7 @@ export function CoordinatorRunPage() {
             startedAt:     timing?.startedAt,
             completedAt:   timing?.completedAt,
             executionPodName: topoNode?.executionPodName ?? null,
-            dir:           'LR',
+            dir:           'TB',
           } as SubtaskNodeData,
           position: { x: 0, y: 0 },
         };
@@ -1628,14 +1643,14 @@ export function CoordinatorRunPage() {
           runId:     runId      ?? '',
           executionId: runId    ?? '',
           projectId:   projectId ?? '',
-          dir:         'LR',
+          dir:         'TB',
         } as WorkflowNodeData,
         position: { x: 0, y: 0 },
       };
     });
 
     return {
-      rfNodes:      layoutDagColumns(raw, fwdEdges, { rankdir: 'LR', rankSep: 64, nodeSep: COORDINATOR_GRAPH_NODE_SEP }, nodeSizeHints),
+      rfNodes:      layoutDagColumns(raw, fwdEdges, { rankdir: 'TB', rankSep: 64, nodeSep: COORDINATOR_GRAPH_NODE_SEP }, nodeSizeHints),
       displayEdges: allEdges,
     };
   }, [planningDescriptor, topology, projectId, runId, coordNodeStatusOverride, orch.phase, subtaskTiming, assemblyTiming, roleByAgent, expandedKeys, latestOutcomePlanEvent, specConfirmed, workPlanSeen]);
@@ -1703,8 +1718,12 @@ export function CoordinatorRunPage() {
       };
     }
 
-    const xValues = [...new Set(candidates.map((node) => Math.round(node.position.x ?? 0)))].sort((a, b) => a - b);
-    const depthByX = new Map<number, number>(xValues.map((x, index) => [x, index]));
+    // Reading-order rank derived from the graph's rank axis. The run graph now lays out
+    // top-to-bottom (TB), so successive ranks increase in Y. This rank only informs the
+    // sibling reading order below; the tree row indent comes from real nesting depth
+    // (see flattenRunTree), not from this value.
+    const yValues = [...new Set(candidates.map((node) => Math.round(node.position.y ?? 0)))].sort((a, b) => a - b);
+    const depthByRank = new Map<number, number>(yValues.map((y, index) => [y, index]));
 
     const sessionMeta = new Map<string, {
       nodeId: string;
@@ -1723,8 +1742,8 @@ export function CoordinatorRunPage() {
 
     for (const node of candidates) {
       const x = Math.round(node.position.x ?? 0);
-      const depth = depthByX.get(x) ?? 0;
       const y = Math.round(node.position.y ?? 0);
+      const depth = depthByRank.get(y) ?? 0;
       if (node.type === 'subtask') {
         const data = node.data as SubtaskNodeData;
         sessionMeta.set(node.id, {
@@ -2101,80 +2120,19 @@ export function CoordinatorRunPage() {
         <span>Orchestration {shortId}</span>
       </nav>
 
-      {/* Header */}
-      <div className={styles.headerRow}>
-        <Title2>Orchestration</Title2>
-        {(isConnecting || isStreaming) && <Spinner size="extra-tiny" aria-label="Connecting" />}
-        {selectedWorkflow && (
-          <Tooltip
-            relationship="description"
-            content={
-              selectedWorkflow.rationale
-                ? `${selectedWorkflow.auto ? 'Auto-selected' : 'Selected'}: ${selectedWorkflow.rationale}`
-                : selectedWorkflow.auto
-                  ? 'Automatically selected by the coordinator'
-                  : 'Selected for this orchestration'
-            }
-          >
-            <Badge
-              appearance="tint"
-              color="brand"
-              size="large"
-              icon={<FlowchartRegular />}
-              data-testid="coordinator-selected-workflow"
-            >
-              {selectedWorkflow.name}
-              {selectedWorkflow.auto ? ' Â· auto' : ''}
-            </Badge>
-          </Tooltip>
-        )}
-        {isRetryable && (
-          <Button
-            appearance="primary"
-            size="small"
-            icon={<ArrowRepeatAllRegular />}
-            disabled={retrying}
-            onClick={() => void handleRetry()}
-            data-testid="coordinator-retry-button"
-          >
-            Retry
-          </Button>
-        )}
-        {isKubernetesSandbox && (
-          <Button
-            appearance="secondary"
-            size="small"
-            icon={<OpenRegular />}
-            onClick={() => { setPreviewDialogOpen(true); setPreviewError(undefined); }}
-          >
-            Preview Sandbox
-          </Button>
-        )}
-        {retriedFromShort && (
-          <Text className={styles.runIdLabel}>
-            Retried from{' '}
-            <Link
-              to={`/projects/${projectId}/orchestrations/${retriedFrom}`}
-              className={styles.breadcrumbLink}
-            >
-              {retriedFromShort}
-            </Link>
-          </Text>
-        )}
-      </div>
       {retryError && (
         <MessageBar intent="error">
           <MessageBarBody>Retry failed: {retryError}</MessageBarBody>
         </MessageBar>
       )}
 
-      {goal && <Text className={styles.goal}>Goal: {goal}</Text>}
-
       <div className={styles.console} data-testid="run-operator-console">
         <div className={styles.topZone}>
           <div className={styles.titleStack}>
             <div className={styles.topTitleRow}>
-              <Title2>Orchestration: {selectedWorkflow?.name ?? goal ?? shortId}</Title2>
+              <Title2 className={styles.titleText} title={`Orchestration: ${selectedWorkflow?.name ?? goal ?? shortId}`}>
+                Orchestration: {selectedWorkflow?.name ?? goal ?? shortId}
+              </Title2>
               {(isConnecting || isStreaming) && <Spinner size="extra-tiny" aria-label="Live" />}
               {selectedWorkflow && (
                 <Tooltip
