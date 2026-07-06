@@ -1821,7 +1821,7 @@ app.MapGet("/api/runs/{id}/files", async (
     if (run.Status is RunStatus.Pending or RunStatus.Failed)
         return Results.Json(Array.Empty<WorkspaceFileEntry>());
 
-    bool isTerminal = run.Status is RunStatus.Merged or RunStatus.Declined or RunStatus.MergeFailed or RunStatus.Completed;
+    bool isTerminal = run.Status is RunStatus.Merged or RunStatus.Declined or RunStatus.MergeFailed or RunStatus.Completed or RunStatus.AssembleReady;
 
     if (isTerminal)
     {
@@ -2019,7 +2019,7 @@ app.MapGet("/api/runs/{id}/files/{**path}", async (
     }
 
     // --- Diff endpoint branch ---
-    bool isTerminal = run.Status is RunStatus.Merged or RunStatus.Declined or RunStatus.MergeFailed or RunStatus.Completed;
+    bool isTerminal = run.Status is RunStatus.Merged or RunStatus.Declined or RunStatus.MergeFailed or RunStatus.Completed or RunStatus.AssembleReady;
 
     IReadOnlyList<WorkspaceFileEntry> allEntries;
 
