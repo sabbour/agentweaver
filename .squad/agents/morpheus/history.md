@@ -131,3 +131,12 @@ Morpheus completed #176 on PR #178. Blueprint library matching now rejects outpu
 
 ## 2026-07-05T14:16:02-07:00 — Issue #183 initial workflow-selection fix and lockout
 Morpheus owned the initial #183 fix in PR #184: workflow selection moved to a tool-less direct completion with installation-scope auth and hardened parsing. Smith rejected the revision for missing final-message-only SDK response capture, triggering Reviewer Rejection Protocol strict lockout for Morpheus as original author.
+
+
+## 2026-07-05T20:40:00-07:00 — v0.7.11 release batch
+Fixed Copilot workflow-selection and decompose installation-token identity handling, audited installation-scope guards, and repaired stale/transient `assembly_blocked` latch recovery. Staging runs `029b757a` and `7ea28e4e` validated the behavior; release is deployed to staging pending Ahmed validation.
+
+
+## 2026-07-06T22:05:00Z — v0.7.12 live 404 forensics
+
+Read-only forensics found no v0.7.11 identity or installation-scope regression for runs `f1f14868` and `1c18977c`; outcome-spec draft/confirm succeeded and the work plan persisted. The live 404s were benign transient/mis-targeted reads. New deferred backend bug: duplicate cross-replica subtask dispatch plus sibling isolated-worktree read caused sandbox denial and `assembly_blocked` on `1c18977c`.

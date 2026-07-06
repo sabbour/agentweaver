@@ -85,3 +85,7 @@ Seraph approved PR #182 / issue #174. Security finding: the backend remains fail
 
 ## 2026-07-05T14:16:02-07:00 — Issue #183 security approval
 Seraph approved PR #184 for #183. The workflow-selection change reduced attack surface by making the classification turn tool-less while leaving runtime tool approval gates and sandbox behavior untouched.
+
+
+## 2026-07-05T20:40:00-07:00 — v0.7.11 release batch
+Removed project relink end-to-end to close arbitrary server-path exposure: frontend, REST endpoint, DTO, service/store mutation, MCP tool, and settings UI. Initial working-directory assignment remains only in create/import flows.

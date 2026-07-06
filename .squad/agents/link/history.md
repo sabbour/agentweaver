@@ -87,3 +87,7 @@ AKS cluster scripts updated (pending reprovisioning):
 - Shared token Secrets are inherently unsafe; per-pod isolation removes cross-user leakage vectors
 - RBAC must be updated for all run-scoped resource types (SPC, SandboxTemplate, SandboxWarmPool, etc.)
 - Dev secrets should use user-secrets/configuration, not tracked appsettings; production uses Key Vault
+
+
+## 2026-07-05T20:40:00-07:00 — v0.7.11 release batch
+Delivered observability overhaul and AppInsights agent telemetry: `agentweaver.token.usage`, tagged spans, agentic-only traces, compact tiles, and AI-credit-over-time chart. Staging deployment is healthy pending Ahmed validation.

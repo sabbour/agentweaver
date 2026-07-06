@@ -124,3 +124,12 @@ Reordered Kanban board columns to `Backlog → Ready → Active → Human Review
 ## 2026-07-05T13:17:12-07:00 — Tool approval expiry UI
 
 Trinity completed the frontend portion of #174 on PR #182: approval cards now react to server resolution events, represent timeout as `resolvedScope='expired'`, disable/collapse stale controls, and post decisions to the child run id with full request id. Web tests: 466. No merge yet; coordinator validates on staging first.
+
+
+## 2026-07-05T20:40:00-07:00 — v0.7.11 release batch
+Delivered slide-up run-tabs 404 fix, Messages redesign with sanitized markdown, and Overview redesign. Changes are in `release/v0.7.0`, image tag `v0.7.11`, and staging pending Ahmed validation.
+
+
+## 2026-07-06T22:05:00Z — v0.7.12 outcome-spec gate UX
+
+Delivered outcome-spec gate frontend fixes: draft panel remains visible during transient 404 polling with Drafting state; pre-draft run failure is terminal; Confirm has pending/success/409/error states and double-submit guard. Commits `a7e7645`, `de4bed6`; merged to `release/v0.7.0` and deployed to staging.

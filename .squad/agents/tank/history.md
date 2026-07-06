@@ -79,3 +79,12 @@ Tank completed backend fixes for #175 and #174. #175 adds newly saved workflow i
 
 ## 2026-07-05T14:16:02-07:00 — Issue #183 lockout revision owner
 Tank owned the #183 revision after Morpheus was locked out by Smith's rejection. Tank added dual-path workflow-selection response capture, final-message-only regression tests, `InternalsVisibleTo`, and Smith's stripped-text last-resort parse suggestion; build was clean and WorkflowSelect passed 41/41.
+
+
+## 2026-07-05T20:40:00-07:00 — v0.7.11 release batch
+Redesigned Create blank/Create from GitHub dialogs and added `POST /api/blueprints/suggest` with GitHub repo analysis and graceful Templates fallback. Feature is merged into `release/v0.7.0` and deployed to staging as `v0.7.11`.
+
+
+## 2026-07-06T22:05:00Z — v0.7.12 new-project dialogs v2
+
+Delivered shared-base refactor for Blank and From-GitHub creation dialogs: one shell, shared Blueprint panel/tabs, Templates parity, fixed blank right-column scrolling/clipping, wired View all templates, single footer No-blueprint affordance, personal repos via user-first GitHub accounts/repos, and Suggested-only recommendation view. Commits `112addc`, `b066eed`, `0e7d92f`; merged to `release/v0.7.0` and deployed to staging.
