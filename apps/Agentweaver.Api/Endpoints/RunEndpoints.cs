@@ -1896,6 +1896,7 @@ app.MapGet("/api/runs/{id}/files/{**path}", async (
     const string contentSuffix = "/content";
     bool isContentRequest = path.EndsWith(contentSuffix, StringComparison.Ordinal);
     string pathForValidation = isContentRequest ? path[..^contentSuffix.Length] : path;
+    pathForValidation = RelativizeRunFilePath(pathForValidation, run.WorktreePath);
 
     // Path validation after ownership check to prevent leaking run existence via error-code differences.
     if (!TryValidateRelativePath(pathForValidation, out var normalizedPath))
@@ -2412,6 +2413,27 @@ static IReadOnlyList<string> ValidateSandboxPolicyRequest(SandboxPolicyUpdateReq
 /// Windows, Alternate Data Stream specifiers. Returns false on any violation; sets
 /// normalizedPath to the canonical relative form on success.
 /// </summary>
+static string RelativizeRunFilePath(string rawPath, string? worktreePath)
+{
+    if (string.IsNullOrWhiteSpace(worktreePath) || string.IsNullOrWhiteSpace(rawPath))
+        return rawPath;
+
+    var decoded = rawPath.Replace("%2F", "/", StringComparison.OrdinalIgnoreCase)
+                         .Replace("%5C", "/", StringComparison.OrdinalIgnoreCase)
+                         .Replace('\\', '/');
+    while (decoded.StartsWith("//", StringComparison.Ordinal))
+        decoded = decoded[1..];
+    var root = worktreePath.Replace('\\', '/').TrimEnd('/');
+
+    // Accept a run-worktree absolute path that points inside this run's workspace, then convert it
+    // to the relative path the rest of the artifact endpoints are designed around. This keeps the
+    // path traversal guard strict while tolerating legacy UI/tool payloads that leaked worktree roots.
+    if (decoded.StartsWith(root + "/", OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
+        return decoded[(root.Length + 1)..];
+
+    return rawPath;
+}
+
 static bool TryValidateRelativePath(string? rawPath, out string normalizedPath)
 {
     normalizedPath = string.Empty;

@@ -48,7 +48,11 @@ public sealed class ArtifactFilesEndpointTests : IClassFixture<ReviewWebApplicat
     // =========================================================================
     // Helper: insert a run owned by the owner user and return its id string.
     // =========================================================================
-    private async Task<string> InsertOwnerRunAsync(RunStatus status = RunStatus.Pending, string? diff = null)
+    private async Task<string> InsertOwnerRunAsync(
+        RunStatus status = RunStatus.Pending,
+        string? diff = null,
+        string? worktreePath = null,
+        string? worktreeBranch = null)
     {
         var store = _factory.Services.GetRequiredService<SqliteRunStore>();
         var run = new Run
@@ -62,6 +66,8 @@ public sealed class ArtifactFilesEndpointTests : IClassFixture<ReviewWebApplicat
             Status            = status,
             StartedAt         = DateTimeOffset.UtcNow,
             Diff              = diff,
+            WorktreePath      = worktreePath,
+            WorktreeBranch    = worktreeBranch,
         };
         await store.InsertAsync(run);
         if (diff is not null)
@@ -262,6 +268,35 @@ public sealed class ArtifactFilesEndpointTests : IClassFixture<ReviewWebApplicat
         parsed.RootElement.GetProperty("path").GetString().Should().Be("src/worker.ts");
         parsed.RootElement.GetProperty("status").GetString().Should().Be("modified");
         parsed.RootElement.GetProperty("diff").GetString().Should().Contain("+new");
+    }
+
+    [Fact]
+    public async Task InWorktreeAbsolutePath_IsRelativizedBeforeValidation()
+    {
+        const string diff =
+            "diff --git a/discovered-issues.md b/discovered-issues.md\n" +
+            "new file mode 100644\n" +
+            "index 0000000..e965047\n" +
+            "--- /dev/null\n" +
+            "+++ b/discovered-issues.md\n" +
+            "@@ -0,0 +1 @@\n" +
+            "+issue list\n";
+        const string worktreeRoot = "/workspace/.home/.local/share/agentweaver/worktrees/fake-run";
+        var runId = await InsertOwnerRunAsync(
+            RunStatus.InProgress,
+            diff,
+            worktreePath: worktreeRoot,
+            worktreeBranch: "agentweaver-run-test");
+
+        var absolute = $"{worktreeRoot}/discovered-issues.md";
+        var response = await _ownerClient.GetAsync($"/api/runs/{runId}/files/{absolute}");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK,
+            "legacy tool payloads can leak absolute worktree paths, but in-workspace paths should resolve safely");
+        var body = await response.Content.ReadAsStringAsync();
+        using var parsed = JsonDocument.Parse(body);
+        parsed.RootElement.GetProperty("path").GetString().Should().Be("discovered-issues.md");
+        parsed.RootElement.GetProperty("diff").GetString().Should().Contain("+issue list");
     }
 
     // Returns true when the string contains any emoji or symbol-range Unicode code point.
