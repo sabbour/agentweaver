@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { type ReactElement, useEffect, useState } from 'react';
 import {
   Badge,
   Button,
@@ -13,7 +13,16 @@ import {
   mergeClasses,
   tokens,
 } from '@fluentui/react-components';
-import { BotRegular, ChevronDownRegular, ChevronRightRegular, SparkleRegular } from '@fluentui/react-icons';
+import {
+  BotRegular,
+  CheckmarkRegular,
+  ChevronDownRegular,
+  ChevronRightRegular,
+  DocumentRegular,
+  InfoRegular,
+  PeopleTeamRegular,
+  SparkleRegular,
+} from '@fluentui/react-icons';
 import { apiClient } from '../api/apiClient';
 import { normalizeBlueprintList } from '../api/client';
 import type { Blueprint, SuggestBlueprintResponse } from '../api/types';
@@ -52,6 +61,7 @@ const useStyles = makeStyles({
   roleRow: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200 },
   roleDot: { width: '14px', height: '14px', borderRadius: tokens.borderRadiusSmall, backgroundColor: tokens.colorPalettePurpleBackground2, color: tokens.colorPalettePurpleForeground2, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: '9px', flexShrink: 0 },
   iconBubble: { width: '32px', height: '32px', borderRadius: tokens.borderRadiusMedium, backgroundColor: tokens.colorBrandBackground2, color: tokens.colorBrandForeground1, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
+  inlineMeta: { display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalXXS },
   previewCard: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, padding: tokens.spacingVerticalM },
   metaRow: { display: 'flex', flexWrap: 'wrap', gap: tokens.spacingHorizontalS, color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200 },
   generateBox: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS },
@@ -162,7 +172,7 @@ function BlueprintCard({ blueprint, selected, onSelect }: { blueprint: Blueprint
       onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onSelect(); } }}
     >
       <div className={styles.cardLabel}>
-        <span className={styles.iconBubble}>✦</span>
+        <span className={styles.iconBubble}><SparkleRegular /></span>
         <div>
           <Text className={styles.cardTitle}>{blueprint.name}</Text>
           <br />
@@ -171,7 +181,7 @@ function BlueprintCard({ blueprint, selected, onSelect }: { blueprint: Blueprint
         <Text className={styles.cardDescription}>{blueprint.description}</Text>
         <div className={styles.roleRows}>
           {visibleRoles.map((role) => (
-            <div className={styles.roleRow} key={role}><span className={styles.roleDot}>●</span><span>{role}</span></div>
+            <div className={styles.roleRow} key={role}><span className={styles.roleDot}><BotRegular fontSize={10} /></span><span>{role}</span></div>
           ))}
           {remaining > 0 && <Badge appearance="outline" size="small">+{remaining}</Badge>}
         </div>
@@ -344,9 +354,9 @@ export function SuggestedBlueprintPanel({
         <div className={styles.suggestedHeader}>
           <div className={styles.cardLabel}>
             <div className={styles.cardTitleRow}>
-              <span className={styles.iconBubble}>✦</span>
+              <span className={styles.iconBubble}><SparkleRegular /></span>
               <Text className={styles.cardTitle}>{recommended.name}</Text>
-              <Badge appearance="filled" color="success" size="small">✓ Recommended</Badge>
+              <Badge appearance="filled" color="success" size="small" icon={<CheckmarkRegular />}>Recommended</Badge>
             </div>
             <Text className={styles.cardDescription}>{activeSuggestion.rationale || recommended.description}</Text>
             <BlueprintRosterChips roster={recommended.roster} limit={5} />
@@ -354,10 +364,14 @@ export function SuggestedBlueprintPanel({
           <Button appearance="subtle" icon={expanded ? <ChevronDownRegular /> : <ChevronRightRegular />} onClick={() => setExpanded(!expanded)} aria-label="Toggle suggestion details" />
         </div>
         {expanded && activeSuggestion.signals.length > 0 && (
-          <div className={styles.roleRows}>{activeSuggestion.signals.map((s) => <Text key={s} size={200} className={styles.subtle}>• {s}</Text>)}</div>
+          <div className={styles.roleRows}>{activeSuggestion.signals.map((s) => (
+            <div className={styles.roleRow} key={s}><InfoRegular fontSize={14} /><Text size={200} className={styles.subtle}>{s}</Text></div>
+          ))}</div>
         )}
         <div className={styles.suggestedFooter}>
-          <Text className={styles.subtle}>👥 {recommended.roster.length} agents</Text>
+          <Text className={styles.subtle}>
+            <span className={styles.inlineMeta}><PeopleTeamRegular /><span>{recommended.roster.length} agents</span></span>
+          </Text>
           <Button appearance="primary" onClick={() => onChange({ kind: 'predefined', blueprint: recommended })}>Use this blueprint</Button>
         </div>
       </Card>
@@ -381,11 +395,11 @@ function BlueprintTabStrip({ tabs, value, onChange }: { tabs: BlueprintPanelTab[
     templates: 'Templates',
     generate: 'Generate',
   };
-  const iconByTab: Record<BlueprintPanelTab, string> = {
-    generated: '✦',
-    suggested: '✦',
-    templates: '▦',
-    generate: '✦',
+  const iconByTab: Record<BlueprintPanelTab, ReactElement> = {
+    generated: <SparkleRegular />,
+    suggested: <SparkleRegular />,
+    templates: <DocumentRegular />,
+    generate: <SparkleRegular />,
   };
   return (
     <div className={styles.tabStrip}>

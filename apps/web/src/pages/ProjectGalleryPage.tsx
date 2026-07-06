@@ -26,7 +26,15 @@ import {
   makeStyles,
   tokens,
 } from '@fluentui/react-components';
-import { ChevronRightRegular, DismissRegular, DocumentRegular, InfoRegular, SparkleRegular } from '@fluentui/react-icons';
+import {
+  ChevronRightRegular,
+  DismissRegular,
+  DocumentRegular,
+  InfoRegular,
+  LightbulbRegular,
+  SettingsRegular,
+  SparkleRegular,
+} from '@fluentui/react-icons';
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
 import type { CreateProjectRequest, GitHubAccount, GitHubRepo, Project } from '../api/types';
@@ -161,6 +169,7 @@ const useStyles = makeStyles({
   sectionTitle: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS },
   charCounter: { alignSelf: 'flex-end', color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200 },
   tipLine: { color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200 },
+  tipIconLine: { display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalXXS, color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200 },
   fieldWithCounter: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS },
   subsectionHeader: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
   infoBox: {
@@ -404,7 +413,7 @@ function CreateBlankDialog({ onCreated, dataDir, workspaceAutoAssigned }: { onCr
       </div>
       <div className={styles.fieldWithCounter}>
         <div className={styles.subsectionHeader}>
-          <span aria-hidden="true">⚙</span>
+          <SettingsRegular aria-hidden="true" />
           <Text weight="semibold">What do you want Agentweaver to help you accomplish?</Text>
         </div>
         <Text className={styles.tipLine}>Be specific about the problems you're trying to solve or the outcomes you want.</Text>
@@ -418,7 +427,7 @@ function CreateBlankDialog({ onCreated, dataDir, workspaceAutoAssigned }: { onCr
           style={{ minHeight: 130 }}
         />
         <Counter value={goal} max={1000} />
-        <Text className={styles.tipLine}>💡 Tip: The more context you provide, the better the blueprint.</Text>
+        <Text className={styles.tipIconLine}><LightbulbRegular /> <span>Tip: The more context you provide, the better the blueprint.</span></Text>
       </div>
       <Button appearance="primary" icon={<SparkleRegular />} aria-label="Generate blueprint" disabled={!goal.trim() || generation.generating} onClick={() => void generation.generate(goal)}>
         {generation.generating ? 'Generating' : 'Generate Blueprint'}
