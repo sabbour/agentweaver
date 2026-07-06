@@ -32,6 +32,12 @@ The **Overview** page reads the embedded `token_usage` from `GET /api/overview` 
 
 📸 **Screenshot** — Overview page showing the Cost overview tile, top project usage bars, and project usage table.
 
+## Project Observability
+
+The project-scoped **Observability** section adds an AppInsights-backed view beside the older usage panels. The Overview tab calls `GET /api/projects/{id}/metrics` for the selected 7d/30d/90d range and renders compact tiles for runs created over time, AI credit usage over time, AI credit usage by model, model invocation share, response duration by model, and TTFT by model (`apps/web/src/pages/observability/ObservabilityOverviewPage.tsx:31`, `apps/web/src/components/dashboard/ModelPerformancePanels.tsx:160`). Empty charts say **No AI credit usage data yet.**, **No response-duration data yet.**, or **No TTFT data available yet.** rather than fabricating values (`ModelPerformancePanels.tsx:186`, `:229`, `:234`).
+
+The **Agents** tab aggregates the same metrics by agent and reuses the token breakdown component (`apps/web/src/pages/observability/ObservabilityAgentsPage.tsx:58`). The **Traces** tab lists recent coordinator runs and opens an AppInsights trace preview; each lane is an agent, each bar is an agentic/LLM span, and expanding a bar shows model, input tokens, output tokens, duration, and operation (`apps/web/src/pages/observability/ObservabilityTracesPage.tsx:108`, `apps/web/src/components/runs/TransactionTracePanel.tsx:260`).
+
 ## Understanding the numbers
 
 | Term | What it counts | Source |

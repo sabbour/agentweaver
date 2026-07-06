@@ -97,6 +97,14 @@ flowchart LR
    `apps/web/src/pages/OverviewPage.tsx:442`.
 
 
+## Application Insights spans and metrics
+
+The runtime now emits a second observability path alongside `agent.turn.usage`. `CopilotAIAgent` creates an `ActivitySource` named `Agentweaver` and a `Meter` counter named `agentweaver.token.usage` with unit `nano_aiu` (`packages/Agentweaver.AgentRuntime/CopilotAIAgent.cs:45`, `:48`). Each model turn starts an **Agentweaver model turn** client span tagged as `agentweaver.span.kind=agent_turn`, with run id, project id, agent name, operation name, and request model (`CopilotAIAgent.cs:643`). When the turn completes, the span is enriched with response model, input tokens, output tokens, total tokens, nano-AIU, and TTFT tags when available (`CopilotAIAgent.cs:664`). Positive nano-AIU values are also added to `agentweaver.token.usage` with model, run, project, and agent tags (`CopilotAIAgent.cs:683`).
+
+`AppInsightsMetricsService` queries that telemetry for project dashboards and observability pages. It joins `AppDependencies` spans with `agentweaver.token.usage` metrics for the agent leaderboard (`apps/Agentweaver.Api/Metrics/AppInsightsMetricsService.cs:190`), uses the metric for model usage, agent breakdown, run-level breakdown, and AI-credit trend (`AppInsightsMetricsService.cs:292`, `:417`, `:454`, `:493`), and filters traces to agentic/LLM spans by `agentweaver.span.kind`, GenAI tags, agent tags, or model tags (`AppInsightsMetricsService.cs:518`).
+
+This path powers the project Observability tabs: **Overview** renders compact model-performance panels and the **AI credit usage over time** chart (`apps/web/src/components/dashboard/ModelPerformancePanels.tsx:160`, `:186`), **Agents** aggregates cross-run token usage by agent (`apps/web/src/pages/observability/ObservabilityAgentsPage.tsx:58`), and **Traces** previews recent coordinator traces with expandable AppInsights bars (`apps/web/src/pages/observability/ObservabilityTracesPage.tsx:108`, `apps/web/src/components/runs/TransactionTracePanel.tsx:211`).
+
 ## DAG card layout
 
 Usage chips add metadata to graph cards, so the graph layout now shares `DAG_NODE_SEP = 96` and rendered-height hints by node type. `WorkflowRunPage`, `CoordinatorTopologyGraph`, `WorkflowGraphPanel`, and `VisualWorkflowEditor` all pass those hints into `layoutDag`, which prevents overlapping cards as cost, pod, status, and action badges appear. Source: `apps/web/src/utils/dagLayout.ts:6`, `apps/web/src/utils/dagLayout.ts:24`, `apps/web/src/utils/dagLayout.ts:48`, `apps/web/src/pages/WorkflowRunPage.tsx:706`, `apps/web/src/components/CoordinatorTopologyGraph.tsx:522`, `apps/web/src/components/WorkflowGraphPanel.tsx:931`, `apps/web/src/components/VisualWorkflowEditor.tsx:236`.
@@ -140,14 +148,17 @@ project data; admins see everything. Non-admin callers of `/api/usage` receive `
 | Concern | File |
 |---|---|
 | `agent.turn.usage` event type | `packages/Agentweaver.Domain/EventTypes.cs` |
-| Token accumulation and event emission | `packages/Agentweaver.AgentRuntime/CopilotAIAgent.cs` |
+| Token accumulation, AppInsights span tags, and `agentweaver.token.usage` metric | `packages/Agentweaver.AgentRuntime/CopilotAIAgent.cs:45` |
 | Domain types: `TokenUsageRecord`, `TokenUsageSummary`, `TokenUsageByModel`, `TokenUsageByProject` | `packages/Agentweaver.Domain/ITokenUsageStore.cs` |
 | SQLite projection store | `apps/Agentweaver.Api/Infrastructure/SqliteTokenUsageStore.cs` |
 | EF Core / Postgres projection store | `apps/Agentweaver.Api/Infrastructure/Ef/EfTokenUsageStore.cs` |
 | `token_usage_records` schema | `apps/Agentweaver.Api/Infrastructure/SqliteDb.cs` |
 | Background projection service (subscribes to event streams) | `apps/Agentweaver.Api/Runs/TokenUsageProjectionService.cs` |
 | HTTP endpoints (all 4 levels) | `apps/Agentweaver.Api/Endpoints/UsageEndpoints.cs` |
-| DTOs (`TokenUsageSummaryDto`, `TokenUsageByModelDto`, `AppUsageDto`, `ProjectUsageDto`) | `apps/Agentweaver.Api/Metrics/MetricsDtos.cs` |
+| DTOs (`TokenUsageSummaryDto`, `TokenUsageByModelDto`, `AppUsageDto`, `ProjectUsageDto`, `ProjectMetricsDto`, `RunTraceDto`) | `apps/Agentweaver.Api/Metrics/MetricsDtos.cs:86` |
+| AppInsights metrics and trace queries | `apps/Agentweaver.Api/Metrics/AppInsightsMetricsService.cs:31` |
+| Metrics endpoints (`/api/projects/{id}/metrics`, `/api/metrics/runs/{runId}/traces`) | `apps/Agentweaver.Api/Endpoints/MetricsEndpoints.cs:55` |
+| Observability model panels | `apps/web/src/components/dashboard/ModelPerformancePanels.tsx:160` |
 | MCP `get_run_usage` tool | `apps/Agentweaver.Mcp/Tools/RunTools.cs` |
 | MCP `get_project_usage` tool | `apps/Agentweaver.Mcp/Tools/ProjectTools.cs` |
 | Live token counter (Watch page) | `apps/web/src/pages/WatchPage.tsx` |

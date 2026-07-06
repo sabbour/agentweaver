@@ -234,6 +234,14 @@ The card also offers **View run**. In the orchestration detail page, this opens 
 
 Some topology views link directly to the child run's normal workflow page. The experience goal is the same: a user can move from the all-up topology to the responsible child run without losing which subtask it belongs to.
 
+### Slide-up agent session panel
+
+The coordinator page now opens child and coordinator sessions in a full-width slide-up **Agent session** panel instead of a small modal. The panel keeps the orchestration context visible behind it, uses a left run tree for coordinator/child selection, and exposes per-run tabs: **Messages**, **Changes**, and **Files** (`apps/web/src/components/AgentSessionPanel.tsx:1054`, `:1407`).
+
+**Messages** renders each turn as cards. System prompts and coordinator instructions are collapsed by default, while agent messages are open and rendered with `react-markdown`, `remark-gfm`, and `rehype-sanitize` so Markdown is useful but sanitized (`AgentSessionPanel.tsx:31`, `:819`, `:829`, `:1595`). Tool calls are grouped behind a **Tool calls** disclosure and labeled in human terms such as **Read file**, **Edit file**, **View**, or **Run command** (`AgentSessionPanel.tsx:794`, `:1647`). File references from tool arguments become file cards with **Preview** actions (`AgentSessionPanel.tsx:950`, `:1674`).
+
+**Changes** shows changed files and unified diffs; **Files** shows output files. Both fetch `/files` data only when their tab is opened, normalize run worktree paths to workspace-relative paths, and preview content through the file viewer (`AgentSessionPanel.tsx:1177`, `:1219`, `:1437`, `:1534`). This makes paths readable even when backend artifacts include absolute sandbox/worktree prefixes (`AgentSessionPanel.tsx:756`).
+
 ### Children over MCP
 
 `coordinator_children_get` lists the dispatched child runs for a coordinator run. Each row pairs the child run with subtask state:

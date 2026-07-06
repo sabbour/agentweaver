@@ -696,3 +696,7 @@ If rebuilding Agentweaver auth from scratch, implement the system in this order:
 8. **Production guards:** fail fast for auth bypass flags and missing public issuer/audience config.
 
 The central design rule is: **GitHub proves the human, Agentweaver narrows that proof to its own resource, and every shortcut must either be short-lived, single-use, explicitly public, or development-only.**
+
+## Copilot model-turn token scope guard
+
+Copilot model turns must run with the submitting user's Copilot-entitled GitHub token. `CopilotAIAgent.ResolveTokenScope` now rejects missing user identity and rejects the GitHub App installation scope for model turns (`packages/Agentweaver.AgentRuntime/CopilotAIAgent.cs:398`). This keeps installation tokens available for app/repository operations while preventing them from being used as Copilot model credentials.

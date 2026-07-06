@@ -10,6 +10,9 @@ API endpoints, response types, status codes, and MCP tools for GitHub Copilot to
 | `GET` | `/api/workflow-runs/{id}/usage` | API key (project owner) | Token usage summary for a workflow-run envelope |
 | `GET` | `/api/projects/{id}/usage` | API key (project owner) | Project-level usage, time-ranged (default: last 30 days) |
 | `GET` | `/api/usage` | Admin only | App-wide usage, time-ranged (default: last 30 days) |
+| `GET` | `/api/projects/{id}/metrics?from=...&to=...` | API key (project owner) | AppInsights-backed project observability metrics: usage, percentiles, traces inputs, and AI-credit trend |
+| `GET` | `/api/metrics/runs/{runId}/traces` | API key (run owner) | AppInsights agentic/LLM spans for one coordinator run and its children |
+| `GET` | `/api/runs/{id}/token-breakdown` | API key (run owner) | AppInsights agent token breakdown with stored-usage fallback |
 
 The following existing endpoints also include a `token_usage` field in their responses when usage data is available:
 
@@ -69,6 +72,32 @@ Appears in the `by_project` array of `AppUsageDto`.
 | `total_nano_aiu` | `long` | Total nano-AIU attributed to this project |
 | `by_model` | `TokenUsageByModelDto[]` | Per-model breakdown for this project |
 
+### ProjectMetricsDto
+
+Returned by `GET /api/projects/{id}/metrics` and defined in `apps/Agentweaver.Api/Metrics/MetricsDtos.cs:86`.
+
+| Field | Type | Description |
+|---|---|---|
+| `throughput` | `ThroughputPointDto[]` | Daily created/done run counts. |
+| `leaderboard` | `AgentLeaderboardEntryDto[]` | Per-agent activity, success, duration, and AIC. |
+| `invocationTrend` | `DailyInvocationPointDto[]` | Daily run-creation counts. |
+| `modelUsage` | `ModelUsageBreakdownDto[]` | Usage-event count and total nano-AIU by model. |
+| `responseDuration` | `MetricPercentilesDto[]` | P50/P95 duration by model. |
+| `timeToFirstToken` | `MetricPercentilesDto[]` | P50/P95 TTFT by model when first-token telemetry exists. |
+| `agentBreakdown` | `AgentUsageBreakdownDto[]` | Usage-event count and nano-AIU by agent. |
+| `aiCreditUsageTrend` | `AiCreditUsagePointDto[]` | Daily total nano-AIU for the AI-credit-over-time chart. |
+
+### RunTraceDto
+
+Returned by `GET /api/metrics/runs/{runId}/traces` and defined in `MetricsDtos.cs:133`. `AppInsightsMetricsService` filters to agentic/LLM spans using `agentweaver.span.kind`, GenAI, agent, or model tags (`apps/Agentweaver.Api/Metrics/AppInsightsMetricsService.cs:518`).
+
+| Field | Type | Description |
+|---|---|---|
+| `runId` | string | Requested run id. |
+| `spans` | `RunTraceSpanDto[]` | Ordered AppInsights spans. |
+
+`RunTraceSpanDto` includes `id`, `name`, `timestamp`, `durationMs`, `success`, `resultCode`, `agentName`, `model`, `inputTokens`, `outputTokens`, and `operationName`.
+
 ### AIC conversion
 
 ```
@@ -107,6 +136,8 @@ GET /api/usage?from=2026-05-01T00:00:00Z&to=2026-06-01T00:00:00Z
 | Board run card cost chip | `RunCardDto.total_nano_aiu` / `total_tokens`, with supplementary `GET /api/runs/{id}/usage` when missing | `apps/web/src/api/types.ts:767`, `apps/web/src/api/types.ts:783`, `apps/web/src/components/board/RunCard.tsx:90`, `apps/web/src/components/board/RunCard.tsx:160` |
 | Workflow run DAG agent node | `GET /api/runs/{id}/usage` through `runUsage` | `apps/web/src/api/client.ts:758`, `apps/web/src/pages/WorkflowRunPage.tsx:700` |
 | Coordinator DAG coordinator/subtask nodes | Coordinator run usage plus child `GET /api/runs/{childId}/usage` summaries | `apps/web/src/pages/CoordinatorRunPage.tsx:1527`, `apps/web/src/pages/CoordinatorRunPage.tsx:1604` |
+| Project Observability overview | `GET /api/projects/{id}/metrics?from=...&to=...` | Compact tiles, P50/P95 duration and TTFT, model usage, and AI-credit-over-time chart (`apps/web/src/components/dashboard/ModelPerformancePanels.tsx:160`). |
+| Project Observability traces | `GET /api/metrics/runs/{runId}/traces` | AppInsights-only agentic/LLM spans rendered as trace bars (`apps/web/src/components/runs/TransactionTracePanel.tsx:211`). |
 | Project dashboard usage panel | `GET /api/projects/{id}/usage?from=...&to=...` | `apps/web/src/api/client.ts:766`, `apps/web/src/pages/DashboardPage.tsx:289`, `apps/web/src/pages/DashboardPage.tsx:504` |
 | Project dashboard leaderboard Cost column | Scoped run usage aggregated by agent over the same dashboard range selector | `apps/web/src/pages/DashboardPage.tsx:299`, `apps/web/src/pages/DashboardPage.tsx:304`, `apps/web/src/pages/DashboardPage.tsx:461`, `apps/web/src/pages/DashboardPage.tsx:494` |
 | Overview Cost overview and top-project bars | `GET /api/usage` or embedded `OverviewDto.token_usage` | `apps/web/src/api/client.ts:774`, `apps/web/src/api/types.ts:1280`, `apps/web/src/pages/OverviewPage.tsx:225`, `apps/web/src/pages/OverviewPage.tsx:439` |

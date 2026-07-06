@@ -87,7 +87,7 @@ Conceptually, event types fall into families:
 | --- | --- | --- |
 | Run lifecycle | Whether execution started, completed, failed, degraded, cancelled, or became assemble-ready | `run.started`, `run.completed`, `run.failed`, `run.degraded`, `run.assemble_ready` |
 | Agent conversation | Agent turns, messages, deltas, intent, and outcome reporting | `agent.message`, `agent.message.delta`, `agent.intent`, `run.outcome` |
-| Agent usage | GitHub Copilot token consumption and AIC cost per agent turn | `agent.turn.usage` — payload: `inputTokens`, `outputTokens`, `totalTokens`, `totalNanoAiu`, `modelId` |
+| Agent usage | GitHub Copilot token consumption, AIC cost, and AppInsights model-turn telemetry | `agent.turn.usage`; `agentweaver.token.usage`; `Agentweaver model turn` spans tagged `agentweaver.span.kind=agent_turn` |
 | Tooling and gates | Tool calls, tool results, tool errors, approval requests, auto-approval, and questions | `tool.call`, `tool.result`, `tool.error`, `tool.approval_required`, `tool.auto_approved`, `agent.question_asked` |
 | Review and merge | Human review gates and repository integration | `review.requested`, `review.approved`, `review.declined`, `merge.started`, `merge.completed`, `merge.failed` |
 | Workflow graph | Server-authored graph descriptors and step transitions | `run.workflow_graph`, `workflow.step` |
@@ -101,6 +101,10 @@ The important rebuild rule is to keep event types **domain-shaped**, not UI-shap
 Payloads should be complete enough for a consumer to understand the event without reading transient process memory. That means identifiers matter: run id, child run id, subtask id, request id, work plan id, graph id, and status values should travel with the event that needs them.
 
 At the same time, payloads should avoid becoming a second database. Large or durable objects should be referenced by id or by a focused snapshot contract. The event log explains observable transitions; the operational and memory stores hold broader durable state.
+
+## AppInsights model-turn telemetry
+
+The event stream remains the durable audit trail, but model turns also emit OpenTelemetry/AppInsights signals for fleet observability. `CopilotAIAgent` starts an `Agentweaver model turn` activity with run, project, agent, model, and GenAI tags, then completes it with input/output token, total token, nano-AIU, and TTFT tags (`packages/Agentweaver.AgentRuntime/CopilotAIAgent.cs:643`, `:664`). Positive AIC usage is recorded as the `agentweaver.token.usage` counter in `nano_aiu` (`CopilotAIAgent.cs:48`, `:683`). The API trace query deliberately filters to agentic/LLM spans by `agentweaver.span.kind`, GenAI, agent, or model tags so generic platform dependencies do not clutter run traces (`apps/Agentweaver.Api/Metrics/AppInsightsMetricsService.cs:518`).
 
 ## Durable Stream Architecture
 

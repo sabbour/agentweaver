@@ -100,6 +100,8 @@ The durable artifacts are:
 - **Dispatch is single-writer.** The dispatch loop owns subtask status mutation while active.
 - **Assembly is exactly-once by database compare-and-swap.** In-memory guards are helpful but not authoritative.
 - **Recovery starts from persisted state.** Restart logic routes by WorkPlan status, not by reconstructing chat history.
+- **Only terminally ineligible subtasks block assembly.** Pending or still-running children are "not ready yet" and re-arm dispatch; only terminal non-eligible states such as failed/blocked/RAI-flagged produce an `assembly_blocked` verdict (`apps/Agentweaver.Api/Coordinator/AssemblyPlanning.cs:30`, `apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyService.cs:563`).
+- **Stale assembly blocks can clear.** If dispatch later observes every subtask eligible, it can advance `assembly_blocked -> awaiting_assembly` so a stale block does not latch forever (`apps/Agentweaver.Api/Coordinator/CoordinatorDispatchService.cs:479`).
 - **Provider choice is not dynamic on the live path.** The live coordinator path directly builds Copilot-backed agents; the Foundry dispatcher seam is plumbed but not active here.
 
 ## Coordinator state machine

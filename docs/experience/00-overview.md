@@ -47,6 +47,17 @@ Agentweaver treats the backend as the source of truth. The web UI loads snapshot
 
 ## Web UI mental model
 
+### Overview command-center redesign
+
+The signed-in **Overview** page is now a live command center with four user-visible regions sourced from real API calls (`apps/web/src/pages/OverviewPage.tsx:180`):
+
+- **Recent Projects** shows up to four projects sorted by latest activity and links each card to its project. Cards show GitHub/blank origin, active/queued/idle status, last activity, agent count, run count, and issue count (`OverviewPage.tsx:211`). Empty state is **No projects yet.** or **No recent projects to show.** (`OverviewPage.tsx:214`).
+- **AI Usage & Performance** aggregates observability metrics from those recent projects, with a 7d/30d/90d range selector (`OverviewPage.tsx:222`). It shows token consumption, model share, response duration, TTFT, and success rate. The latency tiles display **P50** and **P95** from telemetry; **P99** is intentionally shown as unavailable rather than estimated (`OverviewPage.tsx:151`, `:155`).
+- **Activity Feed** groups recent activity by day and uses empty state **No recent activity.** when the backend has no rows (`OverviewPage.tsx:225`).
+- **Needs Attention** lists degraded overview health, failed recent activity, and queued project work; the happy-path empty state is **Nothing needs attention.** (`OverviewPage.tsx:230`).
+
+The page refreshes every 10 seconds and also exposes **Refresh** with a countdown indicator (`OverviewPage.tsx:217`).
+
 ![Overview page showing fleet activity at a glance](/screenshots/overview-fleet.png)
 
 > 📸 **Screenshot — `overview-fleet.png`**
