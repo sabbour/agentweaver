@@ -667,7 +667,7 @@ export interface AgentSessionPanelProps {
 
 interface ConversationRow {
   key: string;
-  role: 'system' | 'user' | 'agent';
+  role: 'system' | 'user' | 'agent' | 'activity';
   content: string;
   timestamp?: number;
 }
@@ -823,6 +823,7 @@ function friendlyToolLabel(tool: ConversationTool, runId?: string): { label: str
 function authorForRole(role: ConversationRow['role']): { name: string; role: string; collapsedLabel?: string } {
   if (role === 'system') return { name: 'System', role: 'Prompt', collapsedLabel: 'System prompt' };
   if (role === 'user') return { name: 'Coordinator', role: 'Instruction', collapsedLabel: 'Coordinator instruction' };
+  if (role === 'activity') return { name: 'Coordinator', role: 'Activity' };
   return { name: 'Agent', role: 'Worker response' };
 }
 
@@ -1049,6 +1050,248 @@ function buildTurns(events: RunStreamEvent[]): ConversationTurn[] {
   return turns.filter((turn) => turn.rows.length > 0 || turn.toolCalls.length > 0 || turn.approvals.length > 0);
 }
 
+interface SubtaskNarrativeInfo {
+  id: string;
+  title?: string;
+  agent?: string;
+  role?: string;
+}
+
+function readArray(payload: Record<string, unknown>, keys: string[]): unknown[] | undefined {
+  for (const key of keys) {
+    const value = payload[key];
+    if (Array.isArray(value)) return value;
+  }
+  return undefined;
+}
+
+function buildSubtaskInfo(events: RunStreamEvent[]): Map<string, SubtaskNarrativeInfo> {
+  const subtasks = new Map<string, SubtaskNarrativeInfo>();
+  const upsert = (id: string | undefined, patch: Partial<SubtaskNarrativeInfo>) => {
+    if (!id) return;
+    const current = subtasks.get(id) ?? { id };
+    const next: SubtaskNarrativeInfo = { ...current };
+    if (patch.title) next.title = patch.title;
+    if (patch.agent) next.agent = patch.agent;
+    if (patch.role) next.role = patch.role;
+    subtasks.set(id, next);
+  };
+
+  for (const evt of events) {
+    if (evt.type === 'coordinator.work_plan') {
+      for (const raw of readArray(evt.payload, ['subtasks', 'tasks']) ?? []) {
+        const item = (raw ?? {}) as Record<string, unknown>;
+        const id = readString(item, ['id', 'subtaskId', 'subtask_id']);
+        upsert(id, {
+          title: readString(item, ['title', 'task', 'name']),
+          agent: readString(item, ['assignedAgent', 'assigned_agent', 'agent']),
+          role: readString(item, ['role', 'roleTitle', 'role_title']),
+        });
+      }
+    }
+    if (evt.type.startsWith('subtask.') || evt.type.startsWith('coordinator.child_')) {
+      const id = readString(evt.payload, ['subtaskId', 'subtask_id']);
+      upsert(id, {
+        title: readString(evt.payload, ['title', 'task', 'name']),
+        agent: readString(evt.payload, ['assignedAgent', 'assigned_agent', 'agentName', 'agent_name', 'agent']),
+        role: readString(evt.payload, ['role', 'roleTitle', 'role_title', 'agentRole', 'agent_role']),
+      });
+    }
+  }
+  return subtasks;
+}
+
+function subtaskDescription(payload: Record<string, unknown>, subtasks: Map<string, SubtaskNarrativeInfo>): string {
+  const id = readString(payload, ['subtaskId', 'subtask_id']);
+  const info = id ? subtasks.get(id) : undefined;
+  const title = readString(payload, ['title', 'task', 'name']) ?? info?.title ?? (id ? `Subtask ${id}` : 'Subtask');
+  const agent = readString(payload, ['assignedAgent', 'assigned_agent', 'agentName', 'agent_name', 'agent']) ?? info?.agent;
+  const role = readString(payload, ['role', 'roleTitle', 'role_title', 'agentRole', 'agent_role']) ?? info?.role;
+  const actor = agent ? ` (${agent}${role ? ` · ${role}` : ''})` : '';
+  return `${title}${actor}`;
+}
+
+function coordinatorActivityLine(evt: RunStreamEvent, subtasks: Map<string, SubtaskNarrativeInfo>): string | null {
+  const p = evt.payload;
+  switch (evt.type) {
+    case 'coordinator.started': {
+      const goal = readString(p, ['goal', 'message']);
+      return goal ? `Coordinator started: ${goal}` : 'Coordinator started.';
+    }
+    case 'coordinator.recovered': {
+      const status = readString(p, ['status']);
+      return status ? `Coordinator recovered from ${status}.` : 'Coordinator recovered and resumed work.';
+    }
+    case 'coordinator.outcome_spec': {
+      const outcome = readString(p, ['desiredOutcome', 'desired_outcome']);
+      return outcome ? `Outcome spec drafted: ${outcome}` : 'Outcome spec drafted for review.';
+    }
+    case 'coordinator.workflow_selected': {
+      const name = readString(p, ['selectedName', 'selected_name', 'selectedId', 'selected_id']);
+      const rationale = readString(p, ['rationale']);
+      return `Workflow selected: ${name ?? 'workflow'}${rationale ? ` — ${rationale}` : ''}`;
+    }
+    case 'coordinator.work_plan': {
+      const subtasksCount = readArray(p, ['subtasks', 'tasks'])?.length;
+      return subtasksCount != null ? `Work plan created with ${subtasksCount} subtasks.` : 'Work plan created.';
+    }
+    case 'coordinator.steering': {
+      const instruction = readString(p, ['instruction', 'message', 'kind']);
+      return instruction ? `Coordinator steering applied: ${instruction}` : 'Coordinator steering applied.';
+    }
+    case 'coordinator.child_stall_detected':
+      return `Child stalled; redispatching ${subtaskDescription(p, subtasks)}.`;
+    case 'coordinator.children_complete': {
+      const total = readString(p, ['total']);
+      const ready = readString(p, ['assembleReady', 'assemble_ready']);
+      const failed = readString(p, ['failed']);
+      return `Child subtasks complete${total ? `: ${total} total` : ''}${ready ? `, ${ready} ready for assembly` : ''}${failed ? `, ${failed} failed` : ''}.`;
+    }
+    case 'subtask.dispatched':
+      return `Dispatched subtask: ${subtaskDescription(p, subtasks)}.`;
+    case 'subtask.pending_capacity': {
+      const reason = readString(p, ['reason', 'capacityReason', 'capacity_reason']);
+      return `Subtask waiting for capacity: ${subtaskDescription(p, subtasks)}${reason ? ` — ${reason}` : ''}.`;
+    }
+    case 'subtask.running':
+      return `Subtask running: ${subtaskDescription(p, subtasks)}.`;
+    case 'subtask.assemble_ready':
+      return `Subtask ready for assembly: ${subtaskDescription(p, subtasks)}.`;
+    case 'subtask.rai_flagged':
+      return `Subtask flagged by RAI: ${subtaskDescription(p, subtasks)}.`;
+    case 'subtask.completed':
+      return `Subtask completed: ${subtaskDescription(p, subtasks)}.`;
+    case 'subtask.failed': {
+      const reason = readString(p, ['reason', 'error', 'message']);
+      return `Subtask failed: ${subtaskDescription(p, subtasks)}${reason ? ` — ${reason}` : ''}.`;
+    }
+    case 'coordinator.assembly_started':
+      return `Collective assembly started${readString(p, ['integrationBranch', 'integration_branch']) ? ` on ${readString(p, ['integrationBranch', 'integration_branch'])}` : ''}.`;
+    case 'coordinator.integration_conflict_auto_resolved':
+      return `Collective assembly: auto-resolved merge conflict${readArray(p, ['conflictingFiles', 'conflicting_files'])?.length ? ` in ${readArray(p, ['conflictingFiles', 'conflicting_files'])!.join(', ')}` : ''}.`;
+    case 'coordinator.assembly_rai_started':
+      return 'Collective assembly: RAI check started.';
+    case 'coordinator.assembly_rai_completed':
+      return Boolean(p['raiSafetyFlagged'] ?? p['rai_safety_flagged'])
+        ? 'Collective assembly: RAI check completed with safety flags.'
+        : 'Collective assembly: RAI check completed.';
+    case 'coordinator.assembly_review_requested':
+      return 'Human review requested for collective assembly.';
+    case 'coordinator.assembly_review_approved': {
+      const reviewer = readString(p, ['reviewer']);
+      return `Human review approved${reviewer ? ` by ${reviewer}` : ''}.`;
+    }
+    case 'coordinator.assembly_review_preserved':
+      return 'Human review preserved after coordinator failure.';
+    case 'coordinator.assembly_changes_requested':
+      return 'Human review requested changes; coordinator will redispatch affected subtasks.';
+    case 'coordinator.assembly_merge_started':
+      return 'Collective assembly: merge started.';
+    case 'coordinator.assembly_merge_completed': {
+      const commit = readString(p, ['commitHash', 'commit_hash']);
+      return `Collective assembly: merge completed${commit ? ` (${commit.slice(0, 8)})` : ''}.`;
+    }
+    case 'coordinator.assembly_merge_failed': {
+      const reason = readString(p, ['reason', 'error']);
+      return `Collective assembly: merge failed${reason ? ` — ${reason}` : ''}.`;
+    }
+    case 'coordinator.assembly_scribe_started':
+      return 'Collective assembly: scribe started.';
+    case 'coordinator.assembly_scribe_completed':
+      return 'Collective assembly: scribe completed.';
+    case 'coordinator.assembly_completed': {
+      const commit = readString(p, ['commitHash', 'commit_hash']);
+      return `Collective assembly completed${commit ? ` (${commit.slice(0, 8)})` : ''}.`;
+    }
+    case 'coordinator.assembly_blocked': {
+      const reason = readString(p, ['reason']);
+      return `Collective assembly blocked${reason ? ` — ${reason}` : ''}.`;
+    }
+    case 'coordinator.assembly_declined': {
+      const reason = readString(p, ['reason']);
+      return `Collective assembly declined${reason ? ` — ${reason}` : ''}.`;
+    }
+    case 'coordinator.assembly_failed': {
+      const reason = readString(p, ['reason', 'error']);
+      return `Collective assembly failed${reason ? ` — ${reason}` : ''}.`;
+    }
+    case 'coordinator.child_question': {
+      const question = readString(p, ['question']) ?? 'Question pending.';
+      return `Child question from ${subtaskDescription(p, subtasks)}: ${question}`;
+    }
+    case 'coordinator.child_approval_required': {
+      const tool = readString(p, ['toolName', 'tool_name']) ?? 'tool';
+      const message = readString(p, ['message', 'url']);
+      return `Tool approval required from ${subtaskDescription(p, subtasks)}: ${tool}${message ? ` — ${message}` : ''}`;
+    }
+    case 'coordinator.child_approval_resolved': {
+      const outcome = Boolean(p['expired']) ? 'expired' : Boolean(p['approved']) ? 'approved' : 'denied';
+      return `Child tool approval ${outcome} for ${subtaskDescription(p, subtasks)}.`;
+    }
+    case 'coordinator.autopilot_answered': {
+      const answer = readString(p, ['answer']);
+      return `Autopilot answered child question for ${subtaskDescription(p, subtasks)}${answer ? `: ${answer}` : '.'}`;
+    }
+    default:
+      return null;
+  }
+}
+
+function buildCoordinatorTurns(events: RunStreamEvent[]): ConversationTurn[] {
+  const subtasks = buildSubtaskInfo(events);
+  const turns: ConversationTurn[] = [];
+  const resolvedApprovals = new Map<string, string>();
+  let firstSystem: ConversationRow | null = null;
+  let firstTask: ConversationRow | null = null;
+
+  for (const evt of events) {
+    if (evt.type === 'tool.approval_resolved' || evt.type === 'coordinator.child_approval_resolved') {
+      const requestId = readString(evt.payload, ['requestId', 'request_id']);
+      if (!requestId) continue;
+      if (Boolean(evt.payload['expired'])) resolvedApprovals.set(requestId, 'expired');
+      else if (Boolean(evt.payload['approved'])) resolvedApprovals.set(requestId, readString(evt.payload, ['scope']) ?? 'approved');
+      else resolvedApprovals.set(requestId, 'deny');
+    }
+    if (!firstSystem && evt.type === 'agent.system_prompt') {
+      const content = readString(evt.payload, ['content', 'prompt', 'systemPrompt']);
+      if (content) firstSystem = { key: `system-${evt.sequence}`, role: 'system', content, timestamp: readTimestamp(evt) };
+    }
+    if (!firstTask && evt.type === 'agent.task') {
+      const content = readString(evt.payload, ['task', 'content', 'instruction']);
+      if (content) firstTask = { key: `task-${evt.sequence}`, role: 'user', content, timestamp: readTimestamp(evt) };
+    }
+  }
+
+  if (firstSystem || firstTask) {
+    turns.push({
+      key: 'coordinator-prompt-details',
+      rows: [firstSystem, firstTask].filter((row): row is ConversationRow => row !== null),
+      toolCalls: [],
+      approvals: [],
+      filePaths: [],
+    });
+  }
+
+  for (const evt of events) {
+    const line = coordinatorActivityLine(evt, subtasks);
+    if (!line) continue;
+    const requestId = readString(evt.payload, ['requestId', 'request_id']) ?? '';
+    const resolvedScope = requestId ? (resolvedApprovals.get(requestId) ?? null) : null;
+    const approvals = evt.type === 'coordinator.child_approval_required'
+      ? [{ event: evt, isResolved: resolvedScope !== null, resolvedScope }]
+      : [];
+    turns.push({
+      key: `coordinator-activity-${evt.sequence}`,
+      rows: [{ key: `activity-${evt.sequence}`, role: 'activity', content: line, timestamp: readTimestamp(evt) }],
+      toolCalls: [],
+      approvals,
+      filePaths: [],
+    });
+  }
+
+  return turns.length > 0 ? turns : buildTurns(events);
+}
+
 function flattenTree(
   nodes: RunSessionTree[],
   coordinatorNodeId: string | null,
@@ -1120,7 +1363,10 @@ export function AgentSessionPanel({
     : '';
   const { events: liveEvents } = useRunStream(open && selectedRunId ? selectedRunId : '');
   const events = useMemo(() => mergeRunEvents(seedEvents, liveEvents), [seedEvents, liveEvents]);
-  const turns = useMemo(() => buildTurns(events), [events]);
+  const turns = useMemo(
+    () => selectedItem?.isCoordinator ? buildCoordinatorTurns(events) : buildTurns(events),
+    [events, selectedItem?.isCoordinator],
+  );
 
   useEffect(() => {
     if (open) {
