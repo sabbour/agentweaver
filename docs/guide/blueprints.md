@@ -13,3 +13,17 @@ Generated and user-supplied blueprints are validated before they can be applied.
 - `sandbox_profile` is one of the supported profiles (`default` or `restricted`).
 
 If generation returns an invalid blueprint, the API reports plain-language validation details and offers two safe next steps: regenerate with a clearer prompt or edit the draft and validate it again. Invalid blueprints are not saved or applied.
+
+## Generated blueprint hardening
+
+Blueprint generation is library-first. The generator selects built-in workflows only when their
+process fits the requested team, not just because names or domain words overlap. When no built-in
+workflow fits, Agentweaver can generate a custom workflow draft and, on apply, write it into the new
+project's `.agentweaver/workflows/` directory so it is immediately selectable.
+
+Generated blueprints may also include bespoke roles, but only as a last resort. Every non-catalog
+role must have a matching bespoke role definition with an inline charter, and validation rejects
+unrostered bespoke roles or bespoke ids that collide with catalog roles.
+
+See [Workflow generation](../workflow-generation.md) for the generation path and [Workflows](./workflows.md)
+for editing and saving generated workflow drafts.

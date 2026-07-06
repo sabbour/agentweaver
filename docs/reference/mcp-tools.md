@@ -10,7 +10,7 @@
 This page is generated from the MCP server source. Do not edit it by hand — run `node scripts/gen-docs.mjs`. For the full parameter reference of each tool, see [MCP server reference](./mcp.md).
 :::
 
-The Agentweaver MCP server exposes **79 tools** across **13 categories**. This index is the authoritative list of tool names and one-line descriptions, derived directly from the `[McpServerTool]` attributes in the server source.
+The Agentweaver MCP server exposes **88 tools** across **14 categories**. This index is the authoritative list of tool names and one-line descriptions, derived directly from the `[McpServerTool]` attributes in the server source.
 
 MCP tool implementations URI-escape every route path parameter before calling the Agentweaver API. Segments such as `project_id`, `run_id`, `agent_name`, and task or workflow ids are encoded with `Uri.EscapeDataString()` so crafted ids cannot inject `../` or otherwise change the API path. Query-string parameters keep their normal query encoding.
 
@@ -129,6 +129,20 @@ MCP tool implementations URI-escape every route path parameter before calling th
 | --- | --- |
 | `sandbox_policy_get` | Get the sandbox policy for a repository. |
 | `sandbox_policy_set` | Set the sandbox policy for a repository. |
+
+## Skill
+
+| Tool | Description |
+| --- | --- |
+| `skill_assign` | Assign a catalog skill to an agent. At prompt-assembly time only assigned skills appear for that agent (progressive disclosure). |
+| `skill_assignments_list` | List all skill→agent assignments in a project. |
+| `skill_delete` | Delete a catalog skill and all of its agent assignments. |
+| `skill_get` | Get a single catalog skill including SKILL.md instructions and bundled resources. |
+| `skill_import` | Import selected skills from a Git repo into the project catalog. Idempotent by content hash. Omit locations to import all discovered candidates. |
+| `skill_import_preview` | Clone a Git repo and list candidate skills found in recognized skill locations, without importing. |
+| `skill_list` | List catalog skills for a project with their agent assignments and status. |
+| `skill_sync` | Discover and sync skills already present in the project's connected repository (.github/skills, .copilot/skills, .claude/skills, .agents/skills). Idempotent; marks vanished skills as missing. |
+| `skill_unassign` | Remove a skill assignment from an agent. |
 
 ## Team
 

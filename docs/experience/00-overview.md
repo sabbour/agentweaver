@@ -9,6 +9,7 @@ Scope note: this is an orientation document for using Agentweaver. It describes 
 Agentweaver exposes one product through two front doors:
 
 - **The web UI** is for humans. It is visual, navigable, and real-time. A user signs in, chooses a project, watches boards and timelines update, opens files, reviews output, steers coordinators, and changes project settings.
+- **The browser console** is a web UI mode for keyboard-first operation. It opens at `/console`, accepts prose for the real coordinator, and exposes slash commands for common MCP-backed controls.
 - **The MCP server** is for MCP clients such as Claude, Copilot, or other AI assistants. A client connects to Agentweaver, authenticates, and invokes tools like `project_create`, `run_submit`, `run_watch`, `coordinator_start`, `team_cast`, or `memory_search`.
 
 They are two front-ends over the same backend and data model. Projects, runs, coordinator orchestration, team rosters, memory, workflows, backlog items, sandbox policy, diagnostics, and workspace files are authoritative on the backend. The web UI renders those facts as pages, cards, graphs, timelines, and forms. The MCP server exposes the same facts and mutations as tools. Most actions a person performs in the web UI have a corresponding MCP tool an assistant can call.
@@ -30,6 +31,7 @@ The web UI and MCP server differ in interaction style, not in product intent:
 | Surface | Best user | Interaction style | What it is best at |
 |---|---|---|---|
 | Web UI | Human operators, reviewers, project owners | Click, inspect, compare, approve, steer | Seeing state, understanding context, making judgment calls, watching live work |
+| Browser console | Keyboard-first operators | Prose plus slash commands | Starting, monitoring, and steering coordinator runs without leaving a terminal-style browser page |
 | MCP server | AI assistants, automation agents, scripted clients | Connect, authenticate, call tools | Creating and updating work programmatically, chaining operations, asking an assistant to operate Agentweaver for you |
 
 ## Shared experience model
@@ -111,6 +113,7 @@ Agentweaver's web UI is organized into global destinations plus four project-sco
 |---|---|---|
 | **Agents** | `/projects/:projectId/team` | Manage the cast working on the project: inspect agents, view charters and capabilities, add members, retire members, re-role agents, and open the casting wizard. |
 | **Memories** | `/projects/:projectId/memories` | Review team decisions, merge or reject decision inbox entries, and create or update agent memory. |
+| **Skills** | `/projects/:projectId/skills` | Build a per-project skill catalog, inspect provenance and status, and assign active skills to individual agents. |
 
 #### OPERATIONS
 
@@ -125,6 +128,7 @@ Agentweaver's web UI is organized into global destinations plus four project-sco
 |---|---|---|
 | **Diagnostics** | `/projects/:projectId/diagnostics` | Run real diagnostics checks, switch between global and project scope, and inspect pass/warn/fail details with durations. |
 | **Heartbeat** | `/projects/:projectId/heartbeat` | Monitor background automation status, coordinator heartbeat, checkpoint GC, recent ticks, errors, and service cadence. |
+| **Observability > Traces** | `/projects/:projectId/observability/traces` | Preview hierarchical transaction traces for recent coordinator runs. |
 
 ### Deep run destinations
 

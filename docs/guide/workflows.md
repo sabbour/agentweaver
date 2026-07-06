@@ -72,9 +72,13 @@ Click **New workflow** and choose **YAML editor**. A YAML template opens in the 
 
 Choose **Visual editor** to build a workflow as a node graph. Drag roles onto the canvas, connect them, and configure each step visually. The editor generates the YAML for you.
 
+For existing project workflows, use **Edit** to open the YAML editor or **Edit visually** to open the graph editor. Built-in workflows are read-only; fork or create a project workflow when you need to customize the pipeline.
+
 ### Generate from description
 
 Choose **Generate from description**, type what you want the workflow to do in plain language, and Agentweaver generates an initial YAML draft for you to review and edit. If the description includes a recurring cadence such as "Every Monday", the draft uses a `schedule` trigger with a cadence like `weekly:monday`. If the project was created from GitHub — or your prompt includes a GitHub repository or issue URL — generation keeps that target repository in the prompt context so the draft acts against the intended repo.
+
+The generated workflow is preview-first: Agentweaver opens the YAML draft in the editor and does not write it to `.agentweaver/workflows/` until you save. If validation fails after the server's correction pass, the API returns an error instead of saving a broken workflow.
 
 ```mermaid
 flowchart LR

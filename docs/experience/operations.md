@@ -60,6 +60,7 @@ The important operating rule is: Agentweaver shows real state. Diagnostics can w
 | **Heartbeat** | Project **Heartbeat** page | Is background automation enabled, ticking, and acting? | `heartbeat_status` |
 | **Flow** | Project **Flow** page | What is each agent working on right now? | Indirect through board/run/coordinator tools |
 | **Cluster** | Project **Cluster** page (SYSTEM section) | Are pods healthy, is quota available, are any pods orphaned? | `GET /api/diagnostics/cluster` |
+| **Observability > Traces** | Project **Observability** → **Traces** | How did a coordinator transaction move through agent turns, tool calls, and LLM spans? | `GET /api/metrics/runs/{runId}/traces` |
 
 Use **Diagnostics** when something feels broken. Use **Heartbeat** when Ready work is not being claimed. Use **Flow** during active multi-agent work. Use **Settings** before changing command execution posture. Use **Cluster** when capacity warnings appear or pods are accumulating.
 
@@ -427,4 +428,3 @@ When the API is not deployed on AKS (or the cluster diagnostics endpoint returns
 ## See also
 
 - [Token usage monitoring](./token-usage-monitoring.md) — project and app-level AI Credit dashboards, part of the broader operations picture.
-

@@ -106,6 +106,14 @@ At the same time, payloads should avoid becoming a second database. Large or dur
 
 The event stream remains the durable audit trail, but model turns also emit OpenTelemetry/AppInsights signals for fleet observability. `CopilotAIAgent` starts an `Agentweaver model turn` activity with run, project, agent, model, and GenAI tags, then completes it with input/output token, total token, nano-AIU, and TTFT tags (`packages/Agentweaver.AgentRuntime/CopilotAIAgent.cs:643`, `:664`). Positive AIC usage is recorded as the `agentweaver.token.usage` counter in `nano_aiu` (`CopilotAIAgent.cs:48`, `:683`). The API trace query deliberately filters to agentic/LLM spans by `agentweaver.span.kind`, GenAI, agent, or model tags so generic platform dependencies do not clutter run traces (`apps/Agentweaver.Api/Metrics/AppInsightsMetricsService.cs:518`).
 
+The web **Observability > Traces** page turns those spans into a transaction hierarchy. The backend
+returns `RunTraceSpanDto` rows with ids, parent ids, span type, timing, status, agent, tool, model, and
+token fields (`apps/Agentweaver.Api/Metrics/MetricsDtos.cs:133`). The frontend reconstructs the tree
+from parent links and renders agent turns, tool calls, and LLM spans in
+`TransactionTracePanel` (`apps/web/src/components/runs/traceTree.ts:22`,
+`apps/web/src/components/runs/TransactionTracePanel.tsx:294`). See
+[Transaction traces](../experience/transaction-traces.md) for the user guide.
+
 ## Durable Stream Architecture
 
 The run-event stream has two layers:

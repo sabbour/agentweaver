@@ -26,10 +26,22 @@ features:
     details: Submit a goal. The coordinator drafts an OutcomeSpec, you confirm it, then a squad of specialists works in parallel — each in an isolated git worktree. You steer mid-run, review once, and approve.
   - title: Full observability
     details: Every agent message, tool call, and tool result streams live over SSE and is persisted before fan-out. Nothing is opaque. Reopen any run and see the full audit trail.
+  - title: Transaction trace hierarchy
+    details: Observability traces now show agent turns, tool calls, and LLM spans as an expandable transaction tree with per-span Generative AI properties.
+    link: /experience/transaction-traces
+    linkText: See it in action
   - title: Human gates that matter
     details: No code merges without your explicit approval. The OutcomeSpec gate, RAI check, and human review step are enforced by the platform — not optional.
   - title: Scenario workflows
     details: Seven built-in YAML workflows cover software delivery, bug fixing, code review, content authoring, PM discovery, incident response, and agent evaluation. Add your own or generate one.
+  - title: Per-project agent skills
+    details: Build a project skill catalog from repo folders, Git imports, or uploads, then assign active skills to individual agents. Skills use progressive disclosure so only relevant instructions are materialized during runs.
+    link: /experience/project-skills
+    linkText: See it in action
+  - title: Browser console
+    details: Drive Agentweaver from a full-screen terminal-style console. Type prose to steer the real coordinator, or use slash commands for MCP-backed project, backlog, run, and gate controls.
+    link: /experience/browser-console
+    linkText: See it in action
   - title: Suggested blueprints for GitHub repos
     details: Create from GitHub now analyzes repository metadata, topics, languages, root files, and issues to recommend the best starter blueprint, with graceful fallback to Templates.
     link: /experience/repo-blueprint-suggestions
