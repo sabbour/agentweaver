@@ -10,7 +10,6 @@ using Agentweaver.AgentRuntime.Providers;
 using Agentweaver.AgentRuntime.Workflow;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Memory;
-using Agentweaver.Api.ReviewPolicies;
 using Agentweaver.Api.Runs.Graph;
 using Agentweaver.Api.Sandbox;
 using Agentweaver.Api.Workflows;
@@ -41,7 +40,6 @@ public sealed class RunWorkflowFactory
     private readonly IWorkflowAgentFactory _agentFactory;
     private readonly IProjectStore? _projectStore;
     private readonly WorkflowRegistry? _workflowRegistry;
-    private readonly ReviewPolicyRegistry? _reviewPolicyRegistry;
     private readonly IBacklogTaskStore? _backlogTaskStore;
     private readonly CheckpointManager _checkpointManager;
     private readonly string _checkpointDir;
@@ -108,7 +106,6 @@ public sealed class RunWorkflowFactory
             configuration,
             projectStore: null,
             workflowRegistry: null,
-            reviewPolicyRegistry: null,
             eventStream: eventStream,
             backlogTaskStore: backlogTaskStore)
     {
@@ -132,7 +129,6 @@ public sealed class RunWorkflowFactory
         IConfiguration configuration,
         IProjectStore? projectStore,
         WorkflowRegistry? workflowRegistry,
-        ReviewPolicyRegistry? reviewPolicyRegistry,
         IRunEventStream? eventStream = null,
         IBacklogTaskStore? backlogTaskStore = null,
         ICheckpointStoreFactory? checkpointStoreFactory = null)
@@ -154,7 +150,6 @@ public sealed class RunWorkflowFactory
         _agentFactory = agentFactory;
         _projectStore = projectStore;
         _workflowRegistry = workflowRegistry;
-        _reviewPolicyRegistry = reviewPolicyRegistry;
         _backlogTaskStore = backlogTaskStore;
 
         // Checkpoint directory: configurable via Checkpoints:Path; defaults to
@@ -1209,9 +1204,9 @@ public sealed class RunWorkflowFactory
 
                 "human-review" => RequestPort.Create<WorkflowReviewRequest, WorkflowReviewDecision>($"{node.Id}-gate"),
 
-                _ => throw new ReviewPolicyCompositionException(
-                    "review_policy_unsupported_gate",
-                    $"Workflow '{definition.Id}' contains unsupported review-policy gate kind '{gateKind}' on node '{node.Id}'."),
+                _ => throw new WorkflowBindException(
+                    $"Workflow '{definition.Id}' contains unsupported gate kind '{gateKind}' on node '{node.Id}'.",
+                    node.Id),
             };
         }
 
@@ -1317,39 +1312,23 @@ public sealed class RunWorkflowFactory
         CancellationToken ct)
     {
         var fallback = Workflows.BuiltInWorkflows.Default.Definition!;
-        if (_projectStore is null || _workflowRegistry is null || _reviewPolicyRegistry is null)
-            return ReviewPolicyComposer.ComposeForRuntime(fallback, BuiltInReviewPolicies.Default.Policy!).Effective;
+        if (_projectStore is null || _workflowRegistry is null)
+            return fallback;
 
         if (string.IsNullOrWhiteSpace(projectId) || !ProjectId.TryParse(projectId, out var pid))
-            return ReviewPolicyComposer.ComposeForRuntime(fallback, BuiltInReviewPolicies.Default.Policy!).Effective;
+            return fallback;
 
         var project = await _projectStore.GetAsync(pid, ct).ConfigureAwait(false);
         if (project is null)
-            return ReviewPolicyComposer.ComposeForRuntime(fallback, BuiltInReviewPolicies.Default.Policy!).Effective;
+            return fallback;
 
         var overrideId = await ResolveWorkflowOverrideIdAsync(runId, ct).ConfigureAwait(false);
         var workflowResult = ResolveWorkflowForRun(project, overrideId);
         if (!workflowResult.IsValid || workflowResult.Definition is null)
-            throw new ReviewPolicyCompositionException(
-                "workflow_resolution_failed",
+            throw new WorkflowBindException(
                 $"Project '{project.Id}' workflow could not be resolved: {workflowResult.Error ?? "unknown workflow error"}");
 
-        var policyResult = _reviewPolicyRegistry.ResolveActive(project);
-        if (!policyResult.IsValid || policyResult.Policy is null)
-            throw new ReviewPolicyCompositionException(
-                "review_policy_resolution_failed",
-                $"Project '{project.Id}' active review policy could not be resolved: {policyResult.Error ?? "unknown review-policy error"}");
-
-        try
-        {
-            return ReviewPolicyComposer.ComposeForRuntime(workflowResult.Definition, policyResult.Policy).Effective;
-        }
-        catch (ReviewPolicyCompositionException ex)
-        {
-            throw new ReviewPolicyCompositionException(
-                ex.Code,
-                $"{ex.Message} Workflow source={workflowResult.Source}; review policy source={policyResult.Source}.");
-        }
+        return workflowResult.Definition;
     }
 
     private async Task<string?> ResolveWorkflowOverrideIdAsync(string? runId, CancellationToken ct)

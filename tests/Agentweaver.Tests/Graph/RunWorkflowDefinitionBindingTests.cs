@@ -3,7 +3,6 @@ using Microsoft.Agents.AI.Workflows;
 using Microsoft.Extensions.DependencyInjection;
 using Agentweaver.Api.Runs;
 using Agentweaver.Api.Runs.Graph;
-using Agentweaver.Api.ReviewPolicies;
 using Agentweaver.Api.Workflows;
 using Agentweaver.Tests.Helpers;
 
@@ -104,41 +103,6 @@ public sealed class CoordinatorRunWorkflowDefinitionBindingTests
     }
 
     [Fact]
-    public void FullVariant_ComposedRubberduckPolicy_BindsInjectedGateIntoLiveGraph()
-    {
-        var policy = new ReviewPolicy
-        {
-            Name = "rubberduck-opt-in",
-            Steps = [new ReviewStep { Kind = ReviewStepKind.Rubberduck, Label = "Rubber-duck review" }],
-        };
-        var effective = ReviewPolicyComposer.Compose(BuiltInWorkflows.Default.Definition!, policy).Effective;
-
-        var (_, descriptor) = Factory.BuildWorkflowForTest(isChild: false, effective);
-
-        descriptor.Nodes.Should().Contain(n => n.Id == "policy-rubberduck" && n.NodeType == "gate");
-        descriptor.Edges.Should().Contain(e => e.From == "review" && e.To == "policy-rubberduck");
-        descriptor.Edges.Should().Contain(e => e.From == "policy-rubberduck" && e.To == "merge");
-    }
-
-    [Fact]
-    public void FullVariant_DirectAgentTurnPolicyGate_StoresAgentOutputBeforeDecisionGate()
-    {
-        var policy = new ReviewPolicy
-        {
-            Name = "rubberduck-required",
-            Steps = [new ReviewStep { Kind = ReviewStepKind.Rubberduck, Label = "Rubber-duck review" }],
-        };
-        var effective = ReviewPolicyComposer.Compose(DirectMergeWorkflow(), policy).Effective;
-
-        var (workflow, descriptor) = Factory.BuildWorkflowForTest(isChild: false, effective);
-
-        workflow.ReflectExecutors().Should().ContainKey("policy-agent-turn-storer",
-            "a policy gate fed directly by AgentTurnOutput must persist merge data before a later decision-to-merge adapter reads it");
-        descriptor.Edges.Should().Contain(e => e.From == "rai" && e.To == "policy-rubberduck");
-        descriptor.Edges.Should().Contain(e => e.From == "policy-rubberduck" && e.To == "merge");
-    }
-
-    [Fact]
     public void ChildVariant_RemainsTrimmedAgentAssembleReady_ForStage2Parity()
     {
         var d = Factory.GetGraphDescriptor(isChild: true);
@@ -160,30 +124,4 @@ public sealed class CoordinatorRunWorkflowDefinitionBindingTests
         d.Edges.Select(e => new EdgeShape(e.From, e.To, e.Cardinality, e.Loopback)).ToHashSet()
     );
 
-    private static WorkflowDefinition DirectMergeWorkflow() => new()
-    {
-        Id = "direct-merge",
-        Name = "Direct merge",
-        Start = "agent",
-        Nodes =
-        [
-            new WorkflowNode { Id = "agent", Type = WorkflowNodeType.Prompt, Label = "Agent", Role = "agent", Kind = "live" },
-            new WorkflowNode
-            {
-                Id = "rai", Type = WorkflowNodeType.Check, Label = "Rai", Role = "rai", Kind = "live",
-                GateKind = "rai", Branches = ["pass", "no-changes"]
-            },
-            new WorkflowNode { Id = "merge", Type = WorkflowNodeType.Merge, Label = "Merge", Role = "merge", Kind = "live" },
-            new WorkflowNode { Id = "scribe", Type = WorkflowNodeType.Scribe, Label = "Scribe", Role = "scribe", Kind = "live" },
-            new WorkflowNode { Id = "done", Type = WorkflowNodeType.Terminal, Label = "Done", Role = "plumbing", Kind = "terminal" },
-        ],
-        Edges =
-        [
-            new WorkflowEdge { From = "agent", To = "rai" },
-            new WorkflowEdge { From = "rai", To = "merge", When = "pass" },
-            new WorkflowEdge { From = "rai", To = "scribe", When = "no-changes" },
-            new WorkflowEdge { From = "merge", To = "scribe", When = "merged" },
-            new WorkflowEdge { From = "scribe", To = "done" },
-        ],
-    };
 }

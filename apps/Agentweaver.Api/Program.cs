@@ -32,7 +32,6 @@ using Agentweaver.Api.Endpoints;
 using Agentweaver.Api.Infrastructure.Ef;
 using Agentweaver.Api.Tools;
 using Agentweaver.Api.Workflows;
-using Agentweaver.Api.ReviewPolicies;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -268,7 +267,6 @@ builder.Services.AddHostedService<Agentweaver.Api.Coordinator.CoordinatorHeartbe
 
 // Workflows (Feature 010) + Diagnostics (Feature 011)
 builder.Services.AddSingleton<Agentweaver.Api.Workflows.WorkflowRegistry>();
-builder.Services.AddSingleton<Agentweaver.Api.ReviewPolicies.ReviewPolicyRegistry>();
 builder.Services.AddSingleton<Agentweaver.Api.Diagnostics.DiagnosticsService>();
 builder.Services.AddSingleton<Agentweaver.Api.Metrics.DashboardReadService>();
 builder.Services.AddSingleton<Agentweaver.Api.Metrics.AppInsightsMetricsService>();
@@ -768,7 +766,6 @@ else
     app.MapDecisionsEndpoints();
     app.MapMemoryEndpoints();
     app.MapWorkflowDefinitionEndpoints();
-    app.MapReviewPolicyEndpoints();
     app.MapDiagnosticsEndpoints();
     app.MapMetricsEndpoints();
     app.MapSandboxEndpoints();

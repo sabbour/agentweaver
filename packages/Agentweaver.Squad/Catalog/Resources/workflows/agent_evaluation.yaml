@@ -47,12 +47,6 @@ nodes:
     role: agent
     kind: live
 
-  - id: scribe
-    type: scribe
-    label: Scribe
-    role: scribe
-    kind: agent
-
   - id: terminal-safety-failed
     type: terminal
     label: Safety Failed
@@ -85,7 +79,7 @@ edges:
     when: safety-failed
 
   - from: safety-gate
-    to: scribe
+    to: done
     when: no-changes
 
   - from: safety-gate
@@ -93,7 +87,4 @@ edges:
     when: review
 
   - from: report
-    to: scribe
-
-  - from: scribe
     to: done

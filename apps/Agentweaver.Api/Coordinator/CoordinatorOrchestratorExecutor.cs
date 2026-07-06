@@ -127,7 +127,7 @@ public sealed class CoordinatorOrchestratorExecutor
         if (drafts.Count != originalDraftCount)
         {
             _logger.LogInformation(
-                "Coordinator orchestrate: removed {Count} platform-owned draft subtask(s) for run {RunId}; RAI/Scribe run once in collective assembly.",
+                "Coordinator orchestrate: removed {Count} platform-owned draft subtask(s) for run {RunId}; review gates/merge/scribe run once in collective assembly.",
                 originalDraftCount - drafts.Count,
                 input.RunId);
         }
@@ -874,7 +874,7 @@ public sealed class CoordinatorOrchestratorExecutor
             "Use this as guidance for the SHAPE of the decomposition (which roles act, in what order); "
             + "do not copy node ids verbatim and still PREFER concrete roster role ids below.");
         sb.AppendLine(
-            "Do not create subtasks for platform-owned RAI, human-review, merge, or scribe stages; "
+            "Do not create subtasks for platform-owned RAI, rubberduck, human-review, merge, or scribe stages; "
             + "the coordinator collective assembly supplies those exactly once after subtasks finish.");
         return sb.ToString();
     }
@@ -882,7 +882,7 @@ public sealed class CoordinatorOrchestratorExecutor
     private static bool IsCoordinatorPlatformNode(WorkflowNode node)
     {
         var kind = NodeClassifier.Classify(node);
-        return kind is NodeKind.Rai or NodeKind.HumanReview or NodeKind.Merge or NodeKind.Scribe;
+        return kind is NodeKind.Rai or NodeKind.Rubberduck or NodeKind.HumanReview or NodeKind.Merge or NodeKind.Scribe;
     }
 
     private async Task<string?> BuildCoordinatorSystemContextAsync(

@@ -3,7 +3,6 @@ using System.Reflection;
 using Agentweaver.Api.Auth;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Memory;
-using Agentweaver.Api.ReviewPolicies;
 using Agentweaver.Api.Sandbox;
 using Agentweaver.Api.Workflows;
 using Agentweaver.Domain;
@@ -37,7 +36,6 @@ public sealed class DiagnosticsService
     private readonly IProjectWorkspaceProvider _workspaceProvider;
     private readonly HeartbeatStatusStore _heartbeatStore;
     private readonly WorkflowRegistry _workflowRegistry;
-    private readonly ReviewPolicyRegistry _reviewPolicyRegistry;
     private readonly IConfiguration _configuration;
     private readonly IServiceScopeFactory _scopeFactory;
     // Optional in-cluster Kubernetes client for the agent-pod quota check. Null outside Kubernetes
@@ -71,7 +69,6 @@ public sealed class DiagnosticsService
         IProjectWorkspaceProvider workspaceProvider,
         HeartbeatStatusStore heartbeatStore,
         WorkflowRegistry workflowRegistry,
-        ReviewPolicyRegistry reviewPolicyRegistry,
         IConfiguration configuration,
         IServiceScopeFactory scopeFactory,
         IKubernetes? k8s = null,
@@ -84,7 +81,6 @@ public sealed class DiagnosticsService
         _workspaceProvider = workspaceProvider;
         _heartbeatStore = heartbeatStore;
         _workflowRegistry = workflowRegistry;
-        _reviewPolicyRegistry = reviewPolicyRegistry;
         _configuration = configuration;
         _scopeFactory = scopeFactory;
         _k8s = k8s;
@@ -109,7 +105,6 @@ public sealed class DiagnosticsService
         checks.Add(await CheckSqliteReachableAsync(ct).ConfigureAwait(false));
         checks.Add(await CheckDiskWritableAsync().ConfigureAwait(false));
         checks.Add(CheckBuiltInWorkflow());
-        checks.Add(CheckBuiltInReviewPolicy());
         checks.Add(CheckHeartbeatService());
         checks.Add(await CheckProjectStoreAsync(ct).ConfigureAwait(false));
         checks.Add(await CheckGitHubCliAsync(ct).ConfigureAwait(false));
@@ -854,9 +849,7 @@ public sealed class DiagnosticsService
 
         checks.Add(CheckWorkspaceAvailable(project));
         checks.Add(CheckWorkflowsDirectory(project));
-        checks.Add(CheckReviewPoliciesDirectory(project));
         checks.Add(await CheckActiveWorkflowAsync(project, ct).ConfigureAwait(false));
-        checks.Add(CheckActiveReviewPolicy(project));
 
         overallSw.Stop();
 
@@ -1046,26 +1039,6 @@ public sealed class DiagnosticsService
         }
     }
 
-    private static DiagnosticsCheckDto CheckBuiltInReviewPolicy()
-    {
-        var sw = Stopwatch.StartNew();
-        try
-        {
-            var result = BuiltInReviewPolicies.Default;
-            sw.Stop();
-            if (!result.IsValid || result.Policy is null)
-                return Fail("built_in_review_policy", $"Validation failed: {result.Error}", sw);
-
-            var steps = result.Policy.Steps.Count;
-            return Pass("built_in_review_policy", $"Loaded: name={result.Policy.Name}, {steps} steps", sw);
-        }
-        catch (Exception ex)
-        {
-            sw.Stop();
-            return Fail("built_in_review_policy", $"Failed to load: {ex.Message}", sw);
-        }
-    }
-
     private DiagnosticsCheckDto CheckHeartbeatService()
     {
         var sw = Stopwatch.StartNew();
@@ -1169,29 +1142,6 @@ public sealed class DiagnosticsService
         return Pass("workflows_directory", $".agentweaver/workflows/ present; {count} YAML file(s)", sw);
     }
 
-    private static DiagnosticsCheckDto CheckReviewPoliciesDirectory(Project project)
-    {
-        var sw = Stopwatch.StartNew();
-        var dir = Path.Combine(project.WorkingDirectory, ".agentweaver", "review-policies");
-        sw.Stop();
-        if (!Directory.Exists(dir))
-            return Warn("review_policies_directory",
-                $".agentweaver/review-policies/ not present — built-in default policy in use", sw);
-
-        int count;
-        try
-        {
-            count = Directory.EnumerateFiles(dir, "*.*", SearchOption.TopDirectoryOnly)
-                .Count(f => f.EndsWith(".yaml", StringComparison.OrdinalIgnoreCase) ||
-                            f.EndsWith(".yml",  StringComparison.OrdinalIgnoreCase));
-        }
-        catch (Exception ex)
-        {
-            return Warn("review_policies_directory", $"Could not enumerate .agentweaver/review-policies/: {ex.Message}", sw);
-        }
-        return Pass("review_policies_directory", $".agentweaver/review-policies/ present; {count} YAML file(s)", sw);
-    }
-
     private async Task<DiagnosticsCheckDto> CheckActiveWorkflowAsync(Project project, CancellationToken ct)
     {
         var sw = Stopwatch.StartNew();
@@ -1212,26 +1162,6 @@ public sealed class DiagnosticsService
         {
             sw.Stop();
             return Fail("active_workflow", $"Workflow load failed: {ex.Message}", sw);
-        }
-    }
-
-    private DiagnosticsCheckDto CheckActiveReviewPolicy(Project project)
-    {
-        var sw = Stopwatch.StartNew();
-        try
-        {
-            var result = _reviewPolicyRegistry.ResolveActive(project);
-            sw.Stop();
-            if (!result.IsValid || result.Policy is null)
-                return Fail("active_review_policy", $"Active policy invalid: {result.Error}", sw);
-            var steps = result.Policy.Steps.Count;
-            return Pass("active_review_policy",
-                $"Active policy: {result.Policy.Name}, {steps} step(s), source={result.Source}", sw);
-        }
-        catch (Exception ex)
-        {
-            sw.Stop();
-            return Fail("active_review_policy", $"Policy resolution failed: {ex.Message}", sw);
         }
     }
 

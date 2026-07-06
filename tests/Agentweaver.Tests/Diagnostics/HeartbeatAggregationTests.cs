@@ -62,7 +62,7 @@ public sealed class HeartbeatAggregationTests : IDisposable
         // dependencies are not dereferenced by that path.
         return new DiagnosticsService(
             db: null!, projectStore: null!, workspaceProvider: null!,
-            heartbeatStore: heartbeatStore, workflowRegistry: null!, reviewPolicyRegistry: null!,
+            heartbeatStore: heartbeatStore, workflowRegistry: null!,
             configuration: config, scopeFactory: scopeFactory);
     }
 

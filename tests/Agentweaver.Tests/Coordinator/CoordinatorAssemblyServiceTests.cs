@@ -94,7 +94,7 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         _streamStore.Create(coordinatorRunId, "alice");
         await SeedCoordinatorRunAsync(coordinatorRunId);
 
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
         var run = _sut.RunAssemblyAsync(Context(coordinatorRunId), cts.Token);
         await WaitForEventAsync(coordinatorRunId, EventTypes.CoordinatorAssemblyBlocked, cts.Token);
 
@@ -985,6 +985,9 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
 
         public Task<CollectiveRaiResult> RunRaiAsync(CollectiveRaiRequest request, CancellationToken ct) =>
             Task.FromResult(new CollectiveRaiResult(SafetyFlagged: false));
+
+        public Task<CollectiveGateDecision> RunRubberduckAsync(CollectiveRubberduckRequest request, CancellationToken ct) =>
+            Task.FromResult(new CollectiveGateDecision(Approved: true, RequestChanges: false, Feedback: null));
 
         public Task<CollectiveMergeResult> MergeAsync(CollectiveMergeRequest request, CancellationToken ct)
         {

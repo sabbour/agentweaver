@@ -423,6 +423,11 @@ internal static class RunWorkflowGraphBinder
                 return true;
             }
 
+            // Producer agent turn -> rubber-duck gate directly.
+            case (NodeKind.Agent, NodeKind.Rubberduck, null):
+                g.AddEdge(s.ResolveAgentNode(fromNode), ResolveRubberduck(toNode, b));
+                return true;
+
             // RAI cleared (has a diff) -> merge directly (publish-style: no human gate before merge).
             case (NodeKind.Rai, NodeKind.Merge, "review"):
             {
@@ -453,6 +458,12 @@ internal static class RunWorkflowGraphBinder
                 return true;
             }
 
+            // RAI cleared (has a diff) -> rubber-duck gate.
+            case (NodeKind.Rai, NodeKind.Rubberduck, "review"):
+                g.AddEdge<AgentTurnOutput>(ResolveRai(fromNode, b), ResolveRubberduck(toNode, b),
+                    output => output is not null && !output.RaiRevisionRequired && !string.IsNullOrEmpty(output.Diff));
+                return true;
+
             // Peer-review APPROVED / PASS -> merge.
             case (NodeKind.PeerReview, NodeKind.Merge, "approved"):
             case (NodeKind.PeerReview, NodeKind.Merge, "pass"):
@@ -465,12 +476,23 @@ internal static class RunWorkflowGraphBinder
             }
 
             // Peer-review PASS -> RAI gate (e.g. a QA gate that precedes the safety check).
+            case (NodeKind.PeerReview, NodeKind.Rai, "approved"):
             case (NodeKind.PeerReview, NodeKind.Rai, "pass"):
             {
                 var adapter = s.ReviewToAgentOutputAdapter(edge);
                 g.AddEdge<WorkflowReviewDecision>(s.ResolvePeerReviewNode(fromNode), adapter,
                     decision => decision is not null && decision.Approved)
                  .AddEdge(adapter, ResolveRai(toNode, b));
+                return true;
+            }
+
+            // Peer-review PASS -> rubber-duck gate.
+            case (NodeKind.PeerReview, NodeKind.Rubberduck, "pass"):
+            {
+                var adapter = s.ReviewToAgentOutputAdapter(edge);
+                g.AddEdge<WorkflowReviewDecision>(s.ResolvePeerReviewNode(fromNode), adapter,
+                    decision => decision is not null && decision.Approved)
+                 .AddEdge(adapter, ResolveRubberduck(toNode, b));
                 return true;
             }
 
@@ -534,6 +556,43 @@ internal static class RunWorkflowGraphBinder
                 ctx.ScribeOutputs.Add(path.Output);
                 return true;
             }
+
+            // Rubber-duck PASS -> human review gate.
+            case (NodeKind.Rubberduck, NodeKind.HumanReview, "pass"):
+            {
+                var adapter = s.ReviewToReviewRequestAdapter(edge);
+                g.AddEdge<WorkflowReviewDecision>(ResolveRubberduck(fromNode, b), adapter,
+                    decision => decision is not null && decision.Approved)
+                 .AddEdge(adapter, ResolveReview(toNode, b));
+                return true;
+            }
+
+            // Rubber-duck PASS -> merge.
+            case (NodeKind.Rubberduck, NodeKind.Merge, "pass"):
+            {
+                var adapter = s.ReviewToMergeAdapter(edge);
+                g.AddEdge<WorkflowReviewDecision>(ResolveRubberduck(fromNode, b), adapter,
+                    decision => decision is not null && decision.Approved)
+                 .AddEdge(adapter, b.MergeBinding);
+                return true;
+            }
+
+            // Rubber-duck PASS -> next agent turn.
+            case (NodeKind.Rubberduck, NodeKind.Agent, "pass"):
+            {
+                var adapter = s.ReviewToAgentForwardAdapter(edge);
+                g.AddEdge<WorkflowReviewDecision>(ResolveRubberduck(fromNode, b), adapter,
+                    decision => decision is not null && decision.Approved)
+                 .AddEdge(adapter, s.ResolveAgentNode(toNode));
+                return true;
+            }
+
+            // Rubber-duck REVISE -> loop back to a producer agent.
+            case (NodeKind.Rubberduck, NodeKind.Agent, "revise"):
+                g.AddEdge<WorkflowReviewDecision>(ResolveRubberduck(fromNode, b), b.ReviewChangesAdapter,
+                    decision => decision is not null && !decision.Approved && decision.RequestChanges)
+                 .AddEdge(b.ReviewChangesAdapter, s.ResolveAgentNode(toNode), idempotent: true);
+                return true;
 
             // Merge blocked -> re-enter an AI peer-review verdict gate.
             case (NodeKind.Merge, NodeKind.PeerReview, "blocked"):
@@ -620,6 +679,8 @@ internal static class RunWorkflowGraphBinder
             (NodeKind.Agent, NodeKind.Rai, null) => true,
             (NodeKind.Rai, NodeKind.Agent, "revise") => true,
             (NodeKind.Rai, NodeKind.Terminal, "safety-failed") => true,
+            (NodeKind.Rai, NodeKind.Terminal, "no-changes") => true,
+            (NodeKind.Rai, NodeKind.Terminal, "review") => true,
             (NodeKind.Rai, NodeKind.Scribe, "no-changes") => true,
             (NodeKind.Rai, NodeKind.HumanReview, "review") => true,
             (NodeKind.HumanReview, NodeKind.Merge, "approved") => true,
@@ -631,18 +692,28 @@ internal static class RunWorkflowGraphBinder
             (NodeKind.Agent, NodeKind.Agent, null) => true,
             (NodeKind.Agent, NodeKind.PeerReview, null) => true,
             (NodeKind.Agent, NodeKind.Scribe, null) => true,
+            (NodeKind.Agent, NodeKind.Terminal, null) => true,
             (NodeKind.Agent, NodeKind.HumanReview, null) => true,
+            (NodeKind.Agent, NodeKind.Rubberduck, null) => true,
             (NodeKind.Rai, NodeKind.Merge, "review") => true,
             (NodeKind.Rai, NodeKind.Agent, "review") => true,
             (NodeKind.Rai, NodeKind.PeerReview, "review") => true,
+            (NodeKind.Rai, NodeKind.Rubberduck, "review") => true,
             (NodeKind.PeerReview, NodeKind.Merge, "approved" or "pass") => true,
             (NodeKind.PeerReview, NodeKind.PeerReview, "approved" or "pass") => true,
             (NodeKind.PeerReview, NodeKind.HumanReview, "approved" or "pass") => true,
-            (NodeKind.PeerReview, NodeKind.Rai, "pass") => true,
+            (NodeKind.PeerReview, NodeKind.Rai, "approved" or "pass") => true,
+            (NodeKind.PeerReview, NodeKind.Rubberduck, "pass") => true,
             (NodeKind.PeerReview, NodeKind.Agent, "request-changes" or "fail") => true,
             (NodeKind.PeerReview, NodeKind.Terminal, "declined") => true,
             (NodeKind.HumanReview, NodeKind.Agent, "approved") => true,
             (NodeKind.HumanReview, NodeKind.Scribe, "approved") => true,
+            (NodeKind.HumanReview, NodeKind.Terminal, "approved") => true,
+            (NodeKind.Rubberduck, NodeKind.HumanReview, "pass") => true,
+            (NodeKind.Rubberduck, NodeKind.Merge, "pass") => true,
+            (NodeKind.Rubberduck, NodeKind.Terminal, "pass") => true,
+            (NodeKind.Rubberduck, NodeKind.Agent, "pass") => true,
+            (NodeKind.Rubberduck, NodeKind.Agent, "revise") => true,
             (NodeKind.Merge, NodeKind.PeerReview, "blocked") => true,
             (NodeKind.Merge, NodeKind.Agent, "blocked") => true,
             _ => false,
@@ -654,6 +725,12 @@ internal static class RunWorkflowGraphBinder
 
     private static ExecutorBinding ResolveReview(WorkflowNode node, RunWorkflowBindings b) =>
         b.PolicyGateBindings.TryGetValue(node.Id, out var binding) ? binding : b.ReviewBinding;
+
+    private static ExecutorBinding ResolveRubberduck(WorkflowNode node, RunWorkflowBindings b) =>
+        b.PolicyGateBindings.TryGetValue(node.Id, out var binding)
+            ? binding
+            : throw new WorkflowBindException(
+                $"Cannot bind rubberduck gate '{node.Id}': no executor was built for this node.", node.Id);
 
     /// <summary>
     /// Wires the graph outputs declared by a terminal definition node. Resolved from the terminal's

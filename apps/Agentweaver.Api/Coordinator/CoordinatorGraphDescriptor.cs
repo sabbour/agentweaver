@@ -29,6 +29,25 @@ public static class CoordinatorGraphDescriptor
     public const string AssemblyMergeNodeId = "planned:assembly-merge";
     public const string AssemblyScribeNodeId = "planned:assembly-scribe";
 
+    public sealed record AssemblyGateNode(string Id, string Label, string GateKind)
+    {
+        public string StageId => Id;
+        public string GraphNodeId => "planned:assembly-" + Id.Replace(' ', '-').Replace('_', '-').ToLowerInvariant();
+        public string Role => GateKind switch
+        {
+            "rai" => "rai",
+            "rubberduck" => "rubberduck",
+            "human-review" => "review",
+            _ => "review",
+        };
+    }
+
+    public static IReadOnlyList<AssemblyGateNode> DefaultAssemblyGates { get; } =
+    [
+        new(AssemblyStage.Rai, "RAI", "rai"),
+        new(AssemblyStage.Review, "Human Review", "human-review"),
+    ];
+
     public static string SubtaskNodeId(int subtaskId) => $"plan:subtask-{subtaskId}";
 
     public static string GraphId(string coordinatorRunId) => $"coordinator:{coordinatorRunId}";
@@ -39,13 +58,14 @@ public static class CoordinatorGraphDescriptor
         IReadOnlyList<Subtask> subtasks,
         IReadOnlyCollection<(int SubtaskId, int DependsOnSubtaskId)> dependencies,
         string? assemblyStage = null,
-        IPodNameRegistry? podRegistry = null)
+        IPodNameRegistry? podRegistry = null,
+        IReadOnlyList<AssemblyGateNode>? assemblyGates = null)
     {
         var projected = subtasks
             .Select(s => new SubtaskNode(
                 s.Id, s.Title, s.AssignedAgent, s.SelectedModelId, s.Phase, s.IsolationStrategy, s.ChildRunId))
             .ToList();
-        return BuildCore(coordinatorRunId, projected, dependencies, assemblyStage, podRegistry);
+        return BuildCore(coordinatorRunId, projected, dependencies, assemblyStage, podRegistry, assemblyGates);
     }
 
     /// <summary>
@@ -59,7 +79,10 @@ public static class CoordinatorGraphDescriptor
         BuildCore(coordinatorRunId, Array.Empty<SubtaskNode>(), Array.Empty<(int, int)>(), assemblyStage: null);
 
     /// <summary>Builds the descriptor from the <see cref="CoordinatorWorkPlanView"/> projection.</summary>
-    public static GraphDescriptor Build(CoordinatorWorkPlanView plan, IPodNameRegistry? podRegistry = null)
+    public static GraphDescriptor Build(
+        CoordinatorWorkPlanView plan,
+        IPodNameRegistry? podRegistry = null,
+        IReadOnlyList<AssemblyGateNode>? assemblyGates = null)
     {
         var projected = plan.Subtasks
             .Select(s => new SubtaskNode(
@@ -68,7 +91,7 @@ public static class CoordinatorGraphDescriptor
         var deps = plan.Dependencies
             .Select(d => (d.SubtaskId, d.DependsOnSubtaskId))
             .ToList();
-        return BuildCore(plan.CoordinatorRunId, projected, deps, plan.AssemblyStage, podRegistry);
+        return BuildCore(plan.CoordinatorRunId, projected, deps, plan.AssemblyStage, podRegistry, assemblyGates);
     }
 
     private static GraphDescriptor BuildCore(
@@ -76,8 +99,10 @@ public static class CoordinatorGraphDescriptor
         IReadOnlyList<SubtaskNode> subtasks,
         IReadOnlyCollection<(int SubtaskId, int DependsOnSubtaskId)> dependencies,
         string? assemblyStage,
-        IPodNameRegistry? podRegistry = null)
+        IPodNameRegistry? podRegistry = null,
+        IReadOnlyList<AssemblyGateNode>? assemblyGates = null)
     {
+        var gates = assemblyGates ?? DefaultAssemblyGates;
         var nodes = new List<GraphNode>(subtasks.Count + 5)
         {
             new(CoordinatorNodeId, "Coordinator", "coordinator", "live", "agent", ChildGraphRef: null),
@@ -105,12 +130,21 @@ public static class CoordinatorGraphDescriptor
         // Collective-assembly stage (Phase 3). Each node flips planned -> live once its stage has
         // started, computed from the persisted work-plan AssemblyStage (sticky/forward-only): a node
         // renders "live" when its stage ordinal is <= the current stage ordinal, else "planned".
-        var stageOrd = AssemblyStage.Ordinal(assemblyStage);
+        var stageOrd = AssemblyStage.Ordinal(assemblyStage, gates);
         string Kind(int nodeStageOrd) => stageOrd >= nodeStageOrd ? "live" : "planned";
-        nodes.Add(new GraphNode(AssemblyRaiNodeId, "RAI", "rai", Kind(AssemblyStage.Ordinal(AssemblyStage.Rai)), "agent", ChildGraphRef: null));
-        nodes.Add(new GraphNode(AssemblyReviewNodeId, "Human Review", "review", Kind(AssemblyStage.Ordinal(AssemblyStage.Review)), "gate", ChildGraphRef: null));
-        nodes.Add(new GraphNode(AssemblyMergeNodeId, "Merge", "merge", Kind(AssemblyStage.Ordinal(AssemblyStage.Merge)), "action", ChildGraphRef: null));
-        nodes.Add(new GraphNode(AssemblyScribeNodeId, "Scribe", "scribe", Kind(AssemblyStage.Ordinal(AssemblyStage.Scribe)), "agent", ChildGraphRef: null));
+        for (var i = 0; i < gates.Count; i++)
+        {
+            var gate = gates[i];
+            nodes.Add(new GraphNode(
+                gate.GraphNodeId,
+                gate.Label,
+                gate.Role,
+                Kind(i + 1),
+                gate.GateKind == "rai" ? "agent" : "gate",
+                ChildGraphRef: null));
+        }
+        nodes.Add(new GraphNode(AssemblyMergeNodeId, "Merge", "merge", Kind(gates.Count + 1), "action", ChildGraphRef: null));
+        nodes.Add(new GraphNode(AssemblyScribeNodeId, "Scribe", "scribe", Kind(gates.Count + 2), "agent", ChildGraphRef: null));
 
         // ── Edges ────────────────────────────────────────────────────────────
         var subtaskIds = subtasks.Select(s => s.Id).ToHashSet();
@@ -134,33 +168,35 @@ public static class CoordinatorGraphDescriptor
         foreach (var (from, to) in depEdges)
             edges.Add((SubtaskNodeId(from), SubtaskNodeId(to)));
 
-        // terminal subtasks (leaves: nothing depends on them) -> planned assembly RAI.
+        var firstAssemblyNodeId = gates.Count > 0 ? gates[0].GraphNodeId : AssemblyMergeNodeId;
+
+        // terminal subtasks (leaves: nothing depends on them) -> first planned assembly node.
         foreach (var s in subtasks)
             if (!hasOutgoing.Contains(s.Id))
-                edges.Add((SubtaskNodeId(s.Id), AssemblyRaiNodeId));
+                edges.Add((SubtaskNodeId(s.Id), firstAssemblyNodeId));
 
         // No subtasks yet (pre-confirmation / pre-decomposition): wire the coordinator straight into
         // the planned assembly stage so the empty coordinator graph still renders as a connected
         // pipeline (Coordinator -> RAI -> Review -> Merge -> Scribe) instead of a floating node.
         if (subtasks.Count == 0)
-            edges.Add((CoordinatorNodeId, AssemblyRaiNodeId));
+            edges.Add((CoordinatorNodeId, firstAssemblyNodeId));
 
-        // planned assembly chain.
-        edges.Add((AssemblyRaiNodeId, AssemblyReviewNodeId));
-        edges.Add((AssemblyReviewNodeId, AssemblyMergeNodeId));
+        // planned assembly chain: authored gates followed by hardcoded merge + scribe.
+        for (var i = 0; i < gates.Count - 1; i++)
+            edges.Add((gates[i].GraphNodeId, gates[i + 1].GraphNodeId));
+        if (gates.Count > 0)
+            edges.Add((gates[^1].GraphNodeId, AssemblyMergeNodeId));
         edges.Add((AssemblyMergeNodeId, AssemblyScribeNodeId));
 
         // Loopback edges: on RAI-RED or human-review request_changes the coordinator RE-DISPATCHES
         // affected subtasks, so control flows back to the coordinator. These reflect the orchestration
         // semantics ("RAI flows back to the coordinator; review flows back to the coordinator") and
         // are the only non-forward edges, so the graph is no longer a pure DAG.
-        var loopbacks = new HashSet<(string From, string To)>
-        {
-            (AssemblyRaiNodeId, CoordinatorNodeId),
-            (AssemblyReviewNodeId, CoordinatorNodeId),
-        };
-        edges.Add((AssemblyRaiNodeId, CoordinatorNodeId));
-        edges.Add((AssemblyReviewNodeId, CoordinatorNodeId));
+        var loopbacks = gates
+            .Select(g => (From: g.GraphNodeId, To: CoordinatorNodeId))
+            .ToHashSet();
+        foreach (var loopback in loopbacks)
+            edges.Add(loopback);
 
         // Cardinality by FORWARD degree: loopback edges are excluded from the degree counts (so they
         // do not distort fan-out/fan-in on the coordinator or assembly nodes) and always render

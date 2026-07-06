@@ -1,6 +1,6 @@
 # Content Authoring Workflow (Feature 015 US3)
 # Content creation pipeline: research → draft → editorial review → RAI check → publish → scribe.
-# Includes an editorial review revise loop and a RAI safety check before publishing.
+# Includes an editorial review revise loop and a RAI safety check and human review before publishing.
 # No code-merge semantics — publish is the terminal action for content delivery.
 
 id: content-authoring
@@ -42,6 +42,17 @@ nodes:
       - no-changes
       - review
 
+  - id: human-review
+    type: check
+    label: Human Review
+    role: review
+    kind: gate
+    gate_kind: human-review
+    branches:
+      - approved
+      - request-changes
+      - declined
+
   - id: publish
     type: prompt
     label: Publish
@@ -49,15 +60,15 @@ nodes:
     kind: live
     prompt: Publish or package the approved content without invoking code merge semantics.
 
-  - id: scribe
-    type: scribe
-    label: Scribe
-    role: scribe
-    kind: agent
-
   - id: terminal-safety-failed
     type: terminal
     label: Safety Failed
+    role: plumbing
+    kind: terminal
+
+  - id: terminal-declined
+    type: terminal
+    label: Declined
     role: plumbing
     kind: terminal
 
@@ -88,15 +99,24 @@ edges:
     when: safety-failed
 
   - from: rai-check
-    to: scribe
+    to: done
     when: no-changes
 
   - from: rai-check
-    to: publish
+    to: human-review
     when: review
 
-  - from: publish
-    to: scribe
+  - from: human-review
+    to: publish
+    when: approved
 
-  - from: scribe
+  - from: human-review
+    to: draft
+    when: request-changes
+
+  - from: human-review
+    to: terminal-declined
+    when: declined
+
+  - from: publish
     to: done

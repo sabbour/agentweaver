@@ -1,68 +1,52 @@
 using FluentAssertions;
-using Microsoft.Extensions.DependencyInjection;
-using Agentweaver.Api.Runs;
 using Agentweaver.Api.Workflows;
 using Agentweaver.Squad.Catalog;
-using Agentweaver.Tests.Helpers;
 
 namespace Agentweaver.Tests.Workflows;
 
 /// <summary>
-/// Feature 015 US3 — the six selectable catalog workflows must BIND onto the real run pipeline, not just
-/// load. Before the binder learned the generic catalog topologies (Agent→Agent sequential turns, AI
-/// peer-review verdict gates, direct Agent→Scribe / Review→Scribe completion, RAI→Merge publish), each of
-/// these threw <see cref="WorkflowBindException"/> at runtime. This test drives the REAL
-/// <see cref="RunWorkflowFactory"/> for each catalog workflow and asserts the MAF graph builds — MAF's
-/// typed <c>Build()</c> validates every edge's input/output contract, so a successful build proves the
-/// generic wiring is type-correct end to end.
+/// Catalog workflows are coordinator-authored topologies: special review gates are first-class workflow
+/// nodes, while merge and scribe are platform-appended by coordinator assembly.
 /// </summary>
 public sealed class CatalogWorkflowBindingTests
 {
-    // bug-fix:           triage → fix (Agent→Agent), fix → verify (Agent→peer-review gate), verify verdict
-    //                    routing, merge → verify (blocked re-enter gate).
-    // content-authoring: research → draft → edit (sequential), RAI → publish (publish-style direct merge),
-    //                    publish → edit (blocked re-enter producer).
-    // incident-response: verify → review-gate (Agent→human-review), review-gate → postmortem (approved →
-    //                    next turn), postmortem → scribe (direct completion).
-    // pm-discovery:      review-gate → scribe (approved → direct completion, no merge).
-    // software-delivery: implement → test-gate (Agent→peer-review gate), test-gate → rai (pass → RAI),
-    //                    test-gate → implement (fail loop), RAI → code-review (review → next turn).
     [Theory]
     [InlineData("bug-fix")]
     [InlineData("content-authoring")]
     [InlineData("incident-response")]
     [InlineData("pm-discovery")]
     [InlineData("software-delivery")]
-    public void CatalogWorkflow_BindsOntoRealRunPipeline_WithoutThrowing(string workflowId)
+    public void CatalogWorkflow_LoadsAndIsBindableForCoordinatorSelection(string workflowId)
     {
-        using var appFactory = new WorkflowWebApplicationFactory();
-        var factory = appFactory.Services.GetRequiredService<RunWorkflowFactory>();
-
         var definition = LoadCatalogWorkflow(workflowId);
 
-        var act = () => factory.BuildWorkflowForTest(isChild: false, definition);
+        var errors = RunWorkflowGraphBinder.GetBindabilityErrors(definition);
 
-        act.Should().NotThrow(
-            because: $"catalog workflow '{workflowId}' must bind onto the real executors (Feature 015 US3)");
+        errors.Should().BeEmpty(because: $"catalog workflow '{workflowId}' must be selectable by the coordinator");
     }
 
     [Theory]
-    [InlineData("bug-fix")]
-    [InlineData("content-authoring")]
-    [InlineData("incident-response")]
-    [InlineData("pm-discovery")]
-    [InlineData("software-delivery")]
-    public void CatalogWorkflow_DescriptorTerminatesAtScribe(string workflowId)
+    [InlineData("software-delivery", new[] { "rai", "rubberduck", "human-review" })]
+    [InlineData("bug-fix", new[] { "rai", "human-review" })]
+    [InlineData("content-authoring", new[] { "rai", "human-review" })]
+    [InlineData("incident-response", new[] { "human-review" })]
+    [InlineData("pm-discovery", new[] { "human-review" })]
+    [InlineData("agent-evaluation", new[] { "rai" })]
+    public void CatalogWorkflow_DeclaresExpectedAuthorableGates_WithoutMergeOrScribe(
+        string workflowId,
+        string[] expectedGates)
     {
-        using var appFactory = new WorkflowWebApplicationFactory();
-        var factory = appFactory.Services.GetRequiredService<RunWorkflowFactory>();
-
         var definition = LoadCatalogWorkflow(workflowId);
 
-        var (_, descriptor) = factory.BuildWorkflowForTest(isChild: false, definition);
+        var gates = definition.Nodes
+            .Where(n => n.Type == WorkflowNodeType.Check)
+            .Select(NodeClassifier.NormalizeGateKind)
+            .Where(g => g is not null)
+            .ToArray();
 
-        descriptor.Nodes.Should().Contain(n => n.Id == "scribe",
-            because: "every catalog workflow records its outcome through the scribe stage");
+        gates.Should().Equal(expectedGates);
+        definition.Nodes.Should().NotContain(n =>
+            n.Type == WorkflowNodeType.Merge || n.Type == WorkflowNodeType.Scribe);
     }
 
     private static WorkflowDefinition LoadCatalogWorkflow(string workflowId)
