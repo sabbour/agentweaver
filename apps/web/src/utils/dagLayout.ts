@@ -109,16 +109,29 @@ export function layoutDagColumns(
   const MARGIN = 24;
 
   const posMap = new Map<string, { x: number; y: number }>();
-  let laneStart = MARGIN;
-  for (const rankKey of [...byRank.keys()].sort((a, b) => a - b)) {
-    const nodeIds = byRank.get(rankKey)!;
-    // Preserve dagre's cross-axis ordering within the rank.
-    nodeIds.sort((a, b) => (isVertical ? g.node(a).x - g.node(b).x : g.node(a).y - g.node(b).y));
+  const sortedRankKeys = [...byRank.keys()].sort((a, b) => a - b);
 
-    if (isVertical) {
-      // Rank lanes run top→bottom; cards spread left→right within each row.
+  if (isVertical) {
+    // Compute each rank's total row width so we can centre every row on a
+    // shared vertical axis. A single-node spine rank then lands centred over a
+    // multi-node fan-out row, and fan-out rows spread symmetrically.
+    const rowWidthOf = (nodeIds: string[]): number =>
+      nodeIds.reduce((sum, id) => sum + (nodeSizeHints?.[id]?.width ?? NODE_W), 0) +
+      Math.max(0, nodeIds.length - 1) * CROSS_GAP;
+
+    const maxRowWidth = sortedRankKeys.reduce(
+      (max, key) => Math.max(max, rowWidthOf(byRank.get(key)!)),
+      0,
+    );
+    const centerX = MARGIN + maxRowWidth / 2;
+
+    let laneStart = MARGIN;
+    for (const rankKey of sortedRankKeys) {
+      const nodeIds = byRank.get(rankKey)!;
+      nodeIds.sort((a, b) => g.node(a).x - g.node(b).x);
+
       const rowH = nodeIds.reduce((max, id) => Math.max(max, nodeSizeHints?.[id]?.height ?? NODE_H), 0);
-      let crossX = MARGIN;
+      let crossX = Math.round(centerX - rowWidthOf(nodeIds) / 2);
       for (const id of nodeIds) {
         const hint = nodeSizeHints?.[id];
         const h = hint?.height ?? NODE_H;
@@ -127,7 +140,14 @@ export function layoutDagColumns(
         crossX += w + CROSS_GAP;
       }
       laneStart += rowH + LANE_GAP;
-    } else {
+    }
+  } else {
+    let laneStart = MARGIN;
+    for (const rankKey of sortedRankKeys) {
+      const nodeIds = byRank.get(rankKey)!;
+      // Preserve dagre's cross-axis ordering within the rank.
+      nodeIds.sort((a, b) => g.node(a).y - g.node(b).y);
+
       // Rank lanes run left→right; cards stack top→bottom within each column.
       const colW = nodeIds.reduce((max, id) => Math.max(max, nodeSizeHints?.[id]?.width ?? NODE_W), 0);
       let crossY = MARGIN;
@@ -140,6 +160,17 @@ export function layoutDagColumns(
         crossY += h + CROSS_GAP;
       }
       laneStart += colW + LANE_GAP;
+    }
+  }
+
+  // Guard against any negative coordinates by shifting everything so the graph
+  // starts at MARGIN on the cross axis.
+  if (isVertical && posMap.size > 0) {
+    let minX = Infinity;
+    for (const pos of posMap.values()) minX = Math.min(minX, pos.x);
+    if (minX < MARGIN) {
+      const shift = MARGIN - minX;
+      for (const pos of posMap.values()) pos.x += shift;
     }
   }
 

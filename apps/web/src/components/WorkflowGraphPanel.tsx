@@ -932,17 +932,42 @@ function SpineEdge({
   const fanOut = forwardSiblings.filter((e) => e.source === source).length;
   const fanIn = forwardSiblings.filter((e) => e.target === target).length;
 
-  const junctionX = (sourceX + targetX) / 2;
+  // Detect flow orientation from the edge geometry so the same edge type serves
+  // both the LR topology graph and the TB coordinator run graph. A dominant
+  // vertical delta means a top→bottom (TB) layout; otherwise treat it as LR.
+  const vertical = Math.abs(targetY - sourceY) >= Math.abs(targetX - sourceX);
+
+  let junctionX: number;
   let junctionY: number;
-  if (fanOut > 1 && fanOut >= fanIn) {
-    junctionY = sourceY;
-  } else if (fanIn > 1) {
-    junctionY = targetY;
-  } else {
+  if (vertical) {
+    // TB flow: mirror the LR logic across axes. Fans anchor the shared junction
+    // on X; the junction sits at the vertical midpoint between the ranks.
     junctionY = (sourceY + targetY) / 2;
+    if (fanOut > 1 && fanOut >= fanIn) {
+      junctionX = sourceX;
+    } else if (fanIn > 1) {
+      junctionX = targetX;
+    } else {
+      junctionX = (sourceX + targetX) / 2;
+    }
+  } else {
+    // LR flow: original behaviour, unchanged.
+    junctionX = (sourceX + targetX) / 2;
+    if (fanOut > 1 && fanOut >= fanIn) {
+      junctionY = sourceY;
+    } else if (fanIn > 1) {
+      junctionY = targetY;
+    } else {
+      junctionY = (sourceY + targetY) / 2;
+    }
   }
 
   const smoothSegment = (sx: number, sy: number, tx: number, ty: number): string => {
+    if (vertical) {
+      // Offset the bezier control points on the Y axis for clean vertical curves.
+      const dy = Math.max(48, Math.abs(ty - sy) * 0.5);
+      return `M ${sx},${sy} C ${sx},${sy + dy} ${tx},${ty - dy} ${tx},${ty}`;
+    }
     const dx = Math.max(48, Math.abs(tx - sx) * 0.5);
     return `M ${sx},${sy} C ${sx + dx},${sy} ${tx - dx},${ty} ${tx},${ty}`;
   };
