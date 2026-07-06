@@ -37,6 +37,7 @@ import { useRunStream, type EventType, type RunStreamEvent } from '../api/sse';
 import { AgentAvatar } from './AgentAvatar';
 import { DiffViewer } from './DiffViewer';
 import { FileViewerModal } from './FileViewerModal';
+import { LifecycleEventCard } from './LifecycleEventCard';
 import { deriveHumanTitle } from '../timeline/reducer';
 
 const PANEL_TOP = '48px';
@@ -683,6 +684,7 @@ interface ConversationTurn {
   key: string;
   rows: ConversationRow[];
   toolCalls: ConversationTool[];
+  approvals: Array<{ event: RunStreamEvent; isResolved: boolean; resolvedScope: string | null }>;
   filePaths: string[];
 }
 
@@ -936,13 +938,23 @@ function formatNodeDuration(startedAt?: number, completedAt?: number): string | 
 function buildTurns(events: RunStreamEvent[]): ConversationTurn[] {
   const turns: ConversationTurn[] = [];
   const pendingTools = new Map<string, ConversationTool>();
+  const resolvedApprovals = new Map<string, string>();
   let current: ConversationTurn | null = null;
   let syntheticIndex = 0;
+
+  for (const evt of events) {
+    if (evt.type !== 'tool.approval_resolved' && evt.type !== 'coordinator.child_approval_resolved') continue;
+    const requestId = readString(evt.payload, ['requestId', 'request_id']);
+    if (!requestId) continue;
+    if (Boolean(evt.payload['expired'])) resolvedApprovals.set(requestId, 'expired');
+    else if (Boolean(evt.payload['approved'])) resolvedApprovals.set(requestId, readString(evt.payload, ['scope']) ?? 'approved');
+    else resolvedApprovals.set(requestId, 'deny');
+  }
 
   const ensureTurn = () => {
     if (current) return current;
     syntheticIndex += 1;
-    current = { key: `synthetic-${syntheticIndex}`, rows: [], toolCalls: [], filePaths: [] };
+    current = { key: `synthetic-${syntheticIndex}`, rows: [], toolCalls: [], approvals: [], filePaths: [] };
     turns.push(current);
     return current;
   };
@@ -959,6 +971,7 @@ function buildTurns(events: RunStreamEvent[]): ConversationTurn[] {
         key: String(evt.payload['turnId'] ?? `turn-${evt.sequence}`),
         rows: [],
         toolCalls: [],
+        approvals: [],
         filePaths: [],
       };
       turns.push(current);
@@ -1017,13 +1030,23 @@ function buildTurns(events: RunStreamEvent[]): ConversationTurn[] {
       pendingTools.set(call.callId, call);
       continue;
     }
+    if (evt.type === 'tool.approval_required' || evt.type === 'shell.approval_required') {
+      const requestId = readString(evt.payload, ['requestId', 'request_id']) ?? '';
+      const resolvedScope = requestId ? (resolvedApprovals.get(requestId) ?? null) : null;
+      ensureTurn().approvals.push({
+        event: evt,
+        isResolved: resolvedScope !== null,
+        resolvedScope,
+      });
+      continue;
+    }
     if (evt.type === 'tool.result' || evt.type === 'tool.error') {
       const callId = String(evt.payload['callId'] ?? '');
       const tool = pendingTools.get(callId);
       if (tool) tool.settled = true;
     }
   }
-  return turns.filter((turn) => turn.rows.length > 0 || turn.toolCalls.length > 0);
+  return turns.filter((turn) => turn.rows.length > 0 || turn.toolCalls.length > 0 || turn.approvals.length > 0);
 }
 
 function flattenTree(
@@ -1665,6 +1688,16 @@ function ConversationTurnBlock({
           )}
         </div>
       )}
+
+      {turn.approvals.map((approval) => (
+        <LifecycleEventCard
+          key={`approval-${approval.event.sequence}`}
+          event={approval.event}
+          runId={runId}
+          isResolved={approval.isResolved}
+          resolvedScope={approval.resolvedScope}
+        />
+      ))}
 
       {turn.filePaths.length > 0 && (
         <div className={styles.fileRows}>

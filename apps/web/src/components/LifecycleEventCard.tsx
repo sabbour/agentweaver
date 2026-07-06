@@ -572,6 +572,15 @@ function scopeLabel(scope: string): string {
     default: return `Allowed (${scope})`;
   }
 }
+
+function payloadString(payload: Record<string, unknown>, keys: string[]): string | undefined {
+  for (const key of keys) {
+    const value = payload[key];
+    if (value != null && String(value).trim() !== '') return String(value);
+  }
+  return undefined;
+}
+
 function ToolApprovalCard({ styles, requestId, displayId, toolName, url, intention, runId, isResolved, resolvedScope: resolvedScopeProp }: ToolApprovalCardProps) {
   const [resolvedScope, setResolvedScope] = useState<string | null>(
     isResolved ? (resolvedScopeProp ?? 'expired') : null,
@@ -983,28 +992,30 @@ export const LifecycleEventCard = memo(function LifecycleEventCard({ event, runI
 
   // --- shell approval required ---
   if (event.type === 'shell.approval_required') {
-    const requestId = String(event.payload['requestId'] ?? event.payload['request_id'] ?? '');
-    const commandHash = String(event.payload['commandHash'] ?? event.payload['command_hash'] ?? '');
+    const requestId = payloadString(event.payload, ['requestId', 'request_id']) ?? '';
+    const commandHash = payloadString(event.payload, ['commandHash', 'command_hash']) ?? '';
     const command = event.payload['command'] ? String(event.payload['command']) : null;
+    const approvalRunId = payloadString(event.payload, ['childRunId', 'child_run_id']) ?? runId;
     return (
       <ShellApprovalCard
         styles={styles}
         requestId={requestId}
         commandHash={commandHash}
         command={command}
-        runId={runId}
+        runId={approvalRunId}
       />
     );
   }
 
   // --- tool approval required ---
-  if (event.type === 'tool.approval_required') {
-    const requestId = String(event.payload['requestId'] ?? event.payload['request_id'] ?? '');
+  if (event.type === 'tool.approval_required' || event.type === 'coordinator.child_approval_required') {
+    const requestId = payloadString(event.payload, ['requestId', 'request_id']) ?? '';
     const displayId = event.payload['displayId'] ? String(event.payload['displayId']) : requestId.slice(0, 8);
-    const toolName = String(event.payload['toolName'] ?? event.payload['tool_name'] ?? 'unknown');
+    const toolName = payloadString(event.payload, ['toolName', 'tool_name']) ?? 'unknown';
     const rawUrl = event.payload['url'] ? String(event.payload['url']) : null;
     const url = rawUrl && rawUrl.length > 80 ? rawUrl.slice(0, 80) + '...' : rawUrl;
-    const intention = event.payload['intention'] ? String(event.payload['intention']) : null;
+    const intention = payloadString(event.payload, ['intention', 'message']) ?? null;
+    const approvalRunId = payloadString(event.payload, ['childRunId', 'child_run_id']) ?? runId;
 
     return (
       <ToolApprovalCard
@@ -1014,7 +1025,7 @@ export const LifecycleEventCard = memo(function LifecycleEventCard({ event, runI
         toolName={toolName}
         url={url}
         intention={intention}
-        runId={runId}
+        runId={approvalRunId}
         isResolved={isResolved}
         resolvedScope={resolvedScope}
       />

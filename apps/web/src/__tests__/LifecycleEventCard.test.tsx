@@ -113,6 +113,47 @@ describe('LifecycleEventCard — tool.approval_required', () => {
     expect(body.request_id).toBe('req-scope-once');
   });
 
+  it('posts approval to childRunId when a bubbled tool approval carries one', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(
+      <Wrapper>
+        <LifecycleEventCard
+          event={makeEvent('tool.approval_required', {
+            childRunId: 'child-run-approval',
+            requestId: 'req-child',
+            toolName: 'web_fetch',
+          })}
+          runId="coordinator-run"
+        />
+      </Wrapper>,
+    );
+
+    await userEvent.click(screen.getByRole('button', { name: 'Allow once' }));
+    expect(String(fetchMock.mock.calls[0][0])).toContain('/runs/child-run-approval/tool-approvals');
+  });
+
+  it('falls back to the runId prop when a tool approval has no childRunId', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(
+      <Wrapper>
+        <LifecycleEventCard
+          event={makeEvent('tool.approval_required', {
+            requestId: 'req-run',
+            toolName: 'web_fetch',
+          })}
+          runId="plain-run"
+        />
+      </Wrapper>,
+    );
+
+    await userEvent.click(screen.getByRole('button', { name: 'Allow once' }));
+    expect(String(fetchMock.mock.calls[0][0])).toContain('/runs/plain-run/tool-approvals');
+  });
+
   it('shows resolved state "✓ Allowed (this run)" after Allow this run click', async () => {
     const fetchMock = vi.fn().mockResolvedValue({ ok: true });
     vi.stubGlobal('fetch', fetchMock);
