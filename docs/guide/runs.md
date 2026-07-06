@@ -103,7 +103,7 @@ Click any agent node in the topology view to open its **execution view**. This s
 Each agent run passes through a pipeline shown as a left-to-right node graph. For coordinator child runs (subtasks), the pipeline is:
 
 ```
-Agent → RAI → Assemble-ready
+Agent → Assemble-ready
 ```
 
 For standalone single-agent runs, the full pipeline is:
@@ -112,7 +112,7 @@ For standalone single-agent runs, the full pipeline is:
 Agent → RAI → Human Review → Merge → Scribe
 ```
 
-Human Review, Merge, and Scribe run once on the **combined** output of all child agents — not per subtask.
+RAI, Human Review, Merge, and Scribe run once on the **combined** output of all child agents — not per subtask.
 
 Loopback edges appear when RAI or a reviewer requests changes and the agent needs to revise.
 

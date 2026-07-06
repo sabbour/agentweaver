@@ -120,6 +120,17 @@ public sealed class CoordinatorOrchestratorExecutor
 
         var drafts = await DecomposeWithModelAsync(input, spec, selectedWorkflow, ct).ConfigureAwait(false)
                      ?? DecomposeDeterministic(spec);
+        var originalDraftCount = drafts.Count;
+        drafts = drafts
+            .Where(d => IsDispatchable(d.Title, d.Role, d.Role))
+            .ToList();
+        if (drafts.Count != originalDraftCount)
+        {
+            _logger.LogInformation(
+                "Coordinator orchestrate: removed {Count} platform-owned draft subtask(s) for run {RunId}; RAI/Scribe run once in collective assembly.",
+                originalDraftCount - drafts.Count,
+                input.RunId);
+        }
         if (drafts.Count == 0)
             drafts = DecomposeDeterministic(spec);
 
@@ -823,7 +834,7 @@ public sealed class CoordinatorOrchestratorExecutor
     /// terse — name, description, and a one-line-per-node summary of the agent/action sequence, never
     /// the full YAML. Returns an empty string when no workflow resolved so the prompt degrades cleanly.
     /// </summary>
-    private static string BuildWorkflowHint(WorkflowDefinition? workflow)
+    internal static string BuildWorkflowHint(WorkflowDefinition? workflow)
     {
         if (workflow is null)
             return string.Empty;
@@ -836,8 +847,11 @@ public sealed class CoordinatorOrchestratorExecutor
             sb.Append("- Purpose: ").AppendLine(workflow.Description.Trim());
 
         // Summarize the agent/action nodes (the roles + ordering) — skip pure plumbing/terminal nodes
-        // so the hint stays focused on what the coordinator should mirror.
+        // and platform-owned gates so the coordinator does not decompose duplicate RAI/review/merge/
+        // scribe subtasks. Coordinator runs always get those once from collective assembly; standalone
+        // runs still execute any matching nodes declared by the selected workflow.
         var nodeLines = workflow.Nodes
+            .Where(n => !IsCoordinatorPlatformNode(n))
             .Where(n => !string.IsNullOrWhiteSpace(n.Agent)
                         || !string.IsNullOrWhiteSpace(n.Role)
                         || n.Type == WorkflowNodeType.Prompt
@@ -859,7 +873,16 @@ public sealed class CoordinatorOrchestratorExecutor
         sb.AppendLine(
             "Use this as guidance for the SHAPE of the decomposition (which roles act, in what order); "
             + "do not copy node ids verbatim and still PREFER concrete roster role ids below.");
+        sb.AppendLine(
+            "Do not create subtasks for platform-owned RAI, human-review, merge, or scribe stages; "
+            + "the coordinator collective assembly supplies those exactly once after subtasks finish.");
         return sb.ToString();
+    }
+
+    private static bool IsCoordinatorPlatformNode(WorkflowNode node)
+    {
+        var kind = NodeClassifier.Classify(node);
+        return kind is NodeKind.Rai or NodeKind.HumanReview or NodeKind.Merge or NodeKind.Scribe;
     }
 
     private async Task<string?> BuildCoordinatorSystemContextAsync(
