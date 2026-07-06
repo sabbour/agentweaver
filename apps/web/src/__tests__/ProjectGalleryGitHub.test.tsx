@@ -11,6 +11,7 @@ vi.mock('../api/apiClient', () => ({
     createProject: vi.fn(),
     listBlueprints: vi.fn(),
     generateBlueprint: vi.fn(),
+    suggestBlueprint: vi.fn(),
     listGitHubAccounts: vi.fn(),
     listGitHubRepos: vi.fn(),
   },
@@ -63,6 +64,13 @@ beforeEach(() => {
   vi.mocked(apiClient.getServerInfo).mockResolvedValue({ data_directory: '/data', workspace_auto_assigned: false } as never);
   vi.mocked(apiClient.listProjects).mockResolvedValue([]);
   vi.mocked(apiClient.listBlueprints).mockResolvedValue([]);
+  vi.mocked(apiClient.suggestBlueprint).mockResolvedValue({
+    recommended_blueprint: null,
+    rationale: 'No suggestion in test.',
+    confidence: 0,
+    signals: [],
+    fallback: true,
+  });
   vi.mocked(apiClient.createProject).mockImplementation(async () => makeProject('new', 'New'));
   // Default: accounts succeed (auto-selects first), repos start empty.
   vi.mocked(apiClient.listGitHubAccounts).mockResolvedValue([USER_ACCOUNT] as never);

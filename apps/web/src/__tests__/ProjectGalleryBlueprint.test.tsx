@@ -11,6 +11,7 @@ vi.mock('../api/apiClient', () => ({
     createProject: vi.fn(),
     listBlueprints: vi.fn(),
     generateBlueprint: vi.fn(),
+    suggestBlueprint: vi.fn(),
   },
 }));
 
@@ -85,6 +86,13 @@ beforeEach(() => {
   vi.mocked(apiClient.getServerInfo).mockResolvedValue({ data_directory: '/data', workspace_auto_assigned: false } as never);
   vi.mocked(apiClient.listProjects).mockResolvedValue([]);
   vi.mocked(apiClient.listBlueprints).mockResolvedValue([BP_BACKEND, BP_DOCS]);
+  vi.mocked(apiClient.suggestBlueprint).mockResolvedValue({
+    recommended_blueprint: BP_BACKEND,
+    rationale: 'Recommended for tests.',
+    confidence: 0.8,
+    signals: [],
+    fallback: false,
+  });
   vi.mocked(apiClient.createProject).mockImplementation(async () => makeProject('new', 'New'));
 });
 
