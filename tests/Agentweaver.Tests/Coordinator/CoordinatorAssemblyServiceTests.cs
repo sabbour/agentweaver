@@ -150,13 +150,12 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
     }
 
     [Fact]
-    public async Task RunAssembly_BlockedSend_RetriesAssembly_AndContinues()
+    public async Task RunAssembly_BlockedSend_RetriesAssembly_AndAppliesDirective()
     {
         var coordinatorRunId = RunId.New().ToString();
         await SeedCoordinatorRunAsync(coordinatorRunId);
-        await SeedPlanAsync(coordinatorRunId, new[] { SubtaskStatus.Completed, SubtaskStatus.AssembleReady });
+        await SeedPlanAsync(coordinatorRunId, new[] { SubtaskStatus.Completed, SubtaskStatus.Failed });
         _streamStore.Create(coordinatorRunId, "alice");
-        _pipeline.IntegrationBuildThrowsRemaining = 3;
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         var run = _sut.RunAssemblyAsync(Context(coordinatorRunId), cts.Token);
@@ -164,17 +163,42 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
 
         var send = await _steering.SteerAsync(
             coordinatorRunId, "send", null, "Retry assembly with the updated context.", "alice", default);
-        send.Status.Should().Be(SteeringStatus.Applied);
+        send.Status.Should().Be(SteeringStatus.Queued);
 
-        await WaitUntilArmedAsync(coordinatorRunId);
-        _reviewGate.TrySubmit(coordinatorRunId, "alice",
-            new AssemblyReviewDecision(Approved: true, RequestChanges: false, Feedback: null,
-                TargetFiles: null, Reviewer: "alice"))
-            .Should().Be(AssemblyReviewSubmitResult.Accepted);
+        await WaitForEventCountAsync(coordinatorRunId, EventTypes.CoordinatorAssemblyBlocked, expectedCount: 2, cts.Token);
+        (await GetDirectiveAsync(send.Id))!.Status.Should().Be(SteeringStatus.Applied);
+
+        await _steering.SteerAsync(coordinatorRunId, "stop", null, "", "alice", default);
         await run;
 
-        _pipeline.IntegrationBuilds.Should().Be(4, "send should wake the blocked wait and retry assembly after the initial blocked wave");
-        EventTypes_(coordinatorRunId).Should().Contain(EventTypes.CoordinatorAssemblyCompleted);
+        EventTypes_(coordinatorRunId).Count(t => t == EventTypes.CoordinatorAssemblyBlocked)
+            .Should().BeGreaterThanOrEqualTo(2, "send should wake the blocked wait and retry assembly");
+        EventTypes_(coordinatorRunId).Should().Contain(EventTypes.CoordinatorSteering);
+    }
+
+    [Fact]
+    public async Task RunAssembly_QueuedSendBeforeBlockedWait_RetriesAssembly_AndDoesNotWaitForNewerDirective()
+    {
+        var coordinatorRunId = RunId.New().ToString();
+        await SeedCoordinatorRunAsync(coordinatorRunId);
+        await SeedPlanAsync(coordinatorRunId, new[] { SubtaskStatus.Completed, SubtaskStatus.Failed });
+        _streamStore.Create(coordinatorRunId, "alice");
+
+        var send = await _steering.SteerAsync(
+            coordinatorRunId, "send", null, "Retry as soon as assembly blocks.", "alice", default);
+        send.Status.Should().Be(SteeringStatus.Queued);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var run = _sut.RunAssemblyAsync(Context(coordinatorRunId), cts.Token);
+        await WaitForEventAsync(coordinatorRunId, EventTypes.CoordinatorAssemblyBlocked, cts.Token);
+
+        await WaitForEventCountAsync(coordinatorRunId, EventTypes.CoordinatorAssemblyBlocked, expectedCount: 2, cts.Token);
+        await _steering.SteerAsync(coordinatorRunId, "stop", null, "", "alice", default);
+        await run;
+
+        EventTypes_(coordinatorRunId).Count(t => t == EventTypes.CoordinatorAssemblyBlocked).Should().BeGreaterThanOrEqualTo(2,
+            "a send queued before the assembly wait starts must still be claimed by assembly_blocked ownership");
+        (await GetDirectiveAsync(send.Id))!.Status.Should().Be(SteeringStatus.Applied);
     }
 
     [Fact]
@@ -773,6 +797,18 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         }
     }
 
+    private async Task WaitForEventCountAsync(string runId, string eventType, int expectedCount, CancellationToken ct)
+    {
+        while (!ct.IsCancellationRequested)
+        {
+            var count = _streamStore.Get(runId)?.GetSnapshotSince(0).Events.Count(e => e.Type == eventType) ?? 0;
+            if (count >= expectedCount)
+                return;
+
+            await Task.Delay(25, ct);
+        }
+    }
+
     private static string NodeKind(GraphDescriptor graph, string nodeId) =>
         graph.Nodes.Single(n => n.Id == nodeId).Kind;
 
@@ -844,6 +880,13 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         subtask.Status = status;
         subtask.UpdatedAt = DateTimeOffset.UtcNow;
         await db.SaveChangesAsync();
+    }
+
+    private async Task<SteeringDirective?> GetDirectiveAsync(int directiveId)
+    {
+        using var scope = _provider.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        return await db.SteeringDirectives.AsNoTracking().FirstOrDefaultAsync(d => d.Id == directiveId);
     }
 
     private async Task SeedDeferredAssemblyDecisionAsync(string coordinatorRunId, AssemblyReviewDecision decision)

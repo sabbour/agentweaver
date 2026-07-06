@@ -100,6 +100,7 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
     private readonly IAgentHostPodLifecycle? _podLifecycle;
     private readonly SandboxRuntimeOptions _sandboxRuntime;
     private readonly CoordinatorSteeringWaitRegistry _steeringWaits;
+    private readonly CoordinatorSteeringQueue _steeringQueue;
     private readonly ILogger<CoordinatorAssemblyService> _logger;
     private readonly CancellationToken _appStopping;
     private readonly TimeSpan _reviewTimeout;
@@ -141,6 +142,7 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         _podLifecycle = podLifecycle;
         _sandboxRuntime = sandboxRuntime?.Value ?? new SandboxRuntimeOptions();
         _steeringWaits = steeringWaits ?? new CoordinatorSteeringWaitRegistry();
+        _steeringQueue = new CoordinatorSteeringQueue(scopeFactory);
         _logger = logger;
         _appStopping = lifetime.ApplicationStopping;
         var reviewTimeoutMinutes = configuration?.GetValue("Coordinator:AssemblyReviewTimeoutMinutes", 60.0) ?? 60.0;
@@ -1932,7 +1934,6 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         CancellationToken ct)
     {
         var waitUntil = DateTimeOffset.UtcNow + _steeringWaitTimeout;
-        var lastDirectiveId = await GetLatestSteeringDirectiveIdAsync(coordinatorRunId, ct).ConfigureAwait(false);
         var waitVersion = _steeringWaits.GetVersion(coordinatorRunId);
 
         while (!ct.IsCancellationRequested)
@@ -1948,12 +1949,12 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
             if (await AreSubtasksAssemblyEligibleAsync(workPlanId, ct).ConfigureAwait(false))
                 return BlockedAssemblyOutcome.EligibilityRecovered;
 
-            var directives = await GetSteeringDirectivesAfterAsync(coordinatorRunId, lastDirectiveId, ct).ConfigureAwait(false);
-            if (directives.Count > 0)
+            var send = await _steeringQueue.TryTakeAssemblySendAsync(coordinatorRunId, ct).ConfigureAwait(false);
+            if (send is not null)
             {
-                lastDirectiveId = directives[^1].Id;
-                if (directives.Any(d => d.Kind == SteeringKind.Send))
-                    return BlockedAssemblyOutcome.RetryAssembly;
+                await MarkSteeringAppliedAsync(send.DirectiveId, ct).ConfigureAwait(false);
+                EmitSteering(coordinatorRunId, send, SteeringStatus.Applied);
+                return BlockedAssemblyOutcome.RetryAssembly;
             }
 
             var remaining = waitUntil - DateTimeOffset.UtcNow;
@@ -2006,30 +2007,6 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         return AssemblyPlanning.AllEligible(subtasks.ToDictionary(s => s.Id, s => s.Status));
     }
 
-    private async Task<int> GetLatestSteeringDirectiveIdAsync(string coordinatorRunId, CancellationToken ct)
-    {
-        using var scope = _scopeFactory.CreateScope();
-        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
-        return await db.SteeringDirectives.AsNoTracking()
-            .Where(d => d.CoordinatorRunId == coordinatorRunId)
-            .OrderByDescending(d => d.Id)
-            .Select(d => d.Id)
-            .FirstOrDefaultAsync(ct).ConfigureAwait(false);
-    }
-
-    private async Task<List<SteeringDirective>> GetSteeringDirectivesAfterAsync(
-        string coordinatorRunId,
-        int lastDirectiveId,
-        CancellationToken ct)
-    {
-        using var scope = _scopeFactory.CreateScope();
-        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
-        return await db.SteeringDirectives.AsNoTracking()
-            .Where(d => d.CoordinatorRunId == coordinatorRunId && d.Id > lastDirectiveId)
-            .OrderBy(d => d.Id)
-            .ToListAsync(ct).ConfigureAwait(false);
-    }
-
     private async Task<string?> GetWorkPlanStatusAsync(int workPlanId, CancellationToken ct)
     {
         using var scope = _scopeFactory.CreateScope();
@@ -2038,6 +2015,23 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
             .Where(w => w.Id == workPlanId)
             .Select(w => w.Status)
             .FirstOrDefaultAsync(ct).ConfigureAwait(false);
+    }
+
+    private async Task MarkSteeringAppliedAsync(int directiveId, CancellationToken ct)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var row = await db.SteeringDirectives.FirstOrDefaultAsync(d => d.Id == directiveId, ct).ConfigureAwait(false);
+        if (row is null) return;
+        row.Status = SteeringStatus.Applied;
+        await db.SaveChangesAsync(ct).ConfigureAwait(false);
+    }
+
+    private void EmitSteering(string coordinatorRunId, QueuedSteering directive, string status)
+    {
+        var entry = _streamStore.Get(coordinatorRunId);
+        entry?.RecordNext(EventTypes.CoordinatorSteering, CoordinatorSteeringEvent.Payload(
+            directive.DirectiveId, directive.Kind, directive.TargetChildRunId, status, directive.Instruction));
     }
 
     private async Task<RunStatus?> GetCoordinatorRunStatusAsync(string coordinatorRunId, CancellationToken ct)

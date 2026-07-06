@@ -84,6 +84,7 @@ public sealed class CoordinatorSteeringServiceTests : IDisposable
     public async Task RedirectOrAmend_IsQueuedForNextTurnBoundary(string kind)
     {
         _streamStore.Create("coord-1", "alice");
+        await SeedActiveChildAsync("coord-1", "child-7", SubtaskStatus.Running);
 
         var view = await _sut.SteerAsync("coord-1", kind, "child-7", "use the v2 API", "alice", default);
 
@@ -162,29 +163,33 @@ public sealed class CoordinatorSteeringServiceTests : IDisposable
     }
 
     // -----------------------------------------------------------------------
-    // send — informational nudge, applied immediately, no plan change.
+    // send — informational nudge, queued for the owning coordinator loop, no plan change.
     // -----------------------------------------------------------------------
 
     [Fact]
-    public async Task Send_AppliesImmediately_WithoutQueuingOrDispatchChange()
+    public async Task Send_QueuesForSafeBoundary_WithoutDispatchChange()
     {
         _streamStore.Create("coord-send", "alice");
+        await SeedActiveChildAsync("coord-send", "child-send", SubtaskStatus.Running);
 
         var view = await _sut.SteerAsync("coord-send", "send", null, "note for the operator", "alice", default);
 
         view.Kind.Should().Be(SteeringKind.Send);
-        view.Status.Should().Be(SteeringStatus.Applied, "send collapses to applied immediately");
-        view.RelayedAt.Should().NotBeNull("an applied send records the relay time");
+        view.Status.Should().Be(SteeringStatus.Queued, "send waits for the coordinator-owned safe boundary");
+        view.RelayedAt.Should().BeNull("a queued send has not been relayed yet");
         view.TargetChildRunId.Should().BeNull("send is coordinator-level, not child-targeted");
 
-        // Nothing queued in the next-boundary queue.
-        (await _queue.TryTakeForChildAsync("coord-send", "any-child")).Should().BeNull("send never goes through the steering queue");
+        // Queued in the next-boundary queue as a broadcast send.
+        var taken = await _queue.TryTakeForChildAsync("coord-send", "child-send");
+        taken.Should().NotBeNull();
+        taken!.Kind.Should().Be(SteeringKind.Send);
+        taken.DirectiveId.Should().Be(view.Id);
 
-        // Persisted as applied.
+        // Persisted as relayed once the owning coordinator loop claims it.
         var persisted = await GetDirectiveAsync(view.Id);
-        persisted!.Status.Should().Be(SteeringStatus.Applied);
+        persisted!.Status.Should().Be(SteeringStatus.Relayed);
 
-        // A coordinator.steering event is emitted on the run stream.
+        // A coordinator.steering event is emitted on the run stream for the queued state.
         var events = _streamStore.Get("coord-send")!.GetSnapshotSince(0).Events;
         events.Should().Contain(e => e.Type == EventTypes.CoordinatorSteering,
             "send must emit a coordinator.steering event for the timeline");
@@ -201,7 +206,7 @@ public sealed class CoordinatorSteeringServiceTests : IDisposable
 
         var view = await _sut.SteerAsync(coord, "send", null, "context update", "alice", default);
 
-        view.Status.Should().Be(SteeringStatus.Applied);
+        view.Status.Should().Be(SteeringStatus.Queued);
 
         // Verify the subtask was not reset.
         using var scope = _provider.CreateScope();
@@ -218,7 +223,7 @@ public sealed class CoordinatorSteeringServiceTests : IDisposable
         // send does not require a non-empty instruction (unlike redirect/amend)
         var view = await _sut.SteerAsync("coord-send-empty", "send", null, "", "alice", default);
 
-        view.Status.Should().Be(SteeringStatus.Applied);
+        view.Status.Should().Be(SteeringStatus.Queued);
         (await CountDirectivesAsync()).Should().Be(1);
     }
 
@@ -245,7 +250,7 @@ public sealed class CoordinatorSteeringServiceTests : IDisposable
 
         var view = await sut.SteerAsync("coord-xpod-send", "send", null, "cross-pod nudge", "alice", default);
 
-        view.Status.Should().Be(SteeringStatus.Applied);
+        view.Status.Should().Be(SteeringStatus.Queued);
 
         // The event must have been appended to the durable (cross-replica) stream so the operator's
         // timeline — served by whichever replica owns the SSE connection — still surfaces it.
@@ -402,6 +407,7 @@ public sealed class CoordinatorSteeringServiceTests : IDisposable
     public async Task QueuedDirective_IsDrainedExactlyOnce_AcrossSeparateDbContexts()
     {
         _streamStore.Create("coord-xpod", "alice");
+        await SeedActiveChildAsync("coord-xpod", "child-x", SubtaskStatus.Running);
 
         // Producer pod: persist a queued redirect via SteerAsync (its own scoped DbContext).
         var view = await _sut.SteerAsync("coord-xpod", "redirect", "child-x", "switch to v2", "alice", default);
@@ -430,6 +436,7 @@ public sealed class CoordinatorSteeringServiceTests : IDisposable
     public async Task QueuedDirectives_AreDrainedInFifoOrder()
     {
         _streamStore.Create("coord-fifo", "alice");
+        await SeedActiveChildAsync("coord-fifo", "child-f", SubtaskStatus.Running);
 
         var first = await _sut.SteerAsync("coord-fifo", "redirect", "child-f", "step one", "alice", default);
         var second = await _sut.SteerAsync("coord-fifo", "redirect", "child-f", "step two", "alice", default);

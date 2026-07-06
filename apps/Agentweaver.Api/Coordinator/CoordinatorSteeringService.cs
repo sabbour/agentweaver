@@ -22,8 +22,8 @@ public static class SteeringKind
 
     /// <summary>
     /// Informational nudge delivered to the coordinator. Does not alter the work plan, interrupt
-    /// in-flight dispatch, or reset any subtask — the message is persisted and applied immediately as
-    /// a <c>coordinator.steering</c> event so the operator can observe it in the run timeline.
+    /// in-flight dispatch, or reset any subtask — the message is queued for the next safe dispatch or
+    /// assembly boundary so the owning coordinator loop can inject/observe it.
     /// </summary>
     public const string Send = "send";
 
@@ -48,8 +48,8 @@ public static class SteeringKind
 
     public static bool IsSupported(string kind) => kind is Stop or Send or Redirect or Amend;
 
-    /// <summary>True for the verbs that queue and apply at the child's next turn boundary.</summary>
-    public static bool IsNextBoundary(string kind) => kind is Redirect or Amend;
+    /// <summary>True for the verbs that queue and apply at the child's next safe boundary.</summary>
+    public static bool IsNextBoundary(string kind) => kind is Send or Redirect or Amend;
 }
 
 /// <summary>
@@ -185,11 +185,12 @@ public sealed class CoordinatorSteeringWaitRegistry
 
 /// <summary>
 /// Cross-pod seam between the steering surface (an HTTP-thread call to
-/// <see cref="CoordinatorSteeringService.SteerAsync"/>) and the dispatch loop that owns child-run
-/// control. A <c>redirect</c>/<c>amend</c> directive is persisted as a <c>queued</c>
+/// <see cref="CoordinatorSteeringService.SteerAsync"/>) and the dispatch/assembly loops that own
+/// coordinator control. A <c>send</c>/<c>redirect</c>/<c>amend</c> directive is persisted as a <c>queued</c>
 /// <see cref="SteeringDirective"/> row by the steering surface; the dispatch loop on the pod that
 /// owns the coordinator run drains it from Postgres at the target child's next turn boundary and
-/// injects a revised task turn. <c>stop</c> never goes through this queue — it is an immediate cancel.
+/// injects a revised task turn; the assembly-blocked loop owns queued sends while the plan is
+/// <c>assembly_blocked</c>. <c>stop</c> never goes through this queue — it is an immediate cancel.
 ///
 /// <para>This is REPLICA-SAFE: the queue is backed entirely by the <c>SteeringDirectives</c> table,
 /// so a <c>/steer</c> request that lands on a different pod than the one running the dispatch loop is
@@ -214,7 +215,8 @@ public sealed class CoordinatorSteeringQueue(IServiceScopeFactory scopeFactory)
     /// </summary>
     public Task<QueuedSteering?> TryTakeForChildAsync(
         string coordinatorRunId, string childRunId, CancellationToken ct = default) =>
-        ClaimAsync(coordinatorRunId, childRunId, redirectOnly: false, ct);
+        ClaimAsync(coordinatorRunId, childRunId, redirectOnly: false, sendOnly: false,
+            requiredPlanStatus: WorkPlanStatus.Dispatching, ct);
 
     /// <summary>
     /// Like <see cref="TryTakeForChildAsync"/> but only claims a <see cref="SteeringKind.Redirect"/>
@@ -223,7 +225,18 @@ public sealed class CoordinatorSteeringQueue(IServiceScopeFactory scopeFactory)
     /// </summary>
     public Task<QueuedSteering?> TryTakeRedirectForChildAsync(
         string coordinatorRunId, string childRunId, CancellationToken ct = default) =>
-        ClaimAsync(coordinatorRunId, childRunId, redirectOnly: true, ct);
+        ClaimAsync(coordinatorRunId, childRunId, redirectOnly: true, sendOnly: false,
+            requiredPlanStatus: WorkPlanStatus.Dispatching, ct);
+
+    /// <summary>
+    /// Atomically claims the oldest queued <c>send</c> while the work plan is assembly-blocked. This
+    /// status-scoped ownership prevents the dispatch loop from consuming a send during the
+    /// dispatch-to-assembly transition and starving the blocked assembly retry loop.
+    /// </summary>
+    public Task<QueuedSteering?> TryTakeAssemblySendAsync(
+        string coordinatorRunId, CancellationToken ct = default) =>
+        ClaimAsync(coordinatorRunId, childRunId: null, redirectOnly: false, sendOnly: true,
+            requiredPlanStatus: WorkPlanStatus.AssemblyBlocked, ct);
 
     /// <summary>
     /// Finds the oldest matching <c>queued</c> directive and claims it with a conditional
@@ -232,7 +245,12 @@ public sealed class CoordinatorSteeringQueue(IServiceScopeFactory scopeFactory)
     /// is the at-most-once mechanism that makes the queue replica-safe.
     /// </summary>
     private async Task<QueuedSteering?> ClaimAsync(
-        string coordinatorRunId, string childRunId, bool redirectOnly, CancellationToken ct)
+        string coordinatorRunId,
+        string? childRunId,
+        bool redirectOnly,
+        bool sendOnly,
+        string? requiredPlanStatus,
+        CancellationToken ct)
     {
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
@@ -241,10 +259,15 @@ public sealed class CoordinatorSteeringQueue(IServiceScopeFactory scopeFactory)
         {
             var query = db.SteeringDirectives.AsNoTracking()
                 .Where(d => d.CoordinatorRunId == coordinatorRunId
-                    && d.Status == SteeringStatus.Queued
-                    && (d.TargetChildRunId == null || d.TargetChildRunId == childRunId));
+                    && d.Status == SteeringStatus.Queued);
+            if (requiredPlanStatus is not null)
+                query = query.Where(d => db.WorkPlans.Any(w => w.CoordinatorRunId == coordinatorRunId && w.Status == requiredPlanStatus));
+            if (childRunId is not null)
+                query = query.Where(d => d.TargetChildRunId == null || d.TargetChildRunId == childRunId);
             if (redirectOnly)
                 query = query.Where(d => d.Kind == SteeringKind.Redirect);
+            if (sendOnly)
+                query = query.Where(d => d.Kind == SteeringKind.Send);
 
             var candidate = await query
                 .OrderBy(d => d.Id)
@@ -256,8 +279,12 @@ public sealed class CoordinatorSteeringQueue(IServiceScopeFactory scopeFactory)
             // Atomic claim: only one writer (any pod) can flip this row queued -> relayed. The
             // conditional WHERE Status == queued is the gate that guarantees at-most-once delivery.
             DateTimeOffset? relayedAt = DateTimeOffset.UtcNow;
-            var claimed = await db.SteeringDirectives
-                .Where(d => d.Id == candidate.Id && d.Status == SteeringStatus.Queued)
+            var updateQuery = db.SteeringDirectives
+                .Where(d => d.Id == candidate.Id && d.Status == SteeringStatus.Queued);
+            if (requiredPlanStatus is not null)
+                updateQuery = updateQuery.Where(d =>
+                    db.WorkPlans.Any(w => w.CoordinatorRunId == coordinatorRunId && w.Status == requiredPlanStatus));
+            var claimed = await updateQuery
                 .ExecuteUpdateAsync(s => s
                     .SetProperty(d => d.Status, SteeringStatus.Relayed)
                     .SetProperty(d => d.RelayedAt, relayedAt), ct)
@@ -360,7 +387,7 @@ public sealed class CoordinatorSteeringService
         if (!SteeringKind.IsSupported(normalized))
             throw new SteeringValidationException(
                 $"Unknown steering verb '{kind}'. Supported verbs: stop, send, redirect, amend.");
-        if (SteeringKind.IsNextBoundary(normalized) && string.IsNullOrWhiteSpace(instruction))
+        if (normalized is not SteeringKind.Send && SteeringKind.IsNextBoundary(normalized) && string.IsNullOrWhiteSpace(instruction))
             throw new SteeringValidationException(
                 $"A '{normalized}' directive requires a non-empty instruction.");
 
@@ -394,7 +421,7 @@ public sealed class CoordinatorSteeringService
                 .ConfigureAwait(false);
 
         if (normalized == SteeringKind.Send)
-            return await ApplySendAsync(
+            return await QueueSendAsync(
                 coordinatorRunId, directiveId, resolvedInstruction, createdBy, createdAt, ct)
                 .ConfigureAwait(false);
 
@@ -414,32 +441,30 @@ public sealed class CoordinatorSteeringService
     }
 
     // -----------------------------------------------------------------------
-    // send — informational nudge, applied immediately. When the coordinator is parked at an
-    // assembly_blocked pause, the blocked-wait loop wakes and may re-run assembly.
+    // send — informational nudge queued for the coordinator-owned dispatch or assembly boundary.
     // -----------------------------------------------------------------------
 
     /// <summary>
     /// Delivers an informational directive to the coordinator run timeline without altering the work
-    /// plan or interrupting dispatch. The directive transitions pending → applied in a single step;
-    /// no queue, no re-arm, no subtask reset. Useful for operator notes, mid-run context updates, or
-    /// audit entries that do not require the coordinator to change direction.
+    /// plan or interrupting dispatch. The directive transitions pending → queued here; the owning
+    /// dispatch loop applies it at a clean child turn boundary, or the assembly-blocked loop applies
+    /// it as a retry signal.
     /// </summary>
-    private async Task<SteeringDirectiveView> ApplySendAsync(
+    private async Task<SteeringDirectiveView> QueueSendAsync(
         string coordinatorRunId, int directiveId, string instruction,
         string createdBy, DateTimeOffset createdAt, CancellationToken ct)
     {
-        var relayedAt = DateTimeOffset.UtcNow;
-        await UpdateDirectiveAsync(directiveId, SteeringStatus.Applied, relayedAt, ct).ConfigureAwait(false);
-        await EmitSteeringAsync(coordinatorRunId, directiveId, SteeringKind.Send, targetChildRunId: null, SteeringStatus.Applied, instruction, ct).ConfigureAwait(false);
+        await UpdateDirectiveAsync(directiveId, SteeringStatus.Queued, relayedAt: null, ct).ConfigureAwait(false);
+        await EmitSteeringAsync(coordinatorRunId, directiveId, SteeringKind.Send, targetChildRunId: null, SteeringStatus.Queued, instruction, ct).ConfigureAwait(false);
         _waitRegistry.Signal(coordinatorRunId);
 
         _logger.LogInformation(
-            "Steering send applied for coordinator {RunId} (directive {DirectiveId}); informational nudge delivered",
+            "Steering send queued for coordinator {RunId} (directive {DirectiveId}); informational nudge awaits a safe boundary",
             coordinatorRunId, directiveId);
 
         return new SteeringDirectiveView(
             directiveId, coordinatorRunId, TargetChildRunId: null, SteeringKind.Send, instruction,
-            SteeringStatus.Applied, createdBy, createdAt, relayedAt);
+            SteeringStatus.Queued, createdBy, createdAt, RelayedAt: null);
     }
 
     // -----------------------------------------------------------------------
