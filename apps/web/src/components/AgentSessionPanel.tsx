@@ -20,13 +20,18 @@ import {
   CheckmarkCircleFilled,
   CircleRegular,
   ClockRegular,
+  CodeRegular,
   CopyRegular,
   DismissRegular,
   DismissCircleFilled,
   DocumentRegular,
+  DocumentAddRegular,
+  DocumentEditRegular,
   EyeRegular,
+  GlobeRegular,
   OpenRegular,
   SendRegular,
+  WindowConsoleRegular,
 } from '@fluentui/react-icons';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -323,8 +328,8 @@ const useStyles = makeStyles({
   tabBody: {
     display: 'flex',
     flexDirection: 'column',
-    gap: tokens.spacingVerticalM,
-    padding: tokens.spacingHorizontalL,
+    gap: tokens.spacingVerticalS,
+    padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM}`,
   },
   emptyState: {
     padding: tokens.spacingVerticalXL,
@@ -333,20 +338,20 @@ const useStyles = makeStyles({
   conversationTurn: {
     display: 'flex',
     flexDirection: 'column',
-    gap: tokens.spacingVerticalS,
+    gap: tokens.spacingVerticalXS,
   },
   messageRow: {
     display: 'flex',
     flexDirection: 'column',
-    gap: tokens.spacingVerticalXS,
+    gap: tokens.spacingVerticalXXS,
   },
   messageCard: {
     display: 'grid',
-    gridTemplateColumns: '36px minmax(0, 1fr)',
-    gap: tokens.spacingHorizontalM,
-    padding: `${tokens.spacingVerticalM} ${tokens.spacingHorizontalM}`,
+    gridTemplateColumns: '28px minmax(0, 1fr)',
+    gap: tokens.spacingHorizontalS,
+    padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalS}`,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: tokens.borderRadiusLarge,
+    borderRadius: tokens.borderRadiusMedium,
     backgroundColor: tokens.colorNeutralBackground1,
   },
   messageMeta: {
@@ -372,8 +377,8 @@ const useStyles = makeStyles({
     letterSpacing: '0.04em',
   },
   messageBubble: {
-    borderRadius: tokens.borderRadiusLarge,
-    padding: `${tokens.spacingVerticalS} 0`,
+    borderRadius: tokens.borderRadiusMedium,
+    padding: `${tokens.spacingVerticalXS} 0`,
     whiteSpace: 'pre-wrap',
     wordBreak: 'break-word',
     lineHeight: tokens.lineHeightBase300,
@@ -489,11 +494,22 @@ const useStyles = makeStyles({
   },
   toolRow: {
     display: 'grid',
-    gridTemplateColumns: '16px minmax(0, 1fr)',
+    gridTemplateColumns: '16px minmax(0, 1fr) 16px',
     alignItems: 'center',
     gap: tokens.spacingHorizontalXS,
-    fontSize: tokens.fontSizeBase100,
+    fontSize: tokens.fontSizeBase200,
     color: tokens.colorNeutralForeground2,
+  },
+  toolKind: {
+    display: 'inline-flex',
+    color: tokens.colorNeutralForeground3,
+  },
+  toolLabel: {
+    minWidth: 0,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+    fontFamily: tokens.fontFamilyMonospace,
   },
   toolRowMuted: {
     color: tokens.colorNeutralForeground4,
@@ -828,31 +844,95 @@ function formatBytes(bytes: number | undefined): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-function friendlyToolLabel(tool: ConversationTool, runId?: string): { label: string; muted: boolean } {
+type ToolOpKind = 'read' | 'write' | 'edit' | 'command' | 'web' | 'other';
+
+interface FriendlyTool {
+  label: string;
+  muted: boolean;
+  kind: ToolOpKind;
+  // Full, untruncated detail for the hover title (e.g. the raw command).
+  detail?: string;
+}
+
+const stripQuotes = (value: string): string => value.replace(/^['"]|['"]$/g, '');
+
+// Turn a raw shell command into a compact, classified operation. Reads/listings are surfaced
+// as reads with just the target path (dropping pipe/redirection noise); multi-statement or long
+// commands are summarised to the leading program with a "(+N more)" hint. The full command is
+// returned as `detail` for the row's hover title.
+function summarizeShellCommand(rawCommand: string, runId?: string): FriendlyTool {
+  const detail = normalizeCommand(rawCommand, runId);
+  const command = detail;
+
+  if (command.length === 0 || /^(pwd|cd\s+\.?|true)$/i.test(command)) {
+    return { label: 'Set working directory', muted: true, kind: 'command', detail };
+  }
+
+  // A file read via cat/head/tail/less/sed -n anywhere in the pipeline.
+  const readMatch = /(?:^|[|;&]\s*)(?:cat|head|tail|less|sed\s+-n\s+\S+)\s+([^\s|;&<>]+)/i.exec(command);
+  if (readMatch?.[1]) {
+    return { label: `Read ${normalizeWorkspacePath(stripQuotes(readMatch[1]), runId)}`, muted: false, kind: 'read', detail };
+  }
+  const listMatch = /^(?:ls|find)\s+([^\s|;&<>]+)/i.exec(command);
+  if (listMatch?.[1]) {
+    return { label: `List ${normalizeWorkspacePath(stripQuotes(listMatch[1]), runId)}`, muted: false, kind: 'read', detail };
+  }
+
+  // Otherwise summarise: show the first statement, hint how many more were chained.
+  const segments = command.split(/\s*(?:&&|\|\||;|\|)\s*/).filter(Boolean);
+  const first = (segments[0] ?? command).trim();
+  const shortFirst = first.length > 64 ? `${first.slice(0, 61)}...` : first;
+  const label = segments.length > 1 ? `${shortFirst} (+${segments.length - 1} more)` : shortFirst;
+  return { label, muted: false, kind: 'command', detail };
+}
+
+function friendlyToolLabel(tool: ConversationTool, runId?: string): FriendlyTool {
   const lowerName = tool.toolName.toLowerCase();
+
+  // Web fetch — surface the host, not the full URL.
+  const rawUrl = tool.args['url'] ?? tool.args['uri'];
+  const urlStr = typeof rawUrl === 'string' ? rawUrl.trim() : '';
+  if (lowerName.includes('fetch') || lowerName.includes('web') || /^https?:\/\//i.test(urlStr)) {
+    let host = urlStr;
+    try { host = new URL(urlStr).host || urlStr; } catch { /* keep raw */ }
+    return { label: host ? `Fetch ${host}` : 'Web fetch', muted: false, kind: 'web', detail: urlStr || undefined };
+  }
+
   const rawPath = tool.args['path'] ?? tool.args['file'] ?? tool.args['filePath'] ?? tool.args['filename'];
   if (typeof rawPath === 'string' && rawPath.trim() !== '') {
     const rel = normalizeWorkspacePath(rawPath, runId);
-    if (lowerName.includes('read') || lowerName.includes('cat')) return { label: `Read file: ${rel}`, muted: false };
-    if (lowerName.includes('write') || lowerName.includes('create')) return { label: `Create file: ${rel}`, muted: false };
-    if (lowerName.includes('edit') || lowerName.includes('patch')) return { label: `Edit file: ${rel}`, muted: false };
-    return { label: `View: ${rel}`, muted: false };
+    if (lowerName.includes('write') || lowerName.includes('create')) return { label: `Create ${rel}`, muted: false, kind: 'write', detail: rel };
+    if (lowerName.includes('edit') || lowerName.includes('patch') || lowerName.includes('apply')) return { label: `Edit ${rel}`, muted: false, kind: 'edit', detail: rel };
+    // Any other path-scoped tool (read_file, view, cat, open, …) is a harmless read.
+    return { label: `Read ${rel}`, muted: false, kind: 'read', detail: rel };
   }
 
   const rawCommand = tool.args['command'] ?? tool.args['cmd'] ?? tool.args['script'];
   if (typeof rawCommand === 'string' && rawCommand.trim() !== '') {
-    const command = normalizeCommand(rawCommand, runId);
-    if (command.length === 0 || /^(pwd|cd\s+\.?|true)$/i.test(command)) {
-      return { label: 'Set working directory', muted: true };
-    }
-    const readMatch = /^(?:cat|head|tail|less|sed\s+-n\s+['"]?[\d,$p]+['"]?)\s+(.+)$/i.exec(command);
-    if (readMatch?.[1]) return { label: `Read file: ${normalizeWorkspacePath(readMatch[1].replace(/^['"]|['"]$/g, ''), runId)}`, muted: false };
-    const listMatch = /^(?:ls|find)\s+(.+)$/i.exec(command);
-    if (listMatch?.[1]) return { label: `View: ${normalizeWorkspacePath(listMatch[1].replace(/^['"]|['"]$/g, ''), runId)}`, muted: false };
-    return { label: `Run command: ${command}`, muted: false };
+    return summarizeShellCommand(rawCommand, runId);
   }
 
-  return { label: tool.title, muted: false };
+  return { label: tool.title, muted: false, kind: 'other' };
+}
+
+// True for tools that PRODUCE or MODIFY a file — only these deserve a full preview card in the
+// session pane. Reads/views are shown compactly as tool-call rows instead, avoiding the noisy
+// double-render of a single read as both a row and a large "Workspace file" card.
+function isFileWriteTool(toolName: string): boolean {
+  const n = toolName.toLowerCase();
+  return n.includes('write') || n.includes('create') || n.includes('edit') || n.includes('patch') || n.includes('apply');
+}
+
+// A FluentUI glyph that makes the operation type obvious at a glance.
+function toolKindIcon(kind: ToolOpKind) {
+  switch (kind) {
+    case 'read': return <DocumentRegular />;
+    case 'write': return <DocumentAddRegular />;
+    case 'edit': return <DocumentEditRegular />;
+    case 'web': return <GlobeRegular />;
+    case 'command': return <WindowConsoleRegular />;
+    default: return <CodeRegular />;
+  }
 }
 
 function authorForRole(role: ConversationRow['role']): { name: string; role: string; collapsedLabel?: string } {
@@ -991,7 +1071,9 @@ function buildTurns(events: RunStreamEvent[]): ConversationTurn[] {
     });
   };
 
-  const addFilePath = (turn: ConversationTurn, args: Record<string, unknown>) => {
+  const addFilePath = (turn: ConversationTurn, toolName: string, args: Record<string, unknown>) => {
+    // Only files the agent wrote/edited earn a preview card; reads stay as compact tool rows.
+    if (!isFileWriteTool(toolName)) return;
     const value = args['path'] ?? args['file'];
     if (typeof value !== 'string') return;
     if (!turn.filePaths.includes(value)) turn.filePaths.push(value);
@@ -1064,7 +1146,7 @@ function buildTurns(events: RunStreamEvent[]): ConversationTurn[] {
       };
       const turn = ensureTurn();
       turn.toolCalls.push(call);
-      addFilePath(turn, args);
+      addFilePath(turn, toolName, args);
       pendingTools.set(call.callId, call);
       continue;
     }
@@ -1995,7 +2077,7 @@ function ConversationTurnBlock({
         const expanded = !collapsible || expandedRows.has(row.key);
         return (
           <div key={row.key} className={styles.messageCard}>
-            <AgentAvatar name={author.name} size={32} circle />
+            <AgentAvatar name={author.name} size={28} circle />
             <div className={styles.messageRow}>
               <div className={styles.messageMeta}>
                 <div className={styles.authorBlock}>
@@ -2037,9 +2119,10 @@ function ConversationTurnBlock({
               {turn.toolCalls.map((tool) => {
                 const friendly = friendlyToolLabel(tool, runId);
                 return (
-                  <Text key={tool.callId} className={mergeClasses(styles.toolRow, friendly.muted && styles.toolRowMuted)}>
-                    {tool.settled ? <CheckmarkCircleFilled className={styles.toolCheck} /> : <ClockRegular />}
-                    <span>{friendly.label}</span>
+                  <Text key={tool.callId} className={mergeClasses(styles.toolRow, friendly.muted && styles.toolRowMuted)} title={friendly.detail ?? friendly.label}>
+                    <span className={styles.toolKind} aria-hidden="true">{toolKindIcon(friendly.kind)}</span>
+                    <span className={styles.toolLabel}>{friendly.label}</span>
+                    <span aria-hidden="true">{tool.settled ? <CheckmarkCircleFilled className={styles.toolCheck} /> : <ClockRegular />}</span>
                   </Text>
                 );
               })}

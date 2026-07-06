@@ -54,13 +54,13 @@ export function workflowNodeSizeHint(nodeType?: string | null): NodeSizeHint {
 }
 
 /**
- * Column-aligned DAG layout. Runs dagre to determine rank (depth) assignments,
- * then snaps every node in the same rank to an exact virtual column X so cards
- * line up in clean vertical columns. Within each column nodes are stacked
- * top-to-bottom with uniform spacing, preserving dagre's vertical ordering.
+ * Rank-aligned DAG layout. Runs dagre to determine rank (depth) assignments,
+ * then snaps every node in the same rank to an exact virtual lane so cards line
+ * up in clean rows/columns. Supports both LR (vertical columns, left→right) and
+ * TB (horizontal rows, top→bottom) rank directions.
  *
- * Use this for the coordinator run page where the "virtual column grid" look
- * is required. Other surfaces can keep using layoutDag directly.
+ * Use this for the coordinator run page where the aligned "grid" look is
+ * required. Other surfaces can keep using layoutDag directly.
  */
 export function layoutDagColumns(
   nodes: Node[],
@@ -70,9 +70,10 @@ export function layoutDagColumns(
 ): Node[] {
   if (nodes.length === 0) return nodes;
 
+  const rankdir = opts.rankdir ?? 'LR';
   const g = new Dagre.graphlib.Graph();
   g.setGraph({
-    rankdir: opts.rankdir ?? 'LR',
+    rankdir,
     ranksep: opts.rankSep ?? 80,
     nodesep: opts.nodeSep ?? 40,
     marginx: 24,
@@ -90,43 +91,56 @@ export function layoutDagColumns(
 
   Dagre.layout(g);
 
+  const isVertical = rankdir === 'TB';
+
   // Group nodes by dagre-assigned rank. In LR mode all nodes at the same depth
-  // share the same X value from dagre. Round to absorb floating-point noise.
+  // share the same X value; in TB mode they share the same Y value. Round to
+  // absorb floating-point noise.
   const byRank = new Map<number, string[]>();
   for (const n of nodes) {
-    const key = Math.round(g.node(n.id).x);
+    const node = g.node(n.id);
+    const key = Math.round(isVertical ? node.y : node.x);
     if (!byRank.has(key)) byRank.set(key, []);
     byRank.get(key)!.push(n.id);
   }
 
-  const COL_GAP = 72; // horizontal gap between column edges
-  const ROW_GAP = 40; // vertical gap between stacked cards
+  const LANE_GAP = 72; // gap between successive ranks (columns for LR, rows for TB)
+  const CROSS_GAP = 40; // gap between stacked cards within a rank
   const MARGIN = 24;
 
-  // Walk columns left → right, assign fixed X positions.
   const posMap = new Map<string, { x: number; y: number }>();
-  let colX = MARGIN;
+  let laneStart = MARGIN;
   for (const rankKey of [...byRank.keys()].sort((a, b) => a - b)) {
     const nodeIds = byRank.get(rankKey)!;
-    // Preserve dagre's vertical ordering within the column.
-    nodeIds.sort((a, b) => g.node(a).y - g.node(b).y);
+    // Preserve dagre's cross-axis ordering within the rank.
+    nodeIds.sort((a, b) => (isVertical ? g.node(a).x - g.node(b).x : g.node(a).y - g.node(b).y));
 
-    // Column width = widest card in this column.
-    const colW = nodeIds.reduce((max, id) => {
-      return Math.max(max, nodeSizeHints?.[id]?.width ?? NODE_W);
-    }, 0);
-
-    let rowY = MARGIN;
-    for (const id of nodeIds) {
-      const hint = nodeSizeHints?.[id];
-      const h = hint?.height ?? NODE_H;
-      const w = hint?.width ?? NODE_W;
-      // Centre narrower cards within the column width.
-      posMap.set(id, { x: colX + (colW - w) / 2, y: rowY });
-      rowY += h + ROW_GAP;
+    if (isVertical) {
+      // Rank lanes run top→bottom; cards spread left→right within each row.
+      const rowH = nodeIds.reduce((max, id) => Math.max(max, nodeSizeHints?.[id]?.height ?? NODE_H), 0);
+      let crossX = MARGIN;
+      for (const id of nodeIds) {
+        const hint = nodeSizeHints?.[id];
+        const h = hint?.height ?? NODE_H;
+        const w = hint?.width ?? NODE_W;
+        posMap.set(id, { x: crossX, y: laneStart + (rowH - h) / 2 });
+        crossX += w + CROSS_GAP;
+      }
+      laneStart += rowH + LANE_GAP;
+    } else {
+      // Rank lanes run left→right; cards stack top→bottom within each column.
+      const colW = nodeIds.reduce((max, id) => Math.max(max, nodeSizeHints?.[id]?.width ?? NODE_W), 0);
+      let crossY = MARGIN;
+      for (const id of nodeIds) {
+        const hint = nodeSizeHints?.[id];
+        const h = hint?.height ?? NODE_H;
+        const w = hint?.width ?? NODE_W;
+        // Centre narrower cards within the column width.
+        posMap.set(id, { x: laneStart + (colW - w) / 2, y: crossY });
+        crossY += h + CROSS_GAP;
+      }
+      laneStart += colW + LANE_GAP;
     }
-
-    colX += colW + COL_GAP;
   }
 
   return nodes.map((n) => {
