@@ -11,6 +11,16 @@ using Microsoft.Extensions.Logging;
 
 namespace Agentweaver.Api.Skills;
 
+/// <summary>
+/// Raised when a skill import source is rejected during parsing/validation (unsupported host,
+/// non-https scheme, unresolvable ref, etc.). Its message is safe to surface to the caller as an
+/// Invalid result — it never contains sensitive server-side detail.
+/// </summary>
+public sealed class SkillImportException : Exception
+{
+    public SkillImportException(string message) : base(message) { }
+}
+
 public enum SkillOutcome
 {
     Ok,
@@ -107,7 +117,7 @@ public sealed record GeneratedSkillDraft(
 public sealed class SkillCatalogService
 {
     public const string AcceptedSkillSourceMessage =
-        "No skills found. Expected a SKILL.md, a folder of <name>/SKILL.md, or a repo with skills under .github/skills, .copilot/skills, .claude/skills, or .agents/skills. Accepted sources: owner/repo, https://github.com/owner/repo(.git), GitHub tree/blob URLs, raw SKILL.md URLs, or git@ SSH URLs.";
+        "No skills found. Expected a SKILL.md, a folder of <name>/SKILL.md, or a repo with skills under .github/skills, .copilot/skills, .claude/skills, or .agents/skills. Accepted sources: owner/repo, https://github.com/owner/repo(.git), GitHub tree/blob URLs, or raw https://raw.githubusercontent.com SKILL.md URLs.";
 
     private static readonly Regex SkillNameRegex = new("^[a-z0-9][a-z0-9-]{0,63}$", RegexOptions.Compiled);
     private static readonly HttpClient RawHttp = new() { Timeout = TimeSpan.FromSeconds(20) };
@@ -261,9 +271,19 @@ public sealed class SkillCatalogService
         try
         {
             var source = SkillImportSource.Parse(repoUrl);
-            IReadOnlyList<RawSkill> discovered = source.RawSkillUri is not null
-                ? new[] { await FetchRawSkillAsync(source.RawSkillUri, source.Subpath ?? "SKILL.md", ct).ConfigureAwait(false) }
-                : DiscoverSkills(cloneDir = await CloneToTempAsync(source.CloneUrl!, source.CheckoutRef, project.Owner, ct).ConfigureAwait(false), source.Subpath);
+            IReadOnlyList<RawSkill> discovered;
+            if (source.RawSkillUri is not null)
+            {
+                discovered = new[] { await FetchRawSkillAsync(source.RawSkillUri, source.Subpath ?? "SKILL.md", ct).ConfigureAwait(false) };
+            }
+            else
+            {
+                cloneDir = await CloneToTempAsync(source.CloneUrl!, project.Owner, ct).ConfigureAwait(false);
+                var (checkoutRef, subpath) = await ResolveRefAsync(cloneDir, source, ct).ConfigureAwait(false);
+                if (!string.IsNullOrWhiteSpace(checkoutRef))
+                    await Task.Run(() => CheckoutRef(cloneDir, checkoutRef!), ct).ConfigureAwait(false);
+                discovered = DiscoverSkills(cloneDir, subpath);
+            }
             var candidates = discovered.Select(raw =>
             {
                 var parsed = _parser.Parse(raw.SkillMarkdown, raw.Resources);
@@ -281,10 +301,14 @@ public sealed class SkillCatalogService
                 return (SkillOutcome.Invalid, AcceptedSkillSourceMessage, null);
             return (SkillOutcome.Ok, null, candidates);
         }
+        catch (SkillImportException ex)
+        {
+            return (SkillOutcome.Invalid, ex.Message, null);
+        }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Failed to clone/scan repository {Repo} for skill import", repoUrl);
-            return (SkillOutcome.SourceUnavailable, $"Could not access repository: {ex.Message}", null);
+            return (SkillOutcome.SourceUnavailable, "Could not access repository (check the URL is a public GitHub repo).", null);
         }
         finally
         {
@@ -305,9 +329,19 @@ public sealed class SkillCatalogService
         try
         {
             var source = SkillImportSource.Parse(repoUrl);
-            IReadOnlyList<RawSkill> discovered = source.RawSkillUri is not null
-                ? new[] { await FetchRawSkillAsync(source.RawSkillUri, source.Subpath ?? "SKILL.md", ct).ConfigureAwait(false) }
-                : DiscoverSkills(cloneDir = await CloneToTempAsync(source.CloneUrl!, source.CheckoutRef, project.Owner, ct).ConfigureAwait(false), source.Subpath);
+            IReadOnlyList<RawSkill> discovered;
+            if (source.RawSkillUri is not null)
+            {
+                discovered = new[] { await FetchRawSkillAsync(source.RawSkillUri, source.Subpath ?? "SKILL.md", ct).ConfigureAwait(false) };
+            }
+            else
+            {
+                cloneDir = await CloneToTempAsync(source.CloneUrl!, project.Owner, ct).ConfigureAwait(false);
+                var (checkoutRef, subpath) = await ResolveRefAsync(cloneDir, source, ct).ConfigureAwait(false);
+                if (!string.IsNullOrWhiteSpace(checkoutRef))
+                    await Task.Run(() => CheckoutRef(cloneDir, checkoutRef!), ct).ConfigureAwait(false);
+                discovered = DiscoverSkills(cloneDir, subpath);
+            }
             if (discovered.Count == 0)
                 return new SkillAcquisitionResult { Outcome = SkillOutcome.Invalid, Error = AcceptedSkillSourceMessage };
 
@@ -335,10 +369,14 @@ public sealed class SkillCatalogService
             }
             return new SkillAcquisitionResult { Outcome = SkillOutcome.Ok, Results = results };
         }
+        catch (SkillImportException ex)
+        {
+            return new SkillAcquisitionResult { Outcome = SkillOutcome.Invalid, Error = ex.Message };
+        }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Failed to import skills from repository {Repo}", repoUrl);
-            return new SkillAcquisitionResult { Outcome = SkillOutcome.SourceUnavailable, Error = $"Could not access repository: {ex.Message}" };
+            return new SkillAcquisitionResult { Outcome = SkillOutcome.SourceUnavailable, Error = "Could not access repository (check the URL is a public GitHub repo)." };
         }
         finally
         {
@@ -600,16 +638,61 @@ public sealed class SkillCatalogService
         return raws;
     }
 
-    private async Task<string> CloneToTempAsync(string repoUrl, string? checkoutRef, string owner, CancellationToken ct)
+    private async Task<string> CloneToTempAsync(string repoUrl, string owner, CancellationToken ct)
     {
-        var token = await ResolveTokenAsync(owner, ct).ConfigureAwait(false);
+        // Defense in depth: only wire the caller's GitHub token as a credential when the clone
+        // target is exactly github.com. The Parse allowlist already guarantees this, but scoping
+        // here ensures a token is never offered (and thus never leaked) to any other host.
+        var token = SkillImportSource.IsAllowedCloneHost(repoUrl)
+            ? await ResolveTokenAsync(owner, ct).ConfigureAwait(false)
+            : null;
         var dir = Path.Combine(AppPaths.DataDirectory, "skill-import", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(Path.GetDirectoryName(dir)!);
         // Clone runs synchronously in LibGit2Sharp; offload so we don't block the request thread.
         await Task.Run(() => _gitInit.Clone(dir, repoUrl, token ?? string.Empty), ct).ConfigureAwait(false);
-        if (!string.IsNullOrWhiteSpace(checkoutRef))
-            await Task.Run(() => CheckoutRef(dir, checkoutRef!), ct).ConfigureAwait(false);
         return dir;
+    }
+
+    /// <summary>
+    /// Resolves the checkout ref + subpath for an import source against a freshly cloned repo.
+    /// For tree/blob URLs the ref boundary is ambiguous (a branch/tag name may itself contain
+    /// slashes), so we enumerate the repo's actual refs and greedily match the LONGEST ref that
+    /// is a prefix of the URL segments; the remainder is the subpath. If no ref matches we fail
+    /// loudly rather than silently importing the wrong ref.
+    /// </summary>
+    private async Task<(string? CheckoutRef, string? Subpath)> ResolveRefAsync(string dir, SkillImportSource source, CancellationToken ct)
+    {
+        if (source.RefSegments is null || source.RefSegments.Count == 0)
+            return (source.CheckoutRef, source.Subpath);
+
+        var segments = source.RefSegments;
+        return await Task.Run(() =>
+        {
+            using var repo = new Repository(dir);
+            var refNames = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var b in repo.Branches)
+            {
+                var name = b.IsRemote && b.FriendlyName.StartsWith("origin/", StringComparison.Ordinal)
+                    ? b.FriendlyName["origin/".Length..]
+                    : b.FriendlyName;
+                if (!string.Equals(name, "HEAD", StringComparison.Ordinal))
+                    refNames.Add(name);
+            }
+            foreach (var t in repo.Tags)
+                refNames.Add(t.FriendlyName);
+
+            for (var take = segments.Count; take >= 1; take--)
+            {
+                var candidate = string.Join('/', segments.Take(take));
+                if (refNames.Contains(candidate))
+                {
+                    var subpath = take < segments.Count ? string.Join('/', segments.Skip(take)) : null;
+                    return ((string?)candidate, subpath);
+                }
+            }
+            throw new SkillImportException(
+                "Could not resolve a branch or tag from the URL — the ref does not exist in the repository.");
+        }, ct).ConfigureAwait(false);
     }
 
     private static void CheckoutRef(string dir, string checkoutRef)
@@ -664,40 +747,61 @@ public sealed class SkillCatalogService
 
     private static string EscapeYamlScalar(string value) => "\"" + value.Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"";
 
-    private sealed record SkillImportSource(
+    internal sealed record SkillImportSource(
         string? CloneUrl,
         string? CheckoutRef,
         string? Subpath,
         Uri? RawSkillUri,
-        string SourceRepository)
+        string SourceRepository,
+        // Segments after tree/blob (ref + subpath) whose ref boundary can only be resolved
+        // against the cloned repo's actual refs — null for non-tree/blob sources.
+        IReadOnlyList<string>? RefSegments = null)
     {
+        private const string GitHubHost = "github.com";
+        private const string RawGitHubHost = "raw.githubusercontent.com";
+
         private static readonly Regex OwnerRepo = new("^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$", RegexOptions.Compiled);
+
+        internal static bool IsAllowedCloneHost(string? repoUrl) =>
+            Uri.TryCreate(repoUrl, UriKind.Absolute, out var uri)
+            && string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase)
+            && string.IsNullOrEmpty(uri.UserInfo)
+            && uri.IsDefaultPort
+            && string.Equals(uri.Host, GitHubHost, StringComparison.OrdinalIgnoreCase);
 
         public static SkillImportSource Parse(string input)
         {
             var raw = input.Trim();
+            // Short "owner/repo" form always maps to the canonical public GitHub HTTPS clone URL.
             if (OwnerRepo.IsMatch(raw))
                 return new SkillImportSource($"https://github.com/{raw}.git", null, null, null, raw);
-            if (raw.StartsWith("git@", StringComparison.OrdinalIgnoreCase))
-                return new SkillImportSource(raw, null, null, null, raw);
 
             if (!Uri.TryCreate(raw, UriKind.Absolute, out var uri))
-                throw new InvalidOperationException("Skill source must be owner/repo, a Git URL, a GitHub tree/blob URL, or a raw SKILL.md URL.");
+                throw new SkillImportException(
+                    "Skill source must be owner/repo, a public https://github.com repo/tree/blob URL, or a raw https://raw.githubusercontent.com SKILL.md URL.");
 
-            if (string.Equals(uri.Host, "raw.githubusercontent.com", StringComparison.OrdinalIgnoreCase))
+            // SSRF guard: only https to the exact GitHub hosts is allowed. Reject http/git/ssh/file/ftp,
+            // userinfo tricks (https://github.com@evil.com -> Host=evil.com), and non-default ports.
+            if (!string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
+                throw new SkillImportException("Only https:// GitHub URLs are supported as a skill source.");
+            if (!string.IsNullOrEmpty(uri.UserInfo) || !uri.IsDefaultPort)
+                throw new SkillImportException("Only public https://github.com URLs (default port, no credentials) are supported.");
+
+            var parts = uri.AbsolutePath.Trim('/').Split('/', StringSplitOptions.RemoveEmptyEntries);
+
+            if (string.Equals(uri.Host, RawGitHubHost, StringComparison.OrdinalIgnoreCase))
             {
-                var parts = uri.AbsolutePath.Trim('/').Split('/', StringSplitOptions.RemoveEmptyEntries);
                 if (parts.Length >= 4 && string.Equals(parts[^1], "SKILL.md", StringComparison.Ordinal))
                 {
                     var sourceRepo = $"{parts[0]}/{parts[1]}";
                     var path = string.Join('/', parts.Skip(3));
                     return new SkillImportSource(null, null, path, uri, sourceRepo);
                 }
+                throw new SkillImportException("Raw GitHub URLs must point directly at a SKILL.md file.");
             }
 
-            if (string.Equals(uri.Host, "github.com", StringComparison.OrdinalIgnoreCase))
+            if (string.Equals(uri.Host, GitHubHost, StringComparison.OrdinalIgnoreCase))
             {
-                var parts = uri.AbsolutePath.Trim('/').Split('/', StringSplitOptions.RemoveEmptyEntries);
                 if (parts.Length >= 2)
                 {
                     var repoName = parts[1].EndsWith(".git", StringComparison.OrdinalIgnoreCase) ? parts[1][..^4] : parts[1];
@@ -707,13 +811,17 @@ public sealed class SkillCatalogService
                         return new SkillImportSource(clone, null, null, null, sourceRepo);
                     if (parts.Length >= 4 && (parts[2] is "tree" or "blob"))
                     {
-                        var path = parts.Length > 4 ? string.Join('/', parts.Skip(4)) : null;
-                        return new SkillImportSource(clone, parts[3], path, null, sourceRepo);
+                        // Defer ref-vs-subpath boundary to post-clone resolution (slash-containing branches).
+                        var refSegments = parts.Skip(3).ToArray();
+                        return new SkillImportSource(clone, null, null, null, sourceRepo, refSegments);
                     }
                 }
+                throw new SkillImportException("Unsupported GitHub URL. Use owner/repo, a repo URL, or a tree/blob URL.");
             }
 
-            return new SkillImportSource(raw, null, null, null, raw);
+            // Any other host (internal services, attacker-controlled, etc.) is rejected — never cloned.
+            throw new SkillImportException(
+                $"Unsupported skill source host '{uri.Host}'. Only github.com and raw.githubusercontent.com are allowed.");
         }
     }
 

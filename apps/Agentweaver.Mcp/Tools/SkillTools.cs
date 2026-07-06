@@ -149,7 +149,7 @@ public sealed class SkillTools(AgentweaverApiClient api)
             ct);
     }
 
-    [McpServerTool(Name = "skill_import_preview"), Description("Preview candidate skills from owner/repo, GitHub repo/tree/blob URLs, raw SKILL.md URLs, or git@ SSH URLs, without importing.")]
+    [McpServerTool(Name = "skill_import_preview"), Description("Preview candidate skills from owner/repo, https://github.com repo/tree/blob URLs, or raw https://raw.githubusercontent.com SKILL.md URLs, without importing.")]
     public async Task<string> SkillImportPreviewAsync(
         [Description("Project ID")] string project_id,
         [Description("Git repository URL to inspect")] string repo_url,
@@ -163,11 +163,11 @@ public sealed class SkillTools(AgentweaverApiClient api)
             ct);
     }
 
-    [McpServerTool(Name = "skill_import"), Description("Import selected skills from owner/repo, GitHub repo/tree/blob URLs, raw SKILL.md URLs, or git@ SSH URLs. Idempotent by content hash. Omit locations to import all discovered candidates.")]
+    [McpServerTool(Name = "skill_import"), Description("Import selected skills from owner/repo, https://github.com repo/tree/blob URLs, or raw https://raw.githubusercontent.com SKILL.md URLs. Idempotent by content hash. Locations are REQUIRED when a source contains multiple skills; omitting locations works only when the source has a single skill.")]
     public async Task<string> SkillImportAsync(
         [Description("Project ID")] string project_id,
         [Description("Git repository URL to import from")] string repo_url,
-        [Description("Optional comma-separated skill locations (as returned by skill_import_preview). Omit to import all candidates.")] string? locations = null,
+        [Description("Comma-separated skill locations (as returned by skill_import_preview). Required when the source contains multiple skills; may be omitted only for a single-skill source.")] string? locations = null,
         CancellationToken ct = default)
     {
         var locs = string.IsNullOrWhiteSpace(locations)

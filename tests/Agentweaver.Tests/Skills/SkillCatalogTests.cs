@@ -138,6 +138,89 @@ public sealed class SkillCatalogTests : IDisposable
         else error.Should().Contain(errorContains);
     }
 
+    // ── Import source parsing / SSRF host allowlist ──────────────────────────────
+
+    [Theory]
+    // Non-GitHub / internal hosts must never be turned into a clone/fetch target.
+    [InlineData("https://kubernetes.default.svc/x")]
+    [InlineData("https://localhost/x")]
+    [InlineData("https://127.0.0.1/owner/repo")]
+    [InlineData("https://10.1.2.3/owner/repo")]
+    [InlineData("https://169.254.169.254/latest/meta-data")]
+    [InlineData("https://evil.com/owner/repo")]
+    // Non-https schemes are rejected explicitly.
+    [InlineData("http://github.com/owner/repo")]
+    [InlineData("git://github.com/owner/repo")]
+    [InlineData("ssh://git@github.com/owner/repo")]
+    [InlineData("file:///etc/passwd")]
+    [InlineData("ftp://github.com/owner/repo")]
+    [InlineData("git@github.com:owner/repo.git")]
+    // Userinfo tricks — effective host is evil.com.
+    [InlineData("https://github.com@evil.com/owner/repo")]
+    // Non-default port variants.
+    [InlineData("https://github.com:1234/owner/repo")]
+    [InlineData("https://raw.githubusercontent.com:8443/owner/repo/main/SKILL.md")]
+    public void ParseImportSource_RejectsNonGitHubOrUnsafeSources(string input)
+    {
+        var act = () => SkillCatalogService.SkillImportSource.Parse(input);
+        act.Should().Throw<SkillImportException>();
+    }
+
+    [Fact]
+    public void ParseImportSource_AcceptsPublicGitHubRepo()
+    {
+        var source = SkillCatalogService.SkillImportSource.Parse("https://github.com/owner/repo");
+        source.CloneUrl.Should().Be("https://github.com/owner/repo.git");
+        source.RawSkillUri.Should().BeNull();
+        source.SourceRepository.Should().Be("owner/repo");
+    }
+
+    [Fact]
+    public void ParseImportSource_AcceptsShorthandOwnerRepo()
+    {
+        var source = SkillCatalogService.SkillImportSource.Parse("owner/repo");
+        source.CloneUrl.Should().Be("https://github.com/owner/repo.git");
+    }
+
+    [Fact]
+    public void ParseImportSource_AcceptsRawSkillMdUrl()
+    {
+        var source = SkillCatalogService.SkillImportSource.Parse(
+            "https://raw.githubusercontent.com/owner/repo/main/SKILL.md");
+        source.RawSkillUri.Should().NotBeNull();
+        source.CloneUrl.Should().BeNull();
+        source.SourceRepository.Should().Be("owner/repo");
+    }
+
+    [Fact]
+    public void ParseImportSource_HostCheckIsCaseInsensitive()
+    {
+        var source = SkillCatalogService.SkillImportSource.Parse("https://GitHub.com/Owner/Repo");
+        source.CloneUrl.Should().Be("https://github.com/Owner/Repo.git");
+    }
+
+    [Fact]
+    public void ParseImportSource_TreeUrl_DefersRefResolution()
+    {
+        // The ref boundary for tree/blob URLs is resolved post-clone against real refs, so Parse
+        // must not eagerly assume parts[3] is the ref (which mis-resolves slash-containing branches).
+        var source = SkillCatalogService.SkillImportSource.Parse(
+            "https://github.com/owner/repo/tree/release/v2/skills");
+        source.CloneUrl.Should().Be("https://github.com/owner/repo.git");
+        source.CheckoutRef.Should().BeNull();
+        source.RefSegments.Should().Equal("release", "v2", "skills");
+    }
+
+    [Fact]
+    public void IsAllowedCloneHost_OnlyTrueForGitHubHttps()
+    {
+        SkillCatalogService.SkillImportSource.IsAllowedCloneHost("https://github.com/owner/repo.git").Should().BeTrue();
+        SkillCatalogService.SkillImportSource.IsAllowedCloneHost("https://evil.com/owner/repo.git").Should().BeFalse();
+        SkillCatalogService.SkillImportSource.IsAllowedCloneHost("http://github.com/owner/repo.git").Should().BeFalse();
+        SkillCatalogService.SkillImportSource.IsAllowedCloneHost("https://github.com@evil.com/x").Should().BeFalse();
+        SkillCatalogService.SkillImportSource.IsAllowedCloneHost("https://github.com:1234/owner/repo.git").Should().BeFalse();
+    }
+
     // ── Store: catalog ──────────────────────────────────────────────────────────
 
     private static Skill NewSkill(ProjectId projectId, string name, SkillStatus status = SkillStatus.Active)
