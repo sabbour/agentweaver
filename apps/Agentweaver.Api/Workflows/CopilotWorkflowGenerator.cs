@@ -147,23 +147,7 @@ public sealed class CopilotWorkflowGenerator : IWorkflowGenerator
               scribe after merge for every run.
             - terminal: a no-op sink. Use for final states (done, declined, failed, etc.).
 
-            MANDATORY BUILD & TEST STEP (software workflows): For any software-oriented workflow — one that
-            implements, fixes, refactors, or otherwise changes code (bug fix, feature delivery, refactor,
-            etc.) — you MUST include a build_test gate IMMEDIATELY before the human-review gate. This gate
-            is static, platform-owned, and always-on; never omit it, never make it optional, and never add
-            an inline prompt. Wire it exactly as:
-              - id: build-test
-                type: build_test
-                label: Build & Test
-                role: review
-                agent: qa-engineer
-            Route its verdicts: `when: approved` advances to the human-review gate; `when: request-changes`
-            loops back to the implementation node (e.g. implement/fix); `when: declined` goes to a terminal.
-            If a software workflow has no human-review gate, add one (a `check` node with
-            `gate_kind: human-review`) placed immediately after build-test. Consider adding `rai` before
-            human review for safety-sensitive work and `rubberduck` before human review for code-quality
-            critique. Non-software
-            workflows (pure content authoring, discovery, incident response, evaluation) do NOT need this step.
+            {{WorkflowGatePromptGuidance.SoftwareBuildTestRequirement}}
 
             VALIDATION RULES (your output MUST satisfy all):
             - id, name, start, and at least one node are required.
