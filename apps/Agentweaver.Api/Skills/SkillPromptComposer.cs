@@ -48,20 +48,33 @@ public sealed class SkillPromptComposer
             return null;
         }
 
+        var haveWorktree = !string.IsNullOrEmpty(worktreePath) && Directory.Exists(worktreePath);
+
+        // Staging dir name is keyed by skill id (not just the slug) so two names that slugify the same
+        // ("PR Review" vs "pr-review") never collide and overwrite each other.
+        var wanted = skills.Select(s => (Skill: s, Dir: StagingDirName(s))).ToList();
+
+        if (haveWorktree)
+        {
+            TryEnsureGitExclude(worktreePath);
+            // Reconcile: remove any previously-materialized skill dir that is no longer active+assigned
+            // so removed/unassigned/malformed skills drop out immediately (no stale full instructions
+            // linger on a reused/retried worktree).
+            ReconcileStaleDirs(worktreePath, wanted.Select(w => w.Dir));
+        }
+
         if (skills.Count == 0)
             return null;
 
-        var materialized = new List<(Skill Skill, string Slug)>();
-        if (!string.IsNullOrEmpty(worktreePath) && Directory.Exists(worktreePath))
+        var materialized = new List<(Skill Skill, string Dir)>();
+        if (haveWorktree)
         {
-            TryEnsureGitExclude(worktreePath);
-            foreach (var skill in skills)
+            foreach (var (skill, dir) in wanted)
             {
-                var slug = Slugify(skill.Name);
                 try
                 {
-                    Materialize(worktreePath, slug, skill);
-                    materialized.Add((skill, slug));
+                    Materialize(worktreePath, dir, skill);
+                    materialized.Add((skill, dir));
                 }
                 catch (Exception ex)
                 {
@@ -71,14 +84,13 @@ public sealed class SkillPromptComposer
         }
         else
         {
-            foreach (var skill in skills)
-                materialized.Add((skill, Slugify(skill.Name)));
+            materialized.AddRange(wanted);
         }
 
         return BuildMetadataBlock(materialized);
     }
 
-    private static string BuildMetadataBlock(IReadOnlyList<(Skill Skill, string Slug)> skills)
+    private static string BuildMetadataBlock(IReadOnlyList<(Skill Skill, string Dir)> skills)
     {
         var sb = new StringBuilder();
         sb.AppendLine("## Available Skills");
@@ -88,17 +100,41 @@ public sealed class SkillPromptComposer
             "When — and only when — a skill is relevant to the current task, read its full instructions from the " +
             "referenced `SKILL.md` file before applying it. Do not read them all up front.");
         sb.AppendLine();
-        foreach (var (skill, slug) in skills)
+        foreach (var (skill, dir) in skills)
         {
             sb.AppendLine($"- **{skill.Name}**: {skill.Description}");
-            sb.AppendLine($"  Full instructions: `{SkillsRelativeDir}/{slug}/SKILL.md`");
+            sb.AppendLine($"  Full instructions: `{SkillsRelativeDir}/{dir}/SKILL.md`");
         }
         return sb.ToString().TrimEnd();
     }
 
-    private static void Materialize(string worktreePath, string slug, Skill skill)
+    /// <summary>Deletes materialized skill dirs under the worktree that are not in the current set.</summary>
+    private void ReconcileStaleDirs(string worktreePath, IEnumerable<string> keepDirs)
     {
-        var skillDir = Path.Combine(worktreePath, ".agentweaver", "skills", slug);
+        var root = Path.Combine(worktreePath, ".agentweaver", "skills");
+        if (!Directory.Exists(root))
+            return;
+        var keep = new HashSet<string>(keepDirs, StringComparer.OrdinalIgnoreCase);
+        foreach (var dir in Directory.EnumerateDirectories(root))
+        {
+            var name = Path.GetFileName(dir);
+            if (keep.Contains(name))
+                continue;
+            try
+            {
+                Directory.Delete(dir, recursive: true);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Could not remove stale skill dir {Dir}", dir);
+            }
+        }
+    }
+
+    private static void Materialize(string worktreePath, string dirName, Skill skill)
+    {
+        var skillsRoot = Path.Combine(worktreePath, ".agentweaver", "skills");
+        var skillDir = Path.Combine(skillsRoot, dirName);
         Directory.CreateDirectory(skillDir);
 
         // Reconstruct the SKILL.md with its frontmatter so the on-disk module is standards-compatible.
@@ -112,14 +148,22 @@ public sealed class SkillPromptComposer
 
         foreach (var resource in skill.Resources)
         {
-            var safeRel = resource.RelativePath.Replace('\\', '/').TrimStart('/');
-            if (safeRel.Contains("..", StringComparison.Ordinal))
-                continue; // never escape the skill dir
+            // Zip-slip / rooted-path defense: reject unsafe relative paths, then verify the resolved
+            // target is still inside the skill dir before writing.
+            var safeRel = SkillPaths.NormalizeRelative(resource.RelativePath);
+            if (safeRel is null)
+                continue;
             var target = Path.Combine(skillDir, safeRel.Replace('/', Path.DirectorySeparatorChar));
+            if (!SkillPaths.IsContained(skillDir, target))
+                continue;
             Directory.CreateDirectory(Path.GetDirectoryName(target)!);
             File.WriteAllText(target, resource.Content);
         }
     }
+
+    /// <summary>Unique per-skill staging dir name: slug + short id suffix (guards slug collisions).</summary>
+    internal static string StagingDirName(Skill skill) =>
+        $"{Slugify(skill.Name)}-{skill.Id.Value.ToString("N")[..8]}";
 
     private static string EscapeYaml(string value) =>
         value.Contains(':') || value.Contains('#') || value.Contains('\n')

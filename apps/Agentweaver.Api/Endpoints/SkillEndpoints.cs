@@ -100,25 +100,35 @@ public static class SkillEndpoints
             var caller = ApiKeyAuthMiddleware.GetCaller(http);
             var form = await http.Request.ReadFormAsync(ct);
             var files = new List<UploadedSkillFile>();
-            foreach (var file in form.Files)
+            try
             {
-                await using var stream = file.OpenReadStream();
-                if (file.FileName.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
+                foreach (var file in form.Files)
                 {
-                    using var ms = new MemoryStream();
-                    await stream.CopyToAsync(ms, ct);
-                    ms.Position = 0;
-                    ExpandZip(ms, files);
+                    await using var stream = file.OpenReadStream();
+                    if (file.FileName.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
+                    {
+                        using var ms = new MemoryStream();
+                        await stream.CopyToAsync(ms, ct);
+                        ms.Position = 0;
+                        ExpandZip(ms, files);
+                    }
+                    else
+                    {
+                        using var reader = new StreamReader(stream, Encoding.UTF8);
+                        var content = await reader.ReadToEndAsync(ct);
+                        // Prefer an explicit relative path (folder upload) via a paired form field; else the file name.
+                        var rawRel = form[$"path:{file.Name}"].FirstOrDefault()
+                                  ?? (string.IsNullOrEmpty(file.FileName) ? file.Name : file.FileName);
+                        var rel = SkillPaths.NormalizeRelative(rawRel);
+                        if (rel is null)
+                            return Results.BadRequest(new { error = $"Uploaded file '{rawRel}' has an unsafe path." });
+                        files.Add(new UploadedSkillFile(rel, content));
+                    }
                 }
-                else
-                {
-                    using var reader = new StreamReader(stream, Encoding.UTF8);
-                    var content = await reader.ReadToEndAsync(ct);
-                    // Prefer an explicit relative path (folder upload) via a paired form field; else the file name.
-                    var rel = form[$"path:{file.Name}"].FirstOrDefault()
-                              ?? (string.IsNullOrEmpty(file.FileName) ? file.Name : file.FileName);
-                    files.Add(new UploadedSkillFile(rel, content));
-                }
+            }
+            catch (InvalidDataException ex)
+            {
+                return Results.BadRequest(new { error = ex.Message });
             }
 
             var result = await svc.UploadFilesAsync(projectId, files, caller, ct);
@@ -177,16 +187,62 @@ public static class SkillEndpoints
         _ => Results.StatusCode(500),
     };
 
-    private static void ExpandZip(Stream zipStream, List<UploadedSkillFile> files)
+    internal static void ExpandZip(Stream zipStream, List<UploadedSkillFile> files)
     {
         using var archive = new ZipArchive(zipStream, ZipArchiveMode.Read);
+        long total = 0;
+        var count = 0;
         foreach (var entry in archive.Entries)
         {
             if (string.IsNullOrEmpty(entry.Name)) continue; // directory entry
+            if (++count > MaxArchiveEntries)
+                throw new InvalidDataException($"Archive contains more than {MaxArchiveEntries} entries.");
+
+            // Zip-slip: reject rooted / drive-qualified / traversal entry names before touching them.
+            var rel = SkillPaths.NormalizeRelative(entry.FullName);
+            if (rel is null)
+                throw new InvalidDataException($"Archive entry '{entry.FullName}' has an unsafe path.");
+
             using var es = entry.Open();
-            using var reader = new StreamReader(es, Encoding.UTF8);
-            files.Add(new UploadedSkillFile(entry.FullName, reader.ReadToEnd()));
+            var (text, bytes) = ReadCapped(es, MaxArchiveEntryBytes);
+            total += bytes;
+            if (total > MaxArchiveTotalBytes)
+                throw new InvalidDataException($"Archive decompresses to more than {MaxArchiveTotalBytes / (1024 * 1024)} MB.");
+            if (text is null) continue; // oversized or binary — skipped (mirrors filesystem SafeReadText)
+            files.Add(new UploadedSkillFile(rel, text));
         }
+    }
+
+    // Decompression guards (mirror SkillParser caps + the filesystem SafeReadText 2*MaxResourceBytes
+    // bail): applied DURING extraction so a zip bomb can never be fully decompressed into memory.
+    private const int MaxArchiveEntries = 1024;
+    private const int MaxArchiveEntryBytes = SkillParser.MaxResourceBytes * 2;        // 512 KB per entry
+    private const long MaxArchiveTotalBytes = 16L * 1024 * 1024;                       // 16 MB total decompressed
+
+    /// <summary>
+    /// Reads a stream into text up to <paramref name="cap"/> bytes. Returns (null, bytesRead) when the
+    /// entry exceeds the cap or contains a NUL byte (binary), so the caller can enforce a running total
+    /// while skipping content that validation would reject anyway.
+    /// </summary>
+    private static (string? Text, long Bytes) ReadCapped(Stream stream, int cap)
+    {
+        var buffer = new byte[8192];
+        using var ms = new MemoryStream();
+        int read;
+        while ((read = stream.Read(buffer, 0, buffer.Length)) > 0)
+        {
+            ms.Write(buffer, 0, read);
+            if (ms.Length > cap)
+            {
+                // Drain no further; report an over-cap size so the running total still advances.
+                return (null, ms.Length);
+            }
+        }
+        var data = ms.GetBuffer();
+        var len = (int)ms.Length;
+        for (var i = 0; i < len; i++)
+            if (data[i] == 0) return (null, len); // binary
+        return (Encoding.UTF8.GetString(data, 0, len), len);
     }
 
     private static object ToDetail(Skill s) => new

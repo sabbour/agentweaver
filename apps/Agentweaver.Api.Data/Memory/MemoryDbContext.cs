@@ -297,9 +297,10 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
             e.Property(s => s.Status).HasColumnName("status").HasDefaultValue("active");
             e.Property(s => s.CreatedAt).HasColumnName("created_at");
             e.Property(s => s.UpdatedAt).HasColumnName("updated_at");
-            e.HasIndex(s => new { s.ProjectId, s.Name })
-                .HasDatabaseName("IX_skills_project_name")
-                .IsUnique();
+            // Uniqueness is enforced by a functional unique index on (project_id, lower(name)) created
+            // in the AddSkillCatalog migration (case-insensitive parity with SQLite's COLLATE NOCASE).
+            // EF cannot model a lower() index, so it is intentionally not declared here; case-insensitive
+            // lookups (EfSkillStore.GetByNameAsync) translate to WHERE lower(name) = … and use it.
         });
 
         model.Entity<SkillAssignmentRecord>(e =>

@@ -35,11 +35,10 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                     table.PrimaryKey("PK_skills", x => x.skill_id);
                 });
 
-            migrationBuilder.CreateIndex(
-                name: "IX_skills_project_name",
-                table: "skills",
-                columns: new[] { "project_id", "name" },
-                unique: true);
+            // Case-insensitive uniqueness parity with SQLite (name COLLATE NOCASE): a functional unique
+            // index on lower(name) so "Foo" and "foo" cannot both exist in the same project.
+            migrationBuilder.Sql(
+                "CREATE UNIQUE INDEX \"IX_skills_project_name\" ON skills (project_id, lower(name));");
 
             migrationBuilder.CreateTable(
                 name: "skill_assignments",

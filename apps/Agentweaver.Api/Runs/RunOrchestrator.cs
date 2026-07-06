@@ -563,7 +563,12 @@ public sealed class RunOrchestrator
                 }
             }
 
-            return (run.Task, AppendCapabilities(AppendMemoryProtocol(ComposeChildSystemPrompt(childCharter, childDecisions)), run));
+            var childPrompt = ComposeChildSystemPrompt(childCharter, childDecisions);
+            // Progressive disclosure: coordinator-dispatched workers ARE child runs (ParentRunId set)
+            // and do the actual work, so their assigned skills must reach them too. Child runs carry
+            // AgentName/ProjectId/WorktreePath — everything the composer needs.
+            childPrompt = await AppendAssignedSkillsAsync(run, childPrompt, ct);
+            return (run.Task, AppendCapabilities(AppendMemoryProtocol(childPrompt), run));
         }
 
         // Compile memory context (progressive disclosure — layer 1-4)

@@ -353,12 +353,18 @@ public sealed class SkillCatalogService
         var parsed = _parser.Parse(raw.SkillMarkdown, raw.Resources);
         if (!parsed.IsValid)
         {
-            // Malformed skills are rejected with feedback and never silently added. If a skill by the
-            // same name already exists, flag it Malformed so it stops being applied to agents.
+            // Malformed skills are rejected with feedback and never silently added. Only flag an EXISTING
+            // active skill Malformed when the failing candidate comes from the SAME source (provenance +
+            // repo + location) — i.e. a skill that previously synced/imported cleanly has now broken.
+            // An unrelated import/upload that merely collides by name must NOT deactivate a valid skill.
             if (!string.IsNullOrWhiteSpace(parsed.Name))
             {
                 var existingSameName = await _skills.GetByNameAsync(projectId, parsed.Name!, ct).ConfigureAwait(false);
-                if (existingSameName is not null && existingSameName.Status == SkillStatus.Active)
+                if (existingSameName is not null
+                    && existingSameName.Status == SkillStatus.Active
+                    && existingSameName.Provenance == provenance
+                    && string.Equals(existingSameName.SourceRepository, sourceRepo, StringComparison.OrdinalIgnoreCase)
+                    && string.Equals(existingSameName.SourceLocation, location, StringComparison.OrdinalIgnoreCase))
                 {
                     await _skills.UpdateAsync(existingSameName with { Status = SkillStatus.Malformed, UpdatedAt = DateTimeOffset.UtcNow }, ct)
                         .ConfigureAwait(false);
@@ -471,7 +477,9 @@ public sealed class SkillCatalogService
     internal static IReadOnlyList<RawSkill> GroupUploadedFilesIntoSkills(IReadOnlyList<UploadedSkillFile> files)
     {
         var normalized = files
-            .Select(f => f with { RelativePath = f.RelativePath.Replace('\\', '/').TrimStart('/') })
+            .Select(f => (Safe: SkillPaths.NormalizeRelative(f.RelativePath), File: f))
+            .Where(x => x.Safe is not null)
+            .Select(x => x.File with { RelativePath = x.Safe! })
             .ToList();
 
         var skillRoots = normalized
