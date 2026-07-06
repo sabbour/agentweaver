@@ -80,6 +80,7 @@ export default withMermaid({
             { text: 'Sandbox pods', link: '/reference/sandbox-pods' },
             { text: 'Sandbox browser preview', link: '/reference/sandbox-browser-preview' },
             { text: 'Sandbox setup', link: '/reference/sandbox-setup' },
+            { text: 'Repository blueprint suggestions', link: '/reference/repo-blueprint-suggestions' },
             { text: 'Token usage', link: '/reference/token-usage' },
             { text: 'A2A transport', link: '/reference/a2a' },
             { text: 'Agent eXecutor (AX) comparison', link: '/reference/agent-executor' },
@@ -95,6 +96,7 @@ export default withMermaid({
             { text: 'Overview', link: '/experience/00-overview' },
             { text: 'Onboarding & auth', link: '/experience/onboarding-auth' },
             { text: 'Projects', link: '/experience/projects' },
+            { text: 'Repository blueprint suggestions', link: '/experience/repo-blueprint-suggestions' },
             { text: 'Agent definition', link: '/experience/agent-definition' },
             { text: 'Runs board & watch', link: '/experience/runs-board-watch' },
             { text: 'Coordinator & orchestration', link: '/experience/coordinator-orchestration' },
@@ -154,6 +156,7 @@ export default withMermaid({
             { text: 'MCP server', link: '/deep-dive/mcp-server' },
             { text: 'Agent definition', link: '/deep-dive/agent-definition' },
             { text: 'Projects & workspaces', link: '/deep-dive/projects' },
+            { text: 'Repository blueprint suggestions', link: '/deep-dive/repo-blueprint-suggestions' },
           ],
         },
         {

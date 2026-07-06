@@ -179,7 +179,10 @@ Team member objects include `is_built_in: true` for Scribe, Ralph, and Rai (case
 | --- | --- | --- |
 | `GET` | `/api/blueprints` | List predefined blueprints |
 | `POST` | `/api/blueprints/generate` | Generate a blueprint from a description |
+| `POST` | `/api/blueprints/suggest` | Analyze a GitHub repository and recommend a catalog blueprint |
 | `POST` | `/api/blueprints/validate` | Validate an inline blueprint |
+
+Suggested blueprint analysis accepts `{ "repository": "owner/repo" }`, returns `recommended_blueprint`, `rationale`, `confidence`, `signals`, and `fallback`, and gracefully returns `fallback: true` when GitHub analysis is unavailable. See [Repository blueprint suggestions](./repo-blueprint-suggestions.md).
 
 ### Backlog, board, and workflow setup
 

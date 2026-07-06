@@ -30,6 +30,10 @@ features:
     details: No code merges without your explicit approval. The OutcomeSpec gate, RAI check, and human review step are enforced by the platform — not optional.
   - title: Scenario workflows
     details: Seven built-in YAML workflows cover software delivery, bug fixing, code review, content authoring, PM discovery, incident response, and agent evaluation. Add your own or generate one.
+  - title: Suggested blueprints for GitHub repos
+    details: Create from GitHub now analyzes repository metadata, topics, languages, root files, and issues to recommend the best starter blueprint, with graceful fallback to Templates.
+    link: /experience/repo-blueprint-suggestions
+    linkText: See it in action
   - title: Persistent team memory
     details: Agents build on prior work through four memory layers — decisions, core context, learnings, and open session. A Scribe records what the team learned after every run.
   - title: Sandbox browser preview
