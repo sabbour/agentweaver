@@ -163,6 +163,10 @@ public sealed class NewWorkflowFromScratchTests : IClassFixture<ProjectsWebAppli
             .ToList();
         ids.Should().Contain("my-workflow",
             because: "the saved workflow id must be added to AllowedWorkflowIds and appear in the registry");
+
+        var reloadedProject = await store.GetAsync(pid);
+        reloadedProject!.AllowedWorkflowIds.Should().Contain("my-workflow",
+            because: "the allowed-workflow filter must persist the saved id before the post-save reload");
     }
 
     [Fact]

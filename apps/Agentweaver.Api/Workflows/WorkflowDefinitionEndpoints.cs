@@ -322,9 +322,11 @@ public static class WorkflowDefinitionEndpoints
                     : "(unrestricted)";
 
                 // Distinguish a post-write validation failure from a genuine discovery gap.
+                var expectedSource = $"{workflowId}.yaml";
                 var invalidEntry = refreshedSet.Results.FirstOrDefault(r =>
-                    r.Definition is not null &&
-                    string.Equals(r.Definition.Id, workflowId, StringComparison.OrdinalIgnoreCase));
+                    string.Equals(r.Source, expectedSource, StringComparison.OrdinalIgnoreCase) ||
+                    (r.Definition is not null &&
+                     string.Equals(r.Definition.Id, workflowId, StringComparison.OrdinalIgnoreCase)));
 
                 var saveLogger = loggerFactory.CreateLogger("Agentweaver.Api.Workflows.WorkflowSave");
                 saveLogger.LogError(
@@ -334,9 +336,12 @@ public static class WorkflowDefinitionEndpoints
                     invalidEntry?.Error ?? "(workflow not discovered)");
 
                 if (invalidEntry is not null)
-                    return Results.Problem(
-                        $"Workflow '{workflowId}' was written but failed validation on reload: {invalidEntry.Error}",
-                        statusCode: StatusCodes.Status500InternalServerError);
+                    return Results.UnprocessableEntity(new
+                    {
+                        error = $"Workflow '{workflowId}' was written but failed validation on reload: {invalidEntry.Error ?? "Workflow validation failed."}",
+                        source = invalidEntry.Source,
+                        warnings = invalidEntry.Warnings,
+                    });
 
                 return Results.Problem(
                     $"Workflow '{workflowId}' was written to disk but was not discovered by the registry. " +
