@@ -15,6 +15,7 @@ import type {
   ToolCallItem,
   ApprovalRequestItem,
 } from './types';
+import type { QuestionRequestItem } from './types';
 
 /** Maximum characters stored per content field (Y-1: prevent unbounded DOM growth). */
 export const CONTENT_MAX_CHARS = 50_000;
@@ -29,6 +30,7 @@ export const initialTimelineState: TimelineReducerState = {
   currentTurnIndex: null,
   pendingToolCalls: new Map(),
   pendingApprovals: new Map(),
+  pendingQuestions: new Map(),
   streamingMessage: null,
 };
 
@@ -419,13 +421,19 @@ function processEvent(
     case 'agent.tools':
     case 'agent.intent':
     case 'tool.auto_approved':
-    case 'coordinator.autopilot_answered':
+    // Bubbled child HITL gates on the coordinator stream — surface inline so the
+    // operator can act (LifecycleEventCard routes the answer/approval to the
+    // childRunId). Resolution state is paired at render time (Timeline).
+    // falls through
+    case 'coordinator.child_approval_required':
+    case 'coordinator.child_approval_resolved':
     // Coordinator orchestration milestones — surface as lifecycle cards so the
     // coordinator session timeline narrates the run (spec → plan → dispatch →
     // assembly) even when no agent-turn content is streamed. Normal runs never
     // emit these types, so this is inert for the per-run timeline. High-frequency
     // topology/graph snapshots and subtask.running ticks are deliberately omitted
     // (the workflow graph already visualizes those) to keep the narrative readable.
+    // falls through
     case 'coordinator.recovered':
     case 'coordinator.outcome_spec':
     case 'coordinator.outcome_spec.confirmed':
@@ -513,6 +521,81 @@ function processEvent(
       const pendingApprovals = new Map(state.pendingApprovals);
       pendingApprovals.delete(requestId);
       return { ...state, items, pendingApprovals };
+    }
+
+    // ---- HITL question gates (BLOCKING #1) --------------------------------
+    // Questions often arrive with no open turn (esp. bubbled child questions),
+    // so they are folded as dedicated top-level items paired by requestId and
+    // rendered via the reusable QuestionAnswerCard (see Timeline).
+    case 'agent.question_asked':
+    case 'coordinator.child_question': {
+      const requestId = String(event.payload['requestId'] ?? event.payload['request_id'] ?? '');
+      if (!requestId) return state;
+      // Ignore a duplicate asked for a question we already track.
+      if (state.pendingQuestions.has(requestId)) return state;
+      const isChild = event.type === 'coordinator.child_question';
+      const askingRunId = isChild
+        ? (event.payload['childRunId'] != null || event.payload['child_run_id'] != null
+            ? String(event.payload['childRunId'] ?? event.payload['child_run_id'])
+            : undefined)
+        : undefined;
+      const sourceLabel = isChild
+        ? (event.payload['sourceLabel'] != null || event.payload['agentName'] != null || event.payload['label'] != null
+            ? String(event.payload['sourceLabel'] ?? event.payload['agentName'] ?? event.payload['label'])
+            : 'Subtask')
+        : undefined;
+      const item: QuestionRequestItem = {
+        kind: 'question-request',
+        requestId,
+        question: cap(String(event.payload['question'] ?? '')),
+        askingRunId,
+        sourceLabel,
+        resolved: false,
+      };
+      const items = [...state.items, item];
+      const pendingQuestions = new Map(state.pendingQuestions);
+      pendingQuestions.set(requestId, items.length - 1);
+      return { ...state, items, pendingQuestions };
+    }
+
+    case 'agent.question_answered': {
+      const requestId = String(event.payload['requestId'] ?? event.payload['request_id'] ?? '');
+      const idx = requestId ? state.pendingQuestions.get(requestId) : undefined;
+      if (idx == null) return state; // unknown or already-folded — ignore
+      const existing = state.items[idx] as QuestionRequestItem;
+      const resolved: QuestionRequestItem = {
+        ...existing,
+        answer: cap(String(event.payload['answer'] ?? '')),
+        timedOut: Boolean(event.payload['timedOut'] ?? event.payload['timed_out'] ?? false),
+        resolved: true,
+      };
+      const items = [...state.items.slice(0, idx), resolved, ...state.items.slice(idx + 1)];
+      const pendingQuestions = new Map(state.pendingQuestions);
+      pendingQuestions.delete(requestId);
+      return { ...state, items, pendingQuestions };
+    }
+
+    case 'coordinator.autopilot_answered': {
+      // Autopilot auto-answered a (child) question via the coordinator model.
+      // Resolve the paired question item if we are tracking it, and always keep
+      // the muted audit line (lifecycle card) for provenance.
+      const requestId = String(event.payload['requestId'] ?? event.payload['request_id'] ?? '');
+      const idx = requestId ? state.pendingQuestions.get(requestId) : undefined;
+      let items = state.items;
+      let pendingQuestions = state.pendingQuestions;
+      if (idx != null) {
+        const existing = state.items[idx] as QuestionRequestItem;
+        const resolved: QuestionRequestItem = {
+          ...existing,
+          answer: cap(String(event.payload['answer'] ?? '')),
+          timedOut: false,
+          resolved: true,
+        };
+        items = [...state.items.slice(0, idx), resolved, ...state.items.slice(idx + 1)];
+        pendingQuestions = new Map(state.pendingQuestions);
+        pendingQuestions.delete(requestId);
+      }
+      return { ...state, items: [...items, { kind: 'lifecycle', event }], pendingQuestions };
     }
 
     default:

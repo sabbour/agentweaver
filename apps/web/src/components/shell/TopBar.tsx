@@ -1,4 +1,6 @@
-import { makeStyles, tokens, Badge } from '@fluentui/react-components';
+import { makeStyles, tokens, Badge, Button, Tooltip } from '@fluentui/react-components';
+import { Chat20Regular } from '@fluentui/react-icons';
+import { Link as RouterLink } from 'react-router-dom';
 import { GitHubSignIn } from '../GitHubSignIn';
 import { ProjectSwitcher } from './ProjectSwitcher';
 import { StatusDot } from './StatusDot';
@@ -65,6 +67,13 @@ export function TopBar({
         />
       </div>
       <div className={styles.right}>
+        <Tooltip content="Open control console" relationship="label">
+          <RouterLink to="/console" style={{ display: 'inline-flex' }}>
+            <Button appearance="subtle" icon={<Chat20Regular />} aria-label="Open control console">
+              Console
+            </Button>
+          </RouterLink>
+        </Tooltip>
         <StatusDot />
         <GitHubSignIn />
       </div>

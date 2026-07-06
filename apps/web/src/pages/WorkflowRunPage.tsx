@@ -35,6 +35,7 @@ import {
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { useRunStream, type RunStreamEvent, type EventType } from '../api/sse';
+import { mergeRunEvents, SEED_STATUSES } from '../timeline/mergeRunEvents';
 import { apiClient } from '../api/apiClient';
 import type { TeamDto, GraphDescriptor, PortForwardSessionDto } from '../api/types';
 import { DAG_NODE_SEP, layoutDag, NODE_W, workflowNodeSizeHint } from '../utils/dagLayout';
@@ -198,34 +199,8 @@ const CHILD_FORWARD_EDGES: Edge[] = [
 
 const CHILD_EDGES: Edge[] = [...CHILD_FORWARD_EDGES];
 
-// Statuses for which the run is finished/parked and its live SSE stream is closed, so the
-// timeline must be seeded from the persisted events endpoint. Generous on purpose: a child
-// parks at assemble-ready, and listing unknown-but-inactive states here is harmless.
-const SEED_STATUSES: ReadonlySet<string> = new Set([
-  'completed', 'failed', 'merged', 'declined', 'merge_failed',
-  'parked', 'assemble_ready', 'assembled', 'cancelled', 'stopped',
-]);
-
-// Fold a persisted-events REST seed under live SSE deltas. Seeded events come first in
-// order; a live event is appended only when not already represented (dedupe by sequence,
-// and singleton seq-0 events by type) so a finished run shows persisted progress and an
-// in-flight reconnect still layers new deltas on top.
-function mergeRunEvents(seed: RunStreamEvent[], live: RunStreamEvent[]): RunStreamEvent[] {
-  if (seed.length === 0) return live;
-  const merged = [...seed];
-  const seenSeq = new Set(seed.filter((e) => e.sequence > 0).map((e) => e.sequence));
-  const seenType = new Set(seed.map((e) => e.type));
-  for (const evt of live) {
-    if (evt.sequence > 0) {
-      if (seenSeq.has(evt.sequence)) continue;
-      seenSeq.add(evt.sequence);
-    } else if (seenType.has(evt.type)) {
-      continue;
-    }
-    merged.push(evt);
-  }
-  return merged;
-}
+// Statuses/seed-merge helpers are shared across the workflow page, the agent session
+// panel and the browser console TUI — see timeline/mergeRunEvents.ts (BLOCKING #3).
 
 // ---------------------------------------------------------------------------
 // Page

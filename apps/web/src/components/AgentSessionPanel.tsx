@@ -39,6 +39,7 @@ import rehypeSanitize from 'rehype-sanitize';
 import { apiClient } from '../api/apiClient';
 import type { WorkspaceFileDiff, WorkspaceFileEntry } from '../api/types';
 import { useRunStream, type EventType, type RunStreamEvent } from '../api/sse';
+import { mergeRunEvents as sharedMergeRunEvents } from '../timeline/mergeRunEvents';
 import { AgentAvatar } from './AgentAvatar';
 import { DiffViewer } from './DiffViewer';
 import { FileViewerModal } from './FileViewerModal';
@@ -747,20 +748,8 @@ interface FlatTreeNode extends RunSessionTree {
 }
 
 function mergeRunEvents(seed: RunStreamEvent[], live: RunStreamEvent[]): RunStreamEvent[] {
-  if (seed.length === 0) return [...live].sort((a, b) => (a.sequence || Number.MAX_SAFE_INTEGER) - (b.sequence || Number.MAX_SAFE_INTEGER));
-  const merged = [...seed];
-  const seenSeq = new Set(seed.filter((e) => e.sequence > 0).map((e) => e.sequence));
-  const seenType = new Set(seed.map((e) => e.type));
-  for (const evt of live) {
-    if (evt.sequence > 0) {
-      if (seenSeq.has(evt.sequence)) continue;
-      seenSeq.add(evt.sequence);
-    } else if (seenType.has(evt.type)) {
-      continue;
-    }
-    merged.push(evt);
-  }
-  return merged.sort((a, b) => (a.sequence || Number.MAX_SAFE_INTEGER) - (b.sequence || Number.MAX_SAFE_INTEGER));
+  // The session panel presents a sequence-sorted transcript — see the shared helper.
+  return sharedMergeRunEvents(seed, live, { sort: true });
 }
 
 function readString(payload: Record<string, unknown>, keys: string[]): string | undefined {

@@ -126,4 +126,54 @@ describe('useTimelineItems', () => {
     expect(turns).toHaveLength(2);
     expect((turns[1].steps[0] as AgentMessageItem).content).toBe('after reconnect');
   });
+
+  // BLOCKING #2: buffer overflow — useRunStream caps its buffer at 1000 and slices
+  // events off the front, incrementing droppedEventCount. A length-based cursor
+  // would stall (length stays 1000). The totalReceived high-water mark must keep
+  // processing genuinely-new events past 1000.
+  it('keeps processing after the 1000-event buffer caps and evicts old events', () => {
+    const LIMIT = 1000;
+    // Fill the buffer to the cap with tool-call pairs so each produces a step.
+    let seq = 0;
+    const initial: RunStreamEvent[] = [makeEvent('agent.turn.start', { turnId: 'T1' }, ++seq)];
+    while (initial.length < LIMIT) {
+      const id = `c${seq}`;
+      initial.push(makeEvent('tool.call', { callId: id, name: 'noop', args: {} }, ++seq));
+    }
+
+    const { result, rerender } = renderHook(
+      ({ events, runId, dropped }: { events: RunStreamEvent[]; runId: string; dropped: number }) =>
+        useTimelineItems(events, runId, dropped),
+      { initialProps: { events: initial, runId: 'run-1', dropped: 0 } },
+    );
+
+    const turnBefore = result.current.items.find((i) => i.kind === 'turn-group') as TurnGroupItem;
+    const stepsBefore = turnBefore.steps.length;
+    expect(stepsBefore).toBeGreaterThan(0);
+
+    // Simulate 500 more events arriving. The buffer stays at 1000 by slicing the
+    // oldest 500 off the front, so droppedEventCount === 500. This is exactly the
+    // condition that stalled the old length-based cursor.
+    let buffer = [...initial];
+    let dropped = 0;
+    for (let i = 0; i < 500; i++) {
+      const id = `n${seq}`;
+      buffer.push(makeEvent('tool.call', { callId: id, name: 'noop', args: {} }, ++seq));
+      if (buffer.length > LIMIT) {
+        buffer = buffer.slice(buffer.length - LIMIT);
+        dropped += 1;
+      }
+    }
+    expect(buffer.length).toBe(LIMIT);
+    expect(dropped).toBe(500);
+
+    act(() => {
+      rerender({ events: buffer, runId: 'run-1', dropped });
+    });
+
+    const turnAfter = result.current.items.find((i) => i.kind === 'turn-group') as TurnGroupItem;
+    // The reducer kept folding the new tail: strictly more steps than before the
+    // overflow. A stalled length-based cursor would leave stepsAfter === stepsBefore.
+    expect(turnAfter.steps.length).toBeGreaterThan(stepsBefore);
+  });
 });

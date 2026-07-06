@@ -7,40 +7,65 @@ import type { TimelineReducerState } from './types';
  * Incrementally feeds SSE events into the timeline reducer.
  *
  * RD-B1 (Reconnection fix): useRunStream resets events[] to [] on reconnect to
- * the same runId.  When we detect events.length < processedCountRef.current we
- * know a reset occurred — we reset the reducer state and re-fold from scratch.
+ * the same runId. When we detect the total received count going backwards we
+ * reset the reducer state and re-fold from scratch.
+ *
+ * BLOCKING #2 (Stream buffer stall fix): useRunStream caps its buffer at
+ * DEFAULT_EVENT_BUFFER_LIMIT (1000) and slices old events off the front on
+ * overflow (sse.ts). A length-based cursor stalls once the buffer caps, because
+ * events.length stays at the limit while new events replace old ones. We instead
+ * track the monotonic *total received* count = droppedEventCount + events.length.
+ * New events since the last fold = totalReceived - prevTotalReceived, so we can
+ * process exactly the genuinely-new tail regardless of front-eviction, and never
+ * stall on long-lived runs. Callers should pass droppedEventCount from
+ * useRunStream; it defaults to 0 for callers that never overflow.
  */
 export function useTimelineItems(
   events: RunStreamEvent[],
   runId: string,
+  droppedEventCount = 0,
 ): TimelineReducerState {
   const [state, dispatch] = useReducer(timelineReducer, initialTimelineState);
-  const processedCountRef = useRef(0);
+  const prevTotalRef = useRef(0);
 
   // Reset on runId change (navigating to a different run)
   useEffect(() => {
     dispatch({ type: 'reset' });
-    processedCountRef.current = 0;
+    prevTotalRef.current = 0;
   }, [runId]);
 
   useEffect(() => {
-    const newCount = events.length;
+    const len = events.length;
+    const totalReceived = droppedEventCount + len;
+    const prevTotal = prevTotalRef.current;
 
-    // RD-B1: if the events array shrank (useRunStream reset on reconnect),
-    // we must re-fold the entire history from scratch.
-    if (newCount < processedCountRef.current) {
+    let start: number;
+    if (totalReceived < prevTotal) {
+      // Total went backwards → reconnect reset (useRunStream cleared events[]).
+      // Re-fold whatever we now have.
       dispatch({ type: 'reset' });
-      processedCountRef.current = 0;
+      start = 0;
+    } else {
+      const newLogical = totalReceived - prevTotal;
+      if (newLogical >= len) {
+        // First fold, or so many events dropped that our processed window is
+        // entirely gone — re-fold the current buffer from scratch.
+        dispatch({ type: 'reset' });
+        start = 0;
+      } else {
+        // Process only the genuinely-new tail. When the buffer has evicted
+        // events off the front, `len - newLogical` still points just past the
+        // last event we already folded, because newLogical accounts for the
+        // evicted events too.
+        start = len - newLogical;
+      }
     }
 
-    if (newCount <= processedCountRef.current) return;
-
-    // Process only the new tail
-    for (let i = processedCountRef.current; i < newCount; i++) {
+    for (let i = start; i < len; i++) {
       dispatch({ type: 'event', event: events[i] });
     }
-    processedCountRef.current = newCount;
-  }, [events]);
+    prevTotalRef.current = totalReceived;
+  }, [events, droppedEventCount]);
 
   return state;
 }
