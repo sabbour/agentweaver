@@ -13,10 +13,12 @@ import {
   Input,
   MessageBar,
   MessageBarBody,
+  Popover,
+  PopoverSurface,
+  PopoverTrigger,
   Spinner,
   Text,
   Title2,
-  Title3,
   Tooltip,
   makeStyles,
   tokens,
@@ -25,7 +27,11 @@ import {
   ArrowRepeatAllRegular,
   BotRegular,
   ChatRegular,
+  CheckmarkCircleFilled,
+  CircleRegular,
+  ClockRegular,
   DismissRegular,
+  DismissCircleFilled,
   DocumentRegular,
   FlowchartRegular,
   FolderRegular,
@@ -50,22 +56,13 @@ import { layoutDagColumns, NODE_W, NODE_H, NODE_TYPE_W, NODE_TYPE_H } from '../u
 import type { NodeSizeHint } from '../utils/dagLayout';
 import { OutcomeSpecPanel } from '../components/OutcomeSpecPanel';
 import { AgentAvatar } from '../components/AgentAvatar';
-import { CostChip } from '../components/CostChip';
+import { CostChip, formatAic } from '../components/CostChip';
 import { AgentTokenBreakdown } from '../components/runs/AgentTokenBreakdown';
 import { AgentSessionPanel, type RunSessionTree } from '../components/AgentSessionPanel';
-import { SteerPanel } from '../components/SteerPanel';
 import { SlidePanel } from '../components/SlidePanel';
-import { SteerChatPanel } from '../components/SteerChatPanel';
 import { CoordinatorArtifactsPanel } from '../components/CoordinatorArtifactsPanel';
 import { AutomationToggle } from '../components/AutomationToggle';
 import { AUTOMATION_HELP } from '../components/automationHelp';
-import { QuestionAnswerCard } from '../components/QuestionAnswerCard';
-import { LifecycleEventCard } from '../components/LifecycleEventCard';
-import { Timeline } from '../components/Timeline';
-import { TransactionTracePanel } from '../components/runs/TransactionTracePanel';
-import { useTimelineItems } from '../timeline/useTimelineItems';
-import { stripSerializedWorkPlanMessages } from '../timeline/coordinatorPlanFilter';
-import { RunLayout } from '../components/RunLayout';
 import type { ArtifactBrowserAdapter } from '../hooks/useArtifactBrowser';
 import {
   workflowNodeTypes,
@@ -149,7 +146,7 @@ function resolveSubtaskTopoNode(
   topology: CoordinatorTopologyState,
 ): TopologyNodeState | undefined {
   if (topology.nodes[graphNodeId]) return topology.nodes[graphNodeId];
-  // Strip 'plan:' prefix: 'plan:subtask-1' → 'subtask-1'
+  // Strip 'plan:' prefix: 'plan:subtask-1' â†’ 'subtask-1'
   const stripped = graphNodeId.replace(/^plan:/, '');
   return topology.nodes[stripped];
 }
@@ -180,118 +177,7 @@ interface OrchState {
   conflictBranch?: string;
 }
 
-// Maps a terminal assembly reason code (integration_conflict, integration_build_error, merge_failed,
-// assembly_declined, …) to a human-readable explanation for the blocked/failed card. Falls back to
-// the raw reason when unknown so nothing is hidden.
-function friendlyAssemblyReason(reason: string | undefined): string {
-  // The reason can arrive as the bare event code ("ineligible_subtasks") or as the
-  // run-result string ("assembly_blocked: ineligible_subtasks"). Normalize the
-  // prefix so both map to the same case.
-  const normalized = reason?.replace(/^assembly_blocked:\s*/i, '');
-  switch (normalized) {
-    case 'ineligible_subtasks':
-      return "Assembly can't start because one or more subtasks didn't finish successfully. Every subtask must reach a ready state before the coordinator can assemble the combined result — there is no partial assembly. The blocking subtasks are listed below; reroute to the coordinator to re-run them, or stop the run.";
-    case 'integration_conflict':
-      return 'Two subtasks changed the same lines, so their branches could not be combined automatically. Resolve by steering the coordinator to re-run the affected subtask(s) against the latest changes, or stop and merge manually.';
-    case 'integration_build_error':
-      return 'The combined integration branch could not be built (a git/worktree error occurred while assembling the subtask branches).';
-    case 'merge_failed':
-      return 'Merging the assembled output into your branch failed (a conflict appeared at final merge time).';
-    default:
-      return reason ? `The collective assembly stopped: ${reason}.` : 'The collective assembly could not complete.';
-  }
-}
-
-// A subtask that blocked the all-or-nothing assembly gate, surfaced by the
-// coordinator.assembly_blocked event payload (LOCKED CONTRACT).
-interface IneligibleSubtask {
-  id: number;
-  title: string;
-  status: string;
-  agent: string;
-}
-
-// Find the latest coordinator.assembly_blocked event and read its
-// ineligibleSubtasks list. Returns undefined for older runs that omit it so the
-// blocked panel can fall back to the single-message form.
-function readIneligibleSubtasks(events: RunStreamEvent[]): IneligibleSubtask[] | undefined {
-  let raw: unknown;
-  for (const evt of events) {
-    if (evt.type === 'coordinator.assembly_blocked') {
-      const v = evt.payload['ineligibleSubtasks'] ?? evt.payload['ineligible_subtasks'];
-      if (Array.isArray(v)) raw = v;
-    }
-  }
-  if (!Array.isArray(raw)) return undefined;
-  return raw.map((item) => {
-    const o = (item ?? {}) as Record<string, unknown>;
-    return {
-      id: typeof o.id === 'number' ? o.id : Number(o.id) || 0,
-      title: o.title != null ? String(o.title) : '',
-      status: o.status != null ? String(o.status) : '',
-      agent: o.agent != null ? String(o.agent) : '',
-    };
-  });
-}
-
-// Bare ineligible subtask ids (older runs may carry only ids, no detail rows).
-function readIneligibleSubtaskIds(events: RunStreamEvent[]): number[] | undefined {
-  let raw: unknown;
-  for (const evt of events) {
-    if (evt.type === 'coordinator.assembly_blocked') {
-      const v = evt.payload['ineligibleSubtaskIds'] ?? evt.payload['ineligible_subtask_ids'];
-      if (Array.isArray(v)) raw = v;
-    }
-  }
-  if (!Array.isArray(raw)) return undefined;
-  const ids = raw.map((x) => (typeof x === 'number' ? x : Number(x))).filter((n) => !Number.isNaN(n));
-  return ids.length > 0 ? ids : undefined;
-}
-
-function humanizeSubtaskStatus(status: string): string {
-  if (!status) return '';
-  const spaced = status.replace(/_/g, ' ');
-  return spaced.charAt(0).toUpperCase() + spaced.slice(1);
-}
-
-// Status → badge intent + label for a blocking subtask.
-function subtaskStatusBadge(status: string): {
-  intent: 'warning' | 'danger' | 'informative' | 'subtle';
-  label: string;
-} {
-  switch (status) {
-    case 'rai_flagged':
-      return { intent: 'warning', label: 'RAI-flagged' };
-    case 'failed':
-      return { intent: 'danger', label: 'Failed' };
-    case 'running':
-      return { intent: 'informative', label: 'Still running' };
-    case 'dispatched':
-      return { intent: 'informative', label: 'Dispatched' };
-    case 'pending':
-      return { intent: 'informative', label: 'Pending' };
-    default:
-      return { intent: 'subtle', label: humanizeSubtaskStatus(status) || status };
-  }
-}
-
-// One-line per-status hint shown under each blocking subtask row.
-function subtaskStatusHint(status: string): string {
-  switch (status) {
-    case 'rai_flagged':
-      return "RAI flagged this subtask's output. Reroute to the coordinator to re-run it against the feedback, or stop.";
-    case 'failed':
-      return 'This subtask failed. Reroute to the coordinator to retry it, or stop.';
-    case 'running':
-    case 'dispatched':
-    case 'pending':
-      return "This subtask hasn't finished yet.";
-    default:
-      return '';
-  }
-}
-
-// coordinator.assembly_* event type → phase. These event types may not be emitted
+// coordinator.assembly_* event type â†’ phase. These event types may not be emitted
 // yet; absence simply means we fall through to the status field / work-plan status.
 const ASSEMBLY_EVENT_PHASE: Record<string, OrchPhase> = {
   'coordinator.assembly_started': 'assembling',
@@ -384,7 +270,7 @@ function orchPhaseToTopoStatus(phase: OrchPhase): string | undefined {
 // automated EXCEPT the Human Review gate, which waits on the user: during `in_review` the review
 // node becomes 'started' so WorkflowNode renders it action-required ("Awaiting your review").
 // Returns undefined for stages not yet reached so the backend planned/live kind is preserved.
-// role ∈ {rai, review, merge, scribe}.
+// role âˆˆ {rai, review, merge, scribe}.
 function assemblyNodeStatus(role: string, phase: OrchPhase): StepStatus | undefined {
   switch (phase) {
     case 'assembling':
@@ -492,11 +378,11 @@ const EXPANDED_PIPELINE_RESERVE = 188;
 // for fan-out columns.
 const COORDINATOR_GRAPH_NODE_SEP = 96;
 
-// Renders column depth labels (L0 Coordinator, L1 Research…) inside the React Flow canvas
+// Renders column depth labels (L0 Coordinator, L1 Researchâ€¦) inside the React Flow canvas
 // using ViewportPortal so they pan/zoom with the graph and stay aligned over each column.
 // A compact pipeline step row rendered inline inside a SubtaskNode expansion panel. Laid out as a
 // narrow VERTICAL strip (icon + label/role + status/timer) so the expansion stays within the card
-// width and only grows downward — avoiding the horizontal overflow that overlapped neighbour nodes.
+// width and only grows downward â€” avoiding the horizontal overflow that overlapped neighbour nodes.
 // Does not use React Flow Handles (rendered outside a ReactFlow canvas).
 function ChildStepRow({ def, state, isLast }: { def: ExecutorDef; state: ExecutorState; isLast: boolean }) {
   const { key, label, Icon } = def;
@@ -543,7 +429,7 @@ function ChildStepRow({ def, state, isLast }: { def: ExecutorDef; state: Executo
       </div>
       {!isLast && (
         <span aria-hidden="true" style={{ alignSelf: 'center', color: 'var(--colorNeutralForeground4)', lineHeight: 1, fontSize: 12, height: 14, display: 'flex', alignItems: 'center' }}>
-          ↓
+          â†“
         </span>
       )}
     </div>
@@ -622,8 +508,8 @@ function SubtaskNode({ id, data }: NodeProps) {
   const podName = d.executionPodName as string | null | undefined;
 
   const handleCardClick = useCallback(() => {
-    if (d.childRunId) openPanel?.(id);
-  }, [d.childRunId, id, openPanel]);
+    openPanel?.(id);
+  }, [id, openPanel]);
 
   return (
     <>
@@ -638,8 +524,8 @@ function SubtaskNode({ id, data }: NodeProps) {
         data-node-type="subtask"
         role="article"
         aria-label={`${d.label as string}: ${d.topoStatus as string}`}
-        onClick={d.childRunId ? handleCardClick : undefined}
-        style={d.childRunId ? { cursor: 'pointer' } : undefined}
+        onClick={handleCardClick}
+        style={{ cursor: 'pointer' }}
       >
       <Handle type="target" position={d.dir === 'TB' ? Position.Top : Position.Left} style={handleStyle} />
       <Handle type="source" position={d.dir === 'TB' ? Position.Bottom : Position.Right} style={handleStyle} />
@@ -667,7 +553,7 @@ function SubtaskNode({ id, data }: NodeProps) {
         </div>
       </div>
 
-      {/* Inline child pipeline — compact vertical strip of step rows. Stays within the card width
+      {/* Inline child pipeline â€” compact vertical strip of step rows. Stays within the card width
           (grows only downward) so the expansion never overflows into neighbouring subtask columns. */}
       {expanded && (
         <div
@@ -749,7 +635,7 @@ const useStyles = makeStyles({
     fontSize: tokens.fontSizeBase300,
     color: tokens.colorNeutralForeground2,
   },
-  // Graph band — full-width horizontal pipeline above the two columns.
+  // Graph band â€” full-width horizontal pipeline above the two columns.
   graphBand: {
     display: 'flex',
     flexDirection: 'column',
@@ -923,11 +809,180 @@ const useStyles = makeStyles({
     borderRadius: tokens.borderRadiusSmall,
     padding: tokens.spacingVerticalS,
   },
+  console: {
+    display: 'grid',
+    gridTemplateRows: 'auto minmax(0, 1fr)',
+    height: 'calc(100vh - 150px)',
+    minHeight: '680px',
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusLarge,
+    overflow: 'hidden',
+    backgroundColor: tokens.colorNeutralBackground1,
+  },
+  topZone: {
+    display: 'grid',
+    gridTemplateColumns: 'minmax(0, 1fr) auto',
+    gap: tokens.spacingHorizontalL,
+    alignItems: 'center',
+    padding: `${tokens.spacingVerticalM} ${tokens.spacingHorizontalL}`,
+    borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
+    backgroundColor: tokens.colorNeutralBackground1,
+  },
+  titleStack: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalXS,
+    minWidth: 0,
+  },
+  topTitleRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalS,
+    minWidth: 0,
+    flexWrap: 'wrap',
+  },
+  statsStrip: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalS,
+    flexWrap: 'wrap',
+    color: tokens.colorNeutralForeground2,
+  },
+  statSeparator: {
+    color: tokens.colorNeutralForeground4,
+  },
+  topControls: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    gap: tokens.spacingHorizontalM,
+    flexWrap: 'wrap',
+  },
+  bodyGrid: {
+    minHeight: 0,
+    display: 'grid',
+    gridTemplateColumns: '300px minmax(460px, 1fr) minmax(380px, 440px)',
+  },
+  leftZone: {
+    minHeight: 0,
+    borderRight: `1px solid ${tokens.colorNeutralStroke2}`,
+    backgroundColor: tokens.colorNeutralBackground2,
+    display: 'flex',
+    flexDirection: 'column',
+  },
+  zoneHeader: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM}`,
+    borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
+    fontWeight: tokens.fontWeightSemibold,
+  },
+  treeList: {
+    flex: 1,
+    minHeight: 0,
+    overflowY: 'auto',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '2px',
+    padding: tokens.spacingHorizontalXS,
+  },
+  runTreeRow: {
+    width: '100%',
+    display: 'grid',
+    gridTemplateColumns: '20px 28px minmax(0, 1fr) auto',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalS,
+    padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalS}`,
+    border: 'none',
+    borderRadius: tokens.borderRadiusMedium,
+    backgroundColor: 'transparent',
+    color: tokens.colorNeutralForeground1,
+    textAlign: 'left',
+    cursor: 'pointer',
+    ':hover': { backgroundColor: tokens.colorNeutralBackground1Hover },
+  },
+  runTreeRowSelected: {
+    backgroundColor: tokens.colorBrandBackground2,
+  },
+  treeText: {
+    display: 'flex',
+    flexDirection: 'column',
+    minWidth: 0,
+    gap: '1px',
+  },
+  treePrimary: {
+    fontWeight: tokens.fontWeightSemibold,
+    whiteSpace: 'nowrap',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+  },
+  treeSecondary: {
+    fontSize: tokens.fontSizeBase200,
+    color: tokens.colorNeutralForeground3,
+    whiteSpace: 'nowrap',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+  },
+  treeDuration: {
+    fontSize: tokens.fontSizeBase200,
+    color: tokens.colorNeutralForeground3,
+    fontVariantNumeric: 'tabular-nums',
+  },
+  centerZone: {
+    minWidth: 0,
+    minHeight: 0,
+    display: 'flex',
+    flexDirection: 'column',
+    backgroundColor: tokens.colorNeutralBackground1,
+  },
+  centerBody: {
+    flex: 1,
+    minHeight: 0,
+    padding: tokens.spacingHorizontalM,
+    overflow: 'auto',
+  },
+  centerDag: {
+    height: '100%',
+    minHeight: '520px',
+  },
+  creditsSurface: {
+    width: '360px',
+    maxHeight: '420px',
+    overflowY: 'auto',
+    padding: tokens.spacingVerticalM,
+  },
 });
 
 // ---------------------------------------------------------------------------
 // Page
 // ---------------------------------------------------------------------------
+
+function flattenRunTree(nodes: RunSessionTree[]): RunSessionTree[] {
+  return nodes.flatMap((node) => [node, ...flattenRunTree(node.children)]);
+}
+
+function runTreeStatusIcon(status: string) {
+  const kind = status === 'completed' || status === 'merged' || status === 'assemble_ready'
+    ? 'success'
+    : status === 'failed' || status === 'merge_failed' || status === 'declined'
+      ? 'danger'
+      : status === 'running' || status === 'dispatched' || status === 'dispatching' || status === 'in_progress'
+        ? 'running'
+        : status === 'waiting' || status === 'pending' || status === 'rai_flagged'
+          ? 'waiting'
+          : 'pending';
+  if (kind === 'success') return <CheckmarkCircleFilled aria-hidden="true" />;
+  if (kind === 'danger') return <DismissCircleFilled aria-hidden="true" />;
+  if (kind === 'running') return <Spinner size="extra-tiny" aria-label="Running" />;
+  if (kind === 'waiting') return <ClockRegular aria-hidden="true" />;
+  return <CircleRegular aria-hidden="true" />;
+}
+
+function formatTreeDuration(startedAt?: number, completedAt?: number): string {
+  if (!startedAt) return 'Queued';
+  return fmtTotal(Math.max(0, (completedAt ?? Date.now()) - startedAt));
+}
 
 export function CoordinatorRunPage() {
   const styles = useStyles();
@@ -945,7 +1000,7 @@ export function CoordinatorRunPage() {
   // Topology seed from work plan + children (for subtask status projection).
   const [topoSeed, setTopoSeed] = useState(initialTopologyState);
 
-  // Agent name → role title, fetched from the project team roster, so a subtask card can show the
+  // Agent name â†’ role title, fetched from the project team roster, so a subtask card can show the
   // assigned agent's ROLE (e.g. "Repo Auditor") and not just their cast name (e.g. "Deckard").
   const [roleByAgent, setRoleByAgent] = useState<Record<string, string>>({});
 
@@ -958,7 +1013,7 @@ export function CoordinatorRunPage() {
       .then((desc) => { if (!cancelled) setRestDescriptor(desc); })
       .catch(() => {});
 
-    // Fetch work plan + children for topology status seed. Skip for child runs —
+    // Fetch work plan + children for topology status seed. Skip for child runs â€”
     // work-plan is a coordinator-only artifact and child runs will never have one.
     void (async () => {
       const runDetail = await apiClient.getRun(runId).catch(() => null);
@@ -1021,7 +1076,7 @@ export function CoordinatorRunPage() {
 
   // ---------------------------------------------------------------------------
   // Orchestration lifecycle poll (issues 3 & 4). Reads the coordinator_status field
-  // (added by the backend concurrently — optional) plus the work-plan status, both
+  // (added by the backend concurrently â€” optional) plus the work-plan status, both
   // tolerated as absent. Polls until the orchestration reaches a terminal phase.
   // ---------------------------------------------------------------------------
   const [coordStatusField, setCoordStatusField] = useState<string | undefined>(undefined);
@@ -1036,7 +1091,6 @@ export function CoordinatorRunPage() {
   const [retriedFrom, setRetriedFrom] = useState<string | null>(null);
   // Per-run work-plan snapshot.
   const [workPlanData, setWorkPlanData] = useState<WorkPlanResponse | null>(null);
-  const [blockedSteerPending, setBlockedSteerPending] = useState(false);
 
   // Sandbox preview port-forward state.
   const [sandboxBackend,    setSandboxBackend]    = useState<string | undefined>(undefined);
@@ -1056,6 +1110,7 @@ export function CoordinatorRunPage() {
   // Retry state for the header button.
   const [retrying, setRetrying] = useState(false);
   const [retryError, setRetryError] = useState<string | null>(null);
+  const [stopping, setStopping] = useState(false);
   // Per-run option toggles (autopilot + auto-approve-tools). Seeded once from the run detail,
   // then driven by user toggles (optimistic). Both cascade to the coordinator's children.
   const [autopilot, setAutopilot] = useState(false);
@@ -1139,7 +1194,7 @@ export function CoordinatorRunPage() {
 
   // The workflow the coordinator selected/planned this orchestration against. Carried by the
   // coordinator.workflow_selected event, which is persisted to the run event log and replayed on
-  // reconnect — so it survives page reloads. Latest event wins.
+  // reconnect â€” so it survives page reloads. Latest event wins.
   const selectedWorkflow = useMemo<{ name: string; auto: boolean; rationale?: string } | undefined>(() => {
     let picked: { name: string; auto: boolean; rationale?: string } | undefined;
     for (const evt of events) {
@@ -1179,10 +1234,6 @@ export function CoordinatorRunPage() {
     () => deriveOrchState(events, coordStatusField, coordStatusReason, workPlanStatus),
     [events, coordStatusField, coordStatusReason, workPlanStatus],
   );
-  useEffect(() => {
-    if (orch.phase !== 'blocked') setBlockedSteerPending(false);
-  }, [orch.phase]);
-
   // Derive sandbox backend from sandbox.selected events for the Preview Sandbox button.
   useEffect(() => {
     for (const evt of events) {
@@ -1195,108 +1246,6 @@ export function CoordinatorRunPage() {
 
   // Coordinator graph node status override so it never shows a stale "Pending".
   const coordNodeStatusOverride = orchPhaseToTopoStatus(orch.phase);
-
-  // Blocking subtasks behind an all-or-nothing assembly gate (ineligible_subtasks).
-  const ineligibleSubtasks = useMemo(() => readIneligibleSubtasks(events), [events]);
-  const ineligibleSubtaskIds = useMemo(() => readIneligibleSubtaskIds(events), [events]);
-
-  // Session run — reuse the standard rich run Timeline over the coordinator's OWN event stream,
-  // so the coordinator session reads like every other agent's "view run" (turn groups, tool cards,
-  // agent messages) instead of a bespoke milestone list.
-  const { items: coordItemsRaw, runOutcome: coordRunOutcome } = useTimelineItems(events, runId ?? '');
-  // Suppress the decompose agent's serialized work-plan JSON message: the structured work plan is
-  // already surfaced by the "Decomposed into N subtasks" lifecycle chip + the work-plan panel/graph,
-  // so the raw JSON array must not be dumped verbatim into the session timeline.
-  const coordItems = useMemo(() => stripSerializedWorkPlanMessages(coordItemsRaw), [coordItemsRaw]);
-  const liveRun = streamStatus === 'connecting' || streamStatus === 'streaming';
-
-  // The outcome spec now lives in a slide-in panel opened from the [Spec] button under the
-  // Coordinator card. `specConfirmed` still drives spec-authoring gating below.
-  const specConfirmed = useMemo(
-    () => events.some((e) => e.type === 'coordinator.outcome_spec.confirmed'),
-    [events],
-  );
-
-  // While the outcome spec is still being authored (no work plan yet) the graph filters out the
-  // planned assembly nodes so the canvas stays uncluttered.
-  const hasSubtaskNodes = useMemo(
-    () => (effectiveDescriptor?.nodes ?? []).some((n) => n.node_type === 'subtask'),
-    [effectiveDescriptor],
-  );
-  const inSpecAuthoring = !specConfirmed && !hasSubtaskNodes && orch.phase === 'unknown';
-
-  // Bubbled child questions + tool-approval requests re-projected onto the coordinator stream
-  // (issue: make it easy to answer/approve from the all-up view). Each item records the source
-  // childRunId + subtaskId so the answer/grant is routed to the CHILD that asked, not the
-  // coordinator run. Questions collapse once an agent.question_answered for the same requestId is
-  // re-projected (or optimistically, inside QuestionAnswerCard). Defensive payload key reads.
-  const childRequests = useMemo<Array<
-    | { type: 'question'; requestId: string; childRunId: string; subtaskId?: string; question: string; answer?: string; timedOut?: boolean; seq: number }
-    | { type: 'approval'; requestId: string; childRunId: string; subtaskId?: string; toolName: string; url?: string; message?: string; resolved?: boolean; resolvedScope?: string; seq: number }
-  >>(() => {
-    const questions = new Map<string, { childRunId: string; subtaskId?: string; question: string; seq: number }>();
-    const approvals = new Map<string, { childRunId: string; subtaskId?: string; toolName: string; url?: string; message?: string; seq: number }>();
-    const answered = new Map<string, { answer: string; timedOut: boolean }>();
-    const resolvedApprovals = new Map<string, { approved: boolean; expired: boolean }>();
-    for (const evt of events) {
-      const p = evt.payload;
-      if (evt.type === 'coordinator.child_question') {
-        const requestId = readStr(p, ['requestId', 'request_id']);
-        const childRunId = readStr(p, ['childRunId', 'child_run_id']);
-        if (!requestId || !childRunId) continue;
-        questions.set(requestId, {
-          childRunId,
-          subtaskId: readStr(p, ['subtaskId', 'subtask_id']),
-          question: readStr(p, ['question']) ?? '',
-          seq: evt.sequence,
-        });
-      } else if (evt.type === 'coordinator.child_approval_required') {
-        const requestId = readStr(p, ['requestId', 'request_id']);
-        const childRunId = readStr(p, ['childRunId', 'child_run_id']);
-        if (!requestId || !childRunId) continue;
-        approvals.set(requestId, {
-          childRunId,
-          subtaskId: readStr(p, ['subtaskId', 'subtask_id']),
-          toolName: readStr(p, ['toolName', 'tool_name']) ?? 'unknown',
-          url: readStr(p, ['url']),
-          message: readStr(p, ['message']),
-          seq: evt.sequence,
-        });
-      } else if (evt.type === 'coordinator.child_approval_resolved') {
-        const requestId = readStr(p, ['requestId', 'request_id']);
-        if (!requestId) continue;
-        resolvedApprovals.set(requestId, {
-          approved: Boolean(p['approved']),
-          expired: Boolean(p['expired']),
-        });
-      } else if (evt.type === 'agent.question_answered') {
-        const requestId = readStr(p, ['requestId', 'request_id']);
-        if (!requestId) continue;
-        answered.set(requestId, {
-          answer: readStr(p, ['answer']) ?? '',
-          timedOut: Boolean(p['timedOut'] ?? p['timed_out'] ?? false),
-        });
-      }
-    }
-    const out: Array<
-      | { type: 'question'; requestId: string; childRunId: string; subtaskId?: string; question: string; answer?: string; timedOut?: boolean; seq: number }
-      | { type: 'approval'; requestId: string; childRunId: string; subtaskId?: string; toolName: string; url?: string; message?: string; resolved?: boolean; resolvedScope?: string; seq: number }
-    > = [];
-    for (const [requestId, q] of questions) {
-      const ans = answered.get(requestId);
-      out.push({ type: 'question', requestId, ...q, answer: ans?.answer, timedOut: ans?.timedOut });
-    }
-    for (const [requestId, a] of approvals) {
-      const res = resolvedApprovals.get(requestId);
-      if (res) {
-        const resolvedScope = res.expired ? 'expired' : res.approved ? 'once' : 'deny';
-        out.push({ type: 'approval', requestId, ...a, resolved: true, resolvedScope });
-      } else {
-        out.push({ type: 'approval', requestId, ...a });
-      }
-    }
-    return out.sort((x, y) => x.seq - y.seq);
-  }, [events]);
 
   // Topology state for subtask status projection.
   const topology = useMemo(
@@ -1333,7 +1282,7 @@ export function CoordinatorRunPage() {
 
   // Per-assembly-stage elapsed timing (RAI / Review / Merge / Scribe), derived from the
   // coordinator.assembly_* events (which now carry timestamp_utc). Keyed by node ROLE so it can be
-  // injected into the generic assembly node state the same way subtaskTiming feeds subtask cards —
+  // injected into the generic assembly node state the same way subtaskTiming feeds subtask cards â€”
   // giving each collective-assembly stage a live count-up timer that survives SSE replay/restart.
   const assemblyTiming = useMemo<Record<string, { startedAt?: number; completedAt?: number }>>(() => {
     const STARTED: Record<string, string> = {
@@ -1385,9 +1334,9 @@ export function CoordinatorRunPage() {
     [expandedKeys, toggleExpand],
   );
 
-  // Which coordinator loopback arc (if any) is currently "lit" blue: the review→coordinator
+  // Which coordinator loopback arc (if any) is currently "lit" blue: the reviewâ†’coordinator
   // "Request changes" arc while a human-review request-changes wave is re-dispatching, or the
-  // rai→coordinator "RAI flags" arc while an RAI flag is looping back. Mirrors the per-run page's
+  // raiâ†’coordinator "RAI flags" arc while an RAI flag is looping back. Mirrors the per-run page's
   // active-edge highlight (ActiveEdgeContext). A loop is active when its triggering event is the
   // most recent one that has not yet been superseded by a fresh assembly review / terminal.
   const activeLoopbackId = useMemo<string | undefined>(() => {
@@ -1433,9 +1382,9 @@ export function CoordinatorRunPage() {
     const allEdges: Edge[] = [];
     // Role lookup so loopback labels are derived from the SOURCE node's role rather than its
     // exact id (robust across descriptor id schemes). Tank adds two coordinator-level loopbacks:
-    // rai→coordinator and review→coordinator (loopback:true, no label field on GraphEdge). Render
+    // raiâ†’coordinator and reviewâ†’coordinator (loopback:true, no label field on GraphEdge). Render
     // them as labelled back-edges matching the per-run loopback styling. Falls back gracefully when
-    // a descriptor has zero loopbacks (older runs) — the loop simply produces no loopback edges.
+    // a descriptor has zero loopbacks (older runs) â€” the loop simply produces no loopback edges.
     const roleById: Record<string, string> = {};
     for (const n of effectiveDescriptor.nodes) roleById[n.id] = (n.role ?? '').toLowerCase();
     for (const edge of effectiveDescriptor.edges) {
@@ -1466,7 +1415,7 @@ export function CoordinatorRunPage() {
       const planned = node.kind === 'planned';
 
       if (nt === 'subtask') {
-        // Subtask node — look up topology status by mapped id.
+        // Subtask node â€” look up topology status by mapped id.
         const topoNode = resolveSubtaskTopoNode(node.id, topology);
         // Defensive: read display fields from flat props OR nested data map.
         const agentField  = node.agent  ?? (node.data?.['agent']  as string | undefined) ?? topoNode?.assignedAgent;
@@ -1500,7 +1449,7 @@ export function CoordinatorRunPage() {
         };
       }
 
-      // Coordinator or collective-assembly node — use generic WorkflowNode. def.key MUST be the
+      // Coordinator or collective-assembly node â€” use generic WorkflowNode. def.key MUST be the
       // node ROLE (not node.id), so WorkflowNode's role-based logic fires: the review gate becomes
       // action-required ("Awaiting your review") and the coordinator keeps its "View session" button.
       const roleKey = node.role;
@@ -1580,8 +1529,18 @@ export function CoordinatorRunPage() {
     };
   }, [effectiveDescriptor, topology, projectId, runId, coordNodeStatusOverride, orch.phase, subtaskTiming, assemblyTiming, roleByAgent, expandedKeys]);
 
+  const specConfirmed = useMemo(
+    () => events.some((e) => e.type === 'coordinator.outcome_spec.confirmed'),
+    [events],
+  );
+  const hasSubtaskNodes = useMemo(
+    () => (effectiveDescriptor?.nodes ?? []).some((n) => n.node_type === 'subtask'),
+    [effectiveDescriptor],
+  );
+  const inSpecAuthoring = !specConfirmed && !hasSubtaskNodes && orch.phase === 'unknown';
+
   // While the Coordinator is still drafting the outcome spec (inSpecAuthoring), the assembly
-  // stages (RAI / Human Review / Merge / Scribe) are not yet committed work — no spec confirmed,
+  // stages (RAI / Human Review / Merge / Scribe) are not yet committed work â€” no spec confirmed,
   // no subtasks, no orchestration phase. Presenting them as planned pipeline nodes implies a
   // downstream plan that does not exist. Filter them (and edges referencing them) out of the
   // rendered graph until drafting ends, leaving only the live Coordinator node. The descriptor
@@ -1612,7 +1571,7 @@ export function CoordinatorRunPage() {
     defaultSessionNodeId: string | null;
   }>(() => {
     const candidates = displayNodes.filter((node) => {
-      // Include every planned subtask — not only dispatched ones (with a childRunId) — so the
+      // Include every planned subtask â€” not only dispatched ones (with a childRunId) â€” so the
       // session tree mirrors the full work plan. Planned/pending subtasks show their status but
       // have no streamed conversation until they are dispatched.
       if (node.type === 'subtask') {
@@ -1739,21 +1698,38 @@ export function CoordinatorRunPage() {
     };
   }, [displayNodes]);
 
+  const flatSessionTree = useMemo(() => flattenRunTree(sessionTree), [sessionTree]);
+  const taskRows = flatSessionTree.filter((node) => node.nodeId !== defaultSessionNodeId);
+  const failedCount = flatSessionTree.filter((node) => ['failed', 'merge_failed', 'declined', 'rai_flagged'].includes(node.status)).length;
+  const blockedCount = flatSessionTree.filter((node) => ['waiting', 'pending', 'awaiting_assembly', 'assemble_ready'].includes(node.status)).length;
+  const earliestStart = flatSessionTree.reduce<number | undefined>(
+    (min, node) => (node.startedAt == null ? min : min == null ? node.startedAt : Math.min(min, node.startedAt)),
+    undefined,
+  );
+  const elapsedLabel = earliestStart ? fmtTotal(Date.now() - earliestStart) : '0s';
+  const runStatusLabel = orchPhaseLabel(orch.phase);
+  const aiCreditsLabel = `${formatAic(tokenBreakdown?.totalNanoAiu ?? null)} AI credits`;
+  const summaryLine = `${runStatusLabel}${failedCount ? ` · ${failedCount} failed` : ''}${blockedCount ? ` · ${blockedCount} blocked` : ''}`;
+
   // ---------------------------------------------------------------------------
-  // Steering chat side panel (#163) — a slide-in chat replaces the old inline steer bar.
+  // Steering chat side panel (#163) â€” a slide-in chat replaces the old inline steer bar.
   // ---------------------------------------------------------------------------
 
-  const [steerPanelOpen, setSteerPanelOpen] = useState(false);
   const [specPanelOpen, setSpecPanelOpen] = useState(false);
   const specPanelAutoOpenedRef = useRef(false);
   const [artifactsPanelOpen, setArtifactsPanelOpen] = useState(false);
-  const [sessionPanelOpen, setSessionPanelOpen] = useState(false);
+  const [sessionPanelOpen, setSessionPanelOpen] = useState(true);
   const [panelNodeId, setPanelNodeId] = useState<string | null>(null);
+  const [composerFocusSignal, setComposerFocusSignal] = useState(0);
 
   const openPanelForNode = useCallback((nodeId: string) => {
     setPanelNodeId(nodeId);
     setSessionPanelOpen(true);
   }, []);
+
+  useEffect(() => {
+    if (!panelNodeId && defaultSessionNodeId) setPanelNodeId(defaultSessionNodeId);
+  }, [defaultSessionNodeId, panelNodeId]);
 
   useEffect(() => {
     if (specPanelAutoOpenedRef.current || isChildRun) return;
@@ -1777,7 +1753,7 @@ export function CoordinatorRunPage() {
     }
   }, [defaultSessionNodeId, panelNodeId, sessionNodeIds]);
 
-  // Review/Changes panel anchor — the Human Review gate's "Review now" scrolls here.
+  // Review/Changes panel anchor â€” the Human Review gate's "Review now" scrolls here.
   const reviewRef = useRef<HTMLDivElement>(null);
   const scrollToReview = useCallback(() => {
     reviewRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -1785,7 +1761,6 @@ export function CoordinatorRunPage() {
 
   // Merge "Browse files": route to the project Workspace with the coordinator integration branch
   // selected, so refresh/back preserve the browsed ref and the user lands in the WORK section.
-  const [filesFocusSignal] = useState(0);
   const browseAssemblyFiles = useCallback(() => {
     if (!projectId || !runId) return;
     const query = new URLSearchParams({
@@ -1802,7 +1777,7 @@ export function CoordinatorRunPage() {
     else scrollToReview();
   }, [openPanelForNode, scrollToReview]);
 
-  // Option toggles — optimistic update, revert on error. Both cascade to children server-side.
+  // Option toggles â€” optimistic update, revert on error. Both cascade to children server-side.
   const toggleAutopilot = useCallback((next: boolean) => {
     if (!runId || autopilotBusy) return;
     setAutopilot(next);
@@ -1838,10 +1813,24 @@ export function CoordinatorRunPage() {
     }
   }, [runId, projectId, retrying, navigate]);
 
+  const handleStopRun = useCallback(async () => {
+    if (!runId || stopping) return;
+    setStopping(true);
+    setRetryError(null);
+    try {
+      await apiClient.steerCoordinator(runId, { kind: 'stop' });
+      reconnectStream();
+    } catch (err) {
+      setRetryError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setStopping(false);
+    }
+  }, [reconnectStream, runId, stopping]);
+
   const startPreview = () => {
     const port = parseInt(previewTargetPort, 10);
     if (isNaN(port) || port <= 0 || port > 65535) {
-      setPreviewError('Enter a valid port number (1–65535).');
+      setPreviewError('Enter a valid port number (1â€“65535).');
       return;
     }
     if (!runId) return;
@@ -1945,7 +1934,7 @@ export function CoordinatorRunPage() {
   const coordActive     = !['complete', 'failed', 'blocked', 'declined'].includes(orch.phase);
 
   // A run can be terminally finished at the RUN level (Failed/Declined/Merged) while its WorkPlan
-  // status still reads `in_review` — e.g. a run interrupted by a pre-durability build. In that state
+  // status still reads `in_review` â€” e.g. a run interrupted by a pre-durability build. In that state
   // the in-memory assembly-review gate is NOT armed, so presenting an actionable review bar would
   // 409. Treat the review as actionable only when the run itself is not terminal.
   const runTerminal = runLevelStatus !== undefined
@@ -2013,7 +2002,7 @@ export function CoordinatorRunPage() {
               data-testid="coordinator-selected-workflow"
             >
               {selectedWorkflow.name}
-              {selectedWorkflow.auto ? ' · auto' : ''}
+              {selectedWorkflow.auto ? ' Â· auto' : ''}
             </Badge>
           </Tooltip>
         )}
@@ -2059,381 +2048,253 @@ export function CoordinatorRunPage() {
 
       {goal && <Text className={styles.goal}>Goal: {goal}</Text>}
 
-      {/* Coordinator graph — full-width horizontal band on top (fits the pipeline far better
-          than a narrow side column). */}
-      <div className={styles.graphBand}>
-        <div className={styles.sectionTitleRow}>
-          <Title3>Coordinator Graph</Title3>
-          {orch.phase !== 'unknown' && (
-            <span className={styles.steerLabel}>{orchPhaseLabel(orch.phase)}</span>
-          )}
-          {isStreaming && <Spinner size="extra-tiny" aria-label="Live" />}
-        </div>
-        <Text className={styles.hint}>
-          Live view of the coordinator and its subtasks. Use the Steer button to send a
-          course-correction to the coordinator or stop the orchestration.
-        </Text>
+      <div className={styles.console} data-testid="run-operator-console">
+        <div className={styles.topZone}>
+          <div className={styles.titleStack}>
+            <div className={styles.topTitleRow}>
+              <Title2>Orchestration: {selectedWorkflow?.name ?? goal ?? shortId}</Title2>
+              {(isConnecting || isStreaming) && <Spinner size="extra-tiny" aria-label="Live" />}
+              {selectedWorkflow && (
+                <Tooltip
+                  relationship="description"
+                  content={
+                    selectedWorkflow.rationale
+                      ? `${selectedWorkflow.auto ? 'Auto-selected' : 'Selected'}: ${selectedWorkflow.rationale}`
+                      : selectedWorkflow.auto
+                        ? 'Automatically selected by the coordinator'
+                        : 'Selected for this orchestration'
+                  }
+                >
+                  <Badge appearance="tint" color="brand" size="large" icon={<FlowchartRegular />} data-testid="coordinator-selected-workflow">
+                    {selectedWorkflow.name}{selectedWorkflow.auto ? ' · auto' : ''}
+                  </Badge>
+                </Tooltip>
+              )}
+              {retriedFromShort && (
+                <Text className={styles.runIdLabel}>
+                  Retried from{' '}
+                  <Link to={`/projects/${projectId}/orchestrations/${retriedFrom}`} className={styles.breadcrumbLink}>
+                    {retriedFromShort}
+                  </Link>
+                </Text>
+              )}
+            </div>
+            <div className={styles.statsStrip} aria-label="Run summary">
+              <Text>{summaryLine}</Text>
+              <span className={styles.statSeparator}>·</span>
+              <Text>{taskRows.length} tasks</Text>
+              <span className={styles.statSeparator}>·</span>
+              <Text>{failedCount} failed</Text>
+              <span className={styles.statSeparator}>·</span>
+              <Text>{blockedCount} blocked</Text>
+              <span className={styles.statSeparator}>·</span>
+              <Text>{elapsedLabel} elapsed</Text>
+              <span className={styles.statSeparator}>·</span>
+              <Popover positioning="below-start">
+                <PopoverTrigger disableButtonEnhancement>
+                  <Button appearance="transparent" size="small">{aiCreditsLabel}</Button>
+                </PopoverTrigger>
+                <PopoverSurface className={styles.creditsSurface}>
+                  <AgentTokenBreakdown data={tokenBreakdown} roleByAgent={roleByAgent} />
+                </PopoverSurface>
+              </Popover>
+            </div>
+          </div>
 
-        {!isChildRun && (
-          <div className={styles.coordCardLinks}>
+          <div className={styles.topControls}>
+            <AutomationToggle
+              label="Autopilot"
+              info={AUTOMATION_HELP.autopilotOrchestration}
+              checked={autopilot}
+              disabled={autopilotBusy || !coordActive}
+              onChange={(checked) => toggleAutopilot(checked)}
+            />
+            <AutomationToggle
+              label="Auto-approve"
+              info={AUTOMATION_HELP.autoApproveOrchestration}
+              checked={autoApprove}
+              disabled={autoApproveBusy || !coordActive}
+              onChange={(checked) => toggleAutoApprove(checked)}
+            />
             <Button
               appearance="transparent"
               size="small"
-              icon={<FolderRegular />}
-              onClick={() => setArtifactsPanelOpen(true)}
-              data-testid="open-artifacts-panel"
+              icon={<ChatRegular />}
+              onClick={() => setComposerFocusSignal((value) => value + 1)}
+              data-testid="open-steer-panel"
             >
-              Artifacts
+              Message
             </Button>
-          </div>
-        )}
-
-        {(!isChildRun || coordActive) && (
-          <div className={styles.coordControls}>
+            <Button
+              appearance="secondary"
+              size="small"
+              icon={<ArrowRepeatAllRegular />}
+              disabled={!isRetryable || retrying}
+              onClick={() => void handleRetry()}
+              data-testid="coordinator-retry-button"
+            >
+              Retry failed
+            </Button>
+            <Button
+              appearance="secondary"
+              size="small"
+              icon={stopping ? <Spinner size="extra-tiny" /> : <DismissRegular />}
+              disabled={!coordActive || stopping}
+              onClick={() => void handleStopRun()}
+            >
+              Stop run
+            </Button>
             {!isChildRun && (
-              <Button
-                appearance="secondary"
-                size="small"
-                icon={<DocumentRegular />}
-                onClick={() => setSpecPanelOpen(true)}
-                data-testid="open-spec-panel"
-              >
+              <Button appearance="transparent" size="small" icon={<DocumentRegular />} onClick={() => setSpecPanelOpen(true)} data-testid="open-spec-panel">
                 Spec
               </Button>
             )}
-            {coordActive && (
-              <Button
-                appearance="primary"
-                size="small"
-                icon={<ChatRegular />}
-                onClick={() => setSteerPanelOpen(true)}
-                data-testid="open-steer-panel"
-              >
-                Steer
+            {!isChildRun && (
+              <Button appearance="transparent" size="small" icon={<FolderRegular />} onClick={() => setArtifactsPanelOpen(true)} data-testid="open-artifacts-panel">
+                Artifacts
+              </Button>
+            )}
+            {isKubernetesSandbox && (
+              <Button appearance="transparent" size="small" icon={<OpenRegular />} onClick={() => { setPreviewDialogOpen(true); setPreviewError(undefined); }}>
+                Preview Sandbox
               </Button>
             )}
           </div>
-        )}
+        </div>
 
-        <>
-          {hasGraph ? (
-            <ExecutionModalContext.Provider value={viewAssemblyExecution}>
-            <BrowseFilesContext.Provider value={browseAssemblyFiles}>
-            <ActiveEdgeContext.Provider value={activeLoopbackId}>
-            <CoordinatorSessionContext.Provider value={() => openPanelForNode('coordinator')}>
-            <CoordExpandContext.Provider value={expandValue}>
-            <CoordPanelContext.Provider value={openPanelForNode}>
-              <ZoomControls zoom={zoom} onZoomIn={zoomIn} onZoomOut={zoomOut} onFit={resetZoom} maxZoom={maxZoom} />
-              <div className={styles.dagContainer} style={{ height: graphHeight }} ref={viewportRef}>
-                <div style={{ zoom, width: graphViewport.width, minWidth: '100%', height: graphViewport.height }}>
-                <ReactFlow
-                  key={`${displayNodes.length}:${displayEdges2.length}:${graphHeight}:${[...expandedKeys].sort().join(',')}`}
-                  nodes={displayNodes}
-                  edges={displayEdges2}
-                  nodeTypes={coordinatorNodeTypes}
-                  edgeTypes={workflowEdgeTypes}
-                  defaultViewport={graphViewport.defaultViewport}
-                  minZoom={1}
-                  maxZoom={1}
-                  nodesDraggable={false}
-                  nodesConnectable={false}
-                  nodesFocusable={false}
-                  edgesFocusable={false}
-                  panOnScroll={false}
-                  zoomOnScroll={false}
-                  zoomOnPinch={false}
-                  zoomOnDoubleClick={false}
-                  panOnDrag
-                  proOptions={{ hideAttribution: true }}
-                >
-                  <MiniMap
-                    nodeStrokeWidth={0}
-                    nodeBorderRadius={3}
-                    zoomable
-                    pannable
-                    bgColor="#ffffff"
-                    maskColor="rgba(15, 108, 189, 0.06)"
-                    maskStrokeColor="var(--colorBrandStroke1)"
-                    maskStrokeWidth={2}
-                    style={{
-                      bottom: 8,
-                      right: 8,
-                      width: 104,
-                      height: 72,
-                      border: '1px solid var(--colorNeutralStroke2)',
-                      borderRadius: '6px',
-                      boxShadow: 'var(--shadow4)',
-                    }}
-                    nodeColor={(n) => {
-                      const s = (n.data as SubtaskNodeData | undefined)?.topoStatus as string | undefined;
-                      if (s === 'completed') return '#107c41';
-                      if (s === 'running' || s === 'dispatching') return '#0f6cbd';
-                      if (s === 'waiting' || s === 'awaiting_assembly') return '#d47c00';
-                      if (s === 'failed' || s === 'declined') return '#c50f1f';
-                      return '#c8c6c4';
-                    }}
-                  />
-                </ReactFlow>
-                </div>
-              </div>
-              {inSpecAuthoring && (
+        <div className={styles.bodyGrid}>
+          <aside className={styles.leftZone} aria-label="Run tree">
+            <div className={styles.zoneHeader}>Run tree</div>
+            <div className={styles.treeList}>
+              {flatSessionTree.length === 0 ? (
+                <Text className={styles.hint}>No work plan available yet.</Text>
+              ) : flatSessionTree.map((item) => {
+                const selected = item.nodeId === (panelNodeId ?? defaultSessionNodeId);
+                const indent = Math.max(0, item.depth) * 14;
+                return (
+                  <button
+                    key={item.nodeId}
+                    className={`${styles.runTreeRow} ${selected ? styles.runTreeRowSelected : ''}`}
+                    style={{ paddingLeft: `${8 + indent}px` }}
+                    onClick={() => openPanelForNode(item.nodeId)}
+                    title={`${item.label}${item.agentName ? ` · ${item.agentName}` : ''}`}
+                  >
+                    <span aria-hidden="true">{runTreeStatusIcon(item.status)}</span>
+                    <AgentAvatar name={item.agentName ?? item.label} size={24} circle />
+                    <span className={styles.treeText}>
+                      <Text className={styles.treePrimary}>{item.label}</Text>
+                      <Text className={styles.treeSecondary}>
+                        {item.agentName ?? 'Coordinator'}{item.agentRole ? ` · ${item.agentRole}` : ''}
+                      </Text>
+                    </span>
+                    <Text className={styles.treeDuration}>{formatTreeDuration(item.startedAt, item.completedAt)}</Text>
+                  </button>
+                );
+              })}
+            </div>
+          </aside>
+
+          <section className={styles.centerZone} aria-label="Orchestration graph">
+            <div className={styles.zoneHeader}>
+              <span>Graph</span>
+              {orch.phase !== 'unknown' && <span className={styles.hint}>{orchPhaseLabel(orch.phase)}</span>}
+            </div>
+            <div className={styles.centerBody}>
+              {hasGraph ? (
+                <ExecutionModalContext.Provider value={viewAssemblyExecution}>
+                <BrowseFilesContext.Provider value={browseAssemblyFiles}>
+                <ActiveEdgeContext.Provider value={activeLoopbackId}>
+                <CoordinatorSessionContext.Provider value={() => openPanelForNode('coordinator')}>
+                <CoordExpandContext.Provider value={expandValue}>
+                <CoordPanelContext.Provider value={openPanelForNode}>
+                  <ZoomControls zoom={zoom} onZoomIn={zoomIn} onZoomOut={zoomOut} onFit={resetZoom} maxZoom={maxZoom} />
+                  <div className={`${styles.dagContainer} ${styles.centerDag}`} ref={viewportRef}>
+                    <div style={{ zoom, width: graphViewport.width, minWidth: '100%', height: graphViewport.height }}>
+                    <ReactFlow
+                      key={`${displayNodes.length}:${displayEdges2.length}:${graphHeight}:${[...expandedKeys].sort().join(',')}`}
+                      nodes={displayNodes}
+                      edges={displayEdges2}
+                      nodeTypes={coordinatorNodeTypes}
+                      edgeTypes={workflowEdgeTypes}
+                      defaultViewport={graphViewport.defaultViewport}
+                      minZoom={1}
+                      maxZoom={1}
+                      nodesDraggable={false}
+                      nodesConnectable={false}
+                      nodesFocusable={false}
+                      edgesFocusable={false}
+                      panOnScroll={false}
+                      zoomOnScroll={false}
+                      zoomOnPinch={false}
+                      zoomOnDoubleClick={false}
+                      panOnDrag
+                      onNodeClick={(_, node) => openPanelForNode(node.id)}
+                      proOptions={{ hideAttribution: true }}
+                    >
+                      <MiniMap
+                        nodeStrokeWidth={0}
+                        nodeBorderRadius={3}
+                        zoomable
+                        pannable
+                        bgColor="#ffffff"
+                        maskColor="rgba(15, 108, 189, 0.06)"
+                        maskStrokeColor="var(--colorBrandStroke1)"
+                        maskStrokeWidth={2}
+                        style={{
+                          bottom: 8,
+                          right: 8,
+                          width: 104,
+                          height: 72,
+                          border: '1px solid var(--colorNeutralStroke2)',
+                          borderRadius: '6px',
+                          boxShadow: 'var(--shadow4)',
+                        }}
+                        nodeColor={(n) => {
+                          const s = (n.data as SubtaskNodeData | undefined)?.topoStatus as string | undefined;
+                          if (s === 'completed') return '#107c41';
+                          if (s === 'running' || s === 'dispatching') return '#0f6cbd';
+                          if (s === 'waiting' || s === 'awaiting_assembly') return '#d47c00';
+                          if (s === 'failed' || s === 'declined') return '#c50f1f';
+                          return '#c8c6c4';
+                        }}
+                      />
+                    </ReactFlow>
+                    </div>
+                  </div>
+                  {inSpecAuthoring && <Text className={styles.hint}>The execution pipeline appears once you confirm the outcome spec.</Text>}
+                </CoordPanelContext.Provider>
+                </CoordExpandContext.Provider>
+                </CoordinatorSessionContext.Provider>
+                </ActiveEdgeContext.Provider>
+                </BrowseFilesContext.Provider>
+                </ExecutionModalContext.Provider>
+              ) : (
                 <Text className={styles.hint}>
-                  The execution pipeline appears once you confirm the outcome spec.
+                  {isConnecting
+                    ? 'Connecting to coordinator stream...'
+                    : noWorkPlan
+                      ? 'No work plan available yet.'
+                      : 'Waiting for coordinator graph...'}
                 </Text>
               )}
-            </CoordPanelContext.Provider>
-            </CoordExpandContext.Provider>
-            </CoordinatorSessionContext.Provider>
-            </ActiveEdgeContext.Provider>
-            </BrowseFilesContext.Provider>
-            </ExecutionModalContext.Provider>
-          ) : (
-            <Text className={styles.hint}>
-              {isConnecting
-                ? 'Connecting to coordinator stream...'
-                : noWorkPlan
-                  ? 'No work plan available yet.'
-                  : 'Waiting for coordinator graph...'}
-            </Text>
-          )}
-        </>
-      </div>
-
-      {/* Coordinator session: automation/actions controls, the rich run view, and steering. The
-          outcome spec now lives in a slide-in panel opened from the [Spec] button under the
-          Coordinator card. */}
-      <div className={styles.sessionOnly}>
-        <div className={styles.centerCol}>
-          {/* Assembly review affordance — de-confuses the stuck state (issues 3 & 4). */}
-          {(orch.phase === 'awaiting_assembly' || orch.phase === 'assembling') && (
-            <div className={styles.panel}>
-              <div className={styles.sectionTitleRow}>
-                <Spinner size="tiny" aria-label="Assembling" />
-                <Title3>Assembling collective output…</Title3>
-              </div>
-              <Text className={styles.hint}>
-                The subtasks are complete; the coordinator is integrating their outputs for collective review.
-              </Text>
             </div>
-          )}
+          </section>
 
-          {reviewActionable && (
-            <MessageBar intent="warning">
-              <MessageBarBody>
-                Your review is pending. Review the assembled changes in the Changes panel below, then
-                Approve, request a Change, or Decline.
-              </MessageBarBody>
-            </MessageBar>
-          )}
-
-          {orch.phase === 'in_review' && runTerminal && (
-            <MessageBar intent="warning" data-testid="review-preserved-bar">
-              <MessageBarBody>
-                The orchestration encountered an error, but your review is still available. You can view
-                the changes below. Note: approving will not trigger a new deployment — start a fresh run
-                to retry.{orch.reason ? ` (${orch.reason})` : ''}
-              </MessageBarBody>
-            </MessageBar>
-          )}
-
-          {(orch.phase === 'failed' || orch.phase === 'blocked' || orch.phase === 'declined') && (
-            <div className={styles.panel} data-testid="assembly-blocked-panel">
-              <Title3>Assembly {orchPhaseLabel(orch.phase).toLowerCase()}</Title3>
-              <MessageBar intent="error">
-                <MessageBarBody>{friendlyAssemblyReason(orch.reason)}</MessageBarBody>
-              </MessageBar>
-              {orch.conflictFiles && orch.conflictFiles.length > 0 && (
-                <div className={styles.conflictFiles}>
-                  <Text className={styles.hint}>Conflicting file{orch.conflictFiles.length > 1 ? 's' : ''}:</Text>
-                  <ul className={styles.conflictList}>
-                    {orch.conflictFiles.map((f) => (
-                      <li key={f}><code>{f}</code></li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-              {ineligibleSubtasks && ineligibleSubtasks.length > 0 ? (
-                <div className={styles.blockedSubtasks}>
-                  <Text className={styles.hint}>Blocking subtask{ineligibleSubtasks.length > 1 ? 's' : ''}:</Text>
-                  {ineligibleSubtasks.map((st) => {
-                    const badge = subtaskStatusBadge(st.status);
-                    const hint = subtaskStatusHint(st.status);
-                    return (
-                      <div key={st.id} className={styles.blockedSubtaskRow}>
-                        <div className={styles.blockedSubtaskHead}>
-                          <Text className={styles.blockedSubtaskTitle}>{st.title || `#${st.id}`}</Text>
-                          <Badge appearance="tint" color={badge.intent} size="small">{badge.label}</Badge>
-                          {st.agent && <Text className={styles.blockedSubtaskAgent}>{st.agent}</Text>}
-                        </div>
-                        {hint && <Text className={styles.hint}>{hint}</Text>}
-                      </div>
-                    );
-                  })}
-                </div>
-              ) : (
-                ineligibleSubtaskIds && ineligibleSubtaskIds.length > 0 && (
-                  <div className={styles.conflictFiles}>
-                    <Text className={styles.hint}>Blocking subtask{ineligibleSubtaskIds.length > 1 ? 's' : ''}:</Text>
-                    <ul className={styles.conflictList}>
-                      {ineligibleSubtaskIds.map((id) => (
-                        <li key={id}>#{id}</li>
-                      ))}
-                    </ul>
-                  </div>
-                )
-              )}
-              <Text className={styles.hint}>
-                Use the controls below to redirect the coordinator with an instruction, or stop the run.
-              </Text>
-              {blockedSteerPending && (
-                <MessageBar intent="info">
-                  <MessageBarBody>Message sent — waiting for coordinator response.</MessageBarBody>
-                </MessageBar>
-              )}
-              <SteerPanel
-                runId={runId}
-                blockReason={orch.reason}
-                onSteered={({ kind }) => {
-                  reconnectStream();
-                  setBlockedSteerPending(kind !== 'stop');
-                }}
-              />
-            </div>
-          )}
-
-          {orch.phase === 'complete' && (
-            <MessageBar intent="success">
-              <MessageBarBody>Orchestration complete.</MessageBarBody>
-            </MessageBar>
-          )}
-
-          <div className={styles.observabilityGrid}>
-            <AgentTokenBreakdown data={tokenBreakdown} roleByAgent={roleByAgent} />
-            <TransactionTracePanel
-              runId={runId ?? ''}
-              roleByAgent={roleByAgent}
-            />
-          </div>
-
-          {/* Session controls — compact automation toolbar + bubbled child actions. */}
-          <div className={styles.sessionToolbar}>
-            {(isConnecting || isStreaming) && <Spinner size="extra-tiny" aria-label="Live" />}
-            {/* Automation toggles — autopilot + auto-approve-tools. Both cascade to children.
-                Each carries a visible InfoLabel (i) explaining what it does. */}
-            <div className={styles.toggleGroup}>
-              <AutomationToggle
-                label="Autopilot"
-                info={AUTOMATION_HELP.autopilotOrchestration}
-                checked={autopilot}
-                disabled={autopilotBusy || !coordActive}
-                onChange={(checked) => toggleAutopilot(checked)}
-              />
-              <AutomationToggle
-                label="Auto-approve tools"
-                info={AUTOMATION_HELP.autoApproveOrchestration}
-                checked={autoApprove}
-                disabled={autoApproveBusy || !coordActive}
-                onChange={(checked) => toggleAutoApprove(checked)}
-              />
-            </div>
-          </div>
-
-          {/* Action required — bubbled child questions + tool-approval requests. Answers/grants
-              target the CHILD that asked (childRunId), not the coordinator run. Each item
-              collapses once resolved. */}
-          {childRequests.length > 0 && (
-              <div className={styles.actionRequired} aria-label="Child actions awaiting a response">
-                {childRequests.map((item) => {
-                  const label = item.subtaskId ? `Subtask ${item.subtaskId}` : `Child ${item.childRunId.slice(0, 8)}`;
-                  if (item.type === 'question') {
-                    return (
-                      <QuestionAnswerCard
-                        key={`q-${item.requestId}`}
-                        runId={item.childRunId}
-                        requestId={item.requestId}
-                        question={item.question}
-                        answer={item.answer}
-                        timedOut={item.timedOut}
-                        sourceLabel={label}
-                      />
-                    );
-                  }
-                  // Reuse the existing HITL tool-approval card via a synthetic event, targeted at
-                  // the childRunId so allow/deny POST against the child's tool-approval endpoints.
-                  return (
-                    <div key={`a-${item.requestId}`}>
-                      <Text className={styles.actionSource}>{label} · approval required</Text>
-                      <LifecycleEventCard
-                        event={{
-                          sequence: item.seq,
-                          type: 'tool.approval_required',
-                          payload: {
-                            requestId: item.requestId,
-                            toolName: item.toolName,
-                            url: item.url,
-                            intention: item.message,
-                          },
-                        }}
-                        runId={item.childRunId}
-                        isResolved={item.resolved}
-                        resolvedScope={item.resolvedScope}
-                      />
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-
-          {/* Rich run view — the standard Changes/Files rail + review bar reused for the coordinator.
-              The coordinator owns no worktree, so the adapter points the artifact browser at the
-              collective integration-branch diff and routes Approve/Change/Decline to the assembly
-              gate. The center is the coordinator's own run timeline, so the session reads like every
-              other agent's "view run". The ref is the scroll target for the gate's "Review now". */}
-          <div ref={reviewRef}>
-          <RunLayout
-            runId={runId ?? ''}
-            runStatus={coordRunStatus}
-            artifactAdapter={coordAdapter}
-            focusFilesSignal={filesFocusSignal}
-            centerContent={
-              <Timeline
-                items={coordItems}
-                streamStatus={streamStatus}
-                isLiveRun={coordActive && liveRun}
-                runId={runId}
-                runOutcome={coordRunOutcome}
-              />
-            }
-            style={{ height: '70vh', minHeight: '520px' }}
+          <AgentSessionPanel
+            variant="docked"
+            open={sessionPanelOpen}
+            selectedNodeId={panelNodeId ?? defaultSessionNodeId}
+            coordinatorRunId={runId ?? ''}
+            projectId={projectId ?? ''}
+            tree={sessionTree}
+            onClose={() => setSessionPanelOpen(false)}
+            onSelectNode={openPanelForNode}
+            onCoordinatorFollowUp={reconnectStream}
+            coordinatorActive={coordActive}
+            composerFocusSignal={composerFocusSignal}
           />
-          </div>
         </div>
       </div>
-
-      <AgentSessionPanel
-        open={sessionPanelOpen}
-        selectedNodeId={panelNodeId ?? defaultSessionNodeId}
-        coordinatorRunId={runId ?? ''}
-        projectId={projectId ?? ''}
-        tree={sessionTree}
-        onClose={() => setSessionPanelOpen(false)}
-        onSelectNode={openPanelForNode}
-        onCoordinatorFollowUp={reconnectStream}
-        coordinatorActive={coordActive}
-      />
-
-      {/* Coordinator steering chat side panel (#163) */}
-      <SlidePanel
-        open={steerPanelOpen}
-        onClose={() => setSteerPanelOpen(false)}
-        title="Steer coordinator"
-      >
-        <SteerChatPanel
-          runId={runId}
-          canSteer={coordActive}
-          onSteered={reconnectStream}
-        />
-      </SlidePanel>
 
       {/* Outcome spec side panel (#164) */}
       <SlidePanel

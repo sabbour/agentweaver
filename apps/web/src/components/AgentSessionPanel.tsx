@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Badge,
@@ -638,6 +638,37 @@ const useStyles = makeStyles({
   footerLink: {
     alignSelf: 'flex-start',
   },
+  dockedPanel: {
+    position: 'static',
+    inset: 'auto',
+    height: '100%',
+    minHeight: 0,
+    boxShadow: 'none',
+    borderTop: 0,
+    borderLeft: `1px solid ${tokens.colorNeutralStroke2}`,
+    transform: 'none',
+    pointerEvents: 'auto',
+    zIndex: 'auto',
+  },
+  shellNoSidebar: {
+    gridTemplateColumns: 'minmax(0, 1fr)',
+  },
+  composerStack: {
+    position: 'sticky',
+    bottom: 0,
+    display: 'flex',
+    flexDirection: 'column',
+    borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
+    backgroundColor: tokens.colorNeutralBackground1,
+  },
+  composerContext: {
+    padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalL} 0`,
+    fontSize: tokens.fontSizeBase200,
+    color: tokens.colorNeutralForeground3,
+  },
+  stickyNeedInput: {
+    margin: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalL} 0`,
+  },
 });
 
 export interface RunSessionTree {
@@ -663,6 +694,8 @@ export interface AgentSessionPanelProps {
   projectId: string;
   onCoordinatorFollowUp?: () => void;
   coordinatorActive?: boolean;
+  variant?: 'modal' | 'docked';
+  composerFocusSignal?: number;
 }
 
 interface ConversationRow {
@@ -696,7 +729,7 @@ interface FlatTreeNode extends RunSessionTree {
 }
 
 function mergeRunEvents(seed: RunStreamEvent[], live: RunStreamEvent[]): RunStreamEvent[] {
-  if (seed.length === 0) return live;
+  if (seed.length === 0) return [...live].sort((a, b) => (a.sequence || Number.MAX_SAFE_INTEGER) - (b.sequence || Number.MAX_SAFE_INTEGER));
   const merged = [...seed];
   const seenSeq = new Set(seed.filter((e) => e.sequence > 0).map((e) => e.sequence));
   const seenType = new Set(seed.map((e) => e.type));
@@ -709,7 +742,7 @@ function mergeRunEvents(seed: RunStreamEvent[], live: RunStreamEvent[]): RunStre
     }
     merged.push(evt);
   }
-  return merged;
+  return merged.sort((a, b) => (a.sequence || Number.MAX_SAFE_INTEGER) - (b.sequence || Number.MAX_SAFE_INTEGER));
 }
 
 function readString(payload: Record<string, unknown>, keys: string[]): string | undefined {
@@ -862,30 +895,6 @@ function statusLabel(status: string): string {
   }
 }
 
-function statusIcon(status: string): string {
-  switch (status) {
-    case 'completed':
-    case 'merged':
-      return '✅';
-    case 'running':
-    case 'dispatched':
-    case 'dispatching':
-    case 'in_progress':
-      return '🔄';
-    case 'waiting':
-    case 'pending':
-    case 'assemble_ready':
-      return '⏳';
-    case 'failed':
-    case 'merge_failed':
-    case 'declined':
-    case 'rai_flagged':
-      return '❌';
-    default:
-      return '⚪';
-  }
-}
-
 type StatusKind = 'success' | 'danger' | 'awaiting' | 'running' | 'pending';
 
 function statusKind(status: string): StatusKind {
@@ -959,6 +968,20 @@ function buildTurns(events: RunStreamEvent[]): ConversationTurn[] {
     turns.push(current);
     return current;
   };
+  const appendAgentText = (evt: RunStreamEvent, content: string) => {
+    const turn = ensureTurn();
+    const existing = [...turn.rows].reverse().find((row) => row.role === 'agent');
+    if (existing) {
+      existing.content += content;
+      return;
+    }
+    turn.rows.push({
+      key: `agent-${evt.sequence}`,
+      role: 'agent',
+      content,
+      timestamp: readTimestamp(evt),
+    });
+  };
 
   const addFilePath = (turn: ConversationTurn, args: Record<string, unknown>) => {
     const value = args['path'] ?? args['file'];
@@ -1004,12 +1027,18 @@ function buildTurns(events: RunStreamEvent[]): ConversationTurn[] {
       });
       continue;
     }
-    if (evt.type === 'agent.message') {
-      const content = readString(evt.payload, ['content']);
+    if (evt.type === 'agent.message' || evt.type === 'agent.message.delta') {
+      const content = readString(evt.payload, ['content', 'delta', 'text']);
+      if (!content) continue;
+      appendAgentText(evt, content);
+      continue;
+    }
+    if (evt.type === 'agent.intent') {
+      const content = readString(evt.payload, ['intent', 'message', 'summary']);
       if (!content) continue;
       ensureTurn().rows.push({
-        key: `agent-${evt.sequence}`,
-        role: 'agent',
+        key: `intent-${evt.sequence}`,
+        role: 'activity',
         content,
         timestamp: readTimestamp(evt),
       });
@@ -1327,9 +1356,13 @@ export function AgentSessionPanel({
   projectId,
   onCoordinatorFollowUp,
   coordinatorActive = false,
+  variant = 'modal',
+  composerFocusSignal = 0,
 }: AgentSessionPanelProps) {
   const styles = useStyles();
   const navigate = useNavigate();
+  const composerRef = useRef<HTMLInputElement>(null);
+  const docked = variant === 'docked';
   const [isVisible, setIsVisible] = useState(open);
   const [activeTab, setActiveTab] = useState<'messages' | 'changes' | 'files'>('messages');
   const [seedEvents, setSeedEvents] = useState<RunStreamEvent[]>([]);
@@ -1369,13 +1402,17 @@ export function AgentSessionPanel({
   );
 
   useEffect(() => {
+    if (docked) {
+      setIsVisible(true);
+      return undefined;
+    }
     if (open) {
       setIsVisible(true);
       return undefined;
     }
     const timeoutId = window.setTimeout(() => setIsVisible(false), 220);
     return () => window.clearTimeout(timeoutId);
-  }, [open]);
+  }, [docked, open]);
 
   useEffect(() => {
     if (!open) return undefined;
@@ -1398,6 +1435,10 @@ export function AgentSessionPanel({
     setPreviewPath(null);
     setFollowUpError(null);
   }, [selectedRunId]);
+
+  useEffect(() => {
+    if (composerFocusSignal > 0) composerRef.current?.focus();
+  }, [composerFocusSignal]);
 
   useEffect(() => {
     if (!open || !selectedRunId) {
@@ -1441,7 +1482,7 @@ export function AgentSessionPanel({
   }, [open, selectedRunId]);
 
   useEffect(() => {
-    if (!open || !selectedRunId || activeTab === 'messages') return undefined;
+    if (!open || !selectedRunId) return undefined;
     let cancelled = false;
     setFilesLoading(true);
     setFilesError(null);
@@ -1458,7 +1499,7 @@ export function AgentSessionPanel({
     return () => {
       cancelled = true;
     };
-  }, [activeTab, open, selectedRunId]);
+  }, [open, selectedRunId]);
 
   useEffect(() => {
     if (!open || activeTab !== 'files' || !selectedRunId || files.length === 0) return undefined;
@@ -1526,7 +1567,13 @@ export function AgentSessionPanel({
     setFollowUpBusy(true);
     setFollowUpError(null);
     try {
-      await apiClient.steerCoordinator(coordinatorRunId, { kind: 'send', instruction });
+      await apiClient.steerCoordinator(coordinatorRunId, {
+        kind: 'send',
+        instruction,
+        ...(selectedItem && !selectedItem.isCoordinator && selectedItem.childRunId
+          ? { target_child_run_id: selectedItem.childRunId }
+          : {}),
+      });
       setFollowUp('');
       onCoordinatorFollowUp?.();
     } catch (err: unknown) {
@@ -1534,7 +1581,7 @@ export function AgentSessionPanel({
     } finally {
       setFollowUpBusy(false);
     }
-  }, [coordinatorRunId, followUp, followUpBusy, onCoordinatorFollowUp]);
+  }, [coordinatorRunId, followUp, followUpBusy, onCoordinatorFollowUp, selectedItem]);
 
   const totalAdded = files.reduce((sum, file) => sum + file.added_lines, 0);
   const totalRemoved = files.reduce((sum, file) => sum + file.removed_lines, 0);
@@ -1544,25 +1591,40 @@ export function AgentSessionPanel({
 
   if (!selectedItem || !isVisible) return null;
 
+  const pendingApprovalCount = turns.reduce(
+    (sum, turn) => sum + turn.approvals.filter((approval) => !approval.isResolved).length,
+    0,
+  );
+  const pendingQuestionCount = events.filter((evt) =>
+    evt.type === 'agent.question_asked' || evt.type === 'coordinator.child_question'
+  ).length;
+  const composerContext = selectedItem.isCoordinator
+    ? 'Context: Whole run'
+    : `Context: ${selectedItem.label}${selectedItem.agentName ? ` with ${selectedItem.agentName}` : ''}`;
+
   return (
     <>
+      {!docked && (
+        <div
+          className={mergeClasses(styles.backdrop, open && styles.backdropOpen)}
+          aria-hidden="true"
+          onClick={open ? onClose : undefined}
+        />
+      )}
       <div
-        className={mergeClasses(styles.backdrop, open && styles.backdropOpen)}
-        aria-hidden="true"
-        onClick={open ? onClose : undefined}
-      />
-      <div
-        className={mergeClasses(styles.panel, open && styles.panelOpen)}
-        role="dialog"
-        aria-label="Agent session details"
+        className={mergeClasses(styles.panel, docked && styles.dockedPanel, open && styles.panelOpen)}
+        role={docked ? 'region' : 'dialog'}
+        aria-label="Session"
         aria-hidden={!open}
       >
-        <div className={styles.dragHandleWrap}>
-          <div className={styles.dragHandle} aria-hidden="true" />
-        </div>
+        {!docked && (
+          <div className={styles.dragHandleWrap}>
+            <div className={styles.dragHandle} aria-hidden="true" />
+          </div>
+        )}
 
-        <div className={styles.shell}>
-          <aside className={styles.sidebar}>
+        <div className={mergeClasses(styles.shell, docked && styles.shellNoSidebar)}>
+          {!docked && <aside className={styles.sidebar}>
             <div className={styles.sidebarHeader}>
               <Text className={styles.sidebarTitle}>Agent Sessions</Text>
               <Button appearance="subtle" size="small" icon={<DismissRegular />} aria-label="Close panel" onClick={onClose} />
@@ -1632,14 +1694,14 @@ export function AgentSessionPanel({
                 );
               })}
             </div>
-          </aside>
+          </aside>}
 
           <section className={styles.main}>
             <div className={styles.mainHeader}>
               <div className={styles.mainHeaderInfo}>
                 <div className={styles.badgeRow}>
                   <Badge appearance="tint" color={badgeColor(selectedItem.status)}>
-                    {statusIcon(selectedItem.status)} {statusLabel(selectedItem.status)}
+                    {statusLabel(selectedItem.status)}
                   </Badge>
                 </div>
                 <div className={styles.identityRow}>
@@ -1672,10 +1734,16 @@ export function AgentSessionPanel({
               className={styles.tabList}
               selectedValue={activeTab}
               onTabSelect={(_, data) => setActiveTab(data.value as 'messages' | 'changes' | 'files')}
+              onClickCapture={(evt) => {
+                const target = evt.target as HTMLElement;
+                if (target.closest('[data-testid="session-tab-messages"]')) setActiveTab('messages');
+                if (target.closest('[data-testid="session-tab-changes"]')) setActiveTab('changes');
+                if (target.closest('[data-testid="session-tab-files"]')) setActiveTab('files');
+              }}
             >
-              <Tab value="messages">Messages</Tab>
-              <Tab value="changes">Changes ({files.length})</Tab>
-              <Tab value="files">Files ({files.length})</Tab>
+              <Tab value="messages" data-testid="session-tab-messages" onClick={() => setActiveTab('messages')}>Messages</Tab>
+              <Tab value="changes" data-testid="session-tab-changes" onClick={() => setActiveTab('changes')}>Changes ({files.length})</Tab>
+              <Tab value="files" data-testid="session-tab-files" onClick={() => setActiveTab('files')}>Files ({files.length})</Tab>
             </TabList>
 
             <div className={styles.content}>
@@ -1695,22 +1763,34 @@ export function AgentSessionPanel({
                       <ConversationTurnBlock key={turn.key} turn={turn} runId={selectedRunId} onPreviewFile={openPreview} />
                     ))}
                   </div>
-                  {selectedItem.isCoordinator && (
-                    <>
+                  <>
+                      <div className={styles.composerStack}>
+                        {(pendingApprovalCount > 0 || pendingQuestionCount > 0) && (
+                          <MessageBar intent="warning" className={styles.stickyNeedInput}>
+                            <MessageBarBody>
+                              Needs input: {pendingApprovalCount} approval{pendingApprovalCount === 1 ? '' : 's'}
+                              {pendingQuestionCount > 0 ? `, ${pendingQuestionCount} question${pendingQuestionCount === 1 ? '' : 's'}` : ''}.
+                            </MessageBarBody>
+                          </MessageBar>
+                        )}
+                        <Text className={styles.composerContext}>{composerContext}</Text>
                       <div className={styles.stickyComposer}>
                         <Input
+                          ref={composerRef}
                           className={styles.composerInput}
-                          placeholder="Ask a follow-up..."
+                          placeholder="Message coordinator..."
                           value={followUp}
                           onChange={(_, data) => setFollowUp(data.value)}
                           disabled={!coordinatorActive || followUpBusy}
                         />
                         <Button
                           appearance="primary"
+                          aria-label="Send message"
                           icon={followUpBusy ? <Spinner size="tiny" /> : <SendRegular />}
                           disabled={!coordinatorActive || !followUp.trim()}
                           onClick={() => { void handleSendFollowUp(); }}
                         />
+                      </div>
                       </div>
                       {followUpError && (
                         <div className={styles.composerError}>
@@ -1720,7 +1800,6 @@ export function AgentSessionPanel({
                         </div>
                       )}
                     </>
-                  )}
                 </>
               )}
 
