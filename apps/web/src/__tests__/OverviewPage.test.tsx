@@ -96,6 +96,29 @@ describe('OverviewPage', () => {
     expect(screen.getAllByText('gpt-5').length).toBeGreaterThan(0);
     expect(screen.getByText(/Next refresh in/)).toBeDefined();
   });
+
+  it('links attention failures to valid orchestration routes and avoids bare diagnostics', async () => {
+    vi.mocked(apiClient.getOverview).mockResolvedValue({
+      ...dto,
+      at_a_glance: { ...dto.at_a_glance, health: 'degraded' },
+      recent_activity: [
+        { project_id: 'p1', project_name: 'Demo', label: 'Run failed', kind: 'failed', timestamp_utc: new Date().toISOString() },
+      ],
+    });
+    vi.mocked(apiClient.listProjects).mockResolvedValue([project]);
+    vi.mocked(apiClient.getTeam).mockResolvedValue({ project_name: 'Demo', universe: 'main', members: [], layout: 'canonical', migration_available: false });
+    vi.mocked(apiClient.getProjectRuns).mockResolvedValue([]);
+    vi.mocked(apiClient.getBoard).mockResolvedValue({ project_id: 'p1', workflow_stages_available: true, columns: [] });
+    vi.mocked(apiClient.getProjectMetrics).mockResolvedValue(metrics);
+
+    renderPage();
+
+    await waitFor(() => {
+      const hrefs = Array.from(document.querySelectorAll<HTMLElement>('[href]'))
+        .map((el) => el.getAttribute('href'));
+      expect(hrefs).toContain('/projects/p1/orchestrations');
+      expect(hrefs).toContain('/projects');
+      expect(hrefs).not.toContain('/diagnostics');
+    });
+  });
 });
-
-

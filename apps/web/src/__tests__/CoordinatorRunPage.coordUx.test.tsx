@@ -537,7 +537,7 @@ describe('CoordinatorRunPage — assembly review affordance (issues 3 & 4)', () 
     expect(document.body.textContent ?? '').not.toContain('Awaiting your review');
   });
 
-  it('routes the Scribe "View execution" button to the child workflow page', async () => {
+  it('opens the Scribe "View execution" stream in the session panel', async () => {
     const startedIso = new Date(Date.now() - 30_000).toISOString();
     currentEvents = [
       { sequence: 1, type: 'coordinator.assembly_scribe_started', payload: { workPlanId: 1, timestamp_utc: startedIso } },
@@ -555,9 +555,11 @@ describe('CoordinatorRunPage — assembly review affordance (issues 3 & 4)', () 
     fireEvent.click(btn);
 
     await waitFor(
-      () => expect(mockNavigate).toHaveBeenCalledWith('/projects/p1/runs/coord-run-1-scribe/workflow'),
+      () => expect(document.body.textContent).toContain('Agent Sessions'),
       { timeout: 4000 },
     );
+    expect(document.body.textContent ?? '').toContain('Scribe');
+    expect(mockNavigate).not.toHaveBeenCalledWith('/projects/p1/runs/coord-run-1-scribe/workflow');
   });
 
   it('Merge "Browse files" routes to Workspace with the integration branch selected', async () => {

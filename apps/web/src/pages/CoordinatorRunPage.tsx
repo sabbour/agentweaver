@@ -37,8 +37,6 @@ import {
   Handle,
   MiniMap,
   Position,
-  useReactFlow,
-  useNodesInitialized,
   type Node,
   type Edge,
   type NodeProps,
@@ -47,14 +45,13 @@ import '@xyflow/react/dist/style.css';
 import { useRunStream, type RunStreamEvent } from '../api/sse';
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
-import type { GraphDescriptor, RunStatus, WorkPlanResponse, CoordinatorChildResponse, PortForwardSessionDto, RunAgentTokenBreakdownDto } from '../api/types';
+import type { GraphDescriptor, RunStatus, WorkPlanResponse, PortForwardSessionDto, RunAgentTokenBreakdownDto } from '../api/types';
 import { layoutDagColumns, NODE_W, NODE_H, NODE_TYPE_W, NODE_TYPE_H } from '../utils/dagLayout';
 import type { NodeSizeHint } from '../utils/dagLayout';
 import { OutcomeSpecPanel } from '../components/OutcomeSpecPanel';
 import { AgentAvatar } from '../components/AgentAvatar';
 import { CostChip } from '../components/CostChip';
 import { AgentTokenBreakdown } from '../components/runs/AgentTokenBreakdown';
-import { AgentRail } from '../components/AgentRail';
 import { AgentSessionPanel, type RunSessionTree } from '../components/AgentSessionPanel';
 import { SteerPanel } from '../components/SteerPanel';
 import { SlidePanel } from '../components/SlidePanel';
@@ -62,7 +59,6 @@ import { SteerChatPanel } from '../components/SteerChatPanel';
 import { CoordinatorArtifactsPanel } from '../components/CoordinatorArtifactsPanel';
 import { AutomationToggle } from '../components/AutomationToggle';
 import { AUTOMATION_HELP } from '../components/automationHelp';
-import { deriveAgentQueues } from '../api/agentQueues';
 import { QuestionAnswerCard } from '../components/QuestionAnswerCard';
 import { LifecycleEventCard } from '../components/LifecycleEventCard';
 import { Timeline } from '../components/Timeline';
@@ -125,6 +121,14 @@ function topoStatusToStepStatus(status: string): StepStatus {
     case 'failed':         return 'failed';
     default:               return 'pending';
   }
+}
+
+function graphNodeSize(node: Node): { width: number; height: number } {
+  const nt = (node.data as { nodeType?: string } | undefined)?.nodeType;
+  return {
+    width: node.measured?.width ?? node.initialWidth ?? NODE_TYPE_W[nt ?? ''] ?? NODE_W,
+    height: node.measured?.height ?? node.initialHeight ?? NODE_TYPE_H[nt ?? ''] ?? NODE_H,
+  };
 }
 
 function topoStatusToLabel(status: string): string {
@@ -488,25 +492,6 @@ const EXPANDED_PIPELINE_RESERVE = 188;
 // for fan-out columns.
 const COORDINATOR_GRAPH_NODE_SEP = 96;
 
-// Refits the graph to the viewport AFTER React Flow has measured the node DOM. The bare `fitView`
-// prop only fits once at mount using estimated sizes, so on the initial pre-spec load the wide
-// linear chain (Coordinator → RAI → Review → Merge → Scribe) was fitted before measurement and the
-// last node (Scribe) ended up clipped off the right edge. Re-fitting once nodes are initialized —
-// and whenever the layout token changes (node/edge count, expansion, height) — keeps the whole
-// pipeline in view without leaving stale vertical whitespace.
-function GraphAutoFit({ token }: { token: string }) {
-  const { fitView } = useReactFlow();
-  const initialized = useNodesInitialized();
-  useEffect(() => {
-    if (!initialized) return;
-    const id = requestAnimationFrame(() => {
-      void fitView({ padding: 0.12, maxZoom: 1.1, duration: 150 });
-    });
-    return () => cancelAnimationFrame(id);
-  }, [initialized, token, fitView]);
-  return null;
-}
-
 // Renders column depth labels (L0 Coordinator, L1 Research…) inside the React Flow canvas
 // using ViewportPortal so they pan/zoom with the graph and stay aligned over each column.
 // A compact pipeline step row rendered inline inside a SubtaskNode expansion panel. Laid out as a
@@ -770,10 +755,6 @@ const useStyles = makeStyles({
     flexDirection: 'column',
     gap: tokens.spacingVerticalS,
   },
-  agentRailBand: {
-    padding: `${tokens.spacingVerticalS} 0`,
-    borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
-  },
   // Single-column coordinator session layout. The outcome spec moved to a slide-in panel (#164).
   sessionOnly: {
     display: 'flex',
@@ -845,7 +826,20 @@ const useStyles = makeStyles({
     borderRadius: '8px',
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground1,
+    overflow: 'auto',
     '& .react-flow__renderer': { borderRadius: '8px' },
+    '& .react-flow__minimap': {
+      opacity: 0,
+      transform: 'scale(0.92)',
+      transformOrigin: 'bottom right',
+      transition: 'opacity 120ms ease, transform 120ms ease',
+      pointerEvents: 'none',
+    },
+    '&:hover .react-flow__minimap': {
+      opacity: 1,
+      transform: 'scale(1)',
+      pointerEvents: 'auto',
+    },
   },
   graphColumnLabels: {
     display: 'grid',
@@ -964,7 +958,7 @@ export function CoordinatorRunPage() {
       .then((desc) => { if (!cancelled) setRestDescriptor(desc); })
       .catch(() => {});
 
-    // Fetch work plan + children for topology status seed + AgentRail. Skip for child runs —
+    // Fetch work plan + children for topology status seed. Skip for child runs —
     // work-plan is a coordinator-only artifact and child runs will never have one.
     void (async () => {
       const runDetail = await apiClient.getRun(runId).catch(() => null);
@@ -981,7 +975,6 @@ export function CoordinatorRunPage() {
       if (workPlan) {
         setTopoSeed(seedTopologyFromWorkPlan(workPlan, children));
         setWorkPlanData(workPlan);
-        setChildrenData(children ?? []);
       }
     })();
 
@@ -1041,9 +1034,8 @@ export function CoordinatorRunPage() {
   // review affordance for a terminal run and show its failure reason instead.
   const [runLevelStatus, setRunLevelStatus] = useState<RunStatus | undefined>(undefined);
   const [retriedFrom, setRetriedFrom] = useState<string | null>(null);
-  // Per-run work-plan + children snapshot — used to drive the AgentRail.
+  // Per-run work-plan snapshot.
   const [workPlanData, setWorkPlanData] = useState<WorkPlanResponse | null>(null);
-  const [childrenData, setChildrenData] = useState<CoordinatorChildResponse[]>([]);
   const [blockedSteerPending, setBlockedSteerPending] = useState(false);
 
   // Sandbox preview port-forward state.
@@ -1803,15 +1795,12 @@ export function CoordinatorRunPage() {
     navigate(`/projects/${projectId}/workspace?${query.toString()}`);
   }, [navigate, projectId, runId]);
 
-  // Collective-assembly "View execution": the RAI and Scribe stages run a real agent turn on their
-  // own persisted sub-run stream (`${runId}-rai` / `${runId}-scribe`), so open that stream in the
-  // RunWatcher dialog to surface the actual work (tool calls, inbox review, memory writes) — same
-  // pattern the per-run page uses. Merge "Browse files" and Review "Review now" own no separate run,
-  // so they jump to the reused Changes/Files review panel.
+  // Collective-assembly "View execution": RAI/Scribe have their own persisted sub-run streams, so
+  // focus that session in the slide-up instead of leaving the orchestration page.
   const viewAssemblyExecution = useCallback((id: string) => {
-    if (id.endsWith('-rai') || id.endsWith('-scribe')) navigate(`/projects/${projectId ?? ''}/runs/${id}/workflow`);
+    if (id.endsWith('-rai') || id.endsWith('-scribe')) openPanelForNode(id);
     else scrollToReview();
-  }, [navigate, projectId, scrollToReview]);
+  }, [openPanelForNode, scrollToReview]);
 
   // Option toggles — optimistic update, revert on error. Both cascade to children server-side.
   const toggleAutopilot = useCallback((next: boolean) => {
@@ -1917,6 +1906,41 @@ export function CoordinatorRunPage() {
     const loopHeadroom = hasLoopback ? 132 : 0;
     return Math.max(180, maxY - minY + 56 + loopHeadroom);
   }, [rfNodes, expandedKeys, displayEdges]);
+
+  const graphViewport = useMemo(() => {
+    if (displayNodes.length === 0) {
+      return {
+        width: '100%',
+        height: graphHeight,
+        defaultViewport: { x: 0, y: 0, zoom: 1 },
+      };
+    }
+    const paddingX = 64;
+    const paddingTop = displayEdges2.some((e) => e.type === 'loopback') ? 132 : 64;
+    const paddingBottom = 64;
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    for (const node of displayNodes) {
+      const size = graphNodeSize(node);
+      minX = Math.min(minX, node.position.x);
+      minY = Math.min(minY, node.position.y);
+      maxX = Math.max(maxX, node.position.x + size.width);
+      maxY = Math.max(maxY, node.position.y + size.height);
+    }
+    const width = Math.max(960, maxX - minX + paddingX * 2);
+    const height = Math.max(graphHeight, maxY - minY + paddingTop + paddingBottom);
+    return {
+      width,
+      height,
+      defaultViewport: {
+        x: paddingX - minX,
+        y: paddingTop - minY,
+        zoom: 1,
+      },
+    };
+  }, [displayNodes, displayEdges2, graphHeight]);
   // The toggle endpoints 409 on a non-active run, so only offer them while the orchestration is live.
   const coordActive     = !['complete', 'failed', 'blocked', 'declined'].includes(orch.phase);
 
@@ -1941,12 +1965,6 @@ export function CoordinatorRunPage() {
       default:           return 'in_progress';
     }
   }, [orch.phase, reviewActionable, runLevelStatus]);
-
-  // Per-run agent load items for the AgentRail — derived from the work-plan + children snapshot.
-  const agentItems = useMemo(
-    () => (workPlanData && runId ? deriveAgentQueues(workPlanData, childrenData, runId) : []),
-    [workPlanData, childrenData, runId],
-  );
 
   // Adapter that points the standard artifact browser at the coordinator's collective assembly:
   // files/diff come from the integration branch (the coordinator owns no worktree), and the three
@@ -2107,16 +2125,16 @@ export function CoordinatorRunPage() {
             <CoordPanelContext.Provider value={openPanelForNode}>
               <ZoomControls zoom={zoom} onZoomIn={zoomIn} onZoomOut={zoomOut} onFit={resetZoom} maxZoom={maxZoom} />
               <div className={styles.dagContainer} style={{ height: graphHeight }} ref={viewportRef}>
-                <div style={{ zoom, width: '100%', height: '100%' }}>
+                <div style={{ zoom, width: graphViewport.width, minWidth: '100%', height: graphViewport.height }}>
                 <ReactFlow
-                  key={`${displayNodes.length}:${displayEdges2.length}`}
+                  key={`${displayNodes.length}:${displayEdges2.length}:${graphHeight}:${[...expandedKeys].sort().join(',')}`}
                   nodes={displayNodes}
                   edges={displayEdges2}
                   nodeTypes={coordinatorNodeTypes}
                   edgeTypes={workflowEdgeTypes}
-                  fitView
-                  fitViewOptions={{ padding: 0.12, maxZoom: 1.1 }}
-                  minZoom={0.4}
+                  defaultViewport={graphViewport.defaultViewport}
+                  minZoom={1}
+                  maxZoom={1}
                   nodesDraggable={false}
                   nodesConnectable={false}
                   nodesFocusable={false}
@@ -2128,9 +2146,6 @@ export function CoordinatorRunPage() {
                   panOnDrag
                   proOptions={{ hideAttribution: true }}
                 >
-                  <GraphAutoFit
-                    token={`${displayNodes.length}:${displayEdges2.length}:${graphHeight}:${[...expandedKeys].sort().join(',')}`}
-                  />
                   <MiniMap
                     nodeStrokeWidth={0}
                     nodeBorderRadius={3}
@@ -2143,11 +2158,11 @@ export function CoordinatorRunPage() {
                     style={{
                       bottom: 8,
                       right: 8,
-                      width: 172,
-                      height: 116,
+                      width: 104,
+                      height: 72,
                       border: '1px solid var(--colorNeutralStroke2)',
-                      borderRadius: '8px',
-                      boxShadow: 'var(--shadow8)',
+                      borderRadius: '6px',
+                      boxShadow: 'var(--shadow4)',
                     }}
                     nodeColor={(n) => {
                       const s = (n.data as SubtaskNodeData | undefined)?.topoStatus as string | undefined;
@@ -2183,14 +2198,6 @@ export function CoordinatorRunPage() {
           )}
         </>
       </div>
-
-      {/* Agent rail — compact per-agent load summary derived from the work plan.
-          Phase 2 TODO: wire onSelectAgent to filter/highlight the topology and work plan. */}
-      {workPlanData && (
-        <div className={styles.agentRailBand}>
-          <AgentRail agents={agentItems} title="Agents" />
-        </div>
-      )}
 
       {/* Coordinator session: automation/actions controls, the rich run view, and steering. The
           outcome spec now lives in a slide-in panel opened from the [Spec] button under the
