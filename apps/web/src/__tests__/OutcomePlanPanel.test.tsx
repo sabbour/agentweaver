@@ -3,7 +3,7 @@ import { render, screen, waitFor, cleanup } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { FluentProvider, webLightTheme } from '@fluentui/react-components';
 import { type ReactNode } from 'react';
-import { OutcomeSpecPanel } from '../components/OutcomeSpecPanel';
+import { OutcomePlanPanel } from '../components/OutcomePlanPanel';
 import { ApiError } from '../api/client';
 import type { OutcomeSpec } from '../api/types';
 
@@ -39,7 +39,7 @@ const awaitingSpec: OutcomeSpec = {
 
 const confirmedSpec: OutcomeSpec = { ...awaitingSpec, status: 'confirmed', confirmedBy: 'Ahmed' };
 
-// A spec whose clarifying questions arrive crammed into one string ("1. … 2. …").
+// A spec whose Open questions arrive crammed into one string ("1. … 2. …").
 const specWithQuestions: OutcomeSpec = {
   status: 'awaiting_confirmation',
   goal: 'Add color endpoints',
@@ -48,7 +48,7 @@ const specWithQuestions: OutcomeSpec = {
 };
 
 const gateArmingError = () =>
-  new ApiError(409, JSON.stringify({ error: 'no_pending_gate', message: 'The outcome spec is not awaiting confirmation.' }));
+  new ApiError(409, JSON.stringify({ error: 'no_pending_gate', message: 'The Outcome plan is not awaiting confirmation.' }));
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -60,7 +60,7 @@ afterEach(() => {
   cleanup();
 });
 
-describe('OutcomeSpecPanel confirm retry', () => {
+describe('OutcomePlanPanel confirm retry', () => {
   it('retries a 409 no_pending_gate gate-arming race then confirms without surfacing the error', async () => {
     // The gate may still be arming after a revise re-draft: first two confirms 409, third succeeds.
     vi.mocked(apiClient.confirmOutcomeSpec)
@@ -70,7 +70,7 @@ describe('OutcomeSpecPanel confirm retry', () => {
 
     render(
       <Wrapper>
-        <OutcomeSpecPanel runId="run-1" events={[]} streamStatus="streaming" />
+        <OutcomePlanPanel runId="run-1" events={[]} streamStatus="streaming" />
       </Wrapper>,
     );
 
@@ -78,7 +78,7 @@ describe('OutcomeSpecPanel confirm retry', () => {
     await userEvent.click(confirmButton);
 
     await waitFor(
-      () => expect(document.body.textContent).toContain('Outcome spec confirmed'),
+      () => expect(document.body.textContent).toContain('Outcome plan confirmed'),
       { timeout: 4000 },
     );
 
@@ -95,21 +95,21 @@ describe('OutcomeSpecPanel confirm retry', () => {
 
     render(
       <Wrapper>
-        <OutcomeSpecPanel runId="run-1" events={[]} streamStatus="streaming" />
+        <OutcomePlanPanel runId="run-1" events={[]} streamStatus="streaming" />
       </Wrapper>,
     );
 
-    const confirmButton = await screen.findByRole('button', { name: /^confirm$/i });
+    const confirmButton = await screen.findByRole('button', { name: /confirm plan/i });
     await userEvent.click(confirmButton);
 
     expect((screen.getByRole('button', { name: /confirming/i }) as HTMLButtonElement).disabled).toBe(true);
-    expect((screen.getByRole('button', { name: /clarify and request changes/i }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole('button', { name: /Clarify plan/i }) as HTMLButtonElement).disabled).toBe(true);
     expect(vi.mocked(apiClient.confirmOutcomeSpec)).toHaveBeenCalledTimes(1);
 
     resolveConfirm(confirmedSpec);
 
     await waitFor(() => expect(screen.getByText('Confirmed')).toBeTruthy());
-    expect(screen.queryByRole('button', { name: /^confirm$/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /confirm plan/i })).toBeNull();
   });
 
   it('re-enables confirm after a non-conflict API error', async () => {
@@ -117,15 +117,15 @@ describe('OutcomeSpecPanel confirm retry', () => {
 
     render(
       <Wrapper>
-        <OutcomeSpecPanel runId="run-1" events={[]} streamStatus="streaming" />
+        <OutcomePlanPanel runId="run-1" events={[]} streamStatus="streaming" />
       </Wrapper>,
     );
 
-    await userEvent.click(await screen.findByRole('button', { name: /^confirm$/i }));
+    await userEvent.click(await screen.findByRole('button', { name: /confirm plan/i }));
 
     await waitFor(() => expect(screen.getByText(/API error 500: server exploded/i)).toBeTruthy());
-    expect((screen.getByRole('button', { name: /^confirm$/i }) as HTMLButtonElement).disabled).toBe(false);
-    expect((screen.getByRole('button', { name: /clarify and request changes/i }) as HTMLButtonElement).disabled).toBe(false);
+    expect((screen.getByRole('button', { name: /confirm plan/i }) as HTMLButtonElement).disabled).toBe(false);
+    expect((screen.getByRole('button', { name: /Clarify plan/i }) as HTMLButtonElement).disabled).toBe(false);
   });
 
   it('keeps the REST confirmed status when stale SSE still says awaiting confirmation after confirm', async () => {
@@ -134,7 +134,7 @@ describe('OutcomeSpecPanel confirm retry', () => {
 
     render(
       <Wrapper>
-        <OutcomeSpecPanel
+        <OutcomePlanPanel
           runId="run-1"
           events={[staleAwaitingEvent]}
           streamStatus="streaming"
@@ -143,11 +143,11 @@ describe('OutcomeSpecPanel confirm retry', () => {
       </Wrapper>,
     );
 
-    await userEvent.click(await screen.findByRole('button', { name: /^confirm$/i }));
+    await userEvent.click(await screen.findByRole('button', { name: /confirm plan/i }));
 
     await waitFor(() => expect(screen.getByText('Confirmed')).toBeTruthy());
-    expect(screen.getByText(/Outcome spec confirmed by Ahmed/i)).toBeTruthy();
-    expect(screen.queryByRole('button', { name: /^confirm$/i })).toBeNull();
+    expect(screen.getByText(/Outcome plan confirmed by Ahmed/i)).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /confirm plan/i })).toBeNull();
     expect(onReconnect).toHaveBeenCalledTimes(1);
   });
 
@@ -158,33 +158,33 @@ describe('OutcomeSpecPanel confirm retry', () => {
 
     render(
       <Wrapper>
-        <OutcomeSpecPanel runId="run-1" events={[]} streamStatus="streaming" />
+        <OutcomePlanPanel runId="run-1" events={[]} streamStatus="streaming" />
       </Wrapper>,
     );
 
-    await userEvent.click(await screen.findByRole('button', { name: /^confirm$/i }));
+    await userEvent.click(await screen.findByRole('button', { name: /confirm plan/i }));
 
     await waitFor(() =>
-      expect(screen.getByText('This run is no longer active, so the outcome spec cannot be confirmed.')).toBeTruthy(),
+      expect(screen.getByText('This run is no longer active, so the Outcome plan cannot be confirmed.')).toBeTruthy(),
     );
   });
 });
 
-describe('OutcomeSpecPanel clarify dialog', () => {
-  it('splits crammed clarifying questions into separate answer fields and composes Q/A feedback', async () => {
+describe('OutcomePlanPanel clarify dialog', () => {
+  it('splits crammed Open questions into separate answer fields and composes Q/A feedback', async () => {
     vi.mocked(apiClient.getOutcomeSpec).mockResolvedValue(specWithQuestions);
     vi.mocked(apiClient.reviseOutcomeSpec).mockResolvedValue({ ...specWithQuestions, status: 'drafting' });
 
     render(
       <Wrapper>
-        <OutcomeSpecPanel runId="run-1" events={[]} streamStatus="streaming" />
+        <OutcomePlanPanel runId="run-1" events={[]} streamStatus="streaming" />
       </Wrapper>,
     );
 
-    const openBtn = await screen.findByRole('button', { name: /clarify and request changes/i });
+    const openBtn = await screen.findByRole('button', { name: /Clarify plan/i });
     await userEvent.click(openBtn);
 
-    // Each clarifying question gets its own answer box (2) plus the additional-feedback box (1).
+    // Each open question gets its own answer box (2) plus the additional-feedback box (1).
     const boxes = await screen.findAllByRole('textbox', { hidden: true });
     expect(boxes.length).toBe(3);
 
@@ -202,31 +202,31 @@ describe('OutcomeSpecPanel clarify dialog', () => {
   });
 });
 
-describe('OutcomeSpecPanel drafting state and polling', () => {
+describe('OutcomePlanPanel drafting state and polling', () => {
   it('treats a 404 for getOutcomeSpec as pending drafting and surfaces no error to the user', async () => {
     vi.mocked(apiClient.getOutcomeSpec).mockRejectedValue(new ApiError(404, 'not found'));
 
     const { queryByText } = render(
       <Wrapper>
-        <OutcomeSpecPanel runId="run-1" events={[]} streamStatus="streaming" />
+        <OutcomePlanPanel runId="run-1" events={[]} streamStatus="streaming" />
       </Wrapper>,
     );
 
     await waitFor(() => expect(vi.mocked(apiClient.getOutcomeSpec)).toHaveBeenCalled());
 
-    expect(screen.getByText(/Drafting the outcome spec/i)).toBeTruthy();
+    expect(screen.getByText(/Drafting the Outcome plan/i)).toBeTruthy();
     expect(queryByText(/API error/i)).toBeNull();
     expect(queryByText(/404/)).toBeNull();
   });
 
-  it('polls after a 404 until the drafted outcome spec is available', async () => {
+  it('polls after a 404 until the drafted Outcome plan is available', async () => {
     vi.mocked(apiClient.getOutcomeSpec)
       .mockRejectedValueOnce(new ApiError(404, 'not found'))
       .mockResolvedValue(awaitingSpec);
 
     render(
       <Wrapper>
-        <OutcomeSpecPanel runId="run-1" events={[]} streamStatus="streaming" />
+        <OutcomePlanPanel runId="run-1" events={[]} streamStatus="streaming" />
       </Wrapper>,
     );
 
@@ -239,27 +239,27 @@ describe('OutcomeSpecPanel drafting state and polling', () => {
 
     render(
       <Wrapper>
-        <OutcomeSpecPanel runId="run-1" events={[]} streamStatus="done" runStatus="failed" />
+        <OutcomePlanPanel runId="run-1" events={[]} streamStatus="done" runStatus="failed" />
       </Wrapper>,
     );
 
-    await waitFor(() => expect(screen.getByText(/failed before the outcome spec could be drafted/i)).toBeTruthy());
-    expect(screen.queryByText(/Drafting the outcome spec/i)).toBeNull();
+    await waitFor(() => expect(screen.getByText(/failed before the Outcome plan could be drafted/i)).toBeTruthy());
+    expect(screen.queryByText(/Drafting the Outcome plan/i)).toBeNull();
   });
 });
 
-describe('OutcomeSpecPanel terminal REST status precedence', () => {
+describe('OutcomePlanPanel terminal REST status precedence', () => {
   it('shows declined from the REST snapshot even when the latest SSE spec event is awaiting confirmation', async () => {
     vi.mocked(apiClient.getOutcomeSpec).mockResolvedValue({ ...awaitingSpec, status: 'declined' });
 
     render(
       <Wrapper>
-        <OutcomeSpecPanel runId="run-1" events={[staleAwaitingEvent]} streamStatus="streaming" />
+        <OutcomePlanPanel runId="run-1" events={[staleAwaitingEvent]} streamStatus="streaming" />
       </Wrapper>,
     );
 
     await waitFor(() => expect(screen.getByText('Declined')).toBeTruthy());
-    expect(screen.getByText(/Outcome spec declined/i)).toBeTruthy();
-    expect(screen.queryByRole('button', { name: /^confirm$/i })).toBeNull();
+    expect(screen.getByText(/Outcome plan declined/i)).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /confirm plan/i })).toBeNull();
   });
 });

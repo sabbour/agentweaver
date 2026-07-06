@@ -177,7 +177,7 @@ export function StartOrchestrationFab({ currentProjectId }: StartOrchestrationFa
             <div className={styles.fields}>
               <Text>
                 Choose a project and describe a goal in plain language. The coordinator drafts an
-                outcome spec for your review and confirmation before any work is dispatched.
+                Outcome plan for your review and confirmation before any work is dispatched.
               </Text>
               {loadError && (
                 <MessageBar intent="error">

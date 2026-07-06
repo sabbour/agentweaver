@@ -110,7 +110,7 @@ const useStyles = makeStyles({
   },
 });
 
-// Split clarifying questions into individual items. The coordinator sometimes returns several
+// Split Open questions into individual items. The coordinator sometimes returns several
 // questions crammed into one string as an inline numbered list ("1. ... 2. ..."); break those
 // apart so each question can be answered on its own. Leading "N." / "N)" prefixes are stripped.
 function splitQuestions(lines: string[]): string[] {
@@ -184,17 +184,17 @@ function actionErrorMessage(err: unknown): string {
   if (err instanceof ApiError) {
     const code = apiErrorCode(err);
     if (err.status === 409 && code === 'no_pending_gate') {
-      return 'This run is no longer awaiting outcome-spec confirmation.';
+      return 'This run is no longer awaiting outcome-plan confirmation.';
     }
     if (err.status === 409 && code === 'run_not_active') {
-      return 'This run is no longer active, so the outcome spec cannot be confirmed.';
+      return 'This run is no longer active, so the Outcome plan cannot be confirmed.';
     }
     return `API error ${err.status}: ${err.body}`;
   }
   return err instanceof Error ? err.message : String(err);
 }
 
-interface OutcomeSpecPanelProps {
+interface OutcomePlanPanelProps {
   runId: string;
   projectId?: string;
   events: RunStreamEvent[];
@@ -202,9 +202,11 @@ interface OutcomeSpecPanelProps {
   runStatus?: string;
   onCollapse?: () => void;
   onReconnect?: () => void;
+  onClarifyPlan?: () => void;
+  clarificationSent?: boolean;
 }
 
-export function OutcomeSpecPanel({ runId, projectId, events, streamStatus, runStatus, onCollapse, onReconnect }: OutcomeSpecPanelProps) {
+export function OutcomePlanPanel({ runId, projectId, events, streamStatus, runStatus, onCollapse, onReconnect, onClarifyPlan, clarificationSent = false }: OutcomePlanPanelProps) {
   const styles = useStyles();
 
   const [specFromApi, setSpecFromApi] = useState<OutcomeSpec | null>(null);
@@ -215,6 +217,7 @@ export function OutcomeSpecPanel({ runId, projectId, events, streamStatus, runSt
   const [answers, setAnswers] = useState<string[]>([]);
   const [extraFeedback, setExtraFeedback] = useState('');
   const [revising, setRevising] = useState(false);
+  const [fullPlanOpen, setFullPlanOpen] = useState(false);
   // Snapshot of spec content at the moment a revise request is submitted. Used to detect
   // when the coordinator has finished re-drafting (content changes while revising=true).
   const revisingSnapshotRef = useRef<string | null>(null);
@@ -440,6 +443,10 @@ export function OutcomeSpecPanel({ runId, projectId, events, streamStatus, runSt
   // Open the revise dialog with one empty answer slot per clarifying question.
   // Answering the questions IS the revise feedback the coordinator re-drafts from.
   const openRevise = () => {
+    if (onClarifyPlan) {
+      onClarifyPlan();
+      return;
+    }
     setAnswers(clarifying.map(() => ''));
     setExtraFeedback('');
     setReviseOpen(true);
@@ -485,7 +492,7 @@ export function OutcomeSpecPanel({ runId, projectId, events, streamStatus, runSt
   return (
     <div className={styles.panel}>
       <div className={styles.headerRow}>
-        <Title3>Outcome spec</Title3>
+        <Title3>Outcome plan</Title3>
         <Badge appearance="tint" color={statusMeta.color}>{statusMeta.label}</Badge>
         <div className={styles.spacer} />
         {streamStatus === 'connecting' && <Spinner size="extra-tiny" aria-label="Connecting" />}
@@ -494,7 +501,7 @@ export function OutcomeSpecPanel({ runId, projectId, events, streamStatus, runSt
             appearance="subtle"
             size="small"
             icon={<ChevronLeftRegular />}
-            aria-label="Collapse outcome spec"
+            aria-label="Collapse Outcome plan"
             onClick={onCollapse}
           />
         )}
@@ -504,20 +511,21 @@ export function OutcomeSpecPanel({ runId, projectId, events, streamStatus, runSt
       {(status === 'drafting' || status === 'awaiting_confirmation') && (
         <MessageBar intent="info" icon={<LockClosedRegular />}>
           <MessageBarBody>
-            No subagent work is dispatched until you confirm this outcome spec.
+            The coordinator translated your goal into a proposed outcome, scope, assumptions, and open questions.
+            {' '}Confirm it to dispatch work, or clarify what should change.
           </MessageBarBody>
         </MessageBar>
       )}
       {status === 'confirmed' && (
         <MessageBar intent="success" icon={<CheckmarkCircleRegular />}>
           <MessageBarBody>
-            Outcome spec confirmed{spec?.confirmedBy ? ` by ${spec.confirmedBy}` : ''}. Dispatch is unblocked.
+            Outcome plan confirmed{spec?.confirmedBy ? ` by ${spec.confirmedBy}` : ''}. Dispatch is unblocked.
           </MessageBarBody>
         </MessageBar>
       )}
       {status === 'declined' && (
         <MessageBar intent="warning" icon={<DismissCircleRegular />}>
-          <MessageBarBody>Outcome spec declined. No subagent work was dispatched.</MessageBarBody>
+          <MessageBarBody>Outcome plan declined. No subagent work was dispatched.</MessageBarBody>
         </MessageBar>
       )}
 
@@ -527,30 +535,39 @@ export function OutcomeSpecPanel({ runId, projectId, events, streamStatus, runSt
         </MessageBar>
       )}
 
-      {revising && (
+      {(revising || clarificationSent) && (
         <div className={styles.drafting}>
-          <Spinner size="extra-tiny" aria-hidden="true" />
-          <Text>Coordinator is incorporating your changes and re-drafting the spec...</Text>
+          {revising && <Spinner size="extra-tiny" aria-hidden="true" />}
+          <Text>Clarification sent — The coordinator is revising the Outcome plan.</Text>
         </div>
       )}
 
       {failedBeforeDraft ? (
         <MessageBar intent="error">
-          <MessageBarBody>The run failed before the outcome spec could be drafted.</MessageBarBody>
+          <MessageBarBody>The run failed before the Outcome plan could be drafted.</MessageBarBody>
         </MessageBar>
       ) : !hasContent && !revising ? (
         <div className={styles.drafting}>
-          <Spinner size="extra-tiny" aria-label="Drafting outcome spec" />
-          <Text>Drafting the outcome spec...</Text>
+          <Spinner size="extra-tiny" aria-label="Drafting Outcome plan" />
+          <Text>Drafting the Outcome plan...</Text>
         </div>
+      ) : hasContent && status === 'confirmed' && !fullPlanOpen ? (
+        <>
+          <SpecSection label="Goal" value={spec?.goal} />
+          <div className={styles.actions}>
+            <Button appearance="secondary" onClick={() => setFullPlanOpen(true)}>
+              View full plan
+            </Button>
+          </div>
+        </>
       ) : hasContent ? (
         <>
           <SpecSection label="Goal" value={spec?.goal} />
-          <SpecSection label="Desired outcome" value={spec?.desiredOutcome} />
+          <SpecSection label="Outcome" value={spec?.desiredOutcome} />
           <SpecSection label="Scope" value={spec?.scope} />
           <SpecSection label="Assumptions" value={spec?.assumptions} />
           {clarifying.length > 0 && (
-            <SpecSection label="Clarifying questions" value={spec?.clarifyingQuestions} />
+            <SpecSection label="Open questions" value={spec?.clarifyingQuestions} />
           )}
         </>
       ) : null}
@@ -575,7 +592,7 @@ export function OutcomeSpecPanel({ runId, projectId, events, streamStatus, runSt
             disabled={acting || revising || runInterrupted}
             onClick={() => void handleConfirm()}
           >
-            {acting ? 'Confirming...' : 'Confirm'}
+            {acting ? 'Confirming plan...' : 'Confirm plan'}
           </Button>
           <Button
             appearance="secondary"
@@ -583,9 +600,9 @@ export function OutcomeSpecPanel({ runId, projectId, events, streamStatus, runSt
             disabled={acting || revising || runInterrupted}
             onClick={openRevise}
           >
-            Clarify and request changes
+            Clarify plan
           </Button>
-          {acting && <Spinner size="extra-tiny" label="Confirming outcome spec" />}
+          {acting && <Spinner size="extra-tiny" label="Confirming plan" />}
         </div>
       )}
 
@@ -604,19 +621,19 @@ export function OutcomeSpecPanel({ runId, projectId, events, streamStatus, runSt
       <Dialog open={reviseOpen} onOpenChange={(_, d) => { setReviseOpen(d.open); if (!d.open) { setAnswers([]); setExtraFeedback(''); } }}>
         <DialogSurface>
           <DialogBody>
-            <DialogTitle>Clarify and request changes</DialogTitle>
+            <DialogTitle>Clarify plan</DialogTitle>
             <DialogContent>
               <div className={styles.reviseFields}>
                 <Text>
                   Describe what to change. After you send, the coordinator re-drafts and
-                  re-presents the spec for your confirmation; no subagent work is dispatched
+                  re-presents the plan for your confirmation; no subagent work is dispatched
                   until you confirm.
                 </Text>
                 {clarifying.length > 0 && (
                   <div className={styles.section}>
-                    <Text className={styles.sectionLabel}>Clarifying questions</Text>
+                    <Text className={styles.sectionLabel}>Open questions</Text>
                     <Text className={styles.reviseHint}>
-                      Answer any that apply — your answers refine the spec.
+                      Answer any that apply — your answers refine the plan.
                     </Text>
                     <div className={styles.qaList}>
                       {clarifying.map((q, i) => (
