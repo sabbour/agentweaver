@@ -24,6 +24,7 @@ import {
   DismissRegular,
   DismissCircleFilled,
   DocumentRegular,
+  EyeRegular,
   OpenRegular,
   SendRegular,
 } from '@fluentui/react-icons';
@@ -332,13 +333,31 @@ const useStyles = makeStyles({
   messageRow: {
     display: 'flex',
     flexDirection: 'column',
-    gap: tokens.spacingVerticalXXS,
+    gap: tokens.spacingVerticalXS,
+  },
+  messageCard: {
+    display: 'grid',
+    gridTemplateColumns: '36px minmax(0, 1fr)',
+    gap: tokens.spacingHorizontalM,
+    padding: `${tokens.spacingVerticalM} ${tokens.spacingHorizontalM}`,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusLarge,
+    backgroundColor: tokens.colorNeutralBackground1,
   },
   messageMeta: {
     display: 'flex',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     justifyContent: 'space-between',
     gap: tokens.spacingHorizontalS,
+  },
+  authorBlock: {
+    display: 'flex',
+    flexDirection: 'column',
+    minWidth: 0,
+  },
+  authorName: {
+    fontSize: tokens.fontSizeBase300,
+    fontWeight: tokens.fontWeightSemibold,
   },
   messageRole: {
     fontSize: tokens.fontSizeBase100,
@@ -349,9 +368,10 @@ const useStyles = makeStyles({
   },
   messageBubble: {
     borderRadius: tokens.borderRadiusLarge,
-    padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM}`,
+    padding: `${tokens.spacingVerticalS} 0`,
     whiteSpace: 'pre-wrap',
     wordBreak: 'break-word',
+    lineHeight: tokens.lineHeightBase300,
   },
   bubbleSystem: {
     backgroundColor: tokens.colorNeutralBackground2,
@@ -366,8 +386,10 @@ const useStyles = makeStyles({
     display: 'flex',
     flexDirection: 'column',
     gap: tokens.spacingVerticalXS,
-    borderLeft: `2px solid ${tokens.colorNeutralStroke2}`,
-    paddingLeft: tokens.spacingHorizontalM,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusMedium,
+    backgroundColor: tokens.colorNeutralBackground2,
+    padding: tokens.spacingVerticalS,
   },
   toolsButton: {
     display: 'flex',
@@ -384,24 +406,36 @@ const useStyles = makeStyles({
     display: 'flex',
     flexDirection: 'column',
     gap: tokens.spacingVerticalXXS,
+    paddingTop: tokens.spacingVerticalXS,
   },
   toolRow: {
+    display: 'grid',
+    gridTemplateColumns: '16px minmax(0, 1fr)',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXS,
     fontSize: tokens.fontSizeBase100,
     color: tokens.colorNeutralForeground2,
+  },
+  toolRowMuted: {
+    color: tokens.colorNeutralForeground4,
+  },
+  toolCheck: {
+    color: tokens.colorPaletteGreenForeground1,
   },
   fileRows: {
     display: 'flex',
     flexDirection: 'column',
-    gap: tokens.spacingVerticalXXS,
+    gap: tokens.spacingVerticalXS,
   },
   fileRow: {
-    display: 'grid',
-    gridTemplateColumns: '16px minmax(0, 1fr) auto auto',
+    display: 'flex',
+    flexDirection: 'row',
     alignItems: 'center',
     gap: tokens.spacingHorizontalXS,
-    padding: `${tokens.spacingVerticalXXS} ${tokens.spacingHorizontalS}`,
-    borderRadius: tokens.borderRadiusSmall,
-    backgroundColor: tokens.colorNeutralBackground2,
+    padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM}`,
+    borderRadius: tokens.borderRadiusMedium,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    backgroundColor: tokens.colorNeutralBackground1,
   },
   fileName: {
     minWidth: 0,
@@ -412,6 +446,23 @@ const useStyles = makeStyles({
   fileMeta: {
     fontSize: tokens.fontSizeBase100,
     color: tokens.colorNeutralForeground3,
+  },
+  fileCardInfo: {
+    display: 'flex',
+    flexDirection: 'column',
+    minWidth: 0,
+    flex: 1,
+  },
+  disclosure: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXS,
+    backgroundColor: 'transparent',
+    border: 'none',
+    padding: 0,
+    cursor: 'pointer',
+    color: tokens.colorNeutralForeground2,
+    fontWeight: tokens.fontWeightSemibold,
   },
   stickyComposer: {
     position: 'sticky',
@@ -545,6 +596,7 @@ interface ConversationRow {
 
 interface ConversationTool {
   callId: string;
+  toolName: string;
   title: string;
   settled: boolean;
   args: Record<string, unknown>;
@@ -619,6 +671,80 @@ function formatTimestamp(ms?: number): string {
     hour: 'numeric',
     minute: '2-digit',
   }).format(ms);
+}
+
+function normalizeWorkspacePath(value: string, runId?: string): string {
+  let path = value.trim().replace(/^file:\/\//i, '').replace(/\\/g, '/');
+  path = path.replace(/%2F/gi, '/').replace(/%5C/gi, '/');
+  const escapedRunId = runId?.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const runSpecific = escapedRunId
+    ? new RegExp(`(?:^|/|[A-Za-z]:/).*/worktrees/${escapedRunId}/(.+)$`, 'i')
+    : null;
+  const byRun = runSpecific?.exec(path);
+  if (byRun?.[1]) return byRun[1].replace(/^\/+/, '');
+
+  const anyRun = /(?:^|\/|[A-Za-z]:\/).*\/worktrees\/[0-9a-f]{8}-[0-9a-f-]{27}\/(.+)$/i.exec(path);
+  if (anyRun?.[1]) return anyRun[1].replace(/^\/+/, '');
+
+  const workspace = /(?:^|\/)workspace\/.+?\/worktrees\/[^/]+\/(.+)$/i.exec(path);
+  if (workspace?.[1]) return workspace[1].replace(/^\/+/, '');
+
+  return path.replace(/^\/+/, '');
+}
+
+function normalizeCommand(command: string, runId?: string): string {
+  let normalized = command.trim().replace(/\\/g, '/');
+  normalized = normalizeWorkspacePath(normalized, runId);
+  normalized = normalized
+    .replace(new RegExp(`(?:^|\\s)(?:cd|Set-Location)(?:\\s+-Path)?\\s+['"]?[^;&|]*?/worktrees/${runId ?? '[0-9a-f-]+'}['"]?\\s*(?:&&|;)?\\s*`, 'ig'), ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return normalized.length > 180 ? `${normalized.slice(0, 177)}...` : normalized;
+}
+
+function fileName(path: string): string {
+  const parts = path.replace(/\\/g, '/').split('/').filter(Boolean);
+  return parts[parts.length - 1] ?? path;
+}
+
+function formatBytes(bytes: number | undefined): string {
+  if (bytes == null || !Number.isFinite(bytes)) return 'Workspace file';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(bytes < 10 * 1024 ? 1 : 0)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function friendlyToolLabel(tool: ConversationTool, runId?: string): { label: string; muted: boolean } {
+  const lowerName = tool.toolName.toLowerCase();
+  const rawPath = tool.args['path'] ?? tool.args['file'] ?? tool.args['filePath'] ?? tool.args['filename'];
+  if (typeof rawPath === 'string' && rawPath.trim() !== '') {
+    const rel = normalizeWorkspacePath(rawPath, runId);
+    if (lowerName.includes('read') || lowerName.includes('cat')) return { label: `Read file: ${rel}`, muted: false };
+    if (lowerName.includes('write') || lowerName.includes('create')) return { label: `Create file: ${rel}`, muted: false };
+    if (lowerName.includes('edit') || lowerName.includes('patch')) return { label: `Edit file: ${rel}`, muted: false };
+    return { label: `View: ${rel}`, muted: false };
+  }
+
+  const rawCommand = tool.args['command'] ?? tool.args['cmd'] ?? tool.args['script'];
+  if (typeof rawCommand === 'string' && rawCommand.trim() !== '') {
+    const command = normalizeCommand(rawCommand, runId);
+    if (command.length === 0 || /^(pwd|cd\s+\.?|true)$/i.test(command)) {
+      return { label: 'Set working directory', muted: true };
+    }
+    const readMatch = /^(?:cat|head|tail|less|sed\s+-n\s+['"]?[\d,$p]+['"]?)\s+(.+)$/i.exec(command);
+    if (readMatch?.[1]) return { label: `Read file: ${normalizeWorkspacePath(readMatch[1].replace(/^['"]|['"]$/g, ''), runId)}`, muted: false };
+    const listMatch = /^(?:ls|find)\s+(.+)$/i.exec(command);
+    if (listMatch?.[1]) return { label: `View: ${normalizeWorkspacePath(listMatch[1].replace(/^['"]|['"]$/g, ''), runId)}`, muted: false };
+    return { label: `Run command: ${command}`, muted: false };
+  }
+
+  return { label: tool.title, muted: false };
+}
+
+function authorForRole(role: ConversationRow['role']): { name: string; role: string; collapsedLabel?: string } {
+  if (role === 'system') return { name: 'System', role: 'Prompt', collapsedLabel: 'System prompt' };
+  if (role === 'user') return { name: 'Coordinator', role: 'Instruction', collapsedLabel: 'Coordinator instruction' };
+  return { name: 'Agent', role: 'Worker response' };
 }
 
 function statusLabel(status: string): string {
@@ -785,6 +911,7 @@ function buildTurns(events: RunStreamEvent[]): ConversationTurn[] {
       const toolName = String(evt.payload['toolName'] ?? 'tool');
       const call: ConversationTool = {
         callId: String(evt.payload['callId'] ?? evt.sequence),
+        toolName,
         title: deriveHumanTitle(toolName, args),
         settled: false,
         args,
@@ -851,6 +978,7 @@ export function AgentSessionPanel({
   const [filesLoading, setFilesLoading] = useState(false);
   const [filesError, setFilesError] = useState<string | null>(null);
   const [files, setFiles] = useState<WorkspaceFileEntry[]>([]);
+  const [fileSizes, setFileSizes] = useState<Record<string, string>>({});
   const [expandedPaths, setExpandedPaths] = useState<Set<string>>(new Set());
   const [diffs, setDiffs] = useState<Record<string, WorkspaceFileDiff | null | undefined>>({});
   const [loadingDiffs, setLoadingDiffs] = useState<Set<string>>(new Set());
@@ -898,6 +1026,7 @@ export function AgentSessionPanel({
     setActiveTab('messages');
     setSeedEvents([]);
     setFiles([]);
+    setFileSizes({});
     setFilesError(null);
     setExpandedPaths(new Set());
     setDiffs({});
@@ -954,7 +1083,7 @@ export function AgentSessionPanel({
     setFilesError(null);
     apiClient.getRunFiles(selectedRunId)
       .then((result) => {
-        if (!cancelled) setFiles(result);
+        if (!cancelled) setFiles(result.map((file) => ({ ...file, path: normalizeWorkspacePath(file.path, selectedRunId) })));
       })
       .catch((err: unknown) => {
         if (!cancelled) setFilesError(err instanceof Error ? err.message : String(err));
@@ -967,18 +1096,39 @@ export function AgentSessionPanel({
     };
   }, [activeTab, open, selectedRunId]);
 
+  useEffect(() => {
+    if (!open || activeTab !== 'files' || !selectedRunId || files.length === 0) return undefined;
+    let cancelled = false;
+    void Promise.all(files.map(async (file) => {
+      if (file.status === 'deleted') return [file.path, 'Deleted'] as const;
+      try {
+        const content = await apiClient.getRunFileContent(selectedRunId, file.path);
+        if (content.is_binary) return [file.path, 'Binary file'] as const;
+        if (content.language === 'too_large') return [file.path, 'Too large'] as const;
+        const bytes = content.content == null ? undefined : new TextEncoder().encode(content.content).length;
+        return [file.path, formatBytes(bytes)] as const;
+      } catch {
+        return [file.path, formatBytes(undefined)] as const;
+      }
+    })).then((entries) => {
+      if (!cancelled) setFileSizes(Object.fromEntries(entries));
+    });
+    return () => { cancelled = true; };
+  }, [activeTab, files, open, selectedRunId]);
+
   const loadDiff = useCallback(async (path: string) => {
-    if (!selectedRunId || diffs[path] !== undefined || loadingDiffs.has(path)) return;
-    setLoadingDiffs((prev) => new Set(prev).add(path));
+    const relPath = normalizeWorkspacePath(path, selectedRunId);
+    if (!selectedRunId || diffs[relPath] !== undefined || loadingDiffs.has(relPath)) return;
+    setLoadingDiffs((prev) => new Set(prev).add(relPath));
     try {
-      const diff = await apiClient.getRunFileDiff(selectedRunId, path);
-      setDiffs((prev) => ({ ...prev, [path]: diff }));
+      const diff = await apiClient.getRunFileDiff(selectedRunId, relPath);
+      setDiffs((prev) => ({ ...prev, [relPath]: diff }));
     } catch {
-      setDiffs((prev) => ({ ...prev, [path]: null }));
+      setDiffs((prev) => ({ ...prev, [relPath]: null }));
     } finally {
       setLoadingDiffs((prev) => {
         const next = new Set(prev);
-        next.delete(path);
+        next.delete(relPath);
         return next;
       });
     }
@@ -995,15 +1145,16 @@ export function AgentSessionPanel({
   }, [loadDiff]);
 
   const openPreview = useCallback(async (path: string) => {
-    setPreviewPath(path);
-    if (diffs[path] !== undefined || loadingDiffs.has(path)) return;
+    const relPath = normalizeWorkspacePath(path, selectedRunId);
+    setPreviewPath(relPath);
+    if (diffs[relPath] !== undefined || loadingDiffs.has(relPath)) return;
     setPreviewLoading(true);
     try {
-      await loadDiff(path);
+      await loadDiff(relPath);
     } finally {
       setPreviewLoading(false);
     }
-  }, [diffs, loadDiff, loadingDiffs]);
+  }, [diffs, loadDiff, loadingDiffs, selectedRunId]);
 
   const handleSendFollowUp = useCallback(async () => {
     const instruction = followUp.trim();
@@ -1177,7 +1328,7 @@ export function AgentSessionPanel({
                       <Text className={styles.emptyState}>No streamed messages yet for this session.</Text>
                     )}
                     {turns.map((turn) => (
-                      <ConversationTurnBlock key={turn.key} turn={turn} onPreviewFile={openPreview} />
+                      <ConversationTurnBlock key={turn.key} turn={turn} runId={selectedRunId} onPreviewFile={openPreview} />
                     ))}
                   </div>
                   {selectedItem.isCoordinator && (
@@ -1309,8 +1460,8 @@ export function AgentSessionPanel({
                         <div key={file.path} className={styles.filesListRow}>
                           <DocumentRegular />
                           <Text className={styles.fileName}>{file.path}</Text>
-                          <Text className={styles.fileMeta}>Size unavailable</Text>
-                          <Button appearance="subtle" size="small" icon={<OpenRegular />} onClick={() => { void openPreview(file.path); }}>
+                          <Text className={styles.fileMeta}>{fileSizes[file.path] ?? formatBytes(undefined)}</Text>
+                          <Button appearance="subtle" size="small" icon={<EyeRegular />} onClick={() => { void openPreview(file.path); }}>
                             Preview
                           </Button>
                         </div>
@@ -1339,39 +1490,64 @@ export function AgentSessionPanel({
 
 function ConversationTurnBlock({
   turn,
+  runId,
   onPreviewFile,
 }: {
   turn: ConversationTurn;
+  runId: string;
   onPreviewFile: (path: string) => void;
 }) {
   const styles = useStyles();
   const [toolsOpen, setToolsOpen] = useState(false);
+  const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
   const completedTools = turn.toolCalls.filter((tool) => tool.settled).length;
+  const toggleRow = (key: string) => {
+    setExpandedRows((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
 
   return (
     <div className={styles.conversationTurn}>
-      {turn.rows.map((row) => (
-        <div key={row.key} className={styles.messageRow}>
-          <div className={styles.messageMeta}>
-            <Text className={styles.messageRole}>
-              {row.role === 'user' ? 'User (Coordinator)' : row.role}
-            </Text>
-            <Text className={styles.fileMeta}>{formatTimestamp(row.timestamp)}</Text>
+      {turn.rows.map((row) => {
+        const author = authorForRole(row.role);
+        const collapsible = row.role === 'system' || row.role === 'user';
+        const expanded = !collapsible || expandedRows.has(row.key);
+        return (
+          <div key={row.key} className={styles.messageCard}>
+            <AgentAvatar name={author.name} size={32} circle />
+            <div className={styles.messageRow}>
+              <div className={styles.messageMeta}>
+                <div className={styles.authorBlock}>
+                  <Text className={styles.authorName}>{author.name}</Text>
+                  <Text className={styles.messageRole}>{author.role}</Text>
+                </div>
+                <Text className={styles.fileMeta}>{formatTimestamp(row.timestamp)}</Text>
+              </div>
+              {collapsible ? (
+                <>
+                  <button className={styles.disclosure} onClick={() => toggleRow(row.key)} aria-expanded={expanded}>
+                    {expanded ? <ChevronDownRegular /> : <ChevronRightRegular />}
+                    <Text>{author.collapsedLabel}</Text>
+                  </button>
+                  {expanded && (
+                    <div className={mergeClasses(styles.messageBubble, row.role === 'system' ? styles.bubbleSystem : styles.bubbleUser)}>
+                      {row.content}
+                    </div>
+                  )}
+                </>
+              ) : (
+                <div className={mergeClasses(styles.messageBubble, styles.bubbleAgent)}>
+                  {row.content}
+                </div>
+              )}
+            </div>
           </div>
-          <div
-            className={mergeClasses(
-              styles.messageBubble,
-              row.role === 'system'
-                ? styles.bubbleSystem
-                : row.role === 'user'
-                  ? styles.bubbleUser
-                  : styles.bubbleAgent,
-            )}
-          >
-            {row.content}
-          </div>
-        </div>
-      ))}
+        );
+      })}
 
       {turn.toolCalls.length > 0 && (
         <div className={styles.toolsBox}>
@@ -1381,11 +1557,15 @@ function ConversationTurnBlock({
           </button>
           {toolsOpen && (
             <div className={styles.toolsList}>
-              {turn.toolCalls.map((tool) => (
-                <Text key={tool.callId} className={styles.toolRow}>
-                  {tool.title}
-                </Text>
-              ))}
+              {turn.toolCalls.map((tool) => {
+                const friendly = friendlyToolLabel(tool, runId);
+                return (
+                  <Text key={tool.callId} className={mergeClasses(styles.toolRow, friendly.muted && styles.toolRowMuted)}>
+                    {tool.settled ? <CheckmarkCircleFilled className={styles.toolCheck} /> : <ClockRegular />}
+                    <span>{friendly.label}</span>
+                  </Text>
+                );
+              })}
             </div>
           )}
         </div>
@@ -1393,16 +1573,21 @@ function ConversationTurnBlock({
 
       {turn.filePaths.length > 0 && (
         <div className={styles.fileRows}>
-          {turn.filePaths.map((path) => (
+          {turn.filePaths.map((path) => {
+            const relPath = normalizeWorkspacePath(path, runId);
+            return (
             <div key={path} className={styles.fileRow}>
               <DocumentRegular />
-              <Text className={styles.fileName}>{path}</Text>
-              <Text className={styles.fileMeta}>Size unavailable</Text>
-              <Button appearance="subtle" size="small" icon={<OpenRegular />} onClick={() => onPreviewFile(path)}>
+              <div className={styles.fileCardInfo}>
+                <Text className={styles.fileName}>{fileName(relPath)}</Text>
+                <Text className={styles.fileMeta}>{relPath}</Text>
+              </div>
+              <Text className={styles.fileMeta}>Workspace file</Text>
+              <Button appearance="subtle" size="small" icon={<EyeRegular />} onClick={() => onPreviewFile(relPath)}>
                 Preview
               </Button>
             </div>
-          ))}
+          );})}
         </div>
       )}
     </div>
