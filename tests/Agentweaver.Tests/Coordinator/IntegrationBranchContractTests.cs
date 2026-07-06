@@ -5,12 +5,13 @@ using Agentweaver.Api.Memory;
 namespace Agentweaver.Tests.Coordinator;
 
 /// <summary>
-/// Bug #169: each coordinator subtask runs in its own isolated sandbox (a separate AgentHost pod /
-/// LXC filesystem), so file changes made by one agent are invisible to the next. The shared git
-/// integration branch is the only channel between sandboxes. These tests lock in the git contract
-/// that <see cref="CoordinatorDispatchService.BuildIntegrationBranchContract"/> injects into every
-/// child task: pull-before / commit-push-after, targeting the run's integration branch, and framed
-/// as non-fatal so a git failure never aborts the task.
+/// Issue #197: the child subtask git contract used to tell the agent to
+/// <c>git checkout</c>/<c>commit</c>/<c>push</c> the shared integration branch. Checking out the
+/// integration branch detached the worktree from its run branch (so the API's automatic capture
+/// committed to the wrong ref and the run's diff came back empty), and <c>git push origin</c> always
+/// failed with "no remote configured" — the child's output was silently stranded and lost.
+/// These tests lock in the FIXED contract: propagation is entirely API-managed, so the agent is told
+/// NOT to run any git commands, and prior subtasks' files are already present in its workspace.
 /// </summary>
 public sealed class IntegrationBranchContractTests
 {
@@ -31,7 +32,7 @@ public sealed class IntegrationBranchContractTests
         new(runId, "/repo", originatingBranch, "user@example.com", null);
 
     [Fact]
-    public void Contract_TargetsRunIntegrationBranch_WithPullBeforeAndPushAfter()
+    public void Contract_ReferencesIntegrationBranch_ForContext()
     {
         var context = MakeContext("coord-169", "main");
         var subtask = MakeSubtask(7, "Fix the broken index page");
@@ -40,38 +41,46 @@ public sealed class IntegrationBranchContractTests
 
         var integrationBranch = CoordinatorAssemblyService.IntegrationBranchName("coord-169");
         contract.Should().Contain(integrationBranch);
-
-        // Pull-before contract.
-        contract.Should().Contain("git fetch origin");
-        contract.Should().Contain($"git pull --no-edit origin {integrationBranch}");
-
-        // Commit-push-after contract, keyed to the subtask.
-        contract.Should().Contain("git add -A");
-        contract.Should().Contain("subtask 7: Fix the broken index page");
-        contract.Should().Contain($"git push origin HEAD:{integrationBranch}");
-
-        // Falls back to the originating branch when the integration branch does not yet exist.
-        contract.Should().Contain("main");
     }
 
     [Fact]
-    public void Contract_IsNonFatal_TellsAgentToContinueOnGitFailure()
+    public void Contract_DoesNotInstructAgentToRunActionableGitCommands()
+    {
+        var context = MakeContext("coord-169", "main");
+        var subtask = MakeSubtask(7, "Fix the broken index page");
+
+        var contract = CoordinatorDispatchService.BuildIntegrationBranchContract(context, subtask);
+
+        // The data-loss command sequence from the old contract must be gone entirely.
+        contract.Should().NotContain("git push origin");
+        contract.Should().NotContain("git add -A");
+        contract.Should().NotContain("git commit -m");
+        contract.Should().NotContain("git checkout ");
+        contract.Should().NotContain("git pull --no-edit");
+        contract.Should().NotContain("git fetch origin");
+
+        // And the agent is explicitly told it must NOT run git commands.
+        contract.Should().ContainEquivalentOf("must NOT");
+    }
+
+    [Fact]
+    public void Contract_TellsAgentPriorWorkIsAlreadyPresent()
     {
         var contract = CoordinatorDispatchService.BuildIntegrationBranchContract(
             MakeContext("coord-abc", "develop"), MakeSubtask(1, "do work"));
 
-        contract.Should().ContainEquivalentOf("do NOT abort the task");
-        contract.Should().ContainEquivalentOf("do NOT fail the task");
+        contract.Should().ContainEquivalentOf("already present");
     }
 
     [Fact]
-    public void Contract_SanitizesTitleForShellCommitMessage()
+    public void Contract_TreatsMissingUpstreamArtifactAsErrorNotSilentFallback()
     {
-        var subtask = MakeSubtask(3, "Add \"quoted\" title\nwith newline and `backtick`");
         var contract = CoordinatorDispatchService.BuildIntegrationBranchContract(
-            MakeContext("coord-xyz", "main"), subtask);
+            MakeContext("coord-xyz", "main"), MakeSubtask(3, "consume upstream artifact"));
 
-        // No raw double quotes or newlines from the title leak into the git commit -m instruction.
-        contract.Should().Contain("subtask 3: Add 'quoted' title with newline and 'backtick'");
+        // Downstream visibility (issue #197 symptom B): a missing upstream file must be reported as an
+        // error, not silently replaced by the parent task's goal text.
+        contract.Should().ContainEquivalentOf("real error");
+        contract.Should().ContainEquivalentOf("NOT silently substitute");
     }
 }
