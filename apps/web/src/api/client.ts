@@ -1,6 +1,12 @@
 import type { RetriableReviewErrorBody, RunDetail, PersistedRunEvent, ReviewRequest, ReviewResponse, SandboxPolicy, SubmitRunResponse, WorkspaceFileEntry, WorkspaceFileDiff, WorkspaceNode, CommitResponse, WorkspaceFileContent, RequestChangesResponse, WorkspaceRefsResponse, Project, CreateProjectRequest, Blueprint, ListBlueprintsResponse, GenerateBlueprintResponse, SuggestBlueprintResponse, UpdateProjectProviderSettingsRequest, CreateProjectRunRequest, GitHubDeviceFlow, GitHubPollResult, GitHubAuthStatusResponse, GitHubRepo, GitHubAccount, TeamTemplateDto, CastProposalDto, CreateProposalRequest, AmendProposalRequest, ConfirmProposalRequest, TeamDto, TeamMemberDto, CharterDto, HistoryDto, AddMemberRequest, ReroleRequest, SyncStatusDto, SyncCommitRequest, SyncCommitResponseDto, RoleDto, ServerInfo, WorkflowRunDto, OutcomeSpec, StartOrchestrationResponse, SteerCoordinatorRequest, SteerCoordinatorResponse, WorkPlanResponse, CoordinatorChildResponse, GraphDescriptor, AssemblyReviewDecision, AnswerQuestionResponse, AutoApproveResponse, AutopilotResponse, BoardDto, BacklogTaskDto, BacklogSettingsDto, WorkflowStagesResponse, RetryRunResponse, SystemDiagnosticsDto, HeartbeatStatusDto, WorkspaceFileNode, DecomposeResponse, PortForwardSessionDto, RuntimeInfo, DetailedSystemDiagnosticsDto, ClusterDiagnosticsDto } from './types';
 import { getSessionToken } from '../config';
 
+/** A skill file paired with the folder-relative path it should keep on the server (folder drag-and-drop). */
+export interface SkillUploadItem {
+  file: File;
+  relativePath?: string;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }
@@ -227,6 +233,10 @@ export class AgentweaverApiClient {
     return this.request<void>('DELETE', `/runs/${encodeURIComponent(runId)}`);
   }
 
+  cancelRun(runId: string): Promise<{ run_id: string; status: string; cancelled: boolean; already_terminal: boolean }> {
+    return this.request('POST', `/runs/${encodeURIComponent(runId)}/cancel`, {});
+  }
+
   archiveRun(runId: string): Promise<void> {
     return this.request<void>('POST', `/runs/${encodeURIComponent(runId)}/archive`, {});
   }
@@ -403,14 +413,25 @@ export class AgentweaverApiClient {
   }
 
   // Multipart upload of skill file(s)/folder/archive. Bypasses request<T> to send FormData.
-  async uploadSkills(projectId: string, files: File[]): Promise<import('./types').SkillAcquisitionResponse> {
+  // Accepts plain File objects (single-file / file-picker uploads) or {file, relativePath}
+  // pairs (folder drag-and-drop) so nested SKILL.md directories survive the round-trip.
+  async uploadSkills(
+    projectId: string,
+    files: Array<File | SkillUploadItem>,
+  ): Promise<import('./types').SkillAcquisitionResponse> {
     const form = new FormData();
-    for (const file of files) {
-      form.append('files', file, file.name);
-      // Preserve folder-relative paths (webkitRelativePath) so nested SKILL.md dirs survive upload.
-      const rel = (file as File & { webkitRelativePath?: string }).webkitRelativePath;
-      if (rel) form.append(`path:files`, rel);
-    }
+    files.forEach((entry, index) => {
+      const file = entry instanceof File ? entry : entry.file;
+      const rel = entry instanceof File
+        ? (file as File & { webkitRelativePath?: string }).webkitRelativePath || undefined
+        : entry.relativePath;
+      // Each file gets a UNIQUE form field name so the backend can pair it with its own
+      // relative path (it reads a `path:{fieldName}` field). A shared field name would
+      // collapse every file's path down to the first one.
+      const field = `files${index}`;
+      form.append(field, file, file.name);
+      if (rel) form.append(`path:${field}`, rel);
+    });
     const response = await fetch(`${this.baseUrl}/api/projects/${encodeURIComponent(projectId)}/skills/upload`, {
       method: 'POST',
       headers: this.authHeaders(),

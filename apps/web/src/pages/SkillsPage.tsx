@@ -38,6 +38,11 @@ import {
 } from '@fluentui/react-icons';
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
+import {
+  collectFilesFromDataTransfer,
+  supportsEntryApi,
+  type DroppedSkillFile,
+} from '../utils/skillDrop';
 import type {
   SkillDto,
   SkillDetailDto,
@@ -233,6 +238,33 @@ export function SkillsPage() {
     if (folderInputRef.current) folderInputRef.current.value = '';
   };
 
+  // Drag-and-drop import. A dropped FOLDER is not readable via dataTransfer.files (that path
+  // yields a directory handle whose upload fails with net::ERR_ACCESS_DENIED), so we walk the
+  // FileSystemEntry tree via webkitGetAsEntry() and upload each file with its relative path.
+  const onDropUpload = async (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    if (!projectId || busy) return;
+    const dt = e.dataTransfer;
+    if (supportsEntryApi(dt.items)) {
+      let collected: DroppedSkillFile[];
+      try {
+        // Must capture entries synchronously before any await; the helper does this internally.
+        collected = await collectFilesFromDataTransfer(dt.items);
+      } catch (err) {
+        setMutationError(formatApiError(err));
+        return;
+      }
+      if (collected.length > 0) {
+        await runAcquisition('Upload', () =>
+          apiClient.uploadSkills(projectId, collected.map((c) => ({ file: c.file, relativePath: c.relativePath }))),
+        );
+        return;
+      }
+    }
+    // Fallback: plain single/multi file drop with no directory support.
+    await onUploadFiles(dt.files);
+  };
+
   const resetSkillForm = () => {
     setSkillName('');
     setSkillDisplayName('');
@@ -324,6 +356,12 @@ export function SkillsPage() {
 
   const isBusy = busy !== null;
 
+  const roleByName = new Map(members.map((m) => [m.name, m.role_title]));
+  const labelForAgent = (name: string): string => {
+    const role = roleByName.get(name);
+    return role ? `${name} — ${role}` : name;
+  };
+
   return (
     <div className={styles.root}>
       <PageHeader
@@ -397,7 +435,7 @@ export function SkillsPage() {
                     )}
                     {s.assigned_agents.length > 0 && (
                       <div className={styles.agentChips}>
-                        {s.assigned_agents.map((a) => <Badge key={a} appearance="tint" color="brand">{a}</Badge>)}
+                        {s.assigned_agents.map((a) => <Badge key={a} appearance="tint" color="brand">{labelForAgent(a)}</Badge>)}
                       </div>
                     )}
                     <div className={styles.actions}>
@@ -431,7 +469,7 @@ export function SkillsPage() {
                             return (
                               <Checkbox
                                 key={m.name}
-                                label={m.name}
+                                label={labelForAgent(m.name)}
                                 checked={assigned}
                                 disabled={isBusy}
                                 onChange={(_, data) => void toggleAssignment(s, m.name, data.checked === true)}
@@ -555,7 +593,7 @@ export function SkillsPage() {
                 role="button"
                 tabIndex={0}
                 onClick={() => mdFileInputRef.current?.click()}
-                onDrop={(e) => { e.preventDefault(); void onUploadFiles(e.dataTransfer.files); }}
+                onDrop={(e) => { void onDropUpload(e); }}
                 onDragOver={(e) => e.preventDefault()}
               >
                 <Text weight="semibold">Drop .md skill files here</Text>
@@ -566,7 +604,7 @@ export function SkillsPage() {
                 role="button"
                 tabIndex={0}
                 onClick={() => folderInputRef.current?.click()}
-                onDrop={(e) => { e.preventDefault(); void onUploadFiles(e.dataTransfer.files); }}
+                onDrop={(e) => { void onDropUpload(e); }}
                 onDragOver={(e) => e.preventDefault()}
               >
                 <Text weight="semibold">Drop a skill folder here</Text>

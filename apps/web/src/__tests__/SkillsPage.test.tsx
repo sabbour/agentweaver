@@ -57,10 +57,10 @@ function makeSkill(overrides: Partial<SkillDto> = {}): SkillDto {
   };
 }
 
-function makeMember(name: string): TeamMemberDto {
+function makeMember(name: string, roleTitle = 'Engineer'): TeamMemberDto {
   return {
     name,
-    role_title: 'Engineer',
+    role_title: roleTitle,
     charter_path: `charters/${name}.md`,
     status: 'active',
     default_model: 'gpt',
@@ -75,7 +75,7 @@ function makeTeam(members: TeamMemberDto[]): TeamDto {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  vi.mocked(apiClient.getTeam).mockResolvedValue(makeTeam([makeMember('Smith'), makeMember('Neo')]));
+  vi.mocked(apiClient.getTeam).mockResolvedValue(makeTeam([makeMember('Smith', 'Lead PM'), makeMember('Neo', 'Lead Architect')]));
 });
 
 afterEach(() => {
@@ -121,7 +121,7 @@ describe('SkillsPage — catalog', () => {
 });
 
 describe('SkillsPage — assignments', () => {
-  it('renders an agent checkbox per team member and assigns on toggle', async () => {
+  it('renders an agent checkbox per team member showing "Name — Role" and assigns on toggle', async () => {
     vi.mocked(apiClient.listSkills).mockResolvedValue([makeSkill()]);
     vi.mocked(apiClient.assignSkill).mockResolvedValue(undefined as unknown as void);
 
@@ -130,10 +130,22 @@ describe('SkillsPage — assignments', () => {
     await waitFor(() => expect(screen.getByText('code-review')).toBeTruthy());
     fireEvent.click(screen.getByRole('tab', { name: 'Assignments' }));
 
-    await waitFor(() => expect(screen.getByText('Smith')).toBeTruthy());
-    expect(screen.getByText('Neo')).toBeTruthy();
+    await waitFor(() => expect(screen.getByText('Smith — Lead PM')).toBeTruthy());
+    expect(screen.getByText('Neo — Lead Architect')).toBeTruthy();
 
-    fireEvent.click(screen.getByText('Smith'));
+    fireEvent.click(screen.getByText('Smith — Lead PM'));
     await waitFor(() => expect(apiClient.assignSkill).toHaveBeenCalledWith('proj-001', 's1', 'Smith'));
+  });
+
+  it('shows the role on assigned-agent chips in the catalog and falls back to the bare name for unknown agents', async () => {
+    vi.mocked(apiClient.listSkills).mockResolvedValue([
+      makeSkill({ assigned_agents: ['Smith', 'Ghost'] }),
+    ]);
+
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText('Smith — Lead PM')).toBeTruthy());
+    // 'Ghost' has no matching team member, so it renders as just the name.
+    expect(screen.getByText('Ghost')).toBeTruthy();
   });
 });
