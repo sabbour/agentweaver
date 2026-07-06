@@ -1,8 +1,9 @@
-import { memo } from 'react';
+import { memo, useMemo } from 'react';
 import { Spinner, Text, makeStyles, tokens } from '@fluentui/react-components';
 import { TurnGroup } from './TurnGroup';
 import { LifecycleEventCard } from './LifecycleEventCard';
 import { WorkflowStepCard } from './WorkflowStepCard';
+import { QuestionAnswerCard } from './QuestionAnswerCard';
 import type { TimelineItem } from '../timeline/types';
 import type { StreamStatus } from '../api/sse';
 
@@ -41,6 +42,26 @@ interface TimelineProps {
 export const Timeline = memo(function Timeline({ items, streamStatus, isLiveRun, runId, runOutcome, skippedEventCount = 0 }: TimelineProps) {
   const styles = useStyles();
 
+  // Pair inline approval cards (tool / shell / child approvals rendered as lifecycle
+  // items) with their resolution event so a resolved gate disables immediately. The
+  // reducer already pairs approvals that live inside an open turn; this covers the
+  // lifecycle-fallback path AND bubbled coordinator child approvals.
+  const resolvedApprovals = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const item of items) {
+      if (item.kind !== 'lifecycle') continue;
+      const t = item.event.type;
+      if (t === 'tool.approval_resolved' || t === 'coordinator.child_approval_resolved') {
+        const p = item.event.payload;
+        const requestId = String(p['requestId'] ?? p['request_id'] ?? '');
+        if (!requestId) continue;
+        const scope = p['expired'] ? 'expired' : p['approved'] ? String(p['scope'] ?? 'once') : 'deny';
+        map.set(requestId, scope);
+      }
+    }
+    return map;
+  }, [items]);
+
   return (
     // role="log" announces new items; aria-live="polite" only when live (fix #6)
     <div
@@ -72,12 +93,36 @@ export const Timeline = memo(function Timeline({ items, streamStatus, isLiveRun,
             />
           );
         }
+        if (item.kind === 'question-request') {
+          // Answers POST to the ASKING run: childRunId for a bubbled child question,
+          // else the watched run (BLOCKING #1 — mirror LifecycleEventCard childRunId routing).
+          return (
+            <QuestionAnswerCard
+              key={`q-${item.requestId}`}
+              runId={item.askingRunId ?? runId ?? ''}
+              requestId={item.requestId}
+              question={item.question}
+              answer={item.resolved ? (item.answer ?? '') : undefined}
+              timedOut={item.timedOut}
+              sourceLabel={item.sourceLabel}
+            />
+          );
+        }
         // lifecycle
+        const approvalRequestId =
+          item.event.type === 'tool.approval_required' ||
+          item.event.type === 'coordinator.child_approval_required' ||
+          item.event.type === 'shell.approval_required'
+            ? String(item.event.payload['requestId'] ?? item.event.payload['request_id'] ?? '')
+            : '';
+        const resolvedScope = approvalRequestId ? resolvedApprovals.get(approvalRequestId) : undefined;
         return (
           <LifecycleEventCard
             key={`lc-${item.event.sequence > 0 ? item.event.sequence : i}`}
             event={item.event}
             runId={runId}
+            isResolved={resolvedScope != null}
+            resolvedScope={resolvedScope ?? null}
             runOutcome={item.event.type === 'run.completed' ? runOutcome : undefined}
           />
         );

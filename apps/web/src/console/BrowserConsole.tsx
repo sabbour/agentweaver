@@ -2,45 +2,49 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link as RouterLink } from 'react-router-dom';
 import {
   Badge,
-  Body1,
   Button,
-  Caption1,
-  Card,
-  Divider,
-  Input,
-  MessageBar,
-  MessageBarBody,
   Spinner,
   Text,
-  Title3,
+  Textarea,
   makeStyles,
   shorthands,
   tokens,
 } from '@fluentui/react-components';
 import {
   ArrowClockwise16Regular,
-  Bot20Regular,
-  Broom20Regular,
+  CheckmarkCircle16Regular,
   Open16Regular,
-  Person20Regular,
-  Send20Regular,
+  Send16Regular,
+  Warning16Regular,
 } from '@fluentui/react-icons';
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
-import { useRunStream } from '../api/sse';
 import type { BoardColumnDto, Project, TaskCardDto } from '../api/types';
+import { Timeline } from '../components/Timeline';
+import { useCoordinatorRunModel } from '../hooks/useCoordinatorRunModel';
 import {
-  CONSOLE_COMMANDS,
   DEFERRED_COMMANDS,
-  parseConsoleCommand,
-  type ConsoleIntent,
+  SLASH_COMMANDS,
+  parseInput,
+  type SlashCommandName,
 } from './consoleCommands';
 
-// Browser chat control console (Issue #50). A lightweight control-plane REPL:
-// it manages projects / backlog / orchestrations through the SAME authorized
-// apiClient methods used elsewhere (constitution III — the API is the single
-// source of truth; this is a thin client). It NEVER executes agent work itself;
-// it only starts/manages existing runs and links OUT to the real gated views.
+// Browser control-console TUI (Issue #50). A terminal-styled, chat-based
+// ALTERNATIVE UX to operate Agentweaver end-to-end. It is a thin PRESENTATION
+// over the SAME session/streaming/tool infrastructure the run pages use
+// (constitution III): it reuses useCoordinatorRunModel → useSeededRunStream →
+// useRunStream + useTimelineItems + <Timeline> (which renders AgentMessageBubble,
+// tool calls, LifecycleEventCard, QuestionAnswerCard and every HITL gate). It
+// NEVER executes agent work itself and NEVER bypasses a gate — prose goes to the
+// REAL coordinator agent (steerCoordinator) and /commands wrap the same endpoints
+// the MCP tools wrap (see consoleCommands.ts → docs/reference/mcp-tools.md).
+//
+// PLUGGABLE TURN SOURCES (finding #9): the bound-run panel is fed by ONE typed
+// "turn source" — today the coordinator run stream (boundRunKind='coordinator').
+// The backend operator-agent run stream (#201) drops in as another source without
+// a rewrite: bind its runId + kind and the same <Timeline> renders it.
+
+type TurnSourceKind = 'coordinator';
 
 const useStyles = makeStyles({
   root: {
@@ -48,88 +52,104 @@ const useStyles = makeStyles({
     flexDirection: 'column',
     height: '100%',
     minHeight: 0,
-    gap: tokens.spacingVerticalM,
+    backgroundColor: '#0b0f14',
+    color: '#d6dee6',
+    fontFamily: 'Consolas, "Cascadia Code", "SF Mono", Menlo, monospace',
+    ...shorthands.padding(tokens.spacingVerticalM, tokens.spacingHorizontalM),
+    ...shorthands.gap(tokens.spacingVerticalS),
   },
   header: {
     display: 'flex',
     alignItems: 'center',
+    justifyContent: 'space-between',
     gap: tokens.spacingHorizontalM,
+    ...shorthands.borderBottom('1px', 'solid', '#1e2833'),
+    paddingBottom: tokens.spacingVerticalS,
   },
-  headerText: { display: 'flex', flexDirection: 'column' },
-  contextRow: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: tokens.spacingHorizontalM,
-    flexWrap: 'wrap',
-  },
+  title: { fontWeight: 600, letterSpacing: '0.04em', color: '#8fd0ff' },
+  headerMeta: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
+  body: { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, overflow: 'hidden' },
   transcript: {
+    flexShrink: 0,
+    maxHeight: '42%',
+    overflowY: 'auto',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '2px',
+    fontSize: tokens.fontSizeBase200,
+    lineHeight: '1.45',
+  },
+  line: { whiteSpace: 'pre-wrap', wordBreak: 'break-word', display: 'flex', gap: tokens.spacingHorizontalXS },
+  promptGlyph: { color: '#6fd08f', userSelect: 'none' },
+  sysGlyph: { color: '#5b6b7a', userSelect: 'none' },
+  errText: { color: '#ff8a80' },
+  warnText: { color: '#ffcf6b' },
+  okText: { color: '#8fe3a6' },
+  linkList: { display: 'flex', flexDirection: 'column', gap: '1px', marginLeft: '1.4em' },
+  link: {
+    color: '#8fd0ff',
+    textDecorationLine: 'none',
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: '4px',
+  },
+  runPanel: {
     flex: 1,
     minHeight: 0,
-    overflowY: 'auto',
     display: 'flex',
     flexDirection: 'column',
-    gap: tokens.spacingVerticalS,
-    ...shorthands.padding(tokens.spacingVerticalS),
-    ...shorthands.border('1px', 'solid', tokens.colorNeutralStroke2),
+    ...shorthands.border('1px', 'solid', '#1e2833'),
     ...shorthands.borderRadius(tokens.borderRadiusMedium),
     backgroundColor: tokens.colorNeutralBackground1,
+    color: tokens.colorNeutralForeground1,
+    overflow: 'hidden',
   },
-  msgRow: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'flex-start' },
-  msgRowUser: { flexDirection: 'row-reverse' },
-  bubble: {
-    ...shorthands.padding(tokens.spacingVerticalS, tokens.spacingHorizontalM),
-    ...shorthands.borderRadius(tokens.borderRadiusMedium),
-    maxWidth: '80%',
-    whiteSpace: 'pre-wrap',
-    wordBreak: 'break-word',
-  },
-  bubbleUser: { backgroundColor: tokens.colorBrandBackground2 },
-  bubbleSystem: { backgroundColor: tokens.colorNeutralBackground3 },
-  bubbleError: { backgroundColor: tokens.colorStatusDangerBackground2 },
-  bubbleClarify: { backgroundColor: tokens.colorStatusWarningBackground2 },
-  bubbleSuccess: { backgroundColor: tokens.colorStatusSuccessBackground2 },
-  links: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS, marginTop: tokens.spacingVerticalXS },
-  linkItem: { display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalXXS },
-  link: { color: tokens.colorBrandForegroundLink, textDecorationLine: 'none' },
-  composer: { display: 'flex', gap: tokens.spacingHorizontalS },
-  input: { flex: 1 },
-  monitor: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS, ...shorthands.padding(tokens.spacingVerticalM) },
-  monitorEvents: {
-    maxHeight: '160px',
-    overflowY: 'auto',
+  runPanelHeader: {
     display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalXXS,
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: tokens.spacingHorizontalM,
+    ...shorthands.padding(tokens.spacingVerticalXS, tokens.spacingHorizontalM),
+    backgroundColor: tokens.colorNeutralBackground3,
+    ...shorthands.borderBottom('1px', 'solid', tokens.colorNeutralStroke2),
   },
-  monitorHeader: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: tokens.spacingHorizontalM },
+  gateBar: {
+    display: 'flex',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: tokens.spacingHorizontalS,
+    ...shorthands.padding(tokens.spacingVerticalXS, tokens.spacingHorizontalM),
+    backgroundColor: tokens.colorNeutralBackground2,
+    ...shorthands.borderBottom('1px', 'solid', tokens.colorNeutralStroke2),
+  },
+  timelineScroll: { flex: 1, minHeight: 0, overflowY: 'auto', ...shorthands.padding(tokens.spacingHorizontalM) },
+  composer: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'flex-end' },
+  input: {
+    flex: 1,
+    fontFamily: 'Consolas, "Cascadia Code", "SF Mono", Menlo, monospace',
+  },
 });
 
-interface ConsoleLink {
-  label: string;
-  to: string;
-}
-
-type MsgIntent = 'info' | 'success' | 'error' | 'clarify';
-
-interface ConsoleMessage {
+interface ConsoleLink { label: string; to: string }
+type LineTone = 'user' | 'info' | 'ok' | 'warn' | 'error';
+interface ConsoleLine {
   id: string;
-  role: 'user' | 'system';
-  intent: MsgIntent;
+  tone: LineTone;
   text: string;
   links?: ConsoleLink[];
 }
 
-interface ExecResult {
+interface CommandResult {
+  tone: Exclude<LineTone, 'user'>;
   text: string;
-  intent: MsgIntent;
   links?: ConsoleLink[];
-  // Side effects applied by the caller after the message is appended.
   setActiveProject?: Project | null;
-  monitorRunId?: string;
+  bindRunId?: string;
+  bindRunStatus?: string;
 }
 
-let msgSeq = 0;
-const nextId = () => `m${Date.now()}-${msgSeq++}`;
+let seq = 0;
+const nextId = () => `l${Date.now()}-${seq++}`;
 
 function errText(err: unknown): string {
   if (err instanceof ApiError) return `API error ${err.status}: ${err.body}`;
@@ -142,9 +162,9 @@ function resolveProject(projects: Project[], query: string): { project?: Project
   if (byId) return { project: byId };
   const byName = projects.filter((p) => p.name.toLowerCase() === q);
   if (byName.length === 1) return { project: byName[0] };
-  const bySubstring = projects.filter((p) => p.name.toLowerCase().includes(q) || p.project_id.toLowerCase().includes(q));
-  if (bySubstring.length === 1) return { project: bySubstring[0] };
-  if (bySubstring.length > 1) return { candidates: bySubstring };
+  const bySub = projects.filter((p) => p.name.toLowerCase().includes(q) || p.project_id.toLowerCase().includes(q));
+  if (bySub.length === 1) return { project: bySub[0] };
+  if (bySub.length > 1) return { candidates: bySub };
   return {};
 }
 
@@ -155,318 +175,387 @@ function intakeCards(columns: BoardColumnDto[]): TaskCardDto[] {
     .filter((card): card is TaskCardDto => card.kind === 'task');
 }
 
-// A compact live monitor for a run, driven entirely by the shared SSE hook so it
-// reuses the exact same streaming + Last-Event-ID resume semantics as the rest
-// of the app (acceptance: "reuse apps/web/src/api/sse.ts"; edge case: reconnect).
-function RunMonitor({ projectId, runId }: { projectId: string; runId: string }) {
-  const styles = useStyles();
-  const { events, status, error, reconnect, droppedEventCount } = useRunStream(runId);
-  const recent = events.slice(-25);
+function buildHelp(): string {
+  const cmds = SLASH_COMMANDS
+    .map((c) => `  /${c.name}${c.argHint ? ' ' + c.argHint : ''}\n      ${c.summary}  [MCP: ${c.mcp}]`)
+    .join('\n');
+  const deferred = DEFERRED_COMMANDS.map((c) => `  ${c.label} — ${c.summary}`).join('\n');
   return (
-    <Card className={styles.monitor}>
-      <div className={styles.monitorHeader}>
-        <Text weight="semibold">Live monitor · run {runId}</Text>
-        <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS }}>
-          <Badge
-            appearance="outline"
-            color={status === 'streaming' ? 'success' : status === 'error' ? 'danger' : status === 'done' ? 'informative' : 'warning'}
-          >
-            {status}
-          </Badge>
-          <Button size="small" appearance="subtle" icon={<ArrowClockwise16Regular />} onClick={reconnect}>
-            Reconnect
-          </Button>
-          <RouterLink to={`/projects/${projectId}/orchestrations/${runId}`} style={{ display: 'inline-flex' }}>
-            <Button size="small" appearance="secondary" icon={<Open16Regular />}>Open run</Button>
-          </RouterLink>
-        </div>
-      </div>
-      {error && (
-        <MessageBar intent="warning">
-          <MessageBarBody>{error}</MessageBarBody>
-        </MessageBar>
-      )}
-      {droppedEventCount > 0 && (
-        <Caption1>{droppedEventCount} earlier event(s) trimmed from the live buffer — full history is on the run page.</Caption1>
-      )}
-      <div className={styles.monitorEvents} aria-label="Live run events">
-        {recent.length === 0 ? (
-          <Caption1>Waiting for events…</Caption1>
-        ) : (
-          recent.map((e, i) => (
-            <Caption1 key={`${e.sequence}-${i}`}>
-              <Text weight="semibold">{e.type}</Text>
-              {typeof e.payload?.message === 'string' ? ` — ${e.payload.message as string}` : ''}
-            </Caption1>
-          ))
-        )}
-      </div>
-    </Card>
+    'Two ways to drive Agentweaver:\n' +
+    '  • Type PROSE (no leading slash) to talk to the coordinator agent — it plans,\n' +
+    '    dispatches and assembles work. Bind a run first with /orchestrate or /monitor.\n' +
+    '  • Type /commands for the explicit control plane. Each wraps the SAME endpoint\n' +
+    '    the matching MCP tool wraps (docs/reference/mcp-tools.md).\n\n' +
+    `Commands:\n${cmds}\n\nDeferred (use the linked gated UIs — the console never bypasses these):\n${deferred}`
   );
 }
 
-const GREETING: ConsoleMessage = {
+const GREETING: ConsoleLine = {
   id: 'greeting',
-  role: 'system',
-  intent: 'info',
+  tone: 'info',
   text:
-    'Agentweaver control console. This is a thin control-plane REPL — it manages work through the same APIs as the rest of the app and never runs agent work itself. Type `help` to see commands, `projects` to get started.',
+    'agentweaver control console — terminal UX. Prose drives the real coordinator agent; ' +
+    '/commands drive the MCP-backed control plane. Type /help to begin, /projects to list projects.',
 };
 
 export function BrowserConsole() {
   const styles = useStyles();
-  const [messages, setMessages] = useState<ConsoleMessage[]>([GREETING]);
+  const [lines, setLines] = useState<ConsoleLine[]>([GREETING]);
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
   const [activeProject, setActiveProject] = useState<Project | null>(null);
-  const [monitorRunId, setMonitorRunId] = useState<string>('');
-  const transcriptRef = useRef<HTMLDivElement>(null);
+  const [boundRunId, setBoundRunId] = useState('');
+  const [boundRunStatus, setBoundRunStatus] = useState<string | undefined>(undefined);
+  const [boundRunKind] = useState<TurnSourceKind>('coordinator');
+  // A prose goal captured while NO run is bound — held for EXPLICIT confirmation
+  // rather than auto-starting work (spec: ambiguous requests ask before creating).
+  const [pendingGoal, setPendingGoal] = useState<string | null>(null);
 
   const activeProjectRef = useRef<Project | null>(null);
-  useEffect(() => {
-    activeProjectRef.current = activeProject;
-  }, [activeProject]);
+  useEffect(() => { activeProjectRef.current = activeProject; }, [activeProject]);
 
+  // The bound run's stream/timeline/gate model — inert while boundRunId is ''.
+  const model = useCoordinatorRunModel(boundRunId, boundRunStatus);
+
+  const transcriptRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const el = transcriptRef.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [messages, monitorRunId]);
+  }, [lines]);
 
-  const append = useCallback((role: ConsoleMessage['role'], intent: MsgIntent, text: string, links?: ConsoleLink[]) => {
-    setMessages((prev) => [...prev, { id: nextId(), role, intent, text, links }]);
+  const timelineScrollRef = useRef<HTMLDivElement>(null);
+  const userScrolledUp = useRef(false);
+  const onTimelineScroll = () => {
+    const el = timelineScrollRef.current;
+    if (!el) return;
+    userScrolledUp.current = el.scrollHeight - el.scrollTop - el.clientHeight > 64;
+  };
+  useEffect(() => {
+    if (!userScrolledUp.current && timelineScrollRef.current) {
+      timelineScrollRef.current.scrollTop = timelineScrollRef.current.scrollHeight;
+    }
+  }, [model.items.length]);
+
+  const appendLine = useCallback((tone: LineTone, text: string, links?: ConsoleLink[]) => {
+    setLines((prev) => [...prev, { id: nextId(), tone, text, links }]);
   }, []);
 
-  const requireProject = (): Project | null => {
-    const p = activeProjectRef.current;
-    if (!p) {
-      return null;
-    }
-    return p;
-  };
+  const projectLink = useCallback((p: Project): ConsoleLink => ({ label: `Open ${p.name}`, to: `/projects/${p.project_id}` }), []);
 
-  const execute = useCallback(async (intent: ConsoleIntent): Promise<ExecResult> => {
-    switch (intent.kind) {
-      case 'help': {
-        const avail = CONSOLE_COMMANDS.map((c) => `  ${c.usage}\n      ${c.summary}`).join('\n');
-        const deferred = DEFERRED_COMMANDS.map((c) => `  ${c.usage} — ${c.summary}`).join('\n');
-        return {
-          intent: 'info',
-          text: `Available commands:\n${avail}\n\nDeferred (use the linked UI — the console never bypasses these gates):\n${deferred}`,
-        };
-      }
-      case 'list_projects': {
+  const runCommand = useCallback(async (name: SlashCommandName, arg: string): Promise<CommandResult> => {
+    const requireProject = (): Project | null => activeProjectRef.current;
+    const requireBound = (): string | null => (boundRunId ? boundRunId : null);
+
+    switch (name) {
+      case 'help':
+        return { tone: 'info', text: buildHelp() };
+      case 'clear':
+        setLines([GREETING]);
+        return { tone: 'info', text: 'Transcript cleared.' };
+      case 'projects': {
         const projects = await apiClient.listProjects();
         if (projects.length === 0) {
-          return { intent: 'info', text: 'No projects yet. Create one from the Projects gallery.', links: [{ label: 'Open Projects gallery', to: '/projects' }] };
+          return { tone: 'info', text: 'No projects yet.', links: [{ label: 'Open Projects gallery', to: '/projects' }] };
         }
-        const links = projects.map((p) => ({ label: `${p.name} (${p.project_id})`, to: `/projects/${p.project_id}` }));
-        return { intent: 'info', text: `${projects.length} project(s). Use \`use <name or id>\` to select one:`, links };
+        return {
+          tone: 'info',
+          text: `${projects.length} project(s). Select one with /use <name or id>:`,
+          links: projects.map((p) => ({ label: `${p.name} (${p.project_id})`, to: `/projects/${p.project_id}` })),
+        };
       }
-      case 'use_project': {
+      case 'use': {
+        if (!arg) return { tone: 'warn', text: 'Which project? Try /projects then /use <name or id>.' };
         const projects = await apiClient.listProjects();
-        const { project, candidates } = resolveProject(projects, intent.query);
+        const { project, candidates } = resolveProject(projects, arg);
         if (project) {
-          return {
-            intent: 'success',
-            text: `Active project set to ${project.name} (${project.project_id}).`,
-            links: [{ label: `Open ${project.name}`, to: `/projects/${project.project_id}` }],
-            setActiveProject: project,
-          };
+          return { tone: 'ok', text: `Active project → ${project.name} (${project.project_id}).`, links: [projectLink(project)], setActiveProject: project };
         }
         if (candidates && candidates.length > 1) {
           return {
-            intent: 'clarify',
-            text: `Multiple projects match "${intent.query}". Which one? Re-run \`use <id>\` with one of:`,
+            tone: 'warn',
+            text: `"${arg}" matches ${candidates.length} projects. Re-run /use with a specific id:`,
             links: candidates.map((p) => ({ label: `${p.name} (${p.project_id})`, to: `/projects/${p.project_id}` })),
           };
         }
-        return { intent: 'error', text: `No project matches "${intent.query}". Run \`projects\` to list them.` };
+        return { tone: 'error', text: `No project matches "${arg}". Run /projects to list them.` };
       }
-      case 'list_backlog': {
+      case 'backlog': {
         const p = requireProject();
-        if (!p) return { intent: 'clarify', text: 'Select a project first with `use <project>`.' };
+        if (!p) return { tone: 'warn', text: 'Select a project first with /use <project>.' };
         const board = await apiClient.getBoard(p.project_id);
         const cards = intakeCards(board.columns);
-        if (cards.length === 0) {
-          return { intent: 'info', text: `No backlog/ready items in ${p.name}.`, links: [{ label: 'Open board', to: `/projects/${p.project_id}/board` }] };
-        }
-        const summary = cards.map((c) => `  [${c.state}] ${c.title} (${c.task_id})`).join('\n');
-        return {
-          intent: 'info',
-          text: `${cards.length} intake item(s) in ${p.name}:\n${summary}`,
-          links: [{ label: 'Open board', to: `/projects/${p.project_id}/board` }],
-        };
+        if (cards.length === 0) return { tone: 'info', text: `No backlog/ready items in ${p.name}.`, links: [{ label: 'Open board', to: `/projects/${p.project_id}/board` }] };
+        const body = cards.map((c) => `  [${c.state}] ${c.title} (${c.task_id})`).join('\n');
+        return { tone: 'info', text: `${cards.length} intake item(s) in ${p.name}:\n${body}`, links: [{ label: 'Open board', to: `/projects/${p.project_id}/board` }] };
       }
-      case 'create_backlog': {
+      case 'add': {
         const p = requireProject();
-        if (!p) return { intent: 'clarify', text: 'Select a project first with `use <project>`.' };
-        const task = await apiClient.captureBacklogTask(p.project_id, { title: intent.title, description: intent.description ?? null });
-        return {
-          intent: 'success',
-          text: `Captured backlog item "${task.title}" (${task.task_id}) in ${p.name}.`,
-          links: [{ label: 'View on board', to: `/projects/${p.project_id}/board` }],
-        };
+        if (!p) return { tone: 'warn', text: 'Select a project first with /use <project>.' };
+        if (!arg) return { tone: 'warn', text: 'What should the item say? Try /add <title> :: <optional description>.' };
+        const [titlePart, ...rest] = arg.split('::');
+        const title = titlePart.trim();
+        const description = rest.join('::').trim() || null;
+        if (!title) return { tone: 'warn', text: 'The backlog item needs a title. Try /add <title>.' };
+        const task = await apiClient.captureBacklogTask(p.project_id, { title, description });
+        return { tone: 'ok', text: `Captured "${task.title}" (${task.task_id}) in ${p.name}.`, links: [{ label: 'View on board', to: `/projects/${p.project_id}/board` }] };
       }
-      case 'promote_backlog': {
+      case 'ready': {
         const p = requireProject();
-        if (!p) return { intent: 'clarify', text: 'Select a project first with `use <project>`.' };
+        if (!p) return { tone: 'warn', text: 'Select a project first with /use <project>.' };
+        if (!arg) return { tone: 'warn', text: 'Which backlog item? Try /ready <task title or id> (see /backlog).' };
         const board = await apiClient.getBoard(p.project_id);
         const backlog = intakeCards(board.columns).filter((c) => c.state === 'backlog');
-        const q = intent.query.toLowerCase();
+        const q = arg.toLowerCase();
         const byId = backlog.find((c) => c.task_id.toLowerCase() === q);
         const matches = byId ? [byId] : backlog.filter((c) => c.title.toLowerCase().includes(q));
-        if (matches.length === 0) {
-          return { intent: 'error', text: `No backlog item matches "${intent.query}". Run \`backlog\` to see items.` };
-        }
+        if (matches.length === 0) return { tone: 'error', text: `No backlog item matches "${arg}". Run /backlog to see items.` };
         if (matches.length > 1) {
-          return {
-            intent: 'clarify',
-            text: `"${intent.query}" matches ${matches.length} backlog items. Re-run \`ready <task id>\` with one of:\n${matches.map((c) => `  ${c.title} (${c.task_id})`).join('\n')}`,
-          };
+          return { tone: 'warn', text: `"${arg}" matches ${matches.length} items. Re-run /ready with a task id:\n${matches.map((c) => `  ${c.title} (${c.task_id})`).join('\n')}` };
         }
         const target = matches[0];
         await apiClient.moveTaskToReady(p.project_id, target.task_id);
+        return { tone: 'ok', text: `Moved "${target.title}" to Ready. It is picked up by the normal heartbeat/pickup flow — the console starts no work directly.`, links: [{ label: 'View on board', to: `/projects/${p.project_id}/board` }] };
+      }
+      case 'runs': {
+        const p = requireProject();
+        if (!p) return { tone: 'warn', text: 'Select a project first with /use <project>.' };
+        const runs = await apiClient.listProjectRuns(p.project_id);
+        if (runs.length === 0) return { tone: 'info', text: `No orchestration runs in ${p.name}. Start one with /orchestrate <goal>.` };
         return {
-          intent: 'success',
-          text: `Moved "${target.title}" to Ready in ${p.name}. It will be picked up through the normal heartbeat/pickup flow — no work is started directly by the console.`,
-          links: [{ label: 'View on board', to: `/projects/${p.project_id}/board` }],
+          tone: 'info',
+          text: `${runs.length} run(s) in ${p.name} — bind one with /monitor <runId>:`,
+          links: runs.slice(0, 25).map((r) => {
+            const rid = r.workflow_run_id ?? r.execution_id;
+            return { label: `${r.status} · ${r.task.slice(0, 56)} (${rid})`, to: `/projects/${p.project_id}/orchestrations/${rid}` };
+          }),
         };
       }
-      case 'list_runs': {
+      case 'orchestrate': {
         const p = requireProject();
-        if (!p) return { intent: 'clarify', text: 'Select a project first with `use <project>`.' };
-        const runs = await apiClient.listProjectRuns(p.project_id);
-        if (runs.length === 0) {
-          return { intent: 'info', text: `No orchestration runs in ${p.name} yet. Start one with \`orchestrate <goal>\`.` };
-        }
-        const links = runs.slice(0, 25).map((r) => {
-          const rid = r.workflow_run_id ?? r.execution_id;
-          return { label: `${r.status} · ${r.task.slice(0, 60)} (${rid})`, to: `/projects/${p.project_id}/orchestrations/${rid}` };
-        });
-        return { intent: 'info', text: `${runs.length} run(s) in ${p.name}:`, links };
-      }
-      case 'start_orchestration': {
-        const p = requireProject();
-        if (!p) return { intent: 'clarify', text: 'Select a project first with `use <project>`.' };
-        const res = await apiClient.startOrchestration(p.project_id, intent.goal);
+        if (!p) return { tone: 'warn', text: 'Select a project first with /use <project>.' };
+        if (!arg) return { tone: 'warn', text: 'What goal should the orchestration pursue? Try /orchestrate <goal>.' };
+        const res = await apiClient.startOrchestration(p.project_id, arg);
         return {
-          intent: 'success',
-          text:
-            `Started orchestration in ${p.name}. The coordinator will draft an Outcome plan — you must review and confirm it on the run page before any work is dispatched (the confirmation gate is not bypassed). Run \`monitor ${res.runId}\` to stream updates here.`,
-          links: [{ label: 'Open orchestration (confirm Outcome plan)', to: `/projects/${p.project_id}/orchestrations/${res.runId}` }],
-          monitorRunId: res.runId,
+          tone: 'ok',
+          text: `Started orchestration in ${p.name}. The coordinator will draft an Outcome plan — confirm it below (or on the run page) before work is dispatched; the gate is not bypassed. Bound the terminal to this run.`,
+          links: [{ label: 'Open orchestration', to: `/projects/${p.project_id}/orchestrations/${res.runId}` }],
+          bindRunId: res.runId,
+          bindRunStatus: undefined,
         };
       }
       case 'monitor': {
+        if (!arg) return { tone: 'warn', text: 'Which run? Try /monitor <runId> (see /runs).' };
+        const rid = arg.split(/\s+/)[0];
+        let status: string | undefined;
+        try { status = (await apiClient.getRun(rid)).status; } catch { /* unknown → live-only, no seed */ }
         const p = requireProject();
-        if (!p) return { intent: 'clarify', text: 'Select a project first with `use <project>`, then `monitor <runId>`.' };
-        return {
-          intent: 'info',
-          text: `Streaming live updates for run ${intent.runId}. Full durable history stays on the run page.`,
-          links: [{ label: 'Open run', to: `/projects/${p.project_id}/orchestrations/${intent.runId}` }],
-          monitorRunId: intent.runId,
-        };
+        const links: ConsoleLink[] = p ? [{ label: 'Open run', to: `/projects/${p.project_id}/orchestrations/${rid}` }] : [];
+        return { tone: 'ok', text: `Bound terminal to run ${rid}. Streaming live updates + inline gates below; durable history is seeded for parked/finished runs.`, links, bindRunId: rid, bindRunStatus: status };
       }
-      case 'clarify':
-        return { intent: 'clarify', text: intent.message };
-      case 'unknown':
-        return { intent: 'error', text: `Sorry, I didn't understand "${intent.input}". Type \`help\` for the command list.` };
+      case 'confirm': {
+        if (!requireBound()) return { tone: 'warn', text: 'No bound run. Bind one with /monitor <runId> or /orchestrate <goal>.' };
+        await model.confirmOutcomeSpec();
+        return { tone: 'ok', text: 'Outcome plan confirmed. The coordinator will proceed to dispatch work.' };
+      }
+      case 'revise': {
+        if (!requireBound()) return { tone: 'warn', text: 'No bound run. Bind one with /monitor <runId> first.' };
+        if (!arg) return { tone: 'warn', text: 'Provide revision feedback: /revise <what to change>.' };
+        await model.reviseOutcomeSpec(arg);
+        return { tone: 'ok', text: 'Revision sent. Watch the transcript for the updated Outcome plan, then /confirm.' };
+      }
+      case 'approve-assembly': {
+        if (!requireBound()) return { tone: 'warn', text: 'No bound run. Bind one with /monitor <runId> first.' };
+        await model.reviewAssembly('approve', arg || undefined);
+        return { tone: 'ok', text: 'Assembly review approved. The coordinator will merge/scribe/complete.' };
+      }
+      case 'stop': {
+        if (!requireBound()) return { tone: 'warn', text: 'No bound run to stop.' };
+        await model.stop();
+        return { tone: 'warn', text: 'Stop directive sent to the coordinator.' };
+      }
     }
-  }, []);
+  }, [boundRunId, model, projectLink]);
 
   const submit = useCallback(async () => {
-    const raw = input.trim();
-    if (!raw || busy) return;
-    append('user', 'info', raw);
+    const raw = input;
+    if (!raw.trim() || busy) return;
+    const parsed = parseInput(raw);
+    appendLine('user', raw.trim());
     setInput('');
-    const intent = parseConsoleCommand(raw);
     setBusy(true);
     try {
-      const result = await execute(intent);
+      if (parsed.channel === 'unknown-command') {
+        appendLine('error', `Unknown command /${parsed.token}. Type /help for the command list.`);
+        return;
+      }
+      if (parsed.channel === 'prose') {
+        if (!parsed.text) return;
+        // Prose confirmation of a previously-captured goal.
+        if (pendingGoal && /^(y|yes|start|confirm)$/i.test(parsed.text)) {
+          const p = activeProjectRef.current;
+          if (!p) { appendLine('warn', 'Select a project first with /use <project>, then re-send the goal.'); return; }
+          const goal = pendingGoal;
+          setPendingGoal(null);
+          const res = await apiClient.startOrchestration(p.project_id, goal);
+          setBoundRunId(res.runId);
+          setBoundRunStatus(undefined);
+          appendLine('ok', `Started orchestration for: "${goal}". Confirm the Outcome plan below before work is dispatched.`, [{ label: 'Open orchestration', to: `/projects/${p.project_id}/orchestrations/${res.runId}` }]);
+          return;
+        }
+        if (boundRunId) {
+          // Conversational coordinator loop — prose goes to the REAL coordinator agent.
+          await model.sendMessage(parsed.text);
+          appendLine('info', 'Sent to the coordinator. Watch the run transcript below for its response.');
+          return;
+        }
+        // No bound run → do NOT auto-start work; ask for explicit confirmation (gate).
+        setPendingGoal(parsed.text);
+        const hasProject = !!activeProjectRef.current;
+        appendLine(
+          'warn',
+          hasProject
+            ? `No orchestration is bound. Start one with this as the goal? Reply "yes" to start, or /monitor <runId> to attach to an existing run.\n  goal: ${parsed.text}`
+            : 'No project selected and no run bound. Run /use <project> first, then /orchestrate <goal>.',
+        );
+        return;
+      }
+      // Explicit command channel.
+      const result = await runCommand(parsed.name, parsed.arg);
       if (result.setActiveProject !== undefined) setActiveProject(result.setActiveProject);
-      if (result.monitorRunId) setMonitorRunId(result.monitorRunId);
-      append('system', result.intent, result.text, result.links);
+      if (result.bindRunId !== undefined) { setBoundRunId(result.bindRunId); setBoundRunStatus(result.bindRunStatus); }
+      appendLine(result.tone, result.text, result.links);
     } catch (err) {
-      append('system', 'error', errText(err));
+      appendLine('error', errText(err));
     } finally {
       setBusy(false);
     }
-  }, [input, busy, append, execute]);
+  }, [input, busy, appendLine, runCommand, model, boundRunId, pendingGoal]);
 
-  const bubbleClass = (m: ConsoleMessage) => {
-    if (m.role === 'user') return `${styles.bubble} ${styles.bubbleUser}`;
-    switch (m.intent) {
-      case 'error': return `${styles.bubble} ${styles.bubbleError}`;
-      case 'clarify': return `${styles.bubble} ${styles.bubbleClarify}`;
-      case 'success': return `${styles.bubble} ${styles.bubbleSuccess}`;
-      default: return `${styles.bubble} ${styles.bubbleSystem}`;
+  const toneClass = (tone: LineTone) => {
+    switch (tone) {
+      case 'error': return styles.errText;
+      case 'warn': return styles.warnText;
+      case 'ok': return styles.okText;
+      default: return undefined;
     }
   };
 
-  const activeLabel = useMemo(
-    () => (activeProject ? `${activeProject.name}` : 'none'),
-    [activeProject],
-  );
+  const activeLabel = useMemo(() => (activeProject ? activeProject.name : 'none'), [activeProject]);
+  const gates = model.gates;
+
+  // Runs an inline gate action (confirm / assembly review) then reports it in the transcript.
+  const submitGate = useCallback((action: () => Promise<unknown>, okText: string) => {
+    setBusy(true);
+    return action()
+      .then(() => appendLine('ok', okText))
+      .catch((err) => appendLine('error', errText(err)))
+      .finally(() => setBusy(false));
+  }, [appendLine]);
 
   return (
     <div className={styles.root}>
       <div className={styles.header}>
-        <Bot20Regular />
-        <div className={styles.headerText}>
-          <Title3>Control console</Title3>
-          <Caption1>Conversational control plane · manages work through existing Agentweaver APIs</Caption1>
+        <Text className={styles.title}>agentweaver://console</Text>
+        <div className={styles.headerMeta}>
+          <Text size={200} style={{ color: '#8fa3b5' }}>project:</Text>
+          <Badge appearance="tint" color={activeProject ? 'brand' : 'subtle'}>{activeLabel}</Badge>
+          {boundRunId && <Badge appearance="tint" color="informative">{boundRunKind} · {boundRunId.slice(0, 8)}</Badge>}
         </div>
       </div>
-      <div className={styles.contextRow}>
-        <Text size={200}>Active project:</Text>
-        <Badge appearance="tint" color={activeProject ? 'brand' : 'subtle'}>{activeLabel}</Badge>
-        <Button
-          size="small"
-          appearance="subtle"
-          icon={<Broom20Regular />}
-          onClick={() => { setMessages([GREETING]); setMonitorRunId(''); }}
-        >
-          Clear
-        </Button>
-      </div>
 
-      <div className={styles.transcript} ref={transcriptRef} aria-label="Console transcript">
-        {messages.map((m) => (
-          <div key={m.id} className={`${styles.msgRow} ${m.role === 'user' ? styles.msgRowUser : ''}`}>
-            {m.role === 'user' ? <Person20Regular /> : <Bot20Regular />}
-            <div className={bubbleClass(m)}>
-              <Body1>{m.text}</Body1>
-              {m.links && m.links.length > 0 && (
-                <div className={styles.links}>
-                  {m.links.map((l, i) => (
-                    <span key={`${m.id}-l${i}`} className={styles.linkItem}>
-                      <Open16Regular />
-                      <RouterLink to={l.to} className={styles.link}>{l.label}</RouterLink>
-                    </span>
+      <div className={styles.body}>
+        <div className={styles.transcript} ref={transcriptRef} aria-label="Console transcript" role="log">
+          {lines.map((l) => (
+            <div key={l.id}>
+              <div className={styles.line}>
+                <span className={l.tone === 'user' ? styles.promptGlyph : styles.sysGlyph} aria-hidden="true">
+                  {l.tone === 'user' ? '>' : '·'}
+                </span>
+                <span className={toneClass(l.tone)}>{l.text}</span>
+              </div>
+              {l.links && l.links.length > 0 && (
+                <div className={styles.linkList}>
+                  {l.links.map((lk, i) => (
+                    <RouterLink key={`${l.id}-${i}`} to={lk.to} className={styles.link}>
+                      <Open16Regular aria-hidden="true" />{lk.label}
+                    </RouterLink>
                   ))}
                 </div>
               )}
             </div>
+          ))}
+        </div>
+
+        {boundRunId && (
+          <div className={styles.runPanel} aria-label="Bound run">
+            <div className={styles.runPanelHeader}>
+              <Text weight="semibold" size={200}>
+                run {boundRunId.slice(0, 12)} · {model.derivedRunStatus}
+              </Text>
+              <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS }}>
+                <Badge appearance="outline" color={model.status === 'streaming' ? 'success' : model.status === 'error' ? 'danger' : model.status === 'done' ? 'informative' : 'warning'}>
+                  {model.status}
+                </Badge>
+                {(gates.openQuestionCount > 0 || gates.openApprovalCount > 0) && (
+                  <Badge appearance="tint" color="warning" icon={<Warning16Regular />}>
+                    {gates.openQuestionCount + gates.openApprovalCount} open gate(s)
+                  </Badge>
+                )}
+                <Button size="small" appearance="subtle" icon={<ArrowClockwise16Regular />} onClick={model.reconnect}>Reconnect</Button>
+                {activeProject && (
+                  <RouterLink to={`/projects/${activeProject.project_id}/orchestrations/${boundRunId}`} className={styles.link}>
+                    <Open16Regular aria-hidden="true" />Full run (Changes / merge)
+                  </RouterLink>
+                )}
+              </div>
+            </div>
+
+            {(gates.outcomeSpecPending || gates.assemblyReviewPending) && (
+              <div className={styles.gateBar} role="group" aria-label="Run gates">
+                {gates.outcomeSpecPending && (
+                  <>
+                    <Text size={200} weight="semibold">Outcome plan awaiting confirmation</Text>
+                    <Button size="small" appearance="primary" icon={<CheckmarkCircle16Regular />} onClick={() => { void submitGate(() => model.confirmOutcomeSpec(), 'Outcome plan confirmed.'); }}>Confirm</Button>
+                    <Text size={200} style={{ color: tokens.colorNeutralForeground3 }}>or /revise &lt;feedback&gt;</Text>
+                  </>
+                )}
+                {gates.assemblyReviewPending && (
+                  <>
+                    <Text size={200} weight="semibold">Assembly awaiting review</Text>
+                    <Button size="small" appearance="primary" icon={<CheckmarkCircle16Regular />} onClick={() => { void submitGate(() => model.reviewAssembly('approve'), 'Assembly approved.'); }}>Approve</Button>
+                    <Button size="small" appearance="secondary" onClick={() => { void submitGate(() => model.reviewAssembly('request_changes'), 'Requested changes on the assembly.'); }}>Request changes</Button>
+                    <Button size="small" appearance="subtle" onClick={() => { void submitGate(() => model.reviewAssembly('decline'), 'Assembly declined.'); }}>Decline</Button>
+                  </>
+                )}
+              </div>
+            )}
+
+            <div className={styles.timelineScroll} ref={timelineScrollRef} onScroll={onTimelineScroll}>
+              <Timeline
+                items={model.items}
+                streamStatus={model.status}
+                isLiveRun={model.isLiveRun}
+                runId={boundRunId}
+                runOutcome={model.runOutcome}
+                skippedEventCount={model.droppedEventCount}
+              />
+            </div>
           </div>
-        ))}
+        )}
       </div>
 
-      {monitorRunId && activeProject && (
-        <RunMonitor projectId={activeProject.project_id} runId={monitorRunId} />
-      )}
-
-      <Divider />
       <div className={styles.composer}>
-        <Input
+        <Textarea
           className={styles.input}
           value={input}
-          placeholder="Type a command… e.g. projects, use <name>, add backlog <title>, orchestrate <goal>"
+          placeholder={boundRunId ? 'Message the coordinator, or /command …' : 'Type /help, /projects, /orchestrate <goal> — or prose to start a conversation'}
           onChange={(_, d) => setInput(d.value)}
           onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void submit(); } }}
           disabled={busy}
-          aria-label="Console command"
+          resize="vertical"
+          aria-label="Console input"
         />
-        <Button appearance="primary" icon={busy ? <Spinner size="tiny" /> : <Send20Regular />} disabled={busy || !input.trim()} onClick={() => void submit()}>
+        <Button appearance="primary" icon={busy ? <Spinner size="tiny" /> : <Send16Regular />} disabled={busy || !input.trim()} onClick={() => void submit()}>
           Send
         </Button>
       </div>

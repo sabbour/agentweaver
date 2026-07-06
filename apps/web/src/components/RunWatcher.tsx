@@ -40,7 +40,7 @@ interface RunWatcherProps { runId: string; style?: React.CSSProperties; onReview
 export function RunWatcher({ runId, style, onReviewAction, onTurnUsageEvent }: RunWatcherProps) {
   const styles = useStyles();
   const { events, droppedEventCount, status, error, reconnect } = useRunStream(runId);
-  const { items, runOutcome } = useTimelineItems(events, runId);
+  const { items, runOutcome } = useTimelineItems(events, runId, droppedEventCount);
   const isLiveRun = status === 'connecting' || status === 'streaming';
 
   // Notify the parent when new agent.turn.usage events arrive so it can refresh

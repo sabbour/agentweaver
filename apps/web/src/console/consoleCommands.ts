@@ -1,157 +1,105 @@
-// Browser chat control console — command parser (Issue #50 / spec
+// Browser control-console — slash-command catalog + tokenizer (Issue #50 / spec
 // mcp-integrations/browser-chat-control-console).
 //
-// The console is a THIN CLIENT (constitution Principle III: the API is the
-// single source of truth). This module contains NO business logic and NO
-// network calls — it only turns a line of natural-language-ish input into a
-// structured intent. The console component then drives that intent through the
-// EXISTING authorized apiClient methods, exactly like the rest of the web app.
+// TWO CHANNELS (rubber-duck finding #9):
+//   1. Free-form prose  → the conversational coordinator loop. Prose is sent to
+//      the REAL coordinator agent via apiClient.steerCoordinator (constitution
+//      VII — there is NO browser-side LLM / tool-router; the backend operator
+//      agent that routes arbitrary NL to the whole MCP catalog is filed as #201).
+//   2. /commands        → the explicit MCP-tool control plane. Each command wraps
+//      the SAME authorized apiClient method / API endpoint that the corresponding
+//      MCP tool wraps.
 //
-// Parsing is deliberately deterministic (keyword/verb based) rather than
-// LLM-backed: there is no conversational backend endpoint in the API surface,
-// and constitution VII forbids mocks/stubs. An honest keyword REPL that maps to
-// real endpoints is preferable to faking an NL model.
+// SINGLE SOURCE OF TRUTH (finding #2 — drift risk): the command list below is the
+// ONE typed table the UI, /help and tests all read. Each entry names the MCP tool
+// family it mirrors. Keep these reconciled with the authoritative catalog at
+// docs/reference/mcp-tools.md — do NOT hand-maintain a second divergent mapping.
 
-export type ConsoleIntent =
-  | { kind: 'help' }
-  | { kind: 'list_projects' }
-  | { kind: 'use_project'; query: string }
-  | { kind: 'list_backlog' }
-  | { kind: 'create_backlog'; title: string; description?: string }
-  | { kind: 'promote_backlog'; query: string }
-  | { kind: 'list_runs' }
-  | { kind: 'start_orchestration'; goal: string }
-  | { kind: 'monitor'; runId: string }
-  // A request the parser understood the *shape* of, but which is missing a
-  // required argument or is otherwise ambiguous. The console must ask for
-  // clarification and MUST NOT create or start any work (spec edge case:
-  // "asks for clarification instead of guessing and launching work").
-  | { kind: 'clarify'; message: string }
-  | { kind: 'unknown'; input: string };
+export type SlashCommandName =
+  | 'help'
+  | 'projects'
+  | 'use'
+  | 'backlog'
+  | 'add'
+  | 'ready'
+  | 'runs'
+  | 'orchestrate'
+  | 'monitor'
+  | 'confirm'
+  | 'revise'
+  | 'approve-assembly'
+  | 'stop'
+  | 'clear';
 
-export interface CommandHelp {
-  usage: string;
+export interface SlashCommandSpec {
+  name: SlashCommandName;
+  aliases: string[];
+  /** Argument hint shown in /help, e.g. "<goal>". Empty when the command takes none. */
+  argHint: string;
   summary: string;
-  status: 'available' | 'deferred';
+  /**
+   * The MCP tool family this control mirrors (see docs/reference/mcp-tools.md).
+   * The console calls the same apiClient method the MCP tool wraps — this is a
+   * thin client, not a parallel implementation (constitution III).
+   */
+  mcp: string;
 }
 
-// Canonical command reference — exported so both the UI and tests stay in sync.
-export const CONSOLE_COMMANDS: CommandHelp[] = [
-  { usage: 'help', summary: 'Show the list of console commands.', status: 'available' },
-  { usage: 'projects', summary: 'List projects with links to each project.', status: 'available' },
-  { usage: 'use <project>', summary: 'Select the active project for later commands.', status: 'available' },
-  { usage: 'backlog', summary: "List the active project's backlog / ready items.", status: 'available' },
-  { usage: 'add backlog <title> [:: <description>]', summary: 'Capture a new backlog item.', status: 'available' },
-  { usage: 'ready <task title or id>', summary: 'Promote a backlog item to Ready.', status: 'available' },
-  { usage: 'runs', summary: 'List orchestration/coordinator runs in the active project.', status: 'available' },
-  { usage: 'orchestrate <goal>', summary: 'Start a coordinator orchestration (you confirm the Outcome plan on the run page).', status: 'available' },
-  { usage: 'monitor <runId>', summary: 'Stream live updates for a run while preserving its event history.', status: 'available' },
+// The one typed catalog. Order = /help display order.
+export const SLASH_COMMANDS: SlashCommandSpec[] = [
+  { name: 'help',     aliases: ['?', 'h'],            argHint: '',                    summary: 'Show this command reference.',                                       mcp: '—' },
+  { name: 'projects', aliases: ['ls'],                argHint: '',                    summary: 'List projects with links.',                                          mcp: 'Project.list_projects' },
+  { name: 'use',      aliases: ['select', 'project'], argHint: '<name or id>',        summary: 'Select the active project for later commands.',                      mcp: 'Project.get_project' },
+  { name: 'backlog',  aliases: [],                    argHint: '',                    summary: "List the active project's backlog / ready items.",                   mcp: 'Backlog.get_board' },
+  { name: 'add',      aliases: ['capture'],           argHint: '<title> [:: <desc>]', summary: 'Capture a new backlog item.',                                        mcp: 'Backlog.capture_backlog_task' },
+  { name: 'ready',    aliases: ['promote'],           argHint: '<task title or id>',  summary: 'Promote a backlog item to Ready (picked up by the normal flow).',     mcp: 'Backlog.move_task_to_ready' },
+  { name: 'runs',     aliases: ['orchestrations'],    argHint: '',                    summary: 'List coordinator/orchestration runs in the active project.',          mcp: 'Run.list_project_runs' },
+  { name: 'orchestrate', aliases: ['start'],          argHint: '<goal>',              summary: 'Start a coordinator orchestration (Outcome plan is confirmed here).', mcp: 'Coordinator.start_orchestration' },
+  { name: 'monitor',  aliases: ['watch', 'bind'],     argHint: '<runId>',             summary: 'Bind the terminal to a run: live stream + inline gates + history.',   mcp: 'Run.get_run_events' },
+  { name: 'confirm',  aliases: [],                    argHint: '',                    summary: "Confirm the bound run's drafted Outcome plan gate.",                 mcp: 'Coordinator.confirm_outcome_spec' },
+  { name: 'revise',   aliases: [],                    argHint: '<feedback>',          summary: "Revise the bound run's Outcome plan before confirming.",             mcp: 'Coordinator.revise_outcome_spec' },
+  { name: 'approve-assembly', aliases: ['approve'],   argHint: '[comment]',           summary: "Approve the bound run's collective assembly review gate.",           mcp: 'Coordinator.review_assembly' },
+  { name: 'stop',     aliases: [],                    argHint: '',                    summary: 'Stop the bound coordinator orchestration.',                          mcp: 'Coordinator.steer_coordinator (stop)' },
+  { name: 'clear',    aliases: ['cls'],               argHint: '',                    summary: 'Clear the local transcript (does not affect the run).',              mcp: '—' },
 ];
 
-// Commands intentionally NOT implemented in this slice. Surfaced in help so the
-// boundary is explicit and the console never silently pretends to do them.
-export const DEFERRED_COMMANDS: CommandHelp[] = [
-  { usage: 'create project <name>', summary: 'Full project creation — use the Projects gallery wizard (needs repo/working dir/blueprint).', status: 'deferred' },
-  { usage: 'edit / rank / decompose backlog', summary: 'Detailed backlog editing & work-breakdown — use the Board.', status: 'deferred' },
-  { usage: 'approve / review / merge', summary: 'Confirmation, approval, review and merge gates stay in their existing gated views — the console links out, never bypasses them.', status: 'deferred' },
+// Deferred capabilities — intentionally NOT wired in this slice. Listed in /help so the
+// console never silently pretends to perform them; the linked gated UIs own these actions.
+export const DEFERRED_COMMANDS: Array<{ label: string; summary: string }> = [
+  { label: '/new-project',   summary: 'Full project creation (repo/working dir/blueprint) — use the Projects gallery wizard.' },
+  { label: '/decompose',     summary: 'Detailed work-breakdown / backlog editing — use the Board.' },
+  { label: '/review /merge', summary: 'Worker review & merge gates stay in their gated run views — the console links out, never bypasses them.' },
 ];
 
-function stripLeading(input: string, ...prefixes: string[]): string | null {
-  const lower = input.toLowerCase();
-  for (const p of prefixes) {
-    if (lower === p) return '';
-    if (lower.startsWith(p + ' ')) return input.slice(p.length + 1).trim();
-  }
-  return null;
+const NAME_BY_TOKEN = new Map<string, SlashCommandName>();
+for (const c of SLASH_COMMANDS) {
+  NAME_BY_TOKEN.set(c.name, c.name);
+  for (const a of c.aliases) NAME_BY_TOKEN.set(a, c.name);
 }
 
-function matches(input: string, ...exact: string[]): boolean {
-  return exact.includes(input.toLowerCase());
-}
+export type ParsedInput =
+  // Explicit MCP-tool control-plane command.
+  | { channel: 'command'; name: SlashCommandName; arg: string; raw: string }
+  // A slash token that matched no known command.
+  | { channel: 'unknown-command'; token: string; raw: string }
+  // Free-form prose → conversational coordinator loop.
+  | { channel: 'prose'; text: string; raw: string };
 
 /**
- * Parse a single console line into a structured intent. Pure function.
- * Order matters: more specific verbs are checked before generic ones so that
- * e.g. "runs" is not swallowed by the "run <goal>" orchestration alias.
+ * Tokenize a single input line into a channel. Pure function, no I/O.
+ * A leading '/' selects the explicit command channel; everything else is prose
+ * routed to the coordinator agent.
  */
-export function parseConsoleCommand(raw: string): ConsoleIntent {
-  const input = raw.trim();
-  if (!input) return { kind: 'unknown', input: raw };
-
-  if (matches(input, 'help', '?', 'commands', 'h')) return { kind: 'help' };
-
-  if (matches(input, 'projects', 'list projects', 'show projects', 'ls projects')) {
-    return { kind: 'list_projects' };
+export function parseInput(raw: string): ParsedInput {
+  const trimmed = raw.trim();
+  if (!trimmed.startsWith('/')) {
+    return { channel: 'prose', text: trimmed, raw };
   }
-
-  if (matches(input, 'backlog', 'list backlog', 'show backlog', 'ls backlog')) {
-    return { kind: 'list_backlog' };
-  }
-
-  if (matches(input, 'runs', 'list runs', 'show runs', 'ls runs', 'orchestrations', 'list orchestrations')) {
-    return { kind: 'list_runs' };
-  }
-
-  // use / select project
-  {
-    const q = stripLeading(input, 'use', 'select project', 'switch to', 'switch project', 'open project');
-    if (q !== null) {
-      if (!q) return { kind: 'clarify', message: 'Which project? Try `projects` to list them, then `use <name or id>`.' };
-      return { kind: 'use_project', query: q };
-    }
-  }
-
-  // create / capture backlog item
-  {
-    const q = stripLeading(
-      input,
-      'add backlog',
-      'create backlog',
-      'new backlog item',
-      'new backlog',
-      'add task',
-      'capture task',
-      'capture',
-    );
-    if (q !== null) {
-      if (!q) return { kind: 'clarify', message: 'What should the backlog item say? Try `add backlog <title> :: <optional description>`.' };
-      const [titlePart, ...descParts] = q.split('::');
-      const title = titlePart.trim();
-      const description = descParts.join('::').trim();
-      if (!title) return { kind: 'clarify', message: 'The backlog item needs a title. Try `add backlog <title>`.' };
-      return description
-        ? { kind: 'create_backlog', title, description }
-        : { kind: 'create_backlog', title };
-    }
-  }
-
-  // promote to ready
-  {
-    const q = stripLeading(input, 'ready', 'promote', 'send to ready', 'move to ready');
-    if (q !== null) {
-      const cleaned = q.replace(/^to ready\s+/i, '').replace(/\s+to ready$/i, '').trim();
-      if (!cleaned) return { kind: 'clarify', message: 'Which backlog item should move to Ready? Try `ready <task title or id>` (see `backlog`).' };
-      return { kind: 'promote_backlog', query: cleaned };
-    }
-  }
-
-  // monitor / watch a run
-  {
-    const q = stripLeading(input, 'monitor', 'watch', 'stream', 'tail');
-    if (q !== null) {
-      if (!q) return { kind: 'clarify', message: 'Which run should I monitor? Try `monitor <runId>` (see `runs`).' };
-      return { kind: 'monitor', runId: q.split(/\s+/)[0] };
-    }
-  }
-
-  // start orchestration (checked last: "start"/"run" are generic verbs)
-  {
-    const q = stripLeading(input, 'orchestrate', 'start orchestration', 'start', 'run', 'kick off', 'begin');
-    if (q !== null) {
-      if (!q) return { kind: 'clarify', message: 'What goal should the orchestration pursue? Try `orchestrate <goal>`.' };
-      return { kind: 'start_orchestration', goal: q };
-    }
-  }
-
-  return { kind: 'unknown', input };
+  const withoutSlash = trimmed.slice(1);
+  const spaceIdx = withoutSlash.search(/\s/);
+  const token = (spaceIdx === -1 ? withoutSlash : withoutSlash.slice(0, spaceIdx)).toLowerCase();
+  const arg = spaceIdx === -1 ? '' : withoutSlash.slice(spaceIdx + 1).trim();
+  const name = NAME_BY_TOKEN.get(token);
+  if (!name) return { channel: 'unknown-command', token, raw };
+  return { channel: 'command', name, arg, raw };
 }

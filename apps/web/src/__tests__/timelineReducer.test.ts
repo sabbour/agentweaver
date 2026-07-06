@@ -376,4 +376,71 @@ describe('timelineReducer', () => {
     const turn = s.items[0] as TurnGroupItem;
     expect(turn.steps).toHaveLength(0);
   });
+
+  // --- BLOCKING #1: HITL question gates ------------------------------------
+
+  // Q-01: agent.question_asked creates a top-level, unresolved question item
+  it('agent.question_asked creates an unresolved question-request item (no open turn needed)', () => {
+    const s = fold([
+      makeEvent('agent.question_asked', { requestId: 'q1', question: 'Which region?' }, 1),
+    ]);
+    expect(s.items).toHaveLength(1);
+    const q = s.items[0] as import('../timeline/types').QuestionRequestItem;
+    expect(q.kind).toBe('question-request');
+    expect(q.resolved).toBe(false);
+    expect(q.question).toBe('Which region?');
+    expect(q.askingRunId).toBeUndefined();
+    expect(s.pendingQuestions.get('q1')).toBe(0);
+  });
+
+  // Q-02: agent.question_answered resolves the paired item
+  it('agent.question_answered resolves the paired question by requestId', () => {
+    const s = fold([
+      makeEvent('agent.question_asked', { requestId: 'q1', question: 'Which region?' }, 1),
+      makeEvent('agent.question_answered', { requestId: 'q1', answer: 'westus2' }, 2),
+    ]);
+    expect(s.items).toHaveLength(1);
+    const q = s.items[0] as import('../timeline/types').QuestionRequestItem;
+    expect(q.resolved).toBe(true);
+    expect(q.answer).toBe('westus2');
+    expect(s.pendingQuestions.has('q1')).toBe(false);
+  });
+
+  // Q-03: coordinator.child_question captures askingRunId (childRunId) for answer routing
+  it('coordinator.child_question stores childRunId as askingRunId for answer routing', () => {
+    const s = fold([
+      makeEvent('coordinator.child_question', {
+        requestId: 'cq1', question: 'Merge strategy?', childRunId: 'child-9', agentName: 'Trinity',
+      }, 1),
+    ]);
+    const q = s.items[0] as import('../timeline/types').QuestionRequestItem;
+    expect(q.kind).toBe('question-request');
+    expect(q.askingRunId).toBe('child-9');
+    expect(q.sourceLabel).toBe('Trinity');
+    expect(q.resolved).toBe(false);
+  });
+
+  // Q-04: coordinator.autopilot_answered resolves the question AND keeps the audit line
+  it('coordinator.autopilot_answered resolves a child question and appends an audit lifecycle item', () => {
+    const s = fold([
+      makeEvent('coordinator.child_question', { requestId: 'cq1', question: 'Merge strategy?', childRunId: 'child-9' }, 1),
+      makeEvent('coordinator.autopilot_answered', { requestId: 'cq1', answer: 'rebase', childRunId: 'child-9' }, 2),
+    ]);
+    // question item resolved + a lifecycle audit card appended
+    const q = s.items[0] as import('../timeline/types').QuestionRequestItem;
+    expect(q.kind).toBe('question-request');
+    expect(q.resolved).toBe(true);
+    expect(q.answer).toBe('rebase');
+    expect(s.items.some((i) => i.kind === 'lifecycle' && i.event.type === 'coordinator.autopilot_answered')).toBe(true);
+    expect(s.pendingQuestions.has('cq1')).toBe(false);
+  });
+
+  // Q-05: bubbled child approvals are no longer dropped — they surface as lifecycle items
+  it('coordinator.child_approval_required surfaces as a lifecycle item (not dropped)', () => {
+    const s = fold([
+      makeEvent('coordinator.child_approval_required', { requestId: 'a1', toolName: 'shell', childRunId: 'child-9' }, 1),
+    ]);
+    expect(s.items).toHaveLength(1);
+    expect(s.items[0].kind).toBe('lifecycle');
+  });
 });
