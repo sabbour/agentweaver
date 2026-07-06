@@ -24,6 +24,9 @@ public interface ICollectiveAssemblyPipeline
     /// safety concern (advisory — never hard-blocks; it informs the human reviewer).</summary>
     Task<CollectiveRaiResult> RunRaiAsync(CollectiveRaiRequest request, CancellationToken ct);
 
+    /// <summary>Runs the collective rubber-duck review over the aggregate diff.</summary>
+    Task<CollectiveGateDecision> RunRubberduckAsync(CollectiveRubberduckRequest request, CancellationToken ct);
+
     /// <summary>Performs the ONE collective merge of the integration branch into the originating branch.</summary>
     Task<CollectiveMergeResult> MergeAsync(CollectiveMergeRequest request, CancellationToken ct);
 
@@ -47,6 +50,18 @@ public sealed record CollectiveRaiRequest(
 
 /// <summary>Outcome of the collective RAI review.</summary>
 public sealed record CollectiveRaiResult(bool SafetyFlagged);
+
+/// <summary>Inputs to the collective rubber-duck review of the aggregate diff.</summary>
+public sealed record CollectiveRubberduckRequest(
+    string CoordinatorRunId,
+    string RepositoryPath,
+    string AggregateDiff,
+    string SubmittingUser,
+    string? GateNodeId = null,
+    string? DisplayLabel = null);
+
+/// <summary>Normalized pass/revise decision from an authored collective assembly gate.</summary>
+public sealed record CollectiveGateDecision(bool Approved, bool RequestChanges, string? Feedback);
 
 /// <summary>Inputs to the single collective merge of the integration branch into origin.</summary>
 public sealed record CollectiveMergeRequest(

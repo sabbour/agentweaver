@@ -11,6 +11,7 @@ using Agentweaver.Api.Git;
 using Agentweaver.Api.Memory;
 using Agentweaver.Api.Runs;
 using Agentweaver.Api.Sandbox;
+using Agentweaver.Api.Workflows;
 using Agentweaver.Domain;
 
 using Run = Agentweaver.Domain.Run;
@@ -92,6 +93,8 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
     private readonly ICollectiveAssemblyPipeline _pipeline;
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly IServiceProvider _serviceProvider;
+    private readonly IProjectStore? _projectStore;
+    private readonly WorkflowRegistry? _workflowRegistry;
     private readonly IPodNameRegistry? _podRegistry;
     private readonly IKubernetesEnvironment? _k8sEnv;
     private readonly IAgentHostPodLifecycle? _podLifecycle;
@@ -120,7 +123,9 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         IPodNameRegistry? podRegistry = null,
         IAgentHostPodLifecycle? podLifecycle = null,
         IOptions<SandboxRuntimeOptions>? sandboxRuntime = null,
-        IKubernetesEnvironment? k8sEnv = null)
+        IKubernetesEnvironment? k8sEnv = null,
+        IProjectStore? projectStore = null,
+        WorkflowRegistry? workflowRegistry = null)
     {
         _runStore = runStore;
         _streamStore = streamStore;
@@ -129,6 +134,8 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         _pipeline = pipeline;
         _scopeFactory = scopeFactory;
         _serviceProvider = serviceProvider;
+        _projectStore = projectStore;
+        _workflowRegistry = workflowRegistry;
         _podRegistry = podRegistry;
         _k8sEnv = k8sEnv;
         _podLifecycle = podLifecycle;
@@ -647,62 +654,121 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
 
         var aggregateDiff = integration.Diff ?? string.Empty;
         var aggregateTreeHash = integration.TreeHash ?? string.Empty;
+        var assemblyGates = await ResolveAssemblyGatesAsync(workPlanId, ct).ConfigureAwait(false);
 
-        // ── Collective RAI (advisory) ────────────────────────────────────────────────────────────
-        await _assemblyStore.SetStageAsync(workPlanId, AssemblyStage.Rai, ct).ConfigureAwait(false);
-        await EmitGraphAsync(context.CoordinatorRunId, workPlanId, ct).ConfigureAwait(false);
-        Emit(context.CoordinatorRunId, EventTypes.CoordinatorAssemblyRaiStarted, new { workPlanId, integrationBranch });
-
-        var rai = await _pipeline.RunRaiAsync(
-            new CollectiveRaiRequest(context.CoordinatorRunId, context.RepositoryPath, aggregateDiff, context.SubmittingUser), ct)
-            .ConfigureAwait(false);
-
-        Emit(context.CoordinatorRunId, EventTypes.CoordinatorAssemblyRaiCompleted, new
+        foreach (var gate in assemblyGates)
         {
-            workPlanId,
-            raiSafetyFlagged = rai.SafetyFlagged,
-        });
+            if (gate.GateKind == "rai")
+            {
+                await _assemblyStore.SetStageAsync(workPlanId, gate.StageId, ct).ConfigureAwait(false);
+                await EmitGraphAsync(context.CoordinatorRunId, workPlanId, ct).ConfigureAwait(false);
+                Emit(context.CoordinatorRunId, EventTypes.CoordinatorAssemblyRaiStarted, new { workPlanId, integrationBranch, gateId = gate.Id });
 
-        if (rai.SafetyFlagged)
-        {
-            await RaiBlockAsync(context, workPlanId, edges, integrationBranch, ct).ConfigureAwait(false);
-            return;
+                var rai = await _pipeline.RunRaiAsync(
+                    new CollectiveRaiRequest(context.CoordinatorRunId, context.RepositoryPath, aggregateDiff, context.SubmittingUser), ct)
+                    .ConfigureAwait(false);
+
+                Emit(context.CoordinatorRunId, EventTypes.CoordinatorAssemblyRaiCompleted, new
+                {
+                    workPlanId,
+                    gateId = gate.Id,
+                    raiSafetyFlagged = rai.SafetyFlagged,
+                });
+
+                if (rai.SafetyFlagged)
+                {
+                    await RaiBlockAsync(context, workPlanId, edges, integrationBranch, ct).ConfigureAwait(false);
+                    return;
+                }
+
+                continue;
+            }
+
+            if (gate.GateKind == "rubberduck")
+            {
+                await _assemblyStore.SetStageAsync(workPlanId, gate.StageId, ct).ConfigureAwait(false);
+                await EmitGraphAsync(context.CoordinatorRunId, workPlanId, ct).ConfigureAwait(false);
+                Emit(context.CoordinatorRunId, EventTypes.CoordinatorAssemblyReviewRequested, new
+                {
+                    workPlanId,
+                    integrationBranch,
+                    treeHash = aggregateTreeHash,
+                    gateId = gate.Id,
+                    gateKind = gate.GateKind,
+                    hasChanges = integration.HasChanges,
+                });
+
+                var rubberduck = await _pipeline.RunRubberduckAsync(
+                    new CollectiveRubberduckRequest(
+                        context.CoordinatorRunId,
+                        context.RepositoryPath,
+                        aggregateDiff,
+                        context.SubmittingUser,
+                        gate.GraphNodeId,
+                        gate.Label),
+                    ct).ConfigureAwait(false);
+
+                if (rubberduck.RequestChanges)
+                {
+                    await RequestChangesAsync(
+                        context,
+                        workPlanId,
+                        edges,
+                        new AssemblyReviewDecision(
+                            Approved: false,
+                            RequestChanges: true,
+                            Feedback: rubberduck.Feedback,
+                            TargetFiles: null,
+                            Reviewer: "rubberduck"),
+                        touchedFilesBySubtask,
+                        ct).ConfigureAwait(false);
+                    return;
+                }
+
+                continue;
+            }
+
+            if (gate.GateKind == "human-review")
+            {
+                // ── ONE human review gate (D5) ───────────────────────────────────────────────────
+                await _assemblyStore.SetStatusAndStageAsync(
+                    workPlanId, WorkPlanStatus.InReview, gate.StageId, ct).ConfigureAwait(false);
+                await EmitGraphAsync(context.CoordinatorRunId, workPlanId, ct).ConfigureAwait(false);
+                Emit(context.CoordinatorRunId, EventTypes.CoordinatorAssemblyReviewRequested, new
+                {
+                    workPlanId,
+                    integrationBranch,
+                    treeHash = aggregateTreeHash,
+                    includedSubtaskIds,
+                    gateId = gate.Id,
+                    gateKind = gate.GateKind,
+                    hasChanges = integration.HasChanges,
+                });
+                await CoordinatorAssemblyReviewPersistence.UpsertReviewRequestAsync(
+                    _scopeFactory,
+                    context.CoordinatorRunId,
+                    context.SubmittingUser,
+                    integrationBranch,
+                    aggregateTreeHash,
+                    ct).ConfigureAwait(false);
+
+                var decision = await AwaitReviewDecisionAsync(context, workPlanId, edges, ct).ConfigureAwait(false);
+                if (decision is null)
+                    return;
+
+                if (!await ApplyAuthoredGateDecisionAsync(
+                        context,
+                        workPlanId,
+                        edges,
+                        touchedFilesBySubtask,
+                        decision,
+                        ct).ConfigureAwait(false))
+                    return;
+            }
         }
 
-        // ── ONE human review gate (D5) ───────────────────────────────────────────────────────────
-        await _assemblyStore.SetStatusAndStageAsync(
-            workPlanId, WorkPlanStatus.InReview, AssemblyStage.Review, ct).ConfigureAwait(false);
-        await EmitGraphAsync(context.CoordinatorRunId, workPlanId, ct).ConfigureAwait(false);
-        Emit(context.CoordinatorRunId, EventTypes.CoordinatorAssemblyReviewRequested, new
-        {
-            workPlanId,
-            integrationBranch,
-            treeHash = aggregateTreeHash,
-            includedSubtaskIds,
-            raiSafetyFlagged = rai.SafetyFlagged,
-            hasChanges = integration.HasChanges,
-        });
-        await CoordinatorAssemblyReviewPersistence.UpsertReviewRequestAsync(
-            _scopeFactory,
-            context.CoordinatorRunId,
-            context.SubmittingUser,
-            integrationBranch,
-            aggregateTreeHash,
-            ct).ConfigureAwait(false);
-
-        var decision = await AwaitReviewDecisionAsync(context, workPlanId, edges, ct).ConfigureAwait(false);
-        if (decision is null)
-            return;
-
-        await ApplyReviewDecisionAsync(
-            context,
-            workPlanId,
-            edges,
-            integrationBranch,
-            aggregateTreeHash,
-            touchedFilesBySubtask,
-            decision,
-            ct).ConfigureAwait(false);
+        await CompleteAfterApprovalAsync(
+            context, workPlanId, edges, integrationBranch, aggregateTreeHash, ct).ConfigureAwait(false);
     }
 
     // -----------------------------------------------------------------------
@@ -854,6 +920,54 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         _logger.LogInformation("Collective assembly: run {RunId} declined", context.CoordinatorRunId);
     }
 
+    private async Task<bool> ApplyAuthoredGateDecisionAsync(
+        CoordinatorDispatchContext context,
+        int workPlanId,
+        IReadOnlyCollection<(int, int)> edges,
+        IReadOnlyDictionary<int, IReadOnlySet<string>> touchedFilesBySubtask,
+        AssemblyReviewDecision decision,
+        CancellationToken ct)
+    {
+        if (decision.Approved)
+        {
+            Emit(context.CoordinatorRunId, EventTypes.CoordinatorAssemblyReviewApproved, new { workPlanId });
+            await CoordinatorAssemblyReviewPersistence.ClearAsync(_scopeFactory, context.CoordinatorRunId, ct)
+                .ConfigureAwait(false);
+            await _assemblyStore.SetStatusAndStageAsync(
+                workPlanId, WorkPlanStatus.Assembling, null, ct).ConfigureAwait(false);
+            return true;
+        }
+
+        if (decision.RequestChanges)
+        {
+            await RequestChangesAsync(
+                context, workPlanId, edges, decision, touchedFilesBySubtask, ct).ConfigureAwait(false);
+            return false;
+        }
+
+        const string declineReason = "assembly_declined";
+        await _assemblyStore.SetStatusAndStageAsync(
+            workPlanId, WorkPlanStatus.AssemblyDeclined, null, ct).ConfigureAwait(false);
+        await CoordinatorAssemblyReviewPersistence.ClearAsync(_scopeFactory, context.CoordinatorRunId, ct)
+            .ConfigureAwait(false);
+        Emit(context.CoordinatorRunId, EventTypes.CoordinatorAssemblyDeclined, new
+        {
+            workPlanId,
+            reason = declineReason,
+            reviewer = decision.Reviewer,
+        });
+        await EmitGraphAsync(context.CoordinatorRunId, workPlanId, ct).ConfigureAwait(false);
+        await EmitTopologyAsync(context.CoordinatorRunId, workPlanId, WorkPlanStatus.AssemblyDeclined, edges, ct)
+            .ConfigureAwait(false);
+        await TerminalizeCoordinatorRunAsync(
+            context.CoordinatorRunId, RunStatus.Declined, declineReason, ct).ConfigureAwait(false);
+        await RunCoordinatorScribeAsync(context, workPlanId, terminalStatus: RunStatus.Declined.ToApiString(), mergeResult: declineReason, ct)
+            .ConfigureAwait(false);
+        await PersistAndCompleteStreamAsync(context.CoordinatorRunId).ConfigureAwait(false);
+        _logger.LogInformation("Collective assembly: run {RunId} declined", context.CoordinatorRunId);
+        return false;
+    }
+
     private async Task PollDeferredAssemblyReviewDecisionAsync(CoordinatorDispatchContext context, CancellationToken ct)
     {
         while (!ct.IsCancellationRequested && _reviewGate.IsArmed(context.CoordinatorRunId))
@@ -903,6 +1017,46 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         List<string> BranchesInOrder,
         Dictionary<int, IReadOnlySet<string>> TouchedFilesBySubtask,
         List<int> IncludedSubtaskIds);
+
+    private async Task<IReadOnlyList<CoordinatorGraphDescriptor.AssemblyGateNode>> ResolveAssemblyGatesAsync(
+        int workPlanId,
+        CancellationToken ct)
+    {
+        if (_projectStore is null || _workflowRegistry is null)
+            return CoordinatorGraphDescriptor.DefaultAssemblyGates;
+
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var plan = await db.WorkPlans.AsNoTracking()
+            .Where(w => w.Id == workPlanId)
+            .Select(w => new { w.ProjectId, w.WorkflowId })
+            .FirstOrDefaultAsync(ct)
+            .ConfigureAwait(false);
+        if (plan is null || !ProjectId.TryParse(plan.ProjectId, out var projectId))
+            return CoordinatorGraphDescriptor.DefaultAssemblyGates;
+
+        var project = await _projectStore.GetAsync(projectId, ct).ConfigureAwait(false);
+        if (project is null)
+            return CoordinatorGraphDescriptor.DefaultAssemblyGates;
+
+        var workflow = !string.IsNullOrWhiteSpace(plan.WorkflowId)
+            ? _workflowRegistry.Get(project, plan.WorkflowId!)?.Definition
+            : _workflowRegistry.ResolveDefault(project).Definition;
+        workflow ??= _workflowRegistry.ResolveDefault(project).Definition;
+        if (workflow is null)
+            return CoordinatorGraphDescriptor.DefaultAssemblyGates;
+
+        var gates = workflow.Nodes
+            .Select(n => (Node: n, GateKind: NodeClassifier.NormalizeGateKind(n)))
+            .Where(x => x.GateKind is "rai" or "rubberduck" or "human-review")
+            .Select(x => new CoordinatorGraphDescriptor.AssemblyGateNode(
+                x.Node.Id,
+                string.IsNullOrWhiteSpace(x.Node.Label) ? x.Node.Id : x.Node.Label,
+                x.GateKind!))
+            .ToList();
+
+        return gates;
+    }
 
     private async Task CompleteAfterApprovalAsync(
         CoordinatorDispatchContext context,
@@ -1599,8 +1753,9 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
             .Select(w => w.AssemblyStage)
             .FirstOrDefaultAsync(ct).ConfigureAwait(false);
 
+        var gates = await ResolveAssemblyGatesAsync(workPlanId, ct).ConfigureAwait(false);
         entry.RecordNext(EventTypes.CoordinatorGraph,
-            CoordinatorGraphDescriptor.Build(coordinatorRunId, subtasks, deps, stage));
+            CoordinatorGraphDescriptor.Build(coordinatorRunId, subtasks, deps, stage, assemblyGates: gates));
     }
 
     private async Task EmitTopologyAsync(

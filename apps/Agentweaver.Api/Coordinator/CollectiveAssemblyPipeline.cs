@@ -108,6 +108,37 @@ public sealed class CollectiveAssemblyPipeline : ICollectiveAssemblyPipeline
         return new CollectiveRaiResult(SafetyFlagged: output.ContentSafetyFlagged);
     }
 
+    public async Task<CollectiveGateDecision> RunRubberduckAsync(CollectiveRubberduckRequest request, CancellationToken ct)
+    {
+        if (string.IsNullOrEmpty(request.AggregateDiff))
+            return new CollectiveGateDecision(Approved: true, RequestChanges: false, Feedback: null);
+
+        var rubberduck = new RubberduckTurnExecutor(
+            _copilotClientFactory, _scopeProvider, _sandboxExecutor, _sandboxPolicyStore,
+            _approvalStore, _toolApprovalGate, _loggerFactory,
+            _workflowFactory.GetRecordingWriter,
+            name: "assembly-rubberduck",
+            logicalNodeId: request.GateNodeId ?? "assembly-rubberduck",
+            displayLabel: request.DisplayLabel ?? "Rubber-duck review",
+            createSubStream: _workflowFactory.CreateSubStreamWriter,
+            completeSubStream: _workflowFactory.CompleteSubStream);
+
+        var input = new AgentTurnOutput(
+            RunId: request.CoordinatorRunId,
+            TreeHash: string.Empty,
+            Diff: request.AggregateDiff,
+            StepCount: 0,
+            WorktreePath: string.Empty,
+            WorktreeBranch: string.Empty,
+            RepositoryPath: request.RepositoryPath,
+            OriginatingBranch: string.Empty,
+            ContentSafetyFlagged: false,
+            SubmittingUser: request.SubmittingUser);
+
+        var decision = await rubberduck.HandleAsync(input, NoOpWorkflowContext.Instance, ct).ConfigureAwait(false);
+        return new CollectiveGateDecision(decision.Approved, decision.RequestChanges, decision.Feedback);
+    }
+
     public async Task<CollectiveMergeResult> MergeAsync(CollectiveMergeRequest request, CancellationToken ct)
     {
         string canonicalPath;

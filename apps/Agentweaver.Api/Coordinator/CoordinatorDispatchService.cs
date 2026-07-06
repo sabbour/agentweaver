@@ -2123,6 +2123,26 @@ public static class AssemblyStage
         Done => 5,
         _ => 0,
     };
+
+    public static int Ordinal(
+        string? stage,
+        IReadOnlyList<CoordinatorGraphDescriptor.AssemblyGateNode> gates)
+    {
+        if (string.IsNullOrWhiteSpace(stage))
+            return 0;
+
+        for (var i = 0; i < gates.Count; i++)
+            if (string.Equals(stage, gates[i].StageId, StringComparison.Ordinal))
+                return i + 1;
+
+        return stage switch
+        {
+            Merge => gates.Count + 1,
+            Scribe => gates.Count + 2,
+            Done => gates.Count + 3,
+            _ => 0,
+        };
+    }
 }
 
 /// <summary>
