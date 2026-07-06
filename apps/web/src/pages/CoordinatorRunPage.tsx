@@ -45,14 +45,13 @@ import '@xyflow/react/dist/style.css';
 import { useRunStream, type RunStreamEvent } from '../api/sse';
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
-import type { GraphDescriptor, RunStatus, WorkPlanResponse, CoordinatorChildResponse, PortForwardSessionDto, RunAgentTokenBreakdownDto } from '../api/types';
+import type { GraphDescriptor, RunStatus, WorkPlanResponse, PortForwardSessionDto, RunAgentTokenBreakdownDto } from '../api/types';
 import { layoutDagColumns, NODE_W, NODE_H, NODE_TYPE_W, NODE_TYPE_H } from '../utils/dagLayout';
 import type { NodeSizeHint } from '../utils/dagLayout';
 import { OutcomeSpecPanel } from '../components/OutcomeSpecPanel';
 import { AgentAvatar } from '../components/AgentAvatar';
 import { CostChip } from '../components/CostChip';
 import { AgentTokenBreakdown } from '../components/runs/AgentTokenBreakdown';
-import { AgentRail } from '../components/AgentRail';
 import { AgentSessionPanel, type RunSessionTree } from '../components/AgentSessionPanel';
 import { SteerPanel } from '../components/SteerPanel';
 import { SlidePanel } from '../components/SlidePanel';
@@ -60,7 +59,6 @@ import { SteerChatPanel } from '../components/SteerChatPanel';
 import { CoordinatorArtifactsPanel } from '../components/CoordinatorArtifactsPanel';
 import { AutomationToggle } from '../components/AutomationToggle';
 import { AUTOMATION_HELP } from '../components/automationHelp';
-import { deriveAgentQueues } from '../api/agentQueues';
 import { QuestionAnswerCard } from '../components/QuestionAnswerCard';
 import { LifecycleEventCard } from '../components/LifecycleEventCard';
 import { Timeline } from '../components/Timeline';
@@ -757,10 +755,6 @@ const useStyles = makeStyles({
     flexDirection: 'column',
     gap: tokens.spacingVerticalS,
   },
-  agentRailBand: {
-    padding: `${tokens.spacingVerticalS} 0`,
-    borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
-  },
   // Single-column coordinator session layout. The outcome spec moved to a slide-in panel (#164).
   sessionOnly: {
     display: 'flex',
@@ -964,7 +958,7 @@ export function CoordinatorRunPage() {
       .then((desc) => { if (!cancelled) setRestDescriptor(desc); })
       .catch(() => {});
 
-    // Fetch work plan + children for topology status seed + AgentRail. Skip for child runs —
+    // Fetch work plan + children for topology status seed. Skip for child runs —
     // work-plan is a coordinator-only artifact and child runs will never have one.
     void (async () => {
       const runDetail = await apiClient.getRun(runId).catch(() => null);
@@ -981,7 +975,6 @@ export function CoordinatorRunPage() {
       if (workPlan) {
         setTopoSeed(seedTopologyFromWorkPlan(workPlan, children));
         setWorkPlanData(workPlan);
-        setChildrenData(children ?? []);
       }
     })();
 
@@ -1041,9 +1034,8 @@ export function CoordinatorRunPage() {
   // review affordance for a terminal run and show its failure reason instead.
   const [runLevelStatus, setRunLevelStatus] = useState<RunStatus | undefined>(undefined);
   const [retriedFrom, setRetriedFrom] = useState<string | null>(null);
-  // Per-run work-plan + children snapshot — used to drive the AgentRail.
+  // Per-run work-plan snapshot.
   const [workPlanData, setWorkPlanData] = useState<WorkPlanResponse | null>(null);
-  const [childrenData, setChildrenData] = useState<CoordinatorChildResponse[]>([]);
   const [blockedSteerPending, setBlockedSteerPending] = useState(false);
 
   // Sandbox preview port-forward state.
@@ -1974,12 +1966,6 @@ export function CoordinatorRunPage() {
     }
   }, [orch.phase, reviewActionable, runLevelStatus]);
 
-  // Per-run agent load items for the AgentRail — derived from the work-plan + children snapshot.
-  const agentItems = useMemo(
-    () => (workPlanData && runId ? deriveAgentQueues(workPlanData, childrenData, runId) : []),
-    [workPlanData, childrenData, runId],
-  );
-
   // Adapter that points the standard artifact browser at the coordinator's collective assembly:
   // files/diff come from the integration branch (the coordinator owns no worktree), and the three
   // review actions are delivered to the collective assembly gate instead of the per-run endpoints.
@@ -2212,14 +2198,6 @@ export function CoordinatorRunPage() {
           )}
         </>
       </div>
-
-      {/* Agent rail — compact per-agent load summary derived from the work plan.
-          Phase 2 TODO: wire onSelectAgent to filter/highlight the topology and work plan. */}
-      {workPlanData && (
-        <div className={styles.agentRailBand}>
-          <AgentRail agents={agentItems} title="Agents" />
-        </div>
-      )}
 
       {/* Coordinator session: automation/actions controls, the rich run view, and steering. The
           outcome spec now lives in a slide-in panel opened from the [Spec] button under the
