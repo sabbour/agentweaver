@@ -1,4 +1,3 @@
-using Agentweaver.Api.ReviewPolicies;
 using Agentweaver.Api.Workflows;
 using Agentweaver.Domain;
 using FluentAssertions;
@@ -34,27 +33,6 @@ public sealed class DefinitionRegistryReplicaCoherenceTests : IDisposable
         fromReplicaB.FindById("wf-two").Should().NotBeNull();
     }
 
-    [Fact]
-    public void ReviewPolicyRegistry_ReloadsWhenSharedPolicyFilesChangeAcrossInstances()
-    {
-        var project = CreateProject();
-        var policyDir = Path.Combine(_root, ".agentweaver", "review-policies");
-        Directory.CreateDirectory(policyDir);
-        File.WriteAllText(Path.Combine(policyDir, "custom.yaml"), ReviewPolicyYaml("policy-one"));
-
-        var replicaA = new ReviewPolicyRegistry();
-        var replicaB = new ReviewPolicyRegistry();
-        replicaA.GetOrLoad(project).FindByName("policy-one").Should().NotBeNull();
-        replicaB.GetOrLoad(project).FindByName("policy-one").Should().NotBeNull();
-
-        File.WriteAllText(Path.Combine(policyDir, "custom.yaml"), ReviewPolicyYaml("policy-two"));
-        replicaA.Sync(project).FindByName("policy-two").Should().NotBeNull();
-
-        var fromReplicaB = replicaB.GetOrLoad(project);
-        fromReplicaB.FindByName("policy-one").Should().BeNull();
-        fromReplicaB.FindByName("policy-two").Should().NotBeNull();
-    }
-
     public void Dispose()
     {
         if (Directory.Exists(_root))
@@ -88,13 +66,5 @@ public sealed class DefinitionRegistryReplicaCoherenceTests : IDisposable
         edges:
           - from: scribe
             to: done
-        """;
-
-    private static string ReviewPolicyYaml(string name) =>
-        $$"""
-        name: {{name}}
-        steps:
-          - kind: human-review
-            label: Human Review
         """;
 }

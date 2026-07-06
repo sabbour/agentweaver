@@ -79,13 +79,8 @@ public sealed class ProjectService
             throw;
         }
 
-        // Materialize the default review policy into the new project (Feature 010). Best-effort: never fail
-        // creation if this write fails — the loader regenerates the default from DefaultReviewPolicyTemplate
-        // at runtime. A blank project is empty, so this always writes the default policy.
-        TryMaterializeDefaultReviewPolicy(workingDir);
-
         // Materialize the default workflow into the new project so .agentweaver/workflows/ exists and is
-        // visible/editable in the Workspace (mirrors the review-policy scaffold). The WorkflowRegistry
+        // visible/editable in the Workspace. The WorkflowRegistry
         // treats this on-disk 'default' as the built-in copy, so it introduces no reserved-id conflict.
         TryMaterializeDefaultWorkflow(workingDir);
 
@@ -179,14 +174,8 @@ public sealed class ProjectService
             throw;
         }
 
-        // Materialize the default review policy into the cloned project (Feature 010). Best-effort and
-        // non-clobbering: TryMaterialize skips the write when the file already exists, so a repo that
-        // ships its own review policies is never overwritten. Never fails creation; the loader
-        // regenerates the default from DefaultReviewPolicyTemplate at runtime.
-        TryMaterializeDefaultReviewPolicy(workingDir);
-
         // Materialize the default workflow into the cloned project so .agentweaver/workflows/ exists and
-        // is visible/editable in the Workspace (mirrors the review-policy scaffold). Non-clobbering: a
+        // is visible/editable in the Workspace. Non-clobbering: a
         // repo that already ships a default.yaml is never overwritten. The WorkflowRegistry treats this
         // on-disk 'default' as the built-in copy, so it introduces no reserved-id conflict.
         TryMaterializeDefaultWorkflow(workingDir);
@@ -419,28 +408,9 @@ public sealed class ProjectService
     }
 
     /// <summary>
-    /// Best-effort materialization of the default review policy into the project's working directory at
-    /// <c>.agentweaver/review-policies/default.yaml</c> (Feature 010, FR-032). Non-clobbering and never
-    /// throws: project creation must not fail if this write fails, because the review-policy registry
-    /// regenerates the default from <see cref="ReviewPolicies.DefaultReviewPolicyTemplate"/> at runtime.
-    /// </summary>
-    private void TryMaterializeDefaultReviewPolicy(string workingDir)
-    {
-        var written = ReviewPolicies.DefaultReviewPolicyTemplate.TryMaterialize(workingDir, out var error);
-        if (error is not null)
-            _logger.LogWarning(
-                "Failed to materialize the default review policy into {Path} ({Error}); the runtime default will be used instead.",
-                Path.Combine(workingDir, ReviewPolicies.DefaultReviewPolicyTemplate.RelativeFilePath), error);
-        else if (written)
-            _logger.LogInformation(
-                "Materialized the default review policy into {Path}.",
-                Path.Combine(workingDir, ReviewPolicies.DefaultReviewPolicyTemplate.RelativeFilePath));
-    }
-
-    /// <summary>
     /// Best-effort materialization of the default workflow into the project's working directory at
     /// <c>.agentweaver/workflows/default.yaml</c> so the directory exists and is visible/editable in the
-    /// Workspace (mirrors <see cref="TryMaterializeDefaultReviewPolicy"/>). Non-clobbering and never
+    /// Workspace. Non-clobbering and never
     /// throws: project creation must not fail if this write fails, because the workflow registry
     /// regenerates the default from <see cref="Workflows.DefaultWorkflowTemplate"/> at runtime and treats
     /// this on-disk copy as the built-in default (no reserved-id conflict).

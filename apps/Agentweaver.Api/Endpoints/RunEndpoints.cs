@@ -14,10 +14,10 @@ using Agentweaver.Api.Coordinator;
 using Agentweaver.Api.Git;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Projects;
-using Agentweaver.Api.ReviewPolicies;
 using Agentweaver.Api.Runs;
 using Agentweaver.Api.Sandbox;
 using Agentweaver.Api.Security;
+using Agentweaver.Api.Workflows;
 using Agentweaver.Domain;
 using Agentweaver.Squad.Catalog;
 using Agentweaver.Squad.Model;
@@ -33,72 +33,10 @@ public static class RunEndpoints
     {
 app.MapGet("/", () => "Agentweaver API");
 
-app.MapPost("/api/runs", async (
-    HttpContext httpContext,
-    CreateRunRequest request,
-    RunOrchestrator orchestrator,
-    RepositoryRootValidator repoValidator,
-    IRunOptionsStore runOptions,
-    ILogger<Program> logger,
-    CancellationToken ct) =>
-{
-    var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
-
-    if (string.IsNullOrWhiteSpace(request.Task) || string.IsNullOrWhiteSpace(request.ModelSource))
-        return Results.BadRequest(new { error = "task and model_source are required." });
-
-    if (string.IsNullOrWhiteSpace(request.RepositoryPath) || string.IsNullOrWhiteSpace(request.OriginatingBranch))
-        return Results.BadRequest(new { error = "repository_path and originating_branch are required." });
-
-    ModelSource modelSource;
-    try { modelSource = ModelSourceExtensions.FromApiString(request.ModelSource); }
-    catch (ArgumentException) { return Results.BadRequest(new { error = "model_source must be 'github-copilot' or 'microsoft-foundry'." }); }
-
-    // Validate and canonicalize the repository path (A2 security fix).
-    string canonicalRepoPath;
-    try
-    {
-        canonicalRepoPath = repoValidator.ValidateAndCanonicalize(request.RepositoryPath);
-    }
-    catch (RunSubmissionValidationException ex)
-    {
-        return Results.BadRequest(new { error = ex.Message });
-    }
-
-    var run = new Run
-    {
-        Id = RunId.New(),
-        RepositoryPath = canonicalRepoPath,
-        OriginatingBranch = request.OriginatingBranch,
-        ModelSource = modelSource,
-        Task = request.Task,
-        SubmittingUser = caller.User,
-        Status = RunStatus.Pending,
-        StartedAt = DateTimeOffset.UtcNow,
-        AgentName = string.IsNullOrWhiteSpace(request.AgentName) ? null : request.AgentName,
-    };
-
-    // Seed the per-run options (auto-approve-tools) before the run starts so the runner's
-    // permission handler reads the launch value on its first tool call. Autopilot is a
-    // coordinator-only option, so a standalone run only carries the auto-approve flag.
-    runOptions.Set(run.Id.ToString(), new RunOptions(AutoApproveTools: request.AutoApproveTools));
-
-    try
-    {
-        await orchestrator.StartRunAsync(run, ct);
-    }
-    catch (RunSubmissionValidationException ex)
-    {
-        return Results.BadRequest(new { error = ex.Message });
-    }
-    catch (Exception ex)
-    {
-        logger.LogError(ex, "Failed to start run {RunId}", run.Id);
-        return Results.Problem("Failed to start the run.", statusCode: 500);
-    }
-
-    return Results.Accepted($"/api/runs/{run.Id}", new CreateRunResponse { RunId = run.Id.ToString(), WorkflowRunId = run.Id.ToString(), Status = "in_progress" });
-});
+app.MapPost("/api/runs", () => Results.Problem(
+    title: "Single-run endpoint deprecated",
+    detail: "Start work through POST /api/projects/{id}/orchestrations so the Coordinator can decompose, assemble, review, merge, and scribe.",
+    statusCode: StatusCodes.Status410Gone));
 
 app.MapGet("/api/runs/{id}", async (
     HttpContext httpContext,
@@ -632,13 +570,12 @@ app.MapGet("/api/runs/{id}/graph", async (
 
         return Results.Ok(descriptor);
     }
-    catch (ReviewPolicyCompositionException ex)
+    catch (WorkflowBindException ex)
     {
-        logger.LogError(ex, "Policy hook failed while building graph for run {RunId}", id);
+        logger.LogError(ex, "Workflow binding failed while building graph for run {RunId}", id);
         return Results.Conflict(new
         {
-            error = "policy_hook_failed",
-            code = ex.Code,
+            error = "workflow_bind_failed",
             detail = ex.Message,
         });
     }

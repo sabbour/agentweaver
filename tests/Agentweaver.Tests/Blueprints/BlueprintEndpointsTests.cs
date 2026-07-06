@@ -229,7 +229,7 @@ public sealed class BlueprintEndpointsTests : IClassFixture<BlueprintsWebApplica
     }
 
     [Fact]
-    public async Task CreateProject_InlineBlueprintWithUnknownWorkflowOrPolicy_IsRejected()
+    public async Task CreateProject_InlineBlueprintWithUnknownWorkflow_IsRejected()
     {
         var request = new CreateProjectRequest
         {
@@ -240,10 +240,10 @@ public sealed class BlueprintEndpointsTests : IClassFixture<BlueprintsWebApplica
             {
                 Id = "blueprint-with-unknown-refs",
                 Name = "With Unknown References",
-                Description = "References workflow and review policy ids that are unavailable.",
+                Description = "References a workflow id that is unavailable.",
                 Roster = ["backend-engineer"],
                 Workflow = "missing-workflow",
-                ReviewPolicy = "missing-review-policy",
+                ReviewPolicy = "default",
                 SandboxProfile = "default",
             },
         };
@@ -255,7 +255,6 @@ public sealed class BlueprintEndpointsTests : IClassFixture<BlueprintsWebApplica
         body.GetProperty("error").GetString().Should().Be("invalid_blueprint");
         var details = body.GetProperty("details").EnumerateArray().Select(e => e.GetString()).ToList();
         details.Should().Contain(e => e!.Contains("missing-workflow"));
-        details.Should().Contain(e => e!.Contains("missing-review-policy"));
     }
 
     [Fact]

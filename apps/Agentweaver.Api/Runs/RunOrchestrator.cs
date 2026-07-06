@@ -2,7 +2,7 @@ using Agentweaver.AgentRuntime.Workflow;
 using Agentweaver.Api.Git;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Memory;
-using Agentweaver.Api.ReviewPolicies;
+using Agentweaver.Api.Workflows;
 using Agentweaver.Domain;
 using Microsoft.Data.Sqlite;
 using System.Text;
@@ -450,21 +450,20 @@ public sealed class RunOrchestrator
         {
             return await _workflowFactory.StartAsync(input, runId.ToString(), ct, isChild).ConfigureAwait(false);
         }
-        catch (ReviewPolicyCompositionException ex)
+        catch (WorkflowBindException ex)
         {
-            _logger.LogError(ex, "Policy hook failed for run {RunId}; transitioning to failed", runId);
-            var result = $"policy_hook_failed: {ex.Code}: {ex.Message}";
+            _logger.LogError(ex, "Workflow binding failed for run {RunId}; transitioning to failed", runId);
+            var result = $"workflow_bind_failed: {ex.Message}";
             try
             {
                 var changed = await _runStore.TrySetTerminalStatusAsync(
                     runId, RunStatus.Failed, DateTimeOffset.UtcNow, result, CancellationToken.None)
                     .ConfigureAwait(false);
                 if (changed)
-                    EmitLaunchFailureMetrics(await _runStore.GetAsync(runId, CancellationToken.None).ConfigureAwait(false), "policy_hook_failed");
+                    EmitLaunchFailureMetrics(await _runStore.GetAsync(runId, CancellationToken.None).ConfigureAwait(false), "workflow_bind_failed");
                 entry.RecordNext(EventTypes.RunFailed, new
                 {
-                    reason = "policy_hook_failed",
-                    code = ex.Code,
+                    reason = "workflow_bind_failed",
                     detail = ex.Message,
                 });
                 _ = FirePostRunScribeAsync(runId.ToString());

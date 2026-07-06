@@ -1,6 +1,5 @@
 using Microsoft.Extensions.Logging;
 using Agentweaver.Api.Casting;
-using Agentweaver.Api.ReviewPolicies;
 using Agentweaver.Api.Workflows;
 using Agentweaver.Domain;
 using Agentweaver.Squad.Catalog;
@@ -17,7 +16,7 @@ public sealed record BlueprintValidationResult(bool Valid, IReadOnlyList<string>
 /// <summary>
 /// Application service for blueprints (Feature 012): list predefined, validate against the schema
 /// and the role constraint (rosters may reference only catalog roles), apply a blueprint to a
-/// project (seed the roster via the casting pipeline and set the project's workflow/review-policy/
+/// project (seed the roster via the casting pipeline and set the project's workflow/
 /// sandbox defaults), and generate a blueprint from a description via the model. Blueprints never
 /// mint roles.
 /// </summary>
@@ -34,7 +33,6 @@ public sealed class BlueprintService
     private readonly IProjectStore _projectStore;
     private readonly ISandboxPolicyStore _sandboxPolicyStore;
     private readonly WorkflowRegistry _workflowRegistry;
-    private readonly ReviewPolicyRegistry _reviewPolicyRegistry;
     private readonly IBlueprintGenerator _generator;
     private readonly IWorkflowGenerator _workflowGenerator;
     private readonly ILogger<BlueprintService> _logger;
@@ -45,7 +43,6 @@ public sealed class BlueprintService
         IProjectStore projectStore,
         ISandboxPolicyStore sandboxPolicyStore,
         WorkflowRegistry workflowRegistry,
-        ReviewPolicyRegistry reviewPolicyRegistry,
         IBlueprintGenerator generator,
         IWorkflowGenerator workflowGenerator,
         ILogger<BlueprintService> logger)
@@ -55,7 +52,6 @@ public sealed class BlueprintService
         _projectStore = projectStore;
         _sandboxPolicyStore = sandboxPolicyStore;
         _workflowRegistry = workflowRegistry;
-        _reviewPolicyRegistry = reviewPolicyRegistry;
         _generator = generator;
         _workflowGenerator = workflowGenerator;
         _logger = logger;
@@ -71,7 +67,7 @@ public sealed class BlueprintService
     /// catalog is rejected with a clear error.
     /// </summary>
     /// <param name="blueprint">The blueprint to validate.</param>
-    /// <param name="project">Optional project for workflow/review-policy registry lookups.</param>
+    /// <param name="project">Optional project for workflow registry lookups.</param>
     /// <param name="extraKnownWorkflowIds">Additional workflow ids treated as valid (e.g. a freshly
     /// generated workflow not yet on disk). Avoids rejecting a blueprint whose workflows array contains
     /// an id that the registry cannot find because the file hasn't been materialized yet.</param>
@@ -108,10 +104,6 @@ public sealed class BlueprintService
                     errors.Add($"workflow '{wfId}' is not available for this project.");
             }
         }
-        if (!string.IsNullOrWhiteSpace(blueprint.ReviewPolicy) &&
-            _reviewPolicyRegistry.Get(project, blueprint.ReviewPolicy) is null)
-            errors.Add($"review_policy '{blueprint.ReviewPolicy}' is not available for this project.");
-
         if (string.IsNullOrWhiteSpace(blueprint.SandboxProfile))
             errors.Add("sandbox_profile is required.");
         else if (!_knownSandbox.Contains(blueprint.SandboxProfile))
