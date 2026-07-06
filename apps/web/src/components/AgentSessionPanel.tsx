@@ -28,6 +28,9 @@ import {
   OpenRegular,
   SendRegular,
 } from '@fluentui/react-icons';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import rehypeSanitize from 'rehype-sanitize';
 import { apiClient } from '../api/apiClient';
 import type { WorkspaceFileDiff, WorkspaceFileEntry } from '../api/types';
 import { useRunStream, type EventType, type RunStreamEvent } from '../api/sse';
@@ -372,6 +375,80 @@ const useStyles = makeStyles({
     whiteSpace: 'pre-wrap',
     wordBreak: 'break-word',
     lineHeight: tokens.lineHeightBase300,
+  },
+  markdownBody: {
+    whiteSpace: 'normal',
+    overflowWrap: 'anywhere',
+    '& p': {
+      marginTop: 0,
+      marginBottom: tokens.spacingVerticalS,
+    },
+    '& p:last-child': {
+      marginBottom: 0,
+    },
+    '& h1, & h2, & h3, & h4, & h5, & h6': {
+      marginTop: tokens.spacingVerticalM,
+      marginBottom: tokens.spacingVerticalS,
+      lineHeight: tokens.lineHeightBase400,
+      fontWeight: tokens.fontWeightSemibold,
+    },
+    '& h1:first-child, & h2:first-child, & h3:first-child, & h4:first-child, & h5:first-child, & h6:first-child': {
+      marginTop: 0,
+    },
+    '& ul, & ol': {
+      marginTop: 0,
+      marginBottom: tokens.spacingVerticalS,
+      paddingLeft: tokens.spacingHorizontalXL,
+    },
+    '& li': {
+      marginBottom: tokens.spacingVerticalXXS,
+    },
+    '& blockquote': {
+      margin: `${tokens.spacingVerticalS} 0`,
+      paddingLeft: tokens.spacingHorizontalM,
+      borderLeft: `3px solid ${tokens.colorNeutralStroke2}`,
+      color: tokens.colorNeutralForeground2,
+    },
+    '& a': {
+      color: tokens.colorBrandForegroundLink,
+      textDecorationLine: 'none',
+      ':hover': {
+        textDecorationLine: 'underline',
+      },
+    },
+    '& code': {
+      fontFamily: tokens.fontFamilyMonospace,
+      fontSize: tokens.fontSizeBase200,
+      backgroundColor: tokens.colorNeutralBackground2,
+      borderRadius: tokens.borderRadiusSmall,
+      padding: '1px 4px',
+    },
+    '& pre': {
+      margin: `${tokens.spacingVerticalS} 0`,
+      padding: tokens.spacingVerticalS,
+      borderRadius: tokens.borderRadiusMedium,
+      backgroundColor: tokens.colorNeutralBackground2,
+      overflowX: 'auto',
+      maxWidth: '100%',
+    },
+    '& pre code': {
+      display: 'block',
+      padding: 0,
+      backgroundColor: 'transparent',
+      whiteSpace: 'pre',
+      overflowWrap: 'normal',
+    },
+    '& table': {
+      borderCollapse: 'collapse',
+      display: 'block',
+      overflowX: 'auto',
+      maxWidth: '100%',
+      marginBottom: tokens.spacingVerticalS,
+    },
+    '& th, & td': {
+      border: `1px solid ${tokens.colorNeutralStroke2}`,
+      padding: `${tokens.spacingVerticalXXS} ${tokens.spacingHorizontalS}`,
+    },
   },
   bubbleSystem: {
     backgroundColor: tokens.colorNeutralBackground2,
@@ -745,6 +822,24 @@ function authorForRole(role: ConversationRow['role']): { name: string; role: str
   if (role === 'system') return { name: 'System', role: 'Prompt', collapsedLabel: 'System prompt' };
   if (role === 'user') return { name: 'Coordinator', role: 'Instruction', collapsedLabel: 'Coordinator instruction' };
   return { name: 'Agent', role: 'Worker response' };
+}
+
+function MarkdownMessage({ content }: { content: string }) {
+  return (
+    <ReactMarkdown
+      remarkPlugins={[remarkGfm]}
+      rehypePlugins={[rehypeSanitize]}
+      components={{
+        a: ({ href, children, ...props }) => (
+          <a href={href} target="_blank" rel="noreferrer" {...props}>
+            {children}
+          </a>
+        ),
+      }}
+    >
+      {content}
+    </ReactMarkdown>
+  );
 }
 
 function statusLabel(status: string): string {
@@ -1534,14 +1629,14 @@ function ConversationTurnBlock({
                     <Text>{author.collapsedLabel}</Text>
                   </button>
                   {expanded && (
-                    <div className={mergeClasses(styles.messageBubble, row.role === 'system' ? styles.bubbleSystem : styles.bubbleUser)}>
-                      {row.content}
+                    <div className={mergeClasses(styles.messageBubble, styles.markdownBody, row.role === 'system' ? styles.bubbleSystem : styles.bubbleUser)}>
+                      <MarkdownMessage content={row.content} />
                     </div>
                   )}
                 </>
               ) : (
-                <div className={mergeClasses(styles.messageBubble, styles.bubbleAgent)}>
-                  {row.content}
+                <div className={mergeClasses(styles.messageBubble, styles.markdownBody, styles.bubbleAgent)}>
+                  <MarkdownMessage content={row.content} />
                 </div>
               )}
             </div>
