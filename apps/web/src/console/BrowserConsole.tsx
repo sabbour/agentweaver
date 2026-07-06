@@ -46,60 +46,87 @@ import {
 
 type TurnSourceKind = 'coordinator';
 
+// Dedicated terminal color scope (constitution II allows a scoped palette for the
+// console's TUI surface). These stay local to this shell and never leak into the
+// shared Fluent-themed pages.
+const TERM = {
+  bg: '#0b0f14',
+  bgRaised: '#0e141b',
+  fg: '#d6dee6',
+  fgMuted: '#7c8b9a',
+  fgDim: '#5b6b7a',
+  border: '#1e2833',
+  accent: '#8fd0ff',
+  prompt: '#6fd08f',
+  branch: '#e6c07b',
+  ok: '#8fe3a6',
+  warn: '#ffcf6b',
+  err: '#ff8a80',
+  mono: 'Consolas, "Cascadia Code", "SF Mono", Menlo, monospace',
+} as const;
+
 const useStyles = makeStyles({
+  // Full-height terminal surface: header (compact) → scrollback (flex, scrolls)
+  // → prompt line (pinned bottom), like a real CLI.
   root: {
     display: 'flex',
     flexDirection: 'column',
     height: '100%',
     minHeight: 0,
-    backgroundColor: '#0b0f14',
-    color: '#d6dee6',
-    fontFamily: 'Consolas, "Cascadia Code", "SF Mono", Menlo, monospace',
-    ...shorthands.padding(tokens.spacingVerticalM, tokens.spacingHorizontalM),
-    ...shorthands.gap(tokens.spacingVerticalS),
+    backgroundColor: TERM.bg,
+    color: TERM.fg,
+    fontFamily: TERM.mono,
+    fontSize: tokens.fontSizeBase200,
+    lineHeight: '1.5',
+    overflow: 'hidden',
   },
   header: {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'space-between',
-    gap: tokens.spacingHorizontalM,
-    ...shorthands.borderBottom('1px', 'solid', '#1e2833'),
-    paddingBottom: tokens.spacingVerticalS,
-  },
-  title: { fontWeight: 600, letterSpacing: '0.04em', color: '#8fd0ff' },
-  headerMeta: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
-  body: { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, overflow: 'hidden' },
-  transcript: {
     flexShrink: 0,
-    maxHeight: '42%',
+    gap: tokens.spacingHorizontalM,
+    ...shorthands.borderBottom('1px', 'solid', TERM.border),
+    ...shorthands.padding('6px', tokens.spacingHorizontalM),
+    backgroundColor: TERM.bgRaised,
+  },
+  title: { fontWeight: 600, letterSpacing: '0.04em', color: TERM.accent },
+  headerMeta: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
+  headerLabel: { color: TERM.fgMuted },
+  // The scrollback fills all remaining height — no more cramped 42% void.
+  body: { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' },
+  transcript: {
+    flex: '1 1 auto',
+    minHeight: 0,
     overflowY: 'auto',
     display: 'flex',
     flexDirection: 'column',
-    gap: '2px',
-    fontSize: tokens.fontSizeBase200,
-    lineHeight: '1.45',
+    gap: '1px',
+    ...shorthands.padding(tokens.spacingVerticalS, tokens.spacingHorizontalM),
   },
   line: { whiteSpace: 'pre-wrap', wordBreak: 'break-word', display: 'flex', gap: tokens.spacingHorizontalXS },
-  promptGlyph: { color: '#6fd08f', userSelect: 'none' },
-  sysGlyph: { color: '#5b6b7a', userSelect: 'none' },
-  errText: { color: '#ff8a80' },
-  warnText: { color: '#ffcf6b' },
-  okText: { color: '#8fe3a6' },
-  linkList: { display: 'flex', flexDirection: 'column', gap: '1px', marginLeft: '1.4em' },
+  gutter: { flexShrink: 0, width: '1.1em', textAlign: 'center', userSelect: 'none' },
+  promptGlyph: { color: TERM.prompt },
+  sysGlyph: { color: TERM.fgDim },
+  errText: { color: TERM.err },
+  warnText: { color: TERM.warn },
+  okText: { color: TERM.ok },
+  linkList: { display: 'flex', flexDirection: 'column', gap: '1px', marginLeft: '1.5em' },
   link: {
-    color: '#8fd0ff',
+    color: TERM.accent,
     textDecorationLine: 'none',
     display: 'inline-flex',
     alignItems: 'center',
     gap: '4px',
+    ':hover': { textDecorationLine: 'underline' },
   },
+  // Bound-run panel shares the scrollback space (flex-grows past the console log).
   runPanel: {
-    flex: 1,
-    minHeight: 0,
+    flex: '2 1 0',
+    minHeight: '160px',
     display: 'flex',
     flexDirection: 'column',
-    ...shorthands.border('1px', 'solid', '#1e2833'),
-    ...shorthands.borderRadius(tokens.borderRadiusMedium),
+    ...shorthands.borderTop('1px', 'solid', TERM.border),
     backgroundColor: tokens.colorNeutralBackground1,
     color: tokens.colorNeutralForeground1,
     overflow: 'hidden',
@@ -122,12 +149,62 @@ const useStyles = makeStyles({
     backgroundColor: tokens.colorNeutralBackground2,
     ...shorthands.borderBottom('1px', 'solid', tokens.colorNeutralStroke2),
   },
-  timelineScroll: { flex: 1, minHeight: 0, overflowY: 'auto', ...shorthands.padding(tokens.spacingHorizontalM) },
-  composer: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'flex-end' },
+  // Scoped terminal look for the shared <Timeline> — monospace + dense spacing
+  // applied to DESCENDANTS only. The Timeline component itself is untouched.
+  timelineScroll: {
+    flex: 1,
+    minHeight: 0,
+    overflowY: 'auto',
+    ...shorthands.padding(tokens.spacingHorizontalM),
+    '& *': { fontFamily: TERM.mono },
+  },
+  // CLI-style prompt line pinned to the bottom of the terminal.
+  promptLine: {
+    flexShrink: 0,
+    display: 'flex',
+    alignItems: 'flex-start',
+    gap: tokens.spacingHorizontalXS,
+    ...shorthands.borderTop('1px', 'solid', TERM.border),
+    ...shorthands.padding('6px', tokens.spacingHorizontalM),
+    backgroundColor: TERM.bgRaised,
+  },
+  promptContext: {
+    flexShrink: 0,
+    userSelect: 'none',
+    paddingTop: '5px',
+    whiteSpace: 'nowrap',
+  },
+  promptPath: { color: TERM.accent },
+  promptBranch: { color: TERM.branch },
+  promptCaret: { color: TERM.prompt, marginLeft: '0.4em', marginRight: '0.2em' },
+  blink: {
+    animationName: {
+      '0%, 49%': { opacity: 1 },
+      '50%, 100%': { opacity: 0 },
+    },
+    animationDuration: '1.05s',
+    animationIterationCount: 'infinite',
+    animationTimingFunction: 'step-end',
+  },
+  // Borderless, transparent input that reads as part of the prompt line.
   input: {
     flex: 1,
-    fontFamily: 'Consolas, "Cascadia Code", "SF Mono", Menlo, monospace',
+    minWidth: 0,
+    backgroundColor: 'transparent',
+    ...shorthands.border('0'),
+    ...shorthands.padding('0'),
+    '::after': { display: 'none' },
+    '& textarea': {
+      fontFamily: TERM.mono,
+      fontSize: tokens.fontSizeBase200,
+      lineHeight: '1.5',
+      color: TERM.fg,
+      backgroundColor: 'transparent',
+      ...shorthands.padding('0'),
+      '::placeholder': { color: TERM.fgDim },
+    },
   },
+  sendBtn: { flexShrink: 0 },
 });
 
 interface ConsoleLink { label: string; to: string }
@@ -457,7 +534,7 @@ export function BrowserConsole() {
       <div className={styles.header}>
         <Text className={styles.title}>agentweaver://console</Text>
         <div className={styles.headerMeta}>
-          <Text size={200} style={{ color: '#8fa3b5' }}>project:</Text>
+          <Text size={200} className={styles.headerLabel}>project:</Text>
           <Badge appearance="tint" color={activeProject ? 'brand' : 'subtle'}>{activeLabel}</Badge>
           {boundRunId && <Badge appearance="tint" color="informative">{boundRunKind} · {boundRunId.slice(0, 8)}</Badge>}
         </div>
@@ -468,8 +545,8 @@ export function BrowserConsole() {
           {lines.map((l) => (
             <div key={l.id}>
               <div className={styles.line}>
-                <span className={l.tone === 'user' ? styles.promptGlyph : styles.sysGlyph} aria-hidden="true">
-                  {l.tone === 'user' ? '>' : '·'}
+                <span className={`${styles.gutter} ${l.tone === 'user' ? styles.promptGlyph : styles.sysGlyph}`} aria-hidden="true">
+                  {l.tone === 'user' ? '❯' : '·'}
                 </span>
                 <span className={toneClass(l.tone)}>{l.text}</span>
               </div>
@@ -544,18 +621,26 @@ export function BrowserConsole() {
         )}
       </div>
 
-      <div className={styles.composer}>
+      <div className={styles.promptLine}>
+        <span className={styles.promptContext} aria-hidden="true">
+          <span className={styles.promptPath}>~\Git\agentweaver</span>
+          {' '}
+          <span className={styles.promptBranch}>[{activeProject ? activeProject.name : 'integration'}]</span>
+          <span className={styles.promptCaret}>❯</span>
+        </span>
         <Textarea
           className={styles.input}
+          appearance="filled-lighter"
           value={input}
           placeholder={boundRunId ? 'Message the coordinator, or /command …' : 'Type /help, /projects, /orchestrate <goal> — or prose to start a conversation'}
           onChange={(_, d) => setInput(d.value)}
           onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void submit(); } }}
           disabled={busy}
-          resize="vertical"
+          resize="none"
           aria-label="Console input"
         />
-        <Button appearance="primary" icon={busy ? <Spinner size="tiny" /> : <Send16Regular />} disabled={busy || !input.trim()} onClick={() => void submit()}>
+        {!input && !busy && <span className={`${styles.promptCaret} ${styles.blink}`} aria-hidden="true">▋</span>}
+        <Button className={styles.sendBtn} size="small" appearance="subtle" icon={busy ? <Spinner size="tiny" /> : <Send16Regular />} disabled={busy || !input.trim()} onClick={() => void submit()}>
           Send
         </Button>
       </div>
