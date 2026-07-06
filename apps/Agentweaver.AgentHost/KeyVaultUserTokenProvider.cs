@@ -172,7 +172,7 @@ internal sealed class KeyVaultGitHubTokenStore : IGitHubTokenStore
 
 /// <summary>
 /// Token-scope provider for the warm-pool path: resolves the per-user scope from the runtime state
-/// populated by <c>POST /configure</c> (falls back to the runtime-supplied user id, then installation).
+/// populated by <c>POST /configure</c> or the runtime-supplied user id. Fails closed when absent.
 /// </summary>
 internal sealed class RuntimeUserScopeProvider : IGitHubTokenScopeProvider
 {
@@ -185,6 +185,11 @@ internal sealed class RuntimeUserScopeProvider : IGitHubTokenScopeProvider
         var effective = !string.IsNullOrWhiteSpace(_runtimeState.UserId)
             ? _runtimeState.UserId
             : (string.IsNullOrWhiteSpace(userId) ? null : userId);
-        return effective is not null ? GitHubTokenScope.ForUser(effective) : GitHubTokenScope.Installation;
+        if (effective is null)
+            throw new InvalidOperationException(
+                "AgentHost cannot resolve a Copilot token scope without the submitting user identity; " +
+                "installation-scope Copilot auth is not permitted.");
+
+        return GitHubTokenScope.ForUser(effective);
     }
 }
