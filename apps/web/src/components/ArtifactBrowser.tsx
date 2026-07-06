@@ -686,6 +686,46 @@ function renderFlatChangesList({
 }
 
 // ---------------------------------------------------------------------------
+// CompactChangesList — shared dense changed-files list (status icon + bold
+// filename + right-aligned +N -M + status badge). Reused by the Changes tab of
+// both FileTreePanel and AgentSessionPanel so there is a single source of truth
+// for the "dense list" look. Clicking a row invokes onFileClick(path, true),
+// which callers wire to open the shared diff/file viewer.
+// ---------------------------------------------------------------------------
+
+interface CompactChangesListProps {
+  files: WorkspaceFileEntry[];
+  selectedPath?: string | null;
+  onFileClick: (path: string, isChanged: boolean) => void;
+  /** Show the "Branch Changes" header with the aggregate +added/-removed totals. */
+  showHeader?: boolean;
+}
+
+export function CompactChangesList({
+  files,
+  selectedPath = null,
+  onFileClick,
+  showHeader = true,
+}: CompactChangesListProps) {
+  const styles = useFileTreeStyles();
+  const totalAdded = files.reduce((acc, f) => acc + (f.added_lines ?? 0), 0);
+  const totalRemoved = files.reduce((acc, f) => acc + (f.removed_lines ?? 0), 0);
+
+  return (
+    <>
+      {showHeader && (
+        <div className={styles.changeHeader}>
+          <Text className={styles.changeHeaderTitle}>Branch Changes</Text>
+          <Text className={styles.addedCount}>+{totalAdded}</Text>
+          <Text className={styles.removedCount}>-{totalRemoved}</Text>
+        </div>
+      )}
+      {renderFlatChangesList({ files, selectedPath, onFileClick, styles })}
+    </>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // FilesTabPanel
 // ---------------------------------------------------------------------------
 

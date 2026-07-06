@@ -2375,6 +2375,7 @@ export function CoordinatorRunPage() {
             coordinatorActive={coordActive}
             composerFocusSignal={composerFocusSignal}
             onOutcomePlanClarify={() => setOutcomePlanClarifying(true)}
+            artifactAdapter={coordAdapter}
           />
         </div>
       </div>

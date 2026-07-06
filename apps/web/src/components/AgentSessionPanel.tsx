@@ -21,7 +21,6 @@ import {
   CircleRegular,
   ClockRegular,
   CodeRegular,
-  CopyRegular,
   DismissRegular,
   DismissCircleFilled,
   DocumentRegular,
@@ -37,11 +36,11 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeSanitize from 'rehype-sanitize';
 import { apiClient } from '../api/apiClient';
-import type { WorkspaceFileDiff, WorkspaceFileEntry } from '../api/types';
 import { useRunStream, type EventType, type RunStreamEvent } from '../api/sse';
+import { useArtifactBrowser, type ArtifactBrowserAdapter } from '../hooks/useArtifactBrowser';
 import { mergeRunEvents as sharedMergeRunEvents } from '../timeline/mergeRunEvents';
 import { AgentAvatar } from './AgentAvatar';
-import { DiffViewer } from './DiffViewer';
+import { CompactChangesList, FilesTabPanel } from './ArtifactBrowser';
 import { FileViewerModal } from './FileViewerModal';
 import { LifecycleEventCard } from './LifecycleEventCard';
 import { deriveHumanTitle } from '../timeline/reducer';
@@ -575,86 +574,11 @@ const useStyles = makeStyles({
   composerError: {
     padding: `0 ${tokens.spacingHorizontalL} ${tokens.spacingVerticalS}`,
   },
-  summaryRow: {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: tokens.spacingHorizontalS,
-    flexWrap: 'wrap',
-  },
-  summaryText: {
-    fontSize: tokens.fontSizeBase200,
-    fontWeight: tokens.fontWeightSemibold,
-  },
-  diffList: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalS,
-  },
-  diffCard: {
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: tokens.borderRadiusMedium,
-    overflow: 'hidden',
-    backgroundColor: tokens.colorNeutralBackground1,
-  },
-  diffHeader: {
-    width: '100%',
-    display: 'grid',
-    gridTemplateColumns: 'minmax(0, 1fr) auto',
-    alignItems: 'center',
-    gap: tokens.spacingHorizontalS,
-    backgroundColor: tokens.colorNeutralBackground2,
-    padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalM}`,
-  },
-  diffHeaderToggle: {
-    width: '100%',
-    display: 'grid',
-    gridTemplateColumns: '16px minmax(0, 1fr) auto auto',
-    alignItems: 'center',
-    gap: tokens.spacingHorizontalS,
-    border: 'none',
-    backgroundColor: 'transparent',
-    textAlign: 'left',
-    padding: 0,
-    cursor: 'pointer',
-  },
-  diffPath: {
-    minWidth: 0,
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
-    whiteSpace: 'nowrap',
-    fontWeight: tokens.fontWeightSemibold,
-  },
-  diffMode: {
-    fontSize: tokens.fontSizeBase100,
-    color: tokens.colorNeutralForeground3,
-  },
-  diffContent: {
-    minHeight: '140px',
-    maxHeight: '320px',
-  },
-  filesList: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalXXS,
-  },
-  filesListRow: {
-    display: 'grid',
-    gridTemplateColumns: '16px minmax(0, 1fr) auto auto',
-    alignItems: 'center',
-    gap: tokens.spacingHorizontalS,
-    padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalS}`,
-    borderRadius: tokens.borderRadiusSmall,
-    border: `1px solid ${tokens.colorNeutralStroke1}`,
-  },
   loadingWrap: {
     display: 'flex',
     alignItems: 'center',
     gap: tokens.spacingHorizontalS,
     padding: tokens.spacingVerticalXL,
-  },
-  footerLink: {
-    alignSelf: 'flex-start',
   },
   dockedPanel: {
     position: 'static',
@@ -715,6 +639,10 @@ export interface AgentSessionPanelProps {
   variant?: 'modal' | 'docked';
   composerFocusSignal?: number;
   onOutcomePlanClarify?: () => void;
+  /** Points the shared artifact browser at the coordinator's collective assembly (integration
+   *  branch) when a coordinator-aggregate node is selected. Per-subtask runs use the standard
+   *  per-run endpoints (no adapter). Mirrors the coordAdapter passed to RunLayout. */
+  artifactAdapter?: ArtifactBrowserAdapter;
 }
 
 interface ConversationRow {
@@ -824,13 +752,6 @@ function normalizeCommand(command: string, runId?: string): string {
 function fileName(path: string): string {
   const parts = path.replace(/\\/g, '/').split('/').filter(Boolean);
   return parts[parts.length - 1] ?? path;
-}
-
-function formatBytes(bytes: number | undefined): string {
-  if (bytes == null || !Number.isFinite(bytes)) return 'Workspace file';
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(bytes < 10 * 1024 ? 1 : 0)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 type ToolOpKind = 'read' | 'write' | 'edit' | 'command' | 'web' | 'other';
@@ -1438,6 +1359,7 @@ export function AgentSessionPanel({
   variant = 'modal',
   composerFocusSignal = 0,
   onOutcomePlanClarify,
+  artifactAdapter,
 }: AgentSessionPanelProps) {
   const styles = useStyles();
   const navigate = useNavigate();
@@ -1449,15 +1371,6 @@ export function AgentSessionPanel({
   const [runDetailLoading, setRunDetailLoading] = useState(false);
   const [runDetailError, setRunDetailError] = useState<string | null>(null);
   const [runDetail, setRunDetail] = useState<{ started_at?: string | null; ended_at?: string | null; status?: string | null } | null>(null);
-  const [filesLoading, setFilesLoading] = useState(false);
-  const [filesError, setFilesError] = useState<string | null>(null);
-  const [files, setFiles] = useState<WorkspaceFileEntry[]>([]);
-  const [fileSizes, setFileSizes] = useState<Record<string, string>>({});
-  const [expandedPaths, setExpandedPaths] = useState<Set<string>>(new Set());
-  const [diffs, setDiffs] = useState<Record<string, WorkspaceFileDiff | null | undefined>>({});
-  const [loadingDiffs, setLoadingDiffs] = useState<Set<string>>(new Set());
-  const [previewPath, setPreviewPath] = useState<string | null>(null);
-  const [previewLoading, setPreviewLoading] = useState(false);
   const [followUp, setFollowUp] = useState('');
   const [followUpBusy, setFollowUpBusy] = useState(false);
   const [followUpError, setFollowUpError] = useState<string | null>(null);
@@ -1474,6 +1387,47 @@ export function AgentSessionPanel({
   const selectedRunId = selectedItem
     ? (selectedItem.isCoordinator || selectedItem.nodeId === 'outcome-plan' || selectedItem.nodeId === 'work-plan' ? coordinatorRunId : (selectedItem.childRunId ?? ''))
     : '';
+
+  // Coordinator-aggregate nodes (coordinator itself, work-plan, outcome-plan) own no worktree —
+  // their artifacts live on the integration branch, so route through the assembly adapter. Per
+  // subtask runs use the standard per-run endpoints (undefined adapter).
+  const isCoordinatorAggregate = !!selectedItem
+    && (selectedItem.isCoordinator
+      || selectedItem.nodeId === 'work-plan'
+      || selectedItem.nodeId === 'outcome-plan');
+  const effectiveAdapter = useMemo(
+    () => (isCoordinatorAggregate ? artifactAdapter : undefined),
+    [isCoordinatorAggregate, artifactAdapter],
+  );
+
+  // Reuse the shared artifact browser hook so the Changes tab renders the dense changed-files list
+  // and the Files tab renders the full workspace FOLDER TREE (getRunWorkspace / assembly workspace),
+  // not just the changed files. This is the same hook RunLayout and WorkspacePage drive.
+  const artifactState = useArtifactBrowser(
+    open ? selectedRunId : '',
+    runDetail?.status ?? '',
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    effectiveAdapter,
+  );
+  const {
+    files,
+    filesLoading,
+    filesError,
+    workspaceFiles,
+    workspaceLoading,
+    workspaceError,
+    selectedPath,
+    diff: selectedDiff,
+    diffLoading: selectedDiffLoading,
+    diffError: selectedDiffError,
+    selectedPathIsChanged,
+    handleFileSelect,
+    clearSelection,
+  } = artifactState;
+
   const { events: liveEvents } = useRunStream(open && selectedRunId ? selectedRunId : '');
   const events = useMemo(() => mergeRunEvents(seedEvents, liveEvents), [seedEvents, liveEvents]);
   const turns = useMemo(
@@ -1506,15 +1460,16 @@ export function AgentSessionPanel({
   useEffect(() => {
     setActiveTab('messages');
     setSeedEvents([]);
-    setFiles([]);
-    setFileSizes({});
-    setFilesError(null);
-    setExpandedPaths(new Set());
-    setDiffs({});
-    setLoadingDiffs(new Set());
-    setPreviewPath(null);
     setFollowUpError(null);
   }, [selectedRunId]);
+
+  // Keep the shared artifact hook's internal tab in sync with the panel tab so the workspace
+  // FOLDER TREE is fetched when the user opens the Files tab. The hook's setActiveTab identity
+  // changes every render, so key the effect on the panel tab only (mirrors RunLayout).
+  useEffect(() => {
+    artifactState.setActiveTab(activeTab === 'files' ? 'files' : 'changes');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab]);
 
   useEffect(() => {
     if (composerFocusSignal > 0) {
@@ -1573,85 +1528,14 @@ export function AgentSessionPanel({
     };
   }, [open, selectedRunId]);
 
-  useEffect(() => {
-    if (!open || !selectedRunId) return undefined;
-    let cancelled = false;
-    setFilesLoading(true);
-    setFilesError(null);
-    apiClient.getRunFiles(selectedRunId)
-      .then((result) => {
-        if (!cancelled) setFiles(result.map((file) => ({ ...file, path: normalizeWorkspacePath(file.path, selectedRunId) })));
-      })
-      .catch((err: unknown) => {
-        if (!cancelled) setFilesError(err instanceof Error ? err.message : String(err));
-      })
-      .finally(() => {
-        if (!cancelled) setFilesLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [open, selectedRunId]);
-
-  useEffect(() => {
-    if (!open || activeTab !== 'files' || !selectedRunId || files.length === 0) return undefined;
-    let cancelled = false;
-    void Promise.all(files.map(async (file) => {
-      if (file.status === 'deleted') return [file.path, 'Deleted'] as const;
-      try {
-        const content = await apiClient.getRunFileContent(selectedRunId, file.path);
-        if (content.is_binary) return [file.path, 'Binary file'] as const;
-        if (content.language === 'too_large') return [file.path, 'Too large'] as const;
-        const bytes = content.content == null ? undefined : new TextEncoder().encode(content.content).length;
-        return [file.path, formatBytes(bytes)] as const;
-      } catch {
-        return [file.path, formatBytes(undefined)] as const;
-      }
-    })).then((entries) => {
-      if (!cancelled) setFileSizes(Object.fromEntries(entries));
-    });
-    return () => { cancelled = true; };
-  }, [activeTab, files, open, selectedRunId]);
-
-  const loadDiff = useCallback(async (path: string) => {
+  // File list, diffs and the workspace tree are now fetched by the shared useArtifactBrowser hook
+  // (see artifactState above), so the previous bespoke getRunFiles/getRunFileContent/getRunFileDiff
+  // effects and their state have been removed. Opening a file selects it in the shared hook, which
+  // drives the FileViewerModal below.
+  const openPreview = useCallback((path: string) => {
     const relPath = normalizeWorkspacePath(path, selectedRunId);
-    if (!selectedRunId || diffs[relPath] !== undefined || loadingDiffs.has(relPath)) return;
-    setLoadingDiffs((prev) => new Set(prev).add(relPath));
-    try {
-      const diff = await apiClient.getRunFileDiff(selectedRunId, relPath);
-      setDiffs((prev) => ({ ...prev, [relPath]: diff }));
-    } catch {
-      setDiffs((prev) => ({ ...prev, [relPath]: null }));
-    } finally {
-      setLoadingDiffs((prev) => {
-        const next = new Set(prev);
-        next.delete(relPath);
-        return next;
-      });
-    }
-  }, [diffs, loadingDiffs, selectedRunId]);
-
-  const toggleDiff = useCallback((path: string) => {
-    setExpandedPaths((prev) => {
-      const next = new Set(prev);
-      if (next.has(path)) next.delete(path);
-      else next.add(path);
-      return next;
-    });
-    void loadDiff(path);
-  }, [loadDiff]);
-
-  const openPreview = useCallback(async (path: string) => {
-    const relPath = normalizeWorkspacePath(path, selectedRunId);
-    setPreviewPath(relPath);
-    if (diffs[relPath] !== undefined || loadingDiffs.has(relPath)) return;
-    setPreviewLoading(true);
-    try {
-      await loadDiff(relPath);
-    } finally {
-      setPreviewLoading(false);
-    }
-  }, [diffs, loadDiff, loadingDiffs, selectedRunId]);
+    handleFileSelect(relPath, true);
+  }, [handleFileSelect, selectedRunId]);
 
   const handleSendFollowUp = useCallback(async () => {
     const instruction = followUp.trim();
@@ -1675,8 +1559,6 @@ export function AgentSessionPanel({
     }
   }, [coordinatorRunId, followUp, followUpBusy, onCoordinatorFollowUp, selectedItem]);
 
-  const totalAdded = files.reduce((sum, file) => sum + file.added_lines, 0);
-  const totalRemoved = files.reduce((sum, file) => sum + file.removed_lines, 0);
   const runLink = selectedItem?.isCoordinator
     ? `/projects/${projectId}/orchestrations/${selectedRunId}`
     : `/projects/${projectId}/runs/${selectedRunId}/workflow`;
@@ -1922,100 +1804,24 @@ export function AgentSessionPanel({
                   ) : files.length === 0 ? (
                     <Text className={styles.emptyState}>No diff artifacts available for this session yet.</Text>
                   ) : (
-                    <>
-                      <div className={styles.summaryRow}>
-                        <Text className={styles.summaryText}>
-                          {files.length} file{files.length === 1 ? '' : 's'} changed · +{totalAdded} -{totalRemoved}
-                        </Text>
-                      </div>
-                      <div className={styles.diffList}>
-                        {files.map((file) => {
-                          const expanded = expandedPaths.has(file.path);
-                          const diff = diffs[file.path];
-                          const loading = loadingDiffs.has(file.path);
-                          return (
-                            <div key={file.path} className={styles.diffCard}>
-                              <div className={styles.diffHeader}>
-                                <button className={styles.diffHeaderToggle} onClick={() => toggleDiff(file.path)} aria-expanded={expanded}>
-                                  {expanded ? <ChevronDownRegular /> : <ChevronRightRegular />}
-                                  <Text className={styles.diffPath}>{file.path}</Text>
-                                  <Text className={styles.fileMeta}>+{file.added_lines} -{file.removed_lines}</Text>
-                                  <Text className={styles.diffMode}>Unified</Text>
-                                </button>
-                                <div style={{ display: 'flex', gap: tokens.spacingHorizontalXXS }}>
-                                  <Button
-                                    appearance="subtle"
-                                    size="small"
-                                    icon={<OpenRegular />}
-                                    onClick={() => { void openPreview(file.path); }}
-                                  >
-                                    Preview
-                                  </Button>
-                                  <Button
-                                    appearance="subtle"
-                                    size="small"
-                                    icon={<CopyRegular />}
-                                    aria-label={`Copy diff for ${file.path}`}
-                                    onClick={() => {
-                                      const text = diff?.diff ?? file.path;
-                                      void navigator.clipboard?.writeText(text);
-                                    }}
-                                  />
-                                </div>
-                              </div>
-                              {expanded && (
-                                <div className={styles.diffContent}>
-                                  {loading ? (
-                                    <div className={styles.loadingWrap}>
-                                      <Spinner size="tiny" />
-                                      <Text>Loading diff...</Text>
-                                    </div>
-                                  ) : diff?.diff ? (
-                                    <DiffViewer diff={diff.diff} filename={file.path} />
-                                  ) : (
-                                    <Text className={styles.emptyState}>Diff preview unavailable for this file.</Text>
-                                  )}
-                                </div>
-                              )}
-                            </div>
-                          );
-                        })}
-                      </div>
-                      <Button className={styles.footerLink} appearance="subtle" icon={<OpenRegular />} onClick={() => navigate(runLink)}>
-                        View all changes
-                      </Button>
-                    </>
+                    <CompactChangesList
+                      files={files}
+                      selectedPath={selectedPath}
+                      onFileClick={(path) => handleFileSelect(path, true)}
+                    />
                   )}
                 </div>
               )}
 
               {activeTab === 'files' && (
                 <div className={styles.tabBody}>
-                  {filesLoading ? (
-                    <div className={styles.loadingWrap}>
-                      <Spinner size="tiny" />
-                      <Text>Loading files...</Text>
-                    </div>
-                  ) : filesError ? (
-                    <MessageBar intent="warning">
-                      <MessageBarBody>{filesError}</MessageBarBody>
-                    </MessageBar>
-                  ) : files.length === 0 ? (
-                    <Text className={styles.emptyState}>No output files available for this session yet.</Text>
-                  ) : (
-                    <div className={styles.filesList}>
-                      {files.map((file) => (
-                        <div key={file.path} className={styles.filesListRow}>
-                          <DocumentRegular />
-                          <Text className={styles.fileName}>{file.path}</Text>
-                          <Text className={styles.fileMeta}>{fileSizes[file.path] ?? formatBytes(undefined)}</Text>
-                          <Button appearance="subtle" size="small" icon={<EyeRegular />} onClick={() => { void openPreview(file.path); }}>
-                            Preview
-                          </Button>
-                        </div>
-                      ))}
-                    </div>
-                  )}
+                  <FilesTabPanel
+                    workspaceFiles={workspaceFiles}
+                    workspaceLoading={workspaceLoading}
+                    workspaceError={workspaceError}
+                    selectedPath={selectedPath}
+                    onFileClick={(path, isChanged) => handleFileSelect(path, isChanged)}
+                  />
                 </div>
               )}
             </div>
@@ -2025,12 +1831,13 @@ export function AgentSessionPanel({
 
       <FileViewerModal
         runId={selectedRunId}
-        filePath={previewPath}
-        onClose={() => setPreviewPath(null)}
-        diff={previewPath ? diffs[previewPath] ?? null : null}
-        diffLoading={previewLoading || (previewPath ? loadingDiffs.has(previewPath) : false)}
-        diffError={null}
-        isChanged
+        filePath={selectedPath}
+        onClose={clearSelection}
+        diff={selectedDiff}
+        diffLoading={selectedDiffLoading}
+        diffError={selectedDiffError}
+        isChanged={selectedPathIsChanged}
+        getContent={effectiveAdapter?.getContent}
       />
     </>
   );
