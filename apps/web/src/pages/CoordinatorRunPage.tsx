@@ -1914,12 +1914,6 @@ export function CoordinatorRunPage() {
     }
   }, [defaultSessionNodeId, panelNodeId, sessionNodeIds]);
 
-  // Review/Changes panel anchor â€” the Human Review gate's "Review now" scrolls here.
-  const reviewRef = useRef<HTMLDivElement>(null);
-  const scrollToReview = useCallback(() => {
-    reviewRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  }, []);
-
   // Merge "Browse files": route to the project Workspace with the coordinator integration branch
   // selected, so refresh/back preserve the browsed ref and the user lands in the WORK section.
   const browseAssemblyFiles = useCallback(() => {
@@ -1932,11 +1926,12 @@ export function CoordinatorRunPage() {
   }, [navigate, projectId, runId]);
 
   // Collective-assembly "View execution": RAI/Scribe have their own persisted sub-run streams, so
-  // focus that session in the slide-up instead of leaving the orchestration page.
+  // focus that session in the slide-up. For the review node, open the artifacts/review panel where
+  // the Approve / Request changes / Decline actions live.
   const viewAssemblyExecution = useCallback((id: string) => {
     if (id.endsWith('-rai') || id.endsWith('-scribe')) openPanelForNode(id);
-    else scrollToReview();
-  }, [openPanelForNode, scrollToReview]);
+    else setArtifactsPanelOpen(true);
+  }, [openPanelForNode]);
 
   // Option toggles â€” optimistic update, revert on error. Both cascade to children server-side.
   const toggleAutopilot = useCallback((next: boolean) => {
