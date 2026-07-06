@@ -587,11 +587,6 @@ public sealed record UpdateProjectProviderSettingsRequest
     [JsonPropertyName("default_model_microsoft_foundry")] public string? DefaultModelMicrosoftFoundry { get; init; }
 }
 
-public sealed record RelinkProjectRequest
-{
-    [JsonPropertyName("working_directory")] public string? WorkingDirectory { get; init; }
-}
-
 public sealed record ProjectResponse
 {
     [JsonPropertyName("project_id")] public required string ProjectId { get; init; }

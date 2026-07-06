@@ -150,7 +150,7 @@ Rebuilder rule: test OAuth as a state machine, not just as JSON metadata. Codes,
 
 ### Projects and GitHub integration
 
-Project tests cover the boundary where a repository becomes known to Agentweaver. They verify CRUD, relinking, deletion, workspace selection, token redaction, GitHub device/sign-in flows, token storage and refresh, org authorization, and failure-closed behavior when Copilot tokens are signed out.
+Project tests cover the boundary where a repository becomes known to Agentweaver. They verify CRUD, deletion, workspace selection, token redaction, GitHub device/sign-in flows, token storage and refresh, org authorization, and failure-closed behavior when Copilot tokens are signed out.
 
 Most project endpoint tests do not perform real clones; they use a no-op initializer and isolated workspaces. Git behavior is reserved for tests where branch state is the point.
 

@@ -290,13 +290,6 @@ export function ProjectSettingsPage() {
   const [renameError, setRenameError] = useState<string | null>(null);
   const [renameSuccess, setRenameSuccess] = useState(false);
 
-  // Relink
-  const [newDir, setNewDir] = useState('');
-  const [savingRelink, setSavingRelink] = useState(false);
-  const [relinkError, setRelinkError] = useState<string | null>(null);
-  const [relinkSuccess, setRelinkSuccess] = useState(false);
-  const [dataDir, setDataDir] = useState<string | null>(null);
-
   // Delete
   const [deleteConfirmed, setDeleteConfirmed] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -330,16 +323,12 @@ export function ProjectSettingsPage() {
   useEffect(() => {
     if (!projectId) return;
     let cancelled = false;
-    apiClient.getServerInfo()
-      .then((info) => { if (!cancelled) setDataDir(info.data_directory); })
-      .catch(() => {});
     apiClient.getProject(projectId)
       .then((p) => {
         if (!cancelled) {
           setProject(p);
           setCopilotModel(p.default_model_github_copilot ?? '');
           setNewName(p.name);
-          setNewDir(p.working_directory);
         }
       })
       .catch((err) => {
@@ -488,22 +477,6 @@ export function ProjectSettingsPage() {
     }
   };
 
-  const handleRelink = async () => {
-    if (!projectId || !newDir.trim()) return;
-    setSavingRelink(true);
-    setRelinkError(null);
-    setRelinkSuccess(false);
-    try {
-      await apiClient.relinkProject(projectId, newDir.trim());
-      setProject((prev) => prev ? { ...prev, working_directory: newDir.trim(), available: true } : prev);
-      setRelinkSuccess(true);
-    } catch (err) {
-      setRelinkError(formatError(err));
-    } finally {
-      setSavingRelink(false);
-    }
-  };
-
   const handleDelete = async () => {
     if (!projectId || !deleteConfirmed) return;
     setDeleting(true);
@@ -595,35 +568,6 @@ export function ProjectSettingsPage() {
                   )}
                   {renameSuccess && (
                     <MessageBar intent="success"><MessageBarBody>Project renamed.</MessageBarBody></MessageBar>
-                  )}
-                </div>
-
-                <div className={styles.subBlock}>
-                  <Title3>Relink repository</Title3>
-                  <Text>Update the server-side path if the repository has moved on the Agentweaver server.</Text>
-                  <Field
-                    label="Repository path"
-                    hint={dataDir
-                      ? `Path to a git repository accessible from the server's data folder: ${dataDir}`
-                      : 'Absolute path to a git repository on the machine running the Agentweaver server'}
-                  >
-                    <Input value={newDir} onChange={(_, v) => setNewDir(v.value)} />
-                  </Field>
-                  <div className={styles.actions}>
-                    <Button
-                      appearance="primary"
-                      disabled={savingRelink || !newDir.trim() || newDir.trim() === project.working_directory}
-                      onClick={() => void handleRelink()}
-                    >
-                      {savingRelink ? 'Saving' : 'Save'}
-                    </Button>
-                    {savingRelink && <Spinner size="extra-tiny" aria-hidden="true" />}
-                  </div>
-                  {relinkError && (
-                    <MessageBar intent="error"><MessageBarBody>{relinkError}</MessageBarBody></MessageBar>
-                  )}
-                  {relinkSuccess && (
-                    <MessageBar intent="success"><MessageBarBody>Project relinked.</MessageBarBody></MessageBar>
                   )}
                 </div>
 

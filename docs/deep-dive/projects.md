@@ -40,7 +40,7 @@ Agentweaver recognizes two project origins:
 - **Blank**: Agentweaver creates an empty Git repository and makes an initial commit.
 - **GitHub**: Agentweaver clones a GitHub repository into the workspace.
 
-The origin is not merely decorative. It controls creation behavior, relink validation, and how much repository identity Agentweaver can verify later. A GitHub-origin project records the source repository so a relink can reject an unrelated checkout when the remote clearly does not match.
+The origin is not merely decorative. It controls creation behavior and records the source repository for GitHub-backed projects.
 
 ### The workspace is the base checkout, not the run sandbox
 
@@ -73,7 +73,7 @@ stateDiagram-v2
   PersistingProject --> Active: database insert succeeds
   PersistingProject --> RolledBack: database insert fails; created files are removed
 
-  Active --> Active: rename, update defaults, relink
+  Active --> Active: rename, update defaults
   Active --> RunBlocked: workspace unavailable or project deleting
   RunBlocked --> Active: workspace becomes available again
 
@@ -108,7 +108,7 @@ A blank project is for starting from nothing inside Agentweaver. The flow is:
 
 The initial empty commit is important. A Git repository with no commits has an "unborn" branch, which makes branch and worktree operations awkward or impossible. By creating a first commit immediately, Agentweaver guarantees every later run has a real branch tip to start from.
 
-The empty-directory rule is equally important. Creation is allowed to create a new repository, not adopt arbitrary existing files. If the user wants to connect an existing checkout, that is a relink operation with different validation. This prevents Agentweaver from accidentally overwriting or reinterpreting user data during creation.
+The empty-directory rule is equally important. Creation is allowed to create a new repository, not adopt arbitrary existing files. This prevents Agentweaver from accidentally overwriting or reinterpreting user data during creation.
 
 ## Creating a GitHub project
 
@@ -124,24 +124,9 @@ Project creation requires the API input to be a full `https://github.com/...` UR
 
 Failure during clone rolls back the workspace directory created for that attempt. Failure after clone but before database insert also removes the newly-created checkout. The intended user-facing invariant is simple: after a failed create, there should be no usable project record and no misleading partial project workspace.
 
-## Relinking an existing workspace
-
-Relink exists because files move. A local user may move a checkout, restore a backup, or mount storage at a new path. Relinking updates the project record to point at a new working directory without pretending this is a new project.
-
-Relink is deliberately more permissive than creation about existing content, but stricter about identity:
-
-- The target path must exist.
-- It must be a valid Git repository.
-- For GitHub-origin projects, if an `origin` remote is present, it must plausibly match the recorded source repository.
-- The default branch is re-derived from the repository's current HEAD.
-
-This design lets Agentweaver recover from storage movement while reducing the chance that a project is accidentally pointed at the wrong repository.
-
 ## Workspace provisioning
 
-Workspace provisioning is abstracted behind a provider because local development and cloud deployment need different storage behavior while the rest of the project lifecycle should stay the same.
-
-Every provider answers the same questions:
+The workspace provider owns the filesystem boundary for project creation and runtime availability checks:
 
 - **Resolve**: given a project id and requested path, what path should this project actually use?
 - **Ensure**: can that directory be created and written to?
@@ -264,7 +249,6 @@ The Projects API exposes operations that map directly to the lifecycle concepts:
 - **Create**: validate intent, provision workspace, initialize/clone Git, persist metadata.
 - **List/get**: return stored project metadata plus computed availability.
 - **Rename/update defaults**: change mutable metadata without touching repository identity.
-- **Relink**: point a project record at a moved/restored Git checkout after validation.
 - **Delete**: transition to deleting, cancel active work, release workspace resources, remove the record.
 - **Start/list/get runs**: enforce project scope and workspace availability around workflow execution.
 - **Start orchestration**: run coordinator work against the project's repository boundary.
@@ -285,7 +269,7 @@ Where this lives:
 
 Usually the request is inconsistent with the creation mode: blank projects need a usable workspace path in local mode; GitHub projects need a source repository; model ids must be acceptable; existing non-empty directories are not allowed during creation.
 
-Reasoning model: creation is for making a new controlled workspace. Existing non-empty content belongs to relink, not create.
+Reasoning model: creation is for making a new controlled workspace. Existing non-empty content is not adopted by project creation.
 
 ### GitHub project creation fails because the user is signed out
 

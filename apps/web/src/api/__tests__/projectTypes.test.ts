@@ -191,11 +191,6 @@ describe('AgentweaverApiClient project methods', () => {
     expect(typeof client.updateProjectProviderSettings).toBe('function');
   });
 
-  it('client has relinkProject method', () => {
-    const client = new AgentweaverApiClient('http://localhost:5000', 'key');
-    expect(typeof client.relinkProject).toBe('function');
-  });
-
   it('client has deleteProject method', () => {
     const client = new AgentweaverApiClient('http://localhost:5000', 'key');
     expect(typeof client.deleteProject).toBe('function');

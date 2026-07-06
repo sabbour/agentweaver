@@ -300,8 +300,7 @@ export function ProjectPage() {
       {project && !project.available && (
         <MessageBar intent="warning">
           <MessageBarBody>
-            This project is unavailable. The working directory may have moved. Go to{' '}
-            <Link to={`/projects/${projectId}/settings`}>settings</Link> to relink it.
+            This project is unavailable. The working directory may have moved or become inaccessible.
           </MessageBarBody>
         </MessageBar>
       )}

@@ -2,7 +2,7 @@
 
 Projects are the front door to Agentweaver. A project names the work, anchors it to a repository workspace, and carries the defaults that shape every run in that repository.
 
-Scope: this page covers creating, switching, summarizing, configuring, recovering, and deleting projects across the web UI and current MCP tools.
+Scope: this page covers creating, switching, summarizing, configuring, and deleting projects across the web UI and current MCP tools.
 
 See also: [Overview](./00-overview.md), [Runs & board](./runs-board-watch.md), [Team & casting](./team-casting-memory.md), [Working with Projects](../guide/projects.md), and [Projects & Workspaces](../deep-dive/projects.md).
 
@@ -16,7 +16,7 @@ An Agentweaver **project** is a durable container around a repository and Agentw
 - **Which defaults apply?** The project carries model provider settings plus blueprint-applied team, workflow, review, and sandbox choices.
 - **Can Agentweaver use it now?** The `available` state reflects whether the workspace can be reached.
 
-The project record and the workspace are separate. Renaming changes the record, not the repository path. Relinking changes the path, not the project identity. Deleting removes the Agentweaver project record and run history from the app experience; repository files are treated as workspace state, not casually destroyed from the gallery.
+The project record and the workspace are separate. Renaming changes the record, not the repository path. Deleting removes the Agentweaver project record and run history from the app experience; repository files are treated as workspace state, not casually destroyed from the gallery.
 
 ## Project Gallery
 
@@ -46,7 +46,7 @@ The availability badge is direct:
 - **Available** means Agentweaver can access the working directory.
 - **Unavailable** means the project record exists, but the local directory or mounted workspace is missing or inaccessible.
 
-Unavailable projects remain visible because the recovery action is still available: open the project, follow the warning, and relink it in Settings.
+Unavailable projects remain visible so users can inspect the record and delete it if the workspace is no longer available.
 
 ### Switching projects
 
@@ -124,7 +124,7 @@ The **Repository folder** hint adapts to server mode. If the server has a data d
 
 The **Create** button enables only when required values are present. During submission it reads **Creating** and shows a spinner.
 
-Creation is for a new controlled workspace. The target directory must be empty or not yet exist. If the user wants to reconnect existing content, the correct action is **Relink repository** in Settings.
+Creation is for a new controlled workspace. The target directory must be empty or not yet exist.
 
 ### Create from GitHub
 
@@ -206,7 +206,6 @@ Current scope note: the web UI is the complete GitHub repository-linking create 
 | `project_get` | Get one project by id, including name, origin, working directory, provider settings, state, and availability. |
 | `project_create` | Create a project with name, working directory, optional origin, and optional blueprint. |
 | `project_rename` | Rename the project display name. |
-| `project_relink` | Point the project at a new working directory after a move or mount change. |
 | `project_delete` | Delete the project record. |
 | `project_configure` | Configure default model provider settings. |
 | `project_list_runs` | List all runs for a project. |
@@ -254,7 +253,7 @@ The page title is the project name. The subtitle is:
 
 If the project is unavailable, the page warns:
 
-> This project is unavailable. The working directory may have moved. Go to settings to relink it.
+> This project is unavailable. The working directory may have moved or become inaccessible.
 
 The warning links to project Settings.
 
@@ -311,12 +310,12 @@ Project Settings changes the project record and project policies. The title is *
 ![Project Settings page with General, Sandbox policy, Review policy, and Danger Zone sections](/screenshots/project-settings.png)
 
 > 📸 **Screenshot — `project-settings.png`**
-> *Shows:* the **Project settings** page with the left rail sections **General** (project name, repository link, default model), **Sandbox policy**, **Review policy**, and **Danger Zone**, with the **General** section selected (the active section is deep-linked through the URL query).
+> *Shows:* the **Project settings** page with the left rail sections **General** (project name, default model), **Sandbox policy**, **Review policy**, and **Danger Zone**, with the **General** section selected (the active section is deep-linked through the URL query).
 > *Path:* open a project → click **Settings** in the left rail → `/projects/:projectId/settings`.
 
 The left rail sections are:
 
-- **General** — project name, repository link, and default model
+- **General** — project name and default model
 - **Sandbox policy** — command execution and reachability
 - **Review policy** — review gates for project work
 - **Danger Zone** — irreversible project action
@@ -331,17 +330,6 @@ The selected section is deep-linked through the URL query.
 
 MCP equivalent: `project_rename`.
 
-#### Relink repository
-
-**Relink repository** updates the server-side path when the repository has moved. The explanatory text is:
-
-> Update the server-side path if the repository has moved on the Agentweaver server.
-
-The field is **Repository path**. The hint either references the server data folder or asks for an absolute path to a Git repository on the server machine. Success shows **Project relinked.**
-
-MCP equivalent: `project_relink`.
-
-Use relink when a local checkout moved, a mount path changed, or the project shows **Unavailable**. Relinking preserves the project id, history, and defaults while changing where Agentweaver finds the base repository.
 
 #### Default model
 
@@ -385,30 +373,23 @@ The user must check **I understand this is permanent** before **Delete project**
 
 MCP equivalent: `project_delete`.
 
-Use delete for an unwanted project record. Use relink for a moved repository.
+Use delete for an unwanted or unavailable project record.
 
 ## Edge cases
 
 ### Project is unavailable
 
-A project shows **Unavailable** when the workspace cannot be reached. On the board, Agentweaver tells the user the working directory may have moved and links to Settings.
+A project shows **Unavailable** when the workspace cannot be reached. On the board, Agentweaver tells the user the working directory may have moved or become inaccessible.
 
-Recovery path:
-
-1. Find the correct repository path on the Agentweaver server.
-2. Open Settings.
-3. Use **Relink repository**.
-4. Return to the project.
-
-MCP path: call `project_get`, then `project_relink`, then `project_get` again to confirm availability.
+Recovery path: create a new project for the replacement workspace, or delete the unavailable project record if it is no longer needed. MCP path: call `project_get` to inspect the record and `project_delete` if it should be removed.
 
 ### Repository moved after creation
 
-Do not create a second project just because files moved. Relink keeps the same project id, run history, dashboard history, and defaults.
+Create a new project for the replacement workspace. The removed relink feature no longer changes a project record to point at a new server path.
 
 ### Autofill chose the wrong folder
 
-Before creation, edit **Repository folder**; Agentweaver stops overwriting it. After creation, use **Relink repository**.
+Before creation, edit **Repository folder**; Agentweaver stops overwriting it. After creation, create a new project if a different workspace is required.
 
 ### GitHub repositories do not load
 
@@ -433,7 +414,6 @@ This is expected. **Delete project** stays disabled until **I understand this is
 | See projects | Project Gallery | `project_list` |
 | Inspect one project | **Open** / project pages | `project_get` |
 | Rename | Settings → **Rename project** | `project_rename` |
-| Recover moved repo | Settings → **Relink repository** | `project_relink` |
 | Change model defaults | Settings → **Default model** | `project_configure` |
 | See runs | Board **Runs** | `project_list_runs` |
 | Remove project record | Danger Zone → **Delete project** | `project_delete` |
@@ -443,10 +423,10 @@ This is expected. **Delete project** stays disabled until **I understand this is
 Projects work when Agentweaver keeps three promises:
 
 1. **Make the repository boundary visible.** Cards, settings, and MCP all surface the working directory or repository identity.
-2. **Recover instead of hiding.** Unavailable projects stay visible because relink is the right next action.
+2. **Expose unavailable records clearly.** Unavailable projects stay visible so users can decide whether to recreate or delete them.
 3. **Start with an operating model.** Blueprints make team roster, workflow, review policy, sandbox, and model defaults part of project setup instead of scattered follow-up tasks.
 
-The result is a concrete project experience: named repositories with visible status, quick creation paths, recoverable workspace links, and repeatable defaults for every run.
+The result is a concrete project experience: named repositories with visible status, quick creation paths, visible workspace status, and repeatable defaults for every run.
 
 ## See also
 

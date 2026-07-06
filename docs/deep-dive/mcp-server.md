@@ -257,7 +257,7 @@ A rebuild should preserve this pattern:
 
 | Area | Conceptual purpose | Representative tools |
 |---|---|---|
-| Projects | Create, inspect, configure, relink, rename, delete projects and list their runs. | `project_list`, `project_get`, `project_create`, `project_configure`, `project_list_runs` |
+| Projects | Create, inspect, configure, rename, delete projects and list their runs. | `project_list`, `project_get`, `project_create`, `project_configure`, `project_list_runs` |
 | Runs | Submit agent work, monitor status/live events, review, inspect artifacts, retry, archive. | `run_submit`, `run_status`, `run_watch`, `run_review`, `run_show_artifacts`, `run_retry` |
 | Coordinator orchestration | Start coordinator runs, confirm/revise outcome specs, inspect work plans and child runs, steer active work. | `coordinator_start`, `coordinator_outcome_spec_confirm`, `coordinator_work_plan_get`, `coordinator_steer`, `orchestration_topology` |
 | Backlog and board | Manage tasks through backlog/ready/problem/review/active/done flows and project pickup settings. | `backlog_capture_task`, `backlog_get_board`, `backlog_move_to_ready`, `send_all_backlog_to_ready`, `backlog_set_settings` |

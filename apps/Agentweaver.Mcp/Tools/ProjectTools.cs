@@ -81,22 +81,6 @@ public sealed class ProjectTools(AgentweaverApiClient api)
         catch (Exception ex) { throw new McpApiException(0, ex.Message); }
     }
 
-    [McpServerTool(Name = "project_relink"), Description("Relink a project to a new local working directory path.")]
-    public async Task<string> ProjectRelinkAsync(
-        [Description("Project ID")] string project_id,
-        [Description("New working directory path")] string working_directory,
-        CancellationToken ct)
-    {
-        try
-        {
-            var body = new { working_directory };
-            var result = await api.PostAsync<JsonElement>($"/api/projects/{Uri.EscapeDataString(project_id)}/relink", body, ct);
-            return JsonSerializer.Serialize(result, JsonOpts);
-        }
-        catch (McpApiException) { throw; }
-        catch (Exception ex) { throw new McpApiException(0, ex.Message); }
-    }
-
     [McpServerTool(Name = "project_delete"), Description("Delete a project by ID.")]
     public async Task<string> ProjectDeleteAsync(
         [Description("Project ID")] string project_id,

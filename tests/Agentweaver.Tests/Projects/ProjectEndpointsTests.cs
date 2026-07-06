@@ -192,6 +192,18 @@ public sealed class ProjectEndpointsTests : IClassFixture<ProjectsWebApplication
         response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
     }
 
+    [Fact]
+    public async Task PostProjectRelink_Returns404()
+    {
+        var id = await CreateBlankProjectAsync();
+
+        var response = await _client.PostAsJsonAsync(
+            $"/api/projects/{id}/relink",
+            new { working_directory = NewWorkingDir() });
+
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
+
     // =========================================================================
     // PE-09: GET /api/projects/{id}/runs returns empty list for new project
     // =========================================================================

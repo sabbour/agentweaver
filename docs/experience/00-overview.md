@@ -185,7 +185,7 @@ The tool catalog is broad because it mirrors the product model. It contains 79 t
 | **Diagnostics** | Inspect system health and background heartbeat state. | `diagnostics_get`, `heartbeat_status` |
 | **GitHubAuth** | Check or manage GitHub authentication for the caller. | `github_status`, `github_signin`, `github_signout` |
 | **Memory** | Capture and govern decisions, inbox entries, agent memory, session context, and file import/export. | `decision_inbox_submit`, `decision_inbox_merge`, `decision_list`, `memory_record`, `memory_search`, `session_start`, `memory_export` |
-| **Project** | List, create, inspect, configure, rename, relink, delete projects, and list project runs. | `project_list`, `project_create`, `project_get`, `project_configure`, `project_list_runs` |
+| **Project** | List, create, inspect, configure, rename, delete projects, and list project runs. | `project_list`, `project_create`, `project_get`, `project_configure`, `project_list_runs` |
 | **Run** | Submit, watch, review, inspect artifacts, retry, and archive runs. | `run_submit`, `run_status`, `run_watch`, `run_review`, `run_show_artifacts`, `run_get_file`, `run_retry` |
 | **SandboxPolicy** | Read or change the sandbox policy for a repository. | `sandbox_policy_get`, `sandbox_policy_set` |
 | **Team** | Cast a team, inspect roster, add or retire members, and fetch charters. | `team_get`, `team_cast`, `team_member_add`, `team_member_retire`, `team_member_get_charter` |
@@ -237,7 +237,7 @@ The table below maps major user goals to where a person goes in the web UI and w
 |---|---|---|
 | **Create a project** | **Projects** → **Create blank project** or **Create from GitHub**; optionally choose a blueprint. | `project_create`, plus `list_blueprints`, `validate_blueprint`, or `blueprint_generate` when using a blueprint. |
 | **Find or open a project** | **Overview** for active projects or **Projects** gallery for all projects; project switcher for recent/all projects. | `project_list`, `project_get`. |
-| **Configure a project** | **Settings** → General for name, repository link, and default model. | `project_configure`, `project_rename`, `project_relink`, `project_delete`. |
+| **Configure a project** | **Settings** → General for name and default model. | `project_configure`, `project_rename`, `project_delete`. |
 | **Set sandbox behavior** | **Settings** → Sandbox policy. | `sandbox_policy_get`, `sandbox_policy_set`. |
 | **Set review gates** | **Settings** → Review policy. | `workflows_list`, `workflow_get`, and `workflow_save` for workflow-level gates; `run_review` for execution-time review decisions. The current MCP catalog does not expose a dedicated review-policy settings tool. |
 | **Submit a direct run** | **Board** → start work and open the run's **Workflow** page. | `run_submit`. |

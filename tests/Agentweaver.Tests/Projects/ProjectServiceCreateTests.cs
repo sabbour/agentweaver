@@ -318,9 +318,6 @@ public sealed class ProjectServiceCreateTests : IAsyncDisposable
         public Task UpdateProviderSettingsAsync(ProjectId id, ProjectProviderSettings settings, DateTimeOffset updatedAt, CancellationToken ct = default) =>
             _inner.UpdateProviderSettingsAsync(id, settings, updatedAt, ct);
 
-        public Task UpdateWorkingDirectoryAsync(ProjectId id, string workingDirectory, string defaultBranch, DateTimeOffset updatedAt, CancellationToken ct = default) =>
-            _inner.UpdateWorkingDirectoryAsync(id, workingDirectory, defaultBranch, updatedAt, ct);
-
         public Task<bool> TryBeginDeleteAsync(ProjectId id, CancellationToken ct = default) =>
             _inner.TryBeginDeleteAsync(id, ct);
 

@@ -46,7 +46,7 @@ The Agentweaver MCP server exposes **80 tools** across **13 categories**. Tool n
 - **Diagnostics:** `diagnostics_get`, `heartbeat_status`
 - **GitHub Auth:** `github_signin`, `github_signout`, `github_status`
 - **Memory:** `decision_create`, `decision_inbox_list`, `decision_inbox_merge`, `decision_inbox_reject`, `decision_inbox_submit`, `decision_list`, `decision_update`, `memory_export`, `memory_get`, `memory_import`, `memory_list`, `memory_record`, `memory_search`, `session_current`, `session_start`, `session_update`, `squad_decide`
-- **Project:** `project_configure`, `project_create`, `project_delete`, `project_get`, `project_list`, `project_list_runs`, `project_relink`, `project_rename`
+- **Project:** `project_configure`, `project_create`, `project_delete`, `project_get`, `project_list`, `project_list_runs`, `project_rename`
 - **Run:** `run_archive`, `run_get_file`, `run_retry`, `run_review`, `run_show_artifacts`, `run_status`, `run_submit`, `run_watch`, `start_preview`
 - **Sandbox Policy:** `sandbox_policy_get`, `sandbox_policy_set`
 - **Team:** `team_cast`, `team_get`, `team_member_add`, `team_member_get_charter`, `team_member_retire`
