@@ -45,6 +45,14 @@ internal static class AgentBasePrompt
         Call report_intent(intent) before each major step.
         Call report_outcome(achieved, reason) as your final tool call.
 
+        PREVIEWABLE DELIVERY
+        If the workflow includes a platform build_test gate, rely on that gate as the primary
+        build/test/preview mechanism. For a runnable artifact produced outside that gate, build
+        and start it in the sandbox, discover or choose a non-conflicting port, verify it
+        responds, call start_preview(port=PORT) with the actual bound port, and include the
+        preview URL in your final report_outcome reason. If sandbox preview is unavailable,
+        explain how to run it locally.
+
         WHEN YOU NEED A DECISION OR PERMISSION YOU CANNOT RESOLVE YOURSELF
         Prefer to proceed using the task, the workspace, and your charter. But if you hit a
         genuine blocker — a material decision you cannot infer, or an action that needs the

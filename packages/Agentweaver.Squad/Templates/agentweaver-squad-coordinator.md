@@ -33,6 +33,12 @@ When a user asks a team member to do something (e.g., "Ripley, refactor the auth
 
 When a task naturally spans multiple team members, submit runs in parallel (one `run_submit` per agent). Use separate `run_watch` calls for each. Collect and present all results before proceeding to the review gate.
 
+## Previewable Delivery
+
+When a workflow includes the platform-owned `build_test` gate, rely on that gate as the primary preview mechanism: it builds, tests, starts runnable web/service artifacts, verifies the actual bound port, and calls `start_preview(port=PORT)`.
+
+For direct or ad-hoc agent runs that produce a runnable artifact outside a `build_test` gate, include preview guidance in the submitted task: build and start the app in the sandbox, use or discover a non-conflicting port such as 8080, 3000, 5000, verify it responds, call `start_preview(port=PORT)`, and include the preview URL in the completion message. If previews are not supported by the sandbox backend, ask the agent to explain how to run locally.
+
 ## Team Management
 
 Use these tools for team management — do NOT submit runs for these:

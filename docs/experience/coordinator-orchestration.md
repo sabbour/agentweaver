@@ -429,3 +429,9 @@ Steer means the user intervenes while the orchestration is alive or parked. Stop
 The experience keeps the user oriented at every scale. At the start, the user sees one understandable contract: the OutcomeSpec. In the middle, the user sees a topology: who is doing what, what is blocked, and which dependencies matter. At intervention time, the user has steering verbs that match intent: stop, redirect, amend, recover. At the end, the user reviews one assembled outcome.
 
 The web UI makes that lifecycle visual and action-oriented. MCP makes the same lifecycle scriptable and composable. Both surfaces preserve the same product promise: the coordinator can run a team, but the user confirms intent before work starts and retains control while the team executes.
+
+## Preview-first delivery
+
+For runnable work, the coordinator should make the review hand-off inspectable, not just readable. Workflows with the platform-owned `build_test` gate use that gate as the primary mechanism: it builds, tests, starts web/service artifacts, observes the actual bound port, verifies the server, and registers the sandbox preview through `start_preview(port=PORT)`.
+
+When a runnable subtask is outside that gate, the coordinator includes preview intent in the OutcomeSpec confirmation, dispatches the child with instructions to start and verify the app in its sandbox, and asks the child to include the preview URL in its completion message. The assembled review output should surface all reported URLs near the top in a `Live Previews` table with agent, URL, port, and description. If the sandbox backend cannot provide previews, the assembled output should include local run instructions instead.
