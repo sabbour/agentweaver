@@ -26,8 +26,8 @@ public sealed class CatalogWorkflowBindingTests
     }
 
     [Theory]
-    [InlineData("software-delivery", new[] { "rai", "rubberduck", "human-review" })]
-    [InlineData("bug-fix", new[] { "rai", "human-review" })]
+    [InlineData("software-delivery", new[] { "build-test", "rai", "rubberduck", "human-review" })]
+    [InlineData("bug-fix", new[] { "build-test", "rai", "human-review" })]
     [InlineData("content-authoring", new[] { "rai", "human-review" })]
     [InlineData("incident-response", new[] { "human-review" })]
     [InlineData("pm-discovery", new[] { "human-review" })]
@@ -39,14 +39,29 @@ public sealed class CatalogWorkflowBindingTests
         var definition = LoadCatalogWorkflow(workflowId);
 
         var gates = definition.Nodes
-            .Where(n => n.Type == WorkflowNodeType.Check)
-            .Select(NodeClassifier.NormalizeGateKind)
+            .Where(n => n.Type == WorkflowNodeType.Check || n.Type == WorkflowNodeType.BuildTest)
+            .Select(n => n.Type == WorkflowNodeType.BuildTest ? "build-test" : NodeClassifier.NormalizeGateKind(n))
             .Where(g => g is not null)
             .ToArray();
 
         gates.Should().Equal(expectedGates);
         definition.Nodes.Should().NotContain(n =>
             n.Type == WorkflowNodeType.Merge || n.Type == WorkflowNodeType.Scribe);
+    }
+
+    [Theory]
+    [InlineData("software-delivery")]
+    [InlineData("bug-fix")]
+    public void CatalogWorkflow_UsesPlatformBuildTestGateWithoutInlinePrompt(string workflowId)
+    {
+        var definition = LoadCatalogWorkflow(workflowId);
+
+        var buildTest = definition.Nodes.Single(n => n.Id == "build-test");
+
+        buildTest.Type.Should().Be(WorkflowNodeType.BuildTest);
+        buildTest.Label.Should().Be("Build & Test");
+        buildTest.Agent.Should().Be("qa-engineer");
+        buildTest.Prompt.Should().BeNull();
     }
 
     private static WorkflowDefinition LoadCatalogWorkflow(string workflowId)

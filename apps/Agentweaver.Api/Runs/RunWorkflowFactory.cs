@@ -70,6 +70,8 @@ public sealed class RunWorkflowFactory
     /// </summary>
     internal string? ApiKey => _apiKey;
 
+    internal IWorkflowAgentFactory AgentFactory => _agentFactory;
+
     public RunWorkflowFactory(
         IAgentRunner agentRunner,
         GitHubCopilotClientFactory copilotClientFactory,
@@ -903,6 +905,28 @@ public sealed class RunWorkflowFactory
         {
             if (_peerReviewNodes.TryGetValue(node.Id, out var existing))
                 return existing;
+
+            if (node.Type == WorkflowNodeType.BuildTest)
+            {
+                ExecutorBinding buildTest = new BuildTestTurnExecutor(
+                    _factory._copilotClientFactory,
+                    _factory._scopeProvider,
+                    _factory._sandboxExecutor,
+                    _factory._sandboxPolicyStore,
+                    _factory._approvalStore,
+                    _factory._toolApprovalGate,
+                    _factory._loggerFactory,
+                    _factory.GetRecordingWriter,
+                    name: $"build-test-{node.Id}",
+                    logicalNodeId: node.Id,
+                    displayLabel: node.Label,
+                    createSubStream: _factory.CreateSubStreamWriter,
+                    completeSubStream: _factory.CompleteSubStream,
+                    agentFactory: _factory._agentFactory,
+                    agentId: node.Agent);
+                _peerReviewNodes[node.Id] = buildTest;
+                return buildTest;
+            }
 
             // A peer-review verdict gate is a REAL AI reviewer: the existing RubberduckTurnExecutor takes the
             // produced AgentTurnOutput, runs an AI critique, and emits a WorkflowReviewDecision (PASS→approved,

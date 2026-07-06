@@ -27,6 +27,9 @@ public interface ICollectiveAssemblyPipeline
     /// <summary>Runs the collective rubber-duck review over the aggregate diff.</summary>
     Task<CollectiveGateDecision> RunRubberduckAsync(CollectiveRubberduckRequest request, CancellationToken ct);
 
+    /// <summary>Runs the collective Build & Test gate over the assembled integration branch.</summary>
+    Task<CollectiveGateDecision> RunBuildTestAsync(CollectiveBuildTestRequest request, CancellationToken ct);
+
     /// <summary>Performs the ONE collective merge of the integration branch into the originating branch.</summary>
     Task<CollectiveMergeResult> MergeAsync(CollectiveMergeRequest request, CancellationToken ct);
 
@@ -59,6 +62,18 @@ public sealed record CollectiveRubberduckRequest(
     string SubmittingUser,
     string? GateNodeId = null,
     string? DisplayLabel = null);
+
+/// <summary>Inputs to the collective Build & Test gate.</summary>
+public sealed record CollectiveBuildTestRequest(
+    string CoordinatorRunId,
+    string RepositoryPath,
+    string IntegrationBranch,
+    string AggregateTreeHash,
+    string AggregateDiff,
+    string SubmittingUser,
+    string? GateNodeId = null,
+    string? DisplayLabel = null,
+    string? AgentId = null);
 
 /// <summary>Normalized pass/revise decision from an authored collective assembly gate.</summary>
 public sealed record CollectiveGateDecision(bool Approved, bool RequestChanges, string? Feedback);

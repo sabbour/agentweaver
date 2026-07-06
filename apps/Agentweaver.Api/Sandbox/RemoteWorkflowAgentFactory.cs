@@ -43,6 +43,7 @@ internal sealed class RemoteWorkflowAgentFactory : IWorkflowAgentFactory
     public IWorkflowTurnAgent CreateWorkerAgent() => CreateProxy();
     public IWorkflowTurnAgent CreateRaiAgent() => CreateProxy();
     public IWorkflowTurnAgent CreateRubberduckAgent() => CreateProxy();
+    public IWorkflowTurnAgent CreateBuildTestAgent() => CreateProxy();
     public IWorkflowTurnAgent CreateScribeAgent() => CreateProxy();
 
     private RemoteAgentProxy CreateProxy() =>

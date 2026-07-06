@@ -29,13 +29,14 @@ public static class CoordinatorGraphDescriptor
     public const string AssemblyMergeNodeId = "planned:assembly-merge";
     public const string AssemblyScribeNodeId = "planned:assembly-scribe";
 
-    public sealed record AssemblyGateNode(string Id, string Label, string GateKind)
+    public sealed record AssemblyGateNode(string Id, string Label, string GateKind, string? AgentId = null)
     {
         public string StageId => Id;
         public string GraphNodeId => "planned:assembly-" + Id.Replace(' ', '-').Replace('_', '-').ToLowerInvariant();
         public string Role => GateKind switch
         {
             "rai" => "rai",
+            "build-test" => "review",
             "rubberduck" => "rubberduck",
             "human-review" => "review",
             _ => "review",

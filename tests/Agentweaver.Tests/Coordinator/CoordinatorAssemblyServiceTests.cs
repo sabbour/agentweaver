@@ -957,6 +957,7 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
     {
         public int IntegrationBuilds;
         public int IntegrationRetryPreparations;
+        public int BuildTests;
         public int Merges;
         public int Scribes;
         public IntegrationBranchResult? IntegrationResult;
@@ -988,6 +989,12 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
 
         public Task<CollectiveGateDecision> RunRubberduckAsync(CollectiveRubberduckRequest request, CancellationToken ct) =>
             Task.FromResult(new CollectiveGateDecision(Approved: true, RequestChanges: false, Feedback: null));
+
+        public Task<CollectiveGateDecision> RunBuildTestAsync(CollectiveBuildTestRequest request, CancellationToken ct)
+        {
+            BuildTests++;
+            return Task.FromResult(new CollectiveGateDecision(Approved: true, RequestChanges: false, Feedback: null));
+        }
 
         public Task<CollectiveMergeResult> MergeAsync(CollectiveMergeRequest request, CancellationToken ct)
         {

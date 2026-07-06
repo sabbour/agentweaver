@@ -8,8 +8,8 @@ namespace Agentweaver.Tests.Helpers;
 /// Test <see cref="IWorkflowAgentFactory"/> that produces fake workflow agents which never
 /// touch the GitHub Copilot SDK. The worker agent funnels into the supplied
 /// <see cref="TestFileEditAgentRunner"/> so tests can drive its <c>Mode</c> and observe
-/// <c>InvocationCount</c>/<c>LastTask</c>. Rai, Rubberduck, and Scribe agents are inert (Rai always returns
-/// GREEN, Rubberduck PASS, Scribe is a no-op) so the end-to-end workflow completes deterministically
+/// <c>InvocationCount</c>/<c>LastTask</c>. Rai, Rubberduck, BuildTest, and Scribe agents are inert (Rai always returns
+/// GREEN, Rubberduck/BuildTest PASS, Scribe is a no-op) so the end-to-end workflow completes deterministically
 /// without their turns interfering with the worker-agent assertions.
 /// </summary>
 public sealed class FakeWorkflowAgentFactory : IWorkflowAgentFactory
@@ -24,6 +24,8 @@ public sealed class FakeWorkflowAgentFactory : IWorkflowAgentFactory
 
     public IWorkflowTurnAgent CreateRubberduckAgent() => new FakeWorkflowTurnAgent(FakeAgentRole.Rubberduck, _runner);
 
+    public IWorkflowTurnAgent CreateBuildTestAgent() => new FakeWorkflowTurnAgent(FakeAgentRole.BuildTest, _runner);
+
     public IWorkflowTurnAgent CreateScribeAgent() => new FakeWorkflowTurnAgent(FakeAgentRole.Scribe, _runner);
 }
 
@@ -32,13 +34,14 @@ internal enum FakeAgentRole
     Worker,
     Rai,
     Rubberduck,
+    BuildTest,
     Scribe,
 }
 
 /// <summary>
 /// A fake <see cref="IWorkflowTurnAgent"/> used by integration/security tests. The worker role
 /// delegates to <see cref="TestFileEditAgentRunner"/> (real file/git operations in the worktree);
-/// Rai returns GREEN, Rubberduck returns PASS, and Scribe returns an empty result.
+/// Rai returns GREEN, Rubberduck/BuildTest return PASS, and Scribe returns an empty result.
 /// </summary>
 internal sealed class FakeWorkflowTurnAgent : IWorkflowTurnAgent
 {
@@ -96,6 +99,8 @@ internal sealed class FakeWorkflowTurnAgent : IWorkflowTurnAgent
 
         // Rubberduck is also isolated from the shared runner. PASS lets injected policy gates proceed.
         FakeAgentRole.Rubberduck => Task.FromResult("PASS — critique complete, no changes requested."),
+
+        FakeAgentRole.BuildTest => Task.FromResult("APPROVED — build and test gate passed."),
 
         // Scribe is a silent no-op in tests.
         _ => Task.FromResult(string.Empty),

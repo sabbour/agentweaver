@@ -355,10 +355,11 @@ public sealed class Spec018FactorySelectionTests
         var sp = services.BuildServiceProvider();
         var remoteFactory = sp.GetRequiredService<RemoteWorkflowAgentFactory>();
 
-        // All four factory methods must produce a RemoteAgentProxy
+        // All factory methods must produce a RemoteAgentProxy
         remoteFactory.CreateWorkerAgent().Should().BeOfType<RemoteAgentProxy>();
         remoteFactory.CreateRaiAgent().Should().BeOfType<RemoteAgentProxy>();
         remoteFactory.CreateRubberduckAgent().Should().BeOfType<RemoteAgentProxy>();
+        remoteFactory.CreateBuildTestAgent().Should().BeOfType<RemoteAgentProxy>();
         remoteFactory.CreateScribeAgent().Should().BeOfType<RemoteAgentProxy>();
     }
 
@@ -368,6 +369,7 @@ public sealed class Spec018FactorySelectionTests
         public IWorkflowTurnAgent CreateWorkerAgent()     => throw new NotImplementedException();
         public IWorkflowTurnAgent CreateRaiAgent()         => throw new NotImplementedException();
         public IWorkflowTurnAgent CreateRubberduckAgent() => throw new NotImplementedException();
+        public IWorkflowTurnAgent CreateBuildTestAgent()  => throw new NotImplementedException();
         public IWorkflowTurnAgent CreateScribeAgent()     => throw new NotImplementedException();
     }
 

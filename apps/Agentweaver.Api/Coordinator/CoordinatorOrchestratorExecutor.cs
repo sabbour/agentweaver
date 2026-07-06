@@ -680,7 +680,7 @@ public sealed class CoordinatorOrchestratorExecutor
     // CastMember has no IsBuiltIn flag, so we exclude by a case-insensitive denylist
     // matched against member Name, Role.Id, and Role.Title.
     private static readonly HashSet<string> BuiltInAgentDenyList =
-        new(StringComparer.OrdinalIgnoreCase) { "scribe", "ralph", "rai" };
+        new(StringComparer.OrdinalIgnoreCase) { "scribe", "ralph", "rai", "build-test", "build & test", "build and test" };
 
     private IReadOnlyList<RosterCandidate> ResolveRoster(string repositoryPath)
     {
@@ -874,7 +874,7 @@ public sealed class CoordinatorOrchestratorExecutor
             "Use this as guidance for the SHAPE of the decomposition (which roles act, in what order); "
             + "do not copy node ids verbatim and still PREFER concrete roster role ids below.");
         sb.AppendLine(
-            "Do not create subtasks for platform-owned RAI, rubberduck, human-review, merge, or scribe stages; "
+            "Do not create subtasks for platform-owned build-test, RAI, rubberduck, human-review, merge, or scribe stages; "
             + "the coordinator collective assembly supplies those exactly once after subtasks finish.");
         return sb.ToString();
     }
@@ -882,7 +882,8 @@ public sealed class CoordinatorOrchestratorExecutor
     private static bool IsCoordinatorPlatformNode(WorkflowNode node)
     {
         var kind = NodeClassifier.Classify(node);
-        return kind is NodeKind.Rai or NodeKind.Rubberduck or NodeKind.HumanReview or NodeKind.Merge or NodeKind.Scribe;
+        return node.Type == WorkflowNodeType.BuildTest
+            || kind is NodeKind.Rai or NodeKind.Rubberduck or NodeKind.HumanReview or NodeKind.Merge or NodeKind.Scribe;
     }
 
     private async Task<string?> BuildCoordinatorSystemContextAsync(

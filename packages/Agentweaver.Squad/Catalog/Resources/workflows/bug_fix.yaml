@@ -33,12 +33,11 @@ nodes:
     prompt: Verify the fix resolves the reported defect without regressions - review the change and exercise the relevant behavior. Provide your verdict and findings inline through your review decision; they are captured in the run record and shown in the UI. Do NOT write a verification report file (e.g. qa-verification.md) into the workspace. Any test code you add is a deliverable and belongs in the repository's test suite.
 
   - id: build-test
-    type: peer_review
+    type: build_test
     label: Build & Test
     role: review
     kind: live
     agent: qa-engineer
-    prompt: Run the project's build and test suite. Execute all available build commands and test runners for the repository. The step passes only if build succeeds AND all tests pass. Report any failures with full error output. Do not approve if there are compilation errors, test failures, or lint errors that indicate broken code. After tests pass, if the project is a web application or service, start its development/preview server so stakeholders can access the running changes before human review. Do NOT assume a hardcoded or pre-configured port — the port is not known ahead of time and can differ per execution. Instead, discover how to run the app by inspecting the project itself (package.json scripts, Dockerfile, Makefile, README, framework defaults, etc.), start the server, and then observe the actual port it binds to from the process stdout/logs. Once the server is up and verified (e.g. with curl), register it by calling the `start_preview(port=PORT)` tool with the exact port the server actually bound to, so the preview sandbox attaches to the running process.
 
   - id: rai-check
     type: check

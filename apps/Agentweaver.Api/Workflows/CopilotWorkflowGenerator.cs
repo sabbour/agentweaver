@@ -124,7 +124,7 @@ public sealed class CopilotWorkflowGenerator : IWorkflowGenerator
             - edges: list. Each edge: { from, to, when? }. `from`/`to` MUST reference existing node ids.
               `when` guards the edge on a verdict (e.g. approved, request-changes, declined, pass, revise).
 
-            NODE TYPES — use the following supported types. peer_review HAS a runtime executor and is
+            NODE TYPES — use the following supported types. peer_review and build_test HAVE runtime executors and are
             fully supported. Do NOT use fan_out, fan_in, serial, or coordinator_composed: those are accepted
             by the schema loader but have NO runtime executor and will cause a binding error when the
             workflow runs.
@@ -134,6 +134,9 @@ public sealed class CopilotWorkflowGenerator : IWorkflowGenerator
             - peer_review: an AI peer-review turn that emits a verdict. With verdict-routed outgoing edges
               (e.g. `when: approved` / `when: request-changes`) it acts as a review GATE; with a single
               unconditional outgoing edge it is a plain producing review turn. Set `role` and `prompt`.
+            - build_test: platform-owned Build & Test gate. Do NOT set a prompt; the runtime supplies the
+              canonical build/test/preview instruction. Defaults to `agent: qa-engineer` when omitted.
+              It emits verdicts routed with `when: approved`, `when: request-changes`, and `when: declined`.
             - check: a routing gate. MUST declare `branches:` (the verdict strings it routes on) and
               have exactly one outgoing edge per declared branch. Optional `gate_kind` field for specialised
               gates: `rai` (responsible-AI safety gate), `rubberduck` (AI critique gate; verdicts
@@ -146,14 +149,14 @@ public sealed class CopilotWorkflowGenerator : IWorkflowGenerator
 
             MANDATORY BUILD & TEST STEP (software workflows): For any software-oriented workflow — one that
             implements, fixes, refactors, or otherwise changes code (bug fix, feature delivery, refactor,
-            etc.) — you MUST include a build & test step IMMEDIATELY before the human-review gate. This step
-            is static and always-on; never omit it and never make it optional. Wire it exactly as:
+            etc.) — you MUST include a build_test gate IMMEDIATELY before the human-review gate. This gate
+            is static, platform-owned, and always-on; never omit it, never make it optional, and never add
+            an inline prompt. Wire it exactly as:
               - id: build-test
-                type: peer_review
+                type: build_test
                 label: Build & Test
                 role: review
                 agent: qa-engineer
-                prompt: Run the project's build and test suite. Execute all available build commands and test runners for the repository. The step passes only if build succeeds AND all tests pass. Report any failures with full error output. Do not approve if there are compilation errors, test failures, or lint errors that indicate broken code. After tests pass, if the project is a web application or service, start its development/preview server so stakeholders can access the running changes before human review. Do NOT assume a hardcoded or pre-configured port — the port is not known ahead of time and can differ per execution. Instead, discover how to run the app by inspecting the project itself (package.json scripts, Dockerfile, Makefile, README, framework defaults, etc.), start the server, and then observe the actual port it binds to from the process stdout/logs. Once the server is up and verified (e.g. with curl), register it by calling the `start_preview(port=PORT)` tool with the exact port the server actually bound to, so the preview sandbox attaches to the running process.
             Route its verdicts: `when: approved` advances to the human-review gate; `when: request-changes`
             loops back to the implementation node (e.g. implement/fix); `when: declined` goes to a terminal.
             If a software workflow has no human-review gate, add one (a `check` node with

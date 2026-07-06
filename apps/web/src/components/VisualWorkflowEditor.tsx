@@ -20,10 +20,14 @@ import {
 } from '@fluentui/react-components';
 import {
   AddRegular,
+  BeakerRegular,
   CodeRegular,
   DeleteRegular,
   DismissRegular,
   EyeRegular,
+  PersonFeedbackRegular,
+  PersonRegular,
+  ShieldCheckmarkRegular,
 } from '@fluentui/react-icons';
 import {
   Background,
@@ -43,7 +47,7 @@ import type { GraphNodeType, WorkflowDetailDto } from '../api/types';
 import { DAG_NODE_SEP, layoutDag, workflowNodeSizeHint } from '../utils/dagLayout';
 import {
   NODE_TYPE_LABELS,
-  WORKFLOW_NODE_TYPES,
+  AUTHORABLE_WORKFLOW_NODE_TYPES,
   addEdge,
   addNode,
   parseWorkflowYaml,
@@ -53,8 +57,11 @@ import {
   renameNode,
   setEdgeFieldAt,
   setHeaderField,
+  setBranchTarget,
   setNodeField,
+  setNodeStringArrayField,
   type WfModel,
+  type WfNode,
 } from '../utils/workflowYaml';
 import {
   ActiveEdgeContext,
@@ -86,6 +93,7 @@ export interface VisualWorkflowEditorProps {
 const TYPE_ROLE: Record<string, string> = {
   prompt: 'agent',
   peer_review: 'review',
+  build_test: 'review',
   check: 'rai',
   fan_out: 'subtask',
   fan_in: 'assembly',
@@ -99,6 +107,7 @@ const TYPE_ROLE: Record<string, string> = {
 const TYPE_GRAPHNODE: Record<string, GraphNodeType> = {
   prompt: 'agent',
   peer_review: 'gate',
+  build_test: 'gate',
   check: 'gate',
   fan_out: 'action',
   fan_in: 'action',
@@ -110,7 +119,61 @@ const TYPE_GRAPHNODE: Record<string, GraphNodeType> = {
 };
 
 // Node types whose `agent` field is meaningful (FR-045 type-aware authoring).
-const AGENT_TYPES = new Set(['prompt', 'peer_review', 'coordinator_composed']);
+const AGENT_TYPES = new Set(['prompt', 'peer_review', 'build_test', 'coordinator_composed']);
+const READONLY_NODE_TYPES = new Set(['merge', 'scribe']);
+
+const SPECIAL_GATES = [
+  {
+    key: 'rai',
+    label: 'RAI Check',
+    type: 'check',
+    gate_kind: 'rai',
+    role: 'review',
+    kind: 'gate',
+    branches: ['revise', 'safety-failed', 'no-changes', 'review'],
+    Icon: ShieldCheckmarkRegular,
+  },
+  {
+    key: 'rubberduck',
+    label: 'Rubberduck Review',
+    type: 'check',
+    gate_kind: 'rubberduck',
+    role: 'review',
+    kind: 'gate',
+    branches: ['pass', 'revise'],
+    Icon: PersonFeedbackRegular,
+  },
+  {
+    key: 'human-review',
+    label: 'Human Review',
+    type: 'check',
+    gate_kind: 'human-review',
+    role: 'review',
+    kind: 'gate',
+    branches: ['approved', 'request-changes', 'declined'],
+    Icon: PersonRegular,
+  },
+  {
+    key: 'build-test',
+    label: 'Build & Test',
+    type: 'build_test',
+    role: 'review',
+    kind: 'live',
+    agent: 'qa-engineer',
+    branches: ['approved', 'request-changes', 'declined'],
+    Icon: BeakerRegular,
+  },
+] as const;
+
+const DEFAULT_BRANCHES: Record<string, string[]> = Object.fromEntries(
+  SPECIAL_GATES.map((g) => [g.key, [...g.branches]]),
+);
+
+function gateKey(node: WfNode): string | null {
+  if (node.type === 'build_test') return 'build-test';
+  if (node.type === 'check' && node.gate_kind) return node.gate_kind;
+  return null;
+}
 
 const useStyles = makeStyles({
   root: {
@@ -267,11 +330,13 @@ function buildGraph(
 function unroutedVerdicts(model: WfModel): { nodeId: string; verdicts: string[] }[] {
   const result: { nodeId: string; verdicts: string[] }[] = [];
   for (const n of model.nodes) {
-    if (n.type !== 'check' || !n.branches || n.branches.length === 0) continue;
+    const key = gateKey(n);
+    const branches = n.type === 'build_test' ? DEFAULT_BRANCHES['build-test'] : n.branches;
+    if (!key || !branches || branches.length === 0) continue;
     const routed = new Set(
       model.edges.filter((e) => e.from === n.id && e.when).map((e) => e.when as string),
     );
-    const missing = n.branches.filter((b) => !routed.has(b));
+    const missing = branches.filter((b) => !routed.has(b));
     if (missing.length > 0) result.push({ nodeId: n.id, verdicts: missing });
   }
   return result;
@@ -365,6 +430,28 @@ export function VisualWorkflowEditor({
     });
   }, []);
 
+  const handleAddSpecialGate = useCallback((gate: (typeof SPECIAL_GATES)[number]) => {
+    setYamlText((t) => {
+      const existing = new Set((parseWorkflowYaml(t).model?.nodes ?? []).map((n) => n.id));
+      let i = 1;
+      let id = `${gate.key}-${i}`;
+      while (existing.has(id)) { i += 1; id = `${gate.key}-${i}`; }
+      setSelectedNodeId(id);
+      setSelectedEdgeIndex(null);
+      setRightMode('inspector');
+      return addNode(t, {
+        id,
+        type: gate.type,
+        label: gate.label,
+        role: gate.role,
+        kind: gate.kind,
+        gate_kind: 'gate_kind' in gate ? gate.gate_kind : undefined,
+        agent: 'agent' in gate ? gate.agent : undefined,
+        branches: gate.type === 'check' ? [...gate.branches] : undefined,
+      });
+    });
+  }, []);
+
   const selectedNode = useMemo(
     () => model?.nodes.find((n) => n.id === selectedNodeId) ?? null,
     [model, selectedNodeId],
@@ -373,6 +460,14 @@ export function VisualWorkflowEditor({
     () => (selectedEdgeIndex != null ? model?.edges[selectedEdgeIndex] ?? null : null),
     [model, selectedEdgeIndex],
   );
+  const selectedReadOnly = !!selectedNode && READONLY_NODE_TYPES.has(selectedNode.type);
+  const selectedGateKey = selectedNode ? gateKey(selectedNode) : null;
+  const selectedGateBranches = selectedNode && selectedGateKey
+    ? (selectedNode.type === 'build_test'
+        ? DEFAULT_BRANCHES['build-test']
+        : (selectedNode.branches ?? DEFAULT_BRANCHES[selectedGateKey] ?? []))
+    : [];
+  const selectableTargets = model?.nodes.filter((n) => n.id !== selectedNode?.id) ?? [];
 
   const warnings = useMemo(() => (model ? unroutedVerdicts(model) : []), [model]);
 
@@ -386,6 +481,14 @@ export function VisualWorkflowEditor({
 
   const handleNodeField = useCallback((id: string, field: string, value: string) => {
     setYamlText((t) => setNodeField(t, id, field, value));
+  }, []);
+
+  const handleBranchesField = useCallback((id: string, branches: string[]) => {
+    setYamlText((t) => setNodeStringArrayField(t, id, 'branches', branches));
+  }, []);
+
+  const handleBranchTarget = useCallback((id: string, branch: string, target: string) => {
+    setYamlText((t) => setBranchTarget(t, id, branch, target));
   }, []);
 
   const handleDeleteSelectedNode = useCallback(() => {
@@ -488,7 +591,12 @@ export function VisualWorkflowEditor({
               </MenuTrigger>
               <MenuPopover>
                 <MenuList>
-                  {WORKFLOW_NODE_TYPES.map((t) => (
+                  {SPECIAL_GATES.map((g) => (
+                    <MenuItem key={g.key} icon={<g.Icon />} onClick={() => handleAddSpecialGate(g)}>
+                      {g.label}
+                    </MenuItem>
+                  ))}
+                  {AUTHORABLE_WORKFLOW_NODE_TYPES.map((t) => (
                     <MenuItem key={t} onClick={() => handleAddNode(t)}>
                       {NODE_TYPE_LABELS[t] ?? t}
                     </MenuItem>
@@ -549,10 +657,16 @@ export function VisualWorkflowEditor({
 
           {rightMode === 'inspector' && selectedNode && (
             <>
+              {selectedReadOnly && (
+                <MessageBar intent="info">
+                  <MessageBarBody>Merge and Scribe are platform-owned tail steps. Existing definitions load, but these steps are read-only.</MessageBarBody>
+                </MessageBar>
+              )}
               <Field label="Node id">
                 <Input
                   defaultValue={selectedNode.id}
                   key={`id-${selectedNode.id}`}
+                  disabled={selectedReadOnly}
                   onBlur={(e) => handleRenameNode(selectedNode.id, e.target.value.trim())}
                 />
               </Field>
@@ -560,11 +674,12 @@ export function VisualWorkflowEditor({
                 <Dropdown
                   selectedOptions={[selectedNode.type]}
                   value={NODE_TYPE_LABELS[selectedNode.type] ?? selectedNode.type}
+                  disabled={selectedReadOnly}
                   onOptionSelect={(_, d) => {
                     if (d.optionValue) handleNodeField(selectedNode.id, 'type', d.optionValue as string);
                   }}
                 >
-                  {WORKFLOW_NODE_TYPES.map((t) => (
+                  {AUTHORABLE_WORKFLOW_NODE_TYPES.map((t) => (
                     <Option key={t} value={t} text={NODE_TYPE_LABELS[t] ?? t}>
                       {NODE_TYPE_LABELS[t] ?? t}
                     </Option>
@@ -575,6 +690,7 @@ export function VisualWorkflowEditor({
                 <Input
                   defaultValue={selectedNode.label ?? ''}
                   key={`label-${selectedNode.id}`}
+                  disabled={selectedReadOnly}
                   onBlur={(e) => handleNodeField(selectedNode.id, 'label', e.target.value)}
                 />
               </Field>
@@ -583,6 +699,7 @@ export function VisualWorkflowEditor({
                   <Input
                     defaultValue={selectedNode.agent ?? ''}
                     key={`agent-${selectedNode.id}`}
+                    disabled={selectedReadOnly}
                     onBlur={(e) => handleNodeField(selectedNode.id, 'agent', e.target.value)}
                   />
                 </Field>
@@ -593,6 +710,7 @@ export function VisualWorkflowEditor({
                     defaultValue={selectedNode.prompt ?? ''}
                     key={`prompt-${selectedNode.id}`}
                     rows={4}
+                    disabled={selectedReadOnly}
                     onBlur={(e) => handleNodeField(selectedNode.id, 'prompt', e.target.value)}
                   />
                 </Field>
@@ -602,6 +720,7 @@ export function VisualWorkflowEditor({
                   <Input
                     defaultValue={selectedNode.model ?? ''}
                     key={`model-${selectedNode.id}`}
+                    disabled={selectedReadOnly}
                     onBlur={(e) => handleNodeField(selectedNode.id, 'model', e.target.value)}
                   />
                 </Field>
@@ -611,13 +730,60 @@ export function VisualWorkflowEditor({
                   <Input
                     defaultValue={selectedNode.target ?? ''}
                     key={`target-${selectedNode.id}`}
+                    disabled={selectedReadOnly}
                     onBlur={(e) => handleNodeField(selectedNode.id, 'target', e.target.value)}
                   />
                 </Field>
               )}
-              <Button appearance="secondary" icon={<DeleteRegular />} onClick={handleDeleteSelectedNode}>
-                Delete node
-              </Button>
+              {selectedGateKey && (
+                <Field
+                  label="Branch routing"
+                  hint={selectedNode.type === 'build_test'
+                    ? 'Build & Test uses fixed verdicts and no prompt field.'
+                    : 'Each declared branch should route to a target node.'}
+                >
+                  <div style={{ display: 'grid', gap: tokens.spacingVerticalS }}>
+                    {selectedNode.type === 'check' && (
+                      <Input
+                        value={selectedGateBranches.join(', ')}
+                        aria-label="Gate branches"
+                        onChange={(_, d) => handleBranchesField(
+                          selectedNode.id,
+                          d.value.split(',').map((b) => b.trim()).filter(Boolean),
+                        )}
+                      />
+                    )}
+                    {selectedGateBranches.map((branch) => {
+                      const current = model?.edges.find((e) => e.from === selectedNode.id && e.when === branch)?.to ?? '';
+                      return (
+                        <Field key={branch} label={branch}>
+                          <Dropdown
+                            selectedOptions={current ? [current] : []}
+                            value={current}
+                            placeholder="Select target"
+                            onOptionSelect={(_, d) => handleBranchTarget(
+                              selectedNode.id,
+                              branch,
+                              d.optionValue as string,
+                            )}
+                          >
+                            {selectableTargets.map((n) => (
+                              <Option key={n.id} value={n.id} text={n.label || n.id}>
+                                {n.label || n.id}
+                              </Option>
+                            ))}
+                          </Dropdown>
+                        </Field>
+                      );
+                    })}
+                  </div>
+                </Field>
+              )}
+              {!selectedReadOnly && (
+                <Button appearance="secondary" icon={<DeleteRegular />} onClick={handleDeleteSelectedNode}>
+                  Delete node
+                </Button>
+              )}
             </>
           )}
 

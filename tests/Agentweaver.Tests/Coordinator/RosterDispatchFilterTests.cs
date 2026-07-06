@@ -61,6 +61,13 @@ public sealed class RosterDispatchFilterTests
     public void Rai_TitleWithSuffix_IsNotDispatchable()
         => CoordinatorOrchestratorExecutor.IsDispatchable("SomeName", "some-id", "Rai (assistant)").Should().BeFalse();
 
+    [Theory]
+    [InlineData("Build & Test", "qa-engineer", "QA Engineer")]
+    [InlineData("SomeName", "build-test", "QA Engineer")]
+    [InlineData("SomeName", "some-id", "Build and Test Gate")]
+    public void BuildTest_PlatformGate_IsNotDispatchable(string name, string roleId, string roleTitle)
+        => CoordinatorOrchestratorExecutor.IsDispatchable(name, roleId, roleTitle).Should().BeFalse();
+
     // -----------------------------------------------------------------------
     // Prefix-match boundary: similar-but-distinct names must NOT be excluded
     // -----------------------------------------------------------------------

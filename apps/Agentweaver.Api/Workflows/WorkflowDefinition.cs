@@ -13,6 +13,9 @@ public enum WorkflowNodeType
     /// <summary>A reviewing agent evaluates another node's output and emits a verdict — FR-015.</summary>
     PeerReview,
 
+    /// <summary>Platform-owned build/test/preview gate; emits a peer-review style verdict.</summary>
+    BuildTest,
+
     /// <summary>A gate/condition that routes on an upstream verdict/predicate — FR-016.</summary>
     Check,
 
