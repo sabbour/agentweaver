@@ -1753,6 +1753,7 @@ export function CoordinatorRunPage() {
 
   const [steerPanelOpen, setSteerPanelOpen] = useState(false);
   const [specPanelOpen, setSpecPanelOpen] = useState(false);
+  const specPanelAutoOpenedRef = useRef(false);
   const [artifactsPanelOpen, setArtifactsPanelOpen] = useState(false);
   const [sessionPanelOpen, setSessionPanelOpen] = useState(false);
   const [panelNodeId, setPanelNodeId] = useState<string | null>(null);
@@ -1761,6 +1762,19 @@ export function CoordinatorRunPage() {
     setPanelNodeId(nodeId);
     setSessionPanelOpen(true);
   }, []);
+
+  useEffect(() => {
+    if (specPanelAutoOpenedRef.current || isChildRun) return;
+    const hasCoordinatorSignal = goal != null
+      || coordStatusField != null
+      || workPlanStatus != null
+      || workPlanData != null
+      || events.some((evt) => evt.type.startsWith('coordinator.'));
+    if (hasCoordinatorSignal && !specConfirmed && !hasSubtaskNodes) {
+      specPanelAutoOpenedRef.current = true;
+      setSpecPanelOpen(true);
+    }
+  }, [coordStatusField, events, goal, hasSubtaskNodes, isChildRun, specConfirmed, workPlanData, workPlanStatus]);
 
   useEffect(() => {
     if (panelNodeId && !sessionNodeIds.has(panelNodeId)) {
@@ -2426,6 +2440,7 @@ export function CoordinatorRunPage() {
           projectId={projectId ?? undefined}
           events={events}
           streamStatus={streamStatus}
+          runStatus={runLevelStatus}
           onCollapse={() => setSpecPanelOpen(false)}
           onReconnect={reconnectStream}
         />

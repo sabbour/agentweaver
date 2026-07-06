@@ -157,13 +157,9 @@ function SpecSection({ label, value }: { label: string; value?: string | string[
   );
 }
 
-const RUN_NOT_ACTIVE_MESSAGES: Record<string, string> = {
-  agent_quota_exceeded: 'The cluster ran out of capacity to start your agent. The system is retrying — please wait a moment before trying again.',
-  agent_stall_timeout: 'The agent pod took too long to respond. This may be a transient issue — please start a new task.',
-  agent_pod_reconciler_error: 'The agent pod failed to start due to a configuration error. Please contact support if this persists.',
-  capacity_unavailable: 'No agent capacity is available after multiple retries. Please try again later.',
-};
-const DEFAULT_INTERRUPTED_MESSAGE = 'This run was interrupted and its state could not be restored. Please start a new task.';
+const OUTCOME_SPEC_POLL_MS = 2_000;
+const RUN_TERMINAL_STATUSES = new Set(['completed', 'failed', 'declined', 'merged', 'merge_failed']);
+const RUN_FAILURE_STATUSES = new Set(['failed', 'declined', 'merge_failed']);
 
 const STATUS_META: Record<OutcomeSpecStatus, { label: string; color: 'informative' | 'warning' | 'success' | 'danger' }> = {
   drafting: { label: 'Drafting', color: 'informative' },
@@ -172,16 +168,43 @@ const STATUS_META: Record<OutcomeSpecStatus, { label: string; color: 'informativ
   declined: { label: 'Declined', color: 'danger' },
 };
 
+function apiErrorCode(err: unknown): string | null {
+  if (!(err instanceof ApiError)) return null;
+  try {
+    const body = JSON.parse(err.body) as Record<string, unknown>;
+    return typeof body.error === 'string' ? body.error : null;
+  } catch {
+    if (err.body.includes('no_pending_gate')) return 'no_pending_gate';
+    if (err.body.includes('run_not_active')) return 'run_not_active';
+    return null;
+  }
+}
+
+function actionErrorMessage(err: unknown): string {
+  if (err instanceof ApiError) {
+    const code = apiErrorCode(err);
+    if (err.status === 409 && code === 'no_pending_gate') {
+      return 'This run is no longer awaiting outcome-spec confirmation.';
+    }
+    if (err.status === 409 && code === 'run_not_active') {
+      return 'This run is no longer active, so the outcome spec cannot be confirmed.';
+    }
+    return `API error ${err.status}: ${err.body}`;
+  }
+  return err instanceof Error ? err.message : String(err);
+}
+
 interface OutcomeSpecPanelProps {
   runId: string;
   projectId?: string;
   events: RunStreamEvent[];
   streamStatus: StreamStatus;
+  runStatus?: string;
   onCollapse?: () => void;
   onReconnect?: () => void;
 }
 
-export function OutcomeSpecPanel({ runId, projectId, events, streamStatus, onCollapse, onReconnect }: OutcomeSpecPanelProps) {
+export function OutcomeSpecPanel({ runId, projectId, events, streamStatus, runStatus, onCollapse, onReconnect }: OutcomeSpecPanelProps) {
   const styles = useStyles();
 
   const [specFromApi, setSpecFromApi] = useState<OutcomeSpec | null>(null);
@@ -206,8 +229,7 @@ export function OutcomeSpecPanel({ runId, projectId, events, streamStatus, onCol
   const [decomposeSuccess, setDecomposeSuccess] = useState(false);
 
   // Tracks whether the most recent getOutcomeSpec call returned 404 (spec not yet created).
-  // When true, the streamStatus=done refresh is skipped — the SSE stream will deliver
-  // coordinator.outcome_spec when the spec is ready, making repeated REST retries unnecessary.
+  // While true and the coordinator run is still live, we poll until the draft is available.
   const specNotFoundRef = useRef(false);
 
   // Synchronous in-flight guard for confirm — prevents a second click from firing before
@@ -241,8 +263,7 @@ export function OutcomeSpecPanel({ runId, projectId, events, streamStatus, onCol
   // When the SSE stream closes (server ends it at review gate), refresh the spec from the
   // REST API so the confirmed/awaiting-confirmation state is always current — even when
   // events were missed due to a different API replica serving the stream.
-  // Skip the refresh if the last fetch was a 404 (spec not yet created); the SSE stream
-  // delivers coordinator.outcome_spec when it exists, so repeated 404 calls add noise.
+  // If the spec is still returning 404, the polling effect below owns the next retry.
   useEffect(() => {
     if (streamStatus === 'done' && !specNotFoundRef.current) {
       void fetchSpec();
@@ -296,6 +317,22 @@ export function OutcomeSpecPanel({ runId, projectId, events, streamStatus, onCol
     return merged;
   }, [specFromApi, events]);
 
+  const runTerminal = runStatus != null && RUN_TERMINAL_STATUSES.has(runStatus);
+
+  // A 404 means the coordinator has not drafted the spec yet, not that the gate is absent.
+  // Keep the panel visible and poll until REST returns the drafted spec, unless the run ends.
+  useEffect(() => {
+    if (runTerminal || specFromApi != null || events.some((evt) => evt.type === 'coordinator.outcome_spec')) return;
+    let cancelled = false;
+    const timer = setInterval(() => {
+      if (!cancelled && specNotFoundRef.current) void fetchSpec();
+    }, OUTCOME_SPEC_POLL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [events, fetchSpec, runTerminal, specFromApi]);
+
   const handleConfirm = async () => {
     // Synchronous guard: blocks re-entrant clicks before React re-renders with acting=true.
     if (confirmInFlightRef.current) return;
@@ -320,13 +357,14 @@ export function OutcomeSpecPanel({ runId, projectId, events, streamStatus, onCol
           return;
         } catch (err) {
           const isGateArming =
-            err instanceof ApiError && err.status === 409 && err.body.includes('no_pending_gate');
+            err instanceof ApiError && err.status === 409 && apiErrorCode(err) === 'no_pending_gate';
           if (!isGateArming || attempt >= maxAttempts) throw err;
           await new Promise((resolve) => setTimeout(resolve, backoffMs));
         }
       }
     } catch (err) {
-      setActionError(err instanceof ApiError ? `API error ${err.status}: ${err.body}` : err instanceof Error ? err.message : String(err));
+      setActionError(actionErrorMessage(err));
+      if (err instanceof ApiError && err.status === 409) await fetchSpec();
     } finally {
       confirmInFlightRef.current = false;
       setActing(false);
@@ -348,7 +386,7 @@ export function OutcomeSpecPanel({ runId, projectId, events, streamStatus, onCol
       setAnswers([]);
       setExtraFeedback('');
     } catch (err) {
-      setActionError(err instanceof ApiError ? `API error ${err.status}: ${err.body}` : err instanceof Error ? err.message : String(err));
+      setActionError(actionErrorMessage(err));
     } finally {
       setActing(false);
     }
@@ -357,22 +395,10 @@ export function OutcomeSpecPanel({ runId, projectId, events, streamStatus, onCol
   const status = spec?.status ?? 'drafting';
   const statusMeta = STATUS_META[status] ?? STATUS_META.drafting;
   const awaiting = status === 'awaiting_confirmation';
-  const runInterrupted = actionError?.includes('run_not_active') ?? false;
+  const runInterrupted = actionError?.includes('no longer active') ?? false;
 
-  // Map run_not_active detail codes to human-readable messages.
-  const runInterruptedMessage = useMemo(() => {
-    if (!runInterrupted || !actionError) return DEFAULT_INTERRUPTED_MESSAGE;
-    try {
-      const jsonStart = actionError.indexOf('{');
-      if (jsonStart >= 0) {
-        const body = JSON.parse(actionError.slice(jsonStart)) as Record<string, unknown>;
-        const detail = typeof body.detail === 'string' ? body.detail : '';
-        return RUN_NOT_ACTIVE_MESSAGES[detail] ?? DEFAULT_INTERRUPTED_MESSAGE;
-      }
-    } catch { /* body is not JSON */ }
-    return DEFAULT_INTERRUPTED_MESSAGE;
-  }, [runInterrupted, actionError]);
   const hasContent = spec != null && (spec.goal || spec.desiredOutcome || toLines(spec.scope).length > 0 || toLines(spec.assumptions).length > 0);
+  const failedBeforeDraft = !hasContent && !revising && runStatus != null && RUN_FAILURE_STATUSES.has(runStatus);
   const clarifying = useMemo(() => splitQuestions(toLines(spec?.clarifyingQuestions)), [spec?.clarifyingQuestions]);
 
   // Compose the revise feedback from the per-question answers plus any free-form feedback.
@@ -508,10 +534,14 @@ export function OutcomeSpecPanel({ runId, projectId, events, streamStatus, onCol
         </div>
       )}
 
-      {!hasContent && !revising ? (
+      {failedBeforeDraft ? (
+        <MessageBar intent="error">
+          <MessageBarBody>The run failed before the outcome spec could be drafted.</MessageBarBody>
+        </MessageBar>
+      ) : !hasContent && !revising ? (
         <div className={styles.drafting}>
-          <Spinner size="extra-tiny" aria-hidden="true" />
-          <Text>Coordinator is drafting the outcome spec...</Text>
+          <Spinner size="extra-tiny" aria-label="Drafting outcome spec" />
+          <Text>Drafting the outcome spec...</Text>
         </div>
       ) : hasContent ? (
         <>
@@ -527,11 +557,7 @@ export function OutcomeSpecPanel({ runId, projectId, events, streamStatus, onCol
 
       {actionError && (
         <MessageBar intent="error">
-          <MessageBarBody>
-            {runInterrupted
-              ? runInterruptedMessage
-              : actionError}
-          </MessageBarBody>
+          <MessageBarBody>{actionError}</MessageBarBody>
         </MessageBar>
       )}
 
@@ -549,7 +575,7 @@ export function OutcomeSpecPanel({ runId, projectId, events, streamStatus, onCol
             disabled={acting || revising || runInterrupted}
             onClick={() => void handleConfirm()}
           >
-            {acting ? 'Confirming' : 'Confirm'}
+            {acting ? 'Confirming...' : 'Confirm'}
           </Button>
           <Button
             appearance="secondary"
@@ -559,7 +585,7 @@ export function OutcomeSpecPanel({ runId, projectId, events, streamStatus, onCol
           >
             Clarify and request changes
           </Button>
-          {acting && <Spinner size="extra-tiny" aria-hidden="true" />}
+          {acting && <Spinner size="extra-tiny" label="Confirming outcome spec" />}
         </div>
       )}
 

@@ -55,7 +55,10 @@ beforeEach(() => {
   vi.mocked(apiClient.getOutcomeSpec).mockResolvedValue(awaitingSpec);
 });
 
-afterEach(() => cleanup());
+afterEach(() => {
+  vi.useRealTimers();
+  cleanup();
+});
 
 describe('OutcomeSpecPanel confirm retry', () => {
   it('retries a 409 no_pending_gate gate-arming race then confirms without surfacing the error', async () => {
@@ -82,6 +85,47 @@ describe('OutcomeSpecPanel confirm retry', () => {
     expect(vi.mocked(apiClient.confirmOutcomeSpec)).toHaveBeenCalledTimes(3);
     expect(document.body.textContent).not.toContain('no_pending_gate');
     expect(document.body.textContent).not.toContain('API error 409');
+  });
+
+  it('disables actions while confirm is pending and then shows confirmed state', async () => {
+    let resolveConfirm: (value: OutcomeSpec) => void = () => {};
+    vi.mocked(apiClient.confirmOutcomeSpec).mockImplementation(
+      () => new Promise<OutcomeSpec>((resolve) => { resolveConfirm = resolve; }),
+    );
+
+    render(
+      <Wrapper>
+        <OutcomeSpecPanel runId="run-1" events={[]} streamStatus="streaming" />
+      </Wrapper>,
+    );
+
+    const confirmButton = await screen.findByRole('button', { name: /^confirm$/i });
+    await userEvent.click(confirmButton);
+
+    expect((screen.getByRole('button', { name: /confirming/i }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole('button', { name: /clarify and request changes/i }) as HTMLButtonElement).disabled).toBe(true);
+    expect(vi.mocked(apiClient.confirmOutcomeSpec)).toHaveBeenCalledTimes(1);
+
+    resolveConfirm(confirmedSpec);
+
+    await waitFor(() => expect(screen.getByText('Confirmed')).toBeTruthy());
+    expect(screen.queryByRole('button', { name: /^confirm$/i })).toBeNull();
+  });
+
+  it('re-enables confirm after a non-conflict API error', async () => {
+    vi.mocked(apiClient.confirmOutcomeSpec).mockRejectedValue(new ApiError(500, 'server exploded'));
+
+    render(
+      <Wrapper>
+        <OutcomeSpecPanel runId="run-1" events={[]} streamStatus="streaming" />
+      </Wrapper>,
+    );
+
+    await userEvent.click(await screen.findByRole('button', { name: /^confirm$/i }));
+
+    await waitFor(() => expect(screen.getByText(/API error 500: server exploded/i)).toBeTruthy());
+    expect((screen.getByRole('button', { name: /^confirm$/i }) as HTMLButtonElement).disabled).toBe(false);
+    expect((screen.getByRole('button', { name: /clarify and request changes/i }) as HTMLButtonElement).disabled).toBe(false);
   });
 
   it('keeps the REST confirmed status when stale SSE still says awaiting confirmation after confirm', async () => {
@@ -121,7 +165,7 @@ describe('OutcomeSpecPanel confirm retry', () => {
     await userEvent.click(await screen.findByRole('button', { name: /^confirm$/i }));
 
     await waitFor(() =>
-      expect(screen.getByText('This run was interrupted and its state could not be restored. Please start a new task.')).toBeTruthy(),
+      expect(screen.getByText('This run is no longer active, so the outcome spec cannot be confirmed.')).toBeTruthy(),
     );
   });
 });
@@ -158,10 +202,8 @@ describe('OutcomeSpecPanel clarify dialog', () => {
   });
 });
 
-describe('OutcomeSpecPanel — 404 suppression', () => {
-  it('treats a 404 for getOutcomeSpec as expected absence and surfaces no error to the user', async () => {
-    // A 404 before the coordinator drafts the spec is expected — the stream will fill in later.
-    // The component must not display an error message for this case.
+describe('OutcomeSpecPanel drafting state and polling', () => {
+  it('treats a 404 for getOutcomeSpec as pending drafting and surfaces no error to the user', async () => {
     vi.mocked(apiClient.getOutcomeSpec).mockRejectedValue(new ApiError(404, 'not found'));
 
     const { queryByText } = render(
@@ -172,38 +214,37 @@ describe('OutcomeSpecPanel — 404 suppression', () => {
 
     await waitFor(() => expect(vi.mocked(apiClient.getOutcomeSpec)).toHaveBeenCalled());
 
-    // No API error text should appear in the UI — 404 is a silent expected absence.
+    expect(screen.getByText(/Drafting the outcome spec/i)).toBeTruthy();
     expect(queryByText(/API error/i)).toBeNull();
     expect(queryByText(/404/)).toBeNull();
   });
 
-  it('does not retry getOutcomeSpec when streamStatus becomes done after a 404', async () => {
-    // If the initial fetch returned 404, the component must not re-fetch when the SSE stream
-    // closes (streamStatus=done). Repeated fetches would produce repeated 404 network errors
-    // in the browser console without delivering any new information.
-    vi.mocked(apiClient.getOutcomeSpec).mockRejectedValue(new ApiError(404, 'not found'));
+  it('polls after a 404 until the drafted outcome spec is available', async () => {
+    vi.mocked(apiClient.getOutcomeSpec)
+      .mockRejectedValueOnce(new ApiError(404, 'not found'))
+      .mockResolvedValue(awaitingSpec);
 
-    const { rerender } = render(
+    render(
       <Wrapper>
         <OutcomeSpecPanel runId="run-1" events={[]} streamStatus="streaming" />
       </Wrapper>,
     );
 
-    // Wait for the initial mount fetch to complete.
-    await waitFor(() => expect(vi.mocked(apiClient.getOutcomeSpec)).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(vi.mocked(apiClient.getOutcomeSpec)).toHaveBeenCalledTimes(2), { timeout: 3500 });
+    expect(screen.getByText('Ship the feature')).toBeTruthy();
+  });
 
-    // Simulate the SSE stream closing (streamStatus changes to 'done').
-    rerender(
+  it('shows a terminal error instead of an infinite spinner if the run fails before drafting', async () => {
+    vi.mocked(apiClient.getOutcomeSpec).mockRejectedValue(new ApiError(404, 'not found'));
+
+    render(
       <Wrapper>
-        <OutcomeSpecPanel runId="run-1" events={[]} streamStatus="done" />
+        <OutcomeSpecPanel runId="run-1" events={[]} streamStatus="done" runStatus="failed" />
       </Wrapper>,
     );
 
-    // Allow any pending effects to settle.
-    await new Promise((resolve) => setTimeout(resolve, 100));
-
-    // getOutcomeSpec must NOT be called again — the 404 flag prevents the streamStatus=done retry.
-    expect(vi.mocked(apiClient.getOutcomeSpec)).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(screen.getByText(/failed before the outcome spec could be drafted/i)).toBeTruthy());
+    expect(screen.queryByText(/Drafting the outcome spec/i)).toBeNull();
   });
 });
 
