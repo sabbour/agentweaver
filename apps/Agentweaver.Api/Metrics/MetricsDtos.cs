@@ -83,12 +83,19 @@ public sealed record ProjectMetricsDto
     [JsonPropertyName("responseDuration")] public required IReadOnlyList<MetricPercentilesDto> ResponseDuration { get; init; }
     [JsonPropertyName("timeToFirstToken")] public required IReadOnlyList<MetricPercentilesDto> TimeToFirstToken { get; init; }
     [JsonPropertyName("agentBreakdown")] public required IReadOnlyList<AgentUsageBreakdownDto> AgentBreakdown { get; init; }
+    [JsonPropertyName("aiCreditUsageTrend")] public required IReadOnlyList<AiCreditUsagePointDto> AiCreditUsageTrend { get; init; }
 }
 
 public sealed record DailyInvocationPointDto
 {
     [JsonPropertyName("date")] public required string Date { get; init; }
     [JsonPropertyName("count")] public required int Count { get; init; }
+}
+
+public sealed record AiCreditUsagePointDto
+{
+    [JsonPropertyName("date")] public required string Date { get; init; }
+    [JsonPropertyName("totalNanoAiu")] public required long TotalNanoAiu { get; init; }
 }
 
 public sealed record ModelUsageBreakdownDto

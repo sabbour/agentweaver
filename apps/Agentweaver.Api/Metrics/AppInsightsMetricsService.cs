@@ -67,6 +67,7 @@ public sealed class AppInsightsMetricsService
         var responseDurationTask = QueryResponseDurationAsync(workspaceId, projectId, start, end, ct);
         var ttftTask = QueryTtftAsync(workspaceId, projectId, start, end, ct);
         var agentBreakdownTask = QueryProjectAgentBreakdownAsync(workspaceId, projectId, start, end, ct);
+        var aiCreditTrendTask = QueryAiCreditUsageTrendAsync(workspaceId, projectId, start, end, ct);
         await Task.WhenAll(
             throughputTask,
             leaderboardTask,
@@ -74,7 +75,8 @@ public sealed class AppInsightsMetricsService
             modelUsageTask,
             responseDurationTask,
             ttftTask,
-            agentBreakdownTask).ConfigureAwait(false);
+            agentBreakdownTask,
+            aiCreditTrendTask).ConfigureAwait(false);
 
         return new ProjectMetricsDto
         {
@@ -85,6 +87,7 @@ public sealed class AppInsightsMetricsService
             ResponseDuration = responseDurationTask.Result,
             TimeToFirstToken = ttftTask.Result,
             AgentBreakdown = agentBreakdownTask.Result,
+            AiCreditUsageTrend = aiCreditTrendTask.Result,
         };
     }
 
@@ -113,7 +116,10 @@ public sealed class AppInsightsMetricsService
         };
     }
 
-    public async Task<RunTraceDto> GetRunTracesAsync(string runId, CancellationToken ct = default)
+    public async Task<RunTraceDto> GetRunTracesAsync(
+        string runId,
+        IReadOnlyDictionary<string, string?>? agentNameByRunId = null,
+        CancellationToken ct = default)
     {
         var connectionString = _configuration["APPLICATIONINSIGHTS_CONNECTION_STRING"];
         if (string.IsNullOrWhiteSpace(connectionString))
@@ -123,7 +129,7 @@ public sealed class AppInsightsMetricsService
         if (string.IsNullOrWhiteSpace(workspaceId))
             return EmptyRunTrace(runId);
 
-        var spans = await QueryRunTracesAsync(workspaceId, runId, ct).ConfigureAwait(false);
+        var spans = await QueryRunTracesAsync(workspaceId, runId, agentNameByRunId, ct).ConfigureAwait(false);
         return new RunTraceDto
         {
             RunId = runId,
@@ -204,10 +210,11 @@ public sealed class AppInsightsMetricsService
             | where Name == "agentweaver.token.usage"
             | where TimeGenerated between (datetime({from.UtcDateTime:O}) .. datetime({to.UtcDateTime:O}))
             | where tostring(Properties["project.id"]) == "{EscapeKusto(projectId)}"
-            | summarize cost_aic = sum(Sum) / 1000000000.0 by agent_name = coalesce(
-                tostring(Properties["agent_name"]),
-                tostring(Properties["gen_ai.agent.name"]),
-                "unknown");
+            | extend agent_name = case(
+                isnotempty(tostring(Properties["agent_name"])), tostring(Properties["agent_name"]),
+                isnotempty(tostring(Properties["gen_ai.agent.name"])), tostring(Properties["gen_ai.agent.name"]),
+                "unknown")
+            | summarize cost_aic = sum(Sum) / 1000000000.0 by agent_name;
             leaderboard
             | join kind=leftouter costs on agent_name
             | extend success_rate = iff(runs_total == 0, 0.0, round(100.0 * success_count / runs_total, 0))
@@ -285,11 +292,11 @@ public sealed class AppInsightsMetricsService
             | where Name == "agentweaver.token.usage"
             | where TimeGenerated between (datetime({from.UtcDateTime:O}) .. datetime({to.UtcDateTime:O}))
             | where tostring(Properties["project.id"]) == "{EscapeKusto(projectId)}"
-            | extend model_name = coalesce(
-                tostring(Properties["model"]),
-                tostring(Properties["model_id"]),
-                tostring(Properties["gen_ai.request.model"]),
-                tostring(Properties["gen_ai.response.model"]),
+            | extend model_name = case(
+                isnotempty(tostring(Properties["model"])), tostring(Properties["model"]),
+                isnotempty(tostring(Properties["model_id"])), tostring(Properties["model_id"]),
+                isnotempty(tostring(Properties["gen_ai.request.model"])), tostring(Properties["gen_ai.request.model"]),
+                isnotempty(tostring(Properties["gen_ai.response.model"])), tostring(Properties["gen_ai.response.model"]),
                 "unknown")
             | summarize invocation_count = count(), total_nano_aiu = sum(Sum) by model_name
             | order by total_nano_aiu desc, model_name asc
@@ -318,14 +325,21 @@ public sealed class AppInsightsMetricsService
             AppDependencies
             | where TimeGenerated between (datetime({from.UtcDateTime:O}) .. datetime({to.UtcDateTime:O}))
             | where tostring(Properties["project.id"]) == "{EscapeKusto(projectId)}"
-            | extend model_name = coalesce(
-                tostring(Properties["model"]),
-                tostring(Properties["model_id"]),
-                tostring(Properties["gen_ai.request.model"]),
-                tostring(Properties["gen_ai.response.model"]),
-                tostring(Target),
+            | extend model_name = case(
+                isnotempty(tostring(Properties["model"])), tostring(Properties["model"]),
+                isnotempty(tostring(Properties["model_id"])), tostring(Properties["model_id"]),
+                isnotempty(tostring(Properties["gen_ai.request.model"])), tostring(Properties["gen_ai.request.model"]),
+                isnotempty(tostring(Properties["gen_ai.response.model"])), tostring(Properties["gen_ai.response.model"]),
+                isnotempty(tostring(Target)), tostring(Target),
                 "unknown")
-            | where isnotempty(model_name)
+            | where isnotempty(model_name) and (
+                tostring(Properties["agentweaver.span.kind"]) == "agent_turn"
+                or isnotempty(tostring(Properties["gen_ai.operation.name"]))
+                or isnotempty(tostring(Properties["gen_ai.agent.name"]))
+                or isnotempty(tostring(Properties["agent_name"]))
+                or isnotempty(tostring(Properties["gen_ai.request.model"]))
+                or isnotempty(tostring(Properties["gen_ai.response.model"]))
+            )
             | summarize p50_ms = percentile(toreal(DurationMs), 50), p95_ms = percentile(toreal(DurationMs), 95) by model_name
             | order by model_name asc
             """;
@@ -353,19 +367,28 @@ public sealed class AppInsightsMetricsService
             AppDependencies
             | where TimeGenerated between (datetime({from.UtcDateTime:O}) .. datetime({to.UtcDateTime:O}))
             | where tostring(Properties["project.id"]) == "{EscapeKusto(projectId)}"
-            | extend model_name = coalesce(
-                tostring(Properties["model"]),
-                tostring(Properties["model_id"]),
-                tostring(Properties["gen_ai.request.model"]),
-                tostring(Properties["gen_ai.response.model"]),
-                tostring(Target),
+            | extend model_name = case(
+                isnotempty(tostring(Properties["model"])), tostring(Properties["model"]),
+                isnotempty(tostring(Properties["model_id"])), tostring(Properties["model_id"]),
+                isnotempty(tostring(Properties["gen_ai.request.model"])), tostring(Properties["gen_ai.request.model"]),
+                isnotempty(tostring(Properties["gen_ai.response.model"])), tostring(Properties["gen_ai.response.model"]),
+                isnotempty(tostring(Target)), tostring(Target),
                 "unknown")
             | extend ttft_ms = coalesce(
                 todouble(Measurements["time_to_first_token_ms"]),
                 todouble(Measurements["ttft_ms"]),
                 todouble(Measurements["gen_ai.response.ttft_ms"]),
-                todouble(Measurements["gen_ai.server.time_to_first_token_ms"]))
-            | where isnotempty(model_name) and isnotnull(ttft_ms) and ttft_ms > 0
+                todouble(Measurements["gen_ai.server.time_to_first_token_ms"]),
+                todouble(Properties["time_to_first_token_ms"]),
+                todouble(Properties["ttft_ms"]),
+                todouble(Properties["gen_ai.response.ttft_ms"]),
+                todouble(Properties["gen_ai.server.time_to_first_token_ms"]))
+            | where isnotempty(model_name) and isnotnull(ttft_ms) and ttft_ms > 0 and (
+                tostring(Properties["agentweaver.span.kind"]) == "agent_turn"
+                or isnotempty(tostring(Properties["gen_ai.operation.name"]))
+                or isnotempty(tostring(Properties["gen_ai.agent.name"]))
+                or isnotempty(tostring(Properties["agent_name"]))
+            )
             | summarize p50_ms = percentile(ttft_ms, 50), p95_ms = percentile(ttft_ms, 95) by model_name
             | order by model_name asc
             """;
@@ -394,9 +417,9 @@ public sealed class AppInsightsMetricsService
             | where Name == "agentweaver.token.usage"
             | where TimeGenerated between (datetime({from.UtcDateTime:O}) .. datetime({to.UtcDateTime:O}))
             | where tostring(Properties["project.id"]) == "{EscapeKusto(projectId)}"
-            | extend agent_name = coalesce(
-                tostring(Properties["agent_name"]),
-                tostring(Properties["gen_ai.agent.name"]),
+            | extend agent_name = case(
+                isnotempty(tostring(Properties["agent_name"])), tostring(Properties["agent_name"]),
+                isnotempty(tostring(Properties["gen_ai.agent.name"])), tostring(Properties["gen_ai.agent.name"]),
                 "unknown")
             | summarize invocation_count = count(), total_nano_aiu = sum(Sum) by agent_name
             | order by total_nano_aiu desc, agent_name asc
@@ -437,9 +460,9 @@ public sealed class AppInsightsMetricsService
                 or tostring(Properties["run.id"]) == "{EscapeKusto(runId)}"
                 or tostring(Properties["parent_run_id"]) == "{EscapeKusto(runId)}"
                 or tostring(Properties["parentRunId"]) == "{EscapeKusto(runId)}"
-            | extend agent_name = coalesce(
-                tostring(Properties["agent_name"]),
-                tostring(Properties["gen_ai.agent.name"]),
+            | extend agent_name = case(
+                isnotempty(tostring(Properties["agent_name"])), tostring(Properties["agent_name"]),
+                isnotempty(tostring(Properties["gen_ai.agent.name"])), tostring(Properties["gen_ai.agent.name"]),
                 "unknown")
             | summarize invocation_count = count(), total_nano_aiu = sum(Sum) by agent_name
             | order by total_nano_aiu desc, agent_name asc
@@ -457,44 +480,86 @@ public sealed class AppInsightsMetricsService
         }).ToList();
     }
 
+    private async Task<IReadOnlyList<AiCreditUsagePointDto>> QueryAiCreditUsageTrendAsync(
+        string workspaceId,
+        string projectId,
+        DateTimeOffset from,
+        DateTimeOffset to,
+        CancellationToken ct)
+    {
+        var query =
+            $"""
+            AppMetrics
+            | where Name == "agentweaver.token.usage"
+            | where TimeGenerated between (datetime({from.UtcDateTime:O}) .. datetime({to.UtcDateTime:O}))
+            | where tostring(Properties["project.id"]) == "{EscapeKusto(projectId)}"
+            | summarize total_nano_aiu = sum(Sum) by bin(TimeGenerated, 1d)
+            | order by TimeGenerated asc
+            """;
+
+        var result = await QueryAsync(workspaceId, query, from, to, ct).ConfigureAwait(false);
+        if (result is null) return [];
+
+        var totals = result.Table.Rows.ToDictionary(
+            row => ReadDate(row[0]),
+            row => Convert.ToInt64(row[1] ?? 0),
+            StringComparer.Ordinal);
+
+        var points = new List<AiCreditUsagePointDto>();
+        for (var day = from.UtcDateTime.Date; day <= to.UtcDateTime.Date; day = day.AddDays(1))
+        {
+            var key = day.ToString("yyyy-MM-dd");
+            points.Add(new AiCreditUsagePointDto
+            {
+                Date = key,
+                TotalNanoAiu = totals.GetValueOrDefault(key),
+            });
+        }
+
+        return points;
+    }
+
     private async Task<IReadOnlyList<RunTraceSpanDto>> QueryRunTracesAsync(
         string workspaceId,
         string runId,
+        IReadOnlyDictionary<string, string?>? agentNameByRunId,
         CancellationToken ct)
     {
         var timeTo = DateTimeOffset.UtcNow;
         var timeFrom = timeTo.AddDays(-7);
-        var escapedRunId = EscapeKusto(runId);
-        var runIdPredicate = BuildRunIdDimensionPredicate(runId, "Properties");
+        var runIds = agentNameByRunId?.Keys.Where(id => !string.IsNullOrWhiteSpace(id)).ToArray() ?? [runId];
+        var runIdPredicate = BuildRunIdDimensionPredicate(runId, runIds, "Properties");
         var query =
             $"""
             let run_operations = materialize(
-                AppTraces
+                union isfuzzy=true AppTraces, AppDependencies
                 | where TimeGenerated > ago(7d)
-                | where {runIdPredicate} or Message contains "{escapedRunId}"
+                | where {runIdPredicate}
                 | project operation_id = tostring(OperationId)
                 | where isnotempty(operation_id)
             );
             let correlated_ops = run_operations | distinct operation_id;
+            let agentic_dependencies = AppDependencies
+                | where TimeGenerated > ago(7d)
+                | where {runIdPredicate} or OperationId in (correlated_ops) or ParentId in (correlated_ops)
+                | where tostring(Properties["agentweaver.span.kind"]) == "agent_turn"
+                    or isnotempty(tostring(Properties["gen_ai.operation.name"]))
+                    or isnotempty(tostring(Properties["gen_ai.agent.name"]))
+                    or isnotempty(tostring(Properties["agent_name"]))
+                    or isnotempty(tostring(Properties["gen_ai.request.model"]))
+                    or isnotempty(tostring(Properties["gen_ai.response.model"]))
+                | project id = tostring(Id), name = Name, timestamp = TimeGenerated, duration = DurationMs, success = Success, resultCode = ResultCode, operation_id = tostring(OperationId), parent_operation_id = tostring(ParentId), customDimensions = Properties;
+            let agentic_traces = AppTraces
+                | where TimeGenerated > ago(7d)
+                | where {runIdPredicate} or OperationId in (correlated_ops)
+                | where tostring(Properties["agentweaver.span.kind"]) == "agent_turn"
+                    or isnotempty(tostring(Properties["gen_ai.operation.name"]))
+                    or isnotempty(tostring(Properties["gen_ai.agent.name"]))
+                    or isnotempty(tostring(Properties["agent_name"]))
+                | project id = tostring(Id), name = Message, timestamp = TimeGenerated, duration = todouble(0), success = tobool(1), resultCode = tostring(""), operation_id = tostring(OperationId), parent_operation_id = tostring(ParentId), customDimensions = Properties;
             union isfuzzy=true
-                (AppTraces
-                 | where TimeGenerated > ago(7d)
-                 | where {runIdPredicate}
-                    or Message contains "{escapedRunId}"
-                    or OperationId in (correlated_ops)
-                 | project id = tostring(Id), name = Message, timestamp = TimeGenerated, duration = todouble(0), success = tobool(1), resultCode = tostring(""), operation_id = tostring(OperationId), parent_operation_id = tostring(ParentId), customDimensions = Properties),
-                (AppDependencies
-                 | where TimeGenerated > ago(7d)
-                 | where {runIdPredicate}
-                    or OperationId in (correlated_ops)
-                    or ParentId in (correlated_ops)
-                 | project id = tostring(Id), name = Name, timestamp = TimeGenerated, duration = DurationMs, success = Success, resultCode = ResultCode, operation_id = tostring(OperationId), parent_operation_id = tostring(ParentId), customDimensions = Properties),
-                (AppRequests
-                 | where TimeGenerated > ago(7d)
-                 | where {runIdPredicate}
-                    or OperationId in (correlated_ops)
-                    or ParentId in (correlated_ops)
-                 | project id = tostring(Id), name = Name, timestamp = TimeGenerated, duration = DurationMs, success = Success, resultCode = ResultCode, operation_id = tostring(OperationId), parent_operation_id = tostring(ParentId), customDimensions = Properties)
+                (agentic_dependencies),
+                (agentic_traces)
             | project
                 id,
                 name,
@@ -514,6 +579,9 @@ public sealed class AppInsightsMetricsService
             {
                 var customDimensions = ReadCustomDimensions(row[6]);
                 var timestamp = ReadDateTimeOffset(row[2]) ?? timeFrom;
+                var spanRunId = ReadDimension(customDimensions, "run_id")
+                    ?? ReadDimension(customDimensions, "run.id")
+                    ?? ReadDimension(customDimensions, "runId");
                 return new RunTraceSpanDto
                 {
                     Id = ReadRequiredString(row[0], $"{runId}-{index}"),
@@ -523,8 +591,12 @@ public sealed class AppInsightsMetricsService
                     Success = ReadBool(row[4]),
                     ResultCode = NullIfWhiteSpace(row[5]?.ToString()),
                     AgentName = ReadDimension(customDimensions, "agent_name")
-                        ?? ReadDimension(customDimensions, "gen_ai.agent.name"),
-                    Model = ReadDimension(customDimensions, "gen_ai.request.model"),
+                        ?? ReadDimension(customDimensions, "gen_ai.agent.name")
+                        ?? ResolveFallbackAgentName(agentNameByRunId, spanRunId, runId),
+                    Model = ReadDimension(customDimensions, "gen_ai.response.model")
+                        ?? ReadDimension(customDimensions, "gen_ai.request.model")
+                        ?? ReadDimension(customDimensions, "model")
+                        ?? ReadDimension(customDimensions, "model_id"),
                     InputTokens = ReadDimensionLong(customDimensions, "gen_ai.usage.input_tokens"),
                     OutputTokens = ReadDimensionLong(customDimensions, "gen_ai.usage.output_tokens"),
                     OperationName = ReadDimension(customDimensions, "gen_ai.operation.name"),
@@ -567,6 +639,7 @@ public sealed class AppInsightsMetricsService
         ResponseDuration = [],
         TimeToFirstToken = [],
         AgentBreakdown = [],
+        AiCreditUsageTrend = [],
     };
 
     private static RunAgentTokenBreakdownDto EmptyRunBreakdown(string runId) => new()
@@ -605,18 +678,41 @@ public sealed class AppInsightsMetricsService
 
     private static string EscapeKusto(string value) => value.Replace("\\", "\\\\").Replace("\"", "\\\"");
 
-    private static string BuildRunIdDimensionPredicate(string runId, string customDimensionsColumn)
+    private static string BuildRunIdDimensionPredicate(string rootRunId, IReadOnlyList<string> runIds, string customDimensionsColumn)
     {
-        var escapedRunId = EscapeKusto(runId);
+        var escapedRootRunId = EscapeKusto(rootRunId);
+        var runIdList = string.Join(", ", runIds.Select(id => $"\"{EscapeKusto(id)}\""));
         return $"""
-            tostring({customDimensionsColumn}["run_id"]) == "{escapedRunId}"
-            or tostring({customDimensionsColumn}["runId"]) == "{escapedRunId}"
-            or tostring({customDimensionsColumn}["RunId"]) == "{escapedRunId}"
-            or tostring({customDimensionsColumn}["run.id"]) == "{escapedRunId}"
-            or tostring({customDimensionsColumn}["parent_run_id"]) == "{escapedRunId}"
-            or tostring({customDimensionsColumn}["parentRunId"]) == "{escapedRunId}"
-            or tostring({customDimensionsColumn}["ParentRunId"]) == "{escapedRunId}"
+            tostring({customDimensionsColumn}["run_id"]) in ({runIdList})
+            or tostring({customDimensionsColumn}["runId"]) in ({runIdList})
+            or tostring({customDimensionsColumn}["RunId"]) in ({runIdList})
+            or tostring({customDimensionsColumn}["run.id"]) in ({runIdList})
+            or tostring({customDimensionsColumn}["parent_run_id"]) in ({runIdList})
+            or tostring({customDimensionsColumn}["parentRunId"]) in ({runIdList})
+            or tostring({customDimensionsColumn}["ParentRunId"]) in ({runIdList})
+            or tostring({customDimensionsColumn}["run_id"]) startswith "{escapedRootRunId}-"
+            or tostring({customDimensionsColumn}["run.id"]) startswith "{escapedRootRunId}-"
             """;
+    }
+
+    private static string? ResolveFallbackAgentName(
+        IReadOnlyDictionary<string, string?>? agentNameByRunId,
+        string? spanRunId,
+        string rootRunId)
+    {
+        if (agentNameByRunId is null || agentNameByRunId.Count == 0)
+            return null;
+
+        if (!string.IsNullOrWhiteSpace(spanRunId)
+            && agentNameByRunId.TryGetValue(spanRunId, out var exact)
+            && !string.IsNullOrWhiteSpace(exact))
+        {
+            return exact;
+        }
+
+        return agentNameByRunId.TryGetValue(rootRunId, out var root) && !string.IsNullOrWhiteSpace(root)
+            ? root
+            : null;
     }
 
     private static string ReadRequiredString(object? value, string fallback) =>

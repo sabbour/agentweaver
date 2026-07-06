@@ -141,7 +141,18 @@ public static class MetricsEndpoints
             if (run is null) return Results.NotFound();
             if (!EndpointHelpers.IsOwner(httpContext, run)) return Results.StatusCode(StatusCodes.Status403Forbidden);
 
-            return Results.Ok(await metrics.GetRunTracesAsync(runId, ct).ConfigureAwait(false));
+            var agentNameByRunId = new Dictionary<string, string?>(StringComparer.Ordinal)
+            {
+                [run.Id.ToString()] = run.AgentName,
+            };
+            if (run.ParentRunId is null)
+            {
+                var children = await runStore.GetRunsByParentAsync(run.Id.ToString(), ct).ConfigureAwait(false);
+                foreach (var child in children)
+                    agentNameByRunId[child.Id.ToString()] = child.AgentName;
+            }
+
+            return Results.Ok(await metrics.GetRunTracesAsync(runId, agentNameByRunId, ct).ConfigureAwait(false));
         });
     }
 
