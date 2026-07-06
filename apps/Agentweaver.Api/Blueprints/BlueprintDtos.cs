@@ -107,3 +107,17 @@ public sealed record ValidateBlueprintResponse
     [JsonPropertyName("valid")] public required bool Valid { get; init; }
     [JsonPropertyName("errors")] public required IReadOnlyList<string> Errors { get; init; }
 }
+
+public sealed record SuggestBlueprintRequest
+{
+    [JsonPropertyName("repository")] public string? Repository { get; init; }
+}
+
+public sealed record SuggestBlueprintResponse
+{
+    [JsonPropertyName("recommended_blueprint")] public BlueprintDto? RecommendedBlueprint { get; init; }
+    [JsonPropertyName("rationale")] public string? Rationale { get; init; }
+    [JsonPropertyName("confidence")] public double Confidence { get; init; }
+    [JsonPropertyName("signals")] public IReadOnlyList<string> Signals { get; init; } = [];
+    [JsonPropertyName("fallback")] public bool Fallback { get; init; }
+}
