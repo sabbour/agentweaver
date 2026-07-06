@@ -547,17 +547,10 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
             return existingActive.Id.ToString();
         }
 
-        var childRunId = RunId.New();
-
-        // Mark dispatched + record the child run id, then project the lifecycle + topology delta.
-        var subtask = await UpdateSubtaskAsync(
-            subtaskId, SubtaskStatus.Dispatched, childRunId.ToString(), ct).ConfigureAwait(false);
+        var subtask = await GetSubtaskAsync(subtaskId, ct).ConfigureAwait(false);
         if (subtask is null) return null;
-        statusById[subtaskId] = SubtaskStatus.Dispatched;
-        EmitSubtask(context, workPlanId, subtask, EventTypes.SubtaskDispatched, seq.Next());
-        // A child run id is now assigned, so the unified coordinator graph SHAPE changed
-        // (child_graph_ref appears) — re-emit the full shape-only snapshot.
-        await EmitCoordinatorGraphAsync(context.CoordinatorRunId, workPlanId, ct).ConfigureAwait(false);
+
+        var childRunId = RunId.New();
 
         var childTask = await ComposeChildTaskAsync(context, workPlanId, subtask, ct).ConfigureAwait(false);
 
@@ -616,6 +609,20 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
             if (failed is not null)
                 EmitSubtask(context, workPlanId, failed, EventTypes.SubtaskFailed, seq.Next());
             return null;
+        }
+
+        // Only publish the childRunId after StartChildRunAsync has inserted the child Run row and
+        // created its stream entry. Otherwise the browser can immediately follow the coordinator
+        // subtask event and hit transient 404s for /api/runs/{childRunId} and /stream.
+        var dispatched = await UpdateSubtaskAsync(
+            subtaskId, SubtaskStatus.Dispatched, childRunId.ToString(), ct).ConfigureAwait(false);
+        statusById[subtaskId] = SubtaskStatus.Dispatched;
+        if (dispatched is not null)
+        {
+            EmitSubtask(context, workPlanId, dispatched, EventTypes.SubtaskDispatched, seq.Next());
+            // A child run id is now assigned, so the unified coordinator graph SHAPE changed
+            // (child_graph_ref appears) — re-emit the full shape-only snapshot.
+            await EmitCoordinatorGraphAsync(context.CoordinatorRunId, workPlanId, ct).ConfigureAwait(false);
         }
 
         // The child workflow is now executing.
@@ -1719,6 +1726,15 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
 
         db.Entry(row).State = EntityState.Detached;
         return row;
+    }
+
+    private async Task<Subtask?> GetSubtaskAsync(int subtaskId, CancellationToken ct)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        return await db.Subtasks.AsNoTracking()
+            .FirstOrDefaultAsync(s => s.Id == subtaskId, ct)
+            .ConfigureAwait(false);
     }
 
     private async Task SetWorkPlanStatusAsync(int workPlanId, string status, CancellationToken ct, string? coordinatorPodId = null)

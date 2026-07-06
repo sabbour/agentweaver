@@ -64,6 +64,10 @@ public sealed class ArtifactFilesEndpointTests : IClassFixture<ReviewWebApplicat
             Diff              = diff,
         };
         await store.InsertAsync(run);
+        if (diff is not null)
+        {
+            await store.SetAssembleReadyAsync(run.Id, "tree-for-test", "agentweaver-run-test", diff, 1, DateTimeOffset.UtcNow);
+        }
         return run.Id.ToString();
     }
 
@@ -222,7 +226,7 @@ public sealed class ArtifactFilesEndpointTests : IClassFixture<ReviewWebApplicat
             "-old\n" +
             "+new\n" +
             "+line\n";
-        var runId = await InsertOwnerRunAsync(RunStatus.AssembleReady, diff);
+        var runId = await InsertOwnerRunAsync(RunStatus.InProgress, diff);
 
         var response = await _ownerClient.GetAsync($"/api/runs/{runId}/files");
 
@@ -247,7 +251,7 @@ public sealed class ArtifactFilesEndpointTests : IClassFixture<ReviewWebApplicat
             "@@ -1 +1 @@\n" +
             "-old\n" +
             "+new\n";
-        var runId = await InsertOwnerRunAsync(RunStatus.AssembleReady, diff);
+        var runId = await InsertOwnerRunAsync(RunStatus.InProgress, diff);
 
         var response = await _ownerClient.GetAsync($"/api/runs/{runId}/files/src/worker.ts");
 
