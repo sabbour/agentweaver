@@ -126,6 +126,9 @@ public sealed class WorkflowSelector : IWorkflowSelector
             }
 
             lastResponse = response;
+            _logger.LogInformation(
+                "Workflow selection raw model response for project {ProjectId} (attempt {Attempt}/{MaxAttempts}, truncated): {Response}",
+                context.ProjectId, attempt, MaxAttempts, Truncate(response));
 
             if (!TryParse(response, out var selectedId, out var rationale))
             {
@@ -157,8 +160,8 @@ public sealed class WorkflowSelector : IWorkflowSelector
                 return new WorkflowSelectionResult(selected, rationale, WasAutoSelected: true);
 
             _logger.LogWarning(
-                "Workflow selection model chose unknown workflow id '{SelectedId}' for project {ProjectId} (attempt {Attempt}/{MaxAttempts}).",
-                selectedId, context.ProjectId, attempt, MaxAttempts);
+                "Workflow selection model chose unknown workflow id '{SelectedId}' for project {ProjectId} (attempt {Attempt}/{MaxAttempts}). Raw response (truncated): {Response}",
+                selectedId, context.ProjectId, attempt, MaxAttempts, Truncate(response));
         }
 
         // Structured fallback log: the parse_failure property makes silent-wrong-workflow

@@ -31,6 +31,12 @@ public sealed class CopilotWorkflowSelectionModelTests
         return new AgentResponseUpdate(ChatRole.Assistant, new List<AIContent> { aiContent });
     }
 
+    private static AgentResponseUpdate TextContentChunk(string content)
+    {
+        var aiContent = new TextContent(content);
+        return new AgentResponseUpdate(ChatRole.Assistant, new List<AIContent> { aiContent });
+    }
+
     private static AgentResponseUpdate DeltaChunk(string text) =>
         new(ChatRole.Assistant, text);
 
@@ -49,6 +55,16 @@ public sealed class CopilotWorkflowSelectionModelTests
     {
         // Sanity check: the delta path that already worked continues to work.
         var stream = Stream(DeltaChunk("{\"selected\": \"bug-fix\", "), DeltaChunk("\"rationale\": \"x\"}"));
+
+        var result = await CopilotWorkflowSelectionModel.CaptureResponseTextAsync(stream, CancellationToken.None);
+
+        result.Should().Be("{\"selected\": \"bug-fix\", \"rationale\": \"x\"}");
+    }
+
+    [Fact]
+    public async Task CaptureResponseText_TextContentOnly_ReturnsAccumulatedText()
+    {
+        var stream = Stream(TextContentChunk("{\"selected\": \"bug-fix\", "), TextContentChunk("\"rationale\": \"x\"}"));
 
         var result = await CopilotWorkflowSelectionModel.CaptureResponseTextAsync(stream, CancellationToken.None);
 
