@@ -351,17 +351,17 @@ function lifecycleProps(event: RunStreamEvent, runOutcome?: { achieved: boolean;
     case 'coordinator.outcome_spec':
       return {
         icon: <TaskListSquareLtrRegular aria-hidden="true" />,
-        label: 'outcome spec',
+        label: 'outcome plan',
         summary: p['desiredOutcome']
           ? `Drafted: ${String(p['desiredOutcome']).slice(0, 140).replace(/\n/g, ' ')}`
-          : 'Drafted outcome spec for review',
+          : 'Drafted outcome plan for review',
         badgeColor: 'informative',
       };
     case 'coordinator.outcome_spec.confirmed':
       return {
         icon: <CheckmarkCircleFilled aria-hidden="true" />,
         label: 'outcome confirmed',
-        summary: p['confirmedBy'] ? `Confirmed by ${String(p['confirmedBy'])}` : 'Outcome spec confirmed',
+        summary: p['confirmedBy'] ? `Confirmed by ${String(p['confirmedBy'])}` : 'Outcome plan confirmed',
         badgeColor: 'success',
       };
     case 'coordinator.work_plan': {

@@ -191,7 +191,7 @@ export const AgentMessageBubble = memo(function AgentMessageBubble({
 
   // The coordinator's spec-drafting turn streams its final answer as a raw JSON object
   // ({"desired_outcome": …, "scope": …, …}). That JSON is already surfaced structurally in the
-  // Outcome spec panel, so rendering the raw blob in the timeline is redundant and ugly. Replace it
+  // Outcome plan panel, so rendering the raw blob in the timeline is redundant and ugly. Replace it
   // with a compact pointer. Detect by the leading brace + the spec's signature key.
   const looksLikeSpecDraft = /^\s*\{/.test(content) && /"desired_outcome"\s*:/.test(content);
   if (looksLikeSpecDraft) {
@@ -199,7 +199,7 @@ export const AgentMessageBubble = memo(function AgentMessageBubble({
       <div className={styles.wrapper} aria-label="Agent message">
         <BotRegular className={styles.icon} aria-hidden="true" />
         <Text as="span" style={{ color: tokens.colorNeutralForeground3, fontStyle: 'italic', paddingTop: tokens.spacingVerticalXXS }}>
-          Drafted the outcome spec — see the Outcome spec panel.
+          Drafted the outcome plan — see the Outcome plan panel.
         </Text>
       </div>
     );

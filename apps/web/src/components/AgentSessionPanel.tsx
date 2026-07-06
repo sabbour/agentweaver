@@ -39,6 +39,7 @@ import { DiffViewer } from './DiffViewer';
 import { FileViewerModal } from './FileViewerModal';
 import { LifecycleEventCard } from './LifecycleEventCard';
 import { deriveHumanTitle } from '../timeline/reducer';
+import { OutcomePlanPanel } from './OutcomePlanPanel';
 
 const PANEL_TOP = '48px';
 const SEED_STATUSES: ReadonlySet<string> = new Set([
@@ -696,6 +697,7 @@ export interface AgentSessionPanelProps {
   coordinatorActive?: boolean;
   variant?: 'modal' | 'docked';
   composerFocusSignal?: number;
+  onOutcomePlanClarify?: () => void;
 }
 
 interface ConversationRow {
@@ -884,6 +886,9 @@ function statusLabel(status: string): string {
     case 'running':
     case 'in_progress': return 'Running';
     case 'assemble_ready': return 'Awaiting assembly';
+    case 'awaiting_confirmation': return 'Awaiting confirmation';
+    case 'needs_clarification': return 'Needs clarification';
+    case 'confirmed': return 'Confirmed';
     case 'rai_flagged': return 'RAI flagged';
     case 'completed':
     case 'merged': return 'Completed';
@@ -902,6 +907,7 @@ function statusKind(status: string): StatusKind {
     case 'completed':
     case 'merged':
     case 'assemble_ready':
+    case 'confirmed':
       return 'success';
     case 'failed':
     case 'merge_failed':
@@ -910,6 +916,8 @@ function statusKind(status: string): StatusKind {
     case 'rai_flagged':
     case 'waiting':
     case 'awaiting_assembly':
+    case 'awaiting_confirmation':
+    case 'needs_clarification':
       return 'awaiting';
     case 'running':
     case 'dispatched':
@@ -1153,16 +1161,16 @@ function coordinatorActivityLine(evt: RunStreamEvent, subtasks: Map<string, Subt
     }
     case 'coordinator.outcome_spec': {
       const outcome = readString(p, ['desiredOutcome', 'desired_outcome']);
-      return outcome ? `Outcome spec drafted: ${outcome}` : 'Outcome spec drafted for review.';
+      return outcome ? `Outcome plan drafted: ${outcome}` : 'Outcome plan drafted for review.';
     }
     case 'coordinator.workflow_selected': {
       const name = readString(p, ['selectedName', 'selected_name', 'selectedId', 'selected_id']);
       const rationale = readString(p, ['rationale']);
-      return `Workflow selected: ${name ?? 'workflow'}${rationale ? ` — ${rationale}` : ''}`;
+      return `Selected workflow: ${name ?? 'workflow'}${rationale ? ` — ${rationale}` : ''}`;
     }
     case 'coordinator.work_plan': {
       const subtasksCount = readArray(p, ['subtasks', 'tasks'])?.length;
-      return subtasksCount != null ? `Work plan created with ${subtasksCount} subtasks.` : 'Work plan created.';
+      return subtasksCount != null ? `Coordinator created a work plan with ${subtasksCount} subtasks.` : 'Coordinator created a work plan.';
     }
     case 'coordinator.steering': {
       const instruction = readString(p, ['instruction', 'message', 'kind']);
@@ -1358,6 +1366,7 @@ export function AgentSessionPanel({
   coordinatorActive = false,
   variant = 'modal',
   composerFocusSignal = 0,
+  onOutcomePlanClarify,
 }: AgentSessionPanelProps) {
   const styles = useStyles();
   const navigate = useNavigate();
@@ -1392,13 +1401,13 @@ export function AgentSessionPanel({
     [flatTree, selectedNodeId],
   );
   const selectedRunId = selectedItem
-    ? (selectedItem.isCoordinator ? coordinatorRunId : (selectedItem.childRunId ?? ''))
+    ? (selectedItem.isCoordinator || selectedItem.nodeId === 'outcome-plan' || selectedItem.nodeId === 'work-plan' ? coordinatorRunId : (selectedItem.childRunId ?? ''))
     : '';
   const { events: liveEvents } = useRunStream(open && selectedRunId ? selectedRunId : '');
   const events = useMemo(() => mergeRunEvents(seedEvents, liveEvents), [seedEvents, liveEvents]);
   const turns = useMemo(
-    () => selectedItem?.isCoordinator ? buildCoordinatorTurns(events) : buildTurns(events),
-    [events, selectedItem?.isCoordinator],
+    () => selectedItem?.isCoordinator || selectedItem?.nodeId === 'work-plan' ? buildCoordinatorTurns(events) : buildTurns(events),
+    [events, selectedItem?.isCoordinator, selectedItem?.nodeId],
   );
 
   useEffect(() => {
@@ -1437,8 +1446,20 @@ export function AgentSessionPanel({
   }, [selectedRunId]);
 
   useEffect(() => {
-    if (composerFocusSignal > 0) composerRef.current?.focus();
-  }, [composerFocusSignal]);
+    if (composerFocusSignal > 0) {
+      if (selectedItem?.nodeId === 'outcome-plan') {
+        setFollowUp((value) => value.trim() ? value : 'Clarify the outcome plan: ');
+      }
+      composerRef.current?.focus();
+    }
+  }, [composerFocusSignal, selectedItem?.nodeId]);
+
+  const focusOutcomePlanClarification = useCallback(() => {
+    setFollowUp((value) => value.trim() ? value : 'Clarify the outcome plan: ');
+    setActiveTab('messages');
+    onOutcomePlanClarify?.();
+    window.setTimeout(() => composerRef.current?.focus(), 0);
+  }, [onOutcomePlanClarify]);
 
   useEffect(() => {
     if (!open || !selectedRunId) {
@@ -1598,9 +1619,11 @@ export function AgentSessionPanel({
   const pendingQuestionCount = events.filter((evt) =>
     evt.type === 'agent.question_asked' || evt.type === 'coordinator.child_question'
   ).length;
-  const composerContext = selectedItem.isCoordinator
-    ? 'Context: Whole run'
-    : `Context: ${selectedItem.label}${selectedItem.agentName ? ` with ${selectedItem.agentName}` : ''}`;
+  const composerContext = selectedItem.nodeId === 'outcome-plan'
+    ? 'Context: Outcome plan'
+    : selectedItem.isCoordinator
+      ? 'Context: Whole run'
+      : `Context: ${selectedItem.label}${selectedItem.agentName ? ` with ${selectedItem.agentName}` : ''}`;
 
   return (
     <>
@@ -1756,10 +1779,21 @@ export function AgentSessionPanel({
                         <Text>Loading session details...</Text>
                       </div>
                     )}
-                    {!runDetailLoading && turns.length === 0 && (
+                    {selectedItem.nodeId === 'outcome-plan' ? (
+                      <OutcomePlanPanel
+                        runId={coordinatorRunId}
+                        projectId={projectId}
+                        events={events}
+                        streamStatus="streaming"
+                        runStatus={runDetail?.status ?? undefined}
+                        onReconnect={onCoordinatorFollowUp}
+                        onClarifyPlan={focusOutcomePlanClarification}
+                        clarificationSent={selectedItem.status === 'needs_clarification'}
+                      />
+                    ) : !runDetailLoading && turns.length === 0 && (
                       <Text className={styles.emptyState}>No streamed messages yet for this session.</Text>
                     )}
-                    {turns.map((turn) => (
+                    {selectedItem.nodeId !== 'outcome-plan' && turns.map((turn) => (
                       <ConversationTurnBlock key={turn.key} turn={turn} runId={selectedRunId} onPreviewFile={openPreview} />
                     ))}
                   </div>

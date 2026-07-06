@@ -97,7 +97,7 @@ export function StartOrchestrationDialog({ projectId, onStarted }: StartOrchestr
           <DialogContent>
             <div className={styles.fields}>
               <Text>
-                Describe a goal in plain language. The coordinator drafts an outcome spec for your
+                Describe a goal in plain language. The coordinator drafts an Outcome plan for your
                 review and confirmation before any work is dispatched.
               </Text>
               <Field label="Goal" required>
