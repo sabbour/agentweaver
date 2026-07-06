@@ -54,7 +54,7 @@ import { ApiError } from '../api/client';
 import type { GraphDescriptor, RunStatus, WorkPlanResponse, PortForwardSessionDto, RunAgentTokenBreakdownDto } from '../api/types';
 import { layoutDagColumns, NODE_W, NODE_H, NODE_TYPE_W, NODE_TYPE_H } from '../utils/dagLayout';
 import type { NodeSizeHint } from '../utils/dagLayout';
-import { OutcomeSpecPanel } from '../components/OutcomeSpecPanel';
+import { OutcomePlanPanel } from '../components/OutcomePlanPanel';
 import { AgentAvatar } from '../components/AgentAvatar';
 import { CostChip, formatAic } from '../components/CostChip';
 import { AgentTokenBreakdown } from '../components/runs/AgentTokenBreakdown';
@@ -641,7 +641,7 @@ const useStyles = makeStyles({
     flexDirection: 'column',
     gap: tokens.spacingVerticalS,
   },
-  // Single-column coordinator session layout. The outcome spec moved to a slide-in panel (#164).
+  // Single-column coordinator session layout. The Outcome plan lives in the session pane.
   sessionOnly: {
     display: 'flex',
     flexDirection: 'column',
@@ -963,13 +963,13 @@ function flattenRunTree(nodes: RunSessionTree[]): RunSessionTree[] {
 }
 
 function runTreeStatusIcon(status: string) {
-  const kind = status === 'completed' || status === 'merged' || status === 'assemble_ready'
+  const kind = status === 'completed' || status === 'merged' || status === 'assemble_ready' || status === 'confirmed'
     ? 'success'
     : status === 'failed' || status === 'merge_failed' || status === 'declined'
       ? 'danger'
       : status === 'running' || status === 'dispatched' || status === 'dispatching' || status === 'in_progress'
         ? 'running'
-        : status === 'waiting' || status === 'pending' || status === 'rai_flagged'
+          : status === 'waiting' || status === 'pending' || status === 'rai_flagged' || status === 'awaiting_confirmation' || status === 'needs_clarification'
           ? 'waiting'
           : 'pending';
   if (kind === 'success') return <CheckmarkCircleFilled aria-hidden="true" />;
@@ -982,6 +982,18 @@ function runTreeStatusIcon(status: string) {
 function formatTreeDuration(startedAt?: number, completedAt?: number): string {
   if (!startedAt) return 'Queued';
   return fmtTotal(Math.max(0, (completedAt ?? Date.now()) - startedAt));
+}
+
+function runTreeStatusLabel(status: string, confirmedBy?: string): string {
+  switch (status) {
+    case 'awaiting_confirmation': return 'Awaiting confirmation';
+    case 'confirmed': return confirmedBy ? `Confirmed by ${confirmedBy}` : 'Confirmed';
+    case 'needs_clarification': return 'Needs clarification';
+    case 'completed': return 'Completed';
+    case 'running': return 'Running';
+    case 'pending': return 'Pending';
+    default: return status ? status.replace(/_/g, ' ') : 'Pending';
+  }
 }
 
 export function CoordinatorRunPage() {
@@ -1105,7 +1117,7 @@ export function CoordinatorRunPage() {
   // doesn't hammer the 404 endpoint on a tight loop.
   const [noWorkPlan, setNoWorkPlan] = useState(false);
   // True when the run detail confirms this is a child run (parent_run_id non-null). Child runs
-  // never have a work-plan or outcome-spec; skip coordinator-only artifact fetches entirely.
+  // never have a work-plan or outcome-plan; skip coordinator-only artifact fetches entirely.
   const [isChildRun, setIsChildRun] = useState(false);
   // Retry state for the header button.
   const [retrying, setRetrying] = useState(false);
@@ -1136,7 +1148,7 @@ export function CoordinatorRunPage() {
     const tick = async () => {
       const detail = await apiClient.getRun(runId).catch(() => null);
       // Child runs (parent_run_id non-null) are not coordinator runs and will never have a
-      // work-plan or outcome-spec. Skip coordinator-only artifact fetches to avoid 404 noise.
+      // work-plan or outcome-plan. Skip coordinator-only artifact fetches to avoid 404 noise.
       const childRun = detail?.parent_run_id != null;
       if (childRun) setIsChildRun(true);
       // Fetch work-plan only when it has not already returned 404 and the run is not a child.
@@ -1228,6 +1240,101 @@ export function CoordinatorRunPage() {
   }, [events]);
 
   const effectiveDescriptor: GraphDescriptor | null = sseDescriptor ?? restDescriptor;
+
+  const latestOutcomePlanEvent = useMemo<RunStreamEvent | undefined>(() => {
+    let latest: RunStreamEvent | undefined;
+    for (const evt of events) {
+      if (evt.type === 'coordinator.outcome_spec' && (!latest || evt.sequence >= latest.sequence)) latest = evt;
+    }
+    return latest;
+  }, [events]);
+
+  const specConfirmed = useMemo(
+    () => events.some((e) => e.type === 'coordinator.outcome_spec.confirmed'),
+    [events],
+  );
+
+  const outcomePlanConfirmedBy = useMemo(() => {
+    let confirmedBy: string | undefined;
+    for (const evt of events) {
+      if (evt.type === 'coordinator.outcome_spec.confirmed' && typeof evt.payload['confirmedBy'] === 'string') {
+        confirmedBy = evt.payload['confirmedBy'] as string;
+      }
+    }
+    return confirmedBy;
+  }, [events]);
+
+  const workPlanSeen = useMemo(
+    () => workPlanData != null || events.some((e) => e.type === 'coordinator.work_plan'),
+    [events, workPlanData],
+  );
+
+  const planningDescriptor = useMemo<GraphDescriptor | null>(() => {
+    const base = effectiveDescriptor ?? {
+      graph_id: `coordinator:${runId ?? 'run'}`,
+      variant: 'coordinator',
+      start_node_id: 'coordinator',
+      nodes: [{
+        id: 'coordinator',
+        label: 'Coordinator',
+        role: 'coordinator',
+        kind: 'live',
+        node_type: 'agent',
+      }],
+      edges: [],
+    } satisfies GraphDescriptor;
+
+    const nodesById = new Map(base.nodes.map((node) => [node.id, node]));
+    const coordinator = nodesById.get('coordinator') ?? base.nodes[0];
+    if (!coordinator) return base;
+
+    const outcomeNode: GraphDescriptor['nodes'][number] = {
+      id: 'outcome-plan',
+      label: 'Outcome plan',
+      role: 'outcome_plan',
+      kind: latestOutcomePlanEvent || specConfirmed ? 'live' : 'planned',
+      node_type: 'action',
+    };
+    const workNode: GraphDescriptor['nodes'][number] = {
+      id: 'work-plan',
+      label: 'Work plan',
+      role: 'work_plan',
+      kind: workPlanSeen ? 'live' : 'planned',
+      node_type: 'action',
+    };
+
+    const originalNodes = base.nodes.filter((node) => node.id !== 'outcome-plan' && node.id !== 'work-plan');
+    const planningUnlocked = specConfirmed || workPlanSeen || (!latestOutcomePlanEvent && originalNodes.some((node) => node.node_type === 'subtask'));
+    const downstreamNodes = planningUnlocked ? originalNodes.filter((node) => node.id !== coordinator.id) : [];
+    const originalDownstreamIds = new Set(downstreamNodes.map((node) => node.id));
+    const originalEdges = planningUnlocked
+      ? base.edges.filter((edge) => edge.from !== coordinator.id && edge.to !== coordinator.id && originalDownstreamIds.has(edge.from) && originalDownstreamIds.has(edge.to))
+      : [];
+    const firstDownstreamIds = planningUnlocked
+      ? new Set(base.edges.filter((edge) => !edge.loopback && edge.from === coordinator.id).map((edge) => edge.to))
+      : new Set<string>();
+    if (planningUnlocked && firstDownstreamIds.size === 0) {
+      for (const node of downstreamNodes) firstDownstreamIds.add(node.id);
+    }
+
+    const nodes = planningUnlocked
+      ? [coordinator, outcomeNode, workNode, ...downstreamNodes]
+      : [coordinator, outcomeNode];
+    const edges: GraphDescriptor['edges'] = [
+      { from: coordinator.id, to: 'outcome-plan', cardinality: 'direct', loopback: false },
+    ];
+    if (planningUnlocked) {
+      edges.push({ from: 'outcome-plan', to: 'work-plan', cardinality: 'direct', loopback: false });
+      for (const id of firstDownstreamIds) {
+        if (id !== 'outcome-plan' && id !== 'work-plan') {
+          edges.push({ from: 'work-plan', to: id, cardinality: firstDownstreamIds.size > 1 ? 'fanout' : 'direct', loopback: false });
+        }
+      }
+      edges.push(...originalEdges);
+    }
+
+    return { ...base, start_node_id: coordinator.id, nodes, edges };
+  }, [effectiveDescriptor, latestOutcomePlanEvent, runId, specConfirmed, workPlanSeen]);
 
   // Derived orchestration lifecycle (issues 3 & 4).
   const orch = useMemo<OrchState>(
@@ -1376,7 +1483,7 @@ export function CoordinatorRunPage() {
 
 
   const { rfNodes, displayEdges } = useMemo<{ rfNodes: Node[]; displayEdges: Edge[] }>(() => {
-    if (!effectiveDescriptor) return { rfNodes: [], displayEdges: [] };
+    if (!planningDescriptor) return { rfNodes: [], displayEdges: [] };
 
     const fwdEdges: Edge[] = [];
     const allEdges: Edge[] = [];
@@ -1386,8 +1493,8 @@ export function CoordinatorRunPage() {
     // them as labelled back-edges matching the per-run loopback styling. Falls back gracefully when
     // a descriptor has zero loopbacks (older runs) â€” the loop simply produces no loopback edges.
     const roleById: Record<string, string> = {};
-    for (const n of effectiveDescriptor.nodes) roleById[n.id] = (n.role ?? '').toLowerCase();
-    for (const edge of effectiveDescriptor.edges) {
+    for (const n of planningDescriptor.nodes) roleById[n.id] = (n.role ?? '').toLowerCase();
+    for (const edge of planningDescriptor.edges) {
       const edgeId = `${edge.from}-${edge.to}`;
       if (edge.loopback) {
         allEdges.push(loopbackEdge(edgeId, edge.from, edge.to, coordinatorLoopbackLabel(roleById[edge.from], edge.from)));
@@ -1399,7 +1506,7 @@ export function CoordinatorRunPage() {
     }
 
     const nodeSizeHints: Record<string, NodeSizeHint> = {};
-    const raw: Node[] = effectiveDescriptor.nodes.map((node) => {
+    const raw: Node[] = planningDescriptor.nodes.map((node) => {
       const nt = node.node_type;
       // Subtask cards render taller than the generic hint (multi-line title + role + agent + model +
       // phase + the Expand-pipeline / View-run buttons), so reserve a generous base height to keep
@@ -1481,6 +1588,10 @@ export function CoordinatorRunPage() {
       let stepStatus: StepStatus;
       if (node.id === 'coordinator') {
         stepStatus = topoStatusToStepStatus(coordNodeStatusOverride ?? coordTopoNode?.status ?? 'running');
+      } else if (node.id === 'outcome-plan') {
+        stepStatus = specConfirmed ? 'completed' : latestOutcomePlanEvent ? 'started' : 'pending';
+      } else if (node.id === 'work-plan') {
+        stepStatus = workPlanSeen ? 'completed' : 'pending';
       } else if (assemblyStatus !== undefined) {
         stepStatus = assemblyStatus;
         nodePlanned = false; // the stage has been reached; it is live, not planned
@@ -1527,19 +1638,15 @@ export function CoordinatorRunPage() {
       rfNodes:      layoutDagColumns(raw, fwdEdges, { rankdir: 'LR', rankSep: 64, nodeSep: COORDINATOR_GRAPH_NODE_SEP }, nodeSizeHints),
       displayEdges: allEdges,
     };
-  }, [effectiveDescriptor, topology, projectId, runId, coordNodeStatusOverride, orch.phase, subtaskTiming, assemblyTiming, roleByAgent, expandedKeys]);
+  }, [planningDescriptor, topology, projectId, runId, coordNodeStatusOverride, orch.phase, subtaskTiming, assemblyTiming, roleByAgent, expandedKeys, latestOutcomePlanEvent, specConfirmed, workPlanSeen]);
 
-  const specConfirmed = useMemo(
-    () => events.some((e) => e.type === 'coordinator.outcome_spec.confirmed'),
-    [events],
-  );
   const hasSubtaskNodes = useMemo(
-    () => (effectiveDescriptor?.nodes ?? []).some((n) => n.node_type === 'subtask'),
-    [effectiveDescriptor],
+    () => (planningDescriptor?.nodes ?? []).some((n) => n.node_type === 'subtask'),
+    [planningDescriptor],
   );
   const inSpecAuthoring = !specConfirmed && !hasSubtaskNodes && orch.phase === 'unknown';
 
-  // While the Coordinator is still drafting the outcome spec (inSpecAuthoring), the assembly
+  // While the Coordinator is still drafting the Outcome plan (inSpecAuthoring), the assembly
   // stages (RAI / Human Review / Merge / Scribe) are not yet committed work â€” no spec confirmed,
   // no subtasks, no orchestration phase. Presenting them as planned pipeline nodes implies a
   // downstream plan that does not exist. Filter them (and edges referencing them) out of the
@@ -1547,12 +1654,12 @@ export function CoordinatorRunPage() {
   // itself is left untouched; this is purely a display-time projection.
   const assemblyNodeIds = useMemo(() => {
     const ids = new Set<string>();
-    for (const n of effectiveDescriptor?.nodes ?? []) {
+    for (const n of planningDescriptor?.nodes ?? []) {
       const role = (n.role ?? '').toLowerCase();
       if (role === 'rai' || role === 'review' || role === 'merge' || role === 'scribe') ids.add(n.id);
     }
     return ids;
-  }, [effectiveDescriptor]);
+  }, [planningDescriptor]);
 
   const { displayNodes, displayEdges2 } = useMemo<{ displayNodes: Node[]; displayEdges2: Edge[] }>(() => {
     if (!inSpecAuthoring) return { displayNodes: rfNodes, displayEdges2: displayEdges };
@@ -1564,6 +1671,12 @@ export function CoordinatorRunPage() {
     const filteredEdges = displayEdges.filter((e) => keptIds.has(e.source) && keptIds.has(e.target));
     return { displayNodes: filteredNodes, displayEdges2: filteredEdges };
   }, [inSpecAuthoring, rfNodes, displayEdges, assemblyNodeIds]);
+
+  const [outcomePlanClarifying, setOutcomePlanClarifying] = useState(false);
+
+  useEffect(() => {
+    if (latestOutcomePlanEvent) setOutcomePlanClarifying(false);
+  }, [latestOutcomePlanEvent]);
 
   const { sessionTree, sessionNodeIds, defaultSessionNodeId } = useMemo<{
     sessionTree: RunSessionTree[];
@@ -1578,7 +1691,9 @@ export function CoordinatorRunPage() {
         return true;
       }
       const wfData = node.data as WorkflowNodeData | undefined;
-      return wfData?.def?.key === 'coordinator';
+      return wfData?.def?.key === 'coordinator'
+        || wfData?.def?.key === 'outcome_plan'
+        || wfData?.def?.key === 'work_plan';
     });
     if (candidates.length === 0) {
       return {
@@ -1629,11 +1744,15 @@ export function CoordinatorRunPage() {
       } else {
         const data = node.data as WorkflowNodeData;
         const status =
-          data.state.status === 'started' ? 'running'
-            : data.state.status === 'completed' ? 'completed'
-              : data.state.status === 'failed' ? 'failed'
-                : data.state.status === 'revise' ? 'rai_flagged'
-                  : 'pending';
+          data.def.key === 'outcome_plan'
+            ? (outcomePlanClarifying && !specConfirmed ? 'needs_clarification' : specConfirmed ? 'confirmed' : latestOutcomePlanEvent ? 'awaiting_confirmation' : 'pending')
+            : data.def.key === 'work_plan'
+              ? (workPlanSeen ? 'completed' : 'pending')
+              : data.state.status === 'started' ? 'running'
+                : data.state.status === 'completed' ? 'completed'
+                  : data.state.status === 'failed' ? 'failed'
+                    : data.state.status === 'revise' ? 'rai_flagged'
+                      : 'pending';
         sessionMeta.set(node.id, {
           nodeId: node.id,
           label: data.def.label,
@@ -1696,7 +1815,7 @@ export function CoordinatorRunPage() {
       sessionNodeIds: new Set(sessionMeta.keys()),
       defaultSessionNodeId: rootMeta.nodeId,
     };
-  }, [displayNodes]);
+  }, [displayNodes, latestOutcomePlanEvent, outcomePlanClarifying, specConfirmed, workPlanSeen]);
 
   const flatSessionTree = useMemo(() => flattenRunTree(sessionTree), [sessionTree]);
   const taskRows = flatSessionTree.filter((node) => node.nodeId !== defaultSessionNodeId);
@@ -1716,15 +1835,23 @@ export function CoordinatorRunPage() {
   // ---------------------------------------------------------------------------
 
   const [specPanelOpen, setSpecPanelOpen] = useState(false);
-  const specPanelAutoOpenedRef = useRef(false);
   const [artifactsPanelOpen, setArtifactsPanelOpen] = useState(false);
   const [sessionPanelOpen, setSessionPanelOpen] = useState(true);
   const [panelNodeId, setPanelNodeId] = useState<string | null>(null);
   const [composerFocusSignal, setComposerFocusSignal] = useState(0);
+  const lastSelectedOutcomePlanSeqRef = useRef<number | null>(null);
 
   const openPanelForNode = useCallback((nodeId: string) => {
     setPanelNodeId(nodeId);
     setSessionPanelOpen(true);
+  }, []);
+
+  const focusOutcomePlanComposer = useCallback(() => {
+    setOutcomePlanClarifying(true);
+    setPanelNodeId('outcome-plan');
+    setSessionPanelOpen(true);
+    setComposerFocusSignal((value) => value + 1);
+    setSpecPanelOpen(false);
   }, []);
 
   useEffect(() => {
@@ -1732,17 +1859,12 @@ export function CoordinatorRunPage() {
   }, [defaultSessionNodeId, panelNodeId]);
 
   useEffect(() => {
-    if (specPanelAutoOpenedRef.current || isChildRun) return;
-    const hasCoordinatorSignal = goal != null
-      || coordStatusField != null
-      || workPlanStatus != null
-      || workPlanData != null
-      || events.some((evt) => evt.type.startsWith('coordinator.'));
-    if (hasCoordinatorSignal && !specConfirmed && !hasSubtaskNodes) {
-      specPanelAutoOpenedRef.current = true;
-      setSpecPanelOpen(true);
-    }
-  }, [coordStatusField, events, goal, hasSubtaskNodes, isChildRun, specConfirmed, workPlanData, workPlanStatus]);
+    if (!latestOutcomePlanEvent || isChildRun) return;
+    if (lastSelectedOutcomePlanSeqRef.current === latestOutcomePlanEvent.sequence) return;
+    lastSelectedOutcomePlanSeqRef.current = latestOutcomePlanEvent.sequence;
+    setPanelNodeId('outcome-plan');
+    setSessionPanelOpen(true);
+  }, [isChildRun, latestOutcomePlanEvent]);
 
   useEffect(() => {
     if (panelNodeId && !sessionNodeIds.has(panelNodeId)) {
@@ -2145,8 +2267,8 @@ export function CoordinatorRunPage() {
               Stop run
             </Button>
             {!isChildRun && (
-              <Button appearance="transparent" size="small" icon={<DocumentRegular />} onClick={() => setSpecPanelOpen(true)} data-testid="open-spec-panel">
-                Spec
+              <Button appearance="transparent" size="small" icon={<DocumentRegular />} onClick={() => setSpecPanelOpen(true)} data-testid="open-plan-panel">
+                Plan
               </Button>
             )}
             {!isChildRun && (
@@ -2184,6 +2306,8 @@ export function CoordinatorRunPage() {
                     <span className={styles.treeText}>
                       <Text className={styles.treePrimary}>{item.label}</Text>
                       <Text className={styles.treeSecondary}>
+                        {runTreeStatusLabel(item.status, item.nodeId === 'outcome-plan' ? outcomePlanConfirmedBy : undefined)}
+                        {' · '}
                         {item.agentName ?? 'Coordinator'}{item.agentRole ? ` · ${item.agentRole}` : ''}
                       </Text>
                     </span>
@@ -2261,7 +2385,7 @@ export function CoordinatorRunPage() {
                     </ReactFlow>
                     </div>
                   </div>
-                  {inSpecAuthoring && <Text className={styles.hint}>The execution pipeline appears once you confirm the outcome spec.</Text>}
+                  {inSpecAuthoring && <Text className={styles.hint}>The execution pipeline appears once you confirm the Outcome plan.</Text>}
                 </CoordPanelContext.Provider>
                 </CoordExpandContext.Provider>
                 </CoordinatorSessionContext.Provider>
@@ -2292,18 +2416,19 @@ export function CoordinatorRunPage() {
             onCoordinatorFollowUp={reconnectStream}
             coordinatorActive={coordActive}
             composerFocusSignal={composerFocusSignal}
+            onOutcomePlanClarify={() => setOutcomePlanClarifying(true)}
           />
         </div>
       </div>
 
-      {/* Outcome spec side panel (#164) */}
+      {/* Outcome plan side panel (#164) */}
       <SlidePanel
         open={specPanelOpen}
         onClose={() => setSpecPanelOpen(false)}
-        title="Outcome spec"
+        title="Outcome plan"
         width="min(560px, 94vw)"
       >
-        <OutcomeSpecPanel
+        <OutcomePlanPanel
           runId={runId}
           projectId={projectId ?? undefined}
           events={events}
@@ -2311,6 +2436,7 @@ export function CoordinatorRunPage() {
           runStatus={runLevelStatus}
           onCollapse={() => setSpecPanelOpen(false)}
           onReconnect={reconnectStream}
+          onClarifyPlan={focusOutcomePlanComposer}
         />
       </SlidePanel>
 

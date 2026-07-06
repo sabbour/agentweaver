@@ -31,7 +31,7 @@ vi.mock('../api/apiClient', () => ({
     }),
     getRunTraces: vi.fn().mockResolvedValue({ runId: 'coord-run-1', spans: [] }),
     getRunEvents: vi.fn().mockResolvedValue([]),
-    // OutcomeSpecPanel uses these — return empty/null to avoid noise.
+    // OutcomePlanPanel uses these — return empty/null to avoid noise.
     getOutcomeSpec: vi.fn(),
     getTeam: vi.fn().mockResolvedValue({ members: [] }),
     // RunLayout artifact browser (Changes/Files rail) — empty results in tests.
@@ -49,9 +49,9 @@ vi.mock('../api/sse', () => ({
   useRunStream: () => ({ events: [], status: 'done', error: null, reconnect: vi.fn() }),
 }));
 
-// OutcomeSpecPanel performs its own fetch; stub it so it renders nothing.
-vi.mock('../components/OutcomeSpecPanel', () => ({
-  OutcomeSpecPanel: () => null,
+// OutcomePlanPanel performs its own fetch; stub it so it renders nothing.
+vi.mock('../components/OutcomePlanPanel', () => ({
+  OutcomePlanPanel: () => null,
 }));
 
 import { apiClient } from '../api/apiClient';
@@ -209,7 +209,7 @@ describe('CoordinatorRunPage — unified coordinator graph view', () => {
   });
 });
 
-describe('CoordinatorRunPage — graph during outcome-spec drafting', () => {
+describe('CoordinatorRunPage — graph during outcome-plan drafting', () => {
   it('hides the assembly pipeline stages and shows a caption while drafting the spec', async () => {
     // Drafting state: coordinator + planned assembly stages, no subtasks, no confirmed spec.
     vi.mocked(apiClient.getRunGraph).mockResolvedValue(COORDINATOR_GRAPH_DRAFTING_DESCRIPTOR);
@@ -225,7 +225,7 @@ describe('CoordinatorRunPage — graph during outcome-spec drafting', () => {
     // Coordinator node still renders live.
     expect(text).toContain('Coordinator');
     // The calm caption explains why the pipeline is absent.
-    expect(text).toContain('The execution pipeline appears once you confirm the outcome spec.');
+    expect(text).toContain('The execution pipeline appears once you confirm the Outcome plan.');
     // Assembly stages must NOT be presented as committed planned work yet.
     expect(text).not.toContain('RAI Review');
     expect(text).not.toContain('Human Review');
@@ -250,13 +250,13 @@ describe('CoordinatorRunPage — graph during outcome-spec drafting', () => {
     expect(text).toContain('Human Review');
     expect(text).toContain('Scribe');
     // No drafting caption once the plan exists.
-    expect(text).not.toContain('The execution pipeline appears once you confirm the outcome spec.');
+    expect(text).not.toContain('The execution pipeline appears once you confirm the Outcome plan.');
   });
 });
 
 describe('CoordinatorRunPage — work-plan 404 (no plan yet / stuck run)', () => {
-  it('renders a graceful empty state and does not call the 404 work-plan endpoint again', async () => {
-    // No graph descriptor and a 404 work-plan: a stuck/early run with no plan.
+  it('renders the planning gate and does not call the 404 work-plan endpoint again', async () => {
+    // No graph descriptor and a 404 work-plan: an early run still shows the Outcome plan gate.
     vi.mocked(apiClient.getRunGraph).mockRejectedValue(new ApiError(404, 'not found'));
     vi.mocked(apiClient.getWorkPlan).mockRejectedValue(new ApiError(404, 'not found'));
     vi.mocked(apiClient.getRun).mockResolvedValue({ status: 'running' } as never);
@@ -264,12 +264,12 @@ describe('CoordinatorRunPage — work-plan 404 (no plan yet / stuck run)', () =>
     render(<Wrapper><CoordinatorRunPage /></Wrapper>);
 
     await waitFor(
-      () => expect(document.body.textContent).toContain('No work plan available yet.'),
+      () => expect(document.body.textContent).toContain('Outcome plan'),
       { timeout: 4000 },
     );
 
-    // The graceful state renders instead of an indefinite "Waiting for coordinator graph...".
-    expect(document.body.textContent).toContain('No work plan available yet.');
+    // The planning gate renders instead of an indefinite "Waiting for coordinator graph...".
+    expect(document.body.textContent).toContain('The execution pipeline appears once you confirm the Outcome plan.');
 
     // After the first 404 the work-plan endpoint is not called again — wpEverMissing stops
     // further fetches for the lifetime of the page, so the total call count stays very low.
@@ -305,7 +305,7 @@ describe('CoordinatorRunPage — work-plan 404 (no plan yet / stuck run)', () =>
 
 describe('CoordinatorRunPage — child run (non-coordinator) skips coordinator artifacts', () => {
   it('does not call getWorkPlan for a child run (parent_run_id is set)', async () => {
-    // A child run has parent_run_id set. The work-plan and outcome-spec endpoints do not exist
+    // A child run has parent_run_id set. The work-plan and outcome-plan endpoints do not exist
     // for child runs; calling them produces expected 404s that add noise without value.
     vi.mocked(apiClient.getRun).mockResolvedValue({
       run_id: 'child-run-1',
@@ -329,7 +329,7 @@ describe('CoordinatorRunPage — child run (non-coordinator) skips coordinator a
     expect(vi.mocked(apiClient.getWorkPlan)).not.toHaveBeenCalled();
   });
 
-  it('does not render the outcome spec panel for a child run', async () => {
+  it('does not render the Outcome plan panel for a child run', async () => {
     vi.mocked(apiClient.getRun).mockResolvedValue({
       run_id: 'child-run-1',
       status: 'in_progress',
@@ -345,8 +345,8 @@ describe('CoordinatorRunPage — child run (non-coordinator) skips coordinator a
     );
     await new Promise((resolve) => setTimeout(resolve, 100));
 
-    // The OutcomeSpecPanel is stubbed to return null, so getOutcomeSpec must not be called.
-    // (OutcomeSpecPanel is mocked at the module level in this file.)
+    // The OutcomePlanPanel is stubbed to return null, so getOutcomeSpec must not be called.
+    // (OutcomePlanPanel is mocked at the module level in this file.)
     expect(vi.mocked(apiClient.getOutcomeSpec)).not.toHaveBeenCalled();
   });
 

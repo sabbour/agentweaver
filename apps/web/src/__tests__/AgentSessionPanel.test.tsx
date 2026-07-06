@@ -158,7 +158,7 @@ describe('AgentSessionPanel', () => {
       </Wrapper>,
     );
 
-    await waitFor(() => expect(screen.getByText('Work plan created with 1 subtasks.')).toBeDefined(), { timeout: 4000 });
+    await waitFor(() => expect(screen.getByText('Coordinator created a work plan with 1 subtasks.')).toBeDefined(), { timeout: 4000 });
     expect(screen.getByText('Dispatched subtask: Research multi-agent orchestration (Stark · Lead Researcher).')).toBeDefined();
     expect(screen.getByText('Subtask completed: Research multi-agent orchestration (Stark · Lead Researcher).')).toBeDefined();
     expect(screen.getByText('Collective assembly: RAI check started.')).toBeDefined();

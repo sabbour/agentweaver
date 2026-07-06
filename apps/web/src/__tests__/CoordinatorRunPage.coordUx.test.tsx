@@ -54,8 +54,8 @@ vi.mock('../api/sse', () => ({
   useRunStream: () => ({ events: currentEvents, status: 'done', error: null, reconnect: vi.fn() }),
 }));
 
-vi.mock('../components/OutcomeSpecPanel', () => ({
-  OutcomeSpecPanel: () => null,
+vi.mock('../components/OutcomePlanPanel', () => ({
+  OutcomePlanPanel: () => null,
 }));
 
 import { apiClient } from '../api/apiClient';

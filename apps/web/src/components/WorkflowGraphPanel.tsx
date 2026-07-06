@@ -140,6 +140,8 @@ export function roleDescForRole(role: string): string {
     merge:       'Merge Coordinator',
     scribe:      'Session Logger',
     coordinator: 'Coordinator',
+    outcome_plan: 'Planning gate',
+    work_plan:    'Work planning',
     subtask:     'Subtask Agent',
     assembly:    'Awaiting collective assembly',
   };
@@ -154,6 +156,8 @@ export function iconForRole(role: string): FluentIcon {
     merge:       MergeRegular,
     scribe:      NotebookRegular,
     coordinator: BotRegular,
+    outcome_plan: NotebookRegular,
+    work_plan:    NotebookRegular,
     subtask:     BotRegular,
     assembly:    CheckmarkCircleRegular,
   };
