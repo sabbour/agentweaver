@@ -38,6 +38,44 @@ public static class SkillEndpoints
             return outcome == SkillOutcome.Ok ? Results.Ok(ToDetail(skill!)) : Results.NotFound();
         });
 
+        // POST /api/projects/{id}/skills — create or update a manual skill from form fields.
+        app.MapPost("/api/projects/{id}/skills", async (
+            HttpContext http, string id, CreateSkillRequest body, SkillCatalogService svc, CancellationToken ct) =>
+        {
+            if (!ProjectId.TryParse(id, out var projectId))
+                return Results.BadRequest(new { error = "Invalid project id." });
+            var caller = ApiKeyAuthMiddleware.GetCaller(http);
+            var result = await svc.CreateManualSkillAsync(
+                projectId,
+                new CreateSkillRequestDto(body.Name ?? "", body.DisplayName, body.Description, body.Instructions ?? ""),
+                caller,
+                ct);
+            return MapAcquisition(result);
+        });
+
+        // POST /api/projects/{id}/skills/generate — generate an unsaved SKILL.md draft server-side.
+        app.MapPost("/api/projects/{id}/skills/generate", async (
+            HttpContext http, string id, GenerateSkillRequest body, SkillCatalogService svc, ISkillGenerator generator, CancellationToken ct) =>
+        {
+            if (!ProjectId.TryParse(id, out var projectId))
+                return Results.BadRequest(new { error = "Invalid project id." });
+            var caller = ApiKeyAuthMiddleware.GetCaller(http);
+            var (outcome, _) = await svc.ListAsync(projectId, caller, ct);
+            if (outcome == SkillOutcome.NotFound)
+                return Results.NotFound();
+            if (body is null || string.IsNullOrWhiteSpace(body.Description ?? body.Prompt))
+                return Results.BadRequest(new { error = "description is required." });
+            try
+            {
+                var draft = await generator.GenerateAsync((body.Description ?? body.Prompt)!, caller.User, ct);
+                return Results.Ok(draft);
+            }
+            catch (SkillGenerationException ex)
+            {
+                return Results.BadRequest(new { error = ex.Message });
+            }
+        });
+
         // DELETE /api/projects/{id}/skills/{skillId} — remove a skill + its assignments.
         app.MapDelete("/api/projects/{id}/skills/{skillId}", async (
             HttpContext http, string id, string skillId, SkillCatalogService svc, CancellationToken ct) =>
@@ -263,4 +301,6 @@ public static class SkillEndpoints
 
     public sealed record ImportPreviewRequest(string? RepoUrl);
     public sealed record ImportRequest(string? RepoUrl, IReadOnlyList<string>? Locations);
+    public sealed record CreateSkillRequest(string? Name, string? DisplayName, string? Description, string? Instructions);
+    public sealed record GenerateSkillRequest(string? Description, string? Prompt);
 }

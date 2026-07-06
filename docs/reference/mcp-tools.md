@@ -136,10 +136,12 @@ MCP tool implementations URI-escape every route path parameter before calling th
 | --- | --- |
 | `skill_assign` | Assign a catalog skill to an agent. At prompt-assembly time only assigned skills appear for that agent (progressive disclosure). |
 | `skill_assignments_list` | List all skill→agent assignments in a project. |
+| `skill_create` | Create or update a manual standards-compatible SKILL.md catalog skill. The name must be a lowercase kebab-case command slug. |
 | `skill_delete` | Delete a catalog skill and all of its agent assignments. |
+| `skill_generate` | Generate an unsaved SKILL.md draft server-side from a natural language description. Review the draft, then call skill_create to persist it. |
 | `skill_get` | Get a single catalog skill including SKILL.md instructions and bundled resources. |
-| `skill_import` | Import selected skills from a Git repo into the project catalog. Idempotent by content hash. Omit locations to import all discovered candidates. |
-| `skill_import_preview` | Clone a Git repo and list candidate skills found in recognized skill locations, without importing. |
+| `skill_import` | Import selected skills from owner/repo, GitHub repo/tree/blob URLs, raw SKILL.md URLs, or git@ SSH URLs. Idempotent by content hash. Omit locations to import all discovered candidates. |
+| `skill_import_preview` | Preview candidate skills from owner/repo, GitHub repo/tree/blob URLs, raw SKILL.md URLs, or git@ SSH URLs, without importing. |
 | `skill_list` | List catalog skills for a project with their agent assignments and status. |
 | `skill_sync` | Discover and sync skills already present in the project's connected repository (.github/skills, .copilot/skills, .claude/skills, .agents/skills). Idempotent; marks vanished skills as missing. |
 | `skill_unassign` | Remove a skill assignment from an agent. |
@@ -171,4 +173,3 @@ MCP tool implementations URI-escape every route path parameter before calling th
 | `get_project_workspace_file` | Get the content of a file in a project workspace at a given ref. Defaults to the base branch when ref is omitted. |
 | `list_project_workspace` | List the flat file tree for a project workspace at a given ref. Defaults to the base branch when ref is omitted. |
 | `list_project_workspace_refs` | List the browsable git refs for a project workspace: the base branch and any active run worktrees. |
-

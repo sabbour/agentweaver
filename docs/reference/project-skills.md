@@ -15,10 +15,12 @@ All routes are project-scoped under `/api/projects/{id}/skills`.
 | --- | --- | --- |
 | `GET` | `/api/projects/{id}/skills` | List catalog skills with status, provenance, source, content hash, resources count, and assigned agents. |
 | `GET` | `/api/projects/{id}/skills/{skillId}` | Get one skill, including instructions and bundled text resources. |
+| `POST` | `/api/projects/{id}/skills` | Create or update a manual skill from `name`, optional `displayName`, `description`, and required `instructions`. |
 | `DELETE` | `/api/projects/{id}/skills/{skillId}` | Delete a skill and its assignments. |
+| `POST` | `/api/projects/{id}/skills/generate` | Generate an unsaved skill draft server-side from `description` or `prompt`. |
 | `POST` | `/api/projects/{id}/skills/sync` | Discover and sync skills from the connected repository. |
-| `POST` | `/api/projects/{id}/skills/import/preview` | Clone a Git repository and list candidate skills without importing. |
-| `POST` | `/api/projects/{id}/skills/import` | Import selected candidates from a Git repository. |
+| `POST` | `/api/projects/{id}/skills/import/preview` | Preview candidates from owner/repo, GitHub repo/tree/blob URLs, raw SKILL.md URLs, or git@ SSH URLs. |
+| `POST` | `/api/projects/{id}/skills/import` | Import selected candidates from owner/repo, GitHub repo/tree/blob URLs, raw SKILL.md URLs, or git@ SSH URLs. |
 | `POST` | `/api/projects/{id}/skills/upload` | Upload files, folders, or a `.zip` archive as skill content. |
 | `GET` | `/api/projects/{id}/skills/assignments` | List all skill-to-agent assignments in the project. |
 | `PUT` | `/api/projects/{id}/skills/{skillId}/assignments/{agentName}` | Assign a skill to an agent. |
@@ -33,7 +35,7 @@ All routes are project-scoped under `/api/projects/{id}/skills`.
 | `id` | Project-local skill id. |
 | `name` | `SKILL.md` frontmatter name. Unique per project. |
 | `description` | Short description shown in the catalog and prompt metadata. |
-| `provenance` | `connected-repo-sync`, `repo-import`, or `file-upload`. |
+| `provenance` | `connected-repo-sync`, `repo-import`, `file-upload`, or `manual`. |
 | `source_repository` | Connected repo identifier or imported repo URL when applicable. |
 | `source_location` | Skill folder path in the source when applicable. |
 | `status` | `active`, `missing`, or `malformed`. |
@@ -47,7 +49,7 @@ All routes are project-scoped under `/api/projects/{id}/skills`.
 
 ### Acquisition result
 
-Sync, import, and upload return:
+Create, sync, import, and upload return:
 
 | Field | Meaning |
 | --- | --- |
@@ -63,9 +65,11 @@ The MCP skill tools mirror the REST surface except multipart upload, which is we
 | `skill_list` | List catalog skills with assignments and status. |
 | `skill_get` | Fetch a full skill including `SKILL.md` instructions and resources. |
 | `skill_delete` | Delete a catalog skill and assignments. |
+| `skill_create` | Create or update a manual skill. |
+| `skill_generate` | Generate an unsaved skill draft server-side. |
 | `skill_sync` | Sync recognized skill directories from the connected repository. |
-| `skill_import_preview` | Preview candidate skills in a Git repository. |
-| `skill_import` | Import one or more previewed locations from a Git repository. |
+| `skill_import_preview` | Preview candidate skills from GitHub/Git/raw SKILL.md sources. |
+| `skill_import` | Import one or more previewed locations from GitHub/Git/raw SKILL.md sources. |
 | `skill_assignments_list` | List all project assignments. |
 | `skill_assign` | Assign a skill to an agent. |
 | `skill_unassign` | Remove an assignment. |

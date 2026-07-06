@@ -22,6 +22,7 @@ import {
   Tab,
   TabList,
   Text,
+  Textarea,
   Tooltip,
   makeStyles,
   tokens,
@@ -69,6 +70,17 @@ const useStyles = makeStyles({
   itemDesc: { fontSize: tokens.fontSizeBase200, color: tokens.colorNeutralForeground1, lineHeight: '1.5' },
   agentChips: { display: 'flex', gap: tokens.spacingHorizontalXS, flexWrap: 'wrap', marginTop: tokens.spacingVerticalXS },
   actions: { display: 'flex', gap: tokens.spacingHorizontalS, flexWrap: 'wrap', marginTop: tokens.spacingVerticalXS },
+  formGrid: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM },
+  dropzone: {
+    border: `1px dashed ${tokens.colorNeutralStroke1}`,
+    borderRadius: tokens.borderRadiusMedium,
+    padding: `${tokens.spacingVerticalL} ${tokens.spacingHorizontalL}`,
+    backgroundColor: tokens.colorNeutralBackground2,
+    cursor: 'pointer',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalXS,
+  },
   candidateList: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, marginTop: tokens.spacingVerticalM },
   candidate: {
     border: `1px dashed ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium,
@@ -95,7 +107,8 @@ function statusColor(status: string): 'success' | 'warning' | 'danger' | 'subtle
 
 function summarizeAcquisition(res: SkillAcquisitionResponse): string {
   const counts = { Added: 0, Updated: 0, Unchanged: 0, Rejected: 0 } as Record<string, number>;
-  for (const r of res.results) counts[r.kind] = (counts[r.kind] ?? 0) + 1;
+  const normalize = (kind: string) => kind.charAt(0).toUpperCase() + kind.slice(1).toLowerCase();
+  for (const r of res.results) counts[normalize(r.kind)] = (counts[normalize(r.kind)] ?? 0) + 1;
   const parts: string[] = [];
   if (counts.Added) parts.push(`${counts.Added} added`);
   if (counts.Updated) parts.push(`${counts.Updated} updated`);
@@ -125,11 +138,21 @@ export function SkillsPage() {
 
   // Import dialog
   const [importOpen, setImportOpen] = useState(false);
-  const [repoUrl, setRepoUrl] = useState('');
+  const [sourceUrl, setSourceUrl] = useState('');
   const [candidates, setCandidates] = useState<SkillCandidateDto[] | null>(null);
   const [selectedLocations, setSelectedLocations] = useState<Set<string>>(new Set());
 
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  // Manual add + generate dialogs
+  const [addOpen, setAddOpen] = useState(false);
+  const [generateOpen, setGenerateOpen] = useState(false);
+  const [skillName, setSkillName] = useState('');
+  const [skillDisplayName, setSkillDisplayName] = useState('');
+  const [skillDescription, setSkillDescription] = useState('');
+  const [skillInstructions, setSkillInstructions] = useState('');
+  const [generatePrompt, setGeneratePrompt] = useState('');
+
+  const mdFileInputRef = useRef<HTMLInputElement>(null);
+  const folderInputRef = useRef<HTMLInputElement>(null);
 
   const reload = useCallback(() => {
     setSkills(null);
@@ -168,12 +191,12 @@ export function SkillsPage() {
   const onSync = () => void runAcquisition('Sync', () => apiClient.syncSkills(projectId!));
 
   const onPreview = async () => {
-    if (!projectId || !repoUrl.trim()) return;
+    if (!projectId || !sourceUrl.trim()) return;
     setBusy('preview');
     setMutationError(null);
     setCandidates(null);
     try {
-      const res = await apiClient.previewSkillImport(projectId, repoUrl.trim());
+      const res = await apiClient.previewSkillImport(projectId, sourceUrl.trim());
       setCandidates(res.candidates);
       setSelectedLocations(new Set(res.candidates.filter((c) => c.valid).map((c) => c.location)));
     } catch (err) {
@@ -184,15 +207,15 @@ export function SkillsPage() {
   };
 
   const onImport = async () => {
-    if (!projectId || !repoUrl.trim()) return;
+    if (!projectId || !sourceUrl.trim()) return;
     setBusy('import');
     setMutationError(null);
     try {
       const locs = candidates ? Array.from(selectedLocations) : undefined;
-      const res = await apiClient.importSkills(projectId, repoUrl.trim(), locs && locs.length ? locs : undefined);
+      const res = await apiClient.importSkills(projectId, sourceUrl.trim(), locs && locs.length ? locs : undefined);
       setNotice(`Import: ${summarizeAcquisition(res)}`);
       setImportOpen(false);
-      setRepoUrl('');
+      setSourceUrl('');
       setCandidates(null);
       setSelectedLocations(new Set());
       reload();
@@ -206,7 +229,56 @@ export function SkillsPage() {
   const onUploadFiles = async (files: FileList | null) => {
     if (!projectId || !files || files.length === 0) return;
     await runAcquisition('Upload', () => apiClient.uploadSkills(projectId, Array.from(files)));
-    if (fileInputRef.current) fileInputRef.current.value = '';
+    if (mdFileInputRef.current) mdFileInputRef.current.value = '';
+    if (folderInputRef.current) folderInputRef.current.value = '';
+  };
+
+  const resetSkillForm = () => {
+    setSkillName('');
+    setSkillDisplayName('');
+    setSkillDescription('');
+    setSkillInstructions('');
+  };
+
+  const onCreateSkill = async () => {
+    if (!projectId) return;
+    setBusy('Create skill');
+    setMutationError(null);
+    setNotice(null);
+    try {
+      const res = await apiClient.createSkill(projectId, {
+        name: skillName.trim(),
+        displayName: skillDisplayName.trim() || undefined,
+        description: skillDescription.trim(),
+        instructions: skillInstructions.trim(),
+      });
+      setNotice(`Create skill: ${summarizeAcquisition(res)}`);
+      setAddOpen(false);
+      setGenerateOpen(false);
+      resetSkillForm();
+      reload();
+    } catch (err) {
+      setMutationError(formatApiError(err));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const onGenerateSkill = async () => {
+    if (!projectId || !generatePrompt.trim()) return;
+    setBusy('Generate skill');
+    setMutationError(null);
+    try {
+      const draft = await apiClient.generateSkill(projectId, generatePrompt.trim());
+      setSkillName(draft.name);
+      setSkillDisplayName(draft.display_name ?? '');
+      setSkillDescription(draft.description);
+      setSkillInstructions(draft.instructions);
+    } catch (err) {
+      setMutationError(formatApiError(err));
+    } finally {
+      setBusy(null);
+    }
   };
 
   const onDelete = async (skill: SkillDto) => {
@@ -278,23 +350,18 @@ export function SkillsPage() {
 
       <div className={styles.tabContent}>
         <div className={styles.toolbar}>
+          <Button icon={<BranchFork24Regular />} disabled={isBusy} onClick={() => { resetSkillForm(); setAddOpen(true); }}>
+            Add Skill
+          </Button>
+          <Button icon={<Eye24Regular />} disabled={isBusy} onClick={() => { resetSkillForm(); setGeneratePrompt(''); setGenerateOpen(true); }}>
+            Generate Skill
+          </Button>
+          <Button icon={<ArrowUpload24Regular />} disabled={isBusy} onClick={() => setImportOpen(true)}>
+            Import Skill
+          </Button>
           <Button icon={<ArrowSync24Regular />} disabled={isBusy} onClick={onSync}>
             {busy === 'Sync' ? 'Syncing…' : 'Sync connected repo'}
           </Button>
-          <Button icon={<BranchFork24Regular />} disabled={isBusy} onClick={() => setImportOpen(true)}>
-            Import from repo
-          </Button>
-          <Button icon={<ArrowUpload24Regular />} disabled={isBusy} onClick={() => fileInputRef.current?.click()}>
-            {busy === 'Upload' ? 'Uploading…' : 'Upload'}
-          </Button>
-          <input
-            ref={fileInputRef}
-            type="file"
-            multiple
-            className={styles.hiddenInput}
-            onChange={(e) => void onUploadFiles(e.target.files)}
-            data-testid="skill-upload-input"
-          />
         </div>
 
         {loading && <Spinner size="small" label="Loading…" />}
@@ -408,23 +475,132 @@ export function SkillsPage() {
         </DrawerBody>
       </OverlayDrawer>
 
-      {/* Import dialog */}
-      <Dialog open={importOpen} onOpenChange={(_, d) => { setImportOpen(d.open); if (!d.open) { setCandidates(null); setRepoUrl(''); } }}>
+      {/* Add Skill dialog */}
+      <Dialog open={addOpen} onOpenChange={(_, d) => setAddOpen(d.open)}>
         <DialogSurface>
           <DialogBody>
-            <DialogTitle>Import skills from a Git repo</DialogTitle>
-            <DialogContent>
-              <Field label="Repository URL" required>
+            <DialogTitle>Add Skill</DialogTitle>
+            <DialogContent className={styles.formGrid}>
+              <Field label="Name" required hint="Command slug: lowercase letters, numbers, and hyphens.">
+                <Input value={skillName} onChange={(_, data) => setSkillName(data.value)} disabled={isBusy} placeholder="code-review" />
+              </Field>
+              <Field label="Display Name" hint="Optional label for review before saving.">
+                <Input value={skillDisplayName} onChange={(_, data) => setSkillDisplayName(data.value)} disabled={isBusy} placeholder="Code Review" />
+              </Field>
+              <Field label="Description">
+                <Input value={skillDescription} onChange={(_, data) => setSkillDescription(data.value)} disabled={isBusy} />
+              </Field>
+              <Field label="Instructions" required>
+                <Textarea value={skillInstructions} onChange={(_, data) => setSkillInstructions(data.value)} disabled={isBusy} rows={8} resize="vertical" />
+              </Field>
+            </DialogContent>
+            <DialogActions>
+              <Button appearance="secondary" disabled={isBusy} onClick={() => setAddOpen(false)}>Cancel</Button>
+              <Button appearance="primary" disabled={isBusy || !skillName.trim() || !skillInstructions.trim()} onClick={() => void onCreateSkill()}>
+                {busy === 'Create skill' ? 'Creating…' : 'Create Skill'}
+              </Button>
+            </DialogActions>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
+
+      {/* Generate Skill dialog */}
+      <Dialog open={generateOpen} onOpenChange={(_, d) => setGenerateOpen(d.open)}>
+        <DialogSurface>
+          <DialogBody>
+            <DialogTitle>Generate Skill</DialogTitle>
+            <DialogContent className={styles.formGrid}>
+              <Field label="Describe the skill to generate" required>
+                <Textarea value={generatePrompt} onChange={(_, data) => setGeneratePrompt(data.value)} disabled={isBusy} rows={4} resize="vertical" />
+              </Field>
+              <Button appearance="secondary" disabled={isBusy || !generatePrompt.trim()} onClick={() => void onGenerateSkill()}>
+                {busy === 'Generate skill' ? 'Generating…' : 'Generate'}
+              </Button>
+              {(skillName || skillInstructions) && (
+                <>
+                  <Field label="Name" required hint="Review and edit before creating.">
+                    <Input value={skillName} onChange={(_, data) => setSkillName(data.value)} disabled={isBusy} />
+                  </Field>
+                  <Field label="Display Name">
+                    <Input value={skillDisplayName} onChange={(_, data) => setSkillDisplayName(data.value)} disabled={isBusy} />
+                  </Field>
+                  <Field label="Description">
+                    <Input value={skillDescription} onChange={(_, data) => setSkillDescription(data.value)} disabled={isBusy} />
+                  </Field>
+                  <Field label="Instructions" required>
+                    <Textarea value={skillInstructions} onChange={(_, data) => setSkillInstructions(data.value)} disabled={isBusy} rows={8} resize="vertical" />
+                  </Field>
+                </>
+              )}
+            </DialogContent>
+            <DialogActions>
+              <Button appearance="secondary" disabled={isBusy} onClick={() => setGenerateOpen(false)}>Cancel</Button>
+              <Button appearance="primary" disabled={isBusy || !skillName.trim() || !skillInstructions.trim()} onClick={() => void onCreateSkill()}>
+                Create
+              </Button>
+            </DialogActions>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
+
+      {/* Import dialog */}
+      <Dialog open={importOpen} onOpenChange={(_, d) => { setImportOpen(d.open); if (!d.open) { setCandidates(null); setSourceUrl(''); } }}>
+        <DialogSurface>
+          <DialogBody>
+            <DialogTitle>Import Skill</DialogTitle>
+            <DialogContent className={styles.formGrid}>
+              <MessageBar intent="warning"><MessageBarBody>Only import skills from sources you trust. Imported skills can change how the agent behaves.</MessageBarBody></MessageBar>
+              <div
+                className={styles.dropzone}
+                role="button"
+                tabIndex={0}
+                onClick={() => mdFileInputRef.current?.click()}
+                onDrop={(e) => { e.preventDefault(); void onUploadFiles(e.dataTransfer.files); }}
+                onDragOver={(e) => e.preventDefault()}
+              >
+                <Text weight="semibold">Drop .md skill files here</Text>
+                <Text className={styles.itemMeta}>or click to browse</Text>
+              </div>
+              <div
+                className={styles.dropzone}
+                role="button"
+                tabIndex={0}
+                onClick={() => folderInputRef.current?.click()}
+                onDrop={(e) => { e.preventDefault(); void onUploadFiles(e.dataTransfer.files); }}
+                onDragOver={(e) => e.preventDefault()}
+              >
+                <Text weight="semibold">Drop a skill folder here</Text>
+                <Text className={styles.itemMeta}>Directory with SKILL.md and supporting files</Text>
+              </div>
+              <input
+                ref={mdFileInputRef}
+                type="file"
+                multiple
+                accept=".md,text/markdown"
+                className={styles.hiddenInput}
+                onChange={(e) => void onUploadFiles(e.target.files)}
+                data-testid="skill-upload-input"
+              />
+              <input
+                ref={folderInputRef}
+                type="file"
+                multiple
+                className={styles.hiddenInput}
+                onChange={(e) => void onUploadFiles(e.target.files)}
+                {...{ webkitdirectory: '', directory: '' }}
+              />
+              <Field label="Paste raw SKILL.md URL or GitHub repo/folder URL" required>
                 <Input
-                  value={repoUrl}
-                  placeholder="https://github.com/org/repo"
-                  onChange={(_, data) => setRepoUrl(data.value)}
+                  value={sourceUrl}
+                  placeholder="https://github.com/org/repo/tree/main/skills"
+                  onChange={(_, data) => setSourceUrl(data.value)}
                   disabled={isBusy}
                 />
               </Field>
+              <Text className={styles.itemMeta}>On GitHub, open a SKILL.md, click Raw, copy the URL.</Text>
               {candidates !== null && (
                 candidates.length === 0
-                  ? <Text className={styles.empty}>No candidate skills found in recognized locations.</Text>
+                  ? <Text className={styles.empty}>No candidate skills found. Try a SKILL.md, a folder of skill directories, or a recognized skills folder.</Text>
                   : (
                     <div className={styles.candidateList}>
                       {candidates.map((c) => (
@@ -450,10 +626,10 @@ export function SkillsPage() {
               )}
             </DialogContent>
             <DialogActions>
-              <Button appearance="secondary" disabled={isBusy || !repoUrl.trim()} onClick={() => void onPreview()}>
+              <Button appearance="secondary" disabled={isBusy || !sourceUrl.trim()} onClick={() => void onPreview()}>
                 {busy === 'preview' ? 'Loading…' : 'Preview candidates'}
               </Button>
-              <Button appearance="primary" disabled={isBusy || !repoUrl.trim() || (candidates !== null && selectedLocations.size === 0)} onClick={() => void onImport()}>
+              <Button appearance="primary" disabled={isBusy || !sourceUrl.trim() || (candidates !== null && selectedLocations.size === 0)} onClick={() => void onImport()}>
                 {busy === 'import' ? 'Importing…' : 'Import'}
               </Button>
             </DialogActions>

@@ -104,6 +104,37 @@ public sealed class SkillTools(AgentweaverApiClient api)
             ct);
     }
 
+    [McpServerTool(Name = "skill_create"), Description("Create or update a manual standards-compatible SKILL.md catalog skill. The name must be a lowercase kebab-case command slug.")]
+    public async Task<string> SkillCreateAsync(
+        [Description("Project ID")] string project_id,
+        [Description("Skill command name, lowercase kebab-case")] string name,
+        [Description("Skill instructions body")] string instructions,
+        [Description("Short description shown when the skill is listed")] string? description = null,
+        [Description("Optional display name for clients; not stored in SKILL.md")] string? display_name = null,
+        CancellationToken ct = default)
+    {
+        return await ExecuteJsonAsync(
+            "skill_create",
+            token => api.PostAsync<object>(
+                $"api/projects/{Uri.EscapeDataString(project_id)}/skills",
+                new { name, displayName = display_name, description, instructions }, token),
+            ct);
+    }
+
+    [McpServerTool(Name = "skill_generate"), Description("Generate an unsaved SKILL.md draft server-side from a natural language description. Review the draft, then call skill_create to persist it.")]
+    public async Task<string> SkillGenerateAsync(
+        [Description("Project ID")] string project_id,
+        [Description("Natural language description of the skill to generate")] string description,
+        CancellationToken ct = default)
+    {
+        return await ExecuteJsonAsync(
+            "skill_generate",
+            token => api.PostAsync<object>(
+                $"api/projects/{Uri.EscapeDataString(project_id)}/skills/generate",
+                new { description }, token),
+            ct);
+    }
+
     // ── Acquisition ────────────────────────────────────────────────────────────
 
     [McpServerTool(Name = "skill_sync"), Description("Discover and sync skills already present in the project's connected repository (.github/skills, .copilot/skills, .claude/skills, .agents/skills). Idempotent; marks vanished skills as missing.")]
@@ -118,7 +149,7 @@ public sealed class SkillTools(AgentweaverApiClient api)
             ct);
     }
 
-    [McpServerTool(Name = "skill_import_preview"), Description("Clone a Git repo and list candidate skills found in recognized skill locations, without importing.")]
+    [McpServerTool(Name = "skill_import_preview"), Description("Preview candidate skills from owner/repo, GitHub repo/tree/blob URLs, raw SKILL.md URLs, or git@ SSH URLs, without importing.")]
     public async Task<string> SkillImportPreviewAsync(
         [Description("Project ID")] string project_id,
         [Description("Git repository URL to inspect")] string repo_url,
@@ -132,7 +163,7 @@ public sealed class SkillTools(AgentweaverApiClient api)
             ct);
     }
 
-    [McpServerTool(Name = "skill_import"), Description("Import selected skills from a Git repo into the project catalog. Idempotent by content hash. Omit locations to import all discovered candidates.")]
+    [McpServerTool(Name = "skill_import"), Description("Import selected skills from owner/repo, GitHub repo/tree/blob URLs, raw SKILL.md URLs, or git@ SSH URLs. Idempotent by content hash. Omit locations to import all discovered candidates.")]
     public async Task<string> SkillImportAsync(
         [Description("Project ID")] string project_id,
         [Description("Git repository URL to import from")] string repo_url,

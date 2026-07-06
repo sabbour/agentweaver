@@ -19,12 +19,18 @@ From a project, go to **Skills** or open `/projects/:projectId/skills`. The page
 
 The Catalog toolbar supports three acquisition paths:
 
-1. **Sync connected repo**: scans `.github/skills`, `.copilot/skills`, `.claude/skills`, and
+1. **Add Skill**: write a command slug, description, and instructions. Agentweaver saves a standard
+   `SKILL.md` with `name` and `description` frontmatter.
+2. **Generate Skill**: describe the skill. The server generates a draft, then you review and edit it
+   before creating the catalog skill.
+3. **Import Skill**: upload `.md` skill files, upload a folder with `SKILL.md`, or paste a raw
+   `SKILL.md` URL, `owner/repo`, GitHub repo URL, GitHub tree/blob folder URL, or `git@` SSH URL.
+4. **Sync connected repo**: scans `.github/skills`, `.copilot/skills`, `.claude/skills`, and
    `.agents/skills` in the project repository.
-2. **Import from repo**: enter a Git repository URL, preview valid candidates, select locations, then
-   import them into the catalog.
-3. **Upload**: upload one or more files, a folder selection, or a `.zip` archive. Each uploaded skill
-   must include a `SKILL.md`.
+
+Imports accept a single `SKILL.md`, a folder of `<name>/SKILL.md` directories, or recognized repo
+folders under `.github/skills`, `.copilot/skills`, `.claude/skills`, and `.agents/skills`. Only import
+skills from sources you trust because imported instructions can change how an agent behaves.
 
 Each catalog card shows status, provenance, updated time, source location, assigned agents, and a
 **View** action for the full instructions. Repeating an acquisition is safe: unchanged content is

@@ -382,6 +382,14 @@ export class AgentweaverApiClient {
     return this.request<void>('DELETE', `/projects/${encodeURIComponent(projectId)}/skills/${encodeURIComponent(skillId)}`);
   }
 
+  createSkill(projectId: string, body: import('./types').CreateSkillRequest): Promise<import('./types').SkillAcquisitionResponse> {
+    return this.request<import('./types').SkillAcquisitionResponse>('POST', `/projects/${encodeURIComponent(projectId)}/skills`, body);
+  }
+
+  generateSkill(projectId: string, description: string): Promise<import('./types').GeneratedSkillDraft> {
+    return this.request<import('./types').GeneratedSkillDraft>('POST', `/projects/${encodeURIComponent(projectId)}/skills/generate`, { description });
+  }
+
   syncSkills(projectId: string): Promise<import('./types').SkillAcquisitionResponse> {
     return this.request<import('./types').SkillAcquisitionResponse>('POST', `/projects/${encodeURIComponent(projectId)}/skills/sync`, {});
   }

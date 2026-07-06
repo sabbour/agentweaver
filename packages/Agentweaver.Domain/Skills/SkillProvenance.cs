@@ -12,6 +12,9 @@ public enum SkillProvenance
     /// <summary>Uploaded directly as a file/folder/archive (no live source to re-sync).</summary>
     FileUpload,
 
+    /// <summary>Created manually in the project catalog.</summary>
+    Manual,
+
     /// <summary>Discovered/synced from the project's connected repository at a recognized location.</summary>
     ConnectedRepoSync,
 }
@@ -22,6 +25,7 @@ public static class SkillProvenanceExtensions
     {
         SkillProvenance.RepoImport => "repo-import",
         SkillProvenance.FileUpload => "file-upload",
+        SkillProvenance.Manual => "manual",
         SkillProvenance.ConnectedRepoSync => "connected-repo-sync",
         _ => throw new ArgumentOutOfRangeException(nameof(p)),
     };
@@ -30,6 +34,7 @@ public static class SkillProvenanceExtensions
     {
         "repo-import" => SkillProvenance.RepoImport,
         "file-upload" => SkillProvenance.FileUpload,
+        "manual" => SkillProvenance.Manual,
         "connected-repo-sync" => SkillProvenance.ConnectedRepoSync,
         _ => throw new ArgumentException($"Unknown skill provenance: {s}"),
     };

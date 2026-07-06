@@ -4,6 +4,7 @@ using Agentweaver.Api.Skills;
 using Agentweaver.Domain;
 using Agentweaver.Domain.Skills;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Agentweaver.Tests.Skills;
 
@@ -39,6 +40,9 @@ public sealed class SkillCatalogTests : IDisposable
 
     private static string SkillMd(string name, string description, string body = "Do the thing.") =>
         $"---\nname: {name}\ndescription: {description}\n---\n\n{body}\n";
+
+    private static SkillCatalogService DiscoveryService() => new(
+        null!, null!, null!, new SkillParser(), null!, null!, NullLogger<SkillCatalogService>.Instance);
 
     // ── Parser ────────────────────────────────────────────────────────────────
 
@@ -84,6 +88,54 @@ public sealed class SkillCatalogTests : IDisposable
 
         h1.Should().Be(h2);
         h1.Should().NotBe(h3);
+    }
+
+    [Fact]
+    public void DiscoverSkills_FindsGenericFolderOfSkillDirectories()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "aw-skill-discover-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var skillDir = Path.Combine(root, "skills", "summarize");
+            Directory.CreateDirectory(skillDir);
+            File.WriteAllText(Path.Combine(skillDir, "SKILL.md"), SkillMd("summarize", "Summarizes text."));
+
+            var discovered = DiscoveryService().DiscoverSkills(root, "skills");
+
+            discovered.Should().ContainSingle();
+            discovered[0].RelativeLocation.Should().Be("skills/summarize");
+        }
+        finally { try { Directory.Delete(root, recursive: true); } catch { } }
+    }
+
+    [Fact]
+    public void DiscoverSkills_FindsSingleSkillAtSubpathRoot()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "aw-skill-single-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var skillDir = Path.Combine(root, "skills", "review");
+            Directory.CreateDirectory(skillDir);
+            File.WriteAllText(Path.Combine(skillDir, "SKILL.md"), SkillMd("review", "Reviews code."));
+
+            var discovered = DiscoveryService().DiscoverSkills(root, "skills/review");
+
+            discovered.Should().ContainSingle();
+            discovered[0].RelativeLocation.Should().Be("skills/review/SKILL.md");
+        }
+        finally { try { Directory.Delete(root, recursive: true); } catch { } }
+    }
+
+    [Theory]
+    [InlineData("good-skill", null)]
+    [InlineData("BadSkill", "slug")]
+    [InlineData("bad/skill", "slug")]
+    [InlineData("bad_skill", "slug")]
+    public void ValidateCreateRequest_EnforcesSlugName(string name, string? errorContains)
+    {
+        var error = SkillCatalogService.ValidateCreateRequest(new CreateSkillRequestDto(name, null, "d", "body"));
+        if (errorContains is null) error.Should().BeNull();
+        else error.Should().Contain(errorContains);
     }
 
     // ── Store: catalog ──────────────────────────────────────────────────────────

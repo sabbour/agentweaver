@@ -1299,7 +1299,7 @@ export interface PortForwardSessionDto {
 }
 
 // ── Issues #51/#56 — Per-project skill catalog + agent assignments ───────────
-export type SkillProvenance = 'repo-import' | 'file-upload' | 'connected-repo-sync';
+export type SkillProvenance = 'repo-import' | 'file-upload' | 'manual' | 'connected-repo-sync';
 export type SkillStatus = 'active' | 'missing' | 'malformed';
 
 // GET /api/projects/{id}/skills — one row per catalog skill (with assignments).
@@ -1353,11 +1353,26 @@ export interface SkillImportPreviewResponse {
   candidates: SkillCandidateDto[];
 }
 
+export interface CreateSkillRequest {
+  name: string;
+  displayName?: string;
+  description?: string;
+  instructions: string;
+}
+
+export interface GeneratedSkillDraft {
+  name: string;
+  display_name?: string | null;
+  description: string;
+  instructions: string;
+  skill_markdown: string;
+}
+
 // Per-skill outcome of a sync/import/upload operation.
 export interface SkillUpsertResultDto {
   location?: string | null;
   name?: string | null;
-  kind: 'Added' | 'Updated' | 'Unchanged' | 'Rejected';
+  kind: 'Added' | 'Updated' | 'Unchanged' | 'Rejected' | 'added' | 'updated' | 'unchanged' | 'rejected';
   skill_id?: string | null;
   errors: string[];
 }
