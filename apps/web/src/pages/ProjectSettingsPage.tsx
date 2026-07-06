@@ -1,7 +1,6 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import {
-  Badge,
   Button,
   Checkbox,
   Field,
@@ -17,8 +16,6 @@ import {
   tokens,
 } from '@fluentui/react-components';
 import {
-  ArrowSyncRegular,
-  ClipboardTaskListLtr24Regular,
   Delete24Regular,
   Settings24Regular,
   Shield24Regular,
@@ -31,15 +28,13 @@ import type {
   Project,
   SandboxPolicy,
   UpdateProjectProviderSettingsRequest,
-  ReviewPolicyListResponse,
-  ReviewPolicyDetailDto,
 } from '../api/types';
 
 // Spec settings-subnav — project Settings restructured into a left in-page rail +
 // right content pane. Only sections with a real Agentweaver backend are shipped
-// (Principle VII): General, Sandbox policy, Review policy, Danger Zone. The rail is
+// (Principle VII): General, Sandbox policy, Danger Zone. The rail is
 // data-driven so more sections can be appended as their backends land.
-type SectionId = 'general' | 'sandbox' | 'review' | 'danger';
+type SectionId = 'general' | 'sandbox' | 'danger';
 
 interface SectionDef {
   id: SectionId;
@@ -63,12 +58,6 @@ const SECTIONS: SectionDef[] = [
     icon: <Shield24Regular />,
   },
   {
-    id: 'review',
-    label: 'Review policy',
-    description: 'Choose which review steps gate this project\u2019s work.',
-    icon: <ClipboardTaskListLtr24Regular />,
-  },
-  {
     id: 'danger',
     label: 'Danger Zone',
     description: 'Irreversible actions for this project.',
@@ -78,14 +67,8 @@ const SECTIONS: SectionDef[] = [
 ];
 
 function isSectionId(value: string | null): value is SectionId {
-  return value === 'general' || value === 'sandbox' || value === 'review' || value === 'danger';
+  return value === 'general' || value === 'sandbox' || value === 'danger';
 }
-
-const REVIEW_STEP_LABELS: Record<string, string> = {
-  rubberduck: 'Rubberduck',
-  rai: 'RAI',
-  'human-review': 'Human review',
-};
 
 const useStyles = makeStyles({
   root: {
@@ -216,45 +199,6 @@ const useStyles = makeStyles({
     color: tokens.colorNeutralForeground3,
     fontStyle: 'italic',
   },
-  policyCard: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalS,
-    padding: tokens.spacingVerticalM,
-    backgroundColor: tokens.colorNeutralBackground1,
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: tokens.borderRadiusMedium,
-  },
-  policyCardActive: {
-    border: `1px solid ${tokens.colorBrandStroke1}`,
-  },
-  policyHeader: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: tokens.spacingHorizontalS,
-    flexWrap: 'wrap',
-  },
-  policyName: {
-    fontWeight: tokens.fontWeightSemibold,
-    fontSize: tokens.fontSizeBase400,
-  },
-  policyBadges: {
-    display: 'flex',
-    gap: tokens.spacingHorizontalXS,
-    alignItems: 'center',
-    marginLeft: 'auto',
-  },
-  stepChips: {
-    display: 'flex',
-    gap: tokens.spacingHorizontalXS,
-    flexWrap: 'wrap',
-    alignItems: 'center',
-  },
-  policyList: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalM,
-  },
 });
 
 export function ProjectSettingsPage() {
@@ -304,15 +248,6 @@ export function ProjectSettingsPage() {
   const [sandboxSaveSuccess, setSandboxSaveSuccess] = useState(false);
   const sandboxLoading = project !== null && !sandboxFetched;
 
-  // Review policy
-  const [reviewList, setReviewList] = useState<ReviewPolicyListResponse | null>(null);
-  const [reviewDetails, setReviewDetails] = useState<Record<string, ReviewPolicyDetailDto>>({});
-  const [reviewLoading, setReviewLoading] = useState(true);
-  const [reviewError, setReviewError] = useState<string | null>(null);
-  const [reviewBusy, setReviewBusy] = useState(false);
-  const [reviewSyncing, setReviewSyncing] = useState(false);
-  const [reviewMessage, setReviewMessage] = useState<string | null>(null);
-
   const formatError = (err: unknown): string =>
     err instanceof ApiError
       ? `API error ${err.status}: ${err.body}`
@@ -337,74 +272,6 @@ export function ProjectSettingsPage() {
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, [projectId]);
-
-  // Load review policies (list + per-policy step details for valid policies).
-  const loadReviewPolicies = useMemo(() => async (signal?: { cancelled: boolean }) => {
-    if (!projectId) return;
-    const list = await apiClient.listReviewPolicies(projectId);
-    const validNames = list.policies
-      .map((p) => p.name)
-      .filter((n): n is string => Boolean(n));
-    const details = await Promise.all(
-      validNames.map((name) =>
-        apiClient.getReviewPolicy(projectId, name)
-          .then((d) => [name, d] as const)
-          .catch(() => null),
-      ),
-    );
-    if (signal?.cancelled) return;
-    const map: Record<string, ReviewPolicyDetailDto> = {};
-    for (const entry of details) {
-      if (entry) map[entry[0]] = entry[1];
-    }
-    setReviewList(list);
-    setReviewDetails(map);
-  }, [projectId]);
-
-  useEffect(() => {
-    if (!projectId) return;
-    const signal = { cancelled: false };
-    setReviewLoading(true);
-    setReviewError(null);
-    loadReviewPolicies(signal)
-      .catch((err) => { if (!signal.cancelled) setReviewError(formatError(err)); })
-      .finally(() => { if (!signal.cancelled) setReviewLoading(false); });
-    return () => { signal.cancelled = true; };
-  }, [projectId, loadReviewPolicies]);
-
-  const handleSetActivePolicy = async (name: string) => {
-    if (!projectId) return;
-    setReviewBusy(true);
-    setReviewError(null);
-    setReviewMessage(null);
-    try {
-      const updated = await apiClient.setActiveReviewPolicy(projectId, name);
-      setReviewList(updated);
-      setReviewMessage(`Active review policy set to "${name}".`);
-    } catch (err) {
-      setReviewError(formatError(err));
-    } finally {
-      setReviewBusy(false);
-    }
-  };
-
-  const handleSyncPolicies = async () => {
-    if (!projectId) return;
-    setReviewSyncing(true);
-    setReviewError(null);
-    setReviewMessage(null);
-    try {
-      // POST sync re-reads .agentweaver/review-policies from disk and returns the
-      // refreshed list; then reload list + step details against that set.
-      const refreshed = await apiClient.syncReviewPolicies(projectId);
-      await loadReviewPolicies();
-      setReviewMessage(`Synced ${refreshed.policies.length} review polic${refreshed.policies.length === 1 ? 'y' : 'ies'} from .agentweaver/review-policies/.`);
-    } catch (err) {
-      setReviewError(formatError(err));
-    } finally {
-      setReviewSyncing(false);
-    }
-  };
 
   const handleSaveModel = async () => {
     if (!projectId) return;
@@ -669,98 +536,6 @@ export function ProjectSettingsPage() {
                       <MessageBar intent="success"><MessageBarBody>Sandbox policy saved.</MessageBarBody></MessageBar>
                     )}
                   </>
-                )}
-              </div>
-            )}
-
-            {activeSection === 'review' && (
-              <div className={styles.section}>
-                <div className={styles.actions}>
-                  <Button
-                    appearance="secondary"
-                    icon={reviewSyncing ? <Spinner size="extra-tiny" aria-hidden="true" /> : <ArrowSyncRegular />}
-                    disabled={reviewSyncing}
-                    onClick={() => void handleSyncPolicies()}
-                  >
-                    {reviewSyncing ? 'Syncing' : 'Sync'}
-                  </Button>
-                  {reviewList && (
-                    <Text className={styles.paneDescription}>
-                      Active policy: <strong>{reviewList.active_policy_name}</strong>
-                    </Text>
-                  )}
-                </div>
-
-                {reviewMessage && (
-                  <MessageBar intent="success"><MessageBarBody>{reviewMessage}</MessageBarBody></MessageBar>
-                )}
-                {reviewError && (
-                  <MessageBar intent="error"><MessageBarBody>{reviewError}</MessageBarBody></MessageBar>
-                )}
-                {reviewLoading && <Spinner size="extra-tiny" label="Loading review policies" />}
-
-                {!reviewLoading && reviewList && reviewList.policies.length === 0 && (
-                  <Text className={styles.emptyNote}>
-                    No review policies found. Sync to load from .agentweaver/review-policies/.
-                  </Text>
-                )}
-
-                {!reviewLoading && reviewList && reviewList.policies.length > 0 && (
-                  <div className={styles.policyList}>
-                    {reviewList.policies.map((policy, index) => {
-                      const detail = policy.name ? reviewDetails[policy.name] : undefined;
-                      return (
-                        <div
-                          key={policy.name ?? `invalid-${index}`}
-                          className={mergeClasses(styles.policyCard, policy.is_active && styles.policyCardActive)}
-                        >
-                          <div className={styles.policyHeader}>
-                            <span className={styles.policyName}>{policy.name ?? 'Unnamed policy'}</span>
-                            <div className={styles.policyBadges}>
-                              {policy.is_active && <Badge appearance="filled" color="brand">Active</Badge>}
-                              <Badge appearance="outline" color="informative">
-                                {policy.is_built_in ? 'Built-in' : 'Custom'}
-                              </Badge>
-                              <Badge appearance="tint" color={policy.valid ? 'success' : 'danger'}>
-                                {policy.valid ? 'Valid' : 'Invalid'}
-                              </Badge>
-                            </div>
-                          </div>
-
-                          {policy.description && <Text>{policy.description}</Text>}
-
-                          {detail && detail.steps.length > 0 && (
-                            <div className={styles.stepChips}>
-                              {detail.steps.map((step, i) => (
-                                <Badge key={i} appearance="tint" color="subtle">
-                                  {step.label || REVIEW_STEP_LABELS[step.kind] || step.kind}
-                                </Badge>
-                              ))}
-                            </div>
-                          )}
-
-                          <Text className={styles.emptyNote}>Source: {policy.source}</Text>
-
-                          {!policy.valid && policy.error && (
-                            <MessageBar intent="error"><MessageBarBody>{policy.error}</MessageBarBody></MessageBar>
-                          )}
-
-                          {policy.name && !policy.is_active && (
-                            <div className={styles.actions}>
-                              <Button
-                                appearance="secondary"
-                                size="small"
-                                disabled={reviewBusy || !policy.valid}
-                                onClick={() => void handleSetActivePolicy(policy.name as string)}
-                              >
-                                Set as active
-                              </Button>
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
                 )}
               </div>
             )}

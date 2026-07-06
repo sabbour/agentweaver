@@ -33,13 +33,6 @@ export interface SandboxPolicy {
   destructive_command_patterns: string[];
 }
 
-export interface SubmitRunRequest {
-  repository_path: string;
-  originating_branch: string;
-  task: string;
-  model_source: ModelSource;
-}
-
 export interface SubmitRunResponse {
   run_id: string;
   status: RunStatus;
@@ -315,20 +308,6 @@ export interface AgentMemoryDto {
   tags?: string;
   created_at: string;
   updated_at: string;
-}
-
-export interface CreateRunRequest {
-  repository_path?: string;
-  originating_branch: string;
-  task: string;
-  model_source?: string;
-  agent_name?: string;
-}
-
-export interface CreateProjectRunResponse {
-  run_id: string;        // execution id
-  workflow_run_id: string;
-  status: string;
 }
 
 export interface RunDto {
@@ -1111,45 +1090,6 @@ export interface WorkflowGraphDto {
   start_node_id: string;
   nodes: WorkflowGraphNodeDto[];
   edges: WorkflowGraphEdgeDto[];
-}
-
-// ── Review policies (Spec 010, FR-025/027/033) ───────────────────────────────
-// A single review step within a policy (snake_case over the wire).
-export interface ReviewStepDto {
-  kind: string;
-  label?: string | null;
-}
-
-// A review policy in the project's list response: identity, validation, source.
-export interface ReviewPolicySummaryDto {
-  name: string | null;
-  description: string | null;
-  source: string;
-  valid: boolean;
-  error: string | null;
-  is_built_in: boolean;
-  is_active: boolean;
-}
-
-// Response body for GET/POST the project's review-policies list.
-export interface ReviewPolicyListResponse {
-  active_policy_name: string;
-  policies: ReviewPolicySummaryDto[];
-}
-
-// Full definition for GET a single review policy (its ordered review steps).
-export interface ReviewPolicyDetailDto {
-  name: string;
-  description: string | null;
-  source: string;
-  is_built_in: boolean;
-  is_active: boolean;
-  steps: ReviewStepDto[];
-}
-
-// Request body for PUT the project's active review policy (null clears to default).
-export interface SetActiveReviewPolicyRequest {
-  name: string | null;
 }
 
 // ── Metrics: Dashboard + Overview (web IA reorg) ─────────────────────────────

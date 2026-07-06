@@ -1,4 +1,4 @@
-import type { RetriableReviewErrorBody, RunDetail, PersistedRunEvent, ReviewRequest, ReviewResponse, SandboxPolicy, SubmitRunRequest, SubmitRunResponse, WorkspaceFileEntry, WorkspaceFileDiff, WorkspaceNode, CommitResponse, WorkspaceFileContent, RequestChangesResponse, WorkspaceRefsResponse, Project, CreateProjectRequest, Blueprint, ListBlueprintsResponse, GenerateBlueprintResponse, SuggestBlueprintResponse, UpdateProjectProviderSettingsRequest, CreateProjectRunRequest, CreateRunRequest, GitHubDeviceFlow, GitHubPollResult, GitHubAuthStatusResponse, GitHubRepo, GitHubAccount, TeamTemplateDto, CastProposalDto, CreateProposalRequest, AmendProposalRequest, ConfirmProposalRequest, TeamDto, TeamMemberDto, CharterDto, HistoryDto, AddMemberRequest, ReroleRequest, SyncStatusDto, SyncCommitRequest, SyncCommitResponseDto, RoleDto, ServerInfo, WorkflowRunDto, CreateProjectRunResponse, OutcomeSpec, StartOrchestrationResponse, SteerCoordinatorRequest, SteerCoordinatorResponse, WorkPlanResponse, CoordinatorChildResponse, GraphDescriptor, AssemblyReviewDecision, AnswerQuestionResponse, AutoApproveResponse, AutopilotResponse, BoardDto, BacklogTaskDto, BacklogSettingsDto, WorkflowStagesResponse, RetryRunResponse, SystemDiagnosticsDto, HeartbeatStatusDto, WorkspaceFileNode, DecomposeResponse, PortForwardSessionDto, RuntimeInfo, DetailedSystemDiagnosticsDto, ClusterDiagnosticsDto } from './types';
+import type { RetriableReviewErrorBody, RunDetail, PersistedRunEvent, ReviewRequest, ReviewResponse, SandboxPolicy, SubmitRunResponse, WorkspaceFileEntry, WorkspaceFileDiff, WorkspaceNode, CommitResponse, WorkspaceFileContent, RequestChangesResponse, WorkspaceRefsResponse, Project, CreateProjectRequest, Blueprint, ListBlueprintsResponse, GenerateBlueprintResponse, SuggestBlueprintResponse, UpdateProjectProviderSettingsRequest, CreateProjectRunRequest, GitHubDeviceFlow, GitHubPollResult, GitHubAuthStatusResponse, GitHubRepo, GitHubAccount, TeamTemplateDto, CastProposalDto, CreateProposalRequest, AmendProposalRequest, ConfirmProposalRequest, TeamDto, TeamMemberDto, CharterDto, HistoryDto, AddMemberRequest, ReroleRequest, SyncStatusDto, SyncCommitRequest, SyncCommitResponseDto, RoleDto, ServerInfo, WorkflowRunDto, OutcomeSpec, StartOrchestrationResponse, SteerCoordinatorRequest, SteerCoordinatorResponse, WorkPlanResponse, CoordinatorChildResponse, GraphDescriptor, AssemblyReviewDecision, AnswerQuestionResponse, AutoApproveResponse, AutopilotResponse, BoardDto, BacklogTaskDto, BacklogSettingsDto, WorkflowStagesResponse, RetryRunResponse, SystemDiagnosticsDto, HeartbeatStatusDto, WorkspaceFileNode, DecomposeResponse, PortForwardSessionDto, RuntimeInfo, DetailedSystemDiagnosticsDto, ClusterDiagnosticsDto } from './types';
 import { getSessionToken } from '../config';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -68,10 +68,6 @@ export class AgentweaverApiClient {
   private authHeaders(): Record<string, string> {
     const token = this.sessionTokenProvider();
     return token ? { Authorization: `Bearer ${token}` } : {};
-  }
-
-  submitRun(req: SubmitRunRequest): Promise<SubmitRunResponse> {
-    return this.request<SubmitRunResponse>('POST', '/runs', req);
   }
 
   getRun(runId: string): Promise<RunDetail> {
@@ -205,10 +201,6 @@ export class AgentweaverApiClient {
 
   listProjectRuns(projectId: string): Promise<WorkflowRunDto[]> {
     return this.request<WorkflowRunDto[]>('GET', `/projects/${encodeURIComponent(projectId)}/runs`);
-  }
-
-  createProjectRun(projectId: string, request: CreateRunRequest): Promise<CreateProjectRunResponse> {
-    return this.request<CreateProjectRunResponse>('POST', `/projects/${encodeURIComponent(projectId)}/runs`, request);
   }
 
   getProjectRuns(projectId: string, options?: {
@@ -705,22 +697,6 @@ export class AgentweaverApiClient {
   // List discovered policies + active selection; Get returns one policy's steps;
   // SetActive selects the active policy by name (null clears to the built-in
   // default); Sync re-reads .agentweaver/review-policies/ and returns the set.
-  listReviewPolicies(projectId: string): Promise<import('./types').ReviewPolicyListResponse> {
-    return this.request<import('./types').ReviewPolicyListResponse>('GET', `/projects/${encodeURIComponent(projectId)}/review-policies`);
-  }
-
-  getReviewPolicy(projectId: string, policyName: string): Promise<import('./types').ReviewPolicyDetailDto> {
-    return this.request<import('./types').ReviewPolicyDetailDto>('GET', `/projects/${encodeURIComponent(projectId)}/review-policies/${encodeURIComponent(policyName)}`);
-  }
-
-  setActiveReviewPolicy(projectId: string, name: string | null): Promise<import('./types').ReviewPolicyListResponse> {
-    return this.request<import('./types').ReviewPolicyListResponse>('PUT', `/projects/${encodeURIComponent(projectId)}/review-policies/active`, { name });
-  }
-
-  syncReviewPolicies(projectId: string): Promise<import('./types').ReviewPolicyListResponse> {
-    return this.request<import('./types').ReviewPolicyListResponse>('POST', `/projects/${encodeURIComponent(projectId)}/review-policies/sync`, {});
-  }
-
   // Metrics (web IA reorg) — per-project dashboard + global "Now" overview.
   getProjectDashboard(projectId: string): Promise<import('./types').ProjectDashboardDto> {
     return this.request<import('./types').ProjectDashboardDto>('GET', `/projects/${encodeURIComponent(projectId)}/dashboard`);

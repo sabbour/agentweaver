@@ -3,17 +3,12 @@ import { render, screen, waitFor, cleanup, fireEvent } from '@testing-library/re
 import { FluentProvider, webLightTheme } from '@fluentui/react-components';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { type ReactNode } from 'react';
-import type { ReviewPolicyListResponse, ReviewPolicyDetailDto } from '../api/types';
 
 vi.mock('../api/apiClient', () => ({
   apiClient: {
     getProject: vi.fn(),
     getServerInfo: vi.fn(),
     getSandboxPolicy: vi.fn(),
-    listReviewPolicies: vi.fn(),
-    getReviewPolicy: vi.fn(),
-    setActiveReviewPolicy: vi.fn(),
-    syncReviewPolicies: vi.fn(),
   },
 }));
 
@@ -36,30 +31,6 @@ function renderPage(projectId: string) {
   );
 }
 
-const reviewList: ReviewPolicyListResponse = {
-  active_policy_name: 'default',
-  policies: [
-    {
-      name: 'default',
-      description: 'Built-in default policy.',
-      source: 'built-in',
-      valid: true,
-      error: null,
-      is_built_in: true,
-      is_active: true,
-    },
-  ],
-};
-
-const reviewDetail: ReviewPolicyDetailDto = {
-  name: 'default',
-  description: 'Built-in default policy.',
-  source: 'built-in',
-  is_built_in: true,
-  is_active: true,
-  steps: [{ kind: 'rai', label: null }],
-};
-
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(apiClient.getProject).mockResolvedValue({
@@ -69,9 +40,14 @@ beforeEach(() => {
     default_model_github_copilot: 'gpt-4',
   } as never);
   vi.mocked(apiClient.getServerInfo).mockResolvedValue({ data_directory: 'C:/data' } as never);
-  vi.mocked(apiClient.getSandboxPolicy).mockResolvedValue({} as never);
-  vi.mocked(apiClient.listReviewPolicies).mockResolvedValue(reviewList);
-  vi.mocked(apiClient.getReviewPolicy).mockResolvedValue(reviewDetail);
+  vi.mocked(apiClient.getSandboxPolicy).mockResolvedValue({
+    repository_path: 'C:/demo',
+    shell_enabled: true,
+    direct: false,
+    network_enabled: true,
+    allowed_repository_roots: ['C:/demo'],
+    destructive_command_patterns: [],
+  } as never);
 });
 
 afterEach(() => {
@@ -79,7 +55,7 @@ afterEach(() => {
 });
 
 describe('ProjectSettingsPage', () => {
-  it('renders the four settings sections in the rail', async () => {
+  it('renders the supported settings sections in the rail', async () => {
     renderPage('proj-1');
 
     await waitFor(() => expect(screen.getByText('Project settings')).toBeDefined());
@@ -88,7 +64,6 @@ describe('ProjectSettingsPage', () => {
     expect(rail).toBeDefined();
     expect(screen.getByRole('button', { name: /General/i })).toBeDefined();
     expect(screen.getByRole('button', { name: /Sandbox policy/i })).toBeDefined();
-    expect(screen.getByRole('button', { name: /Review policy/i })).toBeDefined();
     expect(screen.getByRole('button', { name: /Danger Zone/i })).toBeDefined();
   });
 
@@ -97,10 +72,9 @@ describe('ProjectSettingsPage', () => {
 
     await waitFor(() => expect(screen.getByText('Rename project')).toBeDefined());
 
-    fireEvent.click(screen.getByRole('button', { name: /Review policy/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Sandbox policy/i }));
 
-    await waitFor(() => expect(apiClient.listReviewPolicies).toHaveBeenCalledWith('proj-1'));
-    await waitFor(() => expect(screen.getByRole('button', { name: /^Sync/i })).toBeDefined());
+    await waitFor(() => expect(screen.getByText('Sandbox enabled')).toBeDefined());
   });
 
   it('shows an inverted "Sandbox enabled" toggle and gates the network switch on it', async () => {
