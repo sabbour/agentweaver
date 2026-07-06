@@ -62,10 +62,14 @@ public sealed class CopilotWorkflowSelectionModel : IWorkflowSelectionModel
         AIAgent? agent = null;
         try
         {
-            // Use the installation scope — workflow selection is a system-level classification
-            // turn, not tied to any specific user's run. CallerTokenScopeProvider falls back to
-            // Installation when userId is null; FixedInstallationScopeProvider always returns it.
-            var scope = _scopeProvider.Resolve(null);
+            // Copilot model turns require the submitting user's Copilot-entitled token. Do not fall
+            // back to the installation scope: GitHub App installation tokens are not Copilot model
+            // credentials and can yield empty/no-auth turns that look like parse failures.
+            if (string.IsNullOrWhiteSpace(context.SubmittingUser))
+                throw new InvalidOperationException(
+                    "Workflow selection requires a submitting user identity; installation-scope Copilot auth is not permitted.");
+
+            var scope = _scopeProvider.Resolve(context.SubmittingUser);
             client = await _copilotClientFactory.CreateClientAsync(scope, _modelId, ct).ConfigureAwait(false);
             await client.StartAsync(ct).ConfigureAwait(false);
 

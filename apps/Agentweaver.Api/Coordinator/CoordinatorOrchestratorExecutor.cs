@@ -262,7 +262,8 @@ public sealed class CoordinatorOrchestratorExecutor
                 .Where(r => !r.IsBuiltIn)
                 .Select(r => r.Definition!.Id)
                 .ToHashSet(StringComparer.Ordinal);
-            var context = new WorkflowSelectionContext(input.ProjectId, spec.Goal, roles, available, customWorkflowIds);
+            var context = new WorkflowSelectionContext(
+                input.ProjectId, spec.Goal, roles, available, customWorkflowIds, input.SubmittingUser);
 
             _logger.LogInformation(
                 "Coordinator workflow selection for run {RunId}: invoking selector with {WorkflowCount} workflows ({WorkflowIds}).",

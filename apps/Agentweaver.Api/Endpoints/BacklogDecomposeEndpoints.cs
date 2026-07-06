@@ -134,6 +134,7 @@ public static class BacklogDecomposeEndpoints
 
             var project = await projectStore.GetAsync(projectId, ct);
             if (project is null) return Results.NotFound();
+            var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
 
             string fileContent;
             string normalizedPath;
@@ -165,7 +166,6 @@ public static class BacklogDecomposeEndpoints
                 // so worktree and assembly branches are supported correctly.
                 if (!string.IsNullOrWhiteSpace(request.Ref))
                 {
-                    var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
                     var contentResult = await projectWorkspaceService.GetFileContentAsync(
                         projectId, caller, normalizedPath, request.Ref, ct);
 
@@ -213,7 +213,7 @@ public static class BacklogDecomposeEndpoints
             DecomposeAgentResult agentResult;
             try
             {
-                agentResult = await decomposeService.DecomposeAsync(project, fileContent, ct);
+                agentResult = await decomposeService.DecomposeAsync(project, fileContent, caller.User, ct);
             }
             catch (Exception ex)
             {
