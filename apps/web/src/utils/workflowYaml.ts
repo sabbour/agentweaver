@@ -17,6 +17,7 @@ import { parseDocument, isSeq, isMap, type Document } from 'yaml';
 export const WORKFLOW_NODE_TYPES = [
   'prompt',
   'peer_review',
+  'build_test',
   'check',
   'fan_out',
   'fan_in',
@@ -29,10 +30,15 @@ export const WORKFLOW_NODE_TYPES = [
 
 export type WorkflowNodeTypeName = (typeof WORKFLOW_NODE_TYPES)[number];
 
+export const AUTHORABLE_WORKFLOW_NODE_TYPES = WORKFLOW_NODE_TYPES.filter(
+  (t) => t !== 'merge' && t !== 'scribe',
+);
+
 /** Human-friendly labels for the node-type picker. */
 export const NODE_TYPE_LABELS: Record<string, string> = {
   prompt: 'Prompt (agent turn)',
   peer_review: 'Peer review',
+  build_test: 'Build & Test',
   check: 'Check / gate',
   fan_out: 'Fan-out',
   fan_in: 'Fan-in',
@@ -50,6 +56,9 @@ export interface WfNode {
   agent?: string;
   prompt?: string;
   model?: string;
+  role?: string;
+  kind?: string;
+  gate_kind?: string;
   target?: string;
   steps?: string[];
   branches?: string[];
@@ -113,6 +122,9 @@ export function parseWorkflowYaml(text: string): ParseResult {
       agent: asString(n.agent),
       prompt: asString(n.prompt),
       model: asString(n.model),
+      role: asString(n.role),
+      kind: asString(n.kind),
+      gate_kind: asString(n.gate_kind),
       target: asString(n.target),
       steps: asStringArray(n.steps),
       branches: asStringArray(n.branches),
@@ -204,10 +216,40 @@ export function renameNode(text: string, oldId: string, newId: string): string {
 }
 
 /** Append a new typed node with a sensible default label. */
-export function addNode(text: string, node: { id: string; type: string }): string {
+export function addNode(text: string, node: {
+  id: string;
+  type: string;
+  label?: string;
+  role?: string;
+  kind?: string;
+  gate_kind?: string;
+  agent?: string;
+  branches?: string[];
+}): string {
   return withDoc(text, (doc) => {
     if (!isSeq(doc.get('nodes'))) doc.set('nodes', []);
-    doc.addIn(['nodes'], { id: node.id, type: node.type, label: node.id });
+    const record: Record<string, string | string[]> = {
+      id: node.id,
+      type: node.type,
+      label: node.label ?? node.id,
+    };
+    if (node.role) record.role = node.role;
+    if (node.kind) record.kind = node.kind;
+    if (node.gate_kind) record.gate_kind = node.gate_kind;
+    if (node.agent) record.agent = node.agent;
+    if (node.branches) record.branches = node.branches;
+    doc.addIn(['nodes'], record);
+  });
+}
+
+/** Set or delete a string-array field on a node. */
+export function setNodeStringArrayField(text: string, id: string, field: string, values: string[]): string {
+  return withDoc(text, (doc) => {
+    const idx = nodeIndexById(doc, id);
+    if (idx < 0) return;
+    const cleaned = values.map((v) => v.trim()).filter(Boolean);
+    if (cleaned.length === 0) doc.deleteIn(['nodes', idx, field]);
+    else doc.setIn(['nodes', idx, field], cleaned);
   });
 }
 
@@ -236,6 +278,24 @@ export function addEdge(text: string, from: string, to: string, when?: string): 
     const edge: Record<string, string> = { from, to };
     if (when) edge.when = when;
     doc.addIn(['edges'], edge);
+  });
+}
+
+/** Create/update/remove the edge for one branch verdict from a gate-like node. */
+export function setBranchTarget(text: string, from: string, when: string, to: string): string {
+  return withDoc(text, (doc) => {
+    if (!isSeq(doc.get('edges'))) doc.set('edges', []);
+    const items = edgesSeqItems(doc);
+    const idx = items.findIndex((it) => isMap(it) && it.get('from') === from && it.get('when') === when);
+    if (to === '') {
+      if (idx >= 0) doc.deleteIn(['edges', idx]);
+      return;
+    }
+    if (idx >= 0) {
+      doc.setIn(['edges', idx, 'to'], to);
+      return;
+    }
+    doc.addIn(['edges'], { from, to, when });
   });
 }
 

@@ -145,6 +145,7 @@ public static class WorkflowDtoMapper
     {
         WorkflowNodeType.Prompt => "prompt",
         WorkflowNodeType.PeerReview => "peer-review",
+        WorkflowNodeType.BuildTest => "build-test",
         WorkflowNodeType.Check => "check",
         WorkflowNodeType.FanOut => "fan-out",
         WorkflowNodeType.FanIn => "fan-in",
@@ -177,6 +178,7 @@ public static class WorkflowDtoMapper
     {
         WorkflowNodeType.Check              => "rai",
         WorkflowNodeType.PeerReview         => "review",
+        WorkflowNodeType.BuildTest          => "review",
         WorkflowNodeType.Merge              => "merge",
         WorkflowNodeType.Scribe             => "scribe",
         WorkflowNodeType.CoordinatorComposed => "coordinator",
@@ -189,6 +191,7 @@ public static class WorkflowDtoMapper
         WorkflowNodeType.Terminal   => "terminal",
         WorkflowNodeType.Check      => "gate",
         WorkflowNodeType.PeerReview => "gate",
+        WorkflowNodeType.BuildTest  => "gate",
         WorkflowNodeType.FanOut     => "action",
         WorkflowNodeType.FanIn      => "action",
         WorkflowNodeType.Merge      => "action",

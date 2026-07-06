@@ -139,6 +139,36 @@ public sealed class CollectiveAssemblyPipeline : ICollectiveAssemblyPipeline
         return new CollectiveGateDecision(decision.Approved, decision.RequestChanges, decision.Feedback);
     }
 
+    public async Task<CollectiveGateDecision> RunBuildTestAsync(CollectiveBuildTestRequest request, CancellationToken ct)
+    {
+        var buildTest = new BuildTestTurnExecutor(
+            _copilotClientFactory, _scopeProvider, _sandboxExecutor, _sandboxPolicyStore,
+            _approvalStore, _toolApprovalGate, _loggerFactory,
+            _workflowFactory.GetRecordingWriter,
+            name: "assembly-build-test",
+            logicalNodeId: request.GateNodeId ?? "assembly-build-test",
+            displayLabel: request.DisplayLabel ?? "Build & Test",
+            createSubStream: _workflowFactory.CreateSubStreamWriter,
+            completeSubStream: _workflowFactory.CompleteSubStream,
+            agentFactory: _workflowFactory.AgentFactory,
+            agentId: request.AgentId);
+
+        var input = new AgentTurnOutput(
+            RunId: request.CoordinatorRunId,
+            TreeHash: request.AggregateTreeHash,
+            Diff: request.AggregateDiff,
+            StepCount: 0,
+            WorktreePath: request.RepositoryPath,
+            WorktreeBranch: request.IntegrationBranch,
+            RepositoryPath: request.RepositoryPath,
+            OriginatingBranch: string.Empty,
+            ContentSafetyFlagged: false,
+            SubmittingUser: request.SubmittingUser);
+
+        var decision = await buildTest.HandleAsync(input, NoOpWorkflowContext.Instance, ct).ConfigureAwait(false);
+        return new CollectiveGateDecision(decision.Approved, decision.RequestChanges, decision.Feedback);
+    }
+
     public async Task<CollectiveMergeResult> MergeAsync(CollectiveMergeRequest request, CancellationToken ct)
     {
         string canonicalPath;

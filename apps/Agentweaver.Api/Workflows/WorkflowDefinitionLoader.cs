@@ -149,9 +149,10 @@ public static class WorkflowDefinitionLoader
                     break;
 
                 case WorkflowNodeType.PeerReview:
+                case WorkflowNodeType.BuildTest:
                     if (!string.IsNullOrWhiteSpace(node.Target))
                         collectedWarnings.Add(
-                            $"{source}: peer_review node '{node.Id}' declares target '{node.Target}', but the runtime currently ignores peer_review.target.");
+                            $"{source}: {node.Type.ToString().ToLowerInvariant()} node '{node.Id}' declares target '{node.Target}', but the runtime currently ignores target.");
                     goto case WorkflowNodeType.FanIn;
                 case WorkflowNodeType.FanIn:
                     if (node.Target is not null && !nodeIds.Contains(node.Target))
@@ -209,6 +210,7 @@ public static class WorkflowDefinitionLoader
         {
             case "prompt": type = WorkflowNodeType.Prompt; return true;
             case "peer_review": type = WorkflowNodeType.PeerReview; return true;
+            case "build_test": type = WorkflowNodeType.BuildTest; return true;
             case "check": type = WorkflowNodeType.Check; return true;
             case "fan_out": type = WorkflowNodeType.FanOut; return true;
             case "fan_in": type = WorkflowNodeType.FanIn; return true;

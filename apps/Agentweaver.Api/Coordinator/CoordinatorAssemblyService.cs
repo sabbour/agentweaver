@@ -658,6 +658,50 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
 
         foreach (var gate in assemblyGates)
         {
+            if (gate.GateKind == "build-test")
+            {
+                await _assemblyStore.SetStageAsync(workPlanId, gate.StageId, ct).ConfigureAwait(false);
+                await EmitGraphAsync(context.CoordinatorRunId, workPlanId, ct).ConfigureAwait(false);
+                Emit(context.CoordinatorRunId, EventTypes.CoordinatorAssemblyReviewRequested, new
+                {
+                    workPlanId,
+                    integrationBranch,
+                    treeHash = aggregateTreeHash,
+                    gateId = gate.Id,
+                    gateKind = gate.GateKind,
+                    hasChanges = integration.HasChanges,
+                });
+
+                var buildTest = await _pipeline.RunBuildTestAsync(
+                    new CollectiveBuildTestRequest(
+                        context.CoordinatorRunId,
+                        context.RepositoryPath,
+                        integrationBranch,
+                        aggregateTreeHash,
+                        aggregateDiff,
+                        context.SubmittingUser,
+                        gate.GraphNodeId,
+                        gate.Label,
+                        gate.AgentId),
+                    ct).ConfigureAwait(false);
+
+                if (!await ApplyAuthoredGateDecisionAsync(
+                        context,
+                        workPlanId,
+                        edges,
+                        touchedFilesBySubtask,
+                        new AssemblyReviewDecision(
+                            Approved: buildTest.Approved,
+                            RequestChanges: buildTest.RequestChanges,
+                            Feedback: buildTest.Feedback,
+                            TargetFiles: null,
+                            Reviewer: "build-test"),
+                        ct).ConfigureAwait(false))
+                    return;
+
+                continue;
+            }
+
             if (gate.GateKind == "rai")
             {
                 await _assemblyStore.SetStageAsync(workPlanId, gate.StageId, ct).ConfigureAwait(false);
@@ -1047,13 +1091,14 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
             return CoordinatorGraphDescriptor.DefaultAssemblyGates;
 
         var gates = workflow.Nodes
-            .Where(n => n.Type == WorkflowNodeType.Check)
-            .Select(n => (Node: n, GateKind: NodeClassifier.NormalizeGateKind(n)))
-            .Where(x => x.GateKind is "rai" or "rubberduck" or "human-review")
+            .Where(n => n.Type == WorkflowNodeType.Check || n.Type == WorkflowNodeType.BuildTest)
+            .Select(n => (Node: n, GateKind: n.Type == WorkflowNodeType.BuildTest ? "build-test" : NodeClassifier.NormalizeGateKind(n)))
+            .Where(x => x.GateKind is "build-test" or "rai" or "rubberduck" or "human-review")
             .Select(x => new CoordinatorGraphDescriptor.AssemblyGateNode(
                 x.Node.Id,
                 string.IsNullOrWhiteSpace(x.Node.Label) ? x.Node.Id : x.Node.Label,
-                x.GateKind!))
+                x.GateKind!,
+                x.Node.Agent))
             .ToList();
 
         return gates;

@@ -174,10 +174,11 @@ internal static class RunWorkflowGraphBinder
                     $"Cannot bind check node '{node.Id}': gate_kind is required and must be one of rai, human-review, or rubberduck; got '{gate}'.");
             }
 
-            if (node.Type == WorkflowNodeType.PeerReview && !HasVerdictRouting(definition, node))
+            if ((node.Type == WorkflowNodeType.PeerReview || node.Type == WorkflowNodeType.BuildTest)
+                && !HasVerdictRouting(definition, node))
             {
                 errors.Add(
-                    $"Cannot bind peer_review node '{node.Id}': peer_review nodes must declare at least one verdict-routed outgoing edge (approved/request-changes/declined/pass/fail).");
+                    $"Cannot bind {node.Type} node '{node.Id}': peer-review style nodes must declare at least one verdict-routed outgoing edge (approved/request-changes/declined/pass/fail).");
             }
         }
 

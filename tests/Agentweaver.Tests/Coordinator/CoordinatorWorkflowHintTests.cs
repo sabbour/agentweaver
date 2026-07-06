@@ -23,7 +23,7 @@ public sealed class CoordinatorWorkflowHintTests
 
     [Theory]
     [InlineData("software-delivery", "Code Review")]
-    [InlineData("bug-fix", "Build & Test")]
+    [InlineData("bug-fix", "Verify")]
     [InlineData("incident-response", "Postmortem")]
     [InlineData("pm-discovery", "Stakeholder Review")]
     [InlineData("agent-evaluation", "Evaluation Report")]
@@ -41,6 +41,7 @@ public sealed class CoordinatorWorkflowHintTests
         hint.Should().NotContain("Safety Gate");
         hint.Should().NotContain("Review Gate");
         hint.Should().NotContain("Human Review");
+        hint.Should().NotContain("Build & Test");
         hint.Should().NotContain("Merge (role:");
     }
 

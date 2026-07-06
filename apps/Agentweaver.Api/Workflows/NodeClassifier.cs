@@ -43,7 +43,7 @@ internal enum NodeKind
     /// <summary>An ordered sequence of child steps (<see cref="WorkflowNodeType.Serial"/>).</summary>
     Serial,
 
-    /// <summary>A peer-review node that emits a verdict (<see cref="WorkflowNodeType.PeerReview"/>).</summary>
+    /// <summary>A peer-review-style node that emits a verdict (<see cref="WorkflowNodeType.PeerReview"/> / BuildTest).</summary>
     PeerReview,
 
     /// <summary>A coordinator-composed stage (<see cref="WorkflowNodeType.CoordinatorComposed"/>).</summary>
@@ -67,6 +67,7 @@ internal static class NodeClassifier
         WorkflowNodeType.FanIn               => NodeKind.FanIn,
         WorkflowNodeType.Serial              => NodeKind.Serial,
         WorkflowNodeType.PeerReview          => NodeKind.PeerReview,
+        WorkflowNodeType.BuildTest           => NodeKind.PeerReview,
         WorkflowNodeType.CoordinatorComposed => NodeKind.CoordinatorComposed,
         WorkflowNodeType.Check               => ClassifyGate(node),
         _                                    => NodeKind.Check,
