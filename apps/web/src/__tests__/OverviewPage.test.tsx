@@ -2,11 +2,16 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, cleanup } from '@testing-library/react';
 import { FluentProvider, webLightTheme } from '@fluentui/react-components';
 import { MemoryRouter } from 'react-router-dom';
-import type { OverviewDto } from '../api/types';
+import type { OverviewDto, Project, ProjectMetricsDto } from '../api/types';
 
 vi.mock('../api/apiClient', () => ({
   apiClient: {
     getOverview: vi.fn(),
+    listProjects: vi.fn(),
+    getTeam: vi.fn(),
+    getProjectRuns: vi.fn(),
+    getBoard: vi.fn(),
+    getProjectMetrics: vi.fn(),
   },
 }));
 
@@ -31,6 +36,31 @@ const dto: OverviewDto = {
   ],
 };
 
+const project: Project = {
+  project_id: 'p1',
+  name: 'Demo',
+  origin: 'github',
+  source_repository: 'https://github.com/microsoft/demo',
+  working_directory: 'C:\\demo',
+  default_branch: 'main',
+  owner: 'sabbour',
+  default_provider: 'github-copilot',
+  default_model_github_copilot: null,
+  default_model_microsoft_foundry: null,
+  available: true,
+  state: 'active',
+  created_at: new Date().toISOString(),
+  updated_at: new Date().toISOString(),
+};
+
+const metrics: ProjectMetricsDto = {
+  throughput: [],
+  leaderboard: [{ agentName: 'Ada', runsThisWeek: 1, runsTotal: 2, successRate: 100, avgDurationMs: 1000, costAic: 1 }],
+  invocationTrend: [{ date: '2026-07-05', count: 2 }],
+  modelUsage: [{ model: 'gpt-5', invocationCount: 2, totalNanoAiu: 1_000_000_000 }],
+  responseDuration: [{ label: 'gpt-5', p50Ms: 100, p95Ms: 200 }],
+  timeToFirstToken: [{ label: 'gpt-5', p50Ms: 50, p95Ms: 80 }],
+};
 function renderPage() {
   return render(
     <FluentProvider theme={webLightTheme}>
@@ -45,21 +75,27 @@ beforeEach(() => vi.clearAllMocks());
 afterEach(() => cleanup());
 
 describe('OverviewPage', () => {
-  it('renders at-a-glance cards and the live tables', async () => {
+  it('renders redesigned overview sections with real data', async () => {
     vi.mocked(apiClient.getOverview).mockResolvedValue(dto);
+    vi.mocked(apiClient.listProjects).mockResolvedValue([project]);
+    vi.mocked(apiClient.getTeam).mockResolvedValue({ project_name: 'Demo', universe: 'main', members: [{ name: 'Ada', role_title: 'Engineer', charter_path: '', status: 'active', default_model: 'gpt-5', is_named: true, is_built_in: false }], layout: 'canonical', migration_available: false });
+    vi.mocked(apiClient.getProjectRuns).mockResolvedValue([{ workflow_run_id: 'wr1', execution_id: 'r1', task: 'Run completed', status: 'completed', started_at: new Date().toISOString() }]);
+    vi.mocked(apiClient.getBoard).mockResolvedValue({ project_id: 'p1', workflow_stages_available: true, columns: [{ id: 'backlog', kind: 'intake', label: 'Backlog', cards: [{ kind: 'task', task_id: 't1', title: 'Issue', description: null, state: 'backlog', order_key: '1', captured_by: 'Ada', created_at: new Date().toISOString() }] }] });
+    vi.mocked(apiClient.getProjectMetrics).mockResolvedValue(metrics);
 
     renderPage();
 
-    await waitFor(() => expect(screen.getByText('In flight')).toBeDefined());
-    expect(screen.getByText('Queued work')).toBeDefined();
-    expect(screen.getByText('Live sessions')).toBeDefined();
-    expect(screen.getByText('Active workflow runs')).toBeDefined();
-    expect(screen.getByText('Recent activity')).toBeDefined();
+    await waitFor(() => expect(screen.getByText('Recent Projects')).toBeDefined());
+    expect(screen.getByText('AI Usage & Performance')).toBeDefined();
+    expect(screen.getByText('Activity Feed')).toBeDefined();
+    expect(screen.getByText('Needs Attention')).toBeDefined();
+    expect(screen.getAllByText('Demo').length).toBeGreaterThan(0);
+    expect(screen.getByText('microsoft/demo')).toBeDefined();
     expect(screen.getByText('Run completed', { exact: false })).toBeDefined();
-    // Raw status kinds are humanized for the activity status chip.
-    expect(screen.getByText('In progress')).toBeDefined();
-    expect(screen.getByText('healthy')).toBeDefined();
-    // Liveness: the header shows a countdown to the next auto-refresh.
+    expect(screen.getByText('Token consumption by model')).toBeDefined();
+    expect(screen.getAllByText('gpt-5').length).toBeGreaterThan(0);
     expect(screen.getByText(/Next refresh in/)).toBeDefined();
   });
 });
+
+
