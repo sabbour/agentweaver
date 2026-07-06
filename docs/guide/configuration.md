@@ -47,7 +47,7 @@ dotnet user-secrets set "Auth:GitHub:ClientSecret" "<your-oauth-app-client-secre
 
 | Key | Default | Purpose |
 | --- | --- | --- |
-| `Cors:AllowedOrigins` | `[]` | Array of origins the browser is allowed to call from (e.g. `http://localhost:8080` for the web UI in development) |
+| `Cors:AllowedOrigins` | `[]` | Array of origins the browser is allowed to call from (e.g. `http://localhost:5173` for the web UI in development) |
 
 ### Provider settings
 

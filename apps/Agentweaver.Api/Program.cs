@@ -67,7 +67,8 @@ if (!isWorker)
         options.AddDefaultPolicy(policy =>
             policy.WithOrigins(allowedOrigins)
                   .AllowAnyHeader()
-                  .AllowAnyMethod()));
+                  .AllowAnyMethod()
+                  .AllowCredentials()));
 }
 
 // Infrastructure

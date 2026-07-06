@@ -56,7 +56,7 @@ app.MapGet("/auth/github/callback", async (
     IConfiguration configuration,
     CancellationToken ct) =>
 {
-    var frontendUrl = (configuration["Auth:GitHub:FrontendUrl"] ?? "http://localhost:8080").TrimEnd('/');
+    var frontendUrl = (configuration["Auth:GitHub:FrontendUrl"] ?? "http://localhost:5173").TrimEnd('/');
 
     // MCP OAuth broker leg: correlate by the GitHub CSRF state.
     if (!string.IsNullOrWhiteSpace(state) && await oauthBroker.IsPendingState(state, ct).ConfigureAwait(false))

@@ -9,6 +9,7 @@ import {
   tokens,
 } from '@fluentui/react-components';
 import type { Project } from '../../api/types';
+import { GITHUB_AUTHORIZE_URL } from '../../config';
 import { useProjectList } from '../../hooks/useProjectList';
 import { NAV_ITEMS, type NavItemDef } from './navConfig';
 
@@ -197,7 +198,7 @@ export function ProjectSwitcher({
         onInput={(e) => setComboValue(e.currentTarget.value)}
         onOptionSelect={(_, data) => {
           if (data.optionValue === '__signin__') {
-            window.location.href = '/auth/github/authorize';
+            window.location.href = GITHUB_AUTHORIZE_URL;
             return;
           }
           if (data.optionValue) handleSwitch(data.optionValue);

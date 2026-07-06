@@ -47,7 +47,7 @@ Use `apps/Agentweaver.Api/appsettings.Local.json` to configure your non-secret G
     "GitHub": {
       "ClientId": "<your-oauth-app-client-id>",
       "CallbackUrl": "http://localhost:5000/auth/github/callback",
-      "FrontendUrl": "http://localhost:8080"
+      "FrontendUrl": "http://localhost:5173"
     }
   },
   "Providers": {

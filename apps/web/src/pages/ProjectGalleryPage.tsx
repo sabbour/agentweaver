@@ -39,6 +39,7 @@ import {
   SparkleRegular,
 } from '@fluentui/react-icons';
 import { apiClient } from '../api/apiClient';
+import { GITHUB_AUTHORIZE_URL } from '../config';
 import { ApiError } from '../api/client';
 import type { CreateProjectRequest, GitHubAccount, GitHubRepo, Project } from '../api/types';
 import { PageHeader } from '../components/PageHeader';
@@ -692,7 +693,7 @@ function CreateFromGitHubDialog({ onCreated, dataDir, workspaceAutoAssigned }: {
       {authRequired && (
         <MessageBar intent="warning">
           <MessageBarBody>Connect your GitHub account to list repositories, or paste any public owner/repo.</MessageBarBody>
-          <MessageBarActions><Button size="small" onClick={() => { window.location.href = '/auth/github/authorize'; }}>Connect GitHub</Button></MessageBarActions>
+          <MessageBarActions><Button size="small" onClick={() => { window.location.href = GITHUB_AUTHORIZE_URL; }}>Connect GitHub</Button></MessageBarActions>
         </MessageBar>
       )}
       {accountsError && <MessageBar intent="error"><MessageBarBody>Could not load accounts: {accountsError}</MessageBarBody><MessageBarActions><Button size="small" onClick={reloadAccounts}>Retry</Button></MessageBarActions></MessageBar>}
@@ -864,7 +865,7 @@ export function ProjectGalleryPage() {
           <MessageBarActions>
             <Button
               size="small"
-              onClick={() => { window.location.href = '/auth/github/authorize'; }}
+              onClick={() => { window.location.href = GITHUB_AUTHORIZE_URL; }}
             >
               Sign in with GitHub
             </Button>

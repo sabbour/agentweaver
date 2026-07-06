@@ -151,7 +151,7 @@ install_local() {
   echo "    npm --prefix apps/web run dev"
   echo ""
   echo "  API  → http://localhost:5000"
-  echo "  Web  → http://localhost:8080"
+  echo "  Web  → http://localhost:5173"
   echo ""
   echo "  On Windows (WSL2), use start-dev.ps1 instead:"
   echo "    .\\start-dev.ps1"
