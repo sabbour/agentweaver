@@ -103,7 +103,7 @@ const useStyles = makeStyles({
   dragHandle: {
     width: '64px',
     height: '4px',
-    borderRadius: '999px',
+    borderRadius: tokens.borderRadiusCircular,
     backgroundColor: tokens.colorNeutralStroke3,
   },
   shell: {
@@ -425,8 +425,10 @@ const useStyles = makeStyles({
     },
     '& blockquote': {
       margin: `${tokens.spacingVerticalS} 0`,
-      paddingLeft: tokens.spacingHorizontalM,
-      borderLeft: `3px solid ${tokens.colorNeutralStroke2}`,
+      padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM}`,
+      border: `1px solid ${tokens.colorNeutralStroke2}`,
+      borderRadius: tokens.borderRadiusMedium,
+      backgroundColor: tokens.colorNeutralBackground2,
       color: tokens.colorNeutralForeground2,
     },
     '& a': {

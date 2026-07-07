@@ -63,7 +63,7 @@ const useStyles = makeStyles({
   root: {
     display: 'flex',
     flexDirection: 'column',
-    gap: tokens.spacingVerticalL,
+    gap: tokens.spacingVerticalXL,
   },
   breadcrumb: {
     display: 'flex',
@@ -76,19 +76,115 @@ const useStyles = makeStyles({
     color: tokens.colorBrandForeground1,
     textDecoration: 'none',
   },
+  statusSurface: {
+    display: 'grid',
+    gridTemplateColumns: 'minmax(220px, 0.85fr) minmax(0, 1.15fr)',
+    gap: tokens.spacingHorizontalL,
+    alignItems: 'center',
+    padding: tokens.spacingVerticalM,
+    backgroundColor: tokens.colorNeutralBackground1,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusLarge,
+    boxShadow: tokens.shadow2,
+    '@media (max-width: 900px)': {
+      gridTemplateColumns: '1fr',
+    },
+  },
+  statusCopy: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalXXS,
+    minWidth: 0,
+  },
+  statusTitle: {
+    fontSize: tokens.fontSizeBase400,
+    lineHeight: tokens.lineHeightBase400,
+    fontWeight: tokens.fontWeightSemibold,
+  },
+  statusHelp: {
+    color: tokens.colorNeutralForeground2,
+    lineHeight: tokens.lineHeightBase300,
+  },
+  statusPills: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalS,
+    flexWrap: 'wrap',
+  },
+  statusPill: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXXS,
+    minHeight: '28px',
+    padding: `${tokens.spacingVerticalXXS} ${tokens.spacingHorizontalS}`,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusMedium,
+    backgroundColor: tokens.colorNeutralBackground2,
+    color: tokens.colorNeutralForeground2,
+    fontSize: tokens.fontSizeBase200,
+    lineHeight: tokens.lineHeightBase200,
+    fontVariantNumeric: 'tabular-nums',
+  },
+  statusPillValue: {
+    color: tokens.colorNeutralForeground1,
+    fontWeight: tokens.fontWeightSemibold,
+  },
+  section: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalS,
+  },
+  sectionHeader: {
+    display: 'flex',
+    alignItems: 'flex-end',
+    justifyContent: 'space-between',
+    gap: tokens.spacingHorizontalL,
+    flexWrap: 'wrap',
+  },
+  sectionTitleGroup: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalXXS,
+    minWidth: 0,
+  },
+  sectionTitle: {
+    fontSize: tokens.fontSizeBase500,
+    lineHeight: tokens.lineHeightBase500,
+    fontWeight: tokens.fontWeightSemibold,
+  },
+  sectionDescription: {
+    color: tokens.colorNeutralForeground2,
+    lineHeight: tokens.lineHeightBase300,
+    maxWidth: '70ch',
+  },
   list: {
     display: 'flex',
     flexDirection: 'column',
-    gap: tokens.spacingVerticalM,
-  },
-  row: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: tokens.spacingHorizontalL,
-    padding: tokens.spacingVerticalL,
     backgroundColor: tokens.colorNeutralBackground1,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: tokens.borderRadiusMedium,
+    borderRadius: tokens.borderRadiusLarge,
+    overflow: 'hidden',
+  },
+  row: {
+    display: 'grid',
+    gridTemplateColumns: 'minmax(150px, 0.6fr) minmax(0, 1.4fr) auto',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalL,
+    padding: `${tokens.spacingVerticalM} ${tokens.spacingHorizontalL}`,
+    ':not(:first-child)': {
+      borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
+    },
+    '@media (max-width: 760px)': {
+      gridTemplateColumns: '1fr',
+      alignItems: 'start',
+    },
+  },
+  rowStatus: {
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'flex-start',
+    gap: tokens.spacingVerticalXXS,
+    minWidth: 0,
   },
   rowMain: {
     display: 'flex',
@@ -112,16 +208,29 @@ const useStyles = makeStyles({
     fontSize: tokens.fontSizeBase200,
     color: tokens.colorNeutralForeground3,
   },
+  loadingState: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalS,
+    padding: tokens.spacingVerticalXL,
+    backgroundColor: tokens.colorNeutralBackground1,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusLarge,
+  },
   emptyState: {
     display: 'flex',
     flexDirection: 'column',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     gap: tokens.spacingVerticalM,
     padding: `${tokens.spacingVerticalXXL} ${tokens.spacingHorizontalXXL}`,
     backgroundColor: tokens.colorNeutralBackground1,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: tokens.borderRadiusMedium,
-    textAlign: 'center',
+    borderRadius: tokens.borderRadiusLarge,
+  },
+  emptyActions: {
+    display: 'flex',
+    gap: tokens.spacingHorizontalS,
+    flexWrap: 'wrap',
   },
 });
 
@@ -168,6 +277,25 @@ export function OrchestrationsPage() {
   }, [projectId]);
 
   const runIdOf = (run: WorkflowRunDto) => run.workflow_run_id ?? run.execution_id;
+  const activeRuns = runs.filter((run) => !isRunTerminal(run.status));
+  const recentRuns = runs.filter((run) => isRunTerminal(run.status));
+  const statusCounts = runs.reduce<Record<string, number>>((acc, run) => {
+    const label = coordinatorStatusLabel(run.coordinator_status) ?? run.status ?? 'Unknown';
+    acc[label] = (acc[label] ?? 0) + 1;
+    return acc;
+  }, {});
+  const runSections = [
+    {
+      title: 'Active',
+      description: 'Running, blocked, review, and assembly work that may still need operator attention.',
+      items: activeRuns,
+    },
+    {
+      title: 'Recent',
+      description: 'Completed or stopped coordinator runs kept for inspection and cleanup.',
+      items: recentRuns,
+    },
+  ].filter((section) => section.items.length > 0);
 
   const handleStop = (run: WorkflowRunDto) => {
     const runId = runIdOf(run);
@@ -230,65 +358,111 @@ export function OrchestrationsPage() {
         </MessageBar>
       )}
 
-      {loading && <Spinner label="Loading orchestrations" />}
+      {runs.length > 0 && (
+        <div className={styles.statusSurface} aria-label="Orchestration status summary">
+          <div className={styles.statusCopy}>
+            <Text className={styles.statusTitle}>Coordinator runs</Text>
+            <Text className={styles.statusHelp}>
+              Active work stays at the top; finished runs remain available for review, retry, or cleanup.
+            </Text>
+          </div>
+          <div className={styles.statusPills}>
+            <span className={styles.statusPill}><span className={styles.statusPillValue}>{activeRuns.length}</span> active</span>
+            <span className={styles.statusPill}><span className={styles.statusPillValue}>{recentRuns.length}</span> recent</span>
+            {Object.entries(statusCounts).map(([label, count]) => (
+              <span key={label} className={styles.statusPill}>
+                <span className={styles.statusPillValue}>{count}</span> {label}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {loading && (
+        <div className={styles.loadingState}>
+          <Spinner size="extra-tiny" />
+          <Text>Loading orchestrations</Text>
+        </div>
+      )}
 
       {!loading && !error && runs.length === 0 && (
         <div className={styles.emptyState}>
           <Title3>No orchestrations yet</Title3>
           <Text>Start an orchestration from the Board to coordinate a squad of agents.</Text>
+          <div className={styles.emptyActions}>
+            <Link to={`/projects/${projectId}/board`} style={{ textDecoration: 'none' }}>
+              <Button appearance="secondary">Open Board</Button>
+            </Link>
+          </div>
         </div>
       )}
 
       {!loading && runs.length > 0 && (
-        <div className={styles.list}>
-          {runs.map((run) => {
-            const runId = run.workflow_run_id ?? run.execution_id;
-            const coordLabel = coordinatorStatusLabel(run.coordinator_status);
-            const terminal = isRunTerminal(run.status);
-            const busy = busyId === runId;
-            return (
-              <div key={runId} className={styles.row}>
-                <Badge appearance="tint" color={badgeColor(coordLabel)}>
-                  {coordLabel ?? run.status}
-                </Badge>
-                <div className={styles.rowMain}>
-                  <Text className={styles.task}>{run.task ?? '(no task description)'}</Text>
-                  <Text className={styles.meta}>{new Date(run.started_at).toLocaleString()}</Text>
+        <>
+          {runSections.map((section) => (
+            <section key={section.title} className={styles.section} aria-label={`${section.title} orchestrations`}>
+              <div className={styles.sectionHeader}>
+                <div className={styles.sectionTitleGroup}>
+                  <Text className={styles.sectionTitle}>{section.title}</Text>
+                  <Text className={styles.sectionDescription}>{section.description}</Text>
                 </div>
-                <div className={styles.actions}>
-                  <Link to={`/projects/${projectId}/orchestrations/${runId}`} style={{ textDecoration: 'none' }}>
-                    <Button appearance="secondary">Open</Button>
-                  </Link>
-                  <Tooltip
-                    content={terminal ? 'This orchestration has already finished' : 'Stop this orchestration'}
-                    relationship="label"
-                  >
-                    <Button
-                      appearance="subtle"
-                      icon={<DismissCircleRegular />}
-                      aria-label="Stop orchestration"
-                      disabled={terminal || busy}
-                      onClick={() => handleStop(run)}
-                    >
-                      Stop
-                    </Button>
-                  </Tooltip>
-                  <Tooltip content="Delete this orchestration" relationship="label">
-                    <Button
-                      appearance="subtle"
-                      icon={<DeleteRegular />}
-                      aria-label="Delete orchestration"
-                      disabled={busy}
-                      onClick={() => setDeleteTarget(run)}
-                    >
-                      Delete
-                    </Button>
-                  </Tooltip>
-                </div>
+                <Badge appearance="outline">{section.items.length} runs</Badge>
               </div>
-            );
-          })}
-        </div>
+              <div className={styles.list}>
+                {section.items.map((run) => {
+                  const runId = run.workflow_run_id ?? run.execution_id;
+                  const coordLabel = coordinatorStatusLabel(run.coordinator_status);
+                  const terminal = isRunTerminal(run.status);
+                  const busy = busyId === runId;
+                  return (
+                    <div key={runId} className={styles.row}>
+                      <div className={styles.rowStatus}>
+                        <Badge appearance="tint" color={badgeColor(coordLabel)}>
+                          {coordLabel ?? run.status}
+                        </Badge>
+                        <Text className={styles.meta}>{terminal ? 'Finished' : 'Live orchestration'}</Text>
+                      </div>
+                      <div className={styles.rowMain}>
+                        <Text className={styles.task}>{run.task ?? '(no task description)'}</Text>
+                        <Text className={styles.meta}>{new Date(run.started_at).toLocaleString()}</Text>
+                      </div>
+                      <div className={styles.actions}>
+                        <Link to={`/projects/${projectId}/orchestrations/${runId}`} style={{ textDecoration: 'none' }}>
+                          <Button appearance="secondary">Open</Button>
+                        </Link>
+                        <Tooltip
+                          content={terminal ? 'This orchestration has already finished' : 'Stop this orchestration'}
+                          relationship="label"
+                        >
+                          <Button
+                            appearance="subtle"
+                            icon={<DismissCircleRegular />}
+                            aria-label="Stop orchestration"
+                            disabled={terminal || busy}
+                            onClick={() => handleStop(run)}
+                          >
+                            Stop
+                          </Button>
+                        </Tooltip>
+                        <Tooltip content="Delete this orchestration" relationship="label">
+                          <Button
+                            appearance="subtle"
+                            icon={<DeleteRegular />}
+                            aria-label="Delete orchestration"
+                            disabled={busy}
+                            onClick={() => setDeleteTarget(run)}
+                          >
+                            Delete
+                          </Button>
+                        </Tooltip>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </section>
+          ))}
+        </>
       )}
 
       <Dialog open={deleteTarget !== null} onOpenChange={(_, data) => { if (!data.open) setDeleteTarget(null); }}>

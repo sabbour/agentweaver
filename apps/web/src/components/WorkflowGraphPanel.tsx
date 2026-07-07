@@ -217,7 +217,7 @@ export const useNodeStyles = makeStyles({
   // node_type=terminal: small endpoint
   cardTerminal: {
     width: `${NODE_TYPE_W.terminal}px`,
-    borderRadius: '12px',
+    borderRadius: tokens.borderRadiusXLarge,
   },
   // node_type=subtask: medium-large expandable node
   cardSubtask: {
@@ -228,7 +228,10 @@ export const useNodeStyles = makeStyles({
     width: `${NODE_W}px`,
   },
   cardActive: {
-    borderLeft: `3px solid ${tokens.colorBrandForeground1}`,
+    borderTopColor: tokens.colorBrandStroke1,
+    borderRightColor: tokens.colorBrandStroke1,
+    borderBottomColor: tokens.colorBrandStroke1,
+    borderLeftColor: tokens.colorBrandStroke1,
     backgroundColor: tokens.colorBrandBackground2,
     animationName: {
       '0%':   { boxShadow: `0 0 0 0 ${tokens.colorBrandStroke1}` },
@@ -241,6 +244,11 @@ export const useNodeStyles = makeStyles({
     '@media (prefers-reduced-motion: reduce)': {
       animationName: 'none',
     },
+  },
+  cardSelected: {
+    outline: `2px solid ${tokens.colorBrandStroke1}`,
+    outlineOffset: '2px',
+    boxShadow: tokens.shadow4,
   },
   cardActionRequired: {
     border: `2px solid ${tokens.colorPaletteMarigoldBorderActive}`,
@@ -289,7 +297,7 @@ export const useNodeStyles = makeStyles({
     right: '-6px',
     width: '20px',
     height: '20px',
-    borderRadius: '999px',
+    borderRadius: tokens.borderRadiusCircular,
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
@@ -303,7 +311,7 @@ export const useNodeStyles = makeStyles({
     alignItems: 'center',
     gap: '3px',
     padding: '2px 7px',
-    borderRadius: '999px',
+    borderRadius: tokens.borderRadiusCircular,
     fontSize: tokens.fontSizeBase100,
     fontWeight: tokens.fontWeightSemibold,
     whiteSpace: 'nowrap',
@@ -540,7 +548,7 @@ export function statusDescription(key: string, status: StepStatus): string | nul
 // node_type drives width/shape class; role drives icon and colour.
 // ---------------------------------------------------------------------------
 
-export function WorkflowNode({ data }: NodeProps) {
+export function WorkflowNode({ data, selected }: NodeProps) {
   const s = useNodeStyles();
   const {
     def,
@@ -596,6 +604,7 @@ export function WorkflowNode({ data }: NodeProps) {
     isActive        ? s.cardActive         : '',
     isHumanWaiting  ? s.cardActionRequired : '',
     isPlanned       ? s.cardPlanned        : '',
+    selected        ? s.cardSelected       : '',
   ].filter(Boolean).join(' ');
 
   const handleStyle: React.CSSProperties = { opacity: 0, pointerEvents: 'none' };
@@ -614,6 +623,7 @@ export function WorkflowNode({ data }: NodeProps) {
         className={cardClass}
         role="article"
         aria-label={`${label}: ${statusLabel(effectiveStatus)}`}
+        aria-current={selected ? 'true' : undefined}
         data-node-type={nodeType ?? 'default'}
         data-testid={coordinatorClickable ? 'coordinator-card' : undefined}
         tabIndex={coordinatorClickable ? 0 : undefined}

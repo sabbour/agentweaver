@@ -146,7 +146,7 @@ function resolveSubtaskTopoNode(
   topology: CoordinatorTopologyState,
 ): TopologyNodeState | undefined {
   if (topology.nodes[graphNodeId]) return topology.nodes[graphNodeId];
-  // Strip 'plan:' prefix: 'plan:subtask-1' â†’ 'subtask-1'
+  // Strip 'plan:' prefix: 'plan:subtask-1' -> 'subtask-1'
   const stripped = graphNodeId.replace(/^plan:/, '');
   return topology.nodes[stripped];
 }
@@ -175,9 +175,11 @@ interface OrchState {
   diff?: string;
   conflictFiles?: string[];
   conflictBranch?: string;
+  sourceLabel: string;
+  updatedAt?: string;
 }
 
-// coordinator.assembly_* event type â†’ phase. These event types may not be emitted
+// coordinator.assembly_* event type -> phase. These event types may not be emitted
 // yet; absence simply means we fall through to the status field / work-plan status.
 const ASSEMBLY_EVENT_PHASE: Record<string, OrchPhase> = {
   'coordinator.assembly_started': 'assembling',
@@ -216,6 +218,10 @@ function readStr(p: Record<string, unknown>, keys: string[]): string | undefined
   return undefined;
 }
 
+function readEventTimestamp(p: Record<string, unknown>): string | undefined {
+  return readStr(p, ['timestamp_utc', 'timestampUtc', 'updated_at', 'updatedAt', 'timestamp']);
+}
+
 function readChildRunId(node: GraphDescriptor['nodes'][number]): string | undefined {
   return node.child_run_id
     ?? readStr(node.data ?? {}, ['child_run_id', 'childRunId'])
@@ -229,10 +235,10 @@ function deriveOrchState(
   reasonField: string | undefined,
   workPlanStatus: string | undefined,
 ): OrchState {
-  let winner: { phase: OrchPhase; payload: Record<string, unknown> } | undefined;
+  let winner: { phase: OrchPhase; payload: Record<string, unknown>; type: string; sequence: number } | undefined;
   for (const evt of events) {
     const phase = ASSEMBLY_EVENT_PHASE[evt.type as string];
-    if (phase) winner = { phase, payload: evt.payload };
+    if (phase) winner = { phase, payload: evt.payload, type: evt.type, sequence: evt.sequence };
   }
   if (winner) {
     const rawFiles = winner.payload['conflictingFiles'] ?? winner.payload['conflicting_files'];
@@ -245,13 +251,17 @@ function deriveOrchState(
       diff: readStr(winner.payload, ['diff', 'summary', 'integrationDiff', 'integration_diff', 'treeHash', 'tree_hash']),
       conflictFiles: conflictFiles && conflictFiles.length > 0 ? conflictFiles : undefined,
       conflictBranch: readStr(winner.payload, ['conflictingBranch', 'conflicting_branch']),
+      sourceLabel: `${winner.type} event #${winner.sequence}`,
+      updatedAt: readEventTimestamp(winner.payload),
     };
   }
   const fieldPhase = normalizePhase(statusField);
-  if (fieldPhase !== 'unknown') return { phase: fieldPhase, reason: reasonField ?? undefined };
+  if (fieldPhase !== 'unknown') {
+    return { phase: fieldPhase, reason: reasonField ?? undefined, sourceLabel: 'run status field' };
+  }
   const wpPhase = normalizePhase(workPlanStatus);
-  if (wpPhase !== 'unknown') return { phase: wpPhase };
-  return { phase: 'unknown' };
+  if (wpPhase !== 'unknown') return { phase: wpPhase, sourceLabel: 'work plan status' };
+  return { phase: 'unknown', sourceLabel: 'no phase source yet' };
 }
 
 // Coordinator graph node status (so it never shows a stale "Pending").
@@ -270,7 +280,7 @@ function orchPhaseToTopoStatus(phase: OrchPhase): string | undefined {
 // automated EXCEPT the Human Review gate, which waits on the user: during `in_review` the review
 // node becomes 'started' so WorkflowNode renders it action-required ("Awaiting your review").
 // Returns undefined for stages not yet reached so the backend planned/live kind is preserved.
-// role âˆˆ {rai, review, merge, scribe}.
+// role ∈ {rai, review, merge, scribe}.
 function assemblyNodeStatus(role: string, phase: OrchPhase): StepStatus | undefined {
   switch (phase) {
     case 'assembling':
@@ -378,11 +388,11 @@ const EXPANDED_PIPELINE_RESERVE = 188;
 // for fan-out columns.
 const COORDINATOR_GRAPH_NODE_SEP = 96;
 
-// Renders column depth labels (L0 Coordinator, L1 Researchâ€¦) inside the React Flow canvas
+// Renders column depth labels (L0 Coordinator, L1 Research…) inside the React Flow canvas
 // using ViewportPortal so they pan/zoom with the graph and stay aligned over each column.
 // A compact pipeline step row rendered inline inside a SubtaskNode expansion panel. Laid out as a
 // narrow VERTICAL strip (icon + label/role + status/timer) so the expansion stays within the card
-// width and only grows downward â€” avoiding the horizontal overflow that overlapped neighbour nodes.
+// width and only grows downward — avoiding the horizontal overflow that overlapped neighbour nodes.
 // Does not use React Flow Handles (rendered outside a ReactFlow canvas).
 function ChildStepRow({ def, state, isLast }: { def: ExecutorDef; state: ExecutorState; isLast: boolean }) {
   const { key, label, Icon } = def;
@@ -429,14 +439,14 @@ function ChildStepRow({ def, state, isLast }: { def: ExecutorDef; state: Executo
       </div>
       {!isLast && (
         <span aria-hidden="true" style={{ alignSelf: 'center', color: 'var(--colorNeutralForeground4)', lineHeight: 1, fontSize: 12, height: 14, display: 'flex', alignItems: 'center' }}>
-          â†“
+          ↓
         </span>
       )}
     </div>
   );
 }
 
-function SubtaskNode({ id, data }: NodeProps) {
+function SubtaskNode({ id, data, selected }: NodeProps) {
   const s = useNodeStyles();
   const d = data as SubtaskNodeData;
   const expandCtx = useContext(CoordExpandContext);
@@ -520,11 +530,19 @@ function SubtaskNode({ id, data }: NodeProps) {
         withArrow
       >
       <div
-        className={`${s.card} ${s.cardSubtask}${stepStatus === 'started' ? ` ${s.cardActive}` : ''}`}
+        className={`${s.card} ${s.cardSubtask}${stepStatus === 'started' ? ` ${s.cardActive}` : ''}${selected ? ` ${s.cardSelected}` : ''}`}
         data-node-type="subtask"
         role="article"
         aria-label={`${d.label as string}: ${d.topoStatus as string}`}
+        aria-current={selected ? 'true' : undefined}
         onClick={handleCardClick}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            handleCardClick();
+          }
+        }}
+        tabIndex={0}
         style={{ cursor: 'pointer' }}
       >
       <Handle type="target" position={d.dir === 'TB' ? Position.Top : Position.Left} style={handleStyle} />
@@ -553,7 +571,7 @@ function SubtaskNode({ id, data }: NodeProps) {
         </div>
       </div>
 
-      {/* Inline child pipeline â€” compact vertical strip of step rows. Stays within the card width
+      {/* Inline child pipeline — compact vertical strip of step rows. Stays within the card width
           (grows only downward) so the expansion never overflows into neighbouring subtask columns. */}
       {expanded && (
         <div
@@ -606,7 +624,7 @@ const useStyles = makeStyles({
   root: {
     display: 'flex',
     flexDirection: 'column',
-    gap: tokens.spacingVerticalL,
+    gap: tokens.spacingVerticalXL,
     width: '100%',
   },
   breadcrumb: {
@@ -635,7 +653,7 @@ const useStyles = makeStyles({
     fontSize: tokens.fontSizeBase300,
     color: tokens.colorNeutralForeground2,
   },
-  // Graph band â€” full-width horizontal pipeline above the two columns.
+  // Graph band — full-width horizontal pipeline above the two columns.
   graphBand: {
     display: 'flex',
     flexDirection: 'column',
@@ -668,6 +686,11 @@ const useStyles = makeStyles({
   hint: {
     fontSize: tokens.fontSizeBase200,
     color: tokens.colorNeutralForeground3,
+  },
+  phaseSource: {
+    fontSize: tokens.fontSizeBase200,
+    color: tokens.colorNeutralForeground3,
+    lineHeight: tokens.lineHeightBase200,
   },
   conflictFiles: {
     display: 'flex',
@@ -812,7 +835,7 @@ const useStyles = makeStyles({
   console: {
     display: 'grid',
     gridTemplateRows: 'auto minmax(0, 1fr)',
-    height: 'calc(100vh - 96px)',
+    height: 'calc(100vh - 132px)',
     minHeight: '680px',
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     borderRadius: tokens.borderRadiusLarge,
@@ -821,17 +844,21 @@ const useStyles = makeStyles({
   },
   topZone: {
     display: 'grid',
-    gridTemplateColumns: 'minmax(0, 1fr) auto',
+    gridTemplateColumns: 'minmax(0, 1fr) minmax(260px, auto)',
     gap: tokens.spacingHorizontalL,
-    alignItems: 'center',
-    padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalL}`,
+    rowGap: tokens.spacingVerticalS,
+    alignItems: 'start',
+    padding: `${tokens.spacingVerticalM} ${tokens.spacingHorizontalL}`,
     borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground1,
+    '@media (max-width: 1180px)': {
+      gridTemplateColumns: '1fr',
+    },
   },
   titleStack: {
     display: 'flex',
     flexDirection: 'column',
-    gap: tokens.spacingVerticalXXS,
+    gap: tokens.spacingVerticalS,
     minWidth: 0,
   },
   titleText: {
@@ -847,7 +874,7 @@ const useStyles = makeStyles({
     alignItems: 'center',
     gap: tokens.spacingHorizontalS,
     minWidth: 0,
-    flexWrap: 'nowrap',
+    flexWrap: 'wrap',
   },
   statsStrip: {
     display: 'flex',
@@ -855,6 +882,49 @@ const useStyles = makeStyles({
     gap: tokens.spacingHorizontalS,
     flexWrap: 'wrap',
     color: tokens.colorNeutralForeground2,
+  },
+  statusChip: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXXS,
+    minHeight: '26px',
+    padding: `${tokens.spacingVerticalXXS} ${tokens.spacingHorizontalS}`,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusMedium,
+    backgroundColor: tokens.colorNeutralBackground2,
+    color: tokens.colorNeutralForeground2,
+    fontSize: tokens.fontSizeBase200,
+    lineHeight: tokens.lineHeightBase200,
+    fontVariantNumeric: 'tabular-nums',
+  },
+  statusChipStrong: {
+    borderTopColor: tokens.colorBrandStroke2,
+    borderRightColor: tokens.colorBrandStroke2,
+    borderBottomColor: tokens.colorBrandStroke2,
+    borderLeftColor: tokens.colorBrandStroke2,
+    backgroundColor: tokens.colorBrandBackground2,
+    color: tokens.colorBrandForeground1,
+    fontWeight: tokens.fontWeightSemibold,
+  },
+  statusChipDanger: {
+    borderTopColor: tokens.colorStatusDangerBorder1,
+    borderRightColor: tokens.colorStatusDangerBorder1,
+    borderBottomColor: tokens.colorStatusDangerBorder1,
+    borderLeftColor: tokens.colorStatusDangerBorder1,
+    backgroundColor: tokens.colorStatusDangerBackground1,
+    color: tokens.colorStatusDangerForeground1,
+  },
+  statusChipWarning: {
+    borderTopColor: tokens.colorStatusWarningBorder1,
+    borderRightColor: tokens.colorStatusWarningBorder1,
+    borderBottomColor: tokens.colorStatusWarningBorder1,
+    borderLeftColor: tokens.colorStatusWarningBorder1,
+    backgroundColor: tokens.colorStatusWarningBackground1,
+    color: tokens.colorStatusWarningForeground1,
+  },
+  statusChipValue: {
+    color: tokens.colorNeutralForeground1,
+    fontWeight: tokens.fontWeightSemibold,
   },
   statSeparator: {
     color: tokens.colorNeutralForeground4,
@@ -866,10 +936,46 @@ const useStyles = makeStyles({
     gap: tokens.spacingHorizontalM,
     flexWrap: 'wrap',
   },
+  actionGroup: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalXXS,
+    padding: `${tokens.spacingVerticalXXS} ${tokens.spacingHorizontalS}`,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusMedium,
+    backgroundColor: tokens.colorNeutralBackground1,
+  },
+  riskActionGroup: {
+    backgroundColor: tokens.colorStatusWarningBackground1,
+    borderTopColor: tokens.colorStatusWarningBorder1,
+    borderRightColor: tokens.colorStatusWarningBorder1,
+    borderBottomColor: tokens.colorStatusWarningBorder1,
+    borderLeftColor: tokens.colorStatusWarningBorder1,
+  },
+  actionGroupLabel: {
+    fontSize: tokens.fontSizeBase100,
+    lineHeight: tokens.lineHeightBase100,
+    fontWeight: tokens.fontWeightSemibold,
+    color: tokens.colorNeutralForeground3,
+  },
+  actionGroupRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalS,
+    flexWrap: 'wrap',
+  },
+  actionGroupHint: {
+    fontSize: tokens.fontSizeBase100,
+    lineHeight: tokens.lineHeightBase100,
+    color: tokens.colorNeutralForeground3,
+  },
   bodyGrid: {
     minHeight: 0,
     display: 'grid',
-    gridTemplateColumns: '280px minmax(420px, 1fr) clamp(480px, 34vw, 640px)',
+    gridTemplateColumns: '260px minmax(520px, 1fr) clamp(420px, 31vw, 560px)',
+    '@media (max-width: 1180px)': {
+      gridTemplateColumns: '220px minmax(0, 1fr)',
+    },
   },
   leftZone: {
     minHeight: 0,
@@ -912,6 +1018,7 @@ const useStyles = makeStyles({
   },
   runTreeRowSelected: {
     backgroundColor: tokens.colorBrandBackground2,
+    boxShadow: `inset 0 0 0 1px ${tokens.colorBrandStroke1}`,
   },
   treeText: {
     display: 'flex',
@@ -959,6 +1066,40 @@ const useStyles = makeStyles({
     maxHeight: '420px',
     overflowY: 'auto',
     padding: tokens.spacingVerticalM,
+  },
+  readoutZone: {
+    minWidth: 0,
+    minHeight: 0,
+    display: 'flex',
+    flexDirection: 'column',
+    backgroundColor: tokens.colorNeutralBackground1,
+    '@media (max-width: 1180px)': {
+      gridColumnStart: 1,
+      gridColumnEnd: 3,
+      minHeight: '520px',
+      borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
+    },
+  },
+  readoutBody: {
+    flex: 1,
+    minHeight: 0,
+  },
+  emptyState: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalXS,
+    padding: tokens.spacingVerticalM,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusMedium,
+    backgroundColor: tokens.colorNeutralBackground2,
+  },
+  emptyStateTitle: {
+    fontWeight: tokens.fontWeightSemibold,
+    color: tokens.colorNeutralForeground1,
+  },
+  emptyStateBody: {
+    color: tokens.colorNeutralForeground2,
+    lineHeight: tokens.lineHeightBase300,
   },
 });
 
@@ -1011,6 +1152,37 @@ function runTreeStatusLabel(status: string, confirmedBy?: string): string {
   }
 }
 
+const FAILED_TASK_STATUSES = new Set(['failed', 'merge_failed', 'declined']);
+const BLOCKED_TASK_STATUSES = new Set(['blocked', 'rai_flagged', 'needs_clarification', 'pending_capacity']);
+const WAITING_TASK_STATUSES = new Set(['waiting', 'awaiting_assembly', 'assemble_ready', 'awaiting_confirmation']);
+const PENDING_TASK_STATUSES = new Set(['pending']);
+
+function formatPhaseUpdated(timestamp: string | undefined): string {
+  if (!timestamp) return 'No timestamp from source yet';
+  const parsed = new Date(timestamp);
+  if (Number.isNaN(parsed.getTime())) return `Updated ${timestamp}`;
+  return `Updated ${parsed.toLocaleString()}`;
+}
+
+function graphEmptyCopy(isConnecting: boolean, noWorkPlan: boolean) {
+  if (isConnecting) {
+    return {
+      title: 'Connecting to the coordinator stream',
+      body: 'Agentweaver is opening the live event feed. The graph will populate from the stream or the saved run graph as soon as either source responds.',
+    };
+  }
+  if (noWorkPlan) {
+    return {
+      title: 'Work plan is not available yet',
+      body: 'The coordinator has not produced a saved work plan for this run. Keep the stream open, review the selected task details for messages, or retry the run if the phase stays stalled.',
+    };
+  }
+  return {
+    title: 'Waiting for the run graph',
+    body: 'The page is listening for coordinator graph events and checking the saved graph. If this does not resolve, refresh the run or inspect the coordinator messages for an error.',
+  };
+}
+
 export function CoordinatorRunPage() {
   const styles = useStyles();
   const { projectId, runId } = useParams<{ projectId: string; runId: string }>();
@@ -1047,7 +1219,7 @@ export function CoordinatorRunPage() {
   // Topology seed from work plan + children (for subtask status projection).
   const [topoSeed, setTopoSeed] = useState(initialTopologyState);
 
-  // Agent name â†’ role title, fetched from the project team roster, so a subtask card can show the
+  // Agent name -> role title, fetched from the project team roster, so a subtask card can show the
   // assigned agent's ROLE (e.g. "Repo Auditor") and not just their cast name (e.g. "Deckard").
   const [roleByAgent, setRoleByAgent] = useState<Record<string, string>>({});
 
@@ -1060,7 +1232,7 @@ export function CoordinatorRunPage() {
       .then((desc) => { if (!cancelled) setRestDescriptor(desc); })
       .catch(() => {});
 
-    // Fetch work plan + children for topology status seed. Skip for child runs â€”
+    // Fetch work plan + children for topology status seed. Skip for child runs —
     // work-plan is a coordinator-only artifact and child runs will never have one.
     void (async () => {
       const runDetail = await apiClient.getRun(runId).catch(() => null);
@@ -1123,7 +1295,7 @@ export function CoordinatorRunPage() {
 
   // ---------------------------------------------------------------------------
   // Orchestration lifecycle poll (issues 3 & 4). Reads the coordinator_status field
-  // (added by the backend concurrently â€” optional) plus the work-plan status, both
+  // (added by the backend concurrently — optional) plus the work-plan status, both
   // tolerated as absent. Polls until the orchestration reaches a terminal phase.
   // ---------------------------------------------------------------------------
   const [coordStatusField, setCoordStatusField] = useState<string | undefined>(undefined);
@@ -1241,7 +1413,7 @@ export function CoordinatorRunPage() {
 
   // The workflow the coordinator selected/planned this orchestration against. Carried by the
   // coordinator.workflow_selected event, which is persisted to the run event log and replayed on
-  // reconnect â€” so it survives page reloads. Latest event wins.
+  // reconnect — so it survives page reloads. Latest event wins.
   const selectedWorkflow = useMemo<{ name: string; auto: boolean; rationale?: string } | undefined>(() => {
     let picked: { name: string; auto: boolean; rationale?: string } | undefined;
     for (const evt of events) {
@@ -1424,7 +1596,7 @@ export function CoordinatorRunPage() {
 
   // Per-assembly-stage elapsed timing (RAI / Review / Merge / Scribe), derived from the
   // coordinator.assembly_* events (which now carry timestamp_utc). Keyed by node ROLE so it can be
-  // injected into the generic assembly node state the same way subtaskTiming feeds subtask cards â€”
+  // injected into the generic assembly node state the same way subtaskTiming feeds subtask cards —
   // giving each collective-assembly stage a live count-up timer that survives SSE replay/restart.
   const assemblyTiming = useMemo<Record<string, { startedAt?: number; completedAt?: number }>>(() => {
     const STARTED: Record<string, string> = {
@@ -1476,9 +1648,9 @@ export function CoordinatorRunPage() {
     [expandedKeys, toggleExpand],
   );
 
-  // Which coordinator loopback arc (if any) is currently "lit" blue: the reviewâ†’coordinator
+  // Which coordinator loopback arc (if any) is currently "lit" blue: the review->coordinator
   // "Request changes" arc while a human-review request-changes wave is re-dispatching, or the
-  // raiâ†’coordinator "RAI flags" arc while an RAI flag is looping back. Mirrors the per-run page's
+  // rai->coordinator "RAI flags" arc while an RAI flag is looping back. Mirrors the per-run page's
   // active-edge highlight (ActiveEdgeContext). A loop is active when its triggering event is the
   // most recent one that has not yet been superseded by a fresh assembly review / terminal.
   const activeLoopbackId = useMemo<string | undefined>(() => {
@@ -1524,9 +1696,9 @@ export function CoordinatorRunPage() {
     const allEdges: Edge[] = [];
     // Role lookup so loopback labels are derived from the SOURCE node's role rather than its
     // exact id (robust across descriptor id schemes). Tank adds two coordinator-level loopbacks:
-    // raiâ†’coordinator and reviewâ†’coordinator (loopback:true, no label field on GraphEdge). Render
+    // rai->coordinator and review->coordinator (loopback:true, no label field on GraphEdge). Render
     // them as labelled back-edges matching the per-run loopback styling. Falls back gracefully when
-    // a descriptor has zero loopbacks (older runs) â€” the loop simply produces no loopback edges.
+    // a descriptor has zero loopbacks (older runs) — the loop simply produces no loopback edges.
     const roleById: Record<string, string> = {};
     for (const n of planningDescriptor.nodes) roleById[n.id] = (n.role ?? '').toLowerCase();
     for (const edge of planningDescriptor.edges) {
@@ -1557,7 +1729,7 @@ export function CoordinatorRunPage() {
       const planned = node.kind === 'planned';
 
       if (nt === 'subtask') {
-        // Subtask node â€” look up topology status by mapped id.
+        // Subtask node — look up topology status by mapped id.
         const topoNode = resolveSubtaskTopoNode(node.id, topology);
         // Defensive: read display fields from flat props OR nested data map.
         const agentField  = node.agent  ?? (node.data?.['agent']  as string | undefined) ?? topoNode?.assignedAgent;
@@ -1591,7 +1763,7 @@ export function CoordinatorRunPage() {
         };
       }
 
-      // Coordinator or collective-assembly node â€” use generic WorkflowNode. def.key MUST be the
+      // Coordinator or collective-assembly node — use generic WorkflowNode. def.key MUST be the
       // node ROLE (not node.id), so WorkflowNode's role-based logic fires: the review gate becomes
       // action-required ("Awaiting your review") and the coordinator keeps its "View session" button.
       const roleKey = node.role;
@@ -1682,7 +1854,7 @@ export function CoordinatorRunPage() {
   const inSpecAuthoring = !specConfirmed && !hasSubtaskNodes && orch.phase === 'unknown';
 
   // While the Coordinator is still drafting the Outcome plan (inSpecAuthoring), the assembly
-  // stages (RAI / Human Review / Merge / Scribe) are not yet committed work â€” no spec confirmed,
+  // stages (RAI / Human Review / Merge / Scribe) are not yet committed work — no spec confirmed,
   // no subtasks, no orchestration phase. Presenting them as planned pipeline nodes implies a
   // downstream plan that does not exist. Filter them (and edges referencing them) out of the
   // rendered graph until drafting ends, leaving only the live Coordinator node. The descriptor
@@ -1719,7 +1891,7 @@ export function CoordinatorRunPage() {
     defaultSessionNodeId: string | null;
   }>(() => {
     const candidates = displayNodes.filter((node) => {
-      // Include every planned subtask â€” not only dispatched ones (with a childRunId) â€” so the
+      // Include every planned subtask — not only dispatched ones (with a childRunId) — so the
       // session tree mirrors the full work plan. Planned/pending subtasks show their status but
       // have no streamed conversation until they are dispatched.
       if (node.type === 'subtask') {
@@ -1858,8 +2030,17 @@ export function CoordinatorRunPage() {
 
   const flatSessionTree = useMemo(() => flattenRunTree(sessionTree), [sessionTree]);
   const taskRows = flatSessionTree.filter((node) => node.nodeId !== defaultSessionNodeId);
-  const failedCount = flatSessionTree.filter((node) => ['failed', 'merge_failed', 'declined', 'rai_flagged'].includes(node.status)).length;
-  const blockedCount = flatSessionTree.filter((node) => ['waiting', 'pending', 'awaiting_assembly', 'assemble_ready'].includes(node.status)).length;
+  const taskStatusSummary = taskRows.reduce(
+    (acc, node) => {
+      const status = node.status;
+      if (FAILED_TASK_STATUSES.has(status)) acc.failed += 1;
+      else if (BLOCKED_TASK_STATUSES.has(status)) acc.blocked += 1;
+      else if (WAITING_TASK_STATUSES.has(status)) acc.waiting += 1;
+      else if (PENDING_TASK_STATUSES.has(status)) acc.pending += 1;
+      return acc;
+    },
+    { pending: 0, waiting: 0, blocked: 0, failed: 0 },
+  );
   const earliestStart = flatSessionTree.reduce<number | undefined>(
     (min, node) => (node.startedAt == null ? min : min == null ? node.startedAt : Math.min(min, node.startedAt)),
     undefined,
@@ -1867,10 +2048,9 @@ export function CoordinatorRunPage() {
   const elapsedLabel = earliestStart ? fmtTotal(Date.now() - earliestStart) : '0s';
   const runStatusLabel = orchPhaseLabel(orch.phase);
   const aiCreditsLabel = `${formatAic(tokenBreakdown?.totalNanoAiu ?? null)} AI credits`;
-  const summaryLine = `${runStatusLabel}${failedCount ? ` · ${failedCount} failed` : ''}${blockedCount ? ` · ${blockedCount} blocked` : ''}`;
 
   // ---------------------------------------------------------------------------
-  // Steering chat side panel (#163) â€” a slide-in chat replaces the old inline steer bar.
+  // Steering chat side panel (#163) — a slide-in chat replaces the old inline steer bar.
   // ---------------------------------------------------------------------------
 
   const [specPanelOpen, setSpecPanelOpen] = useState(false);
@@ -1893,6 +2073,12 @@ export function CoordinatorRunPage() {
     setSpecPanelOpen(false);
   }, []);
 
+  const focusSelectedComposer = useCallback(() => {
+    if (!panelNodeId && defaultSessionNodeId) setPanelNodeId(defaultSessionNodeId);
+    setSessionPanelOpen(true);
+    setComposerFocusSignal((value) => value + 1);
+  }, [defaultSessionNodeId, panelNodeId]);
+
   useEffect(() => {
     if (!panelNodeId && defaultSessionNodeId) setPanelNodeId(defaultSessionNodeId);
   }, [defaultSessionNodeId, panelNodeId]);
@@ -1914,6 +2100,16 @@ export function CoordinatorRunPage() {
     }
   }, [defaultSessionNodeId, panelNodeId, sessionNodeIds]);
 
+  const selectedSessionItem = flatSessionTree.find((node) => node.nodeId === (panelNodeId ?? defaultSessionNodeId)) ?? flatSessionTree[0] ?? null;
+  const selectedGraphNodeId = selectedSessionItem?.nodeId ?? defaultSessionNodeId;
+  const linkedDisplayNodes = useMemo(
+    () => displayNodes.map((node) => ({
+      ...node,
+      selected: node.id === selectedGraphNodeId,
+    })),
+    [displayNodes, selectedGraphNodeId],
+  );
+
   // Merge "Browse files": route to the project Workspace with the coordinator integration branch
   // selected, so refresh/back preserve the browsed ref and the user lands in the WORK section.
   const browseAssemblyFiles = useCallback(() => {
@@ -1933,7 +2129,7 @@ export function CoordinatorRunPage() {
     else setArtifactsPanelOpen(true);
   }, [openPanelForNode]);
 
-  // Option toggles â€” optimistic update, revert on error. Both cascade to children server-side.
+  // Option toggles — optimistic update, revert on error. Both cascade to children server-side.
   const toggleAutopilot = useCallback((next: boolean) => {
     if (!runId || autopilotBusy) return;
     setAutopilot(next);
@@ -1986,7 +2182,7 @@ export function CoordinatorRunPage() {
   const startPreview = () => {
     const port = parseInt(previewTargetPort, 10);
     if (isNaN(port) || port <= 0 || port > 65535) {
-      setPreviewError('Enter a valid port number (1â€“65535).');
+      setPreviewError('Enter a valid port number (1–65535).');
       return;
     }
     if (!runId) return;
@@ -2102,7 +2298,7 @@ export function CoordinatorRunPage() {
   const coordActive     = !['complete', 'failed', 'blocked', 'declined'].includes(orch.phase);
 
   // A run can be terminally finished at the RUN level (Failed/Declined/Merged) while its WorkPlan
-  // status still reads `in_review` â€” e.g. a run interrupted by a pre-durability build. In that state
+  // status still reads `in_review` — e.g. a run interrupted by a pre-durability build. In that state
   // the in-memory assembly-review gate is NOT armed, so presenting an actionable review bar would
   // 409. Treat the review as actionable only when the run itself is not terminal.
   const runTerminal = runLevelStatus !== undefined
@@ -2135,6 +2331,31 @@ export function CoordinatorRunPage() {
     requestChanges: (rid, comment) => apiClient.reviewAssembly(rid, 'request_changes', comment),
     decline: (rid) => apiClient.reviewAssembly(rid, 'decline'),
   }), []);
+
+  const primaryAction = reviewActionable
+    ? {
+        label: 'Review changes',
+        icon: <DocumentRegular />,
+        disabled: false,
+        onClick: () => setArtifactsPanelOpen(true),
+        testId: 'coordinator-review-changes',
+      }
+    : latestOutcomePlanEvent && !specConfirmed
+      ? {
+          label: 'Review outcome plan',
+          icon: <DocumentRegular />,
+          disabled: false,
+          onClick: () => setSpecPanelOpen(true),
+          testId: 'coordinator-review-outcome-plan',
+        }
+      : {
+          label: 'Message coordinator',
+          icon: <ChatRegular />,
+          disabled: false,
+          onClick: focusSelectedComposer,
+          testId: 'open-steer-panel',
+        };
+  const graphEmptyState = graphEmptyCopy(isConnecting, noWorkPlan);
 
   return (
     <div className={styles.root}>
@@ -2186,86 +2407,121 @@ export function CoordinatorRunPage() {
                 </Text>
               )}
             </div>
-            <div className={styles.statsStrip} aria-label="Run summary">
-              <Text>{summaryLine}</Text>
-              <span className={styles.statSeparator}>·</span>
-              <Text>{taskRows.length} tasks</Text>
-              <span className={styles.statSeparator}>·</span>
-              <Text>{failedCount} failed</Text>
-              <span className={styles.statSeparator}>·</span>
-              <Text>{blockedCount} blocked</Text>
-              <span className={styles.statSeparator}>·</span>
-              <Text>{elapsedLabel} elapsed</Text>
-              <span className={styles.statSeparator}>·</span>
+            <div className={styles.statsStrip} aria-label="Run progress">
+              <span className={`${styles.statusChip} ${styles.statusChipStrong}`}>{runStatusLabel}</span>
+              <span className={styles.statusChip}>
+                <span className={styles.statusChipValue}>{taskRows.length}</span> tasks
+              </span>
+              <span className={styles.statusChip}>
+                <span className={styles.statusChipValue}>{taskStatusSummary.pending}</span> pending
+              </span>
+              <span className={styles.statusChip}>
+                <span className={styles.statusChipValue}>{taskStatusSummary.waiting}</span> waiting
+              </span>
+              <span className={`${styles.statusChip}${taskStatusSummary.blocked ? ` ${styles.statusChipWarning}` : ''}`}>
+                <span className={styles.statusChipValue}>{taskStatusSummary.blocked}</span> blocked
+              </span>
+              <span className={`${styles.statusChip}${taskStatusSummary.failed ? ` ${styles.statusChipDanger}` : ''}`}>
+                <span className={styles.statusChipValue}>{taskStatusSummary.failed}</span> failed
+              </span>
+              <span className={styles.statusChip}>
+                <span className={styles.statusChipValue}>{elapsedLabel}</span> elapsed
+              </span>
               <Popover positioning="below-start">
                 <PopoverTrigger disableButtonEnhancement>
-                  <Button appearance="transparent" size="small">{aiCreditsLabel}</Button>
+                  <Button appearance="secondary" size="small" className={styles.statusChip}>{aiCreditsLabel}</Button>
                 </PopoverTrigger>
                 <PopoverSurface className={styles.creditsSurface}>
                   <AgentTokenBreakdown data={tokenBreakdown} roleByAgent={roleByAgent} />
                 </PopoverSurface>
               </Popover>
             </div>
+            <Text className={styles.phaseSource}>
+              Phase source: {orch.sourceLabel}. {formatPhaseUpdated(orch.updatedAt)}
+              {orch.sourceLabel === 'no phase source yet' ? '; using live stream progress until the coordinator reports a durable phase.' : ''}
+            </Text>
           </div>
 
           <div className={styles.topControls}>
-            <AutomationToggle
-              label="Autopilot"
-              info={AUTOMATION_HELP.autopilotOrchestration}
-              checked={autopilot}
-              disabled={autopilotBusy || !coordActive}
-              onChange={(checked) => toggleAutopilot(checked)}
-            />
-            <AutomationToggle
-              label="Auto-approve"
-              info={AUTOMATION_HELP.autoApproveOrchestration}
-              checked={autoApprove}
-              disabled={autoApproveBusy || !coordActive}
-              onChange={(checked) => toggleAutoApprove(checked)}
-            />
-            <Button
-              appearance="transparent"
-              size="small"
-              icon={<ChatRegular />}
-              onClick={() => setComposerFocusSignal((value) => value + 1)}
-              data-testid="open-steer-panel"
-            >
-              Message
-            </Button>
-            <Button
-              appearance="secondary"
-              size="small"
-              icon={<ArrowRepeatAllRegular />}
-              disabled={!isRetryable || retrying}
-              onClick={() => void handleRetry()}
-              data-testid="coordinator-retry-button"
-            >
-              Retry failed
-            </Button>
-            <Button
-              appearance="secondary"
-              size="small"
-              icon={stopping ? <Spinner size="extra-tiny" /> : <DismissRegular />}
-              disabled={!coordActive || stopping}
-              onClick={() => void handleStopRun()}
-            >
-              Stop run
-            </Button>
-            {!isChildRun && (
-              <Button appearance="transparent" size="small" icon={<DocumentRegular />} onClick={() => setSpecPanelOpen(true)} data-testid="open-plan-panel">
-                Plan
-              </Button>
-            )}
-            {!isChildRun && (
-              <Button appearance="transparent" size="small" icon={<FolderRegular />} onClick={() => setArtifactsPanelOpen(true)} data-testid="open-artifacts-panel">
-                Artifacts
-              </Button>
-            )}
-            {isKubernetesSandbox && (
-              <Button appearance="transparent" size="small" icon={<OpenRegular />} onClick={() => { setPreviewDialogOpen(true); setPreviewError(undefined); }}>
-                Preview Sandbox
-              </Button>
-            )}
+            <div className={styles.actionGroup} aria-label="Primary next action">
+              <span className={styles.actionGroupLabel}>Next action</span>
+              <div className={styles.actionGroupRow}>
+                <Button
+                  appearance="primary"
+                  size="small"
+                  icon={primaryAction.icon}
+                  disabled={primaryAction.disabled}
+                  onClick={primaryAction.onClick}
+                  data-testid={primaryAction.testId}
+                >
+                  {primaryAction.label}
+                </Button>
+              </div>
+            </div>
+            <div className={`${styles.actionGroup} ${styles.riskActionGroup}`} aria-label="Scoped risk mode">
+              <span className={styles.actionGroupLabel}>Scoped risk mode</span>
+              <div className={styles.actionGroupRow}>
+                <AutomationToggle
+                  label="Autopilot"
+                  info={AUTOMATION_HELP.autopilotOrchestration}
+                  checked={autopilot}
+                  disabled={autopilotBusy || !coordActive}
+                  onChange={(checked) => toggleAutopilot(checked)}
+                />
+                <AutomationToggle
+                  label="Auto-approve safe tools"
+                  info={AUTOMATION_HELP.autoApproveOrchestration}
+                  checked={autoApprove}
+                  disabled={autoApproveBusy || !coordActive}
+                  onChange={(checked) => toggleAutoApprove(checked)}
+                />
+              </div>
+              <span className={styles.actionGroupHint}>Applies only to this orchestration and child runs.</span>
+            </div>
+            <div className={styles.actionGroup} aria-label="Run safety controls">
+              <span className={styles.actionGroupLabel}>Safety</span>
+              <div className={styles.actionGroupRow}>
+                <Button
+                  appearance="secondary"
+                  size="small"
+                  icon={<ArrowRepeatAllRegular />}
+                  disabled={!isRetryable || retrying}
+                  onClick={() => void handleRetry()}
+                  data-testid="coordinator-retry-button"
+                >
+                  Retry failed
+                </Button>
+                <Button
+                  appearance="secondary"
+                  size="small"
+                  icon={stopping ? <Spinner size="extra-tiny" /> : <DismissRegular />}
+                  disabled={!coordActive || stopping}
+                  onClick={() => void handleStopRun()}
+                >
+                  Stop run
+                </Button>
+              </div>
+            </div>
+            <div className={styles.actionGroup} aria-label="Secondary panels">
+              <span className={styles.actionGroupLabel}>Panels</span>
+              <div className={styles.actionGroupRow}>
+                {!isChildRun && (
+                  <Button appearance="transparent" size="small" icon={<DocumentRegular />} onClick={() => setSpecPanelOpen(true)} data-testid="open-plan-panel">
+                    Plan
+                  </Button>
+                )}
+                {!isChildRun && (
+                  <Button appearance="transparent" size="small" icon={<FolderRegular />} onClick={() => setArtifactsPanelOpen(true)} data-testid="open-artifacts-panel">
+                    Artifacts
+                  </Button>
+                )}
+                {isKubernetesSandbox && (
+                  <Button appearance="transparent" size="small" icon={<OpenRegular />} onClick={() => { setPreviewDialogOpen(true); setPreviewError(undefined); }}>
+                    Preview Sandbox
+                  </Button>
+                )}
+              </div>
+            </div>
           </div>
         </div>
 
@@ -2274,7 +2530,12 @@ export function CoordinatorRunPage() {
             <div className={styles.zoneHeader}>Run tree</div>
             <div className={styles.treeList}>
               {flatSessionTree.length === 0 ? (
-                <Text className={styles.hint}>No work plan available yet.</Text>
+                <div className={styles.emptyState}>
+                  <Text className={styles.emptyStateTitle}>Coordinator is still shaping the run</Text>
+                  <Text className={styles.emptyStateBody}>
+                    The task tree appears after the outcome plan or saved work plan arrives. Keep the stream open; if it remains empty, use the selected task panel to message the coordinator or retry a failed run.
+                  </Text>
+                </div>
               ) : flatSessionTree.map((item) => {
                 const selected = item.nodeId === (panelNodeId ?? defaultSessionNodeId);
                 const indent = Math.max(0, item.depth) * 14;
@@ -2285,6 +2546,8 @@ export function CoordinatorRunPage() {
                     style={{ paddingLeft: `${8 + indent}px` }}
                     onClick={() => openPanelForNode(item.nodeId)}
                     title={`${item.label}${item.agentName ? ` · ${item.agentName}` : ''}`}
+                    aria-current={selected ? 'true' : undefined}
+                    aria-label={`Select ${item.label}: ${runTreeStatusLabel(item.status, item.nodeId === 'outcome-plan' ? outcomePlanConfirmedBy : undefined)}`}
                   >
                     <span aria-hidden="true">{runTreeStatusIcon(item.status)}</span>
                     <AgentAvatar name={item.agentName ?? item.label} size={24} circle />
@@ -2306,7 +2569,9 @@ export function CoordinatorRunPage() {
           <section className={styles.centerZone} aria-label="Orchestration graph">
             <div className={styles.zoneHeader}>
               <span>Graph</span>
-              {orch.phase !== 'unknown' && <span className={styles.hint}>{orchPhaseLabel(orch.phase)}</span>}
+              <span className={styles.hint}>
+                {selectedSessionItem ? `Selected: ${selectedSessionItem.label}` : orch.phase !== 'unknown' ? orchPhaseLabel(orch.phase) : 'No task selected'}
+              </span>
             </div>
             <div className={styles.centerBody}>
               {hasGraph ? (
@@ -2321,7 +2586,7 @@ export function CoordinatorRunPage() {
                     <div style={{ zoom: effectiveGraphZoom, width: graphViewport.width, height: graphViewport.height }}>
                     <ReactFlow
                       key={`${displayNodes.length}:${displayEdges2.length}:${graphHeight}:${[...expandedKeys].sort().join(',')}`}
-                      nodes={displayNodes}
+                      nodes={linkedDisplayNodes}
                       edges={displayEdges2}
                       nodeTypes={coordinatorNodeTypes}
                       edgeTypes={workflowEdgeTypes}
@@ -2378,32 +2643,39 @@ export function CoordinatorRunPage() {
                 </BrowseFilesContext.Provider>
                 </ExecutionModalContext.Provider>
               ) : (
-                <Text className={styles.hint}>
-                  {isConnecting
-                    ? 'Connecting to coordinator stream...'
-                    : noWorkPlan
-                      ? 'No work plan available yet.'
-                      : 'Waiting for coordinator graph...'}
-                </Text>
+                <div className={styles.emptyState}>
+                  <Text className={styles.emptyStateTitle}>{graphEmptyState.title}</Text>
+                  <Text className={styles.emptyStateBody}>{graphEmptyState.body}</Text>
+                </div>
               )}
             </div>
           </section>
 
-          <AgentSessionPanel
-            variant="docked"
-            open={sessionPanelOpen}
-            selectedNodeId={panelNodeId ?? defaultSessionNodeId}
-            coordinatorRunId={runId ?? ''}
-            projectId={projectId ?? ''}
-            tree={sessionTree}
-            onClose={() => setSessionPanelOpen(false)}
-            onSelectNode={openPanelForNode}
-            onCoordinatorFollowUp={reconnectStream}
-            coordinatorActive={coordActive}
-            composerFocusSignal={composerFocusSignal}
-            onOutcomePlanClarify={() => setOutcomePlanClarifying(true)}
-            artifactAdapter={coordAdapter}
-          />
+          <section className={styles.readoutZone} aria-label="Selected task details">
+            <div className={styles.zoneHeader}>
+              <span>Selected task</span>
+              <span className={styles.hint}>
+                {selectedSessionItem ? `${selectedSessionItem.label} · Messages · Changes · Files` : 'Messages · Changes · Files'}
+              </span>
+            </div>
+            <div className={styles.readoutBody}>
+              <AgentSessionPanel
+                variant="docked"
+                open={sessionPanelOpen}
+                selectedNodeId={panelNodeId ?? defaultSessionNodeId}
+                coordinatorRunId={runId ?? ''}
+                projectId={projectId ?? ''}
+                tree={sessionTree}
+                onClose={() => setSessionPanelOpen(false)}
+                onSelectNode={openPanelForNode}
+                onCoordinatorFollowUp={reconnectStream}
+                coordinatorActive={coordActive}
+                composerFocusSignal={composerFocusSignal}
+                onOutcomePlanClarify={() => setOutcomePlanClarifying(true)}
+                artifactAdapter={coordAdapter}
+              />
+            </div>
+          </section>
         </div>
       </div>
 
