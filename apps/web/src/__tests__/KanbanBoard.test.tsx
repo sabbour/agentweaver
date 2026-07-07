@@ -59,15 +59,15 @@ describe('KanbanBoard — fixed columns (FR-013/015/016/019)', () => {
     await waitFor(() => expect(screen.getByTestId('column-backlog')).toBeTruthy());
 
     // Columns appear in the fixed product order, not the dynamic API stage order.
-    // Main workflow row: Backlog → Ready → Active → Human Review → Done.
-    // Problems renders in its own section below and appears last in the DOM.
+    // Main workflow row: Backlog → Ready → Active → Done.
+    // Human Review and Problems render in the Needs attention / review section below.
     const columns = screen.getAllByTestId(/^column-/);
     expect(columns.map((c) => c.getAttribute('data-testid'))).toEqual([
       'column-backlog',
       'column-ready',
       'column-active',
-      'column-human-review',
       'column-done',
+      'column-human-review',
       'column-problems',
     ]);
     expect(screen.queryByTestId('column-coordinator')).toBeNull();
@@ -100,6 +100,18 @@ describe('KanbanBoard — fixed columns (FR-013/015/016/019)', () => {
     expect(screen.getByText('90%')).toBeTruthy();
   });
 
+  it('renders board summary badges as navigable controls', async () => {
+    getBoardMock().mockResolvedValue(makeBoard());
+    render(<Wrapper><KanbanBoard projectId="proj-1" pollIntervalMs={100000} /></Wrapper>);
+
+    await waitFor(() => expect(screen.getByTestId('column-backlog')).toBeTruthy());
+
+    expect(screen.getByRole('button', { name: /Jump to Backlog: 3 queued tasks/i })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /Jump to Active: 1 active runs/i })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /Jump to Human Review: 0 approvals/i })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /Jump to Needs attention \/ review: 0 items need attention/i })).toBeTruthy();
+  });
+
   it('places an active run-backed card in the Active fixed column (FR-016)', async () => {
     getBoardMock().mockResolvedValue(makeBoard());
     render(<Wrapper><KanbanBoard projectId="proj-1" pollIntervalMs={100000} /></Wrapper>);
@@ -122,14 +134,14 @@ describe('KanbanBoard — fixed columns (FR-013/015/016/019)', () => {
     render(<Wrapper><KanbanBoard projectId="proj-1" pollIntervalMs={100000} /></Wrapper>);
 
     await waitFor(() => expect(screen.getByTestId('column-backlog')).toBeTruthy());
-    expect(screen.getByText(/Workflow columns are unavailable/i)).toBeTruthy();
+    expect(screen.getByText(/Workflow state is temporarily unavailable/i)).toBeTruthy();
     expect(screen.queryByTestId('column-coordinator')).toBeNull();
     expect(screen.getAllByTestId(/^column-/).map((c) => c.getAttribute('data-testid'))).toEqual([
       'column-backlog',
       'column-ready',
       'column-active',
-      'column-human-review',
       'column-done',
+      'column-human-review',
       'column-problems',
     ]);
   });

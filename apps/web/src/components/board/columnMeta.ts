@@ -9,9 +9,10 @@ export const FIXED_BOARD_COLUMNS: ReadonlyArray<Pick<BoardColumnDto, 'id' | 'kin
   { id: 'backlog', kind: 'intake', label: 'Backlog' },
   { id: 'ready', kind: 'intake', label: 'Ready' },
   { id: 'active', kind: 'workflow', label: 'Active' },
-  { id: 'human-review', kind: 'workflow', label: 'Human Review' },
   { id: 'done', kind: 'workflow', label: 'Done' },
-  // Problems is intentionally last — the board UI renders it in a separate section.
+  // Human Review and Problems are intentionally last — the board UI renders them
+  // together in the Needs attention / review section outside the execution flow.
+  { id: 'human-review', kind: 'workflow', label: 'Human Review' },
   { id: 'problems', kind: 'workflow', label: 'Problems' },
 ];
 
@@ -30,12 +31,12 @@ export function columnAccentColor(columnId: string, _workflowIndex: number): str
 // Human copy for the known intake stages. Dynamic workflow stages have no entry and
 // degrade gracefully (no subtitle) rather than printing "undefined".
 export const STAGE_DESCRIPTIONS: Record<string, string> = {
-  backlog: "Captured but not yet committed to. Things you're considering.",
-  ready: 'Committed work that the coordinator and Ralph monitor may pick up next.',
-  problems: 'Blocked, failed, declined, or otherwise needs attention.',
-  'human-review': 'Work waiting for a person to review or approve.',
-  active: 'Work currently moving through the coordinator workflow.',
-  done: 'Completed or merged work.',
+  backlog: "Captured work not yet committed to an agent run.",
+  ready: 'Committed tasks queued for the coordinator or pickup monitor.',
+  problems: 'Failed, blocked, or declined runs that need operator attention.',
+  'human-review': 'Agent work paused for human review or approval.',
+  active: 'Runs actively moving through orchestration.',
+  done: 'Completed, merged, or no-change runs kept for closure.',
 };
 
 function normalized(value: string | null | undefined): string {

@@ -41,27 +41,49 @@ const useStyles = makeStyles({
     gap: tokens.spacingHorizontalXS,
   },
   title: {
+    flex: '1 1 auto',
     fontWeight: tokens.fontWeightSemibold,
     fontSize: tokens.fontSizeBase300,
-    wordBreak: 'break-word',
+    lineHeight: tokens.lineHeightBase300,
+    overflowWrap: 'anywhere',
+    wordBreak: 'normal',
+    minWidth: 0,
   },
   description: {
     color: tokens.colorNeutralForeground2,
-    fontSize: tokens.fontSizeBase200,
+    fontSize: tokens.fontSizeBase300,
+    lineHeight: tokens.lineHeightBase300,
+    maxWidth: '65ch',
     whiteSpace: 'pre-wrap',
-    wordBreak: 'break-word',
+    overflowWrap: 'anywhere',
+    wordBreak: 'normal',
   },
   meta: {
     color: tokens.colorNeutralForeground3,
+    fontSize: tokens.fontSizeBase200,
+    lineHeight: tokens.lineHeightBase200,
+    fontVariantNumeric: 'tabular-nums',
+  },
+  metadataRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXS,
+    flexWrap: 'wrap',
+  },
+  metadataDivider: {
+    color: tokens.colorNeutralForeground4,
+    fontSize: tokens.fontSizeBase200,
+    lineHeight: tokens.lineHeightBase200,
   },
   cardActions: {
     display: 'flex',
     gap: tokens.spacingHorizontalXXS,
+    flexShrink: 0,
   },
   workflowMenuItemTitle: {
     display: 'inline-flex',
     alignItems: 'center',
-    gap: '6px',
+    gap: tokens.spacingHorizontalXS,
   },
   editFields: {
     display: 'flex',
@@ -76,6 +98,7 @@ const useStyles = makeStyles({
   error: {
     color: tokens.colorPaletteRedForeground1,
     fontSize: tokens.fontSizeBase200,
+    lineHeight: tokens.lineHeightBase200,
   },
 });
 
@@ -99,6 +122,8 @@ export function TaskCard({ card, columnId, projectId, onMutated, onDragStartTask
   const [workflows, setWorkflows] = useState<WorkflowSummaryDto[] | null>(null);
   const [workflowsLoading, setWorkflowsLoading] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  const queueLabel = card.state === 'ready' ? 'Ready for pickup' : 'Backlog intake';
+  const capturedAt = new Date(card.created_at).toLocaleDateString();
 
   const reportError = (e: unknown) => {
     setError(e instanceof ApiError ? `API error ${e.status}: ${e.body}` : e instanceof Error ? e.message : String(e));
@@ -222,7 +247,7 @@ export function TaskCard({ card, columnId, projectId, onMutated, onDragStartTask
             </MenuTrigger>
             <MenuPopover>
               <MenuList>
-                {workflowsLoading && <MenuItem disabled>Loading workflows…</MenuItem>}
+                {workflowsLoading && <MenuItem disabled>Loading workflows...</MenuItem>}
                 {!workflowsLoading && workflows?.filter((wf) => wf.valid && wf.id).map((wf) => (
                   <MenuItem key={wf.id} onClick={() => void handleSetOverride(wf.id)}>
                     <span className={styles.workflowMenuItemTitle}>
@@ -243,7 +268,12 @@ export function TaskCard({ card, columnId, projectId, onMutated, onDragStartTask
         </div>
       </div>
       {card.description && <Text className={styles.description}>{card.description}</Text>}
-      <Caption1 className={styles.meta}>{card.captured_by}</Caption1>
+      <div className={styles.metadataRow}>
+        <Badge appearance="tint" color={card.state === 'ready' ? 'informative' : 'subtle'} size="small">{queueLabel}</Badge>
+        <Caption1 className={styles.meta}>Captured by {card.captured_by}</Caption1>
+        <Caption1 className={styles.metadataDivider}>·</Caption1>
+        <Caption1 className={styles.meta}>{capturedAt}</Caption1>
+      </div>
       {notice && <Caption1 className={styles.meta}>{notice}</Caption1>}
       {error && <Text className={styles.error}>{error}</Text>}
     </div>

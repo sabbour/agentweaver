@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor, cleanup } from '@testing-library/react';
+import { render, screen, waitFor, cleanup, fireEvent } from '@testing-library/react';
 import { FluentProvider, webLightTheme } from '@fluentui/react-components';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { type ReactNode } from 'react';
@@ -97,7 +97,11 @@ describe('ProjectPage board (board-dedupe)', () => {
   it('still renders the Runs section', async () => {
     renderPage();
 
-    await waitFor(() => expect(screen.getByText('Runs')).toBeTruthy());
-    expect(screen.getByText('No runs yet. Start one above.')).toBeTruthy();
+    await waitFor(() => expect(screen.getByRole('button', { name: /Run audit trail/i })).toBeTruthy());
+    expect(screen.queryByText('No run history yet. Runs started from orchestration tasks will appear here for audit.')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: /Run audit trail/i }));
+
+    expect(screen.getByText('No run history yet. Runs started from orchestration tasks will appear here for audit.')).toBeTruthy();
   });
 });

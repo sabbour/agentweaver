@@ -43,7 +43,7 @@ beforeEach(() => { vi.clearAllMocks(); });
 afterEach(() => { cleanup(); });
 
 describe('KanbanColumn — Squadboard restyle', () => {
-  it('renders the left accent color and description for a known stage (Ready = blue)', () => {
+  it('renders the header accent color and description for a known stage (Ready = blue)', () => {
     const column: BoardColumnDto = {
       id: 'ready', kind: 'intake', label: 'Ready',
       cards: [task('t1', 'A ready task')],
@@ -53,7 +53,8 @@ describe('KanbanColumn — Squadboard restyle', () => {
     const section = screen.getByTestId('column-ready');
     // Blue accent for Ready (fixed mapping).
     expect(section.getAttribute('data-accent-color')).toBe(tokens.colorPaletteBlueBorderActive);
-    expect((section as HTMLElement).style.borderLeftColor).toBe(tokens.colorPaletteBlueBorderActive);
+    expect((section as HTMLElement).style.borderColor).not.toBe(tokens.colorPaletteBlueBorderActive);
+    expect(within(section).getByLabelText('Ready summary')).toBeTruthy();
     // Real description copy, not "undefined".
     expect(within(section).getByText(STAGE_DESCRIPTIONS.ready)).toBeTruthy();
     expect(within(section).queryByText('undefined')).toBeNull();
@@ -81,12 +82,12 @@ describe('KanbanColumn — Squadboard restyle', () => {
     expect(screen.getByTestId('count-backlog').textContent).toBe('3');
   });
 
-  it('renders a "Drop cards here" dropzone for an empty column (no plain "No items")', () => {
+  it('renders orchestration dropzone copy for an empty intake column (no plain "No items")', () => {
     const column: BoardColumnDto = { id: 'ready', kind: 'intake', label: 'Ready', cards: [] };
     renderColumn(column, columnAccentColor('ready', 0));
 
     expect(screen.getByTestId('dropzone-ready')).toBeTruthy();
-    expect(screen.getByText('Drop cards here')).toBeTruthy();
+    expect(screen.getByText('Drop tasks here to queue them.')).toBeTruthy();
     expect(screen.queryByText('No items')).toBeNull();
   });
 

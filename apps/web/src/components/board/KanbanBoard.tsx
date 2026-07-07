@@ -1,6 +1,7 @@
-import { useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import {
   Button,
+  Caption1,
   Dialog,
   DialogActions,
   DialogBody,
@@ -12,6 +13,7 @@ import {
   Spinner,
   Text,
   makeStyles,
+  mergeClasses,
   tokens,
 } from '@fluentui/react-components';
 import { ArrowImportRegular } from '@fluentui/react-icons';
@@ -31,17 +33,49 @@ const useStyles = makeStyles({
   root: {
     display: 'flex',
     flexDirection: 'column',
-    gap: tokens.spacingVerticalM,
+    gap: tokens.spacingVerticalXL,
   },
-  toolbar: {
-    display: 'flex',
-    alignItems: 'flex-start',
+  intakeSection: {
+    display: 'grid',
+    gridTemplateColumns: 'minmax(0, 1fr) auto',
+    alignItems: 'stretch',
     justifyContent: 'space-between',
     gap: tokens.spacingHorizontalM,
-    flexWrap: 'wrap',
+    padding: tokens.spacingVerticalM,
+    backgroundColor: tokens.colorNeutralBackground1,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusLarge,
+    boxShadow: tokens.shadow2,
+    '@media (max-width: 900px)': {
+      gridTemplateColumns: '1fr',
+    },
+  },
+  intakeMain: {
+    display: 'grid',
+    gridTemplateColumns: '170px minmax(320px, 1fr)',
+    gap: tokens.spacingHorizontalM,
+    alignItems: 'start',
+    '@media (max-width: 900px)': {
+      gridTemplateColumns: '1fr',
+    },
+  },
+  intakeCopy: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalXXS,
+    paddingTop: tokens.spacingVerticalXS,
+  },
+  intakeTitle: {
+    fontWeight: tokens.fontWeightSemibold,
+    fontSize: tokens.fontSizeBase400,
+    lineHeight: tokens.lineHeightBase400,
+  },
+  intakeHelp: {
+    color: tokens.colorNeutralForeground2,
+    lineHeight: tokens.lineHeightBase300,
+    maxWidth: '42ch',
   },
   capture: {
-    flex: 1,
     minWidth: '280px',
   },
   toolbarActions: {
@@ -49,57 +83,149 @@ const useStyles = makeStyles({
     alignItems: 'center',
     gap: tokens.spacingHorizontalS,
     flexWrap: 'wrap',
+    justifyContent: 'flex-end',
+  },
+  workflowSection: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalS,
+  },
+  sectionHeader: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: tokens.spacingHorizontalM,
+    flexWrap: 'wrap',
+  },
+  sectionTitleGroup: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalXXS,
+    minWidth: 0,
+  },
+  sectionTitle: {
+    fontWeight: tokens.fontWeightSemibold,
+    fontSize: tokens.fontSizeBase500,
+    lineHeight: tokens.lineHeightBase500,
+    overflowWrap: 'anywhere',
+  },
+  sectionDescription: {
+    color: tokens.colorNeutralForeground2,
+    fontSize: tokens.fontSizeBase300,
+    lineHeight: tokens.lineHeightBase300,
+    maxWidth: '70ch',
+    overflowWrap: 'anywhere',
+  },
+  summaryStrip: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXS,
+    flexWrap: 'wrap',
+  },
+  summaryButton: {
+    minWidth: 'unset',
+    height: '24px',
+    paddingRight: tokens.spacingHorizontalS,
+    paddingLeft: tokens.spacingHorizontalS,
+    borderRadius: tokens.borderRadiusMedium,
+    fontVariantNumeric: 'tabular-nums',
+    fontSize: tokens.fontSizeBase200,
+    lineHeight: tokens.lineHeightBase200,
+    fontWeight: tokens.fontWeightRegular,
+  },
+  summaryButtonSubtle: {
+    backgroundColor: tokens.colorNeutralBackground1,
+    borderTopColor: tokens.colorNeutralStroke2,
+    borderRightColor: tokens.colorNeutralStroke2,
+    borderBottomColor: tokens.colorNeutralStroke2,
+    borderLeftColor: tokens.colorNeutralStroke2,
+    color: tokens.colorNeutralForeground2,
+  },
+  summaryButtonInfo: {
+    backgroundColor: tokens.colorNeutralBackground1,
+    borderTopColor: tokens.colorBrandStroke2,
+    borderRightColor: tokens.colorBrandStroke2,
+    borderBottomColor: tokens.colorBrandStroke2,
+    borderLeftColor: tokens.colorBrandStroke2,
+    color: tokens.colorBrandForeground1,
+  },
+  summaryButtonWarning: {
+    backgroundColor: tokens.colorNeutralBackground1,
+    borderTopColor: tokens.colorStatusWarningBorder1,
+    borderRightColor: tokens.colorStatusWarningBorder1,
+    borderBottomColor: tokens.colorStatusWarningBorder1,
+    borderLeftColor: tokens.colorStatusWarningBorder1,
+    color: tokens.colorStatusWarningForeground1,
+  },
+  summaryButtonDanger: {
+    backgroundColor: tokens.colorNeutralBackground1,
+    borderTopColor: tokens.colorStatusDangerBorder1,
+    borderRightColor: tokens.colorStatusDangerBorder1,
+    borderBottomColor: tokens.colorStatusDangerBorder1,
+    borderLeftColor: tokens.colorStatusDangerBorder1,
+    color: tokens.colorStatusDangerForeground1,
+  },
+  boardEmpty: {
+    marginTop: tokens.spacingVerticalM,
+    padding: tokens.spacingVerticalM,
+    border: `1px dashed ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusMedium,
+    color: tokens.colorNeutralForeground2,
+    backgroundColor: tokens.colorNeutralBackground1,
+    lineHeight: tokens.lineHeightBase300,
+    maxWidth: '72ch',
+  },
+  boardSurface: {
+    padding: tokens.spacingVerticalM,
+    backgroundColor: tokens.colorNeutralBackground2,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusXLarge,
   },
   columnsViewport: {
     overflowX: 'auto',
     paddingBottom: tokens.spacingVerticalS,
-    // Slim, styled horizontal scrollbar instead of the heavy default OS bar.
-    scrollbarWidth: 'thin',
-    scrollbarColor: `${tokens.colorNeutralStroke1} transparent`,
-    '::-webkit-scrollbar': {
-      height: '8px',
-    },
-    '::-webkit-scrollbar-track': {
-      backgroundColor: 'transparent',
-    },
-    '::-webkit-scrollbar-thumb': {
-      backgroundColor: tokens.colorNeutralStroke1,
-      borderRadius: tokens.borderRadiusCircular,
-    },
-    '::-webkit-scrollbar-thumb:hover': {
-      backgroundColor: tokens.colorNeutralStroke1Hover,
-    },
   },
   columns: {
-    display: 'flex',
-    flexDirection: 'row',
-    gap: tokens.spacingHorizontalM,
+    display: 'grid',
+    gridTemplateColumns: 'repeat(4, minmax(180px, 1fr))',
+    gap: tokens.spacingHorizontalS,
     alignItems: 'flex-start',
+    width: '100%',
     // Zoom origin: anchor to the top-left so zooming out keeps Backlog in place.
     transformOrigin: 'top left',
+  },
+  mainColumn: {
+    minWidth: 0,
   },
   problemsSection: {
     display: 'flex',
     flexDirection: 'column',
-    gap: tokens.spacingVerticalXS,
+    gap: tokens.spacingVerticalS,
+    padding: tokens.spacingVerticalM,
+    backgroundColor: tokens.colorNeutralBackground1,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusLarge,
   },
-  problemsSectionLabel: {
-    color: tokens.colorNeutralForeground3,
-    fontSize: tokens.fontSizeBase200,
+  problemsSectionTitle: {
+    color: tokens.colorNeutralForeground1,
+    fontSize: tokens.fontSizeBase400,
+    lineHeight: tokens.lineHeightBase400,
     fontWeight: tokens.fontWeightSemibold,
-    textTransform: 'uppercase',
-    letterSpacing: '0.05em',
-    paddingLeft: tokens.spacingHorizontalXS,
+    overflowWrap: 'anywhere',
   },
   problemsColumns: {
-    display: 'flex',
-    flexDirection: 'row',
+    display: 'grid',
+    gridTemplateColumns: 'minmax(240px, 0.85fr) minmax(320px, 1.35fr)',
     gap: tokens.spacingHorizontalM,
     alignItems: 'flex-start',
     overflowX: 'auto',
     paddingBottom: tokens.spacingVerticalXS,
-    scrollbarWidth: 'thin',
-    scrollbarColor: `${tokens.colorNeutralStroke1} transparent`,
+    '@media (max-width: 900px)': {
+      gridTemplateColumns: '1fr',
+    },
+  },
+  attentionColumn: {
+    minWidth: 0,
   },
 });
 
@@ -110,10 +236,10 @@ export interface KanbanBoardProps {
 }
 
 // Per-project homepage Kanban board. The board API remains stage-aware, but the UI
-// presents a stable six-bucket view: Backlog, Ready, Active, Human Review, Done (main
-// row) + Problems (separate highlighted section below). Drag is constrained to
-// Backlog<->Ready by the column drop handlers and the server (workflow columns never
-// accept a task move).
+// presents a stable six-bucket view with an executable main flow
+// (Backlog, Ready, Active, Done) plus Human Review and Problems grouped in a
+// separate Needs attention / review section. Drag is constrained to Backlog<->Ready
+// by the column drop handlers and the server (workflow columns never accept a task move).
 export function KanbanBoard({ projectId, pollIntervalMs }: KanbanBoardProps) {
   const styles = useStyles();
   const [includeTerminalHistory, setIncludeTerminalHistory] = useState(false);
@@ -141,6 +267,18 @@ export function KanbanBoard({ projectId, pollIntervalMs }: KanbanBoardProps) {
   // user can fit all workflow columns on screen; +/- controls do the same.
   const { zoom, zoomIn, zoomOut, viewportRef } = useCtrlScrollZoom();
 
+  const jumpToBoardTarget = useCallback((targetId: string) => {
+    const target = document.getElementById(targetId);
+    if (!target) return;
+    const prefersReducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches ?? false;
+    target.scrollIntoView({
+      behavior: prefersReducedMotion ? 'auto' : 'smooth',
+      block: 'start',
+      inline: 'nearest',
+    });
+    target.focus({ preventScroll: true });
+  }, []);
+
   const visibleColumns = useMemo(() => (board ? fixedBoardColumns(board.columns) : []), [board]);
 
   // Deterministic accent palette keyed by each visible fixed column.
@@ -152,8 +290,18 @@ export function KanbanBoard({ projectId, pollIntervalMs }: KanbanBoardProps) {
     }));
   }, [visibleColumns]);
 
-  const mainColumns = useMemo(() => columnsWithAccent.filter(({ col }) => col.id !== 'problems'), [columnsWithAccent]);
-  const problemsEntry = useMemo(() => columnsWithAccent.find(({ col }) => col.id === 'problems'), [columnsWithAccent]);
+  const mainColumns = useMemo(() => columnsWithAccent.filter(({ col }) => col.id !== 'human-review' && col.id !== 'problems'), [columnsWithAccent]);
+  const attentionColumns = useMemo(() => columnsWithAccent.filter(({ col }) => col.id === 'human-review' || col.id === 'problems'), [columnsWithAccent]);
+  const boardSummary = useMemo(() => {
+    const cards = columnsWithAccent.flatMap(({ col }) => col.cards);
+    const queuedTasks = cards.filter((card) => card.kind === 'task').length;
+    const activeRuns = mainColumns
+      .filter(({ col }) => col.id === 'active')
+      .reduce((sum, { col }) => sum + col.cards.filter((card) => card.kind === 'run').length, 0);
+    const approvals = cards.filter((card) => card.kind === 'run' && card.has_pending_approval).length;
+    const needsAttention = attentionColumns.reduce((sum, { col }) => sum + col.cards.length, 0);
+    return { queuedTasks, activeRuns, approvals, needsAttention, total: cards.length };
+  }, [attentionColumns, columnsWithAccent, mainColumns]);
 
   const handleDropTask = async (taskId: string, sourceColumnId: string, targetColumnId: string, targetIndex: number) => {
     setDraggingTaskId(null);
@@ -169,7 +317,7 @@ export function KanbanBoard({ projectId, pollIntervalMs }: KanbanBoardProps) {
         await apiClient.moveTaskToBacklog(projectId, taskId, targetIndex);
       } else {
         // Defensive: only intake columns invoke this handler.
-        setRejectMessage('Only the coordinator moves work into the workflow.');
+        setRejectMessage('Workflow states are controlled by agent execution. Move tasks between Backlog and Ready; the coordinator advances runs after pickup.');
         return;
       }
       await refetch();
@@ -180,7 +328,7 @@ export function KanbanBoard({ projectId, pollIntervalMs }: KanbanBoardProps) {
 
   const handleRejectDrop = () => {
     setDraggingTaskId(null);
-    setRejectMessage('Only the coordinator moves work into the workflow.');
+    setRejectMessage('Workflow states are controlled by agent execution. Move tasks between Backlog and Ready; the coordinator advances runs after pickup.');
   };
 
   const handleImportPickerConfirm = async () => {
@@ -225,9 +373,15 @@ export function KanbanBoard({ projectId, pollIntervalMs }: KanbanBoardProps) {
 
   return (
     <div className={styles.root}>
-      <div className={styles.toolbar}>
-        <div className={styles.capture}>
-          <CaptureTaskForm projectId={projectId} onCaptured={refetch} />
+      <section className={styles.intakeSection} aria-labelledby="board-intake-title">
+        <div className={styles.intakeMain}>
+          <div className={styles.intakeCopy}>
+            <Text id="board-intake-title" className={styles.intakeTitle}>Intake</Text>
+            <Caption1 className={styles.intakeHelp}>Capture agent-executable work, import tasks from a spec, or tune automatic pickup.</Caption1>
+          </div>
+          <div className={styles.capture}>
+            <CaptureTaskForm projectId={projectId} onCaptured={refetch} />
+          </div>
         </div>
         <div className={styles.toolbarActions}>
           <Button
@@ -239,15 +393,15 @@ export function KanbanBoard({ projectId, pollIntervalMs }: KanbanBoardProps) {
           </Button>
           <PickupSettings projectId={projectId} />
         </div>
-      </div>
+      </section>
 
       {importSuccess && (
         <MessageBar intent="success">
-          <MessageBarBody>Tasks imported successfully.</MessageBarBody>
+          <MessageBarBody>Tasks imported to Backlog for orchestration.</MessageBarBody>
         </MessageBar>
       )}
 
-      {status === 'loading' && !board && <Spinner label="Loading board" />}
+      {status === 'loading' && !board && <Spinner label="Loading orchestration board" />}
 
       {status === 'error' && error && (
         <MessageBar intent="error">
@@ -258,7 +412,7 @@ export function KanbanBoard({ projectId, pollIntervalMs }: KanbanBoardProps) {
       {board && !board.workflow_stages_available && (
         <MessageBar intent="warning">
           <MessageBarBody>
-            Workflow columns are unavailable. Workflow buckets may be empty until the API recovers.
+            Workflow state is temporarily unavailable. Intake tasks still show, but live run buckets may be incomplete until the API recovers.
           </MessageBarBody>
         </MessageBar>
       )}
@@ -276,56 +430,111 @@ export function KanbanBoard({ projectId, pollIntervalMs }: KanbanBoardProps) {
       )}
 
       {board && (
-        <>
-          <ZoomControls zoom={zoom} onZoomIn={zoomIn} onZoomOut={zoomOut} />
-          <div className={styles.columnsViewport} ref={viewportRef}>
-            <div className={styles.columns} style={{ zoom }}>
-              {mainColumns.map(({ col: column, accent }) => (
-                <KanbanColumn
-                  key={column.id}
-                  column={column}
-                  accentColor={accent}
-                  projectId={projectId}
-                  onMutated={refetch}
-                  onDropTask={(taskId, sourceColumnId, targetColumnId, targetIndex) =>
-                    void handleDropTask(taskId, sourceColumnId, targetColumnId, targetIndex)}
-                  onRejectDrop={handleRejectDrop}
-                  onDragStartTask={(taskId) => setDraggingTaskId(taskId)}
-                  onDragEndTask={() => setDraggingTaskId(null)}
-                  draggingTaskId={draggingTaskId}
-                  includeTerminalHistory={includeTerminalHistory}
-                  onToggleTerminalHistory={() => setIncludeTerminalHistory((v) => !v)}
-                />
-              ))}
-            </div>
-          </div>
-
-          {problemsEntry && (
-            <div className={styles.problemsSection}>
-              <span className={styles.problemsSectionLabel}>Needs attention</span>
-              <div className={styles.problemsColumns}>
-                <KanbanColumn
-                  key={problemsEntry.col.id}
-                  column={problemsEntry.col}
-                  accentColor={problemsEntry.accent}
-                  projectId={projectId}
-                  onMutated={refetch}
-                  onDropTask={(taskId, sourceColumnId, targetColumnId, targetIndex) =>
-                    void handleDropTask(taskId, sourceColumnId, targetColumnId, targetIndex)}
-                  onRejectDrop={handleRejectDrop}
-                  onDragStartTask={(taskId) => setDraggingTaskId(taskId)}
-                  onDragEndTask={() => setDraggingTaskId(null)}
-                  draggingTaskId={draggingTaskId}
-                  includeTerminalHistory={includeTerminalHistory}
-                  onToggleTerminalHistory={() => setIncludeTerminalHistory((v) => !v)}
-                />
+        <section className={styles.workflowSection} aria-labelledby="board-workflow-title">
+          <div className={styles.sectionHeader}>
+            <div className={styles.sectionTitleGroup}>
+              <Text id="board-workflow-title" className={styles.sectionTitle}>Agent task board</Text>
+              <Caption1 className={styles.sectionDescription}>Fixed Kanban states show the autonomous orchestration flow from intake through completion.</Caption1>
+              <div className={styles.summaryStrip} aria-label="Board execution summary">
+                <Button
+                  appearance="secondary"
+                  size="small"
+                  className={mergeClasses(styles.summaryButton, styles.summaryButtonSubtle)}
+                  aria-label={`Jump to Backlog: ${boardSummary.queuedTasks} queued tasks`}
+                  onClick={() => jumpToBoardTarget('board-column-backlog')}
+                >
+                  {boardSummary.queuedTasks} queued tasks
+                </Button>
+                <Button
+                  appearance="secondary"
+                  size="small"
+                  className={mergeClasses(styles.summaryButton, styles.summaryButtonInfo)}
+                  aria-label={`Jump to Active: ${boardSummary.activeRuns} active runs`}
+                  onClick={() => jumpToBoardTarget('board-column-active')}
+                >
+                  {boardSummary.activeRuns} active runs
+                </Button>
+                <Button
+                  appearance="secondary"
+                  size="small"
+                  className={mergeClasses(styles.summaryButton, boardSummary.approvals ? styles.summaryButtonWarning : styles.summaryButtonSubtle)}
+                  aria-label={`Jump to Human Review: ${boardSummary.approvals} approvals`}
+                  onClick={() => jumpToBoardTarget('board-column-human-review')}
+                >
+                  {boardSummary.approvals} approvals
+                </Button>
+                <Button
+                  appearance="secondary"
+                  size="small"
+                  className={mergeClasses(styles.summaryButton, boardSummary.needsAttention ? styles.summaryButtonDanger : styles.summaryButtonSubtle)}
+                  aria-label={`Jump to Needs attention / review: ${boardSummary.needsAttention} items need attention`}
+                  onClick={() => jumpToBoardTarget('board-attention-section')}
+                >
+                  {boardSummary.needsAttention} needs attention
+                </Button>
               </div>
             </div>
-          )}
-        </>
-      )}
+            <ZoomControls zoom={zoom} onZoomIn={zoomIn} onZoomOut={zoomOut} />
+          </div>
+          <div className={styles.boardSurface}>
+            <div className={styles.columnsViewport} ref={viewportRef}>
+              <div className={styles.columns} style={{ zoom }}>
+                {mainColumns.map(({ col: column, accent }) => (
+                  <KanbanColumn
+                    key={column.id}
+                    column={column}
+                    className={styles.mainColumn}
+                    accentColor={accent}
+                    projectId={projectId}
+                    onMutated={refetch}
+                    onDropTask={(taskId, sourceColumnId, targetColumnId, targetIndex) =>
+                      void handleDropTask(taskId, sourceColumnId, targetColumnId, targetIndex)}
+                    onRejectDrop={handleRejectDrop}
+                    onDragStartTask={(taskId) => setDraggingTaskId(taskId)}
+                    onDragEndTask={() => setDraggingTaskId(null)}
+                    draggingTaskId={draggingTaskId}
+                    includeTerminalHistory={includeTerminalHistory}
+                    onToggleTerminalHistory={() => setIncludeTerminalHistory((v) => !v)}
+                  />
+                ))}
+              </div>
+            </div>
+            {boardSummary.total === 0 && (
+              <Text className={styles.boardEmpty}>No orchestration tasks yet. Capture a task or import a spec to seed Backlog, then move committed work to Ready for agent pickup.</Text>
+            )}
+          </div>
 
-      {board && columnsWithAccent.length === 0 && <Text>No columns to display.</Text>}
+          {attentionColumns.length > 0 && (
+            <section id="board-attention-section" tabIndex={-1} className={styles.problemsSection} aria-labelledby="board-attention-title">
+              <div className={styles.sectionTitleGroup}>
+                <Text id="board-attention-title" className={styles.problemsSectionTitle}>Needs attention / review</Text>
+                <Caption1 className={styles.sectionDescription}>Human review, failed, or blocked runs are separated from the autonomous flow so operators can intervene quickly.</Caption1>
+              </div>
+              <div className={styles.problemsColumns}>
+                {attentionColumns.map(({ col: column, accent }) => (
+                  <KanbanColumn
+                    key={column.id}
+                    column={column}
+                    className={styles.attentionColumn}
+                    accentColor={accent}
+                    projectId={projectId}
+                    onMutated={refetch}
+                    onDropTask={(taskId, sourceColumnId, targetColumnId, targetIndex) =>
+                      void handleDropTask(taskId, sourceColumnId, targetColumnId, targetIndex)}
+                    onRejectDrop={handleRejectDrop}
+                    onDragStartTask={(taskId) => setDraggingTaskId(taskId)}
+                    onDragEndTask={() => setDraggingTaskId(null)}
+                    draggingTaskId={draggingTaskId}
+                    includeTerminalHistory={includeTerminalHistory}
+                    onToggleTerminalHistory={() => setIncludeTerminalHistory((v) => !v)}
+                  />
+                ))}
+              </div>
+            </section>
+          )}
+        </section>
+      )}
+      {board && columnsWithAccent.length === 0 && <Text>No board states are available yet.</Text>}
 
       {/* Workspace file picker dialog */}
       <Dialog open={importPickerOpen} onOpenChange={(_, d) => { if (!d.open) setImportPickerOpen(false); }}>

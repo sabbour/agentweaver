@@ -1,5 +1,5 @@
 import { Badge, Button, Caption1, Popover, PopoverSurface, PopoverTrigger, Text, Textarea, makeStyles, mergeClasses, tokens } from '@fluentui/react-components';
-import { AddRegular } from '@fluentui/react-icons';
+import { AddRegular, PlayCircleRegular } from '@fluentui/react-icons';
 import { useState } from 'react';
 import type { BoardColumnDto, RunCardDto, TaskCardDto } from '../../api/types';
 import { apiClient } from '../../api/apiClient';
@@ -13,17 +13,14 @@ const useStyles = makeStyles({
     display: 'flex',
     flexDirection: 'column',
     gap: tokens.spacingVerticalS,
-    flex: '0 0 300px',
-    width: '300px',
+    width: '100%',
+    minWidth: 0,
     // Fit-content height — empty columns must not leave a giant vertical gap.
     alignSelf: 'flex-start',
     padding: tokens.spacingVerticalM,
     backgroundColor: tokens.colorNeutralBackground1,
     borderRadius: tokens.borderRadiusLarge,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
-    // The 4px accent bar lives on the left edge; its color is applied inline.
-    borderLeftWidth: '4px',
-    borderLeftStyle: 'solid',
     boxShadow: tokens.shadow2,
   },
   header: {
@@ -31,6 +28,7 @@ const useStyles = makeStyles({
     alignItems: 'flex-start',
     justifyContent: 'space-between',
     gap: tokens.spacingHorizontalS,
+    flexWrap: 'wrap',
   },
   headerMain: {
     display: 'flex',
@@ -38,29 +36,54 @@ const useStyles = makeStyles({
     gap: tokens.spacingVerticalXXS,
     minWidth: 0,
     flex: 1,
+    paddingTop: tokens.spacingVerticalXS,
+    borderTop: `3px solid ${tokens.colorNeutralStroke2}`,
   },
   titleRow: {
     display: 'flex',
     alignItems: 'center',
     gap: tokens.spacingHorizontalXS,
+    minWidth: 0,
   },
   label: {
     fontWeight: tokens.fontWeightSemibold,
-    fontSize: tokens.fontSizeBase300,
+    fontSize: tokens.fontSizeBase400,
+    lineHeight: tokens.lineHeightBase400,
+    overflowWrap: 'anywhere',
+    wordBreak: 'normal',
+    minWidth: 0,
   },
   countChip: {
     flexShrink: 0,
+    fontVariantNumeric: 'tabular-nums',
   },
   description: {
+    color: tokens.colorNeutralForeground2,
+    fontSize: tokens.fontSizeBase200,
+    lineHeight: tokens.lineHeightBase200,
+    maxWidth: '34ch',
+    overflowWrap: 'anywhere',
+  },
+  summaryRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXS,
+    flexWrap: 'wrap',
+    paddingTop: tokens.spacingVerticalXXS,
+  },
+  summaryText: {
     color: tokens.colorNeutralForeground3,
     fontSize: tokens.fontSizeBase200,
     lineHeight: tokens.lineHeightBase200,
+    fontVariantNumeric: 'tabular-nums',
   },
   headerActions: {
     display: 'flex',
     alignItems: 'center',
     gap: tokens.spacingHorizontalXXS,
     flexShrink: 0,
+    flexWrap: 'wrap',
+    justifyContent: 'flex-end',
   },
   cards: {
     display: 'flex',
@@ -77,6 +100,7 @@ const useStyles = makeStyles({
     border: `1px dashed ${tokens.colorNeutralStroke2}`,
     color: tokens.colorNeutralForeground3,
     fontSize: tokens.fontSizeBase200,
+    lineHeight: tokens.lineHeightBase200,
     textAlign: 'center',
   },
   dropzoneActive: {
@@ -101,13 +125,15 @@ const useStyles = makeStyles({
   addError: {
     color: tokens.colorPaletteRedForeground1,
     fontSize: tokens.fontSizeBase200,
+    lineHeight: tokens.lineHeightBase200,
   },
 });
 
 export interface KanbanColumnProps {
   column: BoardColumnDto;
+  className?: string;
   projectId: string;
-  // Left-accent color for this column (palette mapping owned by KanbanBoard).
+  // Header accent color for this column (palette mapping owned by KanbanBoard).
   accentColor: string;
   onMutated: () => void | Promise<void>;
   // Intake-only: a task card was dropped at targetIndex of this column.
@@ -135,7 +161,7 @@ function parseDrag(e: React.DragEvent): { taskId: string; sourceColumnId: string
 export function KanbanColumn(props: KanbanColumnProps) {
   const styles = useStyles();
   const {
-    column, projectId, accentColor, onMutated, onDropTask, onRejectDrop,
+    column, className, projectId, accentColor, onMutated, onDropTask, onRejectDrop,
     onDragStartTask, onDragEndTask, draggingTaskId,
     includeTerminalHistory, onToggleTerminalHistory,
   } = props;
@@ -150,6 +176,12 @@ export function KanbanColumn(props: KanbanColumnProps) {
   const isIntake = column.kind === 'intake';
   const isTerminal = column.kind === 'workflow' && (column.id === 'terminal' || column.collapsed_count != null);
   const description = STAGE_DESCRIPTIONS[column.id];
+  const taskCount = column.cards.filter((card) => card.kind === 'task').length;
+  const runCount = column.cards.filter((card) => card.kind === 'run').length;
+  const approvals = column.cards.filter((card) => card.kind === 'run' && (card as RunCardDto).has_pending_approval).length;
+  const summary = isIntake
+    ? `${taskCount} ${taskCount === 1 ? 'task' : 'tasks'} queued`
+    : `${runCount} ${runCount === 1 ? 'run' : 'runs'}${approvals ? ` · ${approvals} awaiting approval` : ''}`;
 
   const handleSendAllToReady = async () => {
     setSendingAll(true);
@@ -220,8 +252,9 @@ export function KanbanColumn(props: KanbanColumnProps) {
 
   return (
     <section
-      className={styles.column}
-      style={{ borderLeftColor: accentColor }}
+      id={`board-column-${column.id}`}
+      className={mergeClasses(styles.column, className)}
+      tabIndex={-1}
       aria-label={`${column.label} column`}
       data-testid={`column-${column.id}`}
       data-column-kind={column.kind}
@@ -229,7 +262,7 @@ export function KanbanColumn(props: KanbanColumnProps) {
       {...intakeHandlers}
     >
       <div className={styles.header}>
-        <div className={styles.headerMain}>
+        <div className={styles.headerMain} style={{ borderTopColor: accentColor }}>
           <div className={styles.titleRow}>
             <Text className={styles.label}>{column.label}</Text>
             <Badge
@@ -244,6 +277,12 @@ export function KanbanColumn(props: KanbanColumnProps) {
             </Badge>
           </div>
           {description && <Caption1 className={styles.description}>{description}</Caption1>}
+          <div className={styles.summaryRow} aria-label={`${column.label} summary`}>
+            <Badge appearance="tint" color={isIntake ? 'subtle' : column.id === 'problems' ? 'danger' : 'informative'} size="small" icon={!isIntake ? <PlayCircleRegular /> : undefined}>
+              {isIntake ? 'Task queue' : 'Run state'}
+            </Badge>
+            <Caption1 className={styles.summaryText}>{summary}</Caption1>
+          </div>
         </div>
         <div className={styles.headerActions}>
           {column.id === 'backlog' && column.cards.length > 0 && (
@@ -311,7 +350,7 @@ export function KanbanColumn(props: KanbanColumnProps) {
           className={mergeClasses(styles.dropzone, isIntake && dragOver && styles.dropzoneActive)}
           data-testid={`dropzone-${column.id}`}
         >
-          Drop cards here
+          {isIntake ? 'Drop tasks here to queue them.' : column.id === 'problems' ? 'No blocked or failed runs.' : 'No runs in this state.'}
         </div>
       ) : (
         <div className={styles.cards}>

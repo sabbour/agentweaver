@@ -1,8 +1,13 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
+  Accordion,
+  AccordionHeader,
+  AccordionItem,
+  AccordionPanel,
   Badge,
   Button,
+  Caption1,
   Dialog,
   DialogActions,
   DialogBody,
@@ -13,8 +18,13 @@ import {
   MessageBar,
   MessageBarBody,
   Spinner,
+  Table,
+  TableBody,
+  TableCell,
+  TableHeader,
+  TableHeaderCell,
+  TableRow,
   Text,
-  Title3,
   makeStyles,
   tokens,
 } from '@fluentui/react-components';
@@ -48,13 +58,14 @@ const useStyles = makeStyles({
   root: {
     display: 'flex',
     flexDirection: 'column',
-    gap: tokens.spacingVerticalL,
+    gap: tokens.spacingVerticalXL,
   },
   breadcrumb: {
     display: 'flex',
     gap: tokens.spacingHorizontalS,
     alignItems: 'center',
     fontSize: tokens.fontSizeBase300,
+    lineHeight: tokens.lineHeightBase300,
     color: tokens.colorNeutralForeground2,
   },
   breadcrumbLink: {
@@ -62,30 +73,97 @@ const useStyles = makeStyles({
     textDecoration: 'none',
   },
   runList: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalXS,
+    maxHeight: '360px',
+    overflow: 'auto',
+    padding: `${tokens.spacingVerticalXS} 0 ${tokens.spacingVerticalS}`,
+    borderTop: `1px solid ${tokens.colorNeutralStroke3}`,
   },
   runRow: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: tokens.spacingHorizontalM,
-    padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM}`,
-    backgroundColor: tokens.colorNeutralBackground1,
-    borderRadius: tokens.borderRadiusMedium,
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderBottom: `1px solid ${tokens.colorNeutralStroke3}`,
   },
   runTask: {
-    flex: 1,
     fontSize: tokens.fontSizeBase300,
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
-    whiteSpace: 'nowrap',
+    lineHeight: tokens.lineHeightBase300,
+    maxWidth: '60ch',
+    overflowWrap: 'anywhere',
+    wordBreak: 'normal',
   },
   runMeta: {
     fontSize: tokens.fontSizeBase200,
+    lineHeight: tokens.lineHeightBase200,
     color: tokens.colorNeutralForeground3,
+    fontVariantNumeric: 'tabular-nums',
+  },
+  runSection: {
+    display: 'flex',
+    flexDirection: 'column',
+    paddingTop: tokens.spacingVerticalXL,
+    paddingBottom: `calc(${tokens.spacingVerticalXXXL} + ${tokens.spacingVerticalXXXL})`,
+    borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
+  },
+  runAccordion: {
+    backgroundColor: tokens.colorNeutralBackground1,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusLarge,
+  },
+  runHeaderContent: {
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'flex-start',
+    gap: tokens.spacingVerticalXXS,
+    width: '100%',
+  },
+  runHeaderTitleRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalS,
+    flexWrap: 'wrap',
+    minWidth: 0,
+  },
+  runTitle: {
+    fontWeight: tokens.fontWeightSemibold,
+    fontSize: tokens.fontSizeBase400,
+    lineHeight: tokens.lineHeightBase400,
+    overflowWrap: 'anywhere',
+  },
+  runDescription: {
+    color: tokens.colorNeutralForeground3,
+    fontSize: tokens.fontSizeBase200,
+    lineHeight: tokens.lineHeightBase200,
+    maxWidth: '68ch',
+  },
+  runStatusStack: {
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'flex-start',
+    gap: tokens.spacingVerticalXXS,
+    maxWidth: '26ch',
+  },
+  runCountBadge: {
+    flexShrink: 0,
+    fontVariantNumeric: 'tabular-nums',
+  },
+  runPanelContent: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalS,
+    paddingTop: tokens.spacingVerticalXS,
+  },
+  runEmpty: {
+    color: tokens.colorNeutralForeground2,
+    lineHeight: tokens.lineHeightBase300,
+    maxWidth: '68ch',
+  },
+  runTable: {
+    minWidth: '720px',
+  },
+  runActionCell: {
     whiteSpace: 'nowrap',
+  },
+  errorText: {
+    color: tokens.colorStatusDangerForeground1,
+    display: 'block',
+    marginTop: tokens.spacingVerticalS,
   },
   dialogFields: {
     display: 'flex',
@@ -120,104 +198,118 @@ function RunRow({ run, projectId, onDeleted }: { run: WorkflowRunDto; projectId:
   };
 
   return (
-    <div className={styles.runRow}>
-      {coordLabel ? (
-        <Badge appearance="tint" color={
-          coordLabel === 'Complete' ? 'success' :
-          coordLabel === 'Failed' || coordLabel === 'Blocked' || coordLabel === 'Declined' ? 'danger' :
-          coordLabel === 'In review' || coordLabel === 'Awaiting assembly' ? 'warning' :
-          'informative'
-        }>
-          {coordLabel === 'Failed' && coordReason ? `Failed: ${coordReason}` : coordLabel}
-        </Badge>
-      ) : (
-      <Badge appearance="tint" color={
-        run.status === 'merged' ? 'success' :
-        run.status === 'completed' && run.result === 'no_changes' ? 'informative' :
-        run.status === 'completed' ? 'success' :
-        run.status === 'failed' || run.status === 'merge_failed' ? 'danger' :
-        run.status === 'in_progress' ? 'informative' : 'subtle'
-      }>
-        {run.status === 'completed' && run.result === 'no_changes' ? 'No Changes' :
-         run.status === 'completed' ? 'Completed' :
-         run.status === 'merged' ? 'Merged' :
-         run.status === 'failed' ? 'Failed' :
-         run.status === 'merge_failed' ? 'Merge Failed' :
-         run.status === 'declined' ? 'Declined' :
-         run.status === 'in_progress' ? 'Running' :
-         run.status === 'awaiting_review' ? 'Awaiting Review' :
-         run.status === 'merging' ? 'Merging' :
-         run.status}
-      </Badge>
-      )}
-      <Text className={styles.runTask}>{run.task ?? '(no task description)'}</Text>
-      <Text className={styles.runMeta}>{new Date(run.started_at).toLocaleString()}</Text>
-      {isCoord ? (
-        <Link to={`/projects/${projectId}/orchestrations/${run.workflow_run_id ?? run.execution_id}`} style={{ textDecoration: 'none' }}>
-          <Button appearance="secondary">Topology</Button>
-        </Link>
-      ) : (
-        <Link to={`/projects/${projectId}/runs/${run.workflow_run_id ?? run.execution_id}/workflow`} style={{ textDecoration: 'none' }}>
-          <Button appearance="secondary">Workflow</Button>
-        </Link>
-      )}
-      {isAbandonable && (
-        <>
-          <Button appearance="subtle" icon={<DismissCircleRegular />} disabled={acting} onClick={() => setConfirmOpen(true)} aria-label="Abandon run">
-            Abandon
-          </Button>
-          <Dialog open={confirmOpen} onOpenChange={(_, d) => setConfirmOpen(d.open)}>
-            <DialogSurface>
-              <DialogBody>
-                <DialogTitle>Abandon run?</DialogTitle>
-                <DialogContent>
-                  This will abandon the run and discard any pending changes. This cannot be undone.
-                  {error && <Text style={{ color: 'red', display: 'block', marginTop: 8 }}>{error}</Text>}
-                </DialogContent>
-                <DialogActions>
-                  <DialogTrigger disableButtonEnhancement>
-                    <Button appearance="secondary">Cancel</Button>
-                  </DialogTrigger>
-                  <Button appearance="primary" onClick={() => void handleConfirmed()}>
-                    Abandon
-                  </Button>
-                </DialogActions>
-              </DialogBody>
-            </DialogSurface>
-          </Dialog>
-        </>
-      )}
-      {isTerminal && (
-        <>
-          <Button
-            appearance="subtle"
-            icon={<DeleteRegular />}
-            disabled={acting}
-            onClick={() => setConfirmOpen(true)}
-            aria-label="Delete run"
-          />
-          <Dialog open={confirmOpen} onOpenChange={(_, d) => setConfirmOpen(d.open)}>
-            <DialogSurface>
-              <DialogBody>
-                <DialogTitle>Delete run?</DialogTitle>
-                <DialogContent>
-                  This will permanently delete the run and cannot be undone.
-                  {error && <Text style={{ color: 'red', display: 'block', marginTop: 8 }}>{error}</Text>}
-                </DialogContent>
-                <DialogActions>
-                  <DialogTrigger disableButtonEnhancement>
-                    <Button appearance="secondary">Cancel</Button>
-                  </DialogTrigger>
-                  <Button appearance="primary" onClick={() => void handleConfirmed()}>
-                    Delete
-                  </Button>
-                </DialogActions>
-              </DialogBody>
-            </DialogSurface>
-          </Dialog>
-        </>
-      )}
-    </div>
+    <TableRow className={styles.runRow}>
+      <TableCell>
+        {coordLabel ? (
+          <div className={styles.runStatusStack}>
+            <Badge appearance="tint" size="small" color={
+              coordLabel === 'Complete' ? 'success' :
+              coordLabel === 'Failed' || coordLabel === 'Blocked' || coordLabel === 'Declined' ? 'danger' :
+              coordLabel === 'In review' || coordLabel === 'Awaiting assembly' ? 'warning' :
+              'informative'
+            }>
+              {coordLabel}
+            </Badge>
+            {coordLabel === 'Failed' && coordReason && <Caption1 className={styles.runMeta}>{coordReason}</Caption1>}
+          </div>
+        ) : (
+          <Badge appearance="tint" size="small" color={
+            run.status === 'merged' ? 'success' :
+            run.status === 'completed' && run.result === 'no_changes' ? 'informative' :
+            run.status === 'completed' ? 'success' :
+            run.status === 'failed' || run.status === 'merge_failed' ? 'danger' :
+            run.status === 'in_progress' ? 'informative' : 'subtle'
+          }>
+            {run.status === 'completed' && run.result === 'no_changes' ? 'No Changes' :
+             run.status === 'completed' ? 'Completed' :
+             run.status === 'merged' ? 'Merged' :
+             run.status === 'failed' ? 'Failed' :
+             run.status === 'merge_failed' ? 'Merge Failed' :
+             run.status === 'declined' ? 'Declined' :
+             run.status === 'in_progress' ? 'Running' :
+             run.status === 'awaiting_review' ? 'Awaiting Review' :
+             run.status === 'merging' ? 'Merging' :
+             run.status}
+          </Badge>
+        )}
+      </TableCell>
+      <TableCell>
+        <Text className={styles.runTask}>{run.task ?? '(no task description)'}</Text>
+      </TableCell>
+      <TableCell>
+        <Text className={styles.runMeta}>{new Date(run.started_at).toLocaleString()}</Text>
+      </TableCell>
+      <TableCell className={styles.runActionCell}>
+        {isCoord ? (
+          <Link to={`/projects/${projectId}/orchestrations/${run.workflow_run_id ?? run.execution_id}`} style={{ textDecoration: 'none' }}>
+            <Button appearance="secondary" size="small">Topology</Button>
+          </Link>
+        ) : (
+          <Link to={`/projects/${projectId}/runs/${run.workflow_run_id ?? run.execution_id}/workflow`} style={{ textDecoration: 'none' }}>
+            <Button appearance="secondary" size="small">Workflow</Button>
+          </Link>
+        )}
+      </TableCell>
+      <TableCell className={styles.runActionCell}>
+        {isAbandonable && (
+          <>
+            <Button appearance="subtle" size="small" icon={<DismissCircleRegular />} disabled={acting} onClick={() => setConfirmOpen(true)} aria-label="Abandon run">
+              Abandon
+            </Button>
+            <Dialog open={confirmOpen} onOpenChange={(_, d) => setConfirmOpen(d.open)}>
+              <DialogSurface>
+                <DialogBody>
+                  <DialogTitle>Abandon run?</DialogTitle>
+                  <DialogContent>
+                    This will abandon the run and discard any pending changes. This cannot be undone.
+                    {error && <Text className={styles.errorText}>{error}</Text>}
+                  </DialogContent>
+                  <DialogActions>
+                    <DialogTrigger disableButtonEnhancement>
+                      <Button appearance="secondary">Cancel</Button>
+                    </DialogTrigger>
+                    <Button appearance="primary" onClick={() => void handleConfirmed()}>
+                      Abandon
+                    </Button>
+                  </DialogActions>
+                </DialogBody>
+              </DialogSurface>
+            </Dialog>
+          </>
+        )}
+        {isTerminal && (
+          <>
+            <Button
+              appearance="subtle"
+              size="small"
+              icon={<DeleteRegular />}
+              disabled={acting}
+              onClick={() => setConfirmOpen(true)}
+              aria-label="Delete run"
+            />
+            <Dialog open={confirmOpen} onOpenChange={(_, d) => setConfirmOpen(d.open)}>
+              <DialogSurface>
+                <DialogBody>
+                  <DialogTitle>Delete run?</DialogTitle>
+                  <DialogContent>
+                    This will permanently delete the run and cannot be undone.
+                    {error && <Text className={styles.errorText}>{error}</Text>}
+                  </DialogContent>
+                  <DialogActions>
+                    <DialogTrigger disableButtonEnhancement>
+                      <Button appearance="secondary">Cancel</Button>
+                    </DialogTrigger>
+                    <Button appearance="primary" onClick={() => void handleConfirmed()}>
+                      Delete
+                    </Button>
+                  </DialogActions>
+                </DialogBody>
+              </DialogSurface>
+            </Dialog>
+          </>
+        )}
+      </TableCell>
+    </TableRow>
   );
 }
 
@@ -289,7 +381,7 @@ export function ProjectPage() {
 
   return (
     <div className={styles.root}>
-      {loading && <Spinner label="Loading project" />}
+      {loading && <Spinner label="Loading project board" />}
 
       {error && (
         <MessageBar intent="error">
@@ -300,7 +392,7 @@ export function ProjectPage() {
       {project && !project.available && (
         <MessageBar intent="warning">
           <MessageBarBody>
-            This project is unavailable. The working directory may have moved or become inaccessible.
+            This project is unavailable. The agent worktree may have moved or become inaccessible.
           </MessageBarBody>
         </MessageBar>
       )}
@@ -309,7 +401,7 @@ export function ProjectPage() {
         <>
           <PageHeader
             title={project.name}
-            subtitle="Backlog, Ready, and in-flight work."
+            subtitle="Orchestrate agent tasks from intake through execution, review, and recovery."
             breadcrumb={
               <div className={styles.breadcrumb}>
                 <Link to="/" className={styles.breadcrumbLink}>Projects</Link>
@@ -329,14 +421,47 @@ export function ProjectPage() {
 
           <KanbanBoard projectId={projectId} />
 
-          <Title3>Runs</Title3>
-          {runs.length === 0 ? (
-            <Text>No runs yet. Start one above.</Text>
-          ) : (
-            <div className={styles.runList}>
-              {runs.map((r) => <RunRow key={r.workflow_run_id} run={r} projectId={projectId} onDeleted={handleRunDeleted} />)}
-            </div>
-          )}
+          <section className={styles.runSection} aria-labelledby="project-runs-title">
+            <Accordion className={styles.runAccordion} collapsible>
+              <AccordionItem value="run-audit">
+                <AccordionHeader expandIconPosition="end">
+                  <div className={styles.runHeaderContent}>
+                    <div className={styles.runHeaderTitleRow}>
+                      <Text id="project-runs-title" className={styles.runTitle}>Run audit trail</Text>
+                      <Badge className={styles.runCountBadge} appearance="tint" color={runs.length ? 'informative' : 'subtle'} size="small">{runs.length} runs</Badge>
+                    </div>
+                    <Caption1 className={styles.runDescription}>
+                      Collapsed by default. Open for historical navigation; use the board above for current recovery work.
+                    </Caption1>
+                  </div>
+                </AccordionHeader>
+                <AccordionPanel>
+                  <div className={styles.runPanelContent}>
+                    {runs.length === 0 ? (
+                      <Text className={styles.runEmpty}>No run history yet. Runs started from orchestration tasks will appear here for audit.</Text>
+                    ) : (
+                      <div className={styles.runList}>
+                        <Table className={styles.runTable} size="small" aria-label="Run audit trail history">
+                          <TableHeader>
+                            <TableRow>
+                              <TableHeaderCell>Status</TableHeaderCell>
+                              <TableHeaderCell>Task</TableHeaderCell>
+                              <TableHeaderCell>Started</TableHeaderCell>
+                              <TableHeaderCell>View</TableHeaderCell>
+                              <TableHeaderCell>Actions</TableHeaderCell>
+                            </TableRow>
+                          </TableHeader>
+                          <TableBody>
+                            {runs.map((r) => <RunRow key={r.workflow_run_id} run={r} projectId={projectId} onDeleted={handleRunDeleted} />)}
+                          </TableBody>
+                        </Table>
+                      </div>
+                    )}
+                  </div>
+                </AccordionPanel>
+              </AccordionItem>
+            </Accordion>
+          </section>
         </>
       )}
     </div>

@@ -22,17 +22,38 @@ const useStyles = makeStyles({
   },
   header: {
     display: 'flex',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     justifyContent: 'space-between',
     gap: tokens.spacingHorizontalXS,
+    flexWrap: 'wrap',
   },
   task: {
+    flex: '1 1 180px',
     fontWeight: tokens.fontWeightSemibold,
     fontSize: tokens.fontSizeBase300,
-    wordBreak: 'break-word',
+    lineHeight: tokens.lineHeightBase300,
+    overflowWrap: 'anywhere',
+    wordBreak: 'normal',
+    minWidth: 0,
   },
   meta: {
     color: tokens.colorNeutralForeground3,
+    fontSize: tokens.fontSizeBase200,
+    lineHeight: tokens.lineHeightBase200,
+    fontVariantNumeric: 'tabular-nums',
+  },
+  progressLine: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXS,
+    flexWrap: 'wrap',
+  },
+  ownerLine: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: tokens.spacingHorizontalS,
+    flexWrap: 'wrap',
   },
   agentChip: {
     display: 'flex',
@@ -44,12 +65,24 @@ const useStyles = makeStyles({
     alignItems: 'center',
     gap: tokens.spacingHorizontalXXS,
     flexShrink: 0,
+    flexWrap: 'wrap',
+    justifyContent: 'flex-end',
   },
   error: {
     color: tokens.colorPaletteRedForeground1,
     fontSize: tokens.fontSizeBase200,
   },
 });
+
+
+function humanize(value: string | null | undefined): string {
+  if (!value) return 'Unknown';
+  return value
+    .replace(/[_:-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/\b\w/g, (m) => m.toUpperCase());
+}
 
 function badgeColor(status: string): 'success' | 'danger' | 'warning' | 'informative' | 'subtle' {
   const s = status.toLowerCase();
@@ -80,6 +113,7 @@ export function RunCard({ card, projectId, onMutated }: RunCardProps) {
   // interactive and backlog-pickup coordinator runs and must not be used as the detail key.)
   const target = card.run_id;
   const stage = card.assembly_stage ?? card.work_plan_status ?? card.status;
+  const started = new Date(card.started_at).toLocaleString();
 
   const isRetryable = card.status === 'failed' || card.status === 'merge_failed';
   const retriedFromShort = card.retried_from ? card.retried_from.slice(0, 8) : null;
@@ -140,7 +174,7 @@ export function RunCard({ card, projectId, onMutated }: RunCardProps) {
               Approval needed
             </Badge>
           )}
-          <Badge appearance="tint" color={badgeColor(card.status)}>{card.status}</Badge>
+          <Badge appearance="tint" color={badgeColor(card.status)} size="small">{humanize(card.status)}</Badge>
           <Button
             appearance="subtle"
             size="small"
@@ -151,15 +185,20 @@ export function RunCard({ card, projectId, onMutated }: RunCardProps) {
           />
         </div>
       </div>
-      {stage && <Caption1 className={styles.meta}>{stage}</Caption1>}
-      {card.agent_name ? (
-        <div className={styles.agentChip} data-testid="run-card-agent">
-          <AgentAvatar name={card.agent_name} size={16} />
-          <Caption1 className={styles.meta}>{card.agent_name}</Caption1>
-        </div>
-      ) : (
-        <Caption1 className={styles.meta}>Coordinator</Caption1>
-      )}
+      <div className={styles.progressLine}>
+        <Caption1 className={styles.meta}>Progress: {humanize(stage)}</Caption1>
+        <Caption1 className={styles.meta}>Started {started}</Caption1>
+      </div>
+      <div className={styles.ownerLine}>
+        {card.agent_name ? (
+          <div className={styles.agentChip} data-testid="run-card-agent">
+            <AgentAvatar name={card.agent_name} size={16} />
+            <Caption1 className={styles.meta}>Owner: {card.agent_name}</Caption1>
+          </div>
+        ) : (
+          <Caption1 className={styles.meta}>Owner: Coordinator assigning agent</Caption1>
+        )}
+      </div>
       {retriedFromShort && (
         <Caption1 className={styles.meta}>
           Retried from{' '}
