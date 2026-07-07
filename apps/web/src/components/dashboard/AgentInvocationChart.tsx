@@ -56,10 +56,12 @@ export function AgentInvocationChart({
   points,
   title = 'Run creation count',
   subtitle = 'Daily project run creations across the selected range.',
+  emptyLabel = 'No run-creation telemetry for this range yet.',
 }: {
   points?: DailyInvocationPointDto[];
   title?: string;
   subtitle?: string;
+  emptyLabel?: string;
 }) {
   const styles = useStyles();
   const series = points ?? [];
@@ -68,7 +70,7 @@ export function AgentInvocationChart({
     <div className={styles.panel}>
       <MetricCardHeader title={title} subtitle={subtitle} />
       {series.length === 0 ? (
-        <MetricEmptyState>No invocation data yet.</MetricEmptyState>
+        <MetricEmptyState>{emptyLabel}</MetricEmptyState>
       ) : (
         <LineChart points={series} label={title} />
       )}

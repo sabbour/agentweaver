@@ -4,10 +4,12 @@ import { costChipLabel } from '../CostChip';
 import { MetricCardHeader, MetricEmptyState } from '../MetricTypography';
 
 const useStyles = makeStyles({
-  grid: {
+  diagnostics: {
     display: 'grid',
-    gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))',
+    gridTemplateColumns: 'minmax(0, 1.1fr) minmax(320px, .9fr)',
     gap: tokens.spacingHorizontalL,
+    alignItems: 'stretch',
+    '@media (max-width: 980px)': { gridTemplateColumns: '1fr' },
   },
   panel: {
     display: 'flex',
@@ -17,6 +19,54 @@ const useStyles = makeStyles({
     backgroundColor: tokens.colorNeutralBackground1,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     borderRadius: tokens.borderRadiusMedium,
+    minWidth: 0,
+  },
+  trendPanel: {
+    display: 'grid',
+    gridTemplateRows: 'auto 1fr',
+  },
+  chartStack: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+    gap: tokens.spacingHorizontalM,
+    '@media (max-width: 760px)': { gridTemplateColumns: '1fr' },
+  },
+  chartSlot: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalS,
+    minWidth: 0,
+    paddingTop: tokens.spacingVerticalS,
+  },
+  slotTitle: {
+    fontWeight: tokens.fontWeightSemibold,
+  },
+  latencyPanel: {
+    gridColumn: '1 / -1',
+  },
+  latencyGrid: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+    gap: tokens.spacingHorizontalL,
+    '@media (max-width: 760px)': { gridTemplateColumns: '1fr' },
+  },
+  subsection: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalS,
+    minWidth: 0,
+  },
+  pendingPanel: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalM,
+    padding: tokens.spacingVerticalL,
+    borderRadius: tokens.borderRadiusMedium,
+    backgroundColor: tokens.colorNeutralBackground2,
+    border: `1px dashed ${tokens.colorNeutralStroke2}`,
+  },
+  emptyCopy: {
+    maxWidth: '72ch',
   },
   list: {
     display: 'flex',
@@ -173,66 +223,94 @@ export function ModelPerformancePanels({ metrics }: { metrics: ProjectMetricsDto
   const totalInvocations = modelUsage.reduce((sum, row) => sum + row.invocationCount, 0);
   const hasInvocationTrend = invocationTrend.some((point) => point.count > 0);
   const hasAiCreditTrend = aiCreditUsageTrend.some((point) => point.totalNanoAiu > 0);
+  const hasModelUsage = modelUsage.some((row) => row.invocationCount > 0 || row.totalNanoAiu > 0);
+  const hasResponseDuration = responseDuration.some((row) => row.p50Ms != null || row.p95Ms != null);
+  const hasTtft = ttft.some((row) => row.p50Ms != null || row.p95Ms != null);
+  const hasAnyTelemetry = hasAiCreditTrend || hasModelUsage || hasResponseDuration || hasTtft;
+
+  if (!hasAnyTelemetry) {
+    return (
+      <div className={styles.pendingPanel}>
+        <MetricCardHeader
+          title="Model telemetry pending"
+          subtitle="No model usage, AI credit, or latency signals are available for this range yet."
+        />
+        <MetricEmptyState className={styles.emptyCopy}>
+          Run or complete an agent task to populate model mix, AI credit usage, response duration, and first-token timing.
+        </MetricEmptyState>
+      </div>
+    );
+  }
 
   return (
-    <div className={styles.grid}>
-      <div className={styles.panel}>
-        <MetricCardHeader title="Runs created over time" subtitle="Daily project run creations for the selected range." />
-        {invocationTrend.length === 0 || !hasInvocationTrend ? (
-          <MetricEmptyState>No run-creation data yet.</MetricEmptyState>
-        ) : (
-          <LineChart points={invocationTrend} valueOf={(point) => 'count' in point ? point.count : 0} label="Runs created over time" />
-        )}
+    <div className={styles.diagnostics}>
+      <div className={`${styles.panel} ${styles.trendPanel}`}>
+        <MetricCardHeader title="Model signal trend" subtitle="Run creation is shown as activity context; AI credit movement is the model evidence used for optimization." />
+        <div className={styles.chartStack}>
+          <div className={styles.chartSlot}>
+            <Text className={styles.slotTitle}>Runs created</Text>
+            {invocationTrend.length === 0 || !hasInvocationTrend ? (
+              <MetricEmptyState>No run-creation data yet.</MetricEmptyState>
+            ) : (
+              <LineChart points={invocationTrend} valueOf={(point) => 'count' in point ? point.count : 0} label="Runs created over time" />
+            )}
+          </div>
+          <div className={styles.chartSlot}>
+            <Text className={styles.slotTitle}>AI credit usage</Text>
+            {aiCreditUsageTrend.length === 0 || !hasAiCreditTrend ? (
+              <MetricEmptyState>No AI credit usage data yet.</MetricEmptyState>
+            ) : (
+              <LineChart
+                points={aiCreditUsageTrend}
+                valueOf={(point) => 'totalNanoAiu' in point ? point.totalNanoAiu : 0}
+                formatMax={(value) => costChipLabel(value, 0)?.replace(' AIC', '') ?? String(value)}
+                label="AI credit usage over time"
+              />
+            )}
+          </div>
+        </div>
       </div>
 
       <div className={styles.panel}>
-        <MetricCardHeader title="AI credit usage over time" subtitle="Daily AI credit usage across the selected range." />
-        {aiCreditUsageTrend.length === 0 || !hasAiCreditTrend ? (
-          <MetricEmptyState>No AI credit usage data yet.</MetricEmptyState>
-        ) : (
-          <LineChart
-            points={aiCreditUsageTrend}
-            valueOf={(point) => 'totalNanoAiu' in point ? point.totalNanoAiu : 0}
-            formatMax={(value) => costChipLabel(value, 0)?.replace(' AIC', '') ?? String(value)}
-            label="AI credit usage over time"
-          />
-        )}
+        <MetricCardHeader title="Model mix" subtitle="Compare spend and invocation share for the models that have emitted usage events." />
+        <div className={styles.subsection}>
+          <Text className={styles.slotTitle}>AI credit usage by model</Text>
+          {modelUsage.length === 0 ? (
+            <MetricEmptyState>No AI credit usage data yet.</MetricEmptyState>
+          ) : (
+            <BarList
+              rows={modelUsage}
+              valueOf={(row) => row.totalNanoAiu}
+              valueLabel={(row) => costChipLabel(row.totalNanoAiu, 0) ?? '—'}
+            />
+          )}
+        </div>
+        <div className={styles.subsection}>
+          <Text className={styles.slotTitle}>Invocation share</Text>
+          {modelUsage.length === 0 ? (
+            <MetricEmptyState>No model invocation data yet.</MetricEmptyState>
+          ) : (
+            <BarList
+              rows={modelUsage}
+              valueOf={(row) => row.invocationCount}
+              valueLabel={(row) => `${totalInvocations > 0 ? Math.round((row.invocationCount / totalInvocations) * 100) : 0}%`}
+            />
+          )}
+        </div>
       </div>
 
-      <div className={styles.panel}>
-        <MetricCardHeader title="AI credit usage by model" subtitle="Total AI credit usage per model; badges show usage event counts." />
-        {modelUsage.length === 0 ? (
-          <MetricEmptyState>No AI credit usage data yet.</MetricEmptyState>
-        ) : (
-          <BarList
-            rows={modelUsage}
-            valueOf={(row) => row.totalNanoAiu}
-            valueLabel={(row) => costChipLabel(row.totalNanoAiu, 0) ?? '—'}
-          />
-        )}
-      </div>
-
-      <div className={styles.panel}>
-        <MetricCardHeader title="Model invocation share" subtitle="Share of usage events attributed to each model across the selected range." />
-        {modelUsage.length === 0 ? (
-          <MetricEmptyState>No model invocation data yet.</MetricEmptyState>
-        ) : (
-          <BarList
-            rows={modelUsage}
-            valueOf={(row) => row.invocationCount}
-            valueLabel={(row) => `${totalInvocations > 0 ? Math.round((row.invocationCount / totalInvocations) * 100) : 0}%`}
-          />
-        )}
-      </div>
-
-      <div className={styles.panel}>
-        <MetricCardHeader title="Response duration by model" subtitle="P50 and P95 model latency from dependency telemetry." />
-        <PercentilesTable rows={responseDuration} emptyLabel="No response-duration data yet." />
-      </div>
-
-      <div className={styles.panel}>
-        <MetricCardHeader title="Time to first token by model" subtitle="P50 and P95 TTFT when first-token measurements are available." />
-        <PercentilesTable rows={ttft} emptyLabel="No TTFT data available yet." />
+      <div className={`${styles.panel} ${styles.latencyPanel}`}>
+        <MetricCardHeader title="Latency checkpoints" subtitle="P50 and P95 duration/TTFT stay grouped so slow models are visible without another card row." />
+        <div className={styles.latencyGrid}>
+          <div className={styles.subsection}>
+            <Text className={styles.slotTitle}>Response duration by model</Text>
+            <PercentilesTable rows={responseDuration} emptyLabel="No response-duration data yet." />
+          </div>
+          <div className={styles.subsection}>
+            <Text className={styles.slotTitle}>Time to first token by model</Text>
+            <PercentilesTable rows={ttft} emptyLabel="No TTFT data available yet." />
+          </div>
+        </div>
       </div>
     </div>
   );
