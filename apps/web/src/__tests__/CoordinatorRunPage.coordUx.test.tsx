@@ -107,6 +107,12 @@ describe('CoordinatorRunPage operator console redesign', () => {
     expect(text).toContain('Auto-approve');
     expect(text).toContain('Retry failed');
     expect(text).toContain('Stop run');
+    const toolbar = screen.getByRole('toolbar', { name: 'Run actions' });
+    expect(toolbar.textContent).toContain('Risk');
+    expect(toolbar.textContent).toContain('Run + children');
+    expect(toolbar.textContent).toContain('Retry after failure');
+    expect(text).not.toContain('Scoped risk mode');
+    expect(text).not.toContain('Applies only to this orchestration and child runs.');
     expect(text).not.toContain('Transaction trace');
     expect(text).not.toContain('Agent token breakdown');
   });

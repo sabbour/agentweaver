@@ -1186,46 +1186,99 @@ const useStyles = makeStyles({
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'flex-end',
-    gap: tokens.spacingHorizontalM,
-    flexWrap: 'wrap',
+    minWidth: 0,
     '@media (max-width: 640px)': {
       justifyContent: 'stretch',
       alignItems: 'stretch',
-      flexDirection: 'column',
     },
   },
-  actionGroup: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalXXS,
-    padding: `${tokens.spacingVerticalXXS} ${tokens.spacingHorizontalS}`,
+  operatorToolbar: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    flexWrap: 'wrap',
+    gap: tokens.spacingHorizontalS,
+    rowGap: tokens.spacingVerticalXS,
+    maxWidth: '100%',
+    padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalS}`,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusLarge,
+    backgroundColor: tokens.colorNeutralBackground2,
+    '@media (max-width: 640px)': {
+      width: '100%',
+      justifyContent: 'flex-start',
+    },
+  },
+  toolbarSection: {
+    minHeight: '32px',
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXS,
+    flexWrap: 'wrap',
+    minWidth: 0,
+  },
+  toolbarPrimarySection: {
+    flex: '0 0 auto',
+  },
+  riskToolbarSection: {
+    flex: '0 1 auto',
+    padding: `0 ${tokens.spacingHorizontalXS}`,
     borderRadius: tokens.borderRadiusMedium,
     backgroundColor: tokens.colorNeutralBackground1,
+    boxShadow: `inset 0 0 0 1px ${tokens.colorNeutralStroke3}`,
+    '@media (max-width: 640px)': {
+      flexBasis: '100%',
+    },
   },
-  riskActionGroup: {
-    backgroundColor: tokens.colorStatusWarningBackground1,
-    borderTopColor: tokens.colorStatusWarningBorder1,
-    borderRightColor: tokens.colorStatusWarningBorder1,
-    borderBottomColor: tokens.colorStatusWarningBorder1,
-    borderLeftColor: tokens.colorStatusWarningBorder1,
+  panelToolbarSection: {
+    marginLeft: 'auto',
+    '@media (max-width: 640px)': {
+      marginLeft: 0,
+    },
   },
-  actionGroupLabel: {
+  toolbarLabel: {
     fontSize: tokens.fontSizeBase100,
     lineHeight: tokens.lineHeightBase100,
     fontWeight: tokens.fontWeightSemibold,
     color: tokens.colorNeutralForeground3,
   },
-  actionGroupRow: {
-    display: 'flex',
+  toolbarDivider: {
+    width: '1px',
+    height: '24px',
+    backgroundColor: tokens.colorNeutralStroke2,
+    '@media (max-width: 640px)': {
+      display: 'none',
+    },
+  },
+  riskToggleRow: {
+    display: 'inline-flex',
     alignItems: 'center',
     gap: tokens.spacingHorizontalS,
     flexWrap: 'wrap',
   },
-  actionGroupHint: {
+  toolbarHint: {
     fontSize: tokens.fontSizeBase100,
     lineHeight: tokens.lineHeightBase100,
     color: tokens.colorNeutralForeground3,
+    whiteSpace: 'nowrap',
+    '@media (max-width: 640px)': {
+      whiteSpace: 'normal',
+    },
+  },
+  stopRunButton: {
+    color: tokens.colorStatusDangerForeground1,
+    borderTopColor: tokens.colorStatusDangerBorder1,
+    borderRightColor: tokens.colorStatusDangerBorder1,
+    borderBottomColor: tokens.colorStatusDangerBorder1,
+    borderLeftColor: tokens.colorStatusDangerBorder1,
+    ':hover': {
+      color: tokens.colorStatusDangerForeground1,
+      backgroundColor: tokens.colorStatusDangerBackground1,
+      borderTopColor: tokens.colorStatusDangerBorder1,
+      borderRightColor: tokens.colorStatusDangerBorder1,
+      borderBottomColor: tokens.colorStatusDangerBorder1,
+      borderLeftColor: tokens.colorStatusDangerBorder1,
+    },
   },
   bodyGrid: {
     minHeight: 0,
@@ -2734,6 +2787,12 @@ export function CoordinatorRunPage() {
     : viewState.bucket === 'blocked' || viewState.bucket === 'unknown' ? ` ${styles.statusChipWarning}`
     : ''
   }`;
+  const automationScopeHint = viewState.canToggleAutomation ? 'Run + children' : `Locked: ${viewState.label}`;
+  const retryHint = isRetryable ? 'Retry resumes failed work' : 'Retry after failure';
+  const stopHint = viewState.canStop ? 'Stop cancels run' : 'Stop while running';
+  const safetyHint = retrying ? 'Retrying…' : stopping ? 'Stopping…' : `${retryHint} · ${stopHint}`;
+  const retryAriaLabel = isRetryable ? 'Retry failed run' : `Retry failed unavailable: ${retryHint}`;
+  const stopAriaLabel = viewState.canStop ? 'Stop run' : `Stop run unavailable: ${stopHint}`;
 
   if (runLoadError && !restDescriptor && events.length === 0) {
     return (
@@ -2887,9 +2946,9 @@ export function CoordinatorRunPage() {
           </div>
 
           <div className={styles.topControls}>
-            <div className={styles.actionGroup} aria-label="Primary next action">
-              <span className={styles.actionGroupLabel}>Next action</span>
-              <div className={styles.actionGroupRow}>
+            <div className={styles.operatorToolbar} role="toolbar" aria-label="Run actions">
+              <div className={`${styles.toolbarSection} ${styles.toolbarPrimarySection}`} role="group" aria-label="Primary next action">
+                <span className={styles.toolbarLabel}>Next</span>
                 <Button
                   appearance="primary"
                   size="small"
@@ -2901,56 +2960,58 @@ export function CoordinatorRunPage() {
                   {primaryAction.label}
                 </Button>
               </div>
-            </div>
-            <div className={`${styles.actionGroup} ${styles.riskActionGroup}`} aria-label="Scoped risk mode">
-              <span className={styles.actionGroupLabel}>Scoped risk mode</span>
-              <div className={styles.actionGroupRow}>
-                <AutomationToggle
-                  label="Autopilot"
-                  info={AUTOMATION_HELP.autopilotOrchestration}
-                  checked={autopilot}
-                  disabled={autopilotBusy || !viewState.canToggleAutomation}
-                  onChange={(checked) => toggleAutopilot(checked)}
-                />
-                <AutomationToggle
-                  label="Auto-approve safe tools"
-                  info={AUTOMATION_HELP.autoApproveOrchestration}
-                  checked={autoApprove}
-                  disabled={autoApproveBusy || !viewState.canToggleAutomation}
-                  onChange={(checked) => toggleAutoApprove(checked)}
-                />
+              <div className={`${styles.toolbarSection} ${styles.riskToolbarSection}`} role="group" aria-label="Scoped risk controls">
+                <span className={styles.toolbarLabel}>Risk</span>
+                <div className={styles.riskToggleRow}>
+                  <AutomationToggle
+                    label="Autopilot"
+                    info={AUTOMATION_HELP.autopilotOrchestration}
+                    checked={autopilot}
+                    disabled={autopilotBusy || !viewState.canToggleAutomation}
+                    onChange={(checked) => toggleAutopilot(checked)}
+                  />
+                  <AutomationToggle
+                    label="Auto-approve safe tools"
+                    info={AUTOMATION_HELP.autoApproveOrchestration}
+                    checked={autoApprove}
+                    disabled={autoApproveBusy || !viewState.canToggleAutomation}
+                    onChange={(checked) => toggleAutoApprove(checked)}
+                  />
+                </div>
+                <span className={styles.toolbarHint}>{automationScopeHint}</span>
               </div>
-              <span className={styles.actionGroupHint}>
-                {viewState.canToggleAutomation ? 'Applies only to this orchestration and child runs.' : `Disabled while status is ${viewState.label}.`}
-              </span>
-            </div>
-            <div className={styles.actionGroup} aria-label="Run safety controls">
-              <span className={styles.actionGroupLabel}>Safety</span>
-              <div className={styles.actionGroupRow}>
+              <span className={styles.toolbarDivider} aria-hidden="true" />
+              <div className={styles.toolbarSection} role="group" aria-label="Run safety controls">
+                <span className={styles.toolbarLabel}>Safety</span>
                 <Button
-                  appearance="secondary"
+                  appearance={isRetryable ? 'secondary' : 'subtle'}
                   size="small"
                   icon={<ArrowRepeatAllRegular />}
                   disabled={!isRetryable || retrying}
                   onClick={() => void handleRetry()}
                   data-testid="coordinator-retry-button"
+                  aria-label={retryAriaLabel}
+                  title={retryHint}
                 >
                   Retry failed
                 </Button>
                 <Button
-                  appearance="secondary"
+                  appearance={viewState.canStop ? 'secondary' : 'subtle'}
+                  className={viewState.canStop ? styles.stopRunButton : undefined}
                   size="small"
                   icon={stopping ? <Spinner size="extra-tiny" /> : <DismissRegular />}
                   disabled={!viewState.canStop || stopping}
                   onClick={() => void handleStopRun()}
+                  aria-label={stopAriaLabel}
+                  title={stopHint}
                 >
                   Stop run
                 </Button>
+                <span className={styles.toolbarHint}>{safetyHint}</span>
               </div>
-            </div>
-            <div className={styles.actionGroup} aria-label="Secondary panels">
-              <span className={styles.actionGroupLabel}>Panels</span>
-              <div className={styles.actionGroupRow}>
+              <span className={styles.toolbarDivider} aria-hidden="true" />
+              <div className={`${styles.toolbarSection} ${styles.panelToolbarSection}`} role="group" aria-label="Secondary panels">
+                <span className={styles.toolbarLabel}>Panels</span>
                 {!isChildRun && (
                   <Button appearance="transparent" size="small" icon={<DocumentRegular />} onClick={() => setSpecPanelOpen(true)} data-testid="open-plan-panel">
                     Plan
