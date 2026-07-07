@@ -84,15 +84,50 @@ const useStyles = makeStyles({
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'space-between',
+    flexWrap: 'wrap',
+    rowGap: '6px',
     flexShrink: 0,
-    gap: tokens.spacingHorizontalM,
+    // Generous gap between the command cluster and the status cluster — they
+    // are two distinct groups, not a row of equal peers.
+    gap: tokens.spacingHorizontalL,
     ...shorthands.borderBottom('1px', 'solid', TERM.border),
     ...shorthands.padding('6px', tokens.spacingHorizontalM),
     backgroundColor: TERM.bgRaised,
   },
-  title: { fontWeight: 600, letterSpacing: '0.04em', color: TERM.accent },
-  headerMeta: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
+  // Title + quick-command chips read as ONE command cluster: tight internal
+  // gap so they group visually, separated from the status cluster by the
+  // header's own gap rather than by matching spacing throughout.
+  headerCommandGroup: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalS,
+    flexWrap: 'wrap',
+    rowGap: '4px',
+    minWidth: 0,
+  },
+  title: { fontWeight: 600, letterSpacing: '0.04em', color: TERM.accent, flexShrink: 0 },
+  // Quick command affordances live next to the title — plain bracketed text
+  // chips, not SaaS-style buttons/cards, so the status rail stays terminal-native.
+  headerChips: { display: 'flex', alignItems: 'center', gap: '2px', flexWrap: 'wrap' },
+  chip: {
+    fontFamily: TERM.mono,
+    fontSize: tokens.fontSizeBase200,
+    color: TERM.fgMuted,
+    backgroundColor: 'transparent',
+    minHeight: '24px',
+    ...shorthands.padding('2px', '8px'),
+    ...shorthands.border('1px', 'solid', TERM.border),
+    ...shorthands.borderRadius(tokens.borderRadiusSmall),
+    ':hover': { color: TERM.fg, ...shorthands.borderColor(TERM.accent) },
+    ':focus-visible': { outlineColor: TERM.accent, outlineStyle: 'solid', outlineWidth: '2px', outlineOffset: '1px' },
+    // Compensate hit-area for touch pointers without growing the visual chip.
+    '@media (pointer: coarse)': { minHeight: '44px', minWidth: '44px' },
+  },
+  // Project / run / busy-state read as ONE status cluster, right-aligned
+  // against the command cluster — a familiar two-zone terminal status bar.
+  headerMeta: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' },
   headerLabel: { color: TERM.fgMuted },
+  busyIndicator: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, color: TERM.warn },
   // The scrollback fills all remaining height — no more cramped 42% void.
   body: { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' },
   transcript: {
@@ -104,21 +139,36 @@ const useStyles = makeStyles({
     gap: '1px',
     ...shorthands.padding(tokens.spacingVerticalS, tokens.spacingHorizontalM),
   },
+  // Applied ONLY when a run panel is actually bound: on narrow/tablet widths
+  // the run panel and the pinned prompt both need room, so the transcript
+  // yields height instead of pushing them off-screen. With no run bound,
+  // the transcript is the only content below the header and should use all
+  // available vertical space rather than capping itself pre-emptively.
+  transcriptCapped: {
+    '@media (max-width: 680px)': { flex: '0 1 30vh', maxHeight: '30vh' },
+  },
   line: { whiteSpace: 'pre-wrap', wordBreak: 'break-word', display: 'flex', gap: tokens.spacingHorizontalXS },
+  // Each new user-submitted command starts a fresh "block" — a small top gap so a
+  // scrollback of many exchanges stays scannable without borders/nested cards.
+  blockStart: { marginTop: tokens.spacingVerticalM },
   gutter: { flexShrink: 0, width: '1.1em', textAlign: 'center', userSelect: 'none' },
   promptGlyph: { color: TERM.prompt },
   sysGlyph: { color: TERM.fgDim },
   errText: { color: TERM.err },
   warnText: { color: TERM.warn },
   okText: { color: TERM.ok },
-  linkList: { display: 'flex', flexDirection: 'column', gap: '1px', marginLeft: '1.5em' },
+  linkList: { display: 'flex', flexDirection: 'column', gap: '2px', marginLeft: '1.5em', marginTop: '2px' },
   link: {
     color: TERM.accent,
     textDecorationLine: 'none',
     display: 'inline-flex',
     alignItems: 'center',
     gap: '4px',
+    minHeight: '20px',
+    ...shorthands.borderRadius(tokens.borderRadiusSmall),
     ':hover': { textDecorationLine: 'underline' },
+    ':focus-visible': { outlineColor: TERM.accent, outlineStyle: 'solid', outlineWidth: '2px', outlineOffset: '2px' },
+    '@media (pointer: coarse)': { minHeight: '44px' },
   },
   // Bound-run panel shares the scrollback space (flex-grows past the console log).
   runPanel: {
@@ -130,15 +180,27 @@ const useStyles = makeStyles({
     backgroundColor: tokens.colorNeutralBackground1,
     color: tokens.colorNeutralForeground1,
     overflow: 'hidden',
+    '@media (max-width: 680px)': { flex: '1 1 auto', minHeight: '220px' },
   },
   runPanelHeader: {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'space-between',
+    flexWrap: 'wrap',
+    rowGap: '4px',
     gap: tokens.spacingHorizontalM,
     ...shorthands.padding(tokens.spacingVerticalXS, tokens.spacingHorizontalM),
     backgroundColor: tokens.colorNeutralBackground3,
     ...shorthands.borderBottom('1px', 'solid', tokens.colorNeutralStroke2),
+  },
+  // Status badges + reconnect + full-run link form one action group that
+  // wraps as a unit on narrow widths instead of overflowing the header.
+  runPanelActions: {
+    display: 'flex',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    rowGap: '4px',
+    gap: tokens.spacingHorizontalS,
   },
   gateBar: {
     display: 'flex',
@@ -173,10 +235,24 @@ const useStyles = makeStyles({
     userSelect: 'none',
     paddingTop: '5px',
     whiteSpace: 'nowrap',
+    // Below ~560px the branch/path context crowds out the input; drop it and
+    // keep just the caret so typing stays comfortable on phones.
+    '@media (max-width: 560px)': {
+      '& > *:not(:last-child)': { display: 'none' },
+    },
   },
   promptPath: { color: TERM.accent },
   promptBranch: { color: TERM.branch },
   promptCaret: { color: TERM.prompt, marginLeft: '0.4em', marginRight: '0.2em' },
+  // Discoverable submit shortcut — state feedback only, no onboarding overlay.
+  promptHint: {
+    flexShrink: 0,
+    color: TERM.fgDim,
+    fontSize: tokens.fontSizeBase100,
+    whiteSpace: 'nowrap',
+    paddingTop: '6px',
+    '@media (max-width: 640px)': { display: 'none' },
+  },
   blink: {
     animationName: {
       '0%, 49%': { opacity: 1 },
@@ -204,7 +280,10 @@ const useStyles = makeStyles({
       '::placeholder': { color: TERM.fgDim },
     },
   },
-  sendBtn: { flexShrink: 0 },
+  sendBtn: {
+    flexShrink: 0,
+    '@media (pointer: coarse)': { minHeight: '44px', minWidth: '44px' },
+  },
 });
 
 interface ConsoleLink { label: string; to: string }
@@ -253,8 +332,16 @@ function intakeCards(columns: BoardColumnDto[]): TaskCardDto[] {
 }
 
 function buildHelp(): string {
-  const cmds = SLASH_COMMANDS
-    .map((c) => `  /${c.name}${c.argHint ? ' ' + c.argHint : ''}\n      ${c.summary}  [MCP: ${c.mcp}]`)
+  // Align the command column so summaries read as a scannable table, not a
+  // ragged list — dense and predictable, like `man` or `--help` output.
+  const rows = SLASH_COMMANDS.map((c) => ({
+    head: `/${c.name}${c.argHint ? ' ' + c.argHint : ''}`,
+    summary: c.summary,
+    mcp: c.mcp,
+  }));
+  const col = Math.min(30, Math.max(...rows.map((r) => r.head.length)) + 2);
+  const cmds = rows
+    .map((r) => `  ${r.head.padEnd(col)}${r.summary}\n${' '.repeat(col + 2)}[MCP: ${r.mcp}]`)
     .join('\n');
   const deferred = DEFERRED_COMMANDS.map((c) => `  ${c.label} — ${c.summary}`).join('\n');
   return (
@@ -272,7 +359,13 @@ const GREETING: ConsoleLine = {
   tone: 'info',
   text:
     'agentweaver control console — terminal UX. Prose drives the real coordinator agent; ' +
-    '/commands drive the MCP-backed control plane. Type /help to begin, /projects to list projects.',
+    '/commands drive the MCP-backed control plane.\n\n' +
+    'Quick start:\n' +
+    '  /projects              list projects\n' +
+    '  /use <name or id>      set the active project\n' +
+    '  /orchestrate <goal>    start a coordinator run (confirms a plan before dispatch)\n' +
+    '  /monitor <runId>       bind the terminal to an existing run\n' +
+    '  /help                  full command + gate reference',
 };
 
 export function BrowserConsole() {
@@ -508,6 +601,25 @@ export function BrowserConsole() {
     }
   }, [input, busy, appendLine, runCommand, model, boundRunId, pendingGoal]);
 
+  // Header quick-command chips run the exact same zero-arg command path as typing
+  // it — they append the same "you typed this" line so the transcript stays the
+  // single source of truth, they're just a faster on-ramp for /help, /projects, /clear.
+  const runQuickCommand = useCallback(async (name: Extract<SlashCommandName, 'help' | 'projects' | 'clear'>) => {
+    if (busy) return;
+    appendLine('user', `/${name}`);
+    setBusy(true);
+    try {
+      const result = await runCommand(name, '');
+      if (result.setActiveProject !== undefined) setActiveProject(result.setActiveProject);
+      if (result.bindRunId !== undefined) { setBoundRunId(result.bindRunId); setBoundRunStatus(result.bindRunStatus); }
+      appendLine(result.tone, result.text, result.links);
+    } catch (err) {
+      appendLine('error', errText(err));
+    } finally {
+      setBusy(false);
+    }
+  }, [busy, appendLine, runCommand]);
+
   const toneClass = (tone: LineTone) => {
     switch (tone) {
       case 'error': return styles.errText;
@@ -532,8 +644,20 @@ export function BrowserConsole() {
   return (
     <div className={styles.root}>
       <div className={styles.header}>
-        <Text className={styles.title}>agentweaver://console</Text>
+        <div className={styles.headerCommandGroup}>
+          <Text className={styles.title}>agentweaver://console</Text>
+          <div className={styles.headerChips} role="group" aria-label="Quick commands">
+            <Button className={styles.chip} appearance="transparent" size="small" onClick={() => { void runQuickCommand('help'); }} disabled={busy}>help</Button>
+            <Button className={styles.chip} appearance="transparent" size="small" onClick={() => { void runQuickCommand('projects'); }} disabled={busy}>projects</Button>
+            <Button className={styles.chip} appearance="transparent" size="small" onClick={() => { void runQuickCommand('clear'); }} disabled={busy}>clear</Button>
+          </div>
+        </div>
         <div className={styles.headerMeta}>
+          {busy && (
+            <span className={styles.busyIndicator} role="status" aria-live="polite">
+              <Spinner size="tiny" /> <Text size={200}>working…</Text>
+            </span>
+          )}
           <Text size={200} className={styles.headerLabel}>project:</Text>
           <Badge appearance="tint" color={activeProject ? 'brand' : 'subtle'}>{activeLabel}</Badge>
           {boundRunId && <Badge appearance="tint" color="informative">{boundRunKind} · {boundRunId.slice(0, 8)}</Badge>}
@@ -541,9 +665,9 @@ export function BrowserConsole() {
       </div>
 
       <div className={styles.body}>
-        <div className={styles.transcript} ref={transcriptRef} aria-label="Console transcript" role="log">
-          {lines.map((l) => (
-            <div key={l.id}>
+        <div className={styles.transcript + (boundRunId ? ` ${styles.transcriptCapped}` : '')} ref={transcriptRef} aria-label="Console transcript" role="log">
+          {lines.map((l, idx) => (
+            <div key={l.id} className={l.tone === 'user' && idx > 0 ? styles.blockStart : undefined}>
               <div className={styles.line}>
                 <span className={`${styles.gutter} ${l.tone === 'user' ? styles.promptGlyph : styles.sysGlyph}`} aria-hidden="true">
                   {l.tone === 'user' ? '❯' : '·'}
@@ -569,7 +693,7 @@ export function BrowserConsole() {
               <Text weight="semibold" size={200}>
                 run {boundRunId.slice(0, 12)} · {model.derivedRunStatus}
               </Text>
-              <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS }}>
+              <div className={styles.runPanelActions}>
                 <Badge appearance="outline" color={model.status === 'streaming' ? 'success' : model.status === 'error' ? 'danger' : model.status === 'done' ? 'informative' : 'warning'}>
                   {model.status}
                 </Badge>
@@ -640,6 +764,7 @@ export function BrowserConsole() {
           aria-label="Console input"
         />
         {!input && !busy && <span className={`${styles.promptCaret} ${styles.blink}`} aria-hidden="true">▋</span>}
+        <span className={styles.promptHint} aria-hidden="true">⏎ send · ⇧⏎ newline</span>
         <Button className={styles.sendBtn} size="small" appearance="subtle" icon={busy ? <Spinner size="tiny" /> : <Send16Regular />} disabled={busy || !input.trim()} onClick={() => void submit()}>
           Send
         </Button>

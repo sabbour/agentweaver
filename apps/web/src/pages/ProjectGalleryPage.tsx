@@ -22,7 +22,6 @@ import {
   Spinner,
   Text,
   Textarea,
-  Title3,
   makeStyles,
   tokens,
 } from '@fluentui/react-components';
@@ -66,13 +65,9 @@ const useStyles = makeStyles({
     flexDirection: 'column',
     gap: tokens.spacingVerticalL,
   },
-  toolbar: {
-    display: 'flex',
-    gap: tokens.spacingHorizontalM,
-  },
   grid: {
     display: 'grid',
-    gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))',
+    gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))',
     gap: tokens.spacingVerticalM,
   },
   card: {
@@ -85,11 +80,26 @@ const useStyles = makeStyles({
     flexDirection: 'column',
     gap: tokens.spacingVerticalXS,
   },
+  cardOriginRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXS,
+  },
+  cardRepo: {
+    color: tokens.colorNeutralForeground3,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  },
   cardDir: {
     fontFamily: tokens.fontFamilyMonospace,
     fontSize: tokens.fontSizeBase200,
     color: tokens.colorNeutralForeground3,
     wordBreak: 'break-all',
+  },
+  cardWarning: {
+    color: tokens.colorPaletteMarigoldForeground1,
+    fontSize: tokens.fontSizeBase200,
   },
   cardActions: {
     display: 'flex',
@@ -99,9 +109,19 @@ const useStyles = makeStyles({
   emptyState: {
     display: 'flex',
     flexDirection: 'column',
-    gap: tokens.spacingVerticalM,
+    gap: tokens.spacingVerticalS,
     alignItems: 'flex-start',
     padding: `${tokens.spacingVerticalXXL} 0`,
+    maxWidth: '640px',
+  },
+  emptyBody: {
+    color: tokens.colorNeutralForeground3,
+  },
+  emptyActions: {
+    display: 'flex',
+    gap: tokens.spacingHorizontalM,
+    flexWrap: 'wrap',
+    marginTop: tokens.spacingVerticalS,
   },
   dialogFields: {
     display: 'flex',
@@ -112,7 +132,6 @@ const useStyles = makeStyles({
     display: 'flex',
     gap: '24px',
     alignItems: 'stretch',
-    minHeight: '560px',
     '@media (max-width: 680px)': {
       flexDirection: 'column',
     },
@@ -123,13 +142,14 @@ const useStyles = makeStyles({
     gap: tokens.spacingVerticalL,
     flex: '0 0 40%',
     width: '40%',
-    minWidth: '360px',
+    minWidth: '320px',
     padding: '24px',
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     borderRadius: tokens.borderRadiusXLarge,
     backgroundColor: tokens.colorNeutralBackground1,
     '@media (max-width: 680px)': {
       width: '100%',
+      minWidth: '0',
     },
   },
   dialogRightCol: {
@@ -140,12 +160,15 @@ const useStyles = makeStyles({
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     borderRadius: tokens.borderRadiusXLarge,
     backgroundColor: tokens.colorNeutralBackground1,
-    minWidth: '360px',
-    height: '640px',
-    maxHeight: 'min(640px, calc(100vh - 220px))',
+    minWidth: '320px',
+    maxHeight: 'calc(100vh - 220px)',
     overflow: 'hidden',
     paddingRight: tokens.spacingHorizontalXS,
     gap: tokens.spacingVerticalM,
+    '@media (max-width: 680px)': {
+      minWidth: '0',
+      maxHeight: 'none',
+    },
   },
   dialogSurface: { maxWidth: '1180px', width: 'min(1180px, calc(100vw - 48px))', backgroundColor: tokens.colorNeutralBackground2, position: 'relative', padding: tokens.spacingVerticalXL },
   closeButton: { position: 'absolute', right: tokens.spacingHorizontalM, top: tokens.spacingVerticalM, minWidth: '32px', border: 0 },
@@ -197,9 +220,9 @@ const useStyles = makeStyles({
     display: 'inline-flex', gap: tokens.spacingHorizontalXS, padding: tokens.spacingVerticalXXS,
     backgroundColor: tokens.colorNeutralBackground3, borderRadius: tokens.borderRadiusXLarge, alignSelf: 'flex-start',
   },
-  footerSplit: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%', gap: tokens.spacingHorizontalL },
-  footerLeft: { display: 'flex', flexDirection: 'row', alignItems: 'center', gap: tokens.spacingHorizontalM, marginRight: 'auto' },
-  footerActions: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
+  footerSplit: { display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center', width: '100%', gap: tokens.spacingHorizontalL, rowGap: tokens.spacingVerticalS },
+  footerLeft: { display: 'flex', flexDirection: 'row', alignItems: 'center', gap: tokens.spacingHorizontalM, marginRight: 'auto', flexWrap: 'wrap' },
+  footerActions: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' },
   repositoryPanel: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM },
   listBlock: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS },
   listHeader: { display: 'flex', justifyContent: 'space-between', alignItems: 'center' },
@@ -437,13 +460,12 @@ function CreateBlankDialog({ onCreated, dataDir, workspaceAutoAssigned }: { onCr
         {generation.generating ? 'Generating' : 'Generate Blueprint'}
       </Button>
       {generation.error && <MessageBar intent="error"><MessageBarBody>{generation.error}</MessageBarBody></MessageBar>}
-      <Text className={styles.tipLine}>Our AI will generate a tailored squad, workflow, and review policy.</Text>
       <div className={styles.infoBox}>
-        <Text weight="semibold">What happens next?</Text>
+        <Text weight="semibold">How blueprint generation works</Text>
         {[
-          ['We generate a custom blueprint', 'Agents, workflows, and review policies tailored to your goal.'],
-          ['Customize to your needs', 'Adjust agents, tools, and workflows before creating.'],
-          ['Create your project', 'Your project will be ready to go in seconds.'],
+          ['Describe your goal', 'Our AI will generate a tailored squad, workflow, and review policy from it.'],
+          ['Review the draft', 'Check the proposed agents and roster on the right, or pick a template instead.'],
+          ['Create when ready', 'Nothing is created until you confirm below — adjust the goal and regenerate anytime.'],
         ].map(([label, copy], index) => (
           <div key={label} className={styles.stepRow}>
             <span className={styles.stepBadge}>{index + 1}</span>
@@ -692,7 +714,7 @@ function CreateFromGitHubDialog({ onCreated, dataDir, workspaceAutoAssigned }: {
 
       {authRequired && (
         <MessageBar intent="warning">
-          <MessageBarBody>Connect your GitHub account to list repositories, or paste any public owner/repo.</MessageBarBody>
+          <MessageBarBody>Connect your GitHub account to list repositories, including private ones you can access. Public repos can still be pasted below without connecting.</MessageBarBody>
           <MessageBarActions><Button size="small" onClick={() => { window.location.href = GITHUB_AUTHORIZE_URL; }}>Connect GitHub</Button></MessageBarActions>
         </MessageBar>
       )}
@@ -759,7 +781,7 @@ function CreateFromGitHubDialog({ onCreated, dataDir, workspaceAutoAssigned }: {
       )}
 
       <div className={styles.infoBox}>
-        <Text><InfoRegular /> You can import any public repository on GitHub. Private repositories require connection.</Text>
+        <Text><InfoRegular /> Any public GitHub repository can be imported directly by owner/repo. Private repositories need a connected GitHub account first.</Text>
       </div>
       {d.error && <MessageBar intent="error"><MessageBarBody>{d.error}</MessageBarBody></MessageBar>}
     </div>
@@ -799,26 +821,34 @@ function CreateFromGitHubDialog({ onCreated, dataDir, workspaceAutoAssigned }: {
   );
 }
 
+function formatSourceRepository(url: string): string {
+  return url.replace(/^https:\/\/github\.com\//, '');
+}
+
 function ProjectCard({ project, onOpen }: { project: Project; onOpen: () => void }) {
   const styles = useStyles();
+  const isGitHub = project.origin === 'github';
   return (
     <Card className={styles.card}>
       <CardHeader
-        header={<Title3>{project.name}</Title3>}
+        header={<Text weight="semibold" size={400}>{project.name}</Text>}
         action={
-          <Badge
-            appearance="filled"
-            color={project.available ? 'success' : 'warning'}
-          >
+          <Badge appearance="tint" size="small" color={project.available ? 'success' : 'warning'}>
             {project.available ? 'Available' : 'Unavailable'}
           </Badge>
         }
       />
       <div className={styles.cardMeta}>
-        {project.source_repository && (
-          <Text size={200}>{project.source_repository}</Text>
-        )}
+        <div className={styles.cardOriginRow}>
+          <Badge appearance="outline" size="small">{isGitHub ? 'GitHub' : 'Blank'}</Badge>
+          {project.source_repository && (
+            <Text size={200} className={styles.cardRepo}>{formatSourceRepository(project.source_repository)}</Text>
+          )}
+        </div>
         <Text className={styles.cardDir}>{project.working_directory}</Text>
+        {!project.available && (
+          <Text className={styles.cardWarning}>Working directory may have moved or become inaccessible.</Text>
+        )}
       </div>
       <div className={styles.cardActions}>
         <Button appearance="primary" size="small" onClick={onOpen}>Open</Button>
@@ -830,7 +860,7 @@ function ProjectCard({ project, onOpen }: { project: Project; onOpen: () => void
 export function ProjectGalleryPage() {
   const styles = useStyles();
   const navigate = useNavigate();
-  const { projects, loading, authError, loadError, errorMessage, appendProject } = useProjectList();
+  const { projects, loading, authError, loadError, errorMessage, appendProject, refetch } = useProjectList();
   const [dataDir, setDataDir] = useState<string | null>(null);
   const [workspaceAutoAssigned, setWorkspaceAutoAssigned] = useState(false);
 
@@ -851,11 +881,22 @@ export function ProjectGalleryPage() {
     appendProject(project);
   };
 
+  const showGalleryActions = !loading && !authError && projects.length > 0;
+
   return (
     <div className={styles.root}>
-      <PageHeader title="Projects" subtitle="Your Agentweaver projects." />
+      <PageHeader
+        title="Projects"
+        subtitle="Open an existing project, or create one from GitHub or a blueprint."
+        actions={showGalleryActions ? (
+          <>
+            <CreateBlankDialog onCreated={handleCreated} dataDir={dataDir} workspaceAutoAssigned={workspaceAutoAssigned} />
+            <CreateFromGitHubDialog onCreated={handleCreated} dataDir={dataDir} workspaceAutoAssigned={workspaceAutoAssigned} />
+          </>
+        ) : undefined}
+      />
 
-      {loading && <Spinner label="Loading projects" />}
+      {loading && <Spinner label="Loading projects…" />}
 
       {!loading && authError && (
         <MessageBar intent="warning">
@@ -876,13 +917,20 @@ export function ProjectGalleryPage() {
       {loadError && (
         <MessageBar intent="error">
           <MessageBarBody>{errorMessage ?? 'Failed to load projects.'}</MessageBarBody>
+          <MessageBarActions>
+            <Button size="small" onClick={refetch}>Retry</Button>
+          </MessageBarActions>
         </MessageBar>
       )}
 
       {!loading && !loadError && !authError && projects.length === 0 && (
         <div className={styles.emptyState}>
-          <Text>No projects yet. Create one to get started.</Text>
-          <div className={styles.toolbar}>
+          <Text weight="semibold" size={500}>No projects yet. Create one to get started.</Text>
+          <Text className={styles.emptyBody}>
+            A project pairs a working directory with a squad and workflow so agents can start real work right away.
+            Import an existing GitHub repository, or start blank and describe a goal for a tailored blueprint.
+          </Text>
+          <div className={styles.emptyActions}>
             <CreateBlankDialog onCreated={handleCreated} dataDir={dataDir} workspaceAutoAssigned={workspaceAutoAssigned} />
             <CreateFromGitHubDialog onCreated={handleCreated} dataDir={dataDir} workspaceAutoAssigned={workspaceAutoAssigned} />
           </div>
@@ -890,21 +938,15 @@ export function ProjectGalleryPage() {
       )}
 
       {!loading && projects.length > 0 && (
-        <>
-          <div className={styles.toolbar}>
-            <CreateBlankDialog onCreated={handleCreated} dataDir={dataDir} workspaceAutoAssigned={workspaceAutoAssigned} />
-            <CreateFromGitHubDialog onCreated={handleCreated} dataDir={dataDir} workspaceAutoAssigned={workspaceAutoAssigned} />
-          </div>
-          <div className={styles.grid}>
-            {projects.map((p) => (
-              <ProjectCard
-                key={p.project_id}
-                project={p}
-                onOpen={() => navigate(`/projects/${p.project_id}`)}
-              />
-            ))}
-          </div>
-        </>
+        <div className={styles.grid}>
+          {projects.map((p) => (
+            <ProjectCard
+              key={p.project_id}
+              project={p}
+              onOpen={() => navigate(`/projects/${p.project_id}`)}
+            />
+          ))}
+        </div>
       )}
     </div>
   );
