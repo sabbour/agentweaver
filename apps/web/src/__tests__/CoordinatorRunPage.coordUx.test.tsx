@@ -117,6 +117,38 @@ describe('CoordinatorRunPage operator console redesign', () => {
     expect(text).not.toContain('Agent token breakdown');
   });
 
+  it('keeps run identity in a protected header slot and lets actions wrap', async () => {
+    render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    const header = await screen.findByTestId('run-header', undefined, { timeout: 4000 });
+    const summary = screen.getByTestId('run-summary');
+    const actionsRow = screen.getByTestId('run-actions-row');
+    const toolbar = screen.getByRole('toolbar', { name: 'Run actions' });
+
+    expect(summary.parentElement).toBe(header);
+    expect(actionsRow.parentElement).toBe(header);
+    expect(Array.from(header.children).indexOf(summary)).toBeLessThan(Array.from(header.children).indexOf(actionsRow));
+    expect(summary.textContent).toContain('Status source:');
+
+    const toolbarStyle = getComputedStyle(toolbar);
+    expect(toolbarStyle.flexWrap).toBe('wrap');
+    expect(toolbarStyle.maxWidth).toBe('100%');
+    expect(toolbarStyle.borderTopStyle).toBe('none');
+
+    const cssText = Array.from(document.styleSheets)
+      .flatMap((sheet) => {
+        try {
+          return Array.from(sheet.cssRules).map((rule) => rule.cssText);
+        } catch {
+          return [];
+        }
+      })
+      .join('\n');
+    expect(cssText).toMatch(/grid-template-columns:\s*minmax\(360px,\s*1fr\)\s+minmax\(0(?:px)?,\s*720px\)/);
+    expect(cssText).toContain('grid-area: identity');
+    expect(cssText).toContain('grid-area: actions');
+  });
+
   it('uses the run tree as task-structured navigation and scopes the composer to the selected task', async () => {
     render(<Wrapper><CoordinatorRunPage /></Wrapper>);
 

@@ -910,6 +910,7 @@ const useStyles = makeStyles({
     fontSize: tokens.fontSizeBase200,
     color: tokens.colorNeutralForeground3,
     lineHeight: tokens.lineHeightBase200,
+    overflowWrap: 'break-word',
   },
   stateReason: {
     color: tokens.colorNeutralForeground2,
@@ -1092,18 +1093,22 @@ const useStyles = makeStyles({
   },
   topZone: {
     display: 'grid',
-    gridTemplateColumns: 'minmax(0, 1fr) minmax(260px, auto)',
+    gridTemplateColumns: 'minmax(360px, 1fr) minmax(0, 720px)',
+    gridTemplateAreas: '"identity actions"',
     gap: tokens.spacingHorizontalL,
     rowGap: tokens.spacingVerticalS,
     alignItems: 'start',
+    maxWidth: '100%',
     padding: `${tokens.spacingVerticalM} ${tokens.spacingHorizontalL}`,
     borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground1,
-    '@media (max-width: 1180px)': {
+    '@media (max-width: 1320px)': {
       gridTemplateColumns: '1fr',
+      gridTemplateAreas: '"identity" "actions"',
     },
   },
   titleStack: {
+    gridArea: 'identity',
     display: 'flex',
     flexDirection: 'column',
     gap: tokens.spacingVerticalS,
@@ -1140,6 +1145,7 @@ const useStyles = makeStyles({
     display: 'inline-flex',
     alignItems: 'center',
     gap: tokens.spacingHorizontalXXS,
+    whiteSpace: 'nowrap',
     minHeight: '26px',
     padding: `${tokens.spacingVerticalXXS} ${tokens.spacingHorizontalS}`,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
@@ -1183,27 +1189,43 @@ const useStyles = makeStyles({
     color: tokens.colorNeutralForeground4,
   },
   topControls: {
+    gridArea: 'actions',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'flex-end',
     minWidth: 0,
+    width: '100%',
+    maxWidth: '100%',
+    '@media (max-width: 1320px)': {
+      justifyContent: 'flex-start',
+    },
     '@media (max-width: 640px)': {
       justifyContent: 'stretch',
       alignItems: 'stretch',
     },
   },
   operatorToolbar: {
-    display: 'inline-flex',
+    display: 'flex',
     alignItems: 'center',
     justifyContent: 'flex-end',
     flexWrap: 'wrap',
     gap: tokens.spacingHorizontalS,
     rowGap: tokens.spacingVerticalXS,
+    width: 'fit-content',
     maxWidth: '100%',
-    padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalS}`,
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: tokens.borderRadiusLarge,
-    backgroundColor: tokens.colorNeutralBackground2,
+    padding: 0,
+    borderTopStyle: 'none',
+    borderRightStyle: 'none',
+    borderBottomStyle: 'none',
+    borderLeftStyle: 'none',
+    borderTopWidth: '0',
+    borderRightWidth: '0',
+    borderBottomWidth: '0',
+    borderLeftWidth: '0',
+    backgroundColor: 'transparent',
+    '@media (max-width: 1320px)': {
+      justifyContent: 'flex-start',
+    },
     '@media (max-width: 640px)': {
       width: '100%',
       justifyContent: 'flex-start',
@@ -1216,15 +1238,17 @@ const useStyles = makeStyles({
     gap: tokens.spacingHorizontalXS,
     flexWrap: 'wrap',
     minWidth: 0,
+    maxWidth: '100%',
   },
   toolbarPrimarySection: {
     flex: '0 0 auto',
   },
   riskToolbarSection: {
-    flex: '0 1 auto',
+    flex: '1 1 360px',
+    minWidth: 0,
     padding: `0 ${tokens.spacingHorizontalXS}`,
     borderRadius: tokens.borderRadiusMedium,
-    backgroundColor: tokens.colorNeutralBackground1,
+    backgroundColor: tokens.colorNeutralBackground2,
     boxShadow: `inset 0 0 0 1px ${tokens.colorNeutralStroke3}`,
     '@media (max-width: 640px)': {
       flexBasis: '100%',
@@ -1255,6 +1279,7 @@ const useStyles = makeStyles({
     alignItems: 'center',
     gap: tokens.spacingHorizontalS,
     flexWrap: 'wrap',
+    minWidth: 0,
   },
   toolbarHint: {
     fontSize: tokens.fontSizeBase100,
@@ -2877,8 +2902,8 @@ export function CoordinatorRunPage() {
       )}
 
       <div className={styles.console} data-testid="run-operator-console">
-        <div className={styles.topZone}>
-          <div className={styles.titleStack}>
+        <div className={styles.topZone} data-testid="run-header">
+          <div className={styles.titleStack} data-testid="run-summary">
             <div className={styles.topTitleRow}>
               <Title2 className={styles.titleText} title={`Orchestration: ${selectedWorkflow?.name ?? goal ?? shortId}`}>
                 Orchestration: {selectedWorkflow?.name ?? goal ?? shortId}
@@ -2945,8 +2970,8 @@ export function CoordinatorRunPage() {
             {viewState.reason && <Text className={styles.stateReason}>{viewState.reason}</Text>}
           </div>
 
-          <div className={styles.topControls}>
-            <div className={styles.operatorToolbar} role="toolbar" aria-label="Run actions">
+          <div className={styles.topControls} data-testid="run-actions-row">
+            <div className={styles.operatorToolbar} role="toolbar" aria-label="Run actions" data-testid="run-actions-toolbar">
               <div className={`${styles.toolbarSection} ${styles.toolbarPrimarySection}`} role="group" aria-label="Primary next action">
                 <span className={styles.toolbarLabel}>Next</span>
                 <Button
