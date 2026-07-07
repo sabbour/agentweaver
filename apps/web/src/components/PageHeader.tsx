@@ -17,6 +17,8 @@ const useStyles = makeStyles({
     alignItems: 'flex-start',
     justifyContent: 'space-between',
     gap: tokens.spacingHorizontalL,
+    rowGap: tokens.spacingVerticalS,
+    flexWrap: 'wrap',
   },
   titleBlock: {
     display: 'flex',
@@ -41,7 +43,7 @@ const useStyles = makeStyles({
     display: 'flex',
     gap: tokens.spacingHorizontalM,
     alignItems: 'center',
-    flexShrink: 0,
+    flexWrap: 'wrap',
   },
 });
 

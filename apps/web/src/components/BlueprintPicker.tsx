@@ -1,4 +1,4 @@
-import { type ReactElement, useEffect, useState } from 'react';
+import { type ReactElement, useEffect, useRef, useState } from 'react';
 import {
   Badge,
   Button,
@@ -47,9 +47,12 @@ const useStyles = makeStyles({
   panelBody: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL, minHeight: 0, overflowY: 'auto', paddingRight: tokens.spacingHorizontalXS },
   sectionHeader: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: tokens.spacingHorizontalM },
   subtle: { color: tokens.colorNeutralForeground3 },
-  emptyCard: { display: 'flex', flexDirection: 'column', alignItems: 'center', gap: tokens.spacingVerticalS, padding: tokens.spacingVerticalXXXL, textAlign: 'center', backgroundColor: tokens.colorNeutralBackground1, border: `1px solid ${tokens.colorNeutralStroke2}`, minHeight: '190px', justifyContent: 'center', overflowWrap: 'anywhere' },
+  emptyCard: { display: 'flex', flexDirection: 'column', alignItems: 'center', gap: tokens.spacingVerticalXS, padding: tokens.spacingVerticalXL, textAlign: 'center', backgroundColor: tokens.colorNeutralBackground1, border: `1px solid ${tokens.colorNeutralStroke2}`, minHeight: '140px', justifyContent: 'center', overflowWrap: 'anywhere' },
+  tabLinks: { display: 'flex', flexWrap: 'wrap', gap: tokens.spacingHorizontalS },
+  // Always reflows (auto-fit columns down to 1 on narrow containers) instead of
+  // scrolling horizontally — a fixed-width dialog column should never need an
+  // inner horizontal scrollbar to see the rest of the templates.
   templateGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: tokens.spacingHorizontalM, alignItems: 'stretch' },
-  templateRow: { display: 'flex', gap: tokens.spacingHorizontalM, overflowX: 'auto', paddingBottom: tokens.spacingVerticalXS },
   radioCard: { width: '100%', minWidth: '180px', minHeight: '220px', cursor: 'pointer', padding: tokens.spacingVerticalM },
   selectedCard: { border: `2px solid ${tokens.colorBrandStroke1}` },
   cardLabel: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS, width: '100%' },
@@ -69,8 +72,6 @@ const useStyles = makeStyles({
   suggestedCard: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, border: `1px solid ${tokens.colorPaletteGreenBorderActive}`, boxShadow: tokens.shadow4, padding: tokens.spacingVerticalL },
   suggestedHeader: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: tokens.spacingHorizontalS },
   suggestedFooter: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: tokens.spacingHorizontalM, borderTop: `1px solid ${tokens.colorNeutralStroke2}`, paddingTop: tokens.spacingVerticalM },
-  customBlueprintRow: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: tokens.spacingHorizontalM, padding: tokens.spacingVerticalM, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium, backgroundColor: tokens.colorNeutralBackground1, cursor: 'pointer', textAlign: 'left' },
-  customBlueprintMain: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM },
 });
 
 export function useBlueprintCatalog(active: boolean) {
@@ -206,14 +207,16 @@ export function BlueprintTemplatePicker({
   limit?: number;
 }) {
   const styles = useStyles();
+  // `limit` only caps how many templates are shown (the rest are one click away
+  // via "View all templates"); it never changes the layout algorithm — this grid
+  // always reflows, it never becomes a horizontally-scrolling row.
   const visible = typeof limit === 'number' ? blueprints.slice(0, limit) : blueprints;
-  const templateListClass = typeof limit === 'number' ? styles.templateRow : styles.templateGrid;
 
   return (
     <div className={styles.root} role="radiogroup" aria-label="Blueprint templates">
       {error && <MessageBar intent="warning"><MessageBarBody>Could not load blueprints: {error}</MessageBarBody></MessageBar>}
       {loading && <div className={styles.generateBar}><Spinner size="extra-tiny" /> <Text size={200}>Loading blueprints…</Text></div>}
-      <div className={templateListClass}>
+      <div className={styles.templateGrid}>
         {visible.map((bp) => (
           <BlueprintCard
             key={bp.id}
@@ -297,16 +300,12 @@ export function GeneratedBlueprintPane({ generated }: { generated: { blueprint: 
 export function SuggestedBlueprintPanel({
   active,
   repository,
-  blueprints,
-  value,
   onChange,
   onViewTemplates,
   onGenerateCustom,
 }: {
   active: boolean;
   repository: string;
-  blueprints: Blueprint[];
-  value: BlueprintSelection;
   onChange: (selection: BlueprintSelection) => void;
   onViewTemplates: () => void;
   onGenerateCustom: () => void;
@@ -332,7 +331,15 @@ export function SuggestedBlueprintPanel({
   const recommended = suggestion?.recommended_blueprint ?? null;
 
   if (!normalizedRepo) {
-    return <Card className={styles.emptyCard}><SparkleRegular fontSize={28} /><Text weight="semibold">Select a repository first</Text><Text className={styles.subtle}>Agentweaver will analyze it and suggest a matching blueprint.</Text></Card>;
+    return (
+      <div className={styles.root}>
+        <MessageBar intent="info"><MessageBarBody>Select a repository and Agentweaver will recommend a blueprint tailored to it.</MessageBarBody></MessageBar>
+        <div className={styles.tabLinks}>
+          <Button appearance="transparent" size="small" icon={<DocumentRegular />} onClick={onViewTemplates}>Browse templates</Button>
+          <Button appearance="transparent" size="small" icon={<SparkleRegular />} onClick={onGenerateCustom}>Generate a custom blueprint</Button>
+        </div>
+      </div>
+    );
   }
 
   if (loading) return <div className={styles.generateBar}><Spinner size="tiny" /><Text>Analyzing repository…</Text></div>;
@@ -340,8 +347,11 @@ export function SuggestedBlueprintPanel({
   if (error || suggestion?.fallback || !recommended) {
     return (
       <div className={styles.root}>
-        <MessageBar intent="warning"><MessageBarBody>{error ? `Could not analyze repo: ${error}` : suggestion?.rationale ?? 'Repository analysis unavailable. Choose a template instead.'}</MessageBarBody></MessageBar>
-        <Button appearance="secondary" onClick={onViewTemplates}>View all templates →</Button>
+        <MessageBar intent="warning"><MessageBarBody>{error ? `Could not analyze repo: ${error}` : suggestion?.rationale ?? 'Repository analysis unavailable. Choose a template or generate a custom blueprint instead.'}</MessageBarBody></MessageBar>
+        <div className={styles.tabLinks}>
+          <Button appearance="secondary" icon={<DocumentRegular />} onClick={onViewTemplates}>Browse templates</Button>
+          <Button appearance="secondary" icon={<SparkleRegular />} onClick={onGenerateCustom}>Generate a custom blueprint</Button>
+        </div>
       </div>
     );
   }
@@ -375,14 +385,6 @@ export function SuggestedBlueprintPanel({
           <Button appearance="primary" onClick={() => onChange({ kind: 'predefined', blueprint: recommended })}>Use this blueprint</Button>
         </div>
       </Card>
-      <StarterTemplatesSection title="Other blueprints" {...{ blueprints, loading: false, error: null, value, onChange }} limit={3} onViewAllTemplates={onViewTemplates} />
-      <button type="button" className={styles.customBlueprintRow} onClick={onGenerateCustom}>
-        <span className={styles.customBlueprintMain}>
-          <span className={styles.iconBubble}><SparkleRegular /></span>
-          <span><Text weight="semibold">Custom blueprint</Text><br /><Text className={styles.subtle}>Describe what you want to build and we'll generate it for you.</Text></span>
-        </span>
-        <ChevronRightRegular />
-      </button>
     </div>
   );
 }
@@ -452,9 +454,20 @@ export function BlueprintPanel({
     if (!tabs.includes(selectedTab)) setSelectedTab(tabs[0]);
   }, [selectedTab, tabs]);
 
+  // When a blueprint is generated, surface it: if this panel has a dedicated
+  // "generated" tab (the blank-project dialog), jump to it so the fresh preview
+  // isn't hidden behind whatever tab the user was browsing.
+  const lastGeneratedId = useRef<string | null>(null);
+  useEffect(() => {
+    const id = generated?.blueprint.id ?? null;
+    if (id && id !== lastGeneratedId.current && tabs.includes('generated')) {
+      setSelectedTab('generated');
+    }
+    lastGeneratedId.current = id;
+  }, [generated, tabs]);
+
   const viewTemplates = () => setSelectedTab('templates');
   const viewGenerate = () => setSelectedTab('generate');
-  const showStarterTemplates = selectedTab === 'generated' && tabs.includes('generated');
 
   return (
     <div className={styles.panel}>
@@ -477,8 +490,6 @@ export function BlueprintPanel({
           <SuggestedBlueprintPanel
             active={active}
             repository={targetRepository ?? ''}
-            blueprints={catalog.blueprints}
-            value={value}
             onChange={onChange}
             onViewTemplates={viewTemplates}
             onGenerateCustom={viewGenerate}
@@ -496,9 +507,6 @@ export function BlueprintPanel({
             />
             {generated && <GeneratedBlueprintPane generated={generated} />}
           </>
-        )}
-        {showStarterTemplates && (
-          <StarterTemplatesSection {...catalog} value={value} onChange={onChange} limit={4} onViewAllTemplates={viewTemplates} />
         )}
       </div>
     </div>

@@ -22,7 +22,6 @@ import {
   Spinner,
   Text,
   Textarea,
-  Title3,
   makeStyles,
   tokens,
 } from '@fluentui/react-components';
@@ -32,10 +31,6 @@ import {
   ChevronUpRegular,
   DismissCircleRegular,
   DismissRegular,
-  DocumentRegular,
-  InfoRegular,
-  LightbulbRegular,
-  SettingsRegular,
   SparkleRegular,
 } from '@fluentui/react-icons';
 import { apiClient } from '../api/apiClient';
@@ -66,13 +61,9 @@ const useStyles = makeStyles({
     flexDirection: 'column',
     gap: tokens.spacingVerticalL,
   },
-  toolbar: {
-    display: 'flex',
-    gap: tokens.spacingHorizontalM,
-  },
   grid: {
     display: 'grid',
-    gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))',
+    gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))',
     gap: tokens.spacingVerticalM,
   },
   card: {
@@ -85,11 +76,26 @@ const useStyles = makeStyles({
     flexDirection: 'column',
     gap: tokens.spacingVerticalXS,
   },
+  cardOriginRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXS,
+  },
+  cardRepo: {
+    color: tokens.colorNeutralForeground3,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  },
   cardDir: {
     fontFamily: tokens.fontFamilyMonospace,
     fontSize: tokens.fontSizeBase200,
     color: tokens.colorNeutralForeground3,
     wordBreak: 'break-all',
+  },
+  cardWarning: {
+    color: tokens.colorPaletteMarigoldForeground1,
+    fontSize: tokens.fontSizeBase200,
   },
   cardActions: {
     display: 'flex',
@@ -99,20 +105,34 @@ const useStyles = makeStyles({
   emptyState: {
     display: 'flex',
     flexDirection: 'column',
-    gap: tokens.spacingVerticalM,
+    gap: tokens.spacingVerticalS,
     alignItems: 'flex-start',
     padding: `${tokens.spacingVerticalXXL} 0`,
+    maxWidth: '640px',
+  },
+  emptyBody: {
+    color: tokens.colorNeutralForeground3,
+  },
+  emptyActions: {
+    display: 'flex',
+    gap: tokens.spacingHorizontalM,
+    flexWrap: 'wrap',
+    marginTop: tokens.spacingVerticalS,
   },
   dialogFields: {
     display: 'flex',
     flexDirection: 'column',
     gap: tokens.spacingVerticalM,
   },
+  // One coherent frame for the whole workflow (form + blueprint), not two
+  // separate floating cards — the divider between columns reads as sections
+  // of one panel, matching how the rest of the product groups related content.
   dialogTwoCol: {
     display: 'flex',
-    gap: '24px',
     alignItems: 'stretch',
-    minHeight: '560px',
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusXLarge,
+    backgroundColor: tokens.colorNeutralBackground1,
     '@media (max-width: 680px)': {
       flexDirection: 'column',
     },
@@ -123,29 +143,29 @@ const useStyles = makeStyles({
     gap: tokens.spacingVerticalL,
     flex: '0 0 40%',
     width: '40%',
-    minWidth: '360px',
+    minWidth: '320px',
     padding: '24px',
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: tokens.borderRadiusXLarge,
-    backgroundColor: tokens.colorNeutralBackground1,
+    borderRight: `1px solid ${tokens.colorNeutralStroke2}`,
     '@media (max-width: 680px)': {
       width: '100%',
+      minWidth: '0',
+      borderRight: 'none',
+      borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
     },
   },
+  // No independent height cap or inner scrollbar: the dialog's own content
+  // area (DialogContent) is the single scroll owner, so the two columns
+  // simply grow together and stay visually attached to one panel.
   dialogRightCol: {
     display: 'flex',
     flexDirection: 'column',
     flex: '1 1 auto',
     padding: '24px',
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: tokens.borderRadiusXLarge,
-    backgroundColor: tokens.colorNeutralBackground1,
-    minWidth: '360px',
-    height: '640px',
-    maxHeight: 'min(640px, calc(100vh - 220px))',
-    overflow: 'hidden',
-    paddingRight: tokens.spacingHorizontalXS,
+    minWidth: '320px',
     gap: tokens.spacingVerticalM,
+    '@media (max-width: 680px)': {
+      minWidth: '0',
+    },
   },
   dialogSurface: { maxWidth: '1180px', width: 'min(1180px, calc(100vw - 48px))', backgroundColor: tokens.colorNeutralBackground2, position: 'relative', padding: tokens.spacingVerticalXL },
   closeButton: { position: 'absolute', right: tokens.spacingHorizontalM, top: tokens.spacingVerticalM, minWidth: '32px', border: 0 },
@@ -168,38 +188,29 @@ const useStyles = makeStyles({
     flexShrink: 0,
   },
   subtitle: { color: tokens.colorNeutralForeground3, marginTop: tokens.spacingVerticalXXS },
-  sectionHeading: { display: 'flex', alignItems: 'flex-start', gap: tokens.spacingHorizontalM },
-  sectionIcon: { width: '36px', height: '36px', borderRadius: tokens.borderRadiusMedium, backgroundColor: tokens.colorBrandBackground2, color: tokens.colorBrandForeground1, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
-  sectionTitle: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS },
   charCounter: { alignSelf: 'flex-end', color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200 },
   tipLine: { color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200 },
-  tipIconLine: { display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalXXS, color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200 },
   fieldWithCounter: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS },
-  subsectionHeader: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
-  infoBox: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalS,
-    padding: tokens.spacingVerticalM,
-    borderRadius: tokens.borderRadiusMedium,
-    backgroundColor: tokens.colorBrandBackground2,
-    border: `1px solid ${tokens.colorBrandStroke2}`,
-  },
-  stepRow: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'flex-start' },
-  stepBadge: {
-    width: '22px', height: '22px', borderRadius: tokens.borderRadiusCircular,
-    backgroundColor: tokens.colorBrandBackground, color: tokens.colorNeutralForegroundOnBrand,
-    display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
-    fontSize: tokens.fontSizeBase200,
-  },
-  stepCopy: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS },
   tabToggle: {
     display: 'inline-flex', gap: tokens.spacingHorizontalXS, padding: tokens.spacingVerticalXXS,
     backgroundColor: tokens.colorNeutralBackground3, borderRadius: tokens.borderRadiusXLarge, alignSelf: 'flex-start',
   },
-  footerSplit: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%', gap: tokens.spacingHorizontalL },
-  footerLeft: { display: 'flex', flexDirection: 'row', alignItems: 'center', gap: tokens.spacingHorizontalM, marginRight: 'auto' },
-  footerActions: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
+  // Border + top padding keeps the action bar reading as a distinct, attached
+  // footer rather than content that trails off — true whether or not the panel
+  // above it is scrolled.
+  footerSplit: {
+    display: 'flex',
+    flexWrap: 'wrap',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    width: '100%',
+    gap: tokens.spacingHorizontalL,
+    rowGap: tokens.spacingVerticalS,
+    borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
+    paddingTop: tokens.spacingVerticalM,
+  },
+  footerLeft: { display: 'flex', flexDirection: 'row', alignItems: 'center', gap: tokens.spacingHorizontalM, marginRight: 'auto', flexWrap: 'wrap' },
+  footerActions: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' },
   repositoryPanel: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM },
   listBlock: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS },
   listHeader: { display: 'flex', justifyContent: 'space-between', alignItems: 'center' },
@@ -219,7 +230,6 @@ const useStyles = makeStyles({
     flexShrink: 0,
   },
   repoSelector: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS },
-  repoSelectorLabel: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS },
   repoOption: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
   githubMark: { width: '28px', height: '28px', borderRadius: tokens.borderRadiusCircular, backgroundColor: tokens.colorNeutralForeground1, color: tokens.colorNeutralBackground1, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: tokens.fontSizeBase100, fontWeight: tokens.fontWeightBold, flexShrink: 0 },
 });
@@ -386,12 +396,6 @@ function CreateBlankDialog({ onCreated, dataDir, workspaceAutoAssigned }: { onCr
 
   const left = (
     <>
-      <div className={styles.sectionHeading}>
-        <span className={styles.sectionIcon}><DocumentRegular /></span>
-        <div className={styles.sectionTitle}>
-          <Text weight="semibold" size={400}>Project basics</Text>
-        </div>
-      </div>
       <Field label="Project name *">
         <Input
           value={d.name}
@@ -416,10 +420,7 @@ function CreateBlankDialog({ onCreated, dataDir, workspaceAutoAssigned }: { onCr
         <Counter value={description} max={500} />
       </div>
       <div className={styles.fieldWithCounter}>
-        <div className={styles.subsectionHeader}>
-          <SettingsRegular aria-hidden="true" />
-          <Text weight="semibold">What do you want Agentweaver to help you accomplish?</Text>
-        </div>
+        <Text weight="semibold">What do you want Agentweaver to help you accomplish?</Text>
         <Text className={styles.tipLine}>Be specific about the problems you're trying to solve or the outcomes you want.</Text>
         <Textarea
           aria-label="Describe your project"
@@ -431,26 +432,12 @@ function CreateBlankDialog({ onCreated, dataDir, workspaceAutoAssigned }: { onCr
           style={{ minHeight: 130 }}
         />
         <Counter value={goal} max={1000} />
-        <Text className={styles.tipIconLine}><LightbulbRegular /> <span>Tip: The more context you provide, the better the blueprint.</span></Text>
       </div>
       <Button appearance="primary" icon={<SparkleRegular />} aria-label="Generate blueprint" disabled={!goal.trim() || generation.generating} onClick={() => void generation.generate(goal)}>
         {generation.generating ? 'Generating' : 'Generate Blueprint'}
       </Button>
       {generation.error && <MessageBar intent="error"><MessageBarBody>{generation.error}</MessageBarBody></MessageBar>}
-      <Text className={styles.tipLine}>Our AI will generate a tailored squad, workflow, and review policy.</Text>
-      <div className={styles.infoBox}>
-        <Text weight="semibold">What happens next?</Text>
-        {[
-          ['We generate a custom blueprint', 'Agents, workflows, and review policies tailored to your goal.'],
-          ['Customize to your needs', 'Adjust agents, tools, and workflows before creating.'],
-          ['Create your project', 'Your project will be ready to go in seconds.'],
-        ].map(([label, copy], index) => (
-          <div key={label} className={styles.stepRow}>
-            <span className={styles.stepBadge}>{index + 1}</span>
-            <span className={styles.stepCopy}><Text weight="semibold">{label}</Text><Text className={styles.tipLine}>{copy}</Text></span>
-          </div>
-        ))}
-      </div>
+      <Text className={styles.tipLine}>Our AI will generate a tailored squad, workflow, and review policy from your goal — nothing is created until you confirm below.</Text>
       {d.error && <MessageBar intent="error"><MessageBarBody>{d.error}</MessageBarBody></MessageBar>}
     </>
   );
@@ -458,7 +445,7 @@ function CreateBlankDialog({ onCreated, dataDir, workspaceAutoAssigned }: { onCr
   const right = (
     <BlueprintPanel
       active={d.open}
-      tabs={['generated', 'templates']}
+      tabs={['templates', 'generated']}
       value={d.blueprint}
       onChange={d.setBlueprint}
       generated={generation.generated}
@@ -649,18 +636,8 @@ function CreateFromGitHubDialog({ onCreated, dataDir, workspaceAutoAssigned }: {
 
   const left = (
     <div className={styles.repositoryPanel}>
-      <div className={styles.sectionHeading}>
-        <span className={styles.sectionIcon}><span className={styles.githubMark}>GH</span></span>
-        <div className={styles.sectionTitle}>
-          <Text weight="semibold" size={400}>Repository</Text>
-        </div>
-      </div>
-
       <div className={styles.repoSelector}>
-        <span className={styles.repoSelectorLabel}>
-          <Text weight="semibold">Repository *</Text>
-          <InfoRegular aria-label="Repository selector information" />
-        </span>
+        <Text weight="semibold">Repository *</Text>
         <Combobox
           aria-label="Repository"
           freeform
@@ -692,7 +669,7 @@ function CreateFromGitHubDialog({ onCreated, dataDir, workspaceAutoAssigned }: {
 
       {authRequired && (
         <MessageBar intent="warning">
-          <MessageBarBody>Connect your GitHub account to list repositories, or paste any public owner/repo.</MessageBarBody>
+          <MessageBarBody>Connect your GitHub account to list repositories, including private ones you can access. Public repos can still be pasted below without connecting.</MessageBarBody>
           <MessageBarActions><Button size="small" onClick={() => { window.location.href = GITHUB_AUTHORIZE_URL; }}>Connect GitHub</Button></MessageBarActions>
         </MessageBar>
       )}
@@ -758,9 +735,6 @@ function CreateFromGitHubDialog({ onCreated, dataDir, workspaceAutoAssigned }: {
         </Field>
       )}
 
-      <div className={styles.infoBox}>
-        <Text><InfoRegular /> You can import any public repository on GitHub. Private repositories require connection.</Text>
-      </div>
       {d.error && <MessageBar intent="error"><MessageBarBody>{d.error}</MessageBarBody></MessageBar>}
     </div>
   );
@@ -799,26 +773,34 @@ function CreateFromGitHubDialog({ onCreated, dataDir, workspaceAutoAssigned }: {
   );
 }
 
+function formatSourceRepository(url: string): string {
+  return url.replace(/^https:\/\/github\.com\//, '');
+}
+
 function ProjectCard({ project, onOpen }: { project: Project; onOpen: () => void }) {
   const styles = useStyles();
+  const isGitHub = project.origin === 'github';
   return (
     <Card className={styles.card}>
       <CardHeader
-        header={<Title3>{project.name}</Title3>}
+        header={<Text weight="semibold" size={400}>{project.name}</Text>}
         action={
-          <Badge
-            appearance="filled"
-            color={project.available ? 'success' : 'warning'}
-          >
+          <Badge appearance="tint" size="small" color={project.available ? 'success' : 'warning'}>
             {project.available ? 'Available' : 'Unavailable'}
           </Badge>
         }
       />
       <div className={styles.cardMeta}>
-        {project.source_repository && (
-          <Text size={200}>{project.source_repository}</Text>
-        )}
+        <div className={styles.cardOriginRow}>
+          <Badge appearance="outline" size="small">{isGitHub ? 'GitHub' : 'Blank'}</Badge>
+          {project.source_repository && (
+            <Text size={200} className={styles.cardRepo}>{formatSourceRepository(project.source_repository)}</Text>
+          )}
+        </div>
         <Text className={styles.cardDir}>{project.working_directory}</Text>
+        {!project.available && (
+          <Text className={styles.cardWarning}>Working directory may have moved or become inaccessible.</Text>
+        )}
       </div>
       <div className={styles.cardActions}>
         <Button appearance="primary" size="small" onClick={onOpen}>Open</Button>
@@ -830,7 +812,7 @@ function ProjectCard({ project, onOpen }: { project: Project; onOpen: () => void
 export function ProjectGalleryPage() {
   const styles = useStyles();
   const navigate = useNavigate();
-  const { projects, loading, authError, loadError, errorMessage, appendProject } = useProjectList();
+  const { projects, loading, authError, loadError, errorMessage, appendProject, refetch } = useProjectList();
   const [dataDir, setDataDir] = useState<string | null>(null);
   const [workspaceAutoAssigned, setWorkspaceAutoAssigned] = useState(false);
 
@@ -851,11 +833,22 @@ export function ProjectGalleryPage() {
     appendProject(project);
   };
 
+  const showGalleryActions = !loading && !authError && projects.length > 0;
+
   return (
     <div className={styles.root}>
-      <PageHeader title="Projects" subtitle="Your Agentweaver projects." />
+      <PageHeader
+        title="Projects"
+        subtitle="Open an existing project, or create one from GitHub or a blueprint."
+        actions={showGalleryActions ? (
+          <>
+            <CreateBlankDialog onCreated={handleCreated} dataDir={dataDir} workspaceAutoAssigned={workspaceAutoAssigned} />
+            <CreateFromGitHubDialog onCreated={handleCreated} dataDir={dataDir} workspaceAutoAssigned={workspaceAutoAssigned} />
+          </>
+        ) : undefined}
+      />
 
-      {loading && <Spinner label="Loading projects" />}
+      {loading && <Spinner label="Loading projects…" />}
 
       {!loading && authError && (
         <MessageBar intent="warning">
@@ -876,13 +869,20 @@ export function ProjectGalleryPage() {
       {loadError && (
         <MessageBar intent="error">
           <MessageBarBody>{errorMessage ?? 'Failed to load projects.'}</MessageBarBody>
+          <MessageBarActions>
+            <Button size="small" onClick={refetch}>Retry</Button>
+          </MessageBarActions>
         </MessageBar>
       )}
 
       {!loading && !loadError && !authError && projects.length === 0 && (
         <div className={styles.emptyState}>
-          <Text>No projects yet. Create one to get started.</Text>
-          <div className={styles.toolbar}>
+          <Text weight="semibold" size={500}>No projects yet. Create one to get started.</Text>
+          <Text className={styles.emptyBody}>
+            A project pairs a working directory with a squad and workflow so agents can start real work right away.
+            Import an existing GitHub repository, or start blank and describe a goal for a tailored blueprint.
+          </Text>
+          <div className={styles.emptyActions}>
             <CreateBlankDialog onCreated={handleCreated} dataDir={dataDir} workspaceAutoAssigned={workspaceAutoAssigned} />
             <CreateFromGitHubDialog onCreated={handleCreated} dataDir={dataDir} workspaceAutoAssigned={workspaceAutoAssigned} />
           </div>
@@ -890,21 +890,15 @@ export function ProjectGalleryPage() {
       )}
 
       {!loading && projects.length > 0 && (
-        <>
-          <div className={styles.toolbar}>
-            <CreateBlankDialog onCreated={handleCreated} dataDir={dataDir} workspaceAutoAssigned={workspaceAutoAssigned} />
-            <CreateFromGitHubDialog onCreated={handleCreated} dataDir={dataDir} workspaceAutoAssigned={workspaceAutoAssigned} />
-          </div>
-          <div className={styles.grid}>
-            {projects.map((p) => (
-              <ProjectCard
-                key={p.project_id}
-                project={p}
-                onOpen={() => navigate(`/projects/${p.project_id}`)}
-              />
-            ))}
-          </div>
-        </>
+        <div className={styles.grid}>
+          {projects.map((p) => (
+            <ProjectCard
+              key={p.project_id}
+              project={p}
+              onOpen={() => navigate(`/projects/${p.project_id}`)}
+            />
+          ))}
+        </div>
       )}
     </div>
   );
