@@ -1,5 +1,9 @@
 # Agentweaver Product Overview
 
+## Register
+
+product
+
 Agentweaver is an alpha platform for running AI coding agents safely and observably. It gives each agent task an isolated git worktree, streams the run in real time, and keeps a human review gate between generated changes and merge.
 
 ## Who it is for
