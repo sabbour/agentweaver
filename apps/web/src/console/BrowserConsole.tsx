@@ -665,7 +665,7 @@ export function BrowserConsole() {
       </div>
 
       <div className={styles.body}>
-        <div className={styles.transcript + (boundRunId ? ` ${styles.transcriptCapped}` : '')} ref={transcriptRef} aria-label="Console transcript" role="log">
+        <div className={`${styles.transcript}${boundRunId ? ` ${styles.transcriptCapped}` : ''}`} ref={transcriptRef} aria-label="Console transcript" role="log">
           {lines.map((l, idx) => (
             <div key={l.id} className={l.tone === 'user' && idx > 0 ? styles.blockStart : undefined}>
               <div className={styles.line}>

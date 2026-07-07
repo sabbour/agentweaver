@@ -31,10 +31,6 @@ import {
   ChevronUpRegular,
   DismissCircleRegular,
   DismissRegular,
-  DocumentRegular,
-  InfoRegular,
-  LightbulbRegular,
-  SettingsRegular,
   SparkleRegular,
 } from '@fluentui/react-icons';
 import { apiClient } from '../api/apiClient';
@@ -128,10 +124,15 @@ const useStyles = makeStyles({
     flexDirection: 'column',
     gap: tokens.spacingVerticalM,
   },
+  // One coherent frame for the whole workflow (form + blueprint), not two
+  // separate floating cards — the divider between columns reads as sections
+  // of one panel, matching how the rest of the product groups related content.
   dialogTwoCol: {
     display: 'flex',
-    gap: '24px',
     alignItems: 'stretch',
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusXLarge,
+    backgroundColor: tokens.colorNeutralBackground1,
     '@media (max-width: 680px)': {
       flexDirection: 'column',
     },
@@ -144,30 +145,26 @@ const useStyles = makeStyles({
     width: '40%',
     minWidth: '320px',
     padding: '24px',
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: tokens.borderRadiusXLarge,
-    backgroundColor: tokens.colorNeutralBackground1,
+    borderRight: `1px solid ${tokens.colorNeutralStroke2}`,
     '@media (max-width: 680px)': {
       width: '100%',
       minWidth: '0',
+      borderRight: 'none',
+      borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
     },
   },
+  // No independent height cap or inner scrollbar: the dialog's own content
+  // area (DialogContent) is the single scroll owner, so the two columns
+  // simply grow together and stay visually attached to one panel.
   dialogRightCol: {
     display: 'flex',
     flexDirection: 'column',
     flex: '1 1 auto',
     padding: '24px',
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: tokens.borderRadiusXLarge,
-    backgroundColor: tokens.colorNeutralBackground1,
     minWidth: '320px',
-    maxHeight: 'calc(100vh - 220px)',
-    overflow: 'hidden',
-    paddingRight: tokens.spacingHorizontalXS,
     gap: tokens.spacingVerticalM,
     '@media (max-width: 680px)': {
       minWidth: '0',
-      maxHeight: 'none',
     },
   },
   dialogSurface: { maxWidth: '1180px', width: 'min(1180px, calc(100vw - 48px))', backgroundColor: tokens.colorNeutralBackground2, position: 'relative', padding: tokens.spacingVerticalXL },
@@ -191,36 +188,27 @@ const useStyles = makeStyles({
     flexShrink: 0,
   },
   subtitle: { color: tokens.colorNeutralForeground3, marginTop: tokens.spacingVerticalXXS },
-  sectionHeading: { display: 'flex', alignItems: 'flex-start', gap: tokens.spacingHorizontalM },
-  sectionIcon: { width: '36px', height: '36px', borderRadius: tokens.borderRadiusMedium, backgroundColor: tokens.colorBrandBackground2, color: tokens.colorBrandForeground1, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
-  sectionTitle: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS },
   charCounter: { alignSelf: 'flex-end', color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200 },
   tipLine: { color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200 },
-  tipIconLine: { display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalXXS, color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200 },
   fieldWithCounter: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS },
-  subsectionHeader: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
-  infoBox: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalS,
-    padding: tokens.spacingVerticalM,
-    borderRadius: tokens.borderRadiusMedium,
-    backgroundColor: tokens.colorBrandBackground2,
-    border: `1px solid ${tokens.colorBrandStroke2}`,
-  },
-  stepRow: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'flex-start' },
-  stepBadge: {
-    width: '22px', height: '22px', borderRadius: tokens.borderRadiusCircular,
-    backgroundColor: tokens.colorBrandBackground, color: tokens.colorNeutralForegroundOnBrand,
-    display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
-    fontSize: tokens.fontSizeBase200,
-  },
-  stepCopy: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS },
   tabToggle: {
     display: 'inline-flex', gap: tokens.spacingHorizontalXS, padding: tokens.spacingVerticalXXS,
     backgroundColor: tokens.colorNeutralBackground3, borderRadius: tokens.borderRadiusXLarge, alignSelf: 'flex-start',
   },
-  footerSplit: { display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center', width: '100%', gap: tokens.spacingHorizontalL, rowGap: tokens.spacingVerticalS },
+  // Border + top padding keeps the action bar reading as a distinct, attached
+  // footer rather than content that trails off — true whether or not the panel
+  // above it is scrolled.
+  footerSplit: {
+    display: 'flex',
+    flexWrap: 'wrap',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    width: '100%',
+    gap: tokens.spacingHorizontalL,
+    rowGap: tokens.spacingVerticalS,
+    borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
+    paddingTop: tokens.spacingVerticalM,
+  },
   footerLeft: { display: 'flex', flexDirection: 'row', alignItems: 'center', gap: tokens.spacingHorizontalM, marginRight: 'auto', flexWrap: 'wrap' },
   footerActions: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' },
   repositoryPanel: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM },
@@ -242,7 +230,6 @@ const useStyles = makeStyles({
     flexShrink: 0,
   },
   repoSelector: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS },
-  repoSelectorLabel: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS },
   repoOption: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
   githubMark: { width: '28px', height: '28px', borderRadius: tokens.borderRadiusCircular, backgroundColor: tokens.colorNeutralForeground1, color: tokens.colorNeutralBackground1, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: tokens.fontSizeBase100, fontWeight: tokens.fontWeightBold, flexShrink: 0 },
 });
@@ -409,12 +396,6 @@ function CreateBlankDialog({ onCreated, dataDir, workspaceAutoAssigned }: { onCr
 
   const left = (
     <>
-      <div className={styles.sectionHeading}>
-        <span className={styles.sectionIcon}><DocumentRegular /></span>
-        <div className={styles.sectionTitle}>
-          <Text weight="semibold" size={400}>Project basics</Text>
-        </div>
-      </div>
       <Field label="Project name *">
         <Input
           value={d.name}
@@ -439,10 +420,7 @@ function CreateBlankDialog({ onCreated, dataDir, workspaceAutoAssigned }: { onCr
         <Counter value={description} max={500} />
       </div>
       <div className={styles.fieldWithCounter}>
-        <div className={styles.subsectionHeader}>
-          <SettingsRegular aria-hidden="true" />
-          <Text weight="semibold">What do you want Agentweaver to help you accomplish?</Text>
-        </div>
+        <Text weight="semibold">What do you want Agentweaver to help you accomplish?</Text>
         <Text className={styles.tipLine}>Be specific about the problems you're trying to solve or the outcomes you want.</Text>
         <Textarea
           aria-label="Describe your project"
@@ -454,25 +432,12 @@ function CreateBlankDialog({ onCreated, dataDir, workspaceAutoAssigned }: { onCr
           style={{ minHeight: 130 }}
         />
         <Counter value={goal} max={1000} />
-        <Text className={styles.tipIconLine}><LightbulbRegular /> <span>Tip: The more context you provide, the better the blueprint.</span></Text>
       </div>
       <Button appearance="primary" icon={<SparkleRegular />} aria-label="Generate blueprint" disabled={!goal.trim() || generation.generating} onClick={() => void generation.generate(goal)}>
         {generation.generating ? 'Generating' : 'Generate Blueprint'}
       </Button>
       {generation.error && <MessageBar intent="error"><MessageBarBody>{generation.error}</MessageBarBody></MessageBar>}
-      <div className={styles.infoBox}>
-        <Text weight="semibold">How blueprint generation works</Text>
-        {[
-          ['Describe your goal', 'Our AI will generate a tailored squad, workflow, and review policy from it.'],
-          ['Review the draft', 'Check the proposed agents and roster on the right, or pick a template instead.'],
-          ['Create when ready', 'Nothing is created until you confirm below — adjust the goal and regenerate anytime.'],
-        ].map(([label, copy], index) => (
-          <div key={label} className={styles.stepRow}>
-            <span className={styles.stepBadge}>{index + 1}</span>
-            <span className={styles.stepCopy}><Text weight="semibold">{label}</Text><Text className={styles.tipLine}>{copy}</Text></span>
-          </div>
-        ))}
-      </div>
+      <Text className={styles.tipLine}>Our AI will generate a tailored squad, workflow, and review policy from your goal — nothing is created until you confirm below.</Text>
       {d.error && <MessageBar intent="error"><MessageBarBody>{d.error}</MessageBarBody></MessageBar>}
     </>
   );
@@ -480,7 +445,7 @@ function CreateBlankDialog({ onCreated, dataDir, workspaceAutoAssigned }: { onCr
   const right = (
     <BlueprintPanel
       active={d.open}
-      tabs={['generated', 'templates']}
+      tabs={['templates', 'generated']}
       value={d.blueprint}
       onChange={d.setBlueprint}
       generated={generation.generated}
@@ -671,18 +636,8 @@ function CreateFromGitHubDialog({ onCreated, dataDir, workspaceAutoAssigned }: {
 
   const left = (
     <div className={styles.repositoryPanel}>
-      <div className={styles.sectionHeading}>
-        <span className={styles.sectionIcon}><span className={styles.githubMark}>GH</span></span>
-        <div className={styles.sectionTitle}>
-          <Text weight="semibold" size={400}>Repository</Text>
-        </div>
-      </div>
-
       <div className={styles.repoSelector}>
-        <span className={styles.repoSelectorLabel}>
-          <Text weight="semibold">Repository *</Text>
-          <InfoRegular aria-label="Repository selector information" />
-        </span>
+        <Text weight="semibold">Repository *</Text>
         <Combobox
           aria-label="Repository"
           freeform
@@ -780,9 +735,6 @@ function CreateFromGitHubDialog({ onCreated, dataDir, workspaceAutoAssigned }: {
         </Field>
       )}
 
-      <div className={styles.infoBox}>
-        <Text><InfoRegular /> Any public GitHub repository can be imported directly by owner/repo. Private repositories need a connected GitHub account first.</Text>
-      </div>
       {d.error && <MessageBar intent="error"><MessageBarBody>{d.error}</MessageBarBody></MessageBar>}
     </div>
   );
