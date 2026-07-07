@@ -18,8 +18,10 @@ const TERMINAL_EVENT_TYPES = new Set([
   'run.failed',
   'merge.completed',
   'merge.failed',
+  'merge.conflicted',
   'coordinator.assembly_completed',
   'coordinator.assembly_failed',
+  'coordinator.assembly_merge_failed',
   'coordinator.assembly_declined',
 ]);
 const RECONNECT_DELAYS_MS = [1000, 2000, 4000, 8000, 16000, 30000];
@@ -102,6 +104,7 @@ export type EventType =
   | 'merge.started'
   | 'merge.completed'
   | 'merge.failed'
+  | 'merge.conflicted'
   | 'workflow.step'
   | 'coordinator.started'
   | 'coordinator.recovered'

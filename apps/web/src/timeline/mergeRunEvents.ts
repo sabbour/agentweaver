@@ -22,10 +22,10 @@ export const SEED_STATUSES: ReadonlySet<string> = new Set([
 
 /**
  * Fold a persisted-events REST seed under live SSE deltas. Seeded events come
- * first in order; a live event is appended only when not already represented
- * (dedupe by sequence, and singleton seq-0 events by type) so a finished run
- * shows persisted progress and an in-flight reconnect still layers new deltas on
- * top.
+ * first in order; a live event is appended only when not already represented.
+ * Positive sequences dedupe by sequence. Sequence-0 events are only deduped for
+ * true singleton terminal events; repeated review / assembly events must remain
+ * visible because they represent distinct gates across revisions.
  *
  * @param opts.sort when true, the merged list is re-ordered by sequence (seq-0
  *   events sort last). The AgentSessionPanel relies on this; the workflow page
@@ -44,13 +44,26 @@ export function mergeRunEvents(
   }
   const merged = [...seed];
   const seenSeq = new Set(seed.filter((e) => e.sequence > 0).map((e) => e.sequence));
-  const seenType = new Set(seed.map((e) => e.type));
+  const seqZeroSingletonTypes: ReadonlySet<string> = new Set([
+    'run.completed',
+    'run.failed',
+    'review.approved',
+    'review.declined',
+    'merge.completed',
+    'merge.failed',
+  ]);
+  const seenSeqZeroSingletonType = new Set(
+    seed
+      .filter((e) => e.sequence === 0 && seqZeroSingletonTypes.has(e.type))
+      .map((e) => e.type),
+  );
   for (const evt of live) {
     if (evt.sequence > 0) {
       if (seenSeq.has(evt.sequence)) continue;
       seenSeq.add(evt.sequence);
-    } else if (seenType.has(evt.type)) {
-      continue;
+    } else if (seqZeroSingletonTypes.has(evt.type)) {
+      if (seenSeqZeroSingletonType.has(evt.type)) continue;
+      seenSeqZeroSingletonType.add(evt.type);
     }
     merged.push(evt);
   }

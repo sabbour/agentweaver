@@ -43,6 +43,27 @@ describe('topologyReducer', () => {
     expect(state.nodes['s1'].title).toBe('Build API');
   });
 
+  it('ignores a stale late snapshot instead of regressing newer deltas', () => {
+    const running = makeEvent('coordinator.topology', {
+      version: 1, seq: 4, changed: [{ id: 's1', status: 'running', childRunId: 'child-1' }],
+    }, 2);
+    const staleSnapshot = makeEvent('coordinator.topology', {
+      version: 1,
+      seq: 0,
+      nodes: [
+        { id: 'coord', kind: 'coordinator', title: 'Coordinator', status: 'running' },
+        { id: 's1', kind: 'subtask', title: 'Build API', status: 'pending' },
+      ],
+      edges: [],
+    }, 3);
+
+    const state = buildTopologyState([SNAPSHOT, running, staleSnapshot]);
+
+    expect(state.topoSeq).toBe(4);
+    expect(state.nodes['s1'].status).toBe('running');
+    expect(state.nodes['s1'].childRunId).toBe('child-1');
+  });
+
   it('merges subtask.* events by subtaskId and attaches childRunId', () => {
     const dispatched = makeEvent('subtask.dispatched', { subtaskId: 's2', childRunId: 'child-42' }, 2);
     const completed = makeEvent('subtask.completed', { subtaskId: 's2' }, 3);
@@ -145,6 +166,20 @@ describe('topologyReducer', () => {
     }, 2);
     const state = buildTopologyState([SNAPSHOT, running]);
     expect(state.nodes['s1'].executionPodName).toBeNull();
+  });
+
+  it('preserves explicit blocked and pending_capacity statuses from events', () => {
+    const pendingCapacity = makeEvent('subtask.pending_capacity', {
+      subtaskId: 's1', status: 'pending_capacity',
+    }, 2);
+    const blocked = makeEvent('subtask.failed', {
+      subtaskId: 's2', status: 'blocked',
+    }, 3);
+
+    const state = buildTopologyState([SNAPSHOT, pendingCapacity, blocked]);
+
+    expect(state.nodes['s1'].status).toBe('pending_capacity');
+    expect(state.nodes['s2'].status).toBe('blocked');
   });
 
   it('preserves executionPodName across subsequent merges when not present in patch', () => {

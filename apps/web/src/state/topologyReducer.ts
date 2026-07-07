@@ -2,7 +2,7 @@
  * Pure reducer for the coordinator dynamic topology view (Feature 008 Phase 2).
  *
  * Principle III (thin client): this reducer performs NO topology computation.
- * It applies the server-authored `coordinator.topology` SNAPSHOT (seq 0), then
+ * It applies server-authored `coordinator.topology` SNAPSHOTs, then
  * merges `coordinator.topology` DELTAS, `subtask.*` updates, `coordinator.work_plan`
  * and `coordinator.steering` directives — all keyed by node id. Components render
  * purely from the accumulated state; they never derive dependencies or status.
@@ -29,7 +29,7 @@ export type TopologyNodeState = TopologyNode & { steering?: NodeSteering };
 export interface CoordinatorTopologyState {
   hasSnapshot: boolean;
   version: number;
-  /** Last applied topology seq (snapshot is 0, deltas are monotonic > 0). */
+  /** Last applied topology seq (snapshots and deltas are monotonic). */
   topoSeq: number;
   /** Node ids in first-seen order so layout is stable. */
   nodeOrder: string[];
@@ -151,11 +151,16 @@ export function topologyReducer(
     }
 
     case 'coordinator.topology': {
-      const seq = typeof p['seq'] === 'number' ? (p['seq'] as number) : Number(p['seq'] ?? 0);
+      const rawSeq = typeof p['seq'] === 'number' ? (p['seq'] as number) : Number(p['seq'] ?? 0);
+      const seq = Number.isFinite(rawSeq) ? rawSeq : 0;
       const version = typeof p['version'] === 'number' ? (p['version'] as number) : state.version;
       const isSnapshot = Array.isArray(p['nodes']);
 
       if (isSnapshot) {
+        // Ignore late/stale full snapshots (for example an assembly replay with seq:0) so they
+        // cannot regress newer live deltas or a newer server-side snapshot.
+        if (state.hasSnapshot && seq < state.topoSeq) return state;
+
         // SNAPSHOT — establishes the full node set and immutable edges.
         const nodes: Record<string, TopologyNodeState> = {};
         const nodeOrder: string[] = [];
@@ -173,7 +178,8 @@ export function topologyReducer(
             executionPodName: parsed.node.executionPodName,
           };
           nodeOrder.push(parsed.id);
-        }        const edges: TopologyEdge[] = Array.isArray(p['edges'])
+        }
+        const edges: TopologyEdge[] = Array.isArray(p['edges'])
           ? (p['edges'] as Record<string, unknown>[])
               .map((e) => ({ from: String(e['from'] ?? ''), to: String(e['to'] ?? '') }))
               .filter((e) => e.from && e.to)

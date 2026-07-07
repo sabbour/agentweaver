@@ -38,7 +38,7 @@ app.MapGet("/api/runs/{id}/outcome-spec", async (
     CancellationToken ct) =>
 {
     if (!RunId.TryParse(id, out var runId))
-        return Results.BadRequest(new { error = "Invalid run id." });
+        return BadRequestError("invalid_run_id", "Invalid run id.");
 
     Run? run;
     try { run = await runStore.GetAsync(runId, ct); }
@@ -48,11 +48,11 @@ app.MapGet("/api/runs/{id}/outcome-spec", async (
         return Results.Problem("Failed to retrieve the run.", statusCode: 500);
     }
 
-    if (run is null) return Results.NotFound();
-    if (!EndpointHelpers.IsOwner(httpContext, run)) return Results.StatusCode(StatusCodes.Status403Forbidden);
+    if (run is null) return NotFoundError("run_not_found", "The coordinator run was not found.");
+    if (!EndpointHelpers.IsOwner(httpContext, run)) return ForbiddenError();
 
     var spec = await ReadOutcomeSpecWithBriefWaitAsync(coordinator, id, ct);
-    if (spec is null) return Results.NotFound();
+    if (spec is null) return NotFoundError("outcome_spec_not_found", "The coordinator outcome spec was not found.");
 
     return Results.Json(MapOutcomeSpec(spec));
 });
@@ -67,7 +67,7 @@ app.MapPost("/api/runs/{id}/outcome-spec/confirm", async (
     CancellationToken ct) =>
 {
     if (!RunId.TryParse(id, out var runId))
-        return Results.BadRequest(new { error = "Invalid run id." });
+        return BadRequestError("invalid_run_id", "Invalid run id.");
 
     Run? run;
     try { run = await runStore.GetAsync(runId, ct); }
@@ -77,8 +77,8 @@ app.MapPost("/api/runs/{id}/outcome-spec/confirm", async (
         return Results.Problem("Failed to retrieve the run.", statusCode: 500);
     }
 
-    if (run is null) return Results.NotFound();
-    if (!EndpointHelpers.IsOwner(httpContext, run)) return Results.StatusCode(StatusCodes.Status403Forbidden);
+    if (run is null) return NotFoundError("run_not_found", "The coordinator run was not found.");
+    if (!EndpointHelpers.IsOwner(httpContext, run)) return ForbiddenError();
 
     var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
     var outcome = await coordinator.ConfirmOutcomeSpecAsync(id, caller.User, ct);
@@ -104,10 +104,10 @@ app.MapPost("/api/runs/{id}/outcome-spec/revise", async (
     CancellationToken ct) =>
 {
     if (!RunId.TryParse(id, out var runId))
-        return Results.BadRequest(new { error = "Invalid run id." });
+        return BadRequestError("invalid_run_id", "Invalid run id.");
 
     if (string.IsNullOrWhiteSpace(request.Feedback))
-        return Results.BadRequest(new { error = "feedback is required." });
+        return BadRequestError("feedback_required", "feedback is required.");
 
     Run? run;
     try { run = await runStore.GetAsync(runId, ct); }
@@ -117,8 +117,8 @@ app.MapPost("/api/runs/{id}/outcome-spec/revise", async (
         return Results.Problem("Failed to retrieve the run.", statusCode: 500);
     }
 
-    if (run is null) return Results.NotFound();
-    if (!EndpointHelpers.IsOwner(httpContext, run)) return Results.StatusCode(StatusCodes.Status403Forbidden);
+    if (run is null) return NotFoundError("run_not_found", "The coordinator run was not found.");
+    if (!EndpointHelpers.IsOwner(httpContext, run)) return ForbiddenError();
 
     var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
     var outcome = await coordinator.ReviseOutcomeSpecAsync(id, request.Feedback!, caller.User, ct);
@@ -150,7 +150,7 @@ app.MapGet("/api/runs/{coordinatorRunId}/work-plan", async (
     CancellationToken ct) =>
 {
     if (!RunId.TryParse(coordinatorRunId, out var runId))
-        return Results.BadRequest(new { error = "Invalid run id." });
+        return BadRequestError("invalid_run_id", "Invalid run id.");
 
     Run? run;
     try { run = await runStore.GetAsync(runId, ct); }
@@ -160,11 +160,11 @@ app.MapGet("/api/runs/{coordinatorRunId}/work-plan", async (
         return Results.Problem("Failed to retrieve the run.", statusCode: 500);
     }
 
-    if (run is null) return Results.NotFound();
-    if (!EndpointHelpers.IsOwner(httpContext, run)) return Results.StatusCode(StatusCodes.Status403Forbidden);
+    if (run is null) return NotFoundError("run_not_found", "The coordinator run was not found.");
+    if (!EndpointHelpers.IsOwner(httpContext, run)) return ForbiddenError();
 
     var plan = await ReadWorkPlanWithBriefWaitAsync(coordinator, coordinatorRunId, ct);
-    if (plan is null) return Results.NotFound();
+    if (plan is null) return NotFoundError("work_plan_not_found", "The coordinator work plan was not found.");
 
     return Results.Json(MapWorkPlan(plan));
 });
@@ -180,7 +180,7 @@ app.MapGet("/api/runs/{coordinatorRunId}/children", async (
     CancellationToken ct) =>
 {
     if (!RunId.TryParse(coordinatorRunId, out var runId))
-        return Results.BadRequest(new { error = "Invalid run id." });
+        return BadRequestError("invalid_run_id", "Invalid run id.");
 
     Run? run;
     try { run = await runStore.GetAsync(runId, ct); }
@@ -190,8 +190,8 @@ app.MapGet("/api/runs/{coordinatorRunId}/children", async (
         return Results.Problem("Failed to retrieve the run.", statusCode: 500);
     }
 
-    if (run is null) return Results.NotFound();
-    if (!EndpointHelpers.IsOwner(httpContext, run)) return Results.StatusCode(StatusCodes.Status403Forbidden);
+    if (run is null) return NotFoundError("run_not_found", "The coordinator run was not found.");
+    if (!EndpointHelpers.IsOwner(httpContext, run)) return ForbiddenError();
 
     var children = await coordinator.GetChildrenAsync(coordinatorRunId, ct);
     return Results.Json(children.Select(MapChild).ToList());
@@ -211,10 +211,10 @@ app.MapPost("/api/runs/{coordinatorRunId}/steer", async (
     CancellationToken ct) =>
 {
     if (!RunId.TryParse(coordinatorRunId, out var runId))
-        return Results.BadRequest(new { error = "Invalid run id." });
+        return BadRequestError("invalid_run_id", "Invalid run id.");
 
     if (string.IsNullOrWhiteSpace(request.Kind))
-        return Results.BadRequest(new { error = "kind is required." });
+        return BadRequestError("kind_required", "kind is required.");
 
     Run? run;
     try { run = await runStore.GetAsync(runId, ct); }
@@ -224,8 +224,8 @@ app.MapPost("/api/runs/{coordinatorRunId}/steer", async (
         return Results.Problem("Failed to retrieve the run.", statusCode: 500);
     }
 
-    if (run is null) return Results.NotFound();
-    if (!EndpointHelpers.IsOwner(httpContext, run)) return Results.StatusCode(StatusCodes.Status403Forbidden);
+    if (run is null) return NotFoundError("run_not_found", "The coordinator run was not found.");
+    if (!EndpointHelpers.IsOwner(httpContext, run)) return ForbiddenError();
 
     var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
 
@@ -243,7 +243,7 @@ app.MapPost("/api/runs/{coordinatorRunId}/steer", async (
     }
     catch (SteeringValidationException ex)
     {
-        return Results.BadRequest(new { error = "steering_invalid", message = ex.Message });
+        return BadRequestError("steering_invalid", ex.Message);
     }
     catch (SteeringRecoveryExhaustedException ex)
     {
@@ -269,7 +269,7 @@ app.MapPost("/api/runs/{coordinatorRunId}/assembly/review", async (
     CancellationToken ct) =>
 {
     if (!RunId.TryParse(coordinatorRunId, out var runId))
-        return Results.BadRequest(new { error = "Invalid run id." });
+        return BadRequestError("invalid_run_id", "Invalid run id.");
 
     Run? run;
     try { run = await runStore.GetAsync(runId, ct); }
@@ -279,8 +279,8 @@ app.MapPost("/api/runs/{coordinatorRunId}/assembly/review", async (
         return Results.Problem("Failed to retrieve the run.", statusCode: 500);
     }
 
-    if (run is null) return Results.NotFound();
-    if (!EndpointHelpers.IsOwner(httpContext, run)) return Results.StatusCode(StatusCodes.Status403Forbidden);
+    if (run is null) return NotFoundError("run_not_found", "The coordinator run was not found.");
+    if (!EndpointHelpers.IsOwner(httpContext, run)) return ForbiddenError();
 
     var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
 
@@ -291,14 +291,51 @@ app.MapPost("/api/runs/{coordinatorRunId}/assembly/review", async (
         TargetFiles: request.TargetFiles,
         Reviewer: caller.User);
 
-    await PersistAssemblyReviewDecisionAsync(
-        coordinatorRunId, decision, scopeFactory, CancellationToken.None).ConfigureAwait(false);
+    var pending = await CoordinatorAssemblyReviewPersistence.ValidatePendingRequestAsync(
+        scopeFactory,
+        coordinatorRunId,
+        caller.User,
+        caller.GitHubLogin,
+        ct).ConfigureAwait(false);
+    if (pending == AssemblyReviewPendingDecisionResult.Forbidden)
+        return ForbiddenError();
+    if (pending != AssemblyReviewPendingDecisionResult.Pending)
+        return NoAssemblyReviewPending();
 
     var result = reviewGate.TrySubmit(coordinatorRunId, caller.User, decision, caller.GitHubLogin);
-    if (result == Agentweaver.Api.Coordinator.AssemblyReviewSubmitResult.NotArmed
-        && await IsAssemblyReviewPendingAsync(coordinatorRunId, scopeFactory, ct).ConfigureAwait(false))
+    if (result == Agentweaver.Api.Coordinator.AssemblyReviewSubmitResult.Accepted)
     {
-        result = Agentweaver.Api.Coordinator.AssemblyReviewSubmitResult.Accepted;
+        await PersistAssemblyReviewDecisionAsync(
+            coordinatorRunId, decision, scopeFactory, CancellationToken.None).ConfigureAwait(false);
+    }
+    else if (result == Agentweaver.Api.Coordinator.AssemblyReviewSubmitResult.NotArmed)
+    {
+        var deferred = await CoordinatorAssemblyReviewPersistence.PersistDecisionForPendingRequestAsync(
+            scopeFactory,
+            coordinatorRunId,
+            decision,
+            caller.User,
+            caller.GitHubLogin,
+            CancellationToken.None).ConfigureAwait(false);
+
+        if (deferred == AssemblyReviewPendingDecisionResult.Persisted)
+        {
+            logger.LogInformation(
+                "Assembly review decision deferred durably. RunId={RunId} Reviewer={Reviewer}",
+                coordinatorRunId, caller.User);
+            return Results.Json(
+                new
+                {
+                    runId = coordinatorRunId,
+                    accepted = false,
+                    deferred = true,
+                    message = "The active coordinator will consume this review decision shortly.",
+                },
+                statusCode: StatusCodes.Status202Accepted);
+        }
+
+        if (deferred == AssemblyReviewPendingDecisionResult.Forbidden)
+            return ForbiddenError();
     }
 
     logger.LogInformation(
@@ -309,11 +346,11 @@ app.MapPost("/api/runs/{coordinatorRunId}/assembly/review", async (
     return result switch
     {
         Agentweaver.Api.Coordinator.AssemblyReviewSubmitResult.Accepted =>
-            Results.Json(new { runId = coordinatorRunId, accepted = true }),
+            Results.Json(new { runId = coordinatorRunId, accepted = true, deferred = false }),
         Agentweaver.Api.Coordinator.AssemblyReviewSubmitResult.Forbidden =>
-            Results.StatusCode(StatusCodes.Status403Forbidden),
+            ForbiddenError(),
         // NotArmed: no collective review is currently awaited (not yet at the gate, or already consumed).
-        _ => Results.Conflict(new { error = "no_assembly_review_pending" }),
+        _ => NoAssemblyReviewPending(),
     };
 });
 
@@ -331,7 +368,7 @@ app.MapGet("/api/runs/{id}/assembly/files", async (
     CancellationToken ct) =>
 {
     if (!RunId.TryParse(id, out var runId))
-        return Results.BadRequest(new { error = "Invalid run id." });
+        return BadRequestError("invalid_run_id", "Invalid run id.");
 
     Run? run;
     try { run = await runStore.GetAsync(runId, ct); }
@@ -342,8 +379,9 @@ app.MapGet("/api/runs/{id}/assembly/files", async (
         return Results.Problem("Failed to retrieve the run.", statusCode: 500);
     }
 
-    if (run is null) return Results.NotFound();
-    if (!EndpointHelpers.IsOwner(httpContext, run)) return Results.NotFound();
+    if (run is null) return NotFoundError("run_not_found", "The coordinator run was not found.");
+    if (!EndpointHelpers.IsOwner(httpContext, run))
+        return NotFoundError("run_not_found", "The coordinator run was not found.");
 
     var integrationBranch = CoordinatorAssemblyService.IntegrationBranchName(id);
     string? aggregateDiff;
@@ -372,7 +410,7 @@ app.MapGet("/api/runs/{id}/assembly/files/{**path}", async (
     CancellationToken ct) =>
 {
     if (!RunId.TryParse(id, out var runId))
-        return Results.BadRequest(new { error = "Invalid run id." });
+        return BadRequestError("invalid_run_id", "Invalid run id.");
 
     Run? run;
     try { run = await runStore.GetAsync(runId, ct); }
@@ -383,12 +421,13 @@ app.MapGet("/api/runs/{id}/assembly/files/{**path}", async (
         return Results.Problem("Failed to retrieve the run.", statusCode: 500);
     }
 
-    if (run is null) return Results.NotFound();
-    if (!EndpointHelpers.IsOwner(httpContext, run)) return Results.NotFound();
+    if (run is null) return NotFoundError("run_not_found", "The coordinator run was not found.");
+    if (!EndpointHelpers.IsOwner(httpContext, run))
+        return NotFoundError("run_not_found", "The coordinator run was not found.");
 
     var normalizedPath = path.Replace('\\', '/').TrimEnd('/');
     if (string.IsNullOrEmpty(normalizedPath))
-        return Results.BadRequest(new { error = "Invalid file path." });
+        return BadRequestError("invalid_file_path", "Invalid file path.");
 
     var integrationBranch = CoordinatorAssemblyService.IntegrationBranchName(id);
     string? aggregateDiff;
@@ -403,13 +442,13 @@ app.MapGet("/api/runs/{id}/assembly/files/{**path}", async (
     }
 
     if (string.IsNullOrEmpty(aggregateDiff))
-        return Results.NotFound();
+        return NotFoundError("assembly_diff_not_found", "The assembled diff was not found.");
 
     // Whitelist: only serve paths present in the collective changed-file set.
     var entries = WorkspaceFileEntryParser.ParseUnifiedDiffEntries(aggregateDiff);
     var whitelistEntry = entries.FirstOrDefault(e => string.Equals(e.Path, normalizedPath, StringComparison.Ordinal));
     if (whitelistEntry is null)
-        return Results.NotFound();
+        return NotFoundError("assembly_file_not_found", "The assembled file diff was not found.");
 
     var (fileDiff, isBinary) = WorkspaceFileEntryParser.ParseFileDiffFromUnifiedDiff(aggregateDiff, normalizedPath);
     return Results.Json(new WorkspaceFileDiff
@@ -434,7 +473,7 @@ app.MapGet("/api/runs/{id}/assembly/workspace", async (
     CancellationToken ct) =>
 {
     if (!RunId.TryParse(id, out var runId))
-        return Results.BadRequest(new { error = "Invalid run id." });
+        return BadRequestError("invalid_run_id", "Invalid run id.");
 
     Run? run;
     try { run = await runStore.GetAsync(runId, ct); }
@@ -445,8 +484,9 @@ app.MapGet("/api/runs/{id}/assembly/workspace", async (
         return Results.Problem("Failed to retrieve the run.", statusCode: 500);
     }
 
-    if (run is null) return Results.NotFound();
-    if (!EndpointHelpers.IsOwner(httpContext, run)) return Results.NotFound();
+    if (run is null) return NotFoundError("run_not_found", "The coordinator run was not found.");
+    if (!EndpointHelpers.IsOwner(httpContext, run))
+        return NotFoundError("run_not_found", "The coordinator run was not found.");
     if (string.IsNullOrEmpty(run.RepositoryPath))
         return Results.Json(Array.Empty<WorkspaceNode>());
 
@@ -490,7 +530,7 @@ app.MapGet("/api/runs/{id}/assembly/content/{**path}", async (
     CancellationToken ct) =>
 {
     if (!RunId.TryParse(id, out var runId))
-        return Results.BadRequest(new { error = "Invalid run id." });
+        return BadRequestError("invalid_run_id", "Invalid run id.");
 
     Run? run;
     try { run = await runStore.GetAsync(runId, ct); }
@@ -501,12 +541,14 @@ app.MapGet("/api/runs/{id}/assembly/content/{**path}", async (
         return Results.Problem("Failed to retrieve the run.", statusCode: 500);
     }
 
-    if (run is null) return Results.NotFound();
-    if (!EndpointHelpers.IsOwner(httpContext, run)) return Results.NotFound();
-    if (string.IsNullOrEmpty(run.RepositoryPath)) return Results.NotFound();
+    if (run is null) return NotFoundError("run_not_found", "The coordinator run was not found.");
+    if (!EndpointHelpers.IsOwner(httpContext, run))
+        return NotFoundError("run_not_found", "The coordinator run was not found.");
+    if (string.IsNullOrEmpty(run.RepositoryPath))
+        return NotFoundError("repository_not_found", "The coordinator run repository was not found.");
 
     if (!EndpointHelpers.TryValidateRelativePath(path, out var normalizedPath))
-        return Results.BadRequest(new { error = "Invalid file path." });
+        return BadRequestError("invalid_file_path", "Invalid file path.");
 
     var integrationBranch = CoordinatorAssemblyService.IntegrationBranchName(id);
 
@@ -516,11 +558,11 @@ app.MapGet("/api/runs/{id}/assembly/content/{**path}", async (
         var commit = repo.Branches[integrationBranch]?.Tip
                      ?? repo.Branches[$"refs/heads/{integrationBranch}"]?.Tip;
         if (commit is null)
-            return Results.NotFound();
+            return NotFoundError("assembly_branch_not_found", "The assembled integration branch was not found.");
 
         var treeEntry = commit[normalizedPath];
         if (treeEntry is null || treeEntry.TargetType != TreeEntryTargetType.Blob)
-            return Results.NotFound();   // e.g. a deleted file has no blob on the tip to preview
+            return NotFoundError("assembly_file_not_found", "The assembled file content was not found.");
 
         var blob = (Blob)treeEntry.Target;
         return Results.Json(EndpointHelpers.BuildBlobContent(blob, normalizedPath));
@@ -553,17 +595,24 @@ static void EnumerateAssemblyTree(Tree tree, string prefix, List<WorkspaceNode> 
     }
 }
 
-static async Task<bool> IsAssemblyReviewPendingAsync(
-    string coordinatorRunId, IServiceScopeFactory scopeFactory, CancellationToken ct)
-{
-    using var scope = scopeFactory.CreateScope();
-    var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
-    return await db.WorkPlans.AsNoTracking()
-        .AnyAsync(w => w.CoordinatorRunId == coordinatorRunId
-            && w.Status == WorkPlanStatus.InReview
-            && w.AssemblyStage == AssemblyStage.Review, ct)
-        .ConfigureAwait(false);
-}
+static IResult BadRequestError(string error, string message) =>
+    Results.Json(new { error, message }, statusCode: StatusCodes.Status400BadRequest);
+
+static IResult NotFoundError(string error, string message) =>
+    Results.Json(new { error, message }, statusCode: StatusCodes.Status404NotFound);
+
+static IResult ForbiddenError() =>
+    Results.Json(
+        new { error = "forbidden", message = "The authenticated caller does not own this coordinator run." },
+        statusCode: StatusCodes.Status403Forbidden);
+
+static IResult ConflictError(string error, string message) =>
+    Results.Json(new { error, message }, statusCode: StatusCodes.Status409Conflict);
+
+static IResult NoAssemblyReviewPending() =>
+    ConflictError(
+        "no_assembly_review_pending",
+        "No active assembly review is awaiting a decision for this coordinator run.");
 
 static async Task PersistAssemblyReviewDecisionAsync(
     string coordinatorRunId,

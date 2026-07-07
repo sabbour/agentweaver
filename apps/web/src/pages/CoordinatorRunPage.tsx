@@ -12,6 +12,7 @@ import {
   Field,
   Input,
   MessageBar,
+  MessageBarActions,
   MessageBarBody,
   Popover,
   PopoverSurface,
@@ -51,6 +52,7 @@ import '@xyflow/react/dist/style.css';
 import { useRunStream, type RunStreamEvent } from '../api/sse';
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
+import { formatApiError, formatApiErrorMessage, type FormattedApiError } from '../api/errors';
 import type { GraphDescriptor, RunStatus, WorkPlanResponse, PortForwardSessionDto, RunAgentTokenBreakdownDto } from '../api/types';
 import { layoutDagColumns, NODE_W, NODE_H, NODE_TYPE_W, NODE_TYPE_H } from '../utils/dagLayout';
 import type { NodeSizeHint } from '../utils/dagLayout';
@@ -110,11 +112,23 @@ const CoordPanelContext = createContext<((nodeId: string) => void) | undefined>(
 
 function topoStatusToStepStatus(status: string): StepStatus {
   switch (status) {
+    case 'dispatching':
+    case 'assembling':
+    case 'in_review':
     case 'dispatched':     return 'started';
     case 'running':        return 'started';
+    case 'pending_capacity': return 'started';
+    case 'awaiting_assembly': return 'started';
     case 'assemble_ready': return 'completed';
     case 'rai_flagged':    return 'revise';
     case 'completed':      return 'completed';
+    case 'complete':       return 'completed';
+    case 'blocked':
+    case 'assembly_blocked':
+    case 'assembly_failed':
+    case 'assembly_declined':
+    case 'needs_resolution':
+    case 'rai_blocked':
     case 'failed':         return 'failed';
     default:               return 'pending';
   }
@@ -130,12 +144,25 @@ function graphNodeSize(node: Node): { width: number; height: number } {
 
 function topoStatusToLabel(status: string): string {
   switch (status) {
+    case 'dispatching':     return 'Dispatching';
+    case 'assembling':      return 'Assembling';
+    case 'in_review':       return 'In review';
+    case 'awaiting_assembly': return 'Awaiting assembly';
     case 'dispatched':     return 'Dispatched';
     case 'running':        return 'Running';
+    case 'pending_capacity': return 'Waiting for capacity';
     case 'assemble_ready': return 'Awaiting assembly';
     case 'rai_flagged':    return 'RAI flagged';
     case 'completed':      return 'Completed';
+    case 'complete':       return 'Complete';
+    case 'blocked':        return 'Blocked';
+    case 'assembly_blocked': return 'Assembly blocked';
+    case 'assembly_failed': return 'Assembly failed';
+    case 'assembly_declined': return 'Assembly declined';
+    case 'needs_resolution': return 'Needs resolution';
+    case 'rai_blocked':    return 'RAI blocked';
     case 'failed':         return 'Failed';
+    case 'unknown':        return 'Unknown';
     default:               return 'Pending';
   }
 }
@@ -162,10 +189,14 @@ type OrchPhase =
   | 'dispatching'
   | 'awaiting_assembly'
   | 'assembling'
+  | 'rai'
   | 'in_review'
+  | 'merge'
+  | 'scribe'
   | 'complete'
   | 'failed'
   | 'blocked'
+  | 'needs_resolution'
   | 'declined'
   | 'unknown';
 
@@ -179,32 +210,68 @@ interface OrchState {
   updatedAt?: string;
 }
 
+type CoordinatorRunBucket =
+  | 'pending'
+  | 'running'
+  | 'waiting'
+  | 'blocked'
+  | 'failed'
+  | 'completed'
+  | 'unknown';
+
+interface CoordinatorRunViewState {
+  bucket: CoordinatorRunBucket;
+  label: string;
+  reason?: string;
+  sourceLabel: string;
+  terminal: boolean;
+  canRetry: boolean;
+  canStop: boolean;
+  canToggleAutomation: boolean;
+}
+
+const RUN_LEVEL_TERMINAL = new Set<string>(['completed', 'failed', 'blocked', 'declined', 'merged', 'merge_failed']);
+const RUN_LEVEL_RETRYABLE = new Set<string>(['failed', 'merge_failed']);
+
 // coordinator.assembly_* event type -> phase. These event types may not be emitted
 // yet; absence simply means we fall through to the status field / work-plan status.
-const ASSEMBLY_EVENT_PHASE: Record<string, OrchPhase> = {
-  'coordinator.assembly_started': 'assembling',
-  'coordinator.assembly_review_requested': 'in_review',
+const ASSEMBLY_EVENT_PHASE: Record<string, { phase: OrchPhase; priority?: number }> = {
+  'coordinator.assembly_started': { phase: 'assembling' },
+  'coordinator.assembly_rai_started': { phase: 'rai' },
+  'coordinator.assembly_rai_completed': { phase: 'assembling' },
+  'coordinator.assembly_review_requested': { phase: 'in_review' },
+  'coordinator.assembly_review_approved': { phase: 'merge' },
   // The run failed while the review gate was still open, but the gate was DELIBERATELY preserved so
   // the human can still view the changes. Keep the orchestration in the review phase (emitted after
   // assembly_failed) so the UI shows the "review still available" message instead of kicking the
   // operator out. Combined with a terminal run status this drives the preserved-review branch.
-  'coordinator.assembly_review_preserved': 'in_review',
-  'coordinator.assembly_changes_requested': 'dispatching', // re-dispatch resets the phase
-  'coordinator.assembly_completed': 'complete',
-  'coordinator.assembly_failed': 'failed',
-  'coordinator.assembly_blocked': 'blocked',
-  'coordinator.assembly_declined': 'declined',
+  'coordinator.assembly_review_preserved': { phase: 'in_review', priority: 4 },
+  'coordinator.assembly_changes_requested': { phase: 'dispatching', priority: 3 }, // re-dispatch resets the phase
+  'coordinator.assembly_merge_started': { phase: 'merge' },
+  'coordinator.assembly_merge_completed': { phase: 'scribe' },
+  'coordinator.assembly_merge_failed': { phase: 'failed', priority: 3 },
+  'merge.conflicted': { phase: 'needs_resolution', priority: 3 },
+  'coordinator.assembly_scribe_started': { phase: 'scribe' },
+  'coordinator.assembly_scribe_completed': { phase: 'scribe' },
+  'coordinator.assembly_completed': { phase: 'complete', priority: 3 },
+  'coordinator.assembly_failed': { phase: 'failed', priority: 3 },
+  'coordinator.assembly_blocked': { phase: 'blocked', priority: 3 },
+  'coordinator.assembly_declined': { phase: 'declined', priority: 3 },
 };
 
 function normalizePhase(raw: string | undefined | null): OrchPhase {
   if (!raw) return 'unknown';
   const k = raw.toLowerCase().replace(/[^a-z]/g, '');
   if (k.includes('awaitingassembly')) return 'awaiting_assembly';
+  if (k.includes('needsresolution')) return 'needs_resolution';
+  if (k.includes('reviewpreserved')) return 'in_review';
+  if (k.includes('reviewapproved')) return 'merge';
   if (k.includes('assembling')) return 'assembling';
   if (k.includes('inreview')) return 'in_review';
   if (k.includes('complete')) return 'complete';
   if (k.includes('fail')) return 'failed';
   if (k.includes('block')) return 'blocked';
+  if (k.includes('pendingcapacity')) return 'blocked';
   if (k.includes('declin')) return 'declined';
   if (k.includes('dispatch')) return 'dispatching';
   return 'unknown';
@@ -235,10 +302,14 @@ function deriveOrchState(
   reasonField: string | undefined,
   workPlanStatus: string | undefined,
 ): OrchState {
-  let winner: { phase: OrchPhase; payload: Record<string, unknown>; type: string; sequence: number } | undefined;
+  let winner: { phase: OrchPhase; payload: Record<string, unknown>; type: string; sequence: number; priority: number } | undefined;
   for (const evt of events) {
-    const phase = ASSEMBLY_EVENT_PHASE[evt.type as string];
-    if (phase) winner = { phase, payload: evt.payload, type: evt.type, sequence: evt.sequence };
+    const mapped = ASSEMBLY_EVENT_PHASE[evt.type as string];
+    if (!mapped) continue;
+    const priority = mapped.priority ?? 1;
+    if (!winner || priority > winner.priority || (priority === winner.priority && evt.sequence >= winner.sequence)) {
+      winner = { phase: mapped.phase, payload: evt.payload, type: evt.type, sequence: evt.sequence, priority };
+    }
   }
   if (winner) {
     const rawFiles = winner.payload['conflictingFiles'] ?? winner.payload['conflicting_files'];
@@ -269,8 +340,8 @@ function orchPhaseToTopoStatus(phase: OrchPhase): string | undefined {
   switch (phase) {
     case 'complete': return 'completed';
     case 'failed':
-    case 'blocked':
     case 'declined': return 'failed';
+    case 'blocked': return 'blocked';
     case 'unknown': return undefined;
     default: return 'running';
   }
@@ -284,13 +355,28 @@ function orchPhaseToTopoStatus(phase: OrchPhase): string | undefined {
 function assemblyNodeStatus(role: string, phase: OrchPhase): StepStatus | undefined {
   switch (phase) {
     case 'assembling':
+    case 'rai':
       return role === 'rai' ? 'started' : undefined;
     case 'in_review':
       if (role === 'rai')    return 'completed';
       if (role === 'review') return 'started';
       return undefined;
+    case 'merge':
+      if (role === 'rai' || role === 'review') return 'completed';
+      if (role === 'merge') return 'started';
+      return undefined;
+    case 'scribe':
+      if (role === 'rai' || role === 'review' || role === 'merge') return 'completed';
+      if (role === 'scribe') return 'started';
+      return undefined;
     case 'complete':
       return 'completed';
+    case 'needs_resolution':
+      if (role === 'rai' || role === 'review') return 'completed';
+      if (role === 'merge') return 'failed';
+      return undefined;
+    case 'failed':
+      return role === 'merge' ? 'failed' : undefined;
     case 'declined':
       if (role === 'review') return 'failed';
       if (role === 'rai')    return 'completed';
@@ -305,13 +391,135 @@ function orchPhaseLabel(phase: OrchPhase): string {
     case 'dispatching':       return 'Dispatching';
     case 'awaiting_assembly': return 'Awaiting assembly';
     case 'assembling':        return 'Assembling';
+    case 'rai':               return 'RAI review';
     case 'in_review':         return 'In review';
+    case 'merge':             return 'Merging';
+    case 'scribe':            return 'Scribing';
     case 'complete':          return 'Complete';
     case 'failed':            return 'Failed';
     case 'blocked':           return 'Blocked';
+    case 'needs_resolution':  return 'Needs resolution';
     case 'declined':          return 'Declined';
-    default:                  return 'Running';
+    default:                  return 'Unknown';
   }
+}
+
+function runStatusLabel(status: string | undefined): string {
+  switch (status) {
+    case 'pending': return 'Pending';
+    case 'in_progress': return 'In progress';
+    case 'completed': return 'Completed';
+    case 'failed': return 'Failed';
+    case 'blocked': return 'Blocked';
+    case 'awaiting_review': return 'Awaiting review';
+    case 'merging': return 'Merging';
+    case 'merged': return 'Merged';
+    case 'declined': return 'Declined';
+    case 'merge_failed': return 'Merge failed';
+    case 'needs_resolution': return 'Needs resolution';
+    case 'assemble_ready': return 'Awaiting assembly';
+    default: return 'Unknown';
+  }
+}
+
+function bucketForRunStatus(status: string | undefined): CoordinatorRunBucket {
+  switch (status) {
+    case 'pending': return 'pending';
+    case 'in_progress':
+    case 'merging': return 'running';
+    case 'awaiting_review':
+    case 'assemble_ready': return 'waiting';
+    case 'blocked': return 'blocked';
+    case 'failed':
+    case 'declined':
+    case 'merge_failed': return 'failed';
+    case 'completed':
+    case 'merged': return 'completed';
+    default: return 'unknown';
+  }
+}
+
+function bucketForOrchPhase(phase: OrchPhase): CoordinatorRunBucket {
+  switch (phase) {
+    case 'dispatching':
+    case 'assembling':
+    case 'rai':
+    case 'merge':
+    case 'scribe': return 'running';
+    case 'awaiting_assembly':
+    case 'in_review': return 'waiting';
+    case 'complete': return 'completed';
+    case 'failed':
+    case 'declined': return 'failed';
+    case 'needs_resolution':
+    case 'blocked': return 'blocked';
+    default: return 'unknown';
+  }
+}
+
+function deriveCoordinatorRunViewState(
+  runLevelStatus: RunStatus | undefined,
+  orch: OrchState,
+  loadError: FormattedApiError | null,
+): CoordinatorRunViewState {
+  if (loadError && runLevelStatus === undefined) {
+    const label =
+      loadError.kind === 'not-found' ? 'Run not found'
+      : loadError.kind === 'unauthorized' ? 'Authentication required'
+      : loadError.kind === 'forbidden' ? 'Permission required'
+      : 'Run unavailable';
+    return {
+      bucket: 'unknown',
+      label,
+      reason: loadError.detail ?? loadError.message,
+      sourceLabel: `GET /runs failed${loadError.status ? ` (${loadError.status})` : ''}`,
+      terminal: true,
+      canRetry: false,
+      canStop: false,
+      canToggleAutomation: false,
+    };
+  }
+
+  const status = runLevelStatus ? String(runLevelStatus) : undefined;
+  if (status && RUN_LEVEL_TERMINAL.has(status)) {
+    const reviewPreserved = orch.sourceLabel.includes('coordinator.assembly_review_preserved');
+    return {
+      bucket: bucketForRunStatus(status),
+      label: reviewPreserved ? 'Review preserved' : runStatusLabel(status),
+      reason: orch.reason ?? (reviewPreserved ? 'The run ended, but the assembly review artifact is still available to inspect.' : undefined),
+      sourceLabel: reviewPreserved ? orch.sourceLabel : 'run status field',
+      terminal: true,
+      canRetry: RUN_LEVEL_RETRYABLE.has(status),
+      canStop: false,
+      canToggleAutomation: false,
+    };
+  }
+
+  const orchBucket = bucketForOrchPhase(orch.phase);
+  if (orchBucket !== 'unknown') {
+    return {
+      bucket: orchBucket,
+      label: orchPhaseLabel(orch.phase),
+      reason: orch.reason,
+      sourceLabel: orch.sourceLabel,
+      terminal: orchBucket === 'completed' || orchBucket === 'failed' || orchBucket === 'blocked',
+      canRetry: false,
+      canStop: status === 'in_progress',
+      canToggleAutomation: status === 'in_progress',
+    };
+  }
+
+  const runBucket = bucketForRunStatus(status);
+  return {
+    bucket: runBucket,
+    label: runStatusLabel(status),
+    reason: orch.reason,
+    sourceLabel: status ? 'run status field' : orch.sourceLabel,
+    terminal: false,
+    canRetry: false,
+    canStop: status === 'in_progress',
+    canToggleAutomation: status === 'in_progress',
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -371,13 +579,6 @@ interface SubtaskNodeData extends Record<string, unknown> {
   /** Layout direction for handle placement. 'LR' (default) = left/right; 'TB' = top/bottom. */
   dir?: 'LR' | 'TB';
 }
-
-// Fallback child pipeline defs (used when a child run's graph descriptor is not yet available).
-const INLINE_CHILD_FALLBACK: ExecutorDef[] = [
-  { key: 'agent',          label: 'Agent',          roleDescription: 'AI Assistant',                Icon: iconForRole('agent')    },
-  { key: 'rai',            label: 'Rai',             roleDescription: 'RAI Reviewer',                Icon: iconForRole('rai')      },
-  { key: 'assemble-ready', label: 'Assemble-ready',  roleDescription: 'Awaiting collective assembly', Icon: iconForRole('assembly') },
-];
 
 // Vertical space (px) a subtask node reserves below its body when its child pipeline is expanded,
 // so dagre spaces sibling subtasks apart instead of letting the expansion overlap neighbours.
@@ -453,15 +654,27 @@ function SubtaskNode({ id, data, selected }: NodeProps) {
   const openPanel = useContext(CoordPanelContext);
   const expanded = expandCtx?.expanded.has(id) ?? false;
   const [childDescriptor, setChildDescriptor] = useState<GraphDescriptor | null>(null);
+  const [childDescriptorError, setChildDescriptorError] = useState<string | null>(null);
   const handleStyle: React.CSSProperties = { opacity: 0, pointerEvents: 'none' };
 
   // Fetch the child run's graph descriptor only when expanded.
   useEffect(() => {
-    if (!expanded || !d.childRunId) return;
+    if (!expanded || !d.childRunId) {
+      setChildDescriptorError(null);
+      return;
+    }
     let cancelled = false;
+    setChildDescriptorError(null);
     apiClient.getRunGraph(d.childRunId as string)
-      .then((desc) => { if (!cancelled) setChildDescriptor(desc); })
-      .catch(() => {});
+      .then((desc) => {
+        if (!cancelled) {
+          setChildDescriptor(desc);
+          setChildDescriptorError(null);
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) setChildDescriptorError(formatApiErrorMessage(err, 'Child pipeline is not available yet.'));
+      });
     return () => { cancelled = true; };
   }, [expanded, d.childRunId]);
 
@@ -496,8 +709,8 @@ function SubtaskNode({ id, data, selected }: NodeProps) {
     return map;
   }, [childEvents]);
 
-  // Build the ordered list of child pipeline nodes: from the descriptor when available,
-  // or from the hardcoded fallback while the fetch is in-flight or unavailable.
+  // Build the ordered list of child pipeline nodes from the descriptor when available. Avoid
+  // painting a fake success pipeline when the child graph fetch fails.
   const childNodes = useMemo<Array<{ def: ExecutorDef; state: ExecutorState }>>(() => {
     const defs = childDescriptor
       ? childDescriptor.nodes.map((n) => ({
@@ -506,7 +719,7 @@ function SubtaskNode({ id, data, selected }: NodeProps) {
           roleDescription: roleDescForRole(n.role),
           Icon:            iconForRole(n.role),
         }))
-      : INLINE_CHILD_FALLBACK;
+      : [];
     return defs.map((def) => ({
       def,
       state: childStepStates[def.key] ?? { status: 'pending' },
@@ -583,14 +796,20 @@ function SubtaskNode({ id, data, selected }: NodeProps) {
             gap: 0,
           }}
         >
-          {childNodes.map((node, i) => (
-            <ChildStepRow
-              key={node.def.key}
-              def={node.def}
-              state={node.state}
-              isLast={i === childNodes.length - 1}
-            />
-          ))}
+          {childDescriptorError ? (
+            <Text style={{ color: tokens.colorNeutralForeground2, lineHeight: tokens.lineHeightBase300 }}>{childDescriptorError}</Text>
+          ) : !d.childRunId ? (
+            <Text style={{ color: tokens.colorNeutralForeground2, lineHeight: tokens.lineHeightBase300 }}>Child run has not been dispatched yet.</Text>
+          ) : childNodes.length === 0 ? (
+            <Text style={{ color: tokens.colorNeutralForeground2, lineHeight: tokens.lineHeightBase300 }}>Child pipeline has not been emitted yet.</Text>
+          ) : childNodes.map((node, i) => (
+              <ChildStepRow
+                key={node.def.key}
+                def={node.def}
+                state={node.state}
+                isLast={i === childNodes.length - 1}
+              />
+            ))}
         </div>
       )}
 
@@ -691,6 +910,30 @@ const useStyles = makeStyles({
     fontSize: tokens.fontSizeBase200,
     color: tokens.colorNeutralForeground3,
     lineHeight: tokens.lineHeightBase200,
+  },
+  stateReason: {
+    color: tokens.colorNeutralForeground2,
+    overflowWrap: 'anywhere',
+  },
+  statusBannerStack: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalS,
+  },
+  pageError: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalM,
+    maxWidth: '760px',
+    padding: tokens.spacingVerticalXL,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusLarge,
+    backgroundColor: tokens.colorNeutralBackground1,
+  },
+  pageErrorActions: {
+    display: 'flex',
+    gap: tokens.spacingHorizontalS,
+    flexWrap: 'wrap',
   },
   conflictFiles: {
     display: 'flex',
@@ -841,6 +1084,11 @@ const useStyles = makeStyles({
     borderRadius: tokens.borderRadiusLarge,
     overflow: 'hidden',
     backgroundColor: tokens.colorNeutralBackground1,
+    '@media (max-width: 640px)': {
+      height: 'auto',
+      minHeight: 'auto',
+      overflow: 'visible',
+    },
   },
   topZone: {
     display: 'grid',
@@ -868,6 +1116,11 @@ const useStyles = makeStyles({
     textOverflow: 'ellipsis',
     fontSize: tokens.fontSizeBase500,
     lineHeight: tokens.lineHeightBase500,
+    textWrap: 'balance',
+    '@media (max-width: 640px)': {
+      whiteSpace: 'normal',
+      overflowWrap: 'anywhere',
+    },
   },
   topTitleRow: {
     display: 'flex',
@@ -935,6 +1188,11 @@ const useStyles = makeStyles({
     justifyContent: 'flex-end',
     gap: tokens.spacingHorizontalM,
     flexWrap: 'wrap',
+    '@media (max-width: 640px)': {
+      justifyContent: 'stretch',
+      alignItems: 'stretch',
+      flexDirection: 'column',
+    },
   },
   actionGroup: {
     display: 'flex',
@@ -976,6 +1234,9 @@ const useStyles = makeStyles({
     '@media (max-width: 1180px)': {
       gridTemplateColumns: '220px minmax(0, 1fr)',
     },
+    '@media (max-width: 640px)': {
+      gridTemplateColumns: '1fr',
+    },
   },
   leftZone: {
     minHeight: 0,
@@ -983,6 +1244,11 @@ const useStyles = makeStyles({
     backgroundColor: tokens.colorNeutralBackground2,
     display: 'flex',
     flexDirection: 'column',
+    '@media (max-width: 640px)': {
+      borderRight: 'none',
+      borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
+      maxHeight: '320px',
+    },
   },
   zoneHeader: {
     display: 'flex',
@@ -1060,6 +1326,9 @@ const useStyles = makeStyles({
   centerDag: {
     height: '100%',
     minHeight: '520px',
+    '@media (max-width: 640px)': {
+      minHeight: '360px',
+    },
   },
   creditsSurface: {
     width: '360px',
@@ -1078,6 +1347,11 @@ const useStyles = makeStyles({
       gridColumnEnd: 3,
       minHeight: '520px',
       borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
+    },
+    '@media (max-width: 640px)': {
+      gridColumnStart: 1,
+      gridColumnEnd: 2,
+      minHeight: '420px',
     },
   },
   readoutBody: {
@@ -1121,11 +1395,11 @@ function flattenRunTree(nodes: RunSessionTree[], depth = 0): RunSessionTree[] {
 function runTreeStatusIcon(status: string) {
   const kind = status === 'completed' || status === 'merged' || status === 'assemble_ready' || status === 'confirmed'
     ? 'success'
-    : status === 'failed' || status === 'merge_failed' || status === 'declined'
+    : status === 'failed' || status === 'merge_failed' || status === 'declined' || status === 'blocked' || status === 'needs_resolution'
       ? 'danger'
       : status === 'running' || status === 'dispatched' || status === 'dispatching' || status === 'in_progress'
         ? 'running'
-          : status === 'waiting' || status === 'pending' || status === 'rai_flagged' || status === 'awaiting_confirmation' || status === 'needs_clarification'
+          : status === 'waiting' || status === 'pending' || status === 'rai_flagged' || status === 'awaiting_confirmation' || status === 'needs_clarification' || status === 'pending_capacity'
           ? 'waiting'
           : 'pending';
   if (kind === 'success') return <CheckmarkCircleFilled aria-hidden="true" />;
@@ -1145,6 +1419,9 @@ function runTreeStatusLabel(status: string, confirmedBy?: string): string {
     case 'awaiting_confirmation': return 'Awaiting confirmation';
     case 'confirmed': return confirmedBy ? `Confirmed by ${confirmedBy}` : 'Confirmed';
     case 'needs_clarification': return 'Needs clarification';
+    case 'needs_resolution': return 'Needs resolution';
+    case 'pending_capacity': return 'Waiting for capacity';
+    case 'blocked': return 'Blocked';
     case 'completed': return 'Completed';
     case 'running': return 'Running';
     case 'pending': return 'Pending';
@@ -1153,7 +1430,7 @@ function runTreeStatusLabel(status: string, confirmedBy?: string): string {
 }
 
 const FAILED_TASK_STATUSES = new Set(['failed', 'merge_failed', 'declined']);
-const BLOCKED_TASK_STATUSES = new Set(['blocked', 'rai_flagged', 'needs_clarification', 'pending_capacity']);
+const BLOCKED_TASK_STATUSES = new Set(['blocked', 'rai_flagged', 'needs_clarification', 'pending_capacity', 'needs_resolution']);
 const WAITING_TASK_STATUSES = new Set(['waiting', 'awaiting_assembly', 'assemble_ready', 'awaiting_confirmation']);
 const PENDING_TASK_STATUSES = new Set(['pending']);
 
@@ -1164,7 +1441,20 @@ function formatPhaseUpdated(timestamp: string | undefined): string {
   return `Updated ${parsed.toLocaleString()}`;
 }
 
-function graphEmptyCopy(isConnecting: boolean, noWorkPlan: boolean) {
+function graphEmptyCopy(
+  isConnecting: boolean,
+  noWorkPlan: boolean,
+  graphError: FormattedApiError | null,
+  viewState: CoordinatorRunViewState,
+) {
+  if (graphError) {
+    return {
+      title: graphError.kind === 'not-found' ? 'Graph has not been emitted yet' : 'Run graph could not be loaded',
+      body: graphError.kind === 'not-found'
+        ? 'The coordinator run exists, but the saved graph endpoint has not produced a descriptor yet. Keep the stream open or refresh after the coordinator emits the graph.'
+        : `${graphError.message}${graphError.detail ? ` ${graphError.detail}` : ''}`,
+    };
+  }
   if (isConnecting) {
     return {
       title: 'Connecting to the coordinator stream',
@@ -1173,8 +1463,10 @@ function graphEmptyCopy(isConnecting: boolean, noWorkPlan: boolean) {
   }
   if (noWorkPlan) {
     return {
-      title: 'Work plan is not available yet',
-      body: 'The coordinator has not produced a saved work plan for this run. Keep the stream open, review the selected task details for messages, or retry the run if the phase stays stalled.',
+      title: viewState.terminal ? 'No saved work plan for this run' : 'Work plan is not available yet',
+      body: viewState.terminal
+        ? 'The run is no longer active and no work plan was saved. Review the run status and coordinator messages for the failure reason.'
+        : 'The coordinator has not produced a saved work plan for this run yet. The page will keep retrying while the run is in progress.',
     };
   }
   return {
@@ -1188,7 +1480,13 @@ export function CoordinatorRunPage() {
   const { projectId, runId } = useParams<{ projectId: string; runId: string }>();
   const navigate = useNavigate();
 
-  const { events, status: streamStatus, reconnect: reconnectStream } = useRunStream(runId ?? '');
+  const {
+    events,
+    droppedEventCount,
+    status: streamStatus,
+    error: streamError,
+    reconnect: reconnectStream,
+  } = useRunStream(runId ?? '');
 
   // Ctrl+Scroll zoom for the orchestration graph, mirroring WorkflowRunPage.
   const { zoom, zoomIn, zoomOut, resetZoom, viewportRef, maxZoom } = useCtrlScrollZoom({ maxZoom: 2 });
@@ -1215,6 +1513,9 @@ export function CoordinatorRunPage() {
 
   // REST seed: coordinator GraphDescriptor (GET /api/runs/{id}/graph, coordinator variant).
   const [restDescriptor, setRestDescriptor] = useState<GraphDescriptor | null>(null);
+  const [graphError, setGraphError] = useState<FormattedApiError | null>(null);
+  const [runLoadError, setRunLoadError] = useState<FormattedApiError | null>(null);
+  const [workPlanError, setWorkPlanError] = useState<FormattedApiError | null>(null);
 
   // Topology seed from work plan + children (for subtask status projection).
   const [topoSeed, setTopoSeed] = useState(initialTopologyState);
@@ -1228,25 +1529,45 @@ export function CoordinatorRunPage() {
     let cancelled = false;
 
     // Fetch graph descriptor for REST seed (so finished coordinator runs still render).
+    setRestDescriptor(null);
+    setGraphError(null);
     apiClient.getRunGraph(runId)
-      .then((desc) => { if (!cancelled) setRestDescriptor(desc); })
-      .catch(() => {});
+      .then((desc) => {
+        if (cancelled) return;
+        setRestDescriptor(desc);
+        setGraphError(null);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setGraphError(formatApiError(err, 'The saved run graph could not be loaded.'));
+      });
 
     // Fetch work plan + children for topology status seed. Skip for child runs —
     // work-plan is a coordinator-only artifact and child runs will never have one.
     void (async () => {
-      const runDetail = await apiClient.getRun(runId).catch(() => null);
+      const runDetail = await apiClient.getRun(runId).catch((err) => {
+        if (!cancelled) setRunLoadError(formatApiError(err, 'The run could not be loaded.'));
+        return null;
+      });
       if (cancelled) return;
+      if (runDetail) setRunLoadError(null);
       if (runDetail?.parent_run_id != null) {
         setIsChildRun(true);
         return;
       }
       const [workPlan, children] = await Promise.all([
-        apiClient.getWorkPlan(runId).catch(() => null),
+        apiClient.getWorkPlan(runId).catch((err) => {
+          if (!(err instanceof ApiError && err.status === 404) && !cancelled) {
+            setWorkPlanError(formatApiError(err, 'The work plan could not be loaded.'));
+          }
+          return null;
+        }),
         apiClient.getCoordinatorChildren(runId).catch(() => null),
       ]);
       if (cancelled) return;
       if (workPlan) {
+        setWorkPlanError(null);
+        setNoWorkPlan(false);
         setTopoSeed(seedTopologyFromWorkPlan(workPlan, children));
         setWorkPlanData(workPlan);
       }
@@ -1330,12 +1651,14 @@ export function CoordinatorRunPage() {
   const [retrying, setRetrying] = useState(false);
   const [retryError, setRetryError] = useState<string | null>(null);
   const [stopping, setStopping] = useState(false);
+  const [stopError, setStopError] = useState<string | null>(null);
   // Per-run option toggles (autopilot + auto-approve-tools). Seeded once from the run detail,
   // then driven by user toggles (optimistic). Both cascade to the coordinator's children.
   const [autopilot, setAutopilot] = useState(false);
   const [autoApprove, setAutoApprove] = useState(false);
   const [autopilotBusy, setAutopilotBusy] = useState(false);
   const [autoApproveBusy, setAutoApproveBusy] = useState(false);
+  const [automationError, setAutomationError] = useState<string | null>(null);
   const [tokenBreakdown, setTokenBreakdown] = useState<RunAgentTokenBreakdownDto | null>(null);
   const seededToggles = useRef(false);
 
@@ -1343,35 +1666,62 @@ export function CoordinatorRunPage() {
     if (!runId) return;
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
-    // Once the work-plan returns 404, we stop calling the endpoint for the rest of this page
-    // lifecycle. The plan does not exist yet; SSE events (coordinator.graph) update the topology
-    // live, and a page refresh will re-seed from REST when the plan is available.
-    let wpEverMissing = false;
-    const TERMINAL = new Set<OrchPhase>(['complete', 'failed', 'declined']);
-    // Run-level terminal statuses stop polling even when coordinator_status is absent (e.g., a
-    // run interrupted before the coordinator emitted a terminal orchestration status).
-    const RUN_LEVEL_TERMINAL = new Set<RunStatus>(['completed', 'failed', 'declined', 'merged', 'merge_failed']);
+    const TERMINAL = new Set<OrchPhase>(['complete', 'failed', 'blocked', 'declined']);
+    setRunLoadError(null);
+    setWorkPlanError(null);
+    setNoWorkPlan(false);
+    setRunLevelStatus(undefined);
+    setCoordStatusField(undefined);
+    setCoordStatusReason(undefined);
+    setWorkPlanStatus(undefined);
+    setWorkPlanData(null);
+    setIsChildRun(false);
+    seededToggles.current = false;
 
     const tick = async () => {
-      const detail = await apiClient.getRun(runId).catch(() => null);
+      let detail: Awaited<ReturnType<typeof apiClient.getRun>>;
+      try {
+        detail = await apiClient.getRun(runId);
+      } catch (err) {
+        if (cancelled) return;
+        setRunLoadError(formatApiError(err, 'The run could not be loaded.'));
+        if (err instanceof ApiError && (err.status === 404 || err.status === 401 || err.status === 403)) return;
+        timer = setTimeout(() => { void tick(); }, 8000);
+        return;
+      }
+      if (cancelled) return;
+      setRunLoadError(null);
       // Child runs (parent_run_id non-null) are not coordinator runs and will never have a
       // work-plan or outcome-plan. Skip coordinator-only artifact fetches to avoid 404 noise.
       const childRun = detail?.parent_run_id != null;
-      if (childRun) setIsChildRun(true);
-      // Fetch work-plan only when it has not already returned 404 and the run is not a child.
-      // wpEverMissing persists across ticks so a single 404 stops all further attempts;
-      // repeated calls would produce repeated browser network errors with no benefit.
+      setIsChildRun(childRun);
       let wp: WorkPlanResponse | null = null;
-      if (!childRun && !wpEverMissing) {
+      let workPlanFailed = false;
+      if (!childRun) {
         try {
           wp = await apiClient.getWorkPlan(runId);
+          const children = await apiClient.getCoordinatorChildren(runId).catch(() => null);
+          if (cancelled) return;
+          setNoWorkPlan(false);
+          setWorkPlanError(null);
+          setWorkPlanData(wp);
+          setTopoSeed(seedTopologyFromWorkPlan(wp, children));
         } catch (err) {
-          if (err instanceof ApiError && err.status === 404) wpEverMissing = true;
+          if (cancelled) return;
+          if (err instanceof ApiError && err.status === 404) {
+            setNoWorkPlan(true);
+            setWorkPlanError(null);
+          } else {
+            workPlanFailed = true;
+            setWorkPlanError(formatApiError(err, 'The work plan could not be loaded.'));
+          }
           wp = null;
         }
+      } else {
+        setNoWorkPlan(false);
+        setWorkPlanError(null);
       }
       if (cancelled) return;
-      setNoWorkPlan(wpEverMissing);
       const statusField = detail?.coordinator_status ?? undefined;
       const reasonField = detail?.coordinator_status_reason ?? undefined;
       const wpStatus = wp?.status ?? undefined;
@@ -1388,13 +1738,11 @@ export function CoordinatorRunPage() {
       }
       // Stop polling when the run-level status is already terminal even if the orchestration
       // coordinator_status field is absent (e.g., a run interrupted before emitting a terminal status).
-      if (detail?.status && RUN_LEVEL_TERMINAL.has(detail.status)) return;
+      if (detail?.status && RUN_LEVEL_TERMINAL.has(String(detail.status))) return;
       const phase = normalizePhase(statusField) !== 'unknown'
         ? normalizePhase(statusField)
         : normalizePhase(wpStatus);
-      if (!TERMINAL.has(phase)) {
-        timer = setTimeout(() => { void tick(); }, 4000);
-      }
+      if (!TERMINAL.has(phase)) timer = setTimeout(() => { void tick(); }, workPlanFailed ? 8000 : 4000);
     };
 
     void tick();
@@ -1477,19 +1825,8 @@ export function CoordinatorRunPage() {
   );
 
   const planningDescriptor = useMemo<GraphDescriptor | null>(() => {
-    const base = effectiveDescriptor ?? {
-      graph_id: `coordinator:${runId ?? 'run'}`,
-      variant: 'coordinator',
-      start_node_id: 'coordinator',
-      nodes: [{
-        id: 'coordinator',
-        label: 'Coordinator',
-        role: 'coordinator',
-        kind: 'live',
-        node_type: 'agent',
-      }],
-      edges: [],
-    } satisfies GraphDescriptor;
+    if (!effectiveDescriptor) return null;
+    const base = effectiveDescriptor;
 
     const nodesById = new Map(base.nodes.map((node) => [node.id, node]));
     const coordinator = nodesById.get('coordinator') ?? base.nodes[0];
@@ -1541,12 +1878,16 @@ export function CoordinatorRunPage() {
     }
 
     return { ...base, start_node_id: coordinator.id, nodes, edges };
-  }, [effectiveDescriptor, latestOutcomePlanEvent, runId, specConfirmed, workPlanSeen]);
+  }, [effectiveDescriptor, latestOutcomePlanEvent, specConfirmed, workPlanSeen]);
 
   // Derived orchestration lifecycle (issues 3 & 4).
   const orch = useMemo<OrchState>(
     () => deriveOrchState(events, coordStatusField, coordStatusReason, workPlanStatus),
     [events, coordStatusField, coordStatusReason, workPlanStatus],
+  );
+  const viewState = useMemo(
+    () => deriveCoordinatorRunViewState(runLevelStatus, orch, runLoadError),
+    [runLevelStatus, orch, runLoadError],
   );
   // Derive sandbox backend from sandbox.selected events for the Preview Sandbox button.
   useEffect(() => {
@@ -1559,7 +1900,12 @@ export function CoordinatorRunPage() {
   }, [events]);
 
   // Coordinator graph node status override so it never shows a stale "Pending".
-  const coordNodeStatusOverride = orchPhaseToTopoStatus(orch.phase);
+  const coordNodeStatusOverride = orchPhaseToTopoStatus(orch.phase)
+    ?? (viewState.bucket === 'failed' || viewState.bucket === 'blocked'
+      ? 'failed'
+      : viewState.bucket === 'completed'
+        ? 'completed'
+        : undefined);
 
   // Topology state for subtask status projection.
   const topology = useMemo(
@@ -1572,7 +1918,7 @@ export function CoordinatorRunPage() {
   // completedAt = first terminal (completed/failed/assemble_ready/rai_flagged). Drives a live counter
   // on each subtask card so the user can see how long it has been running.
   const subtaskTiming = useMemo<Record<string, { startedAt?: number; completedAt?: number }>>(() => {
-    const STARTED = new Set(['subtask.dispatched', 'subtask.running']);
+    const STARTED = new Set(['subtask.dispatched', 'subtask.running', 'subtask.pending_capacity']);
     const TERMINAL = new Set(['subtask.completed', 'subtask.failed', 'subtask.assemble_ready', 'subtask.rai_flagged']);
     const map: Record<string, { startedAt?: number; completedAt?: number }> = {};
     for (const evt of events) {
@@ -1612,6 +1958,7 @@ export function CoordinatorRunPage() {
       'coordinator.assembly_declined': 'review',
       'coordinator.assembly_merge_completed': 'merge',
       'coordinator.assembly_merge_failed': 'merge',
+      'merge.conflicted': 'merge',
       'coordinator.assembly_scribe_completed': 'scribe',
     };
     const map: Record<string, { startedAt?: number; completedAt?: number }> = {};
@@ -1670,7 +2017,8 @@ export function CoordinatorRunPage() {
         t === 'coordinator.assembly_completed' ||
         t === 'coordinator.assembly_declined' ||
         t === 'coordinator.assembly_failed' ||
-        t === 'coordinator.assembly_blocked'
+        t === 'coordinator.assembly_blocked' ||
+        t === 'merge.conflicted'
       ) {
         supersedeSeq = Math.max(supersedeSeq, seq);
       }
@@ -1794,7 +2142,7 @@ export function CoordinatorRunPage() {
       let nodePlanned = planned;
       let stepStatus: StepStatus;
       if (node.id === 'coordinator') {
-        stepStatus = topoStatusToStepStatus(coordNodeStatusOverride ?? coordTopoNode?.status ?? 'running');
+        stepStatus = topoStatusToStepStatus(coordNodeStatusOverride ?? coordTopoNode?.status ?? 'unknown');
       } else if (node.id === 'outcome-plan') {
         stepStatus = specConfirmed ? 'completed' : latestOutcomePlanEvent ? 'started' : 'pending';
       } else if (node.id === 'work-plan') {
@@ -1900,7 +2248,11 @@ export function CoordinatorRunPage() {
       const wfData = node.data as WorkflowNodeData | undefined;
       return wfData?.def?.key === 'coordinator'
         || wfData?.def?.key === 'outcome_plan'
-        || wfData?.def?.key === 'work_plan';
+        || wfData?.def?.key === 'work_plan'
+        || wfData?.def?.key === 'rai'
+        || wfData?.def?.key === 'review'
+        || wfData?.def?.key === 'merge'
+        || wfData?.def?.key === 'scribe';
     });
     if (candidates.length === 0) {
       return {
@@ -2046,7 +2398,7 @@ export function CoordinatorRunPage() {
     undefined,
   );
   const elapsedLabel = earliestStart ? fmtTotal(Date.now() - earliestStart) : '0s';
-  const runStatusLabel = orchPhaseLabel(orch.phase);
+  const runStatusText = viewState.label;
   const aiCreditsLabel = `${formatAic(tokenBreakdown?.totalNanoAiu ?? null)} AI credits`;
 
   // ---------------------------------------------------------------------------
@@ -2131,36 +2483,43 @@ export function CoordinatorRunPage() {
 
   // Option toggles — optimistic update, revert on error. Both cascade to children server-side.
   const toggleAutopilot = useCallback((next: boolean) => {
-    if (!runId || autopilotBusy) return;
+    if (!runId || autopilotBusy || !viewState.canToggleAutomation) return;
+    setAutomationError(null);
     setAutopilot(next);
     setAutopilotBusy(true);
     apiClient.setAutopilot(runId, next)
       .then((res) => setAutopilot(Boolean(res.autopilot)))
-      .catch(() => setAutopilot(!next))
+      .catch((err) => {
+        setAutopilot(!next);
+        setAutomationError(`Autopilot update failed: ${formatApiErrorMessage(err, 'Could not update autopilot.')}`);
+      })
       .finally(() => setAutopilotBusy(false));
-  }, [runId, autopilotBusy]);
+  }, [runId, autopilotBusy, viewState.canToggleAutomation]);
 
   const toggleAutoApprove = useCallback((next: boolean) => {
-    if (!runId || autoApproveBusy) return;
+    if (!runId || autoApproveBusy || !viewState.canToggleAutomation) return;
+    setAutomationError(null);
     setAutoApprove(next);
     setAutoApproveBusy(true);
     apiClient.setAutoApprove(runId, next)
       .then((res) => setAutoApprove(Boolean(res.auto_approve_tools)))
-      .catch(() => setAutoApprove(!next))
+      .catch((err) => {
+        setAutoApprove(!next);
+        setAutomationError(`Auto-approve update failed: ${formatApiErrorMessage(err, 'Could not update auto-approve.')}`);
+      })
       .finally(() => setAutoApproveBusy(false));
-  }, [runId, autoApproveBusy]);
+  }, [runId, autoApproveBusy, viewState.canToggleAutomation]);
 
   const handleRetry = useCallback(async () => {
     if (!runId || !projectId || retrying) return;
     setRetrying(true);
     setRetryError(null);
+    setStopError(null);
     try {
       const res = await apiClient.retryRun(runId);
       navigate(`/projects/${projectId}/orchestrations/${res.run_id}`);
     } catch (err) {
-      setRetryError(
-        err instanceof Error ? err.message : String(err),
-      );
+      setRetryError(formatApiErrorMessage(err, 'Could not retry this run.'));
       setRetrying(false);
     }
   }, [runId, projectId, retrying, navigate]);
@@ -2168,12 +2527,12 @@ export function CoordinatorRunPage() {
   const handleStopRun = useCallback(async () => {
     if (!runId || stopping) return;
     setStopping(true);
-    setRetryError(null);
+    setStopError(null);
     try {
       await apiClient.steerCoordinator(runId, { kind: 'stop' });
       reconnectStream();
     } catch (err) {
-      setRetryError(err instanceof Error ? err.message : String(err));
+      setStopError(formatApiErrorMessage(err, 'Could not stop this run.'));
     } finally {
       setStopping(false);
     }
@@ -2190,7 +2549,7 @@ export function CoordinatorRunPage() {
     setPreviewError(undefined);
     apiClient.startPortForward(runId, port)
       .then((session) => setPreviewSession(session))
-      .catch((err) => setPreviewError(err instanceof Error ? err.message : String(err)))
+      .catch((err) => setPreviewError(formatApiErrorMessage(err, 'Could not start the sandbox preview.')))
       .finally(() => setPreviewBusy(false));
   };
 
@@ -2199,7 +2558,7 @@ export function CoordinatorRunPage() {
     setPreviewBusy(true);
     apiClient.stopPortForward(runId, previewSession.session_id)
       .then(() => setPreviewSession(undefined))
-      .catch(() => { /* ignore stop errors */ })
+      .catch((err) => setPreviewError(formatApiErrorMessage(err, 'Could not stop the sandbox preview.')))
       .finally(() => setPreviewBusy(false));
   };
 
@@ -2210,7 +2569,8 @@ export function CoordinatorRunPage() {
   useEffect(() => {
     if (!keepaliveUrl) return;
     const id = setInterval(() => {
-      apiClient.pingKeepalive(keepaliveUrl).catch(() => { /* ignore keepalive errors */ });
+      apiClient.pingKeepalive(keepaliveUrl)
+        .catch((err) => setPreviewError(`Preview keepalive failed: ${formatApiErrorMessage(err, 'The preview connection may expire.')}`));
     }, 60_000);
     return () => clearInterval(id);
   }, [keepaliveUrl]);
@@ -2223,7 +2583,7 @@ export function CoordinatorRunPage() {
   const isConnecting    = streamStatus === 'connecting';
   const isStreaming     = streamStatus === 'streaming';
   const hasGraph        = rfNodes.length > 0;
-  const isRetryable     = runLevelStatus === 'failed' || runLevelStatus === 'merge_failed';
+  const isRetryable     = viewState.canRetry;
   const retriedFromShort = retriedFrom ? retriedFrom.slice(0, 8) : null;
   // Auto-size the graph band to its content so it grows as subtask pipelines expand, instead of a
   // fixed height that clips tall fan-outs (horizontal LR layout still varies in height per rank).
@@ -2294,21 +2654,31 @@ export function CoordinatorRunPage() {
     return Math.min(1.5, Math.max(0.5, dagContainerWidth / naturalWidth));
   }, [dagContainerWidth, graphViewport.width]);
   const effectiveGraphZoom = zoom * graphFitScale;
-  // The toggle endpoints 409 on a non-active run, so only offer them while the orchestration is live.
-  const coordActive     = !['complete', 'failed', 'blocked', 'declined'].includes(orch.phase);
+  // The toggle/stop endpoints 409 on a non-active run, so only offer them while the run is live.
+  const coordActive     = viewState.canStop;
 
   // A run can be terminally finished at the RUN level (Failed/Declined/Merged) while its WorkPlan
   // status still reads `in_review` — e.g. a run interrupted by a pre-durability build. In that state
   // the in-memory assembly-review gate is NOT armed, so presenting an actionable review bar would
   // 409. Treat the review as actionable only when the run itself is not terminal.
-  const runTerminal = runLevelStatus !== undefined
-    && ['failed', 'declined', 'merge_failed', 'merged', 'completed'].includes(runLevelStatus);
+  const runTerminal = viewState.terminal;
   const reviewActionable = orch.phase === 'in_review' && !runTerminal;
 
   // Map the coordinator orchestration phase onto the standard artifact-browser run status so the
   // reused Changes/Files rail shows the review bar (Approve / Request changes / Decline) exactly when
   // the ONE collective human-review gate is open.
   const coordRunStatus = useMemo(() => {
+    if (runTerminal) {
+      switch (runLevelStatus) {
+        case 'completed':
+        case 'merged':       return 'merged';
+        case 'declined':     return 'declined';
+        case 'failed':
+        case 'blocked':
+        case 'merge_failed': return 'merge_failed';
+        default:             return runLevelStatus ?? 'merge_failed';
+      }
+    }
     switch (orch.phase) {
       case 'in_review':  return reviewActionable ? 'awaiting_review' : (runLevelStatus ?? 'merge_failed');
       case 'complete':   return 'merged';
@@ -2317,7 +2687,7 @@ export function CoordinatorRunPage() {
       case 'blocked':    return 'merge_failed';
       default:           return 'in_progress';
     }
-  }, [orch.phase, reviewActionable, runLevelStatus]);
+  }, [orch.phase, reviewActionable, runLevelStatus, runTerminal]);
 
   // Adapter that points the standard artifact browser at the coordinator's collective assembly:
   // files/diff come from the integration branch (the coordinator owns no worktree), and the three
@@ -2328,6 +2698,9 @@ export function CoordinatorRunPage() {
     getWorkspace: (rid) => apiClient.getAssemblyWorkspace(rid),
     getContent: (rid, path) => apiClient.getAssemblyFileContent(rid, path),
     approve: (rid) => apiClient.reviewAssembly(rid, 'approve'),
+    approveLabel: 'Approve assembly',
+    approveAriaLabel: 'Approve assembly review and continue merge',
+    approveAcceptedStatus: 'review_accepted',
     requestChanges: (rid, comment) => apiClient.reviewAssembly(rid, 'request_changes', comment),
     decline: (rid) => apiClient.reviewAssembly(rid, 'decline'),
   }), []);
@@ -2351,11 +2724,40 @@ export function CoordinatorRunPage() {
       : {
           label: 'Message coordinator',
           icon: <ChatRegular />,
-          disabled: false,
+          disabled: !coordActive,
           onClick: focusSelectedComposer,
           testId: 'open-steer-panel',
         };
-  const graphEmptyState = graphEmptyCopy(isConnecting, noWorkPlan);
+  const graphEmptyState = graphEmptyCopy(isConnecting, noWorkPlan, graphError, viewState);
+  const statusChipClass = `${styles.statusChip} ${styles.statusChipStrong}${
+    viewState.bucket === 'failed' ? ` ${styles.statusChipDanger}`
+    : viewState.bucket === 'blocked' || viewState.bucket === 'unknown' ? ` ${styles.statusChipWarning}`
+    : ''
+  }`;
+
+  if (runLoadError && !restDescriptor && events.length === 0) {
+    return (
+      <div className={styles.root}>
+        <nav className={styles.breadcrumb} aria-label="Breadcrumb">
+          <Link to="/" className={styles.breadcrumbLink}>Projects</Link>
+          <span aria-hidden="true">/</span>
+          <Link to={`/projects/${projectId}`} className={styles.breadcrumbLink}>Project</Link>
+          <span aria-hidden="true">/</span>
+          <span>Orchestration {shortId}</span>
+        </nav>
+        <section className={styles.pageError} aria-live="polite">
+          <Title2>{viewState.label}</Title2>
+          <Text className={styles.stateReason}>{runLoadError.message}</Text>
+          {runLoadError.detail && <Text className={styles.stateReason}>{runLoadError.detail}</Text>}
+          <Text className={styles.phaseSource}>{viewState.sourceLabel}</Text>
+          <div className={styles.pageErrorActions}>
+            <Button appearance="primary" onClick={() => window.location.reload()}>Refresh</Button>
+            <Button appearance="secondary" onClick={() => navigate(`/projects/${projectId}`)}>Back to project</Button>
+          </div>
+        </section>
+      </div>
+    );
+  }
 
   return (
     <div className={styles.root}>
@@ -2368,10 +2770,51 @@ export function CoordinatorRunPage() {
         <span>Orchestration {shortId}</span>
       </nav>
 
-      {retryError && (
-        <MessageBar intent="error">
-          <MessageBarBody>Retry failed: {retryError}</MessageBarBody>
-        </MessageBar>
+      {(retryError || stopError || automationError || workPlanError || (runLoadError && (restDescriptor || events.length > 0)) || streamError || droppedEventCount > 0 || streamStatus === 'error') && (
+        <div className={styles.statusBannerStack} aria-live="polite">
+          {runLoadError && (restDescriptor || events.length > 0) && (
+            <MessageBar intent="warning">
+              <MessageBarBody>Run refresh failed: {runLoadError.message}{runLoadError.detail ? ` ${runLoadError.detail}` : ''}</MessageBarBody>
+              <MessageBarActions>
+                <Button appearance="transparent" size="small" onClick={reconnectStream}>Reconnect stream</Button>
+              </MessageBarActions>
+            </MessageBar>
+          )}
+          {workPlanError && (
+            <MessageBar intent="warning">
+              <MessageBarBody>Work plan refresh failed: {workPlanError.message}{workPlanError.detail ? ` ${workPlanError.detail}` : ''}</MessageBarBody>
+              <MessageBarActions>
+                <Button appearance="transparent" size="small" onClick={reconnectStream}>Refresh</Button>
+              </MessageBarActions>
+            </MessageBar>
+          )}
+          {(streamError || streamStatus === 'error' || droppedEventCount > 0) && (
+            <MessageBar intent="warning" data-testid="coordinator-stream-health">
+              <MessageBarBody>
+                {streamError ? `Live stream issue: ${streamError}` : streamStatus === 'error' ? 'Live stream disconnected.' : 'Live stream dropped older events.'}
+                {droppedEventCount > 0 ? ` ${droppedEventCount} event${droppedEventCount === 1 ? '' : 's'} were dropped from the in-memory buffer; refresh for a complete replay.` : ' Refresh or reconnect if the graph looks stale.'}
+              </MessageBarBody>
+              <MessageBarActions>
+                <Button appearance="transparent" size="small" onClick={reconnectStream}>Reconnect</Button>
+              </MessageBarActions>
+            </MessageBar>
+          )}
+          {retryError && (
+            <MessageBar intent="error">
+              <MessageBarBody>Retry failed: {retryError}</MessageBarBody>
+            </MessageBar>
+          )}
+          {stopError && (
+            <MessageBar intent="error">
+              <MessageBarBody>Stop failed: {stopError}</MessageBarBody>
+            </MessageBar>
+          )}
+          {automationError && (
+            <MessageBar intent="error">
+              <MessageBarBody>{automationError}</MessageBarBody>
+            </MessageBar>
+          )}
+        </div>
       )}
 
       <div className={styles.console} data-testid="run-operator-console">
@@ -2408,7 +2851,7 @@ export function CoordinatorRunPage() {
               )}
             </div>
             <div className={styles.statsStrip} aria-label="Run progress">
-              <span className={`${styles.statusChip} ${styles.statusChipStrong}`}>{runStatusLabel}</span>
+              <span className={statusChipClass}>{runStatusText}</span>
               <span className={styles.statusChip}>
                 <span className={styles.statusChipValue}>{taskRows.length}</span> tasks
               </span>
@@ -2437,9 +2880,10 @@ export function CoordinatorRunPage() {
               </Popover>
             </div>
             <Text className={styles.phaseSource}>
-              Phase source: {orch.sourceLabel}. {formatPhaseUpdated(orch.updatedAt)}
-              {orch.sourceLabel === 'no phase source yet' ? '; using live stream progress until the coordinator reports a durable phase.' : ''}
+              Status source: {viewState.sourceLabel}. {formatPhaseUpdated(orch.updatedAt)}
+              {viewState.bucket === 'unknown' ? '; waiting for a durable coordinator phase instead of assuming the run is running.' : ''}
             </Text>
+            {viewState.reason && <Text className={styles.stateReason}>{viewState.reason}</Text>}
           </div>
 
           <div className={styles.topControls}>
@@ -2465,18 +2909,20 @@ export function CoordinatorRunPage() {
                   label="Autopilot"
                   info={AUTOMATION_HELP.autopilotOrchestration}
                   checked={autopilot}
-                  disabled={autopilotBusy || !coordActive}
+                  disabled={autopilotBusy || !viewState.canToggleAutomation}
                   onChange={(checked) => toggleAutopilot(checked)}
                 />
                 <AutomationToggle
                   label="Auto-approve safe tools"
                   info={AUTOMATION_HELP.autoApproveOrchestration}
                   checked={autoApprove}
-                  disabled={autoApproveBusy || !coordActive}
+                  disabled={autoApproveBusy || !viewState.canToggleAutomation}
                   onChange={(checked) => toggleAutoApprove(checked)}
                 />
               </div>
-              <span className={styles.actionGroupHint}>Applies only to this orchestration and child runs.</span>
+              <span className={styles.actionGroupHint}>
+                {viewState.canToggleAutomation ? 'Applies only to this orchestration and child runs.' : `Disabled while status is ${viewState.label}.`}
+              </span>
             </div>
             <div className={styles.actionGroup} aria-label="Run safety controls">
               <span className={styles.actionGroupLabel}>Safety</span>
@@ -2495,7 +2941,7 @@ export function CoordinatorRunPage() {
                   appearance="secondary"
                   size="small"
                   icon={stopping ? <Spinner size="extra-tiny" /> : <DismissRegular />}
-                  disabled={!coordActive || stopping}
+                  disabled={!viewState.canStop || stopping}
                   onClick={() => void handleStopRun()}
                 >
                   Stop run

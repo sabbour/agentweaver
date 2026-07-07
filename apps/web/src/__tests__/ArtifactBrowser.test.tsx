@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { FluentProvider, webLightTheme } from '@fluentui/react-components';
 import { type ReactNode } from 'react';
 import { ArtifactBrowser, FilesTabPanel } from '../components/ArtifactBrowser';
+import { useArtifactBrowser, type ArtifactBrowserAdapter } from '../hooks/useArtifactBrowser';
 import type { WorkspaceFileEntry, WorkspaceFileDiff, WorkspaceNode } from '../api/types';
 
 // Mock apiClient so no real HTTP calls are made.
@@ -418,6 +419,37 @@ describe('ArtifactBrowser', () => {
       expect(commitRunMock()).toHaveBeenCalledWith('run-010');
       expect(onCommitSuccess).toHaveBeenCalledTimes(1);
     });
+  });
+
+  it('adapter approval reports review accepted instead of merged', async () => {
+    const approve = vi.fn().mockResolvedValue(undefined);
+    const adapter: ArtifactBrowserAdapter = {
+      getFiles: vi.fn().mockResolvedValue([]),
+      approve,
+      approveLabel: 'Approve assembly',
+      approveAriaLabel: 'Approve assembly review and continue merge',
+      approveAcceptedStatus: 'review_accepted',
+    };
+
+    function Harness() {
+      const state = useArtifactBrowser('coord-run-1', 'awaiting_review', undefined, undefined, undefined, undefined, adapter);
+      return (
+        <>
+          <button type="button" onClick={() => { void state.commitRun(); }}>{state.approveLabel}</button>
+          {state.commitResult && <span>{state.commitResult.status}</span>}
+        </>
+      );
+    }
+
+    render(<Wrapper><Harness /></Wrapper>);
+
+    await userEvent.click(screen.getByText('Approve assembly'));
+
+    await waitFor(() => {
+      expect(approve).toHaveBeenCalledWith('coord-run-1');
+      expect(screen.getByText('review_accepted')).toBeDefined();
+    });
+    expect(screen.queryByText('merged')).toBeNull();
   });
 
   // AB-11: Modified files in the Changes tab show an 'M' status badge (not 'D').

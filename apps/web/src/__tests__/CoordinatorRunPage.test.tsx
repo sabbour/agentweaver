@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, waitFor, cleanup } from '@testing-library/react';
+import { render, waitFor, cleanup, screen } from '@testing-library/react';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
 import { FluentProvider, webLightTheme } from '@fluentui/react-components';
 import { type ReactNode } from 'react';
@@ -11,6 +11,16 @@ class ResizeObserverStub {
   disconnect() {}
 }
 (globalThis as unknown as { ResizeObserver: unknown }).ResizeObserver = ResizeObserverStub;
+
+const mockRunStreamState = vi.hoisted(() => ({
+  current: {
+    events: [] as Array<{ sequence: number; type: string; payload: Record<string, unknown> }>,
+    droppedEventCount: 0,
+    status: 'done',
+    error: null as string | null,
+    reconnect: vi.fn(),
+  },
+}));
 
 vi.mock('../api/apiClient', () => ({
   apiClient: {
@@ -46,7 +56,7 @@ vi.mock('../api/apiClient', () => ({
 }));
 
 vi.mock('../api/sse', () => ({
-  useRunStream: () => ({ events: [], status: 'done', error: null, reconnect: vi.fn() }),
+  useRunStream: () => mockRunStreamState.current,
 }));
 
 // OutcomePlanPanel performs its own fetch; stub it so it renders nothing.
@@ -74,12 +84,19 @@ function Wrapper({ children }: { children: ReactNode }) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockRunStreamState.current = {
+    events: [],
+    droppedEventCount: 0,
+    status: 'done',
+    error: null,
+    reconnect: vi.fn(),
+  };
   _resetRuntimeInfoCache();
   vi.mocked(apiClient.getSystemRuntime).mockResolvedValue({ kubernetes: false, podName: null });
   vi.mocked(apiClient.getRunGraph).mockResolvedValue(COORDINATOR_GRAPH_DESCRIPTOR);
-  vi.mocked(apiClient.getWorkPlan).mockRejectedValue(new Error('not found'));
+  vi.mocked(apiClient.getWorkPlan).mockRejectedValue(new ApiError(404, 'not found'));
   vi.mocked(apiClient.getCoordinatorChildren).mockRejectedValue(new Error('not found'));
-  vi.mocked(apiClient.getRun).mockRejectedValue(new Error('not found'));
+  vi.mocked(apiClient.getRun).mockResolvedValue({ run_id: 'coord-run-1', status: 'in_progress' } as never);
   vi.mocked(apiClient.getRunTokenBreakdown).mockResolvedValue({
     runId: 'coord-run-1',
     source: 'events',
@@ -95,6 +112,51 @@ beforeEach(() => {
 afterEach(() => cleanup());
 
 describe('CoordinatorRunPage — unified coordinator graph view', () => {
+  it('renders an explicit not-found state for a missing coordinator run', async () => {
+    vi.mocked(apiClient.getRunGraph).mockRejectedValue(new ApiError(404, 'not found'));
+    vi.mocked(apiClient.getRun).mockRejectedValue(new ApiError(404, 'not found'));
+
+    render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    await waitFor(
+      () => expect(document.body.textContent).toContain('Run not found'),
+      { timeout: 4000 },
+    );
+    expect(document.body.textContent).not.toContain('Running');
+  });
+
+  it('shows a failed run as Failed rather than falling back to Running', async () => {
+    vi.mocked(apiClient.getRun).mockResolvedValue({ run_id: 'coord-run-1', status: 'failed' } as never);
+    vi.mocked(apiClient.getWorkPlan).mockRejectedValue(new ApiError(404, 'not found'));
+
+    render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    await waitFor(
+      () => expect(document.body.textContent).toContain('Failed'),
+      { timeout: 4000 },
+    );
+    expect((screen.getByText('Stop run') as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('surfaces stream errors and dropped events in a health banner', async () => {
+    mockRunStreamState.current = {
+      events: [],
+      droppedEventCount: 2,
+      status: 'error',
+      error: 'connection lost',
+      reconnect: vi.fn(),
+    };
+
+    render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    await waitFor(
+      () => expect(screen.getByTestId('coordinator-stream-health')).toBeDefined(),
+      { timeout: 4000 },
+    );
+    expect(document.body.textContent).toContain('connection lost');
+    expect(document.body.textContent).toContain('2 events');
+  });
+
   it('renders coordinator node, subtask nodes, and planned assembly nodes', async () => {
     render(<Wrapper><CoordinatorRunPage /></Wrapper>);
 
@@ -255,29 +317,23 @@ describe('CoordinatorRunPage — graph during outcome-plan drafting', () => {
 });
 
 describe('CoordinatorRunPage — work-plan 404 (no plan yet / stuck run)', () => {
-  it('renders the planning gate and does not call the 404 work-plan endpoint again', async () => {
-    // No graph descriptor and a 404 work-plan: an early run still shows the Outcome plan gate.
+  it('renders an explicit graph-not-emitted state instead of a fake running graph', async () => {
+    // No graph descriptor and a 404 work-plan: an early run should not invent a successful graph.
     vi.mocked(apiClient.getRunGraph).mockRejectedValue(new ApiError(404, 'not found'));
     vi.mocked(apiClient.getWorkPlan).mockRejectedValue(new ApiError(404, 'not found'));
-    vi.mocked(apiClient.getRun).mockResolvedValue({ status: 'running' } as never);
+    vi.mocked(apiClient.getRun).mockResolvedValue({ status: 'in_progress' } as never);
 
     render(<Wrapper><CoordinatorRunPage /></Wrapper>);
 
     await waitFor(
-      () => expect(document.body.textContent).toContain('Outcome plan'),
+      () => expect(document.body.textContent).toContain('Graph has not been emitted yet'),
       { timeout: 4000 },
     );
 
-    // The planning gate renders instead of an indefinite "Waiting for coordinator graph...".
-    expect(document.body.textContent).toContain('The execution pipeline appears once you confirm the Outcome plan.');
-
-    // After the first 404 the work-plan endpoint is not called again — wpEverMissing stops
-    // further fetches for the lifetime of the page, so the total call count stays very low.
-    const calls = vi.mocked(apiClient.getWorkPlan).mock.calls.length;
-    expect(calls).toBeLessThan(3);
+    expect(document.body.textContent).not.toContain('The execution pipeline appears once you confirm the Outcome plan.');
   });
 
-  it('does not call getWorkPlan again after the first 404 even as the poll continues', async () => {
+  it('keeps retrying getWorkPlan after a 404 while the coordinator run is in progress', async () => {
     // Coordinator run: work-plan returns 404, but run is still in_progress.
     // The poll must keep running (to track coordinator_status) but skip getWorkPlan.
     vi.mocked(apiClient.getWorkPlan).mockRejectedValue(new ApiError(404, 'not found'));
@@ -293,13 +349,13 @@ describe('CoordinatorRunPage — work-plan 404 (no plan yet / stuck run)', () =>
 
     const afterFirstTick = vi.mocked(apiClient.getWorkPlan).mock.calls.length;
 
-    // Advance time past one poll interval to confirm no additional getWorkPlan calls.
-    await new Promise((resolve) => setTimeout(resolve, 200));
+    // The first render calls work-plan from the seed and the lifecycle poll. The important
+    // regression guard is that 404 is not permanently suppressed while the run is active.
+    await new Promise((resolve) => setTimeout(resolve, 4200));
 
     const afterDelay = vi.mocked(apiClient.getWorkPlan).mock.calls.length;
 
-    // getWorkPlan call count must not increase after the first 404.
-    expect(afterDelay).toBe(afterFirstTick);
+    expect(afterDelay).toBeGreaterThan(afterFirstTick);
   });
 });
 

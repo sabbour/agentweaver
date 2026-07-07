@@ -24,7 +24,7 @@ public static class CoordinatorTopology
 
     /// <summary>
     /// Builds the FULL plan-time snapshot. <paramref name="seq"/> is the monotonic topology
-    /// sequence number (0 for the snapshot, then incremented per delta).
+    /// sequence number assigned by the emitter.
     /// <paramref name="coordinatorPodName"/> is the Kubernetes pod name of the API/coordinator
     /// process itself; when provided, the coordinator node carries its own <c>executionPodName</c>
     /// so the frontend can show the chip without a client-side fallback.

@@ -8,6 +8,7 @@ import {
   DismissCircleFilled,
   ShieldRegular,
   CodeRegular,
+  ClockRegular,
   ChevronDownRegular,
   ChevronRightRegular,
   CopyRegular,
@@ -318,6 +319,18 @@ function lifecycleProps(event: RunStreamEvent, runOutcome?: { achieved: boolean;
         summary: String(p['reason'] ?? 'Merge failed'),
         badgeColor: 'danger',
       };
+    case 'merge.conflicted': {
+      const rawFiles = p['conflictingFiles'] ?? p['conflicting_files'];
+      const files = Array.isArray(rawFiles)
+        ? rawFiles.map((file) => String(file)).join(', ')
+        : '';
+      return {
+        icon: <WarningFilled aria-hidden="true" />,
+        label: 'merge conflicted',
+        summary: files ? `Needs resolution: ${files}` : String(p['reason'] ?? 'Merge needs resolution'),
+        badgeColor: 'warning',
+      };
+    }
     case 'sandbox.selected':
       return {
         icon: <ShieldRegular aria-hidden="true" />,
@@ -379,6 +392,13 @@ function lifecycleProps(event: RunStreamEvent, runOutcome?: { achieved: boolean;
         label: 'subtask dispatched',
         summary: `${String(p['assignedAgent'] ?? 'agent')}${p['selectedModelId'] ? ` · ${String(p['selectedModelId'])}` : ''}`,
         badgeColor: 'informative',
+      };
+    case 'subtask.pending_capacity':
+      return {
+        icon: <ClockRegular aria-hidden="true" />,
+        label: 'subtask waiting for capacity',
+        summary: String(p['reason'] ?? p['message'] ?? 'Waiting for agent capacity'),
+        badgeColor: 'warning',
       };
     case 'subtask.rai_flagged':
       return {
@@ -468,8 +488,16 @@ function lifecycleProps(event: RunStreamEvent, runOutcome?: { achieved: boolean;
         summary: p['reviewer'] ? `Approved by ${String(p['reviewer'])}` : 'Review approved',
         badgeColor: 'success',
       };
+    case 'coordinator.assembly_review_preserved':
+      return {
+        icon: <WarningFilled aria-hidden="true" />,
+        label: 'review preserved',
+        summary: String(p['reason'] ?? 'Coordinator failed; review remains available'),
+        badgeColor: 'warning',
+      };
     case 'coordinator.assembly_changes_requested': {
-      const ids = Array.isArray(p['redispatchedSubtaskIds']) ? (p['redispatchedSubtaskIds'] as unknown[]).length : 0;
+      const rawIds = p['redispatchedSubtaskIds'] ?? p['redispatchSubtaskIds'];
+      const ids = Array.isArray(rawIds) ? (rawIds as unknown[]).length : 0;
       return {
         icon: <WarningFilled aria-hidden="true" />,
         label: 'changes requested',

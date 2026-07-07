@@ -10,6 +10,7 @@ export type RunStatus =
   | 'in_progress'
   | 'completed'
   | 'failed'
+  | 'blocked'
   | 'awaiting_review'
   | 'merging'
   | 'merged'
@@ -655,6 +656,7 @@ export interface WorkPlanResponse {
   coordinatorRunId: string;
   outcomeSpecId: number;
   status: string;
+  statusReason?: string | null;
   isolationSummary?: string;
   subtasks: WorkPlanSubtaskResponse[];
   dependencies: WorkPlanDependencyResponse[];
@@ -702,13 +704,22 @@ export interface SteeringDirective {
   instruction?: string;
 }
 
-// POST /api/runs/{coordinatorRunId}/assembly/review body — the collective human review
-// over the assembled integration output (approve / request_changes / decline).
+// Friendly client decision verb for the collective human review UI.
 export type AssemblyReviewDecision = 'approve' | 'request_changes' | 'decline';
 
+// POST /api/runs/{coordinatorRunId}/assembly/review body — backend contract.
 export interface AssemblyReviewRequest {
-  decision: AssemblyReviewDecision;
-  comment?: string;
+  approved: boolean;
+  request_changes?: boolean;
+  feedback?: string;
+  target_files?: string[];
+}
+
+export interface AssemblyReviewResponse {
+  runId: string;
+  accepted: boolean;
+  deferred?: boolean;
+  message?: string;
 }
 
 // POST /api/runs/{id}/questions/{requestId}/answer — answer a worker's bubbled question

@@ -371,6 +371,20 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
             EventTypes.CoordinatorAssemblyScribeCompleted,
             EventTypes.CoordinatorAssemblyCompleted);
         assemblyEvents.Select(e => e.Sequence).Should().BeInAscendingOrder().And.OnlyHaveUniqueItems();
+        var approvedPayload = JsonSerializer.SerializeToNode(
+            assemblyEvents.Single(e => e.Type == EventTypes.CoordinatorAssemblyReviewApproved).Payload)!.AsObject();
+        approvedPayload["reviewer"]!.GetValue<string>().Should().Be("alice");
+
+        var topologyEvents = _streamStore.Get(coordinatorRunId)!.GetSnapshotSince(0).Events
+            .Where(e => e.Type == EventTypes.CoordinatorTopology)
+            .ToList();
+        topologyEvents.Should().NotBeEmpty();
+        topologyEvents.Select(e => e.Sequence).Should().BeInAscendingOrder().And.OnlyHaveUniqueItems();
+        foreach (var evt in topologyEvents)
+        {
+            var payload = JsonSerializer.SerializeToNode(evt.Payload)!.AsObject();
+            payload["seq"]!.GetValue<int>().Should().Be(evt.Sequence);
+        }
 
         // The pipeline ran exactly one of each collective stage.
         _pipeline.IntegrationBuilds.Should().Be(1);

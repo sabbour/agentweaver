@@ -1,4 +1,4 @@
-import type { RetriableReviewErrorBody, RunDetail, PersistedRunEvent, ReviewRequest, ReviewResponse, SandboxPolicy, SubmitRunResponse, WorkspaceFileEntry, WorkspaceFileDiff, WorkspaceNode, CommitResponse, WorkspaceFileContent, RequestChangesResponse, WorkspaceRefsResponse, Project, CreateProjectRequest, Blueprint, ListBlueprintsResponse, GenerateBlueprintResponse, SuggestBlueprintResponse, UpdateProjectProviderSettingsRequest, CreateProjectRunRequest, GitHubDeviceFlow, GitHubPollResult, GitHubAuthStatusResponse, GitHubRepo, GitHubAccount, TeamTemplateDto, CastProposalDto, CreateProposalRequest, AmendProposalRequest, ConfirmProposalRequest, TeamDto, TeamMemberDto, CharterDto, HistoryDto, AddMemberRequest, ReroleRequest, SyncStatusDto, SyncCommitRequest, SyncCommitResponseDto, RoleDto, ServerInfo, WorkflowRunDto, OutcomeSpec, StartOrchestrationResponse, SteerCoordinatorRequest, SteerCoordinatorResponse, WorkPlanResponse, CoordinatorChildResponse, GraphDescriptor, AssemblyReviewDecision, AnswerQuestionResponse, AutoApproveResponse, AutopilotResponse, BoardDto, BacklogTaskDto, BacklogSettingsDto, WorkflowStagesResponse, RetryRunResponse, SystemDiagnosticsDto, HeartbeatStatusDto, WorkspaceFileNode, DecomposeResponse, PortForwardSessionDto, RuntimeInfo, DetailedSystemDiagnosticsDto, ClusterDiagnosticsDto } from './types';
+import type { RetriableReviewErrorBody, RunDetail, PersistedRunEvent, ReviewRequest, ReviewResponse, SandboxPolicy, SubmitRunResponse, WorkspaceFileEntry, WorkspaceFileDiff, WorkspaceNode, CommitResponse, WorkspaceFileContent, RequestChangesResponse, WorkspaceRefsResponse, Project, CreateProjectRequest, Blueprint, ListBlueprintsResponse, GenerateBlueprintResponse, SuggestBlueprintResponse, UpdateProjectProviderSettingsRequest, CreateProjectRunRequest, GitHubDeviceFlow, GitHubPollResult, GitHubAuthStatusResponse, GitHubRepo, GitHubAccount, TeamTemplateDto, CastProposalDto, CreateProposalRequest, AmendProposalRequest, ConfirmProposalRequest, TeamDto, TeamMemberDto, CharterDto, HistoryDto, AddMemberRequest, ReroleRequest, SyncStatusDto, SyncCommitRequest, SyncCommitResponseDto, RoleDto, ServerInfo, WorkflowRunDto, OutcomeSpec, StartOrchestrationResponse, SteerCoordinatorRequest, SteerCoordinatorResponse, WorkPlanResponse, CoordinatorChildResponse, GraphDescriptor, AssemblyReviewDecision, AssemblyReviewRequest, AssemblyReviewResponse, AnswerQuestionResponse, AutoApproveResponse, AutopilotResponse, BoardDto, BacklogTaskDto, BacklogSettingsDto, WorkflowStagesResponse, RetryRunResponse, SystemDiagnosticsDto, HeartbeatStatusDto, WorkspaceFileNode, DecomposeResponse, PortForwardSessionDto, RuntimeInfo, DetailedSystemDiagnosticsDto, ClusterDiagnosticsDto } from './types';
 import { getSessionToken } from '../config';
 
 /** A skill file paired with the folder-relative path it should keep on the server (folder drag-and-drop). */
@@ -522,12 +522,13 @@ export class AgentweaverApiClient {
   // from a friendlier decision verb. approve -> merge/scribe/complete; request_changes -> re-dispatch;
   // decline -> assembly_declined.
   reviewAssembly(coordinatorRunId: string, decision: AssemblyReviewDecision, comment?: string): Promise<void> {
-    const body = {
+    const body: AssemblyReviewRequest = {
       approved: decision === 'approve',
       request_changes: decision === 'request_changes',
       feedback: comment,
     };
-    return this.request<void>('POST', `/runs/${encodeURIComponent(coordinatorRunId)}/assembly/review`, body);
+    return this.request<AssemblyReviewResponse>('POST', `/runs/${encodeURIComponent(coordinatorRunId)}/assembly/review`, body)
+      .then(() => undefined);
   }
 
   // Answer a worker's bubbled question (agent.question_asked). The answer must be POSTed against
@@ -823,7 +824,9 @@ export class AgentweaverApiClient {
 
   async pingKeepalive(keepaliveUrl: string): Promise<void> {
     const headers = this.authHeaders();
-    await fetch(keepaliveUrl, { method: 'POST', headers, credentials: 'include' });
+    const response = await fetch(this.apiUrl(keepaliveUrl), { method: 'POST', headers, credentials: 'include' });
+    const text = typeof response.text === 'function' ? await response.text() : '';
+    if (!response.ok) throw new ApiError(response.status, text);
   }
 
   listPortForwards(runId: string): Promise<PortForwardSessionDto[]> {
@@ -841,8 +844,7 @@ export class AgentweaverApiClient {
     };
     if (body !== undefined) headers['Content-Type'] = 'application/json';
 
-    const apiPath = path.startsWith('/api/') ? path : `/api${path}`;
-    const response = await fetch(`${this.baseUrl}${apiPath}`, {
+    const response = await fetch(this.apiUrl(path), {
       method,
       headers,
       credentials: 'include',
@@ -860,5 +862,12 @@ export class AgentweaverApiClient {
       }
     }
     return null as T;
+  }
+
+  private apiUrl(pathOrUrl: string): string {
+    if (/^[a-z][a-z\d+\-.]*:\/\//i.test(pathOrUrl)) return pathOrUrl;
+    const path = pathOrUrl.startsWith('/') ? pathOrUrl : `/${pathOrUrl}`;
+    const apiPath = path === '/api' || path.startsWith('/api/') ? path : `/api${path}`;
+    return `${this.baseUrl}${apiPath}`;
   }
 }

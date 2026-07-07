@@ -18,6 +18,7 @@ vi.mock('../api/apiClient', () => ({
     }),
     getRunEvents: vi.fn().mockResolvedValue([]),
     getRunFiles: vi.fn().mockResolvedValue([]),
+    getRunWorkspace: vi.fn().mockResolvedValue([]),
     getRunFileContent: vi.fn().mockResolvedValue({ path: 'file.txt', content: '', is_binary: false, language: 'text' }),
     getRunFileDiff: vi.fn().mockResolvedValue(null),
     steerCoordinator: vi.fn().mockResolvedValue({ status: 'applied' }),
@@ -322,5 +323,48 @@ describe('AgentSessionPanel', () => {
     expect(screen.getByText('Workspace file')).toBeDefined();
     // The narrative message remains visible alongside the revealed technical rows.
     expect(screen.getByText('Applying the requested fix.')).toBeDefined();
+  });
+
+  it('guards planned subtasks without childRunId from run/workspace API calls', async () => {
+    const plannedTree: RunSessionTree[] = [
+      {
+        nodeId: 'coordinator',
+        label: 'Coordinator',
+        status: 'running',
+        depth: 0,
+        children: [
+          {
+            nodeId: 'planned-subtask',
+            label: 'Planned subtask',
+            agentName: 'Worker',
+            agentRole: 'Researcher',
+            status: 'pending',
+            depth: 1,
+            children: [],
+          },
+        ],
+      },
+    ];
+
+    render(
+      <Wrapper>
+        <AgentSessionPanel
+          open
+          onClose={vi.fn()}
+          tree={plannedTree}
+          selectedNodeId="planned-subtask"
+          onSelectNode={vi.fn()}
+          coordinatorRunId="coord-run-1"
+          projectId="p1"
+        />
+      </Wrapper>,
+    );
+
+    expect(screen.getByText(/has not been dispatched yet/i)).toBeDefined();
+    await userEvent.click(screen.getByTestId('session-tab-files'));
+    expect(screen.getByTestId('planned-node-file-guard')).toBeDefined();
+    expect(vi.mocked(apiClient.getRun)).not.toHaveBeenCalled();
+    expect(vi.mocked(apiClient.getRunFiles)).not.toHaveBeenCalled();
+    expect(vi.mocked(apiClient.getRunWorkspace)).not.toHaveBeenCalled();
   });
 });

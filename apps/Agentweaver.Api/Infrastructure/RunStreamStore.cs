@@ -86,11 +86,23 @@ public sealed class RunStreamEntry
     /// </summary>
     public int RecordNext(string type, object payload)
     {
+        return RecordNext(type, _ => payload);
+    }
+
+    /// <summary>
+    /// Atomically allocates the next sequence number, builds a payload with that assigned sequence,
+    /// and records the event under a single lock acquisition. Use this when the payload itself carries
+    /// a sequence/version field that must stay monotonic with the stream event.
+    /// </summary>
+    public int RecordNext(string type, Func<int, object> payloadFactory)
+    {
         TaskCompletionSource? previous;
         int seq;
+        object payload;
         lock (_lock)
         {
             seq = _history.Count == 0 ? 1 : _history[^1].Sequence + 1;
+            payload = payloadFactory(seq);
             _history.Add(new RunEvent(seq, type, payload));
             previous = Interlocked.Exchange(ref _eventSignal, new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously));
         }

@@ -1,0 +1,72 @@
+import { ApiError } from './client';
+
+export type ApiErrorKind =
+  | 'not-found'
+  | 'unauthorized'
+  | 'forbidden'
+  | 'conflict'
+  | 'rate-limited'
+  | 'server'
+  | 'network'
+  | 'unknown';
+
+export interface FormattedApiError {
+  kind: ApiErrorKind;
+  status?: number;
+  message: string;
+  detail?: string;
+}
+
+function parseApiBody(body: string): { error?: string; message?: string; detail?: string } {
+  if (!body) return {};
+  try {
+    const parsed = JSON.parse(body) as Record<string, unknown>;
+    return {
+      error: typeof parsed.error === 'string' ? parsed.error : undefined,
+      message: typeof parsed.message === 'string' ? parsed.message : undefined,
+      detail: typeof parsed.detail === 'string' ? parsed.detail : undefined,
+    };
+  } catch {
+    return { message: body };
+  }
+}
+
+export function formatApiError(err: unknown, fallback = 'The request failed.'): FormattedApiError {
+  if (err instanceof ApiError) {
+    const body = parseApiBody(err.body);
+    const serverText = body.message ?? body.detail ?? body.error;
+    const detail = serverText && serverText !== body.error ? serverText : undefined;
+    switch (err.status) {
+      case 401:
+        return { kind: 'unauthorized', status: err.status, message: 'Sign in again to continue.', detail };
+      case 403:
+        return { kind: 'forbidden', status: err.status, message: 'You do not have permission to perform this action.', detail };
+      case 404:
+        return { kind: 'not-found', status: err.status, message: 'The requested run or resource was not found.', detail };
+      case 409:
+        return { kind: 'conflict', status: err.status, message: serverText ?? 'This action is no longer valid for the current run state.', detail };
+      case 429:
+        return { kind: 'rate-limited', status: err.status, message: 'Too many requests. Wait a moment and try again.', detail };
+      default:
+        if (err.status >= 500) {
+          return { kind: 'server', status: err.status, message: 'The API returned a server error. Try again after it recovers.', detail: serverText };
+        }
+        return { kind: 'unknown', status: err.status, message: serverText ?? fallback, detail };
+    }
+  }
+
+  if (err instanceof TypeError) {
+    return { kind: 'network', message: 'Network error. Check the API connection and try again.', detail: err.message };
+  }
+
+  if (err instanceof Error) {
+    return { kind: 'unknown', message: err.message || fallback };
+  }
+
+  return { kind: 'unknown', message: String(err || fallback) };
+}
+
+export function formatApiErrorMessage(err: unknown, fallback?: string): string {
+  const formatted = formatApiError(err, fallback);
+  return formatted.detail ? `${formatted.message} ${formatted.detail}` : formatted.message;
+}

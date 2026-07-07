@@ -38,6 +38,7 @@ import remarkGfm from 'remark-gfm';
 import rehypeSanitize from 'rehype-sanitize';
 import { apiClient } from '../api/apiClient';
 import { useRunStream, type EventType, type RunStreamEvent } from '../api/sse';
+import { formatApiErrorMessage } from '../api/errors';
 import { useArtifactBrowser, type ArtifactBrowserAdapter } from '../hooks/useArtifactBrowser';
 import { mergeRunEvents as sharedMergeRunEvents } from '../timeline/mergeRunEvents';
 import { AgentAvatar } from './AgentAvatar';
@@ -1433,12 +1434,16 @@ export function AgentSessionPanel({
     () => (isCoordinatorAggregate ? artifactAdapter : undefined),
     [isCoordinatorAggregate, artifactAdapter],
   );
+  const canBrowseSelectedRun = selectedRunId.trim().length > 0;
+  const selectedRunUnavailableReason = selectedItem && !isCoordinatorAggregate && !selectedItem.childRunId
+    ? 'This planned task has not been dispatched yet. Changes, files, and the full run page become available after the coordinator starts the child run.'
+    : null;
 
   // Reuse the shared artifact browser hook so the Changes tab renders the dense changed-files list
   // and the Files tab renders the full workspace FOLDER TREE (getRunWorkspace / assembly workspace),
   // not just the changed files. This is the same hook RunLayout and WorkspacePage drive.
   const artifactState = useArtifactBrowser(
-    open ? selectedRunId : '',
+    open && canBrowseSelectedRun ? selectedRunId : '',
     runDetail?.status ?? '',
     undefined,
     undefined,
@@ -1462,7 +1467,7 @@ export function AgentSessionPanel({
     clearSelection,
   } = artifactState;
 
-  const { events: liveEvents } = useRunStream(open && selectedRunId ? selectedRunId : '');
+  const { events: liveEvents } = useRunStream(open && canBrowseSelectedRun ? selectedRunId : '');
   const events = useMemo(() => mergeRunEvents(seedEvents, liveEvents), [seedEvents, liveEvents]);
   const turns = useMemo(
     () => selectedItem?.isCoordinator || selectedItem?.nodeId === 'work-plan' ? buildCoordinatorTurns(events) : buildTurns(events),
@@ -1522,9 +1527,10 @@ export function AgentSessionPanel({
   }, [onOutcomePlanClarify]);
 
   useEffect(() => {
-    if (!open || !selectedRunId) {
+    if (!open || !canBrowseSelectedRun) {
       setRunDetail(null);
       setRunDetailError(null);
+      setRunDetailLoading(false);
       return;
     }
     let cancelled = false;
@@ -1552,7 +1558,7 @@ export function AgentSessionPanel({
       .catch((err: unknown) => {
         if (cancelled) return;
         setRunDetail(null);
-        setRunDetailError(err instanceof Error ? err.message : String(err));
+        setRunDetailError(formatApiErrorMessage(err, 'Could not load run metadata.'));
       })
       .finally(() => {
         if (!cancelled) setRunDetailLoading(false);
@@ -1560,7 +1566,7 @@ export function AgentSessionPanel({
     return () => {
       cancelled = true;
     };
-  }, [open, selectedRunId]);
+  }, [open, selectedRunId, canBrowseSelectedRun]);
 
   // File list, diffs and the workspace tree are now fetched by the shared useArtifactBrowser hook
   // (see artifactState above), so the previous bespoke getRunFiles/getRunFileContent/getRunFileDiff
@@ -1587,15 +1593,17 @@ export function AgentSessionPanel({
       setFollowUp('');
       onCoordinatorFollowUp?.();
     } catch (err: unknown) {
-      setFollowUpError(err instanceof Error ? err.message : String(err));
+      setFollowUpError(formatApiErrorMessage(err, 'Could not send the coordinator message.'));
     } finally {
       setFollowUpBusy(false);
     }
   }, [coordinatorRunId, followUp, followUpBusy, onCoordinatorFollowUp, selectedItem]);
 
-  const runLink = selectedItem?.isCoordinator
-    ? `/projects/${projectId}/orchestrations/${selectedRunId}`
-    : `/projects/${projectId}/runs/${selectedRunId}/workflow`;
+  const runLink = canBrowseSelectedRun
+    ? selectedItem?.isCoordinator
+      ? `/projects/${projectId}/orchestrations/${selectedRunId}`
+      : `/projects/${projectId}/runs/${selectedRunId}/workflow`
+    : '';
 
   if (!selectedItem || !isVisible) return null;
 
@@ -1734,6 +1742,8 @@ export function AgentSessionPanel({
                   appearance="subtle"
                   icon={<OpenRegular />}
                   aria-label="Open full run page"
+                  title={canBrowseSelectedRun ? 'Open full run page' : selectedRunUnavailableReason ?? 'Run page unavailable'}
+                  disabled={!canBrowseSelectedRun}
                   onClick={() => navigate(runLink)}
                 />
                 <Button appearance="subtle" icon={<DismissRegular />} aria-label="Close panel" onClick={onClose} />
@@ -1760,6 +1770,16 @@ export function AgentSessionPanel({
               {activeTab === 'messages' && (
                 <>
                   <div className={styles.tabBody}>
+                    {selectedRunUnavailableReason && (
+                      <MessageBar intent="info">
+                        <MessageBarBody>{selectedRunUnavailableReason}</MessageBarBody>
+                      </MessageBar>
+                    )}
+                    {runDetailError && !selectedRunUnavailableReason && (
+                      <MessageBar intent="warning">
+                        <MessageBarBody>{runDetailError}</MessageBarBody>
+                      </MessageBar>
+                    )}
                     {selectedItem.nodeId !== 'outcome-plan' && !runDetailLoading && turns.length > 0 && (
                       <div className={styles.narrativeToolbar}>
                         <Switch
@@ -1843,7 +1863,11 @@ export function AgentSessionPanel({
 
               {activeTab === 'changes' && (
                 <div className={styles.tabBody}>
-                  {filesLoading ? (
+                  {selectedRunUnavailableReason ? (
+                    <MessageBar intent="info" data-testid="planned-node-artifact-guard">
+                      <MessageBarBody>{selectedRunUnavailableReason}</MessageBarBody>
+                    </MessageBar>
+                  ) : filesLoading ? (
                     <div className={styles.loadingWrap}>
                       <Spinner size="tiny" />
                       <Text>Loading changes...</Text>
@@ -1866,13 +1890,19 @@ export function AgentSessionPanel({
 
               {activeTab === 'files' && (
                 <div className={styles.tabBody}>
-                  <FilesTabPanel
-                    workspaceFiles={workspaceFiles}
-                    workspaceLoading={workspaceLoading}
-                    workspaceError={workspaceError}
-                    selectedPath={selectedPath}
-                    onFileClick={(path, isChanged) => handleFileSelect(path, isChanged)}
-                  />
+                  {selectedRunUnavailableReason ? (
+                    <MessageBar intent="info" data-testid="planned-node-file-guard">
+                      <MessageBarBody>{selectedRunUnavailableReason}</MessageBarBody>
+                    </MessageBar>
+                  ) : (
+                    <FilesTabPanel
+                      workspaceFiles={workspaceFiles}
+                      workspaceLoading={workspaceLoading}
+                      workspaceError={workspaceError}
+                      selectedPath={selectedPath}
+                      onFileClick={(path, isChanged) => handleFileSelect(path, isChanged)}
+                    />
+                  )}
                 </div>
               )}
             </div>

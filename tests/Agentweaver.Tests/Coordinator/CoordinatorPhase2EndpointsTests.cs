@@ -2,9 +2,12 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using FluentAssertions;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Agentweaver.Api.Coordinator;
 using Agentweaver.Api.Contracts;
 using Agentweaver.Api.Infrastructure;
+using Agentweaver.Api.Memory;
 using Agentweaver.Api.Runs;
 using Agentweaver.Domain;
 using Agentweaver.Tests.Helpers;
@@ -112,6 +115,8 @@ public sealed class CoordinatorPhase2EndpointsTests : IDisposable
 
         var resp = await _other.GetAsync($"/api/runs/{runId}/work-plan");
         resp.StatusCode.Should().Be(HttpStatusCode.Forbidden, "non-owner work-plan reads must be 403");
+        var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("error").GetString().Should().Be("forbidden");
     }
 
     // =========================================================================
@@ -232,6 +237,57 @@ public sealed class CoordinatorPhase2EndpointsTests : IDisposable
     }
 
     // =========================================================================
+    // assembly review: stale/no-gate POSTs must not leave durable decisions behind.
+    // =========================================================================
+    [Fact]
+    public async Task AssemblyReview_NoPendingGate_Returns409_AndDoesNotPersistDecision()
+    {
+        var runId = await InsertInactiveCoordinatorRunAsync(CoordinatorWebApplicationFactory.OwnerUser);
+
+        var resp = await _owner.PostAsJsonAsync($"/api/runs/{runId}/assembly/review", new { approved = true });
+
+        resp.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("error").GetString().Should().Be("no_assembly_review_pending");
+
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        (await db.AssemblyReviews.CountAsync(r => r.CoordinatorRunId == runId))
+            .Should().Be(0, "stale assembly review submissions must not persist decisions");
+    }
+
+    [Fact]
+    public async Task AssemblyReview_PendingDurableGateWithoutLocalGate_Returns202_AndPersistsDeferredDecision()
+    {
+        var runId = await InsertInactiveCoordinatorRunAsync(CoordinatorWebApplicationFactory.OwnerUser);
+        await SeedWorkPlanAsync(runId, WorkPlanStatus.InReview, AssemblyStage.Review);
+        await CoordinatorAssemblyReviewPersistence.UpsertReviewRequestAsync(
+            _factory.Services.GetRequiredService<IServiceScopeFactory>(),
+            runId,
+            CoordinatorWebApplicationFactory.OwnerUser,
+            $"agentweaver/integration/{runId}",
+            "tree-hash",
+            CancellationToken.None);
+
+        var resp = await _owner.PostAsJsonAsync($"/api/runs/{runId}/assembly/review",
+            new { approved = true, feedback = "looks good" });
+
+        resp.StatusCode.Should().Be(HttpStatusCode.Accepted,
+            "a non-owner replica can durably defer a decision only for a validated in-review gate");
+        var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("accepted").GetBoolean().Should().BeFalse();
+        body.GetProperty("deferred").GetBoolean().Should().BeTrue();
+
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var record = await db.AssemblyReviews.AsNoTracking()
+            .SingleAsync(r => r.CoordinatorRunId == runId);
+        record.DecisionJson.Should().Contain("\"Approved\":true");
+        record.DecisionJson.Should().Contain("looks good");
+        record.DecisionSubmittedAt.Should().NotBeNull();
+    }
+
+    // =========================================================================
     // steer: redirect with snake_case target_child_run_id is deserialized correctly.
     // Regression guard: frontend sends target_child_run_id (snake_case); the DTO must
     // bind it so the targeted force-complete path receives the child run id.
@@ -283,7 +339,7 @@ public sealed class CoordinatorPhase2EndpointsTests : IDisposable
     }
 
     /// <summary>Seeds an OutcomeSpec + WorkPlan (with the given status) + one subtask for a run.</summary>
-    private async Task SeedWorkPlanAsync(string coordinatorRunId, string status)
+    private async Task SeedWorkPlanAsync(string coordinatorRunId, string status, string? assemblyStage = null)
     {
         using var scope = _factory.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<Agentweaver.Api.Memory.MemoryDbContext>();
@@ -309,6 +365,7 @@ public sealed class CoordinatorPhase2EndpointsTests : IDisposable
             ProjectId = "proj-x",
             CoordinatorRunId = coordinatorRunId,
             Status = status,
+            AssemblyStage = assemblyStage,
             CreatedAt = DateTimeOffset.UtcNow,
             UpdatedAt = DateTimeOffset.UtcNow,
         };

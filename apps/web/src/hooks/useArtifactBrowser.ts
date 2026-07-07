@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
+import { formatApiErrorMessage } from '../api/errors';
 import type { CommitResponse, RequestChangesResponse, ReviewResponse, WorkspaceFileContent, WorkspaceFileDiff, WorkspaceFileEntry, WorkspaceNode } from '../api/types';
 
 const POLL_INTERVAL_MS = 3000;
@@ -30,14 +31,15 @@ export interface ArtifactBrowserAdapter {
    *  branch tip (no worktree); when omitted the modal uses the standard worktree-backed endpoint. */
   getContent?: (runId: string, path: string) => Promise<WorkspaceFileContent>;
   approve?: (runId: string) => Promise<void>;
+  approveLabel?: string;
+  approveAriaLabel?: string;
+  approveAcceptedStatus?: string;
   requestChanges?: (runId: string, comment: string) => Promise<void>;
   decline?: (runId: string) => Promise<void>;
 }
 
 function extractErrorMessage(err: unknown): string {
-  if (err instanceof ApiError) return `API error ${err.status}: ${err.body}`;
-  if (err instanceof Error) return err.message;
-  return String(err);
+  return formatApiErrorMessage(err);
 }
 
 export interface ArtifactBrowserState {
@@ -74,6 +76,8 @@ export interface ArtifactBrowserState {
   requestChangesResult: RequestChangesResponse | null;
   requestChangesError: string | null;
   requestChanges: (comment: string) => Promise<void>;
+  approveLabel: string;
+  approveAriaLabel: string;
 }
 
 export function useArtifactBrowser(
@@ -169,7 +173,7 @@ export function useArtifactBrowser(
         .catch((err: unknown) => {
           if (active) {
             if (err instanceof ApiError && err.status === 409) {
-              setWorkspaceError('Workspace files unavailable for this run.');
+              setFilesError('Workspace files unavailable for this run state.');
               setFilesLoading(false);
               // 409 is permanent — stop polling
               clearInterval(intervalId);
@@ -200,6 +204,12 @@ export function useArtifactBrowser(
   // Fetch workspace files when the Files tab is active.
   useEffect(() => {
     if (activeTab !== 'files') return;
+    if (!runId) {
+      setWorkspaceFiles([]);
+      setWorkspaceLoading(false);
+      setWorkspaceError(null);
+      return;
+    }
 
     let active = true;
 
@@ -225,7 +235,7 @@ export function useArtifactBrowser(
   // Fetch diff when selected file changes (only for changed files).
   // Loading state is reset in the file selection handler, not here.
   useEffect(() => {
-    if (!selectedPath || !selectedPathIsChanged) return;
+    if (!runId || !selectedPath || !selectedPathIsChanged) return;
 
     let active = true;
 
@@ -302,10 +312,10 @@ export function useArtifactBrowser(
         setReviewError(
           err.status === 403
             ? 'Not authorized to review this run.'
-            : `Error ${err.status}: ${err.body}`,
+            : formatApiErrorMessage(err, 'Review failed.'),
         );
       } else {
-        setReviewError(err instanceof Error ? err.message : String(err));
+        setReviewError(formatApiErrorMessage(err, 'Review failed.'));
       }
     } finally {
       setReviewPending(false);
@@ -319,14 +329,14 @@ export function useArtifactBrowser(
     try {
       if (adapter?.approve) {
         await adapter.approve(runId);
-        setCommitResult({ run_id: runId, status: 'merged', merge_result: null, conflicting_files: null });
+        setCommitResult({ run_id: runId, status: adapter.approveAcceptedStatus ?? 'review_accepted', merge_result: null, conflicting_files: null });
       } else {
         const resp = await apiClient.commitRun(runId);
         setCommitResult(resp);
       }
       onCommitSuccess?.();
     } catch (err) {
-      setCommitError(extractErrorMessage(err));
+      setCommitError(formatApiErrorMessage(err, 'Approval failed.'));
     } finally {
       setCommitPending(false);
     }
@@ -350,10 +360,10 @@ export function useArtifactBrowser(
         setRequestChangesError(
           err.status === 403
             ? 'Not authorized to request changes on this run.'
-            : `Error ${err.status}: ${err.body}`,
+            : formatApiErrorMessage(err, 'Could not request changes.'),
         );
       } else {
-        setRequestChangesError(err instanceof Error ? err.message : String(err));
+        setRequestChangesError(formatApiErrorMessage(err, 'Could not request changes.'));
       }
     } finally {
       setRequestChangesPending(false);
@@ -394,5 +404,7 @@ export function useArtifactBrowser(
     requestChangesResult,
     requestChangesError,
     requestChanges,
+    approveLabel: adapter?.approveLabel ?? 'Commit and Merge',
+    approveAriaLabel: adapter?.approveAriaLabel ?? 'Commit and merge to originating branch',
   };
 }

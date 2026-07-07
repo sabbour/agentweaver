@@ -171,11 +171,20 @@ function filename(path: string): string {
 function reviewResultBadgeColor(
   status: string,
 ): 'success' | 'subtle' | 'danger' | 'warning' | 'informative' {
+  if (status === 'review_accepted') return 'informative';
   if (status === 'merged') return 'success';
   if (status === 'declined') return 'subtle';
   if (status === 'merge_failed') return 'danger';
   if (status === 'merging') return 'informative';
   return 'danger';
+}
+
+function formatReviewResultStatus(status: string): string {
+  switch (status) {
+    case 'review_accepted': return 'Review accepted';
+    case 'changes_requested': return 'Changes requested';
+    default: return status.replace(/_/g, ' ');
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -838,6 +847,8 @@ export function FileTreePanel({ state, onFileClick, noChangesProduced, noChangeS
     requestChangesResult,
     requestChangesError,
     requestChanges,
+    approveLabel,
+    approveAriaLabel,
   } = state;
 
   const fileClickHandler = (path: string, isChanged = true) => {
@@ -891,12 +902,12 @@ export function FileTreePanel({ state, onFileClick, noChangesProduced, noChangeS
                 appearance="primary"
                 size="small"
                 icon={<CheckmarkRegular />}
-                aria-label="Commit and merge to originating branch"
+                aria-label={approveAriaLabel}
                 style={{ width: '100%', whiteSpace: 'nowrap' }}
                 disabled={commitPending || reviewPending || requestChangesPending}
                 onClick={() => void commitRun()}
               >
-                Commit and Merge
+                {approveLabel}
               </Button>
               <div style={{ display: 'flex', gap: tokens.spacingHorizontalXS }}>
                 <Button
@@ -979,17 +990,17 @@ export function FileTreePanel({ state, onFileClick, noChangesProduced, noChangeS
       )}
       {commitResult !== null && (
         <div className={styles.reviewResultBar}>
-          <Badge color="success">{commitResult.status}</Badge>
+          <Badge color={reviewResultBadgeColor(commitResult.status)}>{formatReviewResultStatus(commitResult.status)}</Badge>
         </div>
       )}
       {requestChangesResult !== null && (
         <div className={styles.reviewResultBar}>
-          <Badge color="informative">{requestChangesResult.status}</Badge>
+          <Badge color="informative">{formatReviewResultStatus(requestChangesResult.status)}</Badge>
         </div>
       )}
       {reviewResult !== null && (
         <div className={styles.reviewResultBar}>
-          <Badge color={reviewResultBadgeColor(reviewResult.status)}>{reviewResult.status}</Badge>
+          <Badge color={reviewResultBadgeColor(reviewResult.status)}>{formatReviewResultStatus(reviewResult.status)}</Badge>
         </div>
       )}
 

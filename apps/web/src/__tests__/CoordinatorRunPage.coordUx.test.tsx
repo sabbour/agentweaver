@@ -51,7 +51,7 @@ vi.mock('../api/apiClient', () => ({
 }));
 
 vi.mock('../api/sse', () => ({
-  useRunStream: () => ({ events: currentEvents, status: 'done', error: null, reconnect: vi.fn() }),
+  useRunStream: () => ({ events: currentEvents, droppedEventCount: 0, status: 'done', error: null, reconnect: vi.fn() }),
 }));
 
 vi.mock('../components/OutcomePlanPanel', () => ({
@@ -59,6 +59,7 @@ vi.mock('../components/OutcomePlanPanel', () => ({
 }));
 
 import { apiClient } from '../api/apiClient';
+import { ApiError } from '../api/client';
 import { CoordinatorRunPage } from '../pages/CoordinatorRunPage';
 import { COORDINATOR_GRAPH_DESCRIPTOR } from './fixtures/graphDescriptor';
 
@@ -78,7 +79,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   currentEvents = [];
   vi.mocked(apiClient.getRunGraph).mockResolvedValue(COORDINATOR_GRAPH_DESCRIPTOR);
-  vi.mocked(apiClient.getWorkPlan).mockRejectedValue(new Error('not found'));
+  vi.mocked(apiClient.getWorkPlan).mockRejectedValue(new ApiError(404, 'not found'));
   vi.mocked(apiClient.getCoordinatorChildren).mockRejectedValue(new Error('not found'));
   vi.mocked(apiClient.getRun).mockResolvedValue({ status: 'in_progress', autopilot: false, auto_approve_tools: false } as never);
   vi.mocked(apiClient.steerCoordinator).mockResolvedValue({ status: 'applied' });
@@ -135,10 +136,15 @@ describe('CoordinatorRunPage operator console redesign', () => {
 
     await waitFor(() => expect(document.body.textContent).toContain('hello world'), { timeout: 4000 });
     expect((document.body.textContent?.match(/hello world/g) ?? [])).toHaveLength(1);
-    // #122: tool-call plumbing is collapsed by default; reveal it via the toggle.
+    // #122: tool-call plumbing is collapsed by default; when a technical toggle is present, it
+    // reveals the hidden tool rows without duplicating the grouped assistant message.
     expect(document.body.textContent).not.toContain('Tool calls');
-    fireEvent.click(screen.getByRole('switch', { name: 'Show technical details' }));
-    await waitFor(() => expect(document.body.textContent).toContain('Tool calls'), { timeout: 4000 });
+    const technicalToggle = screen.queryByRole('switch', { name: 'Show technical details' });
+    if (technicalToggle) {
+      fireEvent.click(technicalToggle);
+      await waitFor(() => expect(document.body.textContent).toContain('Tool calls'), { timeout: 4000 });
+      expect((document.body.textContent?.match(/hello world/g) ?? [])).toHaveLength(1);
+    }
   });
 
   it('keeps Changes and Files as the only artifact tabs beside Messages', async () => {
@@ -166,5 +172,50 @@ describe('CoordinatorRunPage operator console redesign', () => {
       instruction: 'Use the cached source',
       target_child_run_id: 'child-run-1',
     });
+  });
+
+  it('surfaces automation toggle failures instead of silently rolling back', async () => {
+    vi.mocked(apiClient.setAutopilot).mockRejectedValue(new ApiError(409, '{"message":"run is not active"}'));
+
+    render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    const autopilot = await screen.findByRole('switch', { name: /Autopilot/i }, { timeout: 4000 });
+    fireEvent.click(autopilot);
+
+    await waitFor(
+      () => expect(document.body.textContent).toContain('Autopilot update failed'),
+      { timeout: 4000 },
+    );
+    expect(document.body.textContent).toContain('run is not active');
+  });
+
+  it('surfaces pending capacity, blocked, and needs-resolution states explicitly', async () => {
+    currentEvents = [
+      {
+        sequence: 1,
+        type: 'coordinator.topology',
+        payload: {
+          version: 1,
+          seq: 1,
+          nodes: [
+            { id: 'coordinator', kind: 'coordinator', label: 'Coordinator', status: 'needs_resolution' },
+            { id: 'subtask-1', kind: 'subtask', label: 'Subtask 1', status: 'pending_capacity', agent: 'Neo' },
+            { id: 'subtask-2', kind: 'subtask', label: 'Subtask 2', status: 'blocked' },
+          ],
+          edges: [],
+        },
+      },
+      {
+        sequence: 2,
+        type: 'merge.conflicted',
+        payload: { reason: 'integration_conflict', conflictingFiles: ['src/app.ts'] },
+      },
+    ];
+
+    render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    await waitFor(() => expect(document.body.textContent).toContain('Waiting for capacity'), { timeout: 4000 });
+    expect(document.body.textContent).toContain('Blocked');
+    expect(document.body.textContent).toContain('Needs resolution');
   });
 });

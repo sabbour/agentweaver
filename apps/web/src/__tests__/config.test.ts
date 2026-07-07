@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { AgentweaverApiClient } from '../api/client';
+import { AgentweaverApiClient, ApiError } from '../api/client';
 
 // The `/api` base-path convention: API_URL is the ORIGIN ONLY (no `/api` suffix). The API
 // client owns the single `/api` prefix for XHR endpoints, while GitHub OAuth redirect
@@ -66,5 +66,21 @@ describe('ApiClient request() single /api prefix', () => {
     // Must never double-prefix to /api/api/... under the same-origin convention.
     const calledUrl = String(fetchSpy.mock.calls[0][0]);
     expect(calledUrl).not.toContain('/api/api/');
+  });
+
+  it('posts relative keepalive URLs to the configured API origin', async () => {
+    const fetchSpy = spyFetch();
+    const client = new AgentweaverApiClient('http://localhost:5000', () => null);
+    await client.pingKeepalive('/api/runs/r1/sandbox/keepalive');
+    expect(fetchSpy).toHaveBeenCalledWith(
+      'http://localhost:5000/api/runs/r1/sandbox/keepalive',
+      expect.objectContaining({ method: 'POST' }),
+    );
+  });
+
+  it('throws ApiError when keepalive returns a non-OK response', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('expired', { status: 410 }));
+    const client = new AgentweaverApiClient('http://localhost:5000', () => null);
+    await expect(client.pingKeepalive('/api/keepalive')).rejects.toBeInstanceOf(ApiError);
   });
 });

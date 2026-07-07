@@ -931,7 +931,11 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
     {
         if (decision.Approved)
         {
-            Emit(context.CoordinatorRunId, EventTypes.CoordinatorAssemblyReviewApproved, new { workPlanId });
+            Emit(context.CoordinatorRunId, EventTypes.CoordinatorAssemblyReviewApproved, new
+            {
+                workPlanId,
+                reviewer = decision.Reviewer,
+            });
             await CompleteAfterApprovalAsync(
                 context, workPlanId, edges, integrationBranch, aggregateTreeHash, ct).ConfigureAwait(false);
             return;
@@ -976,7 +980,11 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
     {
         if (decision.Approved)
         {
-            Emit(context.CoordinatorRunId, EventTypes.CoordinatorAssemblyReviewApproved, new { workPlanId });
+            Emit(context.CoordinatorRunId, EventTypes.CoordinatorAssemblyReviewApproved, new
+            {
+                workPlanId,
+                reviewer = decision.Reviewer,
+            });
             await CoordinatorAssemblyReviewPersistence.ClearAsync(_scopeFactory, context.CoordinatorRunId, ct)
                 .ConfigureAwait(false);
             await _assemblyStore.SetStatusAndStageAsync(
@@ -1425,6 +1433,7 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         {
             workPlanId,
             redispatchSubtaskIds = rejection.SubtaskIds,
+            redispatchedSubtaskIds = rejection.SubtaskIds,
             inferredFiles = rejection.InferredFiles,
             fellBackToAll = rejection.FellBackToAll,
             feedback = decision.Feedback,
@@ -1814,8 +1823,8 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         if (entry is null) return;
 
         var subtasks = await ReloadSubtasksAsync(workPlanId, ct).ConfigureAwait(false);
-        entry.RecordNext(EventTypes.CoordinatorTopology, CoordinatorTopology.BuildSnapshot(
-            coordinatorRunId, workPlanId, status, subtasks, edges, 0, _podRegistry, _k8sEnv?.PodName));
+        entry.RecordNext(EventTypes.CoordinatorTopology, seq => CoordinatorTopology.BuildSnapshot(
+            coordinatorRunId, workPlanId, status, subtasks, edges, seq, _podRegistry, _k8sEnv?.PodName));
     }
 
     private async Task ResetSubtasksToPendingAsync(IReadOnlyCollection<int> subtaskIds, string feedback, CancellationToken ct)
