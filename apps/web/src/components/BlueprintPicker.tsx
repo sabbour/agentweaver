@@ -1,4 +1,4 @@
-import { type ReactElement, useEffect, useRef, useState } from 'react';
+import { type ReactElement, useEffect, useState } from 'react';
 import {
   Badge,
   Button,
@@ -9,6 +9,7 @@ import {
   Spinner,
   Text,
   Textarea,
+  Tooltip,
   makeStyles,
   mergeClasses,
   tokens,
@@ -19,6 +20,7 @@ import {
   ChevronDownRegular,
   ChevronRightRegular,
   DocumentRegular,
+  FlowchartRegular,
   InfoRegular,
   PeopleTeamRegular,
   SparkleRegular,
@@ -34,7 +36,7 @@ export type BlueprintSelection =
 
 export const NO_BLUEPRINT: BlueprintSelection = { kind: 'none' };
 
-export type BlueprintPanelTab = 'generated' | 'suggested' | 'templates' | 'generate';
+export type BlueprintPanelTab = 'suggested' | 'templates' | 'generate';
 
 const useStyles = makeStyles({
   root: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minHeight: 0 },
@@ -47,15 +49,60 @@ const useStyles = makeStyles({
   panelBody: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL, minHeight: 0, overflowY: 'auto', paddingRight: tokens.spacingHorizontalXS },
   sectionHeader: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: tokens.spacingHorizontalM },
   subtle: { color: tokens.colorNeutralForeground3 },
+  // Secondary guidance in empty states. colorNeutralForeground2 stays a clearly
+  // legible >= 4.5:1 on the card background, unlike the more muted Foreground3.
+  emptyHint: { color: tokens.colorNeutralForeground2, fontSize: tokens.fontSizeBase200 },
+  emptyIcon: { color: tokens.colorNeutralForeground3 },
+  suggestedActions: { display: 'flex', justifyContent: 'flex-end', gap: tokens.spacingHorizontalS },
   emptyCard: { display: 'flex', flexDirection: 'column', alignItems: 'center', gap: tokens.spacingVerticalXS, padding: tokens.spacingVerticalXL, textAlign: 'center', backgroundColor: tokens.colorNeutralBackground1, border: `1px solid ${tokens.colorNeutralStroke2}`, minHeight: '140px', justifyContent: 'center', overflowWrap: 'anywhere' },
   tabLinks: { display: 'flex', flexWrap: 'wrap', gap: tokens.spacingHorizontalS },
-  // Always reflows (auto-fit columns down to 1 on narrow containers) instead of
-  // scrolling horizontally — a fixed-width dialog column should never need an
-  // inner horizontal scrollbar to see the rest of the templates.
-  templateGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: tokens.spacingHorizontalM, alignItems: 'stretch' },
-  radioCard: { width: '100%', minWidth: '180px', minHeight: '220px', cursor: 'pointer', padding: tokens.spacingVerticalM },
-  selectedCard: { border: `2px solid ${tokens.colorBrandStroke1}` },
-  cardLabel: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS, width: '100%' },
+  // Dense list-row layout: one template per row so many fit without scrolling.
+  // The per-agent roster lives in a focus/hover popover (see TemplateRow), not
+  // inline, which is what keeps each row to a single compact line.
+  templateList: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
+  templateRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalM,
+    width: '100%',
+    minWidth: 0,
+    boxSizing: 'border-box',
+    textAlign: 'left',
+    cursor: 'pointer',
+    padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM}`,
+    borderRadius: tokens.borderRadiusMedium,
+    backgroundColor: tokens.colorNeutralBackground1,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    ':hover': { backgroundColor: tokens.colorNeutralBackground1Hover },
+  },
+  // Selected uses the same 2px brand-stroke / brand-tint language as the
+  // "No blueprint" control: an inner brand ring (via box-shadow, so the row does
+  // not reflow) plus a brand-colored border and a subtle brand tint.
+  templateRowSelected: {
+    backgroundColor: tokens.colorBrandBackground2,
+    borderTopColor: tokens.colorBrandStroke1,
+    borderRightColor: tokens.colorBrandStroke1,
+    borderBottomColor: tokens.colorBrandStroke1,
+    borderLeftColor: tokens.colorBrandStroke1,
+    boxShadow: `inset 0 0 0 1px ${tokens.colorBrandStroke1}`,
+    ':hover': { backgroundColor: tokens.colorBrandBackground2 },
+  },
+  rowIcon: { width: '28px', height: '28px', borderRadius: tokens.borderRadiusMedium, backgroundColor: tokens.colorBrandBackground2, color: tokens.colorBrandForeground1, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
+  rowMain: { display: 'flex', flexDirection: 'column', minWidth: 0, flexGrow: 1 },
+  rowTitle: { fontWeight: tokens.fontWeightSemibold, fontSize: tokens.fontSizeBase300, color: tokens.colorNeutralForeground1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
+  // colorNeutralForeground2 keeps the muted look while staying >= 4.5:1 on the
+  // row background (colorNeutralForeground3 would drop below on the brand tint).
+  rowDesc: { color: tokens.colorNeutralForeground2, fontSize: tokens.fontSizeBase200, lineHeight: tokens.lineHeightBase200, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
+  rowTrailing: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM, flexShrink: 0, marginLeft: 'auto', minWidth: 0 },
+  agentPill: { display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalXXS, fontSize: tokens.fontSizeBase200, color: tokens.colorNeutralForeground3, whiteSpace: 'nowrap', flexShrink: 0 },
+  // Compact workflow indicator. Capped width + ellipsis so a long workflow name
+  // never reflows the single-line row. colorNeutralForeground3 stays >= 4.5:1 on
+  // both the neutral and brand-tint row backgrounds.
+  workflowPill: { display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalXXS, fontSize: tokens.fontSizeBase200, color: tokens.colorNeutralForeground3, whiteSpace: 'nowrap', minWidth: 0, maxWidth: '160px' },
+  workflowName: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 },
+  rosterPop: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS, maxWidth: '240px' },
+  rosterList: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS },
+  rosterItem: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, fontSize: tokens.fontSizeBase200, color: tokens.colorNeutralForeground1 },
   cardTitleRow: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: tokens.spacingHorizontalS },
   cardTitle: { fontWeight: tokens.fontWeightSemibold },
   cardDescription: { color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200, lineHeight: tokens.lineHeightBase200 },
@@ -63,16 +110,86 @@ const useStyles = makeStyles({
   roleRows: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS, marginTop: tokens.spacingVerticalXS },
   roleRow: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200 },
   roleDot: { width: '14px', height: '14px', borderRadius: tokens.borderRadiusSmall, backgroundColor: tokens.colorPalettePurpleBackground2, color: tokens.colorPalettePurpleForeground2, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: '9px', flexShrink: 0 },
-  iconBubble: { width: '32px', height: '32px', borderRadius: tokens.borderRadiusMedium, backgroundColor: tokens.colorBrandBackground2, color: tokens.colorBrandForeground1, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
-  inlineMeta: { display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalXXS },
   previewCard: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, padding: tokens.spacingVerticalM },
   metaRow: { display: 'flex', flexWrap: 'wrap', gap: tokens.spacingHorizontalS, color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200 },
   generateBox: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS },
   generateBar: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
-  suggestedCard: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, border: `1px solid ${tokens.colorPaletteGreenBorderActive}`, boxShadow: tokens.shadow4, padding: tokens.spacingVerticalL },
   suggestedHeader: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: tokens.spacingHorizontalS },
-  suggestedFooter: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: tokens.spacingHorizontalM, borderTop: `1px solid ${tokens.colorNeutralStroke2}`, paddingTop: tokens.spacingVerticalM },
+  // Working state shown while a blueprint is being generated — a purposeful
+  // "at work" surface, not a static spinner.
+  workingCard: { display: 'flex', flexDirection: 'column', alignItems: 'center', gap: tokens.spacingVerticalS, padding: tokens.spacingVerticalXL, textAlign: 'center', backgroundColor: tokens.colorNeutralBackground1, border: `1px solid ${tokens.colorNeutralStroke2}`, minHeight: '140px', justifyContent: 'center' },
+  workingBubble: { width: '48px', height: '48px', borderRadius: tokens.borderRadiusCircular, backgroundColor: tokens.colorBrandBackground2, color: tokens.colorBrandForeground1, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
+  // Gentle breathe on the sparkle bubble. Motion conveys "working"; disabled
+  // under reduced-motion where the bubble simply sits static.
+  sparklePulse: {
+    animationName: {
+      '0%, 100%': { transform: 'scale(1)', opacity: '0.85' },
+      '50%': { transform: 'scale(1.12)', opacity: '1' },
+    },
+    animationDuration: '1.8s',
+    animationIterationCount: 'infinite',
+    animationTimingFunction: tokens.curveEasyEase,
+    '@media (prefers-reduced-motion: reduce)': { animationName: 'none', transform: 'none', opacity: '1' },
+  },
+  workingStatus: { minHeight: tokens.lineHeightBase300, color: tokens.colorNeutralForeground3 },
+  // One-time rise+fade when the generated preview first appears.
+  revealCard: {
+    animationName: {
+      '0%': { transform: 'translateY(8px)', opacity: '0' },
+      '100%': { transform: 'translateY(0)', opacity: '1' },
+    },
+    animationDuration: '340ms',
+    animationTimingFunction: tokens.curveDecelerateMid,
+    animationFillMode: 'both',
+    '@media (prefers-reduced-motion: reduce)': { animationName: 'none', transform: 'none', opacity: '1' },
+  },
+  // One-time pop on the "Generated" badge as the result lands.
+  badgePop: {
+    animationName: {
+      '0%': { transform: 'scale(0.7)', opacity: '0' },
+      '60%': { transform: 'scale(1.08)' },
+      '100%': { transform: 'scale(1)', opacity: '1' },
+    },
+    animationDuration: tokens.durationGentle,
+    animationTimingFunction: tokens.curveDecelerateMid,
+    animationFillMode: 'both',
+    '@media (prefers-reduced-motion: reduce)': { animationName: 'none', transform: 'none', opacity: '1' },
+  },
+  // Sparkle icon on the Generate button pulses while work is in flight.
+  buttonSparkle: {
+    display: 'inline-flex',
+    animationName: {
+      '0%, 100%': { opacity: '0.6', transform: 'scale(0.92)' },
+      '50%': { opacity: '1', transform: 'scale(1.1)' },
+    },
+    animationDuration: '1.4s',
+    animationIterationCount: 'infinite',
+    animationTimingFunction: tokens.curveEasyEase,
+    '@media (prefers-reduced-motion: reduce)': { animationName: 'none', transform: 'none', opacity: '1' },
+  },
 });
+
+// Product-specific steps that mirror what a blueprint actually is: a squad, a
+// workflow, and a review policy. Informative (not decorative) so it may run
+// even under reduced-motion.
+const GENERATION_STEPS = [
+  'Reading your goal',
+  'Casting the squad',
+  'Choosing a workflow',
+  'Setting the review policy',
+  'Almost ready',
+];
+
+function RotatingStatus() {
+  const styles = useStyles();
+  const [index, setIndex] = useState(0);
+  useEffect(() => {
+    if (index >= GENERATION_STEPS.length - 1) return;
+    const timer = setTimeout(() => setIndex((i) => Math.min(i + 1, GENERATION_STEPS.length - 1)), 1400);
+    return () => clearTimeout(timer);
+  }, [index]);
+  return <Text size={200} className={styles.workingStatus} aria-live="polite">{GENERATION_STEPS[index]}</Text>;
+}
 
 export function useBlueprintCatalog(active: boolean) {
   const [blueprints, setBlueprints] = useState<Blueprint[]>([]);
@@ -140,54 +257,101 @@ export function BlueprintRosterChips({ roster, limit }: { roster: string[]; limi
   );
 }
 
-export function BlueprintPreviewCard({ blueprint, generated }: { blueprint: Blueprint; generated?: boolean }) {
+// A blueprint bundles one or more workflows; the first is the default. Prefer the
+// full `workflows` set, falling back to the legacy single `workflow` for older
+// payloads, and to an empty list when neither is present.
+function workflowList(blueprint: Blueprint): string[] {
+  if (blueprint.workflows?.length) return blueprint.workflows;
+  return blueprint.workflow ? [blueprint.workflow] : [];
+}
+
+export function BlueprintMeta({ blueprint }: { blueprint: Blueprint }) {
+  const styles = useStyles();
+  const workflows = workflowList(blueprint);
+  return (
+    <div className={styles.metaRow}>
+      <span>{blueprint.roster.length} agents</span>
+      {workflows.length === 1 && <span>Workflow: {workflows[0]}</span>}
+      {workflows.length > 1 && <span>Workflows: {workflows.join(', ')}</span>}
+      {blueprint.review_policy && <span>Review: {blueprint.review_policy}</span>}
+    </div>
+  );
+}
+
+export function BlueprintPreviewCard({ blueprint, generated, reveal }: { blueprint: Blueprint; generated?: boolean; reveal?: boolean }) {
   const styles = useStyles();
   return (
-    <Card className={styles.previewCard} aria-label={generated ? 'Generated blueprint preview' : `${blueprint.name} blueprint preview`}>
+    <Card className={mergeClasses(styles.previewCard, reveal && styles.revealCard)} aria-label={generated ? 'Generated blueprint preview' : `${blueprint.name} blueprint preview`}>
       <div className={styles.cardTitleRow}>
         <Text className={styles.cardTitle}>{blueprint.name}</Text>
-        {generated && <Badge appearance="tint" color="success" size="small">Generated</Badge>}
+        {generated && <Badge className={reveal ? styles.badgePop : undefined} appearance="tint" color="success" size="small">Generated</Badge>}
       </div>
       {blueprint.description && <Text className={styles.cardDescription}>{blueprint.description}</Text>}
       <BlueprintRosterChips roster={blueprint.roster} />
-      <div className={styles.metaRow}>
-        <span>{blueprint.roster.length} agents</span>
-        <span>Workflow: {blueprint.workflow}</span>
-        <span>Review: {blueprint.review_policy}</span>
-      </div>
+      <BlueprintMeta blueprint={blueprint} />
     </Card>
   );
 }
 
-function BlueprintCard({ blueprint, selected, onSelect }: { blueprint: Blueprint; selected: boolean; onSelect: () => void }) {
+function TemplateRosterList({ blueprint }: { blueprint: Blueprint }) {
   const styles = useStyles();
-  const visibleRoles = blueprint.roster.slice(0, 3);
-  const remaining = Math.max(0, blueprint.roster.length - visibleRoles.length);
   return (
-    <Card
-      className={mergeClasses(styles.radioCard, selected && styles.selectedCard)}
-      onClick={onSelect}
-      role="radio"
-      aria-checked={selected}
-      tabIndex={0}
-      onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onSelect(); } }}
+    <div className={styles.rosterPop}>
+      <div className={styles.rosterList}>
+        {blueprint.roster.map((role) => (
+          <div className={styles.rosterItem} key={role}>
+            <span className={styles.roleDot}><BotRegular fontSize={10} /></span>
+            <span>{role}</span>
+          </div>
+        ))}
+      </div>
+      <BlueprintMeta blueprint={blueprint} />
+    </div>
+  );
+}
+
+function TemplateRow({ blueprint, selected, onSelect }: { blueprint: Blueprint; selected: boolean; onSelect: () => void }) {
+  const styles = useStyles();
+  const workflows = workflowList(blueprint);
+  const workflowLabel = workflows.length === 1 ? workflows[0] : `${workflows.length} workflows`;
+  const workflowAria = workflows.length === 1 ? `Workflow: ${workflows[0]}` : `Workflows: ${workflows.join(', ')}`;
+  return (
+    // Tooltip portals by default, so the roster is never clipped by the panel's
+    // bounded max-height / overflow. relationship="description" wires the roster
+    // as aria-describedby, so it is announced on keyboard focus, not hover-only.
+    <Tooltip
+      relationship="description"
+      withArrow
+      positioning="after"
+      content={<TemplateRosterList blueprint={blueprint} />}
     >
-      <div className={styles.cardLabel}>
-        <span className={styles.iconBubble}><SparkleRegular /></span>
-        <div>
-          <Text className={styles.cardTitle}>{blueprint.name}</Text>
-          <br />
-          <Text className={styles.subtle} size={200}>{blueprint.roster.length} agents</Text>
+      <div
+        className={mergeClasses(styles.templateRow, selected && styles.templateRowSelected)}
+        onClick={onSelect}
+        role="radio"
+        aria-checked={selected}
+        aria-label={blueprint.name}
+        tabIndex={0}
+        onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onSelect(); } }}
+      >
+        <span className={styles.rowIcon}><SparkleRegular /></span>
+        <div className={styles.rowMain}>
+          <span className={styles.rowTitle}>{blueprint.name}</span>
+          {blueprint.description && <span className={styles.rowDesc}>{blueprint.description}</span>}
         </div>
-        <Text className={styles.cardDescription}>{blueprint.description}</Text>
-        <div className={styles.roleRows}>
-          {visibleRoles.map((role) => (
-            <div className={styles.roleRow} key={role}><span className={styles.roleDot}><BotRegular fontSize={10} /></span><span>{role}</span></div>
-          ))}
-          {remaining > 0 && <Badge appearance="outline" size="small">+{remaining}</Badge>}
+        <div className={styles.rowTrailing}>
+          {workflows.length > 0 && (
+            <span className={styles.workflowPill} aria-label={workflowAria}>
+              <FlowchartRegular fontSize={14} aria-hidden />
+              <span className={styles.workflowName}>{workflowLabel}</span>
+            </span>
+          )}
+          <span className={styles.agentPill} aria-label={`${blueprint.roster.length} agents`}>
+            <PeopleTeamRegular fontSize={14} aria-hidden />{blueprint.roster.length}
+          </span>
         </div>
       </div>
-    </Card>
+    </Tooltip>
   );
 }
 
@@ -207,18 +371,18 @@ export function BlueprintTemplatePicker({
   limit?: number;
 }) {
   const styles = useStyles();
-  // `limit` only caps how many templates are shown (the rest are one click away
-  // via "View all templates"); it never changes the layout algorithm — this grid
-  // always reflows, it never becomes a horizontally-scrolling row.
+  // `limit` optionally caps how many templates are shown; unset, the dense row
+  // list surfaces the whole catalog. The list always reflows vertically — it
+  // never becomes a horizontally-scrolling strip.
   const visible = typeof limit === 'number' ? blueprints.slice(0, limit) : blueprints;
 
   return (
     <div className={styles.root} role="radiogroup" aria-label="Blueprint templates">
       {error && <MessageBar intent="warning"><MessageBarBody>Could not load blueprints: {error}</MessageBarBody></MessageBar>}
       {loading && <div className={styles.generateBar}><Spinner size="extra-tiny" /> <Text size={200}>Loading blueprints…</Text></div>}
-      <div className={styles.templateGrid}>
+      <div className={styles.templateList}>
         {visible.map((bp) => (
-          <BlueprintCard
+          <TemplateRow
             key={bp.id}
             blueprint={bp}
             selected={value.kind === 'predefined' && value.blueprint.id === bp.id}
@@ -232,15 +396,13 @@ export function BlueprintTemplatePicker({
 
 export function StarterTemplatesSection({
   title,
-  onViewAllTemplates,
   ...props
-}: Omit<Parameters<typeof BlueprintTemplatePicker>[0], 'showNoBlueprint'> & { title?: string; onViewAllTemplates?: () => void }) {
+}: Omit<Parameters<typeof BlueprintTemplatePicker>[0], 'showNoBlueprint'> & { title?: string }) {
   const styles = useStyles();
   return (
     <div className={styles.root}>
       <div className={styles.sectionHeader}>
         <Text weight="semibold">{title ?? 'Starter templates'}</Text>
-        {onViewAllTemplates && <Button appearance="transparent" size="small" onClick={onViewAllTemplates}>View all templates →</Button>}
       </div>
       <BlueprintTemplatePicker {...props} />
     </div>
@@ -263,28 +425,36 @@ export function GenerateBlueprintBox({
   const styles = useStyles();
   return (
     <div className={styles.generateBox}>
-      <Field label="Describe what Agentweaver should do">
+      <Field label="Describe what you want Agentweaver to do" hint="Agentweaver tailors a squad, a workflow, and a review policy to match.">
         <Textarea
-          aria-label="Describe your project"
-          placeholder="e.g. handle job searches: research roles, triage postings, draft outreach, track follow-ups"
+          aria-label="Describe what you want Agentweaver to do"
+          placeholder="e.g. triage inbound support tickets, research the account, and draft a reply for review"
           value={description}
           onChange={(_, data) => onDescriptionChange(data.value)}
           resize="vertical"
         />
       </Field>
       <div className={styles.generateBar}>
-        <Button appearance="primary" icon={<SparkleRegular />} aria-label="Generate blueprint" disabled={!description.trim() || generating} onClick={onGenerate}>
+        <Button appearance="primary" icon={<span className={generating ? styles.buttonSparkle : undefined}><SparkleRegular /></span>} aria-label="Generate blueprint" disabled={!description.trim() || generating} onClick={onGenerate}>
           {generating ? 'Generating' : 'Generate Blueprint'}
         </Button>
-        {generating && <Spinner size="extra-tiny" aria-hidden="true" />}
       </div>
       {error && <MessageBar intent="error"><MessageBarBody>{error}</MessageBarBody></MessageBar>}
     </div>
   );
 }
 
-export function GeneratedBlueprintPane({ generated }: { generated: { blueprint: Blueprint; generatedWorkflowYaml?: string | null } | null }) {
+export function GeneratedBlueprintPane({ generated, generating }: { generated: { blueprint: Blueprint; generatedWorkflowYaml?: string | null } | null; generating?: boolean }) {
   const styles = useStyles();
+  if (generating) {
+    return (
+      <Card className={styles.workingCard} aria-busy="true" aria-label="Generating blueprint">
+        <span className={mergeClasses(styles.workingBubble, styles.sparklePulse)}><SparkleRegular fontSize={24} /></span>
+        <Text weight="semibold">Designing your blueprint</Text>
+        <RotatingStatus />
+      </Card>
+    );
+  }
   if (!generated) {
     return (
       <Card className={styles.emptyCard}>
@@ -294,7 +464,7 @@ export function GeneratedBlueprintPane({ generated }: { generated: { blueprint: 
       </Card>
     );
   }
-  return <BlueprintPreviewCard blueprint={generated.blueprint} generated />;
+  return <BlueprintPreviewCard blueprint={generated.blueprint} generated reveal />;
 }
 
 export function SuggestedBlueprintPanel({
@@ -333,11 +503,11 @@ export function SuggestedBlueprintPanel({
   if (!normalizedRepo) {
     return (
       <div className={styles.root}>
-        <MessageBar intent="info"><MessageBarBody>Select a repository and Agentweaver will recommend a blueprint tailored to it.</MessageBarBody></MessageBar>
-        <div className={styles.tabLinks}>
-          <Button appearance="transparent" size="small" icon={<DocumentRegular />} onClick={onViewTemplates}>Browse templates</Button>
-          <Button appearance="transparent" size="small" icon={<SparkleRegular />} onClick={onGenerateCustom}>Generate a custom blueprint</Button>
-        </div>
+        <Card className={styles.emptyCard}>
+          <SparkleRegular fontSize={28} className={styles.emptyIcon} aria-hidden />
+          <Text weight="semibold">Select a repository and Agentweaver will recommend a blueprint tailored to it.</Text>
+          <Text className={styles.emptyHint}>Or choose Templates or Generate above.</Text>
+        </Card>
       </div>
     );
   }
@@ -360,31 +530,28 @@ export function SuggestedBlueprintPanel({
 
   return (
     <div className={styles.root}>
-      <Card className={styles.suggestedCard}>
-        <div className={styles.suggestedHeader}>
-          <div className={styles.cardLabel}>
-            <div className={styles.cardTitleRow}>
-              <span className={styles.iconBubble}><SparkleRegular /></span>
-              <Text className={styles.cardTitle}>{recommended.name}</Text>
-              <Badge appearance="filled" color="success" size="small" icon={<CheckmarkRegular />}>Recommended</Badge>
+      <div className={styles.suggestedHeader}>
+        <Badge appearance="filled" color="success" size="small" icon={<CheckmarkRegular />}>Recommended for this repository</Badge>
+      </div>
+      {activeSuggestion.rationale && <Text className={styles.rowDesc}>{activeSuggestion.rationale}</Text>}
+      <BlueprintPreviewCard blueprint={recommended} />
+      {activeSuggestion.signals.length > 0 && (
+        <div className={styles.generateBox}>
+          <Button appearance="subtle" size="small" icon={expanded ? <ChevronDownRegular /> : <ChevronRightRegular />} onClick={() => setExpanded(!expanded)}>
+            {expanded ? 'Hide signals' : 'Why this blueprint'}
+          </Button>
+          {expanded && (
+            <div className={styles.roleRows}>
+              {activeSuggestion.signals.map((s) => (
+                <div className={styles.roleRow} key={s}><InfoRegular fontSize={14} /><Text size={200} className={styles.subtle}>{s}</Text></div>
+              ))}
             </div>
-            <Text className={styles.cardDescription}>{activeSuggestion.rationale || recommended.description}</Text>
-            <BlueprintRosterChips roster={recommended.roster} limit={5} />
-          </div>
-          <Button appearance="subtle" icon={expanded ? <ChevronDownRegular /> : <ChevronRightRegular />} onClick={() => setExpanded(!expanded)} aria-label="Toggle suggestion details" />
+          )}
         </div>
-        {expanded && activeSuggestion.signals.length > 0 && (
-          <div className={styles.roleRows}>{activeSuggestion.signals.map((s) => (
-            <div className={styles.roleRow} key={s}><InfoRegular fontSize={14} /><Text size={200} className={styles.subtle}>{s}</Text></div>
-          ))}</div>
-        )}
-        <div className={styles.suggestedFooter}>
-          <Text className={styles.subtle}>
-            <span className={styles.inlineMeta}><PeopleTeamRegular /><span>{recommended.roster.length} agents</span></span>
-          </Text>
-          <Button appearance="primary" onClick={() => onChange({ kind: 'predefined', blueprint: recommended })}>Use this blueprint</Button>
-        </div>
-      </Card>
+      )}
+      <div className={styles.suggestedActions}>
+        <Button appearance="primary" onClick={() => onChange({ kind: 'predefined', blueprint: recommended })}>Use this blueprint</Button>
+      </div>
     </div>
   );
 }
@@ -392,13 +559,11 @@ export function SuggestedBlueprintPanel({
 function BlueprintTabStrip({ tabs, value, onChange }: { tabs: BlueprintPanelTab[]; value: BlueprintPanelTab; onChange: (tab: BlueprintPanelTab) => void }) {
   const styles = useStyles();
   const labelByTab: Record<BlueprintPanelTab, string> = {
-    generated: 'Generated',
     suggested: 'Suggested',
     templates: 'Templates',
     generate: 'Generate',
   };
   const iconByTab: Record<BlueprintPanelTab, ReactElement> = {
-    generated: <SparkleRegular />,
     suggested: <SparkleRegular />,
     templates: <DocumentRegular />,
     generate: <SparkleRegular />,
@@ -454,18 +619,6 @@ export function BlueprintPanel({
     if (!tabs.includes(selectedTab)) setSelectedTab(tabs[0]);
   }, [selectedTab, tabs]);
 
-  // When a blueprint is generated, surface it: if this panel has a dedicated
-  // "generated" tab (the blank-project dialog), jump to it so the fresh preview
-  // isn't hidden behind whatever tab the user was browsing.
-  const lastGeneratedId = useRef<string | null>(null);
-  useEffect(() => {
-    const id = generated?.blueprint.id ?? null;
-    if (id && id !== lastGeneratedId.current && tabs.includes('generated')) {
-      setSelectedTab('generated');
-    }
-    lastGeneratedId.current = id;
-  }, [generated, tabs]);
-
   const viewTemplates = () => setSelectedTab('templates');
   const viewGenerate = () => setSelectedTab('generate');
 
@@ -485,7 +638,6 @@ export function BlueprintPanel({
       </div>
       <BlueprintTabStrip tabs={tabs} value={selectedTab} onChange={setSelectedTab} />
       <div className={styles.panelBody}>
-        {selectedTab === 'generated' && <GeneratedBlueprintPane generated={generated} />}
         {selectedTab === 'suggested' && (
           <SuggestedBlueprintPanel
             active={active}
@@ -495,7 +647,7 @@ export function BlueprintPanel({
             onGenerateCustom={viewGenerate}
           />
         )}
-        {selectedTab === 'templates' && <StarterTemplatesSection {...catalog} value={value} onChange={onChange} onViewAllTemplates={viewTemplates} />}
+        {selectedTab === 'templates' && <StarterTemplatesSection {...catalog} value={value} onChange={onChange} />}
         {selectedTab === 'generate' && (
           <>
             <GenerateBlueprintBox
@@ -505,7 +657,7 @@ export function BlueprintPanel({
               generating={generating}
               error={generationError}
             />
-            {generated && <GeneratedBlueprintPane generated={generated} />}
+            <GeneratedBlueprintPane generated={generated} generating={generating} />
           </>
         )}
       </div>

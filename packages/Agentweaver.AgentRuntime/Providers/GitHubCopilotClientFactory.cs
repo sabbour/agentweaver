@@ -14,6 +14,7 @@ public sealed class GitHubCopilotClientFactory : IAsyncDisposable
 {
     private readonly string? _configFallbackToken;
     private readonly string? _configFallbackTokenFile;
+    private readonly string? _runtimeCliPath;
     private readonly IGitHubTokenStore _tokenStore;
     private readonly IGitHubTokenScopeProvider _scopeProvider;
     private readonly IGitHubAccessTokenProvider? _accessTokenProvider;
@@ -42,6 +43,14 @@ public sealed class GitHubCopilotClientFactory : IAsyncDisposable
             ?? section.GetValue<string>("ApiKey");
         _configFallbackTokenFile = section.GetValue<string>("GitHubTokenFile")
             ?? section.GetValue<string>("ApiKeyFile");
+        // Optional explicit path to the native Copilot CLI runtime. When the SDK's automatic
+        // resolution (bin/.../runtimes/<rid>/native/copilot) is unavailable — e.g. a dev host
+        // whose RID was never provisioned into the build output — this lets an operator point the
+        // runtime at a locally installed CLI instead. Precedence: config > env var.
+        _runtimeCliPath = FirstNonWhiteSpace(
+            section.GetValue<string>("RuntimeCliPath"),
+            Environment.GetEnvironmentVariable("AGENTWEAVER_COPILOT_CLI_PATH"),
+            Environment.GetEnvironmentVariable("COPILOT_CLI_PATH"));
         _tokenStore = tokenStore;
         _scopeProvider = scopeProvider;
         _accessTokenProvider = accessTokenProvider;
@@ -55,6 +64,7 @@ public sealed class GitHubCopilotClientFactory : IAsyncDisposable
     public CopilotClient CreateClient()
     {
         var options = new CopilotClientOptions();
+        ApplyRuntimeConnection(options);
         var token = ReadConfigFallbackToken();
         if (!string.IsNullOrWhiteSpace(token))
             options.GitHubToken = token;
@@ -71,6 +81,7 @@ public sealed class GitHubCopilotClientFactory : IAsyncDisposable
         GitHubTokenScope scope, string? modelId, CancellationToken ct)
     {
         var options = new CopilotClientOptions();
+        ApplyRuntimeConnection(options);
         var entry = await _tokenStore.GetAsync(scope, ct).ConfigureAwait(false);
         var token = entry.Status switch
         {
@@ -92,9 +103,41 @@ public sealed class GitHubCopilotClientFactory : IAsyncDisposable
     }
 
     /// <summary>
-    /// Returns true when the persisted access token is expired or close enough to expiry that a
-    /// streaming call should recreate its Copilot client before starting the call.
+    /// Applies an explicit Copilot runtime CLI path when one is configured, overriding the SDK's
+    /// default resolution (which probes <c>bin/.../runtimes/&lt;rid&gt;/native/copilot</c> relative to
+    /// the output directory). This is the escape hatch for hosts whose RID was never provisioned
+    /// into the build output. When no path is configured the SDK's bundled/auto-resolved runtime is
+    /// used unchanged.
     /// </summary>
+    private void ApplyRuntimeConnection(CopilotClientOptions options)
+    {
+        if (string.IsNullOrWhiteSpace(_runtimeCliPath))
+            return;
+
+        if (!File.Exists(_runtimeCliPath))
+        {
+            _logger?.LogWarning(
+                "Configured Copilot runtime CLI path does not exist; falling back to SDK auto-resolution. " +
+                "Set Providers:GitHubCopilot:RuntimeCliPath (or AGENTWEAVER_COPILOT_CLI_PATH) to a valid CLI binary.");
+            return;
+        }
+
+        options.Connection = RuntimeConnection.ForStdio(_runtimeCliPath, Array.Empty<string>());
+        _logger?.LogInformation("Using explicit Copilot runtime CLI via stdio connection override.");
+    }
+
+    private static string? FirstNonWhiteSpace(params string?[] values)
+    {
+        foreach (var value in values)
+        {
+            if (!string.IsNullOrWhiteSpace(value))
+                return value;
+        }
+
+        return null;
+    }
+
+
     public async Task<bool> ShouldRefreshBeforeAiCallAsync(GitHubTokenScope scope, CancellationToken ct)
     {
         var token = await _tokenStore.GetTokenAsync(scope, ct).ConfigureAwait(false);

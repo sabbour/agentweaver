@@ -45,6 +45,7 @@ const BP_BACKEND: Blueprint = {
   description: 'A team for backend services.',
   roster: ['architect', 'backend-engineer'],
   workflow: 'coordinator',
+  workflows: ['coordinator', 'release'],
   review_policy: 'auto',
   sandbox_profile: 'standard',
 };
@@ -55,6 +56,7 @@ const BP_DOCS: Blueprint = {
   description: 'Documentation reviewers.',
   roster: ['tech-writer'],
   workflow: 'single',
+  workflows: ['single'],
   review_policy: 'manual',
   sandbox_profile: 'readonly',
 };
@@ -65,6 +67,7 @@ const GENERATED: Blueprint = {
   description: 'Triages incoming bugs.',
   roster: ['triager', 'qa-engineer'],
   workflow: 'coordinator',
+  workflows: ['coordinator'],
   review_policy: 'auto',
   sandbox_profile: 'standard',
 };
@@ -114,8 +117,12 @@ describe('ProjectGalleryPage — blueprint selection', () => {
     await openBlankDialog();
     await waitFor(() => expect(screen.getByText('Backend Squad')).toBeDefined());
     expect(screen.getByText('Docs Team')).toBeDefined();
-    // Roster chips render.
-    expect(screen.getByText('backend-engineer')).toBeDefined();
+    // The roster now lives in a focus/hover popover, not inline. Focusing the
+    // row reveals it (this is the keyboard-accessible path screen readers use).
+    fireEvent.focus(screen.getByRole('radio', { name: 'Backend Squad' }));
+    await waitFor(() => expect(screen.getByText('backend-engineer')).toBeDefined());
+    // A blueprint bundles one or more workflows; the roster meta lists them all.
+    expect(screen.getByText('Workflows: coordinator, release')).toBeDefined();
   });
 
   it('unwraps the blueprint list response wrapper', async () => {
@@ -156,10 +163,10 @@ describe('ProjectGalleryPage — blueprint selection', () => {
 
     await openBlankDialog();
     await waitFor(() => expect(screen.getByText('Backend Squad')).toBeDefined());
-    expect(screen.getByText(/Be specific about the problems/)).toBeDefined();
-    expect(screen.getByText(/Our AI will generate a tailored squad/)).toBeDefined();
 
-    fireEvent.change(screen.getByLabelText('Describe your project'), {
+    // Generation now lives on the shared Generate tab (unified with GitHub).
+    fireEvent.click(screen.getByRole('button', { name: 'Generate' }));
+    fireEvent.change(screen.getByLabelText('Describe what you want Agentweaver to do'), {
       target: { value: 'handle job searches' },
     });
     fireEvent.click(screen.getByRole('button', { name: /Generate blueprint/ }));
@@ -196,7 +203,8 @@ describe('ProjectGalleryPage — blueprint selection', () => {
     await waitFor(() => expect(screen.getByText('Backend Squad')).toBeDefined());
 
     fillNameAndFolder();
-    fireEvent.change(screen.getByLabelText('Describe your project'), {
+    fireEvent.click(screen.getByRole('button', { name: 'Generate' }));
+    fireEvent.change(screen.getByLabelText('Describe what you want Agentweaver to do'), {
       target: { value: 'a bug triager' },
     });
     fireEvent.click(screen.getByRole('button', { name: /Generate blueprint/ }));
@@ -221,7 +229,8 @@ describe('ProjectGalleryPage — blueprint selection', () => {
     await openBlankDialog();
     await waitFor(() => expect(screen.getByText('Backend Squad')).toBeDefined());
 
-    fireEvent.change(screen.getByLabelText('Describe your project'), {
+    fireEvent.click(screen.getByRole('button', { name: 'Generate' }));
+    fireEvent.change(screen.getByLabelText('Describe what you want Agentweaver to do'), {
       target: { value: 'a bug triager' },
     });
     fireEvent.click(screen.getByRole('button', { name: /Generate blueprint/ }));

@@ -15,6 +15,7 @@ When you open Agentweaver, the first screen is the **Project Gallery** — a gri
 Each card shows:
 
 - **Project name**
+- A **GitHub mark** in the card header when the project was created from GitHub
 - **Source repository** (if created from GitHub)
 - **Working directory** path on the server
 - **Availability badge** — green **Available** or amber **Unavailable**
@@ -36,7 +37,7 @@ Two creation paths are available from the Project Gallery toolbar:
 1. Click **Create blank project**.
 2. Enter a **Name** for the project.
 3. Enter a **Repository folder** name. If the server has a configured data directory, the field shows it as a prefix — you only need to type the folder name inside it. Otherwise, enter a full absolute path to a git repository on the machine running the Agentweaver server.
-4. Optionally select a **Blueprint** to pre-equip the project with a team, workflow, and policies. See [Blueprints](./teams) for details.
+4. Optionally choose a **Blueprint** to pre-equip the project with a team, one or more workflows, a review policy, and a sandbox profile. The blank dialog offers the same blueprint step as the GitHub dialog: a **Templates** tab to pick an existing catalog blueprint and a **Generate** tab to describe a goal and generate a custom one. To start empty, use the **No blueprint** action in the dialog footer. See [Blueprints](./blueprints) for details.
 5. Click **Create**.
 
 Agentweaver initializes the chosen directory as an empty git repository and records the project.
@@ -53,10 +54,10 @@ The chosen directory must be empty or not yet exist. Agentweaver will not overwr
 2. Enter a **Name** for the project.
 3. In the **Source repository** field, search your connected GitHub repositories or type `owner/repo` manually.
 4. Enter a **Repository folder** name (same rules as blank project).
-5. Optionally select a **Blueprint**.
+5. Optionally choose a **Blueprint**. The GitHub dialog adds a repo-aware **Suggested** tab in front of **Templates** and **Generate**: it analyzes the chosen repository and recommends a catalog blueprint, while **Templates** and **Generate** work exactly as they do for a blank project.
 6. Click **Create**.
 
-Agentweaver clones the repository into the chosen directory and records the project with its GitHub origin.
+Agentweaver clones the repository into the chosen directory and records the project with its GitHub origin. Its card then carries a GitHub mark in the gallery.
 
 ![Create from GitHub dialog](/guide/images/create-from-github.png)
 

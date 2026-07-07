@@ -4,17 +4,24 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <AnalysisLevel>latest</AnalysisLevel>
-    <!-- GitHub.Copilot.SDK 1.0.0 downloads a native Copilot CLI binary via MSBuild targets and
-         registers it as a ContentWithTargetPath item. Every project in the dependency graph that
-         imports the SDK targets (AgentRuntime, API) registers its own copy, causing NETSDK1152
-         (duplicate publish output files) when dotnet publish collects them all.
+    <!-- GitHub.Copilot.SDK downloads a native Copilot CLI binary via MSBuild targets and registers
+         it as a ContentWithTargetPath item. Every project in the dependency graph that imports the
+         SDK targets (AgentRuntime, API) registers its own copy, causing NETSDK1152 (duplicate
+         publish output files) when dotnet publish collects them all.
 
-         Fix: skip the per-project download AND registration for all projects under /src/ (i.e.,
-         everything that inherits this file). We pre-download the binary once in the Dockerfile and
-         manually place it in the publish output. The EF bundle's temp project lives at /tmp/ and
-         therefore does NOT inherit this file, so it downloads exactly one copy on its own, which is
-         fine (no duplicates from /src/ projects to collide with). -->
-    <CopilotSkipCliDownload>true</CopilotSkipCliDownload>
+         That collision only happens during *publish*. So we scope the skip to publish only
+         (_IsPublishing is a global property the .NET SDK sets to 'true' for `dotnet publish`, and is
+         empty for a plain `dotnet build` / `dotnet run`):
+
+           - Publish (Docker image): skip the per-project download/registration. The Dockerfile
+             pre-downloads the linux-x64 binary once and manually places it in the publish output.
+             The EF bundle's temp project lives at /tmp/ and does NOT inherit this file, so it
+             downloads exactly one copy on its own (no /src/ duplicates to collide with).
+           - Build / run (local dev, e.g. start-dev.ps1 in WSL): do NOT skip, so the SDK downloads
+             and copies the binary for the build host RID (e.g. linux-arm64) into
+             bin/<config>/net10.0/runtimes/<rid>/native/copilot. Without this, the SDK's runtime
+             auto-resolution fails at runtime with "Copilot runtime not found". -->
+    <CopilotSkipCliDownload Condition="'$(_IsPublishing)' == 'true'">true</CopilotSkipCliDownload>
     <!-- Belt-and-suspenders: if any project somehow still ends up with duplicates, suppress the error
          rather than failing the build. -->
     <ErrorOnDuplicatePublishOutputFiles>false</ErrorOnDuplicatePublishOutputFiles>

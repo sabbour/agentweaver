@@ -1973,6 +1973,7 @@ The run's event stream is held in memory by `RunStreamStore` and is not persiste
 | `Providers:GitHubCopilot:ApiKey` | none | GitHub Copilot provider credential |
 | `Providers:GitHubCopilot:Endpoint` | `https://api.githubcopilot.com` | GitHub Copilot base URL |
 | `Providers:GitHubCopilot:Model` | `gpt-4o` | GitHub Copilot model name |
+| `Providers:GitHubCopilot:RuntimeCliPath` | `""` (empty) | Optional explicit path to the native Copilot CLI binary; empty means use the SDK's auto-resolved runtime. Env fallbacks (in order): `AGENTWEAVER_COPILOT_CLI_PATH`, `COPILOT_CLI_PATH`. Grounded in `packages/Agentweaver.AgentRuntime/Providers/GitHubCopilotClientFactory.cs:50`. See [Configuration](/guide/configuration#provider-settings). |
 | `Providers:MicrosoftFoundry:ApiKey` | none | Microsoft Foundry credential |
 | `Providers:MicrosoftFoundry:Endpoint` | none | Microsoft Foundry endpoint |
 | `Providers:MicrosoftFoundry:Deployment` | none | Microsoft Foundry deployment name |

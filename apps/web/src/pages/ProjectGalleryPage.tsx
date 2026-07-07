@@ -22,13 +22,21 @@ import {
   Spinner,
   Text,
   Textarea,
+  Toast,
+  ToastBody,
+  ToastTitle,
+  Toaster,
+  useId,
+  useToastController,
   makeStyles,
+  mergeClasses,
   tokens,
 } from '@fluentui/react-components';
 import {
   ChevronDownRegular,
   ChevronRightRegular,
   ChevronUpRegular,
+  CheckmarkCircleRegular,
   DismissCircleRegular,
   DismissRegular,
   SparkleRegular,
@@ -46,6 +54,7 @@ import {
   type BlueprintSelection,
 } from '../components/BlueprintPicker';
 import { useProjectList } from '../hooks/useProjectList';
+import { GitHubIcon } from '../components/GitHubIcon';
 
 /** Normalizes an owner/repo string or existing https URL to a full GitHub HTTPS URL. */
 function toGitHubUrl(val: string): string {
@@ -71,6 +80,19 @@ const useStyles = makeStyles({
     flexDirection: 'column',
     gap: tokens.spacingVerticalS,
   },
+  // One-time entrance for a freshly-created project card: a brand ring that
+  // fades out with a slight rise. Purely a "this is the new one" cue.
+  cardHighlight: {
+    animationName: {
+      '0%': { boxShadow: `0 0 0 2px ${tokens.colorBrandStroke1}`, transform: 'translateY(6px)' },
+      '70%': { boxShadow: `0 0 0 2px ${tokens.colorBrandStroke1}` },
+      '100%': { boxShadow: '0 0 0 0 transparent', transform: 'translateY(0)' },
+    },
+    animationDuration: '1200ms',
+    animationTimingFunction: tokens.curveDecelerateMid,
+    animationFillMode: 'both',
+    '@media (prefers-reduced-motion: reduce)': { animationName: 'none', transform: 'none', boxShadow: 'none' },
+  },
   cardMeta: {
     display: 'flex',
     flexDirection: 'column',
@@ -80,6 +102,11 @@ const useStyles = makeStyles({
     display: 'flex',
     alignItems: 'center',
     gap: tokens.spacingHorizontalXS,
+  },
+  cardGitHubMark: {
+    display: 'flex',
+    alignItems: 'center',
+    color: tokens.colorNeutralForeground1,
   },
   cardRepo: {
     color: tokens.colorNeutralForeground3,
@@ -146,16 +173,23 @@ const useStyles = makeStyles({
     minWidth: '320px',
     padding: '24px',
     borderRight: `1px solid ${tokens.colorNeutralStroke2}`,
+    // Each column owns its own scroll within a bounded frame, so a short column
+    // never leaves a large empty gap and a tall column scrolls in place instead
+    // of forcing the whole modal to grow past the viewport.
+    maxHeight: 'calc(100vh - 300px)',
+    overflowY: 'auto',
+    overflowX: 'hidden',
     '@media (max-width: 680px)': {
       width: '100%',
       minWidth: '0',
       borderRight: 'none',
       borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
+      maxHeight: 'none',
+      overflowY: 'visible',
     },
   },
-  // No independent height cap or inner scrollbar: the dialog's own content
-  // area (DialogContent) is the single scroll owner, so the two columns
-  // simply grow together and stay visually attached to one panel.
+  // Bounded, independently-scrolling column (see dialogLeftCol) — replaces the
+  // previous single-scroll-owner design at the user's request.
   dialogRightCol: {
     display: 'flex',
     flexDirection: 'column',
@@ -163,11 +197,36 @@ const useStyles = makeStyles({
     padding: '24px',
     minWidth: '320px',
     gap: tokens.spacingVerticalM,
+    maxHeight: 'calc(100vh - 300px)',
+    overflowY: 'auto',
+    overflowX: 'hidden',
     '@media (max-width: 680px)': {
       minWidth: '0',
+      maxHeight: 'none',
+      overflowY: 'visible',
     },
   },
-  dialogSurface: { maxWidth: '1180px', width: 'min(1180px, calc(100vw - 48px))', backgroundColor: tokens.colorNeutralBackground2, position: 'relative', padding: tokens.spacingVerticalXL },
+  // No `position: relative` here on purpose: Fluent's default DialogSurface is
+  // `position: fixed; inset: 0; margin: auto`, which centers the surface in the
+  // viewport. Overriding position breaks that vertical centering and pins the
+  // dialog to the top. A bounded max-height keeps comfortable margin above and
+  // below; the close button (position: absolute) still anchors to this surface
+  // because `position: fixed` is a containing block for absolute descendants.
+  dialogSurface: { maxWidth: '1180px', width: 'min(1180px, calc(100vw - 48px))', maxHeight: 'calc(100vh - 48px)', backgroundColor: tokens.colorNeutralBackground2, padding: tokens.spacingVerticalXL },
+  // Pin the scrim to the whole viewport. Fluent already sizes its backdrop this
+  // way, but forcing it here (together with `appearance: 'dimmed'` on the slot)
+  // guarantees the dim covers the full window regardless of surface height,
+  // centering, or Fluent's nested-dialog detection (which would otherwise make
+  // the backdrop transparent).
+  dialogBackdrop: { position: 'fixed', top: 0, right: 0, bottom: 0, left: 0 },
+  // The two columns each own their scroll, so DialogContent must not add a
+  // second (double) scrollbar of its own — let it size to its children.
+  dialogContent: { overflow: 'visible' },
+  // Fluent lays DialogActions into a single grid track by default, which is why
+  // the footer looked centered/narrow. Force it to span the full body width so
+  // the space-between split (No blueprint on the left, actions on the right)
+  // reaches both edges.
+  dialogActions: { gridColumn: '1 / -1', justifySelf: 'stretch', width: '100%', maxWidth: '100%', margin: 0 },
   closeButton: { position: 'absolute', right: tokens.spacingHorizontalM, top: tokens.spacingVerticalM, minWidth: '32px', border: 0 },
   dialogHeader: {
     display: 'flex',
@@ -210,11 +269,39 @@ const useStyles = makeStyles({
     paddingTop: tokens.spacingVerticalM,
   },
   footerLeft: { display: 'flex', flexDirection: 'row', alignItems: 'center', gap: tokens.spacingHorizontalM, marginRight: 'auto', flexWrap: 'wrap' },
+  // Selected state for the "No blueprint" toggle. Mirrors the brand-emphasis of a
+  // selected template card (colorBrandStroke1) so "no blueprint" reads as an active
+  // choice, without a loud primary fill that would compete with "Create project".
+  // The fill is held steady across hover/active/focus so the selected state doesn't
+  // flicker back to neutral when the pointer is over the button.
+  noBlueprintActive: {
+    borderTopColor: tokens.colorBrandStroke1,
+    borderRightColor: tokens.colorBrandStroke1,
+    borderBottomColor: tokens.colorBrandStroke1,
+    borderLeftColor: tokens.colorBrandStroke1,
+    color: tokens.colorBrandForeground1,
+    backgroundColor: tokens.colorBrandBackground2,
+    ':hover': {
+      borderTopColor: tokens.colorBrandStroke1,
+      borderRightColor: tokens.colorBrandStroke1,
+      borderBottomColor: tokens.colorBrandStroke1,
+      borderLeftColor: tokens.colorBrandStroke1,
+      color: tokens.colorBrandForeground1,
+      backgroundColor: tokens.colorBrandBackground2,
+    },
+    ':hover:active': {
+      borderTopColor: tokens.colorBrandStroke1,
+      borderRightColor: tokens.colorBrandStroke1,
+      borderBottomColor: tokens.colorBrandStroke1,
+      borderLeftColor: tokens.colorBrandStroke1,
+      color: tokens.colorBrandForeground1,
+      backgroundColor: tokens.colorBrandBackground2,
+    },
+  },
   footerActions: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' },
   repositoryPanel: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM },
   listBlock: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS },
   listHeader: { display: 'flex', justifyContent: 'space-between', alignItems: 'center' },
-  recentRow: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: tokens.spacingHorizontalS, padding: tokens.spacingVerticalS, borderRadius: tokens.borderRadiusMedium, border: `1px solid ${tokens.colorNeutralStroke2}`, backgroundColor: tokens.colorNeutralBackground1 },
   orgRow: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: tokens.spacingHorizontalS, padding: tokens.spacingVerticalS, borderRadius: tokens.borderRadiusMedium, border: `1px solid ${tokens.colorNeutralStroke2}`, backgroundColor: tokens.colorNeutralBackground1, cursor: 'pointer', textAlign: 'left' },
   pasteRow: { display: 'flex', gap: tokens.spacingHorizontalS },
   growInput: { flex: 1 },
@@ -319,6 +406,7 @@ function CreateProjectDialogShell({
   canCreate,
   onCreate,
   onNoBlueprint,
+  noBlueprintSelected,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -332,12 +420,16 @@ function CreateProjectDialogShell({
   canCreate: boolean;
   onCreate: () => void;
   onNoBlueprint: () => void;
+  noBlueprintSelected: boolean;
 }) {
   const styles = useStyles();
   return (
     <Dialog open={open} onOpenChange={(_, state) => onOpenChange(state.open)}>
       <DialogTrigger disableButtonEnhancement>{trigger}</DialogTrigger>
-      <DialogSurface className={styles.dialogSurface}>
+      <DialogSurface
+        className={styles.dialogSurface}
+        backdrop={{ appearance: 'dimmed', className: styles.dialogBackdrop }}
+      >
         <DialogTrigger disableButtonEnhancement>
           <Button className={styles.closeButton} appearance="transparent" icon={<DismissRegular />} aria-label="Close" />
         </DialogTrigger>
@@ -351,17 +443,30 @@ function CreateProjectDialogShell({
               </div>
             </div>
           </div>
-          <DialogContent>
+          <DialogContent className={styles.dialogContent}>
             <div className={styles.dialogTwoCol}>
               <div className={styles.dialogLeftCol}>{left}</div>
               <div className={styles.dialogRightCol}>{right}</div>
             </div>
           </DialogContent>
-          <DialogActions>
+          <DialogActions className={styles.dialogActions}>
             <div className={styles.footerSplit}>
               <div className={styles.footerLeft}>
-                <Button appearance="outline" aria-label="No blueprint" icon={<DismissCircleRegular />} onClick={onNoBlueprint}>No blueprint</Button>
-                <Text className={styles.tipLine}>Start with an empty project and add agents later.</Text>
+                <Button
+                  appearance="outline"
+                  className={noBlueprintSelected ? styles.noBlueprintActive : undefined}
+                  aria-label="No blueprint"
+                  aria-pressed={noBlueprintSelected}
+                  icon={noBlueprintSelected ? <CheckmarkCircleRegular /> : <DismissCircleRegular />}
+                  onClick={onNoBlueprint}
+                >
+                  No blueprint
+                </Button>
+                <Text className={styles.tipLine}>
+                  {noBlueprintSelected
+                    ? 'Selected. Your project starts empty; add agents later.'
+                    : 'Start with an empty project and add agents later.'}
+                </Text>
               </div>
               <div className={styles.footerActions}>
                 <DialogTrigger disableButtonEnhancement><Button appearance="transparent" disabled={saving}>Cancel</Button></DialogTrigger>
@@ -419,25 +524,6 @@ function CreateBlankDialog({ onCreated, dataDir, workspaceAutoAssigned }: { onCr
         </Field>
         <Counter value={description} max={500} />
       </div>
-      <div className={styles.fieldWithCounter}>
-        <Text weight="semibold">What do you want Agentweaver to help you accomplish?</Text>
-        <Text className={styles.tipLine}>Be specific about the problems you're trying to solve or the outcomes you want.</Text>
-        <Textarea
-          aria-label="Describe your project"
-          value={goal}
-          maxLength={1000}
-          onChange={(_, v) => setGoal(v.value)}
-          placeholder="e.g. Automate customer support tickets, build internal tools, create documentation, manage product roadmap…"
-          resize="vertical"
-          style={{ minHeight: 130 }}
-        />
-        <Counter value={goal} max={1000} />
-      </div>
-      <Button appearance="primary" icon={<SparkleRegular />} aria-label="Generate blueprint" disabled={!goal.trim() || generation.generating} onClick={() => void generation.generate(goal)}>
-        {generation.generating ? 'Generating' : 'Generate Blueprint'}
-      </Button>
-      {generation.error && <MessageBar intent="error"><MessageBarBody>{generation.error}</MessageBarBody></MessageBar>}
-      <Text className={styles.tipLine}>Our AI will generate a tailored squad, workflow, and review policy from your goal — nothing is created until you confirm below.</Text>
       {d.error && <MessageBar intent="error"><MessageBarBody>{d.error}</MessageBarBody></MessageBar>}
     </>
   );
@@ -445,7 +531,7 @@ function CreateBlankDialog({ onCreated, dataDir, workspaceAutoAssigned }: { onCr
   const right = (
     <BlueprintPanel
       active={d.open}
-      tabs={['templates', 'generated']}
+      tabs={['templates', 'generate']}
       value={d.blueprint}
       onChange={d.setBlueprint}
       generated={generation.generated}
@@ -471,6 +557,7 @@ function CreateBlankDialog({ onCreated, dataDir, workspaceAutoAssigned }: { onCr
       canCreate={canCreate}
       onCreate={() => void d.handleSubmit()}
       onNoBlueprint={() => d.setBlueprint(NO_BLUEPRINT)}
+      noBlueprintSelected={d.blueprint.kind === 'none'}
     />
   );
 }
@@ -588,7 +675,6 @@ function CreateFromGitHubDialog({ onCreated, dataDir, workspaceAutoAssigned }: {
   const [pasteRepo, setPasteRepo] = useState('');
   const [folderName, setFolderName] = useState('');
   const [folderEdited, setFolderEdited] = useState(false);
-  const [recentCleared, setRecentCleared] = useState(false);
   const [showMoreSources, setShowMoreSources] = useState(false);
   const [generateDescription, setGenerateDescription] = useState('');
   const generation = useBlueprintGeneration(d.setBlueprint, d.sourceRepository);
@@ -618,7 +704,6 @@ function CreateFromGitHubDialog({ onCreated, dataDir, workspaceAutoAssigned }: {
     const [owner, repo] = fullName.split('/');
     return repo ? `${owner} / ${repo}` : fullName;
   };
-  const recentTime = (index: number) => ['3 days ago', '1 week ago', '2 weeks ago'][index] ?? 'recently';
 
   const filteredRepos = repos
     .filter(r => r.fullName?.toLowerCase().includes(repoFilter.toLowerCase()) ?? false)
@@ -627,11 +712,10 @@ function CreateFromGitHubDialog({ onCreated, dataDir, workspaceAutoAssigned }: {
       const nameB = (b.fullName?.split('/').pop() ?? '').toLowerCase();
       return nameA.localeCompare(nameB);
     });
-  const recentRepos = recentCleared ? [] : repos.slice(0, 3);
   const visibleSources = showMoreSources ? accounts : accounts.slice(0, 5);
 
   const resetLocal = () => {
-    d.reset(); setRepoFilter(''); setPasteRepo(''); setFolderName(''); setFolderEdited(false); setRecentCleared(false); setShowMoreSources(false); setGenerateDescription(''); generation.setGenerated(null);
+    d.reset(); setRepoFilter(''); setPasteRepo(''); setFolderName(''); setFolderEdited(false); setShowMoreSources(false); setGenerateDescription(''); generation.setGenerated(null);
   };
 
   const left = (
@@ -675,18 +759,6 @@ function CreateFromGitHubDialog({ onCreated, dataDir, workspaceAutoAssigned }: {
       )}
       {accountsError && <MessageBar intent="error"><MessageBarBody>Could not load accounts: {accountsError}</MessageBarBody><MessageBarActions><Button size="small" onClick={reloadAccounts}>Retry</Button></MessageBarActions></MessageBar>}
       {reposError && <MessageBar intent="error"><MessageBarBody>Could not load repositories: {reposError}</MessageBarBody><MessageBarActions><Button size="small" onClick={reloadRepos}>Retry</Button></MessageBarActions></MessageBar>}
-
-      {recentRepos.length > 0 && (
-        <div className={styles.listBlock}>
-          <div className={styles.listHeader}><Text weight="semibold">Recent</Text><Button appearance="transparent" size="small" onClick={() => setRecentCleared(true)}>Clear</Button></div>
-          {recentRepos.map((repo, index) => (
-            <button key={repo.fullName} className={styles.recentRow} type="button" onClick={() => repo.fullName && applyRepo(repo.fullName)}>
-              <span className={styles.accountOption}><span className={styles.githubMark}>GH</span><span><Text weight="semibold">{repoDisplayName(repo.fullName)}</Text><br /><Text className={styles.tipLine}>{recentTime(index)}</Text></span></span>
-              <ChevronRightRegular />
-            </button>
-          ))}
-        </div>
-      )}
 
       {!authRequired && (
         <div className={styles.listBlock}>
@@ -769,6 +841,7 @@ function CreateFromGitHubDialog({ onCreated, dataDir, workspaceAutoAssigned }: {
       canCreate={canCreate}
       onCreate={() => void d.handleSubmit()}
       onNoBlueprint={() => d.setBlueprint(NO_BLUEPRINT)}
+      noBlueprintSelected={d.blueprint.kind === 'none'}
     />
   );
 }
@@ -777,12 +850,22 @@ function formatSourceRepository(url: string): string {
   return url.replace(/^https:\/\/github\.com\//, '');
 }
 
-function ProjectCard({ project, onOpen }: { project: Project; onOpen: () => void }) {
+function ProjectCard({ project, onOpen, highlight }: { project: Project; onOpen: () => void; highlight?: boolean }) {
   const styles = useStyles();
   const isGitHub = project.origin === 'github';
   return (
-    <Card className={styles.card}>
+    <Card className={highlight ? mergeClasses(styles.card, styles.cardHighlight) : styles.card}>
       <CardHeader
+        image={isGitHub ? (
+          <span className={styles.cardGitHubMark}>
+            <GitHubIcon
+              size={20}
+              title={project.source_repository
+                ? `Connected to GitHub: ${formatSourceRepository(project.source_repository)}`
+                : 'Connected to GitHub'}
+            />
+          </span>
+        ) : undefined}
         header={<Text weight="semibold" size={400}>{project.name}</Text>}
         action={
           <Badge appearance="tint" size="small" color={project.available ? 'success' : 'warning'}>
@@ -815,6 +898,9 @@ export function ProjectGalleryPage() {
   const { projects, loading, authError, loadError, errorMessage, appendProject, refetch } = useProjectList();
   const [dataDir, setDataDir] = useState<string | null>(null);
   const [workspaceAutoAssigned, setWorkspaceAutoAssigned] = useState(false);
+  const [highlightId, setHighlightId] = useState<string | null>(null);
+  const toasterId = useId('project-gallery-toaster');
+  const { dispatchToast } = useToastController(toasterId);
 
   useEffect(() => {
     let cancelled = false;
@@ -830,13 +916,32 @@ export function ProjectGalleryPage() {
   }, []);
 
   const handleCreated = (project: Project) => {
+    const isFirstProject = projects.length === 0;
     appendProject(project);
+    setHighlightId(project.project_id);
+    dispatchToast(
+      <Toast>
+        <ToastTitle>{isFirstProject ? "You're set up" : 'Project created'}</ToastTitle>
+        <ToastBody>
+          {isFirstProject
+            ? `'${project.name}' is your first project — open it to start.`
+            : `'${project.name}' is ready to open.`}
+        </ToastBody>
+      </Toast>,
+      { intent: 'success' },
+    );
+    // Clear the highlight once the one-time entrance animation has finished so
+    // it never replays on a later re-render.
+    window.setTimeout(() => {
+      setHighlightId((current) => (current === project.project_id ? null : current));
+    }, 1400);
   };
 
   const showGalleryActions = !loading && !authError && projects.length > 0;
 
   return (
     <div className={styles.root}>
+      <Toaster toasterId={toasterId} position="bottom-end" />
       <PageHeader
         title="Projects"
         subtitle="Open an existing project, or create one from GitHub or a blueprint."
@@ -896,6 +1001,7 @@ export function ProjectGalleryPage() {
               key={p.project_id}
               project={p}
               onOpen={() => navigate(`/projects/${p.project_id}`)}
+              highlight={p.project_id === highlightId}
             />
           ))}
         </div>

@@ -190,7 +190,12 @@ export interface Blueprint {
   name: string;
   description: string;
   roster: string[];
+  // Legacy single workflow id: the blueprint's default (first entry of workflows).
+  // The API returns it for backward compatibility; prefer workflows for display.
   workflow: string;
+  // The full set of workflow ids this blueprint bundles. A blueprint may ship one
+  // or many workflows; the first is the default. Always present in API responses.
+  workflows: string[];
   review_policy: string;
   sandbox_profile: string;
 }

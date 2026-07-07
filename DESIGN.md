@@ -333,6 +333,29 @@ components:
     font-size: "12px"
     padding: "4px 8px"
     shadow: "0 0 2px rgba(0,0,0,0.12), 0 4px 8px rgba(0,0,0,0.14)"
+
+  # Compact selectable list-row (dense alternative to a template card grid).
+  # Single fixed-height line: icon + name + one-line description + trailing meta.
+  list-row:
+    background: "transparent"
+    background-hover: "#f5f5f5"
+    color: "#242424"
+    border: "1px solid #e0e0e0"
+    border-radius: "4px"
+    font-size: "14px"
+    padding: "8px 12px"
+    height: "54px"
+
+  # Selected affordance shared by list-rows, the "No blueprint" control, and
+  # selectable chips: brand-tint fill + 2px brand stroke. A same-color inset ring
+  # (box-shadow, carried in prose) reinforces selection without changing box size.
+  list-row-selected:
+    background: "#eff6fc"
+    color: "#242424"
+    border: "2px solid #0078d4"
+    border-radius: "4px"
+    font-size: "14px"
+    padding: "8px 12px"
 ---
 
 # Fluent 2 Design System
@@ -664,6 +687,17 @@ Fluent 2 defines a logical stacking order. Use these values for custom overlays:
 
 > Fluent components manage their own z-index internally via the `Portal` component.
 
+**Overlay must be the true top layer.** Fluent's `Dialog`/`Popover` portal above app content by default. When app chrome (a fixed left nav rail, a floating action button) sets its own high z-index or forms its own stacking context, it can paint over the modal scrim, leaving parts of the window undimmed. Keep app-chrome z-index below the Fluent overlay layer so the dialog and its dimmed scrim sit above the nav rail and the FAB — do not raise a single chrome element past the dialog. Verify by opening a dialog and confirming the entire viewport (nav rail and FAB included) is dimmed.
+
+### Modal dialog surface
+
+Convention for the Create Project dialogs (`ProjectGalleryPage`), applicable to any large two-column modal:
+
+- **Centered, bounded surface.** Let Fluent's default `DialogSurface` centering stand (do not pin it to the top with a `marginTop`/`top`/`alignSelf` override). Bound its height with `maxHeight: calc(100vh - <comfortable margin>)` so it sits centered with roughly equal space above and below on a laptop viewport.
+- **Per-column scroll, not full-modal scroll.** In a two-column body (source on the left, blueprint on the right), give each column its own bounded scroll region rather than letting the whole modal scroll. The header and footer stay fixed; only the column that overflows scrolls.
+- **Full-width footer.** Use `DialogActions` as a single full-width row: secondary/utility affordance and its helper text on the left (e.g. the "No blueprint" control + a one-line tip), primary actions on the right (Cancel + Create). Do not let the footer controls collapse into a narrow column.
+- **Dimmed backdrop over the full viewport.** The scrim must cover `100vw × 100vh` (`inset: 0`) regardless of surface size; keep the surface's own max-height/margin from shrinking the backdrop, and see the overlay/top-layer note under Z-index above.
+
 ---
 
 ## Elevation & Depth
@@ -777,6 +811,23 @@ const useStyles = makeStyles({
   },
 });
 ```
+
+### Earned-moment motion (delight)
+
+Motion is restrained and reserved for earned moments — a state that changed, a result that arrived, a fresh item worth noticing. Delight spread across the page reads as noise. Every pattern below is written with Griffel keyframes (`animationName: { '0%': {...}, '100%': {...} }` + `animationDuration`) and **every one ships a `@media (prefers-reduced-motion: reduce)` fallback that sets `animationName: 'none'`** and neutralizes transform/opacity. Reduced motion is not optional.
+
+| Moment | Motion | Duration / curve | Reduced-motion fallback |
+|---|---|---|---|
+| Work in flight (blueprint generation) | A "breathing" sparkle icon (subtle scale + opacity pulse) beside rotating status lines | `~1.8s` loop, `curveEasyEase` | Static icon, plain status text |
+| Result arrives (generated preview) | One-time rise + fade (`translateY(8px)`→`0`, `opacity 0`→`1`) | `~340ms`, `curveDecelerateMid`, `fillMode: both` | Instant, fully visible |
+| Result badge | One-time pop (`scale(0.7)`→`1` with a slight overshoot) | `durationGentle`, `curveDecelerateMid` | Instant, full scale |
+| New item created (project card) | One-time entrance: brand ring + gentle rise, cleared after it plays so it never replays | `curveDecelerateMid` | Instant, no ring animation |
+| Success confirmation | Fluent `Toast` (`intent="success"`) dispatched from a `Toaster` | Fluent default | Fluent handles it |
+
+Rules for these:
+- **One-time entrances must clear themselves** (e.g. drop the highlight state after the animation duration) so a later re-render doesn't replay them.
+- **Loops are for genuine in-progress state only** (generation working state), never decoration.
+- Prefer `transform`/`opacity`; a brand ring uses an inset `box-shadow`, not an animated border-width, to avoid reflow.
 
 ---
 
@@ -897,6 +948,38 @@ Animation: linear rotation, `durationUltraSlow` per cycle
 
 Compound border: `colorCompoundBrandStroke` (`#0078d4`)
 
+### Compact list-row (dense selectable list)
+
+The preferred dense alternative to a template card grid. Each option is one fixed-height row (`54px`) instead of a tall card: leading icon, primary name, a one-line truncated description (`colorNeutralForeground2`, ellipsized), and trailing compact meta. It lets many options fit without scrolling and removes the chip-wrapping that inflates card height.
+
+- **Structure:** `role="radio"` on the row, `aria-checked`, `aria-label={name}`, `tabIndex={0}`, Enter/Space selects. Group behaves as a radio set.
+- **No reflow:** all content is single-line (`whiteSpace: nowrap`); the main column has `min-width: 0` + ellipsis; trailing meta is `flex-shrink: 0`. Selection uses an inset `box-shadow` ring, not a border-width change, so the row never changes size.
+- **Trailing meta:** compact, tokenized pills — e.g. a workflow indicator (`FlowchartRegular` + name, or a `N workflows` count when a blueprint bundles several) and an `N agents` count (`PeopleTeamRegular`). The fuller detail lives in the roster tooltip, not inline.
+- Frontmatter tokens: `list-row`, `list-row-selected`.
+
+### Blueprint descriptor (BlueprintMeta)
+
+One shared component renders a blueprint's identity the same way everywhere it appears — the Templates roster tooltip, the Suggested recommendation preview, and the Generate result preview. Do not fork this formatting per surface.
+
+- Canonical form: `N agents` · `Workflow: X` (single) or `Workflows: a, b, c` (many) · `Review: Y`, as space-separated spans in `colorNeutralForeground3`.
+- **A blueprint bundles one or more workflows** (backend `Blueprint.Workflows` is a list; the singular `workflow` is just the default = first entry). Render 0 → omit the workflow span, 1 → `Workflow: X`, many → `Workflows: …`. The compact row shows the single name or an `N workflows` count; the full list belongs in the descriptor / tooltip and the pill's `aria-label`.
+
+### Selected state (rows, chips, options)
+
+The standard selection affordance across the picker: `colorBrandBackground2` (`#eff6fc`) tint fill + a `2px` `colorBrandStroke1` (`#0078d4`) stroke + a same-color inset ring (`box-shadow`, so selection reads clearly without resizing the element). Used by selected template rows and by the "No blueprint" control. Selection is mutually exclusive — selecting "No blueprint" clears any highlighted template and vice-versa, and the choice shows a checked/selected style plus a confirming line so it never reads as a no-op.
+
+### Roster / detail tooltip
+
+The pattern for revealing per-item detail (e.g. the full agent roster) without inflating a dense row: a portaled Fluent `Tooltip` with `relationship="description"`. It opens on hover **and** keyboard focus, wires the content as `aria-describedby` (the roster is real, announced content — not a `title` attribute), and because it portals it is never clipped by the panel's bounded `overflow: auto`. Never hand-roll a `position: absolute` popover inside a scroll container.
+
+### Empty state
+
+Progressive disclosure: reveal suggestions only after the input they depend on exists (e.g. the Suggested tab before a repository is chosen). One calm, centered placeholder — a single neutral icon (no illustration), a concise primary line, and at most a muted secondary pointer. **Do not restate actions the adjacent tabs already own** (no "Browse templates" / "Generate" links sitting directly under Templates/Generate tabs). Guidance text must wrap fully (no truncation) and meet ≥4.5:1 — use `colorNeutralForeground2`, not a washed-out gray.
+
+### Project card
+
+`Card` with a `CardHeader` (name + availability badge), a meta row (origin badge + repository), the working directory, and an `Open` action. For a project connected to a GitHub repository (`origin === 'github'`), place the GitHub logo mark (a shared inline-SVG `GitHubIcon`, `fill: currentColor`, `colorNeutralForeground1`) in the `CardHeader` `image` slot, with an accessible label (`Connected to GitHub: {org/repo}`). Blank projects show no mark. The GitHub logo is a brand mark, not an emoji — its use here is allowed.
+
 ---
 
 ## Do's and Don'ts
@@ -927,16 +1010,33 @@ Compound border: `colorCompoundBrandStroke` (`#0078d4`)
 
 ✅ **Do** use `durationNormal` (200ms) + `curveEasyEase` as the default transition.  
 ✅ **Do** test with `prefers-reduced-motion` — Fluent hooks handle this, but custom CSS must too.  
+✅ **Do** ship a `@media (prefers-reduced-motion: reduce)` fallback for **every** custom keyframe animation (set `animationName: 'none'`, neutralize transform/opacity). No exceptions.  
+✅ **Do** reserve motion for earned moments (state change, arriving result, fresh item); clear one-time entrances so they never replay.  
 ❌ **Don't** animate layout properties (width, height) — prefer `transform` and `opacity`.  
-❌ **Don't** use durations above `durationSlow` (300ms) for interactive feedback.
+❌ **Don't** use durations above `durationSlow` (300ms) for interactive feedback.  
+❌ **Don't** spread animation across the page for decoration — delight everywhere reads as noise.
 
 ### Components
 
 ✅ **Do** use one `primary` button per view.  
 ✅ **Do** wrap everything in `<FluentProvider theme={webLightTheme}>`.  
 ✅ **Do** use `makeStyles` + `mergeClasses` for all custom styles (Griffel CSS-in-JS).  
+✅ **Do** prefer a compact list-row over a card grid for dense, scannable option lists; move per-item detail into a portaled hover/focus tooltip.  
+✅ **Do** reuse one shared descriptor (BlueprintMeta) so the same entity is described identically across every surface.  
+✅ **Do** apply the shared selected-state affordance (brand-tint + 2px brand stroke + inset ring) to selectable rows/chips, and keep selection mutually exclusive with clear feedback.  
 ❌ **Don't** apply inline `style` props for token-based values — use `makeStyles`.  
-❌ **Don't** create custom components for things Fluent already provides (Button, Badge, Card, Input, Tooltip, Dialog, Menu, etc.).
+❌ **Don't** create custom components for things Fluent already provides (Button, Badge, Card, Input, Tooltip, Dialog, Menu, etc.).  
+❌ **Don't** reach for tall vertical cards or identical card grids by reflex — they are the lazy answer and read as slop; use them only when they are genuinely the best affordance.  
+❌ **Don't** hand-roll a `position: absolute` popover inside a scroll container (it gets clipped); use a portaled Fluent `Tooltip`/`Popover`.  
+❌ **Don't** duplicate, in an empty state, the actions the adjacent tabs already own.
+
+### Voice & register
+
+✅ **Do** keep the restrained developer-terminal register: dense, fast, information-rich; delight only at earned moments.  
+✅ **Do** write plain, human copy; label and explain in the user's terms.  
+❌ **Don't** use emojis anywhere in UI labels, copy, or generated text (Constitution VII). A vendor brand mark such as the GitHub logo is not an emoji and is allowed.  
+❌ **Don't** use AI-filler words ("seamless", "genuine", "real", "delve", and similar).  
+❌ **Don't** hardcode values that a Fluent token already covers — tokens over hard-coded hex/px, always.
 
 ---
 
