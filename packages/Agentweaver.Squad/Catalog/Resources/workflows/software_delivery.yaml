@@ -31,13 +31,6 @@ nodes:
     agent: qa-engineer
     prompt: Act as the QA gate - design and run the checks needed to confirm the implementation meets the acceptance criteria without regressions. Provide your verdict and findings inline through your review decision; they are captured in the run record and shown in the UI. Do NOT write a QA report or verification file (e.g. qa-verification.md) into the workspace. Any test code you add is a deliverable and belongs in the repository's test suite.
 
-  - id: build-test
-    type: build_test
-    label: Build & Test
-    role: review
-    kind: live
-    agent: qa-engineer
-
   - id: rai-check
     type: check
     label: RAI Check
@@ -50,13 +43,6 @@ nodes:
       - no-changes
       - review
 
-  - id: code-review
-    type: prompt
-    label: Code Review
-    role: review
-    kind: live
-    prompt: Review the implementation for correctness, maintainability, and readiness for human approval.
-
   - id: rubberduck
     type: check
     label: Rubberduck Review
@@ -66,6 +52,20 @@ nodes:
     branches:
       - pass
       - revise
+
+  - id: code-review
+    type: prompt
+    label: Code Review
+    role: review
+    kind: live
+    prompt: Review the implementation for correctness, maintainability, and readiness for human approval.
+
+  - id: build-test
+    type: build_test
+    label: Build & Test
+    role: review
+    kind: live
+    agent: qa-engineer
 
   - id: review-gate
     type: check

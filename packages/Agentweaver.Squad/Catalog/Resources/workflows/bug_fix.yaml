@@ -1,5 +1,5 @@
 # Bug Fix Workflow (Feature 015 US3)
-# Lightweight bug fix pipeline: triage → fix → QA verification → build & test → human review → merge → scribe.
+# Lightweight bug fix pipeline: triage → fix → QA verification → RAI check → build & test → human review → merge → scribe.
 # Optimized for quick turnaround on defects and patches, with a mandatory build/test gate and human
 # RAI and human review gates before platform merge.
 
@@ -32,13 +32,6 @@ nodes:
     agent: qa-engineer
     prompt: Verify the fix resolves the reported defect without regressions - review the change and exercise the relevant behavior. Provide your verdict and findings inline through your review decision; they are captured in the run record and shown in the UI. Do NOT write a verification report file (e.g. qa-verification.md) into the workspace. Any test code you add is a deliverable and belongs in the repository's test suite.
 
-  - id: build-test
-    type: build_test
-    label: Build & Test
-    role: review
-    kind: live
-    agent: qa-engineer
-
   - id: rai-check
     type: check
     label: RAI Check
@@ -50,6 +43,13 @@ nodes:
       - safety-failed
       - no-changes
       - review
+
+  - id: build-test
+    type: build_test
+    label: Build & Test
+    role: review
+    kind: live
+    agent: qa-engineer
 
   - id: human-review
     type: check
@@ -89,27 +89,14 @@ edges:
 
   # QA verification verdict routing.
   - from: verify
-    to: build-test
-    when: approved
-
-  - from: verify
-    to: fix
-    when: request-changes
-
-  - from: verify
-    to: terminal-declined
-    when: declined
-
-  # Build & test gate: pass advances to human review; failures loop back to fix.
-  - from: build-test
     to: rai-check
     when: approved
 
-  - from: build-test
+  - from: verify
     to: fix
     when: request-changes
 
-  - from: build-test
+  - from: verify
     to: terminal-declined
     when: declined
 
@@ -127,8 +114,21 @@ edges:
     when: no-changes
 
   - from: rai-check
-    to: human-review
+    to: build-test
     when: review
+
+  # Build & test gate: pass advances to human review; failures loop back to fix.
+  - from: build-test
+    to: human-review
+    when: approved
+
+  - from: build-test
+    to: fix
+    when: request-changes
+
+  - from: build-test
+    to: terminal-declined
+    when: declined
 
   # Human review gate routing.
   - from: human-review

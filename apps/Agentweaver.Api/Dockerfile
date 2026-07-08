@@ -60,6 +60,7 @@ LABEL org.opencontainers.image.revision="${GIT_SHA}"
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
+    git \
     libgit2-1.7 \
     && rm -rf /var/lib/apt/lists/*
 

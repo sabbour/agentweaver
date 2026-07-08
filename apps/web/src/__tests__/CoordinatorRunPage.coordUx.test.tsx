@@ -49,6 +49,10 @@ vi.mock('../api/apiClient', () => ({
     getAssemblyFiles: vi.fn().mockResolvedValue([]),
     getAssemblyWorkspace: vi.fn().mockResolvedValue([]),
     getAssemblyFileDiff: vi.fn().mockResolvedValue(null),
+    listPortForwards: vi.fn().mockResolvedValue([]),
+    startPortForward: vi.fn(),
+    stopPortForward: vi.fn(),
+    pingKeepalive: vi.fn().mockResolvedValue(undefined),
   },
 }));
 

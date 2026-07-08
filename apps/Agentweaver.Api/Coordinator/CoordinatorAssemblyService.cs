@@ -1109,10 +1109,27 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         if (workflow is null)
             return CoordinatorGraphDescriptor.DefaultAssemblyGates;
 
+        var gates = ResolveAssemblyGates(workflow);
+
+        return gates;
+    }
+
+    internal static IReadOnlyList<CoordinatorGraphDescriptor.AssemblyGateNode> ResolveAssemblyGates(
+        WorkflowDefinition workflow)
+    {
+        var traversalOrder = ComputeWorkflowTraversalOrder(workflow);
+
         var gates = workflow.Nodes
-            .Where(n => n.Type == WorkflowNodeType.Check || n.Type == WorkflowNodeType.BuildTest)
-            .Select(n => (Node: n, GateKind: n.Type == WorkflowNodeType.BuildTest ? "build-test" : NodeClassifier.NormalizeGateKind(n)))
+            .Select((node, index) => (Node: node, DeclarationIndex: index))
+            .Where(n => n.Node.Type == WorkflowNodeType.Check || n.Node.Type == WorkflowNodeType.BuildTest)
+            .Select(n => (
+                n.Node,
+                n.DeclarationIndex,
+                TraversalIndex: traversalOrder.GetValueOrDefault(n.Node.Id, int.MaxValue),
+                GateKind: n.Node.Type == WorkflowNodeType.BuildTest ? "build-test" : NodeClassifier.NormalizeGateKind(n.Node)))
             .Where(x => x.GateKind is "build-test" or "rai" or "rubberduck" or "human-review")
+            .OrderBy(x => x.TraversalIndex)
+            .ThenBy(x => x.DeclarationIndex)
             .Select(x => new CoordinatorGraphDescriptor.AssemblyGateNode(
                 CoordinatorGraphDescriptor.CanonicalStageId(x.GateKind!, x.Node.Id),
                 string.IsNullOrWhiteSpace(x.Node.Label) ? x.Node.Id : x.Node.Label,
@@ -1130,6 +1147,57 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
             .ToList();
 
         return gates;
+    }
+
+    private static Dictionary<string, int> ComputeWorkflowTraversalOrder(WorkflowDefinition workflow)
+    {
+        var nodeIds = workflow.Nodes.Select(n => n.Id).ToHashSet(StringComparer.Ordinal);
+        var order = new Dictionary<string, int>(StringComparer.Ordinal);
+        if (!nodeIds.Contains(workflow.Start))
+            return order;
+
+        var nodesById = workflow.Nodes.ToDictionary(n => n.Id, StringComparer.Ordinal);
+        var outgoing = workflow.Edges
+            .GroupBy(e => e.From, StringComparer.Ordinal)
+            .ToDictionary(g => g.Key, g => g.ToList(), StringComparer.Ordinal);
+
+        var queue = new Queue<string>();
+        order[workflow.Start] = 0;
+        queue.Enqueue(workflow.Start);
+
+        while (queue.Count > 0)
+        {
+            var current = queue.Dequeue();
+            foreach (var edge in outgoing.GetValueOrDefault(current, []))
+            {
+                var next = edge.To;
+                var target = nodesById.GetValueOrDefault(next);
+                if (target?.Type == WorkflowNodeType.Terminal)
+                    continue;
+
+                if (!IsApprovalPathEdge(edge))
+                    continue;
+
+                if (!nodeIds.Contains(next) || order.ContainsKey(next))
+                    continue;
+
+                order[next] = order.Count;
+                queue.Enqueue(next);
+            }
+        }
+
+        return order;
+    }
+
+    private static bool IsApprovalPathEdge(WorkflowEdge? edge)
+    {
+        if (edge is null || string.IsNullOrWhiteSpace(edge.When))
+            return true;
+
+        var when = edge.When.Trim();
+        return string.Equals(when, "approved", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(when, "pass", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(when, "review", StringComparison.OrdinalIgnoreCase);
     }
 
     private async Task CompleteAfterApprovalAsync(

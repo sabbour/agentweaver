@@ -440,9 +440,14 @@ flowchart TD
     Eligible{All subtasks eligible?}
     Order[Topological branch order]
     Integration[Build integration branch]
+    GateOrder[Resolve authored gates
+by happy-path traversal]
     Rai[Collective RAI over aggregate diff]
     RaiFlag{RAI flagged?}
-    Review[One collective human review]
+    Rubberduck[Optional Rubberduck critique]
+    BuildTest[Build & Test
+detached worktree + preview]
+    Review[Collective human review]
     Decision{Decision}
     Merge[Merge integration branch]
     Scribe[Collective scribe]
@@ -455,9 +460,9 @@ flowchart TD
     Claim -- won --> Eligible
     Eligible -- no --> Blocked
     Eligible -- yes --> Order --> Integration
-    Integration -- auto-resolve / ok --> Rai --> RaiFlag
+    Integration -- auto-resolve / ok --> GateOrder --> Rai --> RaiFlag
     RaiFlag -- yes --> Blocked
-    RaiFlag -- no --> Review --> Decision
+    RaiFlag -- no --> Rubberduck --> BuildTest --> Review --> Decision
     Decision -- approve --> Merge
     Decision -- request changes --> RequestChanges
     Decision -- decline --> Blocked
@@ -473,14 +478,22 @@ flowchart TD
     classDef runtime fill:#DDF3DD,stroke:#107C10,stroke-width:1px,color:#242424;
     classDef evt fill:#D6F0F0,stroke:#038387,stroke-width:1px,color:#242424;
 
-    class Claim,Eligible,Order,RaiFlag,Review,Decision,Complete,RequestChanges,AlreadyClaimed,Blocked svc;
-    class Integration,Rai,Merge,Scribe runtime;
+    class Claim,Eligible,Order,GateOrder,RaiFlag,Review,Decision,Complete,RequestChanges,AlreadyClaimed,Blocked svc;
+    class Integration,Rai,Rubberduck,BuildTest,Merge,Scribe runtime;
     class Dispatching core;
 ```
 
 ### Exactly-once claim
 
 Assembly starts with a database compare-and-swap from `awaiting_assembly` to `assembling`, stamping the integration branch. Only the winner proceeds. This is the authoritative exactly-once guard across dispatch completion, recovery, and review-triggered re-dispatch.
+
+### Authored assembly gates
+
+After the integration branch is built, the coordinator resolves assembly gates from the selected workflow's happy path rather than from YAML node declaration order. It breadth-first traverses from `start`, following unconditional edges plus `approved`, `pass`, and `review` verdict edges, then runs matching gates in that traversal order (`apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyService.cs:1121`, `:1164`, `:1190`).
+
+Known assembly gates are `rai`, `rubberduck`, `build-test`, and `human-review`; `build_test` workflow nodes normalize to `build-test` (`CoordinatorAssemblyService.cs:1128`). The built-in software workflows now put RAI before Build & Test on the approval path: bug fix runs RAI -> Build & Test -> Human Review, while software delivery runs RAI -> Rubberduck -> Code Review -> Build & Test -> Human Review.
+
+Build & Test is a platform gate, not a human action. The assembly service emits `coordinator.assembly_review_requested` with `gateKind: "build-test"`, creates a detached worktree from the integration branch, runs the build/test/preview instruction, and routes its verdict before the human-review gate (`CoordinatorAssemblyService.cs:671`, `apps/Agentweaver.Api/Git/WorktreeManager.cs:155`). Because that detached worktree uses the `git` CLI (`WorktreeManager.cs:546`), the API runtime image installs `git` alongside `libgit2` (`apps/Agentweaver.Api/Dockerfile:58`).
 
 ### Eligibility gate
 

@@ -53,6 +53,10 @@ vi.mock('../api/apiClient', () => ({
     getAssemblyFiles: vi.fn().mockResolvedValue([]),
     getAssemblyWorkspace: vi.fn().mockResolvedValue([]),
     getAssemblyFileDiff: vi.fn().mockResolvedValue(null),
+    listPortForwards: vi.fn().mockResolvedValue([]),
+    startPortForward: vi.fn(),
+    stopPortForward: vi.fn(),
+    pingKeepalive: vi.fn().mockResolvedValue(undefined),
   },
 }));
 
@@ -264,6 +268,155 @@ describe('CoordinatorRunPage — unified coordinator graph view', () => {
     const cta = await screen.findByTestId('run-tree-review-cta', undefined, { timeout: 4000 });
     expect(cta.textContent).toContain('Human review is waiting');
     expect(cta.textContent).toContain('Review changes');
+  });
+
+  it('labels Build & Test as a build/test gate and surfaces the active preview there', async () => {
+    mockRunStreamState.current = {
+      events: [{ sequence: 1, type: 'coordinator.outcome_spec.confirmed', payload: {} }],
+      droppedEventCount: 0,
+      status: 'done',
+      error: null,
+      reconnect: vi.fn(),
+    };
+    vi.mocked(apiClient.getRunGraph).mockResolvedValue({
+      ...COORDINATOR_GRAPH_DESCRIPTOR,
+      nodes: [
+        { id: 'coordinator', label: 'Coordinator', role: 'coordinator', kind: 'live', node_type: 'agent' },
+        { id: 'build-test', label: 'Build & Test', role: 'review', kind: 'live', node_type: 'gate', status: 'running' },
+      ],
+      edges: [{ from: 'coordinator', to: 'build-test', cardinality: 'direct', loopback: false }],
+    });
+    vi.mocked(apiClient.listPortForwards).mockResolvedValue([
+      {
+        session_id: 'pf-1',
+        local_port: 4567,
+        target_port: 3000,
+        pod_name: 'preview-pod',
+        started_at: '2026-07-08T00:00:00.000Z',
+        preview_url: 'https://preview.example.test',
+      },
+    ]);
+
+    render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    const buildRow = await screen.findByRole('button', { name: /Select Build & Test: Running/i }, { timeout: 4000 });
+    expect(buildRow.textContent).toContain('Build/test gate');
+    expect(buildRow.textContent).not.toContain('Human Review');
+    expect(buildRow.textContent).toContain('Preview');
+
+    fireEvent.click(buildRow);
+    const previewCta = await screen.findByTestId('selected-build-preview-cta', undefined, { timeout: 4000 });
+    expect(previewCta.textContent).toContain('Preview from Build & Test is active');
+    expect(previewCta.textContent).toContain('Open preview');
+  });
+
+  it('projects Build & Test running/completed from build-test gateKind events without arming human review', async () => {
+    mockRunStreamState.current = {
+      events: [
+        { sequence: 1, type: 'coordinator.outcome_spec.confirmed', payload: {} },
+        {
+          sequence: 2,
+          type: 'coordinator.assembly_review_requested',
+          payload: { gateKind: 'build-test', timestamp_utc: '2026-07-08T00:00:00.000Z' },
+        },
+      ],
+      droppedEventCount: 0,
+      status: 'done',
+      error: null,
+      reconnect: vi.fn(),
+    };
+    vi.mocked(apiClient.getRunGraph).mockResolvedValue({
+      ...COORDINATOR_GRAPH_DESCRIPTOR,
+      nodes: [
+        { id: 'coordinator', label: 'Coordinator', role: 'coordinator', kind: 'live', node_type: 'agent' },
+        { id: 'build-test', label: 'Build & Test', role: 'review', kind: 'live', node_type: 'gate' },
+        { id: 'planned:assembly-review', label: 'Human Review', role: 'review', kind: 'planned', node_type: 'gate' },
+      ],
+      edges: [
+        { from: 'coordinator', to: 'build-test', cardinality: 'direct', loopback: false },
+        { from: 'build-test', to: 'planned:assembly-review', cardinality: 'direct', loopback: false },
+      ],
+    });
+
+    render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    const buildRow = await screen.findByRole('button', { name: /Select Build & Test: Running/i }, { timeout: 4000 });
+    expect(buildRow.textContent).toContain('Running');
+    expect(buildRow.getAttribute('aria-label')).not.toContain('Operator action needed');
+    expect(screen.queryByTestId('run-tree-review-cta')).toBeNull();
+
+    cleanup();
+    mockRunStreamState.current = {
+      ...mockRunStreamState.current,
+      events: [
+        ...mockRunStreamState.current.events,
+        {
+          sequence: 3,
+          type: 'coordinator.assembly_review_approved',
+          payload: { gateKind: 'build-test', timestamp_utc: '2026-07-08T00:01:00.000Z' },
+        },
+      ],
+    };
+
+    render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    const completedBuildRow = await screen.findByRole('button', { name: /Select Build & Test: Completed/i }, { timeout: 4000 });
+    expect(completedBuildRow.textContent).toContain('Completed');
+    expect(screen.getByRole('button', { name: /Select Human Review: Pending/i }).textContent).toContain('Pending');
+  });
+
+  it('converts live child and gate rows to failed after a terminal failed coordinator run', async () => {
+    mockRunStreamState.current = {
+      events: [{ sequence: 1, type: 'coordinator.outcome_spec.confirmed', payload: {} }],
+      droppedEventCount: 0,
+      status: 'done',
+      error: null,
+      reconnect: vi.fn(),
+    };
+    vi.mocked(apiClient.getRun).mockResolvedValue({ run_id: 'coord-run-1', status: 'failed' } as never);
+    vi.mocked(apiClient.getRunGraph).mockResolvedValue({
+      ...COORDINATOR_GRAPH_DESCRIPTOR,
+      nodes: [
+        { id: 'coordinator', label: 'Coordinator', role: 'coordinator', kind: 'live', node_type: 'agent' },
+        { id: 'build-test', label: 'Build & Test', role: 'build_test', kind: 'live', node_type: 'gate', status: 'running' },
+      ],
+      edges: [{ from: 'coordinator', to: 'build-test', cardinality: 'direct', loopback: false }],
+    });
+
+    render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    const buildRow = await screen.findByRole('button', { name: /Select Build & Test: Failed/i }, { timeout: 4000 });
+    expect(buildRow.textContent).toContain('Failed');
+    expect(within(buildRow).getByTestId('run-tree-status-icon').getAttribute('data-state-color')).toBe('danger');
+  });
+
+  it('renders a RAI verdict on the selected RAI node instead of an empty-message fallback', async () => {
+    mockRunStreamState.current = {
+      events: [
+        {
+          sequence: 1,
+          type: 'coordinator.assembly_rai_completed',
+          payload: { timestamp_utc: '2026-07-08T00:00:00.000Z' },
+        },
+        {
+          sequence: 2,
+          type: 'rai.verdict',
+          payload: { trafficLight: 'green', rationale: 'All checks passed.' },
+        },
+      ],
+      droppedEventCount: 0,
+      status: 'done',
+      error: null,
+      reconnect: vi.fn(),
+    };
+
+    render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    const raiRow = await screen.findByRole('button', { name: /Select RAI Review:/i }, { timeout: 4000 });
+    fireEvent.click(raiRow);
+
+    await waitFor(() => expect(document.body.textContent).toContain('RAI verdict: 🟢 Green — All checks passed.'), { timeout: 4000 });
+    expect(document.body.textContent).not.toContain('No streamed messages yet for this session.');
   });
 
   it('keeps coordinator messaging enabled during review when the backend marks the run steerable', async () => {

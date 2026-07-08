@@ -26,8 +26,8 @@ public sealed class CatalogWorkflowBindingTests
     }
 
     [Theory]
-    [InlineData("software-delivery", new[] { "build-test", "rai", "rubberduck", "human-review" })]
-    [InlineData("bug-fix", new[] { "build-test", "rai", "human-review" })]
+    [InlineData("software-delivery", new[] { "rai", "rubberduck", "build-test", "human-review" })]
+    [InlineData("bug-fix", new[] { "rai", "build-test", "human-review" })]
     [InlineData("content-authoring", new[] { "rai", "human-review" })]
     [InlineData("incident-response", new[] { "human-review" })]
     [InlineData("pm-discovery", new[] { "human-review" })]

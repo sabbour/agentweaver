@@ -52,7 +52,7 @@ import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
 import { formatApiError, formatApiErrorMessage, type FormattedApiError } from '../api/errors';
 import type { GraphDescriptor, RunStatus, WorkPlanResponse, PortForwardSessionDto, RunAgentTokenBreakdownDto } from '../api/types';
-import { layoutDagColumns, NODE_W, NODE_H, NODE_TYPE_W, NODE_TYPE_H } from '../utils/dagLayout';
+import { layoutDagBalancedGrid, NODE_W, NODE_H, NODE_TYPE_W, NODE_TYPE_H } from '../utils/dagLayout';
 import type { NodeSizeHint } from '../utils/dagLayout';
 import { OutcomePlanPanel } from '../components/OutcomePlanPanel';
 import { AgentAvatar } from '../components/AgentAvatar';
@@ -237,6 +237,7 @@ type OrchPhase =
   | 'dispatching'
   | 'awaiting_assembly'
   | 'assembling'
+  | 'build_test'
   | 'rai'
   | 'in_review'
   | 'merge'
@@ -345,6 +346,83 @@ function readChildRunId(node: GraphDescriptor['nodes'][number]): string | undefi
     ?? (node.child_graph_ref?.startsWith('run:') ? node.child_graph_ref.slice(4) : undefined);
 }
 
+function readGateKind(payload: Record<string, unknown>): string | undefined {
+  const gateKind = payload['gateKind'] ?? payload['gate_kind'];
+  return gateKind == null ? undefined : String(gateKind).toLowerCase();
+}
+
+function isHumanReviewGateEvent(evt: RunStreamEvent): boolean {
+  const gateKind = readGateKind(evt.payload);
+  return gateKind === undefined || gateKind === 'human-review';
+}
+
+function assemblyReviewPhaseForEvent(evt: RunStreamEvent, fallback: OrchPhase): OrchPhase {
+  const gateKind = readGateKind(evt.payload);
+  if (evt.type === 'coordinator.assembly_review_requested') {
+    return isHumanReviewGateEvent(evt)
+      ? 'in_review'
+      : gateKind === 'build-test'
+        ? 'build_test'
+        : 'assembling';
+  }
+  if (
+    evt.type === 'coordinator.assembly_review_approved'
+    || evt.type === 'coordinator.assembly_review_preserved'
+    || evt.type === 'coordinator.assembly_declined'
+  ) {
+    return isHumanReviewGateEvent(evt) ? fallback : 'assembling';
+  }
+  return fallback;
+}
+
+function isBuildTestNodeIdOrLabel(id: string | undefined, label: string | undefined): boolean {
+  const key = `${id ?? ''} ${label ?? ''}`.toLowerCase().replace(/[^a-z0-9]+/g, ' ');
+  return key.includes('build test') || key.includes('buildtest');
+}
+
+function effectiveGraphRole(node: GraphDescriptor['nodes'][number]): string {
+  const explicitType = readStr(node.data ?? {}, ['type', 'nodeType', 'node_type', 'gate', 'kind']);
+  if (node.role === 'build_test' || explicitType === 'build_test' || isBuildTestNodeIdOrLabel(node.id, node.label)) {
+    return 'build_test';
+  }
+  return node.role;
+}
+
+function isLiveStatus(status: string | undefined): boolean {
+  return status === 'running'
+    || status === 'dispatched'
+    || status === 'dispatching'
+    || status === 'in_progress'
+    || status === 'awaiting_assembly'
+    || status === 'assembling'
+    || status === 'merging'
+    || status === 'in_review'
+    || status === 'awaiting_review';
+}
+
+function terminalizedStatus(status: string | undefined, terminal: boolean, terminalStatus: string): string {
+  if (!terminal || !isLiveStatus(status)) return status ?? 'pending';
+  return terminalStatus;
+}
+
+function previewUrlFromSession(session: PortForwardSessionDto | undefined): string | null {
+  return session?.preview_url ?? session?.previewUrl ?? null;
+}
+
+function previewUrlFromEvents(events: RunStreamEvent[]): string | null {
+  for (let i = events.length - 1; i >= 0; i -= 1) {
+    const evt = events[i];
+    const preview = evt.payload['preview_url'] ?? evt.payload['previewUrl'];
+    if (preview != null && String(preview).trim() !== '') return String(preview);
+    const session = evt.payload['session'];
+    if (session && typeof session === 'object') {
+      const nested = (session as Record<string, unknown>)['preview_url'] ?? (session as Record<string, unknown>)['previewUrl'];
+      if (nested != null && String(nested).trim() !== '') return String(nested);
+    }
+  }
+  return null;
+}
+
 // Priority: live assembly_* events (last wins) > coordinator_status field > work-plan status.
 function deriveOrchState(
   events: RunStreamEvent[],
@@ -370,8 +448,9 @@ function deriveOrchState(
     const mapped = ASSEMBLY_EVENT_PHASE[evt.type as string];
     if (!mapped) continue;
     const priority = mapped.priority ?? 1;
+    const phase = assemblyReviewPhaseForEvent(evt, mapped.phase);
     if (!winner || priority > winner.priority || (priority === winner.priority && evt.sequence >= winner.sequence)) {
-      winner = { phase: mapped.phase, payload: evt.payload, type: evt.type, sequence: evt.sequence, priority };
+      winner = { phase, payload: evt.payload, type: evt.type, sequence: evt.sequence, priority };
     }
   }
   if (winner) {
@@ -438,24 +517,27 @@ function assemblyTerminalStageMatchesRole(role: string, terminalStage: string | 
 function assemblyNodeStatus(role: string, phase: OrchPhase, terminalStage?: string): StepStatus | undefined {
   switch (phase) {
     case 'assembling':
+    case 'build_test':
     case 'rai':
+      if (role === 'build_test') return phase === 'build_test' ? 'started' : undefined;
       return role === 'rai' ? 'started' : undefined;
     case 'in_review':
+      if (role === 'build_test') return 'completed';
       if (role === 'rai')    return 'completed';
       if (role === 'review') return 'started';
       return undefined;
     case 'merge':
-      if (role === 'rai' || role === 'review') return 'completed';
+      if (role === 'build_test' || role === 'rai' || role === 'review') return 'completed';
       if (role === 'merge') return 'started';
       return undefined;
     case 'scribe':
-      if (role === 'rai' || role === 'review' || role === 'merge') return 'completed';
+      if (role === 'build_test' || role === 'rai' || role === 'review' || role === 'merge') return 'completed';
       if (role === 'scribe') return 'started';
       return undefined;
     case 'complete':
       return 'completed';
     case 'needs_resolution':
-      if (role === 'rai' || role === 'review') return 'completed';
+      if (role === 'build_test' || role === 'rai' || role === 'review') return 'completed';
       if (terminalStage) return assemblyTerminalStageMatchesRole(role, terminalStage) ? 'failed' : undefined;
       if (role === 'merge') return 'failed';
       return undefined;
@@ -465,7 +547,7 @@ function assemblyNodeStatus(role: string, phase: OrchPhase, terminalStage?: stri
     case 'declined':
       if (terminalStage) return assemblyTerminalStageMatchesRole(role, terminalStage) ? 'failed' : undefined;
       if (role === 'review') return 'failed';
-      if (role === 'rai')    return 'completed';
+      if (role === 'build_test' || role === 'rai') return 'completed';
       return undefined;
     default:
       return undefined;
@@ -478,6 +560,7 @@ function orchPhaseLabel(phase: OrchPhase): string {
     case 'dispatching':       return 'Dispatching';
     case 'awaiting_assembly': return 'Preparing assembly';
     case 'assembling':        return 'Assembling';
+    case 'build_test':        return 'Build & Test';
     case 'rai':               return 'RAI review';
     case 'in_review':         return 'In review';
     case 'merge':             return 'Merging';
@@ -532,6 +615,7 @@ function bucketForOrchPhase(phase: OrchPhase): CoordinatorRunBucket {
     case 'dispatching':
     case 'awaiting_assembly':
     case 'assembling':
+    case 'build_test':
     case 'rai':
     case 'merge':
     case 'scribe': return 'running';
@@ -672,11 +756,6 @@ interface SubtaskNodeData extends Record<string, unknown> {
 // so dagre spaces sibling subtasks apart instead of letting the expansion overlap neighbours.
 const EXPANDED_PIPELINE_RESERVE = 188;
 
-// Dagre's nodesep is the vertical gap between sibling nodes in LR layout. Subtask cards can be
-// taller than the generic hints because their titles/metadata wrap, so keep a generous separation
-// for fan-out columns.
-const COORDINATOR_GRAPH_NODE_SEP = 96;
-
 // Renders column depth labels (L0 Coordinator, L1 Research…) inside the React Flow canvas
 // using ViewportPortal so they pan/zoom with the graph and stay aligned over each column.
 // A compact pipeline step row rendered inline inside a SubtaskNode expansion panel. Laid out as a
@@ -804,8 +883,8 @@ function SubtaskNode({ id, data, selected }: NodeProps) {
       ? childDescriptor.nodes.map((n) => ({
           key:             n.id,
           label:           n.label,
-          roleDescription: roleDescForRole(n.role),
-          Icon:            iconForRole(n.role),
+          roleDescription: roleDescForRole(effectiveGraphRole(n)),
+          Icon:            iconForRole(effectiveGraphRole(n)),
         }))
       : [];
     return defs.map((def) => ({
@@ -1597,6 +1676,30 @@ const useStyles = makeStyles({
     backgroundColor: tokens.colorPaletteMarigoldBackground2,
     border: `1px solid ${tokens.colorPaletteMarigoldBorderActive}`,
   },
+  selectedTaskCta: {
+    margin: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM} 0`,
+    padding: tokens.spacingVerticalS,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: tokens.spacingHorizontalM,
+    flexWrap: 'wrap',
+    borderRadius: tokens.borderRadiusMedium,
+    backgroundColor: tokens.colorPaletteMarigoldBackground2,
+    border: `1px solid ${tokens.colorPaletteMarigoldBorderActive}`,
+  },
+  selectedTaskPreviewCta: {
+    margin: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM} 0`,
+    padding: tokens.spacingVerticalS,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: tokens.spacingHorizontalM,
+    flexWrap: 'wrap',
+    borderRadius: tokens.borderRadiusMedium,
+    backgroundColor: tokens.colorBrandBackground2,
+    border: `1px solid ${tokens.colorBrandStroke1}`,
+  },
   runTreeActionPill: {
     display: 'inline-flex',
     alignItems: 'center',
@@ -1605,6 +1708,18 @@ const useStyles = makeStyles({
     padding: '1px 7px',
     borderRadius: tokens.borderRadiusCircular,
     backgroundColor: tokens.colorPaletteMarigoldBorderActive,
+    color: tokens.colorNeutralForegroundInverted,
+    fontSize: tokens.fontSizeBase100,
+    fontWeight: tokens.fontWeightSemibold,
+  },
+  runTreePreviewPill: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    width: 'fit-content',
+    marginLeft: tokens.spacingHorizontalXS,
+    padding: '1px 7px',
+    borderRadius: tokens.borderRadiusCircular,
+    backgroundColor: tokens.colorBrandBackground,
     color: tokens.colorNeutralForegroundInverted,
     fontSize: tokens.fontSizeBase100,
     fontWeight: tokens.fontWeightSemibold,
@@ -1707,8 +1822,13 @@ const useStyles = makeStyles({
     position: 'sticky',
     top: tokens.spacingVerticalS,
     left: tokens.spacingHorizontalS,
+    insetInlineStart: tokens.spacingHorizontalS,
     zIndex: 20,
     width: 'fit-content',
+    padding: tokens.spacingVerticalXXS,
+    borderRadius: tokens.borderRadiusMedium,
+    backgroundColor: tokens.colorNeutralBackground1,
+    boxShadow: tokens.shadow8,
     pointerEvents: 'auto',
   },
   creditsSurface: {
@@ -1830,6 +1950,15 @@ function semanticStateColorForBucket(bucket: CoordinatorRunBucket): SemanticStat
     case 'blocked': return 'input';
     default: return 'queued';
   }
+}
+
+function isOperatorActionStatus(status: string | undefined): boolean {
+  return status === 'awaiting_review'
+    || status === 'in_review'
+    || status === 'approval_required'
+    || status === 'manual_gate'
+    || status === 'needs_resolution'
+    || status === 'needs_clarification';
 }
 
 function runTreeStatusLabel(status: string, confirmedBy?: string): string {
@@ -2098,6 +2227,7 @@ export function CoordinatorRunPage() {
   const [previewDialogOpen, setPreviewDialogOpen] = useState(false);
   const [previewTargetPort, setPreviewTargetPort] = useState('3000');
   const [previewSession,    setPreviewSession]    = useState<PortForwardSessionDto | undefined>(undefined);
+  const [previewSessions,   setPreviewSessions]   = useState<PortForwardSessionDto[]>([]);
   const [previewBusy,       setPreviewBusy]       = useState(false);
   const [previewError,      setPreviewError]      = useState<string | undefined>(undefined);
 
@@ -2366,6 +2496,7 @@ export function CoordinatorRunPage() {
     () => deriveCoordinatorRunViewState(runLevelStatus, orch, runLoadError),
     [runLevelStatus, orch, runLoadError],
   );
+  const runStatusColor = semanticStateColorForBucket(viewState.bucket);
   // Derive sandbox backend from sandbox.selected events for the Preview Sandbox button.
   useEffect(() => {
     for (const evt of events) {
@@ -2375,6 +2506,28 @@ export function CoordinatorRunPage() {
       }
     }
   }, [events]);
+
+  useEffect(() => {
+    if (!runId) return;
+    let cancelled = false;
+    apiClient.listPortForwards(runId)
+      .then((sessions) => {
+        if (cancelled) return;
+        setPreviewSessions(sessions);
+        setPreviewSession((current) => {
+          if (current && sessions.some((session) => session.session_id === current.session_id)) return current;
+          return sessions.find((session) => previewUrlFromSession(session)) ?? sessions[0];
+        });
+      })
+      .catch(() => {
+        if (!cancelled) setPreviewSessions([]);
+      });
+    return () => { cancelled = true; };
+  }, [runId, events.length]);
+
+  const eventPreviewUrl = useMemo(() => previewUrlFromEvents(events), [events]);
+  const activePreviewSession = previewSession ?? previewSessions.find((session) => previewUrlFromSession(session)) ?? previewSessions[0];
+  const activePreviewUrl = activePreviewSession ? previewUrlFromSession(activePreviewSession) : eventPreviewUrl;
 
   // Coordinator graph node status override so it never shows a stale "Pending".
   const coordNodeStatusOverride = orchPhaseToTopoStatus(orch.phase)
@@ -2424,24 +2577,38 @@ export function CoordinatorRunPage() {
   const assemblyTiming = useMemo<Record<string, { startedAt?: number; completedAt?: number }>>(() => {
     const STARTED: Record<string, string> = {
       'coordinator.assembly_rai_started': 'rai',
-      'coordinator.assembly_review_requested': 'review',
       'coordinator.assembly_merge_started': 'merge',
       'coordinator.assembly_scribe_started': 'scribe',
     };
     const COMPLETED: Record<string, string> = {
       'coordinator.assembly_rai_completed': 'rai',
-      'coordinator.assembly_review_approved': 'review',
-      'coordinator.assembly_changes_requested': 'review',
-      'coordinator.assembly_declined': 'review',
       'coordinator.assembly_merge_completed': 'merge',
       'coordinator.assembly_merge_failed': 'merge',
       'merge.conflicted': 'merge',
       'coordinator.assembly_scribe_completed': 'scribe',
     };
+    const roleForReviewGateEvent = (evt: RunStreamEvent): string | undefined => {
+      const gateKind = readGateKind(evt.payload);
+      if (gateKind === 'build-test') return 'build_test';
+      if (gateKind === 'rubberduck') return 'rubberduck';
+      return 'review';
+    };
     const map: Record<string, { startedAt?: number; completedAt?: number }> = {};
     for (const evt of events) {
-      const startRole = STARTED[evt.type];
-      const doneRole = COMPLETED[evt.type];
+      const reviewGateRole = evt.type === 'coordinator.assembly_review_requested'
+        || evt.type === 'coordinator.assembly_review_approved'
+        || evt.type === 'coordinator.assembly_changes_requested'
+        || evt.type === 'coordinator.assembly_declined'
+        ? roleForReviewGateEvent(evt)
+        : undefined;
+      const startRole = evt.type === 'coordinator.assembly_review_requested'
+        ? reviewGateRole
+        : STARTED[evt.type];
+      const doneRole = evt.type === 'coordinator.assembly_review_approved'
+        || evt.type === 'coordinator.assembly_changes_requested'
+        || evt.type === 'coordinator.assembly_declined'
+        ? reviewGateRole
+        : COMPLETED[evt.type];
       const role = startRole ?? doneRole;
       if (!role) continue;
       const tsStr = evt.payload['timestamp_utc'] != null ? String(evt.payload['timestamp_utc']) : undefined;
@@ -2489,7 +2656,7 @@ export function CoordinatorRunPage() {
       } else if (t === 'subtask.rai_flagged') {
         raiSeq = Math.max(raiSeq, seq);
       } else if (
-        t === 'coordinator.assembly_review_requested' ||
+        (t === 'coordinator.assembly_review_requested' && isHumanReviewGateEvent(e)) ||
         t === 'coordinator.assembly_review_approved' ||
         t === 'coordinator.assembly_completed' ||
         t === 'coordinator.assembly_declined' ||
@@ -2525,7 +2692,7 @@ export function CoordinatorRunPage() {
     // them as labelled back-edges matching the per-run loopback styling. Falls back gracefully when
     // a descriptor has zero loopbacks (older runs) — the loop simply produces no loopback edges.
     const roleById: Record<string, string> = {};
-    for (const n of planningDescriptor.nodes) roleById[n.id] = (n.role ?? '').toLowerCase();
+    for (const n of planningDescriptor.nodes) roleById[n.id] = effectiveGraphRole(n).toLowerCase();
     for (const edge of planningDescriptor.edges) {
       const edgeId = `${edge.from}-${edge.to}`;
       if (edge.loopback) {
@@ -2552,6 +2719,8 @@ export function CoordinatorRunPage() {
       };
 
       const planned = node.kind === 'planned';
+      const terminalStatus = runStatusColor === 'danger' ? 'failed' : 'completed';
+      const shouldTerminalizeLiveNodes = viewState.terminal && runStatusColor !== 'success';
 
       if (nt === 'subtask') {
         // Subtask node — look up topology status by mapped id.
@@ -2564,13 +2733,14 @@ export function CoordinatorRunPage() {
         // node.id is "plan:subtask-{id}"; the subtask.* timing map is keyed by the raw "{id}".
         const subtaskKey  = node.id.replace(/^plan:/, '').replace(/^subtask-/, '');
         const timing      = subtaskTiming[subtaskKey];
+        const topoStatus = terminalizedStatus(topoNode?.status ?? 'pending', shouldTerminalizeLiveNodes, terminalStatus);
         return {
           id:   node.id,
           type: 'subtask',
           data: {
             graphNodeId:   node.id,
             label:         node.label,
-            topoStatus:    topoNode?.status ?? 'pending',
+            topoStatus,
             topoNode,
             childGraphRef: node.child_graph_ref,
             childRunId,
@@ -2580,7 +2750,7 @@ export function CoordinatorRunPage() {
             phase:         phaseField,
             projectId:     projectId ?? '',
             startedAt:     timing?.startedAt,
-            completedAt:   timing?.completedAt,
+            completedAt:   timing?.completedAt ?? (shouldTerminalizeLiveNodes && isLiveStatus(topoNode?.status) ? Date.now() : undefined),
             executionPodName: topoNode?.executionPodName ?? null,
             dir:           'GRID',
           } as SubtaskNodeData,
@@ -2591,7 +2761,7 @@ export function CoordinatorRunPage() {
       // Coordinator or collective-assembly node — use generic WorkflowNode. def.key MUST be the
       // node ROLE (not node.id), so WorkflowNode's role-based logic fires: the review gate becomes
       // action-required ("Awaiting your review") and the coordinator keeps its "View session" button.
-      const roleKey = node.role;
+      const roleKey = effectiveGraphRole(node);
       const coordTopoNode = topology.nodes['coordinator'];
 
       // Collective-assembly stage status. Two sources combine: the phase projection
@@ -2599,7 +2769,7 @@ export function CoordinatorRunPage() {
       // orchestration phase, so their started/completed state is taken from the stage's own
       // timing events. Phase status wins when present (it preserves the review "failed"/decline
       // semantics); timing fills in the merge/scribe window so every stage can go live.
-      const isAssemblyRole = roleKey === 'rai' || roleKey === 'review' || roleKey === 'merge' || roleKey === 'scribe';
+      const isAssemblyRole = roleKey === 'build_test' || roleKey === 'rai' || roleKey === 'review' || roleKey === 'merge' || roleKey === 'scribe';
       const at = isAssemblyRole ? assemblyTiming[roleKey] : undefined;
       const terminalStage = node.terminal_stage ?? readStr(node.data ?? {}, ['terminal_stage', 'terminalStage']);
       const terminalOrParkedPhase = orch.phase === 'failed'
@@ -2639,7 +2809,10 @@ export function CoordinatorRunPage() {
         stepStatus = assemblyStatus;
         nodePlanned = false; // the stage has been reached; it is live, not planned
       } else {
-        stepStatus = 'pending';
+        stepStatus = topoStatusToStepStatus(terminalizedStatus(node.status ?? readStr(node.data ?? {}, ['status']), shouldTerminalizeLiveNodes, terminalStatus));
+      }
+      if (!nodePlanned && shouldTerminalizeLiveNodes && stepStatus === 'started') {
+        stepStatus = runStatusColor === 'danger' ? 'failed' : 'completed';
       }
 
       const st: ExecutorState = nodePlanned
@@ -2656,8 +2829,8 @@ export function CoordinatorRunPage() {
       const def: ExecutorDef = {
         key:             roleKey,
         label:           node.label,
-        roleDescription: roleDescForRole(node.role),
-        Icon:            iconForRole(node.role),
+        roleDescription: roleDescForRole(roleKey),
+        Icon:            iconForRole(roleKey),
       };
 
       return {
@@ -2672,18 +2845,23 @@ export function CoordinatorRunPage() {
           executionId: runId    ?? '',
           projectId:   projectId ?? '',
           dir:         'GRID',
+          previewUrl:  roleKey === 'build_test' ? activePreviewUrl : undefined,
         } as WorkflowNodeData,
         position: { x: 0, y: 0 },
       };
     });
 
-    const laidOutNodes = layoutDagColumns(
+    const laidOutNodes = layoutDagBalancedGrid(
       raw,
       fwdEdges,
       {
         rankdir: 'LR',
-        rankSep: 96,
-        nodeSep: COORDINATOR_GRAPH_NODE_SEP,
+        rankSep: 72,
+        nodeSep: 64,
+        viewportWidth: dagContainerSize.width || 960,
+        viewportHeight: dagContainerSize.height || 560,
+        minColumns: 3,
+        maxColumns: 5,
       },
       nodeSizeHints,
     );
@@ -2691,7 +2869,7 @@ export function CoordinatorRunPage() {
       rfNodes:      laidOutNodes,
       displayEdges: routeGridEdges(allEdges, laidOutNodes),
     };
-  }, [planningDescriptor, topology, projectId, runId, coordNodeStatusOverride, orch.phase, subtaskTiming, assemblyTiming, roleByAgent, expandedKeys, latestOutcomePlanDraftingEvent, latestOutcomePlanEvent, specConfirmed, workPlanSeen, coordStatusField, dagContainerSize.width, dagContainerSize.height]);
+  }, [planningDescriptor, topology, projectId, runId, coordNodeStatusOverride, orch.phase, subtaskTiming, assemblyTiming, roleByAgent, expandedKeys, latestOutcomePlanDraftingEvent, latestOutcomePlanEvent, specConfirmed, workPlanSeen, coordStatusField, dagContainerSize.width, dagContainerSize.height, viewState.terminal, runStatusColor, activePreviewUrl]);
 
   const hasSubtaskNodes = useMemo(
     () => (planningDescriptor?.nodes ?? []).some((n) => n.node_type === 'subtask'),
@@ -2712,7 +2890,7 @@ export function CoordinatorRunPage() {
   const assemblyNodeIds = useMemo(() => {
     const ids = new Set<string>();
     for (const n of planningDescriptor?.nodes ?? []) {
-      const role = (n.role ?? '').toLowerCase();
+      const role = effectiveGraphRole(n).toLowerCase();
       if (role === 'rai' || role === 'review' || role === 'merge' || role === 'scribe') ids.add(n.id);
     }
     return ids;
@@ -2751,6 +2929,7 @@ export function CoordinatorRunPage() {
       return wfData?.def?.key === 'coordinator'
         || wfData?.def?.key === 'outcome_plan'
         || wfData?.def?.key === 'work_plan'
+        || wfData?.def?.key === 'build_test'
         || wfData?.def?.key === 'rai'
         || wfData?.def?.key === 'review'
         || wfData?.def?.key === 'merge'
@@ -2989,7 +3168,6 @@ export function CoordinatorRunPage() {
   const executingStateColor = executingSessionItem
     ? semanticStateColorForStatus(executingSessionItem.status)
     : semanticStateColorForBucket(viewState.bucket);
-  const runStatusColor = semanticStateColorForBucket(viewState.bucket);
   const executingActor = executingSessionItem?.agentName
     ? `${executingSessionItem.agentName}${executingSessionItem.agentRole ? ` (${executingSessionItem.agentRole})` : ''}`
     : undefined;
@@ -3115,23 +3293,29 @@ export function CoordinatorRunPage() {
     setPreviewBusy(true);
     setPreviewError(undefined);
     apiClient.startPortForward(runId, port)
-      .then((session) => setPreviewSession(session))
+      .then((session) => {
+        setPreviewSession(session);
+        setPreviewSessions((sessions) => [session, ...sessions.filter((s) => s.session_id !== session.session_id)]);
+      })
       .catch((err) => setPreviewError(formatApiErrorMessage(err, 'Could not start the sandbox preview.')))
       .finally(() => setPreviewBusy(false));
   };
 
   const stopPreview = () => {
-    if (!runId || !previewSession) return;
+    if (!runId || !activePreviewSession) return;
     setPreviewBusy(true);
-    apiClient.stopPortForward(runId, previewSession.session_id)
-      .then(() => setPreviewSession(undefined))
+    apiClient.stopPortForward(runId, activePreviewSession.session_id)
+      .then(() => {
+        setPreviewSession(undefined);
+        setPreviewSessions((sessions) => sessions.filter((s) => s.session_id !== activePreviewSession.session_id));
+      })
       .catch((err) => setPreviewError(formatApiErrorMessage(err, 'Could not stop the sandbox preview.')))
       .finally(() => setPreviewBusy(false));
   };
 
   const isKubernetesSandbox = sandboxBackend === 'kubernetes-sandbox-claim';
-  const previewUrl = previewSession?.preview_url ?? previewSession?.previewUrl ?? null;
-  const keepaliveUrl = previewSession?.keepalive_url ?? previewSession?.keepaliveUrl ?? null;
+  const previewUrl = activePreviewUrl;
+  const keepaliveUrl = activePreviewSession?.keepalive_url ?? activePreviewSession?.keepaliveUrl ?? null;
 
   useEffect(() => {
     if (!keepaliveUrl) return;
@@ -3221,6 +3405,10 @@ export function CoordinatorRunPage() {
   // 409. Treat the review as actionable only when the run itself is not terminal.
   const runTerminal = viewState.terminal;
   const reviewActionable = orch.phase === 'in_review' && !runTerminal;
+  const selectedReviewActionNeeded = reviewActionable && selectedSessionItem?.status === 'awaiting_review';
+  const selectedBuildTestNode = selectedSessionItem
+    ? isBuildTestNodeIdOrLabel(selectedSessionItem.nodeId, selectedSessionItem.label)
+    : false;
 
   // Map the coordinator orchestration phase onto the standard artifact-browser run status so the
   // reused Changes/Files rail shows the review bar (Approve / Request changes / Decline) exactly when
@@ -3757,7 +3945,9 @@ export function CoordinatorRunPage() {
                 const indent = Math.max(0, item.depth) * 14;
                 const itemStateColor = semanticStateColorForStatus(item.status);
                 const itemStatusLabel = runTreeStatusLabel(item.status, item.nodeId === 'outcome-plan' ? outcomePlanConfirmedBy : undefined);
-                const actionNeeded = reviewActionable && item.status === 'awaiting_review';
+                const actionNeeded = isOperatorActionStatus(item.status) && (!viewState.terminal || item.status === 'needs_resolution');
+                const reviewNeeded = reviewActionable && item.status === 'awaiting_review';
+                const buildTestNode = isBuildTestNodeIdOrLabel(item.nodeId, item.label);
                 return (
                   <div key={item.nodeId}>
                     <button
@@ -3766,7 +3956,7 @@ export function CoordinatorRunPage() {
                       onClick={() => openPanelForNode(item.nodeId)}
                       title={`${item.label}${item.agentName ? ` · ${item.agentName}` : ''}`}
                       aria-current={selected ? 'true' : undefined}
-                      aria-label={`Select ${item.label}: ${itemStatusLabel}${actionNeeded ? '. Operator action needed.' : ''}`}
+                      aria-label={`Select ${item.label}: ${itemStatusLabel}${actionNeeded ? '. Operator action needed.' : ''}${buildTestNode && activePreviewUrl ? '. Preview available.' : ''}`}
                     >
                       <span
                         className={`${styles.runTreeStatusIcon} ${stateIconClass(itemStateColor)}`}
@@ -3781,6 +3971,7 @@ export function CoordinatorRunPage() {
                         <Text className={styles.treePrimary}>
                           {item.label}
                           {actionNeeded && <span className={styles.runTreeActionPill}>Action needed</span>}
+                          {buildTestNode && activePreviewUrl && <span className={styles.runTreePreviewPill}>Preview</span>}
                         </Text>
                         <Text className={styles.treeSecondary}>
                           <span className={stateTextClass(itemStateColor)} data-state-color={itemStateColor}>{itemStatusLabel}</span>
@@ -3793,7 +3984,7 @@ export function CoordinatorRunPage() {
                         </Text>
                       </span>
                     </button>
-                    {selected && actionNeeded && (
+                    {selected && reviewNeeded && (
                       <div className={styles.runTreeReviewCta} data-testid="run-tree-review-cta">
                         <Text weight="semibold">Human review is waiting for your decision.</Text>
                         <Button appearance="primary" size="small" icon={<DocumentRegular />} onClick={() => setArtifactsPanelOpen(true)}>
@@ -3815,6 +4006,22 @@ export function CoordinatorRunPage() {
               </span>
             </div>
             <div className={styles.readoutBody}>
+              {selectedReviewActionNeeded && (
+                <div className={styles.selectedTaskCta} data-testid="selected-review-cta">
+                  <Text weight="semibold">Review Gate is awaiting your approval.</Text>
+                  <Button appearance="primary" size="small" icon={<DocumentRegular />} onClick={() => setArtifactsPanelOpen(true)}>
+                    Review changes
+                  </Button>
+                </div>
+              )}
+              {selectedBuildTestNode && activePreviewUrl && (
+                <div className={styles.selectedTaskPreviewCta} data-testid="selected-build-preview-cta">
+                  <Text weight="semibold">Preview from Build &amp; Test is active.</Text>
+                  <Button appearance="primary" size="small" icon={<OpenRegular />} onClick={() => window.open(activePreviewUrl, '_blank', 'noopener,noreferrer')}>
+                    Open preview
+                  </Button>
+                </div>
+              )}
               <AgentSessionPanel
                 variant="docked"
                 open={sessionPanelOpen}
@@ -3893,7 +4100,7 @@ export function CoordinatorRunPage() {
               Sandbox Preview
             </DialogTitle>
             <DialogContent style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, paddingTop: tokens.spacingVerticalM }}>
-              {!previewSession ? (
+              {!activePreviewSession ? (
                 <>
                   <Text>
                     Preview traffic is proxied through the Agentweaver API server.
@@ -3911,7 +4118,7 @@ export function CoordinatorRunPage() {
               ) : (
                 <>
                   <Text>
-                    Preview active for port {previewSession.target_port} on pod <code>{previewSession.pod_name}</code>.
+                    Preview active for port {activePreviewSession.target_port} on pod <code>{activePreviewSession.pod_name}</code>.
                     {previewUrl ? ' The proxied preview is shown below.' : ' The API server did not return a proxied preview URL.'}
                   </Text>
                   {previewUrl && (
@@ -3923,13 +4130,13 @@ export function CoordinatorRunPage() {
                     />
                   )}
                   <Text size={200} style={{ color: tokens.colorNeutralForeground3 }}>
-                    Session ID: {previewSession.session_id}
+                    Session ID: {activePreviewSession.session_id}
                   </Text>
                 </>
               )}
             </DialogContent>
             <DialogActions>
-              {!previewSession ? (
+              {!activePreviewSession ? (
                 <>
                   {previewUrl && (
                     <Button appearance="primary" icon={<OpenRegular />} onClick={() => window.open(previewUrl, '_blank', 'noopener,noreferrer')}>

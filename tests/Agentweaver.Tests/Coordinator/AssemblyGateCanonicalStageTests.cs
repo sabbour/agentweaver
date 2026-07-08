@@ -1,5 +1,7 @@
 using FluentAssertions;
 using Agentweaver.Api.Coordinator;
+using Agentweaver.Api.Workflows;
+using Agentweaver.Squad.Catalog;
 
 namespace Agentweaver.Tests.Coordinator;
 
@@ -15,6 +17,67 @@ namespace Agentweaver.Tests.Coordinator;
 /// </summary>
 public sealed class AssemblyGateCanonicalStageTests
 {
+    [Fact]
+    public void ResolveAssemblyGates_UsesWorkflowEdgeTraversal_NotNodeDeclarationOrder()
+    {
+        var workflow = new WorkflowDefinition
+        {
+            Id = "misdeclared-flow",
+            Name = "Misdeclared Flow",
+            Start = "start",
+            Nodes =
+            [
+                new() { Id = "start", Type = WorkflowNodeType.Prompt, Label = "Start" },
+                new() { Id = "build-test", Type = WorkflowNodeType.BuildTest, Label = "Build & Test" },
+                new()
+                {
+                    Id = "rai-check",
+                    Type = WorkflowNodeType.Check,
+                    Label = "RAI Check",
+                    GateKind = "rai",
+                    Branches = ["review"],
+                },
+                new()
+                {
+                    Id = "review-gate",
+                    Type = WorkflowNodeType.Check,
+                    Label = "Review Gate",
+                    GateKind = "human-review",
+                    Branches = ["approved"],
+                },
+                new() { Id = "done", Type = WorkflowNodeType.Terminal, Label = "Done" },
+            ],
+            Edges =
+            [
+                new() { From = "start", To = "build-test", When = "request-changes" },
+                new() { From = "start", To = "rai-check" },
+                new() { From = "rai-check", To = "done", When = "safety-failed" },
+                new() { From = "rai-check", To = "build-test", When = "review" },
+                new() { From = "build-test", To = "review-gate", When = "approved" },
+                new() { From = "review-gate", To = "done", When = "approved" },
+            ],
+        };
+
+        var gates = CoordinatorAssemblyService.ResolveAssemblyGates(workflow);
+
+        gates.Select(g => g.GateKind).Should().Equal("rai", "build-test", "human-review");
+    }
+
+    [Theory]
+    [InlineData("software-delivery")]
+    [InlineData("bug-fix")]
+    public void ResolveAssemblyGates_SoftwareCatalogWorkflowsOrderRaiBeforeBuildTest(string workflowId)
+    {
+        var workflow = LoadCatalogWorkflow(workflowId);
+
+        var gates = CoordinatorAssemblyService.ResolveAssemblyGates(workflow);
+        var gateKinds = gates.Select(g => g.GateKind).ToList();
+
+        gateKinds.Should().Contain("rai");
+        gateKinds.Should().Contain("build-test");
+        gateKinds.IndexOf("rai").Should().BeLessThan(gateKinds.IndexOf("build-test"));
+    }
+
     [Fact]
     public void CanonicalStageId_HumanReviewKind_MapsToReviewStage()
     {
@@ -77,5 +140,20 @@ public sealed class AssemblyGateCanonicalStageTests
 
         workflowDerived.StageId.Should().Be(defaultHumanGate.StageId);
         workflowDerived.GraphNodeId.Should().Be(defaultHumanGate.GraphNodeId);
+    }
+
+    private static WorkflowDefinition LoadCatalogWorkflow(string workflowId)
+    {
+        var reader = new CatalogReader();
+        foreach (var (yaml, source) in reader.LoadAllWorkflowYamls())
+        {
+            var result = WorkflowDefinitionLoader.Load(yaml, source, isBuiltIn: true);
+            if (result.IsValid
+                && result.Definition is not null
+                && string.Equals(result.Definition.Id, workflowId, StringComparison.Ordinal))
+                return result.Definition;
+        }
+
+        throw new InvalidOperationException($"Catalog workflow '{workflowId}' was not found.");
     }
 }

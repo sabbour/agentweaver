@@ -7,6 +7,11 @@ import { useSeededRunStream } from './useSeededRunStream';
 import { deriveRunStatusFromEvents } from '../timeline/deriveRunStatus';
 import type { AssemblyReviewDecision, SteerCoordinatorRequest } from '../api/types';
 
+function isHumanReviewGateKind(payload: Record<string, unknown>): boolean {
+  const gateKind = payload['gateKind'] ?? payload['gate_kind'];
+  return gateKind == null || String(gateKind).toLowerCase() === 'human-review';
+}
+
 /**
  * Aggregate HITL gate state derived from the timeline/events, so a consumer can
  * surface the FULL gate set without re-scanning (BLOCKING #1 gate integrity).
@@ -73,7 +78,12 @@ export function useCoordinatorRunModel(runId: string, runStatus?: string): Coord
       switch (e.type) {
         case 'coordinator.outcome_spec': outcomeSpecDrafted = true; break;
         case 'coordinator.outcome_spec.confirmed': outcomeSpecConfirmed = true; break;
-        case 'coordinator.assembly_review_requested': assemblyReviewRequested = true; assemblyReviewResolved = false; break;
+        case 'coordinator.assembly_review_requested':
+          if (isHumanReviewGateKind(e.payload)) {
+            assemblyReviewRequested = true;
+            assemblyReviewResolved = false;
+          }
+          break;
         case 'coordinator.assembly_review_approved':
         case 'coordinator.assembly_review_preserved':
         case 'coordinator.assembly_changes_requested':

@@ -103,7 +103,7 @@ Where this lives: `scripts/aks/10-create-cluster.sh`, `scripts/aks/15-setup-iden
 
 ### API workload
 
-The API is the authoritative backend. It handles orchestration, project/workspace operations, authentication/OAuth authorization-server endpoints, memory/decision data, sandbox lifecycle calls, and durable run state.
+The API is the authoritative backend. It handles orchestration, project/workspace operations, authentication/OAuth authorization-server endpoints, memory/decision data, sandbox lifecycle calls, git worktree management, and durable run state. Its runtime image includes both `libgit2` and the `git` CLI because normal headless operations use LibGit2Sharp while the collective Build & Test gate creates a detached integration-branch worktree through `git worktree add --detach` (`apps/Agentweaver.Api/Git/WorktreeManager.cs:155`, `:546`; `apps/Agentweaver.Api/Dockerfile:58`).
 
 It runs as **two replicas** with a **RollingUpdate** strategy. Application state lives in **Azure Database for PostgreSQL Flexible Server** — multiple pods can write concurrently because status transitions use CAS-style `UPDATE ... WHERE` guards and run-level leasing prevents double-dispatch. The init container runs the EF migration bundle before the API container starts, ensuring the schema is current before serving traffic.
 

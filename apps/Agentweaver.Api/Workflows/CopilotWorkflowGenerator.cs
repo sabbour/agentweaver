@@ -240,8 +240,9 @@ public sealed class CopilotWorkflowGenerator : IWorkflowGenerator
               coordinator_composed because those node types are not currently bindable at runtime.
             - Do NOT add merge or scribe nodes to generated/custom workflows; the coordinator appends
               its hardcoded tail after authored gates.
-            - If the workflow is software-oriented, preserve or add a build_test gate immediately
-              before human-review; never place rai after build_test for software delivery.
+            - If the workflow is software-oriented, preserve or add a build_test gate after the RAI
+              safety check (when present) and immediately before human-review; never place rai after
+              build_test for software delivery.
 
             {{WorkflowGatePromptGuidance.SoftwareBuildTestRequirement}}
 
@@ -268,8 +269,8 @@ public sealed class CopilotWorkflowGenerator : IWorkflowGenerator
             - Are all nodes reachable from `start`, and do all edges reference declared nodes?
             - Does every check branch have a matching outgoing edge?
             - For built-in/library edits, did you produce a customized copy with a new id?
-            - For software delivery, is build_test immediately before human-review and before any RAI
-              placement that would otherwise gate build/test?
+            - For software delivery, is build_test after any RAI safety check and immediately before
+              human-review?
 
             Return ONLY valid YAML for the edited WorkflowDefinition draft. No markdown fences. No commentary.
             """;

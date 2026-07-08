@@ -1202,7 +1202,8 @@ function latestRaiVerdict(events: RunStreamEvent[]): RaiVerdict | null {
     const evt = events[i];
     if (evt.type !== 'rai.verdict') continue;
     const payload = evt.payload as Partial<RaiVerdictEventPayload>;
-    const rawVerdict = typeof payload.verdict === 'string' ? payload.verdict : undefined;
+    const rawTrafficLight = readString(evt.payload, ['trafficLight', 'traffic_light']);
+    const rawVerdict = typeof payload.verdict === 'string' ? payload.verdict : rawTrafficLight;
     return {
       verdict: parseRaiVerdictToken(rawVerdict),
       rationale: typeof payload.rationale === 'string'

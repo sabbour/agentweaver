@@ -156,7 +156,7 @@ public sealed class CopilotBlueprintGeneratorTests
         runner.LastTask.Should().Contain("`rubberduck` is a `check` gate_kind");
         runner.LastTask.Should().Contain("`human-review` is a `check` gate_kind");
         runner.LastTask.Should().Contain("MANDATORY BUILD & TEST STEP (software workflows)");
-        runner.LastTask.Should().Contain("build_test gate IMMEDIATELY before the human-review gate");
+        runner.LastTask.Should().Contain("build_test gate after any RAI safety check and IMMEDIATELY before the human-review gate");
         runner.LastTask.Should().Contain("PREFER [] (generate)");
         runner.LastTask.Should().Contain("generic ungated catalog workflow");
     }
