@@ -151,6 +151,25 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
     private string? _degradedReason;
     private int _runDegradedEmitted;
 
+    /// <summary>
+    /// Inactivity watchdog window for a streaming turn. If the Copilot SDK yields no chunk within
+    /// this span, the turn is aborted (retryable) instead of hanging forever and stranding the run
+    /// in <c>in_progress</c> — see <see cref="AsyncStreamIdleTimeout"/> for the root cause. Reset on
+    /// every delivered chunk, so slow first tokens and long tool calls stay alive. Default 15 min
+    /// (well above any legitimate stream gap while still bounding a true hang); override with the
+    /// <c>AGENTWEAVER_AGENT_TURN_IDLE_TIMEOUT_SECONDS</c> environment variable (0 disables it).
+    /// Settable for tests.
+    /// </summary>
+    internal TimeSpan StreamIdleTimeout { get; set; } = ResolveStreamIdleTimeoutDefault();
+
+    private static TimeSpan ResolveStreamIdleTimeoutDefault()
+    {
+        var raw = Environment.GetEnvironmentVariable("AGENTWEAVER_AGENT_TURN_IDLE_TIMEOUT_SECONDS");
+        if (int.TryParse(raw, out var seconds))
+            return seconds <= 0 ? TimeSpan.Zero : TimeSpan.FromSeconds(seconds);
+        return TimeSpan.FromMinutes(15);
+    }
+
     public CopilotAIAgent(
         GitHubCopilotClientFactory factory,
         IGitHubTokenScopeProvider scopeProvider,
@@ -678,7 +697,8 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         if (_inner is null)
             throw new InvalidOperationException("SetupAsync must be called before ExecuteStreamingLoopAsync.");
 
-        await foreach (var chunk in _inner.RunStreamingAsync(task, session, options: null, ct).WithCancellation(ct))
+        await foreach (var chunk in _inner.RunStreamingAsync(task, session, options: null, ct)
+                   .WithIdleTimeout(StreamIdleTimeout, _runId ?? "unknown", _logger, ct))
         {
             if (chunk is null) continue;
 
