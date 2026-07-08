@@ -315,7 +315,7 @@ public sealed class EfRunStore : IRunStore
 
     public async Task<Run?> FindActiveChildAsync(string parentRunId, string subtaskId, CancellationToken ct = default)
     {
-        var activeStatuses = new[] { "in_progress", "awaiting_review", "assembling", "in_review", "assemble_ready" };
+        var activeStatuses = new[] { "in_progress", "awaiting_review", "assembling", "in_review" };
         await using var db = await _factory.CreateDbContextAsync(ct);
         var rec = await db.Runs.AsNoTracking()
             .Where(r => r.ParentRunId == parentRunId && r.SubtaskId == subtaskId && activeStatuses.Contains(r.Status))

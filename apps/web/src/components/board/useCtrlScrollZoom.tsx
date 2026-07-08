@@ -2,8 +2,8 @@
  * useCtrlScrollZoom — shared Ctrl+Scroll zoom behaviour and affordance.
  *
  * Extracted from the Kanban board so the same gesture, bounds, and controls are
- * reused verbatim by both the board (KanbanBoard) and the workflow diagram
- * (WorkflowRunPage). Users zoom OUT to fit a wide canvas on screen at once; 100%
+ * reused verbatim by both the board (KanbanBoard) and orchestration diagrams.
+ * Users zoom OUT to fit a wide canvas on screen at once; 100%
  * is the natural, unscaled size.
  *
  * The wheel listener is attached as a native, non-passive listener (so

@@ -47,6 +47,18 @@ describe('OrchestrationsPage', () => {
     expect(screen.queryByText('Solo task')).toBeNull();
   });
 
+  it('labels the automatic assembly handoff without presenting it as a user-waiting stage', async () => {
+    vi.mocked(apiClient.listProjectRuns).mockResolvedValue([
+      { workflow_run_id: 'c1', execution_id: 'e1', agent_name: 'Coordinator', task: 'Assemble squad output', status: 'in_progress', coordinator_status: 'awaiting_assembly', started_at: new Date().toISOString() },
+    ] as never);
+
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText('Assemble squad output')).toBeDefined());
+    expect(document.body.textContent).toContain('Preparing assembly');
+    expect(document.body.textContent).not.toContain('Awaiting assembly');
+  });
+
   it('shows an empty state when there are no orchestrations', async () => {
     vi.mocked(apiClient.listProjectRuns).mockResolvedValue([] as never);
 

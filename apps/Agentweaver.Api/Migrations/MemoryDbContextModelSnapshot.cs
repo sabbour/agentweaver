@@ -737,7 +737,13 @@ namespace Agentweaver.Api.Migrations
                     b.Property<string>("AssemblyStage")
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("AssemblyStatusReason")
+                        .HasColumnType("TEXT");
+
                     b.Property<DateTimeOffset?>("AssemblyStartedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("AssemblyTerminalStage")
                         .HasColumnType("TEXT");
 
                     b.Property<string>("CoordinatorPodId")

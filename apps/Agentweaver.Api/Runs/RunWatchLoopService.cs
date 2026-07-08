@@ -692,7 +692,8 @@ public sealed class RunWatchLoopService
                 RunId.Parse(runId), RunStatus.Failed, failedAt, reason, CancellationToken.None).ConfigureAwait(false);
 
             EmitTerminalMetrics(run, failedAt, "failed", reason, changed);
-            entry.RecordNext(EventTypes.RunFailed, new { reason });
+            if (!entry.HasEventType(EventTypes.RunFailed))
+                entry.RecordNext(EventTypes.RunFailed, new { reason });
             _streamStore.Complete(runId);
             _ = _factory.PersistRunEventsAsync(runId);
             _ = FirePostRunScribeAsync(runId);

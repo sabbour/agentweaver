@@ -9,6 +9,8 @@ vi.mock('../api/apiClient', () => ({
     getProject: vi.fn(),
     getServerInfo: vi.fn(),
     getSandboxPolicy: vi.fn(),
+    updateProjectProviderSettings: vi.fn(),
+    updateSandboxPolicy: vi.fn(),
   },
 }));
 
@@ -36,9 +38,23 @@ beforeEach(() => {
   vi.mocked(apiClient.getProject).mockResolvedValue({
     project_id: 'proj-1',
     name: 'Demo',
+    origin: 'blank',
+    source_repository: null,
     working_directory: 'C:/demo',
+    default_branch: 'main',
+    owner: 'sabbour',
+    default_provider: 'github-copilot',
     default_model_github_copilot: 'gpt-4',
+    default_model_microsoft_foundry: null,
+    blueprint_generation_model: null,
+    workflow_generation_model: 'claude-sonnet-4.6',
+    outcome_spec_generation_model: null,
+    available: true,
+    state: 'active',
+    created_at: '2026-07-07T00:00:00Z',
+    updated_at: '2026-07-07T00:00:00Z',
   } as never);
+  vi.mocked(apiClient.updateProjectProviderSettings).mockResolvedValue(undefined as never);
   vi.mocked(apiClient.getServerInfo).mockResolvedValue({ data_directory: 'C:/data' } as never);
   vi.mocked(apiClient.getSandboxPolicy).mockResolvedValue({
     repository_path: 'C:/demo',
@@ -75,6 +91,85 @@ describe('ProjectSettingsPage', () => {
     fireEvent.click(screen.getByRole('button', { name: /Sandbox policy/i }));
 
     await waitFor(() => expect(screen.getByText('Sandbox enabled')).toBeDefined());
+  });
+
+  it('renders generation model overrides with blank fields inheriting gpt-5.4', async () => {
+    renderPage('proj-1');
+
+    const blueprint = await screen.findByRole('textbox', { name: 'Blueprint generation model' }) as HTMLInputElement;
+    const workflow = screen.getByRole('textbox', { name: 'Workflow generation model' }) as HTMLInputElement;
+    const outcome = screen.getByRole('textbox', { name: 'Outcome spec generation model' }) as HTMLInputElement;
+
+    expect(screen.getByText('Generation models')).toBeDefined();
+    expect(screen.getByText('Leave a field blank to inherit the global generation default (gpt-5.4).')).toBeDefined();
+    expect(blueprint.value).toBe('');
+    expect(blueprint.getAttribute('placeholder')).toBe('Inherit gpt-5.4');
+    expect(workflow.value).toBe('claude-sonnet-4.6');
+    expect(outcome.value).toBe('');
+  });
+
+  it('saves generation model overrides using Tank backend payload shape', async () => {
+    renderPage('proj-1');
+
+    const blueprint = await screen.findByRole('textbox', { name: 'Blueprint generation model' });
+    const outcome = screen.getByRole('textbox', { name: 'Outcome spec generation model' });
+
+    fireEvent.change(blueprint, { target: { value: ' gpt-5.5 ' } });
+    fireEvent.change(outcome, { target: { value: ' claude-opus-4.8 ' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save generation models' }));
+
+    await waitFor(() => expect(apiClient.updateProjectProviderSettings).toHaveBeenCalledWith('proj-1', {
+      default_provider: 'github-copilot',
+      default_model_github_copilot: 'gpt-4',
+      default_model_microsoft_foundry: null,
+      blueprint_generation_model: 'gpt-5.5',
+      workflow_generation_model: 'claude-sonnet-4.6',
+      outcome_spec_generation_model: 'claude-opus-4.8',
+    }));
+    expect(await screen.findByText('Generation model settings saved.')).toBeDefined();
+  });
+
+  it('resets generation models to inherit the global default without filling fields', async () => {
+    vi.mocked(apiClient.getProject).mockResolvedValue({
+      project_id: 'proj-1',
+      name: 'Demo',
+      origin: 'blank',
+      source_repository: null,
+      working_directory: 'C:/demo',
+      default_branch: 'main',
+      owner: 'sabbour',
+      default_provider: 'github-copilot',
+      default_model_github_copilot: 'gpt-4',
+      default_model_microsoft_foundry: 'foundry-model',
+      blueprint_generation_model: 'gpt-5.5',
+      workflow_generation_model: 'claude-sonnet-4.6',
+      outcome_spec_generation_model: 'claude-opus-4.8',
+      available: true,
+      state: 'active',
+      created_at: '2026-07-07T00:00:00Z',
+      updated_at: '2026-07-07T00:00:00Z',
+    } as never);
+
+    renderPage('proj-1');
+
+    const blueprint = await screen.findByRole('textbox', { name: 'Blueprint generation model' }) as HTMLInputElement;
+    const workflow = screen.getByRole('textbox', { name: 'Workflow generation model' }) as HTMLInputElement;
+    const outcome = screen.getByRole('textbox', { name: 'Outcome spec generation model' }) as HTMLInputElement;
+    expect(blueprint.value).toBe('gpt-5.5');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Reset generation models to inherit defaults' }));
+
+    await waitFor(() => expect(apiClient.updateProjectProviderSettings).toHaveBeenCalledWith('proj-1', {
+      default_provider: 'github-copilot',
+      default_model_github_copilot: 'gpt-4',
+      default_model_microsoft_foundry: 'foundry-model',
+      blueprint_generation_model: null,
+      workflow_generation_model: null,
+      outcome_spec_generation_model: null,
+    }));
+    expect(blueprint.value).toBe('');
+    expect(workflow.value).toBe('');
+    expect(outcome.value).toBe('');
   });
 
   it('shows an inverted "Sandbox enabled" toggle and gates the network switch on it', async () => {

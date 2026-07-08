@@ -37,6 +37,8 @@ public sealed class CoordinatorAssemblyStore
             .ExecuteUpdateAsync(setters => setters
                 .SetProperty(w => w.Status, WorkPlanStatus.Assembling)
                 .SetProperty(w => w.IntegrationBranch, integrationBranch)
+                .SetProperty(w => w.AssemblyTerminalStage, (string?)null)
+                .SetProperty(w => w.AssemblyStatusReason, (string?)null)
                 .SetProperty(w => w.AssemblyStartedAt, now)
                 .SetProperty(w => w.UpdatedAt, now), ct)
             .ConfigureAwait(false);
@@ -57,6 +59,8 @@ public sealed class CoordinatorAssemblyStore
             .ExecuteUpdateAsync(setters => setters
                 .SetProperty(w => w.Status, WorkPlanStatus.AwaitingAssembly)
                 .SetProperty(w => w.AssemblyStage, (string?)null)
+                .SetProperty(w => w.AssemblyTerminalStage, (string?)null)
+                .SetProperty(w => w.AssemblyStatusReason, (string?)null)
                 .SetProperty(w => w.UpdatedAt, now), ct)
             .ConfigureAwait(false);
         return rows > 0;
@@ -87,6 +91,8 @@ public sealed class CoordinatorAssemblyStore
                 UPDATE "WorkPlans"
                    SET "Status" = {WorkPlanStatus.AwaitingAssembly},
                        "AssemblyStage" = NULL,
+                       "AssemblyTerminalStage" = NULL,
+                       "AssemblyStatusReason" = NULL,
                        "UpdatedAt" = {now}
                  WHERE "Id" = {workPlanId}
                    AND "Status" = {WorkPlanStatus.Assembling}
@@ -102,6 +108,8 @@ public sealed class CoordinatorAssemblyStore
             .ExecuteUpdateAsync(setters => setters
                 .SetProperty(w => w.Status, WorkPlanStatus.AwaitingAssembly)
                 .SetProperty(w => w.AssemblyStage, (string?)null)
+                .SetProperty(w => w.AssemblyTerminalStage, (string?)null)
+                .SetProperty(w => w.AssemblyStatusReason, (string?)null)
                 .SetProperty(w => w.UpdatedAt, now), ct)
             .ConfigureAwait(false);
         return updated > 0;
@@ -117,6 +125,27 @@ public sealed class CoordinatorAssemblyStore
             .Where(w => w.Id == workPlanId)
             .ExecuteUpdateAsync(s => s
                 .SetProperty(w => w.Status, status)
+                .SetProperty(w => w.AssemblyTerminalStage, (string?)null)
+                .SetProperty(w => w.AssemblyStatusReason, (string?)null)
+                .SetProperty(w => w.UpdatedAt, now), ct)
+            .ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Sets a parked/terminal assembly status and snapshots the current <see cref="WorkPlan.AssemblyStage"/>
+    /// into <see cref="WorkPlan.AssemblyTerminalStage"/> before any cleanup/scribe stage advances it.
+    /// </summary>
+    public async Task SetTerminalStatusAsync(int workPlanId, string status, string reason, CancellationToken ct)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var now = DateTimeOffset.UtcNow;
+        await db.WorkPlans
+            .Where(w => w.Id == workPlanId)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(w => w.Status, status)
+                .SetProperty(w => w.AssemblyTerminalStage, w => w.AssemblyStage)
+                .SetProperty(w => w.AssemblyStatusReason, reason)
                 .SetProperty(w => w.UpdatedAt, now), ct)
             .ConfigureAwait(false);
     }
@@ -146,6 +175,8 @@ public sealed class CoordinatorAssemblyStore
             .ExecuteUpdateAsync(s => s
                 .SetProperty(w => w.Status, status)
                 .SetProperty(w => w.AssemblyStage, stage)
+                .SetProperty(w => w.AssemblyTerminalStage, (string?)null)
+                .SetProperty(w => w.AssemblyStatusReason, (string?)null)
                 .SetProperty(w => w.UpdatedAt, now), ct)
             .ConfigureAwait(false);
     }
@@ -157,11 +188,23 @@ public sealed class CoordinatorAssemblyStore
         var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
         return await db.WorkPlans.AsNoTracking()
             .Where(w => w.Id == workPlanId)
-            .Select(w => new WorkPlanAssemblyState(w.Id, w.Status, w.AssemblyStage, w.IntegrationBranch))
+            .Select(w => new WorkPlanAssemblyState(
+                w.Id,
+                w.Status,
+                w.AssemblyStage,
+                w.IntegrationBranch,
+                w.AssemblyTerminalStage,
+                w.AssemblyStatusReason))
             .FirstOrDefaultAsync(ct)
             .ConfigureAwait(false);
     }
 }
 
 /// <summary>Assembly-relevant projection of a <see cref="WorkPlan"/> row.</summary>
-public sealed record WorkPlanAssemblyState(int Id, string Status, string? AssemblyStage, string? IntegrationBranch);
+public sealed record WorkPlanAssemblyState(
+    int Id,
+    string Status,
+    string? AssemblyStage,
+    string? IntegrationBranch,
+    string? AssemblyTerminalStage = null,
+    string? AssemblyStatusReason = null);

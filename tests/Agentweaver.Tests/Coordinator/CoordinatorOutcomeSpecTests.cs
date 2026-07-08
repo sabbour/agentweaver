@@ -84,10 +84,20 @@ public sealed class CoordinatorOutcomeSpecTests : IDisposable
         var streamStore = _factory.Services.GetRequiredService<RunStreamStore>();
         var entry = streamStore.Get(runId);
         entry.Should().NotBeNull();
-        var specEvent = entry!.GetSnapshotSince(0).Events.FirstOrDefault(
-            e => e.Type == EventTypes.CoordinatorOutcomeSpec);
+        var events = entry!.GetSnapshotSince(0).Events.ToList();
+        var draftingEvent = events.FirstOrDefault(e => e.Type == EventTypes.CoordinatorOutcomeSpecDrafting);
+        draftingEvent.Should().NotBeNull(
+            "the coordinator must emit an active drafting event before the confirmable draft is ready");
+        var draftingPayload = JsonSerializer.SerializeToElement(draftingEvent!.Payload);
+        draftingPayload.GetProperty("status").GetString().Should().Be("drafting");
+        draftingPayload.GetProperty("goal").GetString().Should().Be(
+            "Build a deterministic outcome spec for testing");
+
+        var specEvent = events.FirstOrDefault(e => e.Type == EventTypes.CoordinatorOutcomeSpec);
         specEvent.Should().NotBeNull(
             "the draft executor must emit coordinator.outcome_spec before suspending");
+        draftingEvent.Sequence.Should().BeLessThan(specEvent!.Sequence,
+            "the active drafting projection must precede the ready-for-confirmation projection");
         var specPayload = JsonSerializer.SerializeToElement(specEvent!.Payload);
         specPayload.GetProperty("goal").GetString().Should().Be(
             "Build a deterministic outcome spec for testing",
@@ -98,12 +108,107 @@ public sealed class CoordinatorOutcomeSpecTests : IDisposable
         var run = await GetRunAsync(_owner, runId);
         run!.Status.Should().Be("in_progress",
             "the coordinator run must remain suspended at the gate, not dispatch or terminate");
+        run.CoordinatorStatus.Should().Be("awaiting_confirmation",
+            "run detail should replay the pre-work-plan outcome-spec lifecycle after drafting completes");
 
         var runStore = _factory.Services.GetRequiredService<SqliteRunStore>();
         var stored = await runStore.GetAsync(RunId.Parse(runId), CancellationToken.None);
         stored!.AgentName.Should().Be("Coordinator");
         stored.ParentRunId.Should().BeNull("the coordinator run is the parent, it has no parent");
         stored.SubtaskId.Should().BeNull("Phase 1 does not decompose into subtasks");
+    }
+
+    [Fact]
+    public async Task Start_UsesProjectOutcomeSpecGenerationModel()
+    {
+        var projectId = await CreateProjectAsync();
+        var update = await _owner.PutAsJsonAsync(
+            $"/api/projects/{projectId}/provider-settings",
+            new { outcome_spec_generation_model = "gpt-5-mini" });
+        update.StatusCode.Should().Be(HttpStatusCode.NoContent);
+
+        var runId = await StartOrchestrationAsync(projectId, "Draft with project-specific outcome spec model");
+        await WaitForGateAsync(runId);
+
+        var drafter = _factory.Services.GetRequiredService<ICoordinatorSpecDrafter>()
+            .Should().BeOfType<FakeCoordinatorSpecDrafter>().Subject;
+        drafter.LastInput.Should().NotBeNull();
+        drafter.LastInput!.OutcomeSpecGenerationModel.Should().Be("gpt-5-mini");
+    }
+
+    [Fact]
+    public async Task Start_DefineOutcomeMode_DraftsSpecAndSuspendsAtGate()
+    {
+        var projectId = await CreateProjectAsync();
+
+        var runId = await StartOrchestrationAsync(
+            projectId,
+            "Explicit define-outcome mode should preserve the existing flow",
+            startMode: "defineOutcome");
+
+        await WaitForGateAsync(runId);
+        var spec = await GetOutcomeSpecAsync(_owner, runId);
+        spec.Should().NotBeNull();
+        spec!.Status.Should().Be("awaiting_confirmation");
+
+        var workPlan = await GetWorkPlanAsync(runId);
+        workPlan.Should().BeNull("defineOutcome must not decompose before the human confirms the spec");
+    }
+
+    [Fact]
+    public async Task Start_DirectMode_SkipsOutcomeGate_OrchestratesFromPrompt()
+    {
+        var projectId = await CreateProjectAsync();
+        const string goal = "Direct mode should plan from this prompt without drafting an outcome spec";
+
+        var runId = await StartOrchestrationAsync(projectId, goal, startMode: "direct");
+
+        var spec = await PollOutcomeSpecUntilAsync(runId, s => s.Status == "confirmed");
+        spec.Should().NotBeNull("direct mode persists a confirmed prompt-backed spec for the existing work-plan FK");
+        spec!.Goal.Should().Be(goal);
+        spec.DesiredOutcome.Should().Be(goal);
+        spec.ConfirmedBy.Should().Be(CoordinatorWebApplicationFactory.OwnerUser);
+
+        var pendingStore = _factory.Services.GetRequiredService<PendingRequestStore>();
+        (await pendingStore.GetAsync(runId)).Should().BeNull("direct mode skips the outcome-spec confirmation gate");
+
+        var workPlan = await PollWorkPlanAsync(runId);
+        workPlan.Should().NotBeNull("direct mode must enter the same orchestration path as a confirmed spec");
+        workPlan!.OutcomeSpecId.Should().BeGreaterThan(0);
+        workPlan.Status.Should().Be("planned");
+
+        var subtaskCount = await PollSubtaskCountAsync(workPlan.Id);
+        subtaskCount.Should().BeGreaterThan(0,
+            "direct mode must decompose the prompt into dispatchable subtasks");
+    }
+
+    [Fact]
+    public async Task RunDetail_NoWorkPlan_ReplaysPersistedDraftingStatus()
+    {
+        var runId = await InsertInactiveCoordinatorRunAsync(CoordinatorWebApplicationFactory.OwnerUser);
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var now = DateTimeOffset.UtcNow;
+            db.OutcomeSpecs.Add(new OutcomeSpec
+            {
+                ProjectId = Guid.NewGuid().ToString(),
+                CoordinatorRunId = runId,
+                Goal = "Drafting should survive replay",
+                DesiredOutcome = string.Empty,
+                Scope = string.Empty,
+                Assumptions = string.Empty,
+                Status = "drafting",
+                CreatedAt = now,
+                UpdatedAt = now,
+            });
+            await db.SaveChangesAsync();
+        }
+
+        var run = await GetRunAsync(_owner, runId);
+
+        run!.CoordinatorStatus.Should().Be("drafting",
+            "persisted/replayed coordinator state must distinguish active outcome-plan drafting from pending/not-started");
     }
 
     // =========================================================================
@@ -398,9 +503,10 @@ public sealed class CoordinatorOutcomeSpecTests : IDisposable
         return body.GetProperty("project_id").GetString()!;
     }
 
-    private async Task<string> StartOrchestrationAsync(string projectId, string goal)
+    private async Task<string> StartOrchestrationAsync(string projectId, string goal, string? startMode = null)
     {
-        var resp = await _owner.PostAsJsonAsync($"/api/projects/{projectId}/orchestrations", new { goal });
+        object request = startMode is null ? new { goal } : new { goal, start_mode = startMode };
+        var resp = await _owner.PostAsJsonAsync($"/api/projects/{projectId}/orchestrations", request);
         resp.StatusCode.Should().Be(HttpStatusCode.Created, "starting a coordinator run must return 201");
         var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
         return body.GetProperty("runId").GetString()!;
@@ -443,6 +549,47 @@ public sealed class CoordinatorOutcomeSpecTests : IDisposable
         }
 
         return null;
+    }
+
+    private async Task<WorkPlan?> GetWorkPlanAsync(string runId)
+    {
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        return await db.WorkPlans.AsNoTracking()
+            .FirstOrDefaultAsync(w => w.CoordinatorRunId == runId);
+    }
+
+    private async Task<WorkPlan?> PollWorkPlanAsync(string runId, int timeoutSeconds = 20)
+    {
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(timeoutSeconds);
+        while (DateTime.UtcNow < deadline)
+        {
+            var plan = await GetWorkPlanAsync(runId);
+            if (plan is not null) return plan;
+            await Task.Delay(50);
+        }
+
+        return null;
+    }
+
+    private async Task<int> CountSubtasksAsync(int workPlanId)
+    {
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        return await db.Subtasks.AsNoTracking().CountAsync(s => s.WorkPlanId == workPlanId);
+    }
+
+    private async Task<int> PollSubtaskCountAsync(int workPlanId, int timeoutSeconds = 20)
+    {
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(timeoutSeconds);
+        while (DateTime.UtcNow < deadline)
+        {
+            var count = await CountSubtasksAsync(workPlanId);
+            if (count > 0) return count;
+            await Task.Delay(50);
+        }
+
+        return 0;
     }
 
     private async Task<RunResponse?> GetRunAsync(HttpClient client, string runId)

@@ -1,3 +1,4 @@
+using System.Text.Json;
 using FluentAssertions;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
@@ -193,6 +194,37 @@ public sealed class CoordinatorSteeringServiceTests : IDisposable
         var events = _streamStore.Get("coord-send")!.GetSnapshotSince(0).Events;
         events.Should().Contain(e => e.Type == EventTypes.CoordinatorSteering,
             "send must emit a coordinator.steering event for the timeline");
+    }
+
+    [Fact]
+    public async Task Send_TargetedChild_PreservesTargetInResponseEventAndQueue()
+    {
+        const string coord = "coord-send-targeted";
+        _streamStore.Create(coord, "alice");
+        await SeedActiveChildAsync(coord, "child-target", SubtaskStatus.Running);
+        await SeedActiveChildAsync(coord, "child-other", SubtaskStatus.Running);
+
+        var view = await _sut.SteerAsync(coord, "send", "child-target", "context for only this child", "alice", default);
+
+        view.Kind.Should().Be(SteeringKind.Send);
+        view.Status.Should().Be(SteeringStatus.Queued);
+        view.TargetChildRunId.Should().Be("child-target",
+            "a selected-child composer message must round-trip its target instead of looking like a whole-run broadcast");
+
+        (await _queue.TryTakeForChildAsync(coord, "child-other")).Should().BeNull(
+            "targeted child messages must not drain on sibling child boundaries");
+
+        var taken = await _queue.TryTakeForChildAsync(coord, "child-target");
+        taken.Should().NotBeNull();
+        taken!.DirectiveId.Should().Be(view.Id);
+        taken.TargetChildRunId.Should().Be("child-target");
+        taken.Instruction.Should().Be("context for only this child");
+
+        var evt = _streamStore.Get(coord)!.GetSnapshotSince(0).Events
+            .Single(e => e.Type == EventTypes.CoordinatorSteering);
+        var payload = JsonSerializer.SerializeToNode(evt.Payload)!.AsObject();
+        payload["targetChildRunId"]!.GetValue<string>().Should().Be("child-target",
+            "Trinity's UI can attribute the accepted message to the selected child context");
     }
 
     [Fact]

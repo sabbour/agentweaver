@@ -59,6 +59,9 @@ public static class CoordinatorGraphDescriptor
         IReadOnlyList<Subtask> subtasks,
         IReadOnlyCollection<(int SubtaskId, int DependsOnSubtaskId)> dependencies,
         string? assemblyStage = null,
+        string? workPlanStatus = null,
+        string? assemblyTerminalStage = null,
+        string? assemblyStatusReason = null,
         IPodNameRegistry? podRegistry = null,
         IReadOnlyList<AssemblyGateNode>? assemblyGates = null)
     {
@@ -66,7 +69,16 @@ public static class CoordinatorGraphDescriptor
             .Select(s => new SubtaskNode(
                 s.Id, s.Title, s.AssignedAgent, s.SelectedModelId, s.Phase, s.IsolationStrategy, s.ChildRunId))
             .ToList();
-        return BuildCore(coordinatorRunId, projected, dependencies, assemblyStage, podRegistry, assemblyGates);
+        return BuildCore(
+            coordinatorRunId,
+            projected,
+            dependencies,
+            assemblyStage,
+            workPlanStatus,
+            assemblyTerminalStage,
+            assemblyStatusReason,
+            podRegistry,
+            assemblyGates);
     }
 
     /// <summary>
@@ -77,7 +89,14 @@ public static class CoordinatorGraphDescriptor
     /// decomposition produces subtasks.
     /// </summary>
     public static GraphDescriptor BuildEmpty(string coordinatorRunId) =>
-        BuildCore(coordinatorRunId, Array.Empty<SubtaskNode>(), Array.Empty<(int, int)>(), assemblyStage: null);
+        BuildCore(
+            coordinatorRunId,
+            Array.Empty<SubtaskNode>(),
+            Array.Empty<(int, int)>(),
+            assemblyStage: null,
+            workPlanStatus: null,
+            assemblyTerminalStage: null,
+            assemblyStatusReason: null);
 
     /// <summary>Builds the descriptor from the <see cref="CoordinatorWorkPlanView"/> projection.</summary>
     public static GraphDescriptor Build(
@@ -92,7 +111,16 @@ public static class CoordinatorGraphDescriptor
         var deps = plan.Dependencies
             .Select(d => (d.SubtaskId, d.DependsOnSubtaskId))
             .ToList();
-        return BuildCore(plan.CoordinatorRunId, projected, deps, plan.AssemblyStage, podRegistry, assemblyGates);
+        return BuildCore(
+            plan.CoordinatorRunId,
+            projected,
+            deps,
+            plan.AssemblyStage,
+            plan.Status,
+            plan.AssemblyTerminalStage,
+            plan.StatusReason,
+            podRegistry,
+            assemblyGates);
     }
 
     private static GraphDescriptor BuildCore(
@@ -100,13 +128,25 @@ public static class CoordinatorGraphDescriptor
         IReadOnlyList<SubtaskNode> subtasks,
         IReadOnlyCollection<(int SubtaskId, int DependsOnSubtaskId)> dependencies,
         string? assemblyStage,
+        string? workPlanStatus,
+        string? assemblyTerminalStage,
+        string? assemblyStatusReason,
         IPodNameRegistry? podRegistry = null,
         IReadOnlyList<AssemblyGateNode>? assemblyGates = null)
     {
         var gates = assemblyGates ?? DefaultAssemblyGates;
         var nodes = new List<GraphNode>(subtasks.Count + 5)
         {
-            new(CoordinatorNodeId, "Coordinator", "coordinator", "live", "agent", ChildGraphRef: null),
+            new(
+                CoordinatorNodeId,
+                "Coordinator",
+                "coordinator",
+                "live",
+                "agent",
+                ChildGraphRef: null,
+                Status: workPlanStatus,
+                StatusReason: assemblyStatusReason,
+                TerminalStage: assemblyTerminalStage),
         };
 
         foreach (var s in subtasks)
@@ -129,23 +169,48 @@ public static class CoordinatorGraphDescriptor
         }
 
         // Collective-assembly stage (Phase 3). Each node flips planned -> live once its stage has
-        // started, computed from the persisted work-plan AssemblyStage (sticky/forward-only): a node
-        // renders "live" when its stage ordinal is <= the current stage ordinal, else "planned".
-        var stageOrd = AssemblyStage.Ordinal(assemblyStage, gates);
+        // started, computed from the persisted work-plan AssemblyStage (sticky/forward-only). For
+        // parked/terminal failures, use AssemblyTerminalStage instead: the failure scribe may advance
+        // AssemblyStage to "scribe", but never-run gates must remain planned.
+        var stageOrd = AssemblyProjectionOrdinal(workPlanStatus, assemblyStage, assemblyTerminalStage, gates);
         string Kind(int nodeStageOrd) => stageOrd >= nodeStageOrd ? "live" : "planned";
         for (var i = 0; i < gates.Count; i++)
         {
             var gate = gates[i];
+            var isTerminalStage = IsTerminalStage(gate.StageId);
             nodes.Add(new GraphNode(
                 gate.GraphNodeId,
                 gate.Label,
                 gate.Role,
                 Kind(i + 1),
                 gate.GateKind == "rai" ? "agent" : "gate",
-                ChildGraphRef: null));
+                ChildGraphRef: null,
+                Status: isTerminalStage ? workPlanStatus : null,
+                StatusReason: isTerminalStage ? assemblyStatusReason : null,
+                TerminalStage: isTerminalStage ? assemblyTerminalStage : null));
         }
-        nodes.Add(new GraphNode(AssemblyMergeNodeId, "Merge", "merge", Kind(gates.Count + 1), "action", ChildGraphRef: null));
-        nodes.Add(new GraphNode(AssemblyScribeNodeId, "Scribe", "scribe", Kind(gates.Count + 2), "agent", ChildGraphRef: null));
+        var mergeTerminal = IsTerminalStage(AssemblyStage.Merge);
+        nodes.Add(new GraphNode(
+            AssemblyMergeNodeId,
+            "Merge",
+            "merge",
+            Kind(gates.Count + 1),
+            "action",
+            ChildGraphRef: null,
+            Status: mergeTerminal ? workPlanStatus : null,
+            StatusReason: mergeTerminal ? assemblyStatusReason : null,
+            TerminalStage: mergeTerminal ? assemblyTerminalStage : null));
+        var scribeTerminal = IsTerminalStage(AssemblyStage.Scribe);
+        nodes.Add(new GraphNode(
+            AssemblyScribeNodeId,
+            "Scribe",
+            "scribe",
+            Kind(gates.Count + 2),
+            "agent",
+            ChildGraphRef: null,
+            Status: scribeTerminal ? workPlanStatus : null,
+            StatusReason: scribeTerminal ? assemblyStatusReason : null,
+            TerminalStage: scribeTerminal ? assemblyTerminalStage : null));
 
         // ── Edges ────────────────────────────────────────────────────────────
         var subtaskIds = subtasks.Select(s => s.Id).ToHashSet();
@@ -220,7 +285,30 @@ public static class CoordinatorGraphDescriptor
 
         return new GraphDescriptor(
             GraphId(coordinatorRunId), Variant, CoordinatorNodeId, nodes.ToArray(), edgeArr);
+
+        bool IsTerminalStage(string stage) =>
+            !string.IsNullOrWhiteSpace(assemblyTerminalStage)
+            && string.Equals(assemblyTerminalStage, stage, StringComparison.Ordinal);
     }
+
+    private static int AssemblyProjectionOrdinal(
+        string? workPlanStatus,
+        string? assemblyStage,
+        string? assemblyTerminalStage,
+        IReadOnlyList<AssemblyGateNode> gates)
+    {
+        if (IsParkedOrTerminalAssemblyStatus(workPlanStatus))
+            return AssemblyStage.Ordinal(assemblyTerminalStage, gates);
+
+        return AssemblyStage.Ordinal(assemblyStage, gates);
+    }
+
+    private static bool IsParkedOrTerminalAssemblyStatus(string? status) => status is
+        WorkPlanStatus.AssemblyBlocked
+        or WorkPlanStatus.AssemblyFailed
+        or WorkPlanStatus.AssemblyDeclined
+        or WorkPlanStatus.RaiBlocked
+        or WorkPlanStatus.NeedsResolution;
 
     private readonly record struct SubtaskNode(
         int Id, string Title, string Agent, string Model, string Phase, string Isolation, string? ChildRunId);

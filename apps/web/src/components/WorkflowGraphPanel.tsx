@@ -2,7 +2,7 @@
  * WorkflowGraphPanel — shared generic workflow graph renderer.
  *
  * Provides the reusable WorkflowNode card, LoopbackEdge, edge helpers, styles, and
- * contexts consumed by both WorkflowRunPage (agent pipeline) and CoordinatorRunPage
+ * contexts consumed by operator graph surfaces, including CoordinatorRunPage
  * (unified coordinator + subtask + planned-assembly view).
  *
  * Reuse rule: import from here; do NOT copy these definitions into page files.
@@ -53,7 +53,7 @@ import { AgentAvatar } from './AgentAvatar';
 import { PodIndicator } from './PodIndicator';
 import { CostChip } from './CostChip';
 import type { GraphNodeType, WorkflowGraphDto } from '../api/types';
-import { DAG_NODE_SEP, NODE_W, NODE_H, NODE_TYPE_W, layoutDag, workflowNodeSizeHint } from '../utils/dagLayout';
+import { DAG_NODE_SEP, NODE_W, NODE_TYPE_W, buildSteppedConnectorRoute, layoutDag, roundedOrthogonalPath, workflowNodeSizeHint } from '../utils/dagLayout';
 import { formatModelLabel } from '../utils/agentIdentity';
 
 // ---------------------------------------------------------------------------
@@ -101,8 +101,8 @@ export interface WorkflowNodeData extends Record<string, unknown> {
   runDegraded?: { toolName: string; reason: string };
   /** Per-node execution pod name (spec-018). Null today (global fallback used); non-null per-agent after distributed phases. */
   executionPodName?: string | null;
-  /** Layout direction for handle placement. 'LR' (default) = left/right; 'TB' = top/bottom. */
-  dir?: 'LR' | 'TB';
+  /** Layout direction for handle placement. 'LR' = left/right; 'TB' = top/bottom; 'GRID' exposes all sides for routed grid edges. */
+  dir?: 'LR' | 'TB' | 'GRID';
   /** When true and the node is running, an orange tool-approval badge is shown. */
   hasPendingApproval?: boolean;
   totalNanoAiu?: number | null;
@@ -113,10 +113,10 @@ export interface WorkflowNodeData extends Record<string, unknown> {
 // Contexts — provided at page level, consumed by node/edge components
 // ---------------------------------------------------------------------------
 
-/** WorkflowRunPage: open the execution detail modal for a given executionId. */
+/** Open the execution detail modal for a given executionId. */
 export const ExecutionModalContext = createContext<((executionId: string) => void) | undefined>(undefined);
 
-/** WorkflowRunPage: id of the active loopback edge (highlighted in blue). */
+/** Id of the active loopback edge (highlighted in blue). */
 export const ActiveEdgeContext = createContext<string | undefined>(undefined);
 
 /** CoordinatorRunPage: open/scroll to the all-up orchestration session panel. */
@@ -536,7 +536,7 @@ export function statusDescription(key: string, status: StepStatus): string | nul
     if (status === 'skipped')   return 'Skipped';
   }
   if (key === 'assemble-ready') {
-    if (status === 'started')   return 'Awaiting assembly...';
+    if (status === 'started')   return 'Preparing assembly...';
     if (status === 'completed') return 'Ready for assembly';
     if (status === 'failed')    return 'Failed';
   }
@@ -608,8 +608,9 @@ export function WorkflowNode({ data, selected }: NodeProps) {
   ].filter(Boolean).join(' ');
 
   const handleStyle: React.CSSProperties = { opacity: 0, pointerEvents: 'none' };
-  const targetPos = (data as WorkflowNodeData).dir === 'TB' ? Position.Top : Position.Left;
-  const sourcePos = (data as WorkflowNodeData).dir === 'TB' ? Position.Bottom : Position.Right;
+  const dir = (data as WorkflowNodeData).dir;
+  const targetPos = dir === 'TB' ? Position.Top : Position.Left;
+  const sourcePos = dir === 'TB' ? Position.Bottom : Position.Right;
   const rawSubText = statusDescription(key, effectiveStatus);
   // message (from workflow.step payload) takes priority over the hardcoded statusDescription fallback.
   const subText    = degradedReason ?? ((key === 'agent' && effectiveStatus === 'started' && intent) ? intent : (message ?? rawSubText));
@@ -636,8 +637,23 @@ export function WorkflowNode({ data, selected }: NodeProps) {
         } : undefined}
         style={coordinatorClickable ? { cursor: 'pointer' } : undefined}
       >
-      <Handle type="target" position={targetPos} style={handleStyle} />
-      <Handle type="source" position={sourcePos} style={handleStyle} />
+      {dir === 'GRID' ? (
+        <>
+          <Handle id="target-left" type="target" position={Position.Left} style={handleStyle} />
+          <Handle id="target-right" type="target" position={Position.Right} style={handleStyle} />
+          <Handle id="target-top" type="target" position={Position.Top} style={handleStyle} />
+          <Handle id="target-bottom" type="target" position={Position.Bottom} style={handleStyle} />
+          <Handle id="source-left" type="source" position={Position.Left} style={handleStyle} />
+          <Handle id="source-right" type="source" position={Position.Right} style={handleStyle} />
+          <Handle id="source-top" type="source" position={Position.Top} style={handleStyle} />
+          <Handle id="source-bottom" type="source" position={Position.Bottom} style={handleStyle} />
+        </>
+      ) : (
+        <>
+          <Handle type="target" position={targetPos} style={handleStyle} />
+          <Handle type="source" position={sourcePos} style={handleStyle} />
+        </>
+      )}
 
       <span
         className={`${s.accentBar} ${accentClass(s, effectiveStatus, { isPlanned: !!isPlanned, isAwaiting: isHumanWaiting })}`}
@@ -769,37 +785,17 @@ export function WorkflowNode({ data, selected }: NodeProps) {
 export const workflowNodeTypes = { workflow: WorkflowNode };
 
 // ---------------------------------------------------------------------------
-// Loopback edge — orthogonal path with clearance heuristics
+// Routed edges — quiet orthogonal paths with rounded corners
 // ---------------------------------------------------------------------------
 
 const LOOPBACK_STROKE        = 'var(--colorNeutralStroke1)';
 const LOOPBACK_STROKE_ACTIVE = 'var(--colorBrandForeground1)';
 const LOOPBACK_TEXT_COLOR    = 'var(--colorNeutralForeground2)';
-const ARC_GAP         = 40;
-const STAGGER         = 36;
-const CORNER_R        = 10;
-const CARD_H_FALLBACK = NODE_H * 1.4;
+const RETURN_RAIL_GAP        = 36;
+const RETURN_RAIL_STAGGER    = 26;
 
-function loopbackPath(sx: number, sy: number, tx: number, ty: number, apexY: number, above: boolean): string {
-  const r = Math.min(CORNER_R, Math.abs(sx - tx) / 4, Math.abs(apexY - sy) / 2, Math.abs(apexY - ty) / 2);
-  if (above) {
-    return [
-      `M ${sx},${sy}`,
-      `L ${sx},${apexY + r}`,
-      `Q ${sx},${apexY} ${sx - r},${apexY}`,
-      `L ${tx + r},${apexY}`,
-      `Q ${tx},${apexY} ${tx},${apexY + r}`,
-      `L ${tx},${ty}`,
-    ].join(' ');
-  }
-  return [
-    `M ${sx},${sy}`,
-    `L ${sx},${apexY - r}`,
-    `Q ${sx},${apexY} ${sx - r},${apexY}`,
-    `L ${tx + r},${apexY}`,
-    `Q ${tx},${apexY} ${tx},${apexY - r}`,
-    `L ${tx},${ty}`,
-  ].join(' ');
+function markerId(prefix: string, id: string): string {
+  return `${prefix}-${String(id).replace(/[^a-zA-Z0-9_-]/g, '-')}`;
 }
 
 export function LoopbackEdge({ id, sourceX, sourceY, targetX, targetY, label, data }: EdgeProps) {
@@ -810,18 +806,13 @@ export function LoopbackEdge({ id, sourceX, sourceY, targetX, targetY, label, da
   const myEdge   = allEdges.find(e => e.id === id);
   const sourceId = myEdge?.source ?? '';
   const targetId = myEdge?.target ?? '';
+  const loopbackData = data as { returnSide?: 'left' | 'right' } | undefined;
 
   const sourceNode = allNodes.find(n => n.id === sourceId);
   const targetNode = allNodes.find(n => n.id === targetId);
 
-  // Use measured width per node so differently-sized cards are routed correctly.
-  const srcW    = sourceNode?.measured?.width  ?? NODE_W;
-  const tgtW    = targetNode?.measured?.width  ?? NODE_W;
-  const srcHalf = (sourceNode?.measured?.height ?? NODE_H) / 2;
-  const tgtHalf = (targetNode?.measured?.height ?? NODE_H) / 2;
-
   const siblings = allEdges
-    .filter(e => e.type === 'loopback' && e.target === targetId)
+    .filter(e => e.type === 'loopback')
     .sort((a, b) => {
       const ax = allNodes.find(n => n.id === a.source)?.position.x ?? 0;
       const bx = allNodes.find(n => n.id === b.source)?.position.x ?? 0;
@@ -829,70 +820,67 @@ export function LoopbackEdge({ id, sourceX, sourceY, targetX, targetY, label, da
     });
 
   const myIndex   = siblings.findIndex(e => e.id === id);
-  const autoAbove = myIndex % 2 === 0;
-  const above     = data?.above !== undefined ? Boolean(data.above) : autoAbove;
-
-  const sx = sourceX - srcW / 2;
-  const tx = targetX + tgtW / 2;
-  const sy = above ? sourceY - srcHalf : sourceY + srcHalf;
-  const ty = above ? targetY - tgtHalf : targetY + tgtHalf;
-
-  const minX = Math.min(sx, tx);
-  const maxX = Math.max(sx, tx);
-  const spannedNodes = allNodes.filter(n => {
-    const nl = n.position.x;
-    const nr = nl + (n.measured?.width ?? NODE_W);
-    return nr > minX && nl < maxX;
-  });
-
-  const fallbackTop    = sourceY - srcHalf;
-  const fallbackBottom = sourceY + srcHalf;
-
-  let apexY: number;
-  if (above) {
-    const minTop = spannedNodes.length > 0
-      ? Math.min(...spannedNodes.map(n => n.position.y))
-      : fallbackTop;
-    apexY = minTop - ARC_GAP;
-  } else {
-    const maxBottom = spannedNodes.length > 0
-      ? Math.max(...spannedNodes.map(n => n.position.y + (n.measured?.height ?? CARD_H_FALLBACK)))
-      : fallbackBottom;
-    apexY = maxBottom + ARC_GAP;
-  }
-
-  const sameSideBefore = siblings.slice(0, myIndex).filter((e, i) => {
-    const sAbove = e.data?.above !== undefined ? Boolean(e.data.above) : i % 2 === 0;
-    return sAbove === above;
+  const sourceRight = (sourceNode?.position.x ?? sourceX) + (sourceNode?.measured?.width ?? NODE_W);
+  const targetRight = (targetNode?.position.x ?? targetX) + (targetNode?.measured?.width ?? NODE_W);
+  const returningLeft = loopbackData?.returnSide === 'right'
+    ? true
+    : loopbackData?.returnSide === 'left'
+      ? false
+      : targetRight <= sourceRight;
+  const nodeBounds = allNodes.reduce(
+    (bounds, node) => {
+      const width = node.measured?.width ?? NODE_W;
+      return {
+        minX: Math.min(bounds.minX, node.position.x),
+        maxX: Math.max(bounds.maxX, node.position.x + width),
+      };
+    },
+    { minX: Math.min(sourceX, targetX), maxX: Math.max(sourceX, targetX) },
+  );
+  const sameSideBefore = siblings.slice(0, Math.max(0, myIndex)).filter((edge) => {
+    const s = allNodes.find(n => n.id === edge.source);
+    const t = allNodes.find(n => n.id === edge.target);
+    if (!s || !t) return returningLeft;
+    const sRight = s.position.x + (s.measured?.width ?? NODE_W);
+    const tRight = t.position.x + (t.measured?.width ?? NODE_W);
+    return (tRight <= sRight) === returningLeft;
   }).length;
-  apexY += (above ? -1 : 1) * sameSideBefore * STAGGER;
-
-  const d        = loopbackPath(sx, sy, tx, ty, apexY, above);
-  const midX     = (sx + tx) / 2;
-  const labelY   = above ? apexY - 6 : apexY + 14;
-  const markerId = `lb-arrow-${id}`;
+  const railX = returningLeft
+    ? nodeBounds.maxX + RETURN_RAIL_GAP + sameSideBefore * RETURN_RAIL_STAGGER
+    : nodeBounds.minX - RETURN_RAIL_GAP - sameSideBefore * RETURN_RAIL_STAGGER;
+  const route = roundedOrthogonalPath([
+    { x: sourceX, y: sourceY },
+    { x: railX, y: sourceY },
+    { x: railX, y: targetY },
+    { x: targetX, y: targetY },
+  ], 10);
+  const labelX = railX;
+  const labelY = (sourceY + targetY) / 2;
+  const markerIdValue = markerId('lb-arrow', id);
   const isActive = id === activeEdgeId;
   const stroke   = isActive ? LOOPBACK_STROKE_ACTIVE : LOOPBACK_STROKE;
 
   return (
     <>
       <defs>
-        <marker id={markerId} markerWidth="8" markerHeight="6" refX="6" refY="3" orient="auto">
+        <marker id={markerIdValue} markerWidth="8" markerHeight="6" refX="6" refY="3" orient="auto">
           <path d="M 0 0 L 6 3 L 0 6 Z" fill={stroke} />
         </marker>
       </defs>
       <path
-        d={d}
+        d={route}
         fill="none"
         stroke={stroke}
         strokeWidth={isActive ? 2 : 1.5}
         strokeDasharray={isActive ? undefined : '5 3'}
-        markerEnd={`url(#${markerId})`}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        markerEnd={`url(#${markerIdValue})`}
       />
       {label != null && (
         <text
-          x={midX}
-          y={labelY}
+          x={labelX}
+          y={labelY - 6}
           textAnchor="middle"
           fontSize={12}
           fill={isActive ? LOOPBACK_STROKE_ACTIVE : LOOPBACK_TEXT_COLOR}
@@ -910,93 +898,55 @@ export function LoopbackEdge({ id, sourceX, sourceY, targetX, targetY, label, da
 export const workflowEdgeTypes = { loopback: LoopbackEdge, spine: SpineEdge };
 
 // ---------------------------------------------------------------------------
-// SpineEdge — smooth forward edge routed through a shared "junction" dot.
-//
-// Every forward edge in a fan-out (one source → many targets) or fan-in (many
-// sources → one target) is drawn as two smooth bezier segments that meet at a
-// single rounded junction point placed between the two columns. Because the
-// junction point is computed deterministically from the source/target geometry,
-// all edges in the same bundle resolve to the *same* point and their dots and
-// shared segment overlap perfectly — producing the clean, symmetric curves in
-// the mockup instead of kinked default beziers.
+// SpineEdge — forward dependency edge routed as one quiet stepped connector.
 // ---------------------------------------------------------------------------
 
-const SPINE_STROKE   = 'var(--colorNeutralStroke2)';
-const SPINE_DOT_FILL = 'var(--colorNeutralStroke2)';
+const SPINE_STROKE = 'var(--colorNeutralStroke1)';
 
 function SpineEdge({
   id,
-  source,
-  target,
   sourceX,
   sourceY,
   targetX,
   targetY,
   label,
+  data,
 }: EdgeProps) {
-  const allEdges = useEdges();
-
-  // How many forward edges share this edge's source / target? Fan-out anchors the
-  // junction at the source's vertical centre; fan-in anchors it at the target's.
-  const forwardSiblings = allEdges.filter((e) => e.type === 'spine');
-  const fanOut = forwardSiblings.filter((e) => e.source === source).length;
-  const fanIn = forwardSiblings.filter((e) => e.target === target).length;
-
-  // Detect flow orientation from the edge geometry so the same edge type serves
-  // both the LR topology graph and the TB coordinator run graph. A dominant
-  // vertical delta means a top→bottom (TB) layout; otherwise treat it as LR.
-  const vertical = Math.abs(targetY - sourceY) >= Math.abs(targetX - sourceX);
-
-  let junctionX: number;
-  let junctionY: number;
-  if (vertical) {
-    // TB flow: mirror the LR logic across axes. Fans anchor the shared junction
-    // on X; the junction sits at the vertical midpoint between the ranks.
-    junctionY = (sourceY + targetY) / 2;
-    if (fanOut > 1 && fanOut >= fanIn) {
-      junctionX = sourceX;
-    } else if (fanIn > 1) {
-      junctionX = targetX;
-    } else {
-      junctionX = (sourceX + targetX) / 2;
-    }
-  } else {
-    // LR flow: original behaviour, unchanged.
-    junctionX = (sourceX + targetX) / 2;
-    if (fanOut > 1 && fanOut >= fanIn) {
-      junctionY = sourceY;
-    } else if (fanIn > 1) {
-      junctionY = targetY;
-    } else {
-      junctionY = (sourceY + targetY) / 2;
-    }
-  }
-
-  const smoothSegment = (sx: number, sy: number, tx: number, ty: number): string => {
-    if (vertical) {
-      // Offset the bezier control points on the Y axis for clean vertical curves.
-      const dy = Math.max(48, Math.abs(ty - sy) * 0.5);
-      return `M ${sx},${sy} C ${sx},${sy + dy} ${tx},${ty - dy} ${tx},${ty}`;
-    }
-    const dx = Math.max(48, Math.abs(tx - sx) * 0.5);
-    return `M ${sx},${sy} C ${sx + dx},${sy} ${tx - dx},${ty} ${tx},${ty}`;
-  };
-
-  const firstPath = smoothSegment(sourceX, sourceY, junctionX, junctionY);
-  const secondPath = smoothSegment(junctionX, junctionY, targetX, targetY);
+  const spineData = data as { flowDirection?: 'horizontal' | 'vertical' } | undefined;
+  const route = buildSteppedConnectorRoute({
+    sourceX,
+    sourceY,
+    targetX,
+    targetY,
+    orientation: spineData?.flowDirection,
+  });
+  const markerIdValue = markerId('spine-arrow', id);
 
   return (
     <>
-      <path id={id} d={firstPath} fill="none" stroke={SPINE_STROKE} strokeWidth={1.5} />
-      <path d={secondPath} fill="none" stroke={SPINE_STROKE} strokeWidth={1.5} />
-      <circle cx={junctionX} cy={junctionY} r={3.5} fill={SPINE_DOT_FILL} stroke="none" />
+      <defs>
+        <marker id={markerIdValue} markerWidth="7" markerHeight="6" refX="6" refY="3" orient="auto">
+          <path d="M 0 0 L 6 3 L 0 6 Z" fill={SPINE_STROKE} />
+        </marker>
+      </defs>
+      <path
+        id={id}
+        data-testid="workflow-spine-edge"
+        d={route.path}
+        fill="none"
+        stroke={SPINE_STROKE}
+        strokeWidth={1.4}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        markerEnd={`url(#${markerIdValue})`}
+      />
       {label != null && label !== '' && (
         <EdgeLabelRenderer>
           <div
             className="nodrag nopan"
             style={{
               position: 'absolute',
-              transform: `translate(-50%, -50%) translate(${junctionX}px, ${junctionY}px)`,
+              transform: `translate(-50%, -50%) translate(${route.labelX}px, ${route.labelY}px)`,
               background: 'var(--colorNeutralBackground1)',
               border: '1px solid var(--colorNeutralStroke2)',
               borderRadius: '4px',

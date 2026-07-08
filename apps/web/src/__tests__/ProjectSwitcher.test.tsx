@@ -27,6 +27,9 @@ function makeProject(id: string, name: string): Project {
     default_provider: 'github-copilot',
     default_model_github_copilot: null,
     default_model_microsoft_foundry: null,
+    blueprint_generation_model: null,
+    workflow_generation_model: null,
+    outcome_spec_generation_model: null,
     available: true,
     state: 'active',
     created_at: '',
@@ -61,9 +64,9 @@ describe('projectSwitchTarget — preserve page category across projects', () =>
     expect(projectSwitchTarget('/projects/A/orchestrations/run-123', 'A', 'B')).toBe('/projects/B/orchestrations');
     // Casting wizard → Agents (team).
     expect(projectSwitchTarget('/projects/A/team/cast', 'A', 'B')).toBe('/projects/B/team');
-    // Deep run / execution routes map to Board via matchSegments.
-    expect(projectSwitchTarget('/projects/A/runs/run-9/workflow', 'A', 'B')).toBe('/projects/B/board');
-    expect(projectSwitchTarget('/projects/A/runs/run-9/execution/ex-1', 'A', 'B')).toBe('/projects/B/board');
+    // Removed run-page routes no longer map to Board.
+    expect(projectSwitchTarget('/projects/A/runs/run-9/workflow', 'A', 'B')).toBe('/projects/B');
+    expect(projectSwitchTarget('/projects/A/runs/run-9/execution/ex-1', 'A', 'B')).toBe('/projects/B');
   });
 
   it('lands on the project home when there is no current project context', () => {
@@ -112,13 +115,13 @@ describe('ProjectSwitcher — switching navigates to the equivalent page', () =>
     );
   });
 
-  it('maps a deep run page to the Board category under the selected project', async () => {
+  it('maps a removed run page route to the selected project home', async () => {
     vi.mocked(apiClient.listProjects).mockResolvedValue([
       makeProject('A', 'Alpha'),
       makeProject('B', 'Bravo'),
     ]);
 
-    renderSwitcherAt('/projects/A/runs/run-9/workflow', 'A');
+    renderSwitcherAt('/projects/A/runs/run-9/execution/ex-1', 'A');
 
     const combo = screen.getByLabelText('Project switcher');
     fireEvent.click(combo);
@@ -127,7 +130,7 @@ describe('ProjectSwitcher — switching navigates to the equivalent page', () =>
     fireEvent.click(option);
 
     await waitFor(() =>
-      expect(screen.getByTestId('location').textContent).toBe('/projects/B/board'),
+      expect(screen.getByTestId('location').textContent).toBe('/projects/B'),
     );
   });
 });

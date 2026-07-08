@@ -3,6 +3,7 @@ using FluentAssertions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Agentweaver.Api.Blueprints;
+using Agentweaver.Api.Generation;
 using Agentweaver.Domain;
 using Agentweaver.Squad.Catalog;
 
@@ -10,6 +11,74 @@ namespace Agentweaver.Tests.Blueprints;
 
 public sealed class CopilotBlueprintGeneratorTests
 {
+    [Fact]
+    public async Task GenerateRawAsync_UsesGpt54GenerationModelByDefault()
+    {
+        var runner = new CapturingAgentRunner();
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Providers:GitHubCopilot:Model"] = "gpt-4o",
+            })
+            .Build();
+        var generator = new CopilotBlueprintGenerator(
+            runner,
+            new CatalogReader(),
+            config,
+            NullLogger<CopilotBlueprintGenerator>.Instance);
+
+        await generator.GenerateRawAsync("Create a research team", CancellationToken.None);
+
+        runner.LastModelId.Should().Be(GenerationModelOptions.DefaultModel);
+    }
+
+    [Fact]
+    public async Task GenerateRawAsync_UsesConfiguredBlueprintGenerationModel()
+    {
+        var runner = new CapturingAgentRunner();
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Generation:Model"] = "gpt-5.4-mini",
+                ["Generation:BlueprintModel"] = "claude-sonnet-4.6",
+            })
+            .Build();
+        var generator = new CopilotBlueprintGenerator(
+            runner,
+            new CatalogReader(),
+            config,
+            NullLogger<CopilotBlueprintGenerator>.Instance);
+
+        await generator.GenerateRawAsync("Create a research team", CancellationToken.None);
+
+        runner.LastModelId.Should().Be("claude-sonnet-4.6");
+    }
+
+    [Fact]
+    public async Task GenerateRawAsync_UsesProjectBlueprintGenerationModelWhenProvided()
+    {
+        var runner = new CapturingAgentRunner();
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Generation:BlueprintModel"] = "claude-sonnet-4.6",
+            })
+            .Build();
+        var generator = new CopilotBlueprintGenerator(
+            runner,
+            new CatalogReader(),
+            config,
+            NullLogger<CopilotBlueprintGenerator>.Instance);
+
+        await generator.GenerateRawAsync(
+            "Create a research team",
+            CancellationToken.None,
+            modelId: "gpt-5-mini");
+
+        runner.LastModelId.Should().Be("gpt-5-mini");
+    }
+
+
     [Fact]
     public async Task GenerateRawAsync_FramesPromptAsAgentweaverOperatingBlueprint()
     {
@@ -119,6 +188,7 @@ public sealed class CopilotBlueprintGeneratorTests
     private sealed class CapturingAgentRunner : IAgentRunner
     {
         public string? LastTask { get; private set; }
+        public string? LastModelId { get; private set; }
 
         public Task<string> ExecuteAsync(
             string task,
@@ -133,6 +203,7 @@ public sealed class CopilotBlueprintGeneratorTests
             string? userId = null)
         {
             LastTask = task;
+            LastModelId = modelId;
             return Task.FromResult(
                 """
                 {

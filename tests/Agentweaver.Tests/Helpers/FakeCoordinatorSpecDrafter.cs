@@ -12,9 +12,12 @@ namespace Agentweaver.Tests.Helpers;
 /// </summary>
 public sealed class FakeCoordinatorSpecDrafter : ICoordinatorSpecDrafter
 {
+    public CoordinatorDraftInput? LastInput { get; private set; }
+
     public Task<OutcomeSpecDraft> DraftAsync(
         CoordinatorDraftInput input, string charter, string? memoryContext, CancellationToken ct)
     {
+        LastInput = input;
         var goal = input.Goal.Trim();
         var hasContext = !string.IsNullOrWhiteSpace(memoryContext);
 

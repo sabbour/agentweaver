@@ -104,4 +104,26 @@ describe('ProjectPage board (board-dedupe)', () => {
 
     expect(screen.getByText('No run history yet. Runs started from orchestration tasks will appear here for audit.')).toBeTruthy();
   });
+
+  it('shows coordinator assembly handoff as automatic preparation in the run audit trail', async () => {
+    vi.mocked(apiClient.listProjectRuns).mockResolvedValue([
+      {
+        workflow_run_id: 'coord-1',
+        execution_id: 'coord-1',
+        agent_name: 'Coordinator',
+        task: 'Prepare assembly',
+        status: 'in_progress',
+        coordinator_status: 'awaiting_assembly',
+        started_at: new Date().toISOString(),
+      },
+    ] as never);
+
+    renderPage();
+
+    await waitFor(() => expect(screen.getByRole('button', { name: /Run audit trail/i })).toBeTruthy());
+    fireEvent.click(screen.getByRole('button', { name: /Run audit trail/i }));
+
+    expect(screen.getByText('Preparing assembly')).toBeTruthy();
+    expect(screen.queryByText('Awaiting assembly')).toBeNull();
+  });
 });

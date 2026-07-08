@@ -318,6 +318,9 @@ public sealed class ProjectServiceCreateTests : IAsyncDisposable
         public Task UpdateProviderSettingsAsync(ProjectId id, ProjectProviderSettings settings, DateTimeOffset updatedAt, CancellationToken ct = default) =>
             _inner.UpdateProviderSettingsAsync(id, settings, updatedAt, ct);
 
+        public Task UpdateGenerationModelSettingsAsync(ProjectId id, string? blueprintGenerationModel, string? workflowGenerationModel, string? outcomeSpecGenerationModel, DateTimeOffset updatedAt, CancellationToken ct = default) =>
+            _inner.UpdateGenerationModelSettingsAsync(id, blueprintGenerationModel, workflowGenerationModel, outcomeSpecGenerationModel, updatedAt, ct);
+
         public Task<bool> TryBeginDeleteAsync(ProjectId id, CancellationToken ct = default) =>
             _inner.TryBeginDeleteAsync(id, ct);
 

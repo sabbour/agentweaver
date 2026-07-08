@@ -29,7 +29,8 @@ public record WorkflowGenerationRequest(
     string? TargetRepository = null,       // owner/repo or URL the workflow should operate against
     string? BaseWorkflowId = null,         // edit mode: saved/built-in workflow being edited
     string? BaseWorkflowYaml = null,       // edit mode: YAML for the saved workflow or current draft
-    bool BaseWorkflowIsBuiltIn = false     // edit mode: true when editing a built-in/catalog workflow
+    bool BaseWorkflowIsBuiltIn = false,    // edit mode: true when editing a built-in/catalog workflow
+    string? GenerationModel = null         // resolved project/global model for this generation turn
 )
 {
     public bool IsEdit => !string.IsNullOrWhiteSpace(BaseWorkflowId) ||

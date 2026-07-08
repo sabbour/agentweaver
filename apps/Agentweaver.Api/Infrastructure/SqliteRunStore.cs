@@ -472,16 +472,15 @@ public sealed class SqliteRunStore : IRunStore
     public async Task<Run?> FindActiveChildAsync(string parentRunId, string subtaskId, CancellationToken ct = default)
     {
         // Returns the first child run for (parentRunId, subtaskId) whose status indicates it is
-        // actively executing or has already delivered — states that mean a second dispatch would
-        // create a duplicate worker for the same subtask. Terminal failure states (failed,
-        // completed, declined, merge_failed, no_changes, content_safety_failed) are excluded
-        // so that recovery-initiated re-dispatches (which intend to retry a failed child) are
-        // not blocked.
+        // actively executing — states that mean a second dispatch would create a duplicate worker
+        // for the same subtask. Delivered/terminal states such as assemble_ready are deliberately
+        // excluded: when assembly review resets a subtask to pending, the next dispatch must create
+        // a new child turn instead of reusing the old terminal output.
         await using var connection = await _db.OpenConnectionAsync(ct).ConfigureAwait(false);
         await using var command = connection.CreateCommand();
         command.CommandText = SelectSql +
             " WHERE parent_run_id = $parentRunId AND subtask_id = $subtaskId" +
-            " AND status IN ('in_progress', 'awaiting_review', 'assembling', 'in_review', 'assemble_ready')" +
+            " AND status IN ('in_progress', 'awaiting_review', 'assembling', 'in_review')" +
             " ORDER BY started_at DESC LIMIT 1;";
         command.Parameters.AddWithValue("$parentRunId", parentRunId);
         command.Parameters.AddWithValue("$subtaskId", subtaskId);

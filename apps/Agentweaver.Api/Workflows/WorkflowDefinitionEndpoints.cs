@@ -1,5 +1,8 @@
+using Agentweaver.AgentRuntime.Providers;
+using Agentweaver.Api.Generation;
 using Agentweaver.Api.Security;
 using Agentweaver.Domain;
+using Microsoft.Extensions.Options;
 using Agentweaver.Squad.Squad;
 using Microsoft.Extensions.Logging;
 using YamlDotNet.Core;
@@ -364,6 +367,7 @@ public static class WorkflowDefinitionEndpoints
             IProjectStore projectStore,
             WorkflowRegistry registry,
             IWorkflowGenerator generator,
+            IOptions<GenerationModelOptions> generationOptions,
             CancellationToken ct) =>
         {
             var (project, error) = await ResolveOwnedProjectAsync(httpContext, projectId, projectStore, ct);
@@ -428,7 +432,8 @@ public static class WorkflowDefinitionEndpoints
                         TargetRepository: project.Origin.SourceRepository,
                         BaseWorkflowId: baseWorkflowId,
                         BaseWorkflowYaml: baseYaml,
-                        BaseWorkflowIsBuiltIn: baseWorkflowIsBuiltIn),
+                        BaseWorkflowIsBuiltIn: baseWorkflowIsBuiltIn,
+                        GenerationModel: generationOptions.Value.ResolveWorkflowModel(project!.WorkflowGenerationModel)),
                     ct);
 
                 return Results.Ok(new GenerateWorkflowResponse
@@ -445,8 +450,29 @@ public static class WorkflowDefinitionEndpoints
             {
                 return Results.BadRequest(new { error = ex.Message });
             }
+            catch (AgentProviderException ex)
+            {
+                return Results.Json(new
+                {
+                    error = ex.ErrorCode,
+                    message = ex.UserMessage,
+                    kind = ex.FailureKind.ToString(),
+                    retryable = ex.IsRetryable,
+                    options = ex.FailureKind == AgentProviderFailureKind.RateLimited
+                        ? new[] { "retry" }
+                        : new[] { "check_provider_auth", "check_provider_config", "retry" },
+                }, statusCode: ProviderFailureStatus(ex.FailureKind));
+            }
         });
     }
+
+    private static int ProviderFailureStatus(AgentProviderFailureKind kind) =>
+        kind switch
+        {
+            AgentProviderFailureKind.Authorization => StatusCodes.Status401Unauthorized,
+            AgentProviderFailureKind.RateLimited => StatusCodes.Status429TooManyRequests,
+            _ => StatusCodes.Status503ServiceUnavailable,
+        };
 
     /// <summary>Reads the project's cast role ids from its squad team, or null when none can be read.
     /// Used to constrain generated workflow nodes to roles the project can cast (FR-061).</summary>

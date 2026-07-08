@@ -83,7 +83,7 @@ debug endpoint — and a person wants to actually *open it* and look. Because th
 server is not reachable by default. The **sandbox preview port-forward** is the supported way to reach it:
 a live preview/debug endpoint tunnelled from the run's pod, scoped to that one run.
 
-A **Preview** button appears on the run/execution view (`WorkflowRunPage`) **only** when the run is using
+A **Preview Sandbox** button appears on the coordinator run page only when the run is using
 the Kubernetes sandbox (`sandboxBackend === 'kubernetes-sandbox-claim'`, read from the run's
 `sandbox.selected` event) **and** the run is still active. On local/dev backends, or after the run ends,
 the button is not shown. The flow a user follows:
@@ -107,7 +107,7 @@ the button is not shown. The flow a user follows:
 %%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
 sequenceDiagram
     participant U as User
-    participant UI as WorkflowRunPage (preview dialog)
+    participant UI as CoordinatorRunPage (preview dialog)
     participant API as API
     participant Pod as Run's sandbox pod
     U->>UI: click Preview (K8s sandbox + active run), pick port

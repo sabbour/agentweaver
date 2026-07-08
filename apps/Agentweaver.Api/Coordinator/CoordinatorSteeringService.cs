@@ -422,7 +422,7 @@ public sealed class CoordinatorSteeringService
 
         if (normalized == SteeringKind.Send)
             return await QueueSendAsync(
-                coordinatorRunId, directiveId, resolvedInstruction, createdBy, createdAt, ct)
+                coordinatorRunId, directiveId, targetChildRunId, resolvedInstruction, createdBy, createdAt, ct)
                 .ConfigureAwait(false);
 
         // redirect / amend. On a LIVE loop these queue and drain at the target child's next turn
@@ -451,11 +451,11 @@ public sealed class CoordinatorSteeringService
     /// it as a retry signal.
     /// </summary>
     private async Task<SteeringDirectiveView> QueueSendAsync(
-        string coordinatorRunId, int directiveId, string instruction,
+        string coordinatorRunId, int directiveId, string? targetChildRunId, string instruction,
         string createdBy, DateTimeOffset createdAt, CancellationToken ct)
     {
         await UpdateDirectiveAsync(directiveId, SteeringStatus.Queued, relayedAt: null, ct).ConfigureAwait(false);
-        await EmitSteeringAsync(coordinatorRunId, directiveId, SteeringKind.Send, targetChildRunId: null, SteeringStatus.Queued, instruction, ct).ConfigureAwait(false);
+        await EmitSteeringAsync(coordinatorRunId, directiveId, SteeringKind.Send, targetChildRunId, SteeringStatus.Queued, instruction, ct).ConfigureAwait(false);
         _waitRegistry.Signal(coordinatorRunId);
 
         _logger.LogInformation(
@@ -463,7 +463,7 @@ public sealed class CoordinatorSteeringService
             coordinatorRunId, directiveId);
 
         return new SteeringDirectiveView(
-            directiveId, coordinatorRunId, TargetChildRunId: null, SteeringKind.Send, instruction,
+            directiveId, coordinatorRunId, targetChildRunId, SteeringKind.Send, instruction,
             SteeringStatus.Queued, createdBy, createdAt, RelayedAt: null);
     }
 
@@ -763,6 +763,8 @@ public sealed class CoordinatorSteeringService
         // coherent before the loop spins up.
         plan.Status = WorkPlanStatus.Dispatching;
         plan.AssemblyStage = null;
+        plan.AssemblyTerminalStage = null;
+        plan.AssemblyStatusReason = null;
         plan.UpdatedAt = now;
         await db.SaveChangesAsync(ct).ConfigureAwait(false);
 

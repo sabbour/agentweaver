@@ -36,6 +36,20 @@ import type {
 // data-driven so more sections can be appended as their backends land.
 type SectionId = 'general' | 'sandbox' | 'danger';
 
+const GENERATION_DEFAULT_MODEL = 'gpt-5.4';
+
+interface GenerationModelState {
+  blueprint_generation_model: string;
+  workflow_generation_model: string;
+  outcome_spec_generation_model: string;
+}
+
+const emptyGenerationModels: GenerationModelState = {
+  blueprint_generation_model: '',
+  workflow_generation_model: '',
+  outcome_spec_generation_model: '',
+};
+
 interface SectionDef {
   id: SectionId;
   label: string;
@@ -48,7 +62,7 @@ const SECTIONS: SectionDef[] = [
   {
     id: 'general',
     label: 'General',
-    description: 'Project name, repository link, and the default model.',
+    description: 'Project name and model overrides.',
     icon: <Settings24Regular />,
   },
   {
@@ -199,6 +213,10 @@ const useStyles = makeStyles({
     color: tokens.colorNeutralForeground3,
     fontStyle: 'italic',
   },
+  helperText: {
+    color: tokens.colorNeutralForeground2,
+    fontSize: tokens.fontSizeBase300,
+  },
 });
 
 export function ProjectSettingsPage() {
@@ -227,6 +245,10 @@ export function ProjectSettingsPage() {
   const [savingModel, setSavingModel] = useState(false);
   const [modelError, setModelError] = useState<string | null>(null);
   const [modelSuccess, setModelSuccess] = useState(false);
+  const [generationModels, setGenerationModels] = useState<GenerationModelState>(emptyGenerationModels);
+  const [savingGeneration, setSavingGeneration] = useState(false);
+  const [generationError, setGenerationError] = useState<string | null>(null);
+  const [generationSuccess, setGenerationSuccess] = useState(false);
 
   // Rename
   const [newName, setNewName] = useState('');
@@ -263,6 +285,11 @@ export function ProjectSettingsPage() {
         if (!cancelled) {
           setProject(p);
           setCopilotModel(p.default_model_github_copilot ?? '');
+          setGenerationModels({
+            blueprint_generation_model: p.blueprint_generation_model ?? '',
+            workflow_generation_model: p.workflow_generation_model ?? '',
+            outcome_spec_generation_model: p.outcome_spec_generation_model ?? '',
+          });
           setNewName(p.name);
         }
       })
@@ -280,15 +307,65 @@ export function ProjectSettingsPage() {
     setModelSuccess(false);
     try {
       const req: UpdateProjectProviderSettingsRequest = {};
-      req.default_provider = 'github-copilot';
-      if (copilotModel.trim()) req.default_model_github_copilot = copilotModel.trim();
+      req.default_provider = project?.default_provider ?? 'github-copilot';
+      req.default_model_github_copilot = copilotModel.trim() || null;
+      req.default_model_microsoft_foundry = project?.default_model_microsoft_foundry ?? null;
+      req.blueprint_generation_model = generationModels.blueprint_generation_model.trim() || null;
+      req.workflow_generation_model = generationModels.workflow_generation_model.trim() || null;
+      req.outcome_spec_generation_model = generationModels.outcome_spec_generation_model.trim() || null;
       await apiClient.updateProjectProviderSettings(projectId, req);
+      setProject((prev) => prev ? {
+        ...prev,
+        default_model_github_copilot: req.default_model_github_copilot ?? null,
+        blueprint_generation_model: req.blueprint_generation_model ?? null,
+        workflow_generation_model: req.workflow_generation_model ?? null,
+        outcome_spec_generation_model: req.outcome_spec_generation_model ?? null,
+      } : prev);
       setModelSuccess(true);
     } catch (err) {
       setModelError(formatError(err));
     } finally {
       setSavingModel(false);
     }
+  };
+
+  const saveGenerationModels = async (models: GenerationModelState) => {
+    if (!projectId) return;
+    setSavingGeneration(true);
+    setGenerationError(null);
+    setGenerationSuccess(false);
+    try {
+      const req: UpdateProjectProviderSettingsRequest = {
+        default_provider: project?.default_provider ?? 'github-copilot',
+        default_model_github_copilot: copilotModel.trim() || null,
+        default_model_microsoft_foundry: project?.default_model_microsoft_foundry ?? null,
+        blueprint_generation_model: models.blueprint_generation_model.trim() || null,
+        workflow_generation_model: models.workflow_generation_model.trim() || null,
+        outcome_spec_generation_model: models.outcome_spec_generation_model.trim() || null,
+      };
+      await apiClient.updateProjectProviderSettings(projectId, req);
+      setProject((prev) => prev ? {
+        ...prev,
+        blueprint_generation_model: req.blueprint_generation_model ?? null,
+        workflow_generation_model: req.workflow_generation_model ?? null,
+        outcome_spec_generation_model: req.outcome_spec_generation_model ?? null,
+      } : prev);
+      setGenerationSuccess(true);
+    } catch (err) {
+      setGenerationError(formatError(err));
+    } finally {
+      setSavingGeneration(false);
+    }
+  };
+
+  const handleSaveGeneration = async () => {
+    await saveGenerationModels(generationModels);
+  };
+
+  const handleResetGeneration = async () => {
+    const inherited = { ...emptyGenerationModels };
+    setGenerationModels(inherited);
+    await saveGenerationModels(inherited);
   };
 
   useEffect(() => {
@@ -438,8 +515,8 @@ export function ProjectSettingsPage() {
                   )}
                 </div>
 
-                <div className={styles.section}>
-                  <Title3>Default model</Title3>
+                <div className={styles.subBlock}>
+                  <Title3>Default run model</Title3>
                   <Field label="GitHub Copilot model">
                     <Input value={copilotModel} onChange={(_, v) => setCopilotModel(v.value)} placeholder="e.g. gpt-4o" />
                   </Field>
@@ -454,6 +531,59 @@ export function ProjectSettingsPage() {
                   )}
                   {modelSuccess && (
                     <MessageBar intent="success"><MessageBarBody>Model settings saved.</MessageBarBody></MessageBar>
+                  )}
+                </div>
+
+                <div className={styles.section}>
+                  <Title3>Generation models</Title3>
+                  <Text className={styles.helperText}>
+                    Leave a field blank to inherit the global generation default ({GENERATION_DEFAULT_MODEL}).
+                  </Text>
+                  <Field label="Blueprint generation model" hint={`Blank inherits ${GENERATION_DEFAULT_MODEL}.`}>
+                    <Input
+                      value={generationModels.blueprint_generation_model}
+                      onChange={(_, v) => setGenerationModels((prev) => ({ ...prev, blueprint_generation_model: v.value }))}
+                      placeholder={`Inherit ${GENERATION_DEFAULT_MODEL}`}
+                    />
+                  </Field>
+                  <Field label="Workflow generation model" hint={`Blank inherits ${GENERATION_DEFAULT_MODEL}.`}>
+                    <Input
+                      value={generationModels.workflow_generation_model}
+                      onChange={(_, v) => setGenerationModels((prev) => ({ ...prev, workflow_generation_model: v.value }))}
+                      placeholder={`Inherit ${GENERATION_DEFAULT_MODEL}`}
+                    />
+                  </Field>
+                  <Field label="Outcome spec generation model" hint={`Blank inherits ${GENERATION_DEFAULT_MODEL}.`}>
+                    <Input
+                      value={generationModels.outcome_spec_generation_model}
+                      onChange={(_, v) => setGenerationModels((prev) => ({ ...prev, outcome_spec_generation_model: v.value }))}
+                      placeholder={`Inherit ${GENERATION_DEFAULT_MODEL}`}
+                    />
+                  </Field>
+                  <div className={styles.actions}>
+                    <Button
+                      appearance="primary"
+                      aria-label="Save generation models"
+                      disabled={savingGeneration}
+                      onClick={() => void handleSaveGeneration()}
+                    >
+                      {savingGeneration ? 'Saving' : 'Save'}
+                    </Button>
+                    <Button
+                      appearance="secondary"
+                      aria-label="Reset generation models to inherit defaults"
+                      disabled={savingGeneration}
+                      onClick={() => void handleResetGeneration()}
+                    >
+                      Reset to inherit
+                    </Button>
+                    {savingGeneration && <Spinner size="extra-tiny" aria-hidden="true" />}
+                  </div>
+                  {generationError && (
+                    <MessageBar intent="error"><MessageBarBody>{generationError}</MessageBarBody></MessageBar>
+                  )}
+                  {generationSuccess && (
+                    <MessageBar intent="success"><MessageBarBody>Generation model settings saved.</MessageBarBody></MessageBar>
                   )}
                 </div>
               </div>

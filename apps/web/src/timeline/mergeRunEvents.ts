@@ -3,9 +3,9 @@ import type { RunStreamEvent } from '../api/sse';
 /**
  * Shared run-history seeding helpers (BLOCKING #3 — de-duplication).
  *
- * Previously `mergeRunEvents` was copy-pasted in WorkflowRunPage.tsx and
- * AgentSessionPanel.tsx, and `SEED_STATUSES` lived only in WorkflowRunPage.
- * Both the workflow page, the agent session panel and the browser console TUI
+ * Previously `mergeRunEvents` was copy-pasted in run detail surfaces and
+ * AgentSessionPanel.tsx, and `SEED_STATUSES` lived only in the old run detail view.
+ * The agent session panel and the browser console TUI
  * need the SAME parked/terminal seeding semantics, so the logic lives here once.
  */
 
@@ -17,7 +17,8 @@ import type { RunStreamEvent } from '../api/sse';
  */
 export const SEED_STATUSES: ReadonlySet<string> = new Set([
   'completed', 'failed', 'merged', 'declined', 'merge_failed',
-  'parked', 'assemble_ready', 'assembled', 'cancelled', 'stopped',
+  'parked', 'blocked', 'awaiting_review',
+  'assemble_ready', 'assembled', 'cancelled', 'stopped',
 ]);
 
 /**
@@ -28,8 +29,8 @@ export const SEED_STATUSES: ReadonlySet<string> = new Set([
  * visible because they represent distinct gates across revisions.
  *
  * @param opts.sort when true, the merged list is re-ordered by sequence (seq-0
- *   events sort last). The AgentSessionPanel relies on this; the workflow page
- *   and the TUI keep arrival order (sort omitted).
+ *   events sort last). The AgentSessionPanel relies on this; the TUI keeps
+ *   arrival order (sort omitted).
  */
 export function mergeRunEvents(
   seed: RunStreamEvent[],

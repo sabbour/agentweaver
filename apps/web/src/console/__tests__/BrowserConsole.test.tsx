@@ -1,12 +1,13 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, cleanup, waitFor, fireEvent } from '@testing-library/react';
 import { FluentProvider, webLightTheme } from '@fluentui/react-components';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, useNavigate } from 'react-router-dom';
 import { type ReactNode } from 'react';
 
 vi.mock('../../api/apiClient', () => ({
   apiClient: {
     listProjects: vi.fn(),
+    getProject: vi.fn(),
     getBoard: vi.fn(),
     captureBacklogTask: vi.fn(),
     moveTaskToReady: vi.fn(),
@@ -18,18 +19,13 @@ vi.mock('../../api/apiClient', () => ({
     confirmOutcomeSpec: vi.fn(),
     reviseOutcomeSpec: vi.fn(),
     reviewAssembly: vi.fn(),
+    sendConsoleMessage: vi.fn(),
   },
-}));
-
-// The bound-run panel reuses the shared SSE hook; stub it so tests never open a real
-// stream. The command engine + prose gating is what we assert here.
-vi.mock('../../api/sse', () => ({
-  useRunStream: () => ({ events: [], droppedEventCount: 0, status: 'connecting', error: null, reconnect: vi.fn() }),
 }));
 
 import { apiClient } from '../../api/apiClient';
 import { BrowserConsole } from '../BrowserConsole';
-import type { Project } from '../../api/types';
+import type { AgentweaverConsoleResponse, Project } from '../../api/types';
 
 function makeProject(id: string, name: string): Project {
   return {
@@ -37,12 +33,15 @@ function makeProject(id: string, name: string): Project {
     name,
     origin: 'blank',
     source_repository: null,
-    working_directory: '/tmp/x',
+    working_directory: 'C:\\repo\\x',
     default_branch: 'main',
     owner: 'me',
     default_provider: 'github-copilot',
     default_model_github_copilot: null,
     default_model_microsoft_foundry: null,
+    blueprint_generation_model: null,
+    workflow_generation_model: null,
+    outcome_spec_generation_model: null,
     available: true,
     state: 'active',
     created_at: '',
@@ -50,97 +49,135 @@ function makeProject(id: string, name: string): Project {
   } as Project;
 }
 
-function Wrapper({ children }: { children: ReactNode }) {
+function Wrapper({ children, initialPath = '/overview' }: { children: ReactNode; initialPath?: string }) {
   return (
     <FluentProvider theme={webLightTheme}>
-      <MemoryRouter>{children}</MemoryRouter>
+      <MemoryRouter initialEntries={[initialPath]}>{children}</MemoryRouter>
     </FluentProvider>
   );
 }
 
-function type(text: string) {
-  fireEvent.change(screen.getByRole('textbox', { name: 'Console input' }), { target: { value: text } });
+function RouteHarness() {
+  const navigate = useNavigate();
+  return (
+    <>
+      <BrowserConsole />
+      <button type="button" onClick={() => navigate('/projects/p1/orchestrations/run-1')}>Go run</button>
+      <button type="button" onClick={() => navigate('/overview')}>Go global</button>
+    </>
+  );
+}
+
+function submit(text: string) {
+  fireEvent.change(screen.getByRole('textbox', { name: 'Ask Agentweaver' }), { target: { value: text } });
   fireEvent.click(screen.getByRole('button', { name: 'Send' }));
 }
 
-beforeEach(() => vi.clearAllMocks());
+function response(partial: Partial<AgentweaverConsoleResponse>): AgentweaverConsoleResponse {
+  return {
+    conversation_id: 'c1',
+    role: 'assistant',
+    status: 'completed',
+    message: 'Done',
+    ...partial,
+  };
+}
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  vi.mocked(apiClient.getProject).mockResolvedValue(makeProject('p1', 'Alpha'));
+});
 afterEach(() => cleanup());
 
-describe('BrowserConsole (terminal TUI)', () => {
-  it('renders a greeting and responds to /help', async () => {
-    render(<Wrapper><BrowserConsole /></Wrapper>);
-    expect(screen.getByText(/control console/i)).toBeDefined();
-    type('/help');
-    expect(await screen.findByText(/Commands:/)).toBeDefined();
+describe('BrowserConsole operator dock', () => {
+  it('keeps a singleton transcript while route context changes', async () => {
+    vi.mocked(apiClient.sendConsoleMessage).mockResolvedValue(response({ message: 'I can help from here.' }));
+
+    render(<Wrapper><RouteHarness /></Wrapper>);
+    submit('hello console');
+
+    expect(await screen.findByText('I can help from here.')).toBeDefined();
+    fireEvent.click(screen.getByRole('button', { name: 'Go run' }));
+
+    expect(screen.getByText('hello console')).toBeDefined();
+    expect(await screen.findByText(/Run · run-1/)).toBeDefined();
+    expect(await screen.findByText(/Project · Alpha/)).toBeDefined();
   });
 
-  it('lists projects with clickable links', async () => {
-    vi.mocked(apiClient.listProjects).mockResolvedValue([makeProject('p1', 'Alpha'), makeProject('p2', 'Beta')]);
+  it('submits natural language to the facade seam with global context', async () => {
+    vi.mocked(apiClient.sendConsoleMessage).mockResolvedValue(response({
+      conversation_id: 'c1',
+      message: 'The project list is healthy.',
+      tools: [{ label: 'List projects', status: 'completed', detail: '2 active projects' }],
+      links: [{ label: 'Open Projects', to: '/projects' }],
+    }));
+
     render(<Wrapper><BrowserConsole /></Wrapper>);
-    type('/projects');
-    const link = await screen.findByRole('link', { name: /Alpha \(p1\)/ });
-    expect(link.getAttribute('href')).toBe('/projects/p1');
+    submit('show me active work');
+
+    await waitFor(() => expect(apiClient.sendConsoleMessage).toHaveBeenCalledWith(expect.objectContaining({
+      conversation_id: null,
+      message: 'show me active work',
+      text: 'show me active work',
+      context: expect.objectContaining({ scope: 'global', project_id: null, run_id: null, route: '/overview' }),
+    })));
+    expect(await screen.findByText('The project list is healthy.')).toBeDefined();
+    expect(screen.getByText(/List projects/)).toBeDefined();
+    expect(screen.getByRole('link', { name: /Open Projects/ }).getAttribute('href')).toBe('/projects');
   });
 
-  it('requires a selected project before creating backlog items', async () => {
-    render(<Wrapper><BrowserConsole /></Wrapper>);
-    type('/add Fix login');
-    expect(await screen.findByText(/Select a project first/)).toBeDefined();
-    expect(apiClient.captureBacklogTask).not.toHaveBeenCalled();
+  it('uses project and run route bindings when calling the facade', async () => {
+    vi.mocked(apiClient.getProject).mockResolvedValue(makeProject('p1', 'Alpha'));
+    vi.mocked(apiClient.sendConsoleMessage).mockResolvedValue(response({ message: 'Run summary ready.' }));
+
+    render(<Wrapper initialPath="/projects/p1/orchestrations/run-77"><BrowserConsole /></Wrapper>);
+    expect(await screen.findByText(/Project · Alpha/)).toBeDefined();
+    expect(screen.getByText(/Run · run-77/)).toBeDefined();
+
+    submit('summarize this run');
+
+    await waitFor(() => expect(apiClient.sendConsoleMessage).toHaveBeenCalledWith(expect.objectContaining({
+      message: 'summarize this run',
+      text: 'summarize this run',
+      context: expect.objectContaining({
+        scope: 'run',
+        project_id: 'p1',
+        run_id: 'run-77',
+        route: '/projects/p1/orchestrations/run-77',
+      }),
+    })));
   });
 
-  it('selects a project and captures a backlog item through the real API', async () => {
+  it('renders clarification, gate-required, and error facade states', async () => {
+    vi.mocked(apiClient.sendConsoleMessage)
+      .mockResolvedValueOnce(response({ kind: 'clarification', message: 'Which project should I inspect?' }))
+      .mockResolvedValueOnce(response({ kind: 'gate_required', message: 'Review the outcome plan before dispatch.', gate: { kind: 'outcome', title: 'Outcome plan review' } }))
+      .mockResolvedValueOnce(response({ status: 'blocked', message: 'The facade agent could not reach the run service.' }));
+
+    render(<Wrapper><BrowserConsole /></Wrapper>);
+
+    submit('inspect it');
+    expect(await screen.findByText('Clarification needed')).toBeDefined();
+    expect(screen.getByText('Which project should I inspect?')).toBeDefined();
+
+    submit('start the plan');
+    expect(await screen.findByText('Outcome plan review')).toBeDefined();
+    expect(screen.getByText('Review the outcome plan before dispatch.')).toBeDefined();
+
+    submit('try again');
+    expect(await screen.findByText('Blocked')).toBeDefined();
+    expect(screen.getByText('The facade agent could not reach the run service.')).toBeDefined();
+  });
+
+  it('keeps slash commands as secondary shortcuts and does not present gate-bypass copy', async () => {
     vi.mocked(apiClient.listProjects).mockResolvedValue([makeProject('p1', 'Alpha')]);
-    vi.mocked(apiClient.captureBacklogTask).mockResolvedValue({ task_id: 't9', title: 'Fix login' } as never);
+
     render(<Wrapper><BrowserConsole /></Wrapper>);
+    fireEvent.click(screen.getByRole('button', { name: '/projects' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
 
-    type('/use Alpha');
-    await screen.findByText(/Active project . Alpha/);
-
-    type('/add Fix login :: it 500s');
-    await waitFor(() =>
-      expect(apiClient.captureBacklogTask).toHaveBeenCalledWith('p1', { title: 'Fix login', description: 'it 500s' }),
-    );
-    expect(await screen.findByText(/Captured "Fix login"/)).toBeDefined();
-  });
-
-  it('asks for clarification when a project name is ambiguous', async () => {
-    vi.mocked(apiClient.listProjects).mockResolvedValue([makeProject('p1', 'Web App'), makeProject('p2', 'Web App v2')]);
-    render(<Wrapper><BrowserConsole /></Wrapper>);
-    type('/use Web');
-    expect(await screen.findByText(/matches 2 projects/)).toBeDefined();
-  });
-
-  it('starts an orchestration and preserves the confirmation gate (does not auto-confirm)', async () => {
-    vi.mocked(apiClient.listProjects).mockResolvedValue([makeProject('p1', 'Alpha')]);
-    vi.mocked(apiClient.startOrchestration).mockResolvedValue({ runId: 'run-77' } as never);
-    render(<Wrapper><BrowserConsole /></Wrapper>);
-
-    type('/use Alpha');
-    await screen.findByText(/Active project . Alpha/);
-
-    type('/orchestrate ship the feature');
-    await waitFor(() => expect(apiClient.startOrchestration).toHaveBeenCalledWith('p1', 'ship the feature'));
-    expect(await screen.findByText(/Outcome plan/i)).toBeDefined();
-    expect(apiClient.confirmOutcomeSpec).not.toHaveBeenCalled();
-    const link = await screen.findByRole('link', { name: /Open orchestration/ });
-    expect(link.getAttribute('href')).toBe('/projects/p1/orchestrations/run-77');
-  });
-
-  it('does NOT auto-start work from free-form prose — it asks for explicit confirmation first', async () => {
-    vi.mocked(apiClient.listProjects).mockResolvedValue([makeProject('p1', 'Alpha')]);
-    render(<Wrapper><BrowserConsole /></Wrapper>);
-
-    type('/use Alpha');
-    await screen.findByText(/Active project . Alpha/);
-
-    type('please build a login page');
-    expect(await screen.findByText(/No orchestration is bound/)).toBeDefined();
-    expect(apiClient.startOrchestration).not.toHaveBeenCalled();
-
-    // Explicit confirmation starts it.
-    vi.mocked(apiClient.startOrchestration).mockResolvedValue({ runId: 'run-9' } as never);
-    type('yes');
-    await waitFor(() => expect(apiClient.startOrchestration).toHaveBeenCalledWith('p1', 'please build a login page'));
+    expect(await screen.findByText(/1 project/)).toBeDefined();
+    expect(screen.getByRole('link', { name: /Alpha \(p1\)/ }).getAttribute('href')).toBe('/projects/p1');
+    expect(screen.queryByText(/bypass|skip gate|auto-confirm/i)).toBeNull();
   });
 });

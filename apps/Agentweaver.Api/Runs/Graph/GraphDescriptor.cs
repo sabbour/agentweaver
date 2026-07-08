@@ -39,7 +39,10 @@ public sealed record GraphNode(
     [property: JsonPropertyName("phase"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Phase = null,
     [property: JsonPropertyName("isolation"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Isolation = null,
     [property: JsonPropertyName("child_run_id"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? ChildRunId = null,
-    [property: JsonPropertyName("executionPodName"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? ExecutionPodName = null);
+    [property: JsonPropertyName("executionPodName"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? ExecutionPodName = null,
+    [property: JsonPropertyName("status"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Status = null,
+    [property: JsonPropertyName("status_reason"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? StatusReason = null,
+    [property: JsonPropertyName("terminal_stage"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? TerminalStage = null);
 
 /// <summary>
 /// A directed edge between two logical nodes after collapse + re-stitch.

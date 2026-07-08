@@ -150,7 +150,7 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
     }
 
     [Fact]
-    public async Task RunAssembly_BlockedSend_RetriesAssembly_AndAppliesDirective()
+    public async Task RunAssembly_BlockedSend_AcknowledgesDirectiveWithoutRetryingAssembly()
     {
         var coordinatorRunId = RunId.New().ToString();
         await SeedCoordinatorRunAsync(coordinatorRunId);
@@ -165,19 +165,19 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
             coordinatorRunId, "send", null, "Retry assembly with the updated context.", "alice", default);
         send.Status.Should().Be(SteeringStatus.Queued);
 
-        await WaitForEventCountAsync(coordinatorRunId, EventTypes.CoordinatorAssemblyBlocked, expectedCount: 2, cts.Token);
+        await WaitForEventAsync(coordinatorRunId, EventTypes.CoordinatorRecovered, cts.Token);
         (await GetDirectiveAsync(send.Id))!.Status.Should().Be(SteeringStatus.Applied);
 
         await _steering.SteerAsync(coordinatorRunId, "stop", null, "", "alice", default);
         await run;
 
         EventTypes_(coordinatorRunId).Count(t => t == EventTypes.CoordinatorAssemblyBlocked)
-            .Should().BeGreaterThanOrEqualTo(2, "send should wake the blocked wait and retry assembly");
+            .Should().Be(1, "send is not a durable state change and must not retry blocked assembly");
         EventTypes_(coordinatorRunId).Should().Contain(EventTypes.CoordinatorSteering);
     }
 
     [Fact]
-    public async Task RunAssembly_QueuedSendBeforeBlockedWait_RetriesAssembly_AndDoesNotWaitForNewerDirective()
+    public async Task RunAssembly_QueuedSendBeforeBlockedWait_AcknowledgesDirectiveWithoutRetryingAssembly()
     {
         var coordinatorRunId = RunId.New().ToString();
         await SeedCoordinatorRunAsync(coordinatorRunId);
@@ -192,12 +192,12 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         var run = _sut.RunAssemblyAsync(Context(coordinatorRunId), cts.Token);
         await WaitForEventAsync(coordinatorRunId, EventTypes.CoordinatorAssemblyBlocked, cts.Token);
 
-        await WaitForEventCountAsync(coordinatorRunId, EventTypes.CoordinatorAssemblyBlocked, expectedCount: 2, cts.Token);
+        await WaitForEventAsync(coordinatorRunId, EventTypes.CoordinatorRecovered, cts.Token);
         await _steering.SteerAsync(coordinatorRunId, "stop", null, "", "alice", default);
         await run;
 
-        EventTypes_(coordinatorRunId).Count(t => t == EventTypes.CoordinatorAssemblyBlocked).Should().BeGreaterThanOrEqualTo(2,
-            "a send queued before the assembly wait starts must still be claimed by assembly_blocked ownership");
+        EventTypes_(coordinatorRunId).Count(t => t == EventTypes.CoordinatorAssemblyBlocked).Should().Be(1,
+            "a queued send must be claimed by assembly_blocked ownership but must not re-enter without state change");
         (await GetDirectiveAsync(send.Id))!.Status.Should().Be(SteeringStatus.Applied);
     }
 
@@ -238,7 +238,8 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
     {
         var coordinatorRunId = RunId.New().ToString();
         await SeedCoordinatorRunAsync(coordinatorRunId);
-        await SeedPlanAsync(coordinatorRunId, new[] { SubtaskStatus.Completed, SubtaskStatus.AssembleReady });
+        var (workPlanId, _) = await SeedPlanAsync(coordinatorRunId,
+            new[] { SubtaskStatus.Completed, SubtaskStatus.AssembleReady });
         _streamStore.Create(coordinatorRunId, "alice");
         _pipeline.IntegrationBuildThrowsRemaining = 2;
 
@@ -255,6 +256,46 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         _pipeline.IntegrationBuilds.Should().Be(3);
         _pipeline.IntegrationRetryPreparations.Should().Be(2);
         EventTypes_(coordinatorRunId).Should().Contain(EventTypes.CoordinatorAssemblyCompleted);
+    }
+
+    [Fact]
+    public async Task RunAssembly_PersistentIntegrationBuildError_BlocksOnce_AndDoesNotAutoRetrySameEligibleChildren()
+    {
+        var coordinatorRunId = RunId.New().ToString();
+        await SeedCoordinatorRunAsync(coordinatorRunId);
+        var (workPlanId, _) = await SeedPlanAsync(coordinatorRunId,
+            new[] { SubtaskStatus.Completed, SubtaskStatus.AssembleReady });
+        _streamStore.Create(coordinatorRunId, "alice");
+        _pipeline.IntegrationBuildThrowsRemaining = 3;
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        var run = _sut.RunAssemblyAsync(Context(coordinatorRunId), cts.Token);
+
+        await WaitForEventAsync(coordinatorRunId, EventTypes.CoordinatorAssemblyBlocked, cts.Token);
+        await Task.Delay(TimeSpan.FromSeconds(4), cts.Token);
+
+        _pipeline.IntegrationBuilds.Should().Be(3,
+            "a persistent integration_build_error must park for steering instead of immediately reusing the same eligible children");
+        EventTypes_(coordinatorRunId).Count(t => t == EventTypes.CoordinatorAssemblyBlocked)
+            .Should().Be(1, "no state changed while blocked, so assembly must not storm duplicate block events");
+        EventTypes_(coordinatorRunId).Count(t => t == EventTypes.CoordinatorRecovered)
+            .Should().Be(0, "integration_build_error is not recovered without a state-changing directive or eligibility change");
+        EventTypes_(coordinatorRunId).Count(t => t == EventTypes.CoordinatorGraph)
+            .Should().Be(2, "only the assembly-start and assembly-blocked snapshots are emitted while parked");
+        EventTypes_(coordinatorRunId).Should().NotContain(EventTypes.CoordinatorAssemblyRaiStarted);
+        EventTypes_(coordinatorRunId).Should().NotContain(EventTypes.CoordinatorAssemblyReviewRequested);
+
+        var graph = _streamStore.Get(coordinatorRunId)!.GetSnapshotSince(0).Events
+            .Where(e => e.Type == EventTypes.CoordinatorGraph)
+            .Select(e => (GraphDescriptor)e.Payload)
+            .Last();
+        NodeKind(graph, CoordinatorGraphDescriptor.AssemblyRaiNodeId).Should().Be("planned");
+        NodeKind(graph, CoordinatorGraphDescriptor.AssemblyReviewNodeId).Should().Be("planned");
+        NodeKind(graph, CoordinatorGraphDescriptor.AssemblyMergeNodeId).Should().Be("planned");
+        NodeKind(graph, CoordinatorGraphDescriptor.AssemblyScribeNodeId).Should().Be("planned");
+
+        await _steering.SteerAsync(coordinatorRunId, "stop", null, "", "alice", default);
+        await run;
     }
 
     [Fact]
@@ -564,8 +605,12 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
             var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
             (await db.Subtasks.AsNoTracking().FirstAsync(s => s.Id == subtaskA)).Status
                 .Should().Be(SubtaskStatus.Pending);
+            (await db.Subtasks.AsNoTracking().FirstAsync(s => s.Id == subtaskA)).ChildRunId
+                .Should().BeNull("a re-dispatched subtask must not keep pointing at the terminal child output it is replacing");
             (await db.Subtasks.AsNoTracking().FirstAsync(s => s.Id == subtaskB)).Status
                 .Should().Be(SubtaskStatus.AssembleReady);
+            (await db.Subtasks.AsNoTracking().FirstAsync(s => s.Id == subtaskB)).ChildRunId
+                .Should().Be(childB.ToString(), "unaffected children keep their successful output reference");
         }
 
         // The plan returned to dispatching and re-dispatch was triggered.
@@ -593,6 +638,30 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         var run = await _runStore.GetAsync(RunId.Parse(coordinatorRunId), default);
         run!.Status.Should().Be(RunStatus.Failed);
         run.Result.Should().Be("steering_stop");
+    }
+
+    [Fact]
+    public async Task RunAssembly_BlockedSend_AcknowledgesWithoutRetryingAssembly()
+    {
+        var coordinatorRunId = RunId.New().ToString();
+        await SeedCoordinatorRunAsync(coordinatorRunId);
+        await SeedPlanAsync(coordinatorRunId, new[] { SubtaskStatus.Completed, SubtaskStatus.Failed });
+        _streamStore.Create(coordinatorRunId, "alice");
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var runTask = _sut.RunAssemblyAsync(Context(coordinatorRunId), cts.Token);
+        await WaitForEventAsync(coordinatorRunId, EventTypes.CoordinatorAssemblyBlocked, cts.Token);
+
+        await _steering.SteerAsync(coordinatorRunId, "send", null, "please retry", "alice", cts.Token);
+        await WaitForEventAsync(coordinatorRunId, EventTypes.CoordinatorRecovered, cts.Token);
+
+        var events = _streamStore.Get(coordinatorRunId)!.GetSnapshotSince(0).Events;
+        events.Count(e => e.Type == EventTypes.CoordinatorAssemblyBlocked).Should().Be(1,
+            "a send message is not a state change and must not re-enter the blocked assembly path");
+        _pipeline.IntegrationBuilds.Should().Be(0);
+
+        await _steering.SteerAsync(coordinatorRunId, "stop", null, "", "alice", cts.Token);
+        await runTask;
     }
 
     [Fact]
@@ -624,7 +693,8 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
     {
         var coordinatorRunId = RunId.New().ToString();
         await SeedCoordinatorRunAsync(coordinatorRunId);
-        await SeedPlanAsync(coordinatorRunId, new[] { SubtaskStatus.Completed, SubtaskStatus.AssembleReady });
+        var (workPlanId, _) = await SeedPlanAsync(coordinatorRunId,
+            new[] { SubtaskStatus.Completed, SubtaskStatus.AssembleReady });
         _streamStore.Create(coordinatorRunId, "alice");
         _pipeline.MergeOverride = CollectiveMergeResult.Failed("merge_error");
 
@@ -640,6 +710,11 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         var persisted = await _runStore.GetAsync(RunId.Parse(coordinatorRunId), default);
         persisted!.Status.Should().Be(RunStatus.MergeFailed);
         persisted.Result.Should().StartWith("assembly_merge_failed:");
+        var state = await _assemblyStore.GetAsync(workPlanId, default);
+        state!.AssemblyTerminalStage.Should().Be(AssemblyStage.Merge);
+        state.AssemblyStatusReason.Should().Be(persisted.Result);
+        state.AssemblyStage.Should().Be(AssemblyStage.Scribe,
+            "the terminal failure stage must survive even after the failure scribe advances AssemblyStage");
     }
 
     [Fact]
@@ -726,6 +801,59 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         (await db.AssemblyReviews.CountAsync(r => r.CoordinatorRunId == coordinatorRunId))
             .Should().Be(0, "a decided gate is cleared on failure as before");
         EventTypes_(coordinatorRunId).Should().NotContain(EventTypes.CoordinatorAssemblyReviewPreserved);
+    }
+
+    [Fact]
+    public async Task FailAssembly_PreGateTerminalFailure_FinalScribeGraphKeepsAssemblyGatesPlanned()
+    {
+        var coordinatorRunId = RunId.New().ToString();
+        await SeedCoordinatorRunAsync(coordinatorRunId);
+        var (workPlanId, _) = await SeedPlanAsync(coordinatorRunId,
+            new[] { SubtaskStatus.Completed, SubtaskStatus.AssembleReady });
+        _streamStore.Create(coordinatorRunId, "alice");
+
+        const string reason = "assembly_rearm_exhausted after 3 attempts";
+        await _sut.FailAssemblyAsync(Context(coordinatorRunId), reason, default);
+
+        var state = await _assemblyStore.GetAsync(workPlanId, default);
+        state!.Status.Should().Be(WorkPlanStatus.AssemblyFailed);
+        state.AssemblyStage.Should().Be(AssemblyStage.Scribe,
+            "terminal cleanup may run the scribe after the pre-gate failure");
+        state.AssemblyTerminalStage.Should().BeNull(
+            "the failure happened before RAI/review/merge/scribe started");
+        state.AssemblyStatusReason.Should().Be(reason);
+
+        var graphs = _streamStore.Get(coordinatorRunId)!.GetSnapshotSince(0).Events
+            .Where(e => e.Type == EventTypes.CoordinatorGraph)
+            .Select(e => (GraphDescriptor)e.Payload)
+            .ToList();
+        graphs.Should().HaveCountGreaterThanOrEqualTo(2,
+            "FailAssembly emits a failure graph and the later scribe cleanup emits another graph");
+        var finalGraph = graphs.Last();
+        var coordinator = finalGraph.Nodes.Single(n => n.Id == CoordinatorGraphDescriptor.CoordinatorNodeId);
+        coordinator.Status.Should().Be(WorkPlanStatus.AssemblyFailed);
+        coordinator.StatusReason.Should().Be(reason);
+        coordinator.TerminalStage.Should().BeNull();
+
+        foreach (var nodeId in new[]
+                 {
+                     CoordinatorGraphDescriptor.AssemblyRaiNodeId,
+                     CoordinatorGraphDescriptor.AssemblyReviewNodeId,
+                     CoordinatorGraphDescriptor.AssemblyMergeNodeId,
+                     CoordinatorGraphDescriptor.AssemblyScribeNodeId,
+                 })
+        {
+            var node = finalGraph.Nodes.Single(n => n.Id == nodeId);
+            node.Kind.Should().Be("planned", $"{node.Label} never ran before terminal cleanup");
+            node.Status.Should().BeNull();
+            node.StatusReason.Should().BeNull();
+            node.TerminalStage.Should().BeNull();
+        }
+
+        _pipeline.Scribes.Should().Be(1);
+        var persisted = await _runStore.GetAsync(RunId.Parse(coordinatorRunId), default);
+        persisted!.Status.Should().Be(RunStatus.Failed);
+        persisted.Result.Should().Be(reason);
     }
 
     [Fact]

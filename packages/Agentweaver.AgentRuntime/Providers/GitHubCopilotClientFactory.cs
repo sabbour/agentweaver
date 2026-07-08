@@ -224,7 +224,15 @@ public sealed class GitHubCopilotClientFactory : IAsyncDisposable
 /// Thrown when no valid GitHub token is available for Copilot.
 /// Does not include token content or credential details in the message.
 /// </summary>
-public sealed class GitHubCopilotUnauthorizedException : Exception
+public sealed class GitHubCopilotUnauthorizedException : AgentProviderException
 {
-    public GitHubCopilotUnauthorizedException(string message) : base(message) { }
+    public GitHubCopilotUnauthorizedException(string message)
+        : base(
+            ModelSource.GitHubCopilot,
+            AgentProviderFailureKind.Authorization,
+            "github_copilot_auth_required",
+            message,
+            isRetryable: false)
+    {
+    }
 }

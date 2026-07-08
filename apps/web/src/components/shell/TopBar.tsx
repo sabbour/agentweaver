@@ -1,10 +1,11 @@
 import { makeStyles, tokens, Badge, Button, Tooltip } from '@fluentui/react-components';
 import { Chat20Regular } from '@fluentui/react-icons';
-import { Link as RouterLink } from 'react-router-dom';
 import { GitHubSignIn } from '../GitHubSignIn';
+import { StartOrchestrationFab } from '../StartOrchestrationFab';
 import { ProjectSwitcher } from './ProjectSwitcher';
 import { StatusDot } from './StatusDot';
 import { useAppVersion } from '../../hooks/useAppVersion';
+import { useConsolePanel } from './ConsolePanelContext';
 
 // Spec 011 — top bar (FR-011..FR-015). Carries the switch-only project switcher,
 // the API-reachability status dot, and the existing GitHub sign-in. The brand
@@ -53,6 +54,8 @@ export function TopBar({
 }: TopBarProps) {
   const styles = useStyles();
   const version = useAppVersion();
+  const { open: consoleOpen, openConsole } = useConsolePanel();
+  const pageHasStartTaskAction = /^\/projects\/[^/]+(?:\/board)?\/?$/.test(pathname);
   return (
     <header className={styles.topBar}>
       <div className={styles.left}>
@@ -67,12 +70,19 @@ export function TopBar({
         />
       </div>
       <div className={styles.right}>
+        {!pageHasStartTaskAction && <StartOrchestrationFab currentProjectId={projectId} />}
         <Tooltip content="Open control console" relationship="label">
-          <RouterLink to="/console" style={{ display: 'inline-flex' }}>
-            <Button appearance="subtle" icon={<Chat20Regular />} aria-label="Open control console">
-              Console
-            </Button>
-          </RouterLink>
+          <Button
+            appearance="subtle"
+            icon={<Chat20Regular />}
+            aria-label="Open control console"
+            aria-expanded={consoleOpen}
+            aria-controls="app-console-panel"
+            data-testid="open-console-panel"
+            onClick={openConsole}
+          >
+            Console
+          </Button>
         </Tooltip>
         <StatusDot />
         <GitHubSignIn />

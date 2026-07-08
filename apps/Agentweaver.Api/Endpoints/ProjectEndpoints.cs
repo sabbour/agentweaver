@@ -271,7 +271,10 @@ app.MapPut("/api/projects/{id}/provider-settings", async (
     if (!IsProjectOwner(httpContext, view.Project)) return Results.StatusCode(StatusCodes.Status403Forbidden);
 
     if (!IsAllowedModelId(request.DefaultModelGitHubCopilot) ||
-        !IsAllowedModelId(request.DefaultModelMicrosoftFoundry))
+        !IsAllowedModelId(request.DefaultModelMicrosoftFoundry) ||
+        !IsAllowedModelId(request.BlueprintGenerationModel) ||
+        !IsAllowedModelId(request.WorkflowGenerationModel) ||
+        !IsAllowedModelId(request.OutcomeSpecGenerationModel))
         return Results.BadRequest(new { error = "model_id is not allowed." });
 
     bool updated;
@@ -279,7 +282,12 @@ app.MapPut("/api/projects/{id}/provider-settings", async (
     {
         updated = await projectService.UpdateProviderSettingsAsync(
             projectId, request.DefaultProvider,
-            request.DefaultModelGitHubCopilot, request.DefaultModelMicrosoftFoundry, ct);
+            request.DefaultModelGitHubCopilot,
+            request.DefaultModelMicrosoftFoundry,
+            request.BlueprintGenerationModel,
+            request.WorkflowGenerationModel,
+            request.OutcomeSpecGenerationModel,
+            ct);
     }
     catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
     return updated ? Results.NoContent() : Results.NotFound();
@@ -381,55 +389,29 @@ static bool IsTerminalHistoryStatus(RunStatus status) =>
     status is RunStatus.Completed or RunStatus.Merged or RunStatus.AssembleReady
         or RunStatus.Declined or RunStatus.Failed or RunStatus.MergeFailed;
 
-// GET /api/projects/{id}/runs/{workflowRunId} — get a single workflow run by its workflow_run_id
-app.MapGet("/api/projects/{id}/runs/{workflowRunId}", async (
-    HttpContext httpContext,
-    string id,
-    string workflowRunId,
-    IProjectStore projectStore,
-    IRunStore runStore,
-    CoordinatorStatusReader coordinator,
-    CancellationToken ct) =>
+static bool TryParseCoordinatorStartMode(string? raw, out CoordinatorStartMode mode)
 {
-    if (!ProjectId.TryParse(id, out var projectId))
-        return Results.BadRequest(new { error = "Invalid project id." });
-
-    var project = await projectStore.GetAsync(projectId, ct);
-    if (project is null) return Results.NotFound();
-    if (!IsProjectOwner(httpContext, project)) return Results.StatusCode(StatusCodes.Status403Forbidden);
-
-    var run = await runStore.GetByWorkflowRunIdAsync(workflowRunId, ct);
-    if (run is null) return Results.NotFound();
-
-    // Guard against cross-project data leakage: ensure the run belongs to the requested project.
-    if (run.ProjectId is null || !string.Equals(run.ProjectId.Value.ToString(), id, StringComparison.OrdinalIgnoreCase))
-        return Results.NotFound();
-
-    string? coordinatorStatus = null;
-    var isCoordinatorRun = run.ParentRunId is null && string.Equals(run.AgentName, "Coordinator", StringComparison.Ordinal);
-    if (isCoordinatorRun)
-        coordinatorStatus = (await coordinator.GetCoordinatorStatusesAsync(new[] { run.Id.ToString() }, ct))
-            .GetValueOrDefault(run.Id.ToString());
-
-    return Results.Ok(new WorkflowRunSummary
+    if (string.IsNullOrWhiteSpace(raw)
+        || string.Equals(raw, "defineOutcome", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(raw, "define_outcome", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(raw, "outcomeSpec", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(raw, "outcome_spec", StringComparison.OrdinalIgnoreCase))
     {
-        WorkflowRunId = run.WorkflowRunId ?? run.Id.ToString(),
-        ExecutionId   = run.Id.ToString(),
-        Task          = run.Task,
-        Status        = run.Status.ToApiString(),
-        AgentName     = run.AgentName,
-        ReviewedBy    = run.ReviewedBy,
-        StartedAt     = run.StartedAt,
-        EndedAt       = run.EndedAt,
-        ModelId       = run.ModelId,
-        Result        = run.Result,
-        CoordinatorStatus = coordinatorStatus,
-        CoordinatorStatusReason = isCoordinatorRun ? run.Result : null,
-        ArchivedAt = run.ArchivedAt,
-    });
-});
+        mode = CoordinatorStartMode.DefineOutcome;
+        return true;
+    }
 
-// POST /api/projects/{id}/runs — start a run within a project
+    if (string.Equals(raw, "direct", StringComparison.OrdinalIgnoreCase))
+    {
+        mode = CoordinatorStartMode.Direct;
+        return true;
+    }
+
+    mode = CoordinatorStartMode.DefineOutcome;
+    return false;
+}
+
+// POST /api/projects/{id}/runs — deprecated direct run submission route
 app.MapPost("/api/projects/{id}/runs", () => Results.Problem(
     title: "Single-run endpoint deprecated",
     detail: "Start work through POST /api/projects/{id}/orchestrations so the Coordinator can decompose, assemble, review, merge, and scribe.",
@@ -441,8 +423,9 @@ app.MapPost("/api/projects/{id}/runs", () => Results.Problem(
 // to status codes. All orchestration lives behind CoordinatorRunService (Principle III).
 // -----------------------------------------------------------------------
 
-// POST /api/projects/{id}/orchestrations — start a coordinator run that drafts a confirmable
-// outcome spec and suspends at the confirmation gate. Body: { goal, modelId? }.
+// POST /api/projects/{id}/orchestrations — start a coordinator run. Default/defineOutcome drafts a
+// confirmable outcome spec and suspends at the confirmation gate; direct plans from the prompt.
+// Body: { goal, start_mode?, modelId? }.
 app.MapPost("/api/projects/{id}/orchestrations", async (
     HttpContext httpContext,
     string id,
@@ -457,6 +440,9 @@ app.MapPost("/api/projects/{id}/orchestrations", async (
 
     if (string.IsNullOrWhiteSpace(request.Goal))
         return Results.BadRequest(new { error = "goal is required." });
+
+    if (!TryParseCoordinatorStartMode(request.StartMode ?? request.Mode, out var startMode))
+        return Results.BadRequest(new { error = "start_mode must be 'defineOutcome' or 'direct'." });
 
     var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
 
@@ -490,7 +476,8 @@ app.MapPost("/api/projects/{id}/orchestrations", async (
         request.AutoApproveTools,
         request.Autopilot,
         ct,
-        workflowOverrideId: request.WorkflowOverrideId);
+        workflowOverrideId: request.WorkflowOverrideId,
+        startMode: startMode);
 
     return Results.Created(
         $"/api/runs/{runId}",
@@ -510,6 +497,9 @@ static ProjectResponse MapProject(Project p, bool available) => new()
     DefaultProvider = p.ProviderSettings.DefaultProvider.ToApiString(),
     DefaultModelGitHubCopilot = p.ProviderSettings.GitHubCopilotModel,
     DefaultModelMicrosoftFoundry = p.ProviderSettings.MicrosoftFoundryModel,
+    BlueprintGenerationModel = p.BlueprintGenerationModel,
+    WorkflowGenerationModel = p.WorkflowGenerationModel,
+    OutcomeSpecGenerationModel = p.OutcomeSpecGenerationModel,
     Available = available,
     State = p.State == ProjectState.Active ? "active" : "deleting",
     CreatedAt = p.CreatedAt,

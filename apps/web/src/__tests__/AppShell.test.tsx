@@ -1,12 +1,13 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, cleanup, waitFor, fireEvent } from '@testing-library/react';
 import { FluentProvider, webLightTheme } from '@fluentui/react-components';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { Link, MemoryRouter, Route, Routes } from 'react-router-dom';
 import { type ReactNode } from 'react';
 
 vi.mock('../api/apiClient', () => ({
   apiClient: {
     listProjects: vi.fn(),
+    getProject: vi.fn(),
     checkHealth: vi.fn(),
     getGitHubAuthStatus: vi.fn(),
   },
@@ -14,6 +15,7 @@ vi.mock('../api/apiClient', () => ({
 
 import { apiClient } from '../api/apiClient';
 import { AppShell, projectIdFromPath } from '../components/shell/AppShell';
+import { ConsoleRouteRedirect } from '../components/shell/ConsoleRouteRedirect';
 import { resolveActiveKey } from '../components/shell/navConfig';
 import type { Project } from '../api/types';
 
@@ -31,6 +33,9 @@ function makeProject(id: string, name: string): Project {
     default_provider: 'github-copilot',
     default_model_github_copilot: null,
     default_model_microsoft_foundry: null,
+    blueprint_generation_model: null,
+    workflow_generation_model: null,
+    outcome_spec_generation_model: null,
     available: true,
     state: 'active',
     created_at: '',
@@ -50,8 +55,9 @@ function renderShellAt(path: string) {
           <Routes>
             <Route path="/" element={<div>Gallery</div>} />
             <Route path="/overview" element={<div>Overview content</div>} />
-            <Route path="/projects/:projectId" element={<div>Board content</div>} />
-            <Route path="/projects/:projectId/team" element={<div>Team content</div>} />
+            <Route path="/console" element={<ConsoleRouteRedirect />} />
+            <Route path="/projects/:projectId" element={<div>Board content <Link to="/projects/proj-1/team">Go team</Link></div>} />
+            <Route path="/projects/:projectId/team" element={<div>Team content <Link to="/projects/proj-1">Go board</Link></div>} />
           </Routes>
         </AppShell>
       </MemoryRouter>
@@ -63,6 +69,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   localStorage.clear();
   vi.mocked(apiClient.listProjects).mockResolvedValue([]);
+  vi.mocked(apiClient.getProject).mockResolvedValue(makeProject('proj-1', 'Project One'));
   vi.mocked(apiClient.checkHealth).mockResolvedValue(true);
   vi.mocked(apiClient.getGitHubAuthStatus).mockResolvedValue({ status: 'signed_in' } as never);
 });
@@ -73,12 +80,12 @@ afterEach(() => {
 
 describe('AppShell navigation', () => {
   it('renders all section groups when a project is in scope', async () => {
-    renderShellAt('/projects/proj-1');
+    renderShellAt('/projects/proj-1/team');
 
-    expect(screen.getByText('WORK')).toBeDefined();
-    expect(screen.getByText('SQUAD')).toBeDefined();
-    expect(screen.getByText('OPERATIONS')).toBeDefined();
-    expect(screen.getByText('SYSTEM')).toBeDefined();
+    expect(screen.getByText('Work')).toBeDefined();
+    expect(screen.getByText('Squad')).toBeDefined();
+    expect(screen.getByText('Operations')).toBeDefined();
+    expect(screen.getByText('System')).toBeDefined();
 
     // Existing destinations present, with Team relabelled to Agents.
     expect(screen.getByText('Dashboard')).toBeDefined();
@@ -95,9 +102,16 @@ describe('AppShell navigation', () => {
     // Global destinations are always present (above the project sections).
     expect(screen.getByText('Overview')).toBeDefined();
     expect(screen.getByText('Projects')).toBeDefined();
+    expect(screen.getByRole('link', { name: 'Agents' }).getAttribute('aria-current')).toBe('page');
+    expect(screen.getByTestId('app-navigation-scroll').getAttribute('data-scrollbar-mode')).toBe('hover');
+    expect(screen.getByTestId('app-navigation-scroll').getAttribute('tabindex')).toBe('0');
+    expect(getComputedStyle(screen.getByRole('group', { name: 'Operations' })).gap).toBe('0px');
 
     // The top bar exposes the project switcher and an API status indicator.
     expect(screen.getByLabelText('Project switcher')).toBeDefined();
+    const startTask = screen.getByTestId('start-task-topbar-action');
+    expect(startTask.closest('header')).toBeTruthy();
+    expect(getComputedStyle(startTask).position).not.toBe('fixed');
     await waitFor(() => expect(screen.getByLabelText('API reachable')).toBeDefined());
   });
 
@@ -105,8 +119,8 @@ describe('AppShell navigation', () => {
     renderShellAt('/');
     expect(screen.getByText('Overview')).toBeDefined();
     expect(screen.getByText('Projects')).toBeDefined();
-    expect(screen.queryByText('WORK')).toBeNull();
-    expect(screen.queryByText('SYSTEM')).toBeNull();
+    expect(screen.queryByText('Work')).toBeNull();
+    expect(screen.queryByText('System')).toBeNull();
   });
 
   it('resolves the active nav item from the route', () => {
@@ -120,8 +134,9 @@ describe('AppShell navigation', () => {
     expect(resolveActiveKey('/projects/p1/observability/traces', 'p1')).toBe('observability');
     expect(resolveActiveKey('/projects/p1/workflows', 'p1')).toBe('workflows');
     expect(resolveActiveKey('/projects/p1/settings', 'p1')).toBe('settings');
-    // Deep run pages fall back to the Board; orchestration detail keeps Orchestrations active.
-    expect(resolveActiveKey('/projects/p1/runs/r1/workflow', 'p1')).toBe('board');
+    // Removed run-page routes are no longer special-cased; orchestration detail keeps Orchestrations active.
+    expect(resolveActiveKey('/projects/p1/runs/r1/workflow', 'p1')).toBe('dashboard');
+    expect(resolveActiveKey('/projects/p1/runs/r1/execution/e1', 'p1')).toBe('dashboard');
     expect(resolveActiveKey('/projects/p1/orchestrations/o1', 'p1')).toBe('orchestrations');
     // No project scope → global keys.
     expect(resolveActiveKey('/', undefined)).toBe('overview');
@@ -139,16 +154,20 @@ describe('AppShell navigation', () => {
     renderShellAt('/projects/proj-1');
 
     // Expanded by default: section labels and item text are visible.
-    expect(screen.getByText('WORK')).toBeDefined();
+    expect(screen.getByText('Work')).toBeDefined();
     expect(screen.getByText('Board')).toBeDefined();
+    expect(screen.getByTestId('app-navigation-menu').getAttribute('data-collapsed')).toBe('false');
 
     const collapse = screen.getByRole('button', { name: 'Collapse navigation' });
     fireEvent.click(collapse);
 
     // Collapsed: text labels gone, but items remain reachable via aria-label.
-    expect(screen.queryByText('WORK')).toBeNull();
+    expect(screen.queryByText('Work')).toBeNull();
     expect(screen.queryByText('Board')).toBeNull();
+    expect(screen.getByRole('link', { name: 'Board' })).toBeDefined();
     expect(screen.getByRole('button', { name: 'Expand navigation' })).toBeDefined();
+    expect(screen.getByTestId('app-navigation-menu').getAttribute('data-collapsed')).toBe('true');
+    expect(screen.getByTestId('app-navigation-scroll').getAttribute('data-scrollbar-mode')).toBe('hidden');
     expect(localStorage.getItem('aw.nav.collapsed')).toBe('1');
   });
 
@@ -165,7 +184,7 @@ describe('AppShell navigation', () => {
       ),
     );
     // …and the project-scoped sections render so their nav targets resolve to it.
-    expect(screen.getByText('WORK')).toBeDefined();
+    expect(screen.getByText('Work')).toBeDefined();
     expect(screen.getByText('Board')).toBeDefined();
     // Overview is still the active item (global content stays global).
     expect(resolveActiveKey('/overview', undefined)).toBe('overview');
@@ -180,6 +199,67 @@ describe('AppShell navigation', () => {
     // Once the project list loads and the persisted id is absent, it is cleared…
     await waitFor(() => expect(localStorage.getItem(LAST_ACTIVE_KEY)).toBeNull());
     // …and the shell falls back to the no-project state without crashing.
-    expect(screen.queryByText('WORK')).toBeNull();
+    expect(screen.queryByText('Work')).toBeNull();
+  });
+
+  it('opens a singleton slide-in console from the top bar', async () => {
+    renderShellAt('/projects/proj-1');
+
+    const opener = screen.getByTestId('open-console-panel');
+    expect(opener.getAttribute('aria-expanded')).toBe('false');
+    fireEvent.click(opener);
+
+    expect(await screen.findByRole('dialog', { name: 'Control console' })).toBeDefined();
+    expect(opener.getAttribute('aria-expanded')).toBe('true');
+    expect(screen.getAllByTestId('browser-console')).toHaveLength(1);
+    expect(screen.getByText('Agentweaver Console')).toBeDefined();
+  });
+
+  it('keeps the singleton console mounted and its transcript intact across route changes', async () => {
+    renderShellAt('/projects/proj-1');
+
+    fireEvent.click(screen.getByTestId('open-console-panel'));
+    await screen.findByRole('dialog', { name: 'Control console' });
+    fireEvent.change(screen.getByRole('textbox', { name: 'Ask Agentweaver' }), { target: { value: '/help' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+    expect(await screen.findByText(/Secondary shortcuts:/)).toBeDefined();
+
+    fireEvent.click(screen.getByRole('link', { name: 'Go team' }));
+    await screen.findByText(/Team content/);
+
+    expect(screen.getAllByTestId('browser-console')).toHaveLength(1);
+    expect(screen.getByText(/Secondary shortcuts:/)).toBeDefined();
+    expect(screen.getByRole('dialog', { name: 'Control console' })).toBeDefined();
+  });
+
+  it('closes the singleton console from the close button or Escape and restores focus to the opener', async () => {
+    renderShellAt('/projects/proj-1');
+
+    const opener = screen.getByTestId('open-console-panel') as HTMLButtonElement;
+    opener.focus();
+    fireEvent.click(opener);
+    await screen.findByRole('dialog', { name: 'Control console' });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close panel' }));
+
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Control console' })).toBeNull());
+    expect(document.activeElement).toBe(opener);
+
+    fireEvent.click(opener);
+    await screen.findByRole('dialog', { name: 'Control console' });
+    fireEvent.keyDown(document, { key: 'Escape' });
+
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Control console' })).toBeNull());
+    expect(screen.getAllByTestId('browser-console')).toHaveLength(1);
+    expect(opener.getAttribute('aria-expanded')).toBe('false');
+    expect(document.activeElement).toBe(opener);
+  });
+
+  it('redirects the obsolete /console route into the shell console panel', async () => {
+    renderShellAt('/console');
+
+    expect(await screen.findByRole('dialog', { name: 'Control console' })).toBeDefined();
+    expect(await screen.findByText('Overview content')).toBeDefined();
+    expect(screen.getAllByTestId('browser-console')).toHaveLength(1);
   });
 });

@@ -34,6 +34,8 @@ public static class WorkspaceFileEntryParser
 
                 bool isAdded   = headerLines.Any(l => l.StartsWith("--- /dev/null", StringComparison.Ordinal));
                 bool isDeleted = headerLines.Any(l => l.StartsWith("+++ /dev/null", StringComparison.Ordinal));
+                bool isRename  = headerLines.Any(l => l.StartsWith("rename from ", StringComparison.Ordinal))
+                              || headerLines.Any(l => l.StartsWith("rename to ", StringComparison.Ordinal));
 
                 // Binary diffs use "Binary files ... differ" lines instead of --- / +++ headers.
                 if (!isAdded && !isDeleted)
@@ -94,7 +96,7 @@ public static class WorkspaceFileEntryParser
                 // listing dozens of untouched files (issue #197 symptom C). Binary modifications and
                 // added/deleted files (which can legitimately be empty) are always kept.
                 bool isBinarySection = section.Contains("Binary files", StringComparison.Ordinal);
-                if (status == "modified" && added == 0 && removed == 0 && !isBinarySection)
+                if (status == "modified" && added == 0 && removed == 0 && !isBinarySection && !isRename)
                     continue;
 
                 entries.Add(new WorkspaceFileEntry

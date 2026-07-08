@@ -4,8 +4,10 @@ title: Browser console
 
 # Browser console
 
-The browser console is a terminal-styled, full-screen chat interface for operating Agentweaver from
-the web app. Open it with the **Console** button in the top bar or navigate to `/console`.
+The browser console is a terminal-styled app-level slide-in for operating Agentweaver from the web
+app. Open it with the **Console** button in the top bar. The console is mounted once in the app shell,
+so its transcript and bound-run state persist while navigating between pages. The obsolete `/console`
+URL safely redirects to the Overview page and opens the same singleton panel.
 
 ## Terminal interface
 
@@ -41,7 +43,7 @@ Common commands:
 
 ## Gates stay visible
 
-The console reuses the same run stream and timeline components as the run pages. OutcomeSpec
+The console reuses the same run stream and timeline components as embedded run inspection. OutcomeSpec
 confirmation, approvals, questions, review, and merge gates appear inline and are not bypassed by
 prose or slash commands.
 
@@ -55,8 +57,9 @@ planned in issue #201.
 
 | Concern | Source |
 | --- | --- |
-| `/console` route | `apps/web/src/App.tsx:47` |
-| Top-bar Console button | `apps/web/src/components/shell/TopBar.tsx:69` |
+| Singleton console panel | `apps/web/src/components/shell/AppShell.tsx` |
+| `/console` redirect | `apps/web/src/components/shell/ConsoleRouteRedirect.tsx` |
+| Top-bar Console button | `apps/web/src/components/shell/TopBar.tsx` |
 | Terminal surface, scrollback, prompt, and blinking cursor | `apps/web/src/console/BrowserConsole.tsx:69`, `apps/web/src/console/BrowserConsole.tsx:180`, `apps/web/src/console/BrowserConsole.tsx:624` |
 | Console architecture and gate reuse | `apps/web/src/console/BrowserConsole.tsx:32` |
 | Slash command catalog | `apps/web/src/console/consoleCommands.ts:18` |

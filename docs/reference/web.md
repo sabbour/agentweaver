@@ -49,8 +49,6 @@ For production hosting, the Vite build output is served by the ASP.NET Core stat
 | `/projects/:projectId/workflows` | Workflows | Workflow definitions and editing |
 | `/projects/:projectId/diagnostics` | Diagnostics | Project diagnostics |
 | `/projects/:projectId/heartbeat` | Heartbeat | Coordinator heartbeat status |
-| `/projects/:projectId/runs/:runId/execution/:executionId` | Execution | Run execution timeline |
-| `/projects/:projectId/runs/:runId/workflow` | Workflow run | Live workflow diagram with executor stage cards, execution modal, and status |
 | `/projects/:projectId/orchestrations/:runId` | Coordinator run | Live outcome-spec review and confirm/revise gate for a coordinator run |
 
 ## Flows
@@ -73,9 +71,9 @@ The board page (`/projects/:projectId/board`) shows project details, the Kanban 
 
 The details section shows the project name, origin, source repository (for GitHub projects), working directory, default branch, and provider settings.
 
-The run list shows each run's id, status, and start time. Status badges show human-friendly labels: `No Changes`, `Completed`, `Merged`, `Failed`, `Merge Failed`, `Declined`, `Running`, and `Awaiting Review`. The `No Changes` label uses an informative (blue) badge to distinguish it from a full merge. Clicking a run navigates to the workflow run page for that run.
+The run list shows each run's id, status, and start time. Status badges show human-friendly labels: `No Changes`, `Completed`, `Merged`, `Failed`, `Merge Failed`, `Declined`, `Running`, and `Awaiting Review`. The `No Changes` label uses an informative (blue) badge to distinguish it from a full merge.
 
-Coordinator runs (detected via `isCoordinatorRun`) instead show their **orchestration status** label when the optional `coordinator_status` field is present — `Dispatching`, `Awaiting assembly`, `In review`, `Assembling`, `Complete`, `Failed`, `Blocked`, or `Declined` (a `Failed` badge appends `coordinator_status_reason` when available). When the field is absent the bare run status is shown. Coordinator rows link to the orchestration topology page via the **Topology** button; other runs link to the **Workflow** page.
+Coordinator runs (detected via `isCoordinatorRun`) instead show their **orchestration status** label when the optional `coordinator_status` field is present — `Dispatching`, `Awaiting assembly`, `In review`, `Assembling`, `Complete`, `Failed`, `Blocked`, or `Declined` (a `Failed` badge appends `coordinator_status_reason` when available). When the field is absent the bare run status is shown. Coordinator rows link to the orchestration topology page via the **Topology** button; non-coordinator rows no longer open standalone workflow run pages.
 
 The start-run dialog collects:
 
@@ -132,7 +130,7 @@ The confirm/revise gate is the safety property of the Phase 1 flow: no dispatch 
 
 ### Coordinator orchestration and unified graph view
 
-Once the outcome spec is confirmed, the coordinator run page renders a **unified dynamic graph** using the same generic `WorkflowNode` renderer as the workflow run page. This single graph shows the coordinator node, all subtask nodes, and the planned assembly pipeline in one React Flow canvas — replacing the previous separate topology view.
+Once the outcome spec is confirmed, the coordinator run page renders a **unified dynamic graph** using the generic `WorkflowNode` renderer. This single graph shows the coordinator node, all subtask nodes, and the planned assembly pipeline in one React Flow canvas — replacing the previous separate topology view.
 
 #### Page layout
 
@@ -165,7 +163,7 @@ The SSE subscription for each inline child graph is scoped to the expansion: it 
 
 While a subtask is expanded, the parent subtask card header also shows an **aggregate elapsed time** — the sum of the child pipeline steps' durations (each step's `completedAt − startedAt`, or `now − startedAt` while still running). It ticks live (1s) when any child step is in progress and is labelled `aria-label="Total child elapsed"`.
 
-A **View run** link navigates to the child run's full workflow page (see [Child run View-run resolution](#child-run-view-run-resolution)).
+Child run inspection stays inside the orchestration context: expand the child pipeline or select the child in the Agent Sessions panel to inspect messages, approvals/questions, files, and status.
 
 #### Coordinator node and orchestration status
 
@@ -175,7 +173,7 @@ The coordinator node also carries a **View session** button that scrolls to the 
 
 #### Graph rendering affordances (edges, cards, minimap, zoom)
 
-The graph's visual layer is shared across the coordinator run page, the workflow run page, and inline editor previews via `WorkflowGraphPanel.tsx`:
+The graph's visual layer is shared across the coordinator run page and inline editor previews via `WorkflowGraphPanel.tsx`:
 
 - **Spine edges** — forward edges use a custom `spine` edge type (`SpineEdge`) instead of React Flow's default bezier. Every edge in a fan-out (shared source) or fan-in (shared target) bundle is routed deterministically through a single shared rounded **junction dot** positioned between the columns, drawn as two smooth `getBezierPath` segments that enter/leave the junction horizontally. There are no hard arrowheads. Gate-condition labels (e.g. an editor edge's `when`) are rendered at the junction via `EdgeLabelRenderer`.
 - **Status accent bar** — both `WorkflowNode` and the coordinator `SubtaskNode` cards render a colored top-accent bar keyed to status (via the exported `accentClass` helper) with the status badge moved to the top-left of the card header.
@@ -215,7 +213,7 @@ Two muted **audit milestones** appear in the session timeline when automation ac
 
 A child run can ask a question or request tool approval; the coordinator re-projects these onto its own stream as `coordinator.child_question` `{ childRunId, subtaskId, requestId, question }` and `coordinator.child_approval_required` `{ childRunId, subtaskId, requestId, toolName, url?, message? }`. The **Action required** block renders each as an actionable item labelled with its source subtask (`Subtask {n}`):
 
-- A child **question** renders the same answer card used on the run page, but the answer is POSTed against the **`childRunId`** from the payload (`apiClient.answerQuestion(childRunId, requestId, value)`), **not** the coordinator run id — the child is the run that is blocked.
+- A child **question** renders the embedded answer card, but the answer is POSTed against the **`childRunId`** from the payload (`apiClient.answerQuestion(childRunId, requestId, value)`), **not** the coordinator run id — the child is the run that is blocked.
 - A child **approval** reuses the existing HITL tool-approval card (`LifecycleEventCard` with a synthetic `tool.approval_required` event) targeted at the **`childRunId`**, so Allow/Deny POST against the child's `tool-approvals`/`tool-denials` endpoints. The tool name, URL, and message are shown.
 - Each item collapses once resolved (a question on `agent.question_answered` for the same `requestId`, or optimistically on submit; an approval on the card's own allow/deny action).
 
@@ -237,100 +235,14 @@ A page-level steering bar sits above the React Flow canvas. Three buttons are al
 
 The steering bar is always visible on the coordinator run page even for finished runs (buttons remain rendered; the API will reject the call if the run is not active). The same steering actions are also available inline on the page via the steering chat box (no dialog required) — see [Coordinator session panel and steering chat box](#coordinator-session-panel-and-steering-chat-box).
 
-### Watch a run
+### Embedded run inspection
 
-The watch screen streams events with `fetch`, not `EventSource`, so it can send the bearer key and `Last-Event-ID`. The stream reconnects after a drop and deduplicates by `sequence`. Reconnection replays from the in-memory buffer while the run's entry is retained on the server.
+Standalone workflow and execution run pages have been retired. The web UI keeps operators in the coordinator context instead:
 
-#### Workflow graph
-
-The workflow run page (`/projects/:projectId/runs/:runId/workflow`) shows a live graph of the executor pipeline. Each pipeline node card displays:
-
-- A **status badge** reflecting the current `workflow.step` event status (`Pending`, `In Progress`, `Complete`, `Skipped`, `Failed`, `Revise`)
-- An **elapsed timer** that ticks live from the `started` event's `timestamp_utc` until the corresponding `completed`/`failed` event
-- An optional **status message line** — when the backend emits a `workflow.step` event with a `message` field, that text is rendered below the role description in a muted colour. It takes priority over the hardcoded fallback description; omitting `message` restores the default text.
-
-For coordinator child runs (runs with a non-null `parent_run_id`), the page renders a trimmed two-node pipeline: Agent → Assemble-ready. RAI, Human Review, Merge, and Scribe are never shown on a child run — they execute once on the collective output at the coordinator level. This trimming is enforced defensively in two ways: (1) the page renders a **loading spinner** (not any graph) until the run detail resolves and child-ness is known, so a child run never flashes the full Agent → … → Scribe placeholder before the trimmed pipeline is selected; and (2) if a full-variant `GraphDescriptor` somehow arrives for a child run (e.g., a stale cache entry), the page discards it and falls back to the hardcoded child pipeline.
-
-#### Child run View-run resolution
-
-The workflow run page resolves a run by first looking it up in `GET /api/projects/{id}/runs`. That list **excludes coordinator child runs** (the server filters it to parent runs, `parent_run_id IS NULL`). When the route's run id is not found in the list, the page falls back to `GET /api/runs/{id}` (`apiClient.getRun`), which **does** return child runs, and resolves:
-
-- `executionId = runId` directly — for a child run the child RunId is itself the stream/graph key (the same key the inline subtask expansion uses), so it drives `getRunGraph(runId)` and `useRunStream(runId)`;
-- `parentRunId` from `parent_run_id` (so `isChild` trims the pipeline), `runStatus` from `status`, `agentName` from `agent_name`, and the model from `model_source`.
-
-Without this fallback the child "View run" link previously left `executionId` unset, so the page spun forever on an all-"Pending" full pipeline. The trimmed child pipeline plus the persisted-events seed (`SEED_STATUSES`) then render the child's live/terminal status.
-
-#### Run header
-
-A header bar shows the shortened run ID alongside a status indicator: a spinner while connecting or streaming, a success badge when done, or an error badge on failure.
-
-For an active, non-child run the header also hosts an **Auto-approve tools** switch, seeded from the run detail's `auto_approve_tools` boolean (optional, default `false`) and flipped via `apiClient.setAutoApprove(runId, enabled)` → `POST /api/runs/{id}/auto-approve` `{ enabled }`. It is optimistic (flips immediately, reconciles to the server boolean, reverts on error) and targets the resolved execution/run id. It is hidden for coordinator **child** runs (they inherit the coordinator's cascade) and for terminal/parked runs (the endpoint returns `409` when the run is not active). Autopilot is **coordinator-only** and is not shown here. Tooltip copy notes that dangerous tools remain blocked by policy.
-
-When automation acts, two **muted audit lines** (the same `size={100}` / `colorNeutralForeground3` treatment as `agent.intent` and the "Used N tools" rows — not prominent cards) appear in the timeline:
-
-- `tool.auto_approved` `{ requestId, toolName, url? }` → *Tool auto-approved: {toolName} {url?}*.
-- `coordinator.autopilot_answered` `{ runId, childRunId?, requestId, question, answer }` → *Autopilot answered{ (child {id})}: {question} → {answer}*.
-
-Both event types are routed through the timeline reducer's lifecycle group and rendered by `LifecycleEventCard`; payload keys are read defensively (`toolName`/`tool_name`, `childRunId`/`child_run_id`).
-
-#### Bubbled questions (answer affordance)
-
-When a worker (or any agent) blocks awaiting an answer, the backend emits `agent.question_asked` `{ requestId, question }` on the run stream (and persists it). Below the run header the page renders one **answer card** per `requestId` that has no matching `agent.question_answered`:
-
-- An unanswered question shows a prominent, brand-stroked card (matching the HITL tool-approval card treatment) with the question text, a textarea, and a **Submit answer** button that calls `apiClient.answerQuestion(runId, requestId, value)` → `POST /api/runs/{id}/questions/{requestId}/answer`.
-- On submit the card optimistically collapses to a muted answered state; it also collapses when the matching `agent.question_answered` `{ answer, timedOut }` arrives, showing the answer (or a **"Question timed out"** hint with the auto-resolved value when `timedOut` is true).
-
-Payload keys are read defensively (`requestId`/`request_id`, `timedOut`/`timed_out`) so minor backend casing differences degrade gracefully.
-
-#### Timeline
-
-Events are grouped into turns. Each turn opens with a divider that reads **Turn N · X steps** and shows a live spinner while the turn is in progress or a checkmark once it closes. A completed turn that received no steps is not shown — it produces no divider or content in the timeline.
-
-Inside each turn, two kinds of steps appear:
-
-**Agent message bubbles** — the agent's text output, rendered with a bot icon on the left. On a live in-progress run, text arrives token-by-token and a blinking cursor follows the end of the accumulated text. Once the server confirms the message is complete, the content is rendered as Markdown: headings, lists, inline code, fenced code blocks, block quotes, and tables. Headings use the Fluent type-ramp scale (h1 → Base500, h2 → Base400, h3/h4 → Base300) so they stay visually consistent with the rest of the UI. Links open in a new tab with `rel="noopener noreferrer"`. When opening a completed run after the fact, the full message content is replayed at once with no cursor — this is expected behaviour, not a bug.
-
-Markdown is sanitized using rehype-sanitize with the default allowlist schema. `rehype-raw` is not included, so any raw HTML in agent output is neutralised rather than rendered. All text fields are React text nodes; `dangerouslySetInnerHTML` is not used anywhere in the rendering pipeline.
-
-**Tool call cards** — each tool call renders as a collapsible accordion card with a wrench icon. The header shows a status indicator and a human-readable title derived from the tool name and key argument, for example **Read file · src/index.js** or **Run command · npm test**. Inside the card, the arguments are shown as formatted JSON, and the result or error appears once settled.
-
-A tool call with no result yet shows a spinner in the header. A regular error shows a red error badge; a sandbox or path-restriction violation shows a yellow warning badge and the card **auto-expands** (so the error is visible without a click). Expanding a tool cluster shows only the first level (individual tool rows) collapsed — click a row to expand its detail pane. Tool clusters with no errors default to collapsed. Both the arguments and the output are plain escaped text — no HTML is interpreted.
-
-**Inline approval cards** — when the agent calls a tool that requires human approval, an **approval card** appears inline in the current turn's timeline (not at the bottom). The card shows:
-- The tool name as a badge
-- The resource URL (scrollable, monospace)
-- Four action buttons: **Allow once**, **Allow this run**, **Always allow (session)**, **Deny**
-- An optional intention description
-
-After taking action, the card collapses to a single line: `✓ Allowed (once) · web_fetch` or `✗ Denied · web_fetch`. On page reload, already-actioned cards remain collapsed.
-
-**Lifecycle event cards** — events such as `run.completed`, `run.failed`, `review.requested`, and the merge outcome are shown as flat cards outside any turn group, with a colour-coded icon and badge. When the agent reports `run.outcome(achieved: false, ...)`, the `run.completed` lifecycle card renders with an amber warning indicator and the reason text instead of the normal green success badge.
-
-#### Review gate
-
-When the run reaches the review gate, a diff viewer and an inline review panel appear below the timeline. See [Review a run](#review-a-run) below.
-
-### Review a run
-
-The review panel is embedded in the watch screen. When the agent emits a `review.requested` event, the watch screen fetches the run, shows the diff, and renders a details table alongside the review panel. The panel shows the tree hash and two buttons: Approve and Decline.
-
-**Approve** can have three outcomes:
-
-- **Merge succeeds** — the run transitions to `merged` and a green success badge appears showing the commit hash. The transition happens live via the `merge.completed` event on the SSE stream; you do not need to refresh the page.
-- **Retriable block** — the server returns a 409 with an error message (for example, because there are uncommitted local changes). The panel shows the server message as a warning bar and keeps Approve and Decline active so you can fix your working tree — commit or stash the changes — and approve again.
-- **Terminal merge failure** — if the merge fails in a way that cannot be retried, a red `merge_failed` badge appears with the failure reason. The review panel re-appears so you can attempt another approve after resolving the conflict manually, or decline the run.
-
-**Decline** records the decision and the run transitions to `declined`.
-
-### Artifact browser
-
-A resizable split-panel layout divides the watch screen: the timeline occupies the left panel and the artifact browser occupies the right panel. The browser is available whenever the run has a worktree — from the moment the run starts through any awaiting-review state.
-
-The browser has two tabs:
-
-**Files tab** — shows the worktree's file tree. Files modified by the agent appear with a colour-coded status badge (`A` added, `M` modified, `D` deleted). Clicking a file opens it in a read-only Monaco editor or CommonMark preview (for `.md` files). The editor shows a diff view highlighting agent changes against the originating branch baseline. The file list polls every few seconds on in-progress runs to pick up new changes as the agent writes them. On 409 (worktree unavailable), polling stops automatically.
-
-**Changes tab** — shows a flat list of all changed files with `+N / -N` line counts. Clicking a file opens the same Monaco diff view.
+- The coordinator graph shows coordinator/subtask status and lets users expand a child pipeline inline from `GET /api/runs/{childRunId}/graph` plus the child run SSE stream.
+- The **Agent Sessions** panel streams the selected coordinator or child run, including agent messages, tool calls, approvals, questions, lifecycle events, and status.
+- The panel's **Changes** and **Files** tabs use the same `/api/runs/{id}/files`, `/workspace`, and assembly artifact endpoints that embedded review flows use.
+- Questions and approvals remain routed to the run that is blocked (`childRunId` for child work, coordinator id for coordinator work).
 
 ### Team page
 
@@ -353,90 +265,6 @@ Two action buttons appear in the page header:
 A **Cast team** button navigates to the casting wizard at `/projects/:projectId/team/cast`.
 
 The sync panel at the bottom of the page shows the pending uncommitted changes fetched from `GET /api/projects/{id}/team/sync`. Each changed file is listed with its status (`added`, `modified`, or `deleted`). A **Commit** button opens a dialog to enter an optional commit message and then calls `POST /api/projects/{id}/team/sync` with the change set hash. If the change set shifts between the panel load and the commit, the server returns a conflict and the panel shows an error with a prompt to refresh.
-
-### Workflow run page
-
-The workflow run page (`/projects/:projectId/runs/:runId/workflow`) is the primary screen for monitoring a run. It renders the pipeline stages as a horizontal React Flow diagram.
-
-#### Dynamic graph descriptor
-
-The page fetches a graph descriptor from `GET /api/runs/{id}/graph` on load and applies any `run.workflow_graph` SSE snapshot (highest `seq` wins). When the descriptor is available it drives all rendering; when the endpoint returns 404 or is not yet deployed, the page falls back to the hardcoded executor lists below.
-
-The descriptor shape (snake_case JSON from the backend):
-
-| Field | Type | Description |
-| --- | --- | --- |
-| `graph_id` | string | Opaque identifier |
-| `variant` | `"full"` \| `"child"` \| `"coordinator"` | Graph variant |
-| `start_node_id` | string | Id of the first node |
-| `nodes` | `GraphNode[]` | Ordered list of pipeline stage nodes |
-| `edges` | `GraphEdge[]` | Directed edges (forward and loopback) |
-
-**`GraphNode`**
-
-| Field | Type | Description |
-| --- | --- | --- |
-| `id` | string | Logical step key matching the status reducer (`agent`, `rai`, `review`, `merge`, `scribe`, `assemble-ready`, `coordinator`, `plan:subtask-{n}`, `planned:assembly-*`) |
-| `label` | string | Card title shown in the UI |
-| `role` | string | Drives icon and color (`agent`/`rai`/`review`/`merge`/`scribe`/`coordinator`/`subtask`/`assembly`) |
-| `kind` | `"live"` \| `"planned"` | `planned` nodes render with a dashed border and muted opacity; they never show a pending spinner |
-| `node_type` | `"agent"` \| `"action"` \| `"gate"` \| `"terminal"` \| `"subtask"` (optional) | Structural category that drives card shape and size (see below) |
-| `child_graph_ref` | string? | Reference to child descriptor in the form `"run:{childRunId}"` (subtask nodes) |
-| `child_run_id` | string? | Child run ID (flat optional field, same value as the id suffix in `child_graph_ref`) |
-| `agent` | string? | Assigned agent name (subtask nodes) |
-| `model` | string? | Selected model ID (subtask nodes) |
-| `phase` | string? | Execution phase (subtask nodes) |
-
-**`GraphEdge`**
-
-| Field | Type | Description |
-| --- | --- | --- |
-| `from` | string | Source node id |
-| `to` | string | Target node id |
-| `cardinality` | `"direct"` \| `"fanout"` \| `"fanin"` | Edge multiplicity |
-| `loopback` | boolean | `true` = back-edge excluded from dagre layout, drawn as a loopback arc above/below the row |
-
-**Status projection** — node `id` equals the logical step key the existing status reducer uses, so status is a direct lookup by id. `planned` nodes are always rendered as "Planned" regardless of any events.
-
-#### node_type → card shape and size
-
-The `node_type` field on `GraphNode` drives card dimensions and visual shape in the `WorkflowNode` renderer. Color remains driven by `role`; `node_type` only controls size and shape.
-
-| `node_type` | Card width | Card height | Visual treatment |
-| --- | --- | --- | --- |
-| `agent` | 220 px | 160 px | Largest card; primary importance |
-| `subtask` | 220 px | 180 px | Expandable card (see coordinator view); taller to show agent/model/phase |
-| `gate` | 180 px | 130 px | Decision-point shape with dashed border |
-| `action` | 170 px | 130 px | Smaller secondary card (Merge, Scribe) |
-| `terminal` | 150 px | 110 px | Smallest card; endpoint/checkpoint (Assemble-ready) |
-| *(absent)* | 200 px | 145 px | Default size |
-
-`planned` nodes always use the default width class regardless of `node_type`, since planned assembly nodes are intentionally muted.
-
-The `data-node-type` HTML attribute on each rendered card card reflects the node's `node_type` value (or `"default"` when absent), enabling CSS-based targeting in tests and tooling.
-
-**Fallback** — when the descriptor endpoint returns 404 or is unavailable, the page falls back to the hardcoded five-stage pipeline (`Agent → Rai → Review → Merge → Scribe`) for a normal run or the trimmed two-stage pipeline (`Agent → Assemble-ready`) for a coordinator child run, so nothing regresses until the backend ships.
-
-#### Pipeline stages (hardcoded fallback / full variant)
-
-**Agent → Rai → Review → Merge → Scribe**
-
-Each card shows:
-- **Stage name and role description** — Agent (AI Assistant), Rai (RAI Reviewer), Review (Human Review), Merge (Merge Coordinator), Scribe (Session Logger)
-- **Status badge** — Pending, Planned, In Progress, Awaiting, Complete, Skipped, Failed, or Revise (Rai only)
-- **Elapsed timer** — running clock while the stage is active; freezes on completion
-- **Description text** — current activity (e.g. "Working on task...", the latest `agent.intent` text, "Passed", "Skipped")
-- **Agent identicon** — circular avatar for the agent executor, matching the identicon on the team page
-- **Model name** — displayed on the agent card when a model is known
-- **Reviewer avatar** — on the Review card, once a human has reviewed, shows the reviewer's GitHub profile picture and username
-
-Loop-back arcs (Rai → Agent for revision, Review → Agent for request-changes) are highlighted in blue while the loop is active.
-
-Clicking **View Execution** on any completed card opens the execution modal.
-
-### Execution modal
-
-The execution modal shows the full event timeline for an individual executor's run — agent messages, tool call cards, approval cards, and lifecycle events. The modal is non-scrollable at the outer level; the inner timeline panel has its own scrollbar. Close with the × button or click outside.
 
 ### Team Memory page
 
@@ -489,7 +317,7 @@ Below the team member grid on the team page, a collapsible **Recent Runs** secti
 - Status badge (color-coded: warning for in-progress, success for completed, danger for failed)
 - Started time
 
-Clicking a run navigates to the watch screen for that run.
+Coordinator run entries open the orchestration detail page; standalone workflow/watch pages are no longer routed.
 
 ## Structure
 
@@ -502,8 +330,6 @@ src/
     sse.ts              run-stream hook
   components/
     RunSubmitForm.tsx
-    RunWatcher.tsx      orchestrates the watch screen
-    RunHeader.tsx       run ID + stream status indicator
     Timeline.tsx        renders the ordered list of timeline items
     TurnGroup.tsx       one agent turn: divider + steps
     TurnDivider.tsx     "Turn N · X steps" header with active/done indicator
@@ -511,7 +337,6 @@ src/
     ToolCallCard.tsx    collapsible card: icon + title + args + result/error
     LifecycleEventCard.tsx  flat card for run/review/merge lifecycle events
     ReviewPanel.tsx
-    RunDetail.tsx
     DiffViewer.tsx      syntax-highlighted unified diff component
     ArtifactBrowser.tsx resizable split-panel file tree + Monaco/markdown viewer
     FileViewerModal.tsx read-only Monaco diff viewer and CommonMark preview modal
@@ -538,8 +363,6 @@ src/
     WorkflowsPage.tsx       workflow definitions and editing
     DiagnosticsPage.tsx     project diagnostics
     HeartbeatPage.tsx       coordinator heartbeat status
-    WatchPage.tsx
-    WorkflowRunPage.tsx     live workflow graph (descriptor-driven or fallback hardcoded)
     CoordinatorRunPage.tsx  coordinator run page: outcome-spec gate + unified graph + steering
     SettingsPage.tsx        sandbox-policy settings component (not currently routed)
     HomePage.tsx            submit form (not currently routed)

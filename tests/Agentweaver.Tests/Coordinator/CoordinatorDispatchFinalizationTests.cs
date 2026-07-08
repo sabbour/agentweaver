@@ -141,6 +141,7 @@ public sealed class CoordinatorDispatchFinalizationTests : IDisposable
             var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
             var plan = await db.WorkPlans.FirstAsync(w => w.Id == workPlanId);
             plan.Status = WorkPlanStatus.AssemblyBlocked;
+            plan.AssemblyStatusReason = "assembly_blocked: ineligible_subtasks [1]";
             await db.SaveChangesAsync();
         }
 
@@ -155,9 +156,46 @@ public sealed class CoordinatorDispatchFinalizationTests : IDisposable
             var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
             var plan = await db.WorkPlans.AsNoTracking().FirstAsync(w => w.Id == workPlanId);
             plan.Status.Should().Be(WorkPlanStatus.AwaitingAssembly);
+            plan.AssemblyStatusReason.Should().BeNull();
         }
 
         _assembly.Started.Should().ContainSingle().Which.CoordinatorRunId.Should().Be(coordinatorRunId);
+    }
+
+    [Fact]
+    public async Task FinalizeDispatch_PlanAssemblyBlockedForIntegrationBuildError_DoesNotClearBlockOrReHandOff()
+    {
+        const string coordinatorRunId = "coord-final-integration-build-blocked";
+        var (workPlanId, subtaskIds) = await SeedPlanAsync(coordinatorRunId);
+        _streamStore.Create(coordinatorRunId, "alice");
+
+        await using (var scope = _provider.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var plan = await db.WorkPlans.FirstAsync(w => w.Id == workPlanId);
+            plan.Status = WorkPlanStatus.AssemblyBlocked;
+            plan.AssemblyStatusReason = "assembly_blocked: integration_build_error";
+            await db.SaveChangesAsync();
+        }
+
+        var statusById = subtaskIds.ToDictionary(id => id, _ => SubtaskStatus.AssembleReady);
+        var context = new CoordinatorDispatchContext(coordinatorRunId, "repo", "main", "alice", null);
+
+        await _sut.FinalizeDispatchAsync(
+            context, workPlanId, statusById, edges: [], new CoordinatorDispatchService.SeqCounter(), default);
+
+        await using (var scope = _provider.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var plan = await db.WorkPlans.AsNoTracking().FirstAsync(w => w.Id == workPlanId);
+            plan.Status.Should().Be(WorkPlanStatus.AssemblyBlocked,
+                "eligible children do not recover an integration_build_error block");
+            plan.AssemblyStatusReason.Should().Be("assembly_blocked: integration_build_error");
+        }
+
+        _assembly.Started.Should().BeEmpty("dispatch recovery must not immediately re-run the same failed integration build");
+        _streamStore.Get(coordinatorRunId)!.GetSnapshotSince(0).Events
+            .Should().NotContain(e => e.Type == EventTypes.CoordinatorChildrenComplete);
     }
 
     private sealed class RecordingAssembly : ICoordinatorAssembly

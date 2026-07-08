@@ -23,5 +23,8 @@ public sealed class ProjectRecord
     public string? SandboxProfile { get; set; }
     public string? SourceBlueprintId { get; set; }
     public string? SourceBlueprintType { get; set; }
+    public string? BlueprintGenerationModel { get; set; }
+    public string? WorkflowGenerationModel { get; set; }
+    public string? OutcomeSpecGenerationModel { get; set; }
     public string? AllowedWorkflowIds { get; set; }
 }

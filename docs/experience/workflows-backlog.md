@@ -155,15 +155,15 @@ Once a task is claimed, the workflow override can no longer be changed. If a use
 
 The coordinator selection model is process-fit oriented. It selects the workflow whose steps and outputs fit the task, not the workflow whose name shares words with the task. If selection fails, the default remains the safe fallback. See [Workflow selection](../workflow-selection.md) for the deeper selection contract.
 
-## The per-run workflow graph
+## Embedded workflow graphs
 
-The per-run workflow graph is the live execution version of the workflow. It is reached at a workflow run page titled **Run** with the short run id beside it. Unlike the Workflows page graph, this graph carries status.
+The live workflow graph is the execution version of the workflow. Standalone workflow run pages have been retired; status-carrying graphs are embedded in coordinator orchestration details and related run-inspection panels. Unlike the Workflows page graph, this graph carries status.
 
 ![Per-run workflow graph with status-carrying node cards](/screenshots/per-run-workflow-graph.png)
 
 > 📸 **Screenshot — `per-run-workflow-graph.png`**
-> *Shows:* the per-run workflow graph on the **Run** page with node cards carrying **Pending** / **In Progress** / **Complete** / **Skipped** / **Failed** / **Revise** / **Awaiting** badges, role labels (AI Assistant, RAI Reviewer, Human Review, Merge Coordinator, Session Logger), and node actions such as **View execution**, **Review now**, **Browse files**, and **View memories**; loopback edges light up during revision.
-> *Path:* `/projects/:projectId/board` → open a run's **Workflow** view → `/projects/:projectId/runs/:runId/workflow`.
+> *Shows:* an embedded workflow graph with node cards carrying **Pending** / **In Progress** / **Complete** / **Skipped** / **Failed** / **Revise** / **Awaiting** badges, role labels, and actions such as **Review now**, **Browse files**, and **View memories**; loopback edges light up during revision.
+> *Path:* open a coordinator run → `/projects/:projectId/orchestrations/:runId`.
 
 The graph is seeded from persisted run state and then updated from the run event stream. If a graph descriptor is available, the UI renders the actual workflow nodes and edges. If not, it falls back to the standard pipeline shape.
 

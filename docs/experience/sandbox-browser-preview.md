@@ -12,14 +12,14 @@ This page walks through the user experience. For the API see the
 
 ## When the Preview button is available
 
-A **Preview** button appears in the run/execution view ([`WorkflowRunPage.tsx:822`](../deep-dive/sandbox-browser-preview.md#source)) **only** when **both** are true:
+A **Preview Sandbox** button appears in the coordinator run page when **both** are true:
 
 - the run is using the **Kubernetes sandbox** (the run's `sandbox.selected` event reports backend
   `kubernetes-sandbox-claim`), **and**
 - the run is **still active**.
 
 On local/dev sandbox backends, or after the run has finished, the button is not shown — there is no claim
-pod to route into. The button sits in the run header.
+pod to route into.
 
 ## Step by step
 
@@ -81,4 +81,4 @@ hands.
 - [Sandbox browser preview — Reference](../reference/sandbox-browser-preview.md) — routes, DTO fields, config, status codes.
 - [Sandbox browser preview — Deep Dive](../deep-dive/sandbox-browser-preview.md) — the reverse proxy, lifecycle, and cleanup.
 - [Sandbox pod execution experience](./sandbox-pod-execution.md) — the pod pill and the pod-per-run model.
-- [Runs, board & watch](./runs-board-watch.md) — where the run/execution view lives.
+- [Runs, board & live inspection](./runs-board-watch.md) — where embedded run inspection lives.

@@ -129,15 +129,23 @@ public sealed class BlueprintsWebApplicationFactory : WebApplicationFactory<Prog
 public sealed class StubBlueprintGenerator : IBlueprintGenerator
 {
     public string Response { get; set; } = "{}";
+    public Exception? ExceptionToThrow { get; set; }
     public string? LastTargetRepository { get; private set; }
+    public string? LastModelId { get; private set; }
 
     public Task<string> GenerateRawAsync(
         string description,
         CancellationToken ct,
         string? userId = null,
-        string? targetRepository = null)
+        string? targetRepository = null,
+        string? modelId = null)
     {
         LastTargetRepository = targetRepository;
+        LastModelId = modelId;
+        var exception = ExceptionToThrow;
+        ExceptionToThrow = null;
+        if (exception is not null)
+            throw exception;
         return Task.FromResult(Response);
     }
 }

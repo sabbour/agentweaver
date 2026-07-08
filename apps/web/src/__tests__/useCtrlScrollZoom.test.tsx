@@ -18,7 +18,7 @@ function ZoomHarness() {
   );
 }
 
-// Harness with elevated max — mirrors WorkflowRunPage / CoordinatorRunPage.
+// Harness with elevated max — mirrors CoordinatorRunPage.
 function ZoomHarnessWithMax({ maxZoom: max }: { maxZoom: number }) {
   const { zoom, zoomIn, zoomOut, viewportRef, maxZoom } = useCtrlScrollZoom({ maxZoom: max });
   return (

@@ -151,8 +151,8 @@ describe('FlowPage', () => {
     expect(screen.queryByText('Neo')).toBeNull();
     expect(screen.getByLabelText('Previous work archive')).toBeDefined();
     await waitFor(() => expect(screen.getAllByText('Implement login').length).toBeGreaterThan(0));
-    expect(screen.getByRole('link', { name: 'Implement login' }).getAttribute('href'))
-      .toBe('/projects/p1/runs/wr-1/execution/child-1');
+    expect(screen.queryByRole('link', { name: 'Implement login' })).toBeNull();
+    expect(screen.getAllByText('Implement login').length).toBeGreaterThan(0);
     expect(apiClient.getProjectRuns).toHaveBeenCalledWith('p1', {
       agentName: 'Ada',
       terminalOnly: true,

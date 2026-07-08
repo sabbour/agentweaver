@@ -21,7 +21,7 @@ import {
 import { FlowRegular } from '@fluentui/react-icons';
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
-import type { WorkflowSummaryDto } from '../api/types';
+import type { StartOrchestrationMode, WorkflowSummaryDto } from '../api/types';
 
 const useStyles = makeStyles({
   fields: {
@@ -40,10 +40,11 @@ export function StartOrchestrationDialog({ projectId, onStarted }: StartOrchestr
   const styles = useStyles();
   const [open, setOpen] = useState(false);
   const [goal, setGoal] = useState('');
-  const [saving, setSaving] = useState(false);
+  const [savingMode, setSavingMode] = useState<StartOrchestrationMode | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [workflowOverride, setWorkflowOverride] = useState<string | null>(null);
   const [selectableWorkflows, setSelectableWorkflows] = useState<WorkflowSummaryDto[]>([]);
+  const saving = savingMode !== null;
 
   useEffect(() => {
     if (!open) return;
@@ -59,17 +60,19 @@ export function StartOrchestrationDialog({ projectId, onStarted }: StartOrchestr
   const reset = () => {
     setGoal('');
     setError(null);
-    setSaving(false);
+    setSavingMode(null);
     setWorkflowOverride(null);
     setSelectableWorkflows([]);
   };
 
-  const handleSubmit = async () => {
+  const handleSubmit = async (mode: StartOrchestrationMode) => {
     if (!goal.trim()) return;
-    setSaving(true);
+    setSavingMode(mode);
     setError(null);
     try {
-      const result = await apiClient.startOrchestration(projectId, goal.trim(), workflowOverride || null);
+      const result = mode === 'direct'
+        ? await apiClient.startOrchestration(projectId, goal.trim(), workflowOverride || null, 'direct')
+        : await apiClient.startOrchestration(projectId, goal.trim(), workflowOverride || null);
       setOpen(false);
       reset();
       onStarted(result.runId);
@@ -82,7 +85,7 @@ export function StartOrchestrationDialog({ projectId, onStarted }: StartOrchestr
             : String(err),
       );
     } finally {
-      setSaving(false);
+      setSavingMode(null);
     }
   };
 
@@ -97,8 +100,9 @@ export function StartOrchestrationDialog({ projectId, onStarted }: StartOrchestr
           <DialogContent>
             <div className={styles.fields}>
               <Text>
-                Describe a goal in plain language. The coordinator drafts an Outcome plan for your
-                review and confirmation before any work is dispatched.
+                Describe a goal in plain language. Direct starts faster from your prompt. Define
+                Outcome drafts structured acceptance criteria and expected outputs before dispatch.
+                Later review, tool approval, assembly, and merge gates still apply.
               </Text>
               <Field label="Goal" required>
                 <Textarea
@@ -133,11 +137,18 @@ export function StartOrchestrationDialog({ projectId, onStarted }: StartOrchestr
               <Button appearance="secondary" disabled={saving}>Cancel</Button>
             </DialogTrigger>
             <Button
+              appearance="secondary"
+              disabled={!goal.trim() || saving}
+              onClick={() => void handleSubmit('define_outcome')}
+            >
+              {savingMode === 'define_outcome' ? 'Defining' : 'Define Outcome'}
+            </Button>
+            <Button
               appearance="primary"
               disabled={!goal.trim() || saving}
-              onClick={() => void handleSubmit()}
+              onClick={() => void handleSubmit('direct')}
             >
-              {saving ? 'Starting' : 'Start'}
+              {savingMode === 'direct' ? 'Starting' : 'Direct'}
             </Button>
             {saving && <Spinner size="extra-tiny" aria-hidden="true" />}
           </DialogActions>

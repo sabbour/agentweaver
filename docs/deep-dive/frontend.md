@@ -29,7 +29,7 @@ flowchart TB
       Shell("AppShell: TopBar, LeftNav, ProjectSwitcher")
       subgraph Pages["Pages"]
         Board("ProjectPage board")
-        RunPg("WorkflowRunPage")
+        Inspect("Embedded run inspection")
         Coord("CoordinatorRunPage")
         Work("WorkspacePage")
       end
@@ -48,7 +48,7 @@ flowchart TB
     Gate --> Api
     Board --> UseBoard
     Work --> Api
-    RunPg --> Stream
+    Inspect --> Stream
     Coord --> Stream
     UseBoard --> Api
     Api -->|"Bearer token"| Token
@@ -65,7 +65,7 @@ flowchart TB
     classDef runtime fill:#DDF3DD,stroke:#107C10,stroke-width:1px,color:#242424;
     classDef evt fill:#D6F0F0,stroke:#038387,stroke-width:1px,color:#242424;
 
-    class User,Gate,Shell,Board,RunPg,Coord,Work client;
+    class User,Gate,Shell,Board,Inspect,Coord,Work client;
     class UseBoard,Reducer svc;
     class Api core;
     class Stream evt;
@@ -138,9 +138,9 @@ Project-scoped routes start with `/projects/:projectId` and represent the work s
 - memories,
 - workflows,
 - diagnostics / heartbeat,
-- run detail pages.
+- orchestration detail pages with embedded run inspection.
 
-All signed-in routes sit inside the persistent shell. The shell is intentionally above individual pages because navigation, project switching, top bar status, and the floating orchestration action should not disappear when the user opens a deep run page.
+All signed-in routes sit inside the persistent shell. The shell is intentionally above individual pages because navigation, project switching, top bar status, and the floating orchestration action should not disappear when the user opens a deep orchestration page.
 
 ```mermaid
 %%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
@@ -164,7 +164,7 @@ flowchart TD
     Project --> Squad["/team, /team/cast, /memories"]
     Project --> Operations["/workflows, /settings"]
     Project --> System["/diagnostics, /heartbeat"]
-    Project --> Runs["/runs/:runId/..."]
+    Project --> Runs["/orchestrations/:runId"]
 
     classDef client fill:#E8EEF9,stroke:#0F6CBD,stroke-width:1px,color:#242424;
     classDef svc fill:#F3F2F1,stroke:#8A8886,stroke-width:1px,color:#242424;
@@ -181,7 +181,7 @@ flowchart TD
 
 The shell derives the active project from the URL. When the user moves to a global page, it remembers the last active project in local storage so the project switcher and project-scoped navigation can still point somewhere useful. This is a UX convenience only; the route remains the source of truth for the currently displayed page.
 
-Rebuild principle: routes should describe user intent, not implementation detail. A run detail URL should be directly openable after refresh, and the page should be able to reconstruct its state from route parameters plus backend snapshots.
+Rebuild principle: routes should describe user intent, not implementation detail. An orchestration detail URL should be directly openable after refresh, and the page should be able to reconstruct its state from route parameters plus backend snapshots.
 
 Where this lives:
 
@@ -341,7 +341,7 @@ Agentweaver does not use a single global Redux-style store. State is scoped to t
 - run timelines and coordinator topology are derived from event streams through reducers,
 - persisted backend state is reloaded through REST snapshots instead of being treated as browser-owned.
 
-This keeps state lifetimes aligned with user workflows. A page can be remounted when the active project changes, forcing clean refetches. A deep run page can be opened directly and rebuilt from snapshots plus the stream. A shell-level project switcher can share the project list without making every feature depend on a global app store.
+This keeps state lifetimes aligned with user workflows. A page can be remounted when the active project changes, forcing clean refetches. A deep orchestration page can be opened directly and rebuilt from snapshots plus the stream. A shell-level project switcher can share the project list without making every feature depend on a global app store.
 
 Rebuild principle: store the minimum browser state needed for responsiveness and navigation. Anything authoritative should be fetched from, or streamed by, the backend.
 
@@ -375,7 +375,7 @@ The stream hook uses `fetch`, not browser `EventSource`. That is intentional: au
 ```mermaid
 %%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
 sequenceDiagram
-    participant Page as Run page
+    participant Page as Embedded run surface
     participant Stream as useRunStream
     participant API as Run stream endpoint
     participant Reducer as Timeline/topology reducers
@@ -413,7 +413,7 @@ Where this lives:
 - `apps/web/src/api/sse.ts`
 - `apps/web/src/timeline/`
 - `apps/web/src/components/Timeline.tsx`
-- `apps/web/src/components/RunWatcher.tsx`
+- `apps/web/src/pages/CoordinatorRunPage.tsx`
 
 ## Snapshot + Stream Synchronization
 
@@ -429,7 +429,7 @@ Agentweaver solves this by layering data:
 ```mermaid
 %%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
 flowchart TD
-    Open[Open run page] --> Params[Read project/run route params]
+    Open[Open orchestration page] --> Params[Read project/run route params]
     Params --> Metadata[Load project/team/run metadata]
     Params --> Seeds[Load REST seeds\nrun events, graph, work plan, children]
     Params --> Stream[Open SSE stream]
@@ -452,7 +452,7 @@ flowchart TD
     class Stream evt;
 ```
 
-For single-agent runs, the page resolves the execution id, loads project/team/run metadata, optionally fetches persisted events for terminal or parked states, fetches a graph descriptor, and then merges live stream events over the seed.
+For embedded single-agent/child runs, the surface resolves run metadata, optionally fetches persisted events for terminal or parked states, fetches a graph descriptor when needed, and then merges live stream events over the seed.
 
 For coordinator runs, the page loads graph/work-plan/children snapshots so the all-up graph and agent rail render immediately, then applies coordinator SSE events as live deltas.
 
@@ -460,7 +460,6 @@ Trade-off: merge logic adds complexity, but it gives a much better operator expe
 
 Where this lives:
 
-- `apps/web/src/pages/WorkflowRunPage.tsx`
 - `apps/web/src/pages/CoordinatorRunPage.tsx`
 - `apps/web/src/api/sse.ts`
 
@@ -470,22 +469,20 @@ A single-agent run is the simplest execution path:
 
 1. The user starts a run from a project surface, usually with a task, branch, and optional agent selection.
 2. The backend creates the run and returns identifiers.
-3. The UI navigates to a workflow/run detail route.
-4. The page resolves the run metadata and stream key.
-5. The page loads any persisted seed events and graph descriptor.
-6. The page opens the SSE stream.
+3. The run appears in project/coordinator surfaces.
+4. Embedded inspection resolves the run metadata and stream key.
+5. The surface loads any persisted seed events and graph descriptor.
+6. The surface opens the SSE stream.
 7. The timeline and graph update as events arrive.
 8. Review, request-changes, commit, and merge actions call the API and then refresh or reconnect the stream projection.
 
-The run page is deliberately built from reusable pieces: header, layout, timeline, graph/workflow panels, review controls, sandbox/files panels, and stream hooks. A rebuild should keep the stream/reducer logic independent from the visual layout so the same run projection can appear in different contexts.
+Run inspection is deliberately built from reusable pieces: timeline, graph/workflow panels, review controls, sandbox/files panels, and stream hooks. A rebuild should keep the stream/reducer logic independent from the visual layout so the same run projection can appear in different contexts.
 
-Important edge case: coordinator child runs may not appear in the parent project run list because they are children, not top-level project runs. The run detail page can still resolve them directly by run id and treat that run id as the stream/graph key.
+Important edge case: coordinator child runs may not appear in the parent project run list because they are children, not top-level project runs. Embedded inspection can still resolve them directly by run id and treat that run id as the stream/graph key.
 
 Where this lives:
 
 - `apps/web/src/components/NewRunDialog.tsx`
-- `apps/web/src/pages/WorkflowRunPage.tsx`
-- `apps/web/src/components/RunLayout.tsx`
 - `apps/web/src/components/ReviewPanel.tsx`
 
 ## Coordinator Orchestration Flow
@@ -606,7 +603,7 @@ If rebuilding the Agentweaver frontend from scratch, implement in this order:
 6. Project list/provider and project-scoped pages.
 7. Run stream hook using fetch-based SSE with auth headers, `Last-Event-ID`, dedupe, terminal detection, and reconnect backoff.
 8. Pure timeline reducer that folds raw events into display items.
-9. Single-agent run page using REST seeds plus live SSE.
+9. Embedded single-agent/child run inspection using REST seeds plus live SSE.
 10. Coordinator page using graph/work-plan/children seeds plus coordinator SSE.
 11. Thin topology reducer that applies server-authored snapshots and deltas.
 12. Review, approval, question-answering, and steering actions that call the correct owning run.

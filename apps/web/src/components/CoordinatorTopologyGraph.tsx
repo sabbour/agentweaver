@@ -1,5 +1,4 @@
 import { createContext, useCallback, useContext, useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
 import {
   Button,
   Dialog,
@@ -35,7 +34,6 @@ import {
   EditRegular,
   FlowRegular,
   HourglassRegular,
-  OpenRegular,
   SendRegular,
   StopRegular,
   ZoomInRegular,
@@ -240,7 +238,7 @@ function statusMeta(status: string, styles: ReturnType<typeof useStyles>): { lab
     pending: { label: 'Pending', badgeClass: 'badgePending', Icon: CircleRegular },
     dispatched: { label: 'Dispatched', badgeClass: 'badgeDispatched', Icon: SendRegular },
     running: { label: 'Running', badgeClass: 'badgeRunning', Icon: ArrowSyncRegular },
-    assemble_ready: { label: 'Awaiting assembly', badgeClass: 'badgeAssemble', Icon: ClockRegular },
+    assemble_ready: { label: 'Ready for assembly', badgeClass: 'badgeCompleted', Icon: CheckmarkCircleRegular },
     rai_flagged: { label: 'RAI flagged', badgeClass: 'badgeFlagged', Icon: AlertRegular },
     pending_capacity: { label: 'Waiting for capacity', badgeClass: 'badgePendingCapacity', Icon: HourglassRegular },
     completed: { label: 'Completed', badgeClass: 'badgeCompleted', Icon: CheckmarkCircleRegular },
@@ -250,7 +248,7 @@ function statusMeta(status: string, styles: ReturnType<typeof useStyles>): { lab
   return { label: meta.label, className: styles[meta.badgeClass] as string, Icon: meta.Icon };
 }
 
-const ACTIVE_STATUSES = new Set(['dispatched', 'running', 'assemble_ready', 'rai_flagged', 'pending_capacity']);
+const ACTIVE_STATUSES = new Set(['dispatched', 'running', 'rai_flagged', 'pending_capacity']);
 
 // ---------------------------------------------------------------------------
 // Node data passed into the React Flow custom node
@@ -258,12 +256,11 @@ const ACTIVE_STATUSES = new Set(['dispatched', 'running', 'assemble_ready', 'rai
 
 interface TopologyNodeData extends Record<string, unknown> {
   node: TopologyNodeState;
-  projectId: string;
 }
 
 function TopologyNodeCard({ data }: NodeProps) {
   const styles = useStyles();
-  const { node, projectId } = data as TopologyNodeData;
+  const { node } = data as TopologyNodeData;
   const onSteer = useContext(SteerContext);
 
   const isCoordinator = node.kind === 'coordinator';
@@ -338,16 +335,11 @@ function TopologyNodeCard({ data }: NodeProps) {
       {node.kind === 'subtask' && node.status === 'assemble_ready' && (
         <span className={styles.assembleNote}>
           <ClockRegular fontSize={12} aria-hidden="true" />
-          Finished its part — waiting for collective assembly
+          Worker complete — ready for assembly
         </span>
       )}
 
       <div className={`${styles.actions} nopan nodrag`}>
-        {node.kind === 'subtask' && node.childRunId && (
-          <Link to={`/projects/${projectId}/runs/${node.childRunId}/workflow`} style={{ textDecoration: 'none' }}>
-            <Button appearance="outline" size="small" icon={<OpenRegular />}>View run</Button>
-          </Link>
-        )}
         {canSteer && (
           <>
             <Button appearance="subtle" size="small" icon={<StopRegular />} onClick={() => onSteer?.({ node, kind: 'stop' })}>
@@ -534,7 +526,7 @@ interface CoordinatorTopologyGraphProps {
   edges: TopologyEdge[];
 }
 
-export function CoordinatorTopologyGraph({ projectId, coordinatorRunId, nodes, edges }: CoordinatorTopologyGraphProps) {
+export function CoordinatorTopologyGraph({ coordinatorRunId, nodes, edges }: CoordinatorTopologyGraphProps) {
   const styles = useStyles();
 
   const [steerReq, setSteerReq] = useState<SteerRequest | null>(null);
@@ -595,14 +587,14 @@ export function CoordinatorTopologyGraph({ projectId, coordinatorRunId, nodes, e
     const raw: Node[] = nodes.map((node) => ({
       id: node.id,
       type: 'topology',
-      data: { node, projectId } as TopologyNodeData,
+      data: { node } as TopologyNodeData,
       position: { x: 0, y: 0 },
     }));
     const nodeSizeHints = Object.fromEntries(
       nodes.map((node) => [node.id, { width: NODE_W, height: node.kind === 'coordinator' ? 220 : RENDERED_TOPOLOGY_NODE_H }]),
     );
     return layoutDag(raw, rfEdges, { rankdir: 'LR', rankSep: 80, nodeSep: DAG_NODE_SEP }, nodeSizeHints);
-  }, [nodes, projectId, rfEdges]);
+  }, [nodes, rfEdges]);
 
   // Pipeline order: left-to-right by layout x-position.
   const orderedNodeIds = useMemo(
@@ -631,7 +623,8 @@ export function CoordinatorTopologyGraph({ projectId, coordinatorRunId, nodes, e
             nodesConnectable={false}
             nodesFocusable={false}
             edgesFocusable={false}
-            panOnScroll={false}
+            panOnScroll
+            preventScrolling={false}
             zoomOnScroll
             zoomActivationKeyCode={['Meta', 'Control']}
             zoomOnPinch

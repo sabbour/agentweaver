@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { Edge, Node } from '@xyflow/react';
-import { layoutDagColumns, NODE_W } from '../utils/dagLayout';
+import { layoutDagBalancedGrid, layoutDagColumns, NODE_H, NODE_W, type NodeSizeHint } from '../utils/dagLayout';
 
 function makeNode(id: string): Node {
   return { id, position: { x: 0, y: 0 }, data: {} };
@@ -65,6 +65,116 @@ describe('layoutDagColumns TB centering', () => {
     for (const n of laid) {
       expect(n.position.x).toBeGreaterThanOrEqual(0);
       expect(n.position.y).toBeGreaterThanOrEqual(0);
+    }
+  });
+});
+
+function makeEdge(source: string, target: string): Edge {
+  return { id: `${source}-${target}`, source, target };
+}
+
+function centerY(node: Node, height = NODE_H): number {
+  return node.position.y + height / 2;
+}
+
+function rounded(value: number): number {
+  return Math.round(value);
+}
+
+function coordinatorWithSubtasks(count: number): { nodes: Node[]; edges: Edge[]; hints: Record<string, NodeSizeHint> } {
+  const subtaskIds = Array.from({ length: count }, (_, index) => `subtask-${index + 1}`);
+  const nodeIds = ['coordinator', 'outcome', 'work', ...subtaskIds, 'rai', 'review', 'merge', 'scribe'];
+  const nodes = nodeIds.map(makeNode);
+  const edges = [
+    makeEdge('coordinator', 'outcome'),
+    makeEdge('outcome', 'work'),
+    ...subtaskIds.map((id) => makeEdge('work', id)),
+    ...subtaskIds.map((id) => makeEdge(id, 'rai')),
+    makeEdge('rai', 'review'),
+    makeEdge('review', 'merge'),
+    makeEdge('merge', 'scribe'),
+  ];
+  const hints = Object.fromEntries(
+    nodeIds.map((id) => [id, { width: id.startsWith('subtask') ? 220 : 180, height: id.startsWith('subtask') ? 180 : 130 }]),
+  );
+  return { nodes, edges, hints };
+}
+
+describe('layoutDagBalancedGrid', () => {
+  it('wraps 5+ subtasks into multiple rows and columns', () => {
+    const { nodes, edges, hints } = coordinatorWithSubtasks(5);
+
+    const laid = layoutDagBalancedGrid(nodes, edges, { viewportWidth: 900, rankSep: 48, nodeSep: 56 }, hints);
+    const byId = new Map(laid.map((n) => [n.id, n]));
+    const subtasks = ['subtask-1', 'subtask-2', 'subtask-3', 'subtask-4', 'subtask-5'].map((id) => byId.get(id)!);
+    const subtaskRows = new Set(subtasks.map((node) => rounded(centerY(node, hints[node.id].height))));
+    const subtaskCols = new Set(subtasks.map((node) => rounded(centerX(node, hints[node.id].width))));
+
+    expect(subtaskRows.size).toBeGreaterThan(1);
+    expect(subtaskCols.size).toBeGreaterThan(1);
+    expect(subtaskCols.size).toBeLessThanOrEqual(3);
+  });
+
+  it('reduces to one column for narrow inspector widths', () => {
+    const { nodes, edges, hints } = coordinatorWithSubtasks(3);
+
+    const laid = layoutDagBalancedGrid(nodes, edges, { viewportWidth: 360, rankSep: 48, nodeSep: 56 }, hints);
+    const centers = laid.map((node) => rounded(centerX(node, hints[node.id].width)));
+
+    expect(Math.max(...centers) - Math.min(...centers)).toBeLessThanOrEqual(1);
+  });
+
+  it('caps height-driven balancing to columns that fit the inspector width', () => {
+    const { nodes, edges, hints } = coordinatorWithSubtasks(5);
+    const viewportWidth = 700;
+    const viewportHeight = 600;
+    const nodeSep = 56;
+    const margin = 24;
+    const maxNodeWidth = Math.max(...Object.values(hints).map((hint) => hint.width));
+    const widthSafeColumns = Math.max(1, Math.floor((viewportWidth - margin * 2 + nodeSep) / (maxNodeWidth + nodeSep)));
+
+    const laid = layoutDagBalancedGrid(nodes, edges, { viewportWidth, viewportHeight, rankSep: 48, nodeSep, maxColumns: 5 }, hints);
+    const occupiedColumns = new Set(laid.map((node) => rounded(centerX(node, hints[node.id].width))));
+    const contentRight = Math.max(...laid.map((node) => node.position.x + hints[node.id].width));
+
+    expect(widthSafeColumns).toBe(2);
+    expect(occupiedColumns.size).toBeLessThanOrEqual(widthSafeColumns);
+    expect(contentRight + margin).toBeLessThanOrEqual(viewportWidth);
+  });
+
+  it('packs the assembly tail across columns after fan-in instead of one node per row', () => {
+    const { nodes, edges, hints } = coordinatorWithSubtasks(3);
+
+    const laid = layoutDagBalancedGrid(nodes, edges, { viewportWidth: 900, rankSep: 48, nodeSep: 56 }, hints);
+    const byId = new Map(laid.map((n) => [n.id, n]));
+    const tail = ['rai', 'review', 'merge', 'scribe'].map((id) => byId.get(id)!);
+    const tailRows = new Set(tail.map((node) => rounded(centerY(node, hints[node.id].height))));
+
+    expect(tailRows.size).toBeLessThan(tail.length);
+    expect(rounded(centerY(byId.get('rai')!, hints.rai.height))).toBe(rounded(centerY(byId.get('review')!, hints.review.height)));
+    expect(rounded(centerY(byId.get('merge')!, hints.merge.height))).toBe(rounded(centerY(byId.get('scribe')!, hints.scribe.height)));
+  });
+
+  it('keeps stable positions with no node overlap', () => {
+    const { nodes, edges, hints } = coordinatorWithSubtasks(5);
+
+    const first = layoutDagBalancedGrid(nodes, edges, { viewportWidth: 900, rankSep: 48, nodeSep: 56 }, hints);
+    const second = layoutDagBalancedGrid(nodes, edges, { viewportWidth: 900, rankSep: 48, nodeSep: 56 }, hints);
+
+    expect(second.map((node) => [node.id, node.position])).toEqual(first.map((node) => [node.id, node.position]));
+    for (let i = 0; i < first.length; i += 1) {
+      for (let j = i + 1; j < first.length; j += 1) {
+        const a = first[i];
+        const b = first[j];
+        const ah = hints[a.id];
+        const bh = hints[b.id];
+        const separated =
+          a.position.x + ah.width <= b.position.x ||
+          b.position.x + bh.width <= a.position.x ||
+          a.position.y + ah.height <= b.position.y ||
+          b.position.y + bh.height <= a.position.y;
+        expect(separated).toBe(true);
+      }
     }
   });
 });

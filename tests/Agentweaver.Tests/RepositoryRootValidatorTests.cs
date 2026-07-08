@@ -337,7 +337,7 @@ public class RepositoryRootValidatorTests
     // --- Integration test ---
 
     [Fact]
-    public async Task Integration_allowlist_rejects_outside_path()
+    public async Task Integration_direct_run_endpoint_is_deprecated_before_allowlist()
     {
         var allowedRoot = Path.Combine(Path.GetTempPath(), $"int-allowed-{Guid.NewGuid():N}");
         var outsidePath = Path.Combine(Path.GetTempPath(), $"int-outside-{Guid.NewGuid():N}");
@@ -369,9 +369,7 @@ public class RepositoryRootValidatorTests
                 model_source = "github-copilot"
             });
 
-            Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
-            var body = await response.Content.ReadFromJsonAsync<ErrorResponse>();
-            Assert.Contains("allowed repository root", body!.Error);
+            Assert.Equal(HttpStatusCode.Gone, response.StatusCode);
         }
         finally
         {

@@ -26,6 +26,19 @@ public sealed class WorkPlan
     /// </summary>
     public string? AssemblyStage { get; set; }
 
+    /// <summary>
+    /// Assembly stage that produced the current parked/terminal status. Unlike <see cref="AssemblyStage"/>,
+    /// this does not advance when the failure scribe runs, so the UI can distinguish the gate/action
+    /// that failed from later cleanup stages. Null when assembly stopped before any collective gate ran.
+    /// </summary>
+    public string? AssemblyTerminalStage { get; set; }
+
+    /// <summary>
+    /// Durable reason for the current parked/terminal assembly status (for example
+    /// <c>assembly_blocked: ineligible_subtasks [47]</c> or <c>assembly_merge_failed: merge_error</c>).
+    /// </summary>
+    public string? AssemblyStatusReason { get; set; }
+
     /// <summary>Timestamp the work plan transitioned awaiting_assembly -&gt; assembling (the
     /// exactly-once CAS claim). Null until assembly is claimed.</summary>
     public DateTimeOffset? AssemblyStartedAt { get; set; }

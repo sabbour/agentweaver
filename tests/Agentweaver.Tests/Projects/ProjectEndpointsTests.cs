@@ -152,6 +152,9 @@ public sealed class ProjectEndpointsTests : IClassFixture<ProjectsWebApplication
             {
                 DefaultProvider           = "microsoft-foundry",
                 DefaultModelMicrosoftFoundry = "gpt-4o",
+                BlueprintGenerationModel = "gpt-5-mini",
+                WorkflowGenerationModel = "gpt-5.3-codex",
+                OutcomeSpecGenerationModel = "claude-sonnet-4.6",
             });
 
         response.StatusCode.Should().Be(HttpStatusCode.NoContent);
@@ -160,6 +163,9 @@ public sealed class ProjectEndpointsTests : IClassFixture<ProjectsWebApplication
         var result  = await getResp.Content.ReadFromJsonAsync<ProjectResponse>();
         result!.DefaultProvider.Should().Be("microsoft-foundry");
         result.DefaultModelMicrosoftFoundry.Should().Be("gpt-4o");
+        result.BlueprintGenerationModel.Should().Be("gpt-5-mini");
+        result.WorkflowGenerationModel.Should().Be("gpt-5.3-codex");
+        result.OutcomeSpecGenerationModel.Should().Be("claude-sonnet-4.6");
     }
 
     // =========================================================================
@@ -256,6 +262,33 @@ public sealed class ProjectEndpointsTests : IClassFixture<ProjectsWebApplication
     }
 
     [Fact]
+    public async Task GetProjectRunByWorkflowRunId_Returns404()
+    {
+        var id       = await CreateBlankProjectAsync();
+        var runStore = _factory.Services.GetRequiredService<SqliteRunStore>();
+        var projectId = ProjectId.Parse(id);
+        var run = new Run
+        {
+            Id                = RunId.New(),
+            RepositoryPath    = NewWorkingDir(),
+            OriginatingBranch = "main",
+            ModelSource       = ModelSource.GitHubCopilot,
+            Task              = "removed run page endpoint",
+            SubmittingUser    = ProjectsWebApplicationFactory.TestUser,
+            Status            = RunStatus.Completed,
+            StartedAt         = DateTimeOffset.UtcNow.AddMinutes(-5),
+            EndedAt           = DateTimeOffset.UtcNow,
+            ProjectId         = projectId,
+            WorkflowRunId     = "workflow-run-page-removed",
+        };
+        await runStore.InsertAsync(run);
+
+        var response = await _client.GetAsync($"/api/projects/{id}/runs/{run.WorkflowRunId}");
+
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
+
+    [Fact]
     public async Task GetProjectRuns_CanFilterTerminalAgentHistoryIncludingChildren()
     {
         var id       = await CreateBlankProjectAsync();
@@ -323,25 +356,18 @@ public sealed class ProjectEndpointsTests : IClassFixture<ProjectsWebApplication
     }
 
     // =========================================================================
-    // PE-11: POST /api/projects/{id}/runs on a deleting project returns 409
+    // PE-11: POST /api/projects/{id}/runs is deprecated
     // =========================================================================
     [Fact]
-    public async Task PostProjectRun_OnDeletingProject_Returns409()
+    public async Task PostProjectRun_Returns410Gone()
     {
-        var id       = await CreateBlankProjectAsync();
-        var projectId = ProjectId.Parse(id);
-
-        // Force the project into Deleting state directly via the store
-        var store = _factory.Services.GetRequiredService<SqliteProjectStore>();
-        await store.TryBeginDeleteAsync(projectId);
+        var id = await CreateBlankProjectAsync();
 
         var response = await _client.PostAsJsonAsync(
             $"/api/projects/{id}/runs",
             new CreateProjectRunRequest { Task = "should be rejected" });
 
-        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
-        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
-        body.GetProperty("error").GetString().Should().Be("project_deleting");
+        response.StatusCode.Should().Be(HttpStatusCode.Gone);
     }
 
     // =========================================================================

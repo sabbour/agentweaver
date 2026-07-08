@@ -57,7 +57,7 @@ public sealed class GitHubOAuthRedirectServiceTests : IDisposable
         login.Should().Be("octocat");
         accessToken.Should().Be("ghu_access");
 
-        var token = await store.GetTokenAsync(GitHubTokenScope.Installation);
+        var token = await store.GetTokenAsync(GitHubTokenScope.ForUser("octocat"));
         token.Should().NotBeNull();
         token!.AccessToken.Should().Be("ghu_access");
         token.RefreshToken.Should().Be("ghr_refresh");
@@ -84,7 +84,7 @@ public sealed class GitHubOAuthRedirectServiceTests : IDisposable
         var state = ExtractState(await svc.BeginAuthorizationAsync());
         await svc.ExchangeCodeAsync("the-code", state);
 
-        var token = await store.GetTokenAsync(GitHubTokenScope.Installation);
+        var token = await store.GetTokenAsync(GitHubTokenScope.ForUser("octocat"));
         token.Should().NotBeNull();
         token!.AccessToken.Should().Be("ghp_classic");
         token.ExpiresAt.Should().BeNull("a classic OAuth app token has no expiry");

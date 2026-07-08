@@ -231,12 +231,24 @@ public sealed class ProjectService
 
     public async Task<bool> UpdateProviderSettingsAsync(
         ProjectId id, string? defaultProvider, string? defaultModelCopilot,
-        string? defaultModelFoundry, CancellationToken ct = default)
+        string? defaultModelFoundry,
+        string? blueprintGenerationModel = null,
+        string? workflowGenerationModel = null,
+        string? outcomeSpecGenerationModel = null,
+        CancellationToken ct = default)
     {
         var project = await _store.GetAsync(id, ct).ConfigureAwait(false);
         if (project is null) return false;
         var settings = BuildProviderSettings(defaultProvider, defaultModelCopilot, defaultModelFoundry);
-        await _store.UpdateProviderSettingsAsync(id, settings, DateTimeOffset.UtcNow, ct).ConfigureAwait(false);
+        var now = DateTimeOffset.UtcNow;
+        await _store.UpdateProviderSettingsAsync(id, settings, now, ct).ConfigureAwait(false);
+        await _store.UpdateGenerationModelSettingsAsync(
+            id,
+            NormalizeModelId(blueprintGenerationModel, nameof(blueprintGenerationModel)),
+            NormalizeModelId(workflowGenerationModel, nameof(workflowGenerationModel)),
+            NormalizeModelId(outcomeSpecGenerationModel, nameof(outcomeSpecGenerationModel)),
+            now,
+            ct).ConfigureAwait(false);
         return true;
     }
 
@@ -388,10 +400,17 @@ public sealed class ProjectService
     {
         if (string.IsNullOrWhiteSpace(modelId)) return;
         var value = modelId.Trim();
-        if (!(value.StartsWith("gpt-", StringComparison.OrdinalIgnoreCase) ||
-              value.StartsWith("claude-", StringComparison.OrdinalIgnoreCase) ||
+        if (!(value.StartsWith("gpt", StringComparison.OrdinalIgnoreCase) ||
+              value.StartsWith("claude", StringComparison.OrdinalIgnoreCase) ||
               value.StartsWith("o", StringComparison.OrdinalIgnoreCase)))
             throw new ArgumentException($"Model id '{modelId}' is not allowed.", paramName);
+    }
+
+    private static string? NormalizeModelId(string? modelId, string paramName)
+    {
+        if (string.IsNullOrWhiteSpace(modelId)) return null;
+        ValidateModelId(modelId, paramName);
+        return modelId.Trim();
     }
 
     private void TryDeleteDirectory(string path)

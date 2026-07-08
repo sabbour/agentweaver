@@ -69,6 +69,24 @@ public sealed class EfProjectStore : IProjectStore
         return rows > 0;
     }
 
+    public async Task UpdateGenerationModelSettingsAsync(
+        ProjectId id,
+        string? blueprintGenerationModel,
+        string? workflowGenerationModel,
+        string? outcomeSpecGenerationModel,
+        DateTimeOffset updatedAt,
+        CancellationToken ct = default)
+    {
+        var pid = id.ToString();
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        await db.Projects.Where(p => p.ProjectId == pid)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(p => p.BlueprintGenerationModel, blueprintGenerationModel)
+                .SetProperty(p => p.WorkflowGenerationModel, workflowGenerationModel)
+                .SetProperty(p => p.OutcomeSpecGenerationModel, outcomeSpecGenerationModel)
+                .SetProperty(p => p.UpdatedAt, updatedAt), ct);
+    }
+
     public async Task DeleteAsync(ProjectId id, CancellationToken ct = default)
     {
         var pid = id.ToString();
@@ -164,6 +182,9 @@ public sealed class EfProjectStore : IProjectStore
         SandboxProfile = p.SandboxProfile,
         SourceBlueprintId = p.SourceBlueprintId,
         SourceBlueprintType = p.SourceBlueprintType,
+        BlueprintGenerationModel = p.BlueprintGenerationModel,
+        WorkflowGenerationModel = p.WorkflowGenerationModel,
+        OutcomeSpecGenerationModel = p.OutcomeSpecGenerationModel,
         AllowedWorkflowIds = p.AllowedWorkflowIds is { Count: > 0 } ? JsonSerializer.Serialize(p.AllowedWorkflowIds) : null,
     };
 
@@ -206,6 +227,9 @@ public sealed class EfProjectStore : IProjectStore
             SandboxProfile = r.SandboxProfile,
             SourceBlueprintId = r.SourceBlueprintId,
             SourceBlueprintType = r.SourceBlueprintType,
+            BlueprintGenerationModel = r.BlueprintGenerationModel,
+            WorkflowGenerationModel = r.WorkflowGenerationModel,
+            OutcomeSpecGenerationModel = r.OutcomeSpecGenerationModel,
             AllowedWorkflowIds = allowedIds is { Count: > 0 } ? allowedIds : null,
         };
     }

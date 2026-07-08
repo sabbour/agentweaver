@@ -224,6 +224,9 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
             e.Property(p => p.SandboxProfile).HasColumnName("sandbox_profile");
             e.Property(p => p.SourceBlueprintId).HasColumnName("source_blueprint_id");
             e.Property(p => p.SourceBlueprintType).HasColumnName("source_blueprint_type");
+            e.Property(p => p.BlueprintGenerationModel).HasColumnName("blueprint_generation_model");
+            e.Property(p => p.WorkflowGenerationModel).HasColumnName("workflow_generation_model");
+            e.Property(p => p.OutcomeSpecGenerationModel).HasColumnName("outcome_spec_generation_model");
             e.Property(p => p.AllowedWorkflowIds).HasColumnName("allowed_workflow_ids");
             e.HasIndex(p => p.State).HasDatabaseName("IX_projects_state");
         });

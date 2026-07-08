@@ -3,6 +3,7 @@ import {
   Apps24Regular,
   DataPie24Regular,
   Pulse24Regular,
+  Home24Regular,
   Board24Regular,
   People24Regular,
   Flow24Regular,
@@ -29,7 +30,7 @@ export interface NavItemDef {
   // project Dashboard (home) route.
   segment: string;
   // Additional first path segments (after the project id) that should mark this
-  // item active — used so deep run / execution routes keep a sensible active item.
+  // item active for supported sub-resource routes.
   matchSegments?: string[];
 }
 
@@ -53,7 +54,7 @@ export interface NavSectionDef {
 // Global (project-independent) destinations rendered above the project sections.
 // Overview is the live "Now" page; Projects is the gallery / switcher landing.
 export const GLOBAL_NAV_ITEMS: GlobalNavItemDef[] = [
-  { key: 'overview', label: 'Overview', icon: <Pulse24Regular />, path: '/overview', matchPrefixes: ['/overview', '/'] },
+  { key: 'overview', label: 'Overview', icon: <Home24Regular />, path: '/overview', matchPrefixes: ['/overview', '/'] },
   { key: 'projects', label: 'Projects', icon: <Apps24Regular />, path: '/projects', matchPrefixes: ['/projects'] },
 ];
 
@@ -64,8 +65,8 @@ export const NAV_SECTIONS: NavSectionDef[] = [
     items: [
       // Dashboard is the project home (index) route at /projects/:projectId.
       { key: 'dashboard', label: 'Dashboard', icon: <DataPie24Regular />, segment: '' },
-      // Board moved to its own /board segment; deep run/execution routes keep it active.
-      { key: 'board', label: 'Board', icon: <Board24Regular />, segment: 'board', matchSegments: ['runs'] },
+      // Board moved to its own /board segment.
+      { key: 'board', label: 'Board', icon: <Board24Regular />, segment: 'board' },
       // Flow — live "what each agent is working on" view.
       { key: 'flow', label: 'Flow', icon: <People24Regular />, segment: 'flow' },
       // Orchestrations — list of coordinator orchestration runs; the detail route

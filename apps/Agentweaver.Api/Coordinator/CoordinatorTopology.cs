@@ -37,7 +37,10 @@ public static class CoordinatorTopology
         IReadOnlyCollection<(int SubtaskId, int DependsOnSubtaskId)> edges,
         long seq,
         IPodNameRegistry? podRegistry = null,
-        string? coordinatorPodName = null)
+        string? coordinatorPodName = null,
+        string? assemblyStage = null,
+        string? assemblyTerminalStage = null,
+        string? statusReason = null)
     {
         var nodes = new List<object>(subtasks.Count + 1)
         {
@@ -54,6 +57,9 @@ public static class CoordinatorTopology
                 phase = (string?)null,
                 isolation = (string?)null,
                 executionPodName = coordinatorPodName,
+                assemblyStage,
+                assemblyTerminalStage,
+                statusReason,
             },
         };
 
@@ -86,6 +92,9 @@ public static class CoordinatorTopology
             coordinatorRunId,
             workPlanId,
             workPlanStatus,
+            assemblyStage,
+            assemblyTerminalStage,
+            statusReason,
             seq,
             nodes,
             edges = edgeList,

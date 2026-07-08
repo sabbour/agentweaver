@@ -7,6 +7,19 @@ public interface IProjectStore
     Task<IReadOnlyList<Project>> ListAsync(CancellationToken ct = default);
     Task UpdateNameAsync(ProjectId id, string name, DateTimeOffset updatedAt, CancellationToken ct = default);
     Task UpdateProviderSettingsAsync(ProjectId id, ProjectProviderSettings settings, DateTimeOffset updatedAt, CancellationToken ct = default);
+
+    /// <summary>
+    /// Updates per-project model overrides for server-authored generation flows. Null values clear the
+    /// project override so the global Generation fallback is used.
+    /// </summary>
+    Task UpdateGenerationModelSettingsAsync(
+        ProjectId id,
+        string? blueprintGenerationModel,
+        string? workflowGenerationModel,
+        string? outcomeSpecGenerationModel,
+        DateTimeOffset updatedAt,
+        CancellationToken ct = default);
+
     /// <summary>
     /// Atomically transitions state Active -> Deleting.
     /// Returns true if the CAS succeeded (the project was Active and is now Deleting).

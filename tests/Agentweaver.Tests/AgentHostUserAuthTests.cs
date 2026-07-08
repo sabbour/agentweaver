@@ -29,19 +29,20 @@ public sealed class AgentHostUserAuthTests
     }
 
     [Fact]
-    public void Resolve_falls_back_to_installation_when_no_user_and_no_signed_in_file()
+    public void Resolve_fails_closed_when_no_user_and_no_signed_in_file()
     {
-        // No configured user id and no discoverable signed-in user_*.json → installation scope
-        // (the non-Copilot fallback the fix is designed to avoid by injecting AgentHost__UserId).
+        // No configured user id and no discoverable signed-in user_*.json → fail closed. Installation
+        // tokens cannot authorize Copilot turns, so falling back would hide the real configuration bug.
         var emptyDir = Path.Combine(Path.GetTempPath(), "agentweaver-scope-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(emptyDir);
         try
         {
             var provider = new SharedUserScopeProvider(authDir: emptyDir, configuredUserId: null);
 
-            var scope = provider.Resolve(userId: null);
+            var act = () => provider.Resolve(userId: null);
 
-            scope.Key.Should().Be("installation");
+            act.Should().Throw<InvalidOperationException>()
+                .WithMessage("*submitting user identity*");
         }
         finally
         {

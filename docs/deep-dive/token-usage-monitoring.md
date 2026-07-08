@@ -20,7 +20,7 @@ flowchart LR
     Agent -->|AppendAsync agent.turn.usage| Stream["Run event stream\nIRunEventStream"]
     Stream -->|durably persisted| DB[("token_usage_records\ntable")]
     Stream -->|live SSE frame| SSE["SSE /api/runs/{id}/stream"]
-    SSE -->|onTurnUsageEvent callback| Watch["WatchPage\nlive counter"]
+    SSE -->|run stream reducers| UI["Embedded run inspection\ncost chips"]
     DB <-->|reads on demand| Endpoints["UsageEndpoints\n4 hierarchy levels"]
     Endpoints --> RunUsage["/api/runs/{id}/usage\nTokenUsageSummaryDto"]
     Endpoints --> WFUsage["/api/workflow-runs/{id}/usage\nTokenUsageSummaryDto"]
@@ -83,11 +83,7 @@ flowchart LR
    `get_project_usage` (`apps/Agentweaver.Mcp/Tools/ProjectTools.cs`) let any MCP client query usage
    without a browser.
 
-8. **Live Watch counter.** `WatchPage.tsx` (`apps/web/src/pages/WatchPage.tsx`) listens for
-   `agent.turn.usage` SSE events via the `RunWatcher.tsx` `onTurnUsageEvent` callback and updates a live
-   counter. `TokenUsagePanel.tsx` renders the running total and per-model breakdown table, with fixed-width
-   numeric cells so token and AIC columns align. Source: `apps/web/src/components/TokenUsagePanel.tsx:66`,
-   `apps/web/src/components/TokenUsagePanel.tsx:74`, `apps/web/src/components/TokenUsagePanel.tsx:108`.
+8. **Embedded run inspection.** Run stream reducers consume `agent.turn.usage` SSE events and surface cost context through board cards and coordinator graph cost chips. The retired standalone Watch page no longer owns token display.
 
 9. **Dashboard, cards, and overview.** `CostChip` converts `total_nano_aiu` to AIC labels and falls back
    to compact token labels. Run cards, workflow/coordinator DAG nodes, the dashboard leaderboard Cost
@@ -107,7 +103,7 @@ This path powers the project Observability tabs: **Overview** renders compact mo
 
 ## DAG card layout
 
-Usage chips add metadata to graph cards, so the graph layout now shares `DAG_NODE_SEP = 96` and rendered-height hints by node type. `WorkflowRunPage`, `CoordinatorTopologyGraph`, `WorkflowGraphPanel`, and `VisualWorkflowEditor` all pass those hints into `layoutDag`, which prevents overlapping cards as cost, pod, status, and action badges appear. Source: `apps/web/src/utils/dagLayout.ts:6`, `apps/web/src/utils/dagLayout.ts:24`, `apps/web/src/utils/dagLayout.ts:48`, `apps/web/src/pages/WorkflowRunPage.tsx:706`, `apps/web/src/components/CoordinatorTopologyGraph.tsx:522`, `apps/web/src/components/WorkflowGraphPanel.tsx:931`, `apps/web/src/components/VisualWorkflowEditor.tsx:236`.
+Usage chips add metadata to graph cards, so the graph layout shares `DAG_NODE_SEP = 96` and rendered-height hints by node type. `CoordinatorTopologyGraph`, `WorkflowGraphPanel`, and `VisualWorkflowEditor` pass those hints into `layoutDag`, which prevents overlapping cards as cost, pod, status, and action badges appear. Source: `apps/web/src/utils/dagLayout.ts`, `apps/web/src/components/CoordinatorTopologyGraph.tsx`, `apps/web/src/components/WorkflowGraphPanel.tsx`, `apps/web/src/components/VisualWorkflowEditor.tsx`.
 
 ## AIC unit and display
 
@@ -161,9 +157,7 @@ project data; admins see everything. Non-admin callers of `/api/usage` receive `
 | Observability model panels | `apps/web/src/components/dashboard/ModelPerformancePanels.tsx:160` |
 | MCP `get_run_usage` tool | `apps/Agentweaver.Mcp/Tools/RunTools.cs` |
 | MCP `get_project_usage` tool | `apps/Agentweaver.Mcp/Tools/ProjectTools.cs` |
-| Live token counter (Watch page) | `apps/web/src/pages/WatchPage.tsx` |
-| SSE event wiring (`onTurnUsageEvent`) | `apps/web/src/pages/RunWatcher.tsx` |
-| Reusable `TokenUsagePanel` component | `apps/web/src/components/TokenUsagePanel.tsx` |
+| Embedded cost chips | `apps/web/src/components/CostChip.tsx`, `apps/web/src/components/WorkflowGraphPanel.tsx` |
 | Dashboard token/AIC section | `apps/web/src/pages/DashboardPage.tsx` |
 | Overview app-level usage section | `apps/web/src/pages/OverviewPage.tsx` |
 

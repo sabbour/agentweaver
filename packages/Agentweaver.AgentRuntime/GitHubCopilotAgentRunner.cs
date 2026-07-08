@@ -88,10 +88,14 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
         string? userId = null)
     {
         if (string.IsNullOrWhiteSpace(userId))
-            throw new InvalidOperationException(
+            throw new AgentProviderException(
+                ModelSource.GitHubCopilot,
+                AgentProviderFailureKind.Authorization,
+                "github_copilot_auth_required",
                 $"Run {runId} cannot use the GitHub Copilot model without a submitting user identity. " +
                 "Pass the authenticated caller's user ID so the correct Copilot-entitled token is used. " +
-                "Using the installation token is not permitted.");
+                "Using the installation token is not permitted.",
+                isRetryable: false);
 
         _logger.LogInformation("ExecuteAsync entered — workingDirectory={WorkingDirectory}, taskLength={TaskLength}, runId={RunId}, streamIsNull={StreamIsNull}",
             workingDirectory, task.Length, runId, stream is null);
@@ -106,13 +110,36 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
 
         var scope = _scopeProvider.Resolve(userId);
         if (string.Equals(scope.Key, GitHubTokenScope.Installation.Key, StringComparison.Ordinal))
-            throw new InvalidOperationException(
+            throw new AgentProviderException(
+                ModelSource.GitHubCopilot,
+                AgentProviderFailureKind.Authorization,
+                "github_copilot_auth_required",
                 $"Run {runId} cannot use the GitHub Copilot model with the installation token scope. " +
                 "GitHub App installation tokens are not Copilot model credentials; configure a " +
-                "user-token scope provider and pass the submitting user.");
+                "user-token scope provider and pass the submitting user.",
+                isRetryable: false);
 
         await using var client = await _factory.CreateClientAsync(scope, modelId, ct).ConfigureAwait(false);
-        await client.StartAsync(ct);
+        try
+        {
+            await client.StartAsync(ct).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            var providerFailure = AgentProviderException.Classify(ModelSource.GitHubCopilot, ex, runId);
+            if (providerFailure is not null)
+            {
+                _logger.LogWarning(
+                    ex,
+                    "GitHub Copilot provider failure while starting client — runId={RunId} kind={Kind} code={Code}",
+                    runId,
+                    providerFailure.FailureKind,
+                    providerFailure.ErrorCode);
+                throw providerFailure;
+            }
+
+            throw;
+        }
 
         _logger.LogInformation("Copilot client started");
 
@@ -322,8 +349,39 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
             InfiniteSessions = new InfiniteSessionConfig { Enabled = false },
         };
 
-        var agent = client.AsAIAgent(sessionConfig, ownsClient: false, id: null, name: null, description: null);
-        var session = await agent.CreateSessionAsync(ct);
+        AIAgent? agent = null;
+        AgentSession session;
+        try
+        {
+            agent = client.AsAIAgent(sessionConfig, ownsClient: false, id: null, name: null, description: null);
+            session = await agent.CreateSessionAsync(ct).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            if (agent is IAsyncDisposable disposableAgent)
+                await disposableAgent.DisposeAsync().ConfigureAwait(false);
+
+            var providerFailure = AgentProviderException.Classify(ModelSource.GitHubCopilot, ex, runId);
+            if (providerFailure is not null)
+            {
+                _logger.LogWarning(
+                    ex,
+                    "GitHub Copilot provider failure while creating session — runId={RunId} kind={Kind} code={Code}",
+                    runId,
+                    providerFailure.FailureKind,
+                    providerFailure.ErrorCode);
+                Emit("run.failed", new
+                {
+                    message = providerFailure.UserMessage,
+                    category = providerFailure.FailureKind.ToString(),
+                    errorCode = providerFailure.ErrorCode,
+                    retryable = providerFailure.IsRetryable,
+                });
+                throw providerFailure;
+            }
+
+            throw;
+        }
 
         _logger.LogInformation("MAF agent session created with sandbox governance — runId={RunId}", runId);
 
@@ -380,6 +438,25 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
         }
         catch (Exception ex)
         {
+            var providerFailure = AgentProviderException.Classify(ModelSource.GitHubCopilot, ex, runId);
+            if (providerFailure is not null)
+            {
+                _logger.LogWarning(
+                    ex,
+                    "GitHub Copilot provider failure during RunStreamingAsync — runId={RunId} kind={Kind} code={Code}",
+                    runId,
+                    providerFailure.FailureKind,
+                    providerFailure.ErrorCode);
+                Emit("run.failed", new
+                {
+                    message = providerFailure.UserMessage,
+                    category = providerFailure.FailureKind.ToString(),
+                    errorCode = providerFailure.ErrorCode,
+                    retryable = providerFailure.IsRetryable,
+                });
+                throw providerFailure;
+            }
+
             _logger.LogError(ex, "RunStreamingAsync threw for workingDirectory={WorkingDirectory}", workingDirectory);
             Emit("run.failed", new { message = "The agent encountered an internal error." });
             throw;

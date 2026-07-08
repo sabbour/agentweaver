@@ -94,12 +94,14 @@ public static class BacklogDecomposeEndpoints
 
             var project = await projectStore.GetAsync(projectId, ct);
             if (project is null) return Results.NotFound();
+            var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
+            if (!caller.Owns(project.Owner))
+                return Results.StatusCode(StatusCodes.Status403Forbidden);
 
             // When a ref is supplied, delegate to the ref-aware workspace service.
             var @ref = httpContext.Request.Query["ref"].FirstOrDefault();
             if (!string.IsNullOrWhiteSpace(@ref))
             {
-                var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
                 var listResult = await projectWorkspaceService.ListWorkspaceAsync(projectId, caller, @ref, ct);
                 if (listResult.Outcome == WorkspaceOutcome.NotFound)
                     return Results.NotFound();
@@ -124,8 +126,9 @@ public static class BacklogDecomposeEndpoints
             DecomposeRequest request,
             IProjectStore projectStore,
             IBacklogTaskStore backlogStore,
-            BacklogDecomposeService decomposeService,
+            IBacklogDecomposeService decomposeService,
             ProjectWorkspaceService projectWorkspaceService,
+            IRunStore runStore,
             MemoryDbContext db,
             CancellationToken ct) =>
         {
@@ -135,6 +138,8 @@ public static class BacklogDecomposeEndpoints
             var project = await projectStore.GetAsync(projectId, ct);
             if (project is null) return Results.NotFound();
             var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
+            if (!caller.Owns(project.Owner))
+                return Results.StatusCode(StatusCodes.Status403Forbidden);
 
             string fileContent;
             string normalizedPath;
@@ -145,16 +150,26 @@ public static class BacklogDecomposeEndpoints
                 if (string.IsNullOrWhiteSpace(request.RunId))
                     return Results.BadRequest(new { error = "run_id is required when file_path is not provided." });
 
+                if (!RunId.TryParse(request.RunId, out var parsedRunId))
+                    return Results.BadRequest(new { error = "Invalid run id." });
+
+                var runId = parsedRunId.ToString();
+                var run = await runStore.GetAsync(parsedRunId, ct);
+                if (run is null || run.ProjectId != projectId)
+                    return Results.NotFound(new { error = "Coordinator run not found for this project." });
+                if (!caller.Owns(run.SubmittingUser))
+                    return Results.StatusCode(StatusCodes.Status403Forbidden);
+
                 var spec = await db.OutcomeSpecs
                     .AsNoTracking()
-                    .FirstOrDefaultAsync(s => s.CoordinatorRunId == request.RunId, ct);
+                    .FirstOrDefaultAsync(s => s.CoordinatorRunId == runId && s.ProjectId == projectId.ToString(), ct);
 
                 if (spec is null)
                     return Results.NotFound(new { error = "Outcome spec not found for the specified run." });
 
                 fileContent = BuildOutcomeSpecMarkdown(spec);
                 // Virtual source path used for idempotency — uniquely identifies this spec per run.
-                normalizedPath = $"__outcome-spec__/{request.RunId}";
+                normalizedPath = $"__outcome-spec__/{runId}";
             }
             else
             {
@@ -237,6 +252,7 @@ public static class BacklogDecomposeEndpoints
             if (request.Confirm)
             {
                 var now = DateTimeOffset.UtcNow;
+                var capturedBy = string.IsNullOrWhiteSpace(caller.GitHubLogin) ? caller.User : caller.GitHubLogin!;
                 var existing = await backlogStore.ListByProjectAsync(projectId, ct);
                 // Build the tail of the existing backlog order_keys so new items append after them.
                 var orderKeys = existing
@@ -258,7 +274,7 @@ public static class BacklogDecomposeEndpoints
                         Description = item.Description,
                         State = BacklogTaskState.Backlog,
                         OrderKey = newKey,
-                        CapturedBy = "decompose",
+                        CapturedBy = capturedBy,
                         CreatedAt = now,
                         SourceFilePath = normalizedPath,
                     }, ct);

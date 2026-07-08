@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Logging;
+using Agentweaver.AgentRuntime.Providers;
 using Agentweaver.Api.Casting;
 using Agentweaver.Api.Workflows;
 using Agentweaver.Domain;
@@ -460,17 +461,35 @@ public sealed class BlueprintService
         string description,
         CancellationToken ct,
         string? userId = null,
-        string? targetRepository = null)
+        string? targetRepository = null,
+        string? projectId = null,
+        string? blueprintGenerationModel = null,
+        string? workflowGenerationModel = null)
     {
         string raw;
         try
         {
-            raw = await _generator.GenerateRawAsync(description, ct, userId, targetRepository).ConfigureAwait(false);
+            raw = await _generator.GenerateRawAsync(
+                description, ct, userId, targetRepository, blueprintGenerationModel).ConfigureAwait(false);
+        }
+        catch (AgentProviderException ex)
+        {
+            return ProviderFailureResult(ex);
+        }
+        catch (Exception ex) when (AgentProviderException.Classify(ModelSource.GitHubCopilot, ex) is not null)
+        {
+            return ProviderFailureResult(AgentProviderException.Classify(ModelSource.GitHubCopilot, ex)!);
         }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Blueprint generation model run failed");
-            return new BlueprintGenerationResult(null, ["The blueprint generation model run failed to complete."]);
+            const string message = "The blueprint generation model run failed to complete.";
+            return new BlueprintGenerationResult(null, [message])
+            {
+                FailureKind = BlueprintGenerationFailureKind.ModelRunFailed,
+                ErrorCode = "blueprint_model_run_failed",
+                FailureMessage = message,
+            };
         }
 
         var parsed = BlueprintGenerationParser.Parse(raw);
@@ -535,9 +554,11 @@ public sealed class BlueprintService
             {
                 var wfRequest = new WorkflowGenerationRequest(
                     Description: description,
+                    ProjectId: projectId,
                     TeamRoles: blueprint.Roster.Count > 0 ? blueprint.Roster.ToList() : null,
                     UserId: userId,
-                    TargetRepository: targetRepository);
+                    TargetRepository: targetRepository,
+                    GenerationModel: workflowGenerationModel);
                 var wfResult = await _workflowGenerator.GenerateAsync(wfRequest, ct).ConfigureAwait(false);
                 generatedWorkflow = wfResult.Workflow;
                 generatedWorkflowYaml = wfResult.GeneratedYaml;
@@ -558,6 +579,10 @@ public sealed class BlueprintService
                 _logger.LogInformation(
                     "Blueprint generation fallback produced workflow '{WorkflowId}' (corrected={Corrected})",
                     generatedWorkflow.Id, wfResult.WasCorrected);
+            }
+            catch (AgentProviderException ex)
+            {
+                return ProviderFailureResult(ex);
             }
             catch (WorkflowGenerationException ex)
             {
@@ -596,6 +621,33 @@ public sealed class BlueprintService
             Warnings = warnings,
         };
     }
+
+    private BlueprintGenerationResult ProviderFailureResult(AgentProviderException ex)
+    {
+        var failureKind = MapProviderFailure(ex.FailureKind);
+        _logger.LogWarning(
+            ex,
+            "Blueprint generation provider failed before producing a draft: source={Source} kind={Kind} code={Code}",
+            ex.ModelSource,
+            ex.FailureKind,
+            ex.ErrorCode);
+        return new BlueprintGenerationResult(null, [ex.UserMessage])
+        {
+            FailureKind = failureKind,
+            ErrorCode = ex.ErrorCode,
+            FailureMessage = ex.UserMessage,
+        };
+    }
+
+    private static BlueprintGenerationFailureKind MapProviderFailure(AgentProviderFailureKind failureKind) =>
+        failureKind switch
+        {
+            AgentProviderFailureKind.Authorization => BlueprintGenerationFailureKind.ProviderAuthorization,
+            AgentProviderFailureKind.Configuration => BlueprintGenerationFailureKind.ProviderConfiguration,
+            AgentProviderFailureKind.ProviderUnavailable => BlueprintGenerationFailureKind.ProviderUnavailable,
+            AgentProviderFailureKind.RateLimited => BlueprintGenerationFailureKind.ProviderRateLimited,
+            _ => BlueprintGenerationFailureKind.ModelRunFailed,
+        };
 
     public static SandboxPolicy CreateSandboxPolicy(string sandboxProfile, string repositoryPath) =>
         sandboxProfile.Trim().ToLowerInvariant() switch

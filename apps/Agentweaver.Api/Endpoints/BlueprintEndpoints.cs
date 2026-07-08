@@ -1,5 +1,8 @@
 using Agentweaver.Api.Blueprints;
+using Agentweaver.Api.Generation;
 using Agentweaver.Api.Security;
+using Agentweaver.Domain;
+using Microsoft.Extensions.Options;
 
 namespace Agentweaver.Api.Endpoints;
 
@@ -26,15 +29,47 @@ public static class BlueprintEndpoints
             HttpContext httpContext,
             GenerateBlueprintRequest request,
             BlueprintService blueprints,
+            IProjectStore projectStore,
+            IOptions<GenerationModelOptions> generationOptions,
             CancellationToken ct) =>
         {
             if (string.IsNullOrWhiteSpace(request.Description))
                 return Results.BadRequest(new { error = "description is required." });
 
+            Project? project = null;
+            if (!string.IsNullOrWhiteSpace(request.ProjectId))
+            {
+                if (!ProjectId.TryParse(request.ProjectId, out var pid))
+                    return Results.BadRequest(new { error = "Invalid project id." });
+                project = await projectStore.GetAsync(pid, ct).ConfigureAwait(false);
+                if (project is null) return Results.NotFound();
+                if (!ApiKeyAuthMiddleware.GetCaller(httpContext).Owns(project.Owner))
+                    return Results.StatusCode(StatusCodes.Status403Forbidden);
+            }
+
             var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
+            var options = generationOptions.Value;
             var result = await blueprints.GenerateAsync(
-                request.Description!, ct, caller.User, request.TargetRepository);
+                request.Description!,
+                ct,
+                caller.User,
+                request.TargetRepository,
+                request.ProjectId,
+                project is null ? null : options.ResolveBlueprintModel(project.BlueprintGenerationModel),
+                project is null ? null : options.ResolveWorkflowModel(project.WorkflowGenerationModel));
             if (!result.Succeeded)
+            {
+                if (IsProviderFailure(result.FailureKind))
+                    return Results.Json(new
+                    {
+                        error = result.ErrorCode ?? "blueprint_provider_unavailable",
+                        message = result.FailureMessage ?? "Blueprint generation could not reach the configured AI provider or model list. Check provider authentication, entitlement, model access, and configuration, then retry.",
+                        details = result.Errors,
+                        options = result.FailureKind == BlueprintGenerationFailureKind.ProviderRateLimited
+                            ? new[] { "retry" }
+                            : new[] { "check_provider_auth", "check_provider_config", "retry" },
+                    }, statusCode: ProviderFailureStatus(result.FailureKind));
+
                 return Results.UnprocessableEntity(new
                 {
                     error = "blueprint_generation_failed",
@@ -42,6 +77,7 @@ public static class BlueprintEndpoints
                     details = result.Errors,
                     options = new[] { "regenerate", "edit" },
                 });
+            }
 
             return Results.Ok(new GenerateBlueprintResponse
             {
@@ -84,4 +120,20 @@ public static class BlueprintEndpoints
             });
         });
     }
+
+    private static bool IsProviderFailure(BlueprintGenerationFailureKind kind) =>
+        kind is BlueprintGenerationFailureKind.ProviderAuthorization
+            or BlueprintGenerationFailureKind.ProviderConfiguration
+            or BlueprintGenerationFailureKind.ProviderUnavailable
+            or BlueprintGenerationFailureKind.ProviderRateLimited
+            or BlueprintGenerationFailureKind.ModelRunFailed;
+
+    private static int ProviderFailureStatus(BlueprintGenerationFailureKind kind) =>
+        kind switch
+        {
+            BlueprintGenerationFailureKind.ProviderAuthorization => StatusCodes.Status401Unauthorized,
+            BlueprintGenerationFailureKind.ProviderRateLimited => StatusCodes.Status429TooManyRequests,
+            BlueprintGenerationFailureKind.ModelRunFailed => StatusCodes.Status502BadGateway,
+            _ => StatusCodes.Status503ServiceUnavailable,
+        };
 }

@@ -43,7 +43,7 @@ import type { Project, WorkflowRunDto } from '../api/types';
 function coordinatorStatusLabel(status: string | undefined): string | undefined {
   if (!status) return undefined;
   const k = status.toLowerCase().replace(/[^a-z]/g, '');
-  if (k.includes('awaitingassembly')) return 'Awaiting assembly';
+  if (k.includes('awaitingassembly')) return 'Preparing assembly';
   if (k.includes('assembling')) return 'Assembling';
   if (k.includes('inreview')) return 'In review';
   if (k.includes('dispatch')) return 'Dispatching';
@@ -205,7 +205,7 @@ function RunRow({ run, projectId, onDeleted }: { run: WorkflowRunDto; projectId:
             <Badge appearance="tint" size="small" color={
               coordLabel === 'Complete' ? 'success' :
               coordLabel === 'Failed' || coordLabel === 'Blocked' || coordLabel === 'Declined' ? 'danger' :
-              coordLabel === 'In review' || coordLabel === 'Awaiting assembly' ? 'warning' :
+              coordLabel === 'In review' ? 'warning' :
               'informative'
             }>
               {coordLabel}
@@ -240,13 +240,9 @@ function RunRow({ run, projectId, onDeleted }: { run: WorkflowRunDto; projectId:
         <Text className={styles.runMeta}>{new Date(run.started_at).toLocaleString()}</Text>
       </TableCell>
       <TableCell className={styles.runActionCell}>
-        {isCoord ? (
+        {isCoord && (
           <Link to={`/projects/${projectId}/orchestrations/${run.workflow_run_id ?? run.execution_id}`} style={{ textDecoration: 'none' }}>
             <Button appearance="secondary" size="small">Topology</Button>
-          </Link>
-        ) : (
-          <Link to={`/projects/${projectId}/runs/${run.workflow_run_id ?? run.execution_id}/workflow`} style={{ textDecoration: 'none' }}>
-            <Button appearance="secondary" size="small">Workflow</Button>
           </Link>
         )}
       </TableCell>

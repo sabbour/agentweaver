@@ -1,8 +1,10 @@
 using System.Text.Json;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Agentweaver.AgentRuntime;
 using Agentweaver.AgentRuntime.Providers;
+using Agentweaver.Api.Generation;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Runs;
 using Agentweaver.Domain;
@@ -46,6 +48,7 @@ public sealed class CopilotCoordinatorSpecDrafter : ICoordinatorSpecDrafter
     private readonly ILoggerFactory _loggerFactory;
     private readonly string? _apiBaseUrl;
     private readonly string? _apiKey;
+    private readonly string _outcomeSpecModel;
 
     public CopilotCoordinatorSpecDrafter(
         GitHubCopilotClientFactory copilotClientFactory,
@@ -56,7 +59,8 @@ public sealed class CopilotCoordinatorSpecDrafter : ICoordinatorSpecDrafter
         IToolApprovalGate toolApprovalGate,
         RunStreamStore streamStore,
         ILoggerFactory loggerFactory,
-        IConfiguration configuration)
+        IConfiguration configuration,
+        IOptions<GenerationModelOptions>? generationOptions = null)
     {
         _copilotClientFactory = copilotClientFactory;
         _scopeProvider = scopeProvider;
@@ -69,7 +73,11 @@ public sealed class CopilotCoordinatorSpecDrafter : ICoordinatorSpecDrafter
         _apiBaseUrl = configuration["Agentweaver:ApiBaseUrl"] ?? "http://localhost:5000";
         _apiKey = configuration["Auth:ApiKey"]
             ?? configuration.GetSection("Auth:Keys").GetChildren().FirstOrDefault()?["Token"];
+        _outcomeSpecModel = (generationOptions?.Value ?? GenerationModelOptions.FromConfiguration(configuration))
+            .ResolveOutcomeSpecModel();
     }
+
+    internal string OutcomeSpecModel => _outcomeSpecModel;
 
     public async Task<OutcomeSpecDraft> DraftAsync(
         CoordinatorDraftInput input, string charter, string? memoryContext, CancellationToken ct)
@@ -140,7 +148,7 @@ public sealed class CopilotCoordinatorSpecDrafter : ICoordinatorSpecDrafter
                 workingDirectory: input.RepositoryPath,
                 repositoryPath: input.RepositoryPath,
                 runId: input.RunId + "-coordinator-draft",
-                modelId: input.ModelId,
+                modelId: ResolveOutcomeSpecModel(input.OutcomeSpecGenerationModel),
                 systemPromptContext: systemPrompt,
                 streamWriter: streamWriter,
                 projectId: input.ProjectId,
@@ -164,6 +172,9 @@ public sealed class CopilotCoordinatorSpecDrafter : ICoordinatorSpecDrafter
                 await agent.DisposeAsync().ConfigureAwait(false);
         }
     }
+
+    private string ResolveOutcomeSpecModel(string? projectModel) =>
+        string.IsNullOrWhiteSpace(projectModel) ? _outcomeSpecModel : projectModel.Trim();
 
     /// <summary>Tolerant JSON extraction: pulls the first balanced object out of the response.</summary>
     private static OutcomeSpecDraft? ParseDraft(string? response)

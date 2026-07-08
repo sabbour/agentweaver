@@ -20,12 +20,18 @@ public sealed record DecomposeAgentResult(
     bool WasCapped,
     int TotalFound);
 
+public interface IBacklogDecomposeService
+{
+    Task<DecomposeAgentResult> DecomposeAsync(
+        Project project, string fileContent, string submittingUser, CancellationToken ct);
+}
+
 /// <summary>
 /// Runs a single <see cref="CopilotAIAgent"/> turn that reads a markdown document and extracts
 /// actionable backlog items as structured JSON. Used by
 /// <c>POST /api/projects/{id}/backlog/decompose</c> (Feature 014).
 /// </summary>
-public sealed class BacklogDecomposeService
+public sealed class BacklogDecomposeService : IBacklogDecomposeService
 {
     private const int ItemCap = 50;
     private const string AgentName = "BacklogDecompose";

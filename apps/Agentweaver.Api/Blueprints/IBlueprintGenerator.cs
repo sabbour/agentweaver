@@ -12,7 +12,22 @@ namespace Agentweaver.Api.Blueprints;
 /// </summary>
 public interface IBlueprintGenerator
 {
-    Task<string> GenerateRawAsync(string description, CancellationToken ct, string? userId = null, string? targetRepository = null);
+    Task<string> GenerateRawAsync(
+        string description,
+        CancellationToken ct,
+        string? userId = null,
+        string? targetRepository = null,
+        string? modelId = null);
+}
+
+public enum BlueprintGenerationFailureKind
+{
+    Validation,
+    ProviderAuthorization,
+    ProviderConfiguration,
+    ProviderUnavailable,
+    ProviderRateLimited,
+    ModelRunFailed,
 }
 
 /// <summary>The outcome of parsing a model-produced blueprint response.</summary>
@@ -21,6 +36,9 @@ public sealed record BlueprintGenerationResult(
     IReadOnlyList<string> Errors)
 {
     public bool Succeeded => Blueprint is not null && Errors.Count == 0;
+
+    /// <summary>Classifies non-success results so endpoints can return truthful remediation.</summary>
+    public BlueprintGenerationFailureKind FailureKind { get; init; } = BlueprintGenerationFailureKind.Validation;
 
     /// <summary>
     /// Set when the library-first workflow matching found no suitable library workflow (FR-063) and
@@ -34,6 +52,10 @@ public sealed record BlueprintGenerationResult(
     public string? GeneratedWorkflowYaml { get; init; }
 
     public IReadOnlyList<string> Warnings { get; init; } = [];
+
+    public string? ErrorCode { get; init; }
+
+    public string? FailureMessage { get; init; }
 }
 
 /// <summary>

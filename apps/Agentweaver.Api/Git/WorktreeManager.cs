@@ -152,6 +152,47 @@ public sealed class WorktreeManager
         }
     }
 
+    /// <summary>
+    /// Creates a short-lived detached worktree at <paramref name="sourceBranch"/> for read-only gates
+    /// (for example collective Build/Test). The source branch is never checked out in the primary
+    /// repository, so later headless ref resets can delete/recreate it safely.
+    /// </summary>
+    public WorktreeInfo AddDetachedWorktree(string repositoryPath, string sourceBranch, string worktreeName)
+    {
+        var safeName = SanitizeWorktreeName(worktreeName);
+        var worktreePath = Path.Combine(_basePath, safeName);
+
+        if (Directory.Exists(worktreePath))
+            Directory.Delete(worktreePath, recursive: true);
+
+        PruneWorktreeByName(repositoryPath, safeName);
+        TryRunGitWorktreePrune(repositoryPath);
+
+        RunGit(
+            repositoryPath,
+            "worktree",
+            "add",
+            "--detach",
+            worktreePath,
+            sourceBranch);
+
+        return new WorktreeInfo
+        {
+            WorktreePath = worktreePath,
+            BranchName = string.Empty,
+        };
+    }
+
+    public void RemoveDetachedWorktree(string repositoryPath, string worktreePath)
+    {
+        if (Directory.Exists(worktreePath))
+            Directory.Delete(worktreePath, recursive: true);
+
+        var worktreeName = Path.GetFileName(worktreePath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+        if (!string.IsNullOrWhiteSpace(worktreeName))
+            PruneWorktreeByName(repositoryPath, worktreeName);
+    }
+
     public bool BranchExists(string repositoryPath, string branchName)
     {
         using var repo = new Repository(repositoryPath);
@@ -368,6 +409,8 @@ public sealed class WorktreeManager
         string integrationBranch,
         IReadOnlyList<string> childBranchesInOrder)
     {
+        EnsurePrimaryWorktreeNotCheckedOutOnBranch(repositoryPath, originatingBranch, integrationBranch);
+
         // Defensive: a prior — or interrupted — assembly can leave a LINKED worktree checked out on
         // the integration branch, which makes the ref undeletable below ("Cannot delete branch ... as
         // it is the current HEAD of a linked repository"). The integration branch is built headlessly
@@ -379,6 +422,8 @@ public sealed class WorktreeManager
 
         var origin = repo.Branches[originatingBranch]
             ?? throw new InvalidOperationException($"Originating branch '{originatingBranch}' was not found.");
+
+        EnsureMainRepositoryNotCheckedOutOnBranch(repo, integrationBranch, origin);
 
         // Create/reset the integration branch ref at the originating branch tip.
         var existing = repo.Branches[integrationBranch];
@@ -488,6 +533,82 @@ public sealed class WorktreeManager
             integrationCommit.Tree.Sha,
             patch.Content,
             autoResolutions);
+    }
+
+    private static string SanitizeWorktreeName(string name)
+    {
+        var cleaned = Regex.Replace(name, @"[^A-Za-z0-9_.-]+", "-").Trim('-', '.', '_');
+        return string.IsNullOrWhiteSpace(cleaned)
+            ? "agentweaver-worktree-" + Guid.NewGuid().ToString("N")
+            : cleaned;
+    }
+
+    private void RunGit(string repositoryPath, params string[] args)
+    {
+        using var process = new Process();
+        process.StartInfo = new ProcessStartInfo("git")
+        {
+            WorkingDirectory = repositoryPath,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        foreach (var arg in args)
+            process.StartInfo.ArgumentList.Add(arg);
+
+        process.Start();
+        var stdout = process.StandardOutput.ReadToEnd();
+        var stderr = process.StandardError.ReadToEnd();
+        process.WaitForExit();
+        if (process.ExitCode == 0)
+            return;
+
+        var detail = string.IsNullOrWhiteSpace(stderr) ? stdout : stderr;
+        var commandSummary = args.Length >= 2 ? $"{args[0]} {args[1]}" : string.Join(' ', args);
+        throw new InvalidOperationException(
+            $"git {commandSummary} failed in '{repositoryPath}' with exit code {process.ExitCode}: {detail.Trim()}");
+    }
+
+    private void EnsurePrimaryWorktreeNotCheckedOutOnBranch(
+        string repositoryPath,
+        string fallbackBranch,
+        string branchName)
+    {
+        try
+        {
+            using var repo = new Repository(repositoryPath);
+            if (repo.Info.IsHeadDetached || !string.Equals(repo.Head.FriendlyName, branchName, StringComparison.Ordinal))
+                return;
+
+            var fallback = repo.Branches[fallbackBranch]
+                ?? throw new InvalidOperationException($"Fallback branch '{fallbackBranch}' was not found.");
+
+            _logger.LogWarning(
+                "Primary repository worktree is checked out on generated integration branch '{Branch}'. " +
+                "Checking out '{Fallback}' before resetting the integration ref.",
+                branchName,
+                fallbackBranch);
+
+            try
+            {
+                Commands.Checkout(repo, fallback);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex,
+                    "Safe checkout from generated integration branch '{Branch}' to '{Fallback}' failed; retrying with force",
+                    branchName,
+                    fallbackBranch);
+                Commands.Checkout(repo, fallback, new CheckoutOptions { CheckoutModifiers = CheckoutModifiers.Force });
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "Could not move primary repository off integration branch '{Branch}' before reset",
+                branchName);
+        }
     }
 
     /// <summary>
@@ -635,6 +756,33 @@ public sealed class WorktreeManager
                 "WorktreeManager: git worktree prune failed in repository {Path} (best-effort)",
                 repositoryPath);
         }
+    }
+
+    /// <summary>
+    /// Guardrail for a failed/aborted build-test agent that checked out the generated integration
+    /// branch in the main repository instead of a linked worktree. LibGit2Sharp refuses to delete a
+    /// branch that is the current HEAD; the integration branch is Agentweaver-owned scratch state, so
+    /// force the main worktree back to the originating branch before resetting the integration ref.
+    /// </summary>
+    private void EnsureMainRepositoryNotCheckedOutOnBranch(
+       Repository repo,
+       string integrationBranch,
+       Branch fallbackBranch)
+    {
+       if (repo.Info.IsHeadDetached
+           || !string.Equals(repo.Head.FriendlyName, integrationBranch, StringComparison.Ordinal))
+           return;
+
+       _logger.LogWarning(
+           "WorktreeManager: main repository was checked out on integration branch {Branch}; " +
+           "checking out {FallbackBranch} so the integration branch can be reset",
+           integrationBranch,
+           fallbackBranch.FriendlyName);
+
+       Commands.Checkout(repo, fallbackBranch, new CheckoutOptions
+       {
+           CheckoutModifiers = CheckoutModifiers.Force,
+       });
     }
 
     /// <summary>

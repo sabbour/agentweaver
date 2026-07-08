@@ -150,10 +150,10 @@ public sealed record RunResponse
     public string? RetriedFrom { get; init; }
 
     /// <summary>
-    /// Orchestration status of a COORDINATOR run, sourced from its work plan
-    /// (planned | dispatching | awaiting_assembly | assembling | in_review | complete |
-    /// assembly_blocked | assembly_failed | assembly_declined). Null for standalone runs, child
-    /// runs, and coordinator runs with no work plan yet. The web UI shows this (plus
+    /// Orchestration status of a COORDINATOR run, sourced from its outcome spec before decomposition
+    /// (drafting | awaiting_confirmation) and from its work plan afterward (planned | dispatching |
+    /// awaiting_assembly | assembling | in_review | complete | assembly_blocked | assembly_failed |
+    /// assembly_declined). Null for standalone runs and child runs. The web UI shows this (plus
     /// <see cref="Result"/> for the failure detail) instead of the bare run status so an
     /// awaiting-assembly run is not mislabeled "Failed". (Feature 008)
     /// </summary>
@@ -585,6 +585,9 @@ public sealed record UpdateProjectProviderSettingsRequest
     [JsonPropertyName("default_provider")] public string? DefaultProvider { get; init; }
     [JsonPropertyName("default_model_github_copilot")] public string? DefaultModelGitHubCopilot { get; init; }
     [JsonPropertyName("default_model_microsoft_foundry")] public string? DefaultModelMicrosoftFoundry { get; init; }
+    [JsonPropertyName("blueprint_generation_model")] public string? BlueprintGenerationModel { get; init; }
+    [JsonPropertyName("workflow_generation_model")] public string? WorkflowGenerationModel { get; init; }
+    [JsonPropertyName("outcome_spec_generation_model")] public string? OutcomeSpecGenerationModel { get; init; }
 }
 
 public sealed record ProjectResponse
@@ -599,6 +602,9 @@ public sealed record ProjectResponse
     [JsonPropertyName("default_provider")] public required string DefaultProvider { get; init; }
     [JsonPropertyName("default_model_github_copilot")] public string? DefaultModelGitHubCopilot { get; init; }
     [JsonPropertyName("default_model_microsoft_foundry")] public string? DefaultModelMicrosoftFoundry { get; init; }
+    [JsonPropertyName("blueprint_generation_model")] public string? BlueprintGenerationModel { get; init; }
+    [JsonPropertyName("workflow_generation_model")] public string? WorkflowGenerationModel { get; init; }
+    [JsonPropertyName("outcome_spec_generation_model")] public string? OutcomeSpecGenerationModel { get; init; }
     [JsonPropertyName("available")] public required bool Available { get; init; }
     [JsonPropertyName("state")] public required string State { get; init; }
     [JsonPropertyName("created_at")] public required DateTimeOffset CreatedAt { get; init; }
@@ -852,6 +858,15 @@ public sealed record StartOrchestrationRequest
     [JsonPropertyName("goal")] public string? Goal { get; init; }
     [JsonPropertyName("modelId")] public string? ModelId { get; init; }
 
+    /// <summary>
+    /// Start mode for the coordinator. Null/"defineOutcome" preserves the outcome-spec draft +
+    /// confirmation gate; "direct" skips that definition gate and plans from the prompt.
+    /// </summary>
+    [JsonPropertyName("start_mode")] public string? StartMode { get; init; }
+
+    /// <summary>Backward-compatible alias for pre-UI clients; new clients should send start_mode.</summary>
+    [JsonPropertyName("mode")] public string? Mode { get; init; }
+
     /// <summary>When true, the coordinator run and its children auto-grant allow-with-approval tool
     /// requests at the HITL gate (policy denies still apply). Defaults to false. (Feature 008)</summary>
     [JsonPropertyName("autoApproveTools")] public bool AutoApproveTools { get; init; }
@@ -876,6 +891,131 @@ public sealed record EnableFlagRequest
 public sealed record StartOrchestrationResponse
 {
     [JsonPropertyName("runId")] public required string RunId { get; init; }
+}
+
+// -----------------------------------------------------------------------
+// Browser Console facade — singleton smart-TUI turn contract.
+// The endpoint accepts either "text" (backend-native) or "message" (web-client
+// compatibility) and returns renderable state, never hidden browser-side tool
+// routing. Gated/destructive work is surfaced as gate_required/clarification.
+// -----------------------------------------------------------------------
+
+public sealed record ConsoleTurnRequest
+{
+    [JsonPropertyName("text")] public string? Text { get; init; }
+    [JsonPropertyName("message")] public string? Message { get; init; }
+    [JsonPropertyName("context")] public ConsoleTurnContext? Context { get; init; }
+    [JsonPropertyName("project_id")] public string? ProjectId { get; init; }
+    [JsonPropertyName("run_id")] public string? RunId { get; init; }
+    [JsonPropertyName("route")] public string? Route { get; init; }
+    [JsonPropertyName("conversation_id")] public string? ConversationId { get; init; }
+    [JsonPropertyName("confirmation_token")] public string? ConfirmationToken { get; init; }
+}
+
+public sealed record ConsoleTurnContext
+{
+    [JsonPropertyName("scope")] public string? Scope { get; init; }
+    [JsonPropertyName("project_id")] public string? ProjectId { get; init; }
+    [JsonPropertyName("run_id")] public string? RunId { get; init; }
+    [JsonPropertyName("route")] public string? Route { get; init; }
+}
+
+public sealed record ConsoleTurnResponse
+{
+    [JsonPropertyName("conversation_id")] public string? ConversationId { get; init; }
+    [JsonPropertyName("role")] public string Role { get; init; } = "assistant";
+    [JsonPropertyName("status")] public string? Status { get; init; }
+    [JsonPropertyName("kind")] public required string Kind { get; init; }
+    [JsonPropertyName("message")] public required string Message { get; init; }
+    [JsonPropertyName("action")] public string? Action { get; init; }
+    [JsonPropertyName("tools")] public IReadOnlyList<ConsoleToolSummary>? Tools { get; init; }
+    [JsonPropertyName("tool_calls")] public IReadOnlyList<ConsoleToolCall>? ToolCalls { get; init; }
+    [JsonPropertyName("links")] public IReadOnlyList<ConsoleLink>? Links { get; init; }
+    [JsonPropertyName("gate")] public ConsoleGate? Gate { get; init; }
+    [JsonPropertyName("project_id")] public string? ProjectId { get; init; }
+    [JsonPropertyName("run_id")] public string? RunId { get; init; }
+    [JsonPropertyName("message_chunks")] public IReadOnlyList<ConsoleMessageChunk>? MessageChunks { get; init; }
+    [JsonPropertyName("events")] public IReadOnlyList<ConsoleTurnEvent>? Events { get; init; }
+    [JsonPropertyName("action_summaries")] public IReadOnlyList<ConsoleActionSummary>? ActionSummaries { get; init; }
+    [JsonPropertyName("clarifications")] public IReadOnlyList<ConsoleClarification>? Clarifications { get; init; }
+    [JsonPropertyName("errors")] public IReadOnlyList<ConsoleError>? Errors { get; init; }
+    [JsonPropertyName("actionable_state")] public ConsoleActionableState? ActionableState { get; init; }
+}
+
+public sealed record ConsoleLink
+{
+    [JsonPropertyName("label")] public required string Label { get; init; }
+    [JsonPropertyName("to")] public string? To { get; init; }
+    [JsonPropertyName("href")] public string? Href { get; init; }
+}
+
+public sealed record ConsoleToolSummary
+{
+    [JsonPropertyName("label")] public required string Label { get; init; }
+    [JsonPropertyName("status")] public required string Status { get; init; }
+    [JsonPropertyName("detail")] public string? Detail { get; init; }
+}
+
+public sealed record ConsoleToolCall
+{
+    [JsonPropertyName("name")] public required string Name { get; init; }
+    [JsonPropertyName("status")] public required string Status { get; init; }
+    [JsonPropertyName("summary")] public string? Summary { get; init; }
+}
+
+public sealed record ConsoleGate
+{
+    [JsonPropertyName("kind")] public required string Kind { get; init; }
+    [JsonPropertyName("title")] public string? Title { get; init; }
+    [JsonPropertyName("description")] public string? Description { get; init; }
+    [JsonPropertyName("project_id")] public string? ProjectId { get; init; }
+    [JsonPropertyName("run_id")] public string? RunId { get; init; }
+}
+
+public sealed record ConsoleMessageChunk
+{
+    [JsonPropertyName("text")] public required string Text { get; init; }
+}
+
+public sealed record ConsoleTurnEvent
+{
+    [JsonPropertyName("type")] public required string Type { get; init; }
+    [JsonPropertyName("text")] public string? Text { get; init; }
+    [JsonPropertyName("tool")] public string? Tool { get; init; }
+    [JsonPropertyName("status")] public string? Status { get; init; }
+}
+
+public sealed record ConsoleActionSummary
+{
+    [JsonPropertyName("action")] public required string Action { get; init; }
+    [JsonPropertyName("status")] public required string Status { get; init; }
+    [JsonPropertyName("target_type")] public string? TargetType { get; init; }
+    [JsonPropertyName("target_id")] public string? TargetId { get; init; }
+    [JsonPropertyName("label")] public string? Label { get; init; }
+    [JsonPropertyName("detail")] public string? Detail { get; init; }
+}
+
+public sealed record ConsoleClarification
+{
+    [JsonPropertyName("id")] public required string Id { get; init; }
+    [JsonPropertyName("prompt")] public required string Prompt { get; init; }
+    [JsonPropertyName("required")] public bool Required { get; init; } = true;
+    [JsonPropertyName("options")] public IReadOnlyList<string>? Options { get; init; }
+}
+
+public sealed record ConsoleError
+{
+    [JsonPropertyName("code")] public required string Code { get; init; }
+    [JsonPropertyName("message")] public required string Message { get; init; }
+}
+
+public sealed record ConsoleActionableState
+{
+    [JsonPropertyName("project_id")] public string? ProjectId { get; init; }
+    [JsonPropertyName("run_id")] public string? RunId { get; init; }
+    [JsonPropertyName("route")] public string? Route { get; init; }
+    [JsonPropertyName("pending_gate")] public string? PendingGate { get; init; }
+    [JsonPropertyName("suggested_commands")] public IReadOnlyList<string>? SuggestedCommands { get; init; }
 }
 
 /// <summary>Request body for POST /api/runs/{id}/outcome-spec/revise.</summary>
@@ -923,9 +1063,25 @@ public sealed record WorkPlanResponse
     [JsonPropertyName("status")] public required string Status { get; init; }
 
     /// <summary>
-    /// Human-readable reason for a terminal/blocked assembly status (assembly_blocked / assembly_failed
-    /// / assembly_declined), sourced from the coordinator run's result. Null while the plan is in a
-    /// non-failed state. The web UI polls this to render "Failed: &lt;reason&gt;". (Feature 008)
+    /// Current/last assembly stage (null until a collective gate/action starts). This remains useful
+    /// after terminalization because scribe/cleanup may advance separately from the failure point.
+    /// </summary>
+    [JsonPropertyName("assemblyStage")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? AssemblyStage { get; init; }
+
+    /// <summary>
+    /// Stage that produced the current parked/terminal status. Null when assembly blocked before any
+    /// collective gate/action ran, letting the UI distinguish never-run gates from failed ones.
+    /// </summary>
+    [JsonPropertyName("assemblyTerminalStage")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? AssemblyTerminalStage { get; init; }
+
+    /// <summary>
+    /// Human-readable reason for a parked/terminal assembly status (assembly_blocked /
+    /// assembly_failed / assembly_declined / rai_blocked / needs_resolution), sourced from durable
+    /// work-plan state with a coordinator-run result fallback for older rows.
     /// </summary>
     [JsonPropertyName("statusReason")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]

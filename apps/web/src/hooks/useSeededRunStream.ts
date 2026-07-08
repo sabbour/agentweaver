@@ -23,7 +23,7 @@ export interface SeededRunStream {
  *
  * useRunStream alone only resumes the LIVE SSE stream via Last-Event-ID; it never
  * calls getRunEvents, so a parked/terminal run (closed stream) would render empty.
- * The workflow page and the agent session panel each hand-rolled this seed+merge;
+ * The run detail surfaces and the agent session panel each hand-rolled this seed+merge;
  * the browser console TUI needs the exact same behaviour, so it lives here once.
  *
  * @param runId the run to bind to ('' disables the stream).

@@ -130,6 +130,14 @@ public static class EventTypes
     public const string CoordinatorChildStallDetected = "coordinator.child_stall_detected";
 
     /// <summary>
+    /// Emitted when the coordinator begins drafting or re-drafting the outcome spec. This is the
+    /// active counterpart to <see cref="CoordinatorOutcomeSpec"/>, which is emitted only after the
+    /// draft is ready for confirmation.
+    /// Payload: { specId, status:"drafting", goal, revise }.
+    /// </summary>
+    public const string CoordinatorOutcomeSpecDrafting = "coordinator.outcome_spec.drafting";
+
+    /// <summary>
     /// Emitted when the coordinator presents an outcome-spec draft (or revision) for
     /// human confirmation. The run is suspended at the await-confirmation gate after this.
     /// Payload: { specId, status, desiredOutcome, scope, assumptions, clarifyingQuestions }

@@ -590,7 +590,7 @@ function renderTreeNodes({
       );
     }
 
-    const isChanged = node.status !== undefined || defaultChangedFlag;
+    const isChanged = node.status != null || defaultChangedFlag;
     // Base glyph comes from the file extension; the status color class below is layered on
     // top for changed files so the review/diff tree keeps its added/modified/deleted coloring.
     const { Icon: FileExtIcon, kind: fileIconKind } = fileIconForName(node.name);

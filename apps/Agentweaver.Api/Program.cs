@@ -16,7 +16,9 @@ using Agentweaver.Api.Auth;
 using Agentweaver.Api.Blueprints;
 using Agentweaver.Api.Casting;
 using Agentweaver.Api.Contracts;
+using Agentweaver.Api.ConsoleFacade;
 using Agentweaver.Api.Coordinator;
+using Agentweaver.Api.Generation;
 using Agentweaver.Api.Git;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Projects;
@@ -55,6 +57,12 @@ builder.Services.ConfigureHttpJsonOptions(options =>
 {
     options.SerializerOptions.Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping;
 });
+
+builder.Services.AddOptions<GenerationModelOptions>()
+    .Bind(builder.Configuration.GetSection(GenerationModelOptions.SectionName))
+    .Validate(GenerationModelOptions.IsValid,
+        "Generation model settings must use an allowed Copilot model id (gpt*, claude*, or o*).")
+    .ValidateOnStart();
 
 // CORS
 if (!isWorker)
@@ -135,6 +143,9 @@ builder.Services.AddSingleton<Agentweaver.Api.Coordinator.IWorkflowSelector,
 builder.Services.AddSingleton<Agentweaver.Api.Coordinator.CoordinatorWorkflowFactory>();
 builder.Services.AddSingleton<Agentweaver.Api.Coordinator.CoordinatorRunService>();
 builder.Services.AddSingleton<Agentweaver.Api.Coordinator.CoordinatorStatusReader>();
+builder.Services.AddSingleton<ConsoleConversationStore>();
+builder.Services.AddSingleton<IConsoleFacadeAgent, CopilotConsoleFacadeAgent>();
+builder.Services.AddSingleton<IConsoleTurnService, ConsoleTurnService>();
 
 // GitHub auth (token store + scope provider + device flow service)
 var tokenStoreProvider = builder.Configuration["Auth:TokenStore:Provider"];
@@ -629,6 +640,8 @@ builder.Services.AddSingleton<Agentweaver.Api.Workflows.IWorkflowGenerator, Agen
 
 // Spec-to-backlog decomposition (Feature 014)
 builder.Services.AddSingleton<Agentweaver.Api.Backlog.BacklogDecomposeService>();
+builder.Services.AddSingleton<Agentweaver.Api.Backlog.IBacklogDecomposeService>(
+    sp => sp.GetRequiredService<Agentweaver.Api.Backlog.BacklogDecomposeService>());
 
 // Azure Monitor OpenTelemetry (Application Insights) — enabled only when connection string is set.
 if (!string.IsNullOrEmpty(builder.Configuration["APPLICATIONINSIGHTS_CONNECTION_STRING"]))
@@ -782,6 +795,7 @@ else
     app.MapSkillEndpoints();
     app.MapBacklogEndpoints();
     app.MapBacklogDecomposeEndpoints();
+    app.MapConsoleEndpoints();
     app.MapCoordinatorEndpoints();
     app.MapCastingEndpoints();
     app.MapBlueprintEndpoints();

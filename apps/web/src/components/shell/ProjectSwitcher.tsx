@@ -50,9 +50,8 @@ const useStyles = makeStyles({
 
 // The project-scoped category to preserve when switching projects (e.g. stay on
 // Settings). Sub-resource ids are intentionally dropped — switching lands on the
-// category root of the target project. Deep run/execution routes (e.g.
-// /runs/:runId/workflow) are mapped to their owning nav category via the nav
-// item's matchSegments, so they preserve Board instead of falling to the root.
+// category root of the target project. Supported sub-resource routes are mapped
+// to their owning nav category via the nav item's matchSegments.
 function currentCategorySegment(pathname: string, projectId: string | undefined): NavItemDef | null {
   if (!projectId) return null;
   const prefix = `/projects/${projectId}`;
@@ -63,8 +62,7 @@ function currentCategorySegment(pathname: string, projectId: string | undefined)
   // Prefer an exact segment match (e.g. 'team/cast' resolves to Agents at /team).
   const direct = NAV_ITEMS.find((i) => i.segment && i.segment === firstSeg);
   if (direct) return direct;
-  // Otherwise honor matchSegments so deep routes keep their category (e.g.
-  // 'runs/:runId/workflow' maps to Board).
+  // Otherwise honor matchSegments so supported deep routes keep their category.
   const viaMatch = NAV_ITEMS.find((i) => i.matchSegments?.includes(firstSeg));
   if (viaMatch) return viaMatch;
   return null;

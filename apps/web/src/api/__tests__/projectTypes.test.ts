@@ -34,6 +34,9 @@ describe('Project type shapes', () => {
       default_provider: 'github-copilot',
       default_model_github_copilot: null,
       default_model_microsoft_foundry: null,
+      blueprint_generation_model: null,
+      workflow_generation_model: 'claude-sonnet-4.6',
+      outcome_spec_generation_model: null,
       available: true,
       state: 'active',
       created_at: '2026-01-01T00:00:00Z',
@@ -87,8 +90,12 @@ describe('Project type shapes', () => {
       default_provider: 'microsoft-foundry',
       default_model_github_copilot: 'gpt-4o',
       default_model_microsoft_foundry: 'my-model',
+      blueprint_generation_model: 'gpt-5.5',
+      workflow_generation_model: null,
+      outcome_spec_generation_model: 'claude-sonnet-4.6',
     };
     expect(full.default_provider).toBe('microsoft-foundry');
+    expect(full.workflow_generation_model).toBeNull();
   });
 
   it('CreateProjectRunRequest has task as required field', () => {

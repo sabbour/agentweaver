@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
 import {
   Badge,
   Button,
@@ -29,7 +28,6 @@ import {
   DocumentEditRegular,
   EyeRegular,
   GlobeRegular,
-  OpenRegular,
   SendRegular,
   WindowConsoleRegular,
 } from '@fluentui/react-icons';
@@ -39,8 +37,9 @@ import rehypeSanitize from 'rehype-sanitize';
 import { apiClient } from '../api/apiClient';
 import { useRunStream, type EventType, type RunStreamEvent } from '../api/sse';
 import { formatApiErrorMessage } from '../api/errors';
+import type { WorkspaceFileEntry, WorkspaceNode } from '../api/types';
 import { useArtifactBrowser, type ArtifactBrowserAdapter } from '../hooks/useArtifactBrowser';
-import { mergeRunEvents as sharedMergeRunEvents } from '../timeline/mergeRunEvents';
+import { mergeRunEvents as sharedMergeRunEvents, SEED_STATUSES } from '../timeline/mergeRunEvents';
 import { AgentAvatar } from './AgentAvatar';
 import { CompactChangesList, FilesTabPanel } from './ArtifactBrowser';
 import { FileViewerModal } from './FileViewerModal';
@@ -49,11 +48,6 @@ import { deriveHumanTitle } from '../timeline/reducer';
 import { OutcomePlanPanel } from './OutcomePlanPanel';
 
 const PANEL_TOP = '48px';
-const SEED_STATUSES: ReadonlySet<string> = new Set([
-  'completed', 'failed', 'merged', 'declined', 'merge_failed',
-  'parked', 'assemble_ready', 'assembled', 'cancelled', 'stopped',
-]);
-
 const useStyles = makeStyles({
   backdrop: {
     position: 'fixed',
@@ -323,15 +317,18 @@ const useStyles = makeStyles({
   content: {
     flex: 1,
     minHeight: 0,
-    overflowY: 'auto',
+    overflow: 'hidden',
     display: 'flex',
     flexDirection: 'column',
   },
   tabBody: {
+    flex: 1,
+    minHeight: 0,
+    overflowY: 'auto',
     display: 'flex',
     flexDirection: 'column',
-    gap: tokens.spacingVerticalS,
-    padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM}`,
+    gap: tokens.spacingVerticalXS,
+    padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalL}`,
   },
   narrativeToolbar: {
     position: 'sticky',
@@ -341,9 +338,17 @@ const useStyles = makeStyles({
     alignItems: 'center',
     justifyContent: 'flex-end',
     gap: tokens.spacingHorizontalS,
-    padding: `${tokens.spacingVerticalXS} 0`,
+    padding: `0 0 ${tokens.spacingVerticalXS}`,
     backgroundColor: tokens.colorNeutralBackground1,
-    borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
+  },
+  jumpToLatestBar: {
+    position: 'sticky',
+    bottom: 0,
+    zIndex: 1,
+    display: 'flex',
+    justifyContent: 'flex-end',
+    paddingTop: tokens.spacingVerticalXS,
+    backgroundColor: tokens.colorNeutralBackground1,
   },
   emptyState: {
     padding: tokens.spacingVerticalXL,
@@ -352,47 +357,45 @@ const useStyles = makeStyles({
   conversationTurn: {
     display: 'flex',
     flexDirection: 'column',
-    gap: tokens.spacingVerticalXS,
+    gap: tokens.spacingVerticalXXS,
   },
   messageRow: {
     display: 'flex',
     flexDirection: 'column',
-    gap: tokens.spacingVerticalXXS,
+    gap: tokens.spacingVerticalXS,
   },
   messageCard: {
     display: 'grid',
-    gridTemplateColumns: '28px minmax(0, 1fr)',
+    gridTemplateColumns: '24px minmax(0, 1fr)',
     gap: tokens.spacingHorizontalS,
-    padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalS}`,
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: tokens.borderRadiusMedium,
-    backgroundColor: tokens.colorNeutralBackground1,
+    padding: `${tokens.spacingVerticalXS} 0`,
+    backgroundColor: 'transparent',
   },
   messageMeta: {
     display: 'flex',
-    alignItems: 'flex-start',
+    alignItems: 'center',
     justifyContent: 'space-between',
     gap: tokens.spacingHorizontalS,
   },
   authorBlock: {
     display: 'flex',
-    flexDirection: 'column',
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    gap: tokens.spacingHorizontalXS,
     minWidth: 0,
   },
   authorName: {
-    fontSize: tokens.fontSizeBase300,
+    fontSize: tokens.fontSizeBase200,
     fontWeight: tokens.fontWeightSemibold,
   },
   messageRole: {
     fontSize: tokens.fontSizeBase100,
-    fontWeight: tokens.fontWeightSemibold,
     color: tokens.colorNeutralForeground3,
-    textTransform: 'uppercase',
-    letterSpacing: '0.04em',
   },
   messageBubble: {
-    borderRadius: tokens.borderRadiusMedium,
-    padding: `${tokens.spacingVerticalXS} 0`,
+    maxWidth: '76ch',
+    borderRadius: tokens.borderRadiusLarge,
+    padding: 0,
     whiteSpace: 'pre-wrap',
     wordBreak: 'break-word',
     lineHeight: tokens.lineHeightBase300,
@@ -475,21 +478,42 @@ const useStyles = makeStyles({
   },
   bubbleSystem: {
     backgroundColor: tokens.colorNeutralBackground2,
+    padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM}`,
   },
   bubbleUser: {
     backgroundColor: tokens.colorBrandBackground2,
+    padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM}`,
   },
   bubbleAgent: {
-    backgroundColor: tokens.colorNeutralBackground3,
+    backgroundColor: 'transparent',
+  },
+  activityEventRow: {
+    display: 'grid',
+    gridTemplateColumns: '1px minmax(0, 1fr) auto',
+    alignItems: 'start',
+    gap: tokens.spacingHorizontalS,
+    padding: `${tokens.spacingVerticalXXS} 0 ${tokens.spacingVerticalXXS} 32px`,
+    color: tokens.colorNeutralForeground3,
+  },
+  activityRail: {
+    width: '1px',
+    minHeight: '18px',
+    alignSelf: 'stretch',
+    borderRadius: tokens.borderRadiusCircular,
+    backgroundColor: tokens.colorNeutralStroke2,
+  },
+  activityEventText: {
+    fontSize: tokens.fontSizeBase200,
+    lineHeight: tokens.lineHeightBase200,
+    color: tokens.colorNeutralForeground2,
+    overflowWrap: 'anywhere',
   },
   toolsBox: {
     display: 'flex',
     flexDirection: 'column',
     gap: tokens.spacingVerticalXS,
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: tokens.borderRadiusMedium,
-    backgroundColor: tokens.colorNeutralBackground2,
-    padding: tokens.spacingVerticalS,
+    marginLeft: '32px',
+    padding: `${tokens.spacingVerticalXS} 0`,
   },
   toolsButton: {
     display: 'flex',
@@ -501,6 +525,25 @@ const useStyles = makeStyles({
     cursor: 'pointer',
     textAlign: 'left',
     color: tokens.colorNeutralForeground3,
+  },
+  activitySummaryButton: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    gap: tokens.spacingHorizontalXS,
+    marginLeft: '32px',
+    minHeight: '24px',
+    border: 'none',
+    borderRadius: tokens.borderRadiusMedium,
+    padding: `2px ${tokens.spacingHorizontalS}`,
+    backgroundColor: tokens.colorNeutralBackground2,
+    color: tokens.colorNeutralForeground3,
+    cursor: 'pointer',
+    fontSize: tokens.fontSizeBase200,
+    ':hover': {
+      backgroundColor: tokens.colorNeutralBackground2Hover,
+      color: tokens.colorNeutralForeground2,
+    },
   },
   toolsList: {
     display: 'flex',
@@ -536,17 +579,18 @@ const useStyles = makeStyles({
   fileRows: {
     display: 'flex',
     flexDirection: 'column',
-    gap: tokens.spacingVerticalXS,
+    gap: tokens.spacingVerticalXXS,
+    marginLeft: '32px',
   },
   fileRow: {
-    display: 'flex',
-    flexDirection: 'row',
+    display: 'grid',
+    gridTemplateColumns: '16px minmax(0, 1fr) auto auto',
     alignItems: 'center',
     gap: tokens.spacingHorizontalXS,
-    padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM}`,
-    borderRadius: tokens.borderRadiusMedium,
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
-    backgroundColor: tokens.colorNeutralBackground1,
+    minHeight: '24px',
+    padding: `${tokens.spacingVerticalXXS} 0`,
+    borderRadius: 0,
+    backgroundColor: 'transparent',
   },
   fileName: {
     minWidth: 0,
@@ -557,10 +601,15 @@ const useStyles = makeStyles({
   fileMeta: {
     fontSize: tokens.fontSizeBase100,
     color: tokens.colorNeutralForeground3,
+    whiteSpace: 'nowrap',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
   },
   fileCardInfo: {
-    display: 'flex',
-    flexDirection: 'column',
+    display: 'grid',
+    gridTemplateColumns: 'minmax(0, max-content) minmax(0, 1fr)',
+    alignItems: 'baseline',
+    gap: tokens.spacingHorizontalXS,
     minWidth: 0,
     flex: 1,
   },
@@ -576,12 +625,9 @@ const useStyles = makeStyles({
     fontWeight: tokens.fontWeightSemibold,
   },
   stickyComposer: {
-    position: 'sticky',
-    bottom: 0,
     display: 'flex',
     gap: tokens.spacingHorizontalS,
-    padding: tokens.spacingHorizontalL,
-    borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
+    padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalL} ${tokens.spacingVerticalM}`,
     backgroundColor: tokens.colorNeutralBackground1,
   },
   composerInput: {
@@ -589,6 +635,14 @@ const useStyles = makeStyles({
   },
   composerError: {
     padding: `0 ${tokens.spacingHorizontalL} ${tokens.spacingVerticalS}`,
+  },
+  composerStatus: {
+    padding: `0 ${tokens.spacingHorizontalL} ${tokens.spacingVerticalS}`,
+    fontSize: tokens.fontSizeBase200,
+    color: tokens.colorNeutralForeground3,
+  },
+  composerStatusSuccess: {
+    color: tokens.colorPaletteGreenForeground1,
   },
   loadingWrap: {
     display: 'flex',
@@ -612,18 +666,11 @@ const useStyles = makeStyles({
     gridTemplateColumns: 'minmax(0, 1fr)',
   },
   composerStack: {
-    position: 'sticky',
-    bottom: 0,
+    flexShrink: 0,
     display: 'flex',
     flexDirection: 'column',
     borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground1,
-  },
-  // In the docked run-console layout the global "Start task" FAB is fixed to the
-  // viewport's bottom-right corner and overlaps the composer's send control. Reserve
-  // bottom clearance so the "Message coordinator" input is never hidden behind it.
-  dockedComposerStack: {
-    paddingBottom: '84px',
   },
   composerContext: {
     padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalL} 0`,
@@ -663,7 +710,7 @@ export interface AgentSessionPanelProps {
   onOutcomePlanClarify?: () => void;
   /** Points the shared artifact browser at the coordinator's collective assembly (integration
    *  branch) when a coordinator-aggregate node is selected. Per-subtask runs use the standard
-   *  per-run endpoints (no adapter). Mirrors the coordAdapter passed to RunLayout. */
+   *  per-run endpoints (no adapter). */
   artifactAdapter?: ArtifactBrowserAdapter;
 }
 
@@ -695,7 +742,7 @@ interface ConversationTurn {
 // calls (shell start/stop, file view/edit, raw commands), and file-write rows are
 // technical; agent/coordinator messages, instructions, narrative activity lines, and
 // human-facing approvals are high-signal. Classified client-side from event shape only
-// (thin client) — nothing is deleted, only collapsed behind the "Show technical" toggle.
+// (thin client) — nothing is deleted, only collapsed behind the technical details toggle.
 function turnHasSignalContent(turn: ConversationTurn): boolean {
   if (turn.approvals.length > 0) return true;
   return turn.rows.some((row) => row.role !== 'system');
@@ -739,9 +786,16 @@ function formatDurationMs(ms: number): string {
   return `${hrs}h ${m}m`;
 }
 
-function formatStartedMeta(startedAt?: string | null): string {
-  if (!startedAt) return 'Started just now';
-  const elapsed = Math.max(0, Date.now() - new Date(startedAt).getTime());
+function formatStartedMeta(startedAt?: string | null, status?: string | null): string {
+  const statusKey = (status ?? '').toLowerCase();
+  if (!startedAt) {
+    if (statusKey === 'pending' || statusKey === 'queued' || statusKey === 'planned') return 'Not started yet';
+    if (statusKey === 'running' || statusKey === 'in_progress' || statusKey === 'dispatching') return 'Start time unavailable';
+    return 'Timing unavailable';
+  }
+  const startedMs = new Date(startedAt).getTime();
+  if (Number.isNaN(startedMs)) return 'Timing unavailable';
+  const elapsed = Math.max(0, Date.now() - startedMs);
   return `Started ${formatDurationMs(elapsed)} ago`;
 }
 
@@ -772,6 +826,72 @@ function normalizeWorkspacePath(value: string, runId?: string): string {
   return path.replace(/^\/+/, '');
 }
 
+function workspacePathKey(path: string): string {
+  return path.replace(/\\/g, '/').replace(/^\/+/, '').toLowerCase();
+}
+
+function workspaceFileCount(nodes: WorkspaceNode[]): number {
+  const paths = new Set<string>();
+  for (const node of nodes) {
+    if (!node.is_folder) paths.add(workspacePathKey(node.path));
+  }
+  return paths.size;
+}
+
+function collectReferencedWorkspaceFiles(
+  turns: ConversationTurn[],
+  runId: string,
+  changedFiles: WorkspaceFileEntry[],
+): WorkspaceNode[] {
+  const changedStatus = new Map<string, WorkspaceNode['status']>();
+  const byKey = new Map<string, WorkspaceNode>();
+  for (const file of changedFiles) {
+    const key = workspacePathKey(file.path);
+    changedStatus.set(key, file.status);
+    byKey.set(key, {
+      path: file.path,
+      is_folder: false,
+      status: file.status,
+    });
+  }
+
+  for (const turn of turns) {
+    for (const rawPath of turn.filePaths) {
+      const path = normalizeWorkspacePath(rawPath, runId);
+      if (!path) continue;
+      const key = workspacePathKey(path);
+      if (!byKey.has(key)) {
+        byKey.set(key, {
+          path,
+          is_folder: false,
+          status: changedStatus.get(key) ?? null,
+        });
+      }
+    }
+  }
+  return [...byKey.values()];
+}
+
+function mergeWorkspaceReferences(workspaceFiles: WorkspaceNode[], referencedFiles: WorkspaceNode[]): WorkspaceNode[] {
+  if (referencedFiles.length === 0) return workspaceFiles;
+  const refsByKey = new Map(referencedFiles.map((node) => [workspacePathKey(node.path), node]));
+  const seen = new Set(workspaceFiles.map((node) => workspacePathKey(node.path)));
+  const merged = workspaceFiles.map((node) => {
+    const ref = refsByKey.get(workspacePathKey(node.path));
+    if (!node.is_folder && node.status == null && ref?.status) {
+      return { ...node, status: ref.status };
+    }
+    return node;
+  });
+  for (const ref of referencedFiles) {
+    const key = workspacePathKey(ref.path);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push(ref);
+  }
+  return merged;
+}
+
 function normalizeCommand(command: string, runId?: string): string {
   let normalized = command.trim().replace(/\\/g, '/');
   normalized = normalizeWorkspacePath(normalized, runId);
@@ -795,6 +915,12 @@ interface FriendlyTool {
   kind: ToolOpKind;
   // Full, untruncated detail for the hover title (e.g. the raw command).
   detail?: string;
+}
+
+interface ParticipantIdentity {
+  displayName: string;
+  avatarName: string;
+  role?: string;
 }
 
 const stripQuotes = (value: string): string => value.replace(/^['"]|['"]$/g, '');
@@ -878,11 +1004,63 @@ function toolKindIcon(kind: ToolOpKind) {
   }
 }
 
-function authorForRole(role: ConversationRow['role']): { name: string; role: string; collapsedLabel?: string } {
-  if (role === 'system') return { name: 'System', role: 'Prompt', collapsedLabel: 'System prompt' };
-  if (role === 'user') return { name: 'Coordinator', role: 'Instruction', collapsedLabel: 'Coordinator instruction' };
-  if (role === 'activity') return { name: 'Coordinator', role: 'Activity' };
-  return { name: 'Agent', role: 'Worker response' };
+function cleanText(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function nonGenericName(value: string | undefined): string | undefined {
+  const name = cleanText(value);
+  if (!name) return undefined;
+  const normalized = name.toLowerCase();
+  if (normalized === 'agent' || normalized === 'ai assistant' || normalized === 'assistant') return undefined;
+  return name;
+}
+
+function formatNameRole(name: string, role: string | undefined): string {
+  if (!role) return name;
+  if (name.trim().toLowerCase() === role.trim().toLowerCase()) return name;
+  return `${name} (${role})`;
+}
+
+function participantIdentityForNode(item: RunSessionTree | null): ParticipantIdentity {
+  const role = cleanText(item?.agentRole);
+  const avatarName = nonGenericName(item?.agentName)
+    ?? nonGenericName(item?.label)
+    ?? 'Assistant';
+  return {
+    avatarName,
+    role,
+    displayName: formatNameRole(avatarName, role),
+  };
+}
+
+function authorForRole(role: ConversationRow['role'], participant: ParticipantIdentity): { displayName: string; avatarName: string; roleLabel: string; collapsedLabel?: string } {
+  if (role === 'system') return { displayName: 'System (Prompt)', avatarName: 'System', roleLabel: 'technical', collapsedLabel: 'System prompt' };
+  if (role === 'user') return { displayName: 'Coordinator (Instruction)', avatarName: 'Coordinator', roleLabel: 'context', collapsedLabel: 'Coordinator context' };
+  if (role === 'activity') return { displayName: 'Coordinator (Activity)', avatarName: 'Coordinator', roleLabel: 'event' };
+  return { displayName: participant.displayName, avatarName: participant.avatarName, roleLabel: 'response' };
+}
+
+const COORDINATOR_CONTEXT_PATTERNS = [
+  /workspace[-\s]?sync/i,
+  /\bTEAM_ROOT\b/i,
+  /\bWORKTREE_PATH\b/i,
+  /\bCURRENT_DATETIME\b/i,
+  /\bSTATE_BACKEND\b/i,
+  /\bRequested by:/i,
+  /\bYou are .*?(Coordinator|Frontend Engineer|Backend Engineer|Engineer)\b/i,
+];
+
+function isCoordinatorContextContent(content: string): boolean {
+  const hits = COORDINATOR_CONTEXT_PATTERNS.filter((pattern) => pattern.test(content)).length;
+  return hits >= 2 || (content.length > 900 && hits >= 1) || content.length > 1800;
+}
+
+function collapsedRowLabel(row: ConversationRow, fallback: string | undefined): string {
+  if (row.role === 'system') return fallback ?? 'System prompt';
+  if (row.role === 'user' && isCoordinatorContextContent(row.content)) return 'Coordinator context';
+  return fallback ?? 'Message details';
 }
 
 function MarkdownMessage({ content }: { content: string }) {
@@ -905,10 +1083,13 @@ function MarkdownMessage({ content }: { content: string }) {
 
 function statusLabel(status: string): string {
   switch (status) {
+    case 'drafting_outcome': return 'Drafting outcome plan';
+    case 'planning': return 'Planning';
     case 'dispatched': return 'Dispatching';
     case 'running':
     case 'in_progress': return 'Running';
-    case 'assemble_ready': return 'Awaiting assembly';
+    case 'assemble_ready': return 'Ready for assembly';
+    case 'awaiting_assembly': return 'Preparing assembly';
     case 'awaiting_confirmation': return 'Awaiting confirmation';
     case 'needs_clarification': return 'Needs clarification';
     case 'confirmed': return 'Confirmed';
@@ -936,9 +1117,12 @@ function statusKind(status: string): StatusKind {
     case 'merge_failed':
     case 'declined':
       return 'danger';
+    case 'awaiting_assembly':
+    case 'drafting_outcome':
+    case 'planning':
+      return 'running';
     case 'rai_flagged':
     case 'waiting':
-    case 'awaiting_assembly':
     case 'awaiting_confirmation':
     case 'needs_clarification':
       return 'awaiting';
@@ -1169,7 +1353,7 @@ function subtaskDescription(payload: Record<string, unknown>, subtasks: Map<stri
   const title = readString(payload, ['title', 'task', 'name']) ?? info?.title ?? (id ? `Subtask ${id}` : 'Subtask');
   const agent = readString(payload, ['assignedAgent', 'assigned_agent', 'agentName', 'agent_name', 'agent']) ?? info?.agent;
   const role = readString(payload, ['role', 'roleTitle', 'role_title', 'agentRole', 'agent_role']) ?? info?.role;
-  const actor = agent ? ` (${agent}${role ? ` · ${role}` : ''})` : '';
+  const actor = agent ? ` — ${formatNameRole(agent, role)}` : '';
   return `${title}${actor}`;
 }
 
@@ -1375,7 +1559,7 @@ function flattenTree(
 function badgeColor(status: string): 'danger' | 'success' | 'informative' | 'subtle' {
   if (status === 'failed' || status === 'merge_failed' || status === 'declined' || status === 'rai_flagged') return 'danger';
   if (status === 'completed' || status === 'merged') return 'success';
-  if (status === 'running' || status === 'dispatched' || status === 'dispatching' || status === 'in_progress') return 'informative';
+  if (status === 'drafting_outcome' || status === 'planning' || status === 'running' || status === 'dispatched' || status === 'dispatching' || status === 'in_progress') return 'informative';
   return 'subtle';
 }
 
@@ -1395,13 +1579,16 @@ export function AgentSessionPanel({
   artifactAdapter,
 }: AgentSessionPanelProps) {
   const styles = useStyles();
-  const navigate = useNavigate();
   const composerRef = useRef<HTMLInputElement>(null);
+  const messagesScrollRef = useRef<HTMLDivElement>(null);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
   const docked = variant === 'docked';
+  const defaultShowTechnical = docked;
   const [isVisible, setIsVisible] = useState(open);
   const [activeTab, setActiveTab] = useState<'messages' | 'changes' | 'files'>('messages');
-  // #122: low-signal technical events are collapsed by default; this reveals them.
-  const [showTechnical, setShowTechnical] = useState(false);
+  // Docked coordinator panels are operator consoles, so technical rows start visible there.
+  const [showTechnical, setShowTechnical] = useState(defaultShowTechnical);
+  const [activityDetailsExpanded, setActivityDetailsExpanded] = useState(false);
   const [seedEvents, setSeedEvents] = useState<RunStreamEvent[]>([]);
   const [runDetailLoading, setRunDetailLoading] = useState(false);
   const [runDetailError, setRunDetailError] = useState<string | null>(null);
@@ -1409,6 +1596,7 @@ export function AgentSessionPanel({
   const [followUp, setFollowUp] = useState('');
   const [followUpBusy, setFollowUpBusy] = useState(false);
   const [followUpError, setFollowUpError] = useState<string | null>(null);
+  const [followUpNotice, setFollowUpNotice] = useState<string | null>(null);
 
   const coordinatorNodeId = tree[0]?.nodeId ?? null;
   const flatTree = useMemo(
@@ -1436,12 +1624,12 @@ export function AgentSessionPanel({
   );
   const canBrowseSelectedRun = selectedRunId.trim().length > 0;
   const selectedRunUnavailableReason = selectedItem && !isCoordinatorAggregate && !selectedItem.childRunId
-    ? 'This planned task has not been dispatched yet. Changes, files, and the full run page become available after the coordinator starts the child run.'
+    ? 'This planned task has not been dispatched yet. Changes and files become available after the coordinator starts the child run.'
     : null;
 
   // Reuse the shared artifact browser hook so the Changes tab renders the dense changed-files list
   // and the Files tab renders the full workspace FOLDER TREE (getRunWorkspace / assembly workspace),
-  // not just the changed files. This is the same hook RunLayout and WorkspacePage drive.
+  // not just the changed files. This is the same hook WorkspacePage drives.
   const artifactState = useArtifactBrowser(
     open && canBrowseSelectedRun ? selectedRunId : '',
     runDetail?.status ?? '',
@@ -1473,6 +1661,16 @@ export function AgentSessionPanel({
     () => selectedItem?.isCoordinator || selectedItem?.nodeId === 'work-plan' ? buildCoordinatorTurns(events) : buildTurns(events),
     [events, selectedItem?.isCoordinator, selectedItem?.nodeId],
   );
+  const referencedWorkspaceFiles = useMemo(
+    () => collectReferencedWorkspaceFiles(turns, selectedRunId, files),
+    [turns, selectedRunId, files],
+  );
+  const displayWorkspaceFiles = useMemo(
+    () => mergeWorkspaceReferences(workspaceFiles, referencedWorkspaceFiles),
+    [workspaceFiles, referencedWorkspaceFiles],
+  );
+  const filesTabCount = useMemo(() => workspaceFileCount(displayWorkspaceFiles), [displayWorkspaceFiles]);
+  const selectedIdentity = useMemo(() => participantIdentityForNode(selectedItem), [selectedItem]);
 
   useEffect(() => {
     if (docked) {
@@ -1500,11 +1698,14 @@ export function AgentSessionPanel({
     setActiveTab('messages');
     setSeedEvents([]);
     setFollowUpError(null);
-  }, [selectedRunId]);
+    setFollowUpNotice(null);
+    setShowTechnical(defaultShowTechnical);
+    setActivityDetailsExpanded(false);
+  }, [selectedRunId, defaultShowTechnical]);
 
   // Keep the shared artifact hook's internal tab in sync with the panel tab so the workspace
   // FOLDER TREE is fetched when the user opens the Files tab. The hook's setActiveTab identity
-  // changes every render, so key the effect on the panel tab only (mirrors RunLayout).
+  // changes every render, so key the effect on the panel tab only.
   useEffect(() => {
     artifactState.setActiveTab(activeTab === 'files' ? 'files' : 'changes');
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1525,6 +1726,11 @@ export function AgentSessionPanel({
     onOutcomePlanClarify?.();
     window.setTimeout(() => composerRef.current?.focus(), 0);
   }, [onOutcomePlanClarify]);
+
+  const jumpToLatestMessage = useCallback(() => {
+    messagesEndRef.current?.scrollIntoView({ block: 'end', behavior: 'smooth' });
+    messagesScrollRef.current?.focus({ preventScroll: true });
+  }, []);
 
   useEffect(() => {
     if (!open || !canBrowseSelectedRun) {
@@ -1582,6 +1788,7 @@ export function AgentSessionPanel({
     if (!instruction || followUpBusy) return;
     setFollowUpBusy(true);
     setFollowUpError(null);
+    setFollowUpNotice(null);
     try {
       await apiClient.steerCoordinator(coordinatorRunId, {
         kind: 'send',
@@ -1591,6 +1798,7 @@ export function AgentSessionPanel({
           : {}),
       });
       setFollowUp('');
+      setFollowUpNotice('Message sent to coordinator.');
       onCoordinatorFollowUp?.();
     } catch (err: unknown) {
       setFollowUpError(formatApiErrorMessage(err, 'Could not send the coordinator message.'));
@@ -1598,12 +1806,6 @@ export function AgentSessionPanel({
       setFollowUpBusy(false);
     }
   }, [coordinatorRunId, followUp, followUpBusy, onCoordinatorFollowUp, selectedItem]);
-
-  const runLink = canBrowseSelectedRun
-    ? selectedItem?.isCoordinator
-      ? `/projects/${projectId}/orchestrations/${selectedRunId}`
-      : `/projects/${projectId}/runs/${selectedRunId}/workflow`
-    : '';
 
   if (!selectedItem || !isVisible) return null;
 
@@ -1619,6 +1821,9 @@ export function AgentSessionPanel({
     : selectedItem.isCoordinator
       ? 'Context: Whole run'
       : `Context: ${selectedItem.label}${selectedItem.agentName ? ` with ${selectedItem.agentName}` : ''}`;
+  const composerAvailabilityMessage = coordinatorActive
+    ? null
+    : 'Messaging is unavailable because this coordinator run is not active.';
 
   return (
     <>
@@ -1650,8 +1855,9 @@ export function AgentSessionPanel({
             <div className={styles.treeScroll}>
               {flatTree.map((item) => {
                 const selected = item.nodeId === selectedItem.nodeId;
+                const identity = participantIdentityForNode(item);
                 const secondary = item.agentName || item.agentRole
-                  ? `${item.agentName ?? item.label}${item.agentRole ? ` · ${item.agentRole}` : ''}`
+                  ? identity.displayName
                   : '';
                 const kind = statusKind(item.status);
                 const glyphClass = mergeClasses(
@@ -1723,29 +1929,18 @@ export function AgentSessionPanel({
                   </Badge>
                 </div>
                 <div className={styles.identityRow}>
-                  <AgentAvatar name={selectedItem.agentName ?? selectedItem.label} size={28} circle />
+                  <AgentAvatar name={selectedIdentity.avatarName} size={28} circle />
                   <div className={styles.identityText}>
                     <Text className={styles.agentName}>{selectedItem.label}</Text>
-                    <Text className={styles.agentRole}>
-                      {selectedItem.agentName ?? 'Coordinator'}
-                      {selectedItem.agentRole ? ` · ${selectedItem.agentRole}` : ''}
-                    </Text>
+                    <Text className={styles.agentRole}>{selectedIdentity.displayName}</Text>
                   </div>
                 </div>
                 <Text className={styles.metaText}>
-                  {formatStartedMeta(runDetail?.started_at ?? undefined)}
+                  {formatStartedMeta(runDetail?.started_at ?? undefined, runDetail?.status ?? selectedItem.status)}
                   {runDetailError ? ' · Metadata unavailable' : ''}
                 </Text>
               </div>
               <div className={styles.headerActions}>
-                <Button
-                  appearance="subtle"
-                  icon={<OpenRegular />}
-                  aria-label="Open full run page"
-                  title={canBrowseSelectedRun ? 'Open full run page' : selectedRunUnavailableReason ?? 'Run page unavailable'}
-                  disabled={!canBrowseSelectedRun}
-                  onClick={() => navigate(runLink)}
-                />
                 <Button appearance="subtle" icon={<DismissRegular />} aria-label="Close panel" onClick={onClose} />
               </div>
             </div>
@@ -1763,13 +1958,19 @@ export function AgentSessionPanel({
             >
               <Tab value="messages" data-testid="session-tab-messages" onClick={() => setActiveTab('messages')}>Messages</Tab>
               <Tab value="changes" data-testid="session-tab-changes" onClick={() => setActiveTab('changes')}>Changes ({files.length})</Tab>
-              <Tab value="files" data-testid="session-tab-files" onClick={() => setActiveTab('files')}>Files ({files.length})</Tab>
+              <Tab value="files" data-testid="session-tab-files" onClick={() => setActiveTab('files')}>Files ({filesTabCount})</Tab>
             </TabList>
 
             <div className={styles.content}>
               {activeTab === 'messages' && (
                 <>
-                  <div className={styles.tabBody}>
+                  <div
+                    className={styles.tabBody}
+                    ref={messagesScrollRef}
+                    tabIndex={0}
+                    data-testid="session-message-scroll"
+                    aria-label="Session messages"
+                  >
                     {selectedRunUnavailableReason && (
                       <MessageBar intent="info">
                         <MessageBarBody>{selectedRunUnavailableReason}</MessageBarBody>
@@ -1785,9 +1986,19 @@ export function AgentSessionPanel({
                         <Switch
                           checked={showTechnical}
                           onChange={(_, data) => setShowTechnical(data.checked)}
-                          label="Show technical details"
+                          label={showTechnical ? 'Technical details shown' : 'Technical details hidden'}
                           data-testid="toggle-technical-details"
                         />
+                        <Button
+                          appearance="subtle"
+                          size="small"
+                          disabled={!showTechnical}
+                          onClick={() => setActivityDetailsExpanded((value) => !value)}
+                          aria-expanded={activityDetailsExpanded}
+                          data-testid="toggle-activity-details"
+                        >
+                          {activityDetailsExpanded ? 'Collapse activity details' : 'Expand activity details'}
+                        </Button>
                       </div>
                     )}
                     {runDetailLoading && (
@@ -1818,46 +2029,81 @@ export function AgentSessionPanel({
                           runId={selectedRunId}
                           onPreviewFile={openPreview}
                           showTechnical={showTechnical}
+                          activityDetailsExpanded={activityDetailsExpanded}
+                          onExpandActivityDetails={() => setActivityDetailsExpanded(true)}
+                          participant={selectedIdentity}
                         />
                       ))}
+                    <div ref={messagesEndRef} data-testid="session-message-end" />
+                    {selectedItem.nodeId !== 'outcome-plan' && turns.length > 0 && (
+                      <div className={styles.jumpToLatestBar}>
+                        <Button
+                          appearance="secondary"
+                          size="small"
+                          icon={<ChevronDownRegular />}
+                          onClick={jumpToLatestMessage}
+                          data-testid="jump-to-latest-messages"
+                        >
+                          Jump to latest
+                        </Button>
+                      </div>
+                    )}
                   </div>
                   <>
-                      <div className={mergeClasses(styles.composerStack, docked && styles.dockedComposerStack)}>
-                        {(pendingApprovalCount > 0 || pendingQuestionCount > 0) && (
-                          <MessageBar intent="warning" className={styles.stickyNeedInput}>
-                            <MessageBarBody>
-                              Needs input: {pendingApprovalCount} approval{pendingApprovalCount === 1 ? '' : 's'}
-                              {pendingQuestionCount > 0 ? `, ${pendingQuestionCount} question${pendingQuestionCount === 1 ? '' : 's'}` : ''}.
-                            </MessageBarBody>
-                          </MessageBar>
-                        )}
-                        <Text className={styles.composerContext}>{composerContext}</Text>
+                    <div className={styles.composerStack}>
+                      {(pendingApprovalCount > 0 || pendingQuestionCount > 0) && (
+                        <MessageBar intent="warning" className={styles.stickyNeedInput}>
+                          <MessageBarBody>
+                            Needs input: {pendingApprovalCount} approval{pendingApprovalCount === 1 ? '' : 's'}
+                            {pendingQuestionCount > 0 ? `, ${pendingQuestionCount} question${pendingQuestionCount === 1 ? '' : 's'}` : ''}.
+                          </MessageBarBody>
+                        </MessageBar>
+                      )}
+                      {followUpError && (
+                        <MessageBar intent="error" className={styles.stickyNeedInput}>
+                          <MessageBarBody>{followUpError}</MessageBarBody>
+                        </MessageBar>
+                      )}
+                      <Text className={styles.composerContext}>{composerContext}</Text>
                       <div className={styles.stickyComposer}>
                         <Input
                           ref={composerRef}
                           className={styles.composerInput}
                           placeholder="Message coordinator..."
                           value={followUp}
-                          onChange={(_, data) => setFollowUp(data.value)}
+                          aria-describedby="coordinator-message-status"
+                          onChange={(_, data) => {
+                            setFollowUp(data.value);
+                            setFollowUpError(null);
+                            setFollowUpNotice(null);
+                          }}
                           disabled={!coordinatorActive || followUpBusy}
                         />
                         <Button
                           appearance="primary"
                           aria-label="Send message"
                           icon={followUpBusy ? <Spinner size="tiny" /> : <SendRegular />}
-                          disabled={!coordinatorActive || !followUp.trim()}
+                          disabled={!coordinatorActive || followUpBusy || !followUp.trim()}
                           onClick={() => { void handleSendFollowUp(); }}
                         />
                       </div>
+                      <div id="coordinator-message-status" aria-live="polite">
+                        {composerAvailabilityMessage && (
+                          <Text className={styles.composerStatus}>{composerAvailabilityMessage}</Text>
+                        )}
+                        {!composerAvailabilityMessage && !followUpError && !followUpNotice && (
+                          <Text className={styles.composerStatus}>
+                            Sends through the coordinator steering API; replies appear when the run stream updates.
+                          </Text>
+                        )}
+                        {followUpNotice && (
+                          <Text className={mergeClasses(styles.composerStatus, styles.composerStatusSuccess)}>
+                            {followUpNotice}
+                          </Text>
+                        )}
                       </div>
-                      {followUpError && (
-                        <div className={styles.composerError}>
-                          <MessageBar intent="error">
-                            <MessageBarBody>{followUpError}</MessageBarBody>
-                          </MessageBar>
-                        </div>
-                      )}
-                    </>
+                    </div>
+                  </>
                 </>
               )}
 
@@ -1896,7 +2142,7 @@ export function AgentSessionPanel({
                     </MessageBar>
                   ) : (
                     <FilesTabPanel
-                      workspaceFiles={workspaceFiles}
+                      workspaceFiles={displayWorkspaceFiles}
                       workspaceLoading={workspaceLoading}
                       workspaceError={workspaceError}
                       selectedPath={selectedPath}
@@ -1929,19 +2175,34 @@ function ConversationTurnBlock({
   runId,
   onPreviewFile,
   showTechnical = true,
+  activityDetailsExpanded = false,
+  onExpandActivityDetails,
+  participant,
 }: {
   turn: ConversationTurn;
   runId: string;
   onPreviewFile: (path: string) => void;
   showTechnical?: boolean;
+  activityDetailsExpanded?: boolean;
+  onExpandActivityDetails?: () => void;
+  participant: ParticipantIdentity;
 }) {
   const styles = useStyles();
   const [toolsOpen, setToolsOpen] = useState(false);
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
   const completedTools = turn.toolCalls.filter((tool) => tool.settled).length;
+  const activityCount = turn.rows.filter((row) => row.role === 'activity').length;
+  const collapsedDetailCount = activityCount + turn.toolCalls.length + turn.filePaths.length;
   // #122: with technical details hidden, drop system-prompt scaffolding rows so the
   // narrative reads cleanly; the rows are revealed (not deleted) when the toggle is on.
-  const visibleRows = showTechnical ? turn.rows : turn.rows.filter((row) => row.role !== 'system');
+  const visibleRows = showTechnical
+    ? (activityDetailsExpanded ? turn.rows : turn.rows.filter((row) => row.role !== 'activity'))
+    : turn.rows.filter((row) => row.role !== 'system');
+  const collapsedSummary = [
+    activityCount ? `${activityCount} update${activityCount === 1 ? '' : 's'}` : null,
+    turn.toolCalls.length ? `${turn.toolCalls.length} tool call${turn.toolCalls.length === 1 ? '' : 's'}` : null,
+    turn.filePaths.length ? `${turn.filePaths.length} artifact${turn.filePaths.length === 1 ? '' : 's'}` : null,
+  ].filter(Boolean).join(' · ');
   const toggleRow = (key: string) => {
     setExpandedRows((prev) => {
       const next = new Set(prev);
@@ -1954,17 +2215,27 @@ function ConversationTurnBlock({
   return (
     <div className={styles.conversationTurn}>
       {visibleRows.map((row) => {
-        const author = authorForRole(row.role);
-        const collapsible = row.role === 'system' || row.role === 'user';
+        const author = authorForRole(row.role, participant);
+        if (row.role === 'activity') {
+          return (
+            <div key={row.key} className={styles.activityEventRow} data-testid="session-activity-row">
+              <span className={styles.activityRail} data-testid="session-activity-rail" aria-hidden="true" />
+              <Text className={styles.activityEventText}>{row.content}</Text>
+              <Text className={styles.fileMeta}>{formatTimestamp(row.timestamp)}</Text>
+            </div>
+          );
+        }
+        const collapsible = row.role === 'system' || (row.role === 'user' && isCoordinatorContextContent(row.content));
         const expanded = !collapsible || expandedRows.has(row.key);
+        const disclosureLabel = collapsedRowLabel(row, author.collapsedLabel);
         return (
-          <div key={row.key} className={styles.messageCard}>
-            <AgentAvatar name={author.name} size={28} circle />
+          <div key={row.key} className={styles.messageCard} data-testid="session-message-row">
+            <AgentAvatar name={author.avatarName} size={24} circle />
             <div className={styles.messageRow}>
               <div className={styles.messageMeta}>
                 <div className={styles.authorBlock}>
-                  <Text className={styles.authorName}>{author.name}</Text>
-                  <Text className={styles.messageRole}>{author.role}</Text>
+                  <Text className={styles.authorName}>{author.displayName}</Text>
+                  <Text className={styles.messageRole}>{author.roleLabel}</Text>
                 </div>
                 <Text className={styles.fileMeta}>{formatTimestamp(row.timestamp)}</Text>
               </div>
@@ -1972,7 +2243,7 @@ function ConversationTurnBlock({
                 <>
                   <button className={styles.disclosure} onClick={() => toggleRow(row.key)} aria-expanded={expanded}>
                     {expanded ? <ChevronDownRegular /> : <ChevronRightRegular />}
-                    <Text>{author.collapsedLabel}</Text>
+                    <Text>{disclosureLabel}</Text>
                   </button>
                   {expanded && (
                     <div className={mergeClasses(styles.messageBubble, styles.markdownBody, row.role === 'system' ? styles.bubbleSystem : styles.bubbleUser)}>
@@ -1990,7 +2261,19 @@ function ConversationTurnBlock({
         );
       })}
 
-      {showTechnical && turn.toolCalls.length > 0 && (
+      {showTechnical && !activityDetailsExpanded && collapsedDetailCount > 0 && (
+        <button
+          type="button"
+          className={styles.activitySummaryButton}
+          onClick={onExpandActivityDetails}
+          data-testid="activity-details-summary"
+        >
+          <ChevronRightRegular aria-hidden="true" />
+          <span>Activity collapsed · {collapsedSummary}</span>
+        </button>
+      )}
+
+      {showTechnical && activityDetailsExpanded && turn.toolCalls.length > 0 && (
         <div className={styles.toolsBox}>
           <button className={styles.toolsButton} onClick={() => setToolsOpen((value) => !value)} aria-expanded={toolsOpen}>
             {toolsOpen ? <ChevronDownRegular /> : <ChevronRightRegular />}
@@ -2023,23 +2306,24 @@ function ConversationTurnBlock({
         />
       ))}
 
-      {showTechnical && turn.filePaths.length > 0 && (
+      {showTechnical && activityDetailsExpanded && turn.filePaths.length > 0 && (
         <div className={styles.fileRows}>
           {turn.filePaths.map((path) => {
             const relPath = normalizeWorkspacePath(path, runId);
             return (
-            <div key={path} className={styles.fileRow}>
-              <DocumentRegular />
-              <div className={styles.fileCardInfo}>
-                <Text className={styles.fileName}>{fileName(relPath)}</Text>
-                <Text className={styles.fileMeta}>{relPath}</Text>
+              <div key={path} className={styles.fileRow} data-testid="session-file-row">
+                <DocumentRegular />
+                <div className={styles.fileCardInfo}>
+                  <Text className={styles.fileName}>{fileName(relPath)}</Text>
+                  <Text className={styles.fileMeta}>{relPath}</Text>
+                </div>
+                <Text className={styles.fileMeta}>Workspace file</Text>
+                <Button appearance="subtle" size="small" icon={<EyeRegular />} onClick={() => onPreviewFile(relPath)}>
+                  Preview
+                </Button>
               </div>
-              <Text className={styles.fileMeta}>Workspace file</Text>
-              <Button appearance="subtle" size="small" icon={<EyeRegular />} onClick={() => onPreviewFile(relPath)}>
-                Preview
-              </Button>
-            </div>
-          );})}
+            );
+          })}
         </div>
       )}
     </div>

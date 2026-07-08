@@ -25,21 +25,16 @@ import {
 import { FlowRegular } from '@fluentui/react-icons';
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
-import type { Project, WorkflowSummaryDto } from '../api/types';
+import type { Project, StartOrchestrationMode, WorkflowSummaryDto } from '../api/types';
 
-// Global floating action button to start an orchestration from any page, with a
-// project selector so the user can choose the target project regardless of the
-// current route context. Mirrors StartOrchestrationDialog's goal field + submit
-// semantics; adds the project picker (ProjectSwitcher's listProjects pattern).
+// Inline top-bar action to start an orchestration, with a project selector so the
+// user can choose the target project regardless of the current route context.
+// Mirrors StartOrchestrationDialog's goal field + submit semantics; adds the
+// project picker (ProjectSwitcher's listProjects pattern).
 
 const useStyles = makeStyles({
-  fab: {
-    position: 'fixed',
-    bottom: tokens.spacingVerticalXXL,
-    right: tokens.spacingHorizontalXXL,
-    zIndex: 100,
-    borderRadius: tokens.borderRadiusCircular,
-    boxShadow: tokens.shadow16,
+  startButton: {
+    flexShrink: 0,
   },
   fields: {
     display: 'flex',
@@ -61,7 +56,7 @@ export function StartOrchestrationFab({ currentProjectId }: StartOrchestrationFa
   const [loadError, setLoadError] = useState(false);
   const [selectedProjectId, setSelectedProjectId] = useState<string | undefined>(currentProjectId);
   const [goal, setGoal] = useState('');
-  const [saving, setSaving] = useState(false);
+  const [savingMode, setSavingMode] = useState<StartOrchestrationMode | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [workflowOverride, setWorkflowOverride] = useState<string | null>(null);
   const [selectableWorkflows, setSelectableWorkflows] = useState<WorkflowSummaryDto[]>([]);
@@ -116,7 +111,7 @@ export function StartOrchestrationFab({ currentProjectId }: StartOrchestrationFa
   const reset = () => {
     setGoal('');
     setError(null);
-    setSaving(false);
+    setSavingMode(null);
     setSelectedProjectId(currentProjectId);
     setWorkflowOverride(null);
     setSelectableWorkflows([]);
@@ -124,14 +119,14 @@ export function StartOrchestrationFab({ currentProjectId }: StartOrchestrationFa
 
   const selectedProject = projects.find((p) => p.project_id === selectedProjectId) ?? null;
 
-  const handleSubmit = async () => {
+  const handleSubmit = async (mode: StartOrchestrationMode) => {
     if (!selectedProjectId || !goal.trim()) return;
-    setSaving(true);
+    setSavingMode(mode);
     setError(null);
     try {
-      const result = workflowOverride
-        ? await apiClient.startOrchestration(selectedProjectId, goal.trim(), workflowOverride)
-        : await apiClient.startOrchestration(selectedProjectId, goal.trim());
+      const result = mode === 'direct'
+        ? await apiClient.startOrchestration(selectedProjectId, goal.trim(), workflowOverride, 'direct')
+        : await apiClient.startOrchestration(selectedProjectId, goal.trim(), workflowOverride);
       setOpen(false);
       reset();
       navigate(`/projects/${selectedProjectId}/orchestrations/${result.runId}`);
@@ -144,11 +139,12 @@ export function StartOrchestrationFab({ currentProjectId }: StartOrchestrationFa
             : String(err),
       );
     } finally {
-      setSaving(false);
+      setSavingMode(null);
     }
   };
 
   const noProjects = projects.length === 0 && !loadError;
+  const saving = savingMode !== null;
 
   return (
     <Dialog
@@ -160,11 +156,12 @@ export function StartOrchestrationFab({ currentProjectId }: StartOrchestrationFa
     >
       <Tooltip content="Start task" relationship="label" positioning="before">
         <Button
-          className={styles.fab}
+          className={styles.startButton}
           appearance="primary"
-          size="large"
+          size="small"
           icon={<FlowRegular />}
           aria-label="Start task"
+          data-testid="start-task-topbar-action"
           onClick={() => setOpen(true)}
         >
           Start task
@@ -176,8 +173,10 @@ export function StartOrchestrationFab({ currentProjectId }: StartOrchestrationFa
           <DialogContent>
             <div className={styles.fields}>
               <Text>
-                Choose a project and describe a goal in plain language. The coordinator drafts an
-                Outcome plan for your review and confirmation before any work is dispatched.
+                Choose a project and describe a goal in plain language. Direct starts faster from
+                your prompt. Define Outcome drafts structured acceptance criteria and expected
+                outputs before dispatch. Later review, tool approval, assembly, and merge gates
+                still apply.
               </Text>
               {loadError && (
                 <MessageBar intent="error">
@@ -256,11 +255,18 @@ export function StartOrchestrationFab({ currentProjectId }: StartOrchestrationFa
               Cancel
             </Button>
             <Button
+              appearance="secondary"
+              disabled={!selectedProjectId || !goal.trim() || saving}
+              onClick={() => void handleSubmit('define_outcome')}
+            >
+              {savingMode === 'define_outcome' ? 'Defining' : 'Define Outcome'}
+            </Button>
+            <Button
               appearance="primary"
               disabled={!selectedProjectId || !goal.trim() || saving}
-              onClick={() => void handleSubmit()}
+              onClick={() => void handleSubmit('direct')}
             >
-              {saving ? 'Starting' : 'Start'}
+              {savingMode === 'direct' ? 'Starting' : 'Direct'}
             </Button>
             {saving && <Spinner size="extra-tiny" aria-hidden="true" />}
           </DialogActions>

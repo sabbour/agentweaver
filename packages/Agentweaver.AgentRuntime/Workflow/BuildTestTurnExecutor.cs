@@ -178,27 +178,84 @@ public sealed class BuildTestTurnExecutor : Executor<AgentTurnOutput, WorkflowRe
 
         foreach (var rawLine in response.Split('\n'))
         {
-            var line = StripLeadingMarkers(rawLine);
-            if (StartsWithVerdictToken(line, "APPROVED") || StartsWithVerdictToken(line, "PASS"))
+            if (!TryParseVerdictLine(rawLine, out var verdict))
+                continue;
+
+            if (verdict == BuildTestVerdict.Approved)
             {
                 decision = new WorkflowReviewDecision(true, Feedback: ExtractFeedback(response));
                 return true;
             }
-            if (StartsWithVerdictToken(line, "REQUEST_CHANGES") ||
-                StartsWithVerdictToken(line, "REQUEST-CHANGES") ||
-                StartsWithVerdictToken(line, "REVISE") ||
-                StartsWithVerdictToken(line, "FAIL"))
+
+            if (verdict == BuildTestVerdict.RequestChanges)
             {
                 decision = new WorkflowReviewDecision(false, RequestChanges: true, Feedback: ExtractFeedback(response));
                 return true;
             }
-            if (StartsWithVerdictToken(line, "DECLINED"))
+
+            if (verdict == BuildTestVerdict.Declined)
             {
                 decision = new WorkflowReviewDecision(false, RequestChanges: false, Feedback: ExtractFeedback(response));
                 return true;
             }
         }
 
+        return false;
+    }
+
+    private enum BuildTestVerdict
+    {
+        Approved,
+        RequestChanges,
+        Declined,
+    }
+
+    private static bool TryParseVerdictLine(string rawLine, out BuildTestVerdict verdict)
+    {
+        var line = StripLeadingMarkers(rawLine);
+        if (StartsWithVerdictToken(line, "APPROVED") || StartsWithVerdictToken(line, "PASS"))
+        {
+            verdict = BuildTestVerdict.Approved;
+            return true;
+        }
+
+        if (StartsWithVerdictToken(line, "REQUEST_CHANGES") ||
+            StartsWithVerdictToken(line, "REQUEST-CHANGES") ||
+            StartsWithVerdictToken(line, "REVISE") ||
+            StartsWithVerdictToken(line, "FAIL"))
+        {
+            verdict = BuildTestVerdict.RequestChanges;
+            return true;
+        }
+
+        if (StartsWithVerdictToken(line, "DECLINED"))
+        {
+            verdict = BuildTestVerdict.Declined;
+            return true;
+        }
+
+        if (ContainsCompactVerdictToken(line, "REQUEST_CHANGES") ||
+            ContainsCompactVerdictToken(line, "REQUEST-CHANGES") ||
+            ContainsCompactVerdictToken(line, "REVISE") ||
+            ContainsCompactVerdictToken(line, "FAIL"))
+        {
+            verdict = BuildTestVerdict.RequestChanges;
+            return true;
+        }
+
+        if (ContainsCompactVerdictToken(line, "DECLINED"))
+        {
+            verdict = BuildTestVerdict.Declined;
+            return true;
+        }
+
+        if (ContainsCompactVerdictToken(line, "APPROVED") || ContainsCompactVerdictToken(line, "PASS"))
+        {
+            verdict = BuildTestVerdict.Approved;
+            return true;
+        }
+
+        verdict = BuildTestVerdict.RequestChanges;
         return false;
     }
 
@@ -218,12 +275,80 @@ public sealed class BuildTestTurnExecutor : Executor<AgentTurnOutput, WorkflowRe
 
     private static bool StartsWithVerdictToken(string line, string token)
     {
-        if (!line.StartsWith(token, StringComparison.OrdinalIgnoreCase))
+        if (!StartsWithTokenOrCurlEcho(line, token))
             return false;
-        if (line.Length == token.Length)
+
+        var tokenIndex = line.StartsWith(token, StringComparison.OrdinalIgnoreCase)
+            ? 0
+            : line.IndexOf(token, StringComparison.OrdinalIgnoreCase);
+        if (tokenIndex < 0)
+            return false;
+
+        var nextIndex = tokenIndex + token.Length;
+        if (line.Length == nextIndex)
             return true;
-        var next = line[token.Length];
+
+        var next = line[nextIndex];
         return !(char.IsLetterOrDigit(next) || next is '\'' or '_');
+    }
+
+    private static bool StartsWithTokenOrCurlEcho(string line, string token) =>
+        line.StartsWith(token, StringComparison.OrdinalIgnoreCase)
+        || line.StartsWith("curl" + token, StringComparison.OrdinalIgnoreCase);
+
+    private static bool ContainsCompactVerdictToken(string line, string token)
+    {
+        var idx = line.IndexOf(token, StringComparison.Ordinal);
+        while (idx >= 0)
+        {
+            if (HasTokenEnd(line, idx + token.Length)
+                && HasSafeTokenStart(line, idx)
+                && !IsNegated(line, idx))
+                return true;
+
+            idx = line.IndexOf(token, idx + token.Length, StringComparison.Ordinal);
+        }
+
+        return false;
+    }
+
+    private static bool HasTokenEnd(string line, int end)
+    {
+        if (end >= line.Length)
+            return true;
+
+        var next = line[end];
+        return !(char.IsLetterOrDigit(next) || next is '\'' or '_');
+    }
+
+    private static bool HasSafeTokenStart(string line, int idx)
+    {
+        if (idx == 0)
+            return true;
+
+        var previous = line[idx - 1];
+        if (!(char.IsLetterOrDigit(previous) || previous is '\'' or '_'))
+            return true;
+
+        // Recovery path for malformed command-output prefixes such as "curlAPPROVED": allow only a
+        // small known command prefix immediately attached to an uppercase verdict token.
+        var prefix = line[..idx].Trim();
+        return prefix is "curl" or "curl.exe" or "wget" or "http" or "httpie" or "iwr" or "irm";
+    }
+
+    private static bool IsNegated(string line, int tokenStart)
+    {
+        var before = line[..tokenStart].TrimEnd();
+        if (before.Length == 0)
+            return false;
+
+        var end = before.Length - 1;
+        var start = end;
+        while (start >= 0 && (char.IsLetter(before[start]) || before[start] is '\'' or '’'))
+            start--;
+
+        var word = before[(start + 1)..].Trim('\'', '’').ToUpperInvariant();
+        return word is "NO" or "NOT" or "NEVER" or "WITHOUT" or "CANNOT" or "CAN'T" or "WON'T" or "ISN'T" or "WASN'T";
     }
 
     private static string ExtractFeedback(string? response)
@@ -232,14 +357,7 @@ public sealed class BuildTestTurnExecutor : Executor<AgentTurnOutput, WorkflowRe
         var lines = response.Split('\n', StringSplitOptions.RemoveEmptyEntries)
             .SkipWhile(l =>
             {
-                var s = StripLeadingMarkers(l);
-                return StartsWithVerdictToken(s, "APPROVED")
-                    || StartsWithVerdictToken(s, "PASS")
-                    || StartsWithVerdictToken(s, "REQUEST_CHANGES")
-                    || StartsWithVerdictToken(s, "REQUEST-CHANGES")
-                    || StartsWithVerdictToken(s, "REVISE")
-                    || StartsWithVerdictToken(s, "FAIL")
-                    || StartsWithVerdictToken(s, "DECLINED");
+                return TryParseVerdictLine(l, out _);
             })
             .ToArray();
         return lines.Length > 0 ? string.Join('\n', lines).Trim() : response.Trim();

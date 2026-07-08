@@ -9,7 +9,7 @@ Scope note: this is an orientation document for using Agentweaver. It describes 
 Agentweaver exposes one product through two front doors:
 
 - **The web UI** is for humans. It is visual, navigable, and real-time. A user signs in, chooses a project, watches boards and timelines update, opens files, reviews output, steers coordinators, and changes project settings.
-- **The browser console** is a web UI mode for keyboard-first operation. It opens at `/console`, accepts prose for the real coordinator, and exposes slash commands for common MCP-backed controls.
+- **The browser console** is a web UI mode for keyboard-first operation. It opens from the top-bar **Console** slide-in, persists across route changes, accepts prose for the real coordinator, and exposes slash commands for common MCP-backed controls.
 - **The MCP server** is for MCP clients such as Claude, Copilot, or other AI assistants. A client connects to Agentweaver, authenticates, and invokes tools like `project_create`, `run_submit`, `run_watch`, `coordinator_start`, `team_cast`, or `memory_search`.
 
 They are two front-ends over the same backend and data model. Projects, runs, coordinator orchestration, team rosters, memory, workflows, backlog items, sandbox policy, diagnostics, and workspace files are authoritative on the backend. The web UI renders those facts as pages, cards, graphs, timelines, and forms. The MCP server exposes the same facts and mutations as tools. Most actions a person performs in the web UI have a corresponding MCP tool an assistant can call.
@@ -31,7 +31,7 @@ The web UI and MCP server differ in interaction style, not in product intent:
 | Surface | Best user | Interaction style | What it is best at |
 |---|---|---|---|
 | Web UI | Human operators, reviewers, project owners | Click, inspect, compare, approve, steer | Seeing state, understanding context, making judgment calls, watching live work |
-| Browser console | Keyboard-first operators | Prose plus slash commands | Starting, monitoring, and steering coordinator runs without leaving a terminal-style browser page |
+| Browser console | Keyboard-first operators | Prose plus slash commands | Starting, monitoring, and steering coordinator runs without leaving a terminal-style app-level panel |
 | MCP server | AI assistants, automation agents, scripted clients | Connect, authenticate, call tools | Creating and updating work programmatically, chaining operations, asking an assistant to operate Agentweaver for you |
 
 ## Shared experience model
@@ -66,7 +66,7 @@ The page refreshes every 10 seconds and also exposes **Refresh** with a countdow
 > *Shows:* the **Overview** page titled "Overview" with the subtitle "Fleet activity at a glance.", the **Refresh** button, and the **Live sessions**, **Active workflow runs**, **Active projects**, and **Recent activity** sections (tables carry `aria-label="Live sessions"` and `aria-label="Active workflow runs"`).
 > *Path:* Sign in → click **Overview** in the left rail (or navigate to `/overview`).
 
-The web UI is a signed-in, project-aware control room. It uses a persistent app shell so navigation, project switching, API health, GitHub identity, and the start-orchestration action remain available even when the user opens a deep run page.
+The web UI is a signed-in, project-aware control room. It uses a persistent app shell so navigation, project switching, API health, GitHub identity, and the start-orchestration action remain available across project pages and orchestration details.
 
 ### The app shell
 
@@ -80,9 +80,9 @@ The shell has three persistent areas:
 
 - **Left navigation rail** — global destinations always appear at the top; project-scoped sections appear when Agentweaver has a project context. The rail can collapse to icon-only mode.
 - **Top bar** — contains the project switcher, API reachability status, and GitHub sign-in/sign-out state.
-- **Main content area** — renders the current page: Overview, Projects, Dashboard, Board, Flow, Orchestrations, Workspace, Agents, Memories, Workflows, Settings, Diagnostics, Heartbeat, or a run detail page.
+- **Main content area** — renders the current page: Overview, Projects, Dashboard, Board, Flow, Orchestrations, Workspace, Agents, Memories, Workflows, Settings, Diagnostics, Heartbeat, or an orchestration detail page.
 
-The project switcher lists existing projects, groups recent projects, and preserves the current page category when switching projects where possible. For example, switching projects from Settings lands on the target project's Settings page; switching from a deep run page lands on the target project's Board.
+The project switcher lists existing projects, groups recent projects, and preserves the current page category when switching projects where possible. For example, switching projects from Settings lands on the target project's Settings page; switching from an orchestration detail lands on the target project's Orchestrations page.
 
 Global pages do not require a project id. When a user leaves a project for a global page, the shell remembers the last active project so project-scoped navigation still has useful targets.
 
@@ -130,18 +130,16 @@ Agentweaver's web UI is organized into global destinations plus four project-sco
 | **Heartbeat** | `/projects/:projectId/heartbeat` | Monitor background automation status, coordinator heartbeat, checkpoint GC, recent ticks, errors, and service cadence. |
 | **Observability > Traces** | `/projects/:projectId/observability/traces` | Preview hierarchical transaction traces for recent coordinator runs. |
 
-### Deep run destinations
+### Deep project destinations
 
-Run pages are project-scoped but intentionally not separate left-nav items. They keep the relevant parent section active:
+Standalone workflow/execution run pages are no longer part of the web UI. Run details are inspected inside the coordinator orchestration page's embedded graph, session panel, artifact browser, and approval/question affordances.
 
 | Destination | Route shape | What you do here |
 |---|---|---|
-| **Workflow run** | `/projects/:projectId/runs/:runId/workflow` | Watch a single run move through Agent, RAI, Human Review, Merge, and Scribe; inspect timeline events, files, approvals, sandbox previews, and run output. |
-| **Execution** | `/projects/:projectId/runs/:runId/execution/:executionId` | Open an execution-level watcher for a specific child execution. |
 | **Coordinator run** | `/projects/:projectId/orchestrations/:runId` | Watch a coordinator topology, confirm or revise the outcome spec, inspect work plan and child runs, steer agents, view assembly status, and review collective output. |
 | **Casting wizard** | `/projects/:projectId/team/cast` | Propose and confirm a project team using templates, goals, constraints, team size, and generated member charters. |
 
-### Common web journey: project → board → run → review
+### Common web journey: project → board → orchestration → review
 
 Most human work starts with a project and ends with review:
 
@@ -150,13 +148,11 @@ flowchart TD
     Projects[Projects gallery] --> Project[Project Dashboard]
     Project --> Board[Board]
     Board --> Start{Start work}
-    Start -->|single run| Run[Workflow run]
     Start -->|multi-agent goal| Coord[Coordinator run]
     Coord --> Spec[Confirm or revise outcome spec]
     Spec --> Plan[Watch work plan and child runs]
     Plan --> Assembly[Review assembly state]
-    Run --> Watch[Timeline, graph, files, approvals]
-    Coord --> Watch
+    Coord --> Watch[Embedded timeline, graph, files, approvals]
     Watch --> Review{Review needed?}
     Review -->|approve| Merge[Merge / complete]
     Review -->|reject or request changes| Revise[Revise, retry, steer, or decline]
@@ -167,8 +163,8 @@ A typical path looks like this:
 
 1. The user opens **Projects**, creates or selects a project, and lands in the project workspace.
 2. The user opens **Board** to see backlog and run buckets.
-3. The user starts work either by submitting a direct run or starting a coordinator orchestration.
-4. Agentweaver opens a run detail page. The user sees a workflow graph, live timeline, tool and shell approval cards, file artifacts, and status badges.
+3. The user starts a coordinator orchestration.
+4. Agentweaver opens the orchestration detail page. The user sees the coordinator graph, embedded child sessions, tool and shell approval cards, file artifacts, and status badges.
 5. If the run reaches human review, the user approves or rejects it. If the coordinator reaches a confirmation gate, the user confirms or revises the outcome spec before child work is dispatched.
 6. After completion, the user reviews artifacts, memory, decisions, and board state.
 
@@ -310,7 +306,7 @@ Runs are eventful. The UI presents streams as timelines, graph state, topology, 
 
 ### Project context stays stable
 
-The shell keeps project navigation, switching, health, and identity visible across pages. Deep links are normal URLs. A run page can be reopened directly. Project switching preserves category when possible. Global pages keep enough remembered project context to make navigation feel continuous.
+The shell keeps project navigation, switching, health, and identity visible across pages. Deep links are normal URLs for supported pages such as orchestration details. Project switching preserves category when possible. Global pages keep enough remembered project context to make navigation feel continuous.
 
 ### Teams and memory shape future work
 

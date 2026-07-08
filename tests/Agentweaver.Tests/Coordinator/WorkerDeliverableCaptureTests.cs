@@ -18,7 +18,7 @@ namespace Agentweaver.Tests.Coordinator;
 ///     not sent to an empty review with no explanation.
 /// (c) When a subtask is reset to Pending by recovery while its old child is still active (the
 ///     duplicate-dispatch scenario from run d929348d), dispatch deduplicates on
-///     (parentRunId, subtaskId) and re-observes the existing child instead of creating a second one.
+///     (parentRunId, subtaskId), but terminal delivered children are not reused for a new revision.
 ///
 /// Tests use real git repos (temp directories), real LibGit2Sharp via WorktreeManager, and real
 /// SQLite via TestSqliteDb — no mocks (Constitution Principle VII).
@@ -177,7 +177,7 @@ public sealed class WorkerDeliverableCaptureTests : IAsyncDisposable
     }
 
     [Fact]
-    public async Task FindActiveChildAsync_WhenAssembleReadyChildExists_ReturnsIt()
+    public async Task FindActiveChildAsync_WhenAssembleReadyChildExists_ReturnsNull()
     {
         var coordRunId = RunId.New().ToString();
         var childRunId = RunId.New();
@@ -200,10 +200,9 @@ public sealed class WorkerDeliverableCaptureTests : IAsyncDisposable
 
         var found = await _runStore.FindActiveChildAsync(coordRunId, subtaskId);
 
-        found.Should().NotBeNull(
-            "an assemble_ready child run must be found and prevent a duplicate dispatch — " +
-            "the coordinator should advance to assembly, not create another worker");
-        found!.Id.Should().Be(childRunId);
+        found.Should().BeNull(
+            "assemble_ready is terminal output; if a subtask was reset to pending for a revision, " +
+            "dispatch must create a new child instead of reusing stale terminal output");
     }
 
     [Fact]

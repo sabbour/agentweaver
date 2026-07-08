@@ -35,7 +35,7 @@ public sealed class PostgresAppBootTests : IClassFixture<PostgresAppBootTests.Ap
     private readonly AppFixture _fixture;
     public PostgresAppBootTests(AppFixture fixture) => _fixture = fixture;
 
-    [Fact]
+    [PostgresFact]
     public void AppBoot_InPostgresMode_ResolvesEfRunStore_AndDoesNotRegisterSqliteRunStore()
     {
         using var scope = _fixture.Services.CreateScope();
@@ -60,7 +60,7 @@ public sealed class PostgresAppBootTests : IClassFixture<PostgresAppBootTests.Ap
         sp.GetRequiredService<IRunRevisionStore>().Should().BeOfType<EfRunRevisionStore>();
     }
 
-    [Fact]
+    [PostgresFact]
     public async Task WorkflowRestartService_RecoverAsync_RunsAgainstPostgres_AndFailsStrandedRun()
     {
         var runStore = _fixture.Services.GetRequiredService<IRunStore>();
@@ -93,7 +93,7 @@ public sealed class PostgresAppBootTests : IClassFixture<PostgresAppBootTests.Ap
             "a stranded non-coordinator InProgress run is failed by the recovery sweep");
     }
 
-    [Fact]
+    [PostgresFact]
     public async Task RunLifecycle_ThroughIRunStore_WorksAgainstPostgres()
     {
         var runStore = _fixture.Services.GetRequiredService<IRunStore>();

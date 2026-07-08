@@ -408,6 +408,53 @@ public sealed class CoordinatorReconcilerTests : IAsyncDisposable
         _assembly.Failed[0].Reason.Should().Contain("exhausted");
     }
 
+    [Fact]
+    public async Task Sweep_AssemblyBlockedIntegrationBuildError_DoesNotReArmOrExhaust()
+    {
+        var coord = RunId.New().ToString();
+        await SeedCoordinatorRunAsync(coord);
+        var (planId, _) = await SeedPlanAsync(coord, new[] { (SubtaskStatus.AssembleReady, (string?)null) });
+        await SetPlanStatusAsync(
+            planId,
+            WorkPlanStatus.AssemblyBlocked,
+            assemblyStatusReason: "assembly_blocked: integration_build_error");
+
+        var reconciler = new CoordinatorReconciler(
+            _scopeFactory, _runStore, _streamStore, new RecordingDispatch(),
+            NullLogger<CoordinatorReconciler>.Instance, configuration: null, assembly: _assembly);
+
+        for (var i = 0; i < CoordinatorReconciler.MaxAssemblyReArmAttempts + 2; i++)
+            (await reconciler.SweepAsync(default)).Should().Be(0);
+
+        _assembly.Started.Should().BeEmpty("integration_build_error is parked until explicit state-changing input");
+        _assembly.Failed.Should().BeEmpty("a parked block is not counted toward re-arm exhaustion");
+        (await GetPlanStatusAsync(planId)).Should().Be(WorkPlanStatus.AssemblyBlocked);
+    }
+
+    [Fact]
+    public async Task Sweep_AssemblyBlockedIneligibleSubtasks_ReArmsOnlyAfterEligibilityChanges()
+    {
+        var coord = RunId.New().ToString();
+        await SeedCoordinatorRunAsync(coord);
+        var (planId, ids) = await SeedPlanAsync(coord, new[] { (SubtaskStatus.Failed, (string?)null) });
+        await SetPlanStatusAsync(
+            planId,
+            WorkPlanStatus.AssemblyBlocked,
+            assemblyStatusReason: "assembly_blocked: ineligible_subtasks [1]");
+
+        var reconciler = new CoordinatorReconciler(
+            _scopeFactory, _runStore, _streamStore, new RecordingDispatch(),
+            NullLogger<CoordinatorReconciler>.Instance, configuration: null, assembly: _assembly);
+
+        (await reconciler.SweepAsync(default)).Should().Be(0);
+        _assembly.Started.Should().BeEmpty();
+
+        await SetSubtaskStatusAsync(ids[0], SubtaskStatus.AssembleReady);
+
+        (await reconciler.SweepAsync(default)).Should().Be(1);
+        _assembly.Started.Should().ContainSingle().Which.CoordinatorRunId.Should().Be(coord);
+    }
+
     // -----------------------------------------------------------------------
     // Harness
     // -----------------------------------------------------------------------
@@ -575,13 +622,28 @@ public sealed class CoordinatorReconcilerTests : IAsyncDisposable
         return (await db.WorkPlans.AsNoTracking().FirstAsync(w => w.Id == planId)).Status;
     }
 
-    private async Task SetPlanStatusAsync(int planId, string status, DateTimeOffset? updatedAt = null)
+    private async Task SetPlanStatusAsync(
+        int planId,
+        string status,
+        DateTimeOffset? updatedAt = null,
+        string? assemblyStatusReason = null)
     {
         using var scope = _provider.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
         var row = await db.WorkPlans.FirstAsync(w => w.Id == planId);
         row.Status = status;
+        row.AssemblyStatusReason = assemblyStatusReason;
         row.UpdatedAt = updatedAt ?? DateTimeOffset.UtcNow;
+        await db.SaveChangesAsync();
+    }
+
+    private async Task SetSubtaskStatusAsync(int subtaskId, string status)
+    {
+        using var scope = _provider.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var row = await db.Subtasks.FirstAsync(s => s.Id == subtaskId);
+        row.Status = status;
+        row.UpdatedAt = DateTimeOffset.UtcNow;
         await db.SaveChangesAsync();
     }
 

@@ -61,6 +61,35 @@ public sealed class IntegrationBranchBuilderTests : IDisposable
     }
 
     [Fact]
+    public void BuildIntegrationBranch_WhenMainRepoIsOnIntegrationBranch_ChecksOutOriginAndResets()
+    {
+        var repoPath = CreateTempGitRepo();
+        const string integrationBranch = "agentweaver/integration/coord-main-checkout";
+
+        CommitOnNewBranch(repoPath, "agentweaver/child-a", "alpha.txt", "alpha contents", "child a");
+        _manager.BuildIntegrationBranch(repoPath, "main", integrationBranch, new[] { "agentweaver/child-a" })
+            .Outcome.Should().Be(IntegrationBranchOutcome.Built);
+
+        using (var repo = new Repository(repoPath))
+        {
+            Commands.Checkout(repo, repo.Branches[integrationBranch]);
+            repo.Head.FriendlyName.Should().Be(integrationBranch);
+        }
+
+        CommitOnNewBranch(repoPath, "agentweaver/child-b", "beta.txt", "beta contents", "child b");
+        var result = _manager.BuildIntegrationBranch(
+            repoPath, "main", integrationBranch, new[] { "agentweaver/child-a", "agentweaver/child-b" });
+
+        result.Outcome.Should().Be(IntegrationBranchOutcome.Built);
+        using var reopened = new Repository(repoPath);
+        reopened.Head.FriendlyName.Should().Be("main",
+            "the main repository must be moved off the generated integration branch before reset");
+        var intTip = reopened.Branches[integrationBranch].Tip;
+        intTip["alpha.txt"].Should().NotBeNull();
+        intTip["beta.txt"].Should().NotBeNull();
+    }
+
+    [Fact]
     public void BuildIntegrationBranch_ConflictingChildren_AutoResolvesByAcceptingLaterChild()
     {
         var repoPath = CreateTempGitRepo();

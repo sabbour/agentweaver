@@ -468,12 +468,7 @@ export function FlowPage() {
             <div className={styles.archiveList}>
               {history.map((run) => (
                 <div key={run.execution_id} className={styles.archiveItem}>
-                  <Link
-                    to={`/projects/${projectId}/runs/${run.workflow_run_id}/execution/${run.execution_id}`}
-                    className={styles.runLink}
-                  >
-                    {run.task || `Run ${run.execution_id.slice(0, 8)}`}
-                  </Link>
+                  <Text>{run.task || `Run ${run.execution_id.slice(0, 8)}`}</Text>
                   <div className={styles.archiveMeta}>
                     <Badge appearance="tint" color={terminalStatusColor(run.status)}>{run.status}</Badge>
                     <span>{formatEndedAt(run)}</span>

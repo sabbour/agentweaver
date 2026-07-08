@@ -1,113 +1,259 @@
-import { Fragment, useEffect, useState } from 'react';
+import { Fragment, useEffect, useMemo, useState } from 'react';
 import type { ReactElement } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link } from 'react-router-dom';
 import {
-  NavDrawer,
-  NavDrawerBody,
-  NavItem,
-  NavSectionHeader,
-  Tooltip,
   Button,
-  mergeClasses,
+  Tooltip,
   makeStyles,
+  mergeClasses,
   tokens,
 } from '@fluentui/react-components';
-import type { OnNavItemSelectData } from '@fluentui/react-components';
 import { PanelLeftContract24Regular, PanelLeftExpand24Regular } from '@fluentui/react-icons';
-import { NAV_SECTIONS, NAV_ITEMS, GLOBAL_NAV_ITEMS, navItemPath } from './navConfig';
+import { NAV_SECTIONS, GLOBAL_NAV_ITEMS, navItemPath } from './navConfig';
 
-// Persistent left sidebar. Global destinations (Overview / Projects) sit at the
-// top; project-scoped sections (WORK / SQUAD / OPERATIONS / SYSTEM) render only
-// when a project is in scope, with SYSTEM anchored to the bottom. The rail is
-// collapsible to an icon-only mini rail (state persisted in localStorage).
+// Persistent left navigation. The rail has fixed chrome (brand + collapse) and
+// a separate scrollable item area so collapsed mode never shows a browser
+// scrollbar jammed against the icons.
 
-const NAV_WIDTH = '180px';
-const NAV_WIDTH_COLLAPSED = '52px';
+const NAV_WIDTH = '216px';
+const NAV_WIDTH_COLLAPSED = '64px';
 const COLLAPSE_KEY = 'aw.nav.collapsed';
 
 const useStyles = makeStyles({
-  navDrawer: {
-    borderRight: `1px solid ${tokens.colorNeutralStroke2}`,
-    height: '100%',
-    overflowX: 'hidden',
-    transitionProperty: 'width, min-width, max-width',
-    transitionDuration: tokens.durationNormal,
-    transitionTimingFunction: tokens.curveEasyEase,
-  },
-  navDrawerExpanded: {
+  root: {
     width: NAV_WIDTH,
     minWidth: NAV_WIDTH,
     maxWidth: NAV_WIDTH,
-    '& nav': {
-      display: 'flex',
-      flexDirection: 'column',
-      height: '100%',
-      width: NAV_WIDTH,
-      minWidth: NAV_WIDTH,
+    height: '100%',
+    display: 'flex',
+    flexDirection: 'column',
+    backgroundColor: tokens.colorNeutralBackground1,
+    borderRight: `1px solid ${tokens.colorNeutralStroke2}`,
+    color: tokens.colorNeutralForeground1,
+    transitionProperty: 'width, min-width, max-width',
+    transitionDuration: tokens.durationNormal,
+    transitionTimingFunction: tokens.curveEasyEase,
+    overflow: 'hidden',
+    '@media (prefers-reduced-motion: reduce)': {
+      transitionDuration: '0ms',
     },
   },
-  navDrawerCollapsed: {
+  rootCollapsed: {
     width: NAV_WIDTH_COLLAPSED,
     minWidth: NAV_WIDTH_COLLAPSED,
     maxWidth: NAV_WIDTH_COLLAPSED,
-    '& nav': {
-      display: 'flex',
-      flexDirection: 'column',
-      height: '100%',
-      width: NAV_WIDTH_COLLAPSED,
-      minWidth: NAV_WIDTH_COLLAPSED,
-    },
   },
-  body: {
+  chrome: {
+    flexShrink: 0,
     display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: tokens.spacingHorizontalS,
+    padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM} ${tokens.spacingVerticalXS}`,
+  },
+  chromeCollapsed: {
     flexDirection: 'column',
-    height: '100%',
-    overflowX: 'hidden',
+    justifyContent: 'flex-start',
+    padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalS} ${tokens.spacingVerticalXS}`,
   },
   brandRow: {
+    minWidth: 0,
+    minHeight: '40px',
     display: 'flex',
     alignItems: 'center',
     gap: tokens.spacingHorizontalS,
-    // Align the rail header height with the top bar (spacingVerticalS padding + 32px mark).
-    minHeight: '32px',
-    padding: `${tokens.spacingVerticalS} 0`,
-    marginBottom: tokens.spacingVerticalXS,
-    textDecoration: 'none',
     color: tokens.colorNeutralForeground1,
-    overflow: 'hidden',
+    textDecorationLine: 'none',
+    borderRadius: tokens.borderRadiusMedium,
+    padding: `0 ${tokens.spacingHorizontalXS}`,
+    ':hover': {
+      backgroundColor: tokens.colorNeutralBackground1Hover,
+      textDecorationLine: 'none',
+    },
+    ':focus-visible': {
+      outlineStyle: 'solid',
+      outlineWidth: '2px',
+      outlineColor: tokens.colorStrokeFocus2,
+      outlineOffset: '2px',
+    },
   },
   brandRowCollapsed: {
+    width: '40px',
     justifyContent: 'center',
+    padding: 0,
   },
   brandLogo: {
     height: '28px',
-    width: 'auto',
+    width: '28px',
     display: 'block',
+    objectFit: 'contain',
     flexShrink: 0,
   },
   brandName: {
-    fontWeight: tokens.fontWeightSemibold,
-    fontSize: tokens.fontSizeBase400,
+    minWidth: 0,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
     whiteSpace: 'nowrap',
+    fontSize: tokens.fontSizeBase400,
+    fontWeight: tokens.fontWeightSemibold,
+    letterSpacing: '-0.01em',
   },
-  toggleRow: {
-    display: 'flex',
-    paddingBottom: tokens.spacingVerticalXS,
+  collapseButton: {
+    flexShrink: 0,
   },
-  toggleRowCollapsed: {
-    justifyContent: 'center',
-  },
-  toggleRowExpanded: {
-    justifyContent: 'flex-end',
-  },
-  spacer: {
+  navScroll: {
     flex: 1,
-    minHeight: tokens.spacingVerticalM,
+    minHeight: 0,
+    overflowY: 'auto',
+    overflowX: 'hidden',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalXS,
+    padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalS} ${tokens.spacingVerticalM}`,
+    scrollbarWidth: 'thin',
+    scrollbarColor: 'transparent transparent',
+    maskImage: 'linear-gradient(to bottom, transparent 0, black 14px, black calc(100% - 14px), transparent 100%)',
+    ':hover': {
+      scrollbarColor: `${tokens.colorNeutralStroke1} transparent`,
+    },
+    ':focus-within': {
+      scrollbarColor: `${tokens.colorNeutralStroke1} transparent`,
+    },
+    ':focus-visible': {
+      outlineStyle: 'solid',
+      outlineWidth: '2px',
+      outlineColor: tokens.colorStrokeFocus2,
+      outlineOffset: '-2px',
+    },
+    '&::-webkit-scrollbar': {
+      width: '8px',
+    },
+    '&::-webkit-scrollbar-track': {
+      backgroundColor: 'transparent',
+    },
+    '&::-webkit-scrollbar-thumb': {
+      backgroundColor: 'transparent',
+      borderRadius: tokens.borderRadiusCircular,
+      border: '2px solid transparent',
+      backgroundClip: 'content-box',
+    },
+    '&:hover::-webkit-scrollbar-thumb': {
+      backgroundColor: tokens.colorNeutralStroke1,
+    },
+    '&:focus-within::-webkit-scrollbar-thumb': {
+      backgroundColor: tokens.colorNeutralStroke1,
+    },
   },
-  miniDivider: {
+  navScrollCollapsed: {
+    alignItems: 'center',
+    gap: tokens.spacingVerticalXXS,
+    padding: `${tokens.spacingVerticalS} 0 ${tokens.spacingVerticalM}`,
+    scrollbarWidth: 'none',
+    msOverflowStyle: 'none',
+    '&::-webkit-scrollbar': {
+      display: 'none',
+      width: 0,
+      height: 0,
+    },
+  },
+  section: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '0px',
+  },
+  sectionExpanded: {
+    padding: `${tokens.spacingVerticalXXS} ${tokens.spacingHorizontalXXS}`,
+    borderRadius: tokens.borderRadiusLarge,
+    backgroundColor: tokens.colorNeutralBackground2,
+    border: `1px solid ${tokens.colorNeutralStroke3}`,
+  },
+  sectionBottom: {
+    marginTop: 'auto',
+    paddingTop: tokens.spacingVerticalM,
+  },
+  sectionHeading: {
+    padding: `0 ${tokens.spacingHorizontalS} ${tokens.spacingVerticalXXS}`,
+    color: tokens.colorNeutralForeground3,
+    fontSize: tokens.fontSizeBase200,
+    fontWeight: tokens.fontWeightSemibold,
+    lineHeight: tokens.lineHeightBase200,
+  },
+  collapsedDivider: {
+    width: '28px',
     height: '1px',
-    margin: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalS}`,
+    margin: `${tokens.spacingVerticalXXS} 0`,
     backgroundColor: tokens.colorNeutralStroke2,
+  },
+  navLink: {
+    minHeight: '36px',
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalS,
+    borderRadius: tokens.borderRadiusMedium,
+    padding: `0 ${tokens.spacingHorizontalS}`,
+    color: tokens.colorNeutralForeground2,
+    textDecorationLine: 'none',
+    fontSize: tokens.fontSizeBase300,
+    fontWeight: tokens.fontWeightRegular,
+    lineHeight: tokens.lineHeightBase300,
+    transitionProperty: 'background-color, color',
+    transitionDuration: tokens.durationFast,
+    transitionTimingFunction: tokens.curveEasyEase,
+    '@media (prefers-reduced-motion: reduce)': {
+      transitionDuration: '0ms',
+    },
+    ':hover': {
+      color: tokens.colorNeutralForeground1,
+      backgroundColor: tokens.colorNeutralBackground1Hover,
+      textDecorationLine: 'none',
+    },
+    ':active': {
+      backgroundColor: tokens.colorNeutralBackground1Pressed,
+    },
+    ':focus-visible': {
+      outlineStyle: 'solid',
+      outlineWidth: '2px',
+      outlineColor: tokens.colorStrokeFocus2,
+      outlineOffset: '2px',
+    },
+    '@media (pointer: coarse)': {
+      minHeight: '44px',
+    },
+  },
+  navLinkCollapsed: {
+    width: '40px',
+    height: '40px',
+    minHeight: '40px',
+    justifyContent: 'center',
+    padding: 0,
+    '@media (pointer: coarse)': {
+      width: '44px',
+      height: '44px',
+      minHeight: '44px',
+    },
+  },
+  navLinkActive: {
+    color: tokens.colorBrandForeground1,
+    backgroundColor: tokens.colorBrandBackground2,
+    fontWeight: tokens.fontWeightSemibold,
+    ':hover': {
+      color: tokens.colorBrandForeground1,
+      backgroundColor: tokens.colorBrandBackground2Hover,
+    },
+  },
+  iconSlot: {
+    width: '22px',
+    height: '22px',
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+  },
+  label: {
+    minWidth: 0,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
   },
 });
 
@@ -116,9 +262,14 @@ export interface LeftNavProps {
   activeKey: string;
 }
 
+function sectionLabel(heading: string): string {
+  return heading
+    .toLowerCase()
+    .replace(/\b\w/g, (match) => match.toUpperCase());
+}
+
 export function LeftNav({ projectId, activeKey }: LeftNavProps) {
   const styles = useStyles();
-  const navigate = useNavigate();
   const [collapsed, setCollapsed] = useState<boolean>(() => {
     try {
       return localStorage.getItem(COLLAPSE_KEY) === '1';
@@ -126,6 +277,11 @@ export function LeftNav({ projectId, activeKey }: LeftNavProps) {
       return false;
     }
   });
+
+  const { primarySections, bottomSections } = useMemo(() => ({
+    primarySections: NAV_SECTIONS.filter((section) => !section.anchorBottom),
+    bottomSections: NAV_SECTIONS.filter((section) => section.anchorBottom),
+  }), []);
 
   const toggleCollapsed = () => {
     setCollapsed((prev) => {
@@ -147,47 +303,71 @@ export function LeftNav({ projectId, activeKey }: LeftNavProps) {
     );
   }, [collapsed]);
 
-  function handleSelect(_: unknown, data: OnNavItemSelectData) {
-    const value = data.value as string;
-    const globalItem = GLOBAL_NAV_ITEMS.find((i) => i.key === value);
-    if (globalItem) {
-      navigate(globalItem.path);
-      return;
-    }
-    if (!projectId) return;
-    const item = NAV_ITEMS.find((i) => i.key === value);
-    if (item) navigate(navItemPath(projectId, item));
-  }
-
-  // A NavItem rendered with an icon-only label + tooltip when the rail is collapsed.
-  const renderNavItem = (key: string, label: string, icon: ReactElement) => {
-    const item = (
-      <NavItem icon={icon} value={key} aria-label={label}>
-        {collapsed ? '' : label}
-      </NavItem>
+  const renderNavLink = (
+    key: string,
+    label: string,
+    icon: ReactElement,
+    to: string,
+  ) => {
+    const active = activeKey === key;
+    const link = (
+      <Link
+        key={key}
+        to={to}
+        aria-label={label}
+        aria-current={active ? 'page' : undefined}
+        className={mergeClasses(
+          styles.navLink,
+          collapsed && styles.navLinkCollapsed,
+          active && styles.navLinkActive,
+        )}
+      >
+        <span className={styles.iconSlot} aria-hidden="true">{icon}</span>
+        {!collapsed && <span className={styles.label}>{label}</span>}
+      </Link>
     );
-    if (!collapsed) return <Fragment key={key}>{item}</Fragment>;
+
+    if (!collapsed) return link;
     return (
       <Tooltip content={label} relationship="label" positioning="after" key={key}>
-        {item}
+        {link}
       </Tooltip>
     );
   };
 
-  return (
-    <NavDrawer
-      open
-      type="inline"
-      size="small"
-      selectedValue={activeKey}
-      onNavItemSelect={handleSelect}
+  const renderSection = (section: (typeof NAV_SECTIONS)[number], bottom = false) => (
+    <div
+      key={section.heading}
+      role="group"
       className={mergeClasses(
-        styles.navDrawer,
-        collapsed ? styles.navDrawerCollapsed : styles.navDrawerExpanded,
+        styles.section,
+        !collapsed && styles.sectionExpanded,
+        bottom && styles.sectionBottom,
       )}
-      aria-label="Primary navigation"
+      aria-label={sectionLabel(section.heading)}
     >
-      <NavDrawerBody className={styles.body}>
+      {collapsed ? (
+        <div className={styles.collapsedDivider} aria-hidden="true" />
+      ) : (
+        <div className={styles.sectionHeading}>{sectionLabel(section.heading)}</div>
+      )}
+      {section.items.map((item) => renderNavLink(
+        item.key,
+        item.label,
+        item.icon,
+        navItemPath(projectId as string, item),
+      ))}
+    </div>
+  );
+
+  return (
+    <aside
+      className={mergeClasses(styles.root, collapsed && styles.rootCollapsed)}
+      aria-label="Primary navigation"
+      data-testid="app-navigation-menu"
+      data-collapsed={collapsed ? 'true' : 'false'}
+    >
+      <div className={mergeClasses(styles.chrome, collapsed && styles.chromeCollapsed)}>
         <Link
           to="/"
           aria-label="Agentweaver home"
@@ -196,36 +376,40 @@ export function LeftNav({ projectId, activeKey }: LeftNavProps) {
           <img src="/agentweaver.png" alt="Agentweaver" className={styles.brandLogo} />
           {!collapsed && <span className={styles.brandName}>Agentweaver</span>}
         </Link>
+        <Button
+          className={styles.collapseButton}
+          appearance="subtle"
+          icon={collapsed ? <PanelLeftExpand24Regular /> : <PanelLeftContract24Regular />}
+          aria-label={collapsed ? 'Expand navigation' : 'Collapse navigation'}
+          aria-expanded={!collapsed}
+          onClick={toggleCollapsed}
+        />
+      </div>
+
+      <nav
+        className={mergeClasses(styles.navScroll, collapsed && styles.navScrollCollapsed)}
+        aria-label="Primary navigation links"
+        data-testid="app-navigation-scroll"
+        data-scrollbar-mode={collapsed ? 'hidden' : 'hover'}
+        tabIndex={0}
+      >
         <div
-          className={mergeClasses(
-            styles.toggleRow,
-            collapsed ? styles.toggleRowCollapsed : styles.toggleRowExpanded,
-          )}
+          className={mergeClasses(styles.section, !collapsed && styles.sectionExpanded)}
+          role="group"
+          aria-label="Global"
         >
-          <Button
-            appearance="subtle"
-            icon={collapsed ? <PanelLeftExpand24Regular /> : <PanelLeftContract24Regular />}
-            aria-label={collapsed ? 'Expand navigation' : 'Collapse navigation'}
-            aria-expanded={!collapsed}
-            onClick={toggleCollapsed}
-          />
+          {GLOBAL_NAV_ITEMS.map((item) => renderNavLink(item.key, item.label, item.icon, item.path))}
         </div>
 
-        {GLOBAL_NAV_ITEMS.map((item) => renderNavItem(item.key, item.label, item.icon))}
-
-        {projectId &&
-          NAV_SECTIONS.map((section) => (
-            <Fragment key={section.heading}>
-              {section.anchorBottom && <div className={styles.spacer} />}
-              {collapsed ? (
-                <div className={styles.miniDivider} aria-hidden="true" />
-              ) : (
-                <NavSectionHeader>{section.heading}</NavSectionHeader>
-              )}
-              {section.items.map((item) => renderNavItem(item.key, item.label, item.icon))}
-            </Fragment>
-          ))}
-      </NavDrawerBody>
-    </NavDrawer>
+        {projectId && (
+          <>
+            {primarySections.map((section) => renderSection(section))}
+            {bottomSections.map((section) => (
+              <Fragment key={section.heading}>{renderSection(section, true)}</Fragment>
+            ))}
+          </>
+        )}
+      </nav>
+    </aside>
   );
 }

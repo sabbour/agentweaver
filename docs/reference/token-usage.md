@@ -134,7 +134,7 @@ GET /api/usage?from=2026-05-01T00:00:00Z&to=2026-06-01T00:00:00Z
 | UI surface | Data source | Notes |
 |---|---|---|
 | Board run card cost chip | `RunCardDto.total_nano_aiu` / `total_tokens`, with supplementary `GET /api/runs/{id}/usage` when missing | `apps/web/src/api/types.ts:767`, `apps/web/src/api/types.ts:783`, `apps/web/src/components/board/RunCard.tsx:90`, `apps/web/src/components/board/RunCard.tsx:160` |
-| Workflow run DAG agent node | `GET /api/runs/{id}/usage` through `runUsage` | `apps/web/src/api/client.ts:758`, `apps/web/src/pages/WorkflowRunPage.tsx:700` |
+| Coordinator graph DAG nodes | `GET /api/runs/{id}/usage` through `runUsage` | `apps/web/src/api/client.ts`, `apps/web/src/pages/CoordinatorRunPage.tsx` |
 | Coordinator DAG coordinator/subtask nodes | Coordinator run usage plus child `GET /api/runs/{childId}/usage` summaries | `apps/web/src/pages/CoordinatorRunPage.tsx:1527`, `apps/web/src/pages/CoordinatorRunPage.tsx:1604` |
 | Project Observability overview | `GET /api/projects/{id}/metrics?from=...&to=...` | Compact tiles, P50/P95 duration and TTFT, model usage, and AI-credit-over-time chart (`apps/web/src/components/dashboard/ModelPerformancePanels.tsx:160`). |
 | Project Observability traces | `GET /api/metrics/runs/{runId}/traces` | AppInsights-only agentic/LLM spans rendered as trace bars (`apps/web/src/components/runs/TransactionTracePanel.tsx:211`). |

@@ -78,11 +78,11 @@ Run endpoints are owner-scoped. The authenticated caller must own the run being 
 | `PUT` | `/api/projects/{id}/provider-settings` | Update provider and model defaults |
 | `DELETE` | `/api/projects/{id}` | Delete a project (record only; cancels active runs) |
 | `GET` | `/api/projects/{id}/runs` | List runs for a project |
-| `GET` | `/api/projects/{id}/runs/{workflowRunId}` | Get a project workflow-run summary |
-| `POST` | `/api/projects/{id}/runs` | Start a run within a project |
+| `POST` | `/api/projects/{id}/runs` | Deprecated direct run submission; returns `410 Gone` |
 | `POST` | `/api/projects/{id}/orchestrations` | Start a coordinator orchestration |
 
 Run summary objects returned by `GET /api/projects/{id}/runs` include a `result` field (`"no_changes"` or `null`). When `result` is `"no_changes"`, the agent found no file changes to commit; the review and merge gates are skipped. Each summary also includes `coordinator_status`: for a coordinator run (`agent_name: "Coordinator"`, no parent) this is the current work-plan orchestration status (`dispatching`, `awaiting_assembly`, `assembling`, `in_review`, `complete`, `assembly_blocked`, `assembly_failed`, `assembly_declined`); it is `null` for normal runs. A companion `coordinator_status_reason` (the coordinator run's `result`, scoped to coordinator rows) carries the human-readable terminal/failure detail so the UI can render "Failed: &lt;reason&gt;". Children are excluded from this list. The UI should render `coordinator_status` (plus `coordinator_status_reason`) for coordinator rows so a long-running assembly does not show as a bare `in_progress` and a terminal failure does not show as an unexplained `failed`.
+The standalone project-scoped workflow-run detail endpoint (`GET /api/projects/{id}/runs/{workflowRunId}`) has been removed with the retired standalone run pages. Use owner-scoped `/api/runs/{id}` and child run endpoints for embedded coordinator panels.
 
 Run control state is durable. Shell approvals/denials, tool approval requests, run-scoped/always allow policies, child-to-parent approval inheritance, `ask_question` answers, `auto-approve`, and `autopilot` are replayed from persisted run events. That means approval, answer, and toggle requests may land on any API replica and still be observed by the worker that owns the run.
 
@@ -850,8 +850,16 @@ Generates a single blueprint from a free-text description.
 Request:
 
 ```json
-{ "description": "Build a travel-planning assistant" }
+{
+  "description": "Build a travel-planning assistant",
+  "project_id": null,
+  "target_repository": null
+}
 ```
+
+When `project_id` is supplied, the caller must own the project and blueprint generation uses that
+project's `blueprint_generation_model`; the generated workflow fallback uses
+`workflow_generation_model`. Null/omitted project settings inherit the global Generation fallback.
 
 Response `200 OK`:
 
@@ -1052,6 +1060,9 @@ Response `201 Created` returns a project object:
   "default_provider": "github-copilot",
   "default_model_github_copilot": null,
   "default_model_microsoft_foundry": null,
+  "blueprint_generation_model": null,
+  "workflow_generation_model": null,
+  "outcome_spec_generation_model": null,
   "available": true,
   "state": "active",
   "source_blueprint_id": null,
@@ -1103,11 +1114,17 @@ Request:
 {
   "default_provider": "microsoft-foundry",
   "default_model_github_copilot": null,
-  "default_model_microsoft_foundry": "gpt-4o"
+  "default_model_microsoft_foundry": "gpt-4o",
+  "blueprint_generation_model": "gpt-5-mini",
+  "workflow_generation_model": null,
+  "outcome_spec_generation_model": "claude-sonnet-4.6"
 }
 ```
 
-All fields are optional. Omitting a field leaves it unchanged. Response `204 No Content` on success.
+Generation model fields are individual nullable project settings. `null` clears a project override and
+falls back to the corresponding global `Generation:*` setting (`Generation:Model`, then `gpt-5.4`).
+They do not affect Console or normal project/run agent execution model selection. Response
+`204 No Content` on success.
 
 ### DELETE /api/projects/{id}
 
@@ -1145,51 +1162,13 @@ Lists all runs for a project. Returns a JSON array. Each entry includes `agent_n
 ]
 ```
 
-### GET /api/projects/{id}/runs/{workflowRunId}
-
-Returns one project workflow-run summary by `workflow_run_id`. The response shape matches entries from `GET /api/projects/{id}/runs`. Returns `404 Not Found` when the run does not exist or belongs to another project.
-
 ### POST /api/projects/{id}/runs
 
-Starts a run within a project. The project's working directory and default branch are used unless overridden in the request body.
-
-Request:
-
-```json
-{
-  "task": "add a license header to every source file",
-  "model_source": "github-copilot",
-  "model_id": null,
-  "base_branch": "main",
-  "agent_name": "Aria"
-}
-```
-
-| Field | Type | Required | Notes |
-| --- | --- | --- | --- |
-| `task` | string | Yes | Task description for the agent |
-| `model_source` | string | No | `"github-copilot"` or `"microsoft-foundry"`. Falls back to the project default, then the runtime default. |
-| `model_id` | string | No | Model override. Falls back to the project default for the resolved provider, then `null`. |
-| `base_branch` | string | No | Branch to run from. Falls back to the project's `default_branch`. |
-| `agent_name` | string | No | Name of a cast team member. When provided, that member's charter is injected as the agent's system prompt. |
-
-Provider and model resolution order:
-1. Value in the request body
-2. Project default (`PUT /api/projects/{id}/provider-settings`)
-3. Runtime default (`appsettings.json`)
-
-Response `202 Accepted`:
-
-```json
-{ "run_id": "f36800fd-...", "workflow_run_id": "workflow-...", "status": "pending" }
-```
-
-`409 Conflict` with `error: "project_deleting"` when the project is being deleted.
-`409 Conflict` with `error: "workspace_unavailable"` when the working directory is not accessible.
+Deprecated direct project-run submission route. It returns `410 Gone`; use `POST /api/projects/{id}/orchestrations` or backlog pickup instead.
 
 ## Coordinator endpoints
 
-The Coordinator agent drafts a confirmable outcome spec for a goal, then suspends at a confirmation gate. These endpoints are a thin HTTP layer over `CoordinatorRunService`; all orchestration lives in the service. A coordinator run is an ordinary run (`agent_name: "Coordinator"`, no parent), so its events stream from `GET /api/runs/{id}/stream` and it is owner-scoped like any other run.
+The Coordinator agent can either start directly from a goal or draft a confirmable outcome spec for a goal and suspend at a confirmation gate. These endpoints are a thin HTTP layer over `CoordinatorRunService`; all orchestration lives in the service. A coordinator run is an ordinary run (`agent_name: "Coordinator"`, no parent), so its events stream from `GET /api/runs/{id}/stream` and it is owner-scoped like any other run.
 
 ### POST /api/projects/{id}/orchestrations
 
@@ -1200,14 +1179,16 @@ Request:
 ```json
 {
   "goal": "Make the onboarding flow resumable across sessions",
-  "modelId": null
+  "modelId": null,
+  "start_mode": "define_outcome"
 }
 ```
 
 | Field | Type | Required | Notes |
 | --- | --- | --- | --- |
-| `goal` | string | Yes | The outcome the coordinator should draft a spec for. |
+| `goal` | string | Yes | The user's prompt/outcome for the coordinator. |
 | `modelId` | string | No | Model override. Falls back to the project's GitHub Copilot default, then the role default. |
+| `start_mode` | `"direct"` or `"define_outcome"` | No | Required contract for the Start Task dialog. Omit or use `"define_outcome"` to preserve the current outcome-spec draft/confirm gate. Use `"direct"` to start coordinator planning/dispatch from `goal` without generating or confirming an outcome spec. Direct still enforces child tool approvals, assembly review, and merge gates. |
 | `autoApproveTools` | bool | No | Launch with auto-approve-tools ON for the coordinator and its children. Defaults to `false`. |
 | `autopilot` | bool | No | Launch with Autopilot ON (auto-answer clarifying questions only). Cascades to children. Defaults to `false`. |
 
@@ -1974,6 +1955,10 @@ The run's event stream is held in memory by `RunStreamStore` and is not persiste
 | `Providers:GitHubCopilot:Endpoint` | `https://api.githubcopilot.com` | GitHub Copilot base URL |
 | `Providers:GitHubCopilot:Model` | `gpt-4o` | GitHub Copilot model name |
 | `Providers:GitHubCopilot:RuntimeCliPath` | `""` (empty) | Optional explicit path to the native Copilot CLI binary; empty means use the SDK's auto-resolved runtime. Env fallbacks (in order): `AGENTWEAVER_COPILOT_CLI_PATH`, `COPILOT_CLI_PATH`. Grounded in `packages/Agentweaver.AgentRuntime/Providers/GitHubCopilotClientFactory.cs:50`. See [Configuration](/guide/configuration#provider-settings). |
+| `Generation:Model` | `gpt-5.4` | Global fallback for blueprint, workflow, and coordinator outcome-spec generation. |
+| `Generation:BlueprintModel` | `Generation:Model` | Optional global fallback when a project has no `blueprint_generation_model`. |
+| `Generation:WorkflowModel` | `Generation:Model` | Optional global fallback when a project has no `workflow_generation_model`. |
+| `Generation:OutcomeSpecModel` | `Generation:Model` | Optional global fallback when a project has no `outcome_spec_generation_model`. |
 | `Providers:MicrosoftFoundry:ApiKey` | none | Microsoft Foundry credential |
 | `Providers:MicrosoftFoundry:Endpoint` | none | Microsoft Foundry endpoint |
 | `Providers:MicrosoftFoundry:Deployment` | none | Microsoft Foundry deployment name |

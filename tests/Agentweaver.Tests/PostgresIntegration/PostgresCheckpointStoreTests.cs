@@ -23,7 +23,7 @@ public sealed class PostgresCheckpointStoreTests(PostgresFixture pg)
         return doc.RootElement.Clone();
     }
 
-    [Fact]
+    [PostgresFact]
     public async Task CreateThenRetrieve_RoundTrips_Payload()
     {
         var store = new PostgresJsonCheckpointStore(pg.Factory, "runs");
@@ -36,7 +36,7 @@ public sealed class PostgresCheckpointStoreTests(PostgresFixture pg)
         roundTrip.GetProperty("name").GetString().Should().Be("alpha");
     }
 
-    [Fact]
+    [PostgresFact]
     public async Task TwoWriters_ShareTheSameStore_CrossPodResume()
     {
         // Two independent store instances over the same factory simulate two API replicas.
@@ -55,7 +55,7 @@ public sealed class PostgresCheckpointStoreTests(PostgresFixture pg)
         payloadFromB.GetProperty("by").GetString().Should().Be("A");
     }
 
-    [Fact]
+    [PostgresFact]
     public async Task ConcurrentWrites_FromTwoWriters_AreAllVisible_NoContention()
     {
         var replicaA = new PostgresJsonCheckpointStore(pg.Factory, "runs");
@@ -77,7 +77,7 @@ public sealed class PostgresCheckpointStoreTests(PostgresFixture pg)
         index.Select(c => c.CheckpointId).Distinct().Should().HaveCount(20);
     }
 
-    [Fact]
+    [PostgresFact]
     public async Task RetrieveIndex_WithParent_FiltersLikeFileStore()
     {
         var store = new PostgresJsonCheckpointStore(pg.Factory, "runs");
@@ -96,7 +96,7 @@ public sealed class PostgresCheckpointStoreTests(PostgresFixture pg)
         scoped.Should().NotContain(root.CheckpointId);
     }
 
-    [Fact]
+    [PostgresFact]
     public async Task DifferentStoreNames_AreIsolated()
     {
         var runs = new PostgresJsonCheckpointStore(pg.Factory, "runs");
@@ -110,7 +110,7 @@ public sealed class PostgresCheckpointStoreTests(PostgresFixture pg)
         (await runs.RetrieveIndexAsync(session)).Should().ContainSingle();
     }
 
-    [Fact]
+    [PostgresFact]
     public async Task RetrieveCheckpoint_Missing_ThrowsKeyNotFound()
     {
         var store = new PostgresJsonCheckpointStore(pg.Factory, "runs");
@@ -121,7 +121,7 @@ public sealed class PostgresCheckpointStoreTests(PostgresFixture pg)
         await act.Should().ThrowAsync<KeyNotFoundException>();
     }
 
-    [Fact]
+    [PostgresFact]
     public async Task PurgeTerminalAsync_DeletesOnlyTerminalSessions()
     {
         var factory = new PostgresCheckpointStoreFactory(pg.Factory);
@@ -142,7 +142,7 @@ public sealed class PostgresCheckpointStoreTests(PostgresFixture pg)
         (await store.RetrieveIndexAsync(live)).Should().ContainSingle();
     }
 
-    [Fact]
+    [PostgresFact]
     public async Task Migration_Created_WorkflowCheckpointsTable()
     {
         await using var db = await pg.CreateDbContextAsync();

@@ -22,7 +22,7 @@ public sealed class MigrationValidityTests(PostgresFixture pg)
     // 1. MIGRATION: schema applied cleanly, all tables / indexes / triggers exist
     // ─────────────────────────────────────────────────────────────────────────
 
-    [Fact]
+    [PostgresFact]
     public async Task Migration_MigrateAsync_Discovers_InitialPostgres()
     {
         var services = new Microsoft.Extensions.DependencyInjection.ServiceCollection();
@@ -37,7 +37,7 @@ public sealed class MigrationValidityTests(PostgresFixture pg)
             "migration must be discoverable via [DbContext] attribute + MigrationsAssembly config");
     }
 
-    [Fact]
+    [PostgresFact]
     public async Task Migration_AllExpectedTables_Exist()
     {
         var expectedTables = new[]
@@ -62,7 +62,7 @@ public sealed class MigrationValidityTests(PostgresFixture pg)
         }
     }
 
-    [Fact]
+    [PostgresFact]
     public async Task Migration_AppendOnlyTriggers_ExistOnRunRevisions()
     {
         await using var conn = new NpgsqlConnection(pg.ConnectionString);
@@ -83,7 +83,7 @@ public sealed class MigrationValidityTests(PostgresFixture pg)
             "UPDATE trigger must exist on run_revisions");
     }
 
-    [Fact]
+    [PostgresFact]
     public async Task Migration_PartialUniqueIndex_ExistsOnBacklogTasks()
     {
         await using var conn = new NpgsqlConnection(pg.ConnectionString);
@@ -102,7 +102,7 @@ public sealed class MigrationValidityTests(PostgresFixture pg)
     /// <summary>
     /// Two parallel workers race to claim the same run — exactly one must win.
     /// </summary>
-    [Fact]
+    [PostgresFact]
     public async Task Lease_ConcurrentClaim_ExactlyOneWins()
     {
         var runId = "run-lease-test-" + Guid.NewGuid().ToString("N")[..8];
@@ -134,7 +134,7 @@ public sealed class MigrationValidityTests(PostgresFixture pg)
     /// <summary>
     /// An expired lease is reclaimable by a second worker.
     /// </summary>
-    [Fact]
+    [PostgresFact]
     public async Task Lease_ExpiredLease_IsReclaimable()
     {
         var runId = "run-reclaim-" + Guid.NewGuid().ToString("N")[..8];
@@ -173,7 +173,7 @@ public sealed class RunRevisionAppendOnlyTests(PostgresFixture pg)
     // 2. run_revisions APPEND-ONLY: UPDATE and DELETE must throw (trigger fires)
     // ─────────────────────────────────────────────────────────────────────────
 
-    [Fact]
+    [PostgresFact]
     public async Task RunRevisions_Insert_Succeeds()
     {
         await using var db = await pg.CreateDbContextAsync();
@@ -192,7 +192,7 @@ public sealed class RunRevisionAppendOnlyTests(PostgresFixture pg)
         await act.Should().NotThrowAsync("INSERT into run_revisions must succeed");
     }
 
-    [Fact]
+    [PostgresFact]
     public async Task RunRevisions_Update_ThrowsViaDirectSql()
     {
         // First insert a revision
@@ -223,7 +223,7 @@ public sealed class RunRevisionAppendOnlyTests(PostgresFixture pg)
                 "the trigger must raise EXCEPTION with 'append-only' in the message");
     }
 
-    [Fact]
+    [PostgresFact]
     public async Task RunRevisions_Delete_ThrowsViaDirectSql()
     {
         var runId = RunId.New().ToString();
@@ -252,7 +252,7 @@ public sealed class RunRevisionAppendOnlyTests(PostgresFixture pg)
                 "the trigger must raise EXCEPTION with 'append-only' in the message");
     }
 
-    [Fact]
+    [PostgresFact]
     public async Task EfRunRevisionStore_GetMaxRevisionNumber_ReturnsZeroWhenEmpty()
     {
         var store = new EfRunRevisionStore(pg.Factory);
@@ -261,7 +261,7 @@ public sealed class RunRevisionAppendOnlyTests(PostgresFixture pg)
         max.Should().Be(0, "max revision number should be 0 when no revisions exist");
     }
 
-    [Fact]
+    [PostgresFact]
     public async Task EfRunRevisionStore_InsertAndGetMax_Works()
     {
         var store = new EfRunRevisionStore(pg.Factory);
@@ -300,7 +300,7 @@ public sealed class EfRunStoreCasTests(PostgresFixture pg)
         return runId;
     }
 
-    [Fact]
+    [PostgresFact]
     public async Task TryStartMerging_ReturnsTrue_OnFirstCall_False_OnSecond()
     {
         var store = new EfRunStore(pg.Factory);
@@ -320,7 +320,7 @@ public sealed class EfRunStoreCasTests(PostgresFixture pg)
             "status must remain merging after failed second CAS");
     }
 
-    [Fact]
+    [PostgresFact]
     public async Task RevertMerging_TransitionsMergingBackToAwaitingReview()
     {
         var store = new EfRunStore(pg.Factory);
@@ -334,7 +334,7 @@ public sealed class EfRunStoreCasTests(PostgresFixture pg)
         run!.Status.Should().Be(RunStatus.AwaitingReview);
     }
 
-    [Fact]
+    [PostgresFact]
     public async Task CompleteMerging_TransitionsMergingToMerged_PersistsResult()
     {
         var store = new EfRunStore(pg.Factory);
@@ -352,7 +352,7 @@ public sealed class EfRunStoreCasTests(PostgresFixture pg)
         run.EndedAt.Should().NotBeNull();
     }
 
-    [Fact]
+    [PostgresFact]
     public async Task TrySetTerminalStatus_OnMergingRun_Succeeds()
     {
         var store = new EfRunStore(pg.Factory);
@@ -368,7 +368,7 @@ public sealed class EfRunStoreCasTests(PostgresFixture pg)
         run.Result.Should().Be("send_response_failed");
     }
 
-    [Fact]
+    [PostgresFact]
     public async Task TrySetTerminalStatus_OnAlreadyTerminalRun_ReturnsFalse()
     {
         var store = new EfRunStore(pg.Factory);
@@ -396,7 +396,7 @@ public sealed class EfRunStoreCasTests(PostgresFixture pg)
         after!.Status.Should().Be(RunStatus.Merged, "terminal status must not be overwritten");
     }
 
-    [Fact]
+    [PostgresFact]
     public async Task ReviewTransition_CompletesWithoutPersistedReviewWaitColumns()
     {
         var store = new EfRunStore(pg.Factory);
@@ -448,7 +448,7 @@ public sealed class EfBacklogTaskStoreTests(PostgresFixture pg)
         return proj;
     }
 
-    [Fact]
+    [PostgresFact]
     public async Task PartialUniqueIndex_DuplicateOrderKey_InSameBucket_IsRejected()
     {
         var project = await InsertProjectAsync();
@@ -461,7 +461,7 @@ public sealed class EfBacklogTaskStoreTests(PostgresFixture pg)
             "inserting a duplicate order_key in the same (project,state) bucket must violate the partial unique index");
     }
 
-    [Fact]
+    [PostgresFact]
     public async Task PartialUniqueIndex_SameOrderKey_InDifferentBuckets_IsAllowed()
     {
         var project = await InsertProjectAsync();
@@ -485,7 +485,7 @@ public sealed class EfBacklogTaskStoreTests(PostgresFixture pg)
             "same order_key in 'claimed' state is excluded from the partial unique index, so new 'ready' entry is fine");
     }
 
-    [Fact]
+    [PostgresFact]
     public async Task ConcurrentClaim_ExactlyOneWins()
     {
         var project = await InsertProjectAsync();
@@ -512,7 +512,7 @@ public sealed class EfBacklogTaskStoreTests(PostgresFixture pg)
             "the other concurrent claim must lose");
     }
 
-    [Fact]
+    [PostgresFact]
     public async Task ListReadyForClaim_ReturnsByOrderKey_TopN()
     {
         var project = await InsertProjectAsync();
@@ -527,7 +527,7 @@ public sealed class EfBacklogTaskStoreTests(PostgresFixture pg)
             "list must return top-N by ascending order_key");
     }
 
-    [Fact]
+    [PostgresFact]
     public async Task TryMoveToReady_CasTransition_BacklogToReady()
     {
         var project = await InsertProjectAsync();
@@ -553,7 +553,7 @@ public sealed class EfProjectStoreUpsertTests(PostgresFixture pg)
     // 5. UPSERT IDEMPOTENCY — project, workflow run, cast proposal stores
     // ─────────────────────────────────────────────────────────────────────────
 
-    [Fact]
+    [PostgresFact]
     public async Task EfProjectStore_Insert_And_Update_RoundTrip()
     {
         var store = new EfProjectStore(pg.Factory);
@@ -571,7 +571,7 @@ public sealed class EfProjectStoreUpsertTests(PostgresFixture pg)
         after!.Name.Should().Be("Updated Name");
     }
 
-    [Fact]
+    [PostgresFact]
     public async Task EfProjectStore_TryBeginDelete_TransitionsActiveToDeleting()
     {
         var store = new EfProjectStore(pg.Factory);
@@ -589,7 +589,7 @@ public sealed class EfProjectStoreUpsertTests(PostgresFixture pg)
         second.Should().BeFalse("project is already in deleting state");
     }
 
-    [Fact]
+    [PostgresFact]
     public async Task EfWorkflowRunStore_Insert_And_SetPath_Works()
     {
         var store = new EfWorkflowRunStore(pg.Factory);
@@ -611,7 +611,7 @@ public sealed class EfProjectStoreUpsertTests(PostgresFixture pg)
         path.Should().Be("/worktrees/wf1");
     }
 
-    [Fact]
+    [PostgresFact]
     public async Task EfCastProposalStore_StoreAndGet_Roundtrip()
     {
         var store = new EfCastProposalStore(pg.Factory);
@@ -634,7 +634,7 @@ public sealed class EfProjectStoreUpsertTests(PostgresFixture pg)
         owner.Should().Be("alice");
     }
 
-    [Fact]
+    [PostgresFact]
     public async Task EfCastProposalStore_Store_IsIdempotent_SecondStoreOverwrites()
     {
         var store = new EfCastProposalStore(pg.Factory);

@@ -50,6 +50,173 @@ function ConvertTo-WslPath {
     return "/mnt/$drive/$rest"
 }
 
+function Read-DotEnvFile {
+    param([Parameter(Mandatory = $true)][string] $Path)
+
+    $values = @{}
+    if (-not (Test-Path -LiteralPath $Path)) { return $values }
+
+    foreach ($line in Get-Content -LiteralPath $Path) {
+        if ($line -match '^\s*(#|$)') { continue }
+        if ($line -notmatch '^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_:]*)\s*=\s*(.*)\s*$') { continue }
+
+        $key = $matches[1]
+        $value = $matches[2].Trim()
+        if (($value.StartsWith('"') -and $value.EndsWith('"')) -or
+            ($value.StartsWith("'") -and $value.EndsWith("'"))) {
+            $value = $value.Substring(1, $value.Length - 2)
+        }
+
+        $values[$key] = $value
+    }
+
+    return $values
+}
+
+function Read-UserSecrets {
+    param([Parameter(Mandatory = $true)][string] $ProjectPath)
+
+    $values = @{}
+    if (-not (Get-Command dotnet -ErrorAction SilentlyContinue)) { return $values }
+    if (-not (Test-Path -LiteralPath $ProjectPath)) { return $values }
+
+    $lines = & dotnet user-secrets list --project $ProjectPath 2>$null
+    foreach ($line in $lines) {
+        if ($line -match '^\s*([^=]+?)\s*=\s*(.*)$') {
+            $values[$matches[1].Trim()] = $matches[2]
+        }
+    }
+
+    return $values
+}
+
+function Merge-ConfigValues {
+    param(
+        [Parameter(Mandatory = $true)][hashtable] $Target,
+        [Parameter(Mandatory = $true)][hashtable] $Source,
+        [Parameter(Mandatory = $true)][string] $SourceName,
+        [Parameter(Mandatory = $true)][hashtable] $Sources
+    )
+
+    foreach ($key in $Source.Keys) {
+        if ([string]::IsNullOrWhiteSpace([string]$Source[$key])) { continue }
+        $Target[$key] = [string]$Source[$key]
+        $Sources[$key] = $SourceName
+    }
+}
+
+function Get-LocalConfigValues {
+    $values = @{}
+    $sources = @{}
+
+    # Lowest precedence: API user-secrets. These are local-only and never printed.
+    $apiCsproj = Join-Path $repoRoot "apps\Agentweaver.Api\Agentweaver.Api.csproj"
+    Merge-ConfigValues $values (Read-UserSecrets $apiCsproj) "user-secrets" $sources
+
+    # Local env files are ignored by git. .env.local intentionally wins over .env.
+    foreach ($envFileName in @(".env", ".env.local")) {
+        $envFile = Join-Path $repoRoot $envFileName
+        Merge-ConfigValues $values (Read-DotEnvFile $envFile) $envFileName $sources
+    }
+
+    # Highest precedence: explicit environment variables in this PowerShell session.
+    foreach ($entry in [Environment]::GetEnvironmentVariables("Process").GetEnumerator()) {
+        if ([string]::IsNullOrWhiteSpace([string]$entry.Value)) { continue }
+        $values[[string]$entry.Key] = [string]$entry.Value
+        $sources[[string]$entry.Key] = "process environment"
+    }
+
+    return [pscustomobject]@{ Values = $values; Sources = $sources }
+}
+
+function Resolve-LocalSetting {
+    param(
+        [Parameter(Mandatory = $true)] [hashtable] $Values,
+        [Parameter(Mandatory = $true)] [hashtable] $Sources,
+        [Parameter(Mandatory = $true)] [string[]] $Keys
+    )
+
+    foreach ($key in $Keys) {
+        if ($Values.ContainsKey($key) -and -not [string]::IsNullOrWhiteSpace($Values[$key])) {
+            return [pscustomobject]@{ Key = $key; Value = [string]$Values[$key]; Source = [string]$Sources[$key] }
+        }
+    }
+
+    return $null
+}
+
+function Add-WslEnvVariable {
+    param([Parameter(Mandatory = $true)][string] $Name)
+
+    $entry = "$Name/u"
+    $existing = @()
+    if (-not [string]::IsNullOrWhiteSpace($env:WSLENV)) {
+        $existing = $env:WSLENV -split ':'
+    }
+
+    if ($existing -notcontains $entry) {
+        $env:WSLENV = (@($existing) + $entry | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) -join ':'
+    }
+}
+
+function Enable-AppInsightsWslBridge {
+    $config = Get-LocalConfigValues
+
+    $connection = Resolve-LocalSetting $config.Values $config.Sources @(
+        "APPLICATIONINSIGHTS_CONNECTION_STRING",
+        "ApplicationInsights:ConnectionString",
+        "ApplicationInsights__ConnectionString",
+        "APPINSIGHTS_CONNECTION_STRING",
+        "APP_INSIGHTS_CONNECTION_STRING"
+    )
+
+    $connectionFromLegacyKey = $false
+    if ($null -eq $connection) {
+        $instrumentationKey = Resolve-LocalSetting $config.Values $config.Sources @(
+            "APPLICATIONINSIGHTS_INSTRUMENTATIONKEY",
+            "ApplicationInsights:InstrumentationKey",
+            "ApplicationInsights__InstrumentationKey",
+            "APPINSIGHTS_INSTRUMENTATIONKEY",
+            "APP_INSIGHTS_INSTRUMENTATIONKEY"
+        )
+
+        if ($null -ne $instrumentationKey) {
+            $connection = [pscustomobject]@{
+                Key = $instrumentationKey.Key
+                Value = "InstrumentationKey=$($instrumentationKey.Value)"
+                Source = $instrumentationKey.Source
+            }
+            $connectionFromLegacyKey = $true
+        }
+    }
+
+    $workspace = Resolve-LocalSetting $config.Values $config.Sources @(
+        "APPLICATIONINSIGHTS_WORKSPACE_ID",
+        "ApplicationInsights:WorkspaceId",
+        "ApplicationInsights__WorkspaceId",
+        "APPINSIGHTS_WORKSPACE_ID",
+        "APP_INSIGHTS_WORKSPACE_ID"
+    )
+
+    if ($null -ne $connection) {
+        $env:APPLICATIONINSIGHTS_CONNECTION_STRING = $connection.Value
+        Add-WslEnvVariable "APPLICATIONINSIGHTS_CONNECTION_STRING"
+    }
+
+    if ($null -ne $workspace) {
+        $env:APPLICATIONINSIGHTS_WORKSPACE_ID = $workspace.Value
+        Add-WslEnvVariable "APPLICATIONINSIGHTS_WORKSPACE_ID"
+    }
+
+    $connectionStatus = if ($null -ne $connection) { "configured from $($connection.Source) key '$($connection.Key)'" } else { "missing" }
+    if ($connectionFromLegacyKey) {
+        $connectionStatus += " (legacy instrumentation key mapped to connection string)"
+    }
+    $workspaceStatus = if ($null -ne $workspace) { "configured from $($workspace.Source) key '$($workspace.Key)'" } else { "missing" }
+
+    Write-Host "AppInsights local config: connection string $connectionStatus; workspace id $workspaceStatus." -ForegroundColor DarkGray
+}
+
 # Convert Windows repo root to WSL path (C:\... -> /mnt/c/...)
 $wslRepoRoot = ConvertTo-WslPath $repoRoot
 
@@ -58,6 +225,10 @@ Write-Host "  Agentweavers Dev" -ForegroundColor Cyan
 Write-Host "  API  $apiDisplay  (WSL2 / Linux .NET; health/API only)" -ForegroundColor DarkCyan
 Write-Host "  Web  $webUrl  (Windows / Vite)" -ForegroundColor DarkCyan
 Write-Host ""
+
+# If local App Insights values live in ignored env files or API user-secrets on Windows,
+# bridge them into the WSL API process under the canonical Azure Monitor env names.
+Enable-AppInsightsWslBridge
 
 # -- 1. Kill any stale API processes/session in WSL ---------------------------
 # The MAF FileSystemJsonCheckpointStore holds an exclusive lock on its directory,
@@ -102,6 +273,7 @@ $bashScriptLines = New-Object System.Collections.Generic.List[string]
 $bashScriptLines.Add("#!/bin/bash")
 $bashScriptLines.Add("cd '$wslRepoRoot'")
 $bashScriptLines.Add("export ASPNETCORE_ENVIRONMENT=Development")
+$bashScriptLines.Add("# APPLICATIONINSIGHTS_* env vars are imported from PowerShell via WSLENV when configured.")
 $bashScriptLines.Add("dotnet run --project $apiProject --configuration Release --urls $apiUrl --no-build")
 $bashScriptLines.Add('echo ""')
 $bashScriptLines.Add('echo "API process exited (code: $?). Press Enter to close."')

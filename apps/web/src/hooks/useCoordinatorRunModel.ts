@@ -11,7 +11,7 @@ import type { AssemblyReviewDecision, SteerCoordinatorRequest } from '../api/typ
  * Aggregate HITL gate state derived from the timeline/events, so a consumer can
  * surface the FULL gate set without re-scanning (BLOCKING #1 gate integrity).
  * None of this bypasses a gate — the actions below POST to the same endpoints the
- * existing run pages (and MCP tools) use.
+ * operator surfaces (and MCP tools) use.
  */
 export interface CoordinatorGateState {
   /** Coordinator drafted an Outcome plan that has not been confirmed yet. */
@@ -33,7 +33,7 @@ export interface CoordinatorRunModel {
   error: string | null;
   droppedEventCount: number;
   isLiveRun: boolean;
-  /** Lifecycle status derived from events (review cycles handled) — for RunLayout parity. */
+  /** Lifecycle status derived from events (review cycles handled). */
   derivedRunStatus: string;
   gates: CoordinatorGateState;
   reconnect: () => void;
@@ -50,9 +50,8 @@ export interface CoordinatorRunModel {
  * Packages the run stream + timeline fold + gate model + steer/gate actions for a
  * coordinator (or worker) run, so presentations bind to ONE hook instead of
  * re-wiring useRunStream + seeding + useTimelineItems + gate scanning
- * (rubber-duck finding #7). RunWatcher/CoordinatorRunPage predate this hook and
- * are intentionally left untouched to keep the change surgical; the browser
- * console TUI consumes this so it never copies their reducer/gate wiring.
+ * (rubber-duck finding #7). The browser console TUI consumes this so it never
+ * copies coordinator reducer/gate wiring.
  *
  * @param runId  run to bind to ('' disables the stream).
  * @param runStatus  lifecycle status, used only to decide whether to seed history

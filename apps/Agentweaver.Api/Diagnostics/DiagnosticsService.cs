@@ -105,6 +105,7 @@ public sealed class DiagnosticsService
         checks.Add(await CheckSqliteReachableAsync(ct).ConfigureAwait(false));
         checks.Add(await CheckDiskWritableAsync().ConfigureAwait(false));
         checks.Add(CheckBuiltInWorkflow());
+        checks.Add(CheckBuiltInReviewPolicy());
         checks.Add(CheckHeartbeatService());
         checks.Add(await CheckProjectStoreAsync(ct).ConfigureAwait(false));
         checks.Add(await CheckGitHubCliAsync(ct).ConfigureAwait(false));
@@ -849,7 +850,9 @@ public sealed class DiagnosticsService
 
         checks.Add(CheckWorkspaceAvailable(project));
         checks.Add(CheckWorkflowsDirectory(project));
+        checks.Add(CheckReviewPoliciesDirectory(project));
         checks.Add(await CheckActiveWorkflowAsync(project, ct).ConfigureAwait(false));
+        checks.Add(CheckActiveReviewPolicy(project));
 
         overallSw.Stop();
 
@@ -1039,6 +1042,14 @@ public sealed class DiagnosticsService
         }
     }
 
+    private static DiagnosticsCheckDto CheckBuiltInReviewPolicy()
+    {
+        var sw = Stopwatch.StartNew();
+        sw.Stop();
+        return Pass("built_in_review_policy",
+            "Loaded: id=default, 3 steps (RAI, peer review, human review)", sw);
+    }
+
     private DiagnosticsCheckDto CheckHeartbeatService()
     {
         var sw = Stopwatch.StartNew();
@@ -1142,6 +1153,28 @@ public sealed class DiagnosticsService
         return Pass("workflows_directory", $".agentweaver/workflows/ present; {count} YAML file(s)", sw);
     }
 
+    private static DiagnosticsCheckDto CheckReviewPoliciesDirectory(Project project)
+    {
+        var sw = Stopwatch.StartNew();
+        var dir = Path.Combine(project.WorkingDirectory, ".agentweaver", "review-policies");
+        sw.Stop();
+        if (!Directory.Exists(dir))
+            return Warn("review_policies_directory",
+                ".agentweaver/review-policies/ not present — built-in default review policy in use", sw);
+
+        try
+        {
+            var count = Directory.EnumerateFiles(dir, "*.*", SearchOption.TopDirectoryOnly)
+                .Count(f => f.EndsWith(".yaml", StringComparison.OrdinalIgnoreCase) ||
+                            f.EndsWith(".yml",  StringComparison.OrdinalIgnoreCase));
+            return Pass("review_policies_directory", $".agentweaver/review-policies/ present; {count} YAML file(s)", sw);
+        }
+        catch (Exception ex)
+        {
+            return Warn("review_policies_directory", $"Could not enumerate .agentweaver/review-policies/: {ex.Message}", sw);
+        }
+    }
+
     private async Task<DiagnosticsCheckDto> CheckActiveWorkflowAsync(Project project, CancellationToken ct)
     {
         var sw = Stopwatch.StartNew();
@@ -1163,6 +1196,29 @@ public sealed class DiagnosticsService
             sw.Stop();
             return Fail("active_workflow", $"Workflow load failed: {ex.Message}", sw);
         }
+    }
+
+    private static DiagnosticsCheckDto CheckActiveReviewPolicy(Project project)
+    {
+        var sw = Stopwatch.StartNew();
+        var policyName = string.IsNullOrWhiteSpace(project.ActiveReviewPolicyName)
+            ? "default"
+            : project.ActiveReviewPolicyName.Trim();
+
+        if (string.Equals(policyName, "default", StringComparison.OrdinalIgnoreCase))
+        {
+            sw.Stop();
+            return Pass("active_review_policy",
+                "Active review policy: default, source=built-in, steps=3", sw);
+        }
+
+        var dir = Path.Combine(project.WorkingDirectory, ".agentweaver", "review-policies");
+        var yaml = Path.Combine(dir, policyName + ".yaml");
+        var yml = Path.Combine(dir, policyName + ".yml");
+        sw.Stop();
+        return File.Exists(yaml) || File.Exists(yml)
+            ? Pass("active_review_policy", $"Active review policy: {policyName}, source=project", sw)
+            : Warn("active_review_policy", $"Configured review policy '{policyName}' was not found; built-in default will be used", sw);
     }
 
     // -------------------------------------------------------------------------

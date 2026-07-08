@@ -667,7 +667,10 @@ static async Task<CoordinatorWorkPlanView?> ReadWorkPlanWithBriefWaitAsync(
     while (true)
     {
         var plan = await coordinator.GetWorkPlanAsync(runId, ct);
-        if (plan is not null || DateTimeOffset.UtcNow >= deadline)
+        if (plan is not null
+            && (plan.Status != WorkPlanStatus.Planned || plan.Subtasks.Count > 0 || DateTimeOffset.UtcNow >= deadline))
+            return plan;
+        if (DateTimeOffset.UtcNow >= deadline)
             return plan;
         await Task.Delay(150, ct);
     }
@@ -697,6 +700,8 @@ static WorkPlanResponse MapWorkPlan(CoordinatorWorkPlanView plan) => new()
     CoordinatorRunId = plan.CoordinatorRunId,
     OutcomeSpecId = plan.OutcomeSpecId,
     Status = plan.Status,
+    AssemblyStage = plan.AssemblyStage,
+    AssemblyTerminalStage = plan.AssemblyTerminalStage,
     StatusReason = plan.StatusReason,
     IsolationSummary = plan.IsolationSummary,
     Subtasks = plan.Subtasks.Select(s => new WorkPlanSubtaskResponse

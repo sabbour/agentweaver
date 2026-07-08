@@ -13,7 +13,8 @@ public sealed record CoordinatorDraftInput(
     string RepositoryPath,
     string? ModelId,
     string? WorkflowOverrideId = null,
-    string? ReviseFeedback = null);
+    string? ReviseFeedback = null,
+    string? OutcomeSpecGenerationModel = null);
 
 /// <summary>
 /// Data surfaced to the external caller (the confirm/revise endpoints) through the

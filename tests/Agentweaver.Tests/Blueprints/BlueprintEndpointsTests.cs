@@ -3,6 +3,7 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
+using Agentweaver.AgentRuntime.Providers;
 using Agentweaver.Api.Blueprints;
 using Agentweaver.Api.Casting;
 using Agentweaver.Api.Contracts;
@@ -258,6 +259,42 @@ public sealed class BlueprintEndpointsTests : IClassFixture<BlueprintsWebApplica
     }
 
     [Fact]
+    public async Task GenerateBlueprint_UsesProjectBlueprintGenerationModel()
+    {
+        _factory.Generator.Response =
+            """
+            {
+              "id": "data-team",
+              "name": "Data Team",
+              "description": "Runs data operations.",
+              "roster": ["backend-engineer"],
+              "workflows": ["software-delivery"],
+              "review_policy": "default",
+              "sandbox_profile": "default"
+            }
+            """;
+
+        var (projectId, _) = await CreateBlankWithBlueprintAsync(new CreateProjectRequest
+        {
+            Name = $"Blueprint Model Test {Guid.NewGuid():N}",
+            Origin = "blank",
+            WorkingDirectory = _factory.NewWorkingDirectory(),
+        });
+
+        var update = await _client.PutAsJsonAsync(
+            $"/api/projects/{projectId}/provider-settings",
+            new { blueprint_generation_model = "gpt-5-mini" });
+        update.StatusCode.Should().Be(HttpStatusCode.NoContent);
+
+        var response = await _client.PostAsJsonAsync(
+            "/api/blueprints/generate",
+            new GenerateBlueprintRequest { ProjectId = projectId, Description = "a data team" });
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK, await response.Content.ReadAsStringAsync());
+        _factory.Generator.LastModelId.Should().Be("gpt-5-mini");
+    }
+
+    [Fact]
     public async Task GenerateBlueprint_MalformedModelOutput_Returns422()
     {
         _factory.Generator.Response = "I am sorry, I cannot produce that.";
@@ -268,6 +305,31 @@ public sealed class BlueprintEndpointsTests : IClassFixture<BlueprintsWebApplica
         response.StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
         var body = await response.Content.ReadFromJsonAsync<JsonElement>();
         body.GetProperty("error").GetString().Should().Be("blueprint_generation_failed");
+    }
+
+    [Fact]
+    public async Task GenerateBlueprint_ProviderModelListFailure_Returns503ActionableProviderError()
+    {
+        _factory.Generator.ExceptionToThrow = AgentProviderException.Classify(
+            ModelSource.GitHubCopilot,
+            new InvalidOperationException("Session error: Execution failed: Error: Failed to list models"))!;
+
+        var response = await _client.PostAsJsonAsync(
+            "/api/blueprints/generate", new GenerateBlueprintRequest { Description = "a data team" });
+
+        response.StatusCode.Should().Be(HttpStatusCode.ServiceUnavailable);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("error").GetString().Should().Be("github_copilot_models_unavailable");
+        body.GetProperty("message").GetString().Should().Contain("could not list available models");
+        body.GetProperty("message").GetString().Should().NotContain("could not be validated");
+
+        var details = body.GetProperty("details").EnumerateArray().Select(e => e.GetString()).ToList();
+        details.Should().Contain(e => e!.Contains("could not list available models"));
+        details.Should().Contain(e => e!.Contains("model access"));
+
+        var options = body.GetProperty("options").EnumerateArray().Select(e => e.GetString()).ToList();
+        options.Should().Contain(["check_provider_auth", "check_provider_config", "retry"]);
+        options.Should().NotContain("edit");
     }
 
     [Fact]

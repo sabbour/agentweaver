@@ -28,14 +28,18 @@ public sealed class SqliteProjectStore : IProjectStore
                                   state, created_at, updated_at,
                                   max_ready_per_heartbeat, pickup_autopilot, pickup_auto_approve_tools,
                                   default_workflow_id, active_review_policy_name, sandbox_profile,
-                                  source_blueprint_id, source_blueprint_type, allowed_workflow_ids)
+                                  source_blueprint_id, source_blueprint_type,
+                                  blueprint_generation_model, workflow_generation_model, outcome_spec_generation_model,
+                                  allowed_workflow_ids)
             VALUES ($projectId, $name, $originKind, $sourceRepository,
                     $workingDirectory, $defaultBranch, $owner,
                     $defaultProvider, $defaultModelCopilot, $defaultModelFoundry,
                     $state, $createdAt, $updatedAt,
                     $maxReadyPerHeartbeat, $pickupAutopilot, $pickupAutoApproveTools,
                     $defaultWorkflowId, $activeReviewPolicyName, $sandboxProfile,
-                    $sourceBlueprintId, $sourceBlueprintType, $allowedWorkflowIds);
+                    $sourceBlueprintId, $sourceBlueprintType,
+                    $blueprintGenerationModel, $workflowGenerationModel, $outcomeSpecGenerationModel,
+                    $allowedWorkflowIds);
             """;
         command.Parameters.AddWithValue("$projectId", project.Id.ToString());
         command.Parameters.AddWithValue("$name", project.Name);
@@ -58,6 +62,9 @@ public sealed class SqliteProjectStore : IProjectStore
         command.Parameters.AddWithValue("$sandboxProfile", (object?)project.SandboxProfile ?? DBNull.Value);
         command.Parameters.AddWithValue("$sourceBlueprintId", (object?)project.SourceBlueprintId ?? DBNull.Value);
         command.Parameters.AddWithValue("$sourceBlueprintType", (object?)project.SourceBlueprintType ?? DBNull.Value);
+        command.Parameters.AddWithValue("$blueprintGenerationModel", (object?)project.BlueprintGenerationModel ?? DBNull.Value);
+        command.Parameters.AddWithValue("$workflowGenerationModel", (object?)project.WorkflowGenerationModel ?? DBNull.Value);
+        command.Parameters.AddWithValue("$outcomeSpecGenerationModel", (object?)project.OutcomeSpecGenerationModel ?? DBNull.Value);
         command.Parameters.AddWithValue("$allowedWorkflowIds", (object?)SerializeWorkflowIds(project.AllowedWorkflowIds) ?? DBNull.Value);
         await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
     }
@@ -124,6 +131,33 @@ public sealed class SqliteProjectStore : IProjectStore
         command.Parameters.AddWithValue("$projectId", id.ToString());
         var rows = await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
         return rows > 0;
+    }
+
+    public async Task UpdateGenerationModelSettingsAsync(
+        ProjectId id,
+        string? blueprintGenerationModel,
+        string? workflowGenerationModel,
+        string? outcomeSpecGenerationModel,
+        DateTimeOffset updatedAt,
+        CancellationToken ct = default)
+    {
+        await using var connection = await _db.OpenConnectionAsync(ct).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            UPDATE projects
+               SET blueprint_generation_model = $blueprintGenerationModel,
+                   workflow_generation_model = $workflowGenerationModel,
+                   outcome_spec_generation_model = $outcomeSpecGenerationModel,
+                   updated_at = $updatedAt
+             WHERE project_id = $projectId;
+            """;
+        command.Parameters.AddWithValue("$blueprintGenerationModel", (object?)blueprintGenerationModel ?? DBNull.Value);
+        command.Parameters.AddWithValue("$workflowGenerationModel", (object?)workflowGenerationModel ?? DBNull.Value);
+        command.Parameters.AddWithValue("$outcomeSpecGenerationModel", (object?)outcomeSpecGenerationModel ?? DBNull.Value);
+        command.Parameters.AddWithValue("$updatedAt", Ts(updatedAt));
+        command.Parameters.AddWithValue("$projectId", id.ToString());
+        await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
     }
 
     public async Task DeleteAsync(ProjectId id, CancellationToken ct = default)
@@ -249,7 +283,9 @@ public sealed class SqliteProjectStore : IProjectStore
     //           9=default_model_foundry 10=state 11=created_at 12=updated_at
     //           13=max_ready_per_heartbeat 14=pickup_autopilot 15=pickup_auto_approve_tools
     //           16=default_workflow_id 17=active_review_policy_name 18=sandbox_profile
-    //           19=source_blueprint_id 20=source_blueprint_type 21=allowed_workflow_ids
+    //           19=source_blueprint_id 20=source_blueprint_type
+    //           21=blueprint_generation_model 22=workflow_generation_model
+    //           23=outcome_spec_generation_model 24=allowed_workflow_ids
     private const string SelectSql =
         """
         SELECT project_id, name, origin_kind, source_repository, working_directory,
@@ -257,7 +293,9 @@ public sealed class SqliteProjectStore : IProjectStore
                default_model_foundry, state, created_at, updated_at,
                max_ready_per_heartbeat, pickup_autopilot, pickup_auto_approve_tools,
                default_workflow_id, active_review_policy_name, sandbox_profile,
-               source_blueprint_id, source_blueprint_type, allowed_workflow_ids
+              source_blueprint_id, source_blueprint_type,
+              blueprint_generation_model, workflow_generation_model, outcome_spec_generation_model,
+              allowed_workflow_ids
           FROM projects
         """;
 
@@ -293,7 +331,10 @@ public sealed class SqliteProjectStore : IProjectStore
             SandboxProfile         = r.IsDBNull(18) ? null : r.GetString(18),
             SourceBlueprintId      = r.IsDBNull(19) ? null : r.GetString(19),
             SourceBlueprintType    = r.IsDBNull(20) ? null : r.GetString(20),
-            AllowedWorkflowIds     = r.IsDBNull(21) ? null : DeserializeWorkflowIds(r.GetString(21), r.GetString(0)),
+            BlueprintGenerationModel = r.IsDBNull(21) ? null : r.GetString(21),
+            WorkflowGenerationModel = r.IsDBNull(22) ? null : r.GetString(22),
+            OutcomeSpecGenerationModel = r.IsDBNull(23) ? null : r.GetString(23),
+            AllowedWorkflowIds     = r.IsDBNull(24) ? null : DeserializeWorkflowIds(r.GetString(24), r.GetString(0)),
         };
     }
 

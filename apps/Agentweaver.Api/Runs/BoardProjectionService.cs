@@ -376,7 +376,7 @@ public sealed class BoardProjectionService
     /// Returns the set of run IDs (from <paramref name="runIds"/>) that have at least one
     /// <c>tool.approval_required</c> event whose requestId has no matching <c>tool.result</c> or
     /// <c>tool.error</c> callId — i.e. the approval is still pending. Uses the same resolution
-    /// logic as the frontend <c>hasPendingApproval</c> memo in <c>WorkflowRunPage.tsx</c>.
+    /// logic as the frontend pending-approval projection.
     /// </summary>
     private async Task<HashSet<string>> GetRunIdsWithPendingApprovalAsync(
         IReadOnlyCollection<string> runIds, CancellationToken ct)

@@ -221,6 +221,24 @@ public sealed class CoordinatorPhase2EndpointsTests : IDisposable
     }
 
     [Fact]
+    public async Task Steer_Send_WithTargetChild_Returns201_WithTargetInDirectiveView()
+    {
+        var runId = await InsertInactiveCoordinatorRunAsync(CoordinatorWebApplicationFactory.OwnerUser);
+
+        var resp = await _owner.PostAsJsonAsync($"/api/runs/{runId}/steer",
+            new { kind = "send", target_child_run_id = "child-selected", instruction = "focus on the parser edge case" });
+
+        resp.StatusCode.Should().Be(HttpStatusCode.Created,
+            "a selected-child coordinator message creates a queued steering directive");
+        var directive = await resp.Content.ReadFromJsonAsync<SteeringDirectiveResponse>();
+        directive.Should().NotBeNull();
+        directive!.Kind.Should().Be("send");
+        directive.Status.Should().Be("queued");
+        directive.TargetChildRunId.Should().Be("child-selected",
+            "the API response must preserve the selected child context for UI success state");
+    }
+
+    [Fact]
     public async Task Steer_NonOwner_Returns403()
     {
         var runId = await InsertInactiveCoordinatorRunAsync(CoordinatorWebApplicationFactory.OwnerUser);
@@ -338,8 +356,38 @@ public sealed class CoordinatorPhase2EndpointsTests : IDisposable
         plan.GetProperty("statusReason").GetString().Should().Be("assembly_blocked: integration_conflict");
     }
 
+    [Fact]
+    public async Task WorkPlan_SurfaceAssemblyStageTruth_ForTerminalAssembly()
+    {
+        var runId = await InsertInactiveCoordinatorRunAsync(CoordinatorWebApplicationFactory.OwnerUser);
+        const string reason = "assembly_merge_failed: merge_error";
+
+        var runStore = _factory.Services.GetRequiredService<SqliteRunStore>();
+        await runStore.UpdateResultAsync(
+            RunId.Parse(runId), RunStatus.MergeFailed, reason,
+            DateTimeOffset.UtcNow, CancellationToken.None);
+        await SeedWorkPlanAsync(
+            runId,
+            "assembly_failed",
+            assemblyStage: "scribe",
+            assemblyTerminalStage: "merge",
+            assemblyStatusReason: reason);
+
+        var plan = await _owner.GetFromJsonAsync<JsonElement>($"/api/runs/{runId}/work-plan");
+
+        plan.GetProperty("status").GetString().Should().Be("assembly_failed");
+        plan.GetProperty("assemblyStage").GetString().Should().Be("scribe");
+        plan.GetProperty("assemblyTerminalStage").GetString().Should().Be("merge");
+        plan.GetProperty("statusReason").GetString().Should().Be(reason);
+    }
+
     /// <summary>Seeds an OutcomeSpec + WorkPlan (with the given status) + one subtask for a run.</summary>
-    private async Task SeedWorkPlanAsync(string coordinatorRunId, string status, string? assemblyStage = null)
+    private async Task SeedWorkPlanAsync(
+        string coordinatorRunId,
+        string status,
+        string? assemblyStage = null,
+        string? assemblyTerminalStage = null,
+        string? assemblyStatusReason = null)
     {
         using var scope = _factory.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<Agentweaver.Api.Memory.MemoryDbContext>();
@@ -366,6 +414,8 @@ public sealed class CoordinatorPhase2EndpointsTests : IDisposable
             CoordinatorRunId = coordinatorRunId,
             Status = status,
             AssemblyStage = assemblyStage,
+            AssemblyTerminalStage = assemblyTerminalStage,
+            AssemblyStatusReason = assemblyStatusReason,
             CreatedAt = DateTimeOffset.UtcNow,
             UpdatedAt = DateTimeOffset.UtcNow,
         };

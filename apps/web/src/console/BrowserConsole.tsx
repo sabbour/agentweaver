@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Link as RouterLink } from 'react-router-dom';
+import { Link as RouterLink, useLocation } from 'react-router-dom';
 import {
   Badge,
   Button,
@@ -7,11 +7,11 @@ import {
   Text,
   Textarea,
   makeStyles,
+  mergeClasses,
   shorthands,
   tokens,
 } from '@fluentui/react-components';
 import {
-  ArrowClockwise16Regular,
   CheckmarkCircle16Regular,
   Open16Regular,
   Send16Regular,
@@ -19,9 +19,13 @@ import {
 } from '@fluentui/react-icons';
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
-import type { BoardColumnDto, Project, TaskCardDto } from '../api/types';
-import { Timeline } from '../components/Timeline';
-import { useCoordinatorRunModel } from '../hooks/useCoordinatorRunModel';
+import type {
+  AgentweaverConsoleResponse,
+  AgentweaverConsoleToolCall,
+  BoardColumnDto,
+  Project,
+  TaskCardDto,
+} from '../api/types';
 import {
   DEFERRED_COMMANDS,
   SLASH_COMMANDS,
@@ -29,283 +33,272 @@ import {
   type SlashCommandName,
 } from './consoleCommands';
 
-// Browser control-console TUI (Issue #50). A terminal-styled, chat-based
-// ALTERNATIVE UX to operate Agentweaver end-to-end. It is a thin PRESENTATION
-// over the SAME session/streaming/tool infrastructure the run pages use
-// (constitution III): it reuses useCoordinatorRunModel → useSeededRunStream →
-// useRunStream + useTimelineItems + <Timeline> (which renders AgentMessageBubble,
-// tool calls, LifecycleEventCard, QuestionAnswerCard and every HITL gate). It
-// NEVER executes agent work itself and NEVER bypasses a gate — prose goes to the
-// REAL coordinator agent (steerCoordinator) and /commands wrap the same endpoints
-// the MCP tools wrap (see consoleCommands.ts → docs/reference/mcp-tools.md).
-//
-// PLUGGABLE TURN SOURCES (finding #9): the bound-run panel is fed by ONE typed
-// "turn source" — today the coordinator run stream (boundRunKind='coordinator').
-// The backend operator-agent run stream (#201) drops in as another source without
-// a rewrite: bind its runId + kind and the same <Timeline> renders it.
-
-type TurnSourceKind = 'coordinator';
-
-// Dedicated terminal color scope (constitution II allows a scoped palette for the
-// console's TUI surface). These stay local to this shell and never leak into the
-// shared Fluent-themed pages.
-const TERM = {
-  bg: '#0b0f14',
-  bgRaised: '#0e141b',
-  fg: '#d6dee6',
-  fgMuted: '#7c8b9a',
-  fgDim: '#5b6b7a',
-  border: '#1e2833',
-  accent: '#8fd0ff',
-  prompt: '#6fd08f',
-  branch: '#e6c07b',
-  ok: '#8fe3a6',
-  warn: '#ffcf6b',
-  err: '#ff8a80',
-  mono: 'Consolas, "Cascadia Code", "SF Mono", Menlo, monospace',
-} as const;
+// Smart operator dock for the singleton browser console. Natural language goes to
+// the backend Agentweaver facade; slash commands remain secondary shortcuts over
+// the same typed API client surface.
 
 const useStyles = makeStyles({
-  // Full-height terminal surface: header (compact) → scrollback (flex, scrolls)
-  // → prompt line (pinned bottom), like a real CLI.
   root: {
     display: 'flex',
     flexDirection: 'column',
     height: '100%',
     minHeight: 0,
-    backgroundColor: TERM.bg,
-    color: TERM.fg,
-    fontFamily: TERM.mono,
-    fontSize: tokens.fontSizeBase200,
-    lineHeight: '1.5',
-    overflow: 'hidden',
-  },
-  header: {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    flexWrap: 'wrap',
-    rowGap: '6px',
-    flexShrink: 0,
-    // Generous gap between the command cluster and the status cluster — they
-    // are two distinct groups, not a row of equal peers.
-    gap: tokens.spacingHorizontalL,
-    ...shorthands.borderBottom('1px', 'solid', TERM.border),
-    ...shorthands.padding('6px', tokens.spacingHorizontalM),
-    backgroundColor: TERM.bgRaised,
-  },
-  // Title + quick-command chips read as ONE command cluster: tight internal
-  // gap so they group visually, separated from the status cluster by the
-  // header's own gap rather than by matching spacing throughout.
-  headerCommandGroup: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: tokens.spacingHorizontalS,
-    flexWrap: 'wrap',
-    rowGap: '4px',
-    minWidth: 0,
-  },
-  title: { fontWeight: 600, letterSpacing: '0.04em', color: TERM.accent, flexShrink: 0 },
-  // Quick command affordances live next to the title — plain bracketed text
-  // chips, not SaaS-style buttons/cards, so the status rail stays terminal-native.
-  headerChips: { display: 'flex', alignItems: 'center', gap: '2px', flexWrap: 'wrap' },
-  chip: {
-    fontFamily: TERM.mono,
-    fontSize: tokens.fontSizeBase200,
-    color: TERM.fgMuted,
-    backgroundColor: 'transparent',
-    minHeight: '24px',
-    ...shorthands.padding('2px', '8px'),
-    ...shorthands.border('1px', 'solid', TERM.border),
-    ...shorthands.borderRadius(tokens.borderRadiusSmall),
-    ':hover': { color: TERM.fg, ...shorthands.borderColor(TERM.accent) },
-    ':focus-visible': { outlineColor: TERM.accent, outlineStyle: 'solid', outlineWidth: '2px', outlineOffset: '1px' },
-    // Compensate hit-area for touch pointers without growing the visual chip.
-    '@media (pointer: coarse)': { minHeight: '44px', minWidth: '44px' },
-  },
-  // Project / run / busy-state read as ONE status cluster, right-aligned
-  // against the command cluster — a familiar two-zone terminal status bar.
-  headerMeta: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' },
-  headerLabel: { color: TERM.fgMuted },
-  busyIndicator: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, color: TERM.warn },
-  // The scrollback fills all remaining height — no more cramped 42% void.
-  body: { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' },
-  transcript: {
-    flex: '1 1 auto',
-    minHeight: 0,
-    overflowY: 'auto',
-    display: 'flex',
-    flexDirection: 'column',
-    gap: '1px',
-    ...shorthands.padding(tokens.spacingVerticalS, tokens.spacingHorizontalM),
-  },
-  // Applied ONLY when a run panel is actually bound: on narrow/tablet widths
-  // the run panel and the pinned prompt both need room, so the transcript
-  // yields height instead of pushing them off-screen. With no run bound,
-  // the transcript is the only content below the header and should use all
-  // available vertical space rather than capping itself pre-emptively.
-  transcriptCapped: {
-    '@media (max-width: 680px)': { flex: '0 1 30vh', maxHeight: '30vh' },
-  },
-  line: { whiteSpace: 'pre-wrap', wordBreak: 'break-word', display: 'flex', gap: tokens.spacingHorizontalXS },
-  // Each new user-submitted command starts a fresh "block" — a small top gap so a
-  // scrollback of many exchanges stays scannable without borders/nested cards.
-  blockStart: { marginTop: tokens.spacingVerticalM },
-  gutter: { flexShrink: 0, width: '1.1em', textAlign: 'center', userSelect: 'none' },
-  promptGlyph: { color: TERM.prompt },
-  sysGlyph: { color: TERM.fgDim },
-  errText: { color: TERM.err },
-  warnText: { color: TERM.warn },
-  okText: { color: TERM.ok },
-  linkList: { display: 'flex', flexDirection: 'column', gap: '2px', marginLeft: '1.5em', marginTop: '2px' },
-  link: {
-    color: TERM.accent,
-    textDecorationLine: 'none',
-    display: 'inline-flex',
-    alignItems: 'center',
-    gap: '4px',
-    minHeight: '20px',
-    ...shorthands.borderRadius(tokens.borderRadiusSmall),
-    ':hover': { textDecorationLine: 'underline' },
-    ':focus-visible': { outlineColor: TERM.accent, outlineStyle: 'solid', outlineWidth: '2px', outlineOffset: '2px' },
-    '@media (pointer: coarse)': { minHeight: '44px' },
-  },
-  // Bound-run panel shares the scrollback space (flex-grows past the console log).
-  runPanel: {
-    flex: '2 1 0',
-    minHeight: '160px',
-    display: 'flex',
-    flexDirection: 'column',
-    ...shorthands.borderTop('1px', 'solid', TERM.border),
     backgroundColor: tokens.colorNeutralBackground1,
     color: tokens.colorNeutralForeground1,
     overflow: 'hidden',
-    '@media (max-width: 680px)': { flex: '1 1 auto', minHeight: '220px' },
   },
-  runPanelHeader: {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    flexWrap: 'wrap',
-    rowGap: '4px',
+  header: {
+    flexShrink: 0,
+    display: 'grid',
+    gridTemplateColumns: 'minmax(0, 1fr) auto',
     gap: tokens.spacingHorizontalM,
-    ...shorthands.padding(tokens.spacingVerticalXS, tokens.spacingHorizontalM),
-    backgroundColor: tokens.colorNeutralBackground3,
+    alignItems: 'center',
+    ...shorthands.padding(tokens.spacingVerticalS, tokens.spacingHorizontalL),
     ...shorthands.borderBottom('1px', 'solid', tokens.colorNeutralStroke2),
-  },
-  // Status badges + reconnect + full-run link form one action group that
-  // wraps as a unit on narrow widths instead of overflowing the header.
-  runPanelActions: {
-    display: 'flex',
-    alignItems: 'center',
-    flexWrap: 'wrap',
-    rowGap: '4px',
-    gap: tokens.spacingHorizontalS,
-  },
-  gateBar: {
-    display: 'flex',
-    alignItems: 'center',
-    flexWrap: 'wrap',
-    gap: tokens.spacingHorizontalS,
-    ...shorthands.padding(tokens.spacingVerticalXS, tokens.spacingHorizontalM),
     backgroundColor: tokens.colorNeutralBackground2,
-    ...shorthands.borderBottom('1px', 'solid', tokens.colorNeutralStroke2),
+    '@media (max-width: 720px)': { gridTemplateColumns: '1fr' },
   },
-  // Scoped terminal look for the shared <Timeline> — monospace + dense spacing
-  // applied to DESCENDANTS only. The Timeline component itself is untouched.
-  timelineScroll: {
+  titleStack: {
+    minWidth: 0,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalXXS,
+  },
+  titleRow: {
+    display: 'flex',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: tokens.spacingHorizontalS,
+    minWidth: 0,
+  },
+  title: {
+    fontWeight: tokens.fontWeightSemibold,
+    fontSize: tokens.fontSizeBase400,
+    lineHeight: tokens.lineHeightBase400,
+  },
+  subtitle: {
+    color: tokens.colorNeutralForeground3,
+    fontSize: tokens.fontSizeBase200,
+    lineHeight: tokens.lineHeightBase200,
+  },
+  contextRail: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    flexWrap: 'wrap',
+    gap: tokens.spacingHorizontalXS,
+  },
+  quickRow: {
+    flexShrink: 0,
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXS,
+    flexWrap: 'wrap',
+    ...shorthands.padding(tokens.spacingVerticalXS, tokens.spacingHorizontalL),
+    ...shorthands.borderBottom('1px', 'solid', tokens.colorNeutralStroke2),
+    backgroundColor: tokens.colorNeutralBackground1,
+  },
+  quickLabel: {
+    color: tokens.colorNeutralForeground3,
+    fontSize: tokens.fontSizeBase100,
+    fontWeight: tokens.fontWeightSemibold,
+  },
+  stream: {
     flex: 1,
     minHeight: 0,
     overflowY: 'auto',
-    ...shorthands.padding(tokens.spacingHorizontalM),
-    '& *': { fontFamily: TERM.mono },
-  },
-  // CLI-style prompt line pinned to the bottom of the terminal.
-  promptLine: {
-    flexShrink: 0,
     display: 'flex',
-    alignItems: 'flex-start',
-    gap: tokens.spacingHorizontalXS,
-    ...shorthands.borderTop('1px', 'solid', TERM.border),
-    ...shorthands.padding('6px', tokens.spacingHorizontalM),
-    backgroundColor: TERM.bgRaised,
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalM,
+    ...shorthands.padding(tokens.spacingVerticalM, tokens.spacingHorizontalL),
   },
-  promptContext: {
-    flexShrink: 0,
-    userSelect: 'none',
-    paddingTop: '5px',
-    whiteSpace: 'nowrap',
-    // Below ~560px the branch/path context crowds out the input; drop it and
-    // keep just the caret so typing stays comfortable on phones.
-    '@media (max-width: 560px)': {
-      '& > *:not(:last-child)': { display: 'none' },
-    },
+  turn: {
+    display: 'grid',
+    gridTemplateColumns: '28px minmax(0, 1fr)',
+    gap: tokens.spacingHorizontalS,
+    alignItems: 'start',
   },
-  promptPath: { color: TERM.accent },
-  promptBranch: { color: TERM.branch },
-  promptCaret: { color: TERM.prompt, marginLeft: '0.4em', marginRight: '0.2em' },
-  // Discoverable submit shortcut — state feedback only, no onboarding overlay.
-  promptHint: {
-    flexShrink: 0,
-    color: TERM.fgDim,
+  avatar: {
+    width: '28px',
+    height: '28px',
+    borderRadius: tokens.borderRadiusCircular,
+    display: 'grid',
+    placeItems: 'center',
     fontSize: tokens.fontSizeBase100,
-    whiteSpace: 'nowrap',
-    paddingTop: '6px',
-    '@media (max-width: 640px)': { display: 'none' },
+    fontWeight: tokens.fontWeightSemibold,
+    backgroundColor: tokens.colorNeutralBackground3,
+    color: tokens.colorNeutralForeground2,
+    ...shorthands.border('1px', 'solid', tokens.colorNeutralStroke2),
   },
-  blink: {
-    animationName: {
-      '0%, 49%': { opacity: 1 },
-      '50%, 100%': { opacity: 0 },
-    },
-    animationDuration: '1.05s',
-    animationIterationCount: 'infinite',
-    animationTimingFunction: 'step-end',
+  userAvatar: {
+    backgroundColor: tokens.colorBrandBackground2,
+    color: tokens.colorBrandForeground1,
+    borderTopColor: tokens.colorBrandStroke2,
+    borderRightColor: tokens.colorBrandStroke2,
+    borderBottomColor: tokens.colorBrandStroke2,
+    borderLeftColor: tokens.colorBrandStroke2,
   },
-  // Borderless, transparent input that reads as part of the prompt line.
-  input: {
-    flex: 1,
+  message: {
     minWidth: 0,
-    backgroundColor: 'transparent',
-    ...shorthands.border('0'),
-    ...shorthands.padding('0'),
-    '::after': { display: 'none' },
-    '& textarea': {
-      fontFamily: TERM.mono,
-      fontSize: tokens.fontSizeBase200,
-      lineHeight: '1.5',
-      color: TERM.fg,
-      backgroundColor: 'transparent',
-      ...shorthands.padding('0'),
-      '::placeholder': { color: TERM.fgDim },
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalXS,
+  },
+  messageMeta: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXS,
+    flexWrap: 'wrap',
+  },
+  author: {
+    fontSize: tokens.fontSizeBase200,
+    fontWeight: tokens.fontWeightSemibold,
+  },
+  roleLabel: {
+    fontSize: tokens.fontSizeBase100,
+    color: tokens.colorNeutralForeground3,
+  },
+  bubble: {
+    maxWidth: '78ch',
+    whiteSpace: 'pre-wrap',
+    overflowWrap: 'anywhere',
+    lineHeight: tokens.lineHeightBase300,
+    fontSize: tokens.fontSizeBase300,
+  },
+  userBubble: {
+    color: tokens.colorNeutralForeground1,
+  },
+  stateBlock: {
+    maxWidth: '78ch',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalXS,
+    ...shorthands.padding(tokens.spacingVerticalS, tokens.spacingHorizontalM),
+    ...shorthands.border('1px', 'solid', tokens.colorNeutralStroke2),
+    ...shorthands.borderRadius(tokens.borderRadiusMedium),
+    backgroundColor: tokens.colorNeutralBackground2,
+  },
+  clarificationBlock: {
+    borderTopColor: tokens.colorStatusWarningBorder1,
+    borderRightColor: tokens.colorStatusWarningBorder1,
+    borderBottomColor: tokens.colorStatusWarningBorder1,
+    borderLeftColor: tokens.colorStatusWarningBorder1,
+    backgroundColor: tokens.colorStatusWarningBackground1,
+  },
+  gateBlock: {
+    borderTopColor: tokens.colorPaletteMarigoldBorderActive,
+    borderRightColor: tokens.colorPaletteMarigoldBorderActive,
+    borderBottomColor: tokens.colorPaletteMarigoldBorderActive,
+    borderLeftColor: tokens.colorPaletteMarigoldBorderActive,
+    backgroundColor: tokens.colorPaletteMarigoldBackground2,
+  },
+  errorBlock: {
+    borderTopColor: tokens.colorStatusDangerBorder1,
+    borderRightColor: tokens.colorStatusDangerBorder1,
+    borderBottomColor: tokens.colorStatusDangerBorder1,
+    borderLeftColor: tokens.colorStatusDangerBorder1,
+    backgroundColor: tokens.colorStatusDangerBackground1,
+  },
+  stateTitle: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXS,
+    fontWeight: tokens.fontWeightSemibold,
+  },
+  toolList: {
+    maxWidth: '78ch',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalXXS,
+    marginTop: tokens.spacingVerticalXXS,
+  },
+  toolRow: {
+    display: 'grid',
+    gridTemplateColumns: 'auto minmax(0, 1fr)',
+    gap: tokens.spacingHorizontalS,
+    alignItems: 'baseline',
+    fontSize: tokens.fontSizeBase200,
+    color: tokens.colorNeutralForeground2,
+  },
+  links: {
+    display: 'flex',
+    flexWrap: 'wrap',
+    gap: tokens.spacingHorizontalXS,
+  },
+  link: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXXS,
+    color: tokens.colorBrandForegroundLink,
+    textDecorationLine: 'none',
+    fontSize: tokens.fontSizeBase200,
+    minHeight: '24px',
+    ':hover': { textDecorationLine: 'underline' },
+    ':focus-visible': {
+      outlineStyle: 'solid',
+      outlineWidth: '2px',
+      outlineColor: tokens.colorStrokeFocus2,
+      outlineOffset: '2px',
     },
   },
-  sendBtn: {
+  composer: {
     flexShrink: 0,
-    '@media (pointer: coarse)': { minHeight: '44px', minWidth: '44px' },
+    display: 'grid',
+    gridTemplateColumns: 'minmax(0, 1fr) auto',
+    gap: tokens.spacingHorizontalS,
+    alignItems: 'end',
+    ...shorthands.padding(tokens.spacingVerticalS, tokens.spacingHorizontalL),
+    ...shorthands.borderTop('1px', 'solid', tokens.colorNeutralStroke2),
+    backgroundColor: tokens.colorNeutralBackground1,
+  },
+  input: {
+    '& textarea': {
+      minHeight: '48px',
+      maxHeight: '140px',
+      lineHeight: tokens.lineHeightBase300,
+    },
+  },
+  composerHint: {
+    gridColumn: '1 / -1',
+    color: tokens.colorNeutralForeground3,
+    fontSize: tokens.fontSizeBase100,
   },
 });
 
-interface ConsoleLink { label: string; to: string }
-type LineTone = 'user' | 'info' | 'ok' | 'warn' | 'error';
-interface ConsoleLine {
+type ConsoleScope = 'global' | 'project' | 'run';
+type MessageKind = 'answer' | 'tool' | 'clarification' | 'gate' | 'error';
+
+interface ConsoleLink { label: string; to?: string; href?: string }
+interface ConsoleMessage {
   id: string;
-  tone: LineTone;
+  role: 'user' | 'assistant';
+  kind: MessageKind;
   text: string;
   links?: ConsoleLink[];
+  tools?: AgentweaverConsoleToolCall[];
+  gateTitle?: string;
 }
 
 interface CommandResult {
-  tone: Exclude<LineTone, 'user'>;
+  kind?: MessageKind;
   text: string;
   links?: ConsoleLink[];
-  setActiveProject?: Project | null;
+  tools?: AgentweaverConsoleToolCall[];
+  setSelectedProject?: Project | null;
   bindRunId?: string;
-  bindRunStatus?: string;
+  clear?: boolean;
 }
 
 let seq = 0;
-const nextId = () => `l${Date.now()}-${seq++}`;
+const nextId = () => `console-${Date.now()}-${seq++}`;
+
+export function consoleRouteContext(pathname: string): { projectId?: string; runId?: string; scope: ConsoleScope } {
+  const runMatch = /^\/projects\/([^/]+)\/orchestrations\/([^/]+)/.exec(pathname);
+  if (runMatch) return { projectId: decodeURIComponent(runMatch[1]), runId: decodeURIComponent(runMatch[2]), scope: 'run' };
+  const projectMatch = /^\/projects\/([^/]+)/.exec(pathname);
+  if (projectMatch) return { projectId: decodeURIComponent(projectMatch[1]), scope: 'project' };
+  return { scope: 'global' };
+}
 
 function errText(err: unknown): string {
   if (err instanceof ApiError) return `API error ${err.status}: ${err.body}`;
@@ -332,442 +325,438 @@ function intakeCards(columns: BoardColumnDto[]): TaskCardDto[] {
 }
 
 function buildHelp(): string {
-  // Align the command column so summaries read as a scannable table, not a
-  // ragged list — dense and predictable, like `man` or `--help` output.
-  const rows = SLASH_COMMANDS.map((c) => ({
-    head: `/${c.name}${c.argHint ? ' ' + c.argHint : ''}`,
-    summary: c.summary,
-    mcp: c.mcp,
-  }));
-  const col = Math.min(30, Math.max(...rows.map((r) => r.head.length)) + 2);
-  const cmds = rows
-    .map((r) => `  ${r.head.padEnd(col)}${r.summary}\n${' '.repeat(col + 2)}[MCP: ${r.mcp}]`)
+  const shortcuts = SLASH_COMMANDS
+    .map((c) => `/${c.name}${c.argHint ? ` ${c.argHint}` : ''} — ${c.summary}`)
     .join('\n');
-  const deferred = DEFERRED_COMMANDS.map((c) => `  ${c.label} — ${c.summary}`).join('\n');
-  return (
-    'Two ways to drive Agentweaver:\n' +
-    '  • Type PROSE (no leading slash) to talk to the coordinator agent — it plans,\n' +
-    '    dispatches and assembles work. Bind a run first with /orchestrate or /monitor.\n' +
-    '  • Type /commands for the explicit control plane. Each wraps the SAME endpoint\n' +
-    '    the matching MCP tool wraps (docs/reference/mcp-tools.md).\n\n' +
-    `Commands:\n${cmds}\n\nDeferred (use the linked gated UIs — the console never bypasses these):\n${deferred}`
-  );
+  const deferred = DEFERRED_COMMANDS.map((c) => `${c.label} — ${c.summary}`).join('\n');
+  return `Natural language is the primary interface. Ask Agentweaver what you want; the facade agent selects tools and asks only when needed.\n\nSecondary shortcuts:\n${shortcuts}\n\nGated surfaces stay gated:\n${deferred}`;
 }
 
-const GREETING: ConsoleLine = {
-  id: 'greeting',
-  tone: 'info',
-  text:
-    'agentweaver control console — terminal UX. Prose drives the real coordinator agent; ' +
-    '/commands drive the MCP-backed control plane.\n\n' +
-    'Quick start:\n' +
-    '  /projects              list projects\n' +
-    '  /use <name or id>      set the active project\n' +
-    '  /orchestrate <goal>    start a coordinator run (confirms a plan before dispatch)\n' +
-    '  /monitor <runId>       bind the terminal to an existing run\n' +
-    '  /help                  full command + gate reference',
+const WELCOME: ConsoleMessage = {
+  id: 'welcome',
+  role: 'assistant',
+  kind: 'answer',
+  text: 'Ask Agentweaver to inspect projects, start or monitor orchestrations, summarize runs, or help unblock work. I will route requests through the facade agent and surface gates for review.',
 };
+
+function commandTool(name: string, status: AgentweaverConsoleToolCall['status'] = 'completed', summary?: string): AgentweaverConsoleToolCall {
+  return { name, status, summary };
+}
+
+function responseLinks(response: AgentweaverConsoleResponse): ConsoleLink[] {
+  const links: ConsoleLink[] = (response.links ?? []).map((link) => ({
+    label: link.label,
+    to: link.to,
+    href: link.href,
+  }));
+  if (response.project_id && !links.some((l) => l.to === `/projects/${response.project_id}`)) {
+    links.push({ label: 'Open project', to: `/projects/${response.project_id}` });
+  }
+  if (response.project_id && response.run_id && !links.some((l) => l.to === `/projects/${response.project_id}/orchestrations/${response.run_id}`)) {
+    links.push({ label: 'Open run', to: `/projects/${response.project_id}/orchestrations/${response.run_id}` });
+  }
+  return links;
+}
+
+function responseToMessage(response: AgentweaverConsoleResponse): ConsoleMessage {
+  const kind: MessageKind = response.status === 'needs_clarification'
+      || response.kind === 'clarification'
+      || Boolean(response.clarifications?.length)
+      ? 'clarification'
+      : response.status === 'needs_confirmation'
+      || response.kind === 'gate_required'
+      || Boolean(response.gate)
+        ? 'gate'
+      : response.status === 'blocked'
+      || response.kind === 'error'
+      || Boolean(response.errors?.length)
+        ? 'error'
+          : response.tool_calls?.length || response.tools?.length || response.action_summaries?.length || response.action
+            ? 'tool'
+            : 'answer';
+  const tools = response.tool_calls?.length
+      ? response.tool_calls
+      : response.tools?.length
+        ? response.tools.map((tool) => ({ name: tool.label, status: tool.status, summary: tool.detail }))
+      : response.action_summaries?.length
+        ? response.action_summaries.map((action) => ({ name: action.label ?? action.action, status: action.status, summary: action.detail }))
+      : response.action
+        ? [{ name: response.action, status: response.status ?? 'completed', summary: response.message }]
+        : undefined;
+  const text = response.message
+      || response.message_chunks?.map((chunk) => chunk.text).join('')
+      || response.clarifications?.map((item) => item.prompt).join('\n')
+      || response.errors?.map((item) => item.message).join('\n')
+      || '';
+  return {
+      id: nextId(),
+      role: 'assistant',
+      kind,
+      text,
+      links: responseLinks(response),
+      tools,
+      gateTitle: response.status === 'blocked' ? 'Blocked' : response.gate?.title ?? response.action ?? undefined,
+  };
+}
+
+function linkFromProject(p: Project): ConsoleLink {
+  return { label: `Open ${p.name}`, to: `/projects/${p.project_id}` };
+}
 
 export function BrowserConsole() {
   const styles = useStyles();
-  const [lines, setLines] = useState<ConsoleLine[]>([GREETING]);
+  const location = useLocation();
+  const route = useMemo(() => consoleRouteContext(location.pathname), [location.pathname]);
+  const [messages, setMessages] = useState<ConsoleMessage[]>([WELCOME]);
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
-  const [activeProject, setActiveProject] = useState<Project | null>(null);
+  const [selectedProject, setSelectedProject] = useState<Project | null>(null);
+  const [routeProject, setRouteProject] = useState<Project | null>(null);
   const [boundRunId, setBoundRunId] = useState('');
-  const [boundRunStatus, setBoundRunStatus] = useState<string | undefined>(undefined);
-  const [boundRunKind] = useState<TurnSourceKind>('coordinator');
-  // A prose goal captured while NO run is bound — held for EXPLICIT confirmation
-  // rather than auto-starting work (spec: ambiguous requests ask before creating).
-  const [pendingGoal, setPendingGoal] = useState<string | null>(null);
+  const [conversationId, setConversationId] = useState<string | undefined>();
+  const streamRef = useRef<HTMLDivElement>(null);
 
-  const activeProjectRef = useRef<Project | null>(null);
-  useEffect(() => { activeProjectRef.current = activeProject; }, [activeProject]);
-
-  // The bound run's stream/timeline/gate model — inert while boundRunId is ''.
-  const model = useCoordinatorRunModel(boundRunId, boundRunStatus);
-
-  const transcriptRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    const el = transcriptRef.current;
+    const el = streamRef.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [lines]);
+  }, [messages, busy]);
 
-  const timelineScrollRef = useRef<HTMLDivElement>(null);
-  const userScrolledUp = useRef(false);
-  const onTimelineScroll = () => {
-    const el = timelineScrollRef.current;
-    if (!el) return;
-    userScrolledUp.current = el.scrollHeight - el.scrollTop - el.clientHeight > 64;
-  };
   useEffect(() => {
-    if (!userScrolledUp.current && timelineScrollRef.current) {
-      timelineScrollRef.current.scrollTop = timelineScrollRef.current.scrollHeight;
+    if (!route.projectId) {
+      setRouteProject(null);
+      return;
     }
-  }, [model.items.length]);
+    let cancelled = false;
+    apiClient.getProject(route.projectId)
+      .then((project) => { if (!cancelled) setRouteProject(project); })
+      .catch(() => { if (!cancelled) setRouteProject(null); });
+    return () => { cancelled = true; };
+  }, [route.projectId]);
 
-  const appendLine = useCallback((tone: LineTone, text: string, links?: ConsoleLink[]) => {
-    setLines((prev) => [...prev, { id: nextId(), tone, text, links }]);
+  useEffect(() => {
+    if (route.runId) setBoundRunId(route.runId);
+  }, [route.runId]);
+
+  const effectiveProjectId = route.projectId ?? selectedProject?.project_id;
+  const effectiveProjectName = route.projectId
+    ? (routeProject?.name ?? route.projectId)
+    : (selectedProject?.name ?? undefined);
+  const effectiveRunId = route.runId ?? (boundRunId ? boundRunId : undefined);
+  const effectiveScope: ConsoleScope = effectiveRunId ? 'run' : effectiveProjectId ? 'project' : 'global';
+
+  const append = useCallback((message: Omit<ConsoleMessage, 'id'>) => {
+    setMessages((prev) => [...prev, { ...message, id: nextId() }]);
   }, []);
 
-  const projectLink = useCallback((p: Project): ConsoleLink => ({ label: `Open ${p.name}`, to: `/projects/${p.project_id}` }), []);
-
   const runCommand = useCallback(async (name: SlashCommandName, arg: string): Promise<CommandResult> => {
-    const requireProject = (): Project | null => activeProjectRef.current;
-    const requireBound = (): string | null => (boundRunId ? boundRunId : null);
-
+    const projectId = effectiveProjectId;
+    const runId = effectiveRunId;
     switch (name) {
       case 'help':
-        return { tone: 'info', text: buildHelp() };
+        return { text: buildHelp() };
       case 'clear':
-        setLines([GREETING]);
-        return { tone: 'info', text: 'Transcript cleared.' };
+        return { text: '', clear: true };
       case 'projects': {
         const projects = await apiClient.listProjects();
-        if (projects.length === 0) {
-          return { tone: 'info', text: 'No projects yet.', links: [{ label: 'Open Projects gallery', to: '/projects' }] };
-        }
+        if (!projects.length) return { text: 'No projects yet.', links: [{ label: 'Open Projects', to: '/projects' }], tools: [commandTool('List projects')] };
         return {
-          tone: 'info',
-          text: `${projects.length} project(s). Select one with /use <name or id>:`,
+          text: `${projects.length} project(s). Use /use <name or id> to pin one when you are outside a project route.`,
           links: projects.map((p) => ({ label: `${p.name} (${p.project_id})`, to: `/projects/${p.project_id}` })),
+          tools: [commandTool('List projects')],
         };
       }
       case 'use': {
-        if (!arg) return { tone: 'warn', text: 'Which project? Try /projects then /use <name or id>.' };
+        if (!arg) return { kind: 'clarification', text: 'Which project should I use? Try /projects, then /use <name or id>.' };
         const projects = await apiClient.listProjects();
         const { project, candidates } = resolveProject(projects, arg);
         if (project) {
-          return { tone: 'ok', text: `Active project → ${project.name} (${project.project_id}).`, links: [projectLink(project)], setActiveProject: project };
-        }
-        if (candidates && candidates.length > 1) {
           return {
-            tone: 'warn',
-            text: `"${arg}" matches ${candidates.length} projects. Re-run /use with a specific id:`,
+            text: `Pinned ${project.name} for global console requests. Project routes still override this context while you are on them.`,
+            links: [linkFromProject(project)],
+            tools: [commandTool('Select project')],
+            setSelectedProject: project,
+          };
+        }
+        if (candidates?.length) {
+          return {
+            kind: 'clarification',
+            text: `“${arg}” matches ${candidates.length} projects. Choose the exact id with /use <id>.`,
             links: candidates.map((p) => ({ label: `${p.name} (${p.project_id})`, to: `/projects/${p.project_id}` })),
           };
         }
-        return { tone: 'error', text: `No project matches "${arg}". Run /projects to list them.` };
+        return { kind: 'error', text: `No project matches “${arg}”.` };
       }
       case 'backlog': {
-        const p = requireProject();
-        if (!p) return { tone: 'warn', text: 'Select a project first with /use <project>.' };
-        const board = await apiClient.getBoard(p.project_id);
+        if (!projectId) return { kind: 'clarification', text: 'Choose a project first with /use <project>, or navigate to a project.' };
+        const board = await apiClient.getBoard(projectId);
         const cards = intakeCards(board.columns);
-        if (cards.length === 0) return { tone: 'info', text: `No backlog/ready items in ${p.name}.`, links: [{ label: 'Open board', to: `/projects/${p.project_id}/board` }] };
-        const body = cards.map((c) => `  [${c.state}] ${c.title} (${c.task_id})`).join('\n');
-        return { tone: 'info', text: `${cards.length} intake item(s) in ${p.name}:\n${body}`, links: [{ label: 'Open board', to: `/projects/${p.project_id}/board` }] };
+        return {
+          text: cards.length ? cards.map((c) => `${c.state}: ${c.title} (${c.task_id})`).join('\n') : 'No backlog or ready items found.',
+          links: [{ label: 'Open board', to: `/projects/${projectId}/board` }],
+          tools: [commandTool('Read board')],
+        };
       }
       case 'add': {
-        const p = requireProject();
-        if (!p) return { tone: 'warn', text: 'Select a project first with /use <project>.' };
-        if (!arg) return { tone: 'warn', text: 'What should the item say? Try /add <title> :: <optional description>.' };
+        if (!projectId) return { kind: 'clarification', text: 'Choose a project first with /use <project>, or navigate to a project.' };
+        if (!arg) return { kind: 'clarification', text: 'What backlog item should I capture? Use /add <title> :: <optional description>.' };
         const [titlePart, ...rest] = arg.split('::');
         const title = titlePart.trim();
+        if (!title) return { kind: 'clarification', text: 'The backlog item needs a title.' };
         const description = rest.join('::').trim() || null;
-        if (!title) return { tone: 'warn', text: 'The backlog item needs a title. Try /add <title>.' };
-        const task = await apiClient.captureBacklogTask(p.project_id, { title, description });
-        return { tone: 'ok', text: `Captured "${task.title}" (${task.task_id}) in ${p.name}.`, links: [{ label: 'View on board', to: `/projects/${p.project_id}/board` }] };
+        const task = await apiClient.captureBacklogTask(projectId, { title, description });
+        return {
+          text: `Captured “${task.title}” (${task.task_id}).`,
+          links: [{ label: 'Open board', to: `/projects/${projectId}/board` }],
+          tools: [commandTool('Capture backlog task')],
+        };
       }
       case 'ready': {
-        const p = requireProject();
-        if (!p) return { tone: 'warn', text: 'Select a project first with /use <project>.' };
-        if (!arg) return { tone: 'warn', text: 'Which backlog item? Try /ready <task title or id> (see /backlog).' };
-        const board = await apiClient.getBoard(p.project_id);
+        if (!projectId) return { kind: 'clarification', text: 'Choose a project first with /use <project>, or navigate to a project.' };
+        if (!arg) return { kind: 'clarification', text: 'Which backlog item should move to Ready? Use /ready <task title or id>.' };
+        const board = await apiClient.getBoard(projectId);
         const backlog = intakeCards(board.columns).filter((c) => c.state === 'backlog');
         const q = arg.toLowerCase();
-        const byId = backlog.find((c) => c.task_id.toLowerCase() === q);
-        const matches = byId ? [byId] : backlog.filter((c) => c.title.toLowerCase().includes(q));
-        if (matches.length === 0) return { tone: 'error', text: `No backlog item matches "${arg}". Run /backlog to see items.` };
-        if (matches.length > 1) {
-          return { tone: 'warn', text: `"${arg}" matches ${matches.length} items. Re-run /ready with a task id:\n${matches.map((c) => `  ${c.title} (${c.task_id})`).join('\n')}` };
-        }
-        const target = matches[0];
-        await apiClient.moveTaskToReady(p.project_id, target.task_id);
-        return { tone: 'ok', text: `Moved "${target.title}" to Ready. It is picked up by the normal heartbeat/pickup flow — the console starts no work directly.`, links: [{ label: 'View on board', to: `/projects/${p.project_id}/board` }] };
+        const match = backlog.find((c) => c.task_id.toLowerCase() === q) ?? backlog.find((c) => c.title.toLowerCase().includes(q));
+        if (!match) return { kind: 'error', text: `No backlog item matches “${arg}”.` };
+        await apiClient.moveTaskToReady(projectId, match.task_id);
+        return { text: `Moved “${match.title}” to Ready.`, links: [{ label: 'Open board', to: `/projects/${projectId}/board` }], tools: [commandTool('Move task to ready')] };
       }
       case 'runs': {
-        const p = requireProject();
-        if (!p) return { tone: 'warn', text: 'Select a project first with /use <project>.' };
-        const runs = await apiClient.listProjectRuns(p.project_id);
-        if (runs.length === 0) return { tone: 'info', text: `No orchestration runs in ${p.name}. Start one with /orchestrate <goal>.` };
+        if (!projectId) return { kind: 'clarification', text: 'Choose a project first with /use <project>, or navigate to a project.' };
+        const runs = await apiClient.listProjectRuns(projectId);
         return {
-          tone: 'info',
-          text: `${runs.length} run(s) in ${p.name} — bind one with /monitor <runId>:`,
+          text: runs.length ? `${runs.length} run(s). Use /monitor <runId> or open a run.` : 'No orchestration runs yet.',
           links: runs.slice(0, 25).map((r) => {
-            const rid = r.workflow_run_id ?? r.execution_id;
-            return { label: `${r.status} · ${r.task.slice(0, 56)} (${rid})`, to: `/projects/${p.project_id}/orchestrations/${rid}` };
+            const id = r.workflow_run_id ?? r.execution_id;
+            return { label: `${r.status} · ${r.task || id}`, to: `/projects/${projectId}/orchestrations/${id}` };
           }),
+          tools: [commandTool('List project runs')],
         };
       }
       case 'orchestrate': {
-        const p = requireProject();
-        if (!p) return { tone: 'warn', text: 'Select a project first with /use <project>.' };
-        if (!arg) return { tone: 'warn', text: 'What goal should the orchestration pursue? Try /orchestrate <goal>.' };
-        const res = await apiClient.startOrchestration(p.project_id, arg);
+        if (!projectId) return { kind: 'clarification', text: 'Choose a project first with /use <project>, or navigate to a project.' };
+        if (!arg) return { kind: 'clarification', text: 'What should the orchestration accomplish?' };
+        const res = await apiClient.startOrchestration(projectId, arg);
         return {
-          tone: 'ok',
-          text: `Started orchestration in ${p.name}. The coordinator will draft an Outcome plan — confirm it below (or on the run page) before work is dispatched; the gate is not bypassed. Bound the terminal to this run.`,
-          links: [{ label: 'Open orchestration', to: `/projects/${p.project_id}/orchestrations/${res.runId}` }],
+          kind: 'gate',
+          text: 'Started orchestration. Review the outcome plan gate before work dispatches.',
+          links: [{ label: 'Open orchestration', to: `/projects/${projectId}/orchestrations/${res.runId}` }],
+          tools: [commandTool('Start orchestration')],
           bindRunId: res.runId,
-          bindRunStatus: undefined,
         };
       }
       case 'monitor': {
-        if (!arg) return { tone: 'warn', text: 'Which run? Try /monitor <runId> (see /runs).' };
-        const rid = arg.split(/\s+/)[0];
-        let status: string | undefined;
-        try { status = (await apiClient.getRun(rid)).status; } catch { /* unknown → live-only, no seed */ }
-        const p = requireProject();
-        const links: ConsoleLink[] = p ? [{ label: 'Open run', to: `/projects/${p.project_id}/orchestrations/${rid}` }] : [];
-        return { tone: 'ok', text: `Bound terminal to run ${rid}. Streaming live updates + inline gates below; durable history is seeded for parked/finished runs.`, links, bindRunId: rid, bindRunStatus: status };
+        if (!arg) return { kind: 'clarification', text: 'Which run should I bind? Use /monitor <runId>.' };
+        const id = arg.split(/\s+/)[0];
+        return {
+          text: `Bound the dock context to run ${id}.`,
+          links: projectId ? [{ label: 'Open run', to: `/projects/${projectId}/orchestrations/${id}` }] : undefined,
+          tools: [commandTool('Bind run')],
+          bindRunId: id,
+        };
       }
       case 'confirm': {
-        if (!requireBound()) return { tone: 'warn', text: 'No bound run. Bind one with /monitor <runId> or /orchestrate <goal>.' };
-        await model.confirmOutcomeSpec();
-        return { tone: 'ok', text: 'Outcome plan confirmed. The coordinator will proceed to dispatch work.' };
+        if (!runId) return { kind: 'gate', text: 'No run is bound. Open a run or use /monitor <runId> before confirming a gate.' };
+        await apiClient.confirmOutcomeSpec(runId);
+        return { text: 'Outcome plan confirmed.', tools: [commandTool('Confirm outcome plan')] };
       }
       case 'revise': {
-        if (!requireBound()) return { tone: 'warn', text: 'No bound run. Bind one with /monitor <runId> first.' };
-        if (!arg) return { tone: 'warn', text: 'Provide revision feedback: /revise <what to change>.' };
-        await model.reviseOutcomeSpec(arg);
-        return { tone: 'ok', text: 'Revision sent. Watch the transcript for the updated Outcome plan, then /confirm.' };
+        if (!runId) return { kind: 'gate', text: 'No run is bound. Open a run or use /monitor <runId> before revising a gate.' };
+        if (!arg) return { kind: 'clarification', text: 'What should change? Use /revise <feedback>.' };
+        await apiClient.reviseOutcomeSpec(runId, arg);
+        return { text: 'Revision sent to the coordinator.', tools: [commandTool('Revise outcome plan')] };
       }
       case 'approve-assembly': {
-        if (!requireBound()) return { tone: 'warn', text: 'No bound run. Bind one with /monitor <runId> first.' };
-        await model.reviewAssembly('approve', arg || undefined);
-        return { tone: 'ok', text: 'Assembly review approved. The coordinator will merge/scribe/complete.' };
+        if (!runId) return { kind: 'gate', text: 'No run is bound. Open a run or use /monitor <runId> before reviewing assembly.' };
+        await apiClient.reviewAssembly(runId, 'approve', arg || undefined);
+        return { text: 'Assembly approved.', tools: [commandTool('Review assembly')] };
       }
       case 'stop': {
-        if (!requireBound()) return { tone: 'warn', text: 'No bound run to stop.' };
-        await model.stop();
-        return { tone: 'warn', text: 'Stop directive sent to the coordinator.' };
+        if (!runId) return { kind: 'clarification', text: 'No run is bound. Open a run or use /monitor <runId>.' };
+        await apiClient.steerCoordinator(runId, { kind: 'stop' });
+        return { text: 'Stop directive sent to the coordinator.', tools: [commandTool('Stop orchestration', 'queued')] };
       }
     }
-  }, [boundRunId, model, projectLink]);
+  }, [effectiveProjectId, effectiveRunId]);
 
   const submit = useCallback(async () => {
-    const raw = input;
-    if (!raw.trim() || busy) return;
+    const raw = input.trim();
+    if (!raw || busy) return;
     const parsed = parseInput(raw);
-    appendLine('user', raw.trim());
+    append({ role: 'user', kind: 'answer', text: raw });
     setInput('');
     setBusy(true);
     try {
       if (parsed.channel === 'unknown-command') {
-        appendLine('error', `Unknown command /${parsed.token}. Type /help for the command list.`);
+        append({ role: 'assistant', kind: 'error', text: `Unknown shortcut /${parsed.token}. Type /help for the shortcut list, or ask in natural language.` });
         return;
       }
-      if (parsed.channel === 'prose') {
-        if (!parsed.text) return;
-        // Prose confirmation of a previously-captured goal.
-        if (pendingGoal && /^(y|yes|start|confirm)$/i.test(parsed.text)) {
-          const p = activeProjectRef.current;
-          if (!p) { appendLine('warn', 'Select a project first with /use <project>, then re-send the goal.'); return; }
-          const goal = pendingGoal;
-          setPendingGoal(null);
-          const res = await apiClient.startOrchestration(p.project_id, goal);
-          setBoundRunId(res.runId);
-          setBoundRunStatus(undefined);
-          appendLine('ok', `Started orchestration for: "${goal}". Confirm the Outcome plan below before work is dispatched.`, [{ label: 'Open orchestration', to: `/projects/${p.project_id}/orchestrations/${res.runId}` }]);
+      if (parsed.channel === 'command') {
+        const result = await runCommand(parsed.name, parsed.arg);
+        if (result.clear) {
+          setMessages([WELCOME]);
           return;
         }
-        if (boundRunId) {
-          // Conversational coordinator loop — prose goes to the REAL coordinator agent.
-          await model.sendMessage(parsed.text);
-          appendLine('info', 'Sent to the coordinator. Watch the run transcript below for its response.');
-          return;
-        }
-        // No bound run → do NOT auto-start work; ask for explicit confirmation (gate).
-        setPendingGoal(parsed.text);
-        const hasProject = !!activeProjectRef.current;
-        appendLine(
-          'warn',
-          hasProject
-            ? `No orchestration is bound. Start one with this as the goal? Reply "yes" to start, or /monitor <runId> to attach to an existing run.\n  goal: ${parsed.text}`
-            : 'No project selected and no run bound. Run /use <project> first, then /orchestrate <goal>.',
-        );
+        if (result.setSelectedProject !== undefined) setSelectedProject(result.setSelectedProject);
+        if (result.bindRunId !== undefined) setBoundRunId(result.bindRunId);
+        append({ role: 'assistant', kind: result.kind ?? (result.tools?.length ? 'tool' : 'answer'), text: result.text, links: result.links, tools: result.tools });
         return;
       }
-      // Explicit command channel.
-      const result = await runCommand(parsed.name, parsed.arg);
-      if (result.setActiveProject !== undefined) setActiveProject(result.setActiveProject);
-      if (result.bindRunId !== undefined) { setBoundRunId(result.bindRunId); setBoundRunStatus(result.bindRunStatus); }
-      appendLine(result.tone, result.text, result.links);
+
+      const response = await apiClient.sendConsoleMessage({
+        message: parsed.text,
+        text: parsed.text,
+        conversation_id: conversationId ?? null,
+        context: {
+          scope: effectiveScope,
+          project_id: effectiveProjectId ?? null,
+          run_id: effectiveRunId ?? null,
+          route: location.pathname,
+        },
+      });
+      if (response.conversation_id) setConversationId(response.conversation_id);
+      if (response.run_id) setBoundRunId(response.run_id);
+      append(responseToMessage(response));
     } catch (err) {
-      appendLine('error', errText(err));
+      append({ role: 'assistant', kind: 'error', text: errText(err) });
     } finally {
       setBusy(false);
     }
-  }, [input, busy, appendLine, runCommand, model, boundRunId, pendingGoal]);
+  }, [append, busy, conversationId, effectiveProjectId, effectiveRunId, effectiveScope, input, location.pathname, runCommand]);
 
-  // Header quick-command chips run the exact same zero-arg command path as typing
-  // it — they append the same "you typed this" line so the transcript stays the
-  // single source of truth, they're just a faster on-ramp for /help, /projects, /clear.
-  const runQuickCommand = useCallback(async (name: Extract<SlashCommandName, 'help' | 'projects' | 'clear'>) => {
+  const runQuickCommand = useCallback((command: SlashCommandName) => {
     if (busy) return;
-    appendLine('user', `/${name}`);
-    setBusy(true);
-    try {
-      const result = await runCommand(name, '');
-      if (result.setActiveProject !== undefined) setActiveProject(result.setActiveProject);
-      if (result.bindRunId !== undefined) { setBoundRunId(result.bindRunId); setBoundRunStatus(result.bindRunStatus); }
-      appendLine(result.tone, result.text, result.links);
-    } catch (err) {
-      appendLine('error', errText(err));
-    } finally {
-      setBusy(false);
-    }
-  }, [busy, appendLine, runCommand]);
+    setInput(`/${command}`);
+  }, [busy]);
 
-  const toneClass = (tone: LineTone) => {
-    switch (tone) {
-      case 'error': return styles.errText;
-      case 'warn': return styles.warnText;
-      case 'ok': return styles.okText;
-      default: return undefined;
-    }
-  };
+  const scopeLabel = effectiveScope === 'run' ? 'Run' : effectiveScope === 'project' ? 'Project' : 'Global';
+  const effectiveProjectBadgeLabel = effectiveProjectName ?? effectiveProjectId;
+  const routeBindingLabel = route.runId
+    ? 'route run'
+    : route.projectId
+      ? 'route project'
+      : selectedProject
+        ? 'selected project'
+        : 'global';
 
-  const activeLabel = useMemo(() => (activeProject ? activeProject.name : 'none'), [activeProject]);
-  const gates = model.gates;
+  const renderLinks = (links?: ConsoleLink[]) => links?.length ? (
+    <div className={styles.links}>
+      {links.map((link, index) => link.to ? (
+        <RouterLink key={`${link.label}-${index}`} className={styles.link} to={link.to}>
+          <Open16Regular aria-hidden="true" />{link.label}
+        </RouterLink>
+      ) : link.href ? (
+        <a key={`${link.label}-${index}`} className={styles.link} href={link.href} target="_blank" rel="noreferrer">
+          <Open16Regular aria-hidden="true" />{link.label}
+        </a>
+      ) : null)}
+    </div>
+  ) : null;
 
-  // Runs an inline gate action (confirm / assembly review) then reports it in the transcript.
-  const submitGate = useCallback((action: () => Promise<unknown>, okText: string) => {
-    setBusy(true);
-    return action()
-      .then(() => appendLine('ok', okText))
-      .catch((err) => appendLine('error', errText(err)))
-      .finally(() => setBusy(false));
-  }, [appendLine]);
+  const renderTools = (tools?: AgentweaverConsoleToolCall[]) => tools?.length ? (
+    <div className={styles.toolList} aria-label="Action summary">
+      {tools.map((tool, index) => (
+        <div key={`${tool.name}-${index}`} className={styles.toolRow}>
+          <Badge appearance="outline" color={tool.status === 'failed' ? 'danger' : tool.status === 'queued' ? 'warning' : 'success'}>{tool.status}</Badge>
+          <span>{tool.name}{tool.summary ? ` — ${tool.summary}` : ''}</span>
+        </div>
+      ))}
+    </div>
+  ) : null;
+
+  const stateBlockClass = (kind: MessageKind) => mergeClasses(
+    styles.stateBlock,
+    kind === 'clarification' && styles.clarificationBlock,
+    kind === 'gate' && styles.gateBlock,
+    kind === 'error' && styles.errorBlock,
+  );
 
   return (
-    <div className={styles.root}>
+    <div className={styles.root} data-testid="browser-console">
       <div className={styles.header}>
-        <div className={styles.headerCommandGroup}>
-          <Text className={styles.title}>agentweaver://console</Text>
-          <div className={styles.headerChips} role="group" aria-label="Quick commands">
-            <Button className={styles.chip} appearance="transparent" size="small" onClick={() => { void runQuickCommand('help'); }} disabled={busy}>help</Button>
-            <Button className={styles.chip} appearance="transparent" size="small" onClick={() => { void runQuickCommand('projects'); }} disabled={busy}>projects</Button>
-            <Button className={styles.chip} appearance="transparent" size="small" onClick={() => { void runQuickCommand('clear'); }} disabled={busy}>clear</Button>
+        <div className={styles.titleStack}>
+          <div className={styles.titleRow}>
+            <Text className={styles.title}>Agentweaver Console</Text>
+            {busy && <Spinner size="extra-tiny" label="Agentweaver is working" />}
           </div>
+          <Text className={styles.subtitle}>Message-first operator dock. The facade agent chooses tools and surfaces gates when human review is required.</Text>
         </div>
-        <div className={styles.headerMeta}>
-          {busy && (
-            <span className={styles.busyIndicator} role="status" aria-live="polite">
-              <Spinner size="tiny" /> <Text size={200}>working…</Text>
-            </span>
-          )}
-          <Text size={200} className={styles.headerLabel}>project:</Text>
-          <Badge appearance="tint" color={activeProject ? 'brand' : 'subtle'}>{activeLabel}</Badge>
-          {boundRunId && <Badge appearance="tint" color="informative">{boundRunKind} · {boundRunId.slice(0, 8)}</Badge>}
+        <div className={styles.contextRail} aria-label="Console context">
+          <Badge appearance="filled" color={effectiveScope === 'global' ? 'subtle' : effectiveScope === 'project' ? 'brand' : 'informative'}>{scopeLabel}</Badge>
+          {effectiveProjectId && <Badge appearance="outline">Project · {effectiveProjectBadgeLabel}</Badge>}
+          {effectiveRunId && <Badge appearance="outline">Run · {effectiveRunId.slice(0, 12)}</Badge>}
+          <Badge appearance="tint" color="subtle">{routeBindingLabel}</Badge>
         </div>
       </div>
 
-      <div className={styles.body}>
-        <div className={`${styles.transcript}${boundRunId ? ` ${styles.transcriptCapped}` : ''}`} ref={transcriptRef} aria-label="Console transcript" role="log">
-          {lines.map((l, idx) => (
-            <div key={l.id} className={l.tone === 'user' && idx > 0 ? styles.blockStart : undefined}>
-              <div className={styles.line}>
-                <span className={`${styles.gutter} ${l.tone === 'user' ? styles.promptGlyph : styles.sysGlyph}`} aria-hidden="true">
-                  {l.tone === 'user' ? '❯' : '·'}
-                </span>
-                <span className={toneClass(l.tone)}>{l.text}</span>
-              </div>
-              {l.links && l.links.length > 0 && (
-                <div className={styles.linkList}>
-                  {l.links.map((lk, i) => (
-                    <RouterLink key={`${l.id}-${i}`} to={lk.to} className={styles.link}>
-                      <Open16Regular aria-hidden="true" />{lk.label}
-                    </RouterLink>
-                  ))}
+      <div className={styles.quickRow} role="toolbar" aria-label="Console shortcuts">
+        <Text className={styles.quickLabel}>Shortcuts</Text>
+        <Button size="small" appearance="subtle" onClick={() => runQuickCommand('help')} disabled={busy}>/help</Button>
+        <Button size="small" appearance="subtle" onClick={() => runQuickCommand('projects')} disabled={busy}>/projects</Button>
+        <Button size="small" appearance="subtle" onClick={() => runQuickCommand('runs')} disabled={busy}>/runs</Button>
+        <Button size="small" appearance="subtle" onClick={() => runQuickCommand('clear')} disabled={busy}>/clear</Button>
+      </div>
+
+      <div className={styles.stream} ref={streamRef} role="log" aria-label="Console responses">
+        {messages.map((message) => {
+          const isUser = message.role === 'user';
+          const stateful = !isUser && (message.kind === 'clarification' || message.kind === 'gate' || message.kind === 'error');
+          return (
+            <div key={message.id} className={styles.turn}>
+              <div className={mergeClasses(styles.avatar, isUser && styles.userAvatar)} aria-hidden="true">{isUser ? 'You' : 'AW'}</div>
+              <div className={styles.message}>
+                <div className={styles.messageMeta}>
+                  <Text className={styles.author}>{isUser ? 'You' : 'Agentweaver'}</Text>
+                  <Text className={styles.roleLabel}>{isUser ? 'request' : message.kind === 'tool' ? 'action summary' : message.kind.replace('_', ' ')}</Text>
                 </div>
-              )}
-            </div>
-          ))}
-        </div>
-
-        {boundRunId && (
-          <div className={styles.runPanel} aria-label="Bound run">
-            <div className={styles.runPanelHeader}>
-              <Text weight="semibold" size={200}>
-                run {boundRunId.slice(0, 12)} · {model.derivedRunStatus}
-              </Text>
-              <div className={styles.runPanelActions}>
-                <Badge appearance="outline" color={model.status === 'streaming' ? 'success' : model.status === 'error' ? 'danger' : model.status === 'done' ? 'informative' : 'warning'}>
-                  {model.status}
-                </Badge>
-                {(gates.openQuestionCount > 0 || gates.openApprovalCount > 0) && (
-                  <Badge appearance="tint" color="warning" icon={<Warning16Regular />}>
-                    {gates.openQuestionCount + gates.openApprovalCount} open gate(s)
-                  </Badge>
+                {stateful ? (
+                  <div className={stateBlockClass(message.kind)}>
+                    <div className={styles.stateTitle}>
+                      {message.kind === 'gate' ? <CheckmarkCircle16Regular aria-hidden="true" /> : <Warning16Regular aria-hidden="true" />}
+                      <span>{message.kind === 'clarification' ? 'Clarification needed' : message.kind === 'gate' ? (message.gateTitle ?? 'Confirmation required') : (message.gateTitle ?? 'Console error')}</span>
+                    </div>
+                    <Text className={styles.bubble}>{message.text}</Text>
+                  </div>
+                ) : (
+                  <Text className={mergeClasses(styles.bubble, isUser && styles.userBubble)}>{message.text}</Text>
                 )}
-                <Button size="small" appearance="subtle" icon={<ArrowClockwise16Regular />} onClick={model.reconnect}>Reconnect</Button>
-                {activeProject && (
-                  <RouterLink to={`/projects/${activeProject.project_id}/orchestrations/${boundRunId}`} className={styles.link}>
-                    <Open16Regular aria-hidden="true" />Full run (Changes / merge)
-                  </RouterLink>
-                )}
+                {renderTools(message.tools)}
+                {renderLinks(message.links)}
               </div>
             </div>
-
-            {(gates.outcomeSpecPending || gates.assemblyReviewPending) && (
-              <div className={styles.gateBar} role="group" aria-label="Run gates">
-                {gates.outcomeSpecPending && (
-                  <>
-                    <Text size={200} weight="semibold">Outcome plan awaiting confirmation</Text>
-                    <Button size="small" appearance="primary" icon={<CheckmarkCircle16Regular />} onClick={() => { void submitGate(() => model.confirmOutcomeSpec(), 'Outcome plan confirmed.'); }}>Confirm</Button>
-                    <Text size={200} style={{ color: tokens.colorNeutralForeground3 }}>or /revise &lt;feedback&gt;</Text>
-                  </>
-                )}
-                {gates.assemblyReviewPending && (
-                  <>
-                    <Text size={200} weight="semibold">Assembly awaiting review</Text>
-                    <Button size="small" appearance="primary" icon={<CheckmarkCircle16Regular />} onClick={() => { void submitGate(() => model.reviewAssembly('approve'), 'Assembly approved.'); }}>Approve</Button>
-                    <Button size="small" appearance="secondary" onClick={() => { void submitGate(() => model.reviewAssembly('request_changes'), 'Requested changes on the assembly.'); }}>Request changes</Button>
-                    <Button size="small" appearance="subtle" onClick={() => { void submitGate(() => model.reviewAssembly('decline'), 'Assembly declined.'); }}>Decline</Button>
-                  </>
-                )}
-              </div>
-            )}
-
-            <div className={styles.timelineScroll} ref={timelineScrollRef} onScroll={onTimelineScroll}>
-              <Timeline
-                items={model.items}
-                streamStatus={model.status}
-                isLiveRun={model.isLiveRun}
-                runId={boundRunId}
-                runOutcome={model.runOutcome}
-                skippedEventCount={model.droppedEventCount}
-              />
+          );
+        })}
+        {busy && (
+          <div className={styles.turn} aria-live="polite">
+            <div className={styles.avatar} aria-hidden="true">AW</div>
+            <div className={styles.message}>
+              <div className={styles.messageMeta}><Text className={styles.author}>Agentweaver</Text><Text className={styles.roleLabel}>working</Text></div>
+              <Text className={styles.bubble}>Thinking through the request and selecting tools…</Text>
             </div>
           </div>
         )}
       </div>
 
-      <div className={styles.promptLine}>
-        <span className={styles.promptContext} aria-hidden="true">
-          <span className={styles.promptPath}>~\Git\agentweaver</span>
-          {' '}
-          <span className={styles.promptBranch}>[{activeProject ? activeProject.name : 'integration'}]</span>
-          <span className={styles.promptCaret}>❯</span>
-        </span>
+      <div className={styles.composer}>
         <Textarea
           className={styles.input}
-          appearance="filled-lighter"
           value={input}
-          placeholder={boundRunId ? 'Message the coordinator, or /command …' : 'Type /help, /projects, /orchestrate <goal> — or prose to start a conversation'}
-          onChange={(_, d) => setInput(d.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void submit(); } }}
+          placeholder="Ask Agentweaver…"
+          aria-label="Ask Agentweaver"
+          resize="vertical"
           disabled={busy}
-          resize="none"
-          aria-label="Console input"
+          onChange={(_, data) => setInput(data.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+              e.preventDefault();
+              void submit();
+            }
+          }}
         />
-        {!input && !busy && <span className={`${styles.promptCaret} ${styles.blink}`} aria-hidden="true">▋</span>}
-        <span className={styles.promptHint} aria-hidden="true">⏎ send · ⇧⏎ newline</span>
-        <Button className={styles.sendBtn} size="small" appearance="subtle" icon={busy ? <Spinner size="tiny" /> : <Send16Regular />} disabled={busy || !input.trim()} onClick={() => void submit()}>
+        <Button appearance="primary" icon={busy ? <Spinner size="tiny" /> : <Send16Regular />} disabled={busy || !input.trim()} onClick={() => void submit()}>
           Send
         </Button>
+        <Text className={styles.composerHint}>Enter sends · Shift+Enter adds a line · slash commands are optional shortcuts, not the main workflow.</Text>
       </div>
     </div>
   );

@@ -476,7 +476,12 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         if (!advanced)
         {
             var current = await ReadWorkPlanStatusAsync(workPlanId, ct).ConfigureAwait(false);
-            if (current == WorkPlanStatus.AssemblyBlocked && AssemblyPlanning.AllEligible(statusById))
+            var blockedReason = current == WorkPlanStatus.AssemblyBlocked
+                ? await ReadWorkPlanAssemblyStatusReasonAsync(workPlanId, ct).ConfigureAwait(false)
+                : null;
+            if (current == WorkPlanStatus.AssemblyBlocked
+                && CanRecoverAssemblyBlockedOnEligibility(blockedReason)
+                && AssemblyPlanning.AllEligible(statusById))
             {
                 advanced = await TryAdvanceWorkPlanStatusAsync(
                     workPlanId, WorkPlanStatus.AssemblyBlocked, WorkPlanStatus.AwaitingAssembly, ct)
@@ -487,8 +492,8 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
                 if (advanced)
                 {
                     _logger.LogInformation(
-                        "Coordinator dispatch complete for run {RunId}: cleared stale assembly_blocked state after all subtasks became eligible.",
-                        context.CoordinatorRunId);
+                        "Coordinator dispatch complete for run {RunId}: cleared stale assembly_blocked state ({Reason}) after all subtasks became eligible.",
+                        context.CoordinatorRunId, blockedReason);
                 }
             }
 
@@ -542,10 +547,12 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         SeqCounter seq,
         CancellationToken ct)
     {
-        // Idempotency guard: if an active (in_progress or assemble_ready) child run already exists
-        // for this (coordinator, subtask) pair, re-use it instead of creating a second worker.
+        // Idempotency guard: if an active child run already exists for this (coordinator, subtask)
+        // pair, re-use it instead of creating a second worker.
         // This can occur when recovery (steering redirect / reconciler re-arm) resets a subtask's
         // status to Pending with ChildRunId = null while the old child is still executing.
+        // Terminal delivered children (assemble_ready/completed/failed) are intentionally excluded by
+        // FindActiveChildAsync so an assembly-review re-dispatch creates a fresh child turn.
         var existingActive = await _runStore.FindActiveChildAsync(
             context.CoordinatorRunId, subtaskId.ToString(), ct).ConfigureAwait(false);
         if (existingActive is not null)
@@ -1728,12 +1735,25 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
             .Select(d => (d.SubtaskId, d.DependsOnSubtaskId))
             .ToList();
 
-        var assemblyStage = await db.WorkPlans.AsNoTracking()
+        var state = await db.WorkPlans.AsNoTracking()
             .Where(w => w.Id == workPlanId)
-            .Select(w => w.AssemblyStage)
+            .Select(w => new
+            {
+                w.Status,
+                w.AssemblyStage,
+                w.AssemblyTerminalStage,
+                w.AssemblyStatusReason,
+            })
             .FirstOrDefaultAsync(ct).ConfigureAwait(false);
 
-        var descriptor = CoordinatorGraphDescriptor.Build(coordinatorRunId, subtasks, deps, assemblyStage);
+        var descriptor = CoordinatorGraphDescriptor.Build(
+            coordinatorRunId,
+            subtasks,
+            deps,
+            state?.AssemblyStage,
+            state?.Status,
+            state?.AssemblyTerminalStage,
+            state?.AssemblyStatusReason);
         entry.RecordNext(EventTypes.CoordinatorGraph, descriptor);
     }
 
@@ -1793,6 +1813,9 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
             .Where(w => w.Id == workPlanId && w.Status == fromStatus)
             .ExecuteUpdateAsync(s => s
                 .SetProperty(w => w.Status, toStatus)
+                .SetProperty(w => w.AssemblyStage, (string?)null)
+                .SetProperty(w => w.AssemblyTerminalStage, (string?)null)
+                .SetProperty(w => w.AssemblyStatusReason, (string?)null)
                 .SetProperty(w => w.UpdatedAt, now), ct)
             .ConfigureAwait(false);
         return rows > 0;
@@ -1808,6 +1831,21 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
             .FirstOrDefaultAsync(ct)
             .ConfigureAwait(false);
     }
+
+    private async Task<string?> ReadWorkPlanAssemblyStatusReasonAsync(int workPlanId, CancellationToken ct)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        return await db.WorkPlans.AsNoTracking()
+            .Where(w => w.Id == workPlanId)
+            .Select(w => w.AssemblyStatusReason)
+            .FirstOrDefaultAsync(ct)
+            .ConfigureAwait(false);
+    }
+
+    private static bool CanRecoverAssemblyBlockedOnEligibility(string? reason) =>
+        !string.IsNullOrWhiteSpace(reason)
+        && reason.Contains("ineligible_subtasks", StringComparison.Ordinal);
 
     // -----------------------------------------------------------------------
     // Event projection on the coordinator stream

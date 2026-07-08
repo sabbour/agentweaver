@@ -86,7 +86,7 @@ Lists pods currently running that have a matching active run record:
 | Column | Meaning |
 |---|---|
 | **Pod name** | Kubernetes pod name |
-| **Run ID** | The run the pod is serving (links to the run page) |
+| **Run ID** | The run the pod is serving (links to an orchestration detail when available) |
 | **Node** | Kubernetes node the pod is scheduled on |
 | **Started at** | When the pod was created |
 
@@ -149,7 +149,7 @@ Lists all SandboxClaim CRD objects in the namespace:
 | **Name** | Kubernetes name of the SandboxClaim object |
 | **Phase** | `bound` (assigned to a sandbox), `pending` (waiting for one), or `unknown` |
 | **Ready** | Whether the claimed sandbox is ready |
-| **Run** | The run ID that created this claim, linking to the run page when present |
+| **Run** | The run ID that created this claim, linking to an orchestration detail when present |
 | **Bound sandbox** | The Sandbox object this claim is bound to; blank when still pending |
 | **Warm pool** | The pool the bound sandbox came from; blank for ad-hoc claims |
 | **Age** | How long the claim has existed |

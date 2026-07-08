@@ -41,7 +41,7 @@ function isRunTerminal(status: string | undefined): boolean {
 function coordinatorStatusLabel(status: string | undefined): string | undefined {
   if (!status) return undefined;
   const k = status.toLowerCase().replace(/[^a-z]/g, '');
-  if (k.includes('awaitingassembly')) return 'Awaiting assembly';
+  if (k.includes('awaitingassembly')) return 'Preparing assembly';
   if (k.includes('assembling')) return 'Assembling';
   if (k.includes('inreview')) return 'In review';
   if (k.includes('dispatch')) return 'Dispatching';
@@ -55,7 +55,7 @@ function coordinatorStatusLabel(status: string | undefined): string | undefined 
 function badgeColor(label: string | undefined): 'success' | 'danger' | 'warning' | 'informative' {
   if (label === 'Complete') return 'success';
   if (label === 'Failed' || label === 'Blocked' || label === 'Declined') return 'danger';
-  if (label === 'In review' || label === 'Awaiting assembly') return 'warning';
+  if (label === 'In review') return 'warning';
   return 'informative';
 }
 

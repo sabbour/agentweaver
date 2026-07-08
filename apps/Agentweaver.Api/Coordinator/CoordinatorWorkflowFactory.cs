@@ -155,10 +155,39 @@ public sealed class CoordinatorWorkflowFactory
             .Build()!;
     }
 
+    private Workflow BuildDirectWorkflow()
+    {
+        // Direct mode deliberately skips the draft + confirmation RequestPort. It persists a confirmed
+        // prompt-backed spec only to satisfy the existing work-plan FK, then enters the same
+        // orchestration/dispatch/review pipeline as the confirmed outcome-spec path.
+        ExecutorBinding direct = new FunctionExecutor<CoordinatorDraftInput, CoordinatorOutcome>(
+            "coordinator-direct",
+            async (input, ctx, ct) =>
+            {
+                await ctx.QueueStateUpdateAsync(InputStateKey, input, InputStateScope, ct).ConfigureAwait(false);
+                return await PersistDirectSpecAndOrchestrateAsync(input, ct).ConfigureAwait(false);
+            });
+
+        return new WorkflowBuilder(direct)
+            .WithOutputFrom(direct)
+            .Build()!;
+    }
+
     /// <summary>Launches a new streaming coordinator run.</summary>
     public async Task<StreamingRun> StartAsync(CoordinatorDraftInput input, string runId, CancellationToken ct)
     {
         var workflow = BuildWorkflow();
+        return await InProcessExecution.RunStreamingAsync(
+            workflow, input, _checkpointManager, runId, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Launches a coordinator run in Direct mode: no outcome-spec drafting or confirmation gate; the
+    /// user's prompt is the authoritative input to orchestration.
+    /// </summary>
+    public async Task<StreamingRun> StartDirectAsync(CoordinatorDraftInput input, string runId, CancellationToken ct)
+    {
+        var workflow = BuildDirectWorkflow();
         return await InProcessExecution.RunStreamingAsync(
             workflow, input, _checkpointManager, runId, ct).ConfigureAwait(false);
     }
@@ -203,9 +232,87 @@ public sealed class CoordinatorWorkflowFactory
     // Drafting + persistence
     // -----------------------------------------------------------------------
 
+    private async Task<CoordinatorOutcome> PersistDirectSpecAndOrchestrateAsync(
+        CoordinatorDraftInput input, CancellationToken ct)
+    {
+        var specId = await PersistDirectSpecAsync(input, ct).ConfigureAwait(false);
+        await _orchestrator.OrchestrateAsync(input, ct).ConfigureAwait(false);
+        return new CoordinatorOutcome(input.RunId, specId, "confirmed");
+    }
+
+    private async Task<int> PersistDirectSpecAsync(CoordinatorDraftInput input, CancellationToken ct)
+    {
+        const string status = "confirmed";
+        const string scope = "Direct mode: use the user's prompt as the full task scope.";
+        const string assumptions = "Outcome definition was skipped by Direct mode; no additional assumptions were defined.";
+
+        using var scopeServices = _scopeFactory.CreateScope();
+        var db = scopeServices.ServiceProvider.GetRequiredService<MemoryDbContext>();
+
+        var now = DateTimeOffset.UtcNow;
+        var spec = await db.OutcomeSpecs
+            .FirstOrDefaultAsync(s => s.CoordinatorRunId == input.RunId, ct)
+            .ConfigureAwait(false);
+
+        if (spec is null)
+        {
+            spec = new OutcomeSpec
+            {
+                ProjectId = input.ProjectId,
+                CoordinatorRunId = input.RunId,
+                Goal = input.Goal,
+                DesiredOutcome = input.Goal,
+                Scope = scope,
+                Assumptions = assumptions,
+                ClarifyingQuestions = null,
+                Status = status,
+                ConfirmedBy = input.SubmittingUser,
+                CreatedAt = now,
+                UpdatedAt = now,
+            };
+            db.OutcomeSpecs.Add(spec);
+        }
+        else
+        {
+            spec.Goal = input.Goal;
+            spec.DesiredOutcome = input.Goal;
+            spec.Scope = scope;
+            spec.Assumptions = assumptions;
+            spec.ClarifyingQuestions = null;
+            spec.Status = status;
+            spec.ConfirmedBy = input.SubmittingUser;
+            spec.UpdatedAt = now;
+        }
+
+        await db.SaveChangesAsync(ct).ConfigureAwait(false);
+
+        var entry = _streamStore.Get(input.RunId);
+        entry?.RecordNext(EventTypes.CoordinatorOutcomeSpec, new
+        {
+            specId = spec.Id,
+            status,
+            goal = input.Goal,
+            desiredOutcome = input.Goal,
+            scope,
+            assumptions,
+            clarifyingQuestions = (string?)null,
+            mode = "direct",
+        });
+        entry?.RecordNext(EventTypes.CoordinatorOutcomeSpecConfirmed, new
+        {
+            specId = spec.Id,
+            confirmedBy = input.SubmittingUser,
+            mode = "direct",
+        });
+
+        return spec.Id;
+    }
+
     private async Task<CoordinatorOutcomeSpecRequest> DraftAndPersistAsync(
         CoordinatorDraftInput input, CancellationToken ct)
     {
+        await MarkDraftingAsync(input, ct).ConfigureAwait(false);
+
         var memoryContext = await CompileMemoryContextAsync(input.ProjectId, ct).ConfigureAwait(false);
         var charter = BuiltInCharterResolver.Resolve(input.RepositoryPath, "coordinator") ?? FallbackCharter;
 
@@ -231,6 +338,53 @@ public sealed class CoordinatorWorkflowFactory
         return new CoordinatorOutcomeSpecRequest(
             input.RunId, specId, input.Goal,
             draft.DesiredOutcome, draft.Scope, draft.Assumptions, draft.ClarifyingQuestions, status);
+    }
+
+    private async Task MarkDraftingAsync(CoordinatorDraftInput input, CancellationToken ct)
+    {
+        const string status = "drafting";
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+
+        var now = DateTimeOffset.UtcNow;
+        var spec = await db.OutcomeSpecs
+            .FirstOrDefaultAsync(s => s.CoordinatorRunId == input.RunId, ct)
+            .ConfigureAwait(false);
+
+        if (spec is null)
+        {
+            spec = new OutcomeSpec
+            {
+                ProjectId = input.ProjectId,
+                CoordinatorRunId = input.RunId,
+                Goal = input.Goal,
+                DesiredOutcome = string.Empty,
+                Scope = string.Empty,
+                Assumptions = string.Empty,
+                ClarifyingQuestions = null,
+                Status = status,
+                CreatedAt = now,
+                UpdatedAt = now,
+            };
+            db.OutcomeSpecs.Add(spec);
+        }
+        else
+        {
+            spec.Goal = input.Goal;
+            spec.Status = status;
+            spec.ConfirmedBy = null;
+            spec.UpdatedAt = now;
+        }
+
+        await db.SaveChangesAsync(ct).ConfigureAwait(false);
+
+        _streamStore.Get(input.RunId)?.RecordNext(EventTypes.CoordinatorOutcomeSpecDrafting, new
+        {
+            specId = spec.Id,
+            status,
+            goal = input.Goal,
+            revise = !string.IsNullOrWhiteSpace(input.ReviseFeedback),
+        });
     }
 
     private async Task<string?> CompileMemoryContextAsync(string projectId, CancellationToken ct)

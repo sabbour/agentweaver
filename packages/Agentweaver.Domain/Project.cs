@@ -59,6 +59,24 @@ public sealed record Project
     public string? SourceBlueprintType { get; init; }
 
     /// <summary>
+    /// Optional project-specific model for server-authored blueprint generation. Null means "use the
+    /// global Generation fallback"; this does not affect normal agent/run model selection.
+    /// </summary>
+    public string? BlueprintGenerationModel { get; init; }
+
+    /// <summary>
+    /// Optional project-specific model for server-authored workflow YAML generation. Null means "use the
+    /// global Generation fallback"; this does not affect normal agent/run model selection.
+    /// </summary>
+    public string? WorkflowGenerationModel { get; init; }
+
+    /// <summary>
+    /// Optional project-specific model for coordinator outcome-spec generation. Null means "use the
+    /// global Generation fallback"; this does not affect normal agent/run model selection.
+    /// </summary>
+    public string? OutcomeSpecGenerationModel { get; init; }
+
+    /// <summary>
     /// The set of workflow ids the project is allowed to use, declared by the applied blueprint's
     /// <c>workflows</c> set (Feature 015 US3). When this is null or empty the project may use ALL
     /// catalog/library workflows (backward compatible). When non-empty the workflow registry filters

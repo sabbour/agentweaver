@@ -9,7 +9,7 @@ namespace Agentweaver.Tests.PostgresIntegration;
 [Trait("Category", "PostgresIntegration")]
 public sealed class RepositoryMergeLockPostgresTests(PostgresFixture pg)
 {
-    [Fact]
+    [PostgresFact]
     public async Task SameRepository_IsSerializedAcrossLockInstances()
     {
         var lock1 = CreateLock(pg.ConnectionString);
@@ -23,7 +23,7 @@ public sealed class RepositoryMergeLockPostgresTests(PostgresFixture pg)
         second.Should().BeNull("a second API replica must not enter the same repository merge critical section");
     }
 
-    [Fact]
+    [PostgresFact]
     public async Task DifferentRepositories_CanMergeConcurrentlyAcrossLockInstances()
     {
         var lock1 = CreateLock(pg.ConnectionString);

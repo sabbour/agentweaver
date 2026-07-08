@@ -141,6 +141,7 @@ public sealed class CollectiveAssemblyPipeline : ICollectiveAssemblyPipeline
 
     public async Task<CollectiveGateDecision> RunBuildTestAsync(CollectiveBuildTestRequest request, CancellationToken ct)
     {
+        WorktreeInfo? detachedWorktree = null;
         var buildTest = new BuildTestTurnExecutor(
             _copilotClientFactory, _scopeProvider, _sandboxExecutor, _sandboxPolicyStore,
             _approvalStore, _toolApprovalGate, _loggerFactory,
@@ -153,20 +154,44 @@ public sealed class CollectiveAssemblyPipeline : ICollectiveAssemblyPipeline
             agentFactory: _workflowFactory.AgentFactory,
             agentId: request.AgentId);
 
-        var input = new AgentTurnOutput(
-            RunId: request.CoordinatorRunId,
-            TreeHash: request.AggregateTreeHash,
-            Diff: request.AggregateDiff,
-            StepCount: 0,
-            WorktreePath: request.RepositoryPath,
-            WorktreeBranch: request.IntegrationBranch,
-            RepositoryPath: request.RepositoryPath,
-            OriginatingBranch: string.Empty,
-            ContentSafetyFlagged: false,
-            SubmittingUser: request.SubmittingUser);
+        try
+        {
+            detachedWorktree = _worktreeManager.AddDetachedWorktree(
+                request.RepositoryPath,
+                request.IntegrationBranch,
+                "assembly-build-test-" + request.CoordinatorRunId);
 
-        var decision = await buildTest.HandleAsync(input, NoOpWorkflowContext.Instance, ct).ConfigureAwait(false);
-        return new CollectiveGateDecision(decision.Approved, decision.RequestChanges, decision.Feedback);
+            var input = new AgentTurnOutput(
+                RunId: request.CoordinatorRunId,
+                TreeHash: request.AggregateTreeHash,
+                Diff: request.AggregateDiff,
+                StepCount: 0,
+                WorktreePath: detachedWorktree.WorktreePath,
+                WorktreeBranch: string.Empty,
+                RepositoryPath: request.RepositoryPath,
+                OriginatingBranch: string.Empty,
+                ContentSafetyFlagged: false,
+                SubmittingUser: request.SubmittingUser);
+
+            var decision = await buildTest.HandleAsync(input, NoOpWorkflowContext.Instance, ct).ConfigureAwait(false);
+            return new CollectiveGateDecision(decision.Approved, decision.RequestChanges, decision.Feedback);
+        }
+        finally
+        {
+            if (detachedWorktree is not null)
+            {
+                try
+                {
+                    _worktreeManager.RemoveDetachedWorktree(request.RepositoryPath, detachedWorktree.WorktreePath);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex,
+                        "Collective Build/Test: failed to remove detached worktree {Path}",
+                        detachedWorktree.WorktreePath);
+                }
+            }
+        }
     }
 
     public async Task<CollectiveMergeResult> MergeAsync(CollectiveMergeRequest request, CancellationToken ct)

@@ -108,6 +108,7 @@ export type EventType =
   | 'workflow.step'
   | 'coordinator.started'
   | 'coordinator.recovered'
+  | 'coordinator.outcome_spec.drafting'
   | 'coordinator.outcome_spec'
   | 'coordinator.outcome_spec.confirmed'
   | 'coordinator.work_plan'

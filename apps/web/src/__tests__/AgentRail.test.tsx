@@ -245,7 +245,6 @@ describe('RunCard agent chip', () => {
     const card = makeCard({ agent_name: undefined });
     render(<Wrapper><RunCard card={card} projectId="proj-1" /></Wrapper>);
     expect(screen.queryByTestId('run-card-agent')).toBeNull();
-    // Falls back to "Coordinator" text
-    expect(screen.getByText('Coordinator')).toBeTruthy();
+    expect(screen.getByText('Owner: Coordinator assigning agent')).toBeTruthy();
   });
 });

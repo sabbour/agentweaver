@@ -8,9 +8,8 @@ using Agentweaver.Tests.Helpers;
 namespace Agentweaver.Tests.Api;
 
 /// <summary>
-/// Verifies FR-009: exactly two model source providers are permitted; all others
-/// are rejected at submission time. Uses a real in-process API via
-/// WebApplicationFactory.
+/// Verifies the legacy direct-run submission route stays explicitly deprecated.
+/// Provider/model selection now flows through project orchestration settings.
 /// </summary>
 public sealed class ModelSourceValidationTests : IClassFixture<AgentweaverWebApplicationFactory>
 {
@@ -45,42 +44,19 @@ public sealed class ModelSourceValidationTests : IClassFixture<AgentweaverWebApp
         });
 
     [Fact]
-    public async Task Submit_WithGitHubCopilot_IsAccepted()
+    public async Task Submit_WithGitHubCopilot_ReturnsGone()
     {
         var response = await PostRunAsync("github-copilot");
 
-        // 202 Accepted or 400 from git/agent setup — what matters is it is not
-        // rejected for the model source itself. A 400 from git or agent setup is
-        // acceptable; only a model-source 400 would be a failure.
-        if (response.StatusCode == HttpStatusCode.BadRequest)
-        {
-            var body = await response.Content.ReadFromJsonAsync<JsonElement>();
-            var error = body.GetProperty("error").GetString() ?? string.Empty;
-            error.Should().NotContain("model_source",
-                because: "github-copilot is a valid model source and must not be rejected for that reason");
-        }
-        else
-        {
-            response.StatusCode.Should().Be(HttpStatusCode.Accepted);
-        }
+        response.StatusCode.Should().Be(HttpStatusCode.Gone);
     }
 
     [Fact]
-    public async Task Submit_WithMicrosoftFoundry_IsAccepted()
+    public async Task Submit_WithMicrosoftFoundry_ReturnsGone()
     {
         var response = await PostRunAsync("microsoft-foundry");
 
-        if (response.StatusCode == HttpStatusCode.BadRequest)
-        {
-            var body = await response.Content.ReadFromJsonAsync<JsonElement>();
-            var error = body.GetProperty("error").GetString() ?? string.Empty;
-            error.Should().NotContain("model_source",
-                because: "microsoft-foundry is a valid model source and must not be rejected for that reason");
-        }
-        else
-        {
-            response.StatusCode.Should().Be(HttpStatusCode.Accepted);
-        }
+        response.StatusCode.Should().Be(HttpStatusCode.Gone);
     }
 
     [Theory]
@@ -88,11 +64,11 @@ public sealed class ModelSourceValidationTests : IClassFixture<AgentweaverWebApp
     [InlineData("anthropic")]
     [InlineData("")]
     [InlineData("GITHUB-COPILOT")]
-    public async Task Submit_WithUnsupportedProvider_Returns400(string source)
+    public async Task Submit_WithUnsupportedProvider_ReturnsGone(string source)
     {
         var response = await PostRunAsync(source);
 
-        response.StatusCode.Should().Be(HttpStatusCode.BadRequest,
-            because: $"'{source}' is not a permitted model source; FR-009 allows only github-copilot and microsoft-foundry");
+        response.StatusCode.Should().Be(HttpStatusCode.Gone,
+            because: "direct single-run submission is deprecated before model_source validation is reached");
     }
 }

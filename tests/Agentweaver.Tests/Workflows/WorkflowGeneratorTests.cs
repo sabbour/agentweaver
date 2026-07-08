@@ -7,6 +7,7 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
+using Agentweaver.Api.Generation;
 using Agentweaver.Api.Workflows;
 using Agentweaver.Api.Auth;
 using Agentweaver.Domain;
@@ -50,16 +51,68 @@ public sealed class WorkflowGeneratorTests
     // YAML that parses but fails schema validation (no start/nodes) → drives a correction pass.
     private const string InvalidWorkflowYaml = "name: Broken Workflow\n";
 
-    private static CopilotWorkflowGenerator CreateGenerator(IAgentRunner runner)
+    private static CopilotWorkflowGenerator CreateGenerator(
+        IAgentRunner runner,
+        IDictionary<string, string?>? overrides = null)
     {
+        var values = new Dictionary<string, string?>
+        {
+            ["Providers:GitHubCopilot:Model"] = "gpt-4o",
+        };
+        if (overrides is not null)
+        {
+            foreach (var (key, value) in overrides)
+                values[key] = value;
+        }
+
         var config = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                ["Providers:GitHubCopilot:Model"] = "gpt-4o",
-            })
+            .AddInMemoryCollection(values)
             .Build();
         return new CopilotWorkflowGenerator(runner, new CatalogReader(), config, NullLogger<CopilotWorkflowGenerator>.Instance);
     }
+
+    [Fact]
+    public async Task GenerateAsync_UsesGpt54GenerationModelByDefault()
+    {
+        var runner = new ScriptedAgentRunner(ValidWorkflowYaml);
+        var generator = CreateGenerator(runner);
+
+        await generator.GenerateAsync(new WorkflowGenerationRequest("A simple manual workflow."));
+
+        runner.LastModelId.Should().Be(GenerationModelOptions.DefaultModel);
+    }
+
+    [Fact]
+    public async Task GenerateAsync_UsesConfiguredWorkflowGenerationModel()
+    {
+        var runner = new ScriptedAgentRunner(ValidWorkflowYaml);
+        var generator = CreateGenerator(runner, new Dictionary<string, string?>
+        {
+            ["Generation:Model"] = "gpt-5.4-mini",
+            ["Generation:WorkflowModel"] = "claude-sonnet-4.6",
+        });
+
+        await generator.GenerateAsync(new WorkflowGenerationRequest("A simple manual workflow."));
+
+        runner.LastModelId.Should().Be("claude-sonnet-4.6");
+    }
+
+    [Fact]
+    public async Task GenerateAsync_UsesProjectWorkflowGenerationModelWhenProvided()
+    {
+        var runner = new ScriptedAgentRunner(ValidWorkflowYaml);
+        var generator = CreateGenerator(runner, new Dictionary<string, string?>
+        {
+            ["Generation:WorkflowModel"] = "claude-sonnet-4.6",
+        });
+
+        await generator.GenerateAsync(new WorkflowGenerationRequest(
+            "A simple manual workflow.",
+            GenerationModel: "gpt-5-mini"));
+
+        runner.LastModelId.Should().Be("gpt-5-mini");
+    }
+
 
     [Fact]
     public async Task ValidResponse_ReturnsParsedWorkflow_NotCorrected()
@@ -257,6 +310,39 @@ public sealed class WorkflowGeneratorTests
         generator.CallCount.Should().Be(1);
         generator.LastRequest.Should().NotBeNull();
         generator.LastRequest!.Description.Should().Be("A manual review-and-merge workflow.");
+        generator.LastRequest.GenerationModel.Should().Be(GenerationModelOptions.DefaultModel);
+    }
+
+    [Fact]
+    public async Task GenerateEndpoint_UsesProjectWorkflowGenerationModel()
+    {
+        await using var factory = new StubWorkflowGeneratorFactory();
+        var client = factory.CreateAuthenticatedClient();
+
+        var dir = factory.NewWorkingDirectory();
+        var create = await client.PostAsJsonAsync("/api/projects", new
+        {
+            name = $"WfGen Model Test {Guid.NewGuid():N}",
+            origin = "blank",
+            working_directory = dir,
+        });
+        create.StatusCode.Should().Be(HttpStatusCode.Created);
+        var projectId = (await create.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("project_id").GetString()!;
+
+        var update = await client.PutAsJsonAsync(
+            $"/api/projects/{projectId}/provider-settings",
+            new { workflow_generation_model = "gpt-5-mini" });
+        update.StatusCode.Should().Be(HttpStatusCode.NoContent);
+
+        var resp = await client.PostAsJsonAsync(
+            $"/api/projects/{projectId}/workflows/generate",
+            new { description = "A manual review workflow." });
+        resp.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var generator = factory.Services.GetRequiredService<IWorkflowGenerator>()
+            .Should().BeOfType<StubWorkflowGenerator>().Subject;
+        generator.LastRequest.Should().NotBeNull();
+        generator.LastRequest!.GenerationModel.Should().Be("gpt-5-mini");
     }
 
     [Fact]
@@ -358,6 +444,7 @@ public sealed class WorkflowGeneratorTests
         private readonly Queue<string> _responses;
         public int CallCount { get; private set; }
         public string? LastTask { get; private set; }
+        public string? LastModelId { get; private set; }
 
         public ScriptedAgentRunner(params string[] responses) => _responses = new Queue<string>(responses);
 
@@ -368,6 +455,7 @@ public sealed class WorkflowGeneratorTests
         {
             CallCount++;
             LastTask = task;
+            LastModelId = modelId;
             var next = _responses.Count > 0 ? _responses.Dequeue() : string.Empty;
             return Task.FromResult(next);
         }

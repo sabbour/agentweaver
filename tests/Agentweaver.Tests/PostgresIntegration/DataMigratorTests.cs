@@ -41,7 +41,7 @@ public sealed class DataMigratorTests : IDisposable
     // 3a. Migration utility: row counts match source
     // ─────────────────────────────────────────────────────────────────────────
 
-    [Fact]
+    [PostgresFact]
     public async Task Migrator_RowCounts_MatchSourceDatabase()
     {
         var migrator = BuildMigrator();
@@ -66,7 +66,7 @@ public sealed class DataMigratorTests : IDisposable
     // 3b. Idempotency: second run is a no-op (no duplicate rows, no exception)
     // ─────────────────────────────────────────────────────────────────────────
 
-    [Fact]
+    [PostgresFact]
     public async Task Migrator_SecondRun_IsNoOp()
     {
         var migrator = BuildMigrator();

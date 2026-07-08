@@ -10,8 +10,6 @@ import {
 import { ProjectGalleryPage } from './pages/ProjectGalleryPage';
 import { ProjectPage } from './pages/ProjectPage';
 import { ProjectSettingsPage } from './pages/ProjectSettingsPage';
-import { WatchPage } from './pages/WatchPage';
-import { WorkflowRunPage } from './pages/WorkflowRunPage';
 import { CoordinatorRunRoute } from './routes/CoordinatorRunRoute';
 import { TeamPage } from './pages/TeamPage';
 import { CastingWizardPage } from './pages/CastingWizardPage';
@@ -31,8 +29,8 @@ import { ObservabilityAgentsPage } from './pages/observability/ObservabilityAgen
 import { ObservabilityOverviewPage } from './pages/observability/ObservabilityOverviewPage';
 import { ObservabilityRedirectPage } from './pages/observability/ObservabilityRedirectPage';
 import { ObservabilityTracesPage } from './pages/observability/ObservabilityTracesPage';
-import { BrowserConsole } from './console/BrowserConsole';
 import { AppShell } from './components/shell/AppShell';
+import { ConsoleRouteRedirect } from './components/shell/ConsoleRouteRedirect';
 import { apiClient } from './api/apiClient';
 import { bindSessionLogin, captureSessionAuthFromUrl, clearSessionAuth, getSessionLogin, getSessionToken } from './config';
 
@@ -44,7 +42,7 @@ function Shell() {
         <Route path="/" element={<OverviewPage />} />
         <Route path="/overview" element={<OverviewPage />} />
         <Route path="/projects" element={<ProjectGalleryPage />} />
-        <Route path="/console" element={<BrowserConsole />} />
+        <Route path="/console" element={<ConsoleRouteRedirect />} />
         <Route path="/observability" element={<ObservabilityRedirectPage />} />
         <Route path="/observability/traces" element={<ObservabilityRedirectPage suffix="/traces" />} />
         <Route path="/observability/agents" element={<ObservabilityRedirectPage suffix="/agents" />} />
@@ -67,8 +65,6 @@ function Shell() {
         <Route path="/projects/:projectId/diagnostics" element={<DiagnosticsPage />} />
         <Route path="/projects/:projectId/heartbeat" element={<HeartbeatPage />} />
         <Route path="/projects/:projectId/cluster" element={<ClusterPage />} />
-        <Route path="/projects/:projectId/runs/:runId/execution/:executionId" element={<WatchPage />} />
-        <Route path="/projects/:projectId/runs/:runId/workflow" element={<WorkflowRunPage />} />
         <Route path="/projects/:projectId/orchestrations/:runId" element={<CoordinatorRunRoute />} />
       </Routes>
     </AppShell>

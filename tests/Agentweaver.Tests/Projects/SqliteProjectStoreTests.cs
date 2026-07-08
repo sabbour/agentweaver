@@ -127,6 +127,27 @@ public sealed class SqliteProjectStoreTests
         retrieved.ProviderSettings.MicrosoftFoundryModel.Should().Be("foundry-model-1");
     }
 
+    [Fact]
+    public async Task UpdateGenerationModelSettingsAsync_PersistsIndividualNullableSettings()
+    {
+        await using var testDb = await TestSqliteDb.CreateAsync();
+        var store = new SqliteProjectStore(testDb.Db);
+        var project = MakeProject();
+        await store.InsertAsync(project);
+
+        await store.UpdateGenerationModelSettingsAsync(
+            project.Id,
+            "gpt-5-mini",
+            null,
+            "claude-sonnet-4.6",
+            DateTimeOffset.UtcNow);
+
+        var retrieved = await store.GetAsync(project.Id);
+        retrieved!.BlueprintGenerationModel.Should().Be("gpt-5-mini");
+        retrieved.WorkflowGenerationModel.Should().BeNull();
+        retrieved.OutcomeSpecGenerationModel.Should().Be("claude-sonnet-4.6");
+    }
+
     // =========================================================================
     // PS-06: DeleteAsync removes the record
     // =========================================================================

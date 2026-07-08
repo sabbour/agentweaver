@@ -221,6 +221,8 @@ public sealed class CoordinatorReconciler
                     case WorkPlanStatus.AssemblyBlocked:
                         if (IsAssemblyActive(plan))
                             continue;
+                        if (!await IsRecoverableAssemblyBlockedAsync(plan, ct).ConfigureAwait(false))
+                            continue;
                         if (await TryReArmAssemblyWithCapAsync(plan, ct).ConfigureAwait(false))
                             reArmed++;
                         break;
@@ -249,6 +251,28 @@ public sealed class CoordinatorReconciler
         !string.IsNullOrWhiteSpace(plan.CoordinatorRunId)
         && _assembly is not null
         && _assembly.IsAssemblyActive(plan.CoordinatorRunId);
+
+    private async Task<bool> IsRecoverableAssemblyBlockedAsync(PlanCandidate plan, CancellationToken ct)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var reason = await db.WorkPlans.AsNoTracking()
+            .Where(w => w.Id == plan.WorkPlanId)
+            .Select(w => w.AssemblyStatusReason)
+            .FirstOrDefaultAsync(ct)
+            .ConfigureAwait(false);
+        if (string.IsNullOrWhiteSpace(reason)
+            || !reason.Contains("ineligible_subtasks", StringComparison.Ordinal))
+            return false;
+
+        var statuses = await db.Subtasks.AsNoTracking()
+            .Where(s => s.WorkPlanId == plan.WorkPlanId)
+            .Select(s => new { s.Id, s.Status })
+            .ToDictionaryAsync(s => s.Id, s => s.Status, ct)
+            .ConfigureAwait(false);
+
+        return AssemblyPlanning.AllEligible(statuses);
+    }
 
     /// <summary>
     /// True when a DURABLE, cross-pod human review gate is pending for the run: a
@@ -420,6 +444,8 @@ public sealed class CoordinatorReconciler
             .ExecuteUpdateAsync(s => s
                 .SetProperty(w => w.Status, WorkPlanStatus.AwaitingAssembly)
                 .SetProperty(w => w.AssemblyStage, (string?)null)
+                .SetProperty(w => w.AssemblyTerminalStage, (string?)null)
+                .SetProperty(w => w.AssemblyStatusReason, (string?)null)
                 .SetProperty(w => w.UpdatedAt, now), ct)
             .ConfigureAwait(false);
     }
@@ -437,7 +463,8 @@ public sealed class CoordinatorReconciler
             .Where(w => w.Id == plan.WorkPlanId)
             .ExecuteUpdateAsync(s => s
                 .SetProperty(w => w.Status, WorkPlanStatus.AssemblyFailed)
-                .SetProperty(w => w.AssemblyStage, (string?)null)
+                .SetProperty(w => w.AssemblyTerminalStage, w => w.AssemblyStage)
+                .SetProperty(w => w.AssemblyStatusReason, reason)
                 .SetProperty(w => w.UpdatedAt, now), ct)
             .ConfigureAwait(false);
     }

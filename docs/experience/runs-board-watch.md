@@ -208,20 +208,19 @@ MCP exposes the board with the same operational shape:
 
 Use `backlog_get_board` as the MCP snapshot equivalent of opening the web board. Use movement tools only for Backlog and Ready. For active runs, use run tools such as `run_status`, `run_watch`, `run_retry`, and `run_archive`.
 
-## Watching a run live
+## Inspecting a run live
 
-The live watch experience answers: **what is the agent doing right now, what has it already done, and what needs my attention?**
+The live inspection experience answers: **what is the agent doing right now, what has it already done, and what needs my attention?** Standalone workflow and execution run pages have been retired; run details now appear inside the coordinator orchestration page, embedded task/session panels, the artifact browser, and MCP tools such as `run_watch`.
 
-The watch page shows:
+Embedded run inspection surfaces show:
 
-- a breadcrumb back to the project and run workflow,
-- a short execution id,
-- a run header with **Connecting**, **Streaming**, **done**, or **error**,
-- a left file-tree panel for run artifacts when the run has a workspace,
-- a center timeline that updates as events arrive,
+- the owning coordinator or task context,
+- a stream status such as **Connecting**, **Streaming**, **done**, or **error**,
+- artifact panels for run workspaces when available,
+- timelines that update as events arrive,
 - review or merge resolution badges after terminal review events.
 
-The watch surface auto-scrolls while the user stays near the bottom; if the user scrolls up, new events continue arriving without forcing the viewport down.
+Timeline surfaces auto-scroll while the user stays near the bottom; if the user scrolls up, new events continue arriving without forcing the viewport down.
 
 ### Browsing artifacts
 
@@ -233,23 +232,13 @@ Selecting a file opens its diff or content. Because the coordinator run now uses
 its assembled collective artifacts are inspectable in the same way as any child run's, rather than
 only through the timeline.
 
-### The run header
-
-The run header shows **Run** followed by the short run id. While the SSE connection is opening, the header says **Connecting**. Once events are flowing, it says **Streaming**. A terminal stream shows **done**. A stream failure shows **error** and the current error text, such as a reconnect notice or final failure message.
-
-![Workflow run page showing the run graph, Preview button, and Auto-approve tools toggle](/screenshots/workflow-run-graph.png)
-
-> 📸 **Screenshot — `workflow-run-graph.png`**
-> *Shows:* the **Run** page (`WorkflowRunPage`) with the live run graph (`aria-label="Loading run graph"` while loading), the **Auto-approve tools** toggle, the **Preview** button (visible only for a Kubernetes sandbox on an active run), and **Jump to approval** when a question is pending (`aria-label="Questions awaiting an answer"`).
-> *Path:* `/projects/:projectId/board` → click a run card's **Workflow** button → `/projects/:projectId/runs/:runId/workflow`.
-
 ![Sandbox Preview dialog proxying the running pod preview](/screenshots/sandbox-preview-dialog.png)
 
 > 📸 **Screenshot — `sandbox-preview-dialog.png`**
-> *Shows:* the **Sandbox Preview** dialog opened from the **Preview** button on the Run page, with the text "Preview traffic is proxied through the Agentweaver API server.", the "Preview active for port {port} on pod {pod_name}." status, and the **Cancel** / **Start preview** / **Stop preview** / **Close** actions.
-> *Path:* on `/projects/:projectId/runs/:runId/workflow` (Kubernetes sandbox, active run) → click **Preview**.
+> *Shows:* the **Sandbox Preview** dialog opened from the coordinator run page's **Preview Sandbox** button, with the text "Preview traffic is proxied through the Agentweaver API server.", the "Preview active for port {port} on pod {pod_name}." status, and the **Cancel** / **Start preview** / **Stop preview** / **Close** actions.
+> *Path:* on `/projects/:projectId/orchestrations/:runId` (Kubernetes sandbox, active run) → click **Preview Sandbox**.
 
-This header is stream status, not the entire lifecycle. A run can be **awaiting_review** while the stream is done; lifecycle cards provide the domain meaning.
+Stream status is not the entire lifecycle. A run can be **awaiting_review** while the stream is done; lifecycle cards provide the domain meaning.
 
 ### The timeline
 
@@ -266,8 +255,8 @@ The timeline announces itself as **Run timeline** and behaves like a live log wh
 ![Live Watch page showing the execution timeline](/screenshots/watch-timeline.png)
 
 > 📸 **Screenshot — `watch-timeline.png`**
-> *Shows:* the **Execution** watch page with the breadcrumb (`aria-label="Breadcrumb"`: Projects / Project / Run {shortId} / Execution {shortId}), the run header status (**Connecting** / **Streaming** / **done** / **error**), and the center **Run timeline** with turn groups, agent message bubbles, tool-call cards, and lifecycle cards.
-> *Path:* from a run, open an execution → `/projects/:projectId/runs/:runId/execution/:executionId`.
+> *Shows:* an embedded run timeline with stream status (**Connecting** / **Streaming** / **done** / **error**), turn groups, agent message bubbles, tool-call cards, and lifecycle cards.
+> *Path:* open a coordinator run → `/projects/:projectId/orchestrations/:runId` → select a child/session detail.
 
 ### Turn groups
 
@@ -332,7 +321,7 @@ Agentweaver uses both stream statuses and run lifecycle statuses. Users mostly s
 | **Blocked** | The coordinator cannot proceed without intervention. | Problems |
 | **Archived** | The task or run is hidden from active board projections. | Not shown on the active board |
 
-The board projects these statuses into the six columns. The watch page provides the detailed explanation through events.
+The board projects these statuses into the six columns. Embedded timelines and MCP `run_watch` provide the detailed explanation through events.
 
 ```mermaid
 stateDiagram-v2
@@ -351,9 +340,9 @@ stateDiagram-v2
     Active --> Archived: archive after user cleanup
 ```
 
-## The event stream behind Watch
+## The event stream behind live inspection
 
-The live watch page is powered by the run event stream over SSE. Conceptually, every important run fact becomes an ordered event:
+Live inspection is powered by the run event stream over SSE. Conceptually, every important run fact becomes an ordered event:
 
 ```text
 sequence

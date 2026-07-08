@@ -34,6 +34,9 @@ function makeProject(id: string, name: string): Project {
     default_provider: 'github-copilot',
     default_model_github_copilot: null,
     default_model_microsoft_foundry: null,
+    blueprint_generation_model: null,
+    workflow_generation_model: null,
+    outcome_spec_generation_model: null,
     available: true,
     state: 'active',
     created_at: '',
@@ -58,7 +61,7 @@ afterEach(() => {
 });
 
 describe('StartOrchestrationFab', () => {
-  it('renders the floating action button', () => {
+  it('renders the inline top-bar action button', () => {
     vi.mocked(apiClient.listProjects).mockResolvedValue([]);
     render(
       <Wrapper>
@@ -66,9 +69,10 @@ describe('StartOrchestrationFab', () => {
       </Wrapper>,
     );
     expect(screen.getByRole('button', { name: 'Start task' })).toBeDefined();
+    expect(screen.getByTestId('start-task-topbar-action')).toBeDefined();
   });
 
-  it('opens a dialog with a project selector and starts in the selected project', async () => {
+  it('opens a dialog with a project selector and starts direct in the selected project', async () => {
     vi.mocked(apiClient.listProjects).mockResolvedValue([
       makeProject('proj-a', 'Alpha'),
       makeProject('proj-b', 'Beta'),
@@ -92,10 +96,12 @@ describe('StartOrchestrationFab', () => {
       target: { value: 'Ship the thing' },
     });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Start' }));
+    expect(screen.getByText(/Direct starts faster/i)).toBeDefined();
+    expect(screen.getByText(/review, tool approval, assembly, and merge gates still apply/i)).toBeDefined();
+    fireEvent.click(screen.getByRole('button', { name: 'Direct' }));
 
     await waitFor(() =>
-      expect(apiClient.startOrchestration).toHaveBeenCalledWith('proj-b', 'Ship the thing'),
+      expect(apiClient.startOrchestration).toHaveBeenCalledWith('proj-b', 'Ship the thing', null, 'direct'),
     );
     expect(navigateMock).toHaveBeenCalledWith('/projects/proj-b/orchestrations/run-77');
   });
@@ -121,10 +127,10 @@ describe('StartOrchestrationFab', () => {
     fireEvent.change(screen.getByRole('textbox', { name: 'Goal' }), {
       target: { value: 'Default project goal' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Start' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Direct' }));
 
     await waitFor(() =>
-      expect(apiClient.startOrchestration).toHaveBeenCalledWith('proj-a', 'Default project goal'),
+      expect(apiClient.startOrchestration).toHaveBeenCalledWith('proj-a', 'Default project goal', null, 'direct'),
     );
   });
 
@@ -155,10 +161,10 @@ describe('StartOrchestrationFab', () => {
     fireEvent.change(screen.getByRole('textbox', { name: 'Goal' }), {
       target: { value: 'Resolved project goal' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Start' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Direct' }));
 
     await waitFor(() =>
-      expect(apiClient.startOrchestration).toHaveBeenCalledWith('proj-b', 'Resolved project goal'),
+      expect(apiClient.startOrchestration).toHaveBeenCalledWith('proj-b', 'Resolved project goal', null, 'direct'),
     );
   });
 
@@ -178,7 +184,8 @@ describe('StartOrchestrationFab', () => {
     const combobox = await screen.findByRole('combobox', { name: 'Project' });
     // No active project → nothing preselected; Start stays disabled until the user picks.
     expect((combobox as HTMLInputElement).value).toBe('');
-    expect(screen.getByRole('button', { name: 'Start' })).toHaveProperty('disabled', true);
+    expect(screen.getByRole('button', { name: 'Direct' })).toHaveProperty('disabled', true);
+    expect(screen.getByRole('button', { name: 'Define Outcome' })).toHaveProperty('disabled', true);
   });
 
   it('guides the user to create a project when none exist', async () => {
@@ -193,7 +200,8 @@ describe('StartOrchestrationFab', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Start task' }));
 
     expect(await screen.findByText(/Create a project first/)).toBeDefined();
-    expect(screen.getByRole('button', { name: 'Start' })).toHaveProperty('disabled', true);
+    expect(screen.getByRole('button', { name: 'Direct' })).toHaveProperty('disabled', true);
+    expect(screen.getByRole('button', { name: 'Define Outcome' })).toHaveProperty('disabled', true);
   });
 
   it('shows a workflow dropdown and passes the selected workflow override', async () => {
@@ -221,7 +229,7 @@ describe('StartOrchestrationFab', () => {
     fireEvent.change(screen.getByRole('textbox', { name: 'Goal' }), {
       target: { value: 'Ship a feature' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Start' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Define Outcome' }));
 
     await waitFor(() =>
       expect(apiClient.startOrchestration).toHaveBeenCalledWith('proj-a', 'Ship a feature', 'software-delivery'),

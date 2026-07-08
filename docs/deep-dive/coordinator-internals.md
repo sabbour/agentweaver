@@ -580,7 +580,7 @@ The frontend **Heartbeat** page shows **Automation** as the first column in the 
 
 Several paths intentionally convert ambiguous failure into durable, inspectable state:
 
-- Child start failure creates a terminal failed child run before marking the subtask failed, so the child run page is not empty.
+- Child start failure creates a terminal failed child run before marking the subtask failed, so embedded child-run inspection has a durable record to render.
 - Orphaned/stalled children are failed after the stall TTL instead of being observed forever, and the coordinator emits `coordinator.child_stall_detected`.
 - Pending dependents of a failed prerequisite are failed with recovery guidance; pending dependents of a stalled prerequisite are marked `blocked`.
 - Unexpected assembly exceptions mark the WorkPlan failed, emit a human-readable assembly failure, terminalize the run, and complete/persist the stream.

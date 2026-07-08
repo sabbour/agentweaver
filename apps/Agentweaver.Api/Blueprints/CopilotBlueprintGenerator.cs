@@ -1,5 +1,7 @@
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
+using Agentweaver.Api.Generation;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Workflows;
 using Agentweaver.Domain;
@@ -24,19 +26,22 @@ public sealed class CopilotBlueprintGenerator : IBlueprintGenerator
         IAgentRunner agentRunner,
         CatalogReader catalog,
         IConfiguration configuration,
-        ILogger<CopilotBlueprintGenerator> logger)
+        ILogger<CopilotBlueprintGenerator> logger,
+        IOptions<GenerationModelOptions>? generationOptions = null)
     {
         _agentRunner = agentRunner;
         _catalog = catalog;
         _logger = logger;
-        _defaultModel = configuration["Providers:GitHubCopilot:Model"];
+        _defaultModel = (generationOptions?.Value ?? GenerationModelOptions.FromConfiguration(configuration))
+            .ResolveBlueprintModel();
     }
 
     public async Task<string> GenerateRawAsync(
         string description,
         CancellationToken ct,
         string? userId = null,
-        string? targetRepository = null)
+        string? targetRepository = null,
+        string? modelId = null)
     {
         if (string.IsNullOrWhiteSpace(description))
             throw new ArgumentException("A description is required to generate a blueprint.", nameof(description));
@@ -191,7 +196,7 @@ public sealed class CopilotBlueprintGenerator : IBlueprintGenerator
                 repositoryPath: scratch,
                 modelSource: ModelSource.GitHubCopilot,
                 runId: runId,
-                modelId: _defaultModel,
+                modelId: modelId ?? _defaultModel,
                 stream: null,
                 ct: ct,
                 userId: userId).ConfigureAwait(false);

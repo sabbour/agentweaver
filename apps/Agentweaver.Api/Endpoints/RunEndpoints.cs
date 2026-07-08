@@ -1915,11 +1915,14 @@ app.MapGet("/api/runs/{id}/files/{**path}", async (
     if (!string.IsNullOrEmpty(run.WorktreePath))
     {
         var worktreeRoot = run.WorktreePath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        var full = Path.GetFullPath(Path.Combine(worktreeRoot, normalizedPath));
-        var rootWithSep = worktreeRoot + Path.DirectorySeparatorChar;
-        var cmp = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
-        if (!full.StartsWith(rootWithSep, cmp))
-            return Results.BadRequest(new { error = "Invalid file path." });
+        if (Path.IsPathFullyQualified(worktreeRoot))
+        {
+            var full = Path.GetFullPath(Path.Combine(worktreeRoot, normalizedPath));
+            var rootWithSep = worktreeRoot + Path.DirectorySeparatorChar;
+            var cmp = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+            if (!full.StartsWith(rootWithSep, cmp))
+                return Results.BadRequest(new { error = "Invalid file path." });
+        }
     }
 
     // Failed runs do not serve artifacts (aligns with diff-withholding policy FR-026 / SC-009).

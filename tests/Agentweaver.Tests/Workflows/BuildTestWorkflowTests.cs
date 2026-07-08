@@ -87,4 +87,28 @@ public sealed class BuildTestWorkflowTests
         BuildTestTurnExecutor.CannedPrompt.Should().Contain("ALL tests");
         BuildTestTurnExecutor.CannedPrompt.Should().Contain("start_preview(port=PORT)");
     }
+
+    [Fact]
+    public void BuildTestVerdictParser_AcceptsCurlPrefixedApprovedVerdict()
+    {
+        var parsed = BuildTestTurnExecutor.TryParseVerdict(
+            "curlAPPROVED\nBuild passed and preview responded with HTTP 200.",
+            out var decision);
+
+        parsed.Should().BeTrue();
+        decision.Approved.Should().BeTrue();
+        decision.RequestChanges.Should().BeFalse();
+    }
+
+    [Theory]
+    [InlineData("not APPROVED")]
+    [InlineData("UNAPPROVED")]
+    [InlineData("preAPPROVED")]
+    public void BuildTestVerdictParser_DoesNotTreatUnsafeApprovalSubstringsAsApproved(string response)
+    {
+        var parsed = BuildTestTurnExecutor.TryParseVerdict(response, out var decision);
+
+        parsed.Should().BeFalse();
+        decision.Approved.Should().BeFalse();
+    }
 }

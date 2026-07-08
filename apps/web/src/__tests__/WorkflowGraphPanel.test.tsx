@@ -3,7 +3,7 @@
  * data-node-type attribute and card width class.
  *
  * Renders a minimal ReactFlow with workflowNodeTypes rather than going
- * through the full WorkflowRunPage loading chain, which avoids async
+ * through the full page loading chain, which avoids async
  * descriptor-fetch timing issues in happy-dom.
  */
 import { describe, it, expect, afterEach, vi } from 'vitest';
@@ -33,6 +33,7 @@ import {
   ActiveEdgeContext,
   type WorkflowNodeData,
 } from '../components/WorkflowGraphPanel';
+import { buildSteppedConnectorRoute } from '../utils/dagLayout';
 import type { Node } from '@xyflow/react';
 
 afterEach(cleanup);
@@ -122,7 +123,7 @@ describe('WorkflowNode — node_type drives data-node-type attribute', () => {
     const nodes: Node[] = [{
       id: 'n1', type: 'workflow', position: { x: 0, y: 0 },
       data: {
-        def: { key: 'assemble-ready', label: 'Assemble-ready', roleDescription: 'Awaiting assembly', Icon: CheckmarkCircleRegular },
+        def: { key: 'assemble-ready', label: 'Assemble-ready', roleDescription: 'Ready for assembly', Icon: CheckmarkCircleRegular },
         state: { status: 'pending' },
         nodeType: 'terminal',
         runId: 'run-1', executionId: 'exec-1', projectId: 'p1',
@@ -213,5 +214,62 @@ describe('WorkflowNode — message field display', () => {
     );
     // The hardcoded 'Reviewing safety...' should NOT appear — message takes priority.
     expect(document.body.textContent).not.toContain('Reviewing safety');
+  });
+});
+
+describe('WorkflowGraphPanel — topology connector routing', () => {
+  it('uses one orthogonal stepped path instead of cubic squiggles and junction dots', () => {
+    const route = buildSteppedConnectorRoute({
+      sourceX: 120,
+      sourceY: 260,
+      targetX: 240,
+      targetY: 500,
+    });
+
+    expect(route.points).toEqual([
+      { x: 120, y: 260 },
+      { x: 120, y: 380 },
+      { x: 240, y: 380 },
+      { x: 240, y: 500 },
+    ]);
+    expect(route.path).toMatch(/^M 120,260 /);
+    expect(route.path).toContain('L 120,372');
+    expect(route.path).toContain('Q 120,380 128,380');
+    expect(route.path).not.toMatch(/\sC\s/);
+  });
+
+  it('keeps same-row dependencies on a predictable vertical lane between cards', () => {
+    const route = buildSteppedConnectorRoute({
+      sourceX: 220,
+      sourceY: 180,
+      targetX: 520,
+      targetY: 180,
+    });
+
+    expect(route.points).toEqual([
+      { x: 220, y: 180 },
+      { x: 370, y: 180 },
+      { x: 520, y: 180 },
+    ]);
+    expect(route.path).toBe('M 220,180 L 370,180 L 520,180');
+    expect(route.path).not.toMatch(/\sC\s/);
+  });
+
+  it('can force left-to-right lane routing for fan-out and fan-in execution graphs', () => {
+    const route = buildSteppedConnectorRoute({
+      sourceX: 240,
+      sourceY: 180,
+      targetX: 560,
+      targetY: 420,
+      orientation: 'horizontal',
+    });
+
+    expect(route.points).toEqual([
+      { x: 240, y: 180 },
+      { x: 400, y: 180 },
+      { x: 400, y: 420 },
+      { x: 560, y: 420 },
+    ]);
+    expect(route.path).not.toMatch(/\sC\s/);
   });
 });

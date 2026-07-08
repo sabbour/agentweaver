@@ -240,7 +240,7 @@ governs unattended runs; production stays human-gated.
 | Shared preview Gateway | `k8s/gateway-preview.yaml` |
 | Sandbox NetworkPolicy (preview ingress range) | `k8s/networkpolicy-sandbox.yaml` |
 | API RBAC (claims read, service/route write) | `k8s/rbac-api.yaml` |
-| Preview button, iframe, keepalive ping | `apps/web/src/pages/WorkflowRunPage.tsx` |
+| Preview button, iframe, keepalive ping | `apps/web/src/pages/CoordinatorRunPage.tsx` |
 | API client (`startPortForward` / `pingKeepalive`) | `apps/web/src/api/client.ts` |
 | `PortForwardSessionDto` (DTO fields) | `apps/web/src/api/types.ts` |
 

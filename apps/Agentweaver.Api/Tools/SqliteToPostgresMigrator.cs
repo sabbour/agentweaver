@@ -178,7 +178,9 @@ public sealed class SqliteToPostgresMigrator
                    COALESCE(max_ready_per_heartbeat,3), COALESCE(pickup_autopilot,1),
                    COALESCE(pickup_auto_approve_tools,0),
                    default_workflow_id, active_review_policy_name, sandbox_profile,
-                   source_blueprint_id, source_blueprint_type, allowed_workflow_ids
+                   source_blueprint_id, source_blueprint_type,
+                   blueprint_generation_model, workflow_generation_model, outcome_spec_generation_model,
+                   allowed_workflow_ids
               FROM projects;
             """;
         await using var reader = await cmd.ExecuteReaderAsync(ct);
@@ -207,7 +209,10 @@ public sealed class SqliteToPostgresMigrator
                 SandboxProfile = reader.IsDBNull(18) ? null : reader.GetString(18),
                 SourceBlueprintId = reader.IsDBNull(19) ? null : reader.GetString(19),
                 SourceBlueprintType = reader.IsDBNull(20) ? null : reader.GetString(20),
-                AllowedWorkflowIds = reader.IsDBNull(21) ? null : reader.GetString(21),
+                BlueprintGenerationModel = reader.IsDBNull(21) ? null : reader.GetString(21),
+                WorkflowGenerationModel = reader.IsDBNull(22) ? null : reader.GetString(22),
+                OutcomeSpecGenerationModel = reader.IsDBNull(23) ? null : reader.GetString(23),
+                AllowedWorkflowIds = reader.IsDBNull(24) ? null : reader.GetString(24),
             });
         }
         return results;

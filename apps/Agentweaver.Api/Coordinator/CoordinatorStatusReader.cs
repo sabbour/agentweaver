@@ -12,7 +12,7 @@ namespace Agentweaver.Api.Coordinator;
 /// This is kept separate from <see cref="CoordinatorRunService"/> on purpose: the hot-path run-list
 /// and run-detail endpoints must not pull the full coordinator orchestration graph (dispatch,
 /// workflow factory, watch-loop wiring) into their dependency closure. This reader depends only on
-/// <see cref="IServiceScopeFactory"/> and reads a single table.
+/// <see cref="IServiceScopeFactory"/> and reads the lifecycle projection tables.
 /// </summary>
 public sealed class CoordinatorStatusReader
 {
@@ -21,8 +21,10 @@ public sealed class CoordinatorStatusReader
     public CoordinatorStatusReader(IServiceScopeFactory scopeFactory) => _scopeFactory = scopeFactory;
 
     /// <summary>
-    /// Returns the current <c>WorkPlan.Status</c> for each supplied coordinator run id that has a
-    /// work plan. Run ids with no work plan are omitted. Returns an empty map for an empty input.
+    /// Returns the current coordinator lifecycle for each supplied coordinator run id. Once a work
+    /// plan exists, <c>WorkPlan.Status</c> is authoritative. Before decomposition, the outcome-spec
+    /// status (<c>drafting</c> / <c>awaiting_confirmation</c>) is used so replayed pages do not
+    /// collapse active outcome planning back to "not started".
     /// </summary>
     public async Task<IReadOnlyDictionary<string, string>> GetCoordinatorStatusesAsync(
         IReadOnlyCollection<string> coordinatorRunIds, CancellationToken ct)
@@ -32,9 +34,27 @@ public sealed class CoordinatorStatusReader
 
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
-        return await db.WorkPlans.AsNoTracking()
+        var result = await db.WorkPlans.AsNoTracking()
             .Where(w => coordinatorRunIds.Contains(w.CoordinatorRunId))
             .ToDictionaryAsync(w => w.CoordinatorRunId, w => w.Status, ct)
             .ConfigureAwait(false);
+
+        var missing = coordinatorRunIds.Where(id => !result.ContainsKey(id)).ToList();
+        if (missing.Count == 0)
+            return result;
+
+        var specs = await db.OutcomeSpecs.AsNoTracking()
+            .Where(s => missing.Contains(s.CoordinatorRunId))
+            .ToListAsync(ct)
+            .ConfigureAwait(false);
+
+        foreach (var spec in specs
+                     .GroupBy(s => s.CoordinatorRunId)
+                     .Select(g => g.OrderByDescending(s => s.UpdatedAt).First()))
+        {
+            result[spec.CoordinatorRunId] = spec.Status;
+        }
+
+        return result;
     }
 }

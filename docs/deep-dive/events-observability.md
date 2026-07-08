@@ -239,7 +239,7 @@ The frontend's robust consumption model is **snapshot + stream**:
 
 ```mermaid
 sequenceDiagram
-    participant Page as Run page
+    participant Page as Embedded run surface
     participant REST as REST seed endpoints
     participant SSE as SSE stream
     participant Reducer as Reducers

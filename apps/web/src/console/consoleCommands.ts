@@ -68,7 +68,7 @@ export const SLASH_COMMANDS: SlashCommandSpec[] = [
 export const DEFERRED_COMMANDS: Array<{ label: string; summary: string }> = [
   { label: '/new-project',   summary: 'Full project creation (repo/working dir/blueprint) — use the Projects gallery wizard.' },
   { label: '/decompose',     summary: 'Detailed work-breakdown / backlog editing — use the Board.' },
-  { label: '/review /merge', summary: 'Worker review & merge gates stay in their gated run views — the console links out, never bypasses them.' },
+  { label: '/review /merge', summary: 'Worker review & merge gates stay in their gated run views — the console links to the appropriate surface.' },
 ];
 
 const NAME_BY_TOKEN = new Map<string, SlashCommandName>();

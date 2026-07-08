@@ -119,7 +119,8 @@ public sealed class CoordinatorRunService
         bool autopilot,
         CancellationToken ct,
         string? workflowOverrideId = null,
-        string? retriedFrom = null)
+        string? retriedFrom = null,
+        CoordinatorStartMode startMode = CoordinatorStartMode.DefineOutcome)
     {
         var runId = RunId.New();
         var now = DateTimeOffset.UtcNow;
@@ -144,10 +145,13 @@ public sealed class CoordinatorRunService
 
         await _runStore.InsertAsync(run, ct).ConfigureAwait(false);
 
-        // Interactive runs share the same activation body as unattended backlog-pickup runs, but they
-        // do NOT schedule the unattended confirm: a human confirms/revises the spec via the HTTP
-        // endpoints.
-        await ActivateAsync(run, new RunOptions(AutoApproveTools: autoApproveTools, Autopilot: autopilot), workflowOverrideId)
+        // Interactive define-outcome runs stop at the confirmation gate; Direct runs skip only that
+        // definition gate and still enter the same dispatch/review/merge pipeline.
+        await ActivateAsync(
+                run,
+                new RunOptions(AutoApproveTools: autoApproveTools, Autopilot: autopilot),
+                workflowOverrideId,
+                direct: startMode == CoordinatorStartMode.Direct)
             .ConfigureAwait(false);
 
         return runId;
@@ -232,13 +236,16 @@ public sealed class CoordinatorRunService
     /// per-run CTS (registered so Abandon -> Cts.Cancel() tears the run down, mirroring
     /// RunOrchestrator), and starts the supervised watch loop.
     /// </summary>
-    private async Task ActivateAsync(Run run, RunOptions options, string? workflowOverrideId = null)
+    private async Task ActivateAsync(Run run, RunOptions options, string? workflowOverrideId = null, bool direct = false)
     {
         var runId = run.Id.ToString();
         _runOptions.Set(runId, options);
 
         var entry = _streamStore.Create(runId, run.SubmittingUser);
-        entry.RecordNext(EventTypes.CoordinatorStarted, new { goal = run.Task });
+        entry.RecordNext(EventTypes.CoordinatorStarted, new { goal = run.Task, mode = direct ? "direct" : "defineOutcome" });
+
+        var outcomeSpecGenerationModel = await ResolveOutcomeSpecGenerationModelAsync(
+            run.ProjectId!.Value, _appStopping).ConfigureAwait(false);
 
         var input = new CoordinatorDraftInput(
             runId,
@@ -247,13 +254,16 @@ public sealed class CoordinatorRunService
             run.SubmittingUser,
             run.RepositoryPath,
             run.ModelId,
-            WorkflowOverrideId: workflowOverrideId);
+            WorkflowOverrideId: workflowOverrideId,
+            OutcomeSpecGenerationModel: outcomeSpecGenerationModel);
 
         var runCts = new CancellationTokenSource();
         var ctsRegistered = false;
         try
         {
-            var streamingRun = await _factory.StartAsync(input, runId, runCts.Token).ConfigureAwait(false);
+            var streamingRun = direct
+                ? await _factory.StartDirectAsync(input, runId, runCts.Token).ConfigureAwait(false)
+                : await _factory.StartAsync(input, runId, runCts.Token).ConfigureAwait(false);
             var runCt = _registry.Register(runId, streamingRun, runCts);
             ctsRegistered = true;
             StartWatching(runId, streamingRun, entry, run.SubmittingUser, runCt);
@@ -266,6 +276,14 @@ public sealed class CoordinatorRunService
                 runCts.Dispose();
             throw;
         }
+    }
+
+    private async Task<string?> ResolveOutcomeSpecGenerationModelAsync(ProjectId projectId, CancellationToken ct)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var projectStore = scope.ServiceProvider.GetRequiredService<IProjectStore>();
+        var project = await projectStore.GetAsync(projectId, ct).ConfigureAwait(false);
+        return project?.OutcomeSpecGenerationModel;
     }
 
     /// <summary>
@@ -1195,16 +1213,18 @@ public sealed class CoordinatorRunService
             .Where(d => ids.Contains(d.SubtaskId))
             .ToListAsync(ct).ConfigureAwait(false);
 
-        // Surface the failure reason for a terminal/blocked plan from the coordinator run's result so
-        // the UI can render "Failed: <reason>" without a separate round-trip.
-        string? statusReason = null;
+        // Surface the durable assembly reason first; fall back to the coordinator run's terminal result
+        // for older rows written before AssemblyStatusReason existed.
+        string? statusReason = plan.AssemblyStatusReason;
         if (plan.Status is WorkPlanStatus.AssemblyBlocked
                         or WorkPlanStatus.AssemblyFailed
                         or WorkPlanStatus.AssemblyDeclined
+                        or WorkPlanStatus.RaiBlocked
+                        or WorkPlanStatus.NeedsResolution
             && RunId.TryParse(coordinatorRunId, out var coordRunId))
         {
             var run = await _runStore.GetAsync(coordRunId, ct).ConfigureAwait(false);
-            statusReason = run?.Result;
+            statusReason ??= run?.Result;
         }
 
         return new CoordinatorWorkPlanView(
@@ -1218,6 +1238,7 @@ public sealed class CoordinatorRunService
                 s.Phase, s.IsolationStrategy, s.Status, s.ChildRunId)).ToList(),
             edges.Select(e => new CoordinatorDependencyView(e.SubtaskId, e.DependsOnSubtaskId)).ToList(),
             plan.AssemblyStage,
+            plan.AssemblyTerminalStage,
             statusReason);
     }
 
@@ -1355,6 +1376,12 @@ public sealed class CoordinatorRunService
     }
 }
 
+public enum CoordinatorStartMode
+{
+    DefineOutcome,
+    Direct,
+}
+
 /// <summary>Result of a resume-seam call so the HTTP layer can map to a status code.</summary>
 public enum CoordinatorGateOutcome
 {
@@ -1378,6 +1405,7 @@ public sealed record CoordinatorWorkPlanView(
     IReadOnlyList<CoordinatorSubtaskView> Subtasks,
     IReadOnlyList<CoordinatorDependencyView> Dependencies,
     string? AssemblyStage = null,
+    string? AssemblyTerminalStage = null,
     string? StatusReason = null);
 
 /// <summary>A subtask row in <see cref="CoordinatorWorkPlanView"/>.</summary>

@@ -239,7 +239,16 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         var scope = ResolveTokenScope(_userId);
         _tokenScope = scope;
         _client = await _factory.CreateClientAsync(scope, modelId, ct).ConfigureAwait(false);
-        await _client.StartAsync(ct).ConfigureAwait(false);
+        try
+        {
+            await _client.StartAsync(ct).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            if (ClassifyProviderFailure(ex, "starting client") is { } providerFailure)
+                throw providerFailure;
+            throw;
+        }
 
         _logger.LogInformation("Copilot client started");
 
@@ -310,11 +319,20 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
     // ----- AIAgent abstract overrides: delegate to the inner GitHubCopilotAgent -----
 
     /// <summary>MAF entry point to create the initial session. Delegates to the inner agent.</summary>
-    protected override ValueTask<AgentSession> CreateSessionCoreAsync(CancellationToken cancellationToken)
+    protected override async ValueTask<AgentSession> CreateSessionCoreAsync(CancellationToken cancellationToken)
     {
         if (_inner is null)
             throw new InvalidOperationException("SetupAsync must be called before CreateSessionAsync.");
-        return _inner.CreateSessionAsync(cancellationToken);
+        try
+        {
+            return await _inner.CreateSessionAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            if (ClassifyProviderFailure(ex, "creating session") is { } providerFailure)
+                throw providerFailure;
+            throw;
+        }
     }
 
     /// <summary>
@@ -328,7 +346,16 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
             throw new InvalidOperationException("SetupAsync must be called before ResumeSessionAsync.");
         // SessionId is already set in SessionConfig ("agentweaver-run-{runId}") so the SDK
         // resumes the persisted session automatically — no raw overload needed.
-        return await _inner.CreateSessionAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            return await _inner.CreateSessionAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            if (ClassifyProviderFailure(ex, "resuming session") is { } providerFailure)
+                throw providerFailure;
+            throw;
+        }
     }
 
     /// <summary>
@@ -387,7 +414,16 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
             var scope = ResolveTokenScope(_userId);
             _tokenScope = scope;
             _client ??= await _factory.CreateClientAsync(scope, _modelId, cancellationToken).ConfigureAwait(false);
-            await _client.StartAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                await _client.StartAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                if (ClassifyProviderFailure(ex, "starting client for session restore") is { } providerFailure)
+                    throw providerFailure;
+                throw;
+            }
             _inner = _client.AsAIAgent(
                 new SessionConfig
                 {
@@ -404,17 +440,25 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
     private GitHubTokenScope ResolveTokenScope(string? userId)
     {
         if (string.IsNullOrWhiteSpace(userId))
-            throw new InvalidOperationException(
+            throw new AgentProviderException(
+                ModelSource.GitHubCopilot,
+                AgentProviderFailureKind.Authorization,
+                "github_copilot_auth_required",
                 $"Run {_runId} cannot start: no submitting user identity is available. " +
                 "Pass the authenticated user's ID to SetupAsync so the correct Copilot-entitled " +
-                "token is resolved. Using the installation token is not permitted.");
+                "token is resolved. Using the installation token is not permitted.",
+                isRetryable: false);
 
         var scope = _scopeProvider.Resolve(userId);
         if (string.Equals(scope.Key, GitHubTokenScope.Installation.Key, StringComparison.Ordinal))
-            throw new InvalidOperationException(
+            throw new AgentProviderException(
+                ModelSource.GitHubCopilot,
+                AgentProviderFailureKind.Authorization,
+                "github_copilot_auth_required",
                 $"Run {_runId} cannot start: the token scope provider resolved the installation " +
                 "scope for a Copilot model turn. GitHub App installation tokens are not Copilot " +
-                "model credentials; configure a user-token scope provider and pass the submitting user.");
+                "model credentials; configure a user-token scope provider and pass the submitting user.",
+                isRetryable: false);
 
         return scope;
     }
@@ -439,6 +483,29 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         }
 
         return false;
+    }
+
+    private AgentProviderException? ClassifyProviderFailure(Exception ex, string phase)
+    {
+        var providerFailure = AgentProviderException.Classify(ModelSource.GitHubCopilot, ex, _runId);
+        if (providerFailure is null)
+            return null;
+
+        _logger.LogWarning(
+            ex,
+            "GitHub Copilot provider failure while {Phase} — runId={RunId} kind={Kind} code={Code}",
+            phase,
+            _runId,
+            providerFailure.FailureKind,
+            providerFailure.ErrorCode);
+        Emit("run.failed", new
+        {
+            message = providerFailure.UserMessage,
+            category = providerFailure.FailureKind.ToString(),
+            errorCode = providerFailure.ErrorCode,
+            retryable = providerFailure.IsRetryable,
+        });
+        return providerFailure;
     }
 
     /// <summary>
@@ -526,14 +593,37 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
                                   "to the agent is not authorized for GitHub Copilot. Sign in the submitting user " +
                                   "and ensure their identity is propagated to the run.",
                     });
-                    throw new InvalidOperationException(
+                    throw new AgentProviderException(
+                        ModelSource.GitHubCopilot,
+                        AgentProviderFailureKind.Authorization,
+                        "github_copilot_auth_required",
                         $"Run {_runId} has no Copilot-entitled credentials: the resolved GitHub token is not " +
                         "authorized for GitHub Copilot. Ensure the submitting user is signed in and " +
                         "AgentHost__UserId is injected into the pod.",
+                        isRetryable: false,
                         ex);
                 }
                 catch (Exception ex)
                 {
+                    var providerFailure = AgentProviderException.Classify(ModelSource.GitHubCopilot, ex, _runId);
+                    if (providerFailure is not null)
+                    {
+                        _logger.LogWarning(
+                            ex,
+                            "GitHub Copilot provider failure during RunStreamingAsync — runId={RunId} kind={Kind} code={Code}",
+                            _runId,
+                            providerFailure.FailureKind,
+                            providerFailure.ErrorCode);
+                        Emit("run.failed", new
+                        {
+                            message = providerFailure.UserMessage,
+                            category = providerFailure.FailureKind.ToString(),
+                            errorCode = providerFailure.ErrorCode,
+                            retryable = providerFailure.IsRetryable,
+                        });
+                        throw providerFailure;
+                    }
+
                     _logger.LogError(ex, "RunStreamingAsync threw for workingDirectory={WorkingDirectory}", _workingDirectory);
                     Emit("run.failed", new { message = "The agent encountered an internal error." });
                     throw;
@@ -734,9 +824,27 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
             await _client.DisposeAsync().ConfigureAwait(false);
 
         _client = await _factory.CreateClientAsync(_tokenScope, _modelId, ct).ConfigureAwait(false);
-        await _client.StartAsync(ct).ConfigureAwait(false);
+        try
+        {
+            await _client.StartAsync(ct).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            if (ClassifyProviderFailure(ex, "restarting client") is { } providerFailure)
+                throw providerFailure;
+            throw;
+        }
         _inner = _client.AsAIAgent(_sessionConfig, ownsClient: false, id: null, name: null, description: null);
-        return await _inner.CreateSessionAsync(ct).ConfigureAwait(false);
+        try
+        {
+            return await _inner.CreateSessionAsync(ct).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            if (ClassifyProviderFailure(ex, "recreating session") is { } providerFailure)
+                throw providerFailure;
+            throw;
+        }
     }
 
     // ----- Thread-safe run-event emission -----

@@ -124,6 +124,12 @@ public sealed class SqliteDb
         // those ids (plus the built-in default).
         await TryAlterAsync(connection, "ALTER TABLE projects ADD COLUMN allowed_workflow_ids TEXT;", ct);
 
+        // Project-scoped model overrides for server-authored generation flows. NULL means "use global
+        // Generation fallback"; these do not alter runtime agent/run model defaults.
+        await TryAlterAsync(connection, "ALTER TABLE projects ADD COLUMN blueprint_generation_model TEXT;", ct);
+        await TryAlterAsync(connection, "ALTER TABLE projects ADD COLUMN workflow_generation_model TEXT;", ct);
+        await TryAlterAsync(connection, "ALTER TABLE projects ADD COLUMN outcome_spec_generation_model TEXT;", ct);
+
         // Off-board archiving for runs/backlog tasks. NULL means active/non-archived, preserving all
         // existing rows. Archived Ready tasks are excluded from heartbeat pickup and board queries.
         await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN archived_at TEXT;", ct);

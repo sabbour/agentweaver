@@ -2,19 +2,19 @@
 
 Agentweaver tracks GitHub Copilot token consumption and AI Credit (AIC) cost at run, workflow/coordinator, project, and app scope. The UI now surfaces that cost in compact run cards, graph nodes, the project dashboard leaderboard, and the fleet Overview page. For API contracts see the [reference](../reference/token-usage.md); for event/projection internals see the [deep dive](../deep-dive/token-usage-monitoring.md).
 
-## Live run view (Watch page)
+## Run and graph cost surfaces
 
-While an agent is running, a live token counter appears below the execution timeline on the Watch page. It updates as `agent.turn.usage` events arrive through the run stream and renders total tokens, input tokens, output tokens, total AICs, and a per-model table. Source: `apps/web/src/components/TokenUsagePanel.tsx:80`, `apps/web/src/components/TokenUsagePanel.tsx:87`, `apps/web/src/components/TokenUsagePanel.tsx:101`, `apps/web/src/components/TokenUsagePanel.tsx:106`.
+Token usage is projected from `agent.turn.usage` events and surfaced on run cards, coordinator graphs, dashboards, and observability pages. The standalone Watch page and its live counter have been retired with the standalone run-page surface.
 
-![Token counter on the Watch page](/screenshots/watch-token-counter.png)
+![Token counter on embedded run inspection surfaces](/screenshots/watch-token-counter.png)
 
-📸 **Screenshot** — Watch page showing the live token counter and per-model breakdown.
+📸 **Screenshot** — Embedded run inspection surface showing token/cost context when available.
 
 ## Run cards and DAG nodes
 
 Run cards in the board show a compact cost chip beside the status badge. If `total_nano_aiu` is positive, the chip displays AICs; otherwise it falls back to compact token count when only tokens are available. Run cards use embedded card fields when present and fetch `GET /api/runs/{id}/usage` as supplementary data when the card did not include totals. Source: `apps/web/src/components/CostChip.tsx:18`, `apps/web/src/components/CostChip.tsx:24`, `apps/web/src/components/board/RunCard.tsx:78`, `apps/web/src/components/board/RunCard.tsx:90`, `apps/web/src/components/board/RunCard.tsx:160`.
 
-Workflow and coordinator graphs use the same `CostChip`. Workflow run pages attach run usage to the agent node; coordinator run pages attach usage to the coordinator node and child-run usage to subtask nodes. Source: `apps/web/src/components/WorkflowGraphPanel.tsx:108`, `apps/web/src/components/WorkflowGraphPanel.tsx:594`, `apps/web/src/pages/WorkflowRunPage.tsx:700`, `apps/web/src/pages/CoordinatorRunPage.tsx:1527`, `apps/web/src/pages/CoordinatorRunPage.tsx:1604`.
+Coordinator graphs use the same `CostChip`: coordinator usage attaches to the coordinator node and child-run usage attaches to subtask nodes. Source: `apps/web/src/components/WorkflowGraphPanel.tsx`, `apps/web/src/pages/CoordinatorRunPage.tsx`.
 
 ## Project dashboard
 
@@ -50,11 +50,11 @@ The **Agents** tab aggregates the same metrics by agent and reuses the token bre
 
 ## DAG layout note
 
-The added cost chips and pod/status badges made DAG cards taller, so graph layout now shares `DAG_NODE_SEP = 96` and per-node rendered-height hints. Workflow runs, coordinator topology, shared workflow graph panels, and the visual workflow editor all pass those hints into `layoutDag`, preventing node overlap as cards gain metadata. Source: `apps/web/src/utils/dagLayout.ts:6`, `apps/web/src/utils/dagLayout.ts:24`, `apps/web/src/utils/dagLayout.ts:48`, `apps/web/src/pages/WorkflowRunPage.tsx:706`, `apps/web/src/components/CoordinatorTopologyGraph.tsx:522`, `apps/web/src/components/WorkflowGraphPanel.tsx:931`, `apps/web/src/components/VisualWorkflowEditor.tsx:236`.
+The added cost chips and pod/status badges made DAG cards taller, so graph layout shares `DAG_NODE_SEP = 96` and per-node rendered-height hints. Coordinator topology, shared workflow graph panels, and the visual workflow editor pass those hints into `layoutDag`, preventing node overlap as cards gain metadata. Source: `apps/web/src/utils/dagLayout.ts`, `apps/web/src/components/CoordinatorTopologyGraph.tsx`, `apps/web/src/components/WorkflowGraphPanel.tsx`, `apps/web/src/components/VisualWorkflowEditor.tsx`.
 
 ## See also
 
 - [Token usage — Reference](../reference/token-usage.md) — endpoints, DTOs, and status codes.
 - [Token usage monitoring — Deep Dive](../deep-dive/token-usage-monitoring.md) — event flow, projections, and source table.
-- [Runs, board, and live watch](./runs-board-watch.md) — run cards, the board, and Watch page flow.
+- [Runs, board, and live inspection](./runs-board-watch.md) — run cards, the board, and embedded inspection flow.
 - [Distributed execution & scaling](../deep-dive/distributed-execution-scaling.md) — shared event-store streaming under multiple replicas.

@@ -1,4 +1,4 @@
-import type { RetriableReviewErrorBody, RunDetail, PersistedRunEvent, ReviewRequest, ReviewResponse, SandboxPolicy, SubmitRunResponse, WorkspaceFileEntry, WorkspaceFileDiff, WorkspaceNode, CommitResponse, WorkspaceFileContent, RequestChangesResponse, WorkspaceRefsResponse, Project, CreateProjectRequest, Blueprint, ListBlueprintsResponse, GenerateBlueprintResponse, SuggestBlueprintResponse, UpdateProjectProviderSettingsRequest, CreateProjectRunRequest, GitHubDeviceFlow, GitHubPollResult, GitHubAuthStatusResponse, GitHubRepo, GitHubAccount, TeamTemplateDto, CastProposalDto, CreateProposalRequest, AmendProposalRequest, ConfirmProposalRequest, TeamDto, TeamMemberDto, CharterDto, HistoryDto, AddMemberRequest, ReroleRequest, SyncStatusDto, SyncCommitRequest, SyncCommitResponseDto, RoleDto, ServerInfo, WorkflowRunDto, OutcomeSpec, StartOrchestrationResponse, SteerCoordinatorRequest, SteerCoordinatorResponse, WorkPlanResponse, CoordinatorChildResponse, GraphDescriptor, AssemblyReviewDecision, AssemblyReviewRequest, AssemblyReviewResponse, AnswerQuestionResponse, AutoApproveResponse, AutopilotResponse, BoardDto, BacklogTaskDto, BacklogSettingsDto, WorkflowStagesResponse, RetryRunResponse, SystemDiagnosticsDto, HeartbeatStatusDto, WorkspaceFileNode, DecomposeResponse, PortForwardSessionDto, RuntimeInfo, DetailedSystemDiagnosticsDto, ClusterDiagnosticsDto } from './types';
+import type { RetriableReviewErrorBody, RunDetail, PersistedRunEvent, ReviewRequest, ReviewResponse, SandboxPolicy, SubmitRunResponse, WorkspaceFileEntry, WorkspaceFileDiff, WorkspaceNode, CommitResponse, WorkspaceFileContent, RequestChangesResponse, WorkspaceRefsResponse, Project, CreateProjectRequest, Blueprint, ListBlueprintsResponse, GenerateBlueprintResponse, SuggestBlueprintResponse, UpdateProjectProviderSettingsRequest, CreateProjectRunRequest, GitHubDeviceFlow, GitHubPollResult, GitHubAuthStatusResponse, GitHubRepo, GitHubAccount, TeamTemplateDto, CastProposalDto, CreateProposalRequest, AmendProposalRequest, ConfirmProposalRequest, TeamDto, TeamMemberDto, CharterDto, HistoryDto, AddMemberRequest, ReroleRequest, SyncStatusDto, SyncCommitRequest, SyncCommitResponseDto, RoleDto, ServerInfo, WorkflowRunDto, OutcomeSpec, StartOrchestrationResponse, StartOrchestrationMode, AgentweaverConsoleRequest, AgentweaverConsoleResponse, SteerCoordinatorRequest, SteerCoordinatorResponse, WorkPlanResponse, CoordinatorChildResponse, GraphDescriptor, AssemblyReviewDecision, AssemblyReviewRequest, AssemblyReviewResponse, AnswerQuestionResponse, AutoApproveResponse, AutopilotResponse, BoardDto, BacklogTaskDto, BacklogSettingsDto, WorkflowStagesResponse, RetryRunResponse, SystemDiagnosticsDto, HeartbeatStatusDto, WorkspaceFileNode, DecomposeResponse, PortForwardSessionDto, RuntimeInfo, DetailedSystemDiagnosticsDto, ClusterDiagnosticsDto } from './types';
 import { getSessionToken } from '../config';
 
 /** A skill file paired with the folder-relative path it should keep on the server (folder drag-and-drop). */
@@ -223,10 +223,6 @@ export class AgentweaverApiClient {
     const queryString = query.toString();
     const suffix = queryString ? `?${queryString}` : '';
     return this.request<WorkflowRunDto[]>('GET', `/projects/${encodeURIComponent(projectId)}/runs${suffix}`);
-  }
-
-  getWorkflowRun(projectId: string, workflowRunId: string): Promise<WorkflowRunDto> {
-    return this.request<WorkflowRunDto>('GET', `/projects/${encodeURIComponent(projectId)}/runs/${encodeURIComponent(workflowRunId)}`);
   }
 
   deleteRun(runId: string): Promise<void> {
@@ -464,10 +460,22 @@ export class AgentweaverApiClient {
     return this.request<SyncCommitResponseDto>('POST', `/projects/${encodeURIComponent(projectId)}/team/sync`, req);
   }
 
+  // Singleton browser console facade. The backend owns NL → tool inference; the
+  // browser only supplies context and renders the typed response.
+  sendConsoleMessage(req: AgentweaverConsoleRequest): Promise<AgentweaverConsoleResponse> {
+    return this.request<AgentweaverConsoleResponse>('POST', '/console/turn', req);
+  }
+
   // Orchestration (Feature 008 — Squad Coordinator Agent)
-  startOrchestration(projectId: string, goal: string, workflowOverrideId?: string | null): Promise<StartOrchestrationResponse> {
+  startOrchestration(
+    projectId: string,
+    goal: string,
+    workflowOverrideId?: string | null,
+    startMode?: StartOrchestrationMode,
+  ): Promise<StartOrchestrationResponse> {
     const body: Record<string, unknown> = { goal };
     if (workflowOverrideId) body.workflow_override_id = workflowOverrideId;
+    if (startMode && startMode !== 'define_outcome') body.start_mode = startMode;
     return this.request<StartOrchestrationResponse>('POST', `/projects/${encodeURIComponent(projectId)}/orchestrations`, body);
   }
 

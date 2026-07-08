@@ -2,6 +2,8 @@ using System.Text;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
+using Agentweaver.Api.Generation;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Domain;
 using Agentweaver.Squad.Catalog;
@@ -30,12 +32,14 @@ public sealed class CopilotWorkflowGenerator : IWorkflowGenerator
         IAgentRunner agentRunner,
         CatalogReader catalog,
         IConfiguration configuration,
-        ILogger<CopilotWorkflowGenerator> logger)
+        ILogger<CopilotWorkflowGenerator> logger,
+        IOptions<GenerationModelOptions>? generationOptions = null)
     {
         _agentRunner = agentRunner;
         _catalog = catalog;
         _logger = logger;
-        _defaultModel = configuration["Providers:GitHubCopilot:Model"];
+        _defaultModel = (generationOptions?.Value ?? GenerationModelOptions.FromConfiguration(configuration))
+            .ResolveWorkflowModel();
     }
 
     public async Task<WorkflowGenerationResult> GenerateAsync(
@@ -48,7 +52,7 @@ public sealed class CopilotWorkflowGenerator : IWorkflowGenerator
         var basePrompt = BuildPrompt(request);
 
         // First pass.
-        var rawFirst = await RunModelAsync(basePrompt, ct, request.UserId).ConfigureAwait(false);
+        var rawFirst = await RunModelAsync(basePrompt, ct, request.UserId, request.GenerationModel).ConfigureAwait(false);
         var (yamlFirst, defFirst, errorFirst) = ParseCandidate(rawFirst, request);
         if (defFirst is not null)
             return new WorkflowGenerationResult(defFirst, yamlFirst, WasCorrected: false);
@@ -59,7 +63,7 @@ public sealed class CopilotWorkflowGenerator : IWorkflowGenerator
 
         // Correction pass (FR-060): exactly one retry with the failed YAML + error appended.
         var correctionPrompt = BuildCorrectionPrompt(basePrompt, yamlFirst, errorFirst!);
-        var rawSecond = await RunModelAsync(correctionPrompt, ct, request.UserId).ConfigureAwait(false);
+        var rawSecond = await RunModelAsync(correctionPrompt, ct, request.UserId, request.GenerationModel).ConfigureAwait(false);
         var (yamlSecond, defSecond, errorSecond) = ParseCandidate(rawSecond, request);
         if (defSecond is not null)
             return new WorkflowGenerationResult(defSecond, yamlSecond, WasCorrected: true);
@@ -323,7 +327,7 @@ public sealed class CopilotWorkflowGenerator : IWorkflowGenerator
         return sb.ToString().TrimEnd();
     }
 
-    private async Task<string> RunModelAsync(string prompt, CancellationToken ct, string? userId = null)
+    private async Task<string> RunModelAsync(string prompt, CancellationToken ct, string? userId = null, string? modelId = null)
     {
         var scratch = Path.Combine(AppPaths.DataDirectory, "workflow-scratch", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(scratch);
@@ -336,7 +340,7 @@ public sealed class CopilotWorkflowGenerator : IWorkflowGenerator
                 repositoryPath: scratch,
                 modelSource: ModelSource.GitHubCopilot,
                 runId: runId,
-                modelId: _defaultModel,
+                modelId: modelId ?? _defaultModel,
                 stream: null,
                 ct: ct,
                 userId: userId).ConfigureAwait(false);

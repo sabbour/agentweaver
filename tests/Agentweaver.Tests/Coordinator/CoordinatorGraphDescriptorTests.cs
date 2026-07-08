@@ -218,6 +218,70 @@ public sealed class CoordinatorGraphDescriptorTests
     }
 
     [Fact]
+    public void Build_WithTerminalAssemblyStage_AnnotatesOnlyFailedStage()
+    {
+        var (subtasks, deps) = SamplePlan();
+
+        var d = CoordinatorGraphDescriptor.Build(
+            "coord_run",
+            subtasks,
+            deps,
+            assemblyStage: AssemblyStage.Scribe,
+            workPlanStatus: WorkPlanStatus.AssemblyFailed,
+            assemblyTerminalStage: AssemblyStage.Merge,
+            assemblyStatusReason: "assembly_merge_failed: merge_error");
+
+        var coordinator = d.Nodes.Single(n => n.Id == "coordinator");
+        coordinator.Status.Should().Be(WorkPlanStatus.AssemblyFailed);
+        coordinator.TerminalStage.Should().Be(AssemblyStage.Merge);
+        coordinator.StatusReason.Should().Be("assembly_merge_failed: merge_error");
+
+        var merge = d.Nodes.Single(n => n.Id == "planned:assembly-merge");
+        merge.Kind.Should().Be("live");
+        merge.Status.Should().Be(WorkPlanStatus.AssemblyFailed);
+        merge.TerminalStage.Should().Be(AssemblyStage.Merge);
+        merge.StatusReason.Should().Be("assembly_merge_failed: merge_error");
+
+        d.Nodes.Single(n => n.Id == "planned:assembly-review").Status.Should().BeNull();
+        d.Nodes.Single(n => n.Id == "planned:assembly-scribe").Status.Should().BeNull();
+    }
+
+    [Fact]
+    public void Build_WithPreGateTerminalFailure_KeepsNeverRunAssemblyGatesPlanned()
+    {
+        var (subtasks, deps) = SamplePlan();
+
+        var d = CoordinatorGraphDescriptor.Build(
+            "coord_run",
+            subtasks,
+            deps,
+            assemblyStage: AssemblyStage.Scribe,
+            workPlanStatus: WorkPlanStatus.AssemblyFailed,
+            assemblyTerminalStage: null,
+            assemblyStatusReason: "assembly_rearm_exhausted after 3 attempts");
+
+        var coordinator = d.Nodes.Single(n => n.Id == "coordinator");
+        coordinator.Status.Should().Be(WorkPlanStatus.AssemblyFailed);
+        coordinator.TerminalStage.Should().BeNull();
+        coordinator.StatusReason.Should().Be("assembly_rearm_exhausted after 3 attempts");
+
+        foreach (var nodeId in new[]
+                 {
+                     CoordinatorGraphDescriptor.AssemblyRaiNodeId,
+                     CoordinatorGraphDescriptor.AssemblyReviewNodeId,
+                     CoordinatorGraphDescriptor.AssemblyMergeNodeId,
+                     CoordinatorGraphDescriptor.AssemblyScribeNodeId,
+                 })
+        {
+            var node = d.Nodes.Single(n => n.Id == nodeId);
+            node.Kind.Should().Be("planned", $"{node.Label} never ran before terminal assembly failure");
+            node.Status.Should().BeNull();
+            node.TerminalStage.Should().BeNull();
+            node.StatusReason.Should().BeNull();
+        }
+    }
+
+    [Fact]
     public void BuildEmpty_ProducesCoordinatorVariant_WithNoSubtasks_AndPlannedAssemblyStage()
     {
         // Pre-confirmation / pre-decomposition: a coordinator run has no work plan yet. The graph
