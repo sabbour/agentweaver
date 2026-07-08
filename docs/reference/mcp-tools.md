@@ -10,7 +10,7 @@
 This page is generated from the MCP server source. Do not edit it by hand — run `node scripts/gen-docs.mjs`. For the full parameter reference of each tool, see [MCP server reference](./mcp.md).
 :::
 
-The Agentweaver MCP server exposes **88 tools** across **14 categories**. This index is the authoritative list of tool names and one-line descriptions, derived directly from the `[McpServerTool]` attributes in the server source.
+The Agentweaver MCP server exposes **90 tools** across **14 categories**. This index is the authoritative list of tool names and one-line descriptions, derived directly from the `[McpServerTool]` attributes in the server source.
 
 MCP tool implementations URI-escape every route path parameter before calling the Agentweaver API. Segments such as `project_id`, `run_id`, `agent_name`, and task or workflow ids are encoded with `Uri.EscapeDataString()` so crafted ids cannot inject `../` or otherwise change the API path. Query-string parameters keep their normal query encoding.
 
@@ -140,8 +140,8 @@ MCP tool implementations URI-escape every route path parameter before calling th
 | `skill_delete` | Delete a catalog skill and all of its agent assignments. |
 | `skill_generate` | Generate an unsaved SKILL.md draft server-side from a natural language description. Review the draft, then call skill_create to persist it. |
 | `skill_get` | Get a single catalog skill including SKILL.md instructions and bundled resources. |
-| `skill_import` | Import selected skills from owner/repo, GitHub repo/tree/blob URLs, raw SKILL.md URLs, or git@ SSH URLs. Idempotent by content hash. Omit locations to import all discovered candidates. |
-| `skill_import_preview` | Preview candidate skills from owner/repo, GitHub repo/tree/blob URLs, raw SKILL.md URLs, or git@ SSH URLs, without importing. |
+| `skill_import` | Import selected skills from owner/repo, https://github.com repo/tree/blob URLs, or raw https://raw.githubusercontent.com SKILL.md URLs. Idempotent by content hash. Locations are REQUIRED when a source contains multiple skills; omitting locations works only when the source has a single skill. |
+| `skill_import_preview` | Preview candidate skills from owner/repo, https://github.com repo/tree/blob URLs, or raw https://raw.githubusercontent.com SKILL.md URLs, without importing. |
 | `skill_list` | List catalog skills for a project with their agent assignments and status. |
 | `skill_sync` | Discover and sync skills already present in the project's connected repository (.github/skills, .copilot/skills, .claude/skills, .agents/skills). Idempotent; marks vanished skills as missing. |
 | `skill_unassign` | Remove a skill assignment from an agent. |
@@ -173,3 +173,4 @@ MCP tool implementations URI-escape every route path parameter before calling th
 | `get_project_workspace_file` | Get the content of a file in a project workspace at a given ref. Defaults to the base branch when ref is omitted. |
 | `list_project_workspace` | List the flat file tree for a project workspace at a given ref. Defaults to the base branch when ref is omitted. |
 | `list_project_workspace_refs` | List the browsable git refs for a project workspace: the base branch and any active run worktrees. |
+
