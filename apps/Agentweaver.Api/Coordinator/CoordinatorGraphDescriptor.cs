@@ -49,6 +49,26 @@ public static class CoordinatorGraphDescriptor
         new(AssemblyStage.Review, "Human Review", "human-review"),
     ];
 
+    /// <summary>
+    /// Maps a gate KIND (rai / human-review / rubberduck / build-test) to the CANONICAL assembly
+    /// stage id used as the <see cref="AssemblyGateNode.StageId"/>. This is the id that gets persisted
+    /// as the work plan's <c>AssemblyStage</c> and validated by
+    /// <c>CoordinatorAssemblyReviewPersistence.IsWorkPlanAwaitingReviewAsync</c> and projected by
+    /// <c>WorkflowStageProjector</c>. It MUST be derived from the gate kind, never from the workflow
+    /// node's arbitrary id (Feature 015 principle) — otherwise a workflow whose human-review node id
+    /// is (e.g.) "human-review" persists a stage that never equals the canonical
+    /// <see cref="AssemblyStage.Review"/> ("review"), so the human-review gate can never be approved
+    /// and the run parks forever in <c>awaiting_review</c>. Kinds without a canonical stage constant
+    /// (build-test, rubberduck) fall back to the node id, which is safe because no authoritative logic
+    /// compares them against a shared constant.
+    /// </summary>
+    public static string CanonicalStageId(string gateKind, string nodeId) => gateKind switch
+    {
+        "rai" => AssemblyStage.Rai,
+        "human-review" => AssemblyStage.Review,
+        _ => nodeId,
+    };
+
     public static string SubtaskNodeId(int subtaskId) => $"plan:subtask-{subtaskId}";
 
     public static string GraphId(string coordinatorRunId) => $"coordinator:{coordinatorRunId}";

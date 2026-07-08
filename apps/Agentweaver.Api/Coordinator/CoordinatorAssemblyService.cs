@@ -1113,10 +1113,19 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
             .Select(n => (Node: n, GateKind: n.Type == WorkflowNodeType.BuildTest ? "build-test" : NodeClassifier.NormalizeGateKind(n)))
             .Where(x => x.GateKind is "build-test" or "rai" or "rubberduck" or "human-review")
             .Select(x => new CoordinatorGraphDescriptor.AssemblyGateNode(
-                x.Node.Id,
+                CoordinatorGraphDescriptor.CanonicalStageId(x.GateKind!, x.Node.Id),
                 string.IsNullOrWhiteSpace(x.Node.Label) ? x.Node.Id : x.Node.Label,
                 x.GateKind!,
                 x.Node.Agent))
+            // Dedupe by the canonical StageId: an authored workflow with two gates that canonicalize
+            // to the same stage (e.g. two human-review nodes both -> "review", or two rai nodes)
+            // would otherwise emit duplicate assembly StageId / GraphNodeId, breaking the coordinator
+            // graph (non-unique node ids) and AssemblyStage.Ordinal projection. The collective
+            // assembly supplies each platform gate exactly once, so keeping the first occurrence per
+            // canonical stage is the correct contract. (Fallback build-test/rubberduck gates keep
+            // their distinct node-id-derived StageId and are unaffected.)
+            .GroupBy(g => g.StageId)
+            .Select(grp => grp.First())
             .ToList();
 
         return gates;

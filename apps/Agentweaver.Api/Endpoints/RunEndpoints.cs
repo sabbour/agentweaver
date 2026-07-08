@@ -1280,7 +1280,7 @@ app.MapPost("/api/runs/{id}/retry", async (
         {
             // Re-enter as a fresh unattended coordinator run; do NOT re-claim a backlog task.
             var project = run.ProjectId is { } ppid ? await projectStore.GetAsync(ppid, ct) : null;
-            var autoApproveTools = project?.PickupAutoApproveTools ?? false;
+            var autoApproveTools = project?.PickupAutoApproveTools ?? true;
             var autopilot = project?.PickupAutopilot ?? true;
             newRunId = await coordinator
                 .StartRetriedPickupCoordinatorRunAsync(run, autoApproveTools, autopilot, ct)

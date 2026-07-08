@@ -321,7 +321,7 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                     updated_at = table.Column<DateTimeOffset>(nullable: false),
                     max_ready_per_heartbeat = table.Column<int>(nullable: false, defaultValue: 3),
                     pickup_autopilot = table.Column<bool>(nullable: false, defaultValue: true),
-                    pickup_auto_approve_tools = table.Column<bool>(nullable: false, defaultValue: false),
+                    pickup_auto_approve_tools = table.Column<bool>(nullable: false, defaultValue: true),
                     default_workflow_id = table.Column<string>(nullable: true),
                     active_review_policy_name = table.Column<string>(nullable: true),
                     sandbox_profile = table.Column<string>(nullable: true),
