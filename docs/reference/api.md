@@ -368,6 +368,8 @@ Unknown ids return `404 Not Found`. Status values are `pending`, `in_progress`, 
 
 For a **coordinator** run (`agent_name: "Coordinator"`, no parent), the response also carries `coordinator_status`: the current work-plan orchestration status (`dispatching`, `awaiting_assembly`, `assembling`, `in_review`, `complete`, `assembly_blocked`, `assembly_failed`, `assembly_declined`). It is `null` for normal runs and for coordinator runs that have no work plan yet. Because a coordinator run stays `in_progress` while it dispatches children and runs collective assembly, `coordinator_status` is what the UI should render (for example "Awaiting assembly" or "Failed: &lt;result&gt;") instead of the bare `status`. On a terminal assembly failure the `result` — also surfaced as `coordinator_status_reason` on this response (scoped to coordinator runs) — carries the human-readable reason (for example `assembly_blocked: <reason>`, `assembly_merge_failed: <reason>`, `assembly_error: <message>`).
 
+Coordinator run detail also includes `coordinator_steerable` (boolean). The backend sets it for coordinator runs whose `RunStatus` is `in_progress` or `awaiting_review`, so the UI can keep **Message coordinator** and steering controls enabled while the collective assembly review gate is parked (`apps/Agentweaver.Api/Contracts/Dtos.cs:178`, `apps/Agentweaver.Api/Endpoints/RunEndpoints.cs:185`, `apps/Agentweaver.Api/Coordinator/CoordinatorSteeringService.cs:348`).
+
 The response also carries `auto_approve_tools` and `autopilot` (booleans) reflecting the current per-run option state (launch value plus any live toggle). Both are `false` unless explicitly enabled. The frontend uses these to render the toggle controls; see `POST /api/runs/{id}/auto-approve` and `POST /api/runs/{id}/autopilot`.
 
 ### POST /api/runs/{id}/archive
@@ -1174,6 +1176,8 @@ The Coordinator agent can either start directly from a goal or draft a confirmab
 
 Starts a coordinator run for the project. The project's working directory, default branch, and the authenticated caller are used as the run's repository path, originating branch, and submitting user. The provider is fixed to GitHub Copilot.
 
+The project must have at least one **dispatchable** cast team member before an orchestration can start. The start path calls `CoordinatorRosterGuard.EnsureDispatchableTeam` before inserting the run (`apps/Agentweaver.Api/Coordinator/CoordinatorRunService.cs:111`, `:125`). A dispatchable member is active, has a role, and is not one of the platform-owned Scribe/Ralph/RAI/Build & Test roles (`apps/Agentweaver.Api/Coordinator/CoordinatorRosterGuard.cs:54`, `apps/Agentweaver.Api/Coordinator/CoordinatorOrchestratorExecutor.cs:687`, `:750`).
+
 Request:
 
 ```json
@@ -1200,8 +1204,25 @@ Response `201 Created` (with `Location: /api/runs/{runId}`):
 
 `400 Bad Request` when `id` is not a valid project id or `goal` is missing.
 `404 Not Found` when the project does not exist.
+`409 Conflict` when the project has no dispatchable team:
+
+```json
+{
+  "error": "no_team",
+  "message": "This project has no team. Cast a team before starting an orchestration."
+}
+```
+
 `409 Conflict` with `error: "project_deleting"` when the project is being deleted.
 `409 Conflict` with `error: "workspace_unavailable"` when the working directory is not accessible.
+`422 Unprocessable Entity` when the team roster exists but cannot be read:
+
+```json
+{
+  "error": "invalid_team",
+  "message": "The project team roster could not be read. Fix the team before starting an orchestration."
+}
+```
 
 ### GET /api/runs/{id}/outcome-spec
 

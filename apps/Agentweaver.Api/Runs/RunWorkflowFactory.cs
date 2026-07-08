@@ -923,7 +923,9 @@ public sealed class RunWorkflowFactory
                     createSubStream: _factory.CreateSubStreamWriter,
                     completeSubStream: _factory.CompleteSubStream,
                     agentFactory: _factory._agentFactory,
-                    agentId: node.Agent);
+                    agentId: node.Agent,
+                    apiBaseUrl: _factory._apiBaseUrl,
+                    apiKey: _factory._apiKey);
                 _peerReviewNodes[node.Id] = buildTest;
                 return buildTest;
             }

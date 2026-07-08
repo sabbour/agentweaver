@@ -56,7 +56,7 @@ import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
 import type { SteerKind, TopologyEdge } from '../api/types';
 import type { TopologyNodeState } from '../state/topologyReducer';
-import { DAG_NODE_SEP, layoutDag, NODE_W, RENDERED_TOPOLOGY_NODE_H } from '../utils/dagLayout';
+import { DAG_NODE_SEP, layoutDagColumns, NODE_W, RENDERED_TOPOLOGY_NODE_H } from '../utils/dagLayout';
 import { AgentAvatar } from './AgentAvatar';
 import { PodIndicator } from './PodIndicator';
 import { STEERING_HELP } from './steeringHelp';
@@ -593,7 +593,7 @@ export function CoordinatorTopologyGraph({ coordinatorRunId, nodes, edges }: Coo
     const nodeSizeHints = Object.fromEntries(
       nodes.map((node) => [node.id, { width: NODE_W, height: node.kind === 'coordinator' ? 220 : RENDERED_TOPOLOGY_NODE_H }]),
     );
-    return layoutDag(raw, rfEdges, { rankdir: 'LR', rankSep: 80, nodeSep: DAG_NODE_SEP }, nodeSizeHints);
+    return layoutDagColumns(raw, rfEdges, { rankdir: 'LR', rankSep: 80, nodeSep: DAG_NODE_SEP }, nodeSizeHints);
   }, [nodes, rfEdges]);
 
   // Pipeline order: left-to-right by layout x-position.

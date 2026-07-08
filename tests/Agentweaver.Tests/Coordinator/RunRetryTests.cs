@@ -7,6 +7,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Agentweaver.Api.Contracts;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Domain;
+using Agentweaver.Tests.Casting;
 using Agentweaver.Tests.Helpers;
 
 namespace Agentweaver.Tests.Coordinator;
@@ -237,6 +238,12 @@ public sealed class RunRetryTests : IDisposable
         string task = "do the thing",
         string? modelId = "gpt-4o")
     {
+        if (repoPath is null && projectId is not null)
+        {
+            var project = await _factory.Services.GetRequiredService<IProjectStore>().GetAsync(projectId.Value);
+            repoPath = project?.WorkingDirectory;
+        }
+
         var run = new Run
         {
             Id = RunId.New(),
@@ -270,6 +277,7 @@ public sealed class RunRetryTests : IDisposable
             working_directory = dir,
         });
         resp.StatusCode.Should().Be(HttpStatusCode.Created, "the test project must be created");
+        SquadTestFixtureHelper.CreateMinimalSquad(dir, "Retry Test");
         return (await resp.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("project_id").GetString()!;
     }
 

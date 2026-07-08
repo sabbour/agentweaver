@@ -1,5 +1,14 @@
 using FluentAssertions;
+using System.Text.Json;
+using System.Threading.Channels;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging.Abstractions;
+using Agentweaver.AgentRuntime;
+using Agentweaver.AgentRuntime.Providers;
 using Agentweaver.AgentRuntime.Workflow;
+using Agentweaver.Domain;
+using Agentweaver.SandboxExec;
+using Agentweaver.Tests.Helpers;
 
 using RaiVerdict = Agentweaver.AgentRuntime.Workflow.RaiTurnExecutor.RaiVerdict;
 
@@ -143,5 +152,61 @@ public sealed class RaiVerdictParserTests
 
         RaiTurnExecutor.ParseVerdict(response).Should().Be(RaiVerdict.Yellow,
             "ParseVerdict applies the advisory Yellow default when TryParseVerdict returns false");
+    }
+
+    [Fact]
+    public async Task HandleAsync_EmitsVerdictPayload_ToParentRunAndRaiSubStream()
+    {
+        var parent = Channel.CreateUnbounded<RunEvent>();
+        var sub = Channel.CreateUnbounded<RunEvent>();
+        var executor = new RaiTurnExecutor(
+            new GitHubCopilotClientFactory(new ConfigurationBuilder().Build(), new NullGitHubTokenStore(), new FixedInstallationScopeStub()),
+            new FixedInstallationScopeStub(),
+            new PassthroughExecutor("test"),
+            new StubPolicyStore(),
+            new InMemoryShellApprovalStore(),
+            new InMemoryToolApprovalGate(),
+            NullLoggerFactory.Instance,
+            getRecordingWriter: _ => parent.Writer,
+            createSubStream: (_, _) => sub.Writer,
+            completeSubStream: _ => sub.Writer.TryComplete(),
+            agentFactory: new FakeWorkflowAgentFactory(new TestFileEditAgentRunner()));
+
+        await executor.HandleAsync(new AgentTurnOutput(
+            RunId: "rai-verdict-run",
+            TreeHash: "tree",
+            Diff: "diff --git a/file.txt b/file.txt\n+safe change",
+            StepCount: 1,
+            WorktreePath: AppContext.BaseDirectory,
+            WorktreeBranch: "agent/rai-verdict-run",
+            RepositoryPath: AppContext.BaseDirectory,
+            OriginatingBranch: "main",
+            ContentSafetyFlagged: false),
+            context: null!,
+            CancellationToken.None);
+
+        var parentVerdict = Drain(parent.Reader).Single(e => e.Type == EventTypes.RaiVerdict);
+        var subVerdict = Drain(sub.Reader).Single(e => e.Type == EventTypes.RaiVerdict);
+
+        AssertGreenVerdictPayload(parentVerdict.Payload);
+        AssertGreenVerdictPayload(subVerdict.Payload);
+    }
+
+    private static List<RunEvent> Drain(ChannelReader<RunEvent> reader)
+    {
+        var events = new List<RunEvent>();
+        while (reader.TryRead(out var evt))
+            events.Add(evt);
+        return events;
+    }
+
+    private static void AssertGreenVerdictPayload(object payload)
+    {
+        using var doc = JsonDocument.Parse(JsonSerializer.Serialize(payload));
+        var root = doc.RootElement;
+        root.GetProperty("verdict").GetString().Should().Be("green");
+        root.TryGetProperty("trafficLight", out _).Should().BeFalse();
+        root.GetProperty("rationale").GetString().Should().Be("no issues, safe to ship.");
+        root.GetProperty("runId").GetString().Should().Be("rai-verdict-run");
     }
 }

@@ -1,77 +1,5 @@
 # Squad Decisions
 
-## 2026-06-30: Security fix: per-pod CSI SPC for AgentHost token isolation + dev secrets review
-
-**Date:** 2026-06-30T00-22-27Z  
-**Author:** Link  
-**What:** Security fix: per-pod CSI SPC for AgentHost token isolation + dev secrets review  
-**References:** security-audit-2026-06-29  
-**Implementation:** Creates run-scoped SecretProviderClass containing only ghtok-user--{base32(userId)}, clones AgentHost SandboxTemplate to point at that SPC, creates run-scoped SandboxWarmPool, cleans up on release or failed launch. Centralizes dynamic AgentHost resource naming. Reaps run-scoped SandboxWarmPool, SandboxTemplate, and SecretProviderClass when deleting orphaned AgentHost claims. Removes obsolete shared-SPC patch service. Removed AgentHostUserTokenSyncService DI/use from GitHubOAuthRedirectService and Program.cs. Documents static agentweaver-user-tokens as installation-only/base parameters. Updated token-delivery docs/comments from shared SPC patching to per-run SPCs. Grants API create/delete for per-run SandboxTemplates, SandboxWarmPools, and SecretProviderClasses. Added UserSecretsId and documented dotnet user-secrets for Auth:GitHub:ClientSecret. Updated test coverage for run-scoped SPC/template/pool behavior and no-user launch failure. Dev secret findings: appsettings.Development.json contains real-looking 40-character ClientSecret but is gitignored and not tracked; no local dev Key Vault/App Configuration delivery (production has Key Vault/CSI). Added .NET user-secrets support and docs.
-
----
-
-## 2026-06-30: Security fix: per-user GitHub token scoping and disabled PVC token mirror
-
-**Date:** 2026-06-30T00-13-47Z  
-**Author:** Morpheus  
-**What:** Security fix: per-user GitHub token scoping and disabled PVC token mirror  
-**References:** security-audit-2026-06-29  
-**Implementation:** KeyVaultGitHubTokenStore now uses diskMirror: null while retaining diskFallback for lazy migration; IGitHubTokenScopeProvider is now config-driven with safe default CallerTokenScopeProvider and explicit installation opt-in. OAuth callback now writes only to GitHubTokenScope.ForUser(login) and throws InvalidOperationException when login is missing/unknown. Removed shared-directory user discovery behavior; missing user id now logs a warning and falls back to installation scope. Wires ILogger<SharedUserScopeProvider> into SharedUserScopeProvider registrations so fallback warning is emitted.
-
----
-
-## 2026-06-30: Security: per-run bearer token on AgentHost A2A turn endpoint
-
-**Date:** 2026-06-30T01-13-05Z  
-**Author:** Morpheus  
-**What:** Security: per-run bearer token on AgentHost A2A turn endpoint  
-**References:** security-audit-2026-06-29, a2a-bearer-token-phase1  
-**Implementation:** AgentHost:TurnBearerToken option protects A2A turn submissions. Bearer-auth middleware requires Authorization: Bearer {TurnBearerToken} for POST {A2APath}/v1/message:stream. Runtime-visible per-run token registry contract added. Per-run in-memory registry extended to store and clear AgentHost turn bearer tokens. Generates 256-bit random token per AgentHost pod launch, injects AgentHost__TurnBearerToken into SandboxClaim env, registers token by run ID, clears on failure/release. Passes turn-token registry into KubernetesSandboxExecutor. Registers IAgentHostTurnTokenRegistry using PodNameRegistry singleton. Injects token registry into RemoteAgentProxy instances. RemoteAgentProxy applies registered run token as default Authorization bearer header on A2A HttpClient. Updated factory/proxy DI tests for optional token-registry dependency.
-
----
-
-## 2026-06-30: AIC capture via AssistantUsageEvent (Feature 019)
-
-**Date:** 2026-06-30T00-53-45Z  
-**Author:** Morpheus  
-**What:** AIC capture via AssistantUsageEvent (Feature 019)  
-**References:** Feature 019 - AI Credit and Token Usage Monitoring, packages/Agentweaver.AgentRuntime/CopilotAIAgent.cs, packages/Agentweaver.Domain/EventTypes.cs  
-**Implementation:** Token and AIC capture implemented by detecting AssistantUsageEvent.RawRepresentation in the existing StreamTurnOnceAsync chunk loop. Accumulators reset per SetupAsync call. agent.turn.usage event emitted at end of each ExecuteStreamingLoopAsync. AssistantUsageData.CopilotUsage.TotalNanoAiu is the authoritative AIC signal from the GitHub Copilot SDK. Per-turn accumulation avoids double-counting on retry loops. TotalNanoAiu is a double (not long as documented); explicit cast to long applied at accumulation time.
-
----
-
-## 2026-06-30: Token usage backend stack (Feature 019)
-
-**Date:** 2026-06-30T00:00:00Z  
-**Author:** Tank  
-**What:** Token usage backend stack (Feature 019)  
-**References:** Feature 019 - AI Credit and Token Usage Monitoring  
-**Status:** IMPLEMENTED (build: 0 errors)  
-**Implementation:** Complete backend implementation: token_usage_records table, dual-backend store (SQLite + EF), background projection service from event stream, four-level hierarchy API endpoints (org/project/run/turn), metrics extension, MCP tools. Captures real AIC and token data from agent.turn.usage run events emitted by Morpheus's runtime changes. All data served from persistent store; no aggregation in clients.
-
----
-
-## 2026-06-30: Security: MCP route parameter escaping + remove hardcoded admin bypass
-
-**Date:** 2026-06-30T01-12-21Z  
-**Author:** Tank  
-**What:** Security: MCP route parameter escaping + remove hardcoded admin bypass  
-**References:** security-audit-2026-06-29, mcp-path-traversal, admin-bypass  
-**Status:** DEPLOYED (commit 5373893)  
-**Implementation:** 86 MCP tool API paths now URI-escaped for route parameters (project_id, task_id, run_id, etc.). Hardcoded admin bypass removed from all 4 endpoint files. Validation: no remaining caller.User admin comparisons found; all builds pass. MCP path traversal vulnerability closed by escaping project_id, run_id, task_id, entry_id, decision_id, agent_name, memory_id in all backlog, coordinator, memory, project, run, team, workflow, and workspace tools. Admin bypass was a security liability; removed entirely from ProjectEndpoints, TeamEndpoints, RunEndpoints, BacklogEndpoints. All MCP Tools files: URI-escaped route parameters. All 4 endpoint files: removed hardcoded admin bypass.
-
----
-
-## 2026-06-30: Token usage frontend (Feature 019)
-
-**Date:** 2026-06-29T18-15-00-07:00  
-**Author:** Trinity  
-**What:** Token usage frontend (Feature 019)  
-**Status:** IMPLEMENTED (all builds pass)  
-**Implementation:** Frontend surfaces AIC and token data via TokenUsagePanel component, live counter on WatchPage, time-range section on DashboardPage, app-level section on OverviewPage (admin-gated, degrades on 403). Display logic is pure presentation with no aggregation in UI. Backend API provides authoritative data. Frontend simply renders hierarchical breakdowns by org/project/run/turn for operator visibility into usage patterns and cost allocation. All UI tests pass; Feature 019 frontend components green.
-
----
-
 ## 2026-07-05T20-29-22: Fix workflow save 500: extend AllowedWorkflowIds when saving a new workflow (#175)
 
 **Date:** 2026-07-05T20-29-22  
@@ -2896,3 +2824,989 @@ Issues found and fixed:
 **Decision:** Treat the observed live 404s for runs `f1f14868` and `1c18977c` as benign transient or mis-targeted reads, not a v0.7.11 identity or installation-scope regression. Separately track the newly found backend bug: duplicate cross-replica subtask dispatch plus a subtask reading a sibling subtask's isolated worktree caused sandbox denial and `assembly_blocked` on run `1c18977c`.
 
 **Rationale:** Outcome-spec draft and confirm succeeded, and the work plan persisted. The problematic old child run was unrelated to the current flow. The duplicate dispatch/worktree isolation bug is real but outside the v0.7.12 UI iteration and was deferred by Ahmed.
+
+## 2026-07-06T07-29-39Z: v0.8.0 staging release deployed; await Ahmed validation before close/merge/push
+
+**Date:** 2026-07-06T07:29:39-07:00  
+**Author:** Scribe  
+**What:** Recorded the v0.8.0 staging release/deploy session and merged pending decision inbox entries.  
+**References:** #50, #51, #56, #59, #112, #114, #116, #166, #195, #196, #197, #198, #199, #200, #201, v0.8.0
+
+Coordinator completed a release/deploy session, not domain implementation. The integration branch `release/v0.7.0` absorbed the wave branches for Neo run-page polish (#195), Apoc approval-404 child-run routing (#196), Sparks child-output propagation (#197), Link trace hierarchy (#166; follow-up #200), Oracle lost coordinator messages (#199), Smith project skills catalog (#51/#56; 6ca3298), Trinity conversational browser TUI/console (#50; fdb2ad5), plus docs from Dozer (37793de). Cross-merge regression f375f96 fixed the timeline reducer `child_approval` case shadowing from #50/#196; 483 web tests passed. VERSION was bumped to 0.8.0 (5950071). Docs build passed. Four ACR images were built and pushed at `v0.8.0` (`api`, `frontend`, `mcp`, `agent-host`). Staging AKS `agentweaver-aks-2` rolled out `api`, `frontend`, `mcp`, and `worker` healthy; frontend returned HTTP 200 and `/api/health` was OK at https://agentweaver.6a4a0fdca7653f00012ffe86.westus2.staging.aksapp.io/. Tags created locally: `v0.7.12` at 9beb937 and `v0.8.0` at 37793de. Nothing has been pushed to origin.
+
+Pending until Ahmed validates: do not close issues #50/#51/#56/#166/#195/#196/#197/#199 or earlier #116/#59/#112/#114; do not merge to main; do not push branches or tags. Open backlog remains #198 (retire WorkflowRunPage/fold ArtifactBrowser), #200 (tool-span parenting), and #201 (backend conversational operator-agent run type = TUI Option B).
+
+## 2026-07-06T07-29-39Z: Inbox merge — v0.7.12/v0.8.0 wave decisions
+
+**Date:** 2026-07-06T07:29:39-07:00  
+**Author:** Scribe  
+**What:** Merged 17 decision inbox entries after the release/deploy handoff.  
+**References:** decisions/inbox/*
+
+- Cypher recorded workflow generation editing: `base_workflow_id` edits saved/built-in workflows, `base_yaml` supports iterative unsaved drafts, built-ins stay immutable via project-owned copies, and blueprint validation now includes reachability/bindability checks for generated/inline/predefined flows.
+- Dozer recorded v0.7.12/v0.8.0 docs surface work: orchestration console/gates docs in deep dive, reference, experience, navigation, landing card, and cross-links; `docs` VitePress build passed.
+- Link recorded v0.7.12 staging deploy: rebuilt api/frontend/agent-host, retagged mcp, deployed to `agentweaver-aks-2`, all rollouts healthy, `/api/version` returned 0.7.12.
+- Morpheus recorded blueprint gate awareness (#176/#187): shared prompt guidance for `build_test`, `rai`, `rubberduck`, and human-review gates, with weak generic matches returning `[]` so the generator can author specialized gated workflows.
+- Morpheus recorded first-class `build_test`: runtime loader accepts `build_test`, graph binding uses `BuildTestTurnExecutor`, default role is `qa-engineer`, catalog/generated workflows express build/test/preview structurally, and editor palette exposes special gates.
+- Morpheus recorded workflow RAI/Scribe dedupe: standalone workflows keep YAML RAI/Scribe, while coordinator decomposition filters platform-owned stages because coordinator assembly runs RAI/review/merge/scribe once on combined child output.
+- Oracle recorded the lost coordinator messages RCA/fix (#199): non-owner replicas dropped in-memory-only `coordinator.steering` events; `CoordinatorSteeringService` now falls back to durable `IRunEventStream.AppendAsync`, with regression coverage and steering tests passing.
+- Squad-Coordinator recorded first-class Build & Test gate direction: replace duplicated peer-review build/test prompts with platform-owned `build_test` node and canonical build/test/preview prompt.
+- Squad-Coordinator recorded release versioning: the next release is minor `v0.8.0`, not another `v0.7.x` patch, because the wave ships new features.
+- Squad-Coordinator recorded four-zone orchestration run page direction (#185): top run summary, left task tree, center graph, right session pane, one Message coordinator composer, action cards for approvals/questions/reviews/blocks, and debug details hidden by default.
+- Squad-Coordinator recorded Outcome Plan direction (#188): replace the modal with a first-class Outcome Plan phase inside the four-zone run page, with inline Confirm/Clarify actions and one composer.
+- Tank recorded approval/save backend fixes: explicit tool approval lifecycle state, late/double resolutions return renderable 200s, wrong ids return 404 `unknown`, expired resolution persists, and workflow saves extend allowed ids before registry reload.
+- Trinity recorded coordinator session messages: coordinator sessions now render coordinator-specific timeline rows, collapse prompt scaffolding, and surface child approvals inline with actionable cards.
+- Trinity recorded graph viewport/agents fixes: coordinator graph uses readable natural baseline with scroll overflow and hover minimap; the duplicate AGENTS summary block was removed.
+- Trinity recorded Outcome Plan implementation: graph nodes precede work nodes, confirmation surface lives in AgentSessionPanel, Clarify uses the single composer, backend event/API names stay unchanged while UI says Outcome plan.
+- Trinity recorded run-page redesign implementation (#185): persistent four-zone operator console, docked AgentSessionPanel, Messages/Changes/Files tabs, sequence-ordered deduped events, sticky input needs, and one composer; web build and 446 tests passed.
+- Trinity recorded child tool approval routing: approval cards post to `childRunId`/`child_run_id` when present, falling back to page/session run id; web build/tests passed.
+
+
+---
+
+# Decision: Fix HIGH SSRF + review findings in skill import (commit da28b18)
+
+- **Owner:** Cypher (Backend)
+- **Requested by:** Ahmed (@sabbour)
+- **Branch:** integration
+- **Fix commit:** fefe437
+- **Reviewed commit:** da28b18 ("Improve skill acquisition UX")
+
+## FIX 1 — HIGH SSRF (blocks v0.9.0)
+
+Previously `SkillImportSource.Parse` special-cased only `raw.githubusercontent.com`
+and `github.com`; ANY other absolute URI fell through to
+`return new SkillImportSource(raw, ...)` with `CloneUrl = raw`, which
+`ProjectGitInitializer.Clone` handed to LibGit2Sharp with no host allowlist.
+An authenticated project owner could make the server clone from arbitrary internal
+HTTPS hosts (`kubernetes.default.svc`, `localhost:PORT`, `10.x`, metadata endpoints).
+Aggravators: the caller's GitHub token was offered as Basic-auth password to
+whatever host was cloned (token leak on 401), and raw `ex.Message` was returned to
+the caller (blind-SSRF oracle for internal recon).
+
+### Resolution (all three parts)
+1. **Strict https + host allowlist in `Parse`** using `System.Uri`:
+   - Produce a `CloneUrl` ONLY when `uri.Host` ordinal-ignore-case equals `github.com`
+     AND `uri.Scheme == https`; produce a `RawSkillUri` ONLY for `raw.githubusercontent.com` + https.
+   - Reject non-https schemes explicitly (http/git/ssh/file/ftp fail the `Uri.UriSchemeHttps` check).
+   - Reject userinfo tricks: `https://github.com@evil.com/...` has `uri.Host == evil.com` (host check fails); also reject any non-empty `uri.UserInfo`.
+   - Reject non-default ports (`github.com:1234`) via `!uri.IsDefaultPort`.
+   - Removed the old `git@` SSH branch and the raw-URL fall-through. Any other host now throws
+     `SkillImportException` (new exception type), surfaced as an **Invalid** import result.
+2. **Credential scoping:** `CloneToTempAsync` resolves and offers the GitHub token ONLY when
+   `SkillImportSource.IsAllowedCloneHost(repoUrl)` is true (scheme https, no userinfo, default port,
+   host == github.com). Otherwise no credentials are supplied. Defense in depth on top of the allowlist.
+3. **Generic caller-facing errors:** clone/fetch failures now return
+   "Could not access repository (check the URL is a public GitHub repo)." while the detail is logged
+   via `_logger.LogWarning`. Validation rejections (SkillImportException) surface their safe message as Invalid.
+
+## FIX 2 — slash-branch ambiguity (Medium)
+
+GitHub tree/blob URLs previously assumed the ref was exactly `parts[3]` and the subpath `parts[4..]`,
+so a slash-containing branch (`release/v2`) could silently resolve the WRONG ref when a shorter ref
+(`release`) also existed. Now `Parse` defers resolution: for tree/blob it stores `RefSegments = parts[3..]`
+with `CheckoutRef = null`. After clone, `ResolveRefAsync` enumerates the repo's ACTUAL refs
+(local + `origin/`-stripped remote branches, and tags) and **greedily matches the LONGEST ref that is a
+prefix of the segments**; the remainder becomes the subpath. If no ref matches it throws
+`SkillImportException` (fails loudly) rather than importing the wrong ref.
+
+## FIX 3 — MCP description accuracy (Low)
+
+`SkillTools.cs` `skill_import` description reworded: locations are REQUIRED when a source contains
+multiple skills; omitting works only for a single-skill source. Also dropped the now-inaccurate
+"git@ SSH URLs" mention from both `skill_import` and `skill_import_preview`.
+
+## FIX 4 — dropzone dedupe (Low) — DEFERRED
+
+Skipped per Ahmed: the web build is currently red from another agent's unrelated WIP, so a web change
+can't be cleanly validated. To be folded in later.
+
+## Validation (backend, isolated from the red web build)
+- `dotnet build apps/Agentweaver.Api/Agentweaver.Api.csproj -c Release --no-restore` → Build succeeded, 0 warnings/errors.
+- `dotnet test tests/Agentweaver.Tests/Agentweaver.Tests.csproj --filter "Skill" -c Release` → Passed: 56, Failed: 0.
+
+## Files changed
+- `apps/Agentweaver.Api/Skills/SkillCatalogService.cs`
+- `apps/Agentweaver.Mcp/Tools/SkillTools.cs`
+- `tests/Agentweaver.Tests/Skills/SkillCatalogTests.cs`
+
+## Note
+The shared `integration` worktree had concurrent WIP from other agents; my uncommitted edits were
+discarded once by another agent's git operation and had to be re-applied. Committed only my three files
+(never `git add -A`).
+
+---
+
+# Decision: v0.9.0 docs wave
+
+- **Author:** Dozer (DevRel/Technical Writer)
+- **Requested by:** Ahmed (@sabbour)
+- **Date:** 2026-07-06
+- **Branch:** integration
+- **Commit:** 8548875
+
+## Summary
+Ran the `docs-feature` skill to document the v0.9.0 wave. Since every shipped item is a refinement of an already-documented feature, I updated the existing experience/reference/deep-dive pages to keep the deployed state and docs in sync (no new pages, so no nav/landing-card changes needed). All claims are code-grounded.
+
+## Pages updated
+1. **Console true-TUI** (`/console`, Trinity 30f5c99) → `docs/experience/browser-console.md`: added a "Terminal interface" section (full-height scrollback, dark surface + monospace, bottom CLI prompt, blinking cursor); refreshed the Source table with `BrowserConsole.tsx` line refs.
+2. **Skills acquisition UX + security allow-list** (Tank da28b18 + Cypher fefe437) → `docs/experience/project-skills.md`, `docs/reference/project-skills.md`, `docs/deep-dive/project-skills.md`: documented Add/Generate/Import + multi-skill discovery preview. **Doc-sync fix:** removed the now-stale `git@` SSH import claim and documented the SSRF allow-list — imports are restricted to `github.com` and `raw.githubusercontent.com` only (grounded in `SkillCatalogService.cs:772`).
+3. **Run artifact browser reuse** (Switch 227f297) → `docs/experience/runs-board-watch.md` (new "Browsing artifacts" section) + `docs/experience/coordinator-orchestration.md`: shared Artifact Browser (compact Changes list + Files tab folder tree) reused per-run, per-agent session, and on the coordinator run.
+4. **Coordinator graph polish** (Niobe 0b67f3e) → `docs/experience/coordinator-orchestration.md`: top-down layout with clean vertical connector edges (no wavy S-curves) and centered/aligned ranks so parallel subtasks align horizontally under their parent.
+5. **Calmer tool-call rows** (Mouse 02583fa) → `docs/experience/runs-board-watch.md` Tool-call cards: single-line rows, action-specific FluentUI icons, muted metadata, and completed calls settle (no perpetual spinner/clock).
+6. **Live coordinator send #199** (Morpheus 1cb5f2b) → `docs/reference/coordinator.md`: added the `send` verb to the steering table and fixed the stale "steering surface is stop/redirect/amend only" text; documented the DB-backed, replica-safe queued-send (queued→relayed CAS) delivered at a safe boundary, with `stop` as the only hard interrupt.
+
+## Excluded
+- Operator agent (#201) — designed but not implemented; left out per instruction (the pre-existing "planned" note in browser-console.md was left untouched, not expanded).
+
+## Validation
+- Constitution VIII respected: no emoji added; FluentUI icon references described by name.
+- `cd docs; npm run build` → **green** (vitepress build complete, exit 0).
+- Committed only docs files to `integration` (7 files); did not touch VERSION/deploy scripts (owned by Link).
+
+---
+
+# Deploy Decision: v0.9.0 → STAGING AKS (release candidate)
+
+**Author:** Link (DevOps/Platform, Matrix Squad)
+**Requested by:** Ahmed (@sabbour)
+**Date:** 2026-07-06T11:15 PT
+**Branch:** `integration` (do NOT merge to main / do NOT close issues — Ahmed validates on staging first)
+**Cluster:** agentweaver-aks-2 (RG agentweaver-rg, westus2) · ACR agentweaverregistry
+
+## Summary
+Cut and deployed **v0.9.0** to the STAGING AKS cluster image-efficiently. All app tiers rolled out and healthy (HTTP 200). Awaiting Ahmed's validation on staging.
+
+## Version bump
+- `VERSION` 0.8.0 → 0.9.0; committed ONLY the VERSION file to `integration`.
+- Commit SHA: **cc60ea1e467f4dbfdc68a6450ff97b1ff7cae68c** ("chore: bump version to 0.9.0")
+- IMAGE_TAG is derived from VERSION by scripts/aks/00-variables.sh → **v0.9.0** (not passed manually).
+
+## Image strategy (image-efficient)
+Rebuilt only changed images, in parallel via `az acr build` (4 independent cloud builds):
+- **REBUILT @ v0.9.0:** agentweaver-api, agentweaver-frontend, agentweaver-mcp, agentweaver-agent-host
+- **agent-host Domain determination:** REBUILT (not retagged). Verified ProjectReference chain — `apps/Agentweaver.AgentHost` references `Agentweaver.Domain` directly AND transitively via `Agentweaver.AgentRuntime → Agentweaver.AgentTools → Agentweaver.Domain`. Since `packages/Agentweaver.Domain` changed in this wave, agent-host must be rebuilt.
+
+## Sandbox retag — NOT APPLICABLE (deviation from task instructions)
+The task called for retagging `agentweaver-sandbox` from v0.8.0 → v0.9.0. This is **stale**: there is NO `agentweaver-sandbox` image.
+- No sandbox Dockerfile / no sandbox dir; the build script (20-build-push-images.sh) only builds 4 images.
+- ACR has no `agentweaver-sandbox` repository (only api, frontend, mcp, agent-host).
+- The legacy image was intentionally removed: `k8s/sandbox-template-agenthost.yaml` notes it "supersedes the removed legacy sleep-infinity agentweaver-sandbox template/image", and `scripts/aks/40-verify.sh` FAILS if a legacy `agentweaver-sandbox` template/warm pool still exists.
+- The `app: agentweaver-sandbox` pod label is now carried by the agent-host pods (for network policy targeting), not a separate image.
+- Therefore an `az acr import` retag would have failed (no source). **This deploy has 4 images, all at v0.9.0** — not 5.
+
+## ACR tags confirmed @ v0.9.0
+- agentweaverregistry.azurecr.io/agentweaver-api:v0.9.0
+- agentweaverregistry.azurecr.io/agentweaver-frontend:v0.9.0
+- agentweaverregistry.azurecr.io/agentweaver-mcp:v0.9.0
+- agentweaverregistry.azurecr.io/agentweaver-agent-host:v0.9.0
+
+## Deploy
+- Ran `scripts/aks/30-deploy.sh` from WSL (envsubst-rendered k8s/*.yaml — no direct kubectl apply of raw manifests).
+- Passed ONLY TENANT_ID (72f988bf-86f1-41af-91ab-2d7cd011db47) and IDENTITY_CLIENT_ID (af4fe49e-9952-4d7a-b8a1-75476584c777), sourced from the existing agentweaver-api service account annotation. IMAGE_TAG derived from VERSION.
+- Pre-normalized CRLF→LF on scripts/aks/*.sh and k8s/*.yaml (Windows checkout) to avoid `$'\r'` bad-interpreter failures.
+
+## Rollout status (all Ready)
+- deployment/agentweaver-api → agentweaver-api:v0.9.0 — 2/2 Running
+- deployment/agentweaver-frontend → agentweaver-frontend:v0.9.0 — 2/2 Running
+- deployment/agentweaver-mcp → agentweaver-mcp:v0.9.0 — 1/1 Running
+- deployment/agentweaver-worker → agentweaver-api:v0.9.0 (worker shares the API image) — 1/1 Running
+- sandboxtemplate/agentweaver-agent-host → agentweaver-agent-host:v0.9.0 (pod-per-run)
+
+## Health validation
+- Gateway IP: 20.115.198.61
+- `/health` → 200 · `/` → 200 · `/api/health` → 200
+
+## Live staging URL (for Ahmed to validate)
+**https://agentweaver.6a4a0fdca7653f00012ffe86.westus2.staging.aksapp.io/**
+- API: https://agentweaver.6a4a0fdca7653f00012ffe86.westus2.staging.aksapp.io/api/
+- MCP: https://agentweaver.6a4a0fdca7653f00012ffe86.westus2.staging.aksapp.io/mcp/
+(zone suffix `6a4a0fdca7653f00012ffe86.westus2.staging.aksapp.io` is per-deploy — read from the managed DefaultDomainCertificate.)
+
+## Not done (by design)
+- No merge to main, no issue closures, no origin tag pushes. This is a staging RC for Ahmed's validation.
+
+---
+
+# Morpheus decision: #199 live coordinator send consumption
+
+Issue: #199 follow-up requires live coordinator `send` directives to be consumed by the owning coordinator loop, while avoiding the dispatch-to-assembly race identified in operator-agent design review.
+
+Decision: use status-scoped routing for `send`.
+
+- The steering HTTP surface persists `send` as `queued` and emits `coordinator.steering(status=queued)`; it no longer final-applies sends itself.
+- While `WorkPlan.Status == dispatching`, `CoordinatorSteeringQueue.TryTakeForChildAsync` may atomically claim queued `send`/`redirect`/`amend` for dispatch child-boundary injection (`queued -> relayed`). Failed-child recovery remains redirect-only.
+- While assembly is blocked, `CoordinatorAssemblyService` owns queued sends: it claims a queued `send`, marks it `applied`, emits `coordinator.steering(status=applied)`, and retries assembly.
+- `stop` remains the only hard mid-turn interrupt.
+
+Rationale: this preserves at-most-once durable cross-replica consumption while preventing a dispatch drain from stealing a send as the run transitions into `assembly_blocked`, which would otherwise starve the assembly retry loop.
+
+References inline: apps/Agentweaver.Api/Coordinator/CoordinatorSteeringService.cs; apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyService.cs; tests/Agentweaver.Tests/Coordinator/CoordinatorSteeringServiceTests.cs; tests/Agentweaver.Tests/Coordinator/CoordinatorAssemblyServiceTests.cs; GitHub issue #199.
+
+---
+
+### 2026-07-06T16-06-59: Use true MCP-backed server-side Operator run for browser console
+**By:** Morpheus
+**What:** Use true MCP-backed server-side Operator run for browser console
+**Why:** Decision: For GitHub issue #201, implement the browser console free-form prose path as a new server-side Operator run that uses the GitHub Copilot SDK/MAF agent loop and registers the Agentweaver MCP HTTP server via SessionConfig.McpServers. Do not add a new WorkflowNodeType; the operator is a control-plane conversation, not a project workflow node. Use server-minted per-user Agentweaver OAuth JWTs for the MCP Authorization header, and keep the browser as a thin stream/timeline client.
+
+Rationale: Ahmed asked for an agent that literally drives MCP. The MCP server is already the authoritative catalog (apps\Agentweaver.Mcp\Program.cs:58,104; .github\agents\agentweaver.agent.md:89-100), and the Copilot SDK exposes MCP HTTP server config plus SessionConfigBase.McpServers (GitHub.Copilot.SDK.xml:31890-31904,32361-32364). In-process function tools would be simpler but duplicate the 79-tool MCP catalog and weaken the single-source-of-truth design. The operator run should reuse existing run-event streaming and Timeline handling for agent/tool/HITL events.
+
+References: issue #201; design file C:\Users\asabbour\.copilot\session-state\674093ad-19e5-42cd-908a-74cda0c64342\files\operator-agent-design.md; #199 live-send fix section.
+
+---
+
+# Decision: Tool-row redesign + "perpetual clock" root-cause fix
+
+Author: Mouse (Frontend) · Branch: integration · Date: 2026-07-06
+
+## Problem
+Ahmed flagged that completed tool calls in the session/timeline transcript keep
+showing a perpetual pending "clock" that never resolves, and that ordinary tool
+activity renders as bulky, tall cards instead of a calm, dense CLI-style list.
+
+## Root cause of the unsettled "clocks"
+The shared timeline reducer (`apps/web/src/timeline/reducer.ts`) settles a
+`tool.call` when a `tool.result`/`tool.error` with a matching `callId` arrives
+(pairing via `pendingToolCalls`). A tool stayed `settled:false` forever — and
+therefore rendered a never-ending running indicator — in two cases:
+
+1. **callId key mismatch.** The reducer only read `payload['callId']`
+   (camelCase). Live SSE is camelCase, but some persisted/replayed sources use
+   snake_case `call_id` (the backend's own `BoardProjectionService` already reads
+   BOTH). If a completion carried `call_id`, it never matched the originating
+   call → perpetual pending.
+2. **Missing completion event.** When the agent SDK provides no `ToolCallId`,
+   the runner mints a fresh random id for the completion
+   (`GitHubCopilotAgentRunner`/`CopilotAIAgent`: `... ?? Guid.NewGuid()`), so the
+   completion can never pair with the call. Such calls never settle even though
+   the agent has moved on.
+
+## Fix (surgical, reducer only)
+- Added `extractCallId(payload)` = `callId ?? call_id`; used on `tool.call`,
+  `tool.result`, `tool.error` so pairing is casing-agnostic (#1).
+- Added `settlePendingCallsInTurn()` grace fallback: on `agent.turn.end` and on
+  run termination (`run.completed`/`run.failed` via `closeOpenTurn`), any tool
+  call still pending in that (now-closed) turn is marked `settled:true` with no
+  error. Finished work resolves to a normal completed row instead of spinning
+  forever (#2). Real completions still settle immediately and win (result kept).
+
+## Row / icon / metadata redesign (`ToolCallCard.tsx`)
+- Single-line, borderless rows (unchanged structure), now with a **leading
+  action icon that varies by tool type** (FluentUI only, Constitution VIII):
+  read/view = DocumentArrowDown, code file (.ts/.tsx/… path) = Code,
+  search/find = Search, write/edit/patch = DocumentEdit, list = Folder,
+  delete = Delete, run_command = Code, report_intent/outcome = Info,
+  fallback = Wrench. (Replaces the previous one-size Wrench.)
+- **Muted secondary metadata** after the label (dimmed `colorNeutralForeground4`):
+  `N lines` (reads), `N matches` (search), `N results` (find), `N items` (list),
+  derived defensively from result content; hidden when nothing meaningful.
+- **Single-line ellipsis** on the title (`whiteSpace:nowrap; overflow:hidden;
+  text-overflow:ellipsis; minWidth:0`) so long paths/queries never wrap.
+- **Status icon semantics (no bare clock):** running = Spinner; stream errored +
+  unsettled = Warning ("Result not received"); settled OK = CheckmarkCircle;
+  error = ErrorCircle; sandbox/non-zero-exit/intent-not-fulfilled = Warning.
+
+## Clustering
+Existing `TurnGroup` clustering (consecutive non-`report_intent` tool calls fold
+into a collapsible "Used N tools" / intent-header toggle) was left intact and now
+benefits from the calmer rows. Not rewritten (per scope).
+
+## Duration marker
+Not added: the timeline `RunStreamEvent` stream carries no per-tool timestamps, so
+a real duration cannot be computed without new backend data. Left as a follow-up;
+did not fabricate a value.
+
+## AgentSessionPanel duplicate clock logic — FOR SWITCH TO FOLD IN
+`apps/web/src/components/AgentSessionPanel.tsx` has its OWN, duplicate tool model
+and clock logic that I did NOT touch (Switch owns it, mid-refactor):
+- Line ~1921: `tool.settled ? <CheckmarkCircleFilled/> : <ClockRegular/>` — this
+  is the literal bare clock Ahmed sees. It should mirror the shared card
+  (spinner while running / checkmark when done), never a bare clock.
+- Lines ~1050-1076: its settling map is buggy — `tool.call` keys under
+  `String(payload.callId ?? sequence)` but `tool.result/error` looks up
+  `String(payload.callId ?? '')`. If `callId` is ever absent, the two keys differ
+  → clock forever. Should use the same `callId ?? call_id` normalization AND a
+  turn-end/run-end grace-settle like the reducer now does.
+- `StatusGlyph` (line ~926): `kind === 'awaiting'` → `<ClockRegular/>`. For a
+  genuine pending-human-approval state a clock is fine but should carry a tooltip
+  explaining it's awaiting approval; it must not be used for finished tool work.
+Once AgentSessionPanel adopts the shared reducer/`ToolCallCard`, these all resolve
+automatically.
+
+## Validation
+Targeted (full web build is red due to Switch's unrelated AgentSessionPanel WIP):
+- `npm test -- --run src/__tests__/ToolCallCard.test.tsx src/__tests__/timelineReducer.test.ts src/__tests__/TurnGroup.test.tsx` → all pass
+  (added: snake_case call_id settles; grace-settle on turn.end and run.completed;
+  real result preserved; settled row has no spinner; line/match metadata renders;
+  live unsettled shows spinner; title ellipsis styling).
+- `npx tsc --noEmit` → 0 errors in my files (ToolCallCard, reducer, tests).
+
+## Files changed
+- apps/web/src/timeline/reducer.ts
+- apps/web/src/components/ToolCallCard.tsx
+- apps/web/src/__tests__/timelineReducer.test.ts
+- apps/web/src/__tests__/ToolCallCard.test.tsx
+
+---
+
+# Decision: Coordinator run-graph layout fixes (Niobe, Frontend)
+
+Date: 2026-07-06
+Branch: integration
+Commit: 0b67f3e
+Files: apps/web/src/components/WorkflowGraphPanel.tsx, apps/web/src/utils/dagLayout.ts, apps/web/src/__tests__/dagLayout.test.ts
+
+## Problem
+Coordinator run graph (TB/vertical) looked wonky: wavy S-curve connectors,
+spine (Coordinator→Outcome→Work) not vertically centered, parallel subtasks
+not centered under their parent.
+
+## Bug 1 — SpineEdge hardcoded for LR → wavy edges in TB
+`SpineEdge` used X-axis bezier control offsets and X-midpoint junctions, which
+bend a top→bottom edge sideways (S-curve). Same edge type serves BOTH the LR
+topology graph and the TB coordinator graph, so it must be orientation-aware.
+
+Fix: detect orientation from geometry —
+`const vertical = Math.abs(targetY - sourceY) >= Math.abs(targetX - sourceX);`
+- Vertical (TB): bezier control points offset on Y axis
+  (`dy = max(48, |ty-sy|*0.5)`, `M sx,sy C sx,sy+dy tx,ty-dy tx,ty`); junction
+  anchored on X — fan-out → junctionX=sourceX, fan-in → junctionX=targetX,
+  else midpoint; junctionY = (sourceY+targetY)/2. Mirror of the LR logic.
+- Horizontal (LR): EXACTLY the original code path — unchanged. Junction dot +
+  shared-segment bundling and label rendering preserved on both axes.
+LR/topology graph appearance is therefore unchanged (verified: LR branch is the
+original code, gated behind `!vertical`).
+
+## Bug 2 — dagLayout TB rows left-aligned → spine zig-zag
+TB branch packed every rank from `crossX = MARGIN` left→right, so single-node
+spine ranks sat far left while fan-outs also started at left; nothing centered.
+
+Fix: split the TB and LR branches. For TB, compute each rank's row width
+(sum of node widths + CROSS_GAP between them), take the max across ranks as the
+shared center axis `centerX = MARGIN + maxRowWidth/2`, and start each rank at
+`crossX = round(centerX - rowWidth/2)`. Single-node ranks land on the axis;
+fan-out rows are symmetric under their parent. Added a min-x guard that shifts
+everything so no negative coordinates and graph starts at MARGIN. LR branch left untouched. Kept NODE_W/NODE_H/NODE_TYPE_* exports and all signatures.
+
+## Tests
+Added apps/web/src/__tests__/dagLayout.test.ts (3 tests):
+single-node spine rank centered over multi-node fan-out on shared axis; linear
+spine vertically aligned; no negative coordinates. All pass.
+
+## Build/Test status
+- My 2 source files + test: zero TS diagnostics (verified via IDE).
+- dagLayout + topologyReducer + coordinatorPlanFilter suites: 23/23 pass.
+- `npm --prefix apps/web run build` currently FAILS, but ONLY on
+  ToolCallCard.tsx (unused-import TS6133 errors) — another agent's uncommitted
+  WIP, out of my scope. None of my files contribute errors.
+
+---
+
+# SSRF Re-Review — skills-import (commit fefe437)
+
+**Reviewer:** Seraph (security)
+**Requested by:** Ahmed (@sabbour)
+**Fix author:** Cypher (locked out of this verdict)
+**Date:** 2026-07-06
+**Verdict:** 🟢 GREEN — original HIGH SSRF fully closed; no new security issues found. Cleared for v0.9.0.
+
+## Scope verified
+`git show fefe437` on `apps/Agentweaver.Api/Skills/SkillCatalogService.cs`, `apps/Agentweaver.Mcp/Tools/SkillTools.cs`, plus surrounding methods (`Parse`, `CloneToTempAsync`, `IsAllowedCloneHost`, `ResolveRefAsync`, `CheckoutRef`, `DiscoverSkills`, `FetchRawSkillAsync`, `ProjectGitInitializer.Clone`, `SkillPaths.NormalizeRelative`).
+
+## Original finding — CLOSED
+The old `Parse` fall-through `return new SkillImportSource(raw, ...)` that cloned any URL verbatim is **removed**. Parse now throws `SkillImportException` for any host other than the two allowlisted GitHub hosts (SkillCatalogService.cs:823-825).
+
+## Allowlist attacked — holds
+- **Host check is on parsed `uri.Host`, not the raw string** — SkillCatalogService.cs:790,804 use `uri.Host` with `OrdinalIgnoreCase`. ✅
+- **Userinfo trick** `https://github.com@evil.com/...` → `uri.Host == evil.com` → rejected; additionally any non-empty `uri.UserInfo` is rejected outright (SkillCatalogService.cs:787). ✅
+- **Scheme gate**: non-https (http/git/ssh/file/ftp) rejected at SkillCatalogService.cs:785. ✅
+- **Port gate**: `!uri.IsDefaultPort` rejected at :787. ✅
+- **Case/IDN/trailing-dot**: `GitHub.com` handled by OrdinalIgnoreCase; `github.com.` (trailing dot) and `xn--` punycode do NOT equal `github.com` and are rejected. ✅
+- **Clone URL is canonicalized**, not passed through: always rebuilt as `https://github.com/{owner}/{repo}.git` from parsed segments (:806-807). Attacker cannot inject an alternate host into the clone target even if Parse were bypassed. ✅
+- **No other clone/fetch caller bypasses the allowlist.** Both `CloneToTempAsync` call sites (:273,:331) and both `FetchRawSkillAsync` call sites (:277,:335) flow from `SkillImportSource.Parse`. (`ProjectService.cs:169` clone is the unrelated project-creation feature, not in this diff/flow.) ✅
+
+## Credential leak — CLOSED
+- Token wired ONLY when `IsAllowedCloneHost(repoUrl)` (exactly https + github.com + default port + no userinfo) — SkillCatalogService.cs:643-645; otherwise `null` → passed as empty password. ✅
+- Raw fetch path (`FetchRawSkillAsync`, :718) attaches **no credentials** at all. ✅
+- Since the clone URL is hardcoded to github.com, libgit2 redirect-to-attacker-host-with-creds is not reachable (github will not redirect to an internal host). Noted as residual/theoretical only.
+
+## Error oracle — CLOSED
+Validation failures surface `SkillImportException.Message` (static, non-sensitive strings). Clone/checkout/fetch failures now return the generic `"Could not access repository (check the URL is a public GitHub repo)."` with the exception detail logged server-side only (:308-311, :374-378). Previous `$"Could not access repository: {ex.Message}"` recon oracle removed. ✅
+
+## Ref resolution / injection — CLEAN
+`ResolveRefAsync` (:657) enumerates the cloned repo's real branch/tag names and only checks out a `candidate` that `refNames.Contains(...)` — the checkout ref is always a genuine ref, via LibGit2Sharp API (no shell). No command/argument injection. If no ref matches it fails loudly. ✅
+
+## Path traversal — CLEAN
+Subpath remainder is run through `SkillPaths.NormalizeRelative` (rejects rooted, drive/UNC, empty, `.`/`..`, colon segments) before `Path.Combine`, with `IsReparsePoint` symlink guards in `DiscoverSkills` (:513-516, plus IsContained helper). System.Uri also normalizes dot-segments. ✅
+
+## Advisory follow-ups (non-blocking)
+1. (Info) Consider explicitly disabling HTTP redirect following on `RawHttp` (raw fetch) and documenting libgit2 redirect behavior — currently not exploitable because both hosts are github-owned, but it's cheap defense-in-depth.
+
+No blocking issues. Skills-import counts toward v0.9.0.
+
+---
+
+# Decision: Reuse shared ArtifactBrowser in AgentSessionPanel Changes/Files tabs
+
+**Author:** Switch (Frontend)
+**Date:** 2026-07-06
+**Branch:** integration
+**Commit:** 227f297
+
+## Problem
+Ahmed: "We already have a button that shows Artifacts and it loads up the right
+thing across the workspace. Why are we not using the same underlying component
+for the individual runs? Why isn't the Coordinator run showing those?" Plus the
+per-run session panel Changes/Files tabs were "way too much space" (bulky rows
+with chevron + full path + "Unified" + "Preview" + copy icon), and the Files tab
+"needs to show an artifact browser (with folders, etc.)."
+
+## Root cause
+`AgentSessionPanel.tsx` had a hand-rolled DUPLICATE of the Changes/Files
+renderers that already exist (and look/work correctly) in the shared
+`ArtifactBrowser.tsx`. Its Changes tab used bespoke `diffCard`/`diffHeader`/
+`Unified`/`Preview`/copy markup; its Files tab just re-rendered the same flat
+changed-files list (no folder tree). It also fetched only the flat
+`getRunFiles` list and never wired the coordinator's assembly adapter, so the
+coordinator run surfaced no artifacts.
+
+## Decision
+Eliminate the duplication by reusing the shared components instead of adding a
+third implementation:
+
+1. **Extracted** an exported `CompactChangesList` in `ArtifactBrowser.tsx`
+   (header + `renderFlatChangesList`) as the single source of truth for the
+   dense changed-files row look. `FileTreePanel` continues to use the same
+   underlying `renderFlatChangesList`.
+2. **Changes tab** in `AgentSessionPanel` now renders `CompactChangesList`
+   (status icon + bold filename + right-aligned `+N -M` + status badge).
+   Clicking a row opens the shared `FileViewerModal` diff view. Removed the
+   per-row Unified label, always-visible Preview button, and copy clutter.
+3. **Files tab** now renders the shared `FilesTabPanel` collapsible FOLDER TREE,
+   wired to the run's full workspace (`getRunWorkspace` / assembly workspace),
+   not just changed files.
+4. Both tabs + preview are driven by the shared `useArtifactBrowser` hook.
+   Coordinator-aggregate nodes (coordinator, work-plan, outcome-plan) route
+   through the assembly `artifactAdapter` (getAssemblyFiles/Workspace/Diff/
+   Content), threaded from `CoordinatorRunPage` (the existing `coordAdapter`,
+   which was defined but never passed to the panel). Per-subtask runs use the
+   standard per-run endpoints (undefined adapter). This is why the coordinator
+   run now surfaces artifacts.
+5. Deleted dead bespoke styles/state: `diffCard`, `diffHeader`,
+   `diffHeaderToggle`, `diffPath`, `diffMode`, `diffContent`, `summaryRow`,
+   `summaryText`, `diffList`, `filesList`, `filesListRow`, `footerLink`,
+   `formatBytes`, and the manual getRunFiles/getRunFileContent/getRunFileDiff
+   fetch effects + expandedPaths/diffs/loadingDiffs/previewPath state.
+
+## Constraints honored
+- FluentUI icons only (Constitution VIII); no emoji.
+- Did not touch dagLayout.ts, run graph nodes, ToolCallCard, WorkflowGraphPanel,
+  or console/*. Changes limited to AgentSessionPanel.tsx, ArtifactBrowser.tsx
+  (small shared extraction), and CoordinatorRunPage.tsx (adapter wiring).
+- Existing test IDs (`session-tab-changes`, `session-tab-files`) preserved.
+
+## Validation
+- `npm --prefix apps/web run build` — passes.
+- `npm --prefix apps/web test -- --run` — AgentSessionPanel (5) and
+  ArtifactBrowser (17) tests pass. 3 unrelated tests (debug_blueprint,
+  OutcomePlanPanel, ProjectGalleryGitHub) flake only under full parallel load;
+  all pass in isolation and are unrelated to these components.
+
+---
+
+# Decision: Browser console (/console) redesigned as a true terminal UI (TUI)
+
+**Agent:** Trinity (Frontend) · **Date:** 2026-07-06 · **Branch:** integration
+**Scope:** `apps/web/src/console/BrowserConsole.tsx` only (console shell). No shared
+Timeline/TurnGroup/ToolCallCard/AgentSessionPanel/graph code touched.
+
+## What changed (visual only)
+- **Full-height column flex layout.** Removed the cramped `maxHeight: 42%` transcript
+  (the empty void). Now: compact header (top) → scrollback (`flex:1`, scrolls) →
+  CLI prompt line (pinned bottom). When a run is bound, the run panel shares the
+  scrollback space with `flex: 2 1 0` so nothing collapses to a void.
+- **Terminal surface.** Dedicated local color scope (`TERM` constant) — dark
+  `#0b0f14` surface, monospace stack, dense 1.5 line spacing. Fluent theme tokens
+  still used inside the bound-run panel (Timeline/gates) so it stays theme-aware.
+- **CLI prompt line.** Leading context segment `~\Git\agentweaver [<project|integration>] ❯`
+  with the input inline as a borderless, transparent Textarea that reads as part of
+  the prompt line. A blinking block cursor (`▋`, CSS step-end animation) shows when
+  idle/empty. Enter-to-send and all handlers (`parseInput`, `steerCoordinator`,
+  pending-goal flow, gates) are unchanged — pure restyle.
+- **Dense scrollback rows.** Small left gutter/bullet marker per row (`❯` for user,
+  `·` for system), tight 1px gaps, no bulky cards for ordinary lines.
+- **Compact terminal toolbar.** Header + run-panel controls (incl. "Full run
+  (Changes / merge)" link) kept, made compact.
+
+## How terminal styling reached the shared <Timeline> WITHOUT editing it
+Applied a **scoped wrapper rule** on the console's `timelineScroll` container:
+`'& *': { fontFamily: TERM.mono }`. This forces monospace on Timeline descendants
+from the console scope only. The shared Timeline/row components are untouched, so
+other pages that render Timeline keep their normal look.
+
+## Seams left clean (constitution VII/III)
+No browser-side LLM or tool routing added. `TurnSourceKind` remains `'coordinator'`;
+the backend operator-agent source (#201) can drop in by binding `runId + kind`.
+Constitution VIII respected: FluentUI icons only, no emoji (glyphs used are
+typographic terminal symbols `❯ · ▋`, not emoji).
+
+## Validation
+- Console tests: `npm --prefix apps/web test -- --run src/console` → 16/16 pass.
+- BrowserConsole.tsx compiles clean (no TS errors attributable to this file).
+- NOTE: full `npm run build` currently fails due to unrelated uncommitted WIP in
+  `apps/web/src/components/AgentSessionPanel.tsx` (another agent, out of my scope) —
+  ~40 `TS2304 Cannot find name` errors. Downstream test failures all trace to that
+  broken import. Not caused by and not fixable within this console-only scope.
+
+# Decision: Show assigned skills on agent detail panel
+
+**Author:** Trinity (Frontend Engineer)
+**Date:** 2026-07-06
+**Task:** Surface skills assigned to an agent on the Agents/Team page.
+
+## Decisions
+
+1. **Data source: `apiClient.listSkills(projectId)`** (not `listSkillAssignments`).
+   `SkillDto` already carries `name`, `description`, `status`, and `assigned_agents: string[]`
+   in a single call, so I filter client-side to `assigned_agents.includes(member.name)` —
+   giving name + description + status without a second fetch. Matches the exact casing/field
+   used by SkillsPage.tsx.
+
+2. **Placement: both Overview and Capabilities tabs.** Overview is the primary home
+   (below Charter path / Recent history). I also replaced the dead Capabilities placeholder
+   ("Capabilities are defined in the agent's charter.") with the same assigned-skills section,
+   since skills *are* the agent's capabilities. The shared `skillsSection` JSX is rendered in
+   both tabs (DRY).
+
+3. **Lazy-load on either skills tab.** Skills fetch fires when Overview OR Capabilities is
+   active, mirroring the existing `historyLoaded` / `charterLoaded` lazy-load pattern with a
+   `cancelled` guard. Loading/error states use `Spinner` + `MessageBar` like the other sections;
+   a skill fetch failure only sets `skillsError` and never breaks the rest of the panel.
+
+4. **Skill name links to the Skills page** (`/projects/:projectId/skills`). SkillsPage has no
+   per-skill deep-link route, so I did not over-engineer a skill-specific anchor.
+
+5. **Status badge only when not Active.** `FluentUI Badge` (tint) with warning/danger color for
+   `missing`/`malformed`, using a local `skillStatusColor` helper mirroring SkillsPage. Empty
+   state shows "No skills assigned". FluentUI `PuzzlePiece20Regular` icon (no emoji, per
+   constitution VIII).
+
+## Files changed
+- apps/web/src/pages/TeamPage.tsx
+- apps/web/src/__tests__/TeamPage.test.tsx
+
+# Decision: Unify `/api` base-path convention (fix GitHub sign-in "unauthorized")
+
+**Author:** Trinity (Frontend) · **Date:** 2026-07-06 · **Branch:** integration
+
+## Root cause (verified against live staging)
+GitHub sign-in returned "unauthorized" because the frontend built the authorize URL as
+`${API_URL}/auth/github/authorize` with staging `API_URL="/api"`, producing
+`/api/auth/github/authorize`. The API only serves the redirect endpoint at the origin root.
+
+Live curl confirmation (host `agentweaver.6a4a0fdca7653f00012ffe86.westus2.staging.aksapp.io`):
+- `GET /api/auth/github/authorize` → **401** (no such route; auth middleware returns `{"error":"unauthorized"}` for all unknown `/api/*`)
+- `GET /auth/github/authorize` → **302** → `https://github.com/login/oauth/authorize?...` (correct)
+
+Secondary latent bug: the codebase was split-brained. `client.ts request()` OWNS a single `/api`
+prefix and expects `baseUrl` = origin only, but several raw fetches (skills upload, review submit,
+SSE stream) omitted `/api`. With staging `API_URL="/api"` the raw fetches happened to work while
+`request()` would double-prefix to `/api/api/...`; on localhost the reverse. The two could never be
+consistent under a single config.
+
+## Decision
+Adopt ONE convention everywhere: **`API_URL` / `baseUrl` = API ORIGIN ONLY (no `/api`)**, and every
+XHR call site adds a single `/api` prefix. Browser-redirect endpoints (`/auth/github/*`) live at the
+origin root.
+
+- Deployed default `AGENTWEAVER_API_URL` changed from `/api` → `""` (same-origin) in
+  `k8s/frontend-deployment.yaml`, `apps/web/Dockerfile`, and `apps/web/docker-entrypoint.sh`.
+- `config.ts` now treats an empty string as a VALID value ("same origin") via an explicit
+  `typeof === 'string'` check instead of `||` truthiness (which would have fallen through to the
+  localhost dev default).
+- Fixed the raw fetch call sites to add `/api` (client.ts skills-upload, review, health; sse.ts stream).
+
+## Resulting on-the-wire behavior
+| | localhost (`API_URL=http://localhost:5000`) | staging (`API_URL=""`) |
+|---|---|---|
+| GITHUB_AUTHORIZE_URL | `http://localhost:5000/auth/github/authorize` | `/auth/github/authorize` |
+| XHR (request()) | `http://localhost:5000/api/...` | `/api/...` |
+| session exchange | `http://localhost:5000/api/auth/session/exchange` | `/api/auth/session/exchange` |
+
+No `/api/api/...` double-prefix in any case. Localhost dev (5173/5000) unchanged.
+
+## Constraints honored
+Thin client (no business logic moved). No FluentUI/emoji changes. Did not touch vite.config.ts,
+start-dev.ps1, or appsettings.Development.json. Images NOT rebuilt — Link owns the frontend redeploy.
+
+# Decision: Run-detail page UX fixes (Trinity, Frontend)
+
+Date: 2026-07-06
+Author: Trinity (Frontend Engineer)
+Scope: Coordinator run-detail page — graph, session/event stream, composer. Did NOT touch OrchestrationsPage.tsx or backend (Neo's concurrent scope).
+
+## Context
+Ahmed raised four UX complaints on the Coordinator RUN DETAIL page
+(`apps/web/src/pages/CoordinatorRunPage.tsx` + `apps/web/src/components/AgentSessionPanel.tsx`).
+
+## Decisions
+
+### 1. Responsive DAG reflow (fit-to-width via ResizeObserver)
+- Added a `ResizeObserver` on the graph scroll viewport (`CoordinatorRunPage.tsx`).
+- Measured container width drives `graphFitScale = clamp(containerWidth / naturalWidth, 0.5, 1.5)`.
+- Combined with the existing Ctrl+Scroll `zoom` as `effectiveGraphZoom = zoom * graphFitScale`, applied via the existing CSS `zoom` mechanism. Removed the `minWidth:'100%'` hack.
+- Rationale: the graph is a fixed-size xyflow canvas with `minZoom=maxZoom=1`; a true `fitView` would require unlocking zoom and risk regressing the tuned #185/#195 layout. Scaling the existing canvas to the measured width fills whitespace when wide and avoids horizontal scroll when narrow, while keeping vertical scroll for tall DAGs. Fit is width-driven (uniform zoom scales height proportionally). Built ON the existing layout rather than replacing it.
+
+### 2. Wider session log panel
+- Changed run-console `bodyGrid` columns from `300px / minmax(460px,1fr) / minmax(380px,440px)` to `280px / minmax(420px,1fr) / clamp(480px,34vw,640px)`.
+- Chose a larger responsive default (`clamp`) over a draggable splitter to minimise risk in a shared worktree; the spec allowed "at least a larger default".
+
+### 3. "Message coordinator" no longer hidden under the "Start task" FAB
+- The global `StartOrchestrationFab` is `position:fixed` bottom-right (z-index 100) and overlapped the docked composer's send control.
+- Fix is self-contained in `AgentSessionPanel.tsx`: added `dockedComposerStack` style with `paddingBottom:'84px'`, applied only in the docked variant, so the composer clears the FAB. Deliberately did NOT edit the shared `StartOrchestrationFab`/`AppShell` to avoid cross-agent conflicts.
+
+### 4. Collapse low-signal technical events by default (#122)
+- Added a "Show technical details" FluentUI `Switch`, OFF by default, in the messages-tab toolbar of `AgentSessionPanel.tsx`.
+- Client-side classification only (thin client, constitution III): system-prompt scaffolding rows, tool-call plumbing (shell/file/command), and file-write rows are technical; agent/coordinator messages, instructions, narrative activity lines, and human-facing approvals are high-signal.
+- Default view hides technical content (collapsed, NOT deleted); toggle reveals everything. Turns containing only technical content are filtered from the default view.
+- Icons: reused FluentUI components only (no emoji), per constitution VIII.
+
+## Validation
+- `npm --prefix apps/web run build` — clean.
+- `npm --prefix apps/web test -- --run` — 512/513 pass; the 1 failure is a flaky 5s timeout under full-suite parallel load (`coordUx` "run tree navigation" test passes in isolation at ~1s). Not caused by these changes.
+- Added/adjusted tests in `AgentSessionPanel.test.tsx` and `CoordinatorRunPage.coordUx.test.tsx` for the default-hides-technical + toggle-reveals behavior.
+
+## Files changed
+- apps/web/src/pages/CoordinatorRunPage.tsx
+- apps/web/src/components/AgentSessionPanel.tsx
+- apps/web/src/__tests__/AgentSessionPanel.test.tsx
+- apps/web/src/__tests__/CoordinatorRunPage.coordUx.test.tsx
+
+# Decision: Skills UX fixes (agent role + folder drag-drop import)
+
+**Author:** Cypher (Frontend)
+**Date:** 2026-07-06
+**Branch:** integration
+
+## Context
+Two bugs in the Skills feature UI (`SkillsPage.tsx`, issues #51/#56):
+1. Assignment UI showed only agent NAME, no role — "Agent name without role isn't useful" (Ahmed).
+2. Dragging a FOLDER onto the import dropzone failed with `net::ERR_ACCESS_DENIED`; single-file drop worked.
+
+## Task 1 — Show agent role
+- Reused the existing team members API (`apiClient.getTeam(projectId).members`, already loaded in the page) which carries `name` + `role_title`.
+- Built a `name → role_title` map and a `labelForAgent(name)` helper that renders `Name — Role`, falling back to the bare name for unknown/system agents.
+- Applied to both the assignment checkboxes and the assigned-agent chips in the catalog.
+
+## Task 2 — Folder drag-drop root cause + fix
+**Root cause:** the drop handler read `e.dataTransfer.files`. For a dropped FOLDER the browser puts a bogus directory entry there (not the contained files); reading/uploading that directory handle throws `net::ERR_ACCESS_DENIED`. Additionally, the previous `uploadSkills` appended every file under the SAME form field name `files`, and the backend pairs relative paths via `form["path:{fieldName}"].FirstOrDefault()` — so with a shared field name all files collapsed onto the first file's path.
+
+**Fix:**
+- New pure, unit-tested helper `apps/web/src/utils/skillDrop.ts` that walks the `webkitGetAsEntry()` / FileSystemEntry tree: recurses directories via `createReader().readEntries()` (looping until the batch is empty), captures entries synchronously before awaiting (DataTransferItemList is neutered after the handler yields), and collects files with their folder-relative paths. Skips oversized (>1 MiB) and known-binary files gracefully.
+- `SkillsPage.onDropUpload` uses the entry API when available and falls back to plain `dataTransfer.files` for single-file drops (kept working).
+- Extended `apiClient.uploadSkills` to accept `File | {file, relativePath}` items and to give each file a UNIQUE form field name (`files0`, `files1`, …) with a paired `path:{field}` field, so the backend correctly pairs each file with its own relative path.
+
+## Constraints honored
+- FluentUI icons only (no emoji); thin client (reused APIs, no business logic); root-caused (folder drop now works, not disabled).
+- Stayed within skills-owned files; left Neo's `cancelRun` (client.ts) untouched.
+
+## Files changed
+- `apps/web/src/pages/SkillsPage.tsx`
+- `apps/web/src/api/client.ts` (skills section only)
+- `apps/web/src/utils/skillDrop.ts` (new)
+- `apps/web/src/__tests__/SkillsPage.test.tsx`
+- `apps/web/src/__tests__/skillDrop.test.ts` (new)
+
+## Validation
+- `npm --prefix apps/web test -- --run SkillsPage skillDrop` → 11 passed.
+- `npm --prefix apps/web run build`: my files compile clean (0 diagnostics). Build currently fails only in `AgentSessionPanel.tsx` — Trinity's concurrent WIP, not touched by me.
+
+# Decision: Document v0.9.2 orchestration + skills UX wave
+
+- **Author:** Link (Platform Engineer)
+- **Date:** 2026-07-06
+- **Branch/commit basis:** `integration` == `main` == `388b993`
+- **Scope:** docs-only (no app code touched)
+
+## Context
+
+The v0.9.2 orchestration + skills UX wave merged to `main`. Documented across the applicable doc facets per the `docs-feature` skill, grounding every claim in real `file:line` sources.
+
+## What was documented
+
+1. Stop & delete orchestrations in `docs/reference/api.md` and `docs/experience/coordinator-orchestration.md`.
+2. Tool-approval routing to owning child run in `docs/reference/api.md`.
+3. Run-page UX in `docs/experience/coordinator-orchestration.md`.
+4. Skills UX in `docs/experience/project-skills.md`.
+
+## Validation
+
+- `cd docs; npm run build` → green (build complete, no errors).
+- Cross-link anchor verified against generated HTML: `api.md#delete-api-runs-id`.
+
+## Notes / non-goals
+
+- No new pages created — reused existing gold-standard pages.
+- No landing card / nav / screenshot facets needed for this incremental wave.
+- Did not stage `apps/web/index.html` or any non-docs changes.
+
+# Decision: Ship v0.9.1 sign-in fix to staging RC
+
+- **Author:** Link (DevOps/deploy)
+- **Date:** 2026-07-06T12:10:34-07:00
+- **Requested by:** Ahmed (@sabbour)
+- **Branch:** integration (shared worktree)
+- **State backend:** local
+
+## Context
+v0.9.0 staging RC had a GitHub sign-in bug (`/api` base-path). Trinity fixed it in `65284b8e82526176cf4ca6d49e18e8e1ea292aff` (code-review APPROVE + security GREEN, build clean, 500/500 tests). Only the frontend changed since v0.9.0; the API/MCP/AgentHost/Domain/sandbox were untouched.
+
+## Decision
+Cut an immutable **v0.9.1** RC to staging so Ahmed can re-test sign-in. Image-efficient: rebuild ONLY the frontend; retag the other three server-side. Do NOT overwrite v0.9.0, do NOT merge to main, do NOT push origin tags, do NOT close issues. Staging RC only.
+
+## Rollout result — all at v0.9.1
+- agentweaver-api: v0.9.1, ready 2/2
+- agentweaver-frontend: v0.9.1, ready 2/2
+- agentweaver-mcp: v0.9.1, ready 1/1
+- agentweaver-worker: agentweaver-api:v0.9.1, ready 1/1
+- agent-host SandboxTemplate: agentweaver-agent-host:v0.9.1
+
+## Fix verification (live cluster)
+HOST: `agentweaver.6a4a0fdca7653f00012ffe86.westus2.staging.aksapp.io`
+- `GET /auth/github/authorize` -> **302** ✓
+- `GET /api/health` -> **200** ✓
+- `GET /health` -> **200** ✓
+- `GET /env-config.js` -> `window.__AGENTWEAVER_CONFIG__ = { API_URL: "" }` ✓
+
+# Decision: Stop & Delete orchestrations from the Orchestrations list page
+
+**Author:** Neo (Backend/Full-stack)
+**Date:** 2026-07-06
+**Requested by:** sabbour (Ahmed)
+
+## Context
+Ahmed wanted Stop and Delete actions directly on the Orchestrations page (`apps/web/src/pages/OrchestrationsPage.tsx`).
+
+## Decisions
+
+1. Delete reuses the existing `DELETE /api/runs/{id}` endpoint — no new delete endpoint.
+2. Added a new `POST /api/runs/{id}/cancel` cancel-only endpoint because no cancel/stop endpoint existed.
+3. Factored out shared cancel logic into `EndpointHelpers.CancelRunWorkAsync`; both DELETE and cancel call it.
+4. Children handling matched DELETE's existing behavior; abandoning the coordinator workflow stops child subtask runs it drives.
+5. Already-terminal runs: cancel returns `{ cancelled: false, already_terminal: true }` (HTTP 200) without acting.
+6. Frontend added `cancelRun`, Stop/Delete FluentUI icon buttons, confirm flows, and existing MessageBar errors.
+
+## Validation
+- API build succeeded.
+- OrchestrationsPage tests 5/5 pass.
+- Full web suite had unrelated concurrent WIP failures in Trinity-owned files.
+
+## Files changed
+- `apps/Agentweaver.Api/Endpoints/EndpointHelpers.cs`
+- `apps/Agentweaver.Api/Endpoints/RunEndpoints.cs`
+- `apps/web/src/api/client.ts`
+- `apps/web/src/pages/OrchestrationsPage.tsx`
+- `apps/web/src/__tests__/OrchestrationsPage.test.tsx`
+
+# Decision: Route tool-approvals to the owning child subtask run (recurrence of #196)
+
+**Author:** Neo (Backend/Full-stack)
+**Date:** 2026-07-06
+**Requested by:** sabbour (Ahmed)
+**References:** issue #196, RunEndpoints.cs, EndpointHelpers.cs
+
+## Context / Live bug
+On a Coordinator orchestration, approving a tool call failed with `API error 404: {"error":"No approval request found for this request_id on this run..."}` because the client could post to the coordinator run while the pending approval was registered on the child subtask run.
+
+## Root cause
+`CoordinatorDispatchService.BubbleChildInteraction` re-emits the child's approval-required event onto the coordinator SSE stream, but `POST /api/runs/{id}/tool-approvals` and `/tool-denials` previously resolved only against the posted id. Posting to the parent coordinator returned Unknown and then 404.
+
+## Fix
+Added `EndpointHelpers.ResolveApprovalOwningRunIdAsync(gate, runStore, postedRunId, requestId)`:
+1. If posted run owns the request, return it.
+2. Else if posted run is a coordinator, inspect child runs and return the child that owns the request.
+3. Else return null and preserve existing 404 behavior.
+
+Wired into both `/tool-approvals` and `/tool-denials` so grant/deny/state checks operate on the owning child run.
+
+## Validation
+- API release build: 0 errors.
+- New `ToolApprovalOwningRunResolutionTests.cs`: 3 tests pass; broader approval/bubbling filter: 44 passed.
+- Web build passes; approval-card frontend tests pass.
+
+## Files changed
+- `apps/Agentweaver.Api/Endpoints/EndpointHelpers.cs`
+- `apps/Agentweaver.Api/Endpoints/RunEndpoints.cs`
+- `tests/Agentweaver.Tests/ToolApprovalOwningRunResolutionTests.cs`
+
+# Decision: Review now action opens the Assembly artifacts panel
+
+**Author:** Trinity (Frontend Engineer)
+**Date:** 2026-07-06
+**Requested by:** Ahmed (@sabbour)
+
+## Context
+The Coordinator run page's "Review now" action in the Assembly and review section was a no-op. The previous implementation targeted dead `reviewRef` / `scrollToReview` plumbing rather than the visible review surface.
+
+## Decision
+Retarget `viewAssemblyExecution` to open the artifacts panel directly with `setArtifactsPanelOpen(true)` and remove the dead review ref/scroll code. This preserves the existing Assembly and review model while making the CTA land on the shipped review surface.
+
+## Validation
+Commit `388b993` shipped with the v0.9.2 wave; code-review returned a clean verdict and staging deployment is healthy on v0.9.2.
+
+## 2026-07-08T00:57:28-07:00: Inbox merge — link v095 doc facets
+
+# v0.9.5 docs facet split
+
+- Date: 2026-07-08T05:24:00Z
+- Decider: Link
+- Context: v0.9.5 staging docs update requested coverage for coordinator run page rework, browser console, review-gate persistence, project generation model settings, and provider error surface.
+
+## Decision
+
+Documented the wave as:
+
+1. **Coordinator run page + review-gate persistence** in existing coordinator docs (`docs/experience/coordinator-orchestration.md`, `docs/reference/coordinator.md`, `docs/deep-dive/coordinator-internals.md`) because those pages already own the three facets for coordinator lifecycle and assembly behavior.
+2. **Browser console** as a new three-facet set (`docs/experience/browser-console.md`, `docs/reference/browser-console.md`, `docs/deep-dive/browser-console.md`) because the backend facade turns the console from a UI-only shell into a route/DTO/tooling feature.
+3. **Project generation model settings** as a new three-facet set (`docs/experience/project-generation-model-settings.md`, `docs/reference/project-generation-model-settings.md`, `docs/deep-dive/project-generation-model-settings.md`) because it spans UI, persisted DTOs, migrations, and generation runtime consumers.
+4. Folded the **provider error surface** into the console and generation-model references/deep dives rather than creating a standalone page, since the new classifier is currently consumed by those two operator-facing flows.
+
+## Validation
+
+- `cd docs; npm run build` passed.
+- `node scripts/gen-docs.mjs --check` passed.
+- Committed docs on `main` in `7feb8c2a` (`docs: cover v0.9.5 staging wave`).
+
+## 2026-07-08T00:57:28-07:00: Inbox merge — smith screenshot review
+
+# Smith screenshot review
+
+Reviewed commit `9e6a243c` (`docs(screenshots): reconcile plan+spec to real app pages`).
+
+Verdict: APPROVE.
+
+Findings:
+- CI guard is intact: `tests/e2e/screenshots.spec.ts` uses `BASE_URL` from env, file-level serial mode, optional `STORAGE_STATE`, `ensureSignedIn()`, and a `beforeEach` skip when `BASE_URL` is absent. An accidental Playwright run without `BASE_URL` skips this spec.
+- Spot-checked routes against `apps/web/src/App.tsx`; reviewed project, orchestration, skills, workflows, observability, team, memories, board/settings, auth, and console routes are real.
+- Spot-checked added selectors against app components: orchestrations list, skills catalog/import dialog, observability overview/agents/traces/trace preview, and workflow definition graph all map to real text/buttons/components. KEEP selectors sampled also exist.
+- Plan/spec parity verified: 51 `shot('name')` entries, 51 plan rows, zero diff; row numbers are contiguous and per-page counts sum to 51.
+- Removed names `cluster-page-quota-warning` and `per-run-workflow-graph` have no remaining references in spec, plan, or docs callouts. The old placeholder PNG files still exist but are unreferenced and not a blocking issue.
+- Validation passed: `cd docs; npm run build` and `node scripts\gen-docs.mjs --check`.
+
+No blocking issues found; ready to push.
+
+## 2026-07-08T00:57:28-07:00: Inbox merge — trinity screenshot reconcile
+
+# Trinity screenshot reconciliation
+
+Decision: Reconciled the user-guide screenshot plan and Playwright capture spec against the real app routes and page components as of this task.
+
+Rationale:
+- Treat `apps/web/src/App.tsx` and concrete page/component selectors as source of truth, with docs only used to align guide ownership/names.
+- Keep planned screenshots that map to real routes/states, rename stale workflow graph coverage to the actual Workflows page definition graph, remove stale/duplicate shots, and add missing real page/state coverage.
+- Maintain draft/skipped-safe Playwright behavior using the existing BASE_URL guard and env variables while making plan/spec shot names 1:1.
+
+Outcome:
+- Final screenshot set: 51 rows.
+- Added coverage: orchestrations-list, skills-catalog, skill-import-dialog, observability-overview, observability-agents, observability-traces, observability-trace-preview, workflow-definition-graph.
+- Removed/renamed: duplicate project-board removed; cluster-page-quota-warning removed because ClusterPage does not currently expose quota bars; per-run-workflow-graph renamed to workflow-definition-graph because the real page exposes a workflow definition graph.
+- Validation passed: docs build, gen-docs check, and plan/spec parity with 0 diff.
+
+## 2026-07-08T00:57:28-07:00: Inbox merge — trinity screenshot seed data
+
+# Screenshot plan seed-data guidance
+
+Author: Trinity
+Date: 2026-07-08T00:38:25-07:00
+
+Updated `docs/experience/screenshot-plan.md` to require populated data before capturing the 51 web user-guide screenshots.
+
+Decision:
+- Do not invent a demo-data path: investigation found no committed demo-data generator or seed endpoint in `apps/Agentweaver.Api` or `scripts/`.
+- Document the real manual setup flow: create a project, cast a team, populate backlog/workflows, import or create skills, create memory/decision entries, dispatch coordinator runs, wait for telemetry/live diagnostics, then capture with `PROJECT_ID`, `RUN_ID`, and `EXECUTION_ID`.
+- Add a `Data needed` table column so every planned screenshot has an explicit prerequisite while preserving screenshot names and spec parity.
+
+Validation:
+- `cd docs; npm run build` passed.
+- `node scripts\gen-docs.mjs --check` passed.
+- Parity check remains 51 planned screenshot rows = 51 Playwright shot names.
+
+## 2026-07-08T00:57:28-07:00: Cleanup audit verdict — keep OAuth token WIP, discard junk worktree dirt
+
+**Author:** Scribe  
+**Requested by:** Ahmed Sabbour (@sabbour)  
+**References:** Smith PR #205; coordinator stash/worktree audit
+
+Decision:
+- Treat the current `k8s/*.yaml` working-tree churn as Windows LF→CRLF drift only; leave it untouched and do not include it in unrelated commits.
+- Treat `stash@{0}` (`graph zoom-in button`) as stale/orphaned WIP because it adds `getRunUsage` mocks for an API absent from `main`; do not restore unless the unmerged run-usage feature returns.
+- Treat `stash@{1}` (`OAuth pod shared store`) as potentially keepable substantive C# work because it introduces `AgentHostUserTokenSyncService` and `EnsureUserTokenInSpcAsync` for CSI SecretProviderClass per-user token sync; preserve for deliberate follow-up.
+- Treat worktree `sabbour-ui-improvement-research` dirt as junk (`apps/web/index.html` live-preview script plus `.impeccable/` cache) because the worktree is 0 commits ahead of main.
+- Treat worktree `sabbour-craft-overview` dirt as junk untracked tool caches (`.learnings/`, `.playwright-cli/`, `local-api-probe/`) because the worktree is 0 commits ahead of main.
+- Smith's Playwright screenshot setup was isolated on `sabbour/playwright-screenshot-setup` and opened as PR https://github.com/sabbour/agentweaver/pull/205; repo was returned to `main` and no k8s/.squad/unrelated files were included.
+
+Rationale: Keep only substantive unfinished OAuth SecretProviderClass work under explicit follow-up; avoid normalizing line-ending drift or tool-cache/live-preview junk into product history.
+
+## 2026-07-08T13:57:00-07:00: Inbox merge — run page review UX, structured RAI verdicts, preview identity, and teamless-run block
+
+### Teamless orchestration runs are blocked
+
+**Decision:** Teamless coordinator execution is blocked. A project must have at least one dispatchable roster member before orchestration start or backlog pickup can execute.
+
+**Rationale:** Blank API-created projects can lack `.squad/team.md`. The previous coordinator fallback silently selected `Core Implementer` and made the coordinator appear to do all work, which confused operators and hid the missing-team setup problem.
+
+**Contract and implementation notes:**
+- `POST /api/projects/{id}/orchestrations` rejects teamless projects before run creation with HTTP 409 and `{ "error": "no_team", "message": "This project has no team. Cast a team before starting an orchestration." }`.
+- The roster source is `SquadReader.ReadTeam()` on the project working directory, filtered to active dispatchable members and excluding infrastructure roles such as Scribe, Ralph, Rai, and build-test.
+- Backlog pickup refuses teamless projects before claim/reserve, so no fallback run is created and the task remains Ready for retry after casting a team.
+- Defense-in-depth remains in `CoordinatorOrchestratorExecutor` to prevent unattended fallback execution.
+- The frontend surfaces the block as a clear no-team error state with a `Cast a team` CTA to `/projects/{id}/team/cast`.
+
+**Sources merged:** `coordinator-teamless-run-policy.md`, `tank-block-teamless.md`.
+
+### RAI verdict events use a structured verdict enum
+
+**Decision:** `rai.verdict` carries a structured `verdict` token as the source of truth. The payload is `{ verdict, runId, rationale }`, where `verdict` is one of `green | yellow | red | revise`.
+
+**Rationale:** Review found a high-severity mismatch where the backend emitted emoji traffic lights while the frontend compared against word values, causing every verdict, including red, to render as success. Removing the redundant presentation field makes the contract single-source and lets the client derive message intent, label, and icon exhaustively from `verdict`.
+
+**Contract and implementation notes:**
+- `trafficLight` is removed from the event payload; any prior inbox note mentioning it is superseded by this decision.
+- `rai.verdict` is visible on the parent run stream and the `{runId}-rai` sub-stream.
+- The frontend treats unknown verdicts as neutral info / `Unknown`, never silently as success.
+- Coordinator runs are operator-steerable while `in_progress` or `awaiting_review`; `awaiting_review` is the assembly human-review parking state, not terminal inactivity.
+
+**Sources merged:** `coordinator-rai-verdict-structured.md`, `tank-review-steering-rai-verdict.md`.
+
+### Build & Test preview uses the persisted run id
+
+**Decision:** Build & Test agents register `start_preview` with the real persisted run id, not the synthetic `{runId}-build-test` sub-stream id.
+
+**Rationale:** `start_preview` calls `/api/runs/{runId}/sandbox/preview`, the preview endpoint validates ownership via `IRunStore.GetAsync`, and sandbox claims are derived from the run id used for agent setup and command execution. The persisted run id must therefore be threaded through Build & Test setup/tool binding/sandbox claim paths, while `{runId}-build-test` remains only a UI/event sub-stream id.
+
+**Additional runtime note:** `SandboxPreviewService` resolves both `agent-{runId}` and `run-{runId}` claim conventions, and sandbox claim creation is idempotent on 409.
+
+**Sources merged:** `morpheus-preview-buildtest.md`.
+
+### Orchestration reliability root-cause decisions retained
+
+**Decision:** Keep the coordinator reliability fixes from the previous wave as active architecture history:
+- Assembly review gates are keyed by canonical assembly stage, not raw workflow node id.
+- Assembly review waits indefinitely through durable state and deferred polling rather than failing after a 60-minute wall-clock timeout.
+- Pickup auto-approve defaults align with pickup autopilot so unattended backlog children can use allow-with-approval tools without stalling.
+- Copilot streaming turns are bounded by an inactivity watchdog so a stalled SDK stream fails cleanly with a retryable provider error rather than hanging forever.
+
+**Sources merged:** `Coordinator-root-caused-and-fixed-three-orchestration-reliabil.md`, `Coordinator-added-inactivity-watchdog-for-hung-copilot-streami.md`.
+
+### Workflow generation editing and blueprint validation
+
+**Decision:** Workflow generation supports editing from an existing workflow through `base_workflow_id` or from an unsaved draft through `base_yaml`; the generate endpoint returns an unsaved draft preview and saving remains the existing validated PUT path.
+
+**Contract and implementation notes:**
+- Built-in/library workflow edits are immutable-source edits. The generator must produce a project-owned customized copy, and validation rejects built-in edit output that keeps the reserved base id.
+- Blueprint generation was hardened through prompt changes and structural validation in the existing blueprint validation path; generated blueprint failures return plain-language details with regenerate/edit options.
+- Workflow graph reachability and bindability checks live in blueprint validation so generated, inline, and predefined blueprint flows share the same guard.
+- No UI changes were required for this slice.
+
+**Sources merged:** `cypher-wf-gen-editing.md`.

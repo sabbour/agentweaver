@@ -1,6 +1,10 @@
 using System.Net;
 using FluentAssertions;
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Logging.Abstractions;
+using Agentweaver.AgentTools;
+using Agentweaver.SandboxExec;
+using Agentweaver.SandboxFs;
 using Agentweaver.AgentRuntime;
 
 namespace Agentweaver.Tests.Sandbox;
@@ -23,6 +27,31 @@ public sealed class StartPreviewToolTests
         var http = new HttpClient(handler) { BaseAddress = new Uri("http://localhost/") };
         var tools = AgentweaverApiTools.Build(ProjectId, AgentName, "http://localhost", null, http, runId: runId);
         return tools.Single(t => t.Name == "start_preview");
+    }
+
+    [Fact]
+    public void BuildSessionConfigTools_IncludesStartPreview_WhenProjectAgentAndRunArePresent()
+    {
+        using var workspace = new TempWorkspace();
+        var context = new SandboxToolContext(
+            AgentId: "qa-engineer",
+            WorkingDirectory: workspace.Path,
+            SandboxRoot: workspace.Path,
+            Executor: SandboxExecutorFactory.CreatePassthrough(),
+            FileTools: new SandboxedFileTools(workspace.Path),
+            SearchTools: new SandboxedSearchTools(workspace.Path),
+            Redactor: SandboxOutputRedactor.Default,
+            Options: new SandboxToolOptions(ShellEnabled: false),
+            Logger: NullLogger.Instance,
+            RunId: RunId);
+
+        var withProject = CopilotAIAgent.BuildSessionConfigTools(
+            context, ProjectId, AgentName, "http://localhost", apiKey: null);
+        var withoutProject = CopilotAIAgent.BuildSessionConfigTools(
+            context, projectId: null, agentName: AgentName, apiBaseUrl: "http://localhost", apiKey: null);
+
+        withProject.Select(t => t.Name).Should().Contain("start_preview");
+        withoutProject.Select(t => t.Name).Should().NotContain("start_preview");
     }
 
     [Fact]
@@ -137,3 +166,24 @@ internal sealed class CapturingHandler : HttpMessageHandler
         };
     }
 }
+
+internal sealed class TempWorkspace : IDisposable
+{
+    public string Path { get; } = System.IO.Path.Combine(
+        Directory.GetCurrentDirectory(), ".agentweaver-test-workspaces", Guid.NewGuid().ToString("N"));
+
+    public TempWorkspace() => Directory.CreateDirectory(Path);
+
+    public void Dispose()
+    {
+        try
+        {
+            if (Directory.Exists(Path))
+                Directory.Delete(Path, recursive: true);
+        }
+        catch
+        {
+        }
+    }
+}
+

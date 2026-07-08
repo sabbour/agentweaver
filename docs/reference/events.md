@@ -38,7 +38,7 @@ Clients should order and deduplicate events by `sequence`.
 | `run.cancelled` | When an in-progress run is cancelled because its project was deleted | *(none)* |
 | `run.error` | When an operation fails but the run is reverted to a retryable state (e.g. back to AwaitingReview after a merge internal error); **non-terminal** — the stream stays open | `reason` |
 | `run.degraded` | When the sandbox blocks at least one tool call during a run; **non-terminal** — the run continues with a degraded outcome | `toolName`, `reason` |
-| `rai.verdict` | The RAI reviewer's verdict for a run; written to the `{runId}-rai` sub-stream | `verdict` (`green` / `yellow` / `red` / `revise`), `runId` |
+| `rai.verdict` | The RAI reviewer's verdict for a run; written to both the parent run stream and the `{runId}-rai` sub-stream | `verdict` (`green` / `yellow` / `red` / `revise`), `runId`, `rationale` |
 | `workflow.step` | When each workflow executor stage transitions (start/complete/fail/skip), for every node in both the full and child pipelines | `step`, `status`, `label`, `timestamp_utc`, `agent_name` (agent step only), `reviewer` (review step only), `message` (optional) |
 | `run.workflow_graph` | Once at run start, carrying the full workflow graph descriptor for rendering the run topology | `GraphDescriptor` (see below) |
 | `review.requested` | After the worktree is committed and the review tree hash is stored | `tree_hash`, `request_id` |
@@ -92,6 +92,18 @@ Both providers surface the same tool event vocabulary. For each tool the agent r
 SDK-internal tools (`report_outcome`, `glob`) are suppressed from the event stream. `report_intent` is translated into an `agent.intent` event rather than suppressed — the raw tool call is hidden, but the intent text surfaces as a first-class event. `agent.tools` is a synthetic event emitted by the runtime, not an SDK tool.
 
 ## Event details
+
+### `rai.verdict`
+
+The RAI executor emits one structured verdict event when a Responsible AI review completes. The payload is:
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `verdict` | `"green"` \| `"yellow"` \| `"red"` \| `"revise"` | Machine-readable token. There is no emoji field in the event payload. |
+| `runId` | string | The reviewed run. |
+| `rationale` | string | Human-readable rationale extracted from the RAI response, or a fallback failure rationale. |
+
+The event is written to both the parent run stream and the `{runId}-rai` sub-stream (`packages/Agentweaver.Domain/EventTypes.cs:104`, `packages/Agentweaver.AgentRuntime/Workflow/RaiTurnExecutor.cs:373`). The web session panel reads the token and maps it locally to a traffic-light presentation with the rationale (`apps/web/src/components/AgentSessionPanel.tsx:1200`, `:1216`).
 
 ### `agent.message`
 

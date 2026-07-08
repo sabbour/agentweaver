@@ -1580,6 +1580,35 @@ const useStyles = makeStyles({
     backgroundColor: tokens.colorBrandBackground2,
     boxShadow: `inset 0 0 0 1px ${tokens.colorBrandStroke1}`,
   },
+  runTreeRowActionNeeded: {
+    backgroundColor: tokens.colorPaletteMarigoldBackground2,
+    boxShadow: `inset 3px 0 0 ${tokens.colorPaletteMarigoldBorderActive}`,
+    ':hover': { backgroundColor: tokens.colorPaletteMarigoldBackground2 },
+  },
+  runTreeReviewCta: {
+    marginLeft: '56px',
+    marginRight: tokens.spacingHorizontalS,
+    marginBottom: tokens.spacingVerticalXS,
+    padding: tokens.spacingVerticalS,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalXS,
+    borderRadius: tokens.borderRadiusMedium,
+    backgroundColor: tokens.colorPaletteMarigoldBackground2,
+    border: `1px solid ${tokens.colorPaletteMarigoldBorderActive}`,
+  },
+  runTreeActionPill: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    width: 'fit-content',
+    marginLeft: tokens.spacingHorizontalXS,
+    padding: '1px 7px',
+    borderRadius: tokens.borderRadiusCircular,
+    backgroundColor: tokens.colorPaletteMarigoldBorderActive,
+    color: tokens.colorNeutralForegroundInverted,
+    fontSize: tokens.fontSizeBase100,
+    fontWeight: tokens.fontWeightSemibold,
+  },
   runTreeStatusIcon: {
     width: '20px',
     height: '20px',
@@ -1647,6 +1676,7 @@ const useStyles = makeStyles({
     fontWeight: tokens.fontWeightSemibold,
   },
   topologyDag: {
+    position: 'relative',
     flex: 1,
     height: 'auto',
     minHeight: '480px',
@@ -1672,6 +1702,14 @@ const useStyles = makeStyles({
     justifyContent: 'space-between',
     gap: tokens.spacingHorizontalM,
     flexWrap: 'wrap',
+  },
+  topologyControlsOverlay: {
+    position: 'sticky',
+    top: tokens.spacingVerticalS,
+    left: tokens.spacingHorizontalS,
+    zIndex: 20,
+    width: 'fit-content',
+    pointerEvents: 'auto',
   },
   creditsSurface: {
     width: '360px',
@@ -1806,6 +1844,7 @@ function runTreeStatusLabel(status: string, confirmedBy?: string): string {
     case 'blocked': return 'Blocked';
     case 'completed': return 'Completed';
     case 'assemble_ready': return 'Ready for assembly';
+    case 'awaiting_review': return 'Action needed';
     case 'awaiting_assembly': return 'Preparing assembly';
     case 'failed': return 'Failed';
     case 'merge_failed': return 'Merge failed';
@@ -2048,6 +2087,7 @@ export function CoordinatorRunPage() {
   // ---------------------------------------------------------------------------
   const [coordStatusField, setCoordStatusField] = useState<string | undefined>(undefined);
   const [coordStatusReason, setCoordStatusReason] = useState<string | undefined>(undefined);
+  const [coordinatorSteerable, setCoordinatorSteerable] = useState<boolean | undefined>(undefined);
   const [workPlanStatus, setWorkPlanStatus] = useState<string | undefined>(undefined);
   const [retriedFrom, setRetriedFrom] = useState<string | null>(null);
   // Per-run work-plan snapshot.
@@ -2094,6 +2134,7 @@ export function CoordinatorRunPage() {
     setRunLevelStatus(undefined);
     setCoordStatusField(undefined);
     setCoordStatusReason(undefined);
+    setCoordinatorSteerable(undefined);
     setWorkPlanStatus(undefined);
     setWorkPlanData(null);
     setIsChildRun(false);
@@ -2148,6 +2189,7 @@ export function CoordinatorRunPage() {
       const wpStatus = wp?.status ?? undefined;
       setCoordStatusField(statusField);
       setCoordStatusReason(reasonField);
+      setCoordinatorSteerable(typeof detail?.coordinator_steerable === 'boolean' ? detail.coordinator_steerable : undefined);
       setWorkPlanStatus(wpStatus);
       setRunLevelStatus(detail?.status ?? undefined);
       if (detail?.retried_from) setRetriedFrom(detail.retried_from);
@@ -2771,6 +2813,8 @@ export function CoordinatorRunPage() {
             ? (outcomePlanClarifying && !specConfirmed ? 'needs_clarification' : specConfirmed ? 'confirmed' : latestOutcomePlanEvent ? 'awaiting_confirmation' : outcomePlanDraftingActive ? 'drafting_outcome' : 'pending')
             : data.def.key === 'work_plan'
               ? (workPlanSeen ? 'completed' : 'pending')
+              : data.def.key === 'review' && orch.phase === 'in_review' && !viewState.terminal
+                ? 'awaiting_review'
               : data.state.status === 'started' ? 'running'
                 : data.state.status === 'completed' ? 'completed'
                   : data.state.status === 'failed' ? 'failed'
@@ -2838,7 +2882,7 @@ export function CoordinatorRunPage() {
       sessionNodeIds: new Set(sessionMeta.keys()),
       defaultSessionNodeId: rootMeta.nodeId,
     };
-  }, [displayNodes, latestOutcomePlanEvent, outcomePlanClarifying, outcomePlanDraftingActive, specConfirmed, workPlanSeen]);
+  }, [displayNodes, latestOutcomePlanEvent, orch.phase, outcomePlanClarifying, outcomePlanDraftingActive, specConfirmed, viewState.terminal, workPlanSeen]);
 
   const flatSessionTree = useMemo(() => flattenRunTree(sessionTree), [sessionTree]);
   const taskRows = flatSessionTree.filter((node) => node.nodeId !== defaultSessionNodeId);
@@ -3167,8 +3211,9 @@ export function CoordinatorRunPage() {
   }, [displayNodes, displayEdges2, graphHeight, dagContainerSize.width]);
 
   const effectiveGraphZoom = zoom;
-  // The toggle/stop endpoints 409 on a non-active run, so only offer them while the run is live.
-  const coordActive     = viewState.canStop;
+  // Stop/toggle endpoints still require an active run, but coordinator messaging uses the backend's
+  // explicit steerability bit so review-gated runs can receive operator instructions.
+  const coordActive = coordinatorSteerable === true || (coordinatorSteerable === undefined && viewState.canStop);
 
   // A run can be terminally finished at the RUN level (Failed/Declined/Merged) while its WorkPlan
   // status still reads `in_review` — e.g. a run interrupted by a pre-durability build. In that state
@@ -3260,7 +3305,6 @@ export function CoordinatorRunPage() {
         <CoordinatorSessionContext.Provider value={() => openPanelForNode('coordinator')}>
         <CoordExpandContext.Provider value={expandValue}>
         <CoordPanelContext.Provider value={openPanelForNode}>
-          <ZoomControls zoom={zoom} onZoomIn={zoomIn} onZoomOut={zoomOut} onFit={resetZoom} maxZoom={maxZoom} />
           <div
             className={`${styles.dagContainer} ${styles.topologyDag}`}
             ref={setDagViewportRef}
@@ -3273,6 +3317,9 @@ export function CoordinatorRunPage() {
             tabIndex={0}
             aria-label="Scrollable topology graph. Drag or scroll to inspect the execution flow."
           >
+            <div className={styles.topologyControlsOverlay} data-testid="topology-controls-overlay">
+              <ZoomControls zoom={zoom} onZoomIn={zoomIn} onZoomOut={zoomOut} onFit={resetZoom} maxZoom={maxZoom} />
+            </div>
             <div data-testid="topology-graph-canvas" style={{ zoom: effectiveGraphZoom, width: graphViewport.width, height: graphViewport.height }}>
               <ReactFlow
                 key={`${displayNodes.length}:${displayEdges2.length}:${graphHeight}:${dagContainerSize.width}:${dagContainerSize.height}:${[...expandedKeys].sort().join(',')}`}
@@ -3710,38 +3757,51 @@ export function CoordinatorRunPage() {
                 const indent = Math.max(0, item.depth) * 14;
                 const itemStateColor = semanticStateColorForStatus(item.status);
                 const itemStatusLabel = runTreeStatusLabel(item.status, item.nodeId === 'outcome-plan' ? outcomePlanConfirmedBy : undefined);
+                const actionNeeded = reviewActionable && item.status === 'awaiting_review';
                 return (
-                  <button
-                    key={item.nodeId}
-                    className={`${styles.runTreeRow} ${selected ? styles.runTreeRowSelected : ''}`}
-                    style={{ paddingLeft: `${8 + indent}px` }}
-                    onClick={() => openPanelForNode(item.nodeId)}
-                    title={`${item.label}${item.agentName ? ` · ${item.agentName}` : ''}`}
-                    aria-current={selected ? 'true' : undefined}
-                    aria-label={`Select ${item.label}: ${itemStatusLabel}`}
-                  >
-                    <span
-                      className={`${styles.runTreeStatusIcon} ${stateIconClass(itemStateColor)}`}
-                      data-testid="run-tree-status-icon"
-                      data-state-color={itemStateColor}
-                      aria-hidden="true"
+                  <div key={item.nodeId}>
+                    <button
+                      className={`${styles.runTreeRow} ${selected ? styles.runTreeRowSelected : ''} ${actionNeeded ? styles.runTreeRowActionNeeded : ''}`}
+                      style={{ paddingLeft: `${8 + indent}px` }}
+                      onClick={() => openPanelForNode(item.nodeId)}
+                      title={`${item.label}${item.agentName ? ` · ${item.agentName}` : ''}`}
+                      aria-current={selected ? 'true' : undefined}
+                      aria-label={`Select ${item.label}: ${itemStatusLabel}${actionNeeded ? '. Operator action needed.' : ''}`}
                     >
-                      {runTreeStatusIcon(item.status)}
-                    </span>
-                    <AgentAvatar name={item.agentName ?? item.label} size={24} circle />
-                    <span className={styles.treeText}>
-                      <Text className={styles.treePrimary}>{item.label}</Text>
-                      <Text className={styles.treeSecondary}>
-                        <span className={stateTextClass(itemStateColor)} data-state-color={itemStateColor}>{itemStatusLabel}</span>
-                        {' · '}
-                        {item.agentName
-                          ? `${item.agentName}${item.agentRole ? ` (${item.agentRole})` : ''}`
-                          : item.agentRole
-                            ? `Coordinator (${item.agentRole})`
-                            : 'Coordinator'}
-                      </Text>
-                    </span>
-                  </button>
+                      <span
+                        className={`${styles.runTreeStatusIcon} ${stateIconClass(itemStateColor)}`}
+                        data-testid="run-tree-status-icon"
+                        data-state-color={itemStateColor}
+                        aria-hidden="true"
+                      >
+                        {runTreeStatusIcon(item.status)}
+                      </span>
+                      <AgentAvatar name={item.agentName ?? item.label} size={24} circle />
+                      <span className={styles.treeText}>
+                        <Text className={styles.treePrimary}>
+                          {item.label}
+                          {actionNeeded && <span className={styles.runTreeActionPill}>Action needed</span>}
+                        </Text>
+                        <Text className={styles.treeSecondary}>
+                          <span className={stateTextClass(itemStateColor)} data-state-color={itemStateColor}>{itemStatusLabel}</span>
+                          {' · '}
+                          {item.agentName
+                            ? `${item.agentName}${item.agentRole ? ` (${item.agentRole})` : ''}`
+                            : item.agentRole
+                              ? `Coordinator (${item.agentRole})`
+                              : 'Coordinator'}
+                        </Text>
+                      </span>
+                    </button>
+                    {selected && actionNeeded && (
+                      <div className={styles.runTreeReviewCta} data-testid="run-tree-review-cta">
+                        <Text weight="semibold">Human review is waiting for your decision.</Text>
+                        <Button appearance="primary" size="small" icon={<DocumentRegular />} onClick={() => setArtifactsPanelOpen(true)}>
+                          Review changes
+                        </Button>
+                      </div>
+                    )}
+                  </div>
                 );
               })}
             </div>

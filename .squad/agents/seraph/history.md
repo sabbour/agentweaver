@@ -89,3 +89,7 @@ Seraph approved PR #184 for #183. The workflow-selection change reduced attack s
 
 ## 2026-07-05T20:40:00-07:00 — v0.7.11 release batch
 Removed project relink end-to-end to close arbitrary server-path exposure: frontend, REST endpoint, DTO, service/store mutation, MCP tool, and settings UI. Initial working-directory assignment remains only in create/import flows.
+
+
+## 2026-07-06 v0.9.0 staging wave
+- Re-reviewed the skills-import SSRF fix and cleared it green for release.

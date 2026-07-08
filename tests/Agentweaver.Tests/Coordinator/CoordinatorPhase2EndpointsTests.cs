@@ -10,6 +10,7 @@ using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Memory;
 using Agentweaver.Api.Runs;
 using Agentweaver.Domain;
+using Agentweaver.Tests.Casting;
 using Agentweaver.Tests.Helpers;
 
 namespace Agentweaver.Tests.Coordinator;
@@ -327,6 +328,30 @@ public sealed class CoordinatorPhase2EndpointsTests : IDisposable
             "the snake_case target_child_run_id from the request body must be bound to TargetChildRunId");
     }
 
+    [Fact]
+    public async Task Steer_Send_AwaitingAssemblyReviewCoordinator_Returns201_AndRunDetailIsSteerable()
+    {
+        var runId = await InsertInactiveCoordinatorRunAsync(
+            CoordinatorWebApplicationFactory.OwnerUser,
+            RunStatus.AwaitingReview);
+        await SeedWorkPlanAsync(runId, WorkPlanStatus.InReview, AssemblyStage.Review);
+
+        var detail = await _owner.GetFromJsonAsync<JsonElement>($"/api/runs/{runId}");
+        detail.GetProperty("status").GetString().Should().Be("awaiting_review");
+        detail.GetProperty("coordinator_steerable").GetBoolean().Should().BeTrue(
+            "an assembly human-review gate is parked but still operator-addressable");
+
+        var resp = await _owner.PostAsJsonAsync($"/api/runs/{runId}/steer",
+            new { kind = "send", instruction = "Please explain the assembly risk before I approve." });
+
+        resp.StatusCode.Should().Be(HttpStatusCode.Created,
+            "awaiting_review coordinator runs must accept steering messages during human review");
+        var directive = await resp.Content.ReadFromJsonAsync<SteeringDirectiveResponse>();
+        directive.Should().NotBeNull();
+        directive!.Kind.Should().Be("send");
+        directive.Status.Should().Be(SteeringStatus.Queued);
+    }
+
     // =========================================================================
     // Feature 008: coordinator orchestration status + failure reason surfacing.
     // A coordinator run parked at a terminal assembly status must expose the work-plan status on the
@@ -452,6 +477,7 @@ public sealed class CoordinatorPhase2EndpointsTests : IDisposable
             working_directory = dir,
         });
         resp.StatusCode.Should().Be(HttpStatusCode.Created);
+        SquadTestFixtureHelper.CreateMinimalSquad(dir, "Coordinator P2");
         var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
         return body.GetProperty("project_id").GetString()!;
     }
@@ -495,7 +521,9 @@ public sealed class CoordinatorPhase2EndpointsTests : IDisposable
     /// Inserts a coordinator-style run owned by <paramref name="ownerUser"/> with no live workflow
     /// and no work plan, mirroring the shape produced by StartCoordinatorRunAsync.
     /// </summary>
-    private async Task<string> InsertInactiveCoordinatorRunAsync(string ownerUser)
+    private async Task<string> InsertInactiveCoordinatorRunAsync(
+        string ownerUser,
+        RunStatus status = RunStatus.InProgress)
     {
         var runStore = _factory.Services.GetRequiredService<SqliteRunStore>();
         var runId = RunId.New();
@@ -507,7 +535,7 @@ public sealed class CoordinatorPhase2EndpointsTests : IDisposable
             ModelSource = ModelSource.GitHubCopilot,
             Task = "inactive coordinator run",
             SubmittingUser = ownerUser,
-            Status = RunStatus.InProgress,
+            Status = status,
             StartedAt = DateTimeOffset.UtcNow,
             AgentName = "Coordinator",
             ParentRunId = null,

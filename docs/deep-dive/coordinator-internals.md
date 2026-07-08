@@ -104,6 +104,16 @@ The durable artifacts are:
 - **Stale assembly blocks can clear.** If dispatch later observes every subtask eligible, it can advance `assembly_blocked -> awaiting_assembly` so a stale block does not latch forever (`apps/Agentweaver.Api/Coordinator/CoordinatorDispatchService.cs:479`).
 - **Provider choice is not dynamic on the live path.** The live coordinator path directly builds Copilot-backed agents; the Foundry dispatcher seam is plumbed but not active here.
 
+## Dispatchable-team guard layers
+
+Coordinator orchestration no longer invents a default worker when a project has no cast team. The guard is layered so every entry point fails visibly instead of starting teamless work:
+
+1. **Interactive start.** `StartCoordinatorRunAsync` calls `CoordinatorRosterGuard.EnsureDispatchableTeam` before the coordinator run row is inserted (`apps/Agentweaver.Api/Coordinator/CoordinatorRunService.cs:111`, `:125`). The project endpoint maps `NoTeamException` to `409 no_team` and `InvalidTeamException` to `422 invalid_team` (`apps/Agentweaver.Api/Endpoints/ProjectEndpoints.cs:486`).
+2. **Backlog pickup.** `CoordinatorPickupService` checks the same guard before activating a Ready backlog task. If the roster is absent or unreadable, it atomically reserves a failed coordinator run with result `no_team` or `invalid_team` and returns before any Core Implementer child work can start (`apps/Agentweaver.Api/Coordinator/CoordinatorPickupService.cs:79`, `:106`, `:121`).
+3. **Executor defense.** The orchestrator resolves the roster from the same dispatchable-member predicate and fails the coordinator run with `no_team` if no candidate remains, rather than falling back to a fabricated worker (`apps/Agentweaver.Api/Coordinator/CoordinatorOrchestratorExecutor.cs:140`, `:716`). The predicate requires an active member with a role, then rejects Scribe, Ralph, RAI, and Build & Test names/roles (`apps/Agentweaver.Api/Coordinator/CoordinatorRosterGuard.cs:54`, `apps/Agentweaver.Api/Coordinator/CoordinatorOrchestratorExecutor.cs:687`, `:750`).
+
+This preserves the coordinator's model: casting defines who can do work; orchestration only decomposes and assigns work to that real team.
+
 ## Coordinator state machine
 
 There are two overlapping state machines: the parent run status and the WorkPlan status. The WorkPlan is the more precise coordinator-internal state after planning.

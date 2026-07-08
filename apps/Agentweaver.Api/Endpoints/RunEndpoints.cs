@@ -182,6 +182,7 @@ app.MapGet("/api/runs/{id}", async (
         RetriedFrom = run.RetriedFrom,
         CoordinatorStatus = coordinatorStatus,
         CoordinatorStatusReason = isCoordinatorRun ? run.Result : null,
+        CoordinatorSteerable = isCoordinatorRun && CoordinatorSteeringService.IsSteerableRunStatus(run.Status),
         AutoApproveTools = runOptions.Get(run.Id.ToString()).AutoApproveTools,
         Autopilot = runOptions.Get(run.Id.ToString()).Autopilot,
         ArchivedAt = run.ArchivedAt,
@@ -1324,6 +1325,15 @@ app.MapPost("/api/runs/{id}/retry", async (
             await orchestrator.StartRunAsync(newRun, ct).ConfigureAwait(false);
             newRunId = newRun.Id;
         }
+    }
+    catch (NoTeamException)
+    {
+        return Results.Conflict(new { error = NoTeamException.ErrorCode, message = NoTeamException.DefaultMessage });
+    }
+    catch (InvalidTeamException ex)
+    {
+        logger.LogError(ex, "Failed to read dispatchable team roster while retrying source run {RunId}", runId);
+        return Results.UnprocessableEntity(new { error = InvalidTeamException.ErrorCode, message = InvalidTeamException.DefaultMessage });
     }
     catch (Exception ex)
     {

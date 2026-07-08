@@ -122,6 +122,8 @@ public sealed class CoordinatorRunService
         string? retriedFrom = null,
         CoordinatorStartMode startMode = CoordinatorStartMode.DefineOutcome)
     {
+        CoordinatorRosterGuard.EnsureDispatchableTeam(repositoryPath);
+
         var runId = RunId.New();
         var now = DateTimeOffset.UtcNow;
 
@@ -170,6 +172,8 @@ public sealed class CoordinatorRunService
     public async Task<RunId> StartRetriedPickupCoordinatorRunAsync(
         Run source, bool autoApproveTools, bool autopilot, CancellationToken ct)
     {
+        CoordinatorRosterGuard.EnsureDispatchableTeam(source.RepositoryPath);
+
         var runId = RunId.New();
         var now = DateTimeOffset.UtcNow;
 

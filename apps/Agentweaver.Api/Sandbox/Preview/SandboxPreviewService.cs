@@ -432,13 +432,29 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
     /// Resolves the run's bound sandbox pod name from <b>cluster state</b> (the run's SandboxClaim
     /// <c>status</c>), NOT from the in-process pod registry. The registry is only populated on the
     /// replica that launched the pod, so on a multi-replica deployment a preview-start request
-    /// hitting the other replica would otherwise spuriously fail. Reading the claim is replica-safe:
-    /// every replica sees the same claim status. Returns <see langword="null"/> when the claim is
-    /// missing or not yet bound (a correct, deterministic "not ready" for ALL replicas).
+    /// hitting the other replica would otherwise spuriously fail. Reading the claim is replica-safe.
+    /// Preview supports both retained claim conventions for the same run: AgentHost pod-per-run
+    /// claims (<c>agent-*</c>) and in-process command sandbox claims (<c>run-*</c>). Returns
+    /// <see langword="null"/> when neither claim is bound.
     /// </summary>
     private async Task<string?> ResolveBoundPodNameAsync(string runId, CancellationToken ct)
     {
-        var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
+        foreach (var claimName in new[]
+        {
+            SandboxClaimConventions.DeriveAgentHostClaimName(runId),
+            SandboxClaimConventions.DeriveRunCommandClaimName(runId),
+        }.Distinct(StringComparer.Ordinal))
+        {
+            var podName = await TryResolveBoundPodNameFromClaimAsync(claimName, ct).ConfigureAwait(false);
+            if (!string.IsNullOrEmpty(podName))
+                return podName;
+        }
+
+        return null;
+    }
+
+    private async Task<string?> TryResolveBoundPodNameFromClaimAsync(string claimName, CancellationToken ct)
+    {
         try
         {
             var raw = await _client!.CustomObjects.GetNamespacedCustomObjectAsync(
@@ -450,7 +466,6 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
         }
         catch (HttpOperationException ex) when (ex.Response?.StatusCode == System.Net.HttpStatusCode.NotFound)
         {
-            // No claim for this run yet (or already released) — not ready, deterministically.
             return null;
         }
     }

@@ -152,7 +152,10 @@ public sealed class CollectiveAssemblyPipeline : ICollectiveAssemblyPipeline
             createSubStream: _workflowFactory.CreateSubStreamWriter,
             completeSubStream: _workflowFactory.CompleteSubStream,
             agentFactory: _workflowFactory.AgentFactory,
-            agentId: request.AgentId);
+            agentId: request.AgentId,
+            projectId: request.ProjectId,
+            apiBaseUrl: _workflowFactory.ApiBaseUrl,
+            apiKey: _workflowFactory.ApiKey);
 
         try
         {
@@ -171,7 +174,9 @@ public sealed class CollectiveAssemblyPipeline : ICollectiveAssemblyPipeline
                 RepositoryPath: request.RepositoryPath,
                 OriginatingBranch: string.Empty,
                 ContentSafetyFlagged: false,
-                SubmittingUser: request.SubmittingUser);
+                SubmittingUser: request.SubmittingUser,
+                ProjectId: request.ProjectId,
+                AgentName: request.AgentId);
 
             var decision = await buildTest.HandleAsync(input, NoOpWorkflowContext.Instance, ct).ConfigureAwait(false);
             return new CollectiveGateDecision(decision.Approved, decision.RequestChanges, decision.Feedback);

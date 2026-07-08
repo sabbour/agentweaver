@@ -171,6 +171,14 @@ public sealed record RunResponse
     public string? CoordinatorStatusReason { get; init; }
 
     /// <summary>
+    /// True when a COORDINATOR run can accept steering/messages. Human-review parking
+    /// (<c>awaiting_review</c>) is intentionally steerable so operators can talk to the
+    /// coordinator while the collective assembly gate is open.
+    /// </summary>
+    [JsonPropertyName("coordinator_steerable")]
+    public bool CoordinatorSteerable { get; init; }
+
+    /// <summary>
     /// Current value of the per-run <c>auto-approve-tools</c> option (allow-with-approval tool
     /// requests are auto-granted at the HITL gate; policy denies are unaffected). Reflects launch
     /// value and any live toggle. (Feature 008)

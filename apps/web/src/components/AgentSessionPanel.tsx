@@ -37,7 +37,7 @@ import rehypeSanitize from 'rehype-sanitize';
 import { apiClient } from '../api/apiClient';
 import { useRunStream, type EventType, type RunStreamEvent } from '../api/sse';
 import { formatApiErrorMessage } from '../api/errors';
-import type { WorkspaceFileEntry, WorkspaceNode } from '../api/types';
+import type { RaiVerdictEventPayload, RaiVerdictToken, WorkspaceFileEntry, WorkspaceNode } from '../api/types';
 import { useArtifactBrowser, type ArtifactBrowserAdapter } from '../hooks/useArtifactBrowser';
 import { mergeRunEvents as sharedMergeRunEvents, SEED_STATUSES } from '../timeline/mergeRunEvents';
 import { AgentAvatar } from './AgentAvatar';
@@ -1090,6 +1090,7 @@ function statusLabel(status: string): string {
     case 'in_progress': return 'Running';
     case 'assemble_ready': return 'Ready for assembly';
     case 'awaiting_assembly': return 'Preparing assembly';
+    case 'awaiting_review': return 'Awaiting review';
     case 'awaiting_confirmation': return 'Awaiting confirmation';
     case 'needs_clarification': return 'Needs clarification';
     case 'confirmed': return 'Confirmed';
@@ -1124,6 +1125,7 @@ function statusKind(status: string): StatusKind {
     case 'rai_flagged':
     case 'waiting':
     case 'awaiting_confirmation':
+    case 'awaiting_review':
     case 'needs_clarification':
       return 'awaiting';
     case 'running':
@@ -1143,6 +1145,106 @@ function StatusGlyph({ status, className }: { status: string; className?: string
   if (kind === 'awaiting') return <ClockRegular className={className} />;
   if (kind === 'running') return <Spinner size="extra-tiny" className={className} />;
   return <CircleRegular className={className} />;
+}
+
+const TERMINAL_EMPTY_STATUSES = new Set(['completed', 'merged', 'confirmed', 'assemble_ready', 'failed', 'merge_failed', 'declined']);
+
+interface RaiVerdict {
+  verdict?: RaiVerdictToken;
+  rationale?: string;
+}
+
+type RaiVerdictPresentation = {
+  intent: 'success' | 'warning' | 'error' | 'info';
+  label: string;
+  emoji: string;
+};
+
+const RAI_VERDICT_PRESENTATION: Record<RaiVerdictToken, RaiVerdictPresentation> = {
+  red:    { intent: 'error',   label: 'Red',    emoji: '🔴' },
+  revise: { intent: 'warning', label: 'Revise', emoji: '🟡' },
+  yellow: { intent: 'warning', label: 'Yellow', emoji: '🟡' },
+  green:  { intent: 'success', label: 'Green',  emoji: '🟢' },
+};
+
+const UNKNOWN_RAI_VERDICT_PRESENTATION: RaiVerdictPresentation = {
+  intent: 'info',
+  label: 'Unknown',
+  emoji: '⚪',
+};
+
+function parseRaiVerdictToken(value: string | undefined): RaiVerdictToken | undefined {
+  if (value === 'green' || value === 'yellow' || value === 'red' || value === 'revise') return value;
+  return undefined;
+}
+
+function isAssemblyAggregateNode(item: RunSessionTree | FlatTreeNode | null | undefined): boolean {
+  if (!item) return false;
+  const key = `${item.nodeId} ${item.label}`.toLowerCase();
+  return key.includes('assembly-rai')
+    || key.includes('assembly-review')
+    || key.includes('assembly-merge')
+    || key.includes('assembly-scribe')
+    || /\brai\b/.test(key)
+    || key.includes('human review')
+    || /\bmerge\b/.test(key)
+    || /\bscribe\b/.test(key);
+}
+
+function isRaiNode(item: RunSessionTree | FlatTreeNode | null | undefined): boolean {
+  if (!item) return false;
+  const key = `${item.nodeId} ${item.label}`.toLowerCase();
+  return key.includes('assembly-rai') || /\brai\b/.test(key);
+}
+
+function latestRaiVerdict(events: RunStreamEvent[]): RaiVerdict | null {
+  for (let i = events.length - 1; i >= 0; i -= 1) {
+    const evt = events[i];
+    if (evt.type !== 'rai.verdict') continue;
+    const payload = evt.payload as Partial<RaiVerdictEventPayload>;
+    const rawVerdict = typeof payload.verdict === 'string' ? payload.verdict : undefined;
+    return {
+      verdict: parseRaiVerdictToken(rawVerdict),
+      rationale: typeof payload.rationale === 'string'
+        ? payload.rationale
+        : readString(evt.payload, ['message', 'summary']),
+    };
+  }
+  return null;
+}
+
+function RaiVerdictCard({ verdict }: { verdict: RaiVerdict }) {
+  const presentation = verdict.verdict
+    ? RAI_VERDICT_PRESENTATION[verdict.verdict]
+    : UNKNOWN_RAI_VERDICT_PRESENTATION;
+  return (
+    <MessageBar intent={presentation.intent} data-testid="rai-verdict-card" data-intent={presentation.intent}>
+      <MessageBarBody>
+        RAI verdict: {presentation.emoji} {presentation.label}
+        {verdict.rationale ? ` — ${verdict.rationale}` : ''}
+      </MessageBarBody>
+    </MessageBar>
+  );
+}
+
+function EmptySessionStatusFallback({ item }: { item: RunSessionTree }) {
+  const styles = useStyles();
+  const label = statusLabel(item.status);
+  const duration = formatNodeDuration(item.startedAt, item.completedAt);
+  const isTerminal = TERMINAL_EMPTY_STATUSES.has(item.status);
+
+  if (!isTerminal) {
+    return <Text className={styles.emptyState}>No streamed messages yet for this session.</Text>;
+  }
+
+  return (
+    <MessageBar intent={statusKind(item.status) === 'danger' ? 'error' : 'success'}>
+      <MessageBarBody>
+        {item.label} {label.toLowerCase()}
+        {duration ? ` in ${duration}` : ''}. No chat messages were emitted for this completed platform gate.
+      </MessageBarBody>
+    </MessageBar>
+  );
 }
 
 function formatNodeDuration(startedAt?: number, completedAt?: number): string | null {
@@ -1607,8 +1709,9 @@ export function AgentSessionPanel({
     () => flatTree.find((item) => item.nodeId === selectedNodeId) ?? flatTree[0] ?? null,
     [flatTree, selectedNodeId],
   );
+  const selectedIsAssemblyAggregate = isAssemblyAggregateNode(selectedItem);
   const selectedRunId = selectedItem
-    ? (selectedItem.isCoordinator || selectedItem.nodeId === 'outcome-plan' || selectedItem.nodeId === 'work-plan' ? coordinatorRunId : (selectedItem.childRunId ?? ''))
+    ? (selectedItem.isCoordinator || selectedItem.nodeId === 'outcome-plan' || selectedItem.nodeId === 'work-plan' || selectedIsAssemblyAggregate ? coordinatorRunId : (selectedItem.childRunId ?? ''))
     : '';
 
   // Coordinator-aggregate nodes (coordinator itself, work-plan, outcome-plan) own no worktree —
@@ -1617,7 +1720,8 @@ export function AgentSessionPanel({
   const isCoordinatorAggregate = !!selectedItem
     && (selectedItem.isCoordinator
       || selectedItem.nodeId === 'work-plan'
-      || selectedItem.nodeId === 'outcome-plan');
+      || selectedItem.nodeId === 'outcome-plan'
+      || selectedIsAssemblyAggregate);
   const effectiveAdapter = useMemo(
     () => (isCoordinatorAggregate ? artifactAdapter : undefined),
     [isCoordinatorAggregate, artifactAdapter],
@@ -1657,6 +1761,10 @@ export function AgentSessionPanel({
 
   const { events: liveEvents } = useRunStream(open && canBrowseSelectedRun ? selectedRunId : '');
   const events = useMemo(() => mergeRunEvents(seedEvents, liveEvents), [seedEvents, liveEvents]);
+  const selectedRaiVerdict = useMemo(
+    () => (isRaiNode(selectedItem) ? latestRaiVerdict(events) : null),
+    [events, selectedItem],
+  );
   const turns = useMemo(
     () => selectedItem?.isCoordinator || selectedItem?.nodeId === 'work-plan' ? buildCoordinatorTurns(events) : buildTurns(events),
     [events, selectedItem?.isCoordinator, selectedItem?.nodeId],
@@ -2018,8 +2126,13 @@ export function AgentSessionPanel({
                         onClarifyPlan={focusOutcomePlanClarification}
                         clarificationSent={selectedItem.status === 'needs_clarification'}
                       />
-                    ) : !runDetailLoading && turns.length === 0 && (
-                      <Text className={styles.emptyState}>No streamed messages yet for this session.</Text>
+                    ) : (
+                      <>
+                        {selectedRaiVerdict && <RaiVerdictCard verdict={selectedRaiVerdict} />}
+                        {!runDetailLoading && turns.length === 0 && !selectedRaiVerdict && (
+                          <EmptySessionStatusFallback item={selectedItem} />
+                        )}
+                      </>
                     )}
                     {selectedItem.nodeId !== 'outcome-plan' &&
                       (showTechnical ? turns : turns.filter(turnHasSignalContent)).map((turn) => (

@@ -4,7 +4,9 @@ using System.Text.Json;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using Agentweaver.Api.Coordinator;
+using Agentweaver.Api.Infrastructure;
 using Agentweaver.Domain;
+using Agentweaver.Tests.Casting;
 using Agentweaver.Tests.Helpers;
 
 namespace Agentweaver.Tests.Coordinator;
@@ -146,7 +148,52 @@ public sealed class CoordinatorPickupRunIdTests : IDisposable
         finalRun.StatusCode.Should().Be(HttpStatusCode.OK, "the coordinator run stays resolvable by run_id end-to-end");
     }
 
-    private async Task<string> CreateProjectAsync()
+    [Fact]
+    public async Task BacklogPickup_TeamlessProject_IsRefused_WithNoTeamRun_AndNoCoreImplementer()
+    {
+        var projectId = await CreateProjectAsync(seedTeam: false);
+        var pid = ProjectId.Parse(projectId);
+        var backlogStore = _factory.Services.GetRequiredService<IBacklogTaskStore>();
+        var task = new BacklogTask
+        {
+            Id          = BacklogTaskId.New(),
+            ProjectId   = pid,
+            Title       = "Pickup must refuse teamless project",
+            Description = "no team should block pickup",
+            State       = BacklogTaskState.Ready,
+            OrderKey    = "n",
+            CapturedBy  = CoordinatorWebApplicationFactory.OwnerUser,
+            CreatedAt   = DateTimeOffset.UtcNow,
+            CommittedAt = DateTimeOffset.UtcNow,
+            ClaimedAt   = null,
+            RunId       = null,
+        };
+        await backlogStore.InsertAsync(task);
+
+        var projectStore = _factory.Services.GetRequiredService<IProjectStore>();
+        var project = await projectStore.GetAsync(pid);
+        project.Should().NotBeNull();
+
+        var pickupService = _factory.Services.GetRequiredService<CoordinatorPickupService>();
+        await pickupService.TryPickupAsync(project!, task, CancellationToken.None);
+
+        var unchanged = await backlogStore.GetAsync(pid, task.Id);
+        unchanged!.State.Should().Be(BacklogTaskState.Claimed,
+            "teamless pickup records an explicit blocked run so the board shows why pickup stopped");
+        unchanged.RunId.Should().NotBeNull();
+
+        var runStore = _factory.Services.GetRequiredService<IRunStore>();
+        var run = await runStore.GetAsync(unchanged.RunId!.Value);
+        run.Should().NotBeNull();
+        run!.Status.Should().Be(RunStatus.Failed);
+        run.Result.Should().Be("no_team");
+        run.EndedAt.Should().NotBeNull();
+        run.AgentName.Should().Be("Coordinator");
+        run.Task.Should().Contain("Pickup must refuse teamless project");
+        run.Task.Should().NotContain("Core Implementer");
+    }
+
+    private async Task<string> CreateProjectAsync(bool seedTeam = true)
     {
         var dir = _factory.NewWorkingDirectory();
         var resp = await _owner.PostAsJsonAsync("/api/projects", new
@@ -156,6 +203,8 @@ public sealed class CoordinatorPickupRunIdTests : IDisposable
             working_directory = dir,
         });
         resp.StatusCode.Should().Be(HttpStatusCode.Created, "the test project must be created");
+        if (seedTeam)
+            SquadTestFixtureHelper.CreateMinimalSquad(dir, "Pickup Test");
         var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
         return body.GetProperty("project_id").GetString()!;
     }

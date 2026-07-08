@@ -38,6 +38,9 @@ public sealed class BuildTestTurnExecutor : Executor<AgentTurnOutput, WorkflowRe
     private readonly Func<string, string, ChannelWriter<RunEvent>>? _createSubStream;
     private readonly Action<string>? _completeSubStream;
     private readonly IWorkflowAgentFactory? _agentFactory;
+    private readonly string? _projectId;
+    private readonly string? _apiBaseUrl;
+    private readonly string? _apiKey;
     private readonly string _agentId;
 
     public BuildTestTurnExecutor(
@@ -55,7 +58,10 @@ public sealed class BuildTestTurnExecutor : Executor<AgentTurnOutput, WorkflowRe
         Func<string, string, ChannelWriter<RunEvent>>? createSubStream = null,
         Action<string>? completeSubStream = null,
         IWorkflowAgentFactory? agentFactory = null,
-        string? agentId = null)
+        string? agentId = null,
+        string? projectId = null,
+        string? apiBaseUrl = null,
+        string? apiKey = null)
         : base(name)
     {
         LogicalNodeId = logicalNodeId;
@@ -72,6 +78,9 @@ public sealed class BuildTestTurnExecutor : Executor<AgentTurnOutput, WorkflowRe
         _createSubStream = createSubStream;
         _completeSubStream = completeSubStream;
         _agentFactory = agentFactory;
+        _projectId = string.IsNullOrWhiteSpace(projectId) ? null : projectId.Trim();
+        _apiBaseUrl = apiBaseUrl;
+        _apiKey = apiKey;
         _agentId = string.IsNullOrWhiteSpace(agentId) ? "qa-engineer" : agentId.Trim();
     }
 
@@ -103,14 +112,14 @@ public sealed class BuildTestTurnExecutor : Executor<AgentTurnOutput, WorkflowRe
             await agent.SetupAsync(
                 worktree,
                 input.RepositoryPath,
-                subRunId,
+                input.RunId,
                 modelId: null,
                 systemPromptContext: null,
                 streamWriter: subWriter,
-                projectId: null,
+                projectId: _projectId ?? input.ProjectId,
                 agentName: _agentId,
-                apiBaseUrl: null,
-                apiKey: null,
+                apiBaseUrl: _apiBaseUrl,
+                apiKey: _apiKey,
                 ct,
                 input.SubmittingUser).ConfigureAwait(false);
 

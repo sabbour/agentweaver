@@ -122,6 +122,7 @@ export type EventType =
   | 'coordinator.integration_conflict_auto_resolved'
   | 'coordinator.assembly_rai_started'
   | 'coordinator.assembly_rai_completed'
+  | 'rai.verdict'
   | 'coordinator.assembly_review_requested'
   | 'coordinator.assembly_review_approved'
   | 'coordinator.assembly_review_preserved'

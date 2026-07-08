@@ -6,6 +6,17 @@ The coordinator is itself an observable, streamed, human-accountable run (`agent
 
 This page documents the Phase 1 outcome-spec flow, the Phase 2 orchestration capabilities (decomposition, child dispatch, observation, topology events, and steering), and the Phase 3 collective assembly terminal-status surfaces (how a coordinator run reports its orchestration status and a human-readable reason on every terminal path).
 
+## Start contract and team requirement
+
+`POST /api/projects/{id}/orchestrations` starts a coordinator run only after the project has a dispatchable cast team. The HTTP endpoint maps the guard into two explicit client contracts (`apps/Agentweaver.Api/Endpoints/ProjectEndpoints.cs:429`, `:486`):
+
+| Status | Body | Meaning |
+| --- | --- | --- |
+| `409 Conflict` | `{ "error": "no_team", "message": "This project has no team. Cast a team before starting an orchestration." }` | No active, dispatchable team member exists. |
+| `422 Unprocessable Entity` | `{ "error": "invalid_team", "message": "The project team roster could not be read. Fix the team before starting an orchestration." }` | The roster could not be parsed/read. |
+
+The guard reads the same `.squad` team source the dispatcher uses: `EnsureDispatchableTeam` calls `SquadReader.ReadTeam`, requires at least one member that is `Active`, has a non-null role, and passes the built-in-agent deny list (`apps/Agentweaver.Api/Coordinator/CoordinatorRosterGuard.cs:30`, `:37`, `:54`; `apps/Agentweaver.Api/Coordinator/CoordinatorOrchestratorExecutor.cs:687`, `:750`). Platform-owned Scribe, Ralph, RAI, and Build & Test roles do not count as worker capacity.
+
 ## What it is (and is not)
 
 The coordinator is orchestration-only. It MUST NOT reimplement any platform capability. The following capabilities stay owned by their existing features; the coordinator reuses them and never duplicates them:
@@ -213,7 +224,7 @@ Because these events ride the coordinator run's ordinary event stream, the live 
 
 ### Steering verbs
 
-A user steers the coordinator while subagents run, and the coordinator relays the direction to the targeted child run(s) via `POST /api/runs/{id}/steer` or the `coordinator_steer` MCP tool. The verbs carry the following semantics:
+A user steers the coordinator while subagents run or while the coordinator is parked at collective human review. `GET /api/runs/{id}` exposes `coordinator_steerable: true` for coordinator runs in `in_progress` or `awaiting_review`, and the web client uses that field to keep the coordinator message composer enabled during review (`apps/Agentweaver.Api/Contracts/Dtos.cs:178`, `apps/Agentweaver.Api/Coordinator/CoordinatorSteeringService.cs:348`, `apps/web/src/api/types.ts:81`). The coordinator relays direction to targeted child run(s) via `POST /api/runs/{id}/steer` or the `coordinator_steer` MCP tool. The verbs carry the following semantics:
 
 | Verb | Effect | Timing |
 | --- | --- | --- |
@@ -258,6 +269,7 @@ This is the no-partial-assembly gate: if any subtask is still ineligible, includ
 A coordinator run stays `in_progress` for the whole dispatch-plus-assembly window (its stream stays open), so the bare `RunStatus` is not enough for a UI to describe where the orchestration is. Two surfaces fix this:
 
 - **`coordinator_status`** — the current `WorkPlan.Status` (`dispatching`, `awaiting_assembly`, `assembling`, `in_review`, `complete`, `assembly_blocked`, `assembly_failed`, `assembly_declined`) is added to each coordinator run on `GET /api/projects/{id}/runs` and `GET /api/runs/{id}`. It is `null` for normal runs. The UI renders this (for example "Awaiting assembly", "In review") instead of the bare `status`.
+- **`coordinator_steerable`** — `true` on `GET /api/runs/{id}` for coordinator runs whose parent run status can still accept operator messages: `in_progress` and `awaiting_review`. This keeps steering and free-form coordinator messaging available while the assembly human-review gate is open.
 - **Terminal status with a reason** — every terminal assembly path moves the coordinator run to a terminal `RunStatus` AND records a human-readable `result` (the reason): `assembly_blocked: <reason>` (Failed), `assembly_merge_failed: <reason>` (MergeFailed), `assembly_declined` (Declined), `assembly_error: <message>` (Failed, unexpected fault in the assembly background task), or `assembly_complete` (Completed). The work plan moves to a matching terminal `WorkPlanStatus` so the topology coordinator node reflects it. The same `result` is exposed as `statusReason` on `GET /api/runs/{coordinatorRunId}/work-plan`. A user is never left with a bare "Failed" and no next action.
 
 ## Surviving a process restart

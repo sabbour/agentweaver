@@ -7,6 +7,7 @@ using Agentweaver.Api.Auth;
 using Agentweaver.AgentRuntime.Workflow;
 using Agentweaver.Domain;
 using k8s;
+using k8s.Autorest;
 using Agentweaver.SandboxExec;
 using Microsoft.Extensions.Logging;
 
@@ -203,10 +204,9 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
     {
         // Use the Agentweaver run ID as the claim name when available so the pod can be
         // looked up by run ID later (preview port-forward). Fall back to a random ID.
-        string claimBase = string.IsNullOrEmpty(command.AgentweaverRunId)
-            ? Guid.NewGuid().ToString("N")[..16]
-            : command.AgentweaverRunId.Replace("-", "")[..Math.Min(16, command.AgentweaverRunId.Replace("-", "").Length)];
-        var claimName = $"run-{claimBase}";
+        var claimName = string.IsNullOrEmpty(command.AgentweaverRunId)
+            ? $"run-{Guid.NewGuid():N}"[..20]
+            : SandboxClaimConventions.DeriveRunCommandClaimName(command.AgentweaverRunId);
 
         var requestedTimeoutMs = command.TimeoutMs > 0
             ? command.TimeoutMs
@@ -246,8 +246,7 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
         {
             _logger.LogInformation(
                 "KubernetesSandboxExecutor: creating SandboxClaim {Claim}", claimName);
-            await CreateClaimAsync(claimName, token);
-            claimCreated = true;
+            claimCreated = await CreateClaimAsync(claimName, token);
 
             var podName = await WaitForBoundAsync(claimName, token);
             _logger.LogInformation(
@@ -332,8 +331,7 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
             // Bind to the SHARED, pre-warmed AgentHost warm pool (replicas: 2). No per-run SPC,
             // SandboxTemplate, or warm pool — the pod is already warm and gets its per-run context
             // via the /configure POST below.
-            await CreateAgentHostClaimAsync(claimName, _options.AgentHostWarmPoolRef, ct).ConfigureAwait(false);
-            claimCreated = true;
+            claimCreated = await CreateAgentHostClaimAsync(claimName, _options.AgentHostWarmPoolRef, ct).ConfigureAwait(false);
 
             var podName = await WaitForBoundAsync(claimName, ct).ConfigureAwait(false);
             _logger.LogInformation(
@@ -484,7 +482,7 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
     /// KV secret name) is delivered after bind via <c>POST /configure</c>
     /// (<see cref="CallAgentHostConfigureAsync"/>).
     /// </summary>
-    private Task CreateAgentHostClaimAsync(
+    private async Task<bool> CreateAgentHostClaimAsync(
         string claimName, string warmPoolName, CancellationToken ct)
     {
         var manifest = new
@@ -502,9 +500,20 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
             },
         };
 
-        return _client.CustomObjects.CreateNamespacedCustomObjectAsync(
-            manifest, ApiGroup, ApiVersion, _options.Namespace, ClaimPlural,
-            cancellationToken: ct);
+        try
+        {
+            await _client.CustomObjects.CreateNamespacedCustomObjectAsync(
+                manifest, ApiGroup, ApiVersion, _options.Namespace, ClaimPlural,
+                cancellationToken: ct).ConfigureAwait(false);
+            return true;
+        }
+        catch (HttpOperationException ex) when (ex.Response?.StatusCode == System.Net.HttpStatusCode.Conflict)
+        {
+            _logger.LogInformation(
+                "KubernetesSandboxExecutor: SandboxClaim {Claim} already exists; waiting for existing claim",
+                claimName);
+            return false;
+        }
     }
 
     /// <summary>
@@ -710,7 +719,7 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
 
     // ── Claim management ──────────────────────────────────────────────────────────
 
-    private Task CreateClaimAsync(string claimName, CancellationToken ct)
+    private async Task<bool> CreateClaimAsync(string claimName, CancellationToken ct)
     {
         // The cluster service CIDR must be present in SandboxEgressCidrExclusions so
         // sandbox NetworkPolicy does not accidentally allow in-cluster service egress.
@@ -729,9 +738,20 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
             },
         };
 
-        return _client.CustomObjects.CreateNamespacedCustomObjectAsync(
-            manifest, ApiGroup, ApiVersion, _options.Namespace, ClaimPlural,
-            cancellationToken: ct);
+        try
+        {
+            await _client.CustomObjects.CreateNamespacedCustomObjectAsync(
+                manifest, ApiGroup, ApiVersion, _options.Namespace, ClaimPlural,
+                cancellationToken: ct).ConfigureAwait(false);
+            return true;
+        }
+        catch (HttpOperationException ex) when (ex.Response?.StatusCode == System.Net.HttpStatusCode.Conflict)
+        {
+            _logger.LogInformation(
+                "KubernetesSandboxExecutor: SandboxClaim {Claim} already exists; waiting for existing claim",
+                claimName);
+            return false;
+        }
     }
 
     /// <summary>

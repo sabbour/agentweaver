@@ -66,6 +66,7 @@ public sealed record CollectiveRubberduckRequest(
 /// <summary>Inputs to the collective Build & Test gate.</summary>
 public sealed record CollectiveBuildTestRequest(
     string CoordinatorRunId,
+    string? ProjectId,
     string RepositoryPath,
     string IntegrationBranch,
     string AggregateTreeHash,

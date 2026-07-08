@@ -130,7 +130,9 @@ public sealed class AgentTurnExecutor : Executor<AgentTurnInput, AgentTurnOutput
                 input.OriginatingBranch,
                 ContentSafetyFlagged: true,
                 Iteration: input.Iteration,
-                SubmittingUser: input.SubmittingUser);
+                SubmittingUser: input.SubmittingUser,
+                ProjectId: input.ProjectId,
+                AgentName: input.AgentName);
         }
 
         string treeHash;
@@ -162,7 +164,9 @@ public sealed class AgentTurnExecutor : Executor<AgentTurnInput, AgentTurnOutput
             input.OriginatingBranch,
             ContentSafetyFlagged: false,
             Iteration: input.Iteration,
-            SubmittingUser: input.SubmittingUser);
+            SubmittingUser: input.SubmittingUser,
+            ProjectId: input.ProjectId,
+            AgentName: input.AgentName);
     }
 
     private static bool IsContentSafetyViolation(Exception ex)

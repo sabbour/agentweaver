@@ -11,6 +11,7 @@ using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Memory;
 using Agentweaver.Api.Runs;
 using Agentweaver.Domain;
+using Agentweaver.Tests.Casting;
 using Agentweaver.Tests.Helpers;
 
 namespace Agentweaver.Tests.Coordinator;
@@ -485,11 +486,70 @@ public sealed class CoordinatorOutcomeSpecTests : IDisposable
         resp.StatusCode.Should().Be(HttpStatusCode.BadRequest);
     }
 
+    [Fact]
+    public async Task StartOrchestration_TeamlessProject_Returns409NoTeam_AndCreatesNoRun()
+    {
+        var projectId = await CreateProjectAsync(seedTeam: false);
+        var pid = ProjectId.Parse(projectId);
+        var runStore = _factory.Services.GetRequiredService<IRunStore>();
+        (await runStore.GetRunsByProjectAsync(pid)).Should().BeEmpty("precondition: project starts with no runs");
+
+        var resp = await _owner.PostAsJsonAsync(
+            $"/api/projects/{projectId}/orchestrations", new { goal = "build without a team" });
+
+        resp.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("error").GetString().Should().Be("no_team");
+        body.GetProperty("message").GetString()
+            .Should().Be("This project has no team. Cast a team before starting an orchestration.");
+        (await runStore.GetRunsByProjectAsync(pid)).Should().BeEmpty(
+            "the start guard must reject before creating a misleading coordinator run");
+    }
+
+    [Fact]
+    public async Task StartOrchestration_UnreadableTeamRoster_Returns422InvalidTeam_AndCreatesNoRun()
+    {
+        var projectId = await CreateProjectAsync(seedTeam: false);
+        var pid = ProjectId.Parse(projectId);
+        var project = await _factory.Services.GetRequiredService<IProjectStore>().GetAsync(pid);
+        project.Should().NotBeNull();
+
+        var squadDir = Path.Combine(project!.WorkingDirectory, ".squad");
+        Directory.CreateDirectory(Path.Combine(squadDir, "casting"));
+        await File.WriteAllTextAsync(Path.Combine(squadDir, "casting", "registry.json"), "{}");
+        await File.WriteAllTextAsync(Path.Combine(squadDir, "casting-registry.json"), "{\"members\":{\"x\":{}}}");
+
+        var runStore = _factory.Services.GetRequiredService<IRunStore>();
+        var resp = await _owner.PostAsJsonAsync(
+            $"/api/projects/{projectId}/orchestrations", new { goal = "build with a corrupt team layout" });
+
+        resp.StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
+        var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("error").GetString().Should().Be("invalid_team");
+        body.GetProperty("message").GetString()
+            .Should().Be("The project team roster could not be read. Fix the team before starting an orchestration.");
+        (await runStore.GetRunsByProjectAsync(pid)).Should().BeEmpty(
+            "roster read failures must reject before creating a coordinator run");
+    }
+
+    [Fact]
+    public async Task StartOrchestration_WithDispatchableTeam_Returns201()
+    {
+        var projectId = await CreateProjectAsync(seedTeam: true);
+
+        var resp = await _owner.PostAsJsonAsync(
+            $"/api/projects/{projectId}/orchestrations", new { goal = "build with a cast team" });
+
+        resp.StatusCode.Should().Be(HttpStatusCode.Created);
+        var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("runId").GetString().Should().NotBeNullOrWhiteSpace();
+    }
+
     // =========================================================================
     // Helpers
     // =========================================================================
 
-    private async Task<string> CreateProjectAsync()
+    private async Task<string> CreateProjectAsync(bool seedTeam = true)
     {
         var dir = _factory.NewWorkingDirectory();
         var resp = await _owner.PostAsJsonAsync("/api/projects", new
@@ -499,6 +559,8 @@ public sealed class CoordinatorOutcomeSpecTests : IDisposable
             working_directory = dir,
         });
         resp.StatusCode.Should().Be(HttpStatusCode.Created, "the test project must be created");
+        if (seedTeam)
+            SquadTestFixtureHelper.CreateMinimalSquad(dir, "Coordinator Test");
         var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
         return body.GetProperty("project_id").GetString()!;
     }

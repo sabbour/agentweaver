@@ -4,6 +4,7 @@ import { FluentProvider, webLightTheme } from '@fluentui/react-components';
 import { type ReactNode } from 'react';
 import { StartOrchestrationDialog } from '../components/StartOrchestrationDialog';
 import { apiClient } from '../api/apiClient';
+import { ApiError } from '../api/client';
 
 vi.mock('../api/apiClient', () => ({
   apiClient: {
@@ -75,5 +76,32 @@ describe('StartOrchestrationDialog', () => {
       expect(apiClient.startOrchestration).toHaveBeenCalledWith('proj-1', 'Ship structured work', 'software-delivery'),
     );
     expect(onStarted).toHaveBeenCalledWith('run-defined');
+  });
+
+  it('shows a Cast a team CTA when start fails with no_team', async () => {
+    vi.mocked(apiClient.startOrchestration).mockRejectedValue(new ApiError(
+      409,
+      JSON.stringify({
+        error: 'no_team',
+        message: 'This project has no team. Cast a team before starting an orchestration.',
+      }),
+    ));
+
+    render(
+      <Wrapper>
+        <StartOrchestrationDialog projectId="proj-1" onStarted={vi.fn()} />
+      </Wrapper>,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Start task' }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Goal' }), {
+      target: { value: 'Build something' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Direct' }));
+
+    expect(await screen.findByText('This project has no team. Cast a team before starting an orchestration.')).toBeDefined();
+    const cta = screen.getByRole('link', { name: 'Cast a team' });
+    expect(cta.getAttribute('href')).toBe('/projects/proj-1/team/cast');
+    expect(document.body.textContent).not.toContain('API error 409');
   });
 });

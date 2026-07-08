@@ -8,6 +8,7 @@ using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Memory;
 using Agentweaver.Api.Runs;
 using Agentweaver.Domain;
+using Agentweaver.Tests.Casting;
 using Agentweaver.Tests.Helpers;
 
 namespace Agentweaver.Tests.Coordinator;
@@ -116,6 +117,7 @@ public sealed class CoordinatorOrchestratorTests : IDisposable
             working_directory = dir,
         });
         resp.StatusCode.Should().Be(HttpStatusCode.Created);
+        SquadTestFixtureHelper.CreateMinimalSquad(dir, "Coordinator Orchestrate");
         var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
         return body.GetProperty("project_id").GetString()!;
     }

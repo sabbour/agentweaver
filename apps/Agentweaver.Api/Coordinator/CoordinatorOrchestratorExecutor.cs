@@ -138,16 +138,21 @@ public sealed class CoordinatorOrchestratorExecutor
         drafts = drafts2;
 
         var roster = ResolveRoster(input.RepositoryPath);
+        if (roster.Count == 0)
+        {
+            await FailNoTeamAsync(input.RunId, ct).ConfigureAwait(false);
+            return;
+        }
 
         // Select a real roster agent + Copilot model for each subtask.
         var assigned = new List<AssignedSubtask>(drafts.Count);
         foreach (var d in drafts)
         {
-            var member = SelectRosterMember(roster, d);
-            var roleDefaultModel = member?.DefaultModel
+            var member = SelectRosterMember(roster, d)!;
+            var roleDefaultModel = member.DefaultModel
                 ?? CatalogModelForRole(d.Role)
                 ?? string.Empty;
-            var agentName = member?.Name ?? FallbackAgentName(d.Role);
+            var agentName = member.Name;
             var model = SelectModel(roleDefaultModel, d.Complexity, input.ModelId);
             assigned.Add(new AssignedSubtask(d, agentName, model));
         }
@@ -691,8 +696,7 @@ public sealed class CoordinatorOrchestratorExecutor
             if (team is null) return [];
 
             return team.Members
-                .Where(m => m.Status == CastMemberStatus.Active)
-                .Where(m => IsDispatchable(m.Name, m.Role?.Id, m.Role?.Title))
+                .Where(CoordinatorRosterGuard.IsDispatchableMember)
                 .Select(m => new RosterCandidate(
                     m.Name,
                     m.Role.Id,
@@ -707,6 +711,29 @@ public sealed class CoordinatorOrchestratorExecutor
             _logger.LogWarning(ex, "Coordinator orchestrate: failed to read team roster at {Path}", repositoryPath);
             return [];
         }
+    }
+
+    private async Task FailNoTeamAsync(string runId, CancellationToken ct)
+    {
+        _logger.LogWarning(
+            "Coordinator orchestrate: run {RunId} has no dispatchable team; failing with {Reason}",
+            runId, NoTeamException.ErrorCode);
+
+        var entry = _streamStore.Get(runId);
+        entry?.RecordNext(EventTypes.RunFailed, new
+        {
+            reason = NoTeamException.ErrorCode,
+            message = NoTeamException.DefaultMessage,
+        });
+
+        using var scope = _scopeFactory.CreateScope();
+        var runStore = scope.ServiceProvider.GetRequiredService<IRunStore>();
+        if (RunId.TryParse(runId, out var id))
+            await runStore.TrySetTerminalStatusAsync(
+                id, RunStatus.Failed, DateTimeOffset.UtcNow, NoTeamException.ErrorCode, ct)
+                .ConfigureAwait(false);
+
+        _streamStore.Complete(runId);
     }
 
     /// <summary>

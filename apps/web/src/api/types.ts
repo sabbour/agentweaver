@@ -78,6 +78,9 @@ export interface RunDetail {
   // Added by the backend concurrently; treat as optional and degrade gracefully.
   coordinator_status?: string | null;
   coordinator_status_reason?: string | null;
+  // Backend contract: true for coordinator runs that can accept steering/messages.
+  // Includes awaiting_review while the assembly human-review gate is parked.
+  coordinator_steerable?: boolean;
   // Per-run options (live-toggleable). auto_approve_tools auto-grants non-dangerous tool HITLs;
   // autopilot (coordinator only) auto-answers clarifying questions via the coordinator model.
   // Both cascade to a coordinator's children. Optional — default false when absent.
@@ -563,6 +566,19 @@ export interface StartOrchestrationRequest {
 
 export interface StartOrchestrationResponse {
   runId: string;
+}
+
+export interface NoTeamStartOrchestrationError {
+  error: 'no_team';
+  message: string;
+}
+
+export type RaiVerdictToken = 'green' | 'yellow' | 'red' | 'revise';
+
+export interface RaiVerdictEventPayload {
+  verdict: RaiVerdictToken;
+  runId?: string;
+  rationale?: string;
 }
 
 // Browser Console facade contract. Natural language requests are posted to the

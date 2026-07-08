@@ -1,4 +1,5 @@
 import { ApiError } from './client';
+import type { NoTeamStartOrchestrationError } from './types';
 
 export type ApiErrorKind =
   | 'not-found'
@@ -17,7 +18,7 @@ export interface FormattedApiError {
   detail?: string;
 }
 
-function parseApiBody(body: string): { error?: string; message?: string; detail?: string } {
+export function parseApiBody(body: string): { error?: string; message?: string; detail?: string } {
   if (!body) return {};
   try {
     const parsed = JSON.parse(body) as Record<string, unknown>;
@@ -29,6 +30,16 @@ function parseApiBody(body: string): { error?: string; message?: string; detail?
   } catch {
     return { message: body };
   }
+}
+
+export function parseNoTeamStartError(err: unknown): NoTeamStartOrchestrationError | null {
+  if (!(err instanceof ApiError) || err.status !== 409) return null;
+  const body = parseApiBody(err.body);
+  if (body.error !== 'no_team') return null;
+  return {
+    error: 'no_team',
+    message: body.message ?? 'This project has no team. Cast a team before starting an orchestration.',
+  };
 }
 
 export function formatApiError(err: unknown, fallback = 'The request failed.'): FormattedApiError {

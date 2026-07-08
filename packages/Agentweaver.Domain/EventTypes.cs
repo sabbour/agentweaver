@@ -102,8 +102,8 @@ public static class EventTypes
 
     /// <summary>
     /// Emitted by <see cref="RaiTurnExecutor"/> with the verdict issued by the RAI reviewer.
-    /// Payload: { verdict: "green"|"yellow"|"red", runId: string }
-    /// Written to the Rai sub-stream ({runId}-rai).
+    /// Payload: { verdict: "green"|"yellow"|"red"|"revise", runId: string, rationale: string }
+    /// Written to both the parent run stream and the Rai sub-stream ({runId}-rai).
     /// </summary>
     public const string RaiVerdict = "rai.verdict";
 
@@ -413,3 +413,4 @@ public static class EventTypes
     /// </summary>
     public const string CoordinatorAutopilotAnswered = "coordinator.autopilot_answered";
 }
+

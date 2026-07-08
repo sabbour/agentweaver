@@ -67,6 +67,40 @@ public sealed class SandboxPreviewServiceClusterTests
             "StartPreview must read the SandboxClaim from the cluster (replica-safe)");
     }
 
+
+    [Fact]
+    public async Task StartPreview_resolves_pod_from_retained_run_command_claim_status()
+    {
+        const string runId = "run-command-preview";
+        var agentClaimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
+        var runCommandClaimName = SandboxClaimConventions.DeriveRunCommandClaimName(runId);
+        using var listener = StartListener(out var targetPort);
+
+        var handler = new FakeKubeHandler();
+        handler.OnGet(
+            $"/apis/{SandboxClaimConventions.ApiGroup}/{SandboxClaimConventions.ApiVersion}/namespaces/agentweaver/sandboxclaims/{runCommandClaimName}",
+            """{"apiVersion":"extensions.agents.x-k8s.io/v1beta1","kind":"SandboxClaim","metadata":{"name":"c"},"status":{"conditions":[{"type":"Ready","status":"True","reason":"Bound","message":"sandbox ready","lastTransitionTime":"2026-06-28T06:00:00Z"}],"sandbox":{"name":"run-command-pod-zzz"}}}""");
+        handler.OnGet(
+            "/api/v1/namespaces/agentweaver/pods/run-command-pod-zzz",
+            """{"apiVersion":"v1","kind":"Pod","metadata":{"name":"run-command-pod-zzz"},"status":{"podIP":"127.0.0.1"}}""");
+        handler.OnAny(@"^/api/v1/namespaces/agentweaver/pods/", """{"apiVersion":"v1","kind":"Pod","metadata":{"name":"run-command-pod-zzz"}}""");
+        handler.OnEcho("POST", "/api/v1/namespaces/agentweaver/services");
+        handler.OnEcho("POST", "/apis/gateway.networking.k8s.io/v1/namespaces/agentweaver/httproutes");
+
+        var svc = NewService(handler);
+
+        var session = await svc.StartPreviewAsync(runId, targetPort, "user-1");
+
+        session.PodName.Should().Be("run-command-pod-zzz",
+            "Build/Test may start the preview server through run_command in the retained run-* sandbox claim");
+        handler.Requests.Should().Contain(r =>
+            r.Method == "GET" && r.Path.EndsWith($"/sandboxclaims/{agentClaimName}"),
+            "the resolver checks the AgentHost claim first");
+        handler.Requests.Should().Contain(r =>
+            r.Method == "GET" && r.Path.EndsWith($"/sandboxclaims/{runCommandClaimName}"),
+            "the resolver falls back to the retained command-sandbox claim for the same run");
+    }
+
     [Fact]
     public async Task StartPreview_returns_not_ready_when_claim_unbound_on_every_replica()
     {

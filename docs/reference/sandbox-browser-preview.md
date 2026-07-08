@@ -32,6 +32,14 @@ A running agent can expose a server it started **without a human typing a port i
 the tool closure ([`AgentweaverApiTools.cs:245`](#source)), so the model supplies only the port and can
 never target another run.
 
+The platform-owned **Build & Test** step can use the same preview surface. Its canned prompt tells the agent
+to build, run all tests, start the web/service preview server after tests pass, observe the actual bound
+port, verify it, and call `start_preview(port=PORT)` with that port
+([`BuildTestTurnExecutor.cs:10`](#source)). Preview pod resolution accepts both retained claim naming
+conventions for the run — `agent-{runId}` for AgentHost pod-per-run claims and `run-{runId}` for retained
+command-sandbox claims — before returning `409` for "no bound pod" ([`SandboxClaimConventions.cs:28`](#source),
+[`SandboxPreviewService.cs:432`](#source)).
+
 The request routes through a **human-in-the-loop approval gate** before any preview is provisioned
 ([`AgentPreviewGate.RequestApprovalAsync`, `AgentPreviewGate.cs:85`](#source)):
 
@@ -145,6 +153,7 @@ DELETE /api/runs/run_01HXYZ/sandbox/port-forward/swift-falcon-amber-k7m2q9x4n8b3
 | Config defaults & port-range check | `apps/Agentweaver.Api/Sandbox/Preview/SandboxPreviewOptions.cs` |
 | Capability token | `apps/Agentweaver.Api/Sandbox/Preview/PreviewToken.cs` |
 | SandboxClaim CRD coordinates + bound-pod parsing | `apps/Agentweaver.Api/Sandbox/SandboxClaimConventions.cs` |
+| Build & Test preview activation prompt | `packages/Agentweaver.AgentRuntime/Workflow/BuildTestTurnExecutor.cs` |
 | DTO fields | `apps/web/src/api/types.ts` |
 | API client | `apps/web/src/api/client.ts` |
 

@@ -122,6 +122,145 @@ describe('AgentSessionPanel', () => {
     expect(screen.queryByRole('button', { name: /open full run page/i })).toBeNull();
   });
 
+  it('shows a completed platform gate status instead of an empty stream placeholder', async () => {
+    const gateTree: RunSessionTree[] = [
+      {
+        ...tree[0],
+        children: [
+          {
+            nodeId: 'rai',
+            label: 'Rai',
+            agentName: 'Coordinator',
+            agentRole: 'Risk gate',
+            status: 'completed',
+            depth: 1,
+            children: [],
+          },
+        ],
+      },
+    ];
+
+    render(
+      <Wrapper>
+        <AgentSessionPanel
+          open
+          onClose={vi.fn()}
+          tree={gateTree}
+          selectedNodeId="rai"
+          onSelectNode={vi.fn()}
+          coordinatorRunId="coord-run-1"
+          projectId="p1"
+        />
+      </Wrapper>,
+    );
+
+    await waitFor(() => expect(document.body.textContent).toContain('Rai completed'), { timeout: 4000 });
+    expect(document.body.textContent).toContain('No chat messages were emitted for this completed platform gate.');
+    expect(document.body.textContent).not.toContain('No streamed messages yet for this session.');
+  });
+
+  it('renders a red RAI verdict as an error state for a completed RAI gate', async () => {
+    currentEvents = [
+      {
+        sequence: 10,
+        type: 'rai.verdict',
+        payload: {
+          verdict: 'red',
+          runId: 'coord-run-1',
+          rationale: 'Safety policy blocked this output.',
+        },
+      },
+    ];
+    const gateTree: RunSessionTree[] = [
+      {
+        ...tree[0],
+        children: [
+          {
+            nodeId: 'planned:assembly-rai',
+            label: 'RAI Review',
+            agentName: 'Coordinator',
+            agentRole: 'Risk gate',
+            status: 'completed',
+            depth: 1,
+            children: [],
+          },
+        ],
+      },
+    ];
+
+    render(
+      <Wrapper>
+        <AgentSessionPanel
+          open
+          onClose={vi.fn()}
+          tree={gateTree}
+          selectedNodeId="planned:assembly-rai"
+          onSelectNode={vi.fn()}
+          coordinatorRunId="coord-run-1"
+          projectId="p1"
+        />
+      </Wrapper>,
+    );
+
+    const verdictCard = await screen.findByTestId('rai-verdict-card', undefined, { timeout: 4000 });
+    expect(verdictCard.getAttribute('data-intent')).toBe('error');
+    expect(document.body.textContent).toContain('RAI verdict: 🔴 Red');
+    expect(document.body.textContent).toContain('Safety policy blocked this output.');
+    expect(document.body.textContent).not.toContain('Green');
+    expect(document.body.textContent).not.toContain('success');
+    expect(document.body.textContent).not.toContain('No streamed messages yet for this session.');
+  });
+
+  it('renders a revise RAI verdict as a warning state', async () => {
+    currentEvents = [
+      {
+        sequence: 10,
+        type: 'rai.verdict',
+        payload: {
+          verdict: 'revise',
+          runId: 'coord-run-1',
+          rationale: 'Revise the assembled response before continuing.',
+        },
+      },
+    ];
+    const gateTree: RunSessionTree[] = [
+      {
+        ...tree[0],
+        children: [
+          {
+            nodeId: 'planned:assembly-rai',
+            label: 'RAI Review',
+            agentName: 'Coordinator',
+            agentRole: 'Risk gate',
+            status: 'completed',
+            depth: 1,
+            children: [],
+          },
+        ],
+      },
+    ];
+
+    render(
+      <Wrapper>
+        <AgentSessionPanel
+          open
+          onClose={vi.fn()}
+          tree={gateTree}
+          selectedNodeId="planned:assembly-rai"
+          onSelectNode={vi.fn()}
+          coordinatorRunId="coord-run-1"
+          projectId="p1"
+        />
+      </Wrapper>,
+    );
+
+    const verdictCard = await screen.findByTestId('rai-verdict-card', undefined, { timeout: 4000 });
+    expect(verdictCard.getAttribute('data-intent')).toBe('warning');
+    expect(document.body.textContent).toContain('RAI verdict: 🟡 Revise');
+    expect(document.body.textContent).toContain('Revise the assembled response before continuing.');
+    expect(document.body.textContent).not.toContain('No streamed messages yet for this session.');
+  });
+
   it('does not invent a just-started timestamp when restored run metadata lacks timing', async () => {
     vi.mocked(apiClient.getRun).mockResolvedValueOnce({
       run_id: 'child-run-1',

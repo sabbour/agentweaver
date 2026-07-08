@@ -91,3 +91,16 @@ AKS cluster scripts updated (pending reprovisioning):
 
 ## 2026-07-05T20:40:00-07:00 — v0.7.11 release batch
 Delivered observability overhaul and AppInsights agent telemetry: `agentweaver.token.usage`, tagged spans, agentic-only traces, compact tiles, and AI-credit-over-time chart. Staging deployment is healthy pending Ahmed validation.
+
+
+## 2026-07-06T07-29-39Z — v0.8.0 staging release
+
+Link's trace hierarchy work (#166) shipped in the v0.8.0 staging wave; follow-up #200 remains open for tool-span parenting. Staging deployed healthy; do not close #166 or push/merge until Ahmed validates.
+
+
+## 2026-07-06 v0.9.0 staging wave
+- Bumped VERSION to 0.9.0 and deployed the staging AKS release candidate successfully.
+
+## 2026-07-07T00:00:00Z — v0.9.2 staging ship
+
+Link shipped v0.9.2 wave documentation (`58907d8`) across the affected docs; VitePress build was green. Coordinator tagged v0.9.2, deployed to `agentweaver-aks-2`, and verified all deployments healthy with `/api/health` 200.

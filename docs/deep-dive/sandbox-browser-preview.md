@@ -148,6 +148,13 @@ run (a run with no parent whose agent is `Coordinator`) never launches a server 
 child worker runs — so it is not given the "you MUST launch, test, and preview a server" mandate. Child
 worker runs and ordinary single-agent runs still receive it when the feature is enabled.
 
+Build & Test gets its own preview instruction. `BuildTestTurnExecutor.CannedPrompt` tells that gate to run the
+project's builds and tests, then start the web/service server, discover the real bound port from logs, verify
+it with a probe such as `curl`, and call `start_preview(port=PORT)` (`BuildTestTurnExecutor.cs:10`). The
+preview service supports this by resolving both run claim conventions: the AgentHost `agent-{runId}` claim
+and the retained command-sandbox `run-{runId}` claim (`SandboxClaimConventions.cs:28`,
+`SandboxPreviewService.cs:432`).
+
 ## Agent-initiated preview (`start_preview`)
 
 A running agent can also expose its server **autonomously**, mid-workflow, without a human picking a port in
@@ -237,6 +244,7 @@ governs unattended runs; production stays human-gated.
 | Owner-or-agent-callback authorization helper | `apps/Agentweaver.Api/Endpoints/EndpointHelpers.cs` |
 | HITL approval primitive (shared with `web_fetch`) | `apps/Agentweaver.Api/Runs/DurableToolApprovalGate.cs` |
 | Agent capability note injection | `apps/Agentweaver.Api/Runs/RunOrchestrator.cs` |
+| Build & Test preview activation prompt | `packages/Agentweaver.AgentRuntime/Workflow/BuildTestTurnExecutor.cs` |
 | Shared preview Gateway | `k8s/gateway-preview.yaml` |
 | Sandbox NetworkPolicy (preview ingress range) | `k8s/networkpolicy-sandbox.yaml` |
 | API RBAC (claims read, service/route write) | `k8s/rbac-api.yaml` |

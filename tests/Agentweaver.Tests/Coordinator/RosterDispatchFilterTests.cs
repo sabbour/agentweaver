@@ -1,5 +1,6 @@
 using FluentAssertions;
 using Agentweaver.Api.Coordinator;
+using Agentweaver.Squad.Model;
 
 namespace Agentweaver.Tests.Coordinator;
 
@@ -107,4 +108,13 @@ public sealed class RosterDispatchFilterTests
     [Fact]
     public void EmptyFields_AreDispatchable()
         => CoordinatorOrchestratorExecutor.IsDispatchable("", "", "").Should().BeTrue();
+
+    [Fact]
+    public void ActiveMemberWithoutRole_IsNotDispatchable()
+    {
+        var member = new CastMember("Roleless", null!, "roleless.md", CastMemberStatus.Active, true);
+
+        CoordinatorRosterGuard.IsDispatchableMember(member).Should().BeFalse(
+            "the start guard and executor roster resolution both dereference Role and must agree that roleless members are not dispatchable");
+    }
 }

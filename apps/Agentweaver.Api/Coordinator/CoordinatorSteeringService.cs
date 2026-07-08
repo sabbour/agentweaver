@@ -340,6 +340,14 @@ public sealed class CoordinatorSteeringService
     private readonly IRunEventStream? _eventStream;
     private readonly ILogger<CoordinatorSteeringService> _logger;
 
+    /// <summary>
+    /// Statuses where the coordinator is still an operator-addressable control loop. In particular,
+    /// AwaitingReview is not terminal for coordinator orchestration: it is the collective assembly
+    /// human-review parking state, so steering and free-form messages must remain enabled.
+    /// </summary>
+    public static bool IsSteerableRunStatus(RunStatus status) =>
+        status is RunStatus.InProgress or RunStatus.AwaitingReview;
+
     public CoordinatorSteeringService(
         RunStreamStore streamStore,
         RunWorkflowRegistry registry,

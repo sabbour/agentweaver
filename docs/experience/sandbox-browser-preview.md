@@ -61,6 +61,16 @@ Operators running automated demos can set `SANDBOX_PREVIEW_AUTO_APPROVE=true` (o
 auto-approve-tools option) to grant these requests automatically; in normal use the approval stays in your
 hands.
 
+## Build & Test preview
+
+Workflows that include the platform-owned **Build & Test** step can also produce a browser preview. After
+builds and tests pass, that step is instructed to start the app/service, discover the actual port from the
+server logs, verify it, and register the preview with `start_preview(port=PORT)`
+(`packages/Agentweaver.AgentRuntime/Workflow/BuildTestTurnExecutor.cs:10`). The preview backend resolves
+either the run's AgentHost claim or a retained command-sandbox claim, so previews work whether the server was
+started in the `agent-{runId}` pod-per-run sandbox or the `run-{runId}` Build & Test command sandbox
+(`apps/Agentweaver.Api/Sandbox/SandboxClaimConventions.cs:28`, `apps/Agentweaver.Api/Sandbox/Preview/SandboxPreviewService.cs:432`).
+
 ## What to expect
 
 - **Kubernetes-only.** The preview routes into the run's own sandbox pod. On local/dev runs there is no

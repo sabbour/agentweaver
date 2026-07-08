@@ -133,3 +133,16 @@ Delivered slide-up run-tabs 404 fix, Messages redesign with sanitized markdown, 
 ## 2026-07-06T22:05:00Z — v0.7.12 outcome-spec gate UX
 
 Delivered outcome-spec gate frontend fixes: draft panel remains visible during transient 404 polling with Drafting state; pre-draft run failure is terminal; Confirm has pending/success/409/error states and double-submit guard. Commits `a7e7645`, `de4bed6`; merged to `release/v0.7.0` and deployed to staging.
+
+
+## 2026-07-06T07-29-39Z — v0.8.0 staging release
+
+Trinity's conversational browser TUI/console work (#50, commit fdb2ad5) shipped in the v0.8.0 staging wave. The #50/#196 merge caused a timeline reducer `child_approval` case-shadowing regression that was fixed before deploy; 483 web tests passed. Staging is healthy; do not close #50 or push/merge until Ahmed validates.
+
+
+## 2026-07-06 v0.9.0 staging wave
+- Delivered the console TUI refresh and the calmer tool-row UI improvements.
+
+## 2026-07-07T00:00:00Z — v0.9.2 staging ship
+
+Trinity shipped the frontend Review now fix (`388b993`): the Assembly and review CTA now opens the artifacts panel directly with `setArtifactsPanelOpen(true)`, and dead `reviewRef` / `scrollToReview` plumbing was removed. The fix is included in v0.9.2 on staging AKS.

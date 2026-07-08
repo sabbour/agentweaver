@@ -28,6 +28,9 @@ public static class SandboxClaimConventions
     /// <summary>Prefix distinguishing AgentHost (pod-per-run) claims from per-command claims.</summary>
     public const string AgentHostClaimPrefix = "agent-";
 
+    /// <summary>Prefix for retained command-sandbox claims created by KubernetesSandboxExecutor.ExecuteAsync.</summary>
+    public const string RunCommandClaimPrefix = "run-";
+
     /// <summary>
     /// Derives the AgentHost <c>SandboxClaim</c> name for <paramref name="runId"/>:
     /// hyphens stripped, truncated to 12 chars, prefixed with <see cref="AgentHostClaimPrefix"/>.
@@ -36,9 +39,25 @@ public static class SandboxClaimConventions
     /// </summary>
     public static string DeriveAgentHostClaimName(string runId)
     {
-        var claimBase = (runId ?? string.Empty).Replace("-", "", StringComparison.Ordinal);
-        claimBase = claimBase[..Math.Min(12, claimBase.Length)];
+        var claimBase = NormalizeRunIdForClaim(runId, 12);
         return $"{AgentHostClaimPrefix}{claimBase}";
+    }
+
+    /// <summary>
+    /// Derives the retained command-sandbox <c>SandboxClaim</c> name for <paramref name="runId"/>.
+    /// This mirrors <see cref="KubernetesSandboxExecutor.ExecuteAsync"/> so preview activation can
+    /// find a server started by an in-process <c>run_command</c> turn.
+    /// </summary>
+    public static string DeriveRunCommandClaimName(string runId)
+    {
+        var claimBase = NormalizeRunIdForClaim(runId, 16);
+        return $"{RunCommandClaimPrefix}{claimBase}";
+    }
+
+    private static string NormalizeRunIdForClaim(string? runId, int maxLength)
+    {
+        var claimBase = (runId ?? string.Empty).Replace("-", "", StringComparison.Ordinal);
+        return claimBase[..Math.Min(maxLength, claimBase.Length)];
     }
 
     public static string DeriveAgentHostSecretProviderClassName(string claimName) =>

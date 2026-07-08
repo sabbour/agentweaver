@@ -685,6 +685,7 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
                 var buildTest = await _pipeline.RunBuildTestAsync(
                     new CollectiveBuildTestRequest(
                         context.CoordinatorRunId,
+                        context.ProjectId?.Value.ToString(),
                         context.RepositoryPath,
                         integrationBranch,
                         aggregateTreeHash,

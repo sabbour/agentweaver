@@ -179,7 +179,7 @@ public sealed class RaiTurnExecutor : Executor<AgentTurnOutput, AgentTurnOutput>
             if (verdict == RaiVerdict.Red)
             {
                 _logger.LogWarning("Rai issued a RED verdict for run {RunId} — flagging content safety", input.RunId);
-                subWriter?.TryWrite(new RunEvent(1, EventTypes.RaiVerdict, new { verdict = "red", runId = input.RunId }));
+                EmitVerdict(writer, subWriter, input.RunId, verdict, response);
                 WorkflowStepEvents.Emit(writer, _logger, input.RunId, LogicalNodeId, "failed", DisplayLabel);
                 _completeSubStream?.Invoke(subRunId);
                 return input with { ContentSafetyFlagged = true };
@@ -188,14 +188,13 @@ public sealed class RaiTurnExecutor : Executor<AgentTurnOutput, AgentTurnOutput>
             if (verdict == RaiVerdict.Revise)
             {
                 _logger.LogInformation("Rai issued a REVISE verdict for run {RunId} — requesting agent revision", input.RunId);
-                subWriter?.TryWrite(new RunEvent(1, EventTypes.RaiVerdict, new { verdict = "revise", runId = input.RunId }));
+                EmitVerdict(writer, subWriter, input.RunId, verdict, response);
                 WorkflowStepEvents.Emit(writer, _logger, input.RunId, LogicalNodeId, "revise", DisplayLabel);
                 _completeSubStream?.Invoke(subRunId);
                 return input with { RaiRevisionRequired = true, RaiFeedback = ExtractFeedback(response) };
             }
 
-            var verdictLabel = ToLabel(verdict);
-            subWriter?.TryWrite(new RunEvent(2, EventTypes.RaiVerdict, new { verdict = verdictLabel, runId = input.RunId }));
+            EmitVerdict(writer, subWriter, input.RunId, verdict, response);
         }
         catch (Exception ex)
         {
@@ -210,7 +209,7 @@ public sealed class RaiTurnExecutor : Executor<AgentTurnOutput, AgentTurnOutput>
                 verdict = ToLabel(verdict),
                 message = ex.Message,
             }));
-            subWriter?.TryWrite(new RunEvent(1, EventTypes.RaiVerdict, new { verdict = ToLabel(verdict), runId = input.RunId }));
+            EmitVerdict(writer, subWriter, input.RunId, verdict, $"RAI review failed: {ex.Message}");
             if (verdict == RaiVerdict.Red)
             {
                 WorkflowStepEvents.Emit(writer, _logger, input.RunId, LogicalNodeId, "failed", DisplayLabel);
@@ -370,6 +369,69 @@ public sealed class RaiTurnExecutor : Executor<AgentTurnOutput, AgentTurnOutput>
         RaiVerdict.Yellow => "yellow",
         _ => "green",
     };
+
+    private static void EmitVerdict(
+        ChannelWriter<RunEvent>? parentWriter,
+        ChannelWriter<RunEvent>? subWriter,
+        string runId,
+        RaiVerdict verdict,
+        string? response)
+    {
+        var payload = new
+        {
+            verdict = ToLabel(verdict),
+            runId,
+            rationale = ExtractRationale(response, verdict),
+        };
+
+        parentWriter?.TryWrite(new RunEvent(0, EventTypes.RaiVerdict, payload));
+        subWriter?.TryWrite(new RunEvent(1, EventTypes.RaiVerdict, payload));
+    }
+
+    private static string ExtractRationale(string? response, RaiVerdict verdict)
+    {
+        if (string.IsNullOrWhiteSpace(response))
+            return verdict switch
+            {
+                RaiVerdict.Red => "RAI reviewer blocked the change.",
+                RaiVerdict.Revise => "RAI reviewer requested a revision.",
+                RaiVerdict.Yellow => "RAI reviewer returned an advisory warning.",
+                _ => "RAI reviewer found no blocking issues.",
+            };
+
+        foreach (var rawLine in response.Split('\n'))
+        {
+            var line = rawLine.Trim();
+            if (line.Length == 0)
+                continue;
+
+            foreach (var (token, _) in VerdictTokens)
+            {
+                var stripped = StripLeadingMarkers(line).TrimStart('*').Trim();
+                if (!StartsWithVerdictToken(stripped, token))
+                    continue;
+
+                var remainder = stripped[token.Length..].Trim();
+                remainder = remainder.TrimStart('*').Trim();
+                remainder = remainder.TrimStart(':', '-', '—', '–').Trim();
+                if (!string.IsNullOrWhiteSpace(remainder))
+                    return TruncateOneLine(remainder);
+            }
+
+            return TruncateOneLine(line);
+        }
+
+        return "RAI reviewer completed without a written rationale.";
+    }
+
+    private static string TruncateOneLine(string value)
+    {
+        var oneLine = string.Join(' ', value.Split(
+            ['\r', '\n'],
+            StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+        const int max = 240;
+        return oneLine.Length <= max ? oneLine : oneLine[..max] + "…";
+    }
 
     private static string Truncate(string? response)
     {

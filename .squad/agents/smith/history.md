@@ -77,3 +77,13 @@ Smith approved PR #177 (#175 workflow save/reload), PR #182 (#174 tool approval 
 
 ## 2026-07-05T14:16:02-07:00 — Issue #183 rejection and re-review approval
 Smith rejected PR #184's first revision because workflow selection captured only delta text and dropped final-message-only `AssistantMessageEvent` responses. After Tank's lockout-driven revision added dual-path capture and regression coverage, Smith approved the re-review.
+
+
+## 2026-07-06T07-29-39Z — v0.8.0 staging release
+
+Smith's project skills catalog work (#51/#56, commit 6ca3298) shipped in the v0.8.0 staging wave. Staging deployed healthy; do not close #51/#56 or push/merge until Ahmed validates.
+
+
+## 2026-07-08T00:57:28-07:00 — Playwright screenshot setup PR
+
+Smith created isolated PR #205 (`sabbour/playwright-screenshot-setup`) for Playwright e2e/screenshot tooling, committed only Playwright-related files, verified Playwright 1.61.1, excluded k8s/.squad/unrelated files, and returned the repo to `main`.

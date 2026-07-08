@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, waitFor, cleanup, fireEvent, screen } from '@testing-library/react';
+import { render, waitFor, cleanup, fireEvent, screen, within } from '@testing-library/react';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
 import { FluentProvider, webLightTheme } from '@fluentui/react-components';
 import { type ReactNode } from 'react';
@@ -225,6 +225,7 @@ describe('CoordinatorRunPage — unified coordinator graph view', () => {
     // Planned assembly nodes
     expect(text).toContain('RAI Review');
     expect(text).toContain('Human Review');
+    expect(within(inspector).getByTestId('topology-controls-overlay')).toBeTruthy();
   });
 
   it('renders planned assembly nodes with "Planned" badge (visually distinct)', async () => {
@@ -244,6 +245,40 @@ describe('CoordinatorRunPage — unified coordinator graph view', () => {
     const html = inspector.innerHTML;
     expect(html).toContain('data-node-type="gate"');    // planned RAI Review + Human Review
     expect(html).toContain('data-node-type="action"');  // planned Merge + Scribe
+  });
+
+  it('highlights the human review tree node and reveals the review CTA when selected', async () => {
+    vi.mocked(apiClient.getRun).mockResolvedValue({
+      run_id: 'coord-run-1',
+      status: 'awaiting_review',
+      coordinator_status: 'in_review',
+    } as never);
+
+    render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    const reviewRow = await screen.findByRole('button', { name: /Select Human Review: Action needed/i }, { timeout: 4000 });
+    expect(reviewRow.getAttribute('aria-label')).toContain('Operator action needed');
+
+    fireEvent.click(reviewRow);
+
+    const cta = await screen.findByTestId('run-tree-review-cta', undefined, { timeout: 4000 });
+    expect(cta.textContent).toContain('Human review is waiting');
+    expect(cta.textContent).toContain('Review changes');
+  });
+
+  it('keeps coordinator messaging enabled during review when the backend marks the run steerable', async () => {
+    vi.mocked(apiClient.getRun).mockResolvedValue({
+      run_id: 'coord-run-1',
+      status: 'awaiting_review',
+      coordinator_status: 'in_review',
+      coordinator_steerable: true,
+    } as never);
+
+    render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    const input = await screen.findByPlaceholderText('Message coordinator...', undefined, { timeout: 4000 }) as HTMLInputElement;
+    await waitFor(() => expect(input.disabled).toBe(false), { timeout: 4000 });
+    expect(document.body.textContent).not.toContain('Messaging is unavailable because this coordinator run is not active.');
   });
 
   it('keeps never-run assembly gates planned after a pre-gate terminal failure', async () => {

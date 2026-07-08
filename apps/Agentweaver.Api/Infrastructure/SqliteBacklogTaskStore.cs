@@ -385,7 +385,7 @@ public sealed class SqliteBacklogTaskStore : IBacklogTaskStore
                                   worktree_path, worktree_branch, project_id, model_id,
                                   agent_name, agent_charter, workflow_run_id, parent_run_id, subtask_id, origin)
                 SELECT $runId, $repo, $branch, $modelSource, $task,
-                       $user, $status, $startedAt, NULL, NULL,
+                       $user, $status, $startedAt, $endedAt, $result,
                        NULL, NULL, $projectId, $modelId,
                        $agentName, $agentCharter, $workflowRunId, $parentRunId, $subtaskId, 'backlog_pickup'
                 WHERE EXISTS (
@@ -400,6 +400,8 @@ public sealed class SqliteBacklogTaskStore : IBacklogTaskStore
             insertRun.Parameters.AddWithValue("$user", coordinatorRun.SubmittingUser);
             insertRun.Parameters.AddWithValue("$status", coordinatorRun.Status.ToApiString());
             insertRun.Parameters.AddWithValue("$startedAt", Ts(coordinatorRun.StartedAt));
+            insertRun.Parameters.AddWithValue("$endedAt", coordinatorRun.EndedAt is { } endedAt ? Ts(endedAt) : DBNull.Value);
+            insertRun.Parameters.AddWithValue("$result", (object?)coordinatorRun.Result ?? DBNull.Value);
             insertRun.Parameters.AddWithValue("$projectId", projectId.ToString());
             insertRun.Parameters.AddWithValue("$modelId", (object?)coordinatorRun.ModelId ?? DBNull.Value);
             insertRun.Parameters.AddWithValue("$agentName", (object?)coordinatorRun.AgentName ?? DBNull.Value);

@@ -40,7 +40,11 @@ public sealed record AgentTurnOutput(
     /// <summary>Carried through from <see cref="AgentTurnInput.Iteration"/> for edge conditions.</summary>
     int Iteration = 0,
     /// <summary>The accountable human whose Copilot-entitled token must be used by downstream model turns.</summary>
-    string? SubmittingUser = null);
+    string? SubmittingUser = null,
+    /// <summary>Project context carried forward for downstream gates that expose Agentweaver API tools.</summary>
+    string? ProjectId = null,
+    /// <summary>Agent context carried forward for downstream gates that expose Agentweaver API tools.</summary>
+    string? AgentName = null);
 
 /// <summary>Data surfaced to the external caller via the review request port.</summary>
 public sealed record WorkflowReviewRequest(

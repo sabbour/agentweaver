@@ -25,6 +25,7 @@ import {
 import { FlowRegular } from '@fluentui/react-icons';
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
+import { parseNoTeamStartError } from '../api/errors';
 import type { Project, StartOrchestrationMode, WorkflowSummaryDto } from '../api/types';
 
 // Inline top-bar action to start an orchestration, with a project selector so the
@@ -40,6 +41,9 @@ const useStyles = makeStyles({
     display: 'flex',
     flexDirection: 'column',
     gap: tokens.spacingVerticalM,
+  },
+  noTeamActions: {
+    marginTop: tokens.spacingVerticalS,
   },
 });
 
@@ -58,6 +62,7 @@ export function StartOrchestrationFab({ currentProjectId }: StartOrchestrationFa
   const [goal, setGoal] = useState('');
   const [savingMode, setSavingMode] = useState<StartOrchestrationMode | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [noTeamError, setNoTeamError] = useState<string | null>(null);
   const [workflowOverride, setWorkflowOverride] = useState<string | null>(null);
   const [selectableWorkflows, setSelectableWorkflows] = useState<WorkflowSummaryDto[]>([]);
 
@@ -111,6 +116,7 @@ export function StartOrchestrationFab({ currentProjectId }: StartOrchestrationFa
   const reset = () => {
     setGoal('');
     setError(null);
+    setNoTeamError(null);
     setSavingMode(null);
     setSelectedProjectId(currentProjectId);
     setWorkflowOverride(null);
@@ -123,6 +129,7 @@ export function StartOrchestrationFab({ currentProjectId }: StartOrchestrationFa
     if (!selectedProjectId || !goal.trim()) return;
     setSavingMode(mode);
     setError(null);
+    setNoTeamError(null);
     try {
       const result = mode === 'direct'
         ? await apiClient.startOrchestration(selectedProjectId, goal.trim(), workflowOverride, 'direct')
@@ -131,6 +138,11 @@ export function StartOrchestrationFab({ currentProjectId }: StartOrchestrationFa
       reset();
       navigate(`/projects/${selectedProjectId}/orchestrations/${result.runId}`);
     } catch (err) {
+      const noTeam = parseNoTeamStartError(err);
+      if (noTeam) {
+        setNoTeamError(noTeam.message);
+        return;
+      }
       setError(
         err instanceof ApiError
           ? `API error ${err.status}: ${err.body}`
@@ -246,6 +258,24 @@ export function StartOrchestrationFab({ currentProjectId }: StartOrchestrationFa
               {error && (
                 <MessageBar intent="error">
                   <MessageBarBody>{error}</MessageBarBody>
+                </MessageBar>
+              )}
+              {noTeamError && selectedProjectId && (
+                <MessageBar intent="warning">
+                  <MessageBarBody>
+                    {noTeamError}
+                    <div className={styles.noTeamActions}>
+                      <Button
+                        appearance="primary"
+                        onClick={() => {
+                          setOpen(false);
+                          navigate(`/projects/${selectedProjectId}/team/cast`);
+                        }}
+                      >
+                        Cast a team
+                      </Button>
+                    </div>
+                  </MessageBarBody>
                 </MessageBar>
               )}
             </div>

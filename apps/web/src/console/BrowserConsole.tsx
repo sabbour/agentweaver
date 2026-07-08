@@ -19,6 +19,7 @@ import {
 } from '@fluentui/react-icons';
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
+import { parseNoTeamStartError } from '../api/errors';
 import type {
   AgentweaverConsoleResponse,
   AgentweaverConsoleToolCall,
@@ -536,7 +537,21 @@ export function BrowserConsole() {
       case 'orchestrate': {
         if (!projectId) return { kind: 'clarification', text: 'Choose a project first with /use <project>, or navigate to a project.' };
         if (!arg) return { kind: 'clarification', text: 'What should the orchestration accomplish?' };
-        const res = await apiClient.startOrchestration(projectId, arg);
+        let res: Awaited<ReturnType<typeof apiClient.startOrchestration>>;
+        try {
+          res = await apiClient.startOrchestration(projectId, arg);
+        } catch (err) {
+          const noTeam = parseNoTeamStartError(err);
+          if (noTeam) {
+            return {
+              kind: 'error',
+              text: noTeam.message,
+              links: [{ label: 'Cast a team', to: `/projects/${projectId}/team/cast` }],
+              tools: [commandTool('Start orchestration')],
+            };
+          }
+          throw err;
+        }
         return {
           kind: 'gate',
           text: 'Started orchestration. Review the outcome plan gate before work dispatches.',
