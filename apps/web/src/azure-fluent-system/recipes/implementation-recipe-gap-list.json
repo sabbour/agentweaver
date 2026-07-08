@@ -1,0 +1,1199 @@
+{
+  "generatedAt": "2026-07-08T14:29:59-07:00",
+  "count": 83,
+  "meaning": "No vague summary-only items remain: each item is classified as folded into a named recipe or not a standalone library API.",
+  "items": [
+    {
+      "nodeId": "40095:5628",
+      "label": ".Table of Contents - Components",
+      "page": "Contents",
+      "category": "COMPONENT",
+      "evidenceType": "design-context-plus-component-graph",
+      "rawFiles": [
+        "raw\\design-context-40095-5628-component-toc.txt",
+        "raw\\component-node-evidence-40095-5628-table-of-contents-components.json"
+      ],
+      "recipeDisposition": "folded-into-named-recipe",
+      "foldedIntoRecipe": "Tab lists",
+      "rationale": "Covered by the Tab lists recipe as a subcomponent/state/anatomy variant; no separate public library API is needed.",
+      "apiMeaning": "If exported, API would mean React component props/callbacks/slots/state model. This item is either folded into an existing API or deliberately not exported."
+    },
+    {
+      "nodeId": "32382:39054",
+      "label": "Azure Copilot Nav Drawer",
+      "page": "↪ Navigation & header",
+      "category": "COMPONENT_SET",
+      "evidenceType": "component-graph-node-snapshot",
+      "rawFiles": [
+        "raw\\component-node-evidence-32382-39054-azure-copilot-nav-drawer.json"
+      ],
+      "recipeDisposition": "folded-into-named-recipe",
+      "foldedIntoRecipe": "Service Menu",
+      "rationale": "Covered by the Service Menu recipe as a subcomponent/state/anatomy variant; no separate public library API is needed.",
+      "apiMeaning": "If exported, API would mean React component props/callbacks/slots/state model. This item is either folded into an existing API or deliberately not exported."
+    },
+    {
+      "nodeId": "32382:39444",
+      "label": ".Nav item",
+      "page": "↪ Navigation & header",
+      "category": "COMPONENT_SET",
+      "evidenceType": "design-context-plus-component-graph",
+      "rawFiles": [
+        "raw\\design-context-32382-39444-nav-item-large.txt",
+        "raw\\component-node-evidence-32382-39444-nav-item.json"
+      ],
+      "recipeDisposition": "folded-into-named-recipe",
+      "foldedIntoRecipe": "Service Menu",
+      "rationale": "Covered by the Service Menu recipe as a subcomponent/state/anatomy variant; no separate public library API is needed.",
+      "apiMeaning": "If exported, API would mean React component props/callbacks/slots/state model. This item is either folded into an existing API or deliberately not exported."
+    },
+    {
+      "nodeId": "32382:39939",
+      "label": ". Nav link Item",
+      "page": "↪ Navigation & header",
+      "category": "COMPONENT_SET",
+      "evidenceType": "component-graph-node-snapshot",
+      "rawFiles": [
+        "raw\\component-node-evidence-32382-39939-nav-link-item.json"
+      ],
+      "recipeDisposition": "folded-into-named-recipe",
+      "foldedIntoRecipe": "Service Menu",
+      "rationale": "Covered by the Service Menu recipe as a subcomponent/state/anatomy variant; no separate public library API is needed.",
+      "apiMeaning": "If exported, API would mean React component props/callbacks/slots/state model. This item is either folded into an existing API or deliberately not exported."
+    },
+    {
+      "nodeId": "32382:39961",
+      "label": ".Copilot Hub Nav header",
+      "page": "↪ Navigation & header",
+      "category": "COMPONENT_SET",
+      "evidenceType": "component-graph-node-snapshot",
+      "rawFiles": [
+        "raw\\component-node-evidence-32382-39961-copilot-hub-nav-header.json"
+      ],
+      "recipeDisposition": "folded-into-named-recipe",
+      "foldedIntoRecipe": "Service Menu",
+      "rationale": "Covered by the Service Menu recipe as a subcomponent/state/anatomy variant; no separate public library API is needed.",
+      "apiMeaning": "If exported, API would mean React component props/callbacks/slots/state model. This item is either folded into an existing API or deliberately not exported."
+    },
+    {
+      "nodeId": "32382:40121",
+      "label": ".Nav Menu",
+      "page": "↪ Navigation & header",
+      "category": "COMPONENT_SET",
+      "evidenceType": "component-graph-node-snapshot",
+      "rawFiles": [
+        "raw\\component-node-evidence-32382-40121-nav-menu.json"
+      ],
+      "recipeDisposition": "folded-into-named-recipe",
+      "foldedIntoRecipe": "Service Menu",
+      "rationale": "Covered by the Service Menu recipe as a subcomponent/state/anatomy variant; no separate public library API is needed.",
+      "apiMeaning": "If exported, API would mean React component props/callbacks/slots/state model. This item is either folded into an existing API or deliberately not exported."
+    },
+    {
+      "nodeId": "32382:40186",
+      "label": "All Chats(WIP)",
+      "page": "↪ Navigation & header",
+      "category": "COMPONENT",
+      "evidenceType": "component-graph-node-snapshot",
+      "rawFiles": [
+        "raw\\component-node-evidence-32382-40186-all-chats-wip.json"
+      ],
+      "recipeDisposition": "folded-into-named-recipe",
+      "foldedIntoRecipe": "Service Menu",
+      "rationale": "Covered by the Service Menu recipe as a subcomponent/state/anatomy variant; no separate public library API is needed.",
+      "apiMeaning": "If exported, API would mean React component props/callbacks/slots/state model. This item is either folded into an existing API or deliberately not exported."
+    },
+    {
+      "nodeId": "32382:40313",
+      "label": "List Chats - stacked indicators (Wip)",
+      "page": "↪ Navigation & header",
+      "category": "COMPONENT",
+      "evidenceType": "component-graph-node-snapshot",
+      "rawFiles": [
+        "raw\\component-node-evidence-32382-40313-list-chats-stacked-indicators-wip.json"
+      ],
+      "recipeDisposition": "folded-into-named-recipe",
+      "foldedIntoRecipe": "Service Menu",
+      "rationale": "Covered by the Service Menu recipe as a subcomponent/state/anatomy variant; no separate public library API is needed.",
+      "apiMeaning": "If exported, API would mean React component props/callbacks/slots/state model. This item is either folded into an existing API or deliberately not exported."
+    },
+    {
+      "nodeId": "34460:64534",
+      "label": "Azure Copilot Header (Sidecar)",
+      "page": "↪ Navigation & header",
+      "category": "COMPONENT",
+      "evidenceType": "design-context-plus-component-graph",
+      "rawFiles": [
+        "raw\\design-context-34460-64534-copilot-header-sidecar-large.txt",
+        "raw\\design-context-34460-64534-copilot-header-sidecar-summary.txt",
+        "raw\\component-node-evidence-34460-64534-azure-copilot-header-sidecar.json"
+      ],
+      "recipeDisposition": "folded-into-named-recipe",
+      "foldedIntoRecipe": "Service Menu",
+      "rationale": "Covered by the Service Menu recipe as a subcomponent/state/anatomy variant; no separate public library API is needed.",
+      "apiMeaning": "If exported, API would mean React component props/callbacks/slots/state model. This item is either folded into an existing API or deliberately not exported."
+    },
+    {
+      "nodeId": "34460:136270",
+      "label": "Azure Copilot Header (Expanded)",
+      "page": "↪ Navigation & header",
+      "category": "COMPONENT_SET",
+      "evidenceType": "component-graph-node-snapshot",
+      "rawFiles": [
+        "raw\\component-node-evidence-34460-136270-azure-copilot-header-expanded.json"
+      ],
+      "recipeDisposition": "folded-into-named-recipe",
+      "foldedIntoRecipe": "Service Menu",
+      "rationale": "Covered by the Service Menu recipe as a subcomponent/state/anatomy variant; no separate public library API is needed.",
+      "apiMeaning": "If exported, API would mean React component props/callbacks/slots/state model. This item is either folded into an existing API or deliberately not exported."
+    },
+    {
+      "nodeId": "32382:38860",
+      "label": ".GM_ListItems",
+      "page": "↪ Grounding menu (GM)",
+      "category": "COMPONENT",
+      "evidenceType": "design-context-plus-component-graph",
+      "rawFiles": [
+        "raw\\design-context-32382-38860-gm-listitems-summary.txt",
+        "raw\\component-node-evidence-32382-38860-gm-listitems.json"
+      ],
+      "recipeDisposition": "not-library-api",
+      "foldedIntoRecipe": null,
+      "rationale": "Catalog/table-of-contents, WIP/deprecated/local helper, or visual-only subpart. It remains cached as evidence but is not exported as a standalone library API.",
+      "apiMeaning": "If exported, API would mean React component props/callbacks/slots/state model. This item is either folded into an existing API or deliberately not exported."
+    },
+    {
+      "nodeId": "32382:38867",
+      "label": ".Grounding Menu",
+      "page": "↪ Grounding menu (GM)",
+      "category": "COMPONENT_SET",
+      "evidenceType": "component-graph-node-snapshot",
+      "rawFiles": [
+        "raw\\component-node-evidence-32382-38867-grounding-menu.json"
+      ],
+      "recipeDisposition": "not-library-api",
+      "foldedIntoRecipe": null,
+      "rationale": "Catalog/table-of-contents, WIP/deprecated/local helper, or visual-only subpart. It remains cached as evidence but is not exported as a standalone library API.",
+      "apiMeaning": "If exported, API would mean React component props/callbacks/slots/state model. This item is either folded into an existing API or deliberately not exported."
+    },
+    {
+      "nodeId": "32382:38901",
+      "label": ".GM_Header",
+      "page": "↪ Grounding menu (GM)",
+      "category": "COMPONENT_SET",
+      "evidenceType": "design-context-plus-component-graph",
+      "rawFiles": [
+        "raw\\design-context-32382-38901-grounding-menu-header.txt",
+        "raw\\component-node-evidence-32382-38901-gm-header.json"
+      ],
+      "recipeDisposition": "folded-into-named-recipe",
+      "foldedIntoRecipe": "Blade header",
+      "rationale": "Covered by the Blade header recipe as a subcomponent/state/anatomy variant; no separate public library API is needed.",
+      "apiMeaning": "If exported, API would mean React component props/callbacks/slots/state model. This item is either folded into an existing API or deliberately not exported."
+    },
+    {
+      "nodeId": "32382:38968",
+      "label": ".GM_Overflow",
+      "page": "↪ Grounding menu (GM)",
+      "category": "COMPONENT_SET",
+      "evidenceType": "component-graph-node-snapshot",
+      "rawFiles": [
+        "raw\\component-node-evidence-32382-38968-gm-overflow.json"
+      ],
+      "recipeDisposition": "not-library-api",
+      "foldedIntoRecipe": null,
+      "rationale": "Catalog/table-of-contents, WIP/deprecated/local helper, or visual-only subpart. It remains cached as evidence but is not exported as a standalone library API.",
+      "apiMeaning": "If exported, API would mean React component props/callbacks/slots/state model. This item is either folded into an existing API or deliberately not exported."
+    },
+    {
+      "nodeId": "32382:38987",
+      "label": ".GM_Search",
+      "page": "↪ Grounding menu (GM)",
+      "category": "COMPONENT_SET",
+      "evidenceType": "design-context-plus-component-graph",
+      "rawFiles": [
+        "raw\\design-context-32382-38987-gm-search-summary.txt",
+        "raw\\component-node-evidence-32382-38987-gm-search.json"
+      ],
+      "recipeDisposition": "not-library-api",
+      "foldedIntoRecipe": null,
+      "rationale": "Catalog/table-of-contents, WIP/deprecated/local helper, or visual-only subpart. It remains cached as evidence but is not exported as a standalone library API.",
+      "apiMeaning": "If exported, API would mean React component props/callbacks/slots/state model. This item is either folded into an existing API or deliberately not exported."
+    },
+    {
+      "nodeId": "32382:38992",
+      "label": ".GM_Entity list Item",
+      "page": "↪ Grounding menu (GM)",
+      "category": "COMPONENT_SET",
+      "evidenceType": "design-context-plus-component-graph",
+      "rawFiles": [
+        "raw\\design-context-32382-38992-gm-entity-list-item-summary.txt",
+        "raw\\component-node-evidence-32382-38992-gm-entity-list-item.json"
+      ],
+      "recipeDisposition": "not-library-api",
+      "foldedIntoRecipe": null,
+      "rationale": "Catalog/table-of-contents, WIP/deprecated/local helper, or visual-only subpart. It remains cached as evidence but is not exported as a standalone library API.",
+      "apiMeaning": "If exported, API would mean React component props/callbacks/slots/state model. This item is either folded into an existing API or deliberately not exported."
+    },
+    {
+      "nodeId": "29389:12096",
+      "label": ".Flair",
+      "page": "Inline Copilot",
+      "category": "COMPONENT",
+      "evidenceType": "component-graph-node-snapshot",
+      "rawFiles": [
+        "raw\\component-node-evidence-29389-12096-flair.json"
+      ],
+      "recipeDisposition": "folded-into-named-recipe",
+      "foldedIntoRecipe": "Inline Copilot",
+      "rationale": "Covered by the Inline Copilot recipe as a subcomponent/state/anatomy variant; no separate public library API is needed.",
+      "apiMeaning": "If exported, API would mean React component props/callbacks/slots/state model. This item is either folded into an existing API or deliberately not exported."
+    },
+    {
+      "nodeId": "29192:8429",
+      "label": ".Inline Copilot title",
+      "page": "Inline Copilot",
+      "category": "COMPONENT_SET",
+      "evidenceType": "component-graph-node-snapshot",
+      "rawFiles": [
+        "raw\\component-node-evidence-29192-8429-inline-copilot-title.json"
+      ],
+      "recipeDisposition": "folded-into-named-recipe",
+      "foldedIntoRecipe": "Inline Copilot",
+      "rationale": "Covered by the Inline Copilot recipe as a subcomponent/state/anatomy variant; no separate public library API is needed.",
+      "apiMeaning": "If exported, API would mean React component props/callbacks/slots/state model. This item is either folded into an existing API or deliberately not exported."
+    },
+    {
+      "nodeId": "30046:9398",
+      "label": "Top action",
+      "page": "Top actions card",
+      "category": "COMPONENT",
+      "evidenceType": "design-context-plus-component-graph",
+      "rawFiles": [
+        "raw\\design-context-30046-9398-top-action-summary.txt",
+        "raw\\component-node-evidence-30046-9398-top-action.json"
+      ],
+      "recipeDisposition": "not-library-api",
+      "foldedIntoRecipe": null,
+      "rationale": "Catalog/table-of-contents, WIP/deprecated/local helper, or visual-only subpart. It remains cached as evidence but is not exported as a standalone library API.",
+      "apiMeaning": "If exported, API would mean React component props/callbacks/slots/state model. This item is either folded into an existing API or deliberately not exported."
+    },
+    {
+      "nodeId": "30289:2845",
+      "label": ".Quick Actions",
+      "page": "Top actions card",
+      "category": "COMPONENT_SET",
+      "evidenceType": "design-context-plus-component-graph",
+      "rawFiles": [
+        "raw\\design-context-30289-2845-quick-actions-summary.txt",
+        "raw\\design-context-30289-2845-top-actions.txt",
+        "raw\\component-node-evidence-30289-2845-quick-actions.json"
+      ],
+      "recipeDisposition": "not-library-api",
+      "foldedIntoRecipe": null,
+      "rationale": "Catalog/table-of-contents, WIP/deprecated/local helper, or visual-only subpart. It remains cached as evidence but is not exported as a standalone library API.",
+      "apiMeaning": "If exported, API would mean React component props/callbacks/slots/state model. This item is either folded into an existing API or deliberately not exported."
+    },
+    {
+      "nodeId": "30028:627",
+      "label": "Accordion",
+      "page": "Accordion",
+      "category": "COMPONENT_SET",
+      "evidenceType": "component-graph-node-snapshot",
+      "rawFiles": [
+        "raw\\component-node-evidence-30028-627-accordion.json"
+      ],
+      "recipeDisposition": "not-library-api",
+      "foldedIntoRecipe": null,
+      "rationale": "Catalog/table-of-contents, WIP/deprecated/local helper, or visual-only subpart. It remains cached as evidence but is not exported as a standalone library API.",
+      "apiMeaning": "If exported, API would mean React component props/callbacks/slots/state model. This item is either folded into an existing API or deliberately not exported."
+    },
+    {
+      "nodeId": "38108:33491",
+      "label": ".Code line",
+      "page": "Code snippet",
+      "category": "COMPONENT",
+      "evidenceType": "component-graph-node-snapshot",
+      "rawFiles": [
+        "raw\\component-node-evidence-38108-33491-code-line.json"
+      ],
+      "recipeDisposition": "not-library-api",
+      "foldedIntoRecipe": null,
+      "rationale": "Catalog/table-of-contents, WIP/deprecated/local helper, or visual-only subpart. It remains cached as evidence but is not exported as a standalone library API.",
+      "apiMeaning": "If exported, API would mean React component props/callbacks/slots/state model. This item is either folded into an existing API or deliberately not exported."
+    },
+    {
+      "nodeId": "38108:33570",
+      "label": ".Number",
+      "page": "Code snippet",
+      "category": "COMPONENT_SET",
+      "evidenceType": "component-graph-node-snapshot",
+      "rawFiles": [
+        "raw\\component-node-evidence-38108-33570-number.json"
+      ],
+      "recipeDisposition": "not-library-api",
+      "foldedIntoRecipe": null,
+      "rationale": "Catalog/table-of-contents, WIP/deprecated/local helper, or visual-only subpart. It remains cached as evidence but is not exported as a standalone library API.",
+      "apiMeaning": "If exported, API would mean React component props/callbacks/slots/state model. This item is either folded into an existing API or deliberately not exported."
+    },
+    {
+      "nodeId": "38108:33579",
+      "label": ".Code level(s)",
+      "page": "Code snippet",
+      "category": "COMPONENT_SET",
+      "evidenceType": "component-graph-node-snapshot",
+      "rawFiles": [
+        "raw\\component-node-evidence-38108-33579-code-level-s.json"
+      ],
+      "recipeDisposition": "not-library-api",
+      "foldedIntoRecipe": null,
+      "rationale": "Catalog/table-of-contents, WIP/deprecated/local helper, or visual-only subpart. It remains cached as evidence but is not exported as a standalone library API.",
+      "apiMeaning": "If exported, API would mean React component props/callbacks/slots/state model. This item is either folded into an existing API or deliberately not exported."
+    },
+    {
+      "nodeId": "38113:34678",
+      "label": ".JSON Collapse",
+      "page": "Code snippet",
+      "category": "COMPONENT_SET",
+      "evidenceType": "component-graph-node-snapshot",
+      "rawFiles": [
+        "raw\\component-node-evidence-38113-34678-json-collapse.json"
+      ],
+      "recipeDisposition": "not-library-api",
+      "foldedIntoRecipe": null,
+      "rationale": "Catalog/table-of-contents, WIP/deprecated/local helper, or visual-only subpart. It remains cached as evidence but is not exported as a standalone library API.",
+      "apiMeaning": "If exported, API would mean React component props/callbacks/slots/state model. This item is either folded into an existing API or deliberately not exported."
+    },
+    {
+      "nodeId": "38116:47202",
+      "label": "Code snippet",
+      "page": "Code snippet",
+      "category": "COMPONENT_SET",
+      "evidenceType": "design-context-plus-component-graph",
+      "rawFiles": [
+        "raw\\design-context-38116-47202-code-snippet-large.txt",
+        "raw\\component-node-evidence-38116-47202-code-snippet.json"
+      ],
+      "recipeDisposition": "not-library-api",
+      "foldedIntoRecipe": null,
+      "rationale": "Catalog/table-of-contents, WIP/deprecated/local helper, or visual-only subpart. It remains cached as evidence but is not exported as a standalone library API.",
+      "apiMeaning": "If exported, API would mean React component props/callbacks/slots/state model. This item is either folded into an existing API or deliberately not exported."
+    },
+    {
+      "nodeId": "25260:8600",
+      "label": "Copy Button",
+      "page": "Copy button",
+      "category": "COMPONENT_SET",
+      "evidenceType": "component-graph-node-snapshot",
+      "rawFiles": [
+        "raw\\component-node-evidence-25260-8600-copy-button.json"
+      ],
+      "recipeDisposition": "not-library-api",
+      "foldedIntoRecipe": null,
+      "rationale": "Catalog/table-of-contents, WIP/deprecated/local helper, or visual-only subpart. It remains cached as evidence but is not exported as a standalone library API.",
+      "apiMeaning": "If exported, API would mean React component props/callbacks/slots/state model. This item is either folded into an existing API or deliberately not exported."
+    },
+    {
+      "nodeId": "28093:48439",
+      "label": ".Grid cell / Checkbox",
+      "page": "Data grid",
+      "category": "COMPONENT",
+      "evidenceType": "component-graph-node-snapshot",
+      "rawFiles": [
+        "raw\\component-node-evidence-28093-48439-grid-cell-checkbox.json"
+      ],
+      "recipeDisposition": "folded-into-named-recipe",
+      "foldedIntoRecipe": "Data grid + filtering",
+      "rationale": "Covered by the Data grid + filtering recipe as a subcomponent/state/anatomy variant; no separate public library API is needed.",
+      "apiMeaning": "If exported, API would mean React component props/callbacks/slots/state model. This item is either folded into an existing API or deliberately not exported."
+    },
+    {
+      "nodeId": "28093:48441",
+      "label": ".Grid cell / Editable field",
+      "page": "Data grid",
+      "category": "COMPONENT_SET",
+      "evidenceType": "component-graph-node-snapshot",
+      "rawFiles": [
+        "raw\\component-node-evidence-28093-48441-grid-cell-editable-field.json"
+      ],
+      "recipeDisposition": "folded-into-named-recipe",
+      "foldedIntoRecipe": "Data grid + filtering",
+      "rationale": "Covered by the Data grid + filtering recipe as a subcomponent/state/anatomy variant; no separate public library API is needed.",
+      "apiMeaning": "If exported, API would mean React component props/callbacks/slots/state model. This item is either folded into an existing API or deliberately not exported."
+    },
+    {
+      "nodeId": "28093:48448",
+      "label": ".Grid cell / Empty",
+      "page": "Data grid",
+      "category": "COMPONENT",
+      "evidenceType": "component-graph-node-snapshot",
+      "rawFiles": [
+        "raw\\component-node-evidence-28093-48448-grid-cell-empty.json"
+      ],
+      "recipeDisposition": "folded-into-named-recipe",
+      "foldedIntoRecipe": "Data grid + filtering",
+      "rationale": "Covered by the Data grid + filtering recipe as a subcomponent/state/anatomy variant; no separate public library API is needed.",
+      "apiMeaning": "If exported, API would mean React component props/callbacks/slots/state model. This item is either folded into an existing API or deliberately not exported."
+    },
+    {
+      "nodeId": "28093:48449",
+      "label": ".Grid cell /  Group",
+      "page": "Data grid",
+      "category": "COMPONENT_SET",
+      "evidenceType": "component-graph-node-snapshot",
+      "rawFiles": [
+        "raw\\component-node-evidence-28093-48449-grid-cell-group.json"
+      ],
+      "recipeDisposition": "folded-into-named-recipe",
+      "foldedIntoRecipe": "Data grid + filtering",
+      "rationale": "Covered by the Data grid + filtering recipe as a subcomponent/state/anatomy variant; no separate public library API is needed.",
+      "apiMeaning": "If exported, API would mean React component props/callbacks/slots/state model. This item is either folded into an existing API or deliberately not exported."
+    },
+    {
+      "nodeId": "28752:53376",
+      "label": ".Grid cell/Tags",
+      "page": "Data grid",
+      "category": "COMPONENT_SET",
+      "evidenceType": "component-graph-node-snapshot",
+      "rawFiles": [
+        "raw\\component-node-evidence-28752-53376-grid-cell-tags.json"
+      ],
+      "recipeDisposition": "folded-into-named-recipe",
+      "foldedIntoRecipe": "Data grid + filtering",
+      "rationale": "Covered by the Data grid + filtering recipe as a subcomponent/state/anatomy variant; no separate public library API is needed.",
+      "apiMeaning": "If exported, API would mean React component props/callbacks/slots/state model. This item is either folded into an existing API or deliberately not exported."
+    },
+    {
+      "nodeId": "28093:48459",
+      "label": ".Column header / Checkbox",
+      "page": "Data grid",
+      "category": "COMPONENT",
+      "evidenceType": "component-graph-node-snapshot",
+      "rawFiles": [
+        "raw\\component-node-evidence-28093-48459-column-header-checkbox.json"
+      ],
+      "recipeDisposition": "folded-into-named-recipe",
+      "foldedIntoRecipe": "Data grid + filtering",
+      "rationale": "Covered by the Data grid + filtering recipe as a subcomponent/state/anatomy variant; no separate public library API is needed.",
+      "apiMeaning": "If exported, API would mean React component props/callbacks/slots/state model. This item is either folded into an existing API or deliberately not exported."
+    },
+    {
+      "nodeId": "28093:48461",
+      "label": ".Column header / Empty",
+      "page": "Data grid",
+      "category": "COMPONENT",
+      "evidenceType": "component-graph-node-snapshot",
+      "rawFiles": [
+        "raw\\component-node-evidence-28093-48461-column-header-empty.json"
+      ],
+      "recipeDisposition": "folded-into-named-recipe",
+      "foldedIntoRecipe": "Data grid + filtering",
+      "rationale": "Covered by the Data grid + filtering recipe as a subcomponent/state/anatomy variant; no separate public library API is needed.",
+      "apiMeaning": "If exported, API would mean React component props/callbacks/slots/state model. This item is either folded into an existing API or deliberately not exported."
+    },
+    {
+      "nodeId": "28093:48462",
+      "label": ".Column header / Label",
+      "page": "Data grid",
+      "category": "COMPONENT_SET",
+      "evidenceType": "component-graph-node-snapshot",
+      "rawFiles": [
+        "raw\\component-node-evidence-28093-48462-column-header-label.json"
+      ],
+      "recipeDisposition": "folded-into-named-recipe",
+      "foldedIntoRecipe": "Data grid + filtering",
+      "rationale": "Covered by the Data grid + filtering recipe as a subcomponent/state/anatomy variant; no separate public library API is needed.",
+      "apiMeaning": "If exported, API would mean React component props/callbacks/slots/state model. This item is either folded into an existing API or deliberately not exported."
+    },
+    {
+      "nodeId": "28093:48474",
+      "label": ".Column header /  Group",
+      "page": "Data grid",
+      "category": "COMPONENT_SET",
+      "evidenceType": "component-graph-node-snapshot",
+      "rawFiles": [
+        "raw\\component-node-evidence-28093-48474-column-header-group.json"
+      ],
+      "recipeDisposition": "folded-into-named-recipe",
+      "foldedIntoRecipe": "Data grid + filtering",
+      "rationale": "Covered by the Data grid + filtering recipe as a subcomponent/state/anatomy variant; no separate public library API is needed.",
+      "apiMeaning": "If exported, API would mean React component props/callbacks/slots/state model. This item is either folded into an existing API or deliberately not exported."
+    },
+    {
+      "nodeId": "28093:48484",
+      "label": ".Grid column / Data grid",
+      "page": "Data grid",
+      "category": "COMPONENT_SET",
+      "evidenceType": "component-graph-node-snapshot",
+      "rawFiles": [
+        "raw\\component-node-evidence-28093-48484-grid-column-data-grid.json"
+      ],
+      "recipeDisposition": "folded-into-named-recipe",
+      "foldedIntoRecipe": "Data grid + filtering",
+      "rationale": "Covered by the Data grid + filtering recipe as a subcomponent/state/anatomy variant; no separate public library API is needed.",
+      "apiMeaning": "If exported, API would mean React component props/callbacks/slots/state model. This item is either folded into an existing API or deliberately not exported."
+    },
+    {
+      "nodeId": "28093:49265",
+      "label": ".Grid column / Editable",
+      "page": "Data grid",
+      "category": "COMPONENT_SET",
+      "evidenceType": "component-graph-node-snapshot",
+      "rawFiles": [
+        "raw\\component-node-evidence-28093-49265-grid-column-editable.json"
+      ],
+      "recipeDisposition": "folded-into-named-recipe",
+      "foldedIntoRecipe": "Data grid + filtering",
+      "rationale": "Covered by the Data grid + filtering recipe as a subcomponent/state/anatomy variant; no separate public library API is needed.",
+      "apiMeaning": "If exported, API would mean React component props/callbacks/slots/state model. This item is either folded into an existing API or deliberately not exported."
+    },
+    {
+      "nodeId": "28093:49423",
+      "label": ".↪️ Hierarchy level",
+      "page": "Data grid",
+      "category": "COMPONENT_SET",
+      "evidenceType": "component-graph-node-snapshot",
+      "rawFiles": [
+        "raw\\component-node-evidence-28093-49423-hierarchy-level.json"
+      ],
+      "recipeDisposition": "folded-into-named-recipe",
+      "foldedIntoRecipe": "Data grid + filtering",
+      "rationale": "Covered by the Data grid + filtering recipe as a subcomponent/state/anatomy variant; no separate public library API is needed.",
+      "apiMeaning": "If exported, API would mean React component props/callbacks/slots/state model. This item is either folded into an existing API or deliberately not exported."
+    },
+    {
+      "nodeId": "28093:49440",
+      "label": ".Grid row / Empty",
+      "page": "Data grid",
+      "category": "COMPONENT_SET",
+      "evidenceType": "component-graph-node-snapshot",
+      "rawFiles": [
+        "raw\\component-node-evidence-28093-49440-grid-row-empty.json"
+      ],
+      "recipeDisposition": "folded-into-named-recipe",
+      "foldedIntoRecipe": "Data grid + filtering",
+      "rationale": "Covered by the Data grid + filtering recipe as a subcomponent/state/anatomy variant; no separate public library API is needed.",
+      "apiMeaning": "If exported, API would mean React component props/callbacks/slots/state model. This item is either folded into an existing API or deliberately not exported."
+    },
+    {
+      "nodeId": "28093:49447",
+      "label": ".↪️ Grouped row chevron",
+      "page": "Data grid",
+      "category": "COMPONENT_SET",
+      "evidenceType": "component-graph-node-snapshot",
+      "rawFiles": [
+        "raw\\component-node-evidence-28093-49447-grouped-row-chevron.json"
+      ],
+      "recipeDisposition": "folded-into-named-recipe",
+      "foldedIntoRecipe": "Data grid + filtering",
+      "rationale": "Covered by the Data grid + filtering recipe as a subcomponent/state/anatomy variant; no separate public library API is needed.",
+      "apiMeaning": "If exported, API would mean React component props/callbacks/slots/state model. This item is either folded into an existing API or deliberately not exported."
+    },
+    {
+      "nodeId": "28093:49456",
+      "label": ".Grid row / Group",
+      "page": "Data grid",
+      "category": "COMPONENT_SET",
+      "evidenceType": "component-graph-node-snapshot",
+      "rawFiles": [
+        "raw\\component-node-evidence-28093-49456-grid-row-group.json"
+      ],
+      "recipeDisposition": "folded-into-named-recipe",
+      "foldedIntoRecipe": "Data grid + filtering",
+      "rationale": "Covered by the Data grid + filtering recipe as a subcomponent/state/anatomy variant; no separate public library API is needed.",
+      "apiMeaning": "If exported, API would mean React component props/callbacks/slots/state model. This item is either folded into an existing API or deliberately not exported."
+    },
+    {
+      "nodeId": "29232:42433",
+      "label": "Empty state",
+      "page": "Empty state",
+      "category": "COMPONENT",
+      "evidenceType": "metadata-plus-component-graph",
+      "rawFiles": [
+        "raw\\metadata-29232-42433-empty-state-batch07-summary.txt",
+        "raw\\metadata-29232-42433-empty-state.xml",
+        "raw\\component-node-evidence-29232-42433-empty-state.json"
+      ],
+      "recipeDisposition": "not-library-api",
+      "foldedIntoRecipe": null,
+      "rationale": "Catalog/table-of-contents, WIP/deprecated/local helper, or visual-only subpart. It remains cached as evidence but is not exported as a standalone library API.",
+      "apiMeaning": "If exported, API would mean React component props/callbacks/slots/state model. This item is either folded into an existing API or deliberately not exported."
+    },
+    {
+      "nodeId": "25412:8797",
+      "label": "Essentials",
+      "page": "Essentials",
+      "category": "COMPONENT_SET",
+      "evidenceType": "component-graph-node-snapshot",
+      "rawFiles": [
+        "raw\\component-node-evidence-25412-8797-essentials.json"
+      ],
+      "recipeDisposition": "not-library-api",
+      "foldedIntoRecipe": null,
+      "rationale": "Catalog/table-of-contents, WIP/deprecated/local helper, or visual-only subpart. It remains cached as evidence but is not exported as a standalone library API.",
+      "apiMeaning": "If exported, API would mean React component props/callbacks/slots/state model. This item is either folded into an existing API or deliberately not exported."
+    },
+    {
+      "nodeId": "35182:761",
+      "label": "Feedback",
+      "page": "Feedback link",
+      "category": "COMPONENT_SET",
+      "evidenceType": "metadata-plus-component-graph",
+      "rawFiles": [
+        "raw\\metadata-35182-761-feedback.xml",
+        "raw\\component-node-evidence-35182-761-feedback.json"
+      ],
+      "recipeDisposition": "not-library-api",
+      "foldedIntoRecipe": null,
+      "rationale": "Catalog/table-of-contents, WIP/deprecated/local helper, or visual-only subpart. It remains cached as evidence but is not exported as a standalone library API.",
+      "apiMeaning": "If exported, API would mean React component props/callbacks/slots/state model. This item is either folded into an existing API or deliberately not exported."
+    },
+    {
+      "nodeId": "25412:31783",
+      "label": "Upload File",
+      "page": "File upload",
+      "category": "COMPONENT_SET",
+      "evidenceType": "component-graph-node-snapshot",
+      "rawFiles": [
+        "raw\\component-node-evidence-25412-31783-upload-file.json"
+      ],
+      "recipeDisposition": "not-library-api",
+      "foldedIntoRecipe": null,
+      "rationale": "Catalog/table-of-contents, WIP/deprecated/local helper, or visual-only subpart. It remains cached as evidence but is not exported as a standalone library API.",
+      "apiMeaning": "If exported, API would mean React component props/callbacks/slots/state model. This item is either folded into an existing API or deliberately not exported."
+    },
+    {
+      "nodeId": "25248:8173",
+      "label": "Filterable combo box",
+      "page": "Filterable combo box",
+      "category": "COMPONENT_SET",
+      "evidenceType": "component-graph-node-snapshot",
+      "rawFiles": [
+        "raw\\component-node-evidence-25248-8173-filterable-combo-box.json"
+      ],
+      "recipeDisposition": "not-library-api",
+      "foldedIntoRecipe": null,
+      "rationale": "Catalog/table-of-contents, WIP/deprecated/local helper, or visual-only subpart. It remains cached as evidence but is not exported as a standalone library API.",
+      "apiMeaning": "If exported, API would mean React component props/callbacks/slots/state model. This item is either folded into an existing API or deliberately not exported."
+    },
+    {
+      "nodeId": "27774:7950",
+      "label": ".Popover (filter pill menus)",
+      "page": "Filter pill",
+      "category": "COMPONENT_SET",
+      "evidenceType": "design-context-plus-component-graph",
+      "rawFiles": [
+        "raw\\design-context-27774-7950-filter-pill-popover.txt",
+        "raw\\component-node-evidence-27774-7950-popover-filter-pill-menus.json"
+      ],
+      "recipeDisposition": "folded-into-named-recipe",
+      "foldedIntoRecipe": "Popovers",
+      "rationale": "Covered by the Popovers recipe as a subcomponent/state/anatomy variant; no separate public library API is needed.",
+      "apiMeaning": "If exported, API would mean React component props/callbacks/slots/state model. This item is either folded into an existing API or deliberately not exported."
+    },
+    {
+      "nodeId": "28644:76791",
+      "label": "Message bar upsell",
+      "page": "Message bar",
+      "category": "COMPONENT_SET",
+      "evidenceType": "design-context-plus-component-graph",
+      "rawFiles": [
+        "raw\\design-context-28644-76791-message-bar.txt",
+        "raw\\component-node-evidence-28644-76791-message-bar-upsell.json"
+      ],
+      "recipeDisposition": "not-library-api",
+      "foldedIntoRecipe": null,
+      "rationale": "Catalog/table-of-contents, WIP/deprecated/local helper, or visual-only subpart. It remains cached as evidence but is not exported as a standalone library API.",
+      "apiMeaning": "If exported, API would mean React component props/callbacks/slots/state model. This item is either folded into an existing API or deliberately not exported."
+    },
+    {
+      "nodeId": "27113:1660",
+      "label": ".Tab Number",
+      "page": "Pager",
+      "category": "COMPONENT_SET",
+      "evidenceType": "component-graph-node-snapshot",
+      "rawFiles": [
+        "raw\\component-node-evidence-27113-1660-tab-number.json"
+      ],
+      "recipeDisposition": "folded-into-named-recipe",
+      "foldedIntoRecipe": "Tab lists",
+      "rationale": "Covered by the Tab lists recipe as a subcomponent/state/anatomy variant; no separate public library API is needed.",
+      "apiMeaning": "If exported, API would mean React component props/callbacks/slots/state model. This item is either folded into an existing API or deliberately not exported."
+    },
+    {
+      "nodeId": "27119:1897",
+      "label": ".Pagination Counter",
+      "page": "Pager",
+      "category": "COMPONENT_SET",
+      "evidenceType": "component-graph-node-snapshot",
+      "rawFiles": [
+        "raw\\component-node-evidence-27119-1897-pagination-counter.json"
+      ],
+      "recipeDisposition": "folded-into-named-recipe",
+      "foldedIntoRecipe": "Pager",
+      "rationale": "Covered by the Pager recipe as a subcomponent/state/anatomy variant; no separate public library API is needed.",
+      "apiMeaning": "If exported, API would mean React component props/callbacks/slots/state model. This item is either folded into an existing API or deliberately not exported."
+    },
+    {
+      "nodeId": "27119:15792",
+      "label": ".Num Dropdown",
+      "page": "Pager",
+      "category": "COMPONENT_SET",
+      "evidenceType": "component-graph-node-snapshot",
+      "rawFiles": [
+        "raw\\component-node-evidence-27119-15792-num-dropdown.json"
+      ],
+      "recipeDisposition": "folded-into-named-recipe",
+      "foldedIntoRecipe": "Pager",
+      "rationale": "Covered by the Pager recipe as a subcomponent/state/anatomy variant; no separate public library API is needed.",
+      "apiMeaning": "If exported, API would mean React component props/callbacks/slots/state model. This item is either folded into an existing API or deliberately not exported."
+    },
+    {
+      "nodeId": "28035:15352",
+      "label": ".Popover Content (Light)",
+      "page": "Popover",
+      "category": "COMPONENT_SET",
+      "evidenceType": "component-graph-node-snapshot",
+      "rawFiles": [
+        "raw\\component-node-evidence-28035-15352-popover-content-light.json"
+      ],
+      "recipeDisposition": "folded-into-named-recipe",
+      "foldedIntoRecipe": "Popovers",
+      "rationale": "Covered by the Popovers recipe as a subcomponent/state/anatomy variant; no separate public library API is needed.",
+      "apiMeaning": "If exported, API would mean React component props/callbacks/slots/state model. This item is either folded into an existing API or deliberately not exported."
+    },
+    {
+      "nodeId": "28174:7417",
+      "label": "Progress Bar with labels",
+      "page": "Progress bar",
+      "category": "COMPONENT_SET",
+      "evidenceType": "component-graph-node-snapshot",
+      "rawFiles": [
+        "raw\\component-node-evidence-28174-7417-progress-bar-with-labels.json"
+      ],
+      "recipeDisposition": "not-library-api",
+      "foldedIntoRecipe": null,
+      "rationale": "Catalog/table-of-contents, WIP/deprecated/local helper, or visual-only subpart. It remains cached as evidence but is not exported as a standalone library API.",
+      "apiMeaning": "If exported, API would mean React component props/callbacks/slots/state model. This item is either folded into an existing API or deliberately not exported."
+    },
+    {
+      "nodeId": "28209:4560",
+      "label": "Animated Progress Bar with labels",
+      "page": "Progress bar",
+      "category": "COMPONENT_SET",
+      "evidenceType": "component-graph-node-snapshot",
+      "rawFiles": [
+        "raw\\component-node-evidence-28209-4560-animated-progress-bar-with-labels.json"
+      ],
+      "recipeDisposition": "not-library-api",
+      "foldedIntoRecipe": null,
+      "rationale": "Catalog/table-of-contents, WIP/deprecated/local helper, or visual-only subpart. It remains cached as evidence but is not exported as a standalone library API.",
+      "apiMeaning": "If exported, API would mean React component props/callbacks/slots/state model. This item is either folded into an existing API or deliberately not exported."
+    },
+    {
+      "nodeId": "27777:16820",
+      "label": "Scrollbar",
+      "page": "Scrollbar",
+      "category": "COMPONENT_SET",
+      "evidenceType": "component-graph-node-snapshot",
+      "rawFiles": [
+        "raw\\component-node-evidence-27777-16820-scrollbar.json"
+      ],
+      "recipeDisposition": "not-library-api",
+      "foldedIntoRecipe": null,
+      "rationale": "Catalog/table-of-contents, WIP/deprecated/local helper, or visual-only subpart. It remains cached as evidence but is not exported as a standalone library API.",
+      "apiMeaning": "If exported, API would mean React component props/callbacks/slots/state model. This item is either folded into an existing API or deliberately not exported."
+    },
+    {
+      "nodeId": "35285:10476",
+      "label": "Footer",
+      "page": "Shell for Azure Portal",
+      "category": "COMPONENT_SET",
+      "evidenceType": "design-context-plus-component-graph",
+      "rawFiles": [
+        "raw\\design-context-35285-10476-shell-footer-large.txt",
+        "raw\\component-node-evidence-35285-10476-footer.json"
+      ],
+      "recipeDisposition": "folded-into-named-recipe",
+      "foldedIntoRecipe": "Form with footer actions",
+      "rationale": "Covered by the Form with footer actions recipe as a subcomponent/state/anatomy variant; no separate public library API is needed.",
+      "apiMeaning": "If exported, API would mean React component props/callbacks/slots/state model. This item is either folded into an existing API or deliberately not exported."
+    },
+    {
+      "nodeId": "32610:9876",
+      "label": ".Menu header",
+      "page": "Shell for Azure Portal",
+      "category": "COMPONENT_SET",
+      "evidenceType": "component-graph-node-snapshot",
+      "rawFiles": [
+        "raw\\component-node-evidence-32610-9876-menu-header.json"
+      ],
+      "recipeDisposition": "folded-into-named-recipe",
+      "foldedIntoRecipe": "Blade header",
+      "rationale": "Covered by the Blade header recipe as a subcomponent/state/anatomy variant; no separate public library API is needed.",
+      "apiMeaning": "If exported, API would mean React component props/callbacks/slots/state model. This item is either folded into an existing API or deliberately not exported."
+    },
+    {
+      "nodeId": "32610:9930",
+      "label": ".Menu group",
+      "page": "Shell for Azure Portal",
+      "category": "COMPONENT_SET",
+      "evidenceType": "component-graph-node-snapshot",
+      "rawFiles": [
+        "raw\\component-node-evidence-32610-9930-menu-group.json"
+      ],
+      "recipeDisposition": "not-library-api",
+      "foldedIntoRecipe": null,
+      "rationale": "Catalog/table-of-contents, WIP/deprecated/local helper, or visual-only subpart. It remains cached as evidence but is not exported as a standalone library API.",
+      "apiMeaning": "If exported, API would mean React component props/callbacks/slots/state model. This item is either folded into an existing API or deliberately not exported."
+    },
+    {
+      "nodeId": "32610:9923",
+      "label": ".search button",
+      "page": "Shell for Azure Portal",
+      "category": "COMPONENT_SET",
+      "evidenceType": "component-graph-node-snapshot",
+      "rawFiles": [
+        "raw\\component-node-evidence-32610-9923-search-button.json"
+      ],
+      "recipeDisposition": "not-library-api",
+      "foldedIntoRecipe": null,
+      "rationale": "Catalog/table-of-contents, WIP/deprecated/local helper, or visual-only subpart. It remains cached as evidence but is not exported as a standalone library API.",
+      "apiMeaning": "If exported, API would mean React component props/callbacks/slots/state model. This item is either folded into an existing API or deliberately not exported."
+    },
+    {
+      "nodeId": "32610:9942",
+      "label": ".Menu search",
+      "page": "Shell for Azure Portal",
+      "category": "COMPONENT_SET",
+      "evidenceType": "component-graph-node-snapshot",
+      "rawFiles": [
+        "raw\\component-node-evidence-32610-9942-menu-search.json"
+      ],
+      "recipeDisposition": "not-library-api",
+      "foldedIntoRecipe": null,
+      "rationale": "Catalog/table-of-contents, WIP/deprecated/local helper, or visual-only subpart. It remains cached as evidence but is not exported as a standalone library API.",
+      "apiMeaning": "If exported, API would mean React component props/callbacks/slots/state model. This item is either folded into an existing API or deliberately not exported."
+    },
+    {
+      "nodeId": "35399:10636",
+      "label": "L1 - Portal Menu",
+      "page": "Shell for Azure Portal",
+      "category": "COMPONENT_SET",
+      "evidenceType": "component-graph-node-snapshot",
+      "rawFiles": [
+        "raw\\component-node-evidence-35399-10636-l1-portal-menu.json"
+      ],
+      "recipeDisposition": "not-library-api",
+      "foldedIntoRecipe": null,
+      "rationale": "Catalog/table-of-contents, WIP/deprecated/local helper, or visual-only subpart. It remains cached as evidence but is not exported as a standalone library API.",
+      "apiMeaning": "If exported, API would mean React component props/callbacks/slots/state model. This item is either folded into an existing API or deliberately not exported."
+    },
+    {
+      "nodeId": "41011:13461",
+      "label": "Footer",
+      "page": "Shell for Azure Portal",
+      "category": "COMPONENT_SET",
+      "evidenceType": "component-graph-node-snapshot",
+      "rawFiles": [
+        "raw\\component-node-evidence-41011-13461-footer.json"
+      ],
+      "recipeDisposition": "folded-into-named-recipe",
+      "foldedIntoRecipe": "Form with footer actions",
+      "rationale": "Covered by the Form with footer actions recipe as a subcomponent/state/anatomy variant; no separate public library API is needed.",
+      "apiMeaning": "If exported, API would mean React component props/callbacks/slots/state model. This item is either folded into an existing API or deliberately not exported."
+    },
+    {
+      "nodeId": "41795:20148",
+      "label": "Search Filter Pills",
+      "page": "Shell for Azure Portal",
+      "category": "COMPONENT_SET",
+      "evidenceType": "component-graph-node-snapshot",
+      "rawFiles": [
+        "raw\\component-node-evidence-41795-20148-search-filter-pills.json"
+      ],
+      "recipeDisposition": "not-library-api",
+      "foldedIntoRecipe": null,
+      "rationale": "Catalog/table-of-contents, WIP/deprecated/local helper, or visual-only subpart. It remains cached as evidence but is not exported as a standalone library API.",
+      "apiMeaning": "If exported, API would mean React component props/callbacks/slots/state model. This item is either folded into an existing API or deliberately not exported."
+    },
+    {
+      "nodeId": "41362:31531",
+      "label": ".Azure Mobile Search",
+      "page": "Shell for Azure Portal",
+      "category": "COMPONENT",
+      "evidenceType": "component-graph-node-snapshot",
+      "rawFiles": [
+        "raw\\component-node-evidence-41362-31531-azure-mobile-search.json"
+      ],
+      "recipeDisposition": "not-library-api",
+      "foldedIntoRecipe": null,
+      "rationale": "Catalog/table-of-contents, WIP/deprecated/local helper, or visual-only subpart. It remains cached as evidence but is not exported as a standalone library API.",
+      "apiMeaning": "If exported, API would mean React component props/callbacks/slots/state model. This item is either folded into an existing API or deliberately not exported."
+    },
+    {
+      "nodeId": "41483:18353",
+      "label": ".Mobile Search Menu",
+      "page": "Shell for Azure Portal",
+      "category": "COMPONENT_SET",
+      "evidenceType": "component-graph-node-snapshot",
+      "rawFiles": [
+        "raw\\component-node-evidence-41483-18353-mobile-search-menu.json"
+      ],
+      "recipeDisposition": "not-library-api",
+      "foldedIntoRecipe": null,
+      "rationale": "Catalog/table-of-contents, WIP/deprecated/local helper, or visual-only subpart. It remains cached as evidence but is not exported as a standalone library API.",
+      "apiMeaning": "If exported, API would mean React component props/callbacks/slots/state model. This item is either folded into an existing API or deliberately not exported."
+    },
+    {
+      "nodeId": "40971:40679",
+      "label": ".Azure Global Search",
+      "page": "Shell for Azure Portal",
+      "category": "COMPONENT",
+      "evidenceType": "wrapper-child-design-context-plus-component-graph",
+      "rawFiles": [
+        "raw\\design-context-40971-40679-azure-global-search-large.txt",
+        "raw\\component-node-evidence-40971-40679-azure-global-search.json"
+      ],
+      "recipeDisposition": "not-library-api",
+      "foldedIntoRecipe": null,
+      "rationale": "Catalog/table-of-contents, WIP/deprecated/local helper, or visual-only subpart. It remains cached as evidence but is not exported as a standalone library API.",
+      "apiMeaning": "If exported, API would mean React component props/callbacks/slots/state model. This item is either folded into an existing API or deliberately not exported."
+    },
+    {
+      "nodeId": "40971:35680",
+      "label": ".Search Menu",
+      "page": "Shell for Azure Portal",
+      "category": "COMPONENT_SET",
+      "evidenceType": "component-graph-node-snapshot",
+      "rawFiles": [
+        "raw\\component-node-evidence-40971-35680-search-menu.json"
+      ],
+      "recipeDisposition": "not-library-api",
+      "foldedIntoRecipe": null,
+      "rationale": "Catalog/table-of-contents, WIP/deprecated/local helper, or visual-only subpart. It remains cached as evidence but is not exported as a standalone library API.",
+      "apiMeaning": "If exported, API would mean React component props/callbacks/slots/state model. This item is either folded into an existing API or deliberately not exported."
+    },
+    {
+      "nodeId": "31147:439",
+      "label": "Site Header",
+      "page": "Shell for Azure Portal",
+      "category": "COMPONENT_SET",
+      "evidenceType": "component-graph-node-snapshot",
+      "rawFiles": [
+        "raw\\component-node-evidence-31147-439-site-header.json"
+      ],
+      "recipeDisposition": "folded-into-named-recipe",
+      "foldedIntoRecipe": "Blade header",
+      "rationale": "Covered by the Blade header recipe as a subcomponent/state/anatomy variant; no separate public library API is needed.",
+      "apiMeaning": "If exported, API would mean React component props/callbacks/slots/state model. This item is either folded into an existing API or deliberately not exported."
+    },
+    {
+      "nodeId": "28472:10338",
+      "label": "Slider with numbers",
+      "page": "Slider",
+      "category": "COMPONENT_SET",
+      "evidenceType": "metadata-plus-component-graph",
+      "rawFiles": [
+        "raw\\metadata-28472-10338-slider-with-numbers.xml",
+        "raw\\component-node-evidence-28472-10338-slider-with-numbers.json"
+      ],
+      "recipeDisposition": "not-library-api",
+      "foldedIntoRecipe": null,
+      "rationale": "Catalog/table-of-contents, WIP/deprecated/local helper, or visual-only subpart. It remains cached as evidence but is not exported as a standalone library API.",
+      "apiMeaning": "If exported, API would mean React component props/callbacks/slots/state model. This item is either folded into an existing API or deliberately not exported."
+    },
+    {
+      "nodeId": "29195:7388",
+      "label": "Azure Vertical Tab",
+      "page": "Tablist",
+      "category": "COMPONENT_SET",
+      "evidenceType": "component-graph-node-snapshot",
+      "rawFiles": [
+        "raw\\component-node-evidence-29195-7388-azure-vertical-tab.json"
+      ],
+      "recipeDisposition": "folded-into-named-recipe",
+      "foldedIntoRecipe": "Tab lists",
+      "rationale": "Covered by the Tab lists recipe as a subcomponent/state/anatomy variant; no separate public library API is needed.",
+      "apiMeaning": "If exported, API would mean React component props/callbacks/slots/state model. This item is either folded into an existing API or deliberately not exported."
+    },
+    {
+      "nodeId": "29185:10188",
+      "label": ".Horizontal Swap",
+      "page": "Tablist",
+      "category": "COMPONENT_SET",
+      "evidenceType": "component-graph-node-snapshot",
+      "rawFiles": [
+        "raw\\component-node-evidence-29185-10188-horizontal-swap.json"
+      ],
+      "recipeDisposition": "folded-into-named-recipe",
+      "foldedIntoRecipe": "Tab lists",
+      "rationale": "Covered by the Tab lists recipe as a subcomponent/state/anatomy variant; no separate public library API is needed.",
+      "apiMeaning": "If exported, API would mean React component props/callbacks/slots/state model. This item is either folded into an existing API or deliberately not exported."
+    },
+    {
+      "nodeId": "29553:7576",
+      "label": "Toolbar (Azure)",
+      "page": "Toolbar for Azure",
+      "category": "COMPONENT_SET",
+      "evidenceType": "metadata-plus-component-graph",
+      "rawFiles": [
+        "raw\\metadata-29553-7576-toolbar-azure.xml",
+        "raw\\component-node-evidence-29553-7576-toolbar-azure.json"
+      ],
+      "recipeDisposition": "not-library-api",
+      "foldedIntoRecipe": null,
+      "rationale": "Catalog/table-of-contents, WIP/deprecated/local helper, or visual-only subpart. It remains cached as evidence but is not exported as a standalone library API.",
+      "apiMeaning": "If exported, API would mean React component props/callbacks/slots/state model. This item is either folded into an existing API or deliberately not exported."
+    },
+    {
+      "nodeId": "27175:3382",
+      "label": ".hierarchical indicator",
+      "page": "Form",
+      "category": "COMPONENT_SET",
+      "evidenceType": "component-graph-node-snapshot",
+      "rawFiles": [
+        "raw\\component-node-evidence-27175-3382-hierarchical-indicator.json"
+      ],
+      "recipeDisposition": "folded-into-named-recipe",
+      "foldedIntoRecipe": "Form with footer actions",
+      "rationale": "Covered by the Form with footer actions recipe as a subcomponent/state/anatomy variant; no separate public library API is needed.",
+      "apiMeaning": "If exported, API would mean React component props/callbacks/slots/state model. This item is either folded into an existing API or deliberately not exported."
+    },
+    {
+      "nodeId": "30330:1179",
+      "label": ".Asterix",
+      "page": "Form",
+      "category": "COMPONENT",
+      "evidenceType": "component-graph-node-snapshot",
+      "rawFiles": [
+        "raw\\component-node-evidence-30330-1179-asterix.json"
+      ],
+      "recipeDisposition": "folded-into-named-recipe",
+      "foldedIntoRecipe": "Form with footer actions",
+      "rationale": "Covered by the Form with footer actions recipe as a subcomponent/state/anatomy variant; no separate public library API is needed.",
+      "apiMeaning": "If exported, API would mean React component props/callbacks/slots/state model. This item is either folded into an existing API or deliberately not exported."
+    },
+    {
+      "nodeId": "25365:18143",
+      "label": ".Azure UI Kit Header (local)",
+      "page": "Local components",
+      "category": "COMPONENT",
+      "evidenceType": "component-graph-node-snapshot",
+      "rawFiles": [
+        "raw\\component-node-evidence-25365-18143-azure-ui-kit-header-local.json"
+      ],
+      "recipeDisposition": "folded-into-named-recipe",
+      "foldedIntoRecipe": "Blade header",
+      "rationale": "Covered by the Blade header recipe as a subcomponent/state/anatomy variant; no separate public library API is needed.",
+      "apiMeaning": "If exported, API would mean React component props/callbacks/slots/state model. This item is either folded into an existing API or deliberately not exported."
+    },
+    {
+      "nodeId": "27218:35323",
+      "label": ".Design System",
+      "page": "Local components",
+      "category": "COMPONENT_SET",
+      "evidenceType": "component-graph-node-snapshot",
+      "rawFiles": [
+        "raw\\component-node-evidence-27218-35323-design-system.json"
+      ],
+      "recipeDisposition": "not-library-api",
+      "foldedIntoRecipe": null,
+      "rationale": "Catalog/table-of-contents, WIP/deprecated/local helper, or visual-only subpart. It remains cached as evidence but is not exported as a standalone library API.",
+      "apiMeaning": "If exported, API would mean React component props/callbacks/slots/state model. This item is either folded into an existing API or deliberately not exported."
+    },
+    {
+      "nodeId": "38075:124063",
+      "label": ".Design System links",
+      "page": "Local components",
+      "category": "COMPONENT_SET",
+      "evidenceType": "component-graph-node-snapshot",
+      "rawFiles": [
+        "raw\\component-node-evidence-38075-124063-design-system-links.json"
+      ],
+      "recipeDisposition": "not-library-api",
+      "foldedIntoRecipe": null,
+      "rationale": "Catalog/table-of-contents, WIP/deprecated/local helper, or visual-only subpart. It remains cached as evidence but is not exported as a standalone library API.",
+      "apiMeaning": "If exported, API would mean React component props/callbacks/slots/state model. This item is either folded into an existing API or deliberately not exported."
+    },
+    {
+      "nodeId": "27218:35373",
+      "label": ".Code status",
+      "page": "Local components",
+      "category": "COMPONENT_SET",
+      "evidenceType": "component-graph-node-snapshot",
+      "rawFiles": [
+        "raw\\component-node-evidence-27218-35373-code-status.json"
+      ],
+      "recipeDisposition": "folded-into-named-recipe",
+      "foldedIntoRecipe": "Iconography",
+      "rationale": "Covered by the Iconography recipe as a subcomponent/state/anatomy variant; no separate public library API is needed.",
+      "apiMeaning": "If exported, API would mean React component props/callbacks/slots/state model. This item is either folded into an existing API or deliberately not exported."
+    },
+    {
+      "nodeId": "27218:35412",
+      "label": ".Progress",
+      "page": "Local components",
+      "category": "COMPONENT_SET",
+      "evidenceType": "component-graph-node-snapshot",
+      "rawFiles": [
+        "raw\\component-node-evidence-27218-35412-progress.json"
+      ],
+      "recipeDisposition": "not-library-api",
+      "foldedIntoRecipe": null,
+      "rationale": "Catalog/table-of-contents, WIP/deprecated/local helper, or visual-only subpart. It remains cached as evidence but is not exported as a standalone library API.",
+      "apiMeaning": "If exported, API would mean React component props/callbacks/slots/state model. This item is either folded into an existing API or deliberately not exported."
+    },
+    {
+      "nodeId": "35718:12181",
+      "label": ".component row (local)",
+      "page": "Local components",
+      "category": "COMPONENT_SET",
+      "evidenceType": "component-graph-node-snapshot",
+      "rawFiles": [
+        "raw\\component-node-evidence-35718-12181-component-row-local.json"
+      ],
+      "recipeDisposition": "not-library-api",
+      "foldedIntoRecipe": null,
+      "rationale": "Catalog/table-of-contents, WIP/deprecated/local helper, or visual-only subpart. It remains cached as evidence but is not exported as a standalone library API.",
+      "apiMeaning": "If exported, API would mean React component props/callbacks/slots/state model. This item is either folded into an existing API or deliberately not exported."
+    },
+    {
+      "nodeId": "38080:124096",
+      "label": ".Latest Component",
+      "page": "Local components",
+      "category": "COMPONENT_SET",
+      "evidenceType": "component-graph-node-snapshot",
+      "rawFiles": [
+        "raw\\component-node-evidence-38080-124096-latest-component.json"
+      ],
+      "recipeDisposition": "not-library-api",
+      "foldedIntoRecipe": null,
+      "rationale": "Catalog/table-of-contents, WIP/deprecated/local helper, or visual-only subpart. It remains cached as evidence but is not exported as a standalone library API.",
+      "apiMeaning": "If exported, API would mean React component props/callbacks/slots/state model. This item is either folded into an existing API or deliberately not exported."
+    },
+    {
+      "nodeId": "38080:124134",
+      "label": ".Design System Update Notice",
+      "page": "Local components",
+      "category": "COMPONENT_SET",
+      "evidenceType": "component-graph-node-snapshot",
+      "rawFiles": [
+        "raw\\component-node-evidence-38080-124134-design-system-update-notice.json"
+      ],
+      "recipeDisposition": "not-library-api",
+      "foldedIntoRecipe": null,
+      "rationale": "Catalog/table-of-contents, WIP/deprecated/local helper, or visual-only subpart. It remains cached as evidence but is not exported as a standalone library API.",
+      "apiMeaning": "If exported, API would mean React component props/callbacks/slots/state model. This item is either folded into an existing API or deliberately not exported."
+    }
+  ],
+  "dispositionCounts": {
+    "folded-into-named-recipe": 43,
+    "not-library-api": 40
+  },
+  "updatedAt": "2026-07-08T15:40:07-07:00",
+  "libraryOwnedArtifacts": {
+    "recipes": "apps/web/src/azure-fluent-system/recipes/implementation-recipes.json",
+    "examples": "apps/web/src/azure-fluent-system/examples"
+  }
+}

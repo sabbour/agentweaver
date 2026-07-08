@@ -1,0 +1,33 @@
+<svg id="uuid-ec8c2db6-5def-46de-9416-1f3669ecb388" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18">
+  <defs>
+    <linearGradient id="uuid-8494ef87-c1c9-4314-bfe6-43261811a051" x1="224.34" y1="474.572" x2="224.34" y2="484.685" gradientTransform="translate(-216 485.516) scale(1 -1)" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#d2ebff" />
+      <stop offset="1" stop-color="#f0fffd" />
+    </linearGradient>
+    <linearGradient id="uuid-8841bc89-8c79-40be-8312-4f24b7d7948a" x1="230.15" y1="466.112" x2="230.15" y2="484.204" gradientTransform="translate(-216 485.516) scale(1 -1)" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#0078d4" />
+      <stop offset=".17" stop-color="#1c84dc" />
+      <stop offset=".38" stop-color="#3990e4" />
+      <stop offset=".59" stop-color="#4d99ea" />
+      <stop offset=".8" stop-color="#5a9eee" />
+      <stop offset="1" stop-color="#5ea0ef" />
+    </linearGradient>
+    <linearGradient id="uuid-66d5ea0b-ab31-4053-924e-d84f8956126e" x1="14.155" y1="4.175" x2="14.155" y2="14.518" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#f0fffd" />
+      <stop offset="1" stop-color="#d2ebff" />
+    </linearGradient>
+  </defs>
+  <g>
+    <path d="m.601,0h15.479c.331,0,.6.269.6.6v10.685c0,.331-.269.6-.6.6H.6c-.331,0-.6-.269-.6-.6V.601c0-.332.269-.601.601-.601Z" fill="#0078d4" />
+    <rect x=".97" y=".831" width="14.74" height="10.112" rx=".3" ry=".3" fill="url(#uuid-8494ef87-c1c9-4314-bfe6-43261811a051)" isolation="isolate" opacity=".9" />
+    <rect x="10.3" y="3.094" width="7.7" height="12.866" rx=".3" ry=".3" fill="url(#uuid-8841bc89-8c79-40be-8312-4f24b7d7948a)" />
+    <rect x="7.48" y=".37" width="1.77" height=".24" rx=".11" ry=".11" fill="#f2f2f2" />
+    <rect x="13.27" y="3.524" width="1.77" height=".24" rx=".11" ry=".11" fill="#f2f2f2" />
+    <rect x="11.03" y="4.175" width="6.25" height="10.343" rx=".14" ry=".14" fill="url(#uuid-66d5ea0b-ab31-4053-924e-d84f8956126e)" isolation="isolate" opacity=".9" />
+    <rect x="13.72" y="14.948" width=".86" height=".731" rx=".2" ry=".2" fill="#f2f2f2" />
+  </g>
+  <g>
+    <ellipse cx="4.515" cy="13.48" rx="4.515" ry="4.52" fill="#e62323" />
+    <path d="m7.084,14.08v-1.309H1.635v1.309h5.449Z" fill="#fff" />
+  </g>
+</svg>

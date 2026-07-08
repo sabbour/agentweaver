@@ -1,0 +1,23 @@
+<svg id="uuid-4c24b8b0-13d1-4538-8bab-0fb97a224ac3" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18">
+  <defs>
+    <linearGradient id="uuid-a4d13f92-9b0d-4bfb-bfb3-0982162c2b83" x1="15.402" y1="6" x2="17.295" y2="6" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#005ba1" />
+      <stop offset="1" stop-color="#5ea0ef" />
+    </linearGradient>
+    <linearGradient id="uuid-4498f7ed-1ef5-4641-a1ca-4c67739e5c0b" x1="6" y1="16.141" x2="6" y2="18.034" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#5ea0ef" />
+      <stop offset="1" stop-color="#005ba1" />
+    </linearGradient>
+    <linearGradient id="uuid-a08e3c26-224c-4af8-8077-4bdc17311a6b" x1="6.937" y1="8.663" x2="8.275" y2="7.325" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#005ba1" />
+      <stop offset=".148" stop-color="#186cb5" />
+      <stop offset=".373" stop-color="#3683ce" />
+      <stop offset=".594" stop-color="#4c93e0" />
+      <stop offset=".806" stop-color="#599ceb" />
+      <stop offset="1" stop-color="#5ea0ef" />
+    </linearGradient>
+  </defs>
+  <path d="m16.8,0c.663,0,1.2.537,1.2,1.2v9.6c0,.663-.537,1.2-1.2,1.2s-1.2-.537-1.2-1.2V1.2c0-.663.537-1.2,1.2-1.2Z" fill="url(#uuid-a4d13f92-9b0d-4bfb-bfb3-0982162c2b83)" />
+  <path d="m0,16.8c0-.663.537-1.2,1.2-1.2h9.6c.663,0,1.2.537,1.2,1.2s-.537,1.2-1.2,1.2H1.2c-.663,0-1.2-.537-1.2-1.2Z" fill="url(#uuid-4498f7ed-1ef5-4641-a1ca-4c67739e5c0b)" />
+  <path d="m4.449,2.751c-.469-.469-1.228-.469-1.697,0-.469.469-.469,1.228,0,1.697l8.4,8.4c.469.469,1.228.469,1.697,0s.469-1.228,0-1.697L4.449,2.751Z" fill="url(#uuid-a08e3c26-224c-4af8-8077-4bdc17311a6b)" />
+</svg>

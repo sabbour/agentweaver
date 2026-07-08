@@ -378,6 +378,272 @@ This project uses **Fluent 2**, Microsoft's second-generation design system. All
 
 ---
 
+## Standalone Azure Fluent system contract
+
+
+This section defines a reusable Azure Fluent-style product system that can be packaged for other React applications. Agentweaver is the first consumer and demo app, not the boundary of the system. The checked-in source of truth for the standalone kit is this `DESIGN.md` contract, the sync skill, and the library under `apps/web/src/azure-fluent-system/`. Supporting evidence artifacts such as extraction caches or icon manifests are generated inputs that may be refreshed, not machine-local dependencies.
+
+Agentweaver's product web app follows the **Azure UI Kit (Fluent 2)** reference as an execution contract, not as a copied Figma export. The authenticated Figma captures available to the team identify the Azure UI Kit file in Web/Light + Fluent + Microsoft + Rounded modes, with `Copilot Flair` styles visible. Where exact Figma variables are unavailable, use Fluent 2 semantic tokens from `@fluentui/react-components`.
+
+**Authoritative Figma coverage:** use the full-frame table-of-contents exports as the source of truth, not the earlier click-through manifests:
+
+- **Component Contents:** `artifacts/figma-exports/full-frame-exports/table-of-contents-components-full.jpg` (`1552×8386`) — authoritative for the component inventory/status below.
+- **Pattern Contents:** `artifacts/figma-exports/full-frame-exports/table-of-contents-patterns-full.png` — authoritative for portal pattern inventory/status. Patterns are listed separately below and must not be conflated with component guidance.
+- Earlier `component-sweep` and `component-sweep-missing` manifests are supplemental click-through evidence for visible Copilot layer language, not authoritative coverage lists.
+- The full-frame export captures **visible Component Contents**. It does not prove every hidden internal Figma variant, state, or property is present/exported. Do not infer hidden variants or copy raw Figma values unless visible in artifacts; use Fluent semantic tokens.
+- **Component Contents and Pattern Contents are distinct.** Component guidance below describes reusable UI building blocks. Pattern guidance describes broader Azure Portal page/task archetypes and should be applied only when implementing that kind of workflow.
+
+**Authoritative MCP extraction cache:** structured extraction records live in `artifacts/figma-extraction/azure-ui-kit-fluent2/`. The cache contains `manifest.json`, `batch-high-impact-01.json`, `batch-representative-02.json`, `batch-representative-03.json`, `batch-representative-04.json`, `batch-representative-05.json`, `batch-representative-06.json`, `batch-representative-07.json`, `component-node-index.json`, `components.jsonl`, `representative-node-plan.json`, `pattern-node-index.json`, `patterns.jsonl`, `distilled-component-contexts.json`, `distilled-pattern-contexts.json`, and raw MCP responses under `raw/`. The current extraction budget ledger records the Azure UI Kit file `q2TdO4dVcMhNWYp0N6Bc05`, the Azure Pattern Templates file `TXALL9CS0727dvGcZo84Bg`, and the Figma request count. User-provided screenshots from the linked Pattern Templates file showed corrupted/overlapped Dev Mode rendering; use cached metadata and design-context text as evidence, not those visual screenshots. Treat this artifact tree as a portable, workflow-generated input surface: refresh it with the sync skill when needed, and do not require machine-local artifact paths in committed docs or consumer code.
+
+Extraction guardrails:
+
+- The bulk component graph found 148 published components, but only a high-impact representative subset has individual Dev Mode/MCP extraction cached. Do not claim per-component extraction coverage for all 148 components.
+- For areas already cached and distilled below, future implementation should not require live Figma access. Use Figma again only for exact states or anatomy of unextracted components/patterns.
+- Several image attachments were blank/tiny node renders; do not treat them as visual evidence.
+- Collapse Figma's large variant matrices into practical Fluent recipes. Implementers should not expose every Figma variant as a product choice.
+
+### Captured Azure UI Kit component inventory
+
+#### Azure Copilot components
+
+| Component Contents label | Design system | Code status | Progress | Agentweaver interpretation |
+|---|---|---|---|---|
+| Copilot for Azure | Azure Copilot | Code available | Complete | Hub/sidecar assistant surface with clear header, conversation body, contextual grounding, and command actions. |
+| Chat input | Azure Copilot | Code available | Complete | Structured composer: placeholder/help text, attachment/tool affordances, send action, validation/message-bar area, latency/progress, prompt suggestions, and character count when applicable. |
+| Chat output | Azure Copilot | Code available | Complete | Transcript/message output with readable markdown/code, metadata, status, and per-message actions. |
+| Navigation & header | Azure Copilot | Code available | Complete | Copilot shell header and nav/drawer language: title, close/back, current context, and optional navigation. |
+| Grounding menu | Azure Copilot | Code available | Complete | Selectable source/context menu with checked state and clear active-grounding feedback. |
+| Chain of thought | Azure Copilot | Code available | Complete | Show agentic progress as explainable steps/status, not raw hidden reasoning; use timeline/step rows, expandable details, badges, and elapsed metadata. |
+| Entry points | Azure Copilot | Code available | Complete | Page-level, component-level, inline, menu, command-bar, and tooltip entry affordances sized to their host surface. |
+| Inline Copilot | Azure Copilot | Code available | Complete | Compact contextual assistance adjacent to target content, dismissible and expandable only when needed. |
+| Top actions | Azure Copilot | Code available | Complete | Suggested-next-action card grouping likely actions with concise labels, icons, and one primary recommendation. |
+
+#### Component Contents inventory
+
+Progress is recorded only where the full-frame export shows a visible progress badge; blank progress cells mean no progress badge was visible in that artifact.
+
+| Component Contents label | AKA / visible note | Design system | Code status | Progress |
+|---|---|---|---|---|
+| Accordion |  | Azure | Code available |  |
+| Arm error list |  | Azure | Design only | Planning |
+| Avatars |  | Fluent 2 | Code available |  |
+| Badge |  | Fluent 2 | Code available |  |
+| Breadcrumb |  | Fluent 2 | Code available |  |
+| Button |  | Fluent 2 | Code available |  |
+| Card | AKA Tile | Fluent 2 | Code available |  |
+| Carousel |  | Fluent 2 | Code available |  |
+| Checkbox |  | Fluent 2 | Code available |  |
+| Code snippet |  | Azure | Design only | Complete |
+| Copy button |  | Azure | Code available | Complete |
+| Datagrid | AKA Details list | Azure | Code available | Complete |
+| Date Picker |  | Fluent 2 | Code available |  |
+| Dialog |  | Fluent 2 | Code available |  |
+| Divider |  | Fluent 2 | Code available |  |
+| Drawer | AKA Content pane, panel | Fluent 2 | Code available |  |
+| Dropdown |  | Fluent 2 | Code available |  |
+| Dropdown - Location |  | Azure | Code available | Complete |
+| Dropdown - Resource group |  | Azure | Code available | Complete |
+| Dropdown - Subscription |  | Azure | Code available | Complete |
+| Empty state |  | Azure | Design only | Complete |
+| Essentials |  | Azure | Code available | Complete |
+| Field |  | Fluent 2 | Code available |  |
+| Feedback link |  | Azure | Code available | Complete |
+| File upload |  | Azure | Code available | Complete |
+| Filterable combo box |  | Azure | Code available | Complete |
+| Filter subscription |  | Azure | Code available | Complete |
+| Filter pill |  | Azure | Code available | Complete |
+| Filter pill - Group |  | Azure | Code available | Complete |
+| Filter pill - Subscription |  | Azure | Code available | Complete |
+| Form | AKA Section control | Azure | Code available | Complete |
+| Info label |  | Fluent 2 | Code available |  |
+| Input |  | Fluent 2 | Code available |  |
+| Label |  | Fluent 2 | Code available |  |
+| Link |  | Fluent 2 | Code available |  |
+| Link - Resource |  | Azure | Code available | Complete |
+| Link - Sanitized |  | Azure | Code available | Complete |
+| Link - View |  | Azure | Code available | Complete |
+| List | AKA List view | Fluent 2 | Code available |  |
+| Material cards |  | Fluent 2 | Code available |  |
+| Menu | AKA Context menu | Fluent 2 | Code available |  |
+| Message bar | AKA Status bar, Info box | Fluent 2 | Code available |  |
+| Nav |  | Fluent 2 | Code available |  |
+| Nav for Azure Portal | Located in Azure Portal Shell | Azure | Design only | Complete |
+| Pager |  | Azure | Code available | Complete |
+| Persona |  | Fluent 2 | Code available |  |
+| Popover |  | Fluent 2 | Code available | Complete |
+| Progress bar |  | Fluent 2 | Code available | Complete |
+| Radio group | AKA Segmented Box | Fluent 2 | Code available |  |
+| Rating |  | Fluent 2 | Code available |  |
+| Scrollbar |  | Azure | Design only | Complete |
+| Search box |  | Fluent 2 | Code available |  |
+| Secure input | AKA Password box | Azure | Code available | Complete |
+| Shell for Azure Portal | Includes side/header/footer; do not improvise nav outside this language | Azure | Design only | Complete |
+| Site header | Now consolidated in Shell for Azure Portal | Azure | Design only | Complete |
+| Skeleton |  | Fluent 2 | Code available |  |
+| Slider |  | Azure | Code available | Complete |
+| Spin button |  | Fluent 2 | Code available |  |
+| Spinner |  | Fluent 2 | Code available |  |
+| Status indicator | AKA Inline message | Fluent 2 | Code available |  |
+| Switch picker |  | Fluent 2 | Code available |  |
+| Switch | AKA Toggle | Fluent 2 | Code available |  |
+| Tablist for Azure | AKA Tab, Pivot | Azure | Code available | Complete |
+| Tag & Interaction tag |  | Fluent 2 | Code available |  |
+| Tag picker |  | Fluent 2 | Code available |  |
+| Tags by resource |  | Azure | Code available | Complete |
+| Teaching popover | AKA Teaching bubble | Fluent 2 | Code available |  |
+| Text area | AKA Text box | Fluent 2 | Code available |  |
+| Toast | AKA Notification toast | Fluent 2 | Code available |  |
+| Toolbar | AKA Command bar | Azure | Code available | Complete |
+| Tooltip | AKA Info balloon | Fluent 2 | Code available |  |
+| Tree |  | Fluent 2 | Code available |  |
+
+### Agentweaver consumption priorities
+
+- **Use Fluent 2 components directly when the table says Fluent 2 + code available** (Button, Dialog, Drawer, Input, Field, Skeleton, Spinner, Tooltip, etc.). Style through tokens and app recipes; do not rebuild primitives.
+- **Use Azure components as product recipes when marked Azure.** If code is available, prefer the closest Fluent implementation plus Azure-specific composition (for example command bars, portal dropdowns, filter pills, resource links). If design-only, implement only the visible language needed for Agentweaver and avoid claiming parity with the upstream component.
+- **Do not improvise Azure Portal navigation.** Shell, site header, portal nav, context panes/drawers, and footer language belong to `Shell for Azure Portal`; Agentweaver's shell should remain a restrained interpretation of that component family.
+- **Data-heavy surfaces** should follow Datagrid/List/Pager/Filter language: dense rows, clear headers, active filter pills, compact status cells, and paging/scrolling only when functionally needed.
+- **Messaging and feedback** should follow Message bar, Status indicator, Toast, Teaching popover, Tooltip, and Feedback link language: local feedback first, toast for transient success, teaching popover only for first-run education.
+- **Forms and input** should follow Field/Input/Text area/Secure input/Dropdown/Date Picker/Radio group/Switch/Slider/Spin button language: labels, helper/error text, keyboard support, visible values for numeric sliders/spinners, and fixed footer actions in long dialogs.
+
+### Extracted component and shell evidence
+
+These rules come from the cached MCP design-context outputs and supersede broad visual guesses from the earlier implementation pass. Coverage now includes a comprehensive node-level offline ledger through `batch-comprehensive-12-icons-and-gap-reopen.json`: all 148 published components have concrete raw evidence records, while design-context anatomy remains targeted to implementation-relevant nodes. Use `apps/web/src/azure-fluent-system/recipes/standalone-system-plan.json` for package/module boundaries, `apps/web/src/azure-fluent-system/recipes/implementation-recipes.json` as the offline handoff layer for reusable Fluent React v9 components/patterns, and `apps/web/src/azure-fluent-system/examples/` for checked-in TSX samples. Raw MCP generated code is reference evidence, not production code.
+
+| Extracted target | Figma node / raw cache | Implementation guidance for Agentweaver |
+|---|---|---|
+| Azure Copilot grounding menu header | `32382:38901`, `raw\design-context-32382-38901-grounding-menu-header.txt` | Grounding selection uses a white, bordered header with `12px` top radii, `16px` horizontal padding, `12px` vertical padding, compact 32px pill tabs, a selected pill using `colorBrandBackground2` + `colorCompoundBrandStroke`, neutral unselected pill labels, an overflow button (`1 more`, `2 more`, etc.), and a rounded search box on the right. Agentweaver should model Copilot context/source selection as a commandable segmented header, not as decorative chips or a generic dropdown. |
+| Azure iconography sources and slots | batch 12 search summaries, `28817:36284`, `35292:9094`, `31147:480` | No dedicated Azure UI Kit iconography page/component was found in the published graph or top-level metadata. Use the installed `@fluentui/react-icons` package / `microsoft/fluentui-system-icons` family for standard action/status/navigation glyphs; use IconCloud (`https://iconcloud.design/`) as the approved authenticated source for Azure resource or product identity exports. Treat the Figma Community Microsoft Fluent System Iconography file as visual/reference guidance only unless assets are explicitly exported under acceptable terms. Observed icon slots: 12px status captions, 16px header/menu controls, 18px grid resource links, 20px tab/button/menu/input controls, 24px generic AI shell button, and 32px service/grounding tiles or entity icons. Keep glyph color token-driven/currentColor except approved product/resource assets. |
+| Command, header, and AI icons | `raw\design-context-28817-36284-grid-cell-icons-summary.txt`, `raw\design-context-35292-9094-header-icons-summary.txt`, `raw\design-context-31147-480-ai-button-summary.txt` | Dense grid row actions collapse behind a 32px overflow icon cell and Fluent `Menu` with 20px item icons; do not expose every row action inline. Blade header actions are optional 32px Pin/Star/More controls with 16px regular icons. Copilot uses the primary/rainbow product icon because color variants are deprecated; generic AI may use Sparkle only for explicit AI affordances. |
+| Offline component handoff ledger | `comprehensive-component-cache-ledger.json`, `raw\component-node-evidence-*.json`, `raw\toc-no-published-node-*.json` | For handoff work, first consult the ledger. `directly-cached` entries have node-specific graph evidence; `directly-cached-wrapper-plus-children` entries pair sparse wrappers with child/subnode anatomy; `unavailable-or-inaccessible` entries document TOC labels with no published node. Do not treat earlier `low-priority`, `documentation-sufficient`, or `covered-by-parent` categories as missing unless the ledger lacks a node-level record. |
+| Offline implementation recipes | `apps/web/src/azure-fluent-system/recipes/implementation-recipes.json` | Practical Fluent React v9 recipes exist for Blade header, Resource tag editor, Service Menu, Data grid + filtering, Copilot composer/response, Inline Copilot, Chain of thought/agentic list, Form with footer actions, Pager, Tab lists, Popovers, and Iconography. Each recipe maps Figma evidence to Fluent components/tokens, layout anatomy, states, accessibility, usage boundaries, and concise TSX/pseudocode. Ledger `recipeStatus` distinguishes complete recipes from summary-only evidence. |
+| Recipe disposition / gap ledger | `apps/web/src/azure-fluent-system/recipes/implementation-recipe-gap-list.json` | Records the 83 formerly summary-only nodes as either folded into a named recipe or intentionally not exported as a standalone library API. This lets other agents inspect the disposition without opening session artifacts. |
+| Standalone system plan | `apps/web/src/azure-fluent-system/recipes/standalone-system-plan.json` | Defines the portable package/module layout, token/CSS architecture, component and pattern inventory, recipe completeness, Agentweaver consumption plan, and blockers. Use it before implementation so components land in a reusable library instead of being hard-coded into the demo app. |
+| Checked-in usage samples | `apps/web/src/azure-fluent-system/examples/` | TSX examples for provider/layout, BladeHeader, ResourceTagEditor, AzureDataGrid + filtering, Copilot composer/response, CreateResourcePattern, and icon registry usage. These are library-local reference files for other agents and future consumers. |
+| Standalone implementation module | `apps/web/src/azure-fluent-system` | The first implementation lives as an isolated web source module because the repo has no workspace package convention yet. It exports provider, tokens/CSS, hardened ready-to-use components, patterns, icon registry adapters, focused tests, and a public index; it is structured to move later into `packages/azure-fluent-system` or `@org/azure-fluent-system` without migrating Agentweaver pages first. Priority surfaces now carry explicit loading/error/disabled/selection/interaction states rather than scaffold-only wrappers. |
+
+### Public React API meaning
+
+In this system, API means the reusable React library contract: exported component and pattern names, prop types, callbacks/events, slots/render props, controlled and uncontrolled state model, accessibility behavior, variants/states, example usage, and implementation skeletons. It does not mean a backend service API. Recipes in `apps/web/src/azure-fluent-system/recipes/implementation-recipes.json` plus the checked-in TSX samples in `apps/web/src/azure-fluent-system/examples/` are expected to give another project enough of this React API contract to implement or consume a component without reopening Figma.
+
+| Azure Copilot grounding menu details | Grounding Menu `32382:38890`, GM Search `32382:38987`, GM Entity List Item `32382:38992`, GM ListItems `32382:38860` | Grounding menus are responsive source/context pickers with header tabs, search, and entity rows. Search rests as an icon button and focuses into a compact rounded SearchBox with a brand underline. Entity rows use a 32px resource/file icon, body heading, caption subheading, optional sync/right icons, and standard Rest/Hover/Pressed/Selected/Disabled/Focus states. Lists are 428px wide with 16px horizontal padding, 4px row gaps, 48px rows, and optional slim scrollbar. |
+| Azure Copilot navigation item | `32382:39444`, cache in component extraction summary | Copilot navigation items are 268px rows with 3px active rail, 12px rounded containers, 16px horizontal padding, 8px vertical padding, 20px icon/status slots, strong text for selected/unread rows, and explicit hover/selected/focus/loading states. Agentweaver's left rail should use this density/state model; avoid custom boxed nav cards. |
+| Azure Copilot workspace header and drawer | Nav Drawer `32382:39055`, Header `32382:40016` | Copilot workspaces use a 60px neutral header with chat title/subtitle, New chat, panel toggle, dismiss, and overflow actions. The 288px drawer is a chat-thread drawer with unread/review/in-progress/completed/no-chat variants; do not reuse it as app-wide primary navigation. |
+| Azure Copilot entry/icon | `31000:461`, `raw\design-context-32382-40353-azure-copilot-large.txt` | Use the primary/rainbow Copilot icon. Rest, hover, pressed, and selected states use subtle button backgrounds with tooltip support; color variants are deprecated and should not become product options. |
+| Inline Copilot prompt input | `29192:8358`, open start `29192:8232`, guided start `29192:8293`, `raw\design-context-29192-8358-inline-copilot-prompt-input-large.txt` | Supports generated, empty, error, open-start, and guided-start states; optional dismiss, stop/loading, focus, scroll, menu, section header, and menu item internals; and error circle feedback. Use only for concrete inline AI actions adjacent to target content, not as generic decorative AI chrome. |
+| Copilot prompt ribbon | Prompt Ribbon `30909:48907` | Page-level prompt ribbons use a selected Copilot icon button plus suggested prompt pills with white fill, brand stroke, 8px radius, compact caption text, and 32px row height. Use only when clicking a prompt opens the sidecar and sends that exact prompt to Copilot. |
+| Copilot entry and top action affordances | Button Entry `31316:1188`, Menu Entry `31330:9223`, Top Action `30046:9398`, Quick Actions `30289:2845` | Use compact Copilot entry buttons for one explicit action, and Copilot menu entry only when multiple related actions exist. Top action cards can surface a single recommendation with resource icon, title/metadata, concise body, and a Copilot action button; use sparingly and do not replace standard toolbar/list actions. Quick Actions is only a compact overflow/status affordance. |
+| Azure Copilot chat composer and user turn | Chat Input `32382:38499`/`32382:38546`, User Message `32382:38151`, Input Footer LG/Sm `32382:38729`/`33526:118139`, Agent Toggle `32382:38689`, Send/Stop `32382:38835` | Composer action is a circular Send/Stop button: send uses brand background, stop uses `colorBrandBackground2`, disabled uses neutral fill, and focus uses the Fluent focus ring. The full composer is a bordered 12px-radius surface with textarea, Add, Agent toggle, optional attachments, and LG/Sm footers. User turns are right-aligned `colorBrandBackground2` bubbles with 16px horizontal and 8px vertical padding. Use inline message bars for composer-local validation or blocked send states; use Agent Toggle only as an explicit mode toggle, not as an AI badge. |
+| Chat output code | `32382:38197`, `raw\design-context-38116-47202-code-snippet-large.txt` | Render Kusto/YAML/CLI or JSON/CLI snippets with Consolas/monospace text, syntax-colored spans, and max-height clipping. Use a semantic code block component with copy actions rather than arbitrary message cards. |
+| Copilot response interactions | Response Element `32382:38154`, Single/Multiple Selection `32382:38161`/`32382:38159`, Confirmation Buttons `32382:38169`, Footeractions `32382:38177`, Request Count `32382:38434`, Latency `32382:38442` | Interactive assistant responses should use Fluent RadioGroup or Checkbox groups plus a submit button for disambiguation, compact primary/secondary buttons for confirmation, and like/dislike footer actions only under assistant output. Request-count is a rule-separated quota caption with info tooltip. Latency uses Copilot header, strong status text, 4px progress bar, and optional Cancel action. |
+| Chain of thought and agentic list | `27880:12932`, reasoning `27865:7924`, artifact pill `27865:11293`, needs-input `27880:13471`, action swap `27887:13690`, show artifacts `27895:9234`, Agentic List `27950:11635`, `raw\design-context-27880-12932-chain-of-thought-large.txt` | Show explainable agent progress with collapsed/expanded states, action rows, attachment/artifact presence, and artifact overflow handling. Needs-user-input rows auto-expand to approval requests, include risk text, and offer Approve/Deny; denial stops reasoning. Artifact pills are 34px rows with icon, title, type metadata, and maximize action. Agentic List composes these into a structured progress timeline, not a generic checklist. Do not expose hidden reasoning or add decorative AI chrome. |
+| Azure Portal shell/footer language | `35285:10476`, `raw\design-context-35285-10476-shell-footer-large.txt` | Shell examples use Portal hierarchy: site header, breadcrumb bar, blade header, service menu, content region, and footer/action bar. Agentweaver pages should flatten their custom card chrome into this sequence: global header, breadcrumb/project context, flat blade/page header, optional service menu/secondary nav, content with toolbar/filter/list, then fixed footer actions for long tasks. |
+| Azure Portal service navigation | Service Menu `32610:9825`, menu item `32610:9731`, menu search `32610:9943`, menu group `32610:9931`, L1 Portal Menu `35399:10130`, L1 element `35360:9984`, service tile `41544:8562` | Use Service Menu as the local/secondary navigation recipe: 264px open rail, compact local SearchBox, grouped resource rows, resource icons, optional favorite star, sub-item indent, explicit hover/pressed/focus, and selected 2px brand rail. L1 Portal Menu is only for global portal sections and uses section/favorite/expand-collapse elements; do not replace local project/resource nav with it. Service tiles are for global search/category menus only. |
+| Blade header, site header, and global search | Blade header `32630:8970`, Site Header `31147:440`, global search `40971:40679`, `raw\design-context-32630-8970-blade-header-large.txt`, `raw\design-context-31147-440-site-header-wide-large.txt`, `raw\design-context-40971-40679-azure-global-search-large.txt` | Blade headers support responsive title/subtitle, optional resource icon/menu context, restrained pin/favorite/context actions, dismiss, and optional Copilot prompt ribbon. The wide Site Header is a 40px shell bar containing home/menu, global search, AI entry, persona, and actions. Global search belongs in shell/header context; do not duplicate it as page-level search. |
+| Data grid and filtering composition | representative nodes `28752:53376`, search filter pills `40971:32871`, filter popover `27774:7950`, `27119:16070`, pattern node `3273:15356`, `raw\design-context-pattern-3273-15356-filtering-content-footer.txt` | Lists/grids use a horizontal command/data surface: Toolbar (Azure), then SearchBox plus filter pill group, then `F2-Data Grid`, then footer/pager. Global search filter pills use a brand selected category pill, neutral category pills, and optional overflow menu; page/resource filters use the filter pill dropdown. Do not stack filters into cards. Data cells carry explicit text/icon/resource/persona slots. |
+| Azure F2 data grid default/editable | wrapper `28093:32728`, child frames `28093:32729` and `28784:55430`, resource/status/persona cells `28093:48359`/`28093:48297`/`28093:48328`, `raw\design-context-28093-32729-data-grid-default-large.txt`, `raw\design-context-28784-55430-data-grid-editable-large.txt` | The top grid node is only sparse wrapper evidence; use child frames for anatomy. Default grids use selectable rows, sortable headers, hierarchy/resource/persona/tag/status cells, and icon/action columns. Resource links use an 18px resource icon plus brand link text; status links use a compact 12px status icon plus brand link text; persona links use a 24px avatar plus brand link text. Editable grids keep table context and allow TextBox, Dropdown, and Date Picker cells only where validation can remain local. |
+| Grid cell tags | `28752:53376` | Grid tag cells align to dense rows with 24px tags, 4px gaps, `colorBrandBackground2` + `colorBrandForeground2`, and ellipsis overflow. |
+| Resource tag editor | `29807:5989`, `36787:12057`, row `29804:6858`, `raw\design-context-29807-5989-tags-by-resource-large.txt`, `raw\design-context-36787-12057-tags-by-resource-medium.txt` | Use table/grid row editor anatomy, not cards: Name, Value, Resource, and Delete columns; Combobox/Input fields; selected resource combobox; colon separator; divider; delete icon button. Large rows use 40px fields with Body 2 text; Medium shares the same anatomy at tighter density. |
+| Forms, labels, and validation | form node `27181:1280`, representative Form label node `27878:1838`, pattern nodes `3203:15419` and `3203:24770`, `raw\design-context-27181-1280-form-large.txt` | Forms sit inside blade/menu-page content with optional header, label, description, message bar, repeated input rows, and footer actions. Use Fluent `Field`, `Label`, `InfoLabel`, `Input`, `Textarea`, and `Dropdown/Combobox`; required marks use danger foreground; `InfoLabel` is only for nonessential explanatory info. Create Project, workflow generation, casting, and settings should use local validation and footer actions instead of ad hoc stacked cards. |
+| Filterable combo box | `25248:8173` | Implement with Fluent `Combobox` plus a filter affordance only where filtering is needed. Support practical Small/Medium/Large sizing and rest/pressed/focus/selected/multi-select/showing-filter states; do not expose every matrix combination as a product choice. |
+| Filter pill dropdown | `25378:3066`, `raw\design-context-25378-3066-filter-pill-dropdown-large.txt` | Resource-scope filter pills use a Tag trigger with Default/Selected/removable states, a popover header with Label/InfoLabel/Input, multi-select list items, divider, and Apply/Cancel actions. Use for subscription/resource filters, not arbitrary settings. |
+| Pager and form footer | Pager narrow open `27162:1910`, Form footer `35285:10489`, `raw\design-context-27162-1910-pager-narrow-open-first-large.txt`, `raw\design-context-35285-10489-footer-form-summary.txt` | Use responsive pager anatomy with item count, rows-per-page dropdown, and pagination counter; avoid custom chip pagination. Long forms use a top-border footer with primary Save, secondary Cancel, and a feedback link on the right. |
+| Progress/status badges | `27218:35412` | Use compact 32px status badges for Complete, Work in progress, and Planning. Use Fluent `Badge` with success/warning/danger colors, 12px strong caption, and pill radius. |
+| Progress bar with labels | static `28174:7417`, animated `28209:4563` | Use Fluent `ProgressBar` with adjacent label/caption text for static Azure Fluent 2 progress. Animated progress uses a 2px rail with optional Label/InfoLabel for long-running nonblocking tasks; use Skeleton instead when loading known-structure content. |
+| Tab lists | Horizontal TabList `29553:14762`, Horizontal Tab validation `29167:8291`, Vertical tabs `29195:8155`, `raw\design-context-29195-8155-vertical-swap-summary.txt` | Use Fluent `TabList` only for closely related categories. Horizontal tabs are 44px high in medium density with optional 20px icons, semibold selected label, 3px rounded brand bottom selector, and More overflow when needed. Validation icons belong only on tabs with actionable content errors/success. Vertical tabs retain the earlier 32px row and 3px left indicator guidance. |
+| Scrollbar | `27777:16820` | Treat default/transparent rail, thumb fill, and thumb position as native scrollbar styling guidance. Do not build a custom scrollbar unless a product requirement demands it. |
+| Copy button | `25260:8600` | Use a small wrapper around Fluent v9 `Button` that copies a provided clipboard value. Place near IDs, code snippets, commands, and resource identifiers. |
+| File upload | `25412:31783` | Supports input or drag/drop, single or multiple files. Use for import and workspace flows. |
+| Essentials | `25412:8797` | Use as a resource metadata block with links, descriptions, IDs, and concise metadata on service overview/resource pages. |
+| Popover content variants | Light `27965:13711`, Brand `28024:14416`, Dark `28035:15353`, `raw\design-context-28035-15353-popover-content-dark-large.txt` | Optional title/body/image/buttons support contextual help or callouts. Light popovers can include primary/secondary actions for structured help; Brand popovers invert action colors and should be reserved for high-emphasis product callouts. Regular Fluent `Popover` or `Tooltip` remains the default for common product UI. |
+| Toolbar, feedback, and slider targeted evidence | Toolbar `29553:7574`/`29553:7575`, Feedback `35182:762`/`35182:765`, Slider `28472:10335`-`28472:10337` | Toolbar has Top of Page Yes/No variants at 884px wide and ~40-41px high with neutral background/stroke; use it as command bar/toolbar language, not card chrome. Feedback has footer and in-page placements with a 20px Person Feedback icon, link text, and an in-page 14px/20px semibold heading; Link text must not wrap. Slider numbers can be Leading, Trailing, or Both; use sliders only for imprecise ranges, and use numeric input for precise values. |
+| Message bars, notifications, and empty states | `28644:76791`, multi-line upsell `28644:76783`, Search No Results `40971:35678`, Mobile Search No Results `41153:24673`, hidden Empty state `29232:42433`, Pattern Templates `1024:309`, `5707:60107` | Use in-context message bars and inline status first. Toasts are for transient confirmation; full-page/blade errors are reserved for unrecoverable states. Purple upsell message bars are only for non-intrusive adoption prompts. Mobile/global search no-results may include filter pills, scope-change link, Entra continuation, and feedback footer. Standalone Empty state remains metadata-only/hidden/generic-only; search no-results is contextual evidence, not standalone Empty state parity. |
+| Form input row status | `.Input row` `27293:520`, `raw\design-context-27293-520-input-row-status-summary.txt` | Azure form rows use a fixed label column and flexible field column, optional secondary hierarchy indicator, optional create link, and optional informational status line with 12px icon/caption. Use Fluent `Field` helper/validation slots to implement this anatomy. |
+| Documentation-sufficient Fluent primitives | Component Contents labels for Field/Input/Textarea/Dropdown/Date Picker/Radio group/Switch/Spin button/Dialog/Drawer/Tooltip/Toast/Spinner/Skeleton/Tree/Tag picker | These are generic Fluent 2 code-available primitives with adequate public guidance and no newly extracted Azure-only anatomy in this pass. Use `@fluentui/react-components` directly and compose with the extracted Azure recipes above only when a product flow needs them. |
+| TOC-only labels not found in published graph | Arm error list, Link - Resource/Sanitized/View, Dropdown - Location/Resource group/Subscription, Secure input, Breadcrumb, Status indicator, Nav for Azure Portal | These visible Component Contents labels did not appear as separate published component nodes in the cached component graph or batch 08 gap analysis. Until exact nodes are discovered, use Fluent primitives plus extracted Azure recipes for resource links, dropdown/filter pills, service menu, header, error messaging, and form validation. |
+
+### Captured Azure UI Kit Pattern Contents
+
+Pattern Contents are Azure Portal workflow/page archetypes. They are not components, and they should not be used to justify rebuilding Fluent primitives. Use them when a whole Agentweaver page maps to a portal task pattern.
+
+| Pattern group | Pattern | Progress |
+|---|---|---|
+| Portal pattern | CES/CVA | Complete |
+| Portal pattern | Error Messages | Complete |
+| Portal pattern | Notifications | Complete |
+| Resource management patterns | Browse Resource | Complete |
+| Resource management patterns | Delete a Resource | Complete |
+| Resource management patterns | Manage a Resource | Planning Changes |
+| Resource management patterns | Create a Resource | Work in progress |
+| Page designs patterns | Filtering | Complete |
+| Page designs patterns | Forms | Complete |
+| Page designs patterns | List and Grids | Complete |
+| Page designs patterns | Step Wizard | Complete |
+| Page designs patterns | Service Overview | Complete |
+
+Agentweaver mapping:
+
+- **Error Messages / Notifications:** apply to API errors, run failures, status indicators, message bars, and toast feedback.
+- **Filtering / List and Grids:** apply to project lists, orchestration lists, workspace browsers, diagnostics tables, and observability tables.
+- **Forms / Step Wizard:** apply to project creation, workflow generation, casting, and long setup dialogs.
+- **Service Overview:** apply to Overview and Dashboard pages: command strip first, then status metrics, recent activity, and attention surfaces.
+- **Resource management patterns:** use as task-flow inspiration only; Agentweaver resources are projects, runs, workflows, agents, memories, and workspace files.
+
+Extracted pattern guidance from `pattern-node-index.json` / `patterns.jsonl`:
+
+| Pattern | Extracted status | Agentweaver guidance |
+|---|---|---|
+| CES/CVA | Cached via child frame `4750:18318` | Treat as feedback-entry guidance only. Feedback belongs in a low-emphasis footer/link or local command area; do not turn it into a primary product CTA. |
+| Error Messages | Cached metadata and design context | Choose the smallest effective error pattern: field-level validation for invalid input, inline/message-bar errors for recoverable page issues, dialog confirmation for destructive or data-loss actions, and full blade/page error only when the page cannot continue. |
+| Notifications | Cached metadata and design context | Use notification surfaces for actionable status and next steps, with consistent placement and reflow. Avoid decorative alert stacks; status should be local to the affected blade, grid, run, or workflow unless it is a global event. |
+| Browse Resource | Cached metadata and design context | Browse pages use top navigation, a page headline/description, then resource discovery with list/grid/search/filter affordances. Agentweaver's project/workspace browsers should start with search/filter/list, not metric-card grids. |
+| Delete a Resource | Cached via child frame `5706:33046` | Destructive delete flows require explicit object naming, consequences, soft-delete/recovery language when available, danger styling only on the destructive action, and a clear cancel path. |
+| Manage a Resource | Cached via child frame `6355:66884`; Pattern Contents marks it "Planning Changes" | Use cautiously as an evolving pattern. Current evidence still favors Portal shell + service menu + toolbar/grid/content sections for project/run/workflow management pages. |
+| Create a Resource | Notice-only/unavailable; linked node shows a `.Design System Update Notice` and Pattern Contents marks it "Work in progress" | Do not treat as authoritative yet. For create flows, use Forms + Step Wizard evidence instead. |
+| Filtering | Cached via targeted child frame `3273:15356`, `raw\design-context-pattern-3273-15356-filtering-content-footer.txt` | Use the horizontal sequence shown in the cached pattern: Toolbar (Azure), SearchBox plus filter pill group, `F2-Data Grid`, then footer bar. Do not stack filters into cards. Context panes keep their own local toolbar/filter/grid/footer stack. |
+| Forms | Cached via metadata and representative child frame `3203:15419` | Forms live inside a blade/content region with stable shell, service menu when applicable, and footer actions. At narrow widths, the form narrows while retaining labels, validation, and footer affordances. |
+| List and Grids | Cached via metadata and representative child frame `3715:20982` | Use toolbar + essentials + grid on overview-style pages; use toolbar + filter pills + grid for operational lists; use empty state below the grid header when no rows match. |
+| Step Wizard | Cached via metadata and representative child frame `3203:24770` | Keep the shell and blade header stable across first/final/error steps. Use horizontal tab/step context only when it helps orientation; footer actions carry progression. |
+| Service Overview | Cached via child frame `4654:83587` | Overview pages should combine command actions, overview card/details, essentials/status, and follow-up sections. Avoid the current hero-metric template; use Azure overview card anatomy and table/detail blocks. |
+
+### Product tone
+
+- **Restrained Azure product UI.** Dense enough for operational work, but keep rows readable and controls discoverable.
+- **Neutral layers first.** The app canvas uses `colorNeutralBackground2`; product surfaces use `colorNeutralBackground1`; nested strips/cards use `colorNeutralBackground2` or `colorNeutralBackground3` only when hierarchy needs it.
+- **Azure blue is stateful.** Reserve brand blue for primary actions, current navigation selection, active state indicators, focus, and links. Do not use brand blue as decoration.
+- **Rounded, practical shapes.** Use `borderRadiusXLarge` for page-level panels and command strips, `borderRadiusLarge` for cards/list rows, `borderRadiusMedium` for controls.
+- **Standard Fluent affordances.** Prefer Fluent Button, Badge, MessageBar, Dialog, Drawer, TabList, Table/DataGrid-like tables, Dropdown/Combobox, Tooltip, Popover, and Skeleton-style loading over bespoke controls.
+
+### Shared app recipes
+
+| Recipe | Implementation | Guidance |
+|---|---|---|
+| App shell | `AppShell`, `LeftNav`, `TopBar` | Persistent Azure portal frame: left navigation, top command/status bar, scrollable content canvas. Keep app chrome below Fluent overlay z-index. |
+| Page header | `PageHeader` | White page-title surface with breadcrumb, title/subtitle, and right-aligned commands. One per route. |
+| Page container | `AzurePage` | Max-width operational canvas (`1480px`) with token gaps and optional full-height mode for split workspaces. |
+| Surface/panel | `AzureSurface` | White or subtle neutral panel with token border/radius/shadow. Use raised surfaces for command centers and flat surfaces for headers. |
+| Command strip | `AzureCommandStrip` or equivalent styles | A page-level action/status band: leading status copy, middle metrics, trailing decision/actions. |
+| Section header | `AzureSectionHeader` or equivalent styles | Title/subtitle on the left, compact actions/filter controls on the right. |
+| Empty state | `AzureEmptyState` or equivalent styles | Calm neutral placeholder with one icon, one title, optional body, and at most one action group. |
+| Work item cards | Kanban `TaskCard`/`RunCard` | White cards on neutral column panels, large radius, subtle border, `shadow2`; hover may lift to `shadow4`. |
+
+### Page patterns
+
+- **Overview / Dashboard:** Use a command strip first, then metric cards, recent activity, and attention panels. Keep numeric metrics tabular and label them with `fontSizeBase200`.
+- **Board:** Intake sits in a raised command surface. Columns are neutral panels; cards stay white for contrast. Drag/drop affordances are dashed neutral/brand borders, not saturated fills.
+- **Workspace:** Use a full-height split view. Tree and file viewer are independent white panels with scroll inside each panel, not the whole route.
+- **Orchestrations / Workflows / Agents:** Prefer dense list rows or card grids with clear status badges and one primary action per item.
+- **Dialogs / drawers:** Use Fluent surfaces and actions. Large two-column dialogs scroll inside columns and keep headers/footers fixed.
+
+### Implementation guardrails
+
+- Import from `@fluentui/react-components` and `@fluentui/react-icons`; do not replace Fluent React.
+- Prefer token references (`tokens.colorNeutralStroke2`) over raw `hex`, `rgba`, or pixel literals. Fixed dimensions are allowed only for structural constraints (nav width, split-pane widths, touch targets).
+- Keep route structure, data fetching, and API behavior unchanged when applying UI recipes.
+- If a Figma variable is not present in the captured artifacts, do **not** invent or copy a raw value. Use the nearest Fluent semantic token.
+
+---
+
 ## Colors
 
 ### Brand palette (Communication Blue)
@@ -1084,3 +1350,7 @@ function App({ prefersDark }: { prefersDark: boolean }) {
 ### All motion tokens
 **Duration:** `durationUltraFast` · `durationFaster` · `durationFast` · `durationNormal` · `durationGentle` · `durationSlow` · `durationSlower` · `durationUltraSlow`  
 **Curves:** `curveLinear` · `curveEasyEase` · `curveEasyEaseMax` · `curveDecelerateMax` · `curveDecelerateMid` · `curveDecelerateMin` · `curveAccelerateMax` · `curveAccelerateMid` · `curveAccelerateMin`
+
+### Create Resource pattern fix
+
+The direct Azure Pattern Templates node for Create Resource (`6672:54683`) is not implementable as direct Figma parity: it is a 0x0 wrapper containing only `.Design System Update Notice` (`6744:54790`). The standalone library therefore provides `CreateResourcePattern` as a pragmatic derived pattern from cached Forms, Step Wizard, Browse Resource, and Manage Resource evidence. Its provenance is `derived-from-related-patterns`; revisit the direct Figma node when Microsoft publishes usable Create Resource anatomy.

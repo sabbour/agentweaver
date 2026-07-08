@@ -1,0 +1,24 @@
+<svg id="uuid-93684e41-d7ca-44c2-b10f-c5bc22f84675" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18">
+  <defs>
+    <linearGradient id="uuid-7f38eda5-8a8d-4f0a-a91d-81b944568888" x1="116.457" y1="61.771" x2="110.628" y2="55.942" gradientTransform="translate(-32.997 134.148) rotate(-45) scale(1 -1)" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#5ea0ef" />
+      <stop offset=".997" stop-color="#0078d4" />
+    </linearGradient>
+    <linearGradient id="uuid-4c2a8ec3-e0f6-4499-91f3-27eadc373b6c" x1="-1696.484" y1="437.664" x2="-1690.655" y2="443.493" gradientTransform="translate(-1496.742 891.759) rotate(135) scale(1 -1)" gradientUnits="userSpaceOnUse">
+      <stop offset=".27" stop-color="#ffd70f" />
+      <stop offset="1" stop-color="#fea11b" />
+    </linearGradient>
+  </defs>
+  <g id="uuid-2a85b5d1-fa7f-459d-b319-8bc558c04bb6">
+    <g>
+      <path d="M2.314,14.552l1.135,1.135h0l-2.228,2.227c-.115,.115-.301,.115-.416,0h0l-.717-.716c-.117-.113-.12-.299-.007-.415l.003-.003,2.228-2.227h0Z" fill="#0078d4" />
+      <path d="M2.663,9.867c-1.488,1.487-1.488,3.897,0,5.384,1.488,1.487,3.899,1.487,5.387,0l1.746-1.746-5.386-5.382-1.747,1.745Z" fill="url(#uuid-7f38eda5-8a8d-4f0a-a91d-81b944568888)" />
+      <path d="M7.117,5.65h1.117c.158,0,.286,.128,.286,.286V14.448c0,.158-.128,.287-.287,.287h-1.117c-.158,0-.286-.128-.286-.286V5.937c0-.158,.128-.287,.287-.287Z" transform="translate(-4.96 8.417) rotate(-45.018)" fill="#5ea0ef" />
+    </g>
+    <g>
+      <path d="M15.655,3.474l-1.132-1.131h0L16.78,.087c.116-.116,.303-.116,.419,0h0l.714,.714c.116,.116,.116,.303,0,.419l-2.257,2.256h0Z" fill="#fea11b" />
+      <path d="M15.337,8.137c1.488-1.487,1.488-3.897,0-5.384-1.488-1.487-3.899-1.487-5.387,0l-1.746,1.746,5.386,5.382,1.747-1.745Z" fill="url(#uuid-4c2a8ec3-e0f6-4499-91f3-27eadc373b6c)" />
+      <path d="M9.766,3.269h1.117c.158,0,.286,.128,.286,.286V12.066c0,.158-.128,.287-.287,.287h-1.117c-.158,0-.286-.128-.286-.286V3.555c0-.158,.128-.287,.287-.287Z" transform="translate(-2.499 9.592) rotate(-45.018)" fill="#ffd70f" />
+    </g>
+  </g>
+</svg>

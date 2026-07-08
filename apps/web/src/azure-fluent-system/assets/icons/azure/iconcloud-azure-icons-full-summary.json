@@ -1,0 +1,197 @@
+{
+  "updatedAt": "2026-07-08T23:15:00.0979496Z",
+  "state": "complete",
+  "policy": "Used visible IconCloud collection cards and card detail Download SVG controls with persistent authenticated Edge profile; no hidden APIs, credentials, or token scraping.",
+  "expectedFromRootSnapshot": {
+    "collections": 27,
+    "icons": 1466,
+    "source": "inspect\\\\azure-icons-root-snapshot.json body text"
+  },
+  "downloaded": {
+    "collections": 27,
+    "rawSvgFiles": 1637,
+    "failures": 0,
+    "note": "Visible card counts exceed root summary for Command/Menu/Other because IconCloud exposes duplicate/named variants; all visible cards downloaded."
+  },
+  "normalized": {
+    "collections": 27,
+    "rawSvgFiles": 1637,
+    "uniqueSvgPayloads": 1441,
+    "duplicatePayloads": 196
+  },
+  "schemaVerification": {
+    "icons": 1441,
+    "aliases": 1637,
+    "requiredMetadataMissing": 0,
+    "firstMissing": null
+  },
+  "manifestPath": "azure-icons-manifest.json",
+  "normalizedAssetPath": "assets",
+  "rawPath": null,
+  "blockers": [],
+  "manualRemaining": "None for visible/exportable IconCloud Azure Icons collections. Future repo copy requires a deliberate static asset folder/import strategy.",
+  "countsByCollection": [
+    {
+      "collection": "AI + Machine Learning",
+      "raw": 42,
+      "unique": 41,
+      "duplicatePayloads": 1
+    },
+    {
+      "collection": "Analytics",
+      "raw": 10,
+      "unique": 10,
+      "duplicatePayloads": 0
+    },
+    {
+      "collection": "App Services",
+      "raw": 4,
+      "unique": 4,
+      "duplicatePayloads": 0
+    },
+    {
+      "collection": "Azure Ecosystem",
+      "raw": 3,
+      "unique": 3,
+      "duplicatePayloads": 0
+    },
+    {
+      "collection": "Blockchain",
+      "raw": 6,
+      "unique": 6,
+      "duplicatePayloads": 0
+    },
+    {
+      "collection": "Command",
+      "raw": 254,
+      "unique": 186,
+      "duplicatePayloads": 68
+    },
+    {
+      "collection": "Compute",
+      "raw": 38,
+      "unique": 34,
+      "duplicatePayloads": 4
+    },
+    {
+      "collection": "Containers",
+      "raw": 8,
+      "unique": 8,
+      "duplicatePayloads": 0
+    },
+    {
+      "collection": "Databases",
+      "raw": 23,
+      "unique": 23,
+      "duplicatePayloads": 0
+    },
+    {
+      "collection": "DevOps",
+      "raw": 13,
+      "unique": 13,
+      "duplicatePayloads": 0
+    },
+    {
+      "collection": "General",
+      "raw": 95,
+      "unique": 94,
+      "duplicatePayloads": 1
+    },
+    {
+      "collection": "Hybrid + Multicloud",
+      "raw": 14,
+      "unique": 14,
+      "duplicatePayloads": 0
+    },
+    {
+      "collection": "Identity",
+      "raw": 36,
+      "unique": 35,
+      "duplicatePayloads": 1
+    },
+    {
+      "collection": "Integration",
+      "raw": 26,
+      "unique": 25,
+      "duplicatePayloads": 1
+    },
+    {
+      "collection": "Intune",
+      "raw": 18,
+      "unique": 16,
+      "duplicatePayloads": 2
+    },
+    {
+      "collection": "IoT",
+      "raw": 26,
+      "unique": 26,
+      "duplicatePayloads": 0
+    },
+    {
+      "collection": "Management + Governance",
+      "raw": 32,
+      "unique": 32,
+      "duplicatePayloads": 0
+    },
+    {
+      "collection": "Menu",
+      "raw": 646,
+      "unique": 578,
+      "duplicatePayloads": 68
+    },
+    {
+      "collection": "Migrate",
+      "raw": 3,
+      "unique": 3,
+      "duplicatePayloads": 0
+    },
+    {
+      "collection": "Mixed Reality",
+      "raw": 2,
+      "unique": 2,
+      "duplicatePayloads": 0
+    },
+    {
+      "collection": "Networking",
+      "raw": 57,
+      "unique": 56,
+      "duplicatePayloads": 1
+    },
+    {
+      "collection": "New Icons",
+      "raw": 14,
+      "unique": 14,
+      "duplicatePayloads": 0
+    },
+    {
+      "collection": "Other",
+      "raw": 194,
+      "unique": 153,
+      "duplicatePayloads": 41
+    },
+    {
+      "collection": "Security",
+      "raw": 14,
+      "unique": 14,
+      "duplicatePayloads": 0
+    },
+    {
+      "collection": "Status",
+      "raw": 34,
+      "unique": 32,
+      "duplicatePayloads": 2
+    },
+    {
+      "collection": "Storage",
+      "raw": 18,
+      "unique": 18,
+      "duplicatePayloads": 0
+    },
+    {
+      "collection": "Web",
+      "raw": 7,
+      "unique": 7,
+      "duplicatePayloads": 0
+    }
+  ]
+}

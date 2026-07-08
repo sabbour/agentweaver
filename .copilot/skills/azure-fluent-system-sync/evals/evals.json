@@ -1,0 +1,41 @@
+{
+  "skill_name": "azure-fluent-system-sync",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Keep the Azure Fluent component library updated from the latest Figma cache. I don't want graph snapshots anymore; make sure every published component has rich design context or a documented failure.",
+      "expected_output": "The agent audits the comprehensive component ledger, identifies graph-only/metadata-only nodes, runs or plans rich Figma context extraction, updates manifest/batch/ledger files, and reports exact rich/failed/remaining counts.",
+      "files": [],
+      "expectations": [
+        "Distinguishes rich design context from graph snapshots",
+        "Uses comprehensive-component-cache-ledger.json and manifest.json as starting points",
+        "Does not claim completion without per-node rich context or explicit unavailable records",
+        "Creates or updates a batch-comprehensive rich-context record"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "IconCloud has the rest of the Azure Icons set now. Normalize those downloads and wire them into the Azure Fluent library so another app can use the glyphs.",
+      "expected_output": "The agent treats IconCloud as the approved Azure/resource icon source, normalizes SVG downloads in session artifacts, creates a manifest, deduplicates duplicates, and wires the assets through AzureIconProvider/createIconCloudRegistry without scraping hidden APIs.",
+      "files": [],
+      "expectations": [
+        "Uses IconCloud exports for Azure/resource glyphs and @fluentui/react-icons for system icons",
+        "Does not request or store credentials",
+        "Creates a normalized icon manifest with file paths and categories",
+        "Keeps assets out of source until they are deduplicated and intentionally copied"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "Make the standalone Azure Fluent system ready to drop into another React project. Finish the recipes and explain the public API for BladeHeader, ResourceTagEditor, grids, and Copilot components.",
+      "expected_output": "The agent updates implementation-recipes.json and library docs/code so recipes include public React component APIs, props, callbacks, slots, state models, accessibility, example usage, and validation for the high-priority components.",
+      "files": [],
+      "expectations": [
+        "Defines API as the public React component contract, not a backend API",
+        "Expands summary-only recipes or explicitly folds/excludes them with rationale",
+        "Hardens ready-to-use component APIs with states, accessibility, and examples",
+        "Runs build, scoped lint, focused tests, and git diff --check where code changes"
+      ]
+    }
+  ]
+}

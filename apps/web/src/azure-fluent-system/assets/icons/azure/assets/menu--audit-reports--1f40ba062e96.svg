@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18">
+  <defs>
+    <linearGradient id="b9858cc9-b173-4377-be6c-4efeb9677e38" x1="-47.347" y1="755.516" x2="-47.347" y2="752.359" gradientTransform="matrix(1, 0, 0, -1, 54, 755.516)" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#0078d4" />
+      <stop offset="1" stop-color="#005ba1" />
+    </linearGradient>
+    <linearGradient id="f280676c-b665-4e63-9de0-c856efa43ec2" x1="-43.359" y1="752.129" x2="-43.359" y2="737.516" gradientTransform="matrix(1, 0, 0, -1, 54, 755.516)" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#83b9f9" />
+      <stop offset="1" stop-color="#5ea0ef" />
+    </linearGradient>
+    <linearGradient id="a9b83e68-5586-40c6-9bdc-542987e55ebb" x1="-43.362" y1="754.212" x2="-43.362" y2="750.729" gradientTransform="matrix(1, 0, 0, -1, 54, 755.516)" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#5ea0ef" />
+      <stop offset="1" stop-color="#0078d4" />
+    </linearGradient>
+  </defs>
+  <g id="a0ec7cec-97ac-454f-a168-ac835986a03d">
+    <g>
+      <g id="b114ad88-7af1-49db-8fd0-5378cd192fd9">
+        <path d="M6.949,2.083a.925.925,0,0,0-.392.756v.087H4.379A1.02,1.02,0,0,0,3.361,3.943V16.415a.282.282,0,0,1-.282.282H1.1a.557.557,0,0,1-.557-.557V2.64A.557.557,0,0,1,1.1,2.083Z" fill="#0078d4" />
+        <path d="M8.421,1.072a1.071,1.071,0,1,0-2.142,0H4.2a.463.463,0,0,0-.464.462V3.156a1.012,1.012,0,0,1,.643-.23H6.557V2.839a.925.925,0,0,1,.392-.756.915.915,0,0,1,.532-.169H9.17a1.546,1.546,0,0,1,.36-.6.14.14,0,0,0-.1-.238ZM7.342,1.6h0a.551.551,0,0,1-.2-.04.536.536,0,0,1-.3-.65A.519.519,0,0,1,7.2.557a.536.536,0,0,1,.663.368.6.6,0,0,1,.019.147A.543.543,0,0,1,7.342,1.6Z" fill="url(#b9858cc9-b173-4377-be6c-4efeb9677e38)" />
+      </g>
+      <g id="afc51588-bd15-4f6f-99a1-81261d2f2b70">
+        <rect x="3.823" y="3.387" width="13.635" height="14.613" rx="0.557" fill="url(#f280676c-b665-4e63-9de0-c856efa43ec2)" />
+        <rect x="4.655" y="4.278" width="11.971" height="12.829" rx="0.557" fill="#fff" opacity="0.1" />
+        <path d="M11.7,2.375a1.072,1.072,0,0,0-2.143,0H7.481a.464.464,0,0,0-.464.464V4.787h7.241V2.839a.464.464,0,0,0-.464-.464ZM10.484,1.86a.536.536,0,0,1,.662.369.521.521,0,0,1,.02.147h0a.542.542,0,0,1-.546.531.533.533,0,0,1-.2-.039.538.538,0,0,1-.3-.65A.527.527,0,0,1,10.484,1.86Z" fill="url(#a9b83e68-5586-40c6-9bdc-542987e55ebb)" />
+        <rect x="6.29" y="7.658" width="8.597" height="0.824" rx="0.278" fill="#fff" opacity="0.6" />
+        <rect x="6.29" y="10.014" width="8.597" height="0.824" rx="0.278" fill="#fff" opacity="0.8" />
+        <rect x="6.29" y="12.368" width="8.597" height="0.824" rx="0.278" fill="#fff" />
+      </g>
+    </g>
+  </g>
+</svg>

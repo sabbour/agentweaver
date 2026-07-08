@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18">
+  <defs>
+    <linearGradient id="a3fade8c-7b5c-4bf8-9347-ae6e46d91e86" x1="9.238" y1="790.558" x2="8.851" y2="774.992" gradientTransform="matrix(1, 0, 0, -1, 0, 791.516)" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#5ea0ef" />
+      <stop offset="1" stop-color="#0078d4" />
+    </linearGradient>
+  </defs>
+  <g id="f9ea8edc-5d98-4491-ac67-8cddd163472a">
+    <g>
+      <path d="M17.1,3.6H9.687a.39.39,0,0,1-.22-.067L7.348,2.125a.4.4,0,0,0-.22-.067H.9a.4.4,0,0,0-.4.4h0v13.09a.4.4,0,0,0,.4.4H17.1a.4.4,0,0,0,.4-.4h0V3.994A.4.4,0,0,0,17.1,3.6Z" fill="#005ba1" />
+      <rect x="2.045" y="2.819" width="3.864" height="0.773" rx="0.162" fill="#fff" />
+      <path d="M17.1,3.582H8.958a.4.4,0,0,0-.283.116L7.368,5.008a.4.4,0,0,1-.283.116H.9a.4.4,0,0,0-.4.4h0v10a.4.4,0,0,0,.4.4H17.1a.4.4,0,0,0,.4-.4h0V3.978a.4.4,0,0,0-.4-.4Z" fill="url(#a3fade8c-7b5c-4bf8-9347-ae6e46d91e86)" />
+    </g>
+  </g>
+</svg>
