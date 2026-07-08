@@ -9,7 +9,7 @@ export default defineConfig({
   retries: 1,
   reporter: [['list'], ['html', { open: 'never', outputFolder: 'playwright-report' }]],
   use: {
-    baseURL: 'https://agentweaver.6a3de4fe60529400010f3fba.westus2.staging.aksapp.io',
+    baseURL: 'https://agentweaver.6a4a0fdca7653f00012ffe86.westus2.staging.aksapp.io',
     ignoreHTTPSErrors: true,
     trace: 'retain-on-failure',
   },
