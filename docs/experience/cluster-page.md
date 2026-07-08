@@ -1,13 +1,13 @@
 # Cluster page
 
-The **Cluster** page gives operators a real-time view of the Kubernetes cluster backing the Agentweaver AKS deployment: pod activity, quota health, component checks, and any subtasks waiting for capacity.
+The **Cluster** page gives operators a real-time view of the Kubernetes cluster backing the Agentweaver AKS deployment: sandbox capacity, Kubernetes health checks, and any subtasks waiting for capacity.
 
 It is available under the **Cluster** nav item in the SYSTEM section of the project left rail. Route: `/projects/:projectId/cluster`.
 
-![Cluster page with KPI cards, quota bars, and pod tables](/screenshots/cluster-page.png)
+![Cluster page with KPI cards, health checks, sandbox claims, and capacity tables](/screenshots/cluster-page.png)
 
 > 📸 **Screenshot — `cluster-page.png`**
-> *Shows:* the Cluster page with KPI cards, quota bars (CPU, memory), the component health table with 6 checks, and the Active / Orphaned / Pending pods tables.
+> *Shows:* the **Cluster** page with Orphaned, Pending capacity, Checks OK, and Warm pool KPI cards plus Health checks, Sandbox claims, orphaned pods, pending capacity, warm pools, and sandbox objects.
 > *Path:* open a project → click **Cluster** in the SYSTEM section of the left rail → `/projects/:projectId/cluster`.
 
 ## When to use the Cluster page
@@ -22,43 +22,20 @@ Open the **Cluster** page when:
 
 ## KPI cards
 
-The four KPI cards at the top of the page give a quick cluster-health summary:
+The KPI cards at the top of the page summarize the cluster signals the current UI exposes:
 
 | Card | What it shows |
 |---|---|
-| **Active pods** | Number of agent-host pods currently serving a live run. |
-| **Orphaned pods** | Pods running with no matching active run. These are candidates for the next reaper sweep (roughly every 2 minutes). A non-zero count here is a leading indicator of quota pressure. |
-| **CPU used / total** | Current CPU consumption vs. the namespace limit, in cores. |
-| **Pending runs** | Subtasks that are waiting for CPU headroom to become available. Each one retries every 60 seconds for up to 10 attempts before failing with `capacity_unavailable`. |
-| **Warm pool** | Ready vs. desired warm sandbox replicas across all SandboxWarmPool objects, shown as N/M. A count below M means run starts lose the fast path of a pre-warmed sandbox. |
+| **Orphaned** | Agent pods that no longer match an active run. |
+| **Pending capacity** | Subtasks currently waiting for sandbox or pod capacity. |
+| **Checks OK** | Healthy checks divided by all reported cluster checks. |
+| **Warm pool** | Ready vs. desired warm sandbox replicas when warm-pool data is available. |
 
-## Quota bars
-
-The two quota bars show namespace resource consumption as a percentage of the configured limit:
-
-- **CPU** — consumed core count vs. the namespace CPU limit.
-- **Memory** — consumed GiB vs. the namespace memory limit.
-
-Color coding:
-- **Green** — below 60 % of limit
-- **Amber** — 60–85 % of limit
-- **Red** — above 85 % of limit
-
-![Cluster page with quota near-limit (red bar)](/screenshots/cluster-page-quota-warning.png)
-
-> 📸 **Screenshot — `cluster-page-quota-warning.png`**
-> *Shows:* the Cluster page with the CPU quota bar showing a red near-limit state, and one or more subtasks in the Pending-capacity runs table.
-> *Path:* open a project → click **Cluster** → observe a red CPU bar.
-
-A red CPU bar combined with entries in the **Pending-capacity runs** table means new pods cannot be scheduled. If the Warm pool row warns, AgentHost may still work but run launch loses the fastest path because fewer than two pods are pre-warmed. Options:
-
-1. Wait for running pods to finish (the reaper will clean orphans within 2 minutes).
-2. Check the **Orphaned pods** table — if there are orphaned pods, they will be reaped on the next sweep.
-3. Scale up the `katapool` node pool if persistent capacity shortage is expected.
+Below the KPIs, the page shows **Health checks**, **Sandbox claims**, **Orphaned agent pods** when present, **Pending capacity**, **Warm pools**, and **Sandbox objects**.
 
 ## Component health table
 
-Six checks run concurrently each time the page loads:
+Cluster checks run concurrently each time the page loads:
 
 | Check | What it tests | Typical failure cause |
 |---|---|---|
@@ -71,7 +48,7 @@ Six checks run concurrently each time the page loads:
 
 Each check shows:
 
-- A status badge: `pass` (green), `warn` (amber), or `fail` (red).
+- A status badge such as `healthy`, `warning`, `degraded`, or `critical`.
 - A detail message (visible on warn/fail) explaining the specific failure.
 - The duration the check took in milliseconds.
 

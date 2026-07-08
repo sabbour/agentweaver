@@ -1,0 +1,9 @@
+# Playwright signed-in session state (live cookies — never commit)
+auth.json
+*.auth.json
+storage-state*.json
+
+# Playwright run artifacts
+node_modules/
+playwright-report/
+test-results/

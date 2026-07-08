@@ -8,7 +8,9 @@ Token usage is projected from `agent.turn.usage` events and surfaced on run card
 
 ![Token counter on embedded run inspection surfaces](/screenshots/watch-token-counter.png)
 
-📸 **Screenshot** — Embedded run inspection surface showing token/cost context when available.
+> 📸 **Screenshot — `watch-token-counter.png`**
+> *Shows:* the coordinator run **AI credits** popover with total token/cost context and per-agent breakdown when available.
+> *Path:* `/projects/:projectId/orchestrations/:runId` → click the AI credits chip.
 
 ## Run cards and DAG nodes
 
@@ -22,21 +24,37 @@ The project dashboard's **Agent and usage metrics** range selector scopes both t
 
 ![Token usage section on the project dashboard](/screenshots/dashboard-token-usage.png)
 
-📸 **Screenshot** — Project dashboard showing the shared range filter, leaderboard Cost column, and Token/AIC usage panel.
+> 📸 **Screenshot — `dashboard-token-usage.png`**
+> *Shows:* the project **Dashboard** with the shared range filter, Model performance panels, Agent leaderboard **Cost** column, and AI-credit/token diagnostics.
+> *Path:* `/projects/:projectId`.
 
 ## App overview (admin)
 
-The **Overview** page reads the embedded `token_usage` from `GET /api/overview` when available and separately fetches `GET /api/usage`. A `403` from the app-wide endpoint is treated as admin-only and hidden without a visible error. Admins see a **Cost overview** tile with total AICs, total tokens, top-project bars, a per-model `TokenUsagePanel`, and a **Usage by project** table. Source: `apps/web/src/pages/OverviewPage.tsx:222`, `apps/web/src/pages/OverviewPage.tsx:225`, `apps/web/src/pages/OverviewPage.tsx:239`, `apps/web/src/pages/OverviewPage.tsx:245`, `apps/web/src/pages/OverviewPage.tsx:272`, `apps/web/src/pages/OverviewPage.tsx:439`, `apps/web/src/pages/OverviewPage.tsx:442`, `apps/web/src/pages/OverviewPage.tsx:445`, `apps/web/src/pages/OverviewPage.tsx:450`, `apps/web/src/pages/OverviewPage.tsx:465`, `apps/web/src/pages/OverviewPage.tsx:475`.
+The **Overview** page aggregates recent-project metrics and shows the **AI Usage & Performance** section with a shared 7d/30d/90d range selector, token consumption by model, model usage distribution, response duration, TTFT, and success-rate tiles. Source: `apps/web/src/pages/OverviewPage.tsx:222`, `apps/web/src/pages/OverviewPage.tsx:225`, `apps/web/src/pages/OverviewPage.tsx:239`, `apps/web/src/pages/OverviewPage.tsx:245`, `apps/web/src/pages/OverviewPage.tsx:272`, `apps/web/src/pages/OverviewPage.tsx:439`, `apps/web/src/pages/OverviewPage.tsx:442`, `apps/web/src/pages/OverviewPage.tsx:445`, `apps/web/src/pages/OverviewPage.tsx:450`, `apps/web/src/pages/OverviewPage.tsx:465`, `apps/web/src/pages/OverviewPage.tsx:475`.
 
 ![App-level usage on the Overview page](/screenshots/overview-token-usage.png)
 
-📸 **Screenshot** — Overview page showing the Cost overview tile, top project usage bars, and project usage table.
+> 📸 **Screenshot — `overview-token-usage.png`**
+> *Shows:* the **Overview** page **AI Usage & Performance** section with range selector and model/cost/latency tiles.
+> *Path:* `/overview`.
 
 ## Project Observability
 
 The project-scoped **Observability** section adds an AppInsights-backed view beside the older usage panels. The Overview tab calls `GET /api/projects/{id}/metrics` for the selected 7d/30d/90d range and renders compact tiles for runs created over time, AI credit usage over time, AI credit usage by model, model invocation share, response duration by model, and TTFT by model (`apps/web/src/pages/observability/ObservabilityOverviewPage.tsx:31`, `apps/web/src/components/dashboard/ModelPerformancePanels.tsx:160`). Empty charts say **No AI credit usage data yet.**, **No response-duration data yet.**, or **No TTFT data available yet.** rather than fabricating values (`ModelPerformancePanels.tsx:186`, `:229`, `:234`).
 
 The **Agents** tab aggregates the same metrics by agent and reuses the token breakdown component (`apps/web/src/pages/observability/ObservabilityAgentsPage.tsx:58`). The **Traces** tab lists recent coordinator runs and opens an AppInsights trace preview; each lane is an agent, each bar is an agentic/LLM span, and expanding a bar shows model, input tokens, output tokens, duration, and operation (`apps/web/src/pages/observability/ObservabilityTracesPage.tsx:108`, `apps/web/src/components/runs/TransactionTracePanel.tsx:260`).
+
+![Project Observability overview with model performance panels](/screenshots/observability-overview.png)
+
+> 📸 **Screenshot — `observability-overview.png`**
+> *Shows:* the project **Observability** Overview tab with the range selector, **Refresh**, and model performance panels for run creation, AI credit usage, model distribution, response duration, and TTFT.
+> *Path:* open a project → click **Observability** → `/projects/:projectId/observability`.
+
+![Project Observability agents tab with token breakdown by agent](/screenshots/observability-agents.png)
+
+> 📸 **Screenshot — `observability-agents.png`**
+> *Shows:* the **Observability** Agents tab with **Agent token breakdown** aggregated by agent over the selected range.
+> *Path:* `/projects/:projectId/observability` → click **Agents**.
 
 ## Understanding the numbers
 

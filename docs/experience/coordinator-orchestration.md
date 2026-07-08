@@ -26,6 +26,12 @@ flowchart TD
     Watch --> Assemble --> Done
 ```
 
+![Orchestrations page listing active and recent coordinator runs](/screenshots/orchestrations-list.png)
+
+> 📸 **Screenshot — `orchestrations-list.png`**
+> *Shows:* the project **Orchestrations** page with coordinator-run status summary, **Active** and **Recent** run sections, and **Open** / **Stop** / **Delete** actions.
+> *Path:* open a project → click **Orchestrations** → `/projects/:projectId/orchestrations`.
+
 ## The experience in one sentence
 
 The coordinator is a project-level team manager. The user describes the outcome once, confirms the coordinator's interpretation, then watches a live topology of subtasks move through specialists, dependencies, child runs, steering, assembly, and final review.

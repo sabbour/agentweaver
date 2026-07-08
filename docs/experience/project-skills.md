@@ -15,6 +15,12 @@ From a project, go to **Skills** or open `/projects/:projectId/skills`. The page
 - **Catalog**: add, inspect, and delete skills.
 - **Assignments**: choose which agents receive each skill.
 
+![Skills Catalog tab with catalog toolbar and skill cards](/screenshots/skills-catalog.png)
+
+> 📸 **Screenshot — `skills-catalog.png`**
+> *Shows:* the **Skills** page **Catalog** tab with **Add Skill**, **Generate Skill**, **Import Skill**, **Sync connected repo**, catalog status/provenance badges, assigned-agent chips, and **View** / **Delete** actions.
+> *Path:* open a project → click **Skills** → `/projects/:projectId/skills`.
+
 ## Add skills
 
 The Catalog toolbar supports three acquisition paths:
@@ -45,6 +51,12 @@ Each catalog card shows status, provenance, updated time, source location, assig
 **View** action for the full instructions. Repeating an acquisition is safe: unchanged content is
 reported as unchanged, changed content updates the existing skill, and invalid content is rejected
 with validation errors.
+
+![Import Skill dialog with dropzones, trusted-source warning, URL field, and candidate preview controls](/screenshots/skill-import-dialog.png)
+
+> 📸 **Screenshot — `skill-import-dialog.png`**
+> *Shows:* the **Import Skill** dialog with the trusted-source warning, `.md` file and skill-folder dropzones, GitHub/raw URL field, **Preview candidates**, candidate selection, and **Import**.
+> *Path:* `/projects/:projectId/skills` → click **Import Skill**.
 
 ## Assign skills to agents
 

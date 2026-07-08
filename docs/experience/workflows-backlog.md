@@ -155,33 +155,15 @@ Once a task is claimed, the workflow override can no longer be changed. If a use
 
 The coordinator selection model is process-fit oriented. It selects the workflow whose steps and outputs fit the task, not the workflow whose name shares words with the task. If selection fails, the default remains the safe fallback. See [Workflow selection](../workflow-selection.md) for the deeper selection contract.
 
-## Embedded workflow graphs
+## Workflow definition graph
 
-The live workflow graph is the execution version of the workflow. Standalone workflow run pages have been retired; status-carrying graphs are embedded in coordinator orchestration details and related run-inspection panels. Unlike the Workflows page graph, this graph carries status.
+The Workflows page can expand any valid workflow card with **View graph**. This is a definition graph, not a live run graph: it shows the reusable pipeline structure before the coordinator applies it to a specific run. Live status-carrying topology remains on the coordinator orchestration page.
 
-![Per-run workflow graph with status-carrying node cards](/screenshots/per-run-workflow-graph.png)
+![Workflow definition graph expanded inside a workflow card](/screenshots/workflow-definition-graph.png)
 
-> 📸 **Screenshot — `per-run-workflow-graph.png`**
-> *Shows:* an embedded workflow graph with node cards carrying **Pending** / **In Progress** / **Complete** / **Skipped** / **Failed** / **Revise** / **Awaiting** badges, role labels, and actions such as **Review now**, **Browse files**, and **View memories**; loopback edges light up during revision.
-> *Path:* open a coordinator run → `/projects/:projectId/orchestrations/:runId`.
-
-The graph is seeded from persisted run state and then updated from the run event stream. If a graph descriptor is available, the UI renders the actual workflow nodes and edges. If not, it falls back to the standard pipeline shape.
-
-Node cards show:
-
-- status badges: **Pending**, **In Progress**, **Complete**, **Skipped**, **Failed**, **Revise**, or **Awaiting**,
-- role label, such as AI Assistant, RAI Reviewer, Human Review, Merge Coordinator, or Session Logger,
-- agent avatar and name when attached,
-- model id for the agent node,
-- current intent or status message,
-- elapsed time while running,
-- actions such as **View execution**, **Review now**, **Browse files**, and **View memories**.
-
-Loopback edges light up when the run is actively revising. RAI can send work back to the agent with **Revise**. Human review can send work back with **Request changes**. Rework is visible in the graph instead of hidden in the timeline.
-
-When review waits for the user, the review node shows **Awaiting** and exposes **Review now**. When a running agent needs tool approval, the page shows **Tool approval required — scroll down to respond** and a **Jump to approval** button. The running node also carries a tool-approval badge.
-
-Coordinator child runs use a trimmed graph: Agent → RAI → Assemble-ready. Human Review, Merge, and Scribe happen once at the coordinator level after child output is assembled.
+> 📸 **Screenshot — `workflow-definition-graph.png`**
+> *Shows:* the inline workflow definition graph expanded inside a workflow card after **View graph**, with workflow nodes and edges for the selected definition.
+> *Path:* `/projects/:projectId/workflows` → click **View graph** on a valid workflow.
 
 ## The backlog board experience
 

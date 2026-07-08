@@ -18,6 +18,18 @@ Expand or collapse rows to follow the transaction. Select a span to inspect even
 status, operation name, model, token usage, or tool name. If Application Insights has not produced
 trace data for the run yet, the panel shows an empty state.
 
+![Observability Traces page listing recent coordinator runs](/screenshots/observability-traces.png)
+
+> 📸 **Screenshot — `observability-traces.png`**
+> *Shows:* the **Observability** Traces tab listing recent coordinator runs with status badges, **Open run**, **Preview trace**, and **Refresh**.
+> *Path:* open a project → click **Observability** → **Traces** → `/projects/:projectId/observability/traces`.
+
+![Expanded transaction trace preview with span details](/screenshots/observability-trace-preview.png)
+
+> 📸 **Screenshot — `observability-trace-preview.png`**
+> *Shows:* the expanded **Preview trace** panel with the hierarchical transaction trace, span rows, and selected span details when AppInsights has data.
+> *Path:* `/projects/:projectId/observability/traces` → click **Preview trace**.
+
 ## Source
 
 | Concern | Source |
