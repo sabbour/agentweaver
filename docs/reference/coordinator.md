@@ -285,3 +285,5 @@ The recreated run emits [`coordinator.recovered`](./events.md#coordinatorrecover
 - [MCP server reference — Coordinator tools](./mcp.md#coordinator)
 - [Web UI reference — Coordinator orchestration and topology view](./web.md#coordinator-orchestration-and-topology-view)
 - [Web UI reference — Coordinator run and outcome-spec gate](./web.md#coordinator-run-and-outcome-spec-gate)
+- [Browser console reference](./browser-console.md)
+- [Project generation model settings](./project-generation-model-settings.md)

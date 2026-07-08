@@ -4,68 +4,60 @@ title: Browser console
 
 # Browser console
 
-The browser console is a terminal-styled app-level slide-in for operating Agentweaver from the web
-app. Open it with the **Console** button in the top bar. The console is mounted once in the app shell,
-so its transcript and bound-run state persist while navigating between pages. The obsolete `/console`
-URL safely redirects to the Overview page and opens the same singleton panel.
+The browser console is a singleton app-level operator dock. It combines a terminal-styled web shell with a backend conversational facade that can answer status questions, inspect Agentweaver state with safe read-only tools, and return explicit gates instead of bypassing review or destructive controls. For the API contract see the [reference](../reference/browser-console.md); for internals see the [deep dive](../deep-dive/browser-console.md).
 
-## Terminal interface
+## When it is available
 
-The console renders as a true terminal, not a chat panel. It uses a dark terminal surface with a
-monospace font and a full-height scrollback region that fills the viewport, so long sessions read
-like a shell log. Input sits at the bottom on a fixed CLI prompt row, prefixed by a prompt glyph and
-trailed by a blinking block cursor. The prompt input itself is borderless and transparent so it reads
-as part of the terminal line rather than a form field. New output appends to the scrollback and the
-view follows the latest line while you stay near the bottom.
+Open it with the **Console** button in the top bar. The console is mounted once in the app shell through `ConsolePanelContext`, so its transcript and bound-run state persist while navigating (`apps/web/src/components/shell/ConsolePanelContext.tsx:1`). The obsolete `/console` URL opens the same singleton panel and redirects to `/overview` (`ConsoleRouteRedirect.tsx:1`).
 
-## Prose and commands
+## What the console knows from the route
 
-The console has two input modes:
+The shell derives context from the current URL (`apps/web/src/console/BrowserConsole.tsx:295`):
 
-- Type normal prose to talk to the real coordinator. When a run is bound, prose is sent to that
-  coordinator run. When no run is bound, the console asks before starting work.
-- Type slash commands for an explicit MCP-backed control plane. Use `/help` in the console to see the
-  palette.
+- on an orchestration page, it binds both `project_id` and `run_id`;
+- on a project page, it binds `project_id`;
+- elsewhere, it stays global unless you pin a project with `/use` or bind a run with `/monitor`.
 
-Common commands:
+The context rail shows the current scope, project, run, and whether the binding came from the route or a console command (`BrowserConsole.tsx:684`).
 
-| Command | Purpose |
-| --- | --- |
-| `/projects` | List projects. |
-| `/use <name or id>` | Select the active project. |
-| `/backlog` | List backlog and ready items. |
-| `/ready <task>` | Move a backlog item to Ready. |
-| `/runs` | List orchestration runs. |
-| `/orchestrate <goal>` | Start a coordinator orchestration and bind the console to it. |
-| `/monitor <runId>` | Bind to an existing run and stream updates. |
-| `/confirm` and `/revise <feedback>` | Operate the OutcomeSpec gate for the bound run. |
-| `/approve-assembly` | Approve the collective assembly review gate. |
+## Step by step
 
-## Gates stay visible
+1. **Open Console.** The panel title is **Agentweaver Console**, with shortcuts for `/help`, `/projects`, `/runs`, and `/clear` (`BrowserConsole.tsx:679`, `:692`).
+2. **Ask in natural language.** The browser sends `message`, `text`, `conversation_id`, and route context to `POST /api/console/turn` (`BrowserConsole.tsx:606`; `apps/web/src/api/client.ts:463`).
+3. **Read the response.** Normal answers render as assistant output. Tool-backed responses show action summaries; links open the related project or orchestration (`BrowserConsole.tsx:361`, `:642`, `:656`).
+4. **Clarify when asked.** If the backend cannot determine the project, run, or target, the response renders as **Clarification needed** with suggested commands (`BrowserConsole.tsx:703`).
+5. **Respect gates.** Requests to confirm, approve, merge, review, delete, stop, or cancel come back as a gate block. Use the explicit run view or gate-specific UI to proceed; free-form console text does not bypass those controls (`apps/Agentweaver.Api/Console/ConsoleTurnService.cs:315`, `:354`).
 
-The console reuses the same run stream and timeline components as embedded run inspection. OutcomeSpec
-confirmation, approvals, questions, review, and merge gates appear inline and are not bypassed by
-prose or slash commands.
+## What natural language can do today
 
-## Planned operator routing
+The facade agent is deliberately read-only/status-oriented. It can list projects, inspect a project, list runs, read a backlog board, get run status, read a coordinator work plan, list coordinator children, build an orchestration topology snapshot, list blueprints, list catalog roles, list workflows, list decisions or the decision inbox, and list memory (`packages/Agentweaver.AgentRuntime/ConsoleFacadeAgent.cs:269`).
 
-The current console deliberately separates free-form coordinator prose from explicit slash commands.
-A fuller type-anything operator agent that routes natural language across the whole MCP catalog is
-planned in issue #201.
+If a run is bound and your message is not a status request, the service treats it as coordinator steering (`SteeringKind.Send`) and tells you to watch the run stream for the response (`apps/Agentweaver.Api/Console/ConsoleTurnService.cs:278`).
+
+## Slash shortcuts
+
+Slash commands remain available as fast local shortcuts. Use `/help` to see the palette. Common commands include `/projects`, `/use <name or id>`, `/backlog`, `/runs`, `/orchestrate <goal>`, `/monitor <runId>`, `/confirm`, `/revise <feedback>`, and `/approve-assembly` (`apps/web/src/console/BrowserConsole.tsx:332`, `:456`).
+
+## Error behavior
+
+The API returns provider-specific errors when the facade cannot start or call GitHub Copilot. Authorization maps to `401`, rate limiting to `429`, and provider/configuration failures to `503` (`apps/Agentweaver.Api/Endpoints/ConsoleEndpoints.cs:48`, `:70`). The web error formatter turns API, network, conflict, and rate-limit failures into operator-readable messages (`apps/web/src/api/errors.ts:34`).
 
 ## Source
 
 | Concern | Source |
 | --- | --- |
-| Singleton console panel | `apps/web/src/components/shell/AppShell.tsx` |
+| Singleton console context | `apps/web/src/components/shell/ConsolePanelContext.tsx` |
 | `/console` redirect | `apps/web/src/components/shell/ConsoleRouteRedirect.tsx` |
-| Top-bar Console button | `apps/web/src/components/shell/TopBar.tsx` |
-| Terminal surface, scrollback, prompt, and blinking cursor | `apps/web/src/console/BrowserConsole.tsx:69`, `apps/web/src/console/BrowserConsole.tsx:180`, `apps/web/src/console/BrowserConsole.tsx:624` |
-| Console architecture and gate reuse | `apps/web/src/console/BrowserConsole.tsx:32` |
-| Slash command catalog | `apps/web/src/console/consoleCommands.ts:18` |
+| Terminal shell, context, submit, rendering | `apps/web/src/console/BrowserConsole.tsx` |
+| API client method | `apps/web/src/api/client.ts:463` |
+| Endpoints | `apps/Agentweaver.Api/Endpoints/ConsoleEndpoints.cs` |
+| Routing and gate behavior | `apps/Agentweaver.Api/Console/ConsoleTurnService.cs` |
+| Facade agent and safe tools | `packages/Agentweaver.AgentRuntime/ConsoleFacadeAgent.cs` |
+| Provider error classifier | `packages/Agentweaver.AgentRuntime/Providers/AgentProviderException.cs` |
 
-## See also
+## Related reading
 
+- [Browser console — Reference](../reference/browser-console.md)
+- [Browser console — Deep Dive](../deep-dive/browser-console.md)
 - [Coordinator & orchestration](./coordinator-orchestration.md)
 - [Runs board & watch](./runs-board-watch.md)
-- [MCP client](./mcp-client.md)

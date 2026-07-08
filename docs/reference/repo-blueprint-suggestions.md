@@ -95,4 +95,5 @@ Sources: `apps/Agentweaver.Api/Endpoints/AuthEndpoints.cs:207`, `:249`, `:295`, 
 
 - [Repository blueprint suggestions — Deep Dive](../deep-dive/repo-blueprint-suggestions.md)
 - [Repository blueprint suggestions — Experience](../experience/repo-blueprint-suggestions.md)
+- [Project generation model settings](./project-generation-model-settings.md)
 - [API reference](./api.md#blueprints)

@@ -42,5 +42,6 @@ The GitHub picker now includes personal repositories, not only organization repo
 ## Related reading
 
 - [Projects experience](./projects.md) — the full project creation flow.
+- [Project generation model settings](./project-generation-model-settings.md) — choose per-project models for blueprint/workflow generation.
 - [Repository blueprint suggestions — Reference](../reference/repo-blueprint-suggestions.md) — route, DTOs, status codes, and mapping rules.
 - [Repository blueprint suggestions — Deep Dive](../deep-dive/repo-blueprint-suggestions.md) — analysis-to-mapping flow.

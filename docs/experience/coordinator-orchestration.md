@@ -456,6 +456,23 @@ The experience keeps the user oriented at every scale. At the start, the user se
 
 The web UI makes that lifecycle visual and action-oriented. MCP makes the same lifecycle scriptable and composable. Both surfaces preserve the same product promise: the coordinator can run a team, but the user confirms intent before work starts and retains control while the team executes.
 
+
+## v0.9.5 run page updates
+
+The run page now makes the whole work plan visible after decomposition. Once `coordinator.work_plan` or the persisted work-plan snapshot is available, the graph shows **Outcome plan** followed by **Work plan**, then the subtask graph (`apps/web/src/pages/CoordinatorRunPage.tsx:2224`, `:2255`, `:2272`). This means a user can see the full set of planned subtasks before every child has been dispatched.
+
+The right-side Agents area is now a selected-task readout. It includes the coordinator root, the outcome/work-plan nodes, every planned subtask, and assembly stages. Planned subtasks are selectable even before they have a child run; their Changes and Files tabs explain that artifacts appear after dispatch (`CoordinatorRunPage.tsx:2702`; `apps/web/src/components/AgentSessionPanel.tsx:1640`).
+
+The message stream is quieter by default. High-signal coordinator updates remain visible, while system prompt scaffolding, raw activity details, tool calls, and file rows sit behind technical-detail toggles (`apps/web/src/components/AgentSessionPanel.tsx:740`, `:2160`). Subtask activity lines include the task title, assigned agent, role, and failure reason when those fields are present in `subtask.*` payloads or the work-plan event (`AgentSessionPanel.tsx:1314`, `:1360`).
+
+Steering now happens from the selected-task panel. Selecting the outcome plan focuses the clarification composer; selecting a subtask opens that task's transcript, files, and follow-up surface (`CoordinatorRunPage.tsx:2866`, `:2880`, `:3758`).
+
+## Assembly review no longer races completion
+
+During collective assembly, the human review gate remains authoritative until it closes. The backend persists the review request and accepts a decision only while the WorkPlan is still `in_review` at the `review` assembly stage (`apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyReviewPersistence.cs:111`, `:196`). If the coordinator process fails before a human acts, the open review is marked as preserved instead of being cleared, so the assembled candidate remains inspectable (`CoordinatorAssemblyReviewPersistence.cs:167`).
+
+The UI can also distinguish the terminal stage and reason for parked assembly states because `WorkPlan` now stores `AssemblyTerminalStage` and `AssemblyStatusReason` (`apps/Agentweaver.Api.Data/Memory/WorkPlan.cs:34`).
+
 ## Preview-first delivery
 
 For runnable work, the coordinator should make the review hand-off inspectable, not just readable. Workflows with the platform-owned `build_test` gate use that gate as the primary mechanism: it builds, tests, starts web/service artifacts, observes the actual bound port, verifies the server, and registers the sandbox preview through `start_preview(port=PORT)`.

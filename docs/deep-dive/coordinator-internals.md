@@ -679,6 +679,21 @@ To rebuild the coordinator from scratch:
 15. **Recover by state, not memory.** On startup and heartbeat, route by WorkPlan status and re-arm idempotent drivers.
 16. **Do not assume dispatcher provider support reaches live workflows.** Add provider selection at the workflow turn-agent seam if live coordinator runs need non-Copilot providers.
 
+
+## v0.9.5 observable run-page projection
+
+The current coordinator UI projection is intentionally seeded from durable artifacts, not only from a live SSE stream. `CoordinatorRunPage` fetches the work plan and children together, stores `workPlanData`, and calls `seedTopologyFromWorkPlan(workPlan, children)` so a completed or reloaded run renders the planned graph immediately (`apps/web/src/pages/CoordinatorRunPage.tsx:1974`, `:1987`). It then inserts synthetic **Outcome plan** and **Work plan** nodes into the graph before the downstream subtask nodes, making the planning contract visible as part of the executable topology (`CoordinatorRunPage.tsx:2224`, `:2272`).
+
+The docked session model mirrors the full plan. Every planned subtask is included in the session tree even if no child run exists yet; child-run transcripts and artifacts appear once `childRunId` is present (`CoordinatorRunPage.tsx:2702`; `apps/web/src/components/AgentSessionPanel.tsx:1640`). The tree is flat under the coordinator root by design: dependency ordering is represented by graph edges, not by tree nesting (`CoordinatorRunPage.tsx:2802`).
+
+`AgentSessionPanel` converts raw event streams into a readable coordinator narrative. It builds subtask metadata from `coordinator.work_plan` and `subtask.*` payloads, then formats dispatch/running/ready/completed/failed lines with title, agent, role, and reason (`apps/web/src/components/AgentSessionPanel.tsx:1314`, `:1360`). The panel classifies technical scaffolding separately from high-signal content, and docked coordinator panels expose a technical-details toggle instead of mixing raw tool/file rows into the primary narrative (`AgentSessionPanel.tsx:740`, `:2160`).
+
+## Durable assembly review gate
+
+The review gate is persisted outside the in-memory assembly driver. `CoordinatorAssemblyReviewPersistence.UpsertReviewRequestAsync` records the owner, integration branch, and aggregate tree hash for the coordinator run; `PersistDecisionForPendingRequestAsync` accepts a decision only when the associated WorkPlan is still `in_review` and at the `review` assembly stage (`apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyReviewPersistence.cs:11`, `:111`, `:196`). This prevents the coordinator from completing as though the collective review had closed when the human decision has not been durably recorded.
+
+When the coordinator fails while the review is open, `MarkCoordinatorFailedAsync` stamps `CoordinatorFailedAt` and `CoordinatorFailureReason` and returns `true` so the open review can remain visible instead of being cleared as decided (`CoordinatorAssemblyReviewPersistence.cs:167`). The WorkPlan adds `AssemblyTerminalStage` and `AssemblyStatusReason`, keeping the failing gate/action separate from later cleanup stage movement (`apps/Agentweaver.Api.Data/Memory/WorkPlan.cs:34`).
+
 ## Where this lives
 
 - `apps/Agentweaver.Api/Coordinator/`

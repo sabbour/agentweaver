@@ -64,5 +64,6 @@ Fallback is a product feature, not just an exception handler. A parse failure, u
 
 - [Repository blueprint suggestions — Reference](../reference/repo-blueprint-suggestions.md)
 - [Repository blueprint suggestions — Experience](../experience/repo-blueprint-suggestions.md)
+- [Project generation model settings](./project-generation-model-settings.md)
 - [Projects experience](../experience/projects.md)
 - [API reference](../reference/api.md#blueprints)
