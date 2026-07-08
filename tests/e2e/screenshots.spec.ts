@@ -513,3 +513,46 @@ test.describe('User Guide · Token usage monitoring (spec-019)', () => {
     }, 'overview-token-usage');
   });
 });
+
+
+// ============================================================================
+// browser-console.md — v0.9.5 console facade screenshot
+// ============================================================================
+test.describe('User Guide · Browser console', () => {
+  test('browser-console.png', async ({ page }) => {
+    await page.goto(`${BASE_URL}/overview`, { waitUntil: 'domcontentloaded' });
+    await page.getByRole('button', { name: 'Console' }).click();
+    await page.getByText('Agentweaver Console').waitFor();
+    await page.screenshot({ path: shot('browser-console'), fullPage: true });
+  });
+});
+
+// ============================================================================
+// project-generation-model-settings.md — v0.9.5 generation settings screenshot
+// ============================================================================
+test.describe('User Guide · Project generation model settings', () => {
+  test('project-generation-model-settings.png', async ({ page }) => {
+    test.skip(!PROJECT_ID, 'Set PROJECT_ID to capture project-scoped screenshots.');
+    await page.goto(`${BASE_URL}${projectRoute('/settings')}`, { waitUntil: 'domcontentloaded' });
+    await page.getByText('Generation models').first().scrollIntoViewIfNeeded().catch(() => undefined);
+    await page.getByText('Generation models').first().waitFor().catch(() => undefined);
+    await page.screenshot({ path: shot('project-generation-model-settings'), fullPage: true });
+  });
+});
+
+// ============================================================================
+// repo-blueprint-suggestions.md — v0.9.5 suggested blueprint screenshot
+// ============================================================================
+test.describe('User Guide · Repository blueprint suggestions', () => {
+  test('repo-blueprint-suggestions.png', async ({ page }) => {
+    await page.goto(`${BASE_URL}/projects`, { waitUntil: 'domcontentloaded' });
+    await page.getByRole('button', { name: 'Create from GitHub' }).click();
+    await page.getByText('Repository sources').waitFor();
+    // Choose or paste a repository before capture; if a live recommendation is unavailable,
+    // the placeholder still documents the intended Suggested-tab state.
+    await page.getByRole('textbox', { name: /repository/i }).first().fill('sabbour/agentweaver').catch(() => undefined);
+    await page.getByText('Suggested').first().waitFor().catch(() => undefined);
+    await page.getByText('Recommended').first().waitFor({ timeout: 15_000 }).catch(() => undefined);
+    await page.screenshot({ path: shot('repo-blueprint-suggestions'), fullPage: true });
+  });
+});

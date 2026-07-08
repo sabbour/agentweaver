@@ -20,6 +20,13 @@ The shell derives context from the current URL (`apps/web/src/console/BrowserCon
 
 The context rail shows the current scope, project, run, and whether the binding came from the route or a console command (`BrowserConsole.tsx:684`).
 
+
+![Agentweaver Console panel with context badges, shortcut buttons, and the message-first operator dock](/screenshots/browser-console.png)
+
+> 📸 **Screenshot — `browser-console.png`**
+> *Shows:* the **Agentweaver Console** singleton panel opened from the top bar, with scope/project/run context badges, `/help` / `/projects` / `/runs` / `/clear` shortcuts, the scrollback log, and the bottom prompt.
+> *Path:* Sign in → navigate to `/overview` → click **Console** in the top bar.
+
 ## Step by step
 
 1. **Open Console.** The panel title is **Agentweaver Console**, with shortcuts for `/help`, `/projects`, `/runs`, and `/clear` (`BrowserConsole.tsx:679`, `:692`).

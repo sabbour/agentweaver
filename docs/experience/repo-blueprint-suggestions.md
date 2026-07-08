@@ -23,6 +23,13 @@ If no repository is selected, the card says **Select a repository first** and ex
 4. Review the **Recommended** card. It shows the blueprint name, rationale, roster chips, agent count, and confidence percentage (`BlueprintPicker.tsx:337`).
 5. Expand details to see repository signals such as description, topics, languages, root files, and issues-enabled (`BlueprintPicker.tsx:350`).
 6. Click **Use this blueprint** to apply it. If the recommendation is not right, click **View all templates →** to switch to **Templates**, or choose **Generate** for a custom blueprint (`BlueprintPicker.tsx:350`, `:352`, `:371`).
+
+
+![Create from GitHub dialog showing the Suggested blueprint recommendation](/screenshots/repo-blueprint-suggestions.png)
+
+> 📸 **Screenshot — `repo-blueprint-suggestions.png`**
+> *Shows:* **Create project from GitHub** with a selected or pasted repository, the **Suggested** blueprint tab, the **Recommended** card, rationale, roster chips, confidence percentage, and repository signals.
+> *Path:* Sign in → `/projects` → **Create from GitHub** → choose or paste a repository → stay on **Suggested**.
 7. Click **Create project**. The create request carries the chosen catalog blueprint id or generated inline blueprint through the existing project creation path (`BlueprintPicker.tsx:371`).
 
 ## How the recommendation is chosen

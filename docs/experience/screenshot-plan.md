@@ -74,6 +74,9 @@ rg "📸 \*\*Screenshot" docs/experience
 | 40 | `dashboard-token-usage.png` | `experience/token-usage-monitoring.md` | `/projects/:projectId/dashboard` | Default view → **Agent and usage metrics** range | Shows shared 7d/30d/90d range filter, **Agent leaderboard** with **Cost** column, and the Token/AIC usage panel. |
 | 41 | `overview-token-usage.png` | `experience/token-usage-monitoring.md` | `/overview` | Admin user | Shows **Cost overview** tile, total AICs/tokens, top-project bars, per-model breakdown, and **Usage by project** table. |
 | 42 | `project-board.png` | `experience/token-usage-monitoring.md` | `/projects/:projectId/board` | Board with runs populated | Shows run cards with compact AIC/token cost chips next to status badges; open a run graph to verify the same chip on DAG nodes. |
+| 44 | `browser-console.png` | `browser-console.md` | `/overview` | Click **Console** in the top bar | **Agentweaver Console** singleton panel with context badges, shortcut buttons, scrollback responses, and bottom prompt. |
+| 45 | `project-generation-model-settings.png` | `project-generation-model-settings.md` | `/projects/:projectId/settings` | **Settings** → scroll to **Generation models** | Project settings **Generation models** section with Blueprint / Workflow / Outcome spec generation model fields, **Save**, and **Reset to inherit**. |
+| 46 | `repo-blueprint-suggestions.png` | `repo-blueprint-suggestions.md` | `/projects` | Click **Create from GitHub** → choose or paste a repository → **Suggested** tab | **Create project from GitHub** dialog showing the **Suggested** recommendation card with rationale, roster chips, confidence, and repository signals. |
 
 ## Count per page
 
@@ -90,4 +93,7 @@ rg "📸 \*\*Screenshot" docs/experience
 | `scaling-operations.md` | 2 |
 | `cluster-page.md` | 2 |
 | `token-usage-monitoring.md` | 4 |
-| **Total** | **42** |
+| `browser-console.md` | 1 |
+| `project-generation-model-settings.md` | 1 |
+| `repo-blueprint-suggestions.md` | 1 |
+| **Total** | **45** |

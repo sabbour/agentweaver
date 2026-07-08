@@ -20,6 +20,13 @@ Leave a field blank to inherit the global generation default shown in the UI (`a
 4. If the save succeeds, the page shows **Generation model settings saved.** (`ProjectSettingsPage.tsx:586`).
 5. To inherit defaults again, click **Reset to inherit**. The UI saves all three generation fields as `null` (`ProjectSettingsPage.tsx:566`, `:342`).
 
+
+![Project settings page showing generation model fields](/screenshots/project-generation-model-settings.png)
+
+> 📸 **Screenshot — `project-generation-model-settings.png`**
+> *Shows:* **Project settings** with the **Generation models** section, the three fields **Blueprint generation model**, **Workflow generation model**, and **Outcome spec generation model**, plus **Save** and **Reset to inherit**.
+> *Path:* Sign in → open a project → **Settings** → scroll to **Generation models**.
+
 ## What changes after save
 
 - The next **Generate blueprint** request for this project uses `blueprint_generation_model` after resolving it through `GenerationModelOptions.ResolveBlueprintModel` (`apps/Agentweaver.Api/Endpoints/BlueprintEndpoints.cs:58`).
