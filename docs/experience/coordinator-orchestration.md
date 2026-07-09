@@ -385,9 +385,24 @@ After child subtasks settle, the coordinator assembles the collective output. Du
 
 When any assembly gate requests changes, the revision loop is visible instead of looking like a stalled graph. The run status chip reads **Revising after {Gate} feedback**, affected subtask cards show **Changes requested — revising**, and the coordinator timeline adds `🔁 {Gate} requested changes → revising N subtasks` with the reviewer feedback inline/expandable (`apps/web/src/pages/CoordinatorRunPage.tsx:713`, `:2703`; `apps/web/src/components/AgentSessionPanel.tsx:1599`). The revision marker clears per subtask once a later terminal subtask event arrives.
 
+For automated gate feedback, the retry is warmer than a fresh assembly. If Build & Test or Rubberduck asks
+for changes, the coordinator keeps the Build & Test pod and detached integration worktree while it
+re-dispatches the affected subtasks. When assembly reaches Build & Test again, it reuses that same
+run-bound pod/worktree instead of releasing resources and cold-launching a replacement. As an operator, that
+means previews and gate context survive the request-changes cycle, and a second pass should not fail just
+because the namespace no longer has spare quota for another AgentHost pod.
+
 During **In review**, the page clearly marks that human review is pending and directs the user to the Changes panel. The review stage node in the graph also surfaces a primary **Review now** button while review is action-required; clicking it opens the artifacts/review panel (the same Changes/Files modal) so the user can jump straight from the topology into the collective assembly output. The Changes/Files experience is reused for the coordinator's collective assembly output. Approve, request a change, or decline actions go to the assembly review gate, not to individual children.
 
-If assembly blocks or fails, the page explains why. It can show conflict files, blocking subtasks, status badges, and hints such as re-running affected subtasks or stopping the run. The important UX rule is that the user gets a reason and a recovery surface, not a bare failed state.
+If assembly blocks or fails, the page explains why. It can show conflict files, blocking subtasks, status
+badges, and hints such as re-running affected subtasks or stopping the run. Build & Test infrastructure
+blocks now include structured failure details in the event payload — `detail`, `exceptionMessage`,
+`innerExceptionMessage`, `innerExceptionType`, and `infrastructureReason` — so the timeline and events API
+can show the real AgentHost launch or transport root cause instead of a generic
+`agenthost_launch_failed`. Retryable `coordinator.assembly_blocked` events keep the stream alive for
+recovery; terminal `coordinator.assembly_failed` events still close the stream, but replay drains all
+persisted diagnostics first. The important UX rule is that the user gets a reason and a recovery surface,
+not a bare failed state.
 
 ### Stall diagnostics
 

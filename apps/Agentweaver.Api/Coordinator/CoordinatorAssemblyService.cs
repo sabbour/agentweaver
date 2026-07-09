@@ -1537,8 +1537,17 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
             feedback = decision.Feedback,
         });
 
-        await CleanupAssemblyBuildTestResourcesAsync(
-            context.CoordinatorRunId, context.RepositoryPath, ct).ConfigureAwait(false);
+        if (IsAutomatedAssemblyGateReviewer(decision.Reviewer))
+        {
+            _logger.LogInformation(
+                "Collective assembly: retaining Build/Test pod and detached worktree for automated gate request-changes on run {RunId} (reviewer={Reviewer})",
+                context.CoordinatorRunId, decision.Reviewer);
+        }
+        else
+        {
+            await CleanupAssemblyBuildTestResourcesAsync(
+                context.CoordinatorRunId, context.RepositoryPath, ct).ConfigureAwait(false);
+        }
 
         // Reset the selected subtasks to pending (leave others' results intact); clear stage and move
         // the plan back to dispatching so the dispatch engine re-runs the affected frontier.
@@ -1572,6 +1581,8 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
     {
         var status = ex.Retryable ? WorkPlanStatus.AssemblyBlocked : WorkPlanStatus.AssemblyFailed;
         var reason = $"build_test_infra_{ex.Reason}";
+        var inner = InnermostException(ex);
+        var detail = BuildInfrastructureFailureDetail(ex);
         await CleanupAssemblyBuildTestResourcesAsync(
             context.CoordinatorRunId, context.RepositoryPath, ct).ConfigureAwait(false);
         await _assemblyStore.SetTerminalStatusAsync(workPlanId, status, reason, ct).ConfigureAwait(false);
@@ -1582,7 +1593,11 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
             {
                 workPlanId,
                 reason,
-                detail = ex.Message,
+                detail,
+                exceptionMessage = ex.Message,
+                innerExceptionMessage = inner?.Message,
+                innerExceptionType = inner?.GetType().FullName,
+                infrastructureReason = ex.Reason,
                 retryable = true,
             });
         }
@@ -1592,16 +1607,50 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
             {
                 workPlanId,
                 reason,
-                detail = ex.Message,
+                detail,
+                exceptionMessage = ex.Message,
+                innerExceptionMessage = inner?.Message,
+                innerExceptionType = inner?.GetType().FullName,
+                infrastructureReason = ex.Reason,
             });
             await TerminalizeCoordinatorRunAsync(
                 context.CoordinatorRunId, RunStatus.Failed, reason, ct).ConfigureAwait(false);
         }
 
         await EmitTopologyAsync(context.CoordinatorRunId, workPlanId, status, edges, ct).ConfigureAwait(false);
+        try
+        {
+            await PersistRunEventsSnapshotAsync(context.CoordinatorRunId, ct).ConfigureAwait(false);
+        }
+        catch (Exception persistEx) when (persistEx is not OperationCanceledException)
+        {
+            _logger.LogWarning(persistEx,
+                "Collective assembly: failed to persist Build/Test infrastructure failure events for run {RunId}",
+                context.CoordinatorRunId);
+        }
         _logger.LogWarning(ex,
-            "Collective assembly Build/Test infrastructure failure for run {RunId}: {Reason} (retryable={Retryable})",
-            context.CoordinatorRunId, ex.Reason, ex.Retryable);
+            "Collective assembly Build/Test infrastructure failure for run {RunId}: {Reason} (retryable={Retryable}); detail={Detail}; inner={InnerMessage}",
+            context.CoordinatorRunId, ex.Reason, ex.Retryable, detail, inner?.Message);
+    }
+
+    private static bool IsAutomatedAssemblyGateReviewer(string? reviewer) =>
+        string.Equals(reviewer, "build-test", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(reviewer, "rubberduck", StringComparison.OrdinalIgnoreCase);
+
+    private static Exception? InnermostException(Exception ex)
+    {
+        var current = ex.InnerException;
+        while (current?.InnerException is not null)
+            current = current.InnerException;
+        return current;
+    }
+
+    private static string BuildInfrastructureFailureDetail(CollectiveBuildTestInfrastructureException ex)
+    {
+        var inner = InnermostException(ex);
+        return inner is null || string.Equals(inner.Message, ex.Message, StringComparison.Ordinal)
+            ? ex.Message
+            : $"{ex.Message} (inner: {inner.Message})";
     }
 
     // -----------------------------------------------------------------------
@@ -1915,36 +1964,7 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
     {
         try
         {
-            var entry = _streamStore.Get(coordinatorRunId);
-            var events = entry?.GetSnapshotSince(0).Events;
-            if (events is { Count: > 0 })
-            {
-                using var scope = _scopeFactory.CreateScope();
-                var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
-
-                var existingSeqs = db.RunEvents
-                    .Where(e => e.RunId == coordinatorRunId)
-                    .Select(e => e.Sequence)
-                    .ToHashSet();
-
-                var toInsert = events
-                    .Where(e => !existingSeqs.Contains(e.Sequence))
-                    .Select(e => new RunEventRecord
-                    {
-                        RunId = coordinatorRunId,
-                        Sequence = e.Sequence,
-                        EventType = e.Type,
-                        PayloadJson = System.Text.Json.JsonSerializer.Serialize(e.Payload),
-                        CreatedAt = DateTime.UtcNow,
-                    })
-                    .ToList();
-
-                if (toInsert.Count > 0)
-                {
-                    db.RunEvents.AddRange(toInsert);
-                    await db.SaveChangesAsync().ConfigureAwait(false);
-                }
-            }
+            await PersistRunEventsSnapshotAsync(coordinatorRunId, CancellationToken.None).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -1954,6 +1974,40 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         finally
         {
             _streamStore.Complete(coordinatorRunId);
+        }
+    }
+
+    private async Task PersistRunEventsSnapshotAsync(string coordinatorRunId, CancellationToken ct)
+    {
+        var entry = _streamStore.Get(coordinatorRunId);
+        var events = entry?.GetSnapshotSince(0).Events;
+        if (events is not { Count: > 0 })
+            return;
+
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+
+        var existingSeqs = db.RunEvents
+            .Where(e => e.RunId == coordinatorRunId)
+            .Select(e => e.Sequence)
+            .ToHashSet();
+
+        var toInsert = events
+            .Where(e => !existingSeqs.Contains(e.Sequence))
+            .Select(e => new RunEventRecord
+            {
+                RunId = coordinatorRunId,
+                Sequence = e.Sequence,
+                EventType = e.Type,
+                PayloadJson = JsonSerializer.Serialize(e.Payload),
+                CreatedAt = DateTime.UtcNow,
+            })
+            .ToList();
+
+        if (toInsert.Count > 0)
+        {
+            db.RunEvents.AddRange(toInsert);
+            await db.SaveChangesAsync(ct).ConfigureAwait(false);
         }
     }
 

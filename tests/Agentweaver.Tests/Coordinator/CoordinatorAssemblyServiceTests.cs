@@ -702,6 +702,63 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
             .Should().Be(RunStatus.InProgress);
     }
 
+    [Fact]
+    public async Task BuildTestInfrastructureFailure_PersistsAssemblyEvent_WithInnerExceptionDetail()
+    {
+        var coordinatorRunId = RunId.New().ToString();
+        var (workPlanId, _) = await SeedPlanAsync(coordinatorRunId,
+            new[] { SubtaskStatus.Completed, SubtaskStatus.AssembleReady });
+        await SeedCoordinatorRunAsync(coordinatorRunId);
+        _streamStore.Create(coordinatorRunId, "alice");
+        _streamStore.Complete(coordinatorRunId);
+
+        var inner = new InvalidOperationException("/configure returned HTTP 500 for workdir");
+        var ex = new CollectiveBuildTestInfrastructureException(
+            "agenthost_launch_failed",
+            "AgentHost pod launch failed for Build & Test: /configure returned HTTP 500 for workdir",
+            retryable: false,
+            inner);
+
+        await InvokeParkBuildTestInfrastructureFailureAsync(Context(coordinatorRunId), workPlanId, ex);
+
+        using var scope = _provider.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var persisted = await db.RunEvents
+            .Where(e => e.RunId == coordinatorRunId && e.EventType == EventTypes.CoordinatorAssemblyFailed)
+            .OrderBy(e => e.Sequence)
+            .SingleAsync();
+        using var doc = JsonDocument.Parse(persisted.PayloadJson);
+        doc.RootElement.GetProperty("reason").GetString().Should().Be("build_test_infra_agenthost_launch_failed");
+        doc.RootElement.GetProperty("detail").GetString().Should().Contain("/configure returned HTTP 500");
+        doc.RootElement.GetProperty("innerExceptionMessage").GetString().Should().Be(inner.Message);
+        doc.RootElement.GetProperty("infrastructureReason").GetString().Should().Be("agenthost_launch_failed");
+    }
+
+    [Fact]
+    public async Task AutomatedGateRequestChanges_RetainsBuildTestResources_ForNextAssemblyPass()
+    {
+        var coordinatorRunId = RunId.New().ToString();
+        var (workPlanId, _) = await SeedPlanAsync(coordinatorRunId,
+            new[] { SubtaskStatus.Completed, SubtaskStatus.AssembleReady });
+        await SeedCoordinatorRunAsync(coordinatorRunId);
+        _streamStore.Create(coordinatorRunId, "alice");
+
+        await InvokeRequestChangesAsync(
+            Context(coordinatorRunId),
+            workPlanId,
+            new AssemblyReviewDecision(
+                Approved: false,
+                RequestChanges: true,
+                Feedback: "Please update the generated aggregate.",
+                TargetFiles: null,
+                Reviewer: "build-test"));
+
+        (await _assemblyStore.GetAsync(workPlanId, default))!.Status.Should().Be(WorkPlanStatus.Dispatching);
+        _dispatch.StartDispatchCalls.Should().ContainSingle();
+        _pipeline.CleanupBuildTestResourcesCalls.Should().Be(0,
+            "automated Build/Test request-changes should reuse the coordinator pod and detached worktree on the next assembly pass");
+    }
+
     // ── Terminal coordinator-run status + reason (so the UI never shows a bare "Failed") ──────────
 
     [Fact]
@@ -1080,6 +1137,28 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         await task.ConfigureAwait(false);
     }
 
+    private async Task InvokeRequestChangesAsync(
+        CoordinatorDispatchContext context,
+        int workPlanId,
+        AssemblyReviewDecision decision)
+    {
+        var method = typeof(CoordinatorAssemblyService).GetMethod(
+            "RequestChangesAsync",
+            BindingFlags.NonPublic | BindingFlags.Instance);
+        method.Should().NotBeNull("request-changes owns coordinator build/test resource retention");
+
+        var task = (Task)method!.Invoke(_sut,
+        [
+            context,
+            workPlanId,
+            Array.Empty<(int, int)>(),
+            decision,
+            new Dictionary<int, IReadOnlySet<string>>(),
+            CancellationToken.None,
+        ])!;
+        await task.ConfigureAwait(false);
+    }
+
     private static string CreateGitRepository()
     {
         var repoPath = Path.Combine(Path.GetTempPath(), $"agentweaver-buildtest-repo-{Guid.NewGuid():N}");
@@ -1278,6 +1357,7 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         public int IntegrationBuilds;
         public int IntegrationRetryPreparations;
         public int BuildTests;
+        public int CleanupBuildTestResourcesCalls;
         public int Merges;
         public int Scribes;
         public IntegrationBranchResult? IntegrationResult;
@@ -1319,7 +1399,11 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         public Task CleanupBuildTestResourcesAsync(
             string coordinatorRunId,
             string repositoryPath,
-            CancellationToken ct = default) => Task.CompletedTask;
+            CancellationToken ct = default)
+        {
+            CleanupBuildTestResourcesCalls++;
+            return Task.CompletedTask;
+        }
 
         public Task<CollectiveMergeResult> MergeAsync(CollectiveMergeRequest request, CancellationToken ct)
         {

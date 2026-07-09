@@ -207,6 +207,9 @@ public sealed class CollectiveAssemblyPipeline : ICollectiveAssemblyPipeline
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {
+                    _logger.LogWarning(ex,
+                        "Collective Build/Test: AgentHost pod launch failed for coordinator run {RunId}: {Message}",
+                        request.CoordinatorRunId, ex.Message);
                     throw new CollectiveBuildTestInfrastructureException(
                         "agenthost_launch_failed",
                         $"AgentHost pod launch failed for Build & Test: {ex.Message}",
@@ -251,6 +254,9 @@ public sealed class CollectiveAssemblyPipeline : ICollectiveAssemblyPipeline
         }
         catch (WorkflowAgentInfrastructureException ex)
         {
+            _logger.LogWarning(ex,
+                "Collective Build/Test: workflow agent infrastructure failure for coordinator run {RunId}: {Reason}: {Message}",
+                request.CoordinatorRunId, ex.Reason, ex.Message);
             throw new CollectiveBuildTestInfrastructureException(
                 ex.Reason,
                 ex.Message,

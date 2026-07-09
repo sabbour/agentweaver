@@ -495,6 +495,16 @@ Known assembly gates are `rai`, `rubberduck`, `build-test`, and `human-review`; 
 
 Build & Test is a platform gate, not a human action. The assembly service emits `coordinator.assembly_review_requested` with `gateKind: "build-test"`, creates a detached worktree from the integration branch, runs the build/test/preview instruction, and routes its verdict before the human-review gate (`CoordinatorAssemblyService.cs:671`, `apps/Agentweaver.Api/Git/WorktreeManager.cs:155`). In `pod-per-run` mode, the pipeline launches a dedicated AgentHost pod bound to the coordinator run id and passes the detached worktree path as the working-directory override (`apps/Agentweaver.Api/Coordinator/CollectiveAssemblyPipeline.cs:155`, `apps/Agentweaver.Api/Sandbox/IAgentHostPodLifecycle.cs:30`). `/configure` then sets the AgentHost working directory/file-tool root to that path before the first turn (`apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs:300`, `:423`). This gives the automated gate a routable A2A endpoint and makes `start_preview` target the preview server running from the assembled integration tree. Because that detached worktree uses the `git` CLI (`WorktreeManager.cs:546`), the API runtime image installs `git` alongside `libgit2` (`apps/Agentweaver.Api/Dockerfile:58`).
 
+Automated gate request-changes now keep that Build & Test execution context warm. When Build & Test or
+Rubberduck requests changes, assembly emits `coordinator.assembly_changes_requested`, resets the inferred
+subtasks, and returns the plan to `dispatching`, but it does **not** release the Build & Test AgentHost pod
+or detached worktree for those automated reviewers (`apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyService.cs:1536`,
+`:1548`). The next assembly pass calls `LaunchAgentHostPodAsync` for the same coordinator run id; if the
+existing `agent-{runId}` claim still matches the detached worktree and still has its turn token, the
+Kubernetes executor skips the namespace quota precheck and reuses the already-configured pod instead of
+cold-launching a fresh one (`apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs:310`, `:316`,
+`:351`, `:416`). Terminal outcomes and non-automated request-changes still use the normal cleanup path.
+
 ### Eligibility gate
 
 The coordinator does no partial assembly. Every subtask must be `assemble_ready` or `completed`.
@@ -513,7 +523,21 @@ The production pipeline reuses the existing RAI executor over the aggregate diff
 
 ### Build & Test infrastructure classification
 
-Build/test code feedback and sandbox infrastructure failures take different paths. A `request-changes` decision from the Build & Test agent is authored feedback and uses normal redispatch routing. Infrastructure failures are classified before that verdict layer: capacity pending, launch failure, missing pod IP, missing A2A endpoint, and A2A transport errors become `build_test_infra_*` reasons (`CollectiveAssemblyPipeline.cs:174`, `:252`; `KubernetesPodAgentEndpointResolver.cs:103`, `:177`; `RemoteAgentProxy.cs:119`, `:243`). Retryable cases park the plan as `assembly_blocked` so the reconciler can re-arm it; non-retryable configuration errors mark `assembly_failed` and terminalize the coordinator (`CoordinatorAssemblyService.cs:1567`, `CoordinatorReconciler.cs:267`). They no longer masquerade as `REQUEST_CHANGES`, so they do not create a redispatch loop that keeps asking workers to fix unavailable infrastructure.
+Build/test code feedback and sandbox infrastructure failures take different paths. A `request-changes`
+decision from the Build & Test agent is authored feedback and uses normal redispatch routing.
+Infrastructure failures are classified before that verdict layer: capacity pending, launch failure, missing
+pod IP, missing A2A endpoint, and A2A transport errors become `build_test_infra_*` reasons
+(`CollectiveAssemblyPipeline.cs:174`, `:252`; `KubernetesPodAgentEndpointResolver.cs:103`, `:177`;
+`RemoteAgentProxy.cs:119`, `:243`). Retryable cases park the plan as `assembly_blocked` so the reconciler
+can re-arm it; non-retryable configuration errors mark `assembly_failed` and terminalize the coordinator
+(`CoordinatorAssemblyService.cs:1567`, `CoordinatorReconciler.cs:267`). The emitted diagnostic payloads
+carry `detail`, `exceptionMessage`, `innerExceptionMessage`, `innerExceptionType`, and
+`infrastructureReason`, so operators can see the actual AgentHost launch or transport root cause rather
+than only `build_test_infra_agenthost_launch_failed` (`CoordinatorAssemblyService.cs:1590`, `:1604`,
+`:1648`). These events are persisted even when they are appended around terminalization because the run
+event stream writes late appends before checking completed-run state (`SqliteRunEventStream.cs:81`,
+`EfRunEventStream.cs:64`). They no longer masquerade as `REQUEST_CHANGES`, so they do not create a
+redispatch loop that keeps asking workers to fix unavailable infrastructure.
 
 ### One collective review
 
@@ -528,7 +552,14 @@ Review decisions:
 
 ### Request-changes routing
 
-The assembly Build & Test pod, detached worktree, and any Gateway preview are intentionally retained while the run waits at human review, so reviewers can open the preview URL against the exact assembled tree. They are cleaned up on terminal outcomes and before an authored request-changes redispatch resets affected subtasks (`CoordinatorAssemblyService.cs:1519`, `:1813`, `:1869`). `AgentHostReaperService` treats `AwaitingReview` as active, so review/preview AgentHost claims are not reaped during that window (`apps/Agentweaver.Api/Sandbox/AgentHostReaperService.cs:86`, `:102`).
+The assembly Build & Test pod, detached worktree, and any Gateway preview are intentionally retained while
+the run waits at human review, so reviewers can open the preview URL against the exact assembled tree. They
+are also retained across automated Build & Test / Rubberduck request-changes redispatches, which preserves
+context and avoids a second-pass AgentHost relaunch failure class. Cleanup still runs on terminal outcomes,
+and it still runs before non-automated request-changes redispatches where the old review context should be
+discarded (`CoordinatorAssemblyService.cs:1536`, `:1548`, `:1869`, `:1918`). `AgentHostReaperService`
+treats `AwaitingReview` as active, so review/preview AgentHost claims are not reaped during that window
+(`apps/Agentweaver.Api/Sandbox/AgentHostReaperService.cs:86`, `:102`).
 
 When the reviewer requests changes, the coordinator tries to avoid redoing everything:
 
@@ -660,7 +691,7 @@ The provider-neutral `AgentRunnerDispatcher` can route one-shot runner calls to 
 | Integration branch conflict | Mark needs resolution; do not enter review/merge. |
 | Collective RAI flagged | Current behavior: mark `rai_blocked` and terminalize failed. |
 | Build & Test infrastructure failure | Classify as `build_test_infra_*`; retryable cases park as `assembly_blocked`, non-retryable configuration errors fail assembly. |
-| Review requests changes | Reset inferred subtasks and dependents; release the assembly Build & Test preview resources, then re-dispatch. |
+| Review requests changes | Reset inferred subtasks and dependents, then re-dispatch. Automated Build & Test / Rubberduck request-changes retain the assembly Build & Test pod and detached worktree for reuse; non-automated request-changes clean those resources up first. |
 | Review declines | Mark assembly declined and terminalize. |
 | Merge conflict | Mark needs resolution / merge failed. |
 | Scribe fails after merge | Emit failure event but keep assembly successful. |

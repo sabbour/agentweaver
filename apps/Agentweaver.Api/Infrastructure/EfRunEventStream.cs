@@ -41,6 +41,7 @@ public sealed class EfRunEventStream : IRunEventStream
         EventTypes.MergeFailed,
         EventTypes.ReviewDeclined,
         EventTypes.RunAssembleReady,
+        EventTypes.CoordinatorAssemblyFailed,
     };
 
     private static readonly IReadOnlyDictionary<string, Type> PayloadTypes = new Dictionary<string, Type>(StringComparer.Ordinal)
@@ -62,13 +63,14 @@ public sealed class EfRunEventStream : IRunEventStream
     /// <inheritdoc />
     public async ValueTask AppendAsync(string runId, RunEvent evt, CancellationToken ct = default)
     {
+        var sequence = await WriteThroughAsync(runId, evt, ct).ConfigureAwait(false);
+
         if (_completedRuns.ContainsKey(runId))
         {
-            _logger?.LogWarning("Discarding event {EventType} for completed run {RunId}", evt.Type, runId);
-            return;
+            _logger?.LogWarning(
+                "Persisted late event {EventType} for completed run {RunId}; subscribers must replay from durable store",
+                evt.Type, runId);
         }
-
-        var sequence = await WriteThroughAsync(runId, evt, ct).ConfigureAwait(false);
 
         _ = sequence;
     }
@@ -80,22 +82,40 @@ public sealed class EfRunEventStream : IRunEventStream
         var lastSeen = fromSequence;
         while (!ct.IsCancellationRequested)
         {
-            var emitted = false;
+            var batch = new List<RunEvent>();
             await foreach (var evt in LoadFromSequenceAsync(runId, lastSeen, ct).ConfigureAwait(false))
+                batch.Add(evt);
+
+            foreach (var evt in batch)
             {
-                emitted = true;
                 yield return evt;
                 lastSeen = evt.Sequence;
-                if (TerminalTypes.Contains(evt.Type))
-                    yield break;
             }
 
-            if (!emitted && _completedRuns.ContainsKey(runId))
+            if (ShouldStopAfterReplayBatch(batch))
                 yield break;
 
-            if (!emitted)
+            if (batch.Count == 0 && _completedRuns.ContainsKey(runId))
+                yield break;
+
+            if (batch.Count == 0)
                 await Task.Delay(PollInterval, ct).ConfigureAwait(false);
         }
+    }
+
+    private static bool ShouldStopAfterReplayBatch(IReadOnlyList<RunEvent> events)
+    {
+        var terminalIndex = -1;
+        for (var i = 0; i < events.Count; i++)
+        {
+            if (TerminalTypes.Contains(events[i].Type))
+                terminalIndex = i;
+        }
+
+        if (terminalIndex < 0)
+            return false;
+
+        return true;
     }
 
     /// <inheritdoc />

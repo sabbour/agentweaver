@@ -307,11 +307,13 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
             ? null
             : Path.GetFullPath(workingDirectoryOverride);
 
-        // Fail fast before creating the claim if the namespace quota cannot admit another agent pod
-        // (2 CPU). Without this the claim is accepted but the controller's pod reconcile is rejected
-        // with "exceeded quota", which surfaces as a generic mid-turn failure. Throws
-        // AgentHostCapacityPendingException so the launch path can park-and-retry instead of failing.
-        await CheckQuotaHeadroomAsync(ct).ConfigureAwait(false);
+        var existingClaim = await AgentHostClaimExistsAsync(claimName, ct).ConfigureAwait(false);
+        // Fail fast before creating a NEW claim if the namespace quota cannot admit another agent pod
+        // (2 CPU). Do not gate an existing coordinator Build/Test claim on spare quota: retained
+        // automated-gate retries must be able to reuse their already-bound pod even when the pool is
+        // otherwise full.
+        if (!existingClaim)
+            await CheckQuotaHeadroomAsync(ct).ConfigureAwait(false);
 
         _logger.LogInformation(
             "KubernetesSandboxExecutor: launching AgentHost pod for run {RunId} via claim {Claim}",
@@ -362,6 +364,7 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
                     _podRegistry?.Unregister(runId);
                     _turnTokenRegistry?.UnregisterTurnToken(runId);
                     await Task.Delay(1000, ct).ConfigureAwait(false);
+                    await CheckQuotaHeadroomAsync(ct).ConfigureAwait(false);
                     claimCreated = await CreateAgentHostClaimAsync(
                         claimName, _options.AgentHostWarmPoolRef, requestedWorkingDirectory, ct).ConfigureAwait(false);
                     if (!claimCreated)
@@ -598,6 +601,28 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
         }
 
         return null;
+    }
+
+    private async Task<bool> AgentHostClaimExistsAsync(string claimName, CancellationToken ct)
+    {
+        try
+        {
+            await _client.CustomObjects.GetNamespacedCustomObjectAsync(
+                ApiGroup, ApiVersion, _options.Namespace, ClaimPlural, claimName,
+                cancellationToken: ct).ConfigureAwait(false);
+            return true;
+        }
+        catch (HttpOperationException ex) when (ex.Response?.StatusCode == System.Net.HttpStatusCode.NotFound)
+        {
+            return false;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(ex,
+                "KubernetesSandboxExecutor: failed to check whether AgentHost claim {Claim} exists; assuming absent",
+                claimName);
+            return false;
+        }
     }
 
     /// <summary>
