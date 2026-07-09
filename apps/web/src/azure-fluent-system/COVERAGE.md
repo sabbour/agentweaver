@@ -46,15 +46,15 @@ that table to reproduce these numbers.
 
 | MCP-extraction status | Count | Meaning |
 | --- | --- | --- |
-| implemented-rendered | 26 | MCP-extracted and rendered by a real library export |
+| implemented-rendered | 25 | MCP-extracted and rendered by a real library export |
 | needs-mcp-extraction | 45 | Exact node identified; deeper MCP extraction not yet cached |
-| showcase-placeholder | 77 | Linked into a delivered surface but not tracked as standalone full-fidelity |
+| showcase-placeholder | 78 | Linked into a delivered surface but not tracked as standalone full-fidelity |
 | needs-implementation | 0 | — |
 | local-only-needed | 0 | — |
 | **Total** | **148** | |
 
-Exact name+node audit against the raw Figma manifest: **105 covered / 43 missing** of the named
-nodes. The 43 misses are enumerated per row in [`catalog/COMPONENTS.md`](./catalog/COMPONENTS.md).
+Exact name+node audit against the raw Figma manifest: **104 covered / 44 missing** of the named
+nodes. The 44 misses are enumerated per row in [`catalog/COMPONENTS.md`](./catalog/COMPONENTS.md).
 
 ### Pattern coverage (Azure Pattern Templates)
 
@@ -72,13 +72,13 @@ Every Copilot surface below was rebuilt or verified directly against its Figma n
 
 | Component | Figma node(s) | Status |
 | --- | --- | --- |
-| ChainOfThought | `386:75088` (sub-content `386:75111`) | Verified — indent + pink-forward running loader corrected |
-| CopilotComposer | `32382:38468` | Rebuilt — gradient 32px pill, inset field, "Message Copilot" |
-| CopilotResponse | `32382:38129` | Rebuilt — left-aligned header, 10px badge, plain body |
-| BladeHeader | `32615:9834` (menu label `35294:9320`) | Verified — menu label 24px regular, resource icon 28px, 24px pipe divider |
-| InlineCopilot | `29192:8232` (loader `29192:8246`, disclaimer `29192:8267`) | Verified — shared Copilot loader bar + AI-content disclaimer |
+| ChainOfThought | `386:75088` (loader `386:75129`) | Verified — Title3 semibold heading + neutral shared loader |
+| CopilotComposer | `32382:38450` (composition `32382:38468` not represented by this API) | Verified — tokenized input shell, not the full composed screen |
+| CopilotResponse | `32382:38124` / element `32382:38154` | Verified — circular persona/badge and brand/thicker stroke treatment |
+| BladeHeader | `32615:9834` (menu label `35294:9320`, pipe `32615:9840`) | Verified — menu label Title3 semibold, resource icon 28px, 2.2734375px pipe divider |
+| InlineCopilot | `29192:8232` (loader `29192:8246`, disclaimer `29192:8267`) | Verified — shared neutral Copilot loader bar + AI-content disclaimer |
 | ArtifactPill | `27865:11293` | Verified — inline title+type, arrow-maximize, 34px pill |
-| AgenticProgress | `27950:10571` / `27880:13472` (loader `386:75129`) | Verified — shared Copilot loader dot + bar |
+| AgenticProgress | `27950:10571` / `27880:13472` (loader `386:75129`) | Verified — shared neutral Copilot loader dot + bar |
 | CopilotWorkspacePattern | composition (`patterns.tsx`) | Inherits fidelity from the primitives above |
 
 ---
@@ -88,7 +88,7 @@ Every Copilot surface below was rebuilt or verified directly against its Figma n
 - **45 nodes are `needs-mcp-extraction`.** Their exact node is identified but a deeper MCP pass is
   not yet cached. They are safe to consume via the closest implemented composition, but are not
   claimed as standalone full-fidelity.
-- **77 nodes are `showcase-placeholder`.** Linked into a delivered surface (so they contribute to a
+- **78 nodes are `showcase-placeholder`.** Linked into a delivered surface (so they contribute to a
   real screen) but not individually tracked as full-fidelity exports.
 - **43 named manifest nodes are unmatched** by an exact name+node in the inventory. Listed per row in
   [`catalog/COMPONENTS.md`](./catalog/COMPONENTS.md) for follow-up.

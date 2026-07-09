@@ -121,14 +121,14 @@ export const componentCatalogData: ComponentCatalogData = {
     "coverageComputation": "Explicit per-component rows are derived from the 148-item figma-list_file_components_for_code_connect inventory. coverageStatus reflects current local delivery accounting (implemented-rendered, showcase-placeholder, needs-mcp-extraction, needs-implementation, or local-only-needed). Exact name/node audit counts are tracked separately and must not be conflated with showcase placeholder coverage.",
     "exactManifestNameNodeAudit": {
       "source": "Checked-in exact name/node comparison after the 2026-07-08 Inline Copilot, Copilot response/composer, workspace/nav, grounding-menu, entry-point, agentic, code-snippet child-node, pager, and data-grid MCP refreshes against the 148-item inventory.",
-      "coveredCount": 105,
-      "missingCount": 43,
+      "coveredCount": 104,
+      "missingCount": 44,
       "note": "Exact name/node coverage now includes the workspace/nav, grounding-menu, entry-point, chain-of-thought wrapper, code-snippet child-node, pager, data-grid, portal-shell search/navigation, copilot-icon, tablist, form-detail, and message-bar batches refreshed with direct design-context and variable-def extraction. Placeholder-linked local coverage remains tracked separately."
     },
     "coverageTable": [
       {
         "status": "implemented-rendered",
-        "count": 26,
+        "count": 25,
         "examples": [
           "Accordion (30028:627)",
           "Azure Copilot (32382:40353)",
@@ -156,7 +156,7 @@ export const componentCatalogData: ComponentCatalogData = {
       },
       {
         "status": "showcase-placeholder",
-        "count": 77,
+        "count": 78,
         "examples": [
           ".Search Menu (40971:35680)",
           ".Copilot icon (31000:461)",
@@ -317,13 +317,13 @@ export const componentCatalogData: ComponentCatalogData = {
         "pageName": "\u21aa Chat output",
         "type": "COMPONENT",
         "nodeUrl": "https://www.figma.com/design/q2TdO4dVcMhNWYp0N6Bc05/Azure-UI-Kit--Fluent-2-?node-id=32382-38151&m=dev",
-        "coverageStatus": "implemented-rendered",
+        "coverageStatus": "showcase-placeholder",
         "mappedGroupId": "copilot-response",
         "libraryExports": [
           "CopilotResponse"
         ],
-        "mcpStatus": "implemented-rendered",
-        "coverageReason": "User message bubble confirmed from MCP extraction on 2026-07-08 20:41 PDT."
+        "mcpStatus": "showcase-placeholder",
+        "coverageReason": "Figma MCP returned invalid node ID during 2026-07-09 verification; parent response nodes 32382:38124 / 32382:38154 remain valid."
       },
       {
         "name": "Copilot Message / Response Element",
@@ -2971,10 +2971,10 @@ export const componentCatalogData: ComponentCatalogData = {
           "component": "User Message",
           "nodeId": "32382:38151",
           "nodeUrl": "https://www.figma.com/design/q2TdO4dVcMhNWYp0N6Bc05/Azure-UI-Kit--Fluent-2-?node-id=32382-38151&m=dev",
-          "status": "implemented-rendered",
-          "designContext": "Succeeded 2026-07-08 20:41 PDT",
-          "variableDefs": "Succeeded 2026-07-08 20:41 PDT",
-          "notes": "User message bubble confirmed from MCP extraction on 2026-07-08 20:41 PDT."
+          "status": "showcase-placeholder",
+          "designContext": "Invalid node ID during 2026-07-09 verification",
+          "variableDefs": "Invalid node ID during 2026-07-09 verification",
+          "notes": "Local user-message state is rendered through CopilotResponse, but this sublayer ID is not independently MCP-verified; parent response nodes 32382:38124 / 32382:38154 remain valid."
         },
         {
           "component": "Copilot Message / Response Element",

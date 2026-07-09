@@ -8,7 +8,7 @@
   --azf-focus-stroke: var(--colorStrokeFocus2);
   --azf-radius-control: var(--borderRadiusMedium);
   --azf-radius-small: var(--borderRadiusSmall);
-  --azf-radius-toolbar: 5px; /* Off-scale Azure UI Kit toolbar radius (Figma 29553:7576); intentionally not on the Fluent 2/4/6/8 ramp. */
+  --azf-radius-toolbar: var(--borderRadiusSmall);
   --azf-radius-panel: var(--borderRadiusXLarge);
   --azf-shadow-flyout: var(--shadow16);
   --azf-surface-border: var(--colorNeutralStroke2);
@@ -19,7 +19,14 @@
   --azf-nav-selected-rail: 2px;
   --azf-grid-row-min-height: 32px;
   --azf-chat-radius: 12px;
-  --azf-radius-composer: 32px; /* Figma 32382:38468 Copilot chat-input pill; off the Fluent ramp, faithful to the Azure UI Kit. */
+  --azf-radius-composer: var(--borderRadius3XLarge); /* Figma 32382:38450 Copilot input shell. */
+  --azf-blade-header-divider-width: 2.2734375px; /* Exact MCP vector width from Figma node 32615:9840. */
+  --azf-m365-chat-light-flair: linear-gradient(
+    180deg,
+    var(--colorBrandBackground2) 0%,
+    var(--colorNeutralBackground3) 38%,
+    var(--colorNeutralBackground1) 100%
+  ); /* Figma token "Gradient/M365 Chat/Light/Flair" on agentic + inline Copilot nodes. */
 }
 
 .azf-density-compact {
@@ -133,19 +140,21 @@
   line-height: var(--lineHeightBase200);
 }
 
-/* Pipe divider: 2px-ish neutral rule, fixed 24px tall per Figma node 32615:9840. */
+/* Pipe divider: exact 2.2734375px neutral vector, fixed 24px tall per Figma node 32615:9840. */
 .azf-blade-header__divider {
   flex: 0 0 auto;
-  width: var(--strokeWidthThin);
+  width: var(--azf-blade-header-divider-width);
   height: 24px;
   background: var(--colorNeutralStroke2);
 }
 
-/* Menu item: same 24px/32px size as the title (via Text size prop) but regular
-   weight in colorNeutralForeground1 — Figma "menuItemText" node 35294:9320. */
+/* Menu item: Title3 24px/32px semibold in colorNeutralForeground1 —
+   Figma "menuItemText" node 35294:9320. */
 .azf-blade-header__menu-label {
   color: var(--colorNeutralForeground1);
-  font-weight: var(--fontWeightRegular);
+  font-size: var(--fontSizeBase600);
+  line-height: var(--lineHeightBase600);
+  font-weight: var(--fontWeightSemibold);
   white-space: nowrap;
 }
 
@@ -442,8 +451,7 @@
   white-space: nowrap;
 }
 
-.azf-command-bar,
-.azf-toolbar {
+.azf-command-bar {
   justify-content: space-between;
   gap: var(--spacingHorizontalM);
   padding: var(--spacingVerticalS) 0;
@@ -502,6 +510,32 @@
 .azf-data-grid {
   width: 100%;
   border-collapse: collapse;
+}
+
+.azf-data-grid .fui-TableHeaderCell,
+.azf-data-grid .fui-TableCell {
+  height: var(--azf-density-row-height);
+  padding-inline: var(--spacingHorizontalMNudge);
+}
+
+.azf-data-grid .fui-TableHeaderCell {
+  font-size: var(--fontSizeBase300);
+  line-height: var(--lineHeightBase300);
+  font-weight: var(--fontWeightSemibold);
+  color: var(--colorNeutralForeground1);
+}
+
+.azf-data-grid .fui-TableHeaderCell__button {
+  min-height: calc(var(--spacingVerticalMNudge) + var(--spacingVerticalXXL));
+  padding-inline: 0;
+  color: inherit;
+  font: inherit;
+}
+
+.azf-data-grid .fui-TableCell {
+  font-size: var(--fontSizeBase300);
+  line-height: var(--lineHeightBase300);
+  color: var(--colorNeutralForeground1);
 }
 
 .azf-data-grid__caption {
@@ -832,34 +866,29 @@
   border-color: var(--colorBrandStroke1);
 }
 
-/* Copilot chat-input pill — Figma node 32382:38468. A gradient-framed pill (NeutralBackground3
-   -> NeutralBackground2) with layered elevation, wrapping a white inset field. */
+/* Copilot input shell — Figma node 32382:38450. The full 32382:38468 composition
+   includes surrounding title/content not represented by this component API. */
 .azf-copilot-composer {
-  padding: var(--spacingHorizontalXXS);
-  border: var(--strokeWidthThin) solid var(--colorNeutralStroke1);
+  padding: var(--spacingVerticalXS);
+  border: var(--strokeWidthThin) solid var(--colorNeutralStroke2);
   border-radius: var(--azf-radius-composer);
-  background: linear-gradient(
-    180deg,
-    var(--colorNeutralBackground3) 0%,
-    var(--colorNeutralBackground2) 100%
-  );
-  box-shadow: var(--shadow28);
+  background: var(--colorNeutralBackground1);
 }
 
 .azf-copilot-composer:focus-within {
-  border-color: var(--azf-focus-stroke);
-  box-shadow: var(--shadow28), 0 0 0 var(--strokeWidthThick) var(--azf-focus-stroke);
+  border-color: var(--colorNeutralStrokeAccessible);
+  box-shadow: 0 0 0 var(--strokeWidthThick) var(--colorNeutralBackgroundAlpha);
 }
 
 .azf-copilot-composer__field {
-  gap: var(--spacingVerticalS);
-  padding: var(--spacingVerticalL) var(--spacingHorizontalL) var(--spacingVerticalM);
-  border-radius: calc(var(--azf-radius-composer) - var(--spacingHorizontalXXS));
+  gap: var(--spacingVerticalM);
+  padding: var(--spacingVerticalL) var(--spacingHorizontalXL) var(--spacingVerticalM);
+  border-radius: var(--borderRadius2XLarge);
   background: var(--colorNeutralBackground1);
 }
 
 /* Blend the Fluent Textarea into the white inset field: no inner border/background,
-   drop the underline indicator (focus is carried by the pill's focus-within ring). */
+   drop the underline indicator (focus is carried by the shell's focus-within ring). */
 .azf-copilot-composer__field .fui-Textarea {
   border: none;
   background-color: transparent;
@@ -873,6 +902,12 @@
   width: 100%;
 }
 
+.azf-copilot-composer__textarea .fui-Textarea__textarea {
+  color: var(--colorNeutralForeground1);
+  font-size: var(--fontSizeBase400);
+  line-height: var(--spacingVerticalXXL);
+}
+
 .azf-copilot-composer__attachments {
   align-items: flex-start;
 }
@@ -881,7 +916,11 @@
   border-radius: var(--borderRadiusMedium);
 }
 
-.azf-copilot-composer__footer,
+.azf-copilot-composer__footer {
+  justify-content: space-between;
+  gap: var(--spacingHorizontalM);
+}
+
 .azf-inline-copilot__header {
   justify-content: space-between;
   gap: var(--spacingHorizontalS);
@@ -934,28 +973,42 @@
 
 .azf-copilot-response__persona {
   align-items: center;
+  gap: var(--spacingHorizontalSNudge);
+  color: var(--colorNeutralForeground2);
 }
 
 .azf-copilot-response__persona-icon {
   display: inline-flex;
+  box-sizing: border-box;
+  inline-size: 20px;
+  block-size: 20px;
+  align-items: center;
+  justify-content: center;
+  border: var(--strokeWidthThicker) solid var(--colorBrandStroke1);
+  border-radius: var(--borderRadiusCircular);
   color: var(--colorBrandForeground1);
+  font-size: var(--fontSizeBase200);
 }
 
 .azf-copilot-response__badge {
   display: inline-flex;
   align-items: center;
   min-height: 20px;
-  padding: 0 var(--spacingHorizontalXS);
-  border-radius: var(--borderRadiusMedium);
-  background: var(--colorNeutralBackground5);
+  padding: 0 var(--spacingHorizontalSNudge);
+  border: var(--strokeWidthThin) solid var(--colorNeutralStroke2);
+  border-radius: var(--borderRadiusCircular);
+  background: var(--colorNeutralBackground1);
   color: var(--colorNeutralForeground3);
 }
 
 .azf-copilot-response__latency {
   padding: var(--spacingVerticalS) var(--spacingHorizontalM);
-  border: 1px solid var(--azf-surface-border);
+  border: var(--strokeWidthThin) solid var(--azf-surface-border);
   border-radius: var(--azf-radius-control);
-  background: var(--colorNeutralBackground1);
+  background: var(--colorTransparentBackground);
+  color: var(--colorNeutralForeground2);
+  font-size: var(--fontSizeBase300);
+  line-height: var(--lineHeightBase300);
 }
 
 .azf-response-choice {
@@ -971,7 +1024,7 @@
   max-width: 520px;
   gap: var(--spacingVerticalS);
   padding: var(--spacingVerticalM);
-  border: 1px solid var(--colorNeutralStroke1);
+  border: var(--strokeWidthThin) solid var(--colorNeutralStroke2);
   border-radius: var(--azf-chat-radius);
   background: var(--colorNeutralBackground1);
   box-shadow: var(--azf-shadow-flyout);
@@ -981,15 +1034,9 @@
 .azf-inline-copilot__flair {
   position: absolute;
   inset: 0;
-  border: 1px solid color-mix(in srgb, var(--colorBrandStroke1) 72%, var(--colorTransparentStroke));
+  border: var(--strokeWidthThin) solid var(--colorNeutralStroke2);
   border-radius: inherit;
-  background:
-    linear-gradient(
-      180deg,
-      color-mix(in srgb, var(--colorBrandBackground2) 70%, var(--colorNeutralBackground1) 30%) 0%,
-      color-mix(in srgb, var(--colorBrandBackground2) 18%, var(--colorNeutralBackground1) 82%) 34%,
-      var(--colorNeutralBackground1) 100%
-    );
+  background: var(--azf-m365-chat-light-flair);
   pointer-events: none;
 }
 
@@ -999,7 +1046,10 @@
 }
 
 .azf-inline-copilot__title {
-  color: var(--colorNeutralForeground2);
+  color: var(--colorNeutralForeground1);
+  font-size: var(--fontSizeBase300);
+  line-height: var(--lineHeightBase300);
+  font-weight: var(--fontWeightSemibold);
 }
 
 .azf-inline-copilot__title-icon {
@@ -1009,6 +1059,15 @@
 
 .azf-inline-copilot__suggestion {
   border-radius: var(--borderRadiusCircular);
+}
+
+.azf-inline-copilot__suggestion:hover {
+  color: var(--colorBrandForeground2);
+}
+
+.azf-inline-copilot .fui-Textarea,
+.azf-inline-copilot .fui-Input {
+  background-color: var(--colorNeutralBackground1);
 }
 
 .azf-inline-copilot__footer {
@@ -1035,15 +1094,51 @@
   gap: var(--spacingVerticalS);
 }
 
+.azf-agentic-list .fui-AccordionItem {
+  overflow: hidden;
+  border: var(--strokeWidthThin) solid var(--colorNeutralStroke1);
+  border-radius: var(--borderRadiusXLarge);
+  background: var(--colorNeutralBackground1);
+  box-shadow: var(--azf-shadow-flyout);
+}
+
+.azf-agentic-list .fui-AccordionItem:hover,
+.azf-agentic-list .fui-AccordionItem:has([aria-expanded='true']) {
+  background: var(--colorNeutralBackground3);
+}
+
 .azf-agentic-step__header {
   width: 100%;
   align-items: center;
   justify-content: space-between;
   gap: var(--spacingHorizontalS);
+  color: var(--colorNeutralForeground1);
+  font-size: var(--fontSizeBase300);
+  line-height: var(--lineHeightBase300);
+  font-weight: var(--fontWeightSemibold);
+}
+
+.azf-agentic-step__header .fui-Badge {
+  border-radius: var(--borderRadiusCircular);
 }
 
 .azf-agentic-step {
-  padding-top: var(--spacingVerticalXS);
+  margin-block-start: var(--spacingVerticalXS);
+  padding: var(--spacingVerticalS) var(--spacingHorizontalM);
+  border: var(--strokeWidthThin) solid var(--colorNeutralStroke2);
+  border-radius: var(--borderRadiusMedium);
+  background: var(--colorNeutralBackground2);
+  color: var(--colorNeutralForeground2);
+}
+
+.azf-agentic-step[data-status='complete'] {
+  border-color: var(--colorStatusSuccessBorder1);
+  background: var(--colorStatusSuccessBackground1);
+}
+
+.azf-agentic-step[data-status='running'] {
+  border-color: var(--colorNeutralStroke2);
+  background: var(--colorNeutralBackground3);
 }
 
 .azf-cot {
@@ -1065,10 +1160,12 @@
   gap: 0;
 }
 
-/* Body 2 (16px/22px regular) per Figma "Reasoning" title. */
+/* Title3 (24px/32px semibold) per Figma ChainOfThought node 386:75088. */
 .azf-cot__title {
-  color: var(--colorNeutralForeground2);
-  line-height: var(--lineHeightBase400);
+  color: var(--colorNeutralForeground1);
+  font-size: var(--fontSizeBase600);
+  line-height: var(--lineHeightBase600);
+  font-weight: var(--fontWeightSemibold);
 }
 
 /* Body 1 (14px/20px) state subtitle, e.g. "8 artifacts created". */
@@ -1157,28 +1254,20 @@
   color: var(--colorStatusDangerForeground1);
 }
 
-/* Copilot "Circle_Loader" — the running-step indicator reads as a pink/magenta
-   dot in Figma (node 386:75129 "Tool call" running row, file oqjy7GlpGqEQgUwMCs1wdq).
-   Built from Fluent shared-palette tokens (Pink -> Magenta -> Berry -> Grape) so it
-   carries the Copilot reasoning accent without hardcoding a magenta hex. */
+/* Shared Copilot loader — Figma node 386:75129 uses neutral Body1 text,
+   subtle/transparent background, and neutral foreground/stroke tokens. */
 .azf-cot__status--running {
   font-size: 0;
 }
 
 .azf-copilot-loader {
   display: inline-block;
-  inline-size: 14px;
-  block-size: 14px;
+  inline-size: var(--spacingHorizontalL);
+  block-size: var(--spacingHorizontalL);
+  border: var(--strokeWidthThicker) solid var(--colorNeutralStroke2);
+  border-block-start-color: var(--colorNeutralForeground3);
   border-radius: var(--borderRadiusCircular);
-  background: conic-gradient(
-    from 90deg,
-    var(--colorPalettePinkBorderActive),
-    var(--colorPaletteMagentaBorderActive),
-    var(--colorPaletteBerryBorderActive),
-    var(--colorPaletteGrapeBorderActive),
-    var(--colorPaletteMagentaBorderActive),
-    var(--colorPalettePinkBorderActive)
-  );
+  background: var(--colorTransparentBackground);
   animation: azf-copilot-loader-spin 1.4s linear infinite;
 }
 
@@ -1188,22 +1277,20 @@
   }
 }
 
-/* "Copilot Loader - Long - Endless" — Figma Inline Copilot latency node 29192:8246
-   (100px x 5px), shared by the agentic running state. A sweeping brand-ramp gradient
-   built from Fluent shared-palette BorderActive tokens (no hardcoded hex). */
+/* Neutral long loader retained for running rows; tokenized so it does not contradict
+   the MCP loader node's neutral/subtle treatment. */
 .azf-copilot-loader-bar {
   display: inline-block;
   inline-size: 100px;
-  block-size: 5px;
+  block-size: var(--strokeWidthThicker);
   border-radius: var(--borderRadiusCircular);
   background: linear-gradient(
     90deg,
-    var(--colorPaletteCornflowerBorderActive),
-    var(--colorPaletteGrapeBorderActive),
-    var(--colorPaletteBerryBorderActive),
-    var(--colorPaletteMagentaBorderActive),
-    var(--colorPalettePinkBorderActive),
-    var(--colorPaletteCornflowerBorderActive)
+    var(--colorTransparentBackground),
+    var(--colorNeutralStroke2),
+    var(--colorNeutralForeground4),
+    var(--colorNeutralStroke2),
+    var(--colorTransparentBackground)
   );
   background-size: 200% 100%;
   animation: azf-copilot-loader-sweep 1.6s linear infinite;
@@ -1217,12 +1304,6 @@
 @media (prefers-reduced-motion: reduce) {
   .azf-copilot-loader,
   .azf-copilot-loader-bar {
-    animation: none;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .azf-copilot-loader {
     animation: none;
   }
 }
@@ -1402,7 +1483,7 @@
 .azf-artifact-pill__content {
   flex: 0 1 auto;
   min-width: 0;
-  gap: var(--spacingHorizontalS);
+  gap: var(--spacingHorizontalXS);
   align-items: center;
   padding-bottom: 2px;
 }
@@ -1423,6 +1504,57 @@
 
 .azf-tabs {
   min-height: var(--azf-tab-height);
+  gap: var(--spacingHorizontalSNudge);
+}
+
+.azf-tabs .fui-Tab {
+  min-height: var(--azf-tab-height);
+  padding: var(--spacingVerticalSNudge) var(--spacingHorizontalMNudge);
+  color: var(--colorNeutralForeground3);
+}
+
+.azf-tabs .fui-Tab:hover {
+  color: var(--colorNeutralForeground2);
+}
+
+.azf-tabs .fui-Tab[aria-selected='true'] {
+  color: var(--colorNeutralForeground1);
+}
+
+.azf-tabs .fui-Tab .fui-Tab__icon {
+  color: var(--colorNeutralForeground3);
+}
+
+.azf-tabs .fui-Tab:hover .fui-Tab__icon {
+  color: var(--colorNeutralForeground2);
+}
+
+.azf-tabs .fui-Tab[aria-selected='true'] .fui-Tab__icon {
+  color: var(--colorCompoundBrandStroke);
+}
+
+.azf-tabs .fui-Tab::after {
+  background-color: var(--colorCompoundBrandStroke);
+}
+
+.azf-tabs .fui-Tab[data-fui-focus-visible] {
+  outline: var(--strokeWidthThick) solid var(--colorStrokeFocus2);
+  outline-offset: calc(var(--strokeWidthThick) * -1);
+  box-shadow: inset 0 0 0 var(--strokeWidthThin) var(--colorNeutralStrokeOnBrand);
+}
+
+.azf-tabs .fui-Tab .fui-Tab__content {
+  color: var(--colorNeutralForeground3);
+  font-size: var(--fontSizeBase300);
+  line-height: var(--lineHeightBase300);
+}
+
+.azf-tabs .fui-Tab:hover .fui-Tab__content {
+  color: var(--colorNeutralForeground2);
+}
+
+.azf-tabs .fui-Tab[aria-selected='true'] .fui-Tab__content {
+  color: var(--colorNeutralForeground1);
 }
 
 .azf-tab__content {
@@ -1430,7 +1562,7 @@
   flex-direction: column;
   align-items: flex-start;
   min-width: 0;
-  gap: 2px;
+  gap: var(--spacingVerticalXXS);
 }
 
 .azf-tab__label {
@@ -1440,8 +1572,9 @@
 }
 
 .azf-tab__description {
-  color: var(--colorNeutralForeground2);
-  font-size: 12px;
+  color: var(--colorNeutralForeground4);
+  font-size: var(--fontSizeBase200);
+  line-height: var(--lineHeightBase200);
 }
 
 .azf-step-list__label {
@@ -1543,18 +1676,35 @@
 /* Azure slider (Figma 28472:10338) */
 .azf-slider {
   max-width: 392px;
+  color: var(--colorNeutralForeground2);
+}
+
+.azf-slider .fui-Label,
+.azf-slider .fui-InfoLabel {
+  color: var(--colorNeutralForeground1);
+  font-size: var(--fontSizeBase300);
+  line-height: var(--lineHeightBase300);
+  font-weight: var(--fontWeightSemibold);
 }
 
 .azf-slider__labelline {
   justify-content: space-between;
 }
 
-.azf-slider__control {
+.azf-slider__control.fui-Slider {
   width: 100%;
+  --fui-Slider__rail--size: var(--strokeWidthThicker);
+  --fui-Slider__rail--color: var(--colorNeutralStrokeAccessible);
+  --fui-Slider__progress--color: var(--colorCompoundBrandStroke);
+  --fui-Slider__thumb--color: var(--colorCompoundBrandStroke);
+  background: transparent;
 }
 
 .azf-slider__value {
   font-variant-numeric: tabular-nums;
+  color: var(--colorNeutralForeground2);
+  font-size: var(--fontSizeBase300);
+  line-height: var(--lineHeightBase300);
 }
 
 .azf-slider--vertical {
@@ -1591,6 +1741,29 @@
   align-items: start;
   gap: var(--spacingHorizontalL);
   max-width: 770px;
+  --azf-file-upload-control-background: var(--colorNeutralBackground1);
+  --azf-file-upload-control-border: var(--colorNeutralStroke1);
+}
+
+.azf-file-upload[data-state='selected'],
+.azf-file-upload[data-state='progress'] {
+  --azf-file-upload-control-background: var(--colorNeutralBackground5);
+}
+
+.azf-file-upload[data-state='success'] {
+  --azf-file-upload-control-background: var(--colorNeutralBackground1);
+}
+
+.azf-file-upload[data-state='dragdrop'] {
+  --azf-file-upload-control-background: var(--colorNeutralBackground5);
+}
+
+@media (prefers-color-scheme: dark) {
+  .azf-file-upload[data-state='selected'],
+  .azf-file-upload[data-state='progress'],
+  .azf-file-upload[data-state='dragdrop'] {
+    --azf-file-upload-control-background: var(--colorNeutralBackground3);
+  }
 }
 
 .azf-file-upload__label {
@@ -1609,8 +1782,11 @@
   border: 0;
 }
 
-.azf-file-upload__input {
+.azf-file-upload .azf-file-upload__input.fui-Input {
   width: 100%;
+  background: var(--azf-file-upload-control-background);
+  background-color: var(--azf-file-upload-control-background);
+  border-color: var(--azf-file-upload-control-border);
 }
 
 .azf-file-upload__success-icon {
@@ -1636,9 +1812,9 @@
   justify-content: center;
   gap: var(--spacingVerticalXS);
   padding: var(--spacingVerticalXL) var(--spacingHorizontalL);
-  border: 1px dashed var(--colorNeutralStroke1);
+  border: var(--strokeWidthThin) dashed var(--azf-file-upload-control-border);
   border-radius: var(--borderRadiusMedium);
-  background: var(--colorNeutralBackground1);
+  background: var(--azf-file-upload-control-background);
   color: var(--colorNeutralForeground2);
   cursor: pointer;
   text-align: center;
@@ -1646,7 +1822,7 @@
 
 .azf-file-upload__dropzone:hover {
   border-color: var(--colorNeutralStrokeAccessible);
-  background: var(--colorNeutralBackground1Hover);
+  background: var(--colorNeutralBackground5);
 }
 
 .azf-file-upload__dropzone:focus-visible {
@@ -1667,11 +1843,47 @@
 
 /* Azure toolbar (Figma 29553:7576) */
 .azf-toolbar {
+  justify-content: space-between;
+  gap: var(--spacingHorizontalS);
+  padding: var(--spacingVerticalS) var(--spacingHorizontalS);
   border-radius: var(--azf-radius-toolbar);
+  border: var(--strokeWidthThin) solid var(--colorNeutralBackground3);
+  background: var(--colorNeutralBackground1);
+  color: var(--colorNeutralForeground1);
+}
+
+.azf-toolbar .fui-Button {
+  border-radius: var(--borderRadiusSmall);
+  color: var(--colorNeutralForeground1);
+  font-size: var(--fontSizeBase300);
+  line-height: var(--lineHeightBase300);
+  font-weight: var(--fontWeightSemibold);
+}
+
+.azf-toolbar .fui-Button:hover {
+  color: var(--colorBrandForegroundLink);
+}
+
+.azf-toolbar .fui-Button[aria-pressed='true'],
+.azf-toolbar .fui-Button[data-checked='true'] {
+  background: var(--colorBrandBackground2);
+  color: var(--colorBrandForegroundLink);
+}
+
+.azf-toolbar .fui-Button:focus-visible {
+  outline: var(--strokeWidthThick) solid var(--colorStrokeFocus2);
+  outline-offset: calc(var(--strokeWidthThick) * -1);
+  box-shadow: inset 0 0 0 var(--strokeWidthThin) var(--colorNeutralStrokeOnBrand);
+}
+
+.azf-toolbar [role='separator']::before,
+.azf-toolbar [role='separator']::after {
+  border-color: var(--colorNeutralStrokeAccessible);
 }
 
 .azf-toolbar--top-of-page {
-  border-bottom: 1px solid var(--colorNeutralStroke1);
+  border-color: transparent;
+  border-bottom: var(--strokeWidthThin) solid var(--colorNeutralBackground3);
   border-end-start-radius: 0;
   border-end-end-radius: 0;
 }

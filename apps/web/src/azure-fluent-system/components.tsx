@@ -1579,7 +1579,7 @@ function CopilotResponseHeader({
       </div>
       {badge && (
         <span className="azf-copilot-response__badge">
-          <Text size={100}>{badge}</Text>
+          <Text size={300}>{badge}</Text>
         </span>
       )}
     </div>
@@ -1627,11 +1627,11 @@ export function CopilotResponse({ parts, actions = [], loading, error, className
         <section className="azf-stack azf-gap-s azf-copilot-response__surface">
           <CopilotResponseHeader />
           <div className="azf-stack azf-gap-xs azf-copilot-response__latency">
-            <div className="azf-row azf-gap-s">
-              <Spinner size="tiny" />
-              <Text className="azf-muted">Generating response</Text>
+            <div className="azf-row azf-gap-s" role="status">
+              <span className="azf-copilot-loader" aria-hidden="true" />
+              <Text size={300}>Generating response</Text>
             </div>
-            <ProgressBar thickness="medium" />
+            <span className="azf-copilot-loader-bar" aria-hidden="true" />
           </div>
         </section>
       )}
@@ -2010,7 +2010,7 @@ export function ChainOfThought({
     >
       <header className="azf-row azf-cot__header">
         <div className="azf-stack azf-cot__heading">
-          <Text size={400} className="azf-cot__title">{title}</Text>
+          <Text size={600} weight="semibold" className="azf-cot__title">{title}</Text>
           {subtitle && <Text size={300} className="azf-cot__subtitle">{subtitle}</Text>}
         </div>
         <Button

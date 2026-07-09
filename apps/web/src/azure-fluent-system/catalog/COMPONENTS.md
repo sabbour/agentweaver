@@ -7,10 +7,10 @@ Checked-in component inventory for `apps/web/src/azure-fluent-system`, sourced f
 | Measure | Value |
 | --- | --- |
 | Inventory components/components sets | 148 |
-| Exact name/node audit | 105 covered / 43 missing |
-| implemented-rendered | 26 |
+| Exact name/node audit | 104 covered / 44 missing |
+| implemented-rendered | 25 |
 | needs-mcp-extraction | 45 |
-| showcase-placeholder | 77 |
+| showcase-placeholder | 78 |
 | needs-implementation | 0 |
 | local-only-needed | 0 |
 | not-in-inventory | 0 |
@@ -89,7 +89,7 @@ Figma-node coverage inventory below and is not part of the 148-node audit.
 | ↪ Chat input / .Input Footer_Sm / [33526:118139](https://www.figma.com/design/q2TdO4dVcMhNWYp0N6Bc05/Azure-UI-Kit--Fluent-2-?node-id=33526-118139&m=dev) | showcase-placeholder | 2026-07-08 20:52 PDT | Figma `q2TdO4dVcMhNWYp0N6Bc05` · `get_design_context` + `get_variable_defs` on `33526:118139` | `CopilotComposer` | `examples/copilot-composer-response.example.tsx` · compact footer linked | Yes | Extracted compact footer anatomy confirmed the add button, agents-off state, attachment chip, and send/stop CTA already linked into the shared composer surface. |
 | ↪ Chat input / .Send_Icon / [32382:38835](https://www.figma.com/design/q2TdO4dVcMhNWYp0N6Bc05/Azure-UI-Kit--Fluent-2-?node-id=32382-38835&m=dev) | showcase-placeholder | 2026-07-08 20:41 PDT | Figma `q2TdO4dVcMhNWYp0N6Bc05` · dev-mode citation in row | `CopilotComposer` | `examples/copilot-composer-response.example.tsx` | Yes | Extracted send/stop icon states were linked into the composer CTA rather than exposed as a standalone export. |
 | ↪ Chat output / Copilot Row Swap / [32382:38124](https://www.figma.com/design/q2TdO4dVcMhNWYp0N6Bc05/Azure-UI-Kit--Fluent-2-?node-id=32382-38124&m=dev) | implemented-rendered | 2026-07-08 20:41 PDT | Figma `q2TdO4dVcMhNWYp0N6Bc05` · dev-mode citation in row | `CopilotResponse` | `examples/copilot-composer-response.example.tsx` | Yes | MCP confirmed the checked-in response surface now covers user, assistant, and confirmation row composition. |
-| ↪ Chat output / User Message / [32382:38151](https://www.figma.com/design/q2TdO4dVcMhNWYp0N6Bc05/Azure-UI-Kit--Fluent-2-?node-id=32382-38151&m=dev) | implemented-rendered | 2026-07-08 20:41 PDT | Figma `q2TdO4dVcMhNWYp0N6Bc05` · dev-mode citation in row | `CopilotResponse` | `examples/copilot-composer-response.example.tsx` | Yes | Extracted right-aligned brand-soft user bubble is now explicitly represented by the checked-in response example and component state. |
+| ↪ Chat output / User Message / [32382:38151](https://www.figma.com/design/q2TdO4dVcMhNWYp0N6Bc05/Azure-UI-Kit--Fluent-2-?node-id=32382-38151&m=dev) | showcase-placeholder | 2026-07-09 16:03 PDT | Figma MCP returned invalid node ID during verification; parent response nodes `32382:38124` / `32382:38154` remain valid | `CopilotResponse` | `examples/copilot-composer-response.example.tsx` | Yes | The local user-message state remains rendered through `CopilotResponse`, but this sublayer ID is not claimed as independently verified until a persistent Figma node is provided. |
 | ↪ Chat output / Copilot Message / Response Element / [32382:38154](https://www.figma.com/design/q2TdO4dVcMhNWYp0N6Bc05/Azure-UI-Kit--Fluent-2-?node-id=32382-38154&m=dev) | implemented-rendered | 2026-07-08 20:41 PDT | Figma `q2TdO4dVcMhNWYp0N6Bc05` · dev-mode citation in row | `CopilotResponse` | `examples/copilot-composer-response.example.tsx` | Yes | Extracted Copilot header, disclaimer badge, and assistant bubble anatomy now map directly to the checked-in response surface. |
 | ↪ Chat output / .Footeractions / [32382:38177](https://www.figma.com/design/q2TdO4dVcMhNWYp0N6Bc05/Azure-UI-Kit--Fluent-2-?node-id=32382-38177&m=dev) | showcase-placeholder | 2026-07-08 20:41 PDT | Figma `q2TdO4dVcMhNWYp0N6Bc05` · dev-mode citation in row | `CopilotResponse` | `examples/copilot-composer-response.example.tsx` | Yes | Extracted feedback actions remain linked into the response footer action row instead of a separate export. |
 | ↪ Chat output / .Code / [32382:38197](https://www.figma.com/design/q2TdO4dVcMhNWYp0N6Bc05/Azure-UI-Kit--Fluent-2-?node-id=32382-38197&m=dev) | showcase-placeholder | 2026-07-08 20:41 PDT | Figma `q2TdO4dVcMhNWYp0N6Bc05` · dev-mode citation in row | `CopilotResponse` | `examples/copilot-composer-response.example.tsx` | Yes | Extracted inline code content maps to the checked-in syntax token treatment used by `CodeSnippet` within CopilotResponse examples. |
