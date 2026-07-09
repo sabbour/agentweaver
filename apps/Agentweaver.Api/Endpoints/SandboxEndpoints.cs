@@ -23,6 +23,7 @@ public static class SandboxEndpoints
             PortForwardRequest request,
             PortForwardService portForwardService,
             ISandboxPreviewService previewService,
+            RunStreamStore streamStore,
             IRunStore runStore,
             ILogger<Program> logger,
             CancellationToken ct) =>
@@ -40,7 +41,7 @@ public static class SandboxEndpoints
                 return Results.StatusCode(StatusCodes.Status403Forbidden);
 
             return await StartPreviewForRunAsync(
-                runId, request.TargetPort, run, previewService, portForwardService, logger, ct);
+                runId, request.TargetPort, run, previewService, portForwardService, streamStore, logger, ct);
         });
 
         // POST /api/runs/{runId}/sandbox/preview
@@ -61,6 +62,7 @@ public static class SandboxEndpoints
             AgentPreviewGate previewGate,
             PortForwardService portForwardService,
             ISandboxPreviewService previewService,
+            RunStreamStore streamStore,
             IRunStore runStore,
             IConfiguration configuration,
             ILogger<Program> logger,
@@ -77,16 +79,24 @@ public static class SandboxEndpoints
             if (!EndpointHelpers.IsOwnerOrServiceCaller(httpContext, run, configuration))
                 return Results.StatusCode(StatusCodes.Status403Forbidden);
 
-            var outcome = await previewGate.RequestApprovalAsync(runId, request.TargetPort, ct);
+            var previewContext = LatestPreviewContext(streamStore, runId);
+            var outcome = await previewGate.RequestApprovalAsync(
+                runId,
+                request.TargetPort,
+                ct,
+                previewContext.WorkPlanId,
+                previewContext.TreeHash);
             if (outcome != PreviewApprovalOutcome.Approved)
             {
+                var reason = outcome == PreviewApprovalOutcome.TimedOut ? "approval_timed_out" : "approval_denied";
+                EmitPreviewFailure(streamStore, runId, request.TargetPort, reason, "Preview approval was denied or timed out.");
                 return Results.Json(
                     new { error = "Preview approval was denied or timed out." },
                     statusCode: StatusCodes.Status403Forbidden);
             }
 
             return await StartPreviewForRunAsync(
-                runId, request.TargetPort, run, previewService, portForwardService, logger, ct);
+                runId, request.TargetPort, run, previewService, portForwardService, streamStore, logger, ct);
         });
 
         // POST /api/runs/{runId}/sandbox/preview/{token}/keepalive
@@ -223,12 +233,13 @@ public static class SandboxEndpoints
     /// approval gate are the caller's responsibility — by the time this runs the request is
     /// already authorized/approved.
     /// </summary>
-    private static async Task<IResult> StartPreviewForRunAsync(
+    internal static async Task<IResult> StartPreviewForRunAsync(
         string runId,
         int targetPort,
         Run run,
         ISandboxPreviewService previewService,
         PortForwardService portForwardService,
+        RunStreamStore streamStore,
         ILogger logger,
         CancellationToken ct)
     {
@@ -252,6 +263,25 @@ public static class SandboxEndpoints
             {
                 var preview = await previewService.StartPreviewAsync(
                     runId, targetPort, run.SubmittingUser, ct);
+                var keepaliveUrl = $"/api/runs/{runId}/sandbox/preview/{preview.Token}/keepalive";
+                var context = LatestPreviewContext(streamStore, runId);
+                var readyPayload = new
+                {
+                    run_id = runId,
+                    work_plan_id = context.WorkPlanId,
+                    tree_hash = context.TreeHash,
+                    source = "preview-api",
+                    target_port = preview.TargetPort,
+                    pod_name = preview.PodName,
+                    session_id = preview.Token,
+                    preview_url = preview.PreviewUrl,
+                    keepalive_url = keepaliveUrl,
+                    started_at = preview.StartedAt,
+                    timestamp_utc = DateTimeOffset.UtcNow.ToString("O"),
+                };
+                streamStore.Get(runId)?.RecordNext(EventTypes.SandboxPreviewReady, readyPayload);
+                streamStore.Get(runId)?.RecordNext(EventTypes.CoordinatorPreviewReady, readyPayload);
+                EmitPreviewWorkflowStep(streamStore, runId, "completed", "Preview is ready.");
 
                 return Results.Ok(new
                 {
@@ -261,27 +291,33 @@ public static class SandboxEndpoints
                     pod_name      = preview.PodName,
                     started_at    = preview.StartedAt,
                     preview_url   = preview.PreviewUrl,
-                    keepalive_url = $"/api/runs/{runId}/sandbox/preview/{preview.Token}/keepalive",
+                    keepalive_url = keepaliveUrl,
                 });
             }
             catch (PortForwardLimitExceededException ex)
             {
                 logger.LogWarning(ex, "Preview session limit exceeded for run {RunId}", runId);
+                EmitPreviewFailure(streamStore, runId, targetPort, "capacity", ex.Message);
                 return Results.Json(new { error = ex.Message }, statusCode: StatusCodes.Status429TooManyRequests);
             }
             catch (InvalidOperationException ex)
             {
                 logger.LogWarning(ex, "Preview start failed for run {RunId}", runId);
+                EmitPreviewFailure(streamStore, runId, targetPort, PreviewFailureReason(ex), ex.Message);
                 return Results.Conflict(new { error = ex.Message });
             }
             catch (Exception ex)
             {
                 logger.LogError(ex, "Preview start error for run {RunId}", runId);
+                EmitPreviewFailure(streamStore, runId, targetPort, "gateway_failed", "Failed to start preview.");
                 return Results.Problem("Failed to start preview.", statusCode: 500);
             }
         }
 
         // ── Legacy kubectl port-forward fallback (local dev) ─────────────────────────
+        // A reachable preview_url requires the Gateway-direct path (Sandbox:Preview:Enabled=true).
+        // The legacy port-forward fallback below is a developer-local diagnostic and does not
+        // satisfy the software-delivery live-preview contract for preview-required projects.
         PortForwardSession session;
         try
         {
@@ -312,6 +348,83 @@ public static class SandboxEndpoints
             started_at  = session.StartedAt,
         });
     }
+
+    private static void EmitPreviewFailure(
+        RunStreamStore streamStore,
+        string runId,
+        int targetPort,
+        string reason,
+        string message)
+    {
+        var context = LatestPreviewContext(streamStore, runId);
+        streamStore.Get(runId)?.RecordNext(EventTypes.SandboxPreviewFailed, new
+        {
+            run_id = runId,
+            work_plan_id = context.WorkPlanId,
+            tree_hash = context.TreeHash,
+            source = "preview-api",
+            target_port = targetPort,
+            reason,
+            message,
+            timestamp_utc = DateTimeOffset.UtcNow.ToString("O"),
+        });
+        EmitPreviewWorkflowStep(streamStore, runId, "failed", message);
+    }
+
+    private static void EmitPreviewWorkflowStep(
+        RunStreamStore streamStore,
+        string runId,
+        string status,
+        string message) =>
+        streamStore.Get(runId)?.RecordNext(EventTypes.WorkflowStep, new
+        {
+            step = "preview",
+            status,
+            label = "Preview",
+            message,
+            timestamp_utc = DateTimeOffset.UtcNow.ToString("O"),
+        });
+
+    private static (int? WorkPlanId, string? TreeHash) LatestPreviewContext(RunStreamStore streamStore, string runId)
+    {
+        var events = streamStore.Get(runId)?.GetSnapshotSince(0).Events;
+        if (events is null) return (null, null);
+
+        for (var i = events.Count - 1; i >= 0; i--)
+        {
+            if (events[i].Type != EventTypes.SandboxPreviewApplicability
+                && events[i].Type != EventTypes.SandboxPreviewReady
+                && events[i].Type != EventTypes.SandboxPreviewFailed
+                && events[i].Type != EventTypes.SandboxPreviewSkippedNotApplicable)
+                continue;
+
+            var node = System.Text.Json.JsonSerializer.SerializeToNode(events[i].Payload) as System.Text.Json.Nodes.JsonObject;
+            if (node is null) continue;
+            int? workPlanId = null;
+            if (node.TryGetPropertyValue("work_plan_id", out var snakeWorkPlan) && snakeWorkPlan is not null)
+                workPlanId = GetNullableInt(snakeWorkPlan);
+            else if (node.TryGetPropertyValue("workPlanId", out var camelWorkPlan) && camelWorkPlan is not null)
+                workPlanId = GetNullableInt(camelWorkPlan);
+            var treeHash = node.TryGetPropertyValue("tree_hash", out var snakeTree) ? snakeTree?.GetValue<string>() : null;
+            treeHash ??= node.TryGetPropertyValue("treeHash", out var camelTree) ? camelTree?.GetValue<string>() : null;
+            if (workPlanId is not null || !string.IsNullOrWhiteSpace(treeHash))
+                return (workPlanId, treeHash);
+        }
+
+        return (null, null);
+    }
+
+    private static int? GetNullableInt(System.Text.Json.Nodes.JsonNode node)
+    {
+        try { return node.GetValue<int>(); }
+        catch { return null; }
+    }
+
+    private static string PreviewFailureReason(InvalidOperationException ex) =>
+        ex.Message.Contains("pod", StringComparison.OrdinalIgnoreCase)
+        || ex.Message.Contains("claim", StringComparison.OrdinalIgnoreCase)
+            ? "no_bound_pod"
+            : "gateway_failed";
 }
 
 /// <summary>Request body for starting a port-forward session.</summary>

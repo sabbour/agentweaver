@@ -46,6 +46,15 @@ public static class EventTypes
     /// </summary>
     public const string ToolApprovalRequired = "tool.approval_required";
 
+    public const string SandboxPreviewApplicability = "sandbox.preview_applicability";
+    public const string SandboxPreviewPending = "sandbox.preview_pending";
+    public const string SandboxPreviewStartRequested = "sandbox.preview_start_requested";
+    public const string SandboxPreviewReady = "sandbox.preview_ready";
+    public const string SandboxPreviewFailed = "sandbox.preview_failed";
+    public const string SandboxPreviewSkippedNotApplicable = "sandbox.preview_skipped_not_applicable";
+    public const string SandboxPreviewStopped = "sandbox.preview_stopped";
+    public const string CoordinatorPreviewReady = "coordinator.preview_ready";
+
     /// <summary>
     /// Emitted on a run's own stream when an agent calls the <c>ask_question</c> tool to bubble a
     /// clarifying question or permission request to the operator (or, for a coordinator child, to
@@ -413,4 +422,3 @@ public static class EventTypes
     /// </summary>
     public const string CoordinatorAutopilotAnswered = "coordinator.autopilot_answered";
 }
-

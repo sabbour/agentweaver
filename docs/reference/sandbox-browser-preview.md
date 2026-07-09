@@ -165,4 +165,5 @@ DELETE /api/runs/run_01HXYZ/sandbox/port-forward/swift-falcon-amber-k7m2q9x4n8b3
 
 - [Sandbox browser preview — User Guide](../experience/sandbox-browser-preview.md) — the step-by-step user flow.
 - [Sandbox browser preview — Deep Dive](../deep-dive/sandbox-browser-preview.md) — how the reverse proxy works end to end.
+- [Live-preview provisioning](./live-preview-provisioning.md) — the Build & Test preview outcome contract.
 - [Sandbox pods reference](./sandbox-pods.md) — pod naming and the wider sandbox API surface.

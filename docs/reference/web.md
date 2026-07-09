@@ -171,6 +171,12 @@ The coordinator node's status reflects the **orchestration lifecycle** rather th
 
 The coordinator node also carries a **View session** button that scrolls to the coordinator session panel (provided via `CoordinatorSessionContext`).
 
+#### Build & Test preview status
+
+When the run emits durable preview events, the coordinator run page reads them from `GET /api/runs/{id}/events` and uses the latest preview event as the UI source of truth. `sandbox.preview_ready` and `coordinator.preview_ready` show an **Open preview** button on the **Build & Test** row and in the human-review artifacts panel. `sandbox.preview_pending` shows **Preview pending approval**. `sandbox.preview_failed` shows **Preview unavailable** with the backend reason while leaving human review actionable.
+
+See [Live-preview provisioning](./live-preview-provisioning.md) for the event contract and [the user guide](../experience/live-preview-provisioning.md) for the review workflow.
+
 #### Graph rendering affordances (edges, cards, minimap, zoom)
 
 The graph's visual layer is shared across the coordinator run page and inline editor previews via `WorkflowGraphPanel.tsx`:

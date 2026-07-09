@@ -260,6 +260,7 @@ governs unattended runs; production stays human-gated.
 
 - [Sandbox browser preview — Reference](../reference/sandbox-browser-preview.md) — routes, DTO, config, status codes.
 - [Sandbox browser preview — User Guide](../experience/sandbox-browser-preview.md) — the step-by-step user flow.
+- [Live-preview provisioning](./live-preview-provisioning.md) — how Build & Test produces and enforces preview outcomes.
 - [Sandbox](./sandbox.md) — the sandbox claim/pod model the preview targets.
 - [Sandbox pod execution](./sandbox-pod-execution.md) — how the per-run pod is claimed and bound.
 - [Sandbox pods reference](../reference/sandbox-pods.md) — pod naming and the wider sandbox API surface.

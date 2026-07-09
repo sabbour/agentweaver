@@ -73,6 +73,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
     private readonly IToolApprovalGate _toolApprovalGate;
     private readonly IQuestionGate? _questionGate;
     private readonly IRunOptionsStore? _runOptions;
+    private readonly IEnumerable<IAgentRuntimeToolProvider> _toolProviders;
     protected readonly ILogger<CopilotAIAgent> _logger;
 
     // --- Per-run config — set by the workflow executor before CreateSessionAsync ---
@@ -179,7 +180,8 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         IToolApprovalGate toolApprovalGate,
         ILogger<CopilotAIAgent> logger,
         IQuestionGate? questionGate = null,
-        IRunOptionsStore? runOptions = null)
+        IRunOptionsStore? runOptions = null,
+        IEnumerable<IAgentRuntimeToolProvider>? toolProviders = null)
     {
         _factory = factory ?? throw new ArgumentNullException(nameof(factory));
         _scopeProvider = scopeProvider ?? throw new ArgumentNullException(nameof(scopeProvider));
@@ -190,6 +192,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _questionGate = questionGate;
         _runOptions = runOptions;
+        _toolProviders = toolProviders ?? [];
     }
 
     /// <summary>
@@ -301,7 +304,8 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
             QuestionGate: _questionGate);
         _toolContext = toolContext;
 
-        var sessionTools = BuildSessionConfigTools(toolContext, _projectId, _agentName, _apiBaseUrl, _apiKey);
+        var sessionTools = BuildSessionConfigTools(
+            toolContext, _projectId, _agentName, _apiBaseUrl, _apiKey, _toolProviders);
         _registeredToolNames = sessionTools.Select(t => t.Name).ToList();
 
         var sessionConfig = new SessionConfig
@@ -1387,7 +1391,8 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         string? projectId = null,
         string? agentName = null,
         string? apiBaseUrl = null,
-        string? apiKey = null)
+        string? apiKey = null,
+        IEnumerable<IAgentRuntimeToolProvider>? toolProviders = null)
     {
         var all = SandboxToolRegistry.Build(context);
         var intentFn = all.First(f => string.Equals(f.Name, "report_intent", StringComparison.Ordinal));
@@ -1411,6 +1416,12 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         {
             var effectiveBaseUrl = apiBaseUrl ?? "http://localhost:5000";
             tools.AddRange(AgentweaverApiTools.Build(projectId, agentName, effectiveBaseUrl, apiKey, runId: context.RunId));
+        }
+
+        if (toolProviders is not null)
+        {
+            foreach (var provider in toolProviders)
+                tools.AddRange(provider.BuildTools(context));
         }
 
         return tools;

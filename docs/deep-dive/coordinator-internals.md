@@ -446,7 +446,9 @@ by happy-path traversal]
     RaiFlag{RAI flagged?}
     Rubberduck[Optional Rubberduck critique]
     BuildTest[Build & Test
-detached worktree + preview]
+detached worktree]
+    Preview[Preview outcome
+ready / failed / skipped]
     Review[Collective human review]
     Decision{Decision}
     Merge[Merge integration branch]
@@ -462,7 +464,7 @@ detached worktree + preview]
     Eligible -- yes --> Order --> Integration
     Integration -- auto-resolve / ok --> GateOrder --> Rai --> RaiFlag
     RaiFlag -- yes --> Blocked
-    RaiFlag -- no --> Rubberduck --> BuildTest --> Review --> Decision
+    RaiFlag -- no --> Rubberduck --> BuildTest --> Preview --> Review --> Decision
     Decision -- approve --> Merge
     Decision -- request changes --> RequestChanges
     Decision -- decline --> Blocked
@@ -494,6 +496,10 @@ After the integration branch is built, the coordinator resolves assembly gates f
 Known assembly gates are `rai`, `rubberduck`, `build-test`, and `human-review`; `build_test` workflow nodes normalize to `build-test` (`CoordinatorAssemblyService.cs:1128`). The built-in software workflows now put RAI before Build & Test on the approval path: bug fix runs RAI -> Build & Test -> Human Review, while software delivery runs RAI -> Rubberduck -> Code Review -> Build & Test -> Human Review.
 
 Build & Test is a platform gate, not a human action. The assembly service emits `coordinator.assembly_review_requested` with `gateKind: "build-test"`, creates a detached worktree from the integration branch, runs the build/test/preview instruction, and routes its verdict before the human-review gate (`CoordinatorAssemblyService.cs:671`, `apps/Agentweaver.Api/Git/WorktreeManager.cs:155`). In `pod-per-run` mode, the pipeline launches a dedicated AgentHost pod bound to the coordinator run id and passes the detached worktree path as the working-directory override (`apps/Agentweaver.Api/Coordinator/CollectiveAssemblyPipeline.cs:155`, `apps/Agentweaver.Api/Sandbox/IAgentHostPodLifecycle.cs:30`). `/configure` then sets the AgentHost working directory/file-tool root to that path before the first turn (`apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs:300`, `:423`). This gives the automated gate a routable A2A endpoint and makes `start_preview` target the preview server running from the assembled integration tree. Because that detached worktree uses the `git` CLI (`WorktreeManager.cs:546`), the API runtime image installs `git` alongside `libgit2` (`apps/Agentweaver.Api/Dockerfile:58`).
+
+Preview is a first-class sub-stage of Build & Test, enforced by an approval-time outcome guard. Before Build & Test runs, `EnsurePreviewApplicabilityRecordedAsync` emits `sandbox.preview_applicability` and a preview `workflow.step`; documentation-only diffs can end in `sandbox.preview_skipped_not_applicable`, while app/server-looking or ambiguous diffs require an outcome (`CoordinatorAssemblyService.cs:1995`, `:2079`). Build & Test is prompted to use the AgentHost `PreviewRunner` tools in order — `start_preview_process`, `observe_bound_port`, then `start_preview(port=PORT)` — so the preview process is supervised and the actual port is discovered rather than assumed (`packages/Agentweaver.AgentRuntime/Workflow/BuildTestTurnExecutor.cs:10`, `apps/Agentweaver.AgentHost/PreviewRunner.cs:70`).
+
+After the Build & Test turn returns, `EnsureFinalPreviewOutcomeBeforeApprovalAsync` accepts only `sandbox.preview_ready`, `sandbox.preview_failed`, or `sandbox.preview_skipped_not_applicable` for the current `{workPlanId, treeHash}` before `ApplyAuthoredGateDecisionAsync` can apply the Build & Test approval (`CoordinatorAssemblyService.cs:708`, `:2031`). `sandbox.preview_pending` is transitional while `AgentPreviewGate` waits on the existing tool-approval mechanism (`apps/Agentweaver.Api/Sandbox/Preview/AgentPreviewGate.cs:103`). If no final event exists, the guard emits `sandbox.preview_failed` with `reason: "preview_outcome_missing"` plus a failed preview `workflow.step`, then proceeds to human review with **Preview unavailable** rather than resetting and redispatching subtasks (`CoordinatorAssemblyService.cs:2050`, `apps/web/src/pages/CoordinatorRunPage.tsx:3823`). See [Live-preview provisioning](./live-preview-provisioning.md) for the full flow.
 
 Automated gate request-changes now keep that Build & Test execution context warm. When Build & Test or
 Rubberduck requests changes, assembly emits `coordinator.assembly_changes_requested`, resets the inferred

@@ -15,9 +15,10 @@ public sealed class BuildTestTurnExecutor : Executor<AgentTurnOutput, WorkflowRe
         "The step passes only if the build succeeds AND all tests pass. Report any failures with full error output. " +
         "Do not approve if there are compilation errors, test failures, or lint errors that indicate broken code. " +
         "After tests pass, if the project is a web application or service, start its development/preview server so stakeholders can access the running changes before human review. " +
+        "Use the managed PreviewRunner tools for this: call `start_preview_process(command=..., cwd=...)`, then `observe_bound_port(session_id=...)`, and only then call `start_preview(port=PORT)`. " +
         "Do NOT assume a hardcoded or pre-configured port — the port is not known ahead of time and can differ per execution. " +
         "Instead, discover how to run the app by inspecting the project itself (package.json scripts, Dockerfile, Makefile, README, framework defaults, etc.), start the server, and then observe the actual port it binds to from the process stdout/logs. " +
-        "Once the server is up and verified (e.g. with curl), register it by calling the `start_preview(port=PORT)` tool with the exact port the server actually bound to, so the preview sandbox attaches to the running process.";
+        "Once PreviewRunner reports the server is up and verified, register it by calling the `start_preview(port=PORT)` tool with the exact port the server actually bound to, so the preview sandbox attaches to the running process.";
 
     public string LogicalNodeId { get; }
     public string DisplayLabel { get; }

@@ -24,6 +24,7 @@ builder.Services.Configure<AgentHostOptions>(builder.Configuration.GetSection("A
 // carries RunId/UserId/TurnBearerToken/KvUserSecretName delivered later via POST /configure
 // (warm pool) or seeded from options at startup (env-var launch).
 builder.Services.AddSingleton<AgentHostRuntimeState>();
+builder.Services.Configure<PreviewRunnerOptions>(builder.Configuration.GetSection("AgentHost:PreviewRunner"));
 
 // ── A2A listener: mTLS (production default) vs plain HTTP (PoC) ─────────────────
 // Sandbox:AgentHost:RequireMtls maps here as AgentHost:RequireMtls. Default TRUE keeps the
@@ -127,6 +128,10 @@ else
 builder.Services.AddSingleton<ISandboxPolicyStore, PodSandboxPolicyStore>();
 
 // ── Agent runtime (in-memory approvals, local executor — Kata VM IS the sandbox) ─
+builder.Services.AddSingleton<PreviewRunner>();
+builder.Services.AddSingleton<IPreviewRunner>(sp => sp.GetRequiredService<PreviewRunner>());
+builder.Services.AddHostedService(sp => sp.GetRequiredService<PreviewRunner>());
+builder.Services.AddSingleton<IAgentRuntimeToolProvider, PreviewRunnerToolProvider>();
 builder.Services.AddAgentRuntime();
 
 // ── CopilotAIAgent (singleton per pod — one run per pod lifetime) ──────────────
@@ -278,6 +283,116 @@ app.Use(async (ctx, next) =>
 app.MapGet("/healthz", (AgentHostStartupService startup) =>
     Results.Ok(startup.IsReady ? "ready" : "standby"));
 
+// ── PreviewRunner endpoints ───────────────────────────────────────────────────
+// API/Coordinator uses these to manage the pod-local preview process lifecycle. The model-facing
+// tools call the same PreviewRunner service in-process; these HTTP endpoints are for platform
+// cleanup/reconciliation (terminal assembly, explicit stop, stale-run repair). They are protected
+// with the same per-run TurnBearerToken used for A2A turns when one is configured.
+app.MapPost("/preview-runner/processes", async (
+    HttpContext ctx,
+    PreviewProcessStartRequest request,
+    IPreviewRunner previewRunner,
+    AgentHostRuntimeState runtimeState) =>
+{
+    if (!PreviewRunnerEndpointAuth.Authorize(ctx, runtimeState))
+        return Results.Unauthorized();
+    if (string.IsNullOrWhiteSpace(request.Command))
+        return Results.BadRequest(new { error = "command is required" });
+    if (string.IsNullOrWhiteSpace(request.Cwd))
+        return Results.BadRequest(new { error = "cwd is required" });
+
+    var result = await previewRunner.StartPreviewProcessAsync(
+        request.Command,
+        request.Cwd,
+        string.IsNullOrWhiteSpace(request.RunId) ? runtimeState.RunId : request.RunId,
+        request.WorkPlanId,
+        request.TreeHash,
+        ctx.RequestAborted).ConfigureAwait(false);
+
+    return Results.Ok(new
+    {
+        session_id = result.SessionId,
+        pid = result.Pid,
+        started_at = result.StartedAt,
+        working_directory = result.WorkingDirectory,
+    });
+});
+
+app.MapPost("/preview-runner/processes/{sessionId}/observe-bound-port", async (
+    HttpContext ctx,
+    string sessionId,
+    PreviewObservePortRequest request,
+    IPreviewRunner previewRunner,
+    AgentHostRuntimeState runtimeState) =>
+{
+    if (!PreviewRunnerEndpointAuth.Authorize(ctx, runtimeState))
+        return Results.Unauthorized();
+
+    var result = await previewRunner.ObserveBoundPortAsync(
+        sessionId,
+        TimeSpan.FromSeconds(Math.Max(1, request.TimeoutSeconds ?? 60)),
+        request.HealthPath ?? "/",
+        ctx.RequestAborted).ConfigureAwait(false);
+
+    return Results.Ok(new
+    {
+        session_id = result.SessionId,
+        port = result.Port,
+        evidence = result.Evidence,
+        healthy = result.Healthy,
+        health_evidence = result.HealthEvidence,
+    });
+});
+
+app.MapPost("/preview-runner/processes/{sessionId}/health-check", async (
+    HttpContext ctx,
+    string sessionId,
+    PreviewHealthCheckRequest request,
+    IPreviewRunner previewRunner,
+    AgentHostRuntimeState runtimeState) =>
+{
+    if (!PreviewRunnerEndpointAuth.Authorize(ctx, runtimeState))
+        return Results.Unauthorized();
+    if (request.Port is <= 0 or > 65535)
+        return Results.BadRequest(new { error = "port must be between 1 and 65535" });
+
+    var result = await previewRunner.HealthCheckAsync(
+        sessionId, request.Port, request.Path ?? "/", ctx.RequestAborted).ConfigureAwait(false);
+
+    return Results.Ok(new
+    {
+        session_id = result.SessionId,
+        port = result.Port,
+        path = result.Path,
+        healthy = result.Healthy,
+        status_code = result.StatusCode,
+        evidence = result.Evidence,
+    });
+});
+
+app.MapDelete("/preview-runner/processes/{sessionId}", async (
+    HttpContext ctx,
+    string sessionId,
+    string? reason,
+    IPreviewRunner previewRunner,
+    AgentHostRuntimeState runtimeState) =>
+{
+    if (!PreviewRunnerEndpointAuth.Authorize(ctx, runtimeState))
+        return Results.Unauthorized();
+
+    var result = await previewRunner.StopPreviewProcessAsync(
+        sessionId,
+        string.IsNullOrWhiteSpace(reason) ? "api_stop" : reason!,
+        ctx.RequestAborted).ConfigureAwait(false);
+
+    return Results.Ok(new
+    {
+        session_id = result.SessionId,
+        stopped = result.Stopped,
+        reason = result.Reason,
+    });
+});
+
 // ── A2A endpoints ──────────────────────────────────────────────────────────────
 // Mounts:
 //   POST  {A2APath}/v1/message:stream  — streaming agent turn (SSE)
@@ -309,4 +424,38 @@ internal sealed record ConfigureRequest
     /// references, so files produced by one stage are visible to the next.
     /// </summary>
     public string? WorkingDirectory { get; init; }
+}
+
+internal sealed record PreviewProcessStartRequest
+{
+    public string Command { get; init; } = "";
+    public string Cwd { get; init; } = "";
+    public string? RunId { get; init; }
+    public string? WorkPlanId { get; init; }
+    public string? TreeHash { get; init; }
+}
+
+internal sealed record PreviewObservePortRequest
+{
+    public int? TimeoutSeconds { get; init; }
+    public string? HealthPath { get; init; }
+}
+
+internal sealed record PreviewHealthCheckRequest
+{
+    public int Port { get; init; }
+    public string? Path { get; init; }
+}
+
+internal static class PreviewRunnerEndpointAuth
+{
+    public static bool Authorize(HttpContext ctx, AgentHostRuntimeState runtimeState)
+    {
+        var turnBearerToken = runtimeState.TurnBearerToken;
+        if (string.IsNullOrEmpty(turnBearerToken))
+            return true;
+
+        var authHeader = ctx.Request.Headers.Authorization.ToString();
+        return string.Equals(authHeader, "Bearer " + turnBearerToken, StringComparison.Ordinal);
+    }
 }

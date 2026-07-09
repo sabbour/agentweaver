@@ -458,6 +458,180 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task RunAssembly_PreviewRequiredWithoutStartPreview_EmitsFailureBeforeBuildTestApproval()
+    {
+        var coordinatorRunId = RunId.New().ToString();
+        var (workPlanId, _) = await SeedPlanAsync(coordinatorRunId,
+            new[] { SubtaskStatus.Completed, SubtaskStatus.AssembleReady });
+        await SeedCoordinatorRunAsync(coordinatorRunId);
+        _streamStore.Create(coordinatorRunId, "alice");
+
+        await InvokeEnsurePreviewApplicabilityRecordedAsync(coordinatorRunId, workPlanId, "agg-tree", "aggregate diff");
+        await InvokeEnsureFinalPreviewOutcomeBeforeApprovalAsync(coordinatorRunId, workPlanId, "agg-tree");
+        await InvokeApplyAuthoredGateDecisionAsync(
+            Context(coordinatorRunId),
+            workPlanId,
+            new AssemblyReviewDecision(Approved: true, RequestChanges: false, Feedback: null,
+                TargetFiles: null, Reviewer: "build-test"));
+
+        var events = _streamStore.Get(coordinatorRunId)!.GetSnapshotSince(0).Events;
+        var failed = events.Single(e => e.Type == EventTypes.SandboxPreviewFailed);
+        var failedPayload = JsonSerializer.SerializeToNode(failed.Payload)!.AsObject();
+        failedPayload["work_plan_id"]!.GetValue<int>().Should().Be(workPlanId);
+        failedPayload["tree_hash"]!.GetValue<string>().Should().Be("agg-tree");
+        failedPayload["reason"]!.GetValue<string>().Should().Be("preview_outcome_missing");
+
+        events.Select(e => e.Type).Should().ContainInOrder(
+            EventTypes.SandboxPreviewFailed,
+            EventTypes.CoordinatorAssemblyReviewApproved);
+        EventTypes_(coordinatorRunId).Should().Contain(EventTypes.CoordinatorAssemblyReviewApproved,
+            "missing preview is surfaced but does not block Human Review or approval");
+    }
+
+    [Fact]
+    public async Task RunAssembly_ExistingPreviewReady_DoesNotEmitMissingOutcomeFailure()
+    {
+        var coordinatorRunId = RunId.New().ToString();
+        var (workPlanId, _) = await SeedPlanAsync(coordinatorRunId,
+            new[] { SubtaskStatus.Completed, SubtaskStatus.AssembleReady });
+        await SeedCoordinatorRunAsync(coordinatorRunId);
+        _streamStore.Create(coordinatorRunId, "alice");
+        _pipeline.OnBuildTest = request =>
+        {
+            _streamStore.Get(coordinatorRunId)!.RecordNext(EventTypes.SandboxPreviewReady, new
+            {
+                run_id = coordinatorRunId,
+                work_plan_id = workPlanId,
+                tree_hash = request.AggregateTreeHash,
+                preview_url = "https://preview.example.test",
+                target_port = 5173,
+            });
+            _streamStore.Get(coordinatorRunId)!.RecordNext(EventTypes.CoordinatorPreviewReady, new
+            {
+                run_id = coordinatorRunId,
+                work_plan_id = workPlanId,
+                tree_hash = request.AggregateTreeHash,
+                preview_url = "https://preview.example.test",
+                target_port = 5173,
+            });
+        };
+
+        await InvokeEnsurePreviewApplicabilityRecordedAsync(coordinatorRunId, workPlanId, "agg-tree", "aggregate diff");
+        _pipeline.OnBuildTest!(new CollectiveBuildTestRequest(
+            coordinatorRunId,
+            "proj-1",
+            ".",
+            "integration",
+            "agg-tree",
+            "aggregate diff",
+            "alice"));
+        await InvokeEnsureFinalPreviewOutcomeBeforeApprovalAsync(coordinatorRunId, workPlanId, "agg-tree");
+
+        EventTypes_(coordinatorRunId).Should().Contain(EventTypes.SandboxPreviewReady);
+        EventTypes_(coordinatorRunId).Should().Contain(EventTypes.CoordinatorPreviewReady);
+        _streamStore.Get(coordinatorRunId)!.GetSnapshotSince(0).Events
+            .Where(e => e.Type == EventTypes.SandboxPreviewFailed)
+            .Select(e => JsonSerializer.SerializeToNode(e.Payload)!.AsObject()["reason"]!.GetValue<string>())
+            .Should().NotContain("preview_outcome_missing");
+    }
+
+    [Fact]
+    public async Task RunAssembly_PreviewOnlyFailureFeedback_DoesNotResetOrRedispatchSubtasks()
+    {
+        var coordinatorRunId = RunId.New().ToString();
+        var (workPlanId, _) = await SeedPlanAsync(coordinatorRunId,
+            new[] { SubtaskStatus.Completed, SubtaskStatus.AssembleReady });
+        await SeedCoordinatorRunAsync(coordinatorRunId);
+        _streamStore.Create(coordinatorRunId, "alice");
+        _pipeline.BuildTestDecision = new CollectiveGateDecision(
+            Approved: false,
+            RequestChanges: true,
+            Feedback: "Preview unavailable; start_preview did not return a URL.");
+
+        await InvokeEnsurePreviewApplicabilityRecordedAsync(coordinatorRunId, workPlanId, "agg-tree", "aggregate diff");
+        await InvokeEnsureFinalPreviewOutcomeBeforeApprovalAsync(coordinatorRunId, workPlanId, "agg-tree");
+        await InvokeApplyAuthoredGateDecisionAsync(
+            Context(coordinatorRunId),
+            workPlanId,
+            new AssemblyReviewDecision(
+                Approved: true,
+                RequestChanges: false,
+                Feedback: _pipeline.BuildTestDecision!.Feedback,
+                TargetFiles: null,
+                Reviewer: "build-test"));
+
+        _dispatch.StartDispatchCalls.Should().BeEmpty("preview failure must not use the reset and redispatch route");
+        EventTypes_(coordinatorRunId).Should().Contain(EventTypes.CoordinatorAssemblyReviewApproved);
+        EventTypes_(coordinatorRunId).Should().NotContain(EventTypes.CoordinatorAssemblyChangesRequested);
+    }
+
+    [Fact]
+    public async Task PreviewGuard_StalePendingFromPriorTree_DoesNotDelayLaterAssemblyPass()
+    {
+        var coordinatorRunId = RunId.New().ToString();
+        var (workPlanId, _) = await SeedPlanAsync(coordinatorRunId,
+            new[] { SubtaskStatus.Completed, SubtaskStatus.AssembleReady });
+        await SeedCoordinatorRunAsync(coordinatorRunId);
+        _streamStore.Create(coordinatorRunId, "alice");
+
+        var stream = _streamStore.Get(coordinatorRunId)!;
+        stream.RecordNext(EventTypes.SandboxPreviewApplicability, new
+        {
+            run_id = coordinatorRunId,
+            work_plan_id = workPlanId,
+            tree_hash = "tree-1",
+            state = "preview_required",
+        });
+        stream.RecordNext(EventTypes.SandboxPreviewPending, new
+        {
+            run_id = coordinatorRunId,
+            target_port = 5173,
+            approval = "pending",
+            request_id = "stale-null-keyed",
+        });
+        stream.RecordNext(EventTypes.SandboxPreviewPending, new
+        {
+            run_id = coordinatorRunId,
+            work_plan_id = workPlanId,
+            tree_hash = "tree-1",
+            target_port = 5173,
+            approval = "pending",
+            request_id = "stale-old-tree",
+        });
+        stream.RecordNext(EventTypes.SandboxPreviewFailed, new
+        {
+            run_id = coordinatorRunId,
+            work_plan_id = workPlanId,
+            tree_hash = "tree-1",
+            source = "preview-api",
+            reason = "approval_timed_out",
+        });
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+        var started = DateTimeOffset.UtcNow;
+        await InvokeEnsurePreviewApplicabilityRecordedAsync(
+            coordinatorRunId, workPlanId, "tree-2", "diff --git a/src/server.ts b/src/server.ts", cts.Token);
+        await InvokeEnsureFinalPreviewOutcomeBeforeApprovalAsync(
+            coordinatorRunId, workPlanId, "tree-2", cts.Token);
+        var elapsed = DateTimeOffset.UtcNow - started;
+
+        elapsed.Should().BeLessThan(TimeSpan.FromSeconds(2),
+            "stale pending events from another tree must not trigger the HITL wait window");
+
+        var events = stream.GetSnapshotSince(0).Events;
+        events.Where(e => e.Type == EventTypes.SandboxPreviewApplicability)
+            .Select(e => JsonSerializer.SerializeToNode(e.Payload)!.AsObject())
+            .Should().Contain(p => p["tree_hash"]!.GetValue<string>() == "tree-2",
+                "the second pass must record its own applicability");
+        var failures = events.Where(e => e.Type == EventTypes.SandboxPreviewFailed)
+            .Select(e => JsonSerializer.SerializeToNode(e.Payload)!.AsObject())
+            .ToList();
+        failures.Should().Contain(p =>
+            p["tree_hash"]!.GetValue<string>() == "tree-2"
+            && p["reason"]!.GetValue<string>() == "preview_outcome_missing");
+    }
+
+    [Fact]
     public async Task RunAssembly_AutoResolvedIntegrationConflict_EmitsCoordinatorEvent()
     {
         var coordinatorRunId = RunId.New().ToString();
@@ -1159,6 +1333,72 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         await task.ConfigureAwait(false);
     }
 
+    private async Task InvokeEnsurePreviewApplicabilityRecordedAsync(
+        string coordinatorRunId,
+        int workPlanId,
+        string treeHash,
+        string aggregateDiff,
+        CancellationToken ct = default)
+    {
+        var method = typeof(CoordinatorAssemblyService).GetMethod(
+            "EnsurePreviewApplicabilityRecordedAsync",
+            BindingFlags.NonPublic | BindingFlags.Instance);
+        method.Should().NotBeNull("the coordinator owns durable preview applicability");
+
+        var task = (Task)method!.Invoke(_sut,
+        [
+            coordinatorRunId,
+            workPlanId,
+            treeHash,
+            aggregateDiff,
+            ct,
+        ])!;
+        await task.ConfigureAwait(false);
+    }
+
+    private async Task InvokeEnsureFinalPreviewOutcomeBeforeApprovalAsync(
+        string coordinatorRunId,
+        int workPlanId,
+        string treeHash,
+        CancellationToken ct = default)
+    {
+        var method = typeof(CoordinatorAssemblyService).GetMethod(
+            "EnsureFinalPreviewOutcomeBeforeApprovalAsync",
+            BindingFlags.NonPublic | BindingFlags.Instance);
+        method.Should().NotBeNull("the coordinator guard owns preview outcome enforcement");
+
+        var task = (Task)method!.Invoke(_sut,
+        [
+            coordinatorRunId,
+            workPlanId,
+            treeHash,
+            ct,
+        ])!;
+        await task.ConfigureAwait(false);
+    }
+
+    private async Task<bool> InvokeApplyAuthoredGateDecisionAsync(
+        CoordinatorDispatchContext context,
+        int workPlanId,
+        AssemblyReviewDecision decision)
+    {
+        var method = typeof(CoordinatorAssemblyService).GetMethod(
+            "ApplyAuthoredGateDecisionAsync",
+            BindingFlags.NonPublic | BindingFlags.Instance);
+        method.Should().NotBeNull("approval application remains the assembly seam after preview guard");
+
+        var task = (Task<bool>)method!.Invoke(_sut,
+        [
+            context,
+            workPlanId,
+            Array.Empty<(int, int)>(),
+            new Dictionary<int, IReadOnlySet<string>>(),
+            decision,
+            CancellationToken.None,
+        ])!;
+        return await task.ConfigureAwait(false);
+    }
+
     private static string CreateGitRepository()
     {
         var repoPath = Path.Combine(Path.GetTempPath(), $"agentweaver-buildtest-repo-{Guid.NewGuid():N}");
@@ -1362,6 +1602,8 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         public int Scribes;
         public IntegrationBranchResult? IntegrationResult;
         public int IntegrationBuildThrowsRemaining;
+        public CollectiveGateDecision? BuildTestDecision;
+        public Action<CollectiveBuildTestRequest>? OnBuildTest;
 
         /// <summary>When set, <see cref="MergeAsync"/> returns this result instead of a clean merge.</summary>
         public CollectiveMergeResult? MergeOverride;
@@ -1393,7 +1635,9 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         public Task<CollectiveGateDecision> RunBuildTestAsync(CollectiveBuildTestRequest request, CancellationToken ct)
         {
             BuildTests++;
-            return Task.FromResult(new CollectiveGateDecision(Approved: true, RequestChanges: false, Feedback: null));
+            OnBuildTest?.Invoke(request);
+            return Task.FromResult(BuildTestDecision
+                ?? new CollectiveGateDecision(Approved: true, RequestChanges: false, Feedback: null));
         }
 
         public Task CleanupBuildTestResourcesAsync(

@@ -686,6 +686,13 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
                 CollectiveGateDecision buildTest;
                 try
                 {
+                    await EnsurePreviewApplicabilityRecordedAsync(
+                        context.CoordinatorRunId,
+                        workPlanId,
+                        aggregateTreeHash,
+                        aggregateDiff,
+                        ct).ConfigureAwait(false);
+
                     buildTest = await _pipeline.RunBuildTestAsync(
                         new CollectiveBuildTestRequest(
                             context.CoordinatorRunId,
@@ -707,14 +714,30 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
                     return;
                 }
 
+                var previewOutcome = await EnsureFinalPreviewOutcomeBeforeApprovalAsync(
+                    context.CoordinatorRunId,
+                    workPlanId,
+                    aggregateTreeHash,
+                    ct).ConfigureAwait(false);
+
+                var requestChanges = buildTest.RequestChanges;
+                var approved = buildTest.Approved;
+                if (previewOutcome.Kind == PreviewOutcomeKind.Failed
+                    && buildTest.RequestChanges
+                    && IsPreviewOnlyFeedback(buildTest.Feedback))
+                {
+                    requestChanges = false;
+                    approved = true;
+                }
+
                 if (!await ApplyAuthoredGateDecisionAsync(
                         context,
                         workPlanId,
                         edges,
                         touchedFilesBySubtask,
                         new AssemblyReviewDecision(
-                            Approved: buildTest.Approved,
-                            RequestChanges: buildTest.RequestChanges,
+                            Approved: approved,
+                            RequestChanges: requestChanges,
                             Feedback: buildTest.Feedback,
                             TargetFiles: null,
                             Reviewer: "build-test"),
@@ -1949,8 +1972,239 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         }
     }
 
+    private async Task EnsurePreviewApplicabilityRecordedAsync(
+        string coordinatorRunId,
+        int workPlanId,
+        string treeHash,
+        string aggregateDiff,
+        CancellationToken ct)
+    {
+        if (FindLatestPreviewState(coordinatorRunId, workPlanId, treeHash).Kind is not PreviewOutcomeKind.None)
+            return;
+
+        var applicability = InferPreviewApplicability(aggregateDiff);
+        Emit(coordinatorRunId, EventTypes.WorkflowStep, new
+        {
+            step = "preview",
+            status = applicability.Required ? "started" : "skipped",
+            label = "Preview",
+            message = applicability.Required
+                ? "Preview applicability requires a live preview outcome before human review."
+                : "Preview is not applicable for this assembly.",
+        });
+        Emit(coordinatorRunId, EventTypes.SandboxPreviewApplicability, new
+        {
+            run_id = coordinatorRunId,
+            work_plan_id = workPlanId,
+            tree_hash = treeHash,
+            state = applicability.Required ? "preview_required" : "preview_skipped_not_applicable",
+            reason = applicability.Reason,
+            evidence = applicability.Evidence,
+        });
+
+        if (!applicability.Required)
+        {
+            Emit(coordinatorRunId, EventTypes.SandboxPreviewSkippedNotApplicable, new
+            {
+                run_id = coordinatorRunId,
+                work_plan_id = workPlanId,
+                tree_hash = treeHash,
+                source = "preview-stage",
+                reason = applicability.Reason,
+                evidence = applicability.Evidence,
+            });
+        }
+
+        await PersistRunEventsSnapshotAsync(coordinatorRunId, ct).ConfigureAwait(false);
+    }
+
+    private async Task<PreviewOutcomeState> EnsureFinalPreviewOutcomeBeforeApprovalAsync(
+        string coordinatorRunId,
+        int workPlanId,
+        string treeHash,
+        CancellationToken ct)
+    {
+        var outcome = FindLatestPreviewState(coordinatorRunId, workPlanId, treeHash);
+        if (outcome.Kind == PreviewOutcomeKind.Pending)
+        {
+            var deadline = DateTimeOffset.UtcNow.AddMinutes(5).AddSeconds(10);
+            while (DateTimeOffset.UtcNow < deadline)
+            {
+                await Task.Delay(TimeSpan.FromSeconds(1), ct).ConfigureAwait(false);
+                outcome = FindLatestPreviewState(coordinatorRunId, workPlanId, treeHash);
+                if (outcome.Kind is PreviewOutcomeKind.Ready or PreviewOutcomeKind.Failed or PreviewOutcomeKind.Skipped)
+                    return outcome;
+            }
+        }
+
+        if (outcome.Kind is PreviewOutcomeKind.Ready or PreviewOutcomeKind.Failed or PreviewOutcomeKind.Skipped)
+            return outcome;
+
+        Emit(coordinatorRunId, EventTypes.SandboxPreviewFailed, new
+        {
+            run_id = coordinatorRunId,
+            work_plan_id = workPlanId,
+            tree_hash = treeHash,
+            source = "approval-guard",
+            reason = "preview_outcome_missing",
+            message = "Build/Test completed without a final live-preview outcome; Human Review may proceed with preview unavailable.",
+        });
+        Emit(coordinatorRunId, EventTypes.WorkflowStep, new
+        {
+            step = "preview",
+            status = "failed",
+            label = "Preview",
+            message = "Preview unavailable: no final preview outcome was recorded before Build/Test approval.",
+        });
+        await PersistRunEventsSnapshotAsync(coordinatorRunId, ct).ConfigureAwait(false);
+        return new PreviewOutcomeState(PreviewOutcomeKind.Failed, "preview_outcome_missing");
+    }
+
+    private PreviewOutcomeState FindLatestPreviewState(string coordinatorRunId, int workPlanId, string treeHash)
+    {
+        var events = _streamStore.Get(coordinatorRunId)?.GetSnapshotSince(0).Events;
+        if (events is null || events.Count == 0)
+            return new PreviewOutcomeState(PreviewOutcomeKind.None, null);
+
+        for (var i = events.Count - 1; i >= 0; i--)
+        {
+            var evt = events[i];
+            if (!IsPreviewStateEvent(evt.Type))
+                continue;
+
+            var payload = JsonSerializer.SerializeToNode(evt.Payload) as System.Text.Json.Nodes.JsonObject;
+            if (payload is null || !PreviewKeyMatches(evt.Type, payload, workPlanId, treeHash))
+                continue;
+
+            if (evt.Type == EventTypes.SandboxPreviewReady)
+                return new PreviewOutcomeState(PreviewOutcomeKind.Ready, null);
+            if (evt.Type == EventTypes.SandboxPreviewFailed)
+                return new PreviewOutcomeState(PreviewOutcomeKind.Failed, GetString(payload, "reason"));
+            if (evt.Type == EventTypes.SandboxPreviewSkippedNotApplicable)
+                return new PreviewOutcomeState(PreviewOutcomeKind.Skipped, GetString(payload, "reason"));
+            if (evt.Type == EventTypes.SandboxPreviewPending)
+                return new PreviewOutcomeState(PreviewOutcomeKind.Pending, null);
+            if (evt.Type == EventTypes.SandboxPreviewApplicability
+                && string.Equals(GetString(payload, "state"), "preview_skipped_not_applicable", StringComparison.Ordinal))
+                return new PreviewOutcomeState(PreviewOutcomeKind.Skipped, GetString(payload, "reason"));
+        }
+
+        return new PreviewOutcomeState(PreviewOutcomeKind.None, null);
+    }
+
+    private static bool IsPreviewStateEvent(string type) =>
+        type == EventTypes.SandboxPreviewApplicability
+        || type == EventTypes.SandboxPreviewReady
+        || type == EventTypes.SandboxPreviewFailed
+        || type == EventTypes.SandboxPreviewSkippedNotApplicable
+        || type == EventTypes.SandboxPreviewPending;
+
+    private static bool PreviewKeyMatches(
+        string eventType,
+        System.Text.Json.Nodes.JsonObject payload,
+        int workPlanId,
+        string treeHash)
+    {
+        var payloadWorkPlanId = GetInt(payload, "work_plan_id") ?? GetInt(payload, "workPlanId");
+        var payloadTreeHash = GetString(payload, "tree_hash") ?? GetString(payload, "treeHash");
+
+        if (eventType == EventTypes.SandboxPreviewPending)
+        {
+            return payloadWorkPlanId == workPlanId
+                && !string.IsNullOrWhiteSpace(payloadTreeHash)
+                && !string.IsNullOrWhiteSpace(treeHash)
+                && string.Equals(payloadTreeHash, treeHash, StringComparison.Ordinal);
+        }
+
+        return (payloadWorkPlanId is null || payloadWorkPlanId == workPlanId)
+            && (string.IsNullOrWhiteSpace(payloadTreeHash)
+                || string.IsNullOrWhiteSpace(treeHash)
+                || string.Equals(payloadTreeHash, treeHash, StringComparison.Ordinal));
+    }
+
+    private static int? GetInt(System.Text.Json.Nodes.JsonObject payload, string name)
+    {
+        if (!payload.TryGetPropertyValue(name, out var node) || node is null)
+            return null;
+        try { return node.GetValue<int>(); }
+        catch { return null; }
+    }
+
+    private static string? GetString(System.Text.Json.Nodes.JsonObject payload, string name)
+    {
+        if (!payload.TryGetPropertyValue(name, out var node) || node is null)
+            return null;
+        try { return node.GetValue<string>(); }
+        catch { return null; }
+    }
+
+    private static (bool Required, string Reason, IReadOnlyList<string> Evidence) InferPreviewApplicability(string aggregateDiff)
+    {
+        var changedFiles = ExtractDiffFiles(aggregateDiff);
+        if (changedFiles.Count > 0
+            && changedFiles.All(IsDocumentationOnlyPath))
+            return (false, "docs_only", changedFiles);
+
+        var previewEvidence = changedFiles
+            .Where(path => path.EndsWith("package.json", StringComparison.OrdinalIgnoreCase)
+                || path.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase)
+                || path.Contains("server", StringComparison.OrdinalIgnoreCase)
+                || path.Contains("controller", StringComparison.OrdinalIgnoreCase)
+                || path.Contains("app", StringComparison.OrdinalIgnoreCase)
+                || path.Contains("vite", StringComparison.OrdinalIgnoreCase)
+                || path.Contains("next", StringComparison.OrdinalIgnoreCase))
+            .Take(8)
+            .ToArray();
+
+        return previewEvidence.Length > 0
+            ? (true, "server_files_changed", previewEvidence)
+            : (true, "ambiguous_default_required", changedFiles.Take(8).ToArray());
+    }
+
+    private static IReadOnlyList<string> ExtractDiffFiles(string aggregateDiff)
+    {
+        if (string.IsNullOrWhiteSpace(aggregateDiff))
+            return [];
+
+        var files = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var line in aggregateDiff.Split('\n'))
+        {
+            var trimmed = line.Trim();
+            if (!trimmed.StartsWith("diff --git ", StringComparison.Ordinal))
+                continue;
+
+            var parts = trimmed.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length >= 4)
+            {
+                var file = parts[3].StartsWith("b/", StringComparison.Ordinal) ? parts[3][2..] : parts[3];
+                files.Add(file.Replace('/', Path.DirectorySeparatorChar));
+            }
+        }
+
+        return files.ToArray();
+    }
+
+    private static bool IsDocumentationOnlyPath(string path) =>
+        path.EndsWith(".md", StringComparison.OrdinalIgnoreCase)
+        || path.EndsWith(".mdx", StringComparison.OrdinalIgnoreCase)
+        || path.EndsWith(".txt", StringComparison.OrdinalIgnoreCase)
+        || path.EndsWith(".adoc", StringComparison.OrdinalIgnoreCase)
+        || path.Contains($"{Path.DirectorySeparatorChar}docs{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase)
+        || path.StartsWith($"docs{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsPreviewOnlyFeedback(string? feedback) =>
+        !string.IsNullOrWhiteSpace(feedback)
+        && feedback.Contains("preview", StringComparison.OrdinalIgnoreCase)
+        && !feedback.Contains("test", StringComparison.OrdinalIgnoreCase)
+        && !feedback.Contains("build", StringComparison.OrdinalIgnoreCase)
+        && !feedback.Contains("compile", StringComparison.OrdinalIgnoreCase);
+
     private void Emit(string coordinatorRunId, string eventType, object payload) =>
         _streamStore.Get(coordinatorRunId)?.RecordNext(eventType, StampTimestamp(payload));
+
+    private enum PreviewOutcomeKind { None, Pending, Ready, Failed, Skipped }
+
+    private sealed record PreviewOutcomeState(PreviewOutcomeKind Kind, string? Reason);
 
     /// <summary>
     /// Persists the coordinator run's in-memory assembly events to the RunEvents table, then marks

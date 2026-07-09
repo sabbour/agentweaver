@@ -127,6 +127,7 @@ beforeEach(() => {
     breakdown: [],
   });
   vi.mocked(apiClient.getRunTraces).mockResolvedValue({ runId: 'coord-run-1', spans: [] });
+  vi.mocked(apiClient.getRunEvents).mockResolvedValue([]);
   vi.mocked(apiClient.reviewAssembly).mockResolvedValue(undefined);
 });
 
@@ -286,15 +287,8 @@ describe('CoordinatorRunPage — unified coordinator graph view', () => {
       ],
       edges: [{ from: 'coordinator', to: 'build-test', cardinality: 'direct', loopback: false }],
     });
-    vi.mocked(apiClient.listPortForwards).mockResolvedValue([
-      {
-        session_id: 'pf-1',
-        local_port: 4567,
-        target_port: 3000,
-        pod_name: 'preview-pod',
-        started_at: '2026-07-08T00:00:00.000Z',
-        preview_url: 'https://preview.example.test',
-      },
+    vi.mocked(apiClient.getRunEvents).mockResolvedValue([
+      { sequence: 2, type: 'sandbox.preview_ready', payload: { preview_url: 'https://preview.example.test', target_port: 3000 } },
     ]);
 
     render(<Wrapper><CoordinatorRunPage /></Wrapper>);

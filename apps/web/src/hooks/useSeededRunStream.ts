@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useRunStream, type RunStreamEvent, type EventType, type StreamStatus } from '../api/sse';
 import { apiClient } from '../api/apiClient';
-import { mergeRunEvents, SEED_STATUSES } from '../timeline/mergeRunEvents';
+import { mergeRunEvents } from '../timeline/mergeRunEvents';
 
 export interface SeededRunStream {
   /** Persisted seed folded under the live SSE deltas — feed this to useTimelineItems. */
@@ -19,7 +19,7 @@ export interface SeededRunStream {
 
 /**
  * useRunStream + persisted-history seeding, extracted so every consumer binds to
- * an already-running OR parked/completed run correctly (BLOCKING #3).
+ * a run's durable event log plus live deltas consistently.
  *
  * useRunStream alone only resumes the LIVE SSE stream via Last-Event-ID; it never
  * calls getRunEvents, so a parked/terminal run (closed stream) would render empty.
@@ -27,9 +27,9 @@ export interface SeededRunStream {
  * the browser console TUI needs the exact same behaviour, so it lives here once.
  *
  * @param runId the run to bind to ('' disables the stream).
- * @param status the run's lifecycle status; when it is terminal/parked
- *   (SEED_STATUSES) the persisted events endpoint is fetched and folded under the
- *   live deltas. Pass undefined for an unknown/active run (seed skipped).
+ * @param status the run's lifecycle status; terminal/parked states still rely on
+ *   the same durable events endpoint, and active runs also seed once so durable
+ *   events emitted before the SSE subscription are visible.
  */
 export function useSeededRunStream(runId: string, status?: string): SeededRunStream {
   const {
@@ -44,7 +44,6 @@ export function useSeededRunStream(runId: string, status?: string): SeededRunStr
 
   useEffect(() => {
     if (!runId) { setSeedEvents([]); return; } // eslint-disable-line react-hooks/set-state-in-effect
-    if (!status || !SEED_STATUSES.has(status)) { setSeedEvents([]); return; }
     let cancelled = false;
     apiClient.getRunEvents(runId)
       .then((persisted) => {

@@ -90,5 +90,6 @@ started in the `agent-{runId}` pod-per-run sandbox or the `run-{runId}` Build & 
 
 - [Sandbox browser preview — Reference](../reference/sandbox-browser-preview.md) — routes, DTO fields, config, status codes.
 - [Sandbox browser preview — Deep Dive](../deep-dive/sandbox-browser-preview.md) — the reverse proxy, lifecycle, and cleanup.
+- [Live-preview provisioning](./live-preview-provisioning.md) — the Build & Test preview review flow.
 - [Sandbox pod execution experience](./sandbox-pod-execution.md) — the pod pill and the pod-per-run model.
 - [Runs, board & live inspection](./runs-board-watch.md) — where embedded run inspection lives.

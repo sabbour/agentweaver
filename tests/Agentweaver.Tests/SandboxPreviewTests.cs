@@ -1,5 +1,10 @@
+using System.Text.Json;
 using Agentweaver.Api.Sandbox.Preview;
+using Agentweaver.Api.Endpoints;
+using Agentweaver.Api.Infrastructure;
+using Agentweaver.Domain;
 using FluentAssertions;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Agentweaver.Tests;
 
@@ -10,6 +15,52 @@ namespace Agentweaver.Tests;
 /// </summary>
 public class SandboxPreviewTests
 {
+    [Fact]
+    public async Task StartPreviewForRunAsync_GatewaySuccess_EmitsSandboxAndCoordinatorPreviewReady()
+    {
+        var runId = RunId.New().ToString();
+        var streamStore = new RunStreamStore();
+        streamStore.Create(runId, "alice");
+        streamStore.Get(runId)!.RecordNext(EventTypes.SandboxPreviewApplicability, new
+        {
+            run_id = runId,
+            work_plan_id = 42,
+            tree_hash = "tree-abc",
+            state = "preview_required",
+        });
+        var run = new Run
+        {
+            Id = RunId.Parse(runId),
+            RepositoryPath = ".",
+            OriginatingBranch = "main",
+            ModelSource = ModelSource.GitHubCopilot,
+            Task = "t",
+            SubmittingUser = "alice",
+            Status = RunStatus.InProgress,
+            StartedAt = DateTimeOffset.UtcNow,
+        };
+
+        await SandboxEndpoints.StartPreviewForRunAsync(
+            runId,
+            5173,
+            run,
+            new FakePreviewService(),
+            null!,
+            streamStore,
+            NullLogger.Instance,
+            CancellationToken.None);
+
+        var events = streamStore.Get(runId)!.GetSnapshotSince(0).Events;
+        events.Select(e => e.Type).Should().Contain(EventTypes.SandboxPreviewReady);
+        events.Select(e => e.Type).Should().Contain(EventTypes.CoordinatorPreviewReady);
+        var ready = JsonSerializer.SerializeToNode(
+            events.Single(e => e.Type == EventTypes.SandboxPreviewReady).Payload)!.AsObject();
+        ready["work_plan_id"]!.GetValue<int>().Should().Be(42);
+        ready["tree_hash"]!.GetValue<string>().Should().Be("tree-abc");
+        ready["preview_url"]!.GetValue<string>().Should().Be("https://preview.example.test");
+        ready["keepalive_url"]!.GetValue<string>().Should().Be($"/api/runs/{runId}/sandbox/preview/tok/keepalive");
+    }
+
     [Fact]
     public void HostLabel_appends_preview_suffix_as_single_dns_label()
     {
@@ -313,5 +364,37 @@ public class SandboxPreviewTests
         PreviewReaper.RunMatches(annotation, "run-impostor").Should().BeFalse();
         PreviewReaper.RunMatches(null, "run-owner").Should().BeFalse();
         PreviewReaper.RunMatches("", "run-owner").Should().BeFalse();
+    }
+
+    private sealed class FakePreviewService : ISandboxPreviewService
+    {
+        public bool Enabled => true;
+        public int AllowedPortMin => 3000;
+        public int AllowedPortMax => 9000;
+
+        public Task<PreviewSession> StartPreviewAsync(
+            string runId,
+            int targetPort,
+            string ownerUserId,
+            CancellationToken ct = default) =>
+            Task.FromResult(new PreviewSession(
+                "tok",
+                runId,
+                "pod-1",
+                targetPort,
+                "https://preview.example.test",
+                new DateTimeOffset(2026, 7, 9, 3, 0, 0, TimeSpan.Zero)));
+
+        public Task<IReadOnlyList<PreviewSession>> ListForRunAsync(string runId, CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<PreviewSession>>([]);
+
+        public Task KeepAliveAsync(string token, CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task<bool> VerifyTokenForRunAsync(string token, string runId, CancellationToken ct = default) =>
+            Task.FromResult(true);
+
+        public Task StopPreviewAsync(string token, CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task<int> ReapAsync(CancellationToken ct = default) => Task.FromResult(0);
     }
 }

@@ -434,18 +434,45 @@ function previewUrlFromSession(session: PortForwardSessionDto | undefined): stri
   return session?.preview_url ?? session?.previewUrl ?? null;
 }
 
-function previewUrlFromEvents(events: RunStreamEvent[]): string | null {
+type RunPreviewState =
+  | { status: 'none' }
+  | { status: 'ready'; previewUrl: string; targetPort?: string }
+  | { status: 'pending'; targetPort?: string }
+  | { status: 'failed'; reason: string; message?: string };
+
+function latestPreviewStateFromEvents(events: RunStreamEvent[]): RunPreviewState {
   for (let i = events.length - 1; i >= 0; i -= 1) {
     const evt = events[i];
-    const preview = evt.payload['preview_url'] ?? evt.payload['previewUrl'];
-    if (preview != null && String(preview).trim() !== '') return String(preview);
-    const session = evt.payload['session'];
-    if (session && typeof session === 'object') {
-      const nested = (session as Record<string, unknown>)['preview_url'] ?? (session as Record<string, unknown>)['previewUrl'];
-      if (nested != null && String(nested).trim() !== '') return String(nested);
+    if (evt.type === 'sandbox.preview_ready' || evt.type === 'coordinator.preview_ready') {
+      const preview = evt.payload['preview_url'] ?? evt.payload['previewUrl'];
+      if (preview != null && String(preview).trim() !== '') {
+        const targetPort = evt.payload['target_port'] ?? evt.payload['targetPort'];
+        return {
+          status: 'ready',
+          previewUrl: String(preview),
+          targetPort: targetPort == null ? undefined : String(targetPort),
+        };
+      }
+    }
+    if (evt.type === 'sandbox.preview_pending') {
+      const targetPort = evt.payload['target_port'] ?? evt.payload['targetPort'];
+      return {
+        status: 'pending',
+        targetPort: targetPort == null ? undefined : String(targetPort),
+      };
+    }
+    if (evt.type === 'sandbox.preview_failed') {
+      const reason = readStr(evt.payload, ['reason']) ?? 'unknown';
+      const message = readStr(evt.payload, ['message']);
+      return { status: 'failed', reason, message };
     }
   }
-  return null;
+  return { status: 'none' };
+}
+
+function previewFailureCopy(state: Extract<RunPreviewState, { status: 'failed' }>): string {
+  const reason = state.reason.replace(/_/g, ' ');
+  return state.message ? `${reason}: ${state.message}` : reason;
 }
 
 // Priority: live assembly_* events (last wins) > coordinator_status field > work-plan status.
@@ -1740,6 +1767,37 @@ const useStyles = makeStyles({
     backgroundColor: tokens.colorBrandBackground2,
     border: `1px solid ${tokens.colorBrandStroke1}`,
   },
+  selectedTaskPreviewPending: {
+    backgroundColor: tokens.colorPaletteMarigoldBackground2,
+    border: `1px solid ${tokens.colorPaletteMarigoldBorderActive}`,
+  },
+  selectedTaskPreviewUnavailable: {
+    backgroundColor: tokens.colorNeutralBackground2,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+  },
+  previewStatusStack: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalXXS,
+  },
+  previewStatusReason: {
+    color: tokens.colorNeutralForeground3,
+    fontSize: tokens.fontSizeBase200,
+  },
+  runTreePreviewCta: {
+    marginLeft: '56px',
+    marginRight: tokens.spacingHorizontalS,
+    marginBottom: tokens.spacingVerticalXS,
+    padding: tokens.spacingVerticalS,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: tokens.spacingHorizontalS,
+    flexWrap: 'wrap',
+    borderRadius: tokens.borderRadiusMedium,
+    backgroundColor: tokens.colorBrandBackground2,
+    border: `1px solid ${tokens.colorBrandStroke1}`,
+  },
   runTreeActionPill: {
     display: 'inline-flex',
     alignItems: 'center',
@@ -1763,6 +1821,12 @@ const useStyles = makeStyles({
     color: tokens.colorNeutralForegroundInverted,
     fontSize: tokens.fontSizeBase100,
     fontWeight: tokens.fontWeightSemibold,
+  },
+  runTreePreviewPillPending: {
+    backgroundColor: tokens.colorPaletteMarigoldBorderActive,
+  },
+  runTreePreviewPillUnavailable: {
+    backgroundColor: tokens.colorNeutralForeground3,
   },
   runTreeStatusIcon: {
     width: '20px',
@@ -2600,9 +2664,9 @@ export function CoordinatorRunPage() {
     return () => { cancelled = true; };
   }, [runId, events.length]);
 
-  const eventPreviewUrl = useMemo(() => previewUrlFromEvents(events), [events]);
+  const runPreviewState = useMemo(() => latestPreviewStateFromEvents(events), [events]);
   const activePreviewSession = previewSession ?? previewSessions.find((session) => previewUrlFromSession(session)) ?? previewSessions[0];
-  const activePreviewUrl = activePreviewSession ? previewUrlFromSession(activePreviewSession) : eventPreviewUrl;
+  const activePreviewUrl = runPreviewState.status === 'ready' ? runPreviewState.previewUrl : null;
 
   // Coordinator graph node status override so it never shows a stale "Pending".
   const coordNodeStatusOverride = orchPhaseToTopoStatus(orch.phase)
@@ -2954,7 +3018,7 @@ export function CoordinatorRunPage() {
           executionId: runId    ?? '',
           projectId:   projectId ?? '',
           dir:         'GRID',
-          previewUrl:  roleKey === 'build_test' ? activePreviewUrl : undefined,
+          previewUrl:  roleKey === 'build_test' ? activePreviewUrl ?? undefined : undefined,
         } as WorkflowNodeData,
         position: { x: 0, y: 0 },
       };
@@ -3435,7 +3499,7 @@ export function CoordinatorRunPage() {
   };
 
   const isKubernetesSandbox = sandboxBackend === 'kubernetes-sandbox-claim';
-  const previewUrl = activePreviewUrl;
+  const previewUrl = activePreviewUrl ?? previewUrlFromSession(activePreviewSession);
   const keepaliveUrl = activePreviewSession?.keepalive_url ?? activePreviewSession?.keepaliveUrl ?? null;
 
   useEffect(() => {
@@ -3725,6 +3789,57 @@ export function CoordinatorRunPage() {
       default: return '';
     }
   };
+  const openPreview = () => {
+    if (runPreviewState.status === 'ready') {
+      window.open(runPreviewState.previewUrl, '_blank', 'noopener,noreferrer');
+    }
+  };
+  const previewStatusContent = (compact = false) => {
+    switch (runPreviewState.status) {
+      case 'ready':
+        return (
+          <>
+            <div className={styles.previewStatusStack}>
+              <Text weight="semibold">{compact ? 'Build & Test preview is active.' : 'Preview from Build & Test is active.'}</Text>
+              {runPreviewState.targetPort && <Text className={styles.previewStatusReason}>Port {runPreviewState.targetPort}</Text>}
+            </div>
+            <Button appearance="primary" size="small" icon={<OpenRegular />} onClick={openPreview}>
+              Open preview
+            </Button>
+          </>
+        );
+      case 'pending':
+        return (
+          <div className={styles.previewStatusStack}>
+            <Text weight="semibold">Preview pending approval</Text>
+            <Text className={styles.previewStatusReason}>
+              Human review can still proceed when it is available.
+            </Text>
+          </div>
+        );
+      case 'failed':
+        return (
+          <div className={styles.previewStatusStack}>
+            <Text weight="semibold">Preview unavailable</Text>
+            <Text className={styles.previewStatusReason}>
+              {previewFailureCopy(runPreviewState)}. Human review can still proceed.
+            </Text>
+          </div>
+        );
+      default:
+        return null;
+    }
+  };
+  const previewStatusSlot = runPreviewState.status === 'none'
+    ? undefined
+    : (
+      <div
+        className={`${styles.selectedTaskPreviewCta} ${runPreviewState.status === 'pending' ? styles.selectedTaskPreviewPending : ''} ${runPreviewState.status === 'failed' ? styles.selectedTaskPreviewUnavailable : ''}`}
+        data-testid="human-review-preview-status"
+      >
+        {previewStatusContent()}
+      </div>
+    );
   const statusChipClass = `${styles.statusChip} ${statusChipSemanticClass(runStatusColor)}`;
   const automationScopeHint = viewState.canToggleAutomation ? 'Run + children' : `Locked: ${viewState.label}`;
   const retryHint = isRetryable ? 'Retry resumes failed work' : 'Retry after failure';
@@ -4077,7 +4192,7 @@ export function CoordinatorRunPage() {
                       onClick={() => openPanelForNode(item.nodeId)}
                       title={`${item.label}${item.agentName ? ` · ${item.agentName}` : ''}`}
                       aria-current={selected ? 'true' : undefined}
-                      aria-label={`Select ${item.label}: ${itemStatusLabel}${actionNeeded ? '. Operator action needed.' : ''}${buildTestNode && activePreviewUrl ? '. Preview available.' : ''}`}
+                      aria-label={`Select ${item.label}: ${itemStatusLabel}${actionNeeded ? '. Operator action needed.' : ''}${buildTestNode && runPreviewState.status === 'ready' ? '. Preview available.' : ''}${buildTestNode && runPreviewState.status === 'pending' ? '. Preview pending approval.' : ''}${buildTestNode && runPreviewState.status === 'failed' ? '. Preview unavailable.' : ''}`}
                     >
                       <span
                         className={`${styles.runTreeStatusIcon} ${stateIconClass(itemStateColor)}`}
@@ -4092,7 +4207,9 @@ export function CoordinatorRunPage() {
                         <Text className={styles.treePrimary}>
                           {item.label}
                           {actionNeeded && <span className={styles.runTreeActionPill}>Action needed</span>}
-                          {buildTestNode && activePreviewUrl && <span className={styles.runTreePreviewPill}>Preview</span>}
+                          {buildTestNode && runPreviewState.status === 'ready' && <span className={styles.runTreePreviewPill}>Preview</span>}
+                          {buildTestNode && runPreviewState.status === 'pending' && <span className={`${styles.runTreePreviewPill} ${styles.runTreePreviewPillPending}`}>Pending</span>}
+                          {buildTestNode && runPreviewState.status === 'failed' && <span className={`${styles.runTreePreviewPill} ${styles.runTreePreviewPillUnavailable}`}>Unavailable</span>}
                         </Text>
                         <Text className={styles.treeSecondary}>
                           <span className={stateTextClass(itemStateColor)} data-state-color={itemStateColor}>{itemStatusLabel}</span>
@@ -4111,6 +4228,14 @@ export function CoordinatorRunPage() {
                         <Button appearance="primary" size="small" icon={<DocumentRegular />} onClick={() => setArtifactsPanelOpen(true)}>
                           Review changes
                         </Button>
+                      </div>
+                    )}
+                    {buildTestNode && runPreviewState.status !== 'none' && (
+                      <div
+                        className={`${styles.runTreePreviewCta} ${runPreviewState.status === 'pending' ? styles.selectedTaskPreviewPending : ''} ${runPreviewState.status === 'failed' ? styles.selectedTaskPreviewUnavailable : ''}`}
+                        data-testid="run-tree-build-preview-status"
+                      >
+                        {previewStatusContent(true)}
                       </div>
                     )}
                   </div>
@@ -4135,12 +4260,12 @@ export function CoordinatorRunPage() {
                   </Button>
                 </div>
               )}
-              {selectedBuildTestNode && activePreviewUrl && (
-                <div className={styles.selectedTaskPreviewCta} data-testid="selected-build-preview-cta">
-                  <Text weight="semibold">Preview from Build &amp; Test is active.</Text>
-                  <Button appearance="primary" size="small" icon={<OpenRegular />} onClick={() => window.open(activePreviewUrl, '_blank', 'noopener,noreferrer')}>
-                    Open preview
-                  </Button>
+              {selectedBuildTestNode && runPreviewState.status !== 'none' && (
+                <div
+                  className={`${styles.selectedTaskPreviewCta} ${runPreviewState.status === 'pending' ? styles.selectedTaskPreviewPending : ''} ${runPreviewState.status === 'failed' ? styles.selectedTaskPreviewUnavailable : ''}`}
+                  data-testid="selected-build-preview-cta"
+                >
+                  {previewStatusContent()}
                 </div>
               )}
               <AgentSessionPanel
@@ -4200,7 +4325,7 @@ export function CoordinatorRunPage() {
         width="min(760px, 96vw)"
       >
         {artifactsPanelOpen && runId && (
-          <CoordinatorArtifactsPanel runId={runId} runStatus={coordRunStatus} adapter={coordAdapter} />
+          <CoordinatorArtifactsPanel runId={runId} runStatus={coordRunStatus} adapter={coordAdapter} previewStatusSlot={previewStatusSlot} />
         )}
       </SlidePanel>
 
