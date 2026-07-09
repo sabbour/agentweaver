@@ -328,11 +328,34 @@ app.MapPost("/preview-runner/processes/{sessionId}/observe-bound-port", async (
     if (!PreviewRunnerEndpointAuth.Authorize(ctx, runtimeState))
         return Results.Unauthorized();
 
-    var result = await previewRunner.ObserveBoundPortAsync(
-        sessionId,
-        TimeSpan.FromSeconds(Math.Max(1, request.TimeoutSeconds ?? 60)),
-        request.HealthPath ?? "/",
-        ctx.RequestAborted).ConfigureAwait(false);
+    PreviewPortObservation result;
+    try
+    {
+        result = await previewRunner.ObserveBoundPortAsync(
+            sessionId,
+            TimeSpan.FromSeconds(Math.Max(1, request.TimeoutSeconds ?? 60)),
+            request.HealthPath ?? "/",
+            ctx.RequestAborted).ConfigureAwait(false);
+    }
+    catch (OperationCanceledException) when (ctx.RequestAborted.IsCancellationRequested)
+    {
+        throw;
+    }
+    catch (Exception ex)
+    {
+        // Never surface an opaque HTTP 500 to PreviewStep: map any unexpected failure to a structured
+        // 200 unhealthy-with-reason so the run shows a legible cause (e.g. "observe_error"), not "500".
+        return Results.Ok(new
+        {
+            session_id = sessionId,
+            port = 0,
+            app_port = 0,
+            evidence = $"observe_error: {ex.Message}",
+            healthy = false,
+            health_evidence = ex.ToString(),
+            reason = "observe_error",
+        });
+    }
 
     return Results.Ok(new
     {

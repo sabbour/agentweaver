@@ -79,9 +79,11 @@ from the in-pod AgentHost observation described next.
 ### Live-preview forwarder: pod-IP reachability guarantee
 
 The Build & Test live-preview path adds one pod-local hop before step 4 above. `PreviewRunner` runs **inside
-the same sandbox pod as the preview app**: it first discovers and health-checks the app's real bound port, then
-starts `TcpPortForwarder` in that pod. The forwarder listens on `0.0.0.0:{publicPort}` and pumps TCP to
-`127.0.0.1:{appPort}`
+the same sandbox pod as the preview app**: it first discovers the app's real bound port using app log hints and
+the pod's namespace-local kernel socket tables (`/proc/net/tcp` and `/proc/net/tcp6`), health-checks that app
+port, then starts `TcpPortForwarder` in that pod. Reading `/proc/net/tcp6` is required for common Node defaults
+such as `server.listen(port)`, which bind IPv6-any (`::`) and may not appear in `/proc/net/tcp`. The forwarder
+listens on `0.0.0.0:{publicPort}` and pumps TCP to `127.0.0.1:{appPort}`
 ([`apps/Agentweaver.AgentHost/TcpPortForwarder.cs`](#source),
 [`apps/Agentweaver.AgentHost/PreviewRunner.cs:315`](#source)). The public port is chosen by scanning the
 allowed preview range `3000-9000`, matching both `SandboxPreviewOptions.AllowedPortMin/Max` and
@@ -95,9 +97,12 @@ app bound loopback-only or all interfaces. `ObserveBoundPortAsync` verifies reac
 through the forwarder public port** before `PreviewStep` asks for approval or registers the Gateway route; if
 the public port cannot be reached, the outcome is `sandbox.preview_failed` with reason `bound_unreachable`, and
 if no port in `3000-9000` is free, the reason is `no_public_port_available`
-([`PreviewRunner.cs:321`](#source), [`PreviewStep.cs:152`](#source)). Failed preview paths best-effort stop
-the supervised process and dispose the forwarder, so preview failures do not leak listeners and never block
-human review ([`PreviewStep.cs:154`](#source), [`PreviewRunner.cs:776`](#source)).
+([`PreviewRunner.cs:321`](#source), [`PreviewStep.cs:152`](#source)). Port-discovery failures are legible and
+closed-set: `no_listening_port_discovered` when the observe timeout expires without a healthy listening port,
+`process_exited:exit={code}` when the app exits before readiness, and `observe_error` for an unexpected
+observe-endpoint error ([`PreviewRunner.cs:262`](#source), [`apps/Agentweaver.AgentHost/Program.cs:347`](#source)).
+Failed preview paths best-effort stop the supervised process and dispose the forwarder, so preview failures do
+not leak listeners and never block human review ([`PreviewStep.cs:154`](#source), [`PreviewRunner.cs:776`](#source)).
 
 ### Single-label subdomain (no nested wildcards)
 
@@ -282,7 +287,7 @@ governs unattended runs; production stays human-gated.
 |---|---|
 | Preview provisioning, reap, orphan sweep, run↔token binding | `apps/Agentweaver.Api/Sandbox/Preview/SandboxPreviewService.cs` |
 | Pod-local live-preview TCP forwarder | `apps/Agentweaver.AgentHost/TcpPortForwarder.cs` |
-| Supervised live-preview process and forwarder observation | `apps/Agentweaver.AgentHost/PreviewRunner.cs` |
+| Supervised live-preview process, `/proc/net/tcp{,6}` port discovery, and forwarder observation | `apps/Agentweaver.AgentHost/PreviewRunner.cs` |
 | Deterministic live-preview step and failure reasons | `apps/Agentweaver.Api/Coordinator/Preview/PreviewStep.cs` |
 | Config defaults & port-range check | `apps/Agentweaver.Api/Sandbox/Preview/SandboxPreviewOptions.cs` |
 | Capability token (128-bit, reserved deny, DNS-1123) | `apps/Agentweaver.Api/Sandbox/Preview/PreviewToken.cs` |

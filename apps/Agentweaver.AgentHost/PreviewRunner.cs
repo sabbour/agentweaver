@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.ComponentModel;
 using System.Diagnostics;
+using System.Globalization;
 using System.Net.Http;
 using System.Net.Sockets;
 using System.Text;
@@ -175,6 +176,10 @@ internal sealed class PreviewRunner : BackgroundService, IPreviewRunner
     private static readonly Regex SsPortPattern =
         new(@"\bLISTEN\s+\d+\s+\d+\s+(?<addr>\S+):(?<port>\d{2,5})\b", RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
+    // Kernel socket tables (Linux). tcp6 is required: node's server.listen(port) binds ::(IPv6-any)
+    // on dual-stack Linux, so the listening socket lands in tcp6, not tcp.
+    private static readonly string[] ProcNetTcpFiles = ["/proc/net/tcp", "/proc/net/tcp6"];
+
     private readonly ConcurrentDictionary<string, PreviewProcessState> _sessions = new(StringComparer.Ordinal);
     private readonly PreviewRunnerOptions _options;
     private readonly ILogger<PreviewRunner> _logger;
@@ -274,8 +279,14 @@ internal sealed class PreviewRunner : BackgroundService, IPreviewRunner
             state.Touch(_clock.GetUtcNow());
 
             if (state.HasExited)
-                throw new InvalidOperationException(
-                    $"Preview process exited before a healthy port was observed. exitCode={state.ExitCode}; logs={state.Buffer.SnapshotText(20)}");
+                return new PreviewPortObservation(
+                    state.SessionId,
+                    0,
+                    $"process_exited: exitCode={state.ExitCode}; logs={state.Buffer.SnapshotText(20)}",
+                    false,
+                    $"Preview process exited before a healthy port was observed. exitCode={state.ExitCode}",
+                    0,
+                    $"process_exited:exit={state.ExitCode}");
 
             foreach (var (port, evidence) in CandidatePortsFromLogs(state.Buffer.SnapshotLines()))
             {
@@ -295,7 +306,7 @@ internal sealed class PreviewRunner : BackgroundService, IPreviewRunner
                 var health = await HealthCheckAsync(sessionId, port, healthPath, ct).ConfigureAwait(false);
                 if (health.Healthy)
                 {
-                    var evidence = $"socket_diff:ss -ltnp reported new listening port {port}";
+                    var evidence = $"socket_diff:/proc/net/tcp{{,6}} reported new listening port {port}";
                     state.MarkPort(port);
                     return await BuildForwardedObservationAsync(state, port, evidence, health.Evidence, healthPath, ct)
                         .ConfigureAwait(false);
@@ -306,9 +317,16 @@ internal sealed class PreviewRunner : BackgroundService, IPreviewRunner
             await Task.Delay(500, ct).ConfigureAwait(false);
         }
 
-        throw new TimeoutException(
-            $"Timed out waiting for preview process {sessionId} to expose a healthy HTTP port. " +
-            $"Last health failure: {lastHealthFailure?.Message ?? "none"}. Logs: {state.Buffer.SnapshotText(20)}");
+        return new PreviewPortObservation(
+            state.SessionId,
+            0,
+            $"no_listening_port_discovered: last_health_failure={lastHealthFailure?.Message ?? "none"}; " +
+            $"logs={state.Buffer.SnapshotText(20)}",
+            false,
+            $"Timed out after {(timeout ?? TimeSpan.FromSeconds(_options.ObserveTimeoutSeconds)).TotalSeconds:0}s " +
+            $"waiting for preview process {sessionId} to expose a healthy HTTP port.",
+            0,
+            "no_listening_port_discovered");
     }
 
     /// <summary>
@@ -607,38 +625,120 @@ internal sealed class PreviewRunner : BackgroundService, IPreviewRunner
 
     private static async Task<HashSet<int>> SnapshotListeningPortsAsync(CancellationToken ct)
     {
-        if (OperatingSystem.IsWindows() || !File.Exists("/usr/bin/ss") && !File.Exists("/bin/ss"))
+        if (OperatingSystem.IsWindows())
             return [];
-
-        var psi = new ProcessStartInfo
-        {
-            FileName = File.Exists("/usr/bin/ss") ? "/usr/bin/ss" : "/bin/ss",
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-        };
-        psi.ArgumentList.Add("-ltnp");
-
-        using var process = Process.Start(psi);
-        if (process is null)
-            return [];
-        var output = await process.StandardOutput.ReadToEndAsync(ct).ConfigureAwait(false);
-        await process.WaitForExitAsync(ct).ConfigureAwait(false);
 
         var ports = new HashSet<int>();
-        foreach (var line in output.Split('\n'))
+
+        // PRIMARY, dependency-free source: parse /proc/net/tcp AND /proc/net/tcp6 directly.
+        // These files are namespace-local and always present on Linux — no external binary (ss)
+        // required. node's server.listen(port) binds :: (IPv6-any) on dual-stack Linux, so the
+        // listening socket appears in /proc/net/tcp6, NOT /proc/net/tcp — BOTH must be read or the
+        // app's port is missed.
+        foreach (var procFile in ProcNetTcpFiles)
         {
-            var match = SsPortPattern.Match(line);
-            if (match.Success &&
-                int.TryParse(match.Groups["port"].Value, out var port) &&
-                port is > 0 and <= 65535)
+            try
+            {
+                if (!File.Exists(procFile))
+                    continue;
+                var contents = await File.ReadAllTextAsync(procFile, ct).ConfigureAwait(false);
+                ports.UnionWith(ParseListeningPortsFromProcNet(contents));
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // Best-effort: a transient /proc read error must not abort discovery — the optional
+                // ss fallback (below) and subsequent poll iterations still get a chance.
+            }
+        }
+
+        // OPTIONAL redundancy: ss, ONLY if the binary is present. /proc above is authoritative; ss is
+        // absent from the AgentHost image, so this is a no-op there by design.
+        await TryUnionSsListeningPortsAsync(ports, ct).ConfigureAwait(false);
+
+        return ports;
+    }
+
+    /// <summary>
+    /// Pure parser for the kernel's <c>/proc/net/tcp</c> and <c>/proc/net/tcp6</c> tables. Returns the
+    /// set of ports whose socket is in the LISTEN state (<c>st == 0A</c>). Field layout (whitespace
+    /// separated, first line is a header): field[1] = <c>local_address</c> as <c>HEXIP:HEXPORT</c>,
+    /// field[3] = <c>st</c> (connection-state hex). Kept static + filesystem-free so it is unit-testable.
+    /// </summary>
+    internal static HashSet<int> ParseListeningPortsFromProcNet(string procNetContents)
+    {
+        var ports = new HashSet<int>();
+        if (string.IsNullOrEmpty(procNetContents))
+            return ports;
+
+        var lines = procNetContents.Split('\n');
+        // Skip the header line (index 0).
+        for (var i = 1; i < lines.Length; i++)
+        {
+            var fields = lines[i].Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+            if (fields.Length < 4)
+                continue;
+
+            // st == "0A" is TCP_LISTEN. Non-LISTEN rows (e.g. "01" ESTABLISHED) are ignored.
+            if (!string.Equals(fields[3], "0A", StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            var local = fields[1];
+            var colon = local.LastIndexOf(':');
+            if (colon < 0 || colon == local.Length - 1)
+                continue;
+
+            var hexPort = local[(colon + 1)..];
+            if (int.TryParse(hexPort, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var port)
+                && port is > 0 and <= 65535)
             {
                 ports.Add(port);
             }
         }
 
         return ports;
+    }
+
+    private static async Task TryUnionSsListeningPortsAsync(HashSet<int> ports, CancellationToken ct)
+    {
+        var ssPath = File.Exists("/usr/bin/ss") ? "/usr/bin/ss"
+            : File.Exists("/bin/ss") ? "/bin/ss"
+            : null;
+        if (ssPath is null)
+            return;
+
+        try
+        {
+            var psi = new ProcessStartInfo
+            {
+                FileName = ssPath,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+            };
+            psi.ArgumentList.Add("-ltnp");
+
+            using var process = Process.Start(psi);
+            if (process is null)
+                return;
+            var output = await process.StandardOutput.ReadToEndAsync(ct).ConfigureAwait(false);
+            await process.WaitForExitAsync(ct).ConfigureAwait(false);
+
+            foreach (var line in output.Split('\n'))
+            {
+                var match = SsPortPattern.Match(line);
+                if (match.Success &&
+                    int.TryParse(match.Groups["port"].Value, out var port) &&
+                    port is > 0 and <= 65535)
+                {
+                    ports.Add(port);
+                }
+            }
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // ss is optional redundancy; failures are non-fatal (/proc is authoritative).
+        }
     }
 
     private async Task StopProcessTreeAsync(Process process, TimeSpan grace, CancellationToken ct)

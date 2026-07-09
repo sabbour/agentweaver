@@ -13,7 +13,7 @@ flowchart LR
     Check{Approved or<br/>request changes?}
     Resolve[PreviewCommandResolver<br/>find run command]
     Runner[AgentHost /preview-runner<br/>start supervised process]
-    Port[observe app port<br/>loopback health]
+    Port[observe app port<br/>logs + /proc tcp/tcp6]
     Forward[forwarder<br/>0.0.0.0:publicPort]
     Approval[AgentPreviewGate<br/>existing approval policy]
     Route[Gateway HTTPRoute<br/>preview_url]
@@ -37,10 +37,10 @@ There is no feature flag. If the service is wired and the verdict is not decline
 
 1. Resolve a command from the detached worktree with `PreviewCommandResolver`. It checks `package.json`, `.csproj`, Dockerfile, Makefile, Python, Go, and simple Node entry points, forcing all-interface binds where known (`apps/Agentweaver.Api/Sandbox/Preview/PreviewCommandResolver.cs:25`).
 2. Call `POST /preview-runner/processes` on the run-bound AgentHost pod origin, not the A2A path (`apps/Agentweaver.Api/Sandbox/Preview/PreviewRunnerHttpClient.cs:35`, `:78`).
-3. Call `observe-bound-port`; AgentHost parses logs and socket state, verifies HTTP health on the app's actual port, starts `TcpPortForwarder`, then verifies HTTP health again through the forwarder's public port (`apps/Agentweaver.AgentHost/PreviewRunner.cs:246`, `:315`).
+3. Call `observe-bound-port`; AgentHost parses stdout/stderr log hints, then diffs the namespace-local kernel socket tables `/proc/net/tcp` and `/proc/net/tcp6` to find a new listening port without depending on the `ss` binary. It verifies HTTP health on the app's actual port, starts `TcpPortForwarder`, then verifies HTTP health again through the forwarder's public port (`apps/Agentweaver.AgentHost/PreviewRunner.cs:246`, `:610`, `:315`).
 4. Register the preview with the existing `AgentPreviewGate` and `SandboxPreviewService`. The platform passes the forwarder public port — scanned from `3000-9000` — so the Gateway always targets a pod-IP-reachable listener instead of assuming a fixed port (`PreviewStep.cs:146`, `:166`, `apps/Agentweaver.AgentHost/TcpPortForwarder.cs:75`). `SandboxPreviewService` then creates the Service + HTTPRoute without an API-pod TCP preflight, because NetworkPolicy permits preview-port ingress only from the Gateway (`SandboxPreviewService.cs:134`, `k8s/networkpolicy-sandbox.yaml`).
 
-`PreviewStep` is the single terminal outcome emitter for this stage: `sandbox.preview_ready`, `sandbox.preview_failed`, or `sandbox.preview_skipped_not_applicable` (`PreviewStep.cs:229`, `:258`, `:272`). The forwarder adds two distinct failure reasons: `bound_unreachable` when the public port fails the through-forwarder health check, and `no_public_port_available` when the allowed public range has no free port (`PreviewRunner.cs:321`, `:346`).
+`PreviewStep` is the single terminal outcome emitter for this stage: `sandbox.preview_ready`, `sandbox.preview_failed`, or `sandbox.preview_skipped_not_applicable` (`PreviewStep.cs:229`, `:258`, `:272`). Observe failures now stay legible end-to-end instead of collapsing into an opaque HTTP 500: `no_listening_port_discovered` means the timeout expired without a healthy listening port, `process_exited:exit={code}` means the app exited before readiness, and `observe_error` means the AgentHost observe endpoint hit an unexpected error but returned a structured unhealthy result. The forwarder adds two more distinct reasons: `bound_unreachable` when the public port fails the through-forwarder health check, and `no_public_port_available` when the allowed public range has no free port (`PreviewRunner.cs:262`, `apps/Agentweaver.AgentHost/Program.cs:347`, `PreviewRunner.cs:321`, `:346`).
 
 The command resolver no longer pins `PORT=3000` or appends `--port`. It may add host-bind hints for known frameworks, but the app otherwise uses its framework default or `process.env.PORT`; port selection belongs to the platform observation/forwarder path (`apps/Agentweaver.Api/Sandbox/Preview/PreviewCommandResolver.cs:25`).
 
@@ -84,7 +84,7 @@ The older approval-time outcome guard remains as a safety net. If no terminal pr
 | Command resolution | `apps/Agentweaver.Api/Sandbox/Preview/PreviewCommandResolver.cs` |
 | AgentHost preview-runner HTTP client | `apps/Agentweaver.Api/Sandbox/Preview/PreviewRunnerHttpClient.cs` |
 | AgentHost preview-runner endpoints and auth | `apps/Agentweaver.AgentHost/Program.cs` |
-| Supervised process runner | `apps/Agentweaver.AgentHost/PreviewRunner.cs` |
+| Supervised process runner and `/proc/net/tcp{,6}` port discovery | `apps/Agentweaver.AgentHost/PreviewRunner.cs` |
 | Pod-local TCP forwarder | `apps/Agentweaver.AgentHost/TcpPortForwarder.cs` |
 | Per-run credential helper | `apps/Agentweaver.Api/Sandbox/Preview/PreviewRunnerCredential.cs` |
 | Gateway preview + dual keepalive | `apps/Agentweaver.Api/Sandbox/Preview/SandboxPreviewService.cs` |

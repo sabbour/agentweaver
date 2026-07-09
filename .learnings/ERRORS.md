@@ -71,3 +71,30 @@ Remove/replace the API->pod direct preflight (architecturally invalid under sand
 - Reproducible: yes
 - Related Files: apps/Agentweaver.Api/Sandbox/Preview/SandboxPreviewService.cs (EnsurePreviewTargetIsReachableAsync ~782-816, StartPreviewAsync ~137), k8s/networkpolicy-sandbox.yaml
 - See Also: forwarder wave v0.9.14-rc1 (fixed loopback+hardcoded-3000)
+
+## [ERR-20260709-PREVPORT] preview port_not_found (blind port discovery: no `ss`, buffered stdout)
+
+**Logged**: 2026-07-09T20:05:00Z
+**Priority**: high
+**Status**: in_progress
+**Area**: backend
+
+### Summary
+After the NetworkPolicy-preflight fix (v0.9.15), preview advanced past registration but failed with reason=port_not_found "preview-runner call failed: HTTP 500". Root cause: the AgentHost observe step could not DISCOVER the app's listening port at all.
+
+### Evidence (run 4d74955a, staging)
+- AppTraces: PreviewRunner started 19:50:30 -> process exited 19:51:31 exitCode=143 (SIGTERM) -> stopped reason=preview_step_failed:port_not_found. So the app did NOT crash; it ran ~61s then observe TIMED OUT and PreviewStep SIGTERM'd it.
+- TimeoutException message: "Last health failure: none. Logs: > agentweaver-preview@1.0.0 start > node server.js" => ZERO candidate ports were ever probed.
+- `kubectl exec` on agent-host pod: `ss`=MISSING (no /usr/bin/ss, no /bin/ss); /proc/net/tcp and /proc/net/tcp6 readable.
+- Code: SnapshotListeningPortsAsync (PreviewRunner.cs ~608) returns [] when ss is absent; CandidatePortsFromLogs relies on stdout, but node block-buffers stdout when piped (not a TTY) so the "listening on 3000" line never flushed within the window.
+
+### Root cause
+Port discovery has two mechanisms and BOTH fail in the sandbox: (1) `ss -ltnp` socket diff -> ss binary not installed -> returns empty; (2) stdout log parse -> defeated by child process stdout buffering. Net: no candidate ports -> observe timeout -> bare HTTP 500 (opaque).
+
+### Fix
+PRIMARY: discover listening ports by reading /proc/net/tcp AND /proc/net/tcp6 (st==0A LISTEN, hex local port), namespace-local, no external binary. SECONDARY: observe must return a clean unhealthy observation with a precise reason (no_listening_port_discovered / process_exited) instead of throwing a 500, so preview_failed is legible. Keep log-parse as supplementary. Do NOT depend on adding `ss` to the image.
+
+### Metadata
+- Reproducible: yes (staging run 4d74955a)
+- Related Files: apps/Agentweaver.AgentHost/PreviewRunner.cs (SnapshotListeningPortsAsync ~608, ObserveBoundPortAsync ~261), apps/Agentweaver.AgentHost/Program.cs (observe endpoint ~321 no try/catch)
+- See Also: ERR-20260709-PREVNP (NetworkPolicy preflight, fixed v0.9.15)

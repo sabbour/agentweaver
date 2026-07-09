@@ -66,8 +66,10 @@ hands.
 Workflows that include the platform-owned **Build & Test** step can also produce a browser preview. After
 builds and tests pass, the platform starts the app/service, discovers the actual port, and registers a preview
 URL automatically. It no longer injects `PORT=3000` or `--port`; apps use their framework default or honor
-`process.env.PORT` if they already support it. Before registration, AgentHost fronts the observed app port with
-a pod-local TCP forwarder on an allowed public port (`3000-9000`), so even a loopback-only app is reachable from
+`process.env.PORT` if they already support it. Port discovery is dependency-free: AgentHost reads app log hints
+and the sandbox pod's `/proc/net/tcp` plus `/proc/net/tcp6` socket tables, so it works even when the image lacks
+`ss` and when Node binds IPv6-any (`::`). Before registration, AgentHost fronts the observed app port with a
+pod-local TCP forwarder on an allowed public port (`3000-9000`), so even a loopback-only app is reachable from
 the Gateway.
 
 The preview backend resolves
@@ -93,9 +95,10 @@ started in the `agent-{runId}` pod-per-run sandbox or the `run-{runId}` Build & 
   all-interface binds there.
 - **Gateway is the reachability test.** The API does not data-path-probe sandbox preview ports; the preview is
   proven ready in-pod first, then confirmed by opening the returned Gateway URL.
-- **Failure is actionable, not blocking.** If the forwarder cannot make the app reachable you see
-  **Preview unavailable** with reasons such as `bound_unreachable` or `no_public_port_available`; review can
-  continue.
+- **Failure is actionable, not blocking.** If the app exits, no listening port appears, observe hits an
+  unexpected error, or the forwarder cannot make the app reachable, you see **Preview unavailable** with a
+  reason such as `process_exited:exit={code}`, `no_listening_port_discovered`, `observe_error`,
+  `bound_unreachable`, or `no_public_port_available`; review can continue.
 
 ## Related reading
 

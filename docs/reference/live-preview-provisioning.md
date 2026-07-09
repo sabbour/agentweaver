@@ -10,7 +10,7 @@ For the Gateway routes and `PortForwardSessionDto`, see [Sandbox browser preview
 | --- | --- | --- |
 | Feature flag | None. The step runs whenever `PreviewStep` is wired and Build & Test is not declined. | `CoordinatorAssemblyService.ShouldRunDeterministicPreviewStep` |
 | Build & Test coupling | Runs after Build & Test for `APPROVED` and `REQUEST_CHANGES`; skipped on `DECLINED`. | `CoordinatorAssemblyService.cs:753` |
-| Port choice | Platform observes the app port inside the sandbox pod, then registers a forwarder public port from `3000-9000`; no configured fixed app port is used. | `PreviewStep.cs:129`, `:166`; `PreviewRunner.cs:315` |
+| Port choice | Platform observes the app port inside the sandbox pod using log hints plus `/proc/net/tcp` and `/proc/net/tcp6`, then registers a forwarder public port from `3000-9000`; no configured fixed app port is used. | `PreviewStep.cs:129`, `:166`; `PreviewRunner.cs:262`, `:610`, `:315` |
 | Registration readiness | In-pod AgentHost observe verifies app + forwarder readiness; the API never probes `podIP:{target_port}` before creating Service/HTTPRoute. | `PreviewRunner.cs:315`; `SandboxPreviewService.cs:134` |
 | End-to-end reachability | Confirmed by using the returned Gateway hostname (`preview_url`), because NetworkPolicy admits preview-port ingress only from the Gateway. | `k8s/networkpolicy-sandbox.yaml`; `SandboxPreviewService.cs:147` |
 | Infra unavailable | Emits `sandbox.preview_skipped_not_applicable` with reason `preview_infra_unavailable`. | `PreviewStep.cs:83` |
@@ -24,7 +24,7 @@ These are platform-facing AgentHost endpoints. They are root-mounted on the Agen
 | Method & path | Body | Returns | Notes |
 | --- | --- | --- | --- |
 | `POST /preview-runner/processes` | `command`, `cwd`, optional `runId`, `workPlanId`, `treeHash` | `session_id`, `pid`, `started_at`, `working_directory` | Starts a supervised process. |
-| `POST /preview-runner/processes/{sessionId}/observe-bound-port` | `timeoutSeconds`, `healthPath` | `session_id`, `port`, `evidence`, `healthy`, `health_evidence`, `app_port`, optional `reason` | Runs in the sandbox pod: discovers the app port, starts the pod-local forwarder on `0.0.0.0`, verifies HTTP health through the forwarder public port, and returns that public port as `port`. |
+| `POST /preview-runner/processes/{sessionId}/observe-bound-port` | `timeoutSeconds`, `healthPath` | `session_id`, `port`, `evidence`, `healthy`, `health_evidence`, `app_port`, optional `reason` | Runs in the sandbox pod: discovers the app port from logs or `/proc/net/tcp{,6}`, starts the pod-local forwarder on `0.0.0.0`, verifies HTTP health through the forwarder public port, and returns that public port as `port`. On observe failure it still returns `200` with `healthy=false` and a closed-set `reason`. |
 | `POST /preview-runner/processes/{sessionId}/health-check` | `port`, optional `path` | `session_id`, `port`, `path`, `healthy`, `status_code`, `evidence` | Used directly and by Gateway keepalive dual-touch. |
 | `DELETE /preview-runner/processes/{sessionId}` | optional `reason` query | `session_id`, `stopped`, `reason` | Stops the process tree. |
 
@@ -50,8 +50,10 @@ Auth accepts either the per-run turn bearer token or the per-run preview-runner 
 | `preview_infra_unavailable` | Pod-per-run or Gateway preview infrastructure cannot produce a reachable URL. |
 | `preview_command_unresolved` | The deterministic command resolver could not find how to run the app. |
 | `preview_runner_unauthorized` | AgentHost rejected the preview-runner credential. |
-| `process_exited` | Preview process could not start or exited early. |
-| `port_not_found` | No healthy bound port was observed. |
+| `process_exited` | Preview process could not start. |
+| `process_exited:exit={code}` | Preview process started but exited before a healthy port was observed. |
+| `no_listening_port_discovered` | Observe timed out without finding a healthy listening port in logs or `/proc/net/tcp{,6}`. |
+| `observe_error` | Unexpected AgentHost observe-endpoint error; surfaced as a structured unhealthy result, not an opaque HTTP 500. |
 | `health_check_failed` | A port was found but did not pass the HTTP health check. |
 | `bound_unreachable` | The app's loopback health check passed, but the forwarder public port did not pass the through-forwarder health check. |
 | `no_public_port_available` | AgentHost could not bind any free forwarder public port in the allowed `3000-9000` range. |

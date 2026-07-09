@@ -19,7 +19,7 @@ It skips when Build & Test **declines**, because the gate is already terminal. I
 | --- | --- | --- |
 | **Open preview** | The assembled app is reachable at a Gateway preview URL. | Open it and inspect the running result before approving or requesting changes. |
 | **Preview pending approval** | The existing preview approval gate is waiting for your decision. | Approve or deny the normal tool-approval card. |
-| **Preview unavailable** | The app could not be started, a port was not found, approval failed, or registration failed. | Continue review; preview failure does not block you. |
+| **Preview unavailable** | The app could not be started, no listening port was discovered, the app exited early, observe failed, approval failed, or registration failed. | Continue review; preview failure does not block you. |
 | No preview state | Preview was not applicable or was skipped by infrastructure. | Review the diff normally. |
 
 The preview URL appears on the Build & Test row and in the human-review artifacts panel.
@@ -36,11 +36,11 @@ The preview URL appears on the Build & Test row and in the human-review artifact
 
 ## What to expect
 
-- **Actual port discovery.** The platform starts the app and observes the port it really bound to; it does not assume port `3000` and does not inject `PORT=3000` or `--port`.
+- **Actual port discovery.** The platform starts the app and observes the port it really bound to; it does not assume port `3000` and does not inject `PORT=3000` or `--port`. Discovery reads app log hints plus `/proc/net/tcp` and `/proc/net/tcp6`, so it does not require `ss` and catches IPv6-any (`::`) listeners.
 - **Pod-IP reachability.** AgentHost runs the app and TCP forwarder inside the sandbox pod, with the forwarder listening on `0.0.0.0` on an allowed public port, so the Gateway URL works even when the app only listened on `127.0.0.1`.
 - **Gateway is the real path.** The API does not probe the sandbox pod directly; opening **Open preview** exercises the same Gateway hostname users rely on.
 - **Verdict independence.** A Build & Test request-changes verdict can still produce a preview so you can inspect what failed or what needs polish.
-- **Preview failure is non-blocking.** A failed preview is visible as **Preview unavailable**, but it never forces a changes request and never prevents human review.
+- **Preview failure is non-blocking.** A failed preview is visible as **Preview unavailable** with legible reasons such as `no_listening_port_discovered`, `process_exited:exit={code}`, or `observe_error`, but it never forces a changes request and never prevents human review.
 - **Credential isolation.** The preview-runner credential is per-run, delivered in memory, scrubbed from child process environment, and deleted on terminal cleanup or orphan reaping.
 
 ## Related reading

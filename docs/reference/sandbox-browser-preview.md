@@ -31,12 +31,14 @@ The relative `keepalive_url` returned by `POST …/port-forward` is
 creates the ClusterIP Service, and creates the HTTPRoute. It deliberately does **not** connect from the API pod
 to `podIP:{target_port}` because `sandbox-allow-preview-ingress` admits TCP `3000-9000` only from the preview
 Gateway's data-plane pods ([`SandboxPreviewService.cs:134`](#source), [`k8s/networkpolicy-sandbox.yaml`](#source)).
-For platform live-preview, readiness is the AgentHost in-pod observation: the app responds on its real port,
-the in-pod `TcpPortForwarder` listens on `0.0.0.0:{publicPort}`, and AgentHost verifies the forwarder public
-port before registration (`apps/Agentweaver.AgentHost/PreviewRunner.cs:315`). After registration, the real
-end-to-end check is opening the returned Gateway hostname (`preview_url`). `ListForRunAsync` uses a
-label-selector pod-existence check as its liveness proxy, because the same NetworkPolicy makes an API-side TCP
-liveness probe invalid (`SandboxPreviewService.cs:399`, `:768`).
+For platform live-preview, readiness is the AgentHost in-pod observation: log hints are tried first, then the
+pod's own `/proc/net/tcp` and `/proc/net/tcp6` tables are parsed for new listening sockets, the app responds on
+its real port, the in-pod `TcpPortForwarder` listens on `0.0.0.0:{publicPort}`, and AgentHost verifies the
+forwarder public port before registration (`apps/Agentweaver.AgentHost/PreviewRunner.cs:262`, `:610`). The
+`tcp6` table matters for Node's default IPv6-any binds. After registration, the real end-to-end check is
+opening the returned Gateway hostname (`preview_url`). `ListForRunAsync` uses a label-selector pod-existence
+check as its liveness proxy, because the same NetworkPolicy makes an API-side TCP liveness probe invalid
+(`SandboxPreviewService.cs:399`, `:768`).
 
 ## Agent-initiated preview (`start_preview`)
 
@@ -131,10 +133,11 @@ Bound from the `Sandbox:Preview` section into [`SandboxPreviewOptions.cs`](#sour
 | `429 Too Many Requests` | A session cap was hit on the port-forward fallback. |
 | `500` | Unexpected failure provisioning the preview (or `kubectl` failed to start the fallback tunnel). |
 
-Platform live-preview failures are emitted as `sandbox.preview_failed` events rather than API status codes. The
-forwarder-specific reasons are `bound_unreachable` (the app was reachable on loopback, but the forwarder's
-public pod-IP port failed health check) and `no_public_port_available` (no free public port in the allowed
-`3000-9000` range). See [Decoupled live-preview provisioning — Reference](./live-preview-provisioning.md).
+Platform live-preview failures are emitted as `sandbox.preview_failed` events rather than API status codes.
+Discovery/observe reasons include `no_listening_port_discovered`, `process_exited:exit={code}`, and
+`observe_error`; forwarder-specific reasons include `bound_unreachable` (the app was reachable on loopback, but
+the forwarder's public pod-IP port failed health check) and `no_public_port_available` (no free public port in
+the allowed `3000-9000` range). See [Decoupled live-preview provisioning — Reference](./live-preview-provisioning.md).
 
 ## Example
 
@@ -175,7 +178,7 @@ DELETE /api/runs/run_01HXYZ/sandbox/port-forward/swift-falcon-amber-k7m2q9x4n8b3
 | Owner-or-agent-callback authorization | `apps/Agentweaver.Api/Endpoints/EndpointHelpers.cs` |
 | Preview provisioning, keepalive, stop, reap | `apps/Agentweaver.Api/Sandbox/Preview/SandboxPreviewService.cs` |
 | Live-preview pod-local TCP forwarder | `apps/Agentweaver.AgentHost/TcpPortForwarder.cs` |
-| Live-preview runner observation and forwarder lifecycle | `apps/Agentweaver.AgentHost/PreviewRunner.cs` |
+| Live-preview runner `/proc` port discovery, observation, and forwarder lifecycle | `apps/Agentweaver.AgentHost/PreviewRunner.cs` |
 | Deterministic live-preview step | `apps/Agentweaver.Api/Coordinator/Preview/PreviewStep.cs` |
 | Config defaults & port-range check | `apps/Agentweaver.Api/Sandbox/Preview/SandboxPreviewOptions.cs` |
 | Capability token | `apps/Agentweaver.Api/Sandbox/Preview/PreviewToken.cs` |
