@@ -29,3 +29,16 @@ Root-cause the seam between StartRevisionAsync (in-place resume) and RunOrchestr
 - Reproducible: yes (live proof)
 - Related Files: apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyService.cs (ExecuteInPlaceSteerAsync, ConsciousDispatchFreshFallbackAsync), apps/Agentweaver.Api/Runs/RunOrchestrator.cs (revision watch/terminal detection), packages/Agentweaver.AgentRuntime/CopilotAIAgent.cs (StreamTurnOnceAsync)
 - See Also: agent streaming reliability memory (AsyncStreamIdleTimeout)
+
+### Resolution
+- **Resolved**: 2026-07-09T14:00:00Z
+- **Commit**: 3fc7c93f (v0.9.13-rc1), deployed staging
+- **Notes**: Live-proven on run d6f9b040 (project f4490ab1): software-delivery ran through 3 in-place-steer
+  attempts across repeated rubberduck request-changes, converged, human-review approved, MERGED
+  (commit cfa8948, assembly_complete). The exact wedge class (watch_stream_completed_without_terminal_event
+  -> assembly_failed) NEVER occurred. Fix = AgentTurnExecutor transient-commit retry + visible rethrow;
+  RunWatchLoopService child ExecutorFailedEvent terminalization; CoordinatorAssemblyService conscious+visible
+  dispatch_fresh on in-place-no-terminal. All steering decisions were VISIBLE (no glitch).
+- **Follow-up (NOT blocking, see LRN below)**: in-place revision produced a clean terminal only 1/3 times;
+  the other 2 fell back to conscious dispatch_fresh (in_place_revision_no_terminal). Context-preservation
+  works but is not yet the dominant path. Deeper in-place *resume* seam remains.
