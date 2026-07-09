@@ -42,3 +42,32 @@ Root-cause the seam between StartRevisionAsync (in-place resume) and RunOrchestr
 - **Follow-up (NOT blocking, see LRN below)**: in-place revision produced a clean terminal only 1/3 times;
   the other 2 fell back to conscious dispatch_fresh (in_place_revision_no_terminal). Context-preservation
   works but is not yet the dominant path. Deeper in-place *resume* seam remains.
+
+## [ERR-20260709-PREVNP] preview registration_failed (NetworkPolicy-blocked API preflight)
+
+**Logged**: 2026-07-09T19:20:00Z
+**Priority**: high
+**Status**: in_progress
+**Area**: backend
+
+### Summary
+Live preview still fails with reason=registration_failed "Nothing is listening on sandbox pod <pod> port 5431" even after the TCP forwarder fix. Port is now in-range (5431) and forwarder-bound 0.0.0.0, so de-hardcoding + forwarder worked. Root cause of THIS failure is a second, independent blocker.
+
+### Error
+```
+sandbox.preview_failed reason=registration_failed
+message="Nothing is listening on sandbox pod agentweaver-agent-host-xtqwt port 5431."
+```
+
+### Context
+- PreviewStep start/observe/health resolve the BOUND agent-host pod origin; process+forwarder start there and observe verifies healthy THROUGH the forwarder (in-pod loopback). Good.
+- SandboxPreviewService.StartPreviewAsync then calls EnsurePreviewTargetIsReachableAsync(podName,targetPort) BEFORE creating the Service/HTTPRoute. It does a DIRECT TcpClient.ConnectAsync(pod.Status.PodIP, targetPort) FROM THE API POD.
+- k8s/networkpolicy-sandbox.yaml (sandbox-allow-preview-ingress) admits ports 3000-9000 on sandbox pods ONLY from pods labelled gateway.networking.k8s.io/gateway-name=agentweaver-preview-gateway. API pods are app=agentweaver-api -> NOT the gateway -> the preflight is denied by design and can NEVER pass. This blocks every preview before the route is even created.
+
+### Suggested Fix
+Remove/replace the API->pod direct preflight (architecturally invalid under sandbox isolation). Rely on the AgentHost forwarder-verified observe as the readiness signal, create the Service+HTTPRoute, return the preview_url. Optional: verify reachability THROUGH the gateway (the allowed path), non-fatal. Then curl the public URL in the proof for end-to-end confirmation.
+
+### Metadata
+- Reproducible: yes
+- Related Files: apps/Agentweaver.Api/Sandbox/Preview/SandboxPreviewService.cs (EnsurePreviewTargetIsReachableAsync ~782-816, StartPreviewAsync ~137), k8s/networkpolicy-sandbox.yaml
+- See Also: forwarder wave v0.9.14-rc1 (fixed loopback+hardcoded-3000)

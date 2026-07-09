@@ -87,9 +87,12 @@ started in the `agent-{runId}` pod-per-run sandbox or the `run-{runId}` Build & 
 - **Auto-expiry.** A preview is reaped after **30 minutes** idle (no keepalive), after a hard **8-hour**
   cap, or once its pod is gone — whichever comes first. By default it survives the run ending (you can keep
   previewing a finished run's artifact) until one of those limits or an explicit **Stop**.
-- **Platform previews handle loopback binds.** The Build & Test live-preview path registers the forwarder's
-  pod-IP-reachable public port, so apps that only bind `127.0.0.1` can still be previewed. Manual previews
-  still expose the port you enter directly, so prefer all-interface binds there.
+- **Platform previews handle loopback binds.** The Build & Test live-preview path runs the app and forwarder
+  inside the sandbox pod and registers the forwarder's `0.0.0.0` public port, so apps that only bind
+  `127.0.0.1` can still be previewed. Manual previews still expose the port you enter directly, so prefer
+  all-interface binds there.
+- **Gateway is the reachability test.** The API does not data-path-probe sandbox preview ports; the preview is
+  proven ready in-pod first, then confirmed by opening the returned Gateway URL.
 - **Failure is actionable, not blocking.** If the forwarder cannot make the app reachable you see
   **Preview unavailable** with reasons such as `bound_unreachable` or `no_public_port_available`; review can
   continue.

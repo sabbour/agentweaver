@@ -16,14 +16,27 @@ exists and the caller owns it (`404`/`403`). Source:
 
 | Method & path | Body | Returns | Notes |
 |---|---|---|---|
-| `POST /api/runs/{runId}/sandbox/port-forward` | `{ "target_port": <3000..9000> }` | `PortForwardSessionDto` | Starts a preview. Preview path: provisions Service + HTTPRoute, returns `preview_url` + `keepalive_url`. `target_port` must be within `AllowedPortMin..AllowedPortMax`. **Human/operator-initiated** (owner-only). |
+| `POST /api/runs/{runId}/sandbox/port-forward` | `{ "target_port": <3000..9000> }` | `PortForwardSessionDto` | Starts a preview. Preview path provisions Service + HTTPRoute and returns `preview_url` + `keepalive_url`; it does not API-probe `podIP:{target_port}`. `target_port` must be within `AllowedPortMin..AllowedPortMax`. **Human/operator-initiated** (owner-only). |
 | `POST /api/runs/{runId}/sandbox/preview` | `{ "target_port": <3000..9000> }` | `PortForwardSessionDto` | **Agent-initiated** variant of the start route. Two caller surfaces hit it: the in-sandbox `start_preview(port)` agent tool and the `start_preview(run_id, port)` MCP tool on `agentweaver-mcp` ([`RunTools.cs`](#source)). Routes through a human-in-the-loop approval gate ([`AgentPreviewGate`](#source)) before running the *same* preview-start path. Authorized for the run's **owner OR its own agent callback** ([`SandboxEndpoints.cs:57`](#source)). |
 | `POST /api/runs/{runId}/sandbox/preview/{token}/keepalive` | — | `{ token, kept_alive: true }` | Bumps the preview's idle expiry to now + `IdleTimeoutMinutes`. Preview path only. Verifies the token's HTTPRoute carries the matching run before bumping. |
 | `DELETE /api/runs/{runId}/sandbox/port-forward/{sessionId}` | — | `{ session_id, stopped: true }` | Explicit stop. For the preview path `sessionId` is the capability token; deletes the HTTPRoute then the Service. Verifies run↔token first. |
-| `GET /api/runs/{runId}/sandbox/port-forward` | — | `PortForwardSessionDto[]` | Lists active port-forward sessions for the run. |
+| `GET /api/runs/{runId}/sandbox/port-forward` | — | `PortForwardSessionDto[]` | Lists active preview sessions for the run. Liveness is the policy-safe existence of a bound pod with the preview-run label, not an API-side TCP probe. |
 
 The relative `keepalive_url` returned by `POST …/port-forward` is
 `/api/runs/{runId}/sandbox/preview/{token}/keepalive` ([`SandboxEndpoints.cs:70`](#source)).
+
+## Readiness and liveness model
+
+`SandboxPreviewService.StartPreviewAsync` is orchestration-only: it resolves the bound pod, patches labels,
+creates the ClusterIP Service, and creates the HTTPRoute. It deliberately does **not** connect from the API pod
+to `podIP:{target_port}` because `sandbox-allow-preview-ingress` admits TCP `3000-9000` only from the preview
+Gateway's data-plane pods ([`SandboxPreviewService.cs:134`](#source), [`k8s/networkpolicy-sandbox.yaml`](#source)).
+For platform live-preview, readiness is the AgentHost in-pod observation: the app responds on its real port,
+the in-pod `TcpPortForwarder` listens on `0.0.0.0:{publicPort}`, and AgentHost verifies the forwarder public
+port before registration (`apps/Agentweaver.AgentHost/PreviewRunner.cs:315`). After registration, the real
+end-to-end check is opening the returned Gateway hostname (`preview_url`). `ListForRunAsync` uses a
+label-selector pod-existence check as its liveness proxy, because the same NetworkPolicy makes an API-side TCP
+liveness probe invalid (`SandboxPreviewService.cs:399`, `:768`).
 
 ## Agent-initiated preview (`start_preview`)
 
@@ -115,13 +128,13 @@ Bound from the `Sandbox:Preview` section into [`SandboxPreviewOptions.cs`](#sour
 | `403 Forbidden` | Caller does not own the run (operator route); or — on the agent route — the caller is neither the owner nor the run's own agent callback, **or** the agent-preview approval was denied / timed out at the HITL gate. |
 | `404 Not Found` | Run does not exist; or (keepalive/`DELETE`, preview path) the token's HTTPRoute does not carry the matching run (run↔token binding). |
 | `409 Conflict` | No bound sandbox pod for the run (the `SandboxClaim` is missing or not yet `Bound`), or the Gateway preview is not enabled on the keepalive path. |
+| `429 Too Many Requests` | A session cap was hit on the port-forward fallback. |
+| `500` | Unexpected failure provisioning the preview (or `kubectl` failed to start the fallback tunnel). |
 
 Platform live-preview failures are emitted as `sandbox.preview_failed` events rather than API status codes. The
 forwarder-specific reasons are `bound_unreachable` (the app was reachable on loopback, but the forwarder's
 public pod-IP port failed health check) and `no_public_port_available` (no free public port in the allowed
 `3000-9000` range). See [Decoupled live-preview provisioning — Reference](./live-preview-provisioning.md).
-| `429 Too Many Requests` | A session cap was hit on the port-forward fallback. |
-| `500` | Unexpected failure provisioning the preview (or `kubectl` failed to start the fallback tunnel). |
 
 ## Example
 

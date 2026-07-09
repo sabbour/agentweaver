@@ -10,7 +10,9 @@ For the Gateway routes and `PortForwardSessionDto`, see [Sandbox browser preview
 | --- | --- | --- |
 | Feature flag | None. The step runs whenever `PreviewStep` is wired and Build & Test is not declined. | `CoordinatorAssemblyService.ShouldRunDeterministicPreviewStep` |
 | Build & Test coupling | Runs after Build & Test for `APPROVED` and `REQUEST_CHANGES`; skipped on `DECLINED`. | `CoordinatorAssemblyService.cs:753` |
-| Port choice | Platform observes the app port, then registers a forwarder public port from `3000-9000`; no configured fixed app port is used. | `PreviewStep.cs:129`, `:166`; `PreviewRunner.cs:315` |
+| Port choice | Platform observes the app port inside the sandbox pod, then registers a forwarder public port from `3000-9000`; no configured fixed app port is used. | `PreviewStep.cs:129`, `:166`; `PreviewRunner.cs:315` |
+| Registration readiness | In-pod AgentHost observe verifies app + forwarder readiness; the API never probes `podIP:{target_port}` before creating Service/HTTPRoute. | `PreviewRunner.cs:315`; `SandboxPreviewService.cs:134` |
+| End-to-end reachability | Confirmed by using the returned Gateway hostname (`preview_url`), because NetworkPolicy admits preview-port ingress only from the Gateway. | `k8s/networkpolicy-sandbox.yaml`; `SandboxPreviewService.cs:147` |
 | Infra unavailable | Emits `sandbox.preview_skipped_not_applicable` with reason `preview_infra_unavailable`. | `PreviewStep.cs:83` |
 | Preview failure | Emits `sandbox.preview_failed`; never blocks human review and never forces changes. | `PreviewStep.cs:31`, `CoordinatorAssemblyService.cs:772` |
 | Approval | Uses existing `AgentPreviewGate`; no preview-specific bypass. | `PreviewStep.cs:157` |
@@ -22,7 +24,7 @@ These are platform-facing AgentHost endpoints. They are root-mounted on the Agen
 | Method & path | Body | Returns | Notes |
 | --- | --- | --- | --- |
 | `POST /preview-runner/processes` | `command`, `cwd`, optional `runId`, `workPlanId`, `treeHash` | `session_id`, `pid`, `started_at`, `working_directory` | Starts a supervised process. |
-| `POST /preview-runner/processes/{sessionId}/observe-bound-port` | `timeoutSeconds`, `healthPath` | `session_id`, `port`, `evidence`, `healthy`, `health_evidence`, `app_port`, optional `reason` | Discovers the app port, starts the pod-local forwarder, verifies HTTP health through the forwarder public port, and returns that public port as `port`. |
+| `POST /preview-runner/processes/{sessionId}/observe-bound-port` | `timeoutSeconds`, `healthPath` | `session_id`, `port`, `evidence`, `healthy`, `health_evidence`, `app_port`, optional `reason` | Runs in the sandbox pod: discovers the app port, starts the pod-local forwarder on `0.0.0.0`, verifies HTTP health through the forwarder public port, and returns that public port as `port`. |
 | `POST /preview-runner/processes/{sessionId}/health-check` | `port`, optional `path` | `session_id`, `port`, `path`, `healthy`, `status_code`, `evidence` | Used directly and by Gateway keepalive dual-touch. |
 | `DELETE /preview-runner/processes/{sessionId}` | optional `reason` query | `session_id`, `stopped`, `reason` | Stops the process tree. |
 

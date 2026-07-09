@@ -1,5 +1,4 @@
 using System.Globalization;
-using System.Net.Sockets;
 using k8s;
 using k8s.Autorest;
 using k8s.Models;
@@ -85,9 +84,6 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
 
     /// <summary>Minimum age before a route-less preview Service is treated as a leaked orphan.</summary>
     private static readonly TimeSpan OrphanGrace = TimeSpan.FromMinutes(2);
-    private static readonly TimeSpan PreviewProbeTimeout = TimeSpan.FromSeconds(1);
-    private static readonly TimeSpan PreviewProbeRetryWindow = TimeSpan.FromSeconds(3);
-    private static readonly TimeSpan PreviewProbeRetryDelay = TimeSpan.FromMilliseconds(250);
 
     private readonly IKubernetes? _client;
     private readonly SandboxPreviewOptions _options;
@@ -134,7 +130,13 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
             throw new InvalidOperationException(
                 $"No bound sandbox pod for run {runId}. A preview is only available after the run's " +
                 "SandboxClaim reports a bound pod (status.phase=Bound).");
-        await EnsurePreviewTargetIsReachableAsync(podName, targetPort, ct).ConfigureAwait(false);
+
+        // NOTE: We deliberately do NOT TCP-probe podIP:targetPort from the API pod here.
+        // Under the sandbox isolation model (k8s/networkpolicy-sandbox.yaml), preview ports
+        // 3000-9000 admit ingress ONLY from the preview Gateway — a direct API->podIP connect is
+        // denied by policy and can never succeed. Readiness is already proven upstream by the
+        // AgentHost observe step (forwarder-verified, in-pod loopback) before this call, which is
+        // the correct readiness signal under isolation.
 
         var sanitizedRun = PreviewReaper.PerRunLabel(runId);
         await EnforcePreviewLimitsAsync(sanitizedRun, ct).ConfigureAwait(false);
@@ -394,11 +396,14 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
             if (string.IsNullOrWhiteSpace(route.PodName) || route.TargetPort is null or <= 0)
                 continue;
 
-            if (!await IsPreviewTargetReachableAsync(route.PodName, route.TargetPort.Value, ct).ConfigureAwait(false))
+            // Liveness proxy under isolation: we cannot TCP-probe podIP:targetPort from the API pod
+            // (denied by the sandbox NetworkPolicy). Use the allowed control-plane pod-existence check
+            // (label selector) instead so a torn-down pod stops being reported as active.
+            if (!await PodExistsForRunAsync(sanitizedRun, ct).ConfigureAwait(false))
             {
                 _logger.LogInformation(
-                    "SandboxPreviewService: preview {Fingerprint} for run {RunId} is not reporting active because pod {Pod} is not listening on port {Port}",
-                    Fingerprint(route.Token), runId, route.PodName, route.TargetPort.Value);
+                    "SandboxPreviewService: preview {Fingerprint} for run {RunId} is not reporting active because no bound pod exists for the run",
+                    Fingerprint(route.Token), runId);
                 continue;
             }
 
@@ -776,57 +781,6 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
             _logger.LogWarning(ex,
                 "SandboxPreviewService: pod-existence probe failed for run {Run}; assuming alive", sanitizedRun);
             return true;
-        }
-    }
-
-    private async Task EnsurePreviewTargetIsReachableAsync(string podName, int targetPort, CancellationToken ct)
-    {
-        var deadline = _clock.GetUtcNow() + PreviewProbeRetryWindow;
-        while (_clock.GetUtcNow() < deadline)
-        {
-            if (await IsPreviewTargetReachableAsync(podName, targetPort, ct).ConfigureAwait(false))
-                return;
-
-            await Task.Delay(PreviewProbeRetryDelay, ct).ConfigureAwait(false);
-        }
-
-        throw new InvalidOperationException(
-            $"Nothing is listening on sandbox pod {podName} port {targetPort}. Start the server and wait until it accepts TCP connections before requesting a preview.");
-    }
-
-    private async Task<bool> IsPreviewTargetReachableAsync(string podName, int targetPort, CancellationToken ct)
-    {
-        try
-        {
-            var pod = await _client!.CoreV1.ReadNamespacedPodAsync(
-                podName, _options.Namespace, cancellationToken: ct).ConfigureAwait(false);
-            var host = pod.Status?.PodIP
-                ?? pod.Status?.PodIPs?.FirstOrDefault(ip => !string.IsNullOrWhiteSpace(ip.Ip))?.Ip;
-            if (string.IsNullOrWhiteSpace(host))
-            {
-                _logger.LogInformation(
-                    "SandboxPreviewService: pod {Pod} has no IP yet; preview target port {Port} is not reachable",
-                    podName, targetPort);
-                return false;
-            }
-
-            using var client = new TcpClient();
-            using var attemptCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            attemptCts.CancelAfter(PreviewProbeTimeout);
-            await client.ConnectAsync(host, targetPort, attemptCts.Token).ConfigureAwait(false);
-            return true;
-        }
-        catch (HttpOperationException ex) when (ex.Response?.StatusCode == System.Net.HttpStatusCode.NotFound)
-        {
-            return false;
-        }
-        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
-        {
-            return false;
-        }
-        catch (SocketException)
-        {
-            return false;
         }
     }
 

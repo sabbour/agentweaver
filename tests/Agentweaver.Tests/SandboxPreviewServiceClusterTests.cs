@@ -147,6 +147,9 @@ public sealed class SandboxPreviewServiceClusterTests
         handler.OnGet(
             "/api/v1/namespaces/agentweaver/pods/agenthost-pod-1",
             """{"apiVersion":"v1","kind":"Pod","metadata":{"name":"agenthost-pod-1"},"status":{"podIP":"127.0.0.1"}}""");
+        // Pod-existence probe (label selector) confirms the run's bound pod is still present.
+        handler.OnGet("/api/v1/namespaces/agentweaver/pods",
+            """{"kind":"PodList","items":[{"metadata":{"name":"agenthost-pod-1"}}]}""");
 
         var svc = NewService(handler);
 
@@ -161,8 +164,12 @@ public sealed class SandboxPreviewServiceClusterTests
     }
 
     [Fact]
-    public async Task StartPreview_rejects_preview_when_nothing_is_listening_on_the_target_port()
+    public async Task StartPreview_does_not_tcp_probe_target_port_and_creates_route()
     {
+        // Under the sandbox isolation model the API pod cannot TCP-connect to podIP:targetPort
+        // (NetworkPolicy admits preview ports only from the Gateway). StartPreview must therefore
+        // NOT preflight-probe the port: readiness is proven upstream by the AgentHost observe step.
+        // Here nothing is listening on the target port, yet the Service + HTTPRoute must still be created.
         const string runId = "run-dead-port";
         var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
         var deadPort = ReserveUnusedLocalPort();
@@ -174,56 +181,46 @@ public sealed class SandboxPreviewServiceClusterTests
         handler.OnGet(
             "/api/v1/namespaces/agentweaver/pods/agenthost-pod-dead",
             """{"apiVersion":"v1","kind":"Pod","metadata":{"name":"agenthost-pod-dead"},"status":{"podIP":"127.0.0.1"}}""");
+        handler.OnEcho("POST", "/api/v1/namespaces/agentweaver/services");
+        handler.OnEcho("POST", "/apis/gateway.networking.k8s.io/v1/namespaces/agentweaver/httproutes");
 
         var svc = NewService(handler);
 
-        var act = async () => await svc.StartPreviewAsync(runId, deadPort, "user-1");
+        var session = await svc.StartPreviewAsync(runId, deadPort, "user-1");
 
-        await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*Nothing is listening*");
-        handler.Requests.Should().NotContain(r => r.Method == "POST" && r.Path.EndsWith("/services"),
-            "the preview must fail before advertising an inactive port");
+        session.PodName.Should().Be("agenthost-pod-dead");
+        session.PreviewUrl.Should().StartWith("https://");
+        handler.Requests.Should().Contain(r => r.Method == "POST" && r.Path.EndsWith("/services"),
+            "readiness is proven by the AgentHost observe step, so the route is created without an API->podIP probe");
     }
 
     [Fact]
-    public async Task ListForRun_filters_out_routes_whose_target_port_is_not_listening()
+    public async Task ListForRun_filters_out_routes_when_no_bound_pod_exists_for_the_run()
     {
+        // Under isolation we cannot TCP-probe podIP:targetPort from the API pod, so ListForRun uses
+        // the allowed control-plane pod-existence check (label selector) as the liveness proxy.
+        // When the run's bound pod is gone, its routes must not be reported as active.
         const string runId = "run-filter-dead-preview";
         var sanitizedRun = PreviewReaper.PerRunLabel(runId);
-        const string liveToken = "swift-falcon-amber-k7m2q9x4n8b3r6t5w1z0c2";
-        const string deadToken = "calm-otter-cobalt-k7m2q9x4n8b3r6t5w1z0c2";
-        using var listener = StartListener(out var livePort);
-        var deadPort = ReserveUnusedLocalPort();
+        const string token = "swift-falcon-amber-k7m2q9x4n8b3r6t5w1z0c2";
 
         var handler = new FakeKubeHandler();
         handler.OnGet("/apis/gateway.networking.k8s.io/v1/namespaces/agentweaver/httproutes",
             "{\"kind\":\"HTTPRouteList\",\"items\":[" +
-            "{\"metadata\":{\"name\":\"preview-live\",\"annotations\":{" +
-            "\"agentweaver.dev/preview-token\":\"" + liveToken + "\"," +
+            "{\"metadata\":{\"name\":\"preview-x\",\"annotations\":{" +
+            "\"agentweaver.dev/preview-token\":\"" + token + "\"," +
             "\"agentweaver.dev/preview-run\":\"" + sanitizedRun + "\"," +
-            "\"agentweaver.dev/preview-pod\":\"agenthost-pod-live\"," +
-            "\"agentweaver.dev/preview-target-port\":\"" + livePort + "\"," +
-            "\"agentweaver.dev/preview-started-at\":\"2026-06-30T23:00:00Z\"}}}," +
-            "{\"metadata\":{\"name\":\"preview-dead\",\"annotations\":{" +
-            "\"agentweaver.dev/preview-token\":\"" + deadToken + "\"," +
-            "\"agentweaver.dev/preview-run\":\"" + sanitizedRun + "\"," +
-            "\"agentweaver.dev/preview-pod\":\"agenthost-pod-dead\"," +
-            "\"agentweaver.dev/preview-target-port\":\"" + deadPort + "\"," +
+            "\"agentweaver.dev/preview-pod\":\"agenthost-pod-gone\"," +
+            "\"agentweaver.dev/preview-target-port\":\"5431\"," +
             "\"agentweaver.dev/preview-started-at\":\"2026-06-30T23:05:00Z\"}}}]}");
-        handler.OnGet(
-            "/api/v1/namespaces/agentweaver/pods/agenthost-pod-live",
-            """{"apiVersion":"v1","kind":"Pod","metadata":{"name":"agenthost-pod-live"},"status":{"podIP":"127.0.0.1"}}""");
-        handler.OnGet(
-            "/api/v1/namespaces/agentweaver/pods/agenthost-pod-dead",
-            """{"apiVersion":"v1","kind":"Pod","metadata":{"name":"agenthost-pod-dead"},"status":{"podIP":"127.0.0.1"}}""");
+        // Pod-existence probe (label selector) returns an empty list -> the pod is gone.
+        handler.OnGet("/api/v1/namespaces/agentweaver/pods", """{"kind":"PodList","items":[]}""");
 
         var svc = NewService(handler);
 
         var sessions = await svc.ListForRunAsync(runId);
 
-        sessions.Should().ContainSingle();
-        sessions[0].Token.Should().Be(liveToken);
-        sessions[0].TargetPort.Should().Be(livePort);
+        sessions.Should().BeEmpty("a route whose bound pod no longer exists must not be reported active");
     }
 
     [Fact]
