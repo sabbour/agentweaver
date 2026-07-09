@@ -1,8 +1,28 @@
 import { useState } from 'react';
-import { CopilotComposer, CopilotResponse, type AzfResponsePart } from '..';
+import { CodeSnippet, CopilotComposer, CopilotResponse, type AzfResponsePart } from '..';
 
 const initialResponse: AzfResponsePart[] = [
-  { id: 'summary', type: 'text', content: 'Copilot can summarize telemetry, suggest actions, and ask for confirmation without exposing hidden reasoning.' },
+  { id: 'user', type: 'text', author: 'user', content: 'Summarize unhealthy resources and include the Kusto filter.' },
+  {
+    id: 'summary',
+    type: 'text',
+    title: 'Copilot',
+    badge: 'AI-generated content may be incorrect',
+    content: (
+      <div className="azf-stack azf-gap-s">
+        <p>Copilot can summarize telemetry, suggest actions, and ask for confirmation without exposing hidden reasoning.</p>
+        <CodeSnippet
+          title="Kusto"
+          lines={[
+            { lineNumber: 1, tokens: [{ text: 'securityresources', tone: 'key' }] },
+            { lineNumber: 2, tokens: [{ text: '| ', tone: 'operator' }, { text: 'where', tone: 'keyword' }, { text: ' type == ', tone: 'plain' }, { text: '"microsoft.authorization/policyassignments"', tone: 'string' }] },
+          ]}
+          maxHeight={152}
+        />
+      </div>
+    ),
+    supportingText: '1 request left',
+  },
   {
     id: 'confirm',
     type: 'confirmation',
@@ -17,6 +37,7 @@ const initialResponse: AzfResponsePart[] = [
 export function CopilotComposerResponseExample() {
   const [prompt, setPrompt] = useState('Summarize unhealthy resources in the last 24 hours.');
   const [isRunning, setIsRunning] = useState(false);
+  const [agentMode, setAgentMode] = useState(true);
 
   return (
     <div>
@@ -34,8 +55,8 @@ export function CopilotComposerResponseExample() {
         onSend={() => setIsRunning(true)}
         isRunning={isRunning}
         onStop={() => setIsRunning(false)}
-        agentMode="Investigate"
-        onAgentModeChange={() => undefined}
+        agentMode={agentMode}
+        onAgentModeChange={setAgentMode}
         attachments={[
           { id: 'cluster', name: 'cluster-health.csv', description: "Yesterday's export", onRemove: () => undefined },
         ]}

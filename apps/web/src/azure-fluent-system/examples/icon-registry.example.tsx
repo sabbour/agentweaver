@@ -10,7 +10,7 @@ const manifestRegistry = createIconCloudRegistryFromManifest(
   {
     icons: [
       { name: 'Storage Accounts', collection: 'Storage', category: 'Storage', file: 'storage/storage-accounts.svg' },
-      { name: 'Virtual Machines', collection: 'Compute', category: 'Compute', file: 'compute/virtual-machines.svg' },
+      { name: 'Virtual Machine', collection: 'Compute', category: 'Compute', file: 'compute/virtual-machine.svg' },
     ],
   },
   {
@@ -30,7 +30,7 @@ export function IconRegistryExample() {
     <AzureIconProvider registry={combinedRegistry}>
       <div>
         <AzureIcon name="VirtualMachine" label="Virtual machine" size={18} />
-        <AzureIcon name="Compute/Virtual Machines" label="Compute virtual machines" size={20} />
+        <AzureIcon name="Compute/Virtual Machine" label="Compute virtual machine" size={20} />
         <AzureIcon name="Storage/Storage Accounts" label="Storage accounts" size={20} />
         <AzureIcon name="FluentFallback" label="Fallback icon" size={16} />
       </div>

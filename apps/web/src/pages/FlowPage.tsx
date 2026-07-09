@@ -7,7 +7,6 @@ import {
   MessageBarBody,
   Spinner,
   Text,
-  Title3,
   makeStyles,
   tokens,
 } from '@fluentui/react-components';
@@ -16,6 +15,7 @@ import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
 import { AgentAvatar } from '../components/AgentAvatar';
 import { PageHeader } from '../components/PageHeader';
+import { AzureEmptyState, AzurePage, AzureSectionHeader, AzureSurface } from '../components/azure/AzureLayout';
 import { RefreshCountdown } from '../hooks/useRefreshCountdown';
 import { fromDto } from '../api/agentQueues';
 import type { AgentQueueItem } from '../api/agentQueues';
@@ -59,10 +59,6 @@ const useStyles = makeStyles({
     display: 'flex',
     flexDirection: 'column',
     gap: tokens.spacingVerticalS,
-    padding: tokens.spacingVerticalL,
-    backgroundColor: tokens.colorNeutralBackground1,
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: tokens.borderRadiusMedium,
   },
   cardHeader: {
     display: 'flex',
@@ -121,17 +117,6 @@ const useStyles = makeStyles({
     textDecoration: 'none',
     fontSize: tokens.fontSizeBase200,
   },
-  emptyState: {
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'center',
-    gap: tokens.spacingVerticalM,
-    padding: `${tokens.spacingVerticalXXL} ${tokens.spacingHorizontalXXL}`,
-    backgroundColor: tokens.colorNeutralBackground1,
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: tokens.borderRadiusMedium,
-    textAlign: 'center',
-  },
   filterNote: {
     display: 'flex',
     alignItems: 'center',
@@ -142,11 +127,7 @@ const useStyles = makeStyles({
   archivePanel: {
     display: 'flex',
     flexDirection: 'column',
-    gap: tokens.spacingVerticalS,
-    padding: tokens.spacingVerticalL,
-    backgroundColor: tokens.colorNeutralBackground1,
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: tokens.borderRadiusMedium,
+    gap: tokens.spacingVerticalM,
   },
   archiveList: {
     display: 'flex',
@@ -196,7 +177,7 @@ function AgentCard({ agent, projectId }: { agent: AgentQueueItem; projectId: str
   const styles = useStyles();
   const hasGroups = agent.orchestrations && agent.orchestrations.length > 0;
   return (
-    <div className={styles.card}>
+    <AzureSurface className={styles.card}>
       <div className={styles.cardHeader}>
         <AgentAvatar name={agent.agentName} size={24} />
         <span className={styles.agentName}>{agent.agentName}</span>
@@ -266,7 +247,7 @@ function AgentCard({ agent, projectId }: { agent: AgentQueueItem; projectId: str
           )}
         </>
       )}
-    </div>
+    </AzureSurface>
   );
 }
 
@@ -376,7 +357,7 @@ export function FlowPage() {
   if (!projectId) return null;
 
   return (
-    <div className={styles.root}>
+    <AzurePage className={styles.root}>
       <PageHeader
         title="Flow"
         subtitle={selectedAgent
@@ -431,14 +412,14 @@ export function FlowPage() {
       )}
 
       {!loading && !error && visibleAgents.length === 0 && (
-        <div className={styles.emptyState}>
-          <Title3>{selectedAgent ? `No active work for ${selectedAgent}` : 'No active agents'}</Title3>
-          <Text>
-            {selectedAgent
+        <AzureEmptyState
+          title={selectedAgent ? `No active work for ${selectedAgent}` : 'No active agents'}
+          body={
+            selectedAgent
               ? 'This agent has no current in-flight subtasks. Its completed work remains in the archive below.'
-              : 'No agents are currently working in this project. Start an orchestration to see live activity here.'}
-          </Text>
-        </div>
+              : 'No agents are currently working in this project. Start an orchestration to see live activity here.'
+          }
+        />
       )}
 
       {visibleAgents.length > 0 && (
@@ -450,11 +431,11 @@ export function FlowPage() {
       )}
 
       {selectedAgent && (
-        <section className={styles.archivePanel} aria-label="Previous work archive">
-          <Title3>Previous work archive</Title3>
-          <Text>
-            Terminal runs for {selectedAgent}: completed, merged, assemble-ready, declined, failed, and merge-failed work.
-          </Text>
+        <AzureSurface className={styles.archivePanel} aria-label="Previous work archive">
+          <AzureSectionHeader
+            title="Previous work archive"
+            description={`Terminal runs for ${selectedAgent}: completed, merged, assemble-ready, declined, failed, and merge-failed work.`}
+          />
           {historyLoading && <Spinner size="tiny" label="Loading previous work" />}
           {historyError && (
             <MessageBar intent="error">
@@ -478,8 +459,8 @@ export function FlowPage() {
               ))}
             </div>
           )}
-        </section>
+        </AzureSurface>
       )}
-    </div>
+    </AzurePage>
   );
 }

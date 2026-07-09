@@ -41,11 +41,11 @@ const useStyles = makeStyles({
     alignItems: 'stretch',
     justifyContent: 'space-between',
     gap: tokens.spacingHorizontalM,
-    padding: tokens.spacingVerticalM,
+    padding: tokens.spacingVerticalL,
     backgroundColor: tokens.colorNeutralBackground1,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: tokens.borderRadiusLarge,
-    boxShadow: tokens.shadow2,
+    borderRadius: tokens.borderRadiusXLarge,
+    boxShadow: tokens.shadow4,
     '@media (max-width: 900px)': {
       gridTemplateColumns: '1fr',
     },
@@ -176,10 +176,11 @@ const useStyles = makeStyles({
     maxWidth: '72ch',
   },
   boardSurface: {
-    padding: tokens.spacingVerticalM,
-    backgroundColor: tokens.colorNeutralBackground2,
+    padding: tokens.spacingVerticalL,
+    backgroundColor: tokens.colorNeutralBackground1,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     borderRadius: tokens.borderRadiusXLarge,
+    boxShadow: tokens.shadow2,
   },
   columnsViewport: {
     overflowX: 'auto',
@@ -187,8 +188,8 @@ const useStyles = makeStyles({
   },
   columns: {
     display: 'grid',
-    gridTemplateColumns: 'repeat(4, minmax(180px, 1fr))',
-    gap: tokens.spacingHorizontalS,
+    gridTemplateColumns: 'repeat(4, minmax(220px, 1fr))',
+    gap: tokens.spacingHorizontalM,
     alignItems: 'flex-start',
     width: '100%',
     // Zoom origin: anchor to the top-left so zooming out keeps Backlog in place.
@@ -204,7 +205,8 @@ const useStyles = makeStyles({
     padding: tokens.spacingVerticalM,
     backgroundColor: tokens.colorNeutralBackground1,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: tokens.borderRadiusLarge,
+    borderRadius: tokens.borderRadiusXLarge,
+    boxShadow: tokens.shadow2,
   },
   problemsSectionTitle: {
     color: tokens.colorNeutralForeground1,

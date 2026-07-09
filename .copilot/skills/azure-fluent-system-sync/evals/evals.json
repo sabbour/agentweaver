@@ -3,38 +3,74 @@
   "evals": [
     {
       "id": 1,
-      "prompt": "Keep the Azure Fluent component library updated from the latest Figma cache. I don't want graph snapshots anymore; make sure every published component has rich design context or a documented failure.",
-      "expected_output": "The agent audits the comprehensive component ledger, identifies graph-only/metadata-only nodes, runs or plans rich Figma context extraction, updates manifest/batch/ledger files, and reports exact rich/failed/remaining counts.",
+      "prompt": "Keep the Azure Fluent component library updated from the latest Figma cache, but the result needs to be self-contained in the library. I don't want graph snapshots anymore, and I don't want transient-artifact handoff junk. Make sure every published component has rich design context or a documented failure, and keep the deliverable drop-in ready.",
+      "expected_output": "The agent audits the checked-in component catalog, identifies nodes that still need direct MCP extraction, updates durable catalog and library files, and reports exact extracted/failed/remaining counts while separating transient tool output from checked-in deliverables.",
       "files": [],
       "expectations": [
         "Distinguishes rich design context from graph snapshots",
-        "Uses comprehensive-component-cache-ledger.json and manifest.json as starting points",
+        "Uses checked-in catalog files and showcase data as starting points",
         "Does not claim completion without per-node rich context or explicit unavailable records",
-        "Creates or updates a batch-comprehensive rich-context record"
+        "Creates or updates durable per-node extraction records in checked-in catalog artifacts",
+        "Treats the final output as a checked-in self-contained library, not pointers to artifacts"
       ]
     },
     {
       "id": 2,
-      "prompt": "IconCloud has the rest of the Azure Icons set now. Normalize those downloads and wire them into the Azure Fluent library so another app can use the glyphs.",
-      "expected_output": "The agent treats IconCloud as the approved Azure/resource icon source, normalizes SVG downloads in session artifacts, creates a manifest, deduplicates duplicates, and wires the assets through AzureIconProvider/createIconCloudRegistry without scraping hidden APIs.",
+      "prompt": "IconCloud has the rest of the Azure Icons set now. Normalize those downloads and wire them into the Azure Fluent library so another app can use the glyphs as a drop-in, self-contained package.",
+      "expected_output": "The agent treats IconCloud as the approved Azure/resource icon source, normalizes SVG downloads, deduplicates duplicates, then vendors the final checked-in icon metadata and SVG assets into library-owned paths under apps/web/src/azure-fluent-system/assets/icons/azure/, updates catalog/ICONS.md, adds or documents a minimal showcase icon surface when feasible, and avoids hidden-API scraping.",
       "files": [],
       "expectations": [
         "Uses IconCloud exports for Azure/resource glyphs and @fluentui/react-icons for system icons",
         "Does not request or store credentials",
-        "Creates a normalized icon manifest with file paths and categories",
-        "Keeps assets out of source until they are deduplicated and intentionally copied"
+        "Creates normalized checked-in icon metadata with file paths and categories",
+        "Keeps assets out of source until they are deduplicated and intentionally copied",
+        "Requires checked-in library-owned icon files for self-contained output",
+        "Requires icon metadata paths to be relative and sanitized rather than absolute or transient-artifact based",
+        "Updates catalog/ICONS.md with icon source, import status, and local mapping notes",
+        "Keeps showcase icon visibility aligned with catalog/ICONS.md when a local icon surface exists"
       ]
     },
     {
       "id": 3,
-      "prompt": "Make the standalone Azure Fluent system ready to drop into another React project. Finish the recipes and explain the public API for BladeHeader, ResourceTagEditor, grids, and Copilot components.",
-      "expected_output": "The agent updates implementation-recipes.json and library docs/code so recipes include public React component APIs, props, callbacks, slots, state models, accessibility, example usage, and validation for the high-priority components.",
+      "prompt": "Make the standalone Azure Fluent system ready to drop into another React project. Consolidate the checked-in catalog, add first-class examples, and explain the public API for BladeHeader, ResourceTagEditor, grids, Copilot components, CreateResourcePattern, and icon registry usage without reviving recipe-dump files.",
+      "expected_output": "The agent updates the checked-in catalog docs/code so the durable catalog surface captures public component, pattern, and icon usage guidance with examples, showcase visibility, and validation, while keeping examples as first-class library files under examples/ and using the catalog rather than redundant recipe-plan JSON dumps.",
       "files": [],
       "expectations": [
         "Defines API as the public React component contract, not a backend API",
-        "Expands summary-only recipes or explicitly folds/excludes them with rationale",
+        "Consolidates durable API and coverage guidance into the checked-in catalog instead of recipe-dump files",
         "Hardens ready-to-use component APIs with states, accessibility, and examples",
-        "Runs build, scoped lint, focused tests, and git diff --check where code changes"
+        "Requires example files covering provider/layout, BladeHeader, ResourceTagEditor, AzureDataGrid filtering, Copilot composer/response, CreateResourcePattern, and icon registry usage",
+        "Separates generated inputs from checked-in deliverables in the completion report",
+        "Runs forbidden-string search, scoped lint, focused tests, and git diff --check where code changes"
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "Refresh the Azure Fluent System project mapping from Azure UI Kit / Fluent 2 using Figma MCP. Use figma-list_file_components_for_code_connect for file key q2TdO4dVcMhNWYp0N6Bc05, rebuild the explicit inventory rows in catalog/COMPONENTS.md without implying that placeholder coverage means full implementation.",
+      "expected_output": "The agent treats the Figma component inventory as the durable source of truth for catalog/COMPONENTS.md, preserves exact audit counts separately from showcase-placeholder coverage, records per-category totals, and avoids claiming 148/148 implemented unless the table supports it.",
+      "files": [],
+      "expectations": [
+        "Uses figma-list_file_components_for_code_connect with file key q2TdO4dVcMhNWYp0N6Bc05",
+        "Updates or regenerates explicit per-component inventory rows in catalog/COMPONENTS.md",
+        "Updates COMPONENTS.md from checked-in catalog data rather than inventing statuses",
+        "Keeps exact name/node audit counts separate from showcase-placeholder coverage",
+        "Records total inventory count and category counts in durable checked-in files",
+        "Does not claim exhaustive implementation when nodes are still showcase-placeholder, needs-mcp-extraction, needs-implementation, local-only-needed, or not-in-inventory"
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "Take a single Azure UI Kit dev-mode URL for the Azure Fluent System library, extract it with Figma MCP, wire it into the React library and showcase, and update the catalog docs. If the node extraction fails, record the exact failure and keep the status conservative instead of guessing.",
+      "expected_output": "The agent parses the exact file key and node ID from the dev-mode URL, calls figma-get_design_context and figma-get_variable_defs, updates local React/CSS/example/showcase/catalog files when the extraction succeeds, and records an explicit failure without claiming high fidelity when MCP extraction fails or the URL is unsupported.",
+      "files": [],
+      "expectations": [
+        "Uses the exact file key and node ID from the dev-mode URL",
+        "Calls figma-get_design_context and figma-get_variable_defs for the single node",
+        "Updates components.tsx, types.ts, tokens.css, examples, catalog/COMPONENTS.md or catalog/PATTERNS.md, and showcase entries when implementation changes are needed",
+        "Uses local azf classes/tokens rather than pasted Tailwind or generated Figma CSS",
+        "Reflects showcase coverage as Yes or No in the mapping table",
+        "Records explicit extraction failure details and avoids silent screenshot-only or guessed fallback",
+        "Runs doctrine validation plus appropriate build/test/consistency checks for the changed layer"
       ]
     }
   ]

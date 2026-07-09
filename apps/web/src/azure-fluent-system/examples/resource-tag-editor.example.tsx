@@ -20,7 +20,7 @@ export function ResourceTagEditorExample() {
         rows={rows}
         resources={resources}
         validation={{
-          'tag-2': rows[1]?.value ? '' : 'Value is required.',
+          'tag-2:value': rows[1]?.value ? '' : 'Value is required.',
         }}
         onRowChange={(rowId, patch) =>
           setRows((currentRows) =>

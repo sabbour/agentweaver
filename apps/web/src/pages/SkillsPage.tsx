@@ -51,6 +51,7 @@ import type {
   TeamMemberDto,
 } from '../api/types';
 import { PageHeader } from '../components/PageHeader';
+import { AzureCommandStrip, AzureEmptyState, AzurePage, AzureSurface } from '../components/azure/AzureLayout';
 
 const useStyles = makeStyles({
   root: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL },
@@ -59,14 +60,12 @@ const useStyles = makeStyles({
     fontSize: tokens.fontSizeBase300, color: tokens.colorNeutralForeground2,
   },
   breadcrumbLink: { color: tokens.colorBrandForeground1, textDecoration: 'none' },
-  tabContent: { marginTop: tokens.spacingVerticalM, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM },
+  tabContent: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM },
   toolbar: { display: 'flex', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' },
   empty: { color: tokens.colorNeutralForeground3, fontStyle: 'italic' },
   itemList: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM },
   item: {
-    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium,
-    padding: `${tokens.spacingVerticalM} ${tokens.spacingHorizontalM}`,
-    backgroundColor: tokens.colorNeutralBackground2, display: 'flex', flexDirection: 'column',
+    display: 'flex', flexDirection: 'column',
     gap: tokens.spacingVerticalXS,
   },
   itemHeader: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' },
@@ -363,7 +362,7 @@ export function SkillsPage() {
   };
 
   return (
-    <div className={styles.root}>
+    <AzurePage className={styles.root}>
       <PageHeader
         title="Skills"
         subtitle="Import, sync, and assign reusable agent skills for this project."
@@ -386,8 +385,8 @@ export function SkillsPage() {
         <Tab value="assignments">Assignments</Tab>
       </TabList>
 
-      <div className={styles.tabContent}>
-        <div className={styles.toolbar}>
+      <AzureSurface className={styles.tabContent}>
+        <AzureCommandStrip className={styles.toolbar}>
           <Button icon={<BranchFork24Regular />} disabled={isBusy} onClick={() => { resetSkillForm(); setAddOpen(true); }}>
             Add Skill
           </Button>
@@ -400,7 +399,7 @@ export function SkillsPage() {
           <Button icon={<ArrowSync24Regular />} disabled={isBusy} onClick={onSync}>
             {busy === 'Sync' ? 'Syncing…' : 'Sync connected repo'}
           </Button>
-        </div>
+        </AzureCommandStrip>
 
         {loading && <Spinner size="small" label="Loading…" />}
         {loadError && (
@@ -418,11 +417,11 @@ export function SkillsPage() {
 
         {!loading && !loadError && selectedTab === 'catalog' && (
           skills === null || skills.length === 0
-            ? <Text className={styles.empty}>No skills in the catalog yet. Sync the connected repo, import from a Git repo, or upload a skill.</Text>
+            ? <AzureEmptyState title="No skills in the catalog yet" body="Sync the connected repo, import from a Git repo, or upload a skill." />
             : (
               <div className={styles.itemList}>
                 {skills.map((s) => (
-                  <div key={s.id} className={styles.item}>
+                  <AzureSurface key={s.id} className={styles.item} tone="subtle" density="compact">
                     <div className={styles.itemHeader}>
                       <span className={styles.itemTitle}>{s.name}</span>
                       <Badge appearance="tint" color={statusColor(s.status)}>{s.status}</Badge>
@@ -442,7 +441,7 @@ export function SkillsPage() {
                       <Button size="small" icon={<Eye24Regular />} disabled={isBusy} onClick={() => void openDetail(s)}>View</Button>
                       <Button size="small" appearance="outline" icon={<Delete24Regular />} disabled={isBusy} onClick={() => void onDelete(s)}>Delete</Button>
                     </div>
-                  </div>
+                  </AzureSurface>
                 ))}
               </div>
             )
@@ -450,13 +449,13 @@ export function SkillsPage() {
 
         {!loading && !loadError && selectedTab === 'assignments' && (
           skills === null || skills.length === 0
-            ? <Text className={styles.empty}>No skills to assign. Add skills in the Catalog tab first.</Text>
+            ? <AzureEmptyState title="No skills to assign" body="Add skills in the Catalog tab first." />
             : members.length === 0
-              ? <Text className={styles.empty}>No agents in this project's team yet. Cast a team to assign skills.</Text>
+              ? <AzureEmptyState title="No agents in this project's team yet" body="Cast a team to assign skills." />
               : (
                 <div className={styles.itemList}>
                   {skills.map((s) => (
-                    <div key={s.id} className={styles.item}>
+                    <AzureSurface key={s.id} className={styles.item} tone="subtle" density="compact">
                       <div className={styles.itemHeader}>
                         <span className={styles.itemTitle}>{s.name}</span>
                         <Badge appearance="tint" color={statusColor(s.status)}>{s.status}</Badge>
@@ -478,12 +477,12 @@ export function SkillsPage() {
                           })}
                         </div>
                       </div>
-                    </div>
+                    </AzureSurface>
                   ))}
                 </div>
               )
         )}
-      </div>
+      </AzureSurface>
 
       {/* Detail drawer */}
       <OverlayDrawer position="end" open={detailOpen} onOpenChange={(_, d) => setDetailOpen(d.open)} size="medium">
@@ -674,6 +673,6 @@ export function SkillsPage() {
           </DialogBody>
         </DialogSurface>
       </Dialog>
-    </div>
+    </AzurePage>
   );
 }

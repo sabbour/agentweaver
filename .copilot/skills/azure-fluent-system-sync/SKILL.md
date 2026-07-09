@@ -1,198 +1,272 @@
 ---
-name: azure-fluent-system-sync
-description: Keep the standalone Azure Fluent-style component and pattern library synchronized with Azure UI Kit Figma evidence, IconCloud/Fluent icon sources, implementation recipes, DESIGN.md, and validation. Use this skill whenever the user mentions updating the Azure Fluent library, refreshing from Figma, completing rich design-context coverage, syncing IconCloud/Azure icons, expanding implementation recipes, fixing the Create Resource pattern gap, hardening the component library, or making the system drop-in ready for other projects.
+name: "azure-fluent-system-sync"
+description: "Project skill for refreshing the Azure Fluent System library from Azure UI Kit / Fluent 2 via Figma MCP, mapping extracted nodes into checked-in React/CSS/docs/showcase artifacts, and validating the result without silent fallback."
+domain: "frontend-design-system"
+confidence: "high"
+source: "team-decision"
 ---
 
-# Azure Fluent System Sync
+# Azure Fluent System sync
 
-Use this skill to keep the portable Azure Fluent-style system current and usable as a standalone library. The system has five connected layers:
+Use this skill when work touches the checked-in Azure Fluent System library under `apps/web/src/azure-fluent-system/` and the request depends on Azure UI Kit / Fluent 2 Figma extraction, component inventory updates, node-level extraction, showcase coverage, or portable traceability docs.
 
-1. **Evidence cache** from Azure UI Kit / Fluent 2 Figma.
-2. **Icon assets** from approved sources: Fluent system icons and IconCloud exports.
-3. **Implementation recipes** that translate evidence into public React contracts.
-4. **Library code** under `apps/web/src/azure-fluent-system`.
-5. **Docs and validation** in `DESIGN.md`, package README, tests, build, and lint.
+The goal is a **checked-in, portable deliverable**. Future consumers should be able to use the library, docs, examples, and the three checked-in catalog files **without** reopening Figma or recovering transient runtime artifacts.
 
-The goal is not a one-off Agentweaver visual pass. The goal is a high-fidelity, reusable system another React project can consume without reopening Figma.
+## When to invoke
 
-## Source of truth map
+Invoke this skill whenever the user asks to:
 
-Use these artifacts before making changes:
+- refresh Azure Fluent System components or patterns from Figma
+- extract the main Azure UI Kit component list / inventory
+- extract a specific Figma node from a dev-mode URL
+- add or update a Figma-backed component in the React library
+- refresh `COMPONENTS.md`, `PATTERNS.md`, or `ICONS.md`
+- add/verify component or icon visibility in the showcase
+- reconcile Figma extraction outputs with `components.tsx`, `types.ts`, `tokens.css`, examples, tests, or `DESIGN.md`
 
-| Layer | Location |
-|---|---|
-| Design doctrine | `DESIGN.md`, section `Standalone Azure Fluent system contract` |
-| Library implementation | `apps/web/src/azure-fluent-system/` |
+## Project constants
+
+| Item | Value |
+| --- | --- |
+| Library root | `apps/web/src/azure-fluent-system/` |
+| Azure UI Kit / Fluent 2 file key | `q2TdO4dVcMhNWYp0N6Bc05` |
+| Component catalog | `apps/web/src/azure-fluent-system/catalog/COMPONENTS.md` |
+| Pattern catalog | `apps/web/src/azure-fluent-system/catalog/PATTERNS.md` |
+| Icon catalog | `apps/web/src/azure-fluent-system/catalog/ICONS.md` |
+
 | Library README | `apps/web/src/azure-fluent-system/README.md` |
-| Figma cache root | `artifacts/figma-extraction/azure-ui-kit-fluent2/` |
-| Component ledger | `comprehensive-component-cache-ledger.json` |
-| Pattern ledger | `patterns.jsonl`, `pattern-node-index.json`, `distilled-pattern-contexts.json` |
-| Recipes | `implementation-recipes.json`, `implementation-recipe-gap-list.json` |
-| System plan | `standalone-system-plan.json` |
-| Icon downloads | `artifacts/iconcloud/` |
+| Durable doctrine | `apps/web/src/azure-fluent-system/DESIGN.md` and repo `DESIGN.md` |
+| Showcase app | `apps/web/src/azure-fluent-system/showcase/AzureFluentShowcaseApp.tsx` |
+| Focused test | `apps/web/src/__tests__/azureFluentSystem.test.tsx` |
 
-If the artifact folders are missing or stale, regenerate or refresh `artifacts/figma-extraction/azure-ui-kit-fluent2/` and `artifacts/iconcloud/` with the sync workflow before proceeding. Do not commit machine-local artifact paths.
+## Durable outcome rule
 
-## Vocabulary
+Do not stop at transient Figma output. The final deliverable must live in checked-in project files:
 
-- **Rich design context** means Figma `get_design_context` output for a published component node, plus the component graph record. If the node is a sparse wrapper, use metadata and targeted child `get_design_context` files.
-- **Graph snapshot** means node-level published component graph metadata only. It is useful for inventory, but it is not enough for high-fidelity implementation.
-- **Recipe** means a structured implementation spec: evidence files, public React API, props, callbacks, slots, state model, variants, accessibility, examples, and implementation skeleton.
-- **API** means the public React library contract: exported component/pattern names, prop types, events, slots/render props, controlled/uncontrolled state, and example usage. It does not mean a backend HTTP API.
-- **Ready-to-use library** means consumers can import components, pass data/handlers, handle loading/error/disabled states, and get accessible Fluent React v9 UI without reading raw Figma dumps.
+- React implementation in `components.tsx`, `patterns.tsx`, `types.ts`, and `tokens.css`
+- focused examples in `examples/*.example.tsx`
+- component catalog in `catalog/COMPONENTS.md`
+- pattern catalog in `catalog/PATTERNS.md`
+- icon catalog in `catalog/ICONS.md`
+- summary/link updates in `README.md` when coverage shape changes
+- visible preview coverage in `showcase/AzureFluentShowcaseApp.tsx`
 
-## Standard workflow
+Downstream agents must not need Figma MCP for ordinary consumption.
 
-### 1. Classify the request
+## Source-of-truth map
 
-Map the user request to one or more workstreams:
+| Need | File |
+| --- | --- |
+| Public component/pattern code | `apps/web/src/azure-fluent-system/components.tsx`, `patterns.tsx`, `types.ts`, `tokens.css` |
+| Public icon code and assets | `apps/web/src/azure-fluent-system/icons.tsx`, `assets/icons/azure/` |
+| Component catalog | `apps/web/src/azure-fluent-system/catalog/COMPONENTS.md` |
+| Pattern catalog | `apps/web/src/azure-fluent-system/catalog/PATTERNS.md` |
+| Icon catalog | `apps/web/src/azure-fluent-system/catalog/ICONS.md` |
+| Portable usage and summary | `apps/web/src/azure-fluent-system/README.md` |
+| Durable doctrine / anti-rules | `apps/web/src/azure-fluent-system/DESIGN.md` |
+| Showcase presence | `apps/web/src/azure-fluent-system/showcase/AzureFluentShowcaseApp.tsx` |
+| Example coverage | `apps/web/src/azure-fluent-system/examples/` |
+| Focused regression coverage | `apps/web/src/__tests__/azureFluentSystem.test.tsx` |
 
-| User asks for | Workstream |
-|---|---|
-| "update from Figma", "full component coverage", "rich context" | Figma evidence sync |
-| "icons", "IconCloud", "Azure glyphs" | Icon source sync |
-| "recipes", "API", "handoff docs" | Recipe/API sync |
-| "component library ready", "high fidelity", "drop-in" | Library hardening |
-| "Create Resource pattern" | Pattern gap investigation |
-| "use it in Agentweaver" | Consumer migration |
+## Workflow
 
-Do not mix up completion claims. Evidence, recipes, code, and consumer migration are separate milestones.
+### 1. Extract the main component inventory with Figma MCP
 
-### 2. Sync Figma evidence
+Use `figma-list_file_components_for_code_connect` with the Azure UI Kit file key:
 
-1. Read `manifest.json` and `comprehensive-component-cache-ledger.json`.
-2. Find ledger entries with graph-only or metadata-only evidence.
-3. For each missing rich context entry:
-   - Call Figma `get_design_context` for the exact node when available.
-   - If sparse or wrapper-like, call metadata and then rich context on meaningful child frames/symbols.
-   - Save raw output under `raw\design-context-comprehensive-<nodeid>-<slug>.txt`.
-   - Update the ledger with request attempts, raw files, evidence type, and any failure.
-4. Update `manifest.json` request count/status.
-5. Create a new batch file named `batch-comprehensive-<N>-rich-context-<scope>.json`.
+- `fileKey: q2TdO4dVcMhNWYp0N6Bc05`
 
-If rate limiting or Figma access fails, record the exact node IDs and stop gracefully. Do not claim full rich coverage unless every published node has rich context or an explicit unavailable record.
+Treat the result as the **inventory source of truth** for:
 
-### 3. Investigate pattern gaps
+- `apps/web/src/azure-fluent-system/catalog/COMPONENTS.md`
+- any cross-links in `apps/web/src/azure-fluent-system/README.md`
 
-For pattern issues such as **Create Resource**:
+When pattern-family inventory or guidance changes, keep the pattern-side checked-in artifacts synchronized too:
 
-1. Read `pattern-node-index.json`, `patterns.jsonl`, and linked raw files.
-2. Search the linked pattern file for child frames, variant names, nearby nodes, or alternate template names before spending new Figma calls.
-3. If a usable child/template exists, cache rich context and update `patterns.jsonl`, distilled contexts, and `DESIGN.md`.
-4. If only a notice/update node exists, create a root-cause record with node IDs, metadata evidence, and exact blocker. Mark the pattern blocked, not complete.
+- `apps/web/src/azure-fluent-system/catalog/PATTERNS.md`
 
-### 4. Sync icons
+When icon assets, aliases, or import strategy change, keep the icon-side artifact synchronized too:
 
-Use this source hierarchy:
+- `apps/web/src/azure-fluent-system/catalog/ICONS.md`
 
-1. **General system icons:** `@fluentui/react-icons`, from the `microsoft/fluentui-system-icons` family.
-2. **Azure/resource glyphs:** IconCloud (`https://iconcloud.design/`) authenticated exports.
-3. **Figma Community Microsoft Fluent System Iconography:** visual/reference guidance only unless assets are explicitly exported under acceptable terms.
+Required handling:
 
-IconCloud handling:
+1. Rebuild or update the explicit per-component inventory rows from the Figma response.
+2. Preserve one row per inventory component/component set.
+3. Record:
+   - total inventory row count
+   - per-category counts
+   - exact name/node audit counts **only** when they come from an explicit comparison source
+4. Keep showcase placeholders and related local mappings separate from exact-node coverage.
+5. Do **not** claim `148/148 implemented` unless the table actually supports that claim.
 
-- Use Microsoft Edge/Playwright with a persistent profile when interactive login is needed.
-- Never ask for or store credentials.
-- Use visible export/download controls only; do not scrape hidden/private APIs.
-- Download to session artifacts first, not directly into source.
-- Normalize assets into a manifest with names, categories, format, source URL, and file path.
-- Wire assets through `AzureIconProvider`, `AzureIcon`, and `createIconCloudRegistry`.
-- Deduplicate extensionless SVG payloads and named SVG duplicates before copying assets into any project-owned static folder.
+Current durable outputs should remain conservative:
 
-### 5. Complete recipes and public APIs
+- exact inventory rows must remain explicit in the checked-in helper data used by the showcase
+- summary counts must stay aligned between the helper data and the Markdown table
+- the Markdown catalog file must reflect the same totals and categories
 
-For every component/pattern in the standalone system surface:
+### 2. Extract a single item/node with Figma MCP
 
-1. Update `implementation-recipes.json` with:
-   - `name`
-   - `figmaNodeIds`
-   - `rawEvidenceFiles`
-   - `purpose`
-   - `fluentReactMapping`
-   - `layoutAnatomy`
-   - `statesAndVariants`
-   - `accessibilityAndInteraction`
-   - `proposedApi`
-   - `props`
-   - `events`
-   - `slots`
-   - `stateModel`
-   - `exampleUsage`
-   - `implementationSkeleton`
-   - `confidence`
-   - `remainingUnknowns`
-2. Resolve `summary-only` entries by either:
-   - writing a dedicated full recipe,
-   - folding the node into a named recipe with explicit evidence and rationale, or
-   - marking it not part of the public library API with a reason.
-3. Update `implementation-recipe-gap-list.json`.
+Use the exact dev-mode node URL whenever possible, for example:
 
-Do not leave unexplained "summary-only" recipe coverage when the user asks for a drop-in system.
+- `https://www.figma.com/design/q2TdO4dVcMhNWYp0N6Bc05/...?...node-id=30028-627&m=dev`
 
-### 6. Harden library code
+For a single node:
 
-Work in `apps/web/src/azure-fluent-system/`.
+1. Parse the exact file key and node ID from the dev-mode URL.
+2. Call `figma-get_design_context` with that exact `fileKey` and `nodeId`.
+3. Call `figma-get_variable_defs` with that exact `fileKey` and `nodeId`.
+4. Use `figma-get_motion_context` only when motion/animation fidelity matters.
 
-High-fidelity components must provide:
+Failure handling is mandatory:
 
-- Fluent React v9 primitives and tokens, not Tailwind or copied Figma CSS.
-- Default, hover/focus/active/disabled/loading/error states where applicable.
-- Controlled data/value APIs and callback signatures.
-- Accessible labels, table/list semantics, keyboard-friendly actions, and focus behavior.
-- Responsive behavior without nested card chrome.
-- Icon slots that accept Fluent icons or IconCloud registry entries.
-- Examples in README and tests for critical interactions.
+- do not silently fall back from MCP failure to screenshots, vague grouped references, or guessed fidelity
+- If extraction fails, record the exact failure and node ID in durable project artifacts.
+- Do **not** silently fall back to screenshots, vague grouped references, or guessed implementation fidelity.
+- Use conservative status in the catalog rows such as the already-recorded statuses (`implemented-rendered`, `showcase-placeholder`, `needs-mcp-extraction`, `needs-implementation`, `local-only-needed`, `not-in-inventory`) plus explicit error text in notes or `mcpNodes`.
+- Screenshots may help polish the UI, but they do **not** count as successful MCP extraction.
 
-Prioritize:
+Tool constraints:
 
-- `BladeHeader`
-- `ServiceMenu`
-- `DataToolbar`
-- `FilterBar`
-- `AzureDataGrid`
-- `ResourceTagEditor`
-- `FormFooter`
-- `Pager`
-- `CopilotComposer`
-- `CopilotResponse`
-- `InlineCopilot`
-- `AgenticProgress`
-- `AzureTabList`
-- `HelpPopover` / `CalloutPopover`
-- pattern wrappers such as browse, filtering, form blade, delete, service overview, and Copilot workspace.
+- If the URL is missing `node-id`, get a node-specific dev URL before claiming extraction.
+- For `/make/` URLs or unsupported URL shapes, follow the MCP tool constraints exactly.
+- If the tool requires a node-specific design URL and you do not have one, stop and report the blocker instead of inventing fidelity.
 
-### 7. Validate
+### 3. Map extraction into the checked-in library
 
-Run the smallest checks that prove the changed layer:
+When a node is added or refreshed, update the checked-in library, not just the inventory records:
+
+- `apps/web/src/azure-fluent-system/components.tsx`
+- `apps/web/src/azure-fluent-system/types.ts`
+- `apps/web/src/azure-fluent-system/tokens.css`
+- `apps/web/src/azure-fluent-system/icons.tsx`
+- `apps/web/src/azure-fluent-system/assets/icons/azure/`
+- `apps/web/src/azure-fluent-system/examples/*.example.tsx`
+- `apps/web/src/azure-fluent-system/catalog/COMPONENTS.md`
+- `apps/web/src/azure-fluent-system/catalog/PATTERNS.md`
+- `apps/web/src/azure-fluent-system/catalog/ICONS.md`
+- `apps/web/src/azure-fluent-system/showcase/AzureFluentShowcaseApp.tsx`
+- `apps/web/src/__tests__/azureFluentSystem.test.tsx`
+
+Mapping rules:
+
+- Use implemented React export names where present: e.g. `AzureAccordion`, `CodeSnippet`, `CopyButton`, `CopilotComposer`, `CopilotResponse`, `InlineCopilot`, `AgenticProgress`, `CopilotWorkspacePattern`.
+- Use `Related local export <surface>` when the node can borrow implementation context from a broader checked-in surface but still lacks its own dedicated preview.
+- Use `Needs mapping` or `Not mapped` when no checked-in export is present.
+- Reuse the durable statuses already present in the checked-in catalog rows rather than inventing success.
+
+Implementation rules:
+
+- Use local `azf-` classes and the existing token contract in `tokens.css`.
+- Do **not** paste Tailwind or generated Figma CSS into the library.
+- Do **not** treat generated Figma React code as production code.
+- Preserve portability: consumers must still work from local files only.
+
+### 4. Update `DESIGN.md` carefully
+
+Only write durable guidance into `DESIGN.md`:
+
+- pattern doctrine
+- local component usage notes
+- anti-rules / guardrails
+- durable source citations where they help future maintenance
+
+Do **not** make `DESIGN.md` depend on:
+
+- Figma MCP availability
+- machine-local paths
+- transient tool-output files
+- copied raw extraction dumps
+
+`DESIGN.md` should tell future agents **how to work locally** even when Figma MCP is unavailable.
+
+### 5. Add and verify showcase coverage
+
+Every newly mapped component or pattern must be reflected in the showcase:
+
+- add it to the **Components** preview when it is a reusable library primitive
+- add it to the **Patterns** browser when it is a composed pattern wrapper
+
+If icon work changed:
+
+- keep `catalog/ICONS.md` synchronized with the checked-in icon assets, aliases, and examples
+- expose a minimal visible icon surface in the showcase when feasible, keeping it preview-oriented and aligned with `catalog/ICONS.md`
+
+Verification rules:
+
+- ensure the item is visibly present, not only mentioned in metadata
+- keep showcase presence synchronized with `COMPONENTS.md`, `PATTERNS.md`, and `ICONS.md` when icon coverage is shown
+- set showcase coverage explicitly in the mapping table:
+  - `Yes` = the inventory row is visible and selectable in the showcase
+  - `No` = not surfaced in the showcase
+
+If a component reuses implementation context from another surface, the mapping table should say so plainly without implying the row is already implemented.
+
+### 6. Validate without silent failure
+
+Run the smallest set of existing checks that proves the changed layer, but do not silently skip required validation.
+
+Required baseline validation for Azure Fluent System work:
 
 ```powershell
-Set-Location apps\web
-npm run build
-npx eslint src/azure-fluent-system
-npm run test -- --run <new-or-focused-test-file>
-git diff --check
+npm --prefix apps/web/src/azure-fluent-system run showcase:validate-doctrine
 ```
 
-If full tests fail outside the library, record the exact failure and continue with focused validation. Do not hide unrelated timeouts.
+When TypeScript, React, CSS, examples, catalog shape, or showcase behavior changed, also run:
 
-### 8. Report status precisely
-
-Use this report structure:
-
-```markdown
-**Evidence:** X / 148 published nodes have rich design context; Y wrapper+child; Z unavailable.
-**Patterns:** Create Resource verdict and files updated.
-**Recipes:** complete / folded / not-public-API / blocked counts.
-**Icons:** downloaded/imported/normalized counts and source.
-**Library:** components hardened and validation results.
-**Next:** whether Agentweaver migration can begin.
+```powershell
+npm --prefix apps/web/src/azure-fluent-system run showcase:build
+npm --prefix apps/web run build
+npm --prefix apps/web run test -- --run src/__tests__/azureFluentSystem.test.tsx
 ```
+
+Also run a targeted consistency check for the durable mapping outputs:
+
+- verify `COMPONENTS.md` remains a readable markdown table with the required columns and no embedded JSON block
+- verify the component inventory row count in `COMPONENTS.md` stays aligned with its status summary
+- verify the component status summary counts in `COMPONENTS.md` still match the table rows and any helper data used by the showcase
+- verify extracted component rows in `COMPONENTS.md` still match the tracked MCP-backed component entries used by the showcase
+- verify `PATTERNS.md` remains a readable markdown table with the required columns and no embedded JSON block
+- verify the pattern-family row count in `PATTERNS.md` matches the tracked showcase/browser data
+- verify `ICONS.md` remains a readable markdown table with the required columns and no embedded JSON or SVG dump
+- verify the icon summary counts in `ICONS.md` stay aligned with the checked-in icon assets and import metadata
+- verify `README.md` still links to `catalog/COMPONENTS.md`, `catalog/PATTERNS.md`, and `catalog/ICONS.md`
+
+Run a forbidden-path / coupling search and scoped diff check:
+
+```powershell
+rg -n "transient-output markers|machine-local path markers" apps/web/src/azure-fluent-system .copilot/skills/azure-fluent-system-sync
+git --no-pager diff --check -- apps/web/src/azure-fluent-system .copilot/skills/azure-fluent-system-sync
+```
+
+If validation fails:
+
+- report the exact command
+- report the exact error
+- separate unrelated baseline failures from your change-specific failures
+- do **not** claim the component/pattern is complete
+
+## Reporting rules
+
+When reporting completion, be precise:
+
+- which file key and node IDs were used
+- whether the inventory was refreshed
+- which nodes were extracted successfully
+- which nodes still need MCP extraction
+- which exports were added or updated
+- whether the showcase status is `Yes` or `No`
+- which validations passed or failed
+
+Never collapse `needs-mcp-extraction`, `showcase-placeholder`, and `implemented-rendered` into one misleading success claim.
 
 ## Guardrails
 
-- Do not claim all components are high-fidelity if some only have graph snapshots.
-- Do not treat raw Figma-generated code as production code.
-- Do not expose hidden chain-of-thought; show explainable progress/state rows instead.
-- Do not scrape credentials, hidden IconCloud APIs, or private Figma internals.
-- Do not migrate Agentweaver broadly until the standalone library is stable enough to consume.
-- Do not copy icon glyphs directly from Figma. Use `@fluentui/react-icons`, `microsoft/fluentui-system-icons`, or IconCloud exports.
+- Do **not** silently fall back from failed MCP extraction to guessed implementation fidelity.
+- Do **not** claim high fidelity for nodes still marked `showcase-placeholder`, `needs-mcp-extraction`, `needs-implementation`, `local-only-needed`, or `not-in-inventory`.
+- Do **not** commit machine-local paths, transient tool-output paths, or temp identifiers.
+- Do **not** require downstream consumers to have Figma MCP.
+- Do **not** paste Tailwind or raw generated design code into the library.
+- Do **not** leave showcase visibility implicit; reflect it explicitly in `COMPONENTS.md` and `PATTERNS.md`.
+- Do **not** update `DESIGN.md` with ephemeral extraction logs.

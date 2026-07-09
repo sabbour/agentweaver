@@ -30,6 +30,7 @@ const useStyles = makeStyles({
     backgroundColor: tokens.colorNeutralBackground1,
     borderRight: `1px solid ${tokens.colorNeutralStroke2}`,
     color: tokens.colorNeutralForeground1,
+    boxShadow: tokens.shadow2,
     transitionProperty: 'width, min-width, max-width',
     transitionDuration: tokens.durationNormal,
     transitionTimingFunction: tokens.curveEasyEase,
@@ -49,7 +50,9 @@ const useStyles = makeStyles({
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: tokens.spacingHorizontalS,
-    padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM} ${tokens.spacingVerticalXS}`,
+    minHeight: '52px',
+    padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM}`,
+    borderBottom: `1px solid ${tokens.colorNeutralStroke3}`,
   },
   chromeCollapsed: {
     flexDirection: 'column',
@@ -199,6 +202,7 @@ const useStyles = makeStyles({
     transitionProperty: 'background-color, color',
     transitionDuration: tokens.durationFast,
     transitionTimingFunction: tokens.curveEasyEase,
+    position: 'relative',
     '@media (prefers-reduced-motion: reduce)': {
       transitionDuration: '0ms',
     },
@@ -236,6 +240,7 @@ const useStyles = makeStyles({
     color: tokens.colorBrandForeground1,
     backgroundColor: tokens.colorBrandBackground2,
     fontWeight: tokens.fontWeightSemibold,
+    boxShadow: `inset 3px 0 0 ${tokens.colorBrandStroke1}`,
     ':hover': {
       color: tokens.colorBrandForeground1,
       backgroundColor: tokens.colorBrandBackground2Hover,

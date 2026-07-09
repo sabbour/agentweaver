@@ -1,7 +1,6 @@
 import { useState } from 'react';
 import {
   Button,
-  Divider,
   Field,
   Input,
   MessageBar,
@@ -9,14 +8,14 @@ import {
   Spinner,
   Switch,
   Text,
-  Title2,
-  Title3,
   makeStyles,
   tokens,
 } from '@fluentui/react-components';
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
 import type { SandboxPolicy } from '../api/types';
+import { PageHeader } from '../components/PageHeader';
+import { AzurePage, AzureSectionHeader, AzureSurface } from '../components/azure/AzureLayout';
 
 const useStyles = makeStyles({
   root: {
@@ -114,17 +113,17 @@ export function SettingsPage() {
   };
 
   return (
-    <div className={styles.root}>
-      <Title2>Settings</Title2>
+    <AzurePage className={styles.root}>
+      <PageHeader
+        title="Settings"
+        subtitle="System-level configuration for local repository policy."
+      />
 
-      <Divider />
-
-      <div className={styles.section}>
-        <Title3>Sandbox policy</Title3>
-        <Text>
-          View and update the sandbox policy for a repository. Enter the repository path to load its
-          current policy.
-        </Text>
+      <AzureSurface className={styles.section}>
+        <AzureSectionHeader
+          title="Sandbox policy"
+          description="View and update the sandbox policy for a repository. Enter the repository path to load its current policy."
+        />
 
         <Field label="Repository path">
           <Input
@@ -153,7 +152,7 @@ export function SettingsPage() {
         )}
 
         {policy && (
-          <div className={styles.section}>
+          <AzureSurface className={styles.section} tone="subtle">
             <Field label="Shell execution">
               <Switch
                 label={policy.shell_enabled ? 'Enabled' : 'Disabled'}
@@ -238,9 +237,9 @@ export function SettingsPage() {
                 <MessageBarBody>Policy saved.</MessageBarBody>
               </MessageBar>
             )}
-          </div>
+          </AzureSurface>
         )}
-      </div>
-    </div>
+      </AzureSurface>
+    </AzurePage>
   );
 }

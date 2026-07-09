@@ -13,7 +13,7 @@ import './tokens.css';
 // 3. Figma Community iconography files are visual reference only unless assets are
 //    explicitly exported under acceptable terms.
 
-export type AzureIconSize = 12 | 16 | 18 | 20 | 24 | 32;
+export type AzureIconSize = 12 | 16 | 18 | 20 | 24 | 28 | 32;
 
 export interface AzureIconDefinition {
   element?: ReactElement;

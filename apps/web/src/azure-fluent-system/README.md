@@ -5,114 +5,92 @@ Reusable Azure Fluent-style React components and patterns built on `@fluentui/re
 ```tsx
 import {
   AzureFluentProvider,
-  AzureIconProvider,
   BladeHeader,
   ServiceMenu,
-  DataToolbar,
-  FilterBar,
   AzureDataGrid,
-  ResourceTagEditor,
   CopilotComposer,
 } from './azure-fluent-system';
 ```
 
-## Checked-in recipes and examples
+## Public surface vs. dev-only showcase
 
-The library now owns its offline handoff artifacts, so other agents can use the checked-in package directly:
+The barrel (`index.ts`) is the **only** public entry point. It exports library
+symbols exclusively — types, provider, icons, components, foundations, and
+patterns — and imports `tokens.css` as a side effect. It deliberately does
+**not** re-export `./showcase`, which is a dev-only preview app bundled with a
+large catalog dataset. Keeping the showcase out of the barrel avoids a circular
+dependency and prevents the showcase + catalog from leaking into product
+bundles. If tooling or tests need the showcase, import it directly from
+`./azure-fluent-system/showcase/AzureFluentShowcaseApp`.
 
-- `apps/web/src/azure-fluent-system/recipes/implementation-recipes.json`
-- `apps/web/src/azure-fluent-system/recipes/implementation-recipe-gap-list.json`
-- `apps/web/src/azure-fluent-system/recipes/standalone-system-plan.json`
+## Checked-in catalog and examples
+
+The library now owns a compact checked-in catalog so other agents can work locally without reopening Figma:
+
+- `apps/web/src/azure-fluent-system/DESIGN.md`
+- `apps/web/src/azure-fluent-system/catalog/COMPONENTS.md`
+- `apps/web/src/azure-fluent-system/catalog/PATTERNS.md`
+- `apps/web/src/azure-fluent-system/catalog/ICONS.md`
+- `apps/web/src/azure-fluent-system/COVERAGE.md`
+- `apps/web/src/azure-fluent-system/REBUILD-GUIDE.md`
 - `apps/web/src/azure-fluent-system/examples/README.md`
 - `apps/web/src/azure-fluent-system/examples/*.example.tsx`
+- `apps/web/src/azure-fluent-system/showcase/README.md`
 
-Use the recipe JSON for API contracts and evidence-backed implementation guidance. Use `examples/` for compilable-looking TSX samples covering provider/layout, BladeHeader, ResourceTagEditor, AzureDataGrid + filtering, Copilot composer/response, CreateResourcePattern, and icon registry wiring.
+Use `DESIGN.md` as the portable design-system addendum, `catalog/COMPONENTS.md` for component inventory/mapping/extraction status, `catalog/PATTERNS.md` for pattern inventory/mapping/doctrine, `catalog/ICONS.md` for icon inventory/import status, `examples/` for focused samples, and `showcase/` for the standalone pattern browser plus component preview with an inline icon catalog surface.
 
-## Production usage shape
+For the two cross-cutting root docs: read [`COVERAGE.md`](./COVERAGE.md) for the honest high-fidelity-vs-placeholder coverage ledger and how fidelity is guaranteed, and [`REBUILD-GUIDE.md`](./REBUILD-GUIDE.md) for the end-to-end process of pointing an LLM at this library to rebuild the Agentweaver app (including a worked `CoordinatorRunPage` recipe).
 
-Wrap consumers once so Fluent tokens and the portable `azf-` CSS contract are present:
+## Component catalog snapshot
 
-```tsx
-<AzureFluentProvider density="cozy">
-  <BladeHeader
-    title="Virtual machines"
-    subtitle="Compute resources"
-    actions={[{ id: 'refresh', label: 'Refresh', onClick: refresh }]}
-    onDismiss={closeBlade}
-  />
-</AzureFluentProvider>
-```
+Review [`catalog/COMPONENTS.md`](./catalog/COMPONENTS.md) for the durable Azure UI Kit → local implementation catalog. It is a checked-in component inventory and mapping table, not exhaustive high-fidelity implementation coverage.
 
-Use the data surface without card wrappers:
+| Snapshot | Count |
+| --- | --- |
+| Inventory components/components sets | 148 |
+| Exact name/node audit | 105 covered / 43 missing |
+| implemented-rendered | 26 |
+| needs-mcp-extraction | 45 |
+| showcase-placeholder | 77 |
+| needs-implementation | 0 |
+| local-only-needed | 0 |
 
-```tsx
-<DataToolbar actions={[{ id: 'create', label: 'Create', appearance: 'primary', onClick: createVm }]} />
-<FilterBar filters={filters} searchValue={query} onSearchChange={setQuery} />
-<AzureDataGrid
-  items={resources}
-  getRowId={(resource) => resource.id}
-  selectedRowId={selectedId}
-  onRowClick={openResource}
-  columns={[{ columnId: 'name', header: 'Name', sortable: true, sortValue: (r) => r.name, renderCell: (r) => r.name }]}
-/>
-```
+## Pattern catalog snapshot
 
-Use tag editing as a controlled component:
+Review [`catalog/PATTERNS.md`](./catalog/PATTERNS.md) for the durable Azure Pattern Templates → local implementation catalog.
 
-```tsx
-<ResourceTagEditor
-  rows={tags}
-  resources={resources}
-  validation={tagErrors}
-  onRowChange={(rowId, patch) => setTags(updateTag(rowId, patch))}
-  onAddRow={addTag}
-  onDeleteRow={deleteTag}
-/>
-```
+| Snapshot | Count |
+| --- | --- |
+| Pattern families | 8 |
+| Unique tracked dev-mode nodes | 25 |
+| rich-context | 1 |
+| page-index-only | 1 |
+| component-inventory | 6 |
 
-Copilot surfaces support explicit loading/stop/error states and do not expose hidden reasoning:
+## Icon catalog snapshot
 
-```tsx
-<CopilotComposer
-  value={prompt}
-  onChange={setPrompt}
-  onSend={sendPrompt}
-  isRunning={isRunning}
-  onStop={stopPrompt}
-  attachments={attachments}
-/>
-```
+Review [`catalog/ICONS.md`](./catalog/ICONS.md) for the durable IconCloud → local asset/import catalog.
 
-## Icon source hierarchy
+| Snapshot | Count |
+| --- | --- |
+| Vendored Azure icon collections | 27 |
+| Raw visible icon exports | 1637 |
+| Unique checked-in SVG assets | 1441 |
+| Duplicate alias payloads | 196 |
 
-1. General system icons use the installed `@fluentui/react-icons` package, which is the React package for the Microsoft Fluent system icons family (`microsoft/fluentui-system-icons`). Do not add another dependency for these unless a missing glyph requires it.
-2. Azure/resource-specific product glyphs should come from IconCloud (`https://iconcloud.design/`), the approved authenticated source. This module does not store credentials, scrape private APIs, or redistribute raw Figma glyphs.
-3. The Figma Community Microsoft Fluent System Iconography file is visual/reference guidance only unless assets are explicitly exported under acceptable terms.
+## Local-first downstream workflow
 
-Export approved SVG/PNG assets from IconCloud into workflow-generated artifacts first, normalize and deduplicate them, then check the approved assets into this module under `./assets/icons/azure/`. Register a small explicit set with `createIconCloudRegistry`:
+Downstream agents should be able to consume this library without Figma MCP.
 
-```tsx
-const registry = createIconCloudRegistry(['VirtualMachine', 'StorageAccount'] as const, {
-  basePath: '/azure-icons',
-});
+1. Inspect the checked-in showcase, examples, and catalog files first.
+2. Read `DESIGN.md` as the package-local design contract.
+3. Use `catalog/COMPONENTS.md`, `catalog/PATTERNS.md`, and `catalog/ICONS.md` to find exports, examples, implementation files, extraction or import status, and citations.
+4. Import primitives from `apps/web/src/azure-fluent-system`, then compose the target pattern with the checked-in React + CSS sources.
+5. Treat Figma dev-mode URLs as traceability citations only.
+6. Use Figma MCP only if it is available and you are intentionally refreshing the catalog or investigating a gap.
 
-<AzureIconProvider registry={registry}>
-  <AzureIcon name="VirtualMachine" size={18} label="Virtual machine" />
-</AzureIconProvider>
-```
+## Showcase app
 
-For normalized IconCloud manifests, use `createIconCloudRegistryFromManifest` so the registry follows the manifest file paths instead of assuming every asset is named directly after the icon. The checked-in Azure icon bundle lives in `./assets/icons/azure/azure-icons-manifest.json` with SVGs under `./assets/icons/azure/assets/`:
+`apps/web/src/azure-fluent-system/showcase/` is the library-local standalone showcase. It has exactly two primary experiences: a component preview and a pattern example browser, plus an inline icon catalog surface inside the Components experience. It is self-contained for downstream projects: the checked-in catalogs, examples, React components, CSS tokens, and local assets are enough for ordinary usage without Figma MCP. Run it from `apps/web/src/azure-fluent-system/` with `npm run showcase:dev`, which serves the standalone app at `http://127.0.0.1:4174/`.
 
-```tsx
-const manifestUrl = new URL('./assets/icons/azure/azure-icons-manifest.json', import.meta.url);
-const iconsBaseUrl = new URL('./assets/icons/azure/', import.meta.url).toString();
-const azureIconsManifest = await fetch(manifestUrl).then((response) => response.json());
-
-const registry = createIconCloudRegistryFromManifest(azureIconsManifest, {
-  basePath: iconsBaseUrl,
-  filter: (icon) => icon.collections?.includes('Compute') ?? icon.category === 'Compute',
-  getKey: (icon) => `${icon.category ?? icon.collection}/${icon.name}`,
-});
-```
-
-The checked-in manifest keeps each icon `file` entry relative to the manifest directory (`assets/...svg`), so consumers can fetch the manifest and point `basePath` at the checked-in folder without depending on session artifacts or absolute local paths.
+The root project doctrine still lives in the repository `DESIGN.md`, but this library also ships a portable addendum in `./DESIGN.md`. Downstream projects should copy or merge the library-local addendum so the component, pattern, token, icon, and anti-rule guidance stays close to the package.

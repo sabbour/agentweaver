@@ -33,6 +33,7 @@ import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
 import { StartOrchestrationDialog } from '../components/StartOrchestrationDialog';
 import { PageHeader } from '../components/PageHeader';
+import { AzurePage } from '../components/azure/AzureLayout';
 import { KanbanBoard } from '../components/board/KanbanBoard';
 import { isCoordinatorRun } from '../utils/runKind';
 import type { Project, WorkflowRunDto } from '../api/types';
@@ -376,7 +377,7 @@ export function ProjectPage() {
   if (!projectId) return null;
 
   return (
-    <div className={styles.root}>
+    <AzurePage className={styles.root}>
       {loading && <Spinner label="Loading project board" />}
 
       {error && (
@@ -460,6 +461,6 @@ export function ProjectPage() {
           </section>
         </>
       )}
-    </div>
+    </AzurePage>
   );
 }

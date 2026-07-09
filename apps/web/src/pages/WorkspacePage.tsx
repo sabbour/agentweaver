@@ -15,6 +15,7 @@ import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
 import type { Project, ProposedBacklogItem, WorkspaceNode, WorkspaceRef } from '../api/types';
 import { PageHeader } from '../components/PageHeader';
+import { AzurePage } from '../components/azure/AzureLayout';
 import { FilesTabPanel } from '../components/ArtifactBrowser';
 import { FileViewer } from '../components/FileViewer';
 import { DecomposePreviewDialog } from '../components/DecomposePreviewDialog';
@@ -283,7 +284,7 @@ export function WorkspacePage() {
   if (!projectId) return null;
 
   return (
-    <div className={styles.root}>
+    <AzurePage className={styles.root} fullHeight>
       <PageHeader
         title="Workspace"
         subtitle="Browse the project repository and active run worktrees, read-only."
@@ -391,6 +392,6 @@ export function WorkspacePage() {
         isLoading={decomposeLoading}
         error={decomposeError}
       />
-    </div>
+    </AzurePage>
   );
 }

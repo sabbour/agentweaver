@@ -19,7 +19,6 @@ import {
   TabList,
   Text,
   Textarea,
-  Title2,
   Title3,
   makeStyles,
   tokens,
@@ -31,6 +30,8 @@ import {
 } from '@fluentui/react-icons';
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
+import { PageHeader } from '../components/PageHeader';
+import { AzurePage, AzureSectionHeader, AzureSurface } from '../components/azure/AzureLayout';
 import type {
   TeamTemplateDto,
   CastProposalDto,
@@ -43,7 +44,7 @@ const useStyles = makeStyles({
   root: {
     display: 'flex',
     flexDirection: 'column',
-    gap: tokens.spacingVerticalL,
+    gap: tokens.spacingVerticalXL,
     maxWidth: '760px',
   },
   breadcrumb: {
@@ -58,10 +59,6 @@ const useStyles = makeStyles({
     textDecoration: 'none',
   },
   card: {
-    padding: tokens.spacingVerticalL,
-    backgroundColor: tokens.colorNeutralBackground1,
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: tokens.borderRadiusMedium,
     display: 'flex',
     flexDirection: 'column',
     gap: tokens.spacingVerticalM,
@@ -155,9 +152,6 @@ const useStyles = makeStyles({
     justifyContent: 'flex-end',
   },
   rationaleBox: {
-    padding: tokens.spacingVerticalM,
-    backgroundColor: tokens.colorNeutralBackground2,
-    borderRadius: tokens.borderRadiusMedium,
     display: 'flex',
     flexDirection: 'column',
     gap: tokens.spacingVerticalXS,
@@ -501,16 +495,20 @@ export function CastingWizardPage() {
   );
 
   return (
-    <div className={styles.root}>
-      <div className={styles.breadcrumb}>
-        <Link to="/" className={styles.breadcrumbLink}>Projects</Link>
-        <span>/</span>
-        <Link to={`/projects/${projectId}/team`} className={styles.breadcrumbLink}>Team</Link>
-        <span>/</span>
-        <span>Cast</span>
-      </div>
-
-      <Title2>Cast a team</Title2>
+    <AzurePage className={styles.root}>
+      <PageHeader
+        title="Cast a team"
+        subtitle="Choose roles from a template, project analysis, or a plain-language team brief."
+        breadcrumb={
+          <nav className={styles.breadcrumb} aria-label="Breadcrumb">
+            <Link to="/" className={styles.breadcrumbLink}>Projects</Link>
+            <span>/</span>
+            <Link to={`/projects/${projectId}/team`} className={styles.breadcrumbLink}>Team</Link>
+            <span>/</span>
+            <span>Cast</span>
+          </nav>
+        }
+      />
 
       <div className={styles.stepIndicator}>
         {STEPS.map((s, i) => (
@@ -532,7 +530,7 @@ export function CastingWizardPage() {
             <Tab icon={<SearchRegular />} value="analyze">Analyze</Tab>
           </TabList>
 
-          <div className={styles.tabContent}>
+          <AzureSurface className={styles.tabContent}>
             {activePanel === 'formulate' && (
               <>
                 <Text className={styles.panelDesc}>
@@ -649,18 +647,18 @@ export function CastingWizardPage() {
               </>
             )}
 
-          </div>
+          </AzureSurface>
 
           {castRationale && (
-            <div className={styles.rationaleBox}>
+            <AzureSurface className={styles.rationaleBox} tone="subtle" density="compact">
               <Text className={styles.rationaleLabel}>Why this team</Text>
               <Text>{castRationale}</Text>
-            </div>
+            </AzureSurface>
           )}
 
           {/* Roles section */}
-          <div className={styles.rolesSection}>
-            <Text className={styles.rolesSectionLabel}>Roles</Text>
+          <AzureSurface className={styles.rolesSection}>
+            <AzureSectionHeader title="Roles" description="Tune the role mix before reviewing the proposal." />
             {templatesLoading && <Spinner size="extra-tiny" />}
             {!templatesLoading && (
               <div className={styles.rolesGrid}>
@@ -680,7 +678,7 @@ export function CastingWizardPage() {
                 ))}
               </div>
             )}
-          </div>
+          </AzureSurface>
 
           <Accordion collapsible>
             <AccordionItem value="universe">
@@ -727,7 +725,7 @@ export function CastingWizardPage() {
 
       {/* Step 2: Review proposal */}
       {step === 'review' && proposal && (
-        <div className={styles.card}>
+        <AzureSurface className={styles.card}>
           <Title3>Review proposal</Title3>
 
           {proposal.warnings.length > 0 && proposal.warnings.map((w, i) => (
@@ -802,12 +800,12 @@ export function CastingWizardPage() {
               Confirm
             </Button>
           </div>
-        </div>
+        </AzureSurface>
       )}
 
       {/* Step 3: Confirm */}
       {step === 'confirm' && proposal && (
-        <div className={styles.card}>
+        <AzureSurface className={styles.card}>
           <Title3>Cast team</Title3>
           <Text>
             You are about to create a team with {proposal.members.length} member{proposal.members.length !== 1 ? 's' : ''}.
@@ -833,8 +831,8 @@ export function CastingWizardPage() {
             </Button>
             {confirming && <Spinner size="extra-tiny" aria-hidden="true" />}
           </div>
-        </div>
+        </AzureSurface>
       )}
-    </div>
+    </AzurePage>
   );
 }

@@ -9,6 +9,7 @@ body,
 #root {
   margin: 0;
   padding: 0;
+  font-family: "Segoe UI", "Segoe UI Web (West European)", -apple-system, BlinkMacSystemFont, Roboto, "Helvetica Neue", sans-serif;
 }
 
 #root {
@@ -17,7 +18,10 @@ body,
 
 /* Fallback only — Fluent webLightTheme owns all background theming. */
 body {
-  background-color: #f5f5f5;
+  background-color: var(--colorNeutralBackground2, #fafafa);
+  color: var(--colorNeutralForeground1, #242424);
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
 }
 
 /* Impeccable live-mode compatibility.

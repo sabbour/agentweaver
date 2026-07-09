@@ -13,7 +13,6 @@ import {
   TableHeaderCell,
   TableRow,
   Text,
-  Title3,
   makeStyles,
   tokens,
 } from '@fluentui/react-components';
@@ -22,6 +21,7 @@ import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
 import type { HeartbeatAutomationDto, HeartbeatStatusDto } from '../api/types';
 import { PageHeader } from '../components/PageHeader';
+import { AzureEmptyState, AzurePage, AzureSectionHeader, AzureSurface } from '../components/azure/AzureLayout';
 import { RefreshCountdown } from '../hooks/useRefreshCountdown';
 
 // Heartbeat (Spec 011, FR-017) — service status, last error, the real automations
@@ -56,10 +56,6 @@ const useStyles = makeStyles({
     display: 'flex',
     flexDirection: 'column',
     gap: tokens.spacingVerticalXS,
-    padding: tokens.spacingVerticalL,
-    backgroundColor: tokens.colorNeutralBackground1,
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: tokens.borderRadiusMedium,
   },
   automationHeader: {
     display: 'flex',
@@ -107,7 +103,7 @@ function AutomationCard({
   styles: ReturnType<typeof useStyles>;
 }) {
   return (
-    <div className={styles.automationCard}>
+    <AzureSurface className={styles.automationCard} density="compact">
       <div className={styles.automationHeader}>
         <Text className={styles.automationName}>{automation.name}</Text>
         <Badge appearance="tint" color={automationBadgeColor(automation.status)}>{automation.status}</Badge>
@@ -118,7 +114,7 @@ function AutomationCard({
         Last run: {automation.last_run_utc ? relativeTime(automation.last_run_utc) : '—'}
         {automation.last_acted_count != null && ` · acted ${automation.last_acted_count}`}
       </Text>
-    </div>
+    </AzureSurface>
   );
 }
 
@@ -160,7 +156,7 @@ export function HeartbeatPage() {
   }, [load, autoRefresh]);
 
   return (
-    <div className={styles.root}>
+    <AzurePage className={styles.root}>
       <PageHeader
         title="Heartbeat"
         subtitle="Background automation status and recent ticks."
@@ -196,7 +192,7 @@ export function HeartbeatPage() {
 
       {data && (
         <>
-          <div className={styles.statusRow}>
+          <AzureSurface className={styles.statusRow} density="compact">
             <Badge appearance="filled" color={serviceBadgeColor(data.service_status)}>
               {data.service_status}
             </Badge>
@@ -206,7 +202,7 @@ export function HeartbeatPage() {
             <Text className={styles.meta}>
               Last tick: {data.last_tick_utc ? relativeTime(data.last_tick_utc) : '—'}
             </Text>
-          </div>
+          </AzureSurface>
 
           {data.last_error && (
             <MessageBar intent="error">
@@ -214,19 +210,19 @@ export function HeartbeatPage() {
             </MessageBar>
           )}
 
-          <div className={styles.section}>
-            <Title3>Automations</Title3>
+          <AzureSurface className={styles.section}>
+            <AzureSectionHeader title="Automations" />
             <div className={styles.automations}>
               {data.automations.map((a) => (
                 <AutomationCard key={a.name} automation={a} styles={styles} />
               ))}
             </div>
-          </div>
+          </AzureSurface>
 
-          <div className={styles.section}>
-            <Title3>Recent activity</Title3>
+          <AzureSurface className={styles.section}>
+            <AzureSectionHeader title="Recent activity" />
             {data.recent_activity.length === 0 ? (
-              <Text>No ticks recorded yet.</Text>
+              <AzureEmptyState title="No ticks recorded yet" body="Recent heartbeat activity will appear after the next automation cycle." />
             ) : (
               <Table aria-label="Recent heartbeat ticks" size="small">
                 <TableHeader>
@@ -259,9 +255,9 @@ export function HeartbeatPage() {
                 </TableBody>
               </Table>
             )}
-          </div>
+          </AzureSurface>
         </>
       )}
-    </div>
+    </AzurePage>
   );
 }
