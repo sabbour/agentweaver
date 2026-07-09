@@ -17,6 +17,13 @@ internal static class AgentHostEndpoint
     public static string Scheme(bool requireMtls) => requireMtls ? "https" : "http";
 
     /// <summary>Builds the full A2A endpoint URL <c>scheme://host:port/path</c>.</summary>
-    public static string Build(bool requireMtls, string host, int port, string a2aPath) =>
-        $"{Scheme(requireMtls)}://{host}:{port}{a2aPath}";
+    /// <remarks>
+    /// When <paramref name="path"/> is <see langword="null"/> or empty the URL is the bare AgentHost
+    /// ORIGIN (<c>scheme://host:port</c>) with NO trailing path — used for the root-mounted
+    /// <c>/preview-runner/*</c> endpoints, which must NOT carry the A2A path segment.
+    /// </remarks>
+    public static string Build(bool requireMtls, string host, int port, string? path) =>
+        string.IsNullOrEmpty(path)
+            ? $"{Scheme(requireMtls)}://{host}:{port}"
+            : $"{Scheme(requireMtls)}://{host}:{port}{path}";
 }

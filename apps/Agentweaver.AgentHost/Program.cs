@@ -222,7 +222,7 @@ app.MapPost("/configure", async (HttpContext ctx) =>
     // Interlocked one-time gate (inside TryConfigure): first caller wins, the rest get 409.
     if (!runtimeState.TryConfigure(
             body.RunId, body.UserId ?? string.Empty, body.TurnBearerToken ?? string.Empty,
-            body.KvUserSecretName, body.GitHubAccessToken))
+            body.KvUserSecretName, body.GitHubAccessToken, body.PreviewRunnerCredential))
         return Results.Conflict("Already configured");
 
     await startup.ConfigureAsync(
@@ -411,6 +411,13 @@ internal sealed record ConfigureRequest
     public string? KvUserSecretName { get; init; }
 
     /// <summary>
+    /// Per-run preview-runner credential (spec-006 decouple-preview, BLOCKER A). Delivered in-memory
+    /// only — never placed in pod env/config/file — so the untrusted preview process cannot inherit it.
+    /// <c>PreviewRunnerEndpointAuth</c> accepts this OR <see cref="TurnBearerToken"/>.
+    /// </summary>
+    public string? PreviewRunnerCredential { get; init; }
+
+    /// <summary>
     /// GitHub OAuth access token pre-resolved by the API (which has KV access).
     /// When present, the pod skips the Key Vault fetch entirely — no OIDC or KV egress needed.
     /// </summary>
@@ -449,13 +456,33 @@ internal sealed record PreviewHealthCheckRequest
 
 internal static class PreviewRunnerEndpointAuth
 {
+    /// <summary>
+    /// Authorizes a <c>/preview-runner/*</c> call (spec-006 decouple-preview, BLOCKER 2/A). Accepts
+    /// EITHER the per-run <see cref="AgentHostRuntimeState.TurnBearerToken"/> OR the per-run
+    /// <see cref="AgentHostRuntimeState.PreviewRunnerCredential"/> (delivered in-memory via
+    /// <c>/configure</c>). Fail-closed: when EITHER credential is configured, a caller presenting
+    /// none/an invalid one is rejected. The dev "no credential configured ⇒ allow" branch applies
+    /// ONLY when neither credential is set (local/dev where preview infra is not active).
+    /// </summary>
     public static bool Authorize(HttpContext ctx, AgentHostRuntimeState runtimeState)
     {
         var turnBearerToken = runtimeState.TurnBearerToken;
-        if (string.IsNullOrEmpty(turnBearerToken))
+        var previewCredential = runtimeState.PreviewRunnerCredential;
+
+        var hasTurn = !string.IsNullOrEmpty(turnBearerToken);
+        var hasCredential = !string.IsNullOrEmpty(previewCredential);
+
+        // Dev/local: no credential configured at all ⇒ allow (preview infra inactive).
+        if (!hasTurn && !hasCredential)
             return true;
 
         var authHeader = ctx.Request.Headers.Authorization.ToString();
-        return string.Equals(authHeader, "Bearer " + turnBearerToken, StringComparison.Ordinal);
+        if (hasTurn && string.Equals(authHeader, "Bearer " + turnBearerToken, StringComparison.Ordinal))
+            return true;
+        if (hasCredential && string.Equals(authHeader, "Bearer " + previewCredential, StringComparison.Ordinal))
+            return true;
+
+        // Fail-closed: a credential is configured but the caller presented none/an invalid one.
+        return false;
     }
 }

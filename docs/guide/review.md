@@ -36,7 +36,11 @@ For projects that produce a browser preview, the run tree shows the preview stat
 
 The same preview status appears in the human-review file panel so you do not have to search the event timeline for the URL.
 
-For the full contract behind this stage, see [Live-preview provisioning](../experience/live-preview-provisioning.md).
+For the full contract behind this stage, see [Decoupled live-preview provisioning](../experience/live-preview-provisioning.md).
+
+### Request changes and steering
+
+When review feedback asks for changes, it goes through the coordinator's unified steering path. The timeline shows the feedback source and then the coordinator's decision: steer the existing child in place, dispatch fresh work, proceed, or record an advisory no-op. See [Unified autonomous steering](../experience/unified-steering.md).
 
 ## The file panel
 

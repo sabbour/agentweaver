@@ -738,65 +738,16 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         (await _assemblyStore.GetAsync(workPlanId, default))!.Status.Should().Be(WorkPlanStatus.Complete);
     }
 
-    // ── D6 request_changes inference + re-dispatch ──────────────────────────────────────────────
+    // ── request_changes deterministic (explicit-target) re-dispatch (rev8: no prose inference) ─────
 
-    [Fact]
-    public async Task RunAssembly_RequestChanges_InfersAffectedChild_ResetsItToPending_AndRedispatches()
-    {
-        var coordinatorRunId = RunId.New().ToString();
-
-        // Two independent eligible children with known, distinct touched-files.
-        var childA = RunId.New();
-        var childB = RunId.New();
-        await SeedChildRunAsync(childA, "agentweaver/child-a", DiffTouching("src/a.txt"));
-        await SeedChildRunAsync(childB, "agentweaver/child-b", DiffTouching("src/b.txt"));
-
-        var (workPlanId, subtaskIds) = await SeedPlanAsync(coordinatorRunId,
-            new[] { SubtaskStatus.AssembleReady, SubtaskStatus.AssembleReady },
-            childRunIds: new[] { childA.ToString(), childB.ToString() });
-        await SeedCoordinatorRunAsync(coordinatorRunId);
-        _streamStore.Create(coordinatorRunId, "alice");
-        var subtaskA = subtaskIds[0];
-        var subtaskB = subtaskIds[1];
-
-        var run = _sut.RunAssemblyAsync(Context(coordinatorRunId), default);
-
-        await WaitUntilArmedAsync(coordinatorRunId);
-        // Feedback references ONLY child A's file → only subtask A (+ dependents) should be re-dispatched.
-        _reviewGate.TrySubmit(coordinatorRunId, "alice",
-            new AssemblyReviewDecision(Approved: false, RequestChanges: true,
-                Feedback: "Please fix the bug in src/a.txt", TargetFiles: null, Reviewer: "alice"))
-            .Should().Be(AssemblyReviewSubmitResult.Accepted);
-
-        await run;
-
-        var changes = _streamStore.Get(coordinatorRunId)!.GetSnapshotSince(0).Events
-            .Single(e => e.Type == EventTypes.CoordinatorAssemblyChangesRequested);
-        // Assembly event payloads are stamped with timestamp_utc and stored as a JsonObject.
-        var changesPayload = (System.Text.Json.Nodes.JsonObject)changes.Payload;
-        var redispatch = changesPayload["redispatchSubtaskIds"]!.AsArray()
-            .Select(n => (int)n!).ToList();
-        redispatch.Should().BeEquivalentTo(new[] { subtaskA });
-
-        // Subtask A reset to pending; B's prior result is left intact.
-        await using (var scope = _provider.CreateAsyncScope())
-        {
-            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
-            (await db.Subtasks.AsNoTracking().FirstAsync(s => s.Id == subtaskA)).Status
-                .Should().Be(SubtaskStatus.Pending);
-            (await db.Subtasks.AsNoTracking().FirstAsync(s => s.Id == subtaskA)).ChildRunId
-                .Should().BeNull("a re-dispatched subtask must not keep pointing at the terminal child output it is replacing");
-            (await db.Subtasks.AsNoTracking().FirstAsync(s => s.Id == subtaskB)).Status
-                .Should().Be(SubtaskStatus.AssembleReady);
-            (await db.Subtasks.AsNoTracking().FirstAsync(s => s.Id == subtaskB)).ChildRunId
-                .Should().Be(childB.ToString(), "unaffected children keep their successful output reference");
-        }
-
-        // The plan returned to dispatching and re-dispatch was triggered.
-        (await _assemblyStore.GetAsync(workPlanId, default))!.Status.Should().Be(WorkPlanStatus.Dispatching);
-        (await _runStore.GetAsync(RunId.Parse(coordinatorRunId), default))!.Status.Should().Be(RunStatus.InProgress);
-        _dispatch.StartDispatchCalls.Should().ContainSingle().Which.CoordinatorRunId.Should().Be(coordinatorRunId);
-    }
+    // rev8 (unified autonomous steering): the OLD assembly-gate REQUEST_CHANGES reflex — auto
+    // reset-to-pending + auto re-dispatch driven directly by the gate — has been REMOVED. Gates no
+    // longer force a reset+dispatch; ALL correction feedback (human-review, build-test, RAI,
+    // rubberduck) now normalizes into a SteeringSignal and routes to the coordinator, which
+    // CONSCIOUSLY decides A (in-place resume, context preserved) / B (logged fresh dispatch) / C /
+    // D. That coordinator-owned routing + decision transaction + two-phase effect proof is covered
+    // end-to-end in UnifiedSteeringTests (real decider + stubs); the in-place resume executor path
+    // requires a live RunOrchestrator and is exercised there, not in this orchestration harness.
 
     [Fact]
     public async Task RunBuildTestAsync_BareLaunchInvalidOperation_MapsToRetryableInfrastructureFailure()
@@ -1394,6 +1345,8 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
             Array.Empty<(int, int)>(),
             new Dictionary<int, IReadOnlySet<string>>(),
             decision,
+            SteeringSource.BuildTest,
+            string.Empty,
             CancellationToken.None,
         ])!;
         return await task.ConfigureAwait(false);
@@ -1648,6 +1601,9 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
             CleanupBuildTestResourcesCalls++;
             return Task.CompletedTask;
         }
+
+        public string GetBuildTestWorktreePath(string coordinatorRunId) =>
+            $"/workspace/assembly-build-test-{coordinatorRunId}";
 
         public Task<CollectiveMergeResult> MergeAsync(CollectiveMergeRequest request, CancellationToken ct)
         {

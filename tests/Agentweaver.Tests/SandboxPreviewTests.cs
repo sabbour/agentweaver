@@ -376,7 +376,8 @@ public class SandboxPreviewTests
             string runId,
             int targetPort,
             string ownerUserId,
-            CancellationToken ct = default) =>
+            CancellationToken ct = default,
+            string? previewRunnerSessionId = null) =>
             Task.FromResult(new PreviewSession(
                 "tok",
                 runId,

@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Agentweaver.Api.Auth;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Domain;
 using k8s;
@@ -34,17 +35,20 @@ public sealed class AgentHostReaperService : IAgentHostReaper
     private readonly IRunStore _runStore;
     private readonly KubernetesSandboxOptions _options;
     private readonly ILogger<AgentHostReaperService> _logger;
+    private readonly ISecretStore? _secretStore;
 
     public AgentHostReaperService(
         IKubernetes client,
         IRunStore runStore,
         KubernetesSandboxOptions options,
-        ILogger<AgentHostReaperService> logger)
+        ILogger<AgentHostReaperService> logger,
+        ISecretStore? secretStore = null)
     {
         _client = client;
         _runStore = runStore;
         _options = options;
         _logger = logger;
+        _secretStore = secretStore;
     }
 
     /// <inheritdoc />
@@ -65,6 +69,12 @@ public sealed class AgentHostReaperService : IAgentHostReaper
             if (await TryDeleteClaimAsync(claim.ClaimName, ct).ConfigureAwait(false))
             {
                 reaped++;
+                // Belt-and-suspenders credential lifecycle: this orphaned claim's run crashed or
+                // stalled, so ReleaseAgentHostPodAsync (the normal delete site) NEVER ran and the
+                // per-run preview-runner credential is still in the secret store. Recover the run id
+                // from the claim annotation and delete it so the credential's durable lifetime stays
+                // bounded by the pod's (spec-006 decouple-preview; no-op when absent).
+                await TryDeleteOrphanCredentialAsync(claim.AnnotatedRunId, ct).ConfigureAwait(false);
             }
         }
 
@@ -155,16 +165,47 @@ public sealed class AgentHostReaperService : IAgentHostReaper
             // SandboxClaimConventions.TryGetBoundPodName), so it doubles as the readiness signal.
             var podName = SandboxClaimConventions.TryGetBoundPodName(item);
 
+            // Original (un-truncated) run id stamped at claim creation; lets the orphan sweep delete
+            // the per-run preview-runner credential even though the claim name is lossy.
+            var annotatedRunId = SandboxClaimConventions.TryGetRunIdAnnotation(item);
+
             claims.Add(new AgentHostClaimInfo(
                 ClaimName: name,
                 RunId: null,
                 PodName: podName,
                 Ready: podName is not null,
                 CreatedAt: createdAt,
-                Orphaned: false));
+                Orphaned: false,
+                AnnotatedRunId: annotatedRunId));
         }
 
         return claims;
+    }
+
+    /// <summary>
+    /// Deletes the per-run preview-runner credential for an orphaned (crash/stall-reaped) run. No-op
+    /// when the secret store is unavailable or the run id could not be recovered from the claim
+    /// annotation, and never throws — a credential-delete failure must not abort the reaper sweep.
+    /// Uses the SAME <c>PreviewRunnerCredential.SecretKey(runId)</c> derivation as the mint/release
+    /// paths so the delete actually matches (spec-006 decouple-preview).
+    /// </summary>
+    private async Task TryDeleteOrphanCredentialAsync(string? runId, CancellationToken ct)
+    {
+        if (_secretStore is null || string.IsNullOrEmpty(runId))
+            return;
+
+        try
+        {
+            await _secretStore.DeleteSecretAsync(Preview.PreviewRunnerCredential.SecretKey(runId), ct)
+                .ConfigureAwait(false);
+            _logger.LogInformation(
+                "AgentHostReaper: deleted orphaned preview-runner credential for run {RunId}", runId);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(ex,
+                "AgentHostReaper: failed to delete preview-runner credential for run {RunId} (best-effort)", runId);
+        }
     }
 
     private async Task<bool> TryDeleteClaimAsync(string claimName, CancellationToken ct)

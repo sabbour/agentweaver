@@ -130,86 +130,9 @@ public sealed class AssemblyPlanningTests
         touched.Should().Contain("README.md");
     }
 
-    // ── D6 rejection inference ─────────────────────────────────────────────────────────────────
-
-    [Fact]
-    public void InferRedispatch_SelectsMatchingChildren_PlusDependents()
-    {
-        // Subtask 1 touched login.ts; 2 touched users.cs; 3 depends on 1 (dependent), touched other.cs.
-        var touched = new Dictionary<int, IReadOnlySet<string>>
-        {
-            [1] = new HashSet<string> { "src/auth/login.ts" },
-            [2] = new HashSet<string> { "src/api/users.cs" },
-            [3] = new HashSet<string> { "src/other.cs" },
-        };
-        var edges = new[] { (3, 1) }; // 3 depends on 1
-
-        var plan = AssemblyPlanning.InferRedispatch(
-            feedback: "Please fix src/auth/login.ts",
-            targetFiles: null,
-            touchedFilesBySubtask: touched,
-            edges: edges);
-
-        plan.FellBackToAll.Should().BeFalse();
-        plan.SubtaskIds.Should().BeEquivalentTo(new[] { 1, 3 }); // matched 1 + dependent 3
-        plan.SubtaskIds.Should().NotContain(2);
-        plan.InferredFiles.Should().Contain("src/auth/login.ts");
-    }
-
-    [Fact]
-    public void InferRedispatch_ExplicitTargetFiles_AreHonored()
-    {
-        var touched = new Dictionary<int, IReadOnlySet<string>>
-        {
-            [1] = new HashSet<string> { "src/auth/login.ts" },
-            [2] = new HashSet<string> { "src/api/users.cs" },
-        };
-
-        var plan = AssemblyPlanning.InferRedispatch(
-            feedback: "see attached file list",
-            targetFiles: new[] { "src/api/users.cs" },
-            touchedFilesBySubtask: touched,
-            edges: Array.Empty<(int, int)>());
-
-        plan.FellBackToAll.Should().BeFalse();
-        plan.SubtaskIds.Should().BeEquivalentTo(new[] { 2 });
-    }
-
-    [Fact]
-    public void InferRedispatch_NoFilesInferred_FallsBackToAll()
-    {
-        var touched = new Dictionary<int, IReadOnlySet<string>>
-        {
-            [1] = new HashSet<string> { "a.cs" },
-            [2] = new HashSet<string> { "b.cs" },
-        };
-
-        var plan = AssemblyPlanning.InferRedispatch(
-            feedback: "this is bad, redo it", // no path-like tokens
-            targetFiles: null,
-            touchedFilesBySubtask: touched,
-            edges: Array.Empty<(int, int)>());
-
-        plan.FellBackToAll.Should().BeTrue();
-        plan.SubtaskIds.Should().BeEquivalentTo(new[] { 1, 2 });
-    }
-
-    [Fact]
-    public void InferRedispatch_FilesInferredButNoChildMatches_FallsBackToAll()
-    {
-        var touched = new Dictionary<int, IReadOnlySet<string>>
-        {
-            [1] = new HashSet<string> { "a.cs" },
-            [2] = new HashSet<string> { "b.cs" },
-        };
-
-        var plan = AssemblyPlanning.InferRedispatch(
-            feedback: "fix src/unrelated/zzz.ts",
-            targetFiles: null,
-            touchedFilesBySubtask: touched,
-            edges: Array.Empty<(int, int)>());
-
-        plan.FellBackToAll.Should().BeTrue();
-        plan.SubtaskIds.Should().BeEquivalentTo(new[] { 1, 2 });
-    }
+    // ── D6 prose-based rejection inference (InferRedispatch) removed by rev8 unified steering ──────
+    // The fragile prose-parsing InferRedispatch heuristic and its AssemblyRejectionPlan record were
+    // deleted; the coordinator now chooses steering targets explicitly. The former
+    // InferRedispatch_* tests exercised removed behavior and were removed with it. ExtractFileTokens
+    // / ExtractTouchedFiles remain covered above (output-conflict callers still use them).
 }

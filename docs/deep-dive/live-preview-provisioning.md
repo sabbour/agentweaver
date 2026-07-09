@@ -1,101 +1,92 @@
-# Live-preview provisioning — Deep Dive
+# Decoupled live-preview provisioning — Deep Dive
 
-Live-preview provisioning makes a browser preview a first-class outcome of the coordinator software-delivery pipeline. After Build & Test validates the assembled integration tree, the same gate is expected to start the app inside the run-bound AgentHost pod, discover the actual bound port, health-check it, and call `start_preview(port=PORT)`. The coordinator then verifies that a durable preview outcome exists before it accepts Build & Test approval.
+Decoupled live preview makes the browser preview a deterministic platform step instead of a model-mediated side effect of Build & Test. Build & Test still evaluates the assembled integration tree, but after that turn returns the API runs a platform-owned `PreviewStep` that starts the app in the same retained AgentHost pod, discovers the actual bound port, registers the Gateway preview, and records a durable outcome.
 
-This page covers the pipeline behavior. For the lower-level Gateway proxy, see [Sandbox browser preview](./sandbox-browser-preview.md); for event payloads and operator-facing contracts, see the [reference](../reference/live-preview-provisioning.md); for the web experience, see the [user guide](../experience/live-preview-provisioning.md).
+For proxy internals, see [Sandbox browser preview](./sandbox-browser-preview.md). For event and endpoint contracts, see the [reference](../reference/live-preview-provisioning.md). For the review workflow, see the [user guide](../experience/live-preview-provisioning.md).
 
 ## End-to-end flow
 
 ```mermaid
 %%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
 flowchart LR
-    Integration[Integrated child output<br/>aggregate tree hash]
-    Applicability[Preview applicability<br/>required or skipped]
-    BuildTest[Build & Test gate<br/>build + tests + preview prompt]
-    Runner[AgentHost PreviewRunner<br/>managed process group]
-    Port[Observe bound port<br/>logs then socket diff]
-    Health[HTTP health check]
-    Gate[AgentPreviewGate<br/>HITL or auto-approve]
-    Gateway[Gateway preview<br/>preview_url]
-    Guard[Coordinator outcome guard]
+    Gate[Build & Test verdict]
+    Check{Approved or<br/>request changes?}
+    Resolve[PreviewCommandResolver<br/>find run command]
+    Runner[AgentHost /preview-runner<br/>start supervised process]
+    Port[observe-bound-port<br/>actual port + health]
+    Approval[AgentPreviewGate<br/>existing approval policy]
+    Route[Gateway HTTPRoute<br/>preview_url]
+    Outcome[preview_ready / failed / skipped]
     Review[Human review<br/>preview ready or unavailable]
 
-    Integration --> Applicability --> BuildTest
-    BuildTest --> Runner --> Port --> Health --> Gate --> Gateway
-    Gateway --> Guard
-    Applicability --> Guard
-    Guard --> Review
+    Gate --> Check
+    Check -- declined --> Review
+    Check -- yes --> Resolve --> Runner --> Port --> Approval --> Route --> Outcome --> Review
+    Resolve -- infra unavailable --> Outcome
+    Port -- failure --> Outcome
 ```
 
-The important detail is that preview success is not inferred from the model's final Build & Test verdict. `CoordinatorAssemblyService` records preview applicability before the Build & Test turn, runs the gate, then calls `EnsureFinalPreviewOutcomeBeforeApprovalAsync` before `ApplyAuthoredGateDecisionAsync` can emit the assembly approval (`apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyService.cs:688`, `:708`, `:2031`). The accepted final outcomes are:
+The invocation point is in the coordinator assembly Build & Test gate. `CoordinatorAssemblyService` records preview applicability, runs Build & Test, then calls `PreviewStep.RunAsync` before applying the authored gate decision (`apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyService.cs:710`, `:753`). `ShouldRunDeterministicPreviewStep` means the step runs for `APPROVED` and `REQUEST_CHANGES` verdicts, and skips only `DECLINED` verdicts or missing service wiring (`CoordinatorAssemblyService.cs:180`).
 
-- `sandbox.preview_ready` with a non-empty `preview_url`;
-- `sandbox.preview_failed` with a reason/message;
-- `sandbox.preview_skipped_not_applicable` when the aggregate diff is classified as not previewable.
+There is no feature flag. If the service is wired and the verdict is not declined, the preview step runs. Infrastructure that cannot produce a reachable Gateway preview self-skips by emitting `sandbox.preview_skipped_not_applicable` with reason `preview_infra_unavailable` (`apps/Agentweaver.Api/Coordinator/Preview/PreviewStep.cs:83`).
 
-`sandbox.preview_pending` is intentionally transitional. The guard waits for the existing approval timeout window, but it does not accept pending as final (`CoordinatorAssemblyService.cs:2037`).
+## Deterministic command and port discovery
 
-## Applicability before Build & Test
+`PreviewStep` does not ask the Build & Test model to call preview tools. It drives AgentHost directly:
 
-Before Build & Test starts, the coordinator emits:
+1. Resolve a command from the detached worktree with `PreviewCommandResolver`. It checks `package.json`, `.csproj`, Dockerfile, Makefile, Python, Go, and simple Node entry points, forcing all-interface binds where known (`apps/Agentweaver.Api/Sandbox/Preview/PreviewCommandResolver.cs:25`).
+2. Call `POST /preview-runner/processes` on the run-bound AgentHost pod origin, not the A2A path (`apps/Agentweaver.Api/Sandbox/Preview/PreviewRunnerHttpClient.cs:35`, `:78`).
+3. Call `observe-bound-port`; AgentHost parses logs and socket state, then verifies HTTP health before returning the actual port (`apps/Agentweaver.AgentHost/PreviewRunner.cs:246`).
+4. Register the preview with the existing `AgentPreviewGate` and `SandboxPreviewService`. The platform passes the actual observed port; it never assumes a fixed port (`PreviewStep.cs:146`, `:166`).
 
-- `workflow.step` with `step: "preview"` and `status: "started"` or `"skipped"`;
-- `sandbox.preview_applicability` with `state: "preview_required"` or `"preview_skipped_not_applicable"`;
-- `sandbox.preview_skipped_not_applicable` when the skipped state is final.
+`PreviewStep` is the single terminal outcome emitter for this stage: `sandbox.preview_ready`, `sandbox.preview_failed`, or `sandbox.preview_skipped_not_applicable` (`PreviewStep.cs:229`, `:258`, `:272`).
 
-The first implementation uses the aggregate diff as a deterministic input. Documentation-only changes are skipped with reason `docs_only`; app/server-looking changes are required with reason `server_files_changed`; ambiguous changes default to required with reason `ambiguous_default_required` (`CoordinatorAssemblyService.cs:1995`, `:2079`). This deliberately fails visible for ambiguous app work instead of silently shipping without a preview.
+## Gateway and lifetime alignment
 
-## Managed process model
+On success, registration creates the same Gateway HTTPRoute / Service chain described in [Sandbox browser preview](./sandbox-browser-preview.md), but it also records `preview_runner_session_id` on both the `preview_ready` payload and the HTTPRoute annotations (`PreviewStep.cs:249`, `apps/Agentweaver.Api/Sandbox/Preview/SandboxPreviewService.cs:670`). That id is distinct from `session_id`, which remains the Gateway capability token.
 
-The durable process supervisor is `PreviewRunner` inside `apps/Agentweaver.AgentHost`. It contributes four agent tools:
+Keepalive now touches both lifetimes. `SandboxPreviewService.KeepAliveAsync` patches the HTTPRoute idle expiry, then best-effort calls `/preview-runner/processes/{sessionId}/health-check` using the annotated PreviewRunner session so the supervised app process is not reaped while the Gateway route stays alive (`SandboxPreviewService.cs:236`, `:271`).
 
-| Tool | Purpose |
-| --- | --- |
-| `start_preview_process` | Starts the app/server command in the run worktree and keeps stdout/stderr in a ring buffer. |
-| `observe_bound_port` | Finds the real port from known log patterns, then falls back to socket-state diffing. |
-| `health_check` | Probes `http://127.0.0.1:{port}{path}` and treats HTTP status below 500 as healthy. |
-| `stop_preview_process` | Stops the managed process tree with a grace period, then force-kills if needed. |
+## Per-run preview-runner credential
 
-The runner starts processes through `cmd.exe /c` on Windows or `setsid /bin/sh -lc` on Linux, captures logs, records the baseline listening ports before startup, and stops stale sessions after idle timeout, max lifetime, process exit, or AgentHost shutdown (`apps/Agentweaver.AgentHost/PreviewRunner.cs:70`, `:151`, `:262`, `:326`).
+AgentHost `/preview-runner/*` endpoints are protected by a per-run credential:
 
-Build & Test is prompted to use this order: `start_preview_process`, `observe_bound_port`, then `start_preview(port=PORT)`. The prompt explicitly forbids hardcoded ports and tells the agent to inspect the project to find the app command (`packages/Agentweaver.AgentRuntime/Workflow/BuildTestTurnExecutor.cs:10`).
+- API mints a fresh credential on AgentHost launch and sends it only in the `/configure` body; it is not a pod environment variable, file, or config value (`apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs:699`).
+- AgentHost stores it in `AgentHostRuntimeState.PreviewRunnerCredential`, in memory only (`apps/Agentweaver.AgentHost/AgentHostRuntimeState.cs:40`).
+- `/preview-runner/*` accepts either the turn bearer token or the preview-runner credential and fails closed when either credential is configured (`apps/Agentweaver.AgentHost/Program.cs:450`).
+- The credential key is deterministic per run, but every launch mints a new random value (`apps/Agentweaver.Api/Sandbox/Preview/PreviewRunnerCredential.cs:32`, `:39`).
+- Pod release and crash/stall orphan reaping delete the durable credential best-effort (`KubernetesSandboxExecutor.cs:486`, `apps/Agentweaver.Api/Sandbox/AgentHostReaperService.cs:189`).
 
-## Approval and preview provisioning
+The AgentHost process launcher also scrubs secret-bearing environment variables before spawning the untrusted preview app, so the app cannot inherit the preview-runner credential (`apps/Agentweaver.AgentHost/PreviewRunner.cs:408`).
 
-The final `start_preview(port=PORT)` call uses the same endpoint and approval seam as any other agent-initiated preview:
+## Failure behavior
 
-1. `POST /api/runs/{runId}/sandbox/preview` validates the run and accepts the owner or the run's own agent callback (`apps/Agentweaver.Api/Endpoints/SandboxEndpoints.cs:57`).
-2. `AgentPreviewGate.RequestApprovalAsync` reuses the existing auto-approve sources: `Sandbox:Preview:AutoApprove` / `SANDBOX_PREVIEW_AUTO_APPROVE`, per-run `AutoApproveTools`, or an existing scoped allow policy (`apps/Agentweaver.Api/Sandbox/Preview/AgentPreviewGate.cs:75`).
-3. With no auto-approve source, the gate emits `tool.approval_required`, `sandbox.preview_pending`, and a pending `workflow.step`; denial or timeout becomes `sandbox.preview_failed` (`AgentPreviewGate.cs:103`, `apps/Agentweaver.Api/Endpoints/SandboxEndpoints.cs:88`).
-4. On approval, `StartPreviewForRunAsync` provisions the Gateway preview, emits `sandbox.preview_ready`, mirrors `coordinator.preview_ready`, and completes the preview workflow step (`SandboxEndpoints.cs:248`).
+Preview is intentionally decoupled from the Build & Test verdict:
 
-The preview URL still comes from the [sandbox browser preview](./sandbox-browser-preview.md) Gateway path. A local `kubectl port-forward` fallback can be useful for diagnostics, but it does not satisfy the first-class software-delivery preview contract because it has no public `preview_url` (`SandboxEndpoints.cs:284`).
+- Preview failure never changes an `APPROVED` verdict into request-changes.
+- Preview failure never forces changes when Build & Test already returned `REQUEST_CHANGES`.
+- Preview failure never blocks human review. The UI shows **Preview unavailable** with the recorded reason.
+- `DECLINED` Build & Test skips the preview step because that gate is already terminal.
 
-## Failure and review behavior
-
-Missing preview is visible but not a hard block on human review. If Build & Test passes and no final preview outcome exists, the guard emits `sandbox.preview_failed` with reason `preview_outcome_missing` and a failed preview `workflow.step`, then allows the Build & Test approval path to continue (`CoordinatorAssemblyService.cs:2050`). The web UI shows **Preview unavailable** at the Build & Test step and in the human-review artifacts panel (`apps/web/src/pages/CoordinatorRunPage.tsx:464`, `:3823`).
-
-This split prevents the old silent failure mode without turning app preview into a merge-blocking gate. Build/test failures and preview-only failures also route differently: if Build & Test asks for changes only because preview failed, the coordinator treats the gate as approved so the run can reach human review with the unavailable preview state (`CoordinatorAssemblyService.cs:720`). Preview failure does not use the assembly reset-and-redispatch path.
-
-## Cleanup and retention
-
-The assembly Build & Test pod, detached worktree, and Gateway preview are retained while the coordinator waits at human review so the URL points at the exact assembled tree. Terminalization stops previews best-effort and then cleans up the Build & Test resources or releases the AgentHost pod (`CoordinatorAssemblyService.cs:1869`, `:1918`). The AgentHost PreviewRunner also reaps stale supervised processes locally (`PreviewRunner.cs:326`).
+The older approval-time outcome guard remains as a safety net. If no terminal preview outcome exists, the coordinator emits `sandbox.preview_failed` with reason `preview_outcome_missing`, but still proceeds with the authored Build & Test decision (`CoordinatorAssemblyService.cs:2455`).
 
 ## Source
 
 | Concern | File |
 | --- | --- |
-| AgentHost process supervisor and preview tools | `apps/Agentweaver.AgentHost/PreviewRunner.cs` |
-| Build & Test preview prompt | `packages/Agentweaver.AgentRuntime/Workflow/BuildTestTurnExecutor.cs` |
-| Coordinator applicability, outcome guard, approval routing, cleanup | `apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyService.cs` |
-| Agent-initiated preview endpoint and ready/failed event emission | `apps/Agentweaver.Api/Endpoints/SandboxEndpoints.cs` |
-| Preview approval gate and pending events | `apps/Agentweaver.Api/Sandbox/Preview/AgentPreviewGate.cs` |
-| Event type constants | `packages/Agentweaver.Domain/EventTypes.cs` |
-| Web preview projection | `apps/web/src/pages/CoordinatorRunPage.tsx` |
+| Deterministic preview step | `apps/Agentweaver.Api/Coordinator/Preview/PreviewStep.cs` |
+| Build & Test invocation point | `apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyService.cs` |
+| Command resolution | `apps/Agentweaver.Api/Sandbox/Preview/PreviewCommandResolver.cs` |
+| AgentHost preview-runner HTTP client | `apps/Agentweaver.Api/Sandbox/Preview/PreviewRunnerHttpClient.cs` |
+| AgentHost preview-runner endpoints and auth | `apps/Agentweaver.AgentHost/Program.cs` |
+| Supervised process runner | `apps/Agentweaver.AgentHost/PreviewRunner.cs` |
+| Per-run credential helper | `apps/Agentweaver.Api/Sandbox/Preview/PreviewRunnerCredential.cs` |
+| Gateway preview + dual keepalive | `apps/Agentweaver.Api/Sandbox/Preview/SandboxPreviewService.cs` |
+| Credential cleanup on pod release/reap | `apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs`, `apps/Agentweaver.Api/Sandbox/AgentHostReaperService.cs` |
 
 ## See also
 
-- [Live-preview provisioning — Reference](../reference/live-preview-provisioning.md)
-- [Live-preview provisioning — User Guide](../experience/live-preview-provisioning.md)
+- [Decoupled live-preview provisioning — Reference](../reference/live-preview-provisioning.md)
+- [Decoupled live-preview provisioning — User Guide](../experience/live-preview-provisioning.md)
 - [Sandbox browser preview](./sandbox-browser-preview.md)
 - [Coordinator internals](./coordinator-internals.md)

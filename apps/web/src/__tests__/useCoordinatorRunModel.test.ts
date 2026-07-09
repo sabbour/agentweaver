@@ -61,4 +61,22 @@ describe('useCoordinatorRunModel gate derivation', () => {
     const legacy = renderHook(() => useCoordinatorRunModel('run-1'));
     expect(legacy.result.current.gates.assemblyReviewPending).toBe(true);
   });
+
+  it('resolves a pending human-review after an in_place_steer steering decision', () => {
+    streamState.events = [
+      evt(1, 'coordinator.assembly_review_requested', { gateKind: 'human-review' }),
+      evt(2, 'coordinator.steering_decision', { decision: 'in_place_steer', subtaskIds: ['subtask-1'] }),
+    ];
+    const { result } = renderHook(() => useCoordinatorRunModel('run-1'));
+    expect(result.current.gates.assemblyReviewPending).toBe(false);
+  });
+
+  it('does NOT resolve a pending human-review for an advisory steering decision', () => {
+    streamState.events = [
+      evt(1, 'coordinator.assembly_review_requested', { gateKind: 'human-review' }),
+      evt(2, 'coordinator.steering_decision', { decision: 'advisory' }),
+    ];
+    const { result } = renderHook(() => useCoordinatorRunModel('run-1'));
+    expect(result.current.gates.assemblyReviewPending).toBe(true);
+  });
 });

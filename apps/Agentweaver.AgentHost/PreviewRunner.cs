@@ -167,12 +167,14 @@ internal sealed class PreviewRunner : BackgroundService, IPreviewRunner
     private readonly PreviewRunnerOptions _options;
     private readonly ILogger<PreviewRunner> _logger;
     private readonly TimeProvider _clock;
+    private readonly AgentHostRuntimeState? _runtimeState;
 
-    public PreviewRunner(IOptions<PreviewRunnerOptions> options, ILogger<PreviewRunner> logger, TimeProvider? clock = null)
+    public PreviewRunner(IOptions<PreviewRunnerOptions> options, ILogger<PreviewRunner> logger, TimeProvider? clock = null, AgentHostRuntimeState? runtimeState = null)
     {
         _options = options.Value;
         _logger = logger;
         _clock = clock ?? TimeProvider.System;
+        _runtimeState = runtimeState;
     }
 
     public async Task<PreviewProcessStartResult> StartPreviewProcessAsync(
@@ -195,6 +197,7 @@ internal sealed class PreviewRunner : BackgroundService, IPreviewRunner
         var beforePorts = await SnapshotListeningPortsAsync(ct).ConfigureAwait(false);
         var sessionId = Guid.NewGuid().ToString("n")[..12];
         var process = BuildProcess(command, fullCwd);
+        ScrubChildEnvironment(process.StartInfo);
         var state = new PreviewProcessState(
             sessionId,
             runId ?? string.Empty,
@@ -435,6 +438,68 @@ internal sealed class PreviewRunner : BackgroundService, IPreviewRunner
         }
 
         return new Process { StartInfo = psi, EnableRaisingEvents = true };
+    }
+
+    /// <summary>
+    /// Test-only seam (spec-006 §11 env-scrub assertion): builds the child <see cref="ProcessStartInfo"/>
+    /// for <paramref name="command"/> and applies <see cref="ScrubChildEnvironment"/>, returning the
+    /// scrubbed environment WITHOUT spawning a process.
+    /// </summary>
+    internal IReadOnlyDictionary<string, string?> BuildScrubbedChildEnvironmentForTest(string command, string cwd)
+    {
+        var process = BuildProcess(command, cwd);
+        ScrubChildEnvironment(process.StartInfo);
+        var env = process.StartInfo.Environment.ToDictionary(kvp => kvp.Key, kvp => (string?)kvp.Value);
+        process.Dispose();
+        return env;
+    }
+
+    // Defense-in-depth (spec-006 decouple-preview, BLOCKER A): the child preview process inherits the
+    // parent AgentHost environment. Explicitly STRIP any auth-bearing variables — the current turn
+    // token, the per-run preview-runner credential, and known secret env names — so the untrusted app
+    // can never read a credential and drive /preview-runner/* itself. Belt-and-suspenders on top of
+    // the in-memory (never-env) credential delivery.
+    private static readonly string[] SecretEnvNames =
+    [
+        "AgentHost__TurnBearerToken",
+        "AGENTHOST__TURNBEARERTOKEN",
+        "AgentHost__PreviewRunnerCredential",
+        "AGENTHOST__PREVIEWRUNNERCREDENTIAL",
+        "GITHUB_ACCESS_TOKEN",
+        "GITHUB_TOKEN",
+        "GH_TOKEN",
+        "TurnBearerToken",
+        "PreviewRunnerCredential",
+    ];
+
+    private void ScrubChildEnvironment(ProcessStartInfo psi)
+    {
+        var env = psi.Environment;
+
+        // Remove by known secret env var name (case-insensitive).
+        foreach (var key in env.Keys.ToArray())
+        {
+            if (SecretEnvNames.Any(n => string.Equals(n, key, StringComparison.OrdinalIgnoreCase)))
+                env.Remove(key);
+            else if (key.Contains("SECRET", StringComparison.OrdinalIgnoreCase)
+                     || key.Contains("PASSWORD", StringComparison.OrdinalIgnoreCase)
+                     || (key.Contains("TOKEN", StringComparison.OrdinalIgnoreCase)
+                         && key.StartsWith("AgentHost", StringComparison.OrdinalIgnoreCase)))
+                env.Remove(key);
+        }
+
+        // Remove by VALUE match against the live credentials (covers any aliased var name).
+        var secrets = new[] { _runtimeState?.TurnBearerToken, _runtimeState?.PreviewRunnerCredential }
+            .Where(s => !string.IsNullOrEmpty(s))
+            .ToArray();
+        if (secrets.Length > 0)
+        {
+            foreach (var kvp in env.ToArray())
+            {
+                if (kvp.Value is not null && secrets.Any(s => string.Equals(s, kvp.Value, StringComparison.Ordinal)))
+                    env.Remove(kvp.Key);
+            }
+        }
     }
 
     private static void CaptureLine(PreviewProcessState state, string stream, string? line)

@@ -1,84 +1,87 @@
-# Live-preview provisioning — Reference
+# Decoupled live-preview provisioning — Reference
 
-Reference for the coordinator Build & Test live-preview contract: the events, gate ordering, tool calls, and UI states that make preview provisioning an enforced outcome before human review.
+Reference for the platform-owned preview step that runs after Build & Test. It starts a supervised app process, discovers the actual port, registers a Gateway preview URL, and records a durable preview outcome without changing the Build & Test verdict.
 
-For proxy routes and the `PortForwardSessionDto`, see [Sandbox browser preview — Reference](./sandbox-browser-preview.md). For the implementation flow, see the [deep dive](../deep-dive/live-preview-provisioning.md); for the review experience, see the [user guide](../experience/live-preview-provisioning.md).
+For the Gateway routes and `PortForwardSessionDto`, see [Sandbox browser preview — Reference](./sandbox-browser-preview.md). For implementation details, see the [deep dive](../deep-dive/live-preview-provisioning.md). For the user workflow, see the [experience guide](../experience/live-preview-provisioning.md).
 
-## Coordinator contract
+## Runtime contract
 
-| Phase | Source | Contract |
+| Contract | Shipped behavior | Source |
 | --- | --- | --- |
-| Applicability | `CoordinatorAssemblyService.EnsurePreviewApplicabilityRecordedAsync` | Emits `sandbox.preview_applicability` before Build & Test. Documentation-only diffs are skipped; server/app-looking or ambiguous diffs require preview. |
-| Build & Test instruction | `BuildTestTurnExecutor.CannedPrompt` | Build and test first. If previewable, call `start_preview_process`, `observe_bound_port`, then `start_preview(port=PORT)` with the observed port. |
-| Preview approval | `AgentPreviewGate.RequestApprovalAsync` | Reuses the existing tool approval gate and auto-approve sources. No special preview bypass exists. |
-| Preview provisioning | `SandboxEndpoints.StartPreviewForRunAsync` | On Gateway success, emits `sandbox.preview_ready`, `coordinator.preview_ready`, and a completed preview `workflow.step`. |
-| Outcome guard | `CoordinatorAssemblyService.EnsureFinalPreviewOutcomeBeforeApprovalAsync` | Requires one final preview outcome before Build & Test approval is applied. If none exists, emits `sandbox.preview_failed` with `reason: "preview_outcome_missing"` and proceeds to human review. |
+| Feature flag | None. The step runs whenever `PreviewStep` is wired and Build & Test is not declined. | `CoordinatorAssemblyService.ShouldRunDeterministicPreviewStep` |
+| Build & Test coupling | Runs after Build & Test for `APPROVED` and `REQUEST_CHANGES`; skipped on `DECLINED`. | `CoordinatorAssemblyService.cs:753` |
+| Port choice | Platform uses the port observed by AgentHost PreviewRunner, not a configured fixed port. | `PreviewStep.cs:129`, `:166` |
+| Infra unavailable | Emits `sandbox.preview_skipped_not_applicable` with reason `preview_infra_unavailable`. | `PreviewStep.cs:83` |
+| Preview failure | Emits `sandbox.preview_failed`; never blocks human review and never forces changes. | `PreviewStep.cs:31`, `CoordinatorAssemblyService.cs:772` |
+| Approval | Uses existing `AgentPreviewGate`; no preview-specific bypass. | `PreviewStep.cs:157` |
 
-## PreviewRunner tools
+## AgentHost preview-runner endpoints
 
-These tools are contributed by the AgentHost PreviewRunner (`apps/Agentweaver.AgentHost/PreviewRunner.cs:70`).
+These are platform-facing AgentHost endpoints. They are root-mounted on the AgentHost origin, not under the A2A path (`apps/Agentweaver.AgentHost/Program.cs:291`).
 
-| Tool | Arguments | Returns to agent | Notes |
+| Method & path | Body | Returns | Notes |
 | --- | --- | --- | --- |
-| `start_preview_process` | `command`, optional `cwd`, optional `work_plan_id`, optional `tree_hash` | `preview_process_started: session_id=..., pid=..., cwd=...` | Starts a managed process under AgentHost supervision. |
-| `observe_bound_port` | `session_id`, optional `timeout_seconds` | `bound_port_observed: ... port=..., healthy=True/False ...` | Parses `LISTENING ON PORT`, `Local: http://...`, `Now listening on: ...`; then falls back to socket diffing. |
-| `health_check` | `session_id`, `port`, optional `path` | `preview_health: ... healthy=..., status=...` | Probes localhost inside the pod; status below 500 is healthy. |
-| `stop_preview_process` | `session_id`, optional `reason` | `preview_process_stopped: ... stopped=...` | Stops the process group/tree. |
+| `POST /preview-runner/processes` | `command`, `cwd`, optional `runId`, `workPlanId`, `treeHash` | `session_id`, `pid`, `started_at`, `working_directory` | Starts a supervised process. |
+| `POST /preview-runner/processes/{sessionId}/observe-bound-port` | `timeoutSeconds`, `healthPath` | `session_id`, `port`, `evidence`, `healthy`, `health_evidence` | Discovers the actual bound port and verifies HTTP health. |
+| `POST /preview-runner/processes/{sessionId}/health-check` | `port`, optional `path` | `session_id`, `port`, `path`, `healthy`, `status_code`, `evidence` | Used directly and by Gateway keepalive dual-touch. |
+| `DELETE /preview-runner/processes/{sessionId}` | optional `reason` query | `session_id`, `stopped`, `reason` | Stops the process tree. |
 
-## Events
+Auth accepts either the per-run turn bearer token or the per-run preview-runner credential. If either is configured, missing or invalid auth returns `401` (`apps/Agentweaver.AgentHost/Program.cs:450`).
 
-| Type | Final? | Required payload fields | Meaning |
+## Preview events
+
+| Event | Final? | Payload fields | Meaning |
 | --- | --- | --- | --- |
-| `sandbox.preview_applicability` | No | `run_id`, `work_plan_id`, `tree_hash`, `state`, `reason`, `evidence` | Applicability decision before Build & Test. `state` is `preview_required` or `preview_skipped_not_applicable`. |
-| `sandbox.preview_skipped_not_applicable` | Yes | `run_id`, `work_plan_id`, `tree_hash`, `source`, `reason`, `evidence` | Final outcome for non-previewable work. Accepted by the guard. |
-| `sandbox.preview_pending` | No | `run_id`, `work_plan_id`, `tree_hash`, `target_port`, `approval`, `request_id` | Existing `AgentPreviewGate` is waiting for HITL approval. Not accepted as final. |
-| `sandbox.preview_ready` | Yes | `run_id`, `work_plan_id`, `tree_hash`, `target_port`, `pod_name`, `session_id`, `preview_url`, `keepalive_url`, `started_at` | Gateway preview was provisioned. Accepted by the guard when `preview_url` is non-empty. |
-| `coordinator.preview_ready` | Mirror | Same as `sandbox.preview_ready` | Coordinator-scoped mirror used by consumers that prefer coordinator event families. |
-| `sandbox.preview_failed` | Yes | `run_id`, `work_plan_id`, `tree_hash`, `source`, `reason`, `message`; optional `target_port` | Preview failed, was denied, timed out, or was missing at approval time. Accepted by the guard and surfaced as preview unavailable. |
-| `workflow.step` | Stage state | `step: "preview"`, `status`, `label`, optional `message` | Drives the preview stage row in the workflow graph and run tree. |
+| `sandbox.preview_applicability` | No | `run_id`, `work_plan_id`, `tree_hash`, `state`, `reason`, `evidence` | Applicability recorded before Build & Test. |
+| `sandbox.preview_start_requested` | No | `run_id`, `work_plan_id`, `tree_hash`, `source`, `command_source` | `PreviewStep` resolved a command and is starting the app. |
+| `sandbox.preview_pending` | No | `run_id`, `work_plan_id`, `tree_hash`, `target_port`, `approval`, `request_id` | Existing preview approval gate is waiting. |
+| `sandbox.preview_ready` | Yes | `run_id`, `work_plan_id`, `tree_hash`, `target_port`, `pod_name`, `session_id`, `preview_runner_session_id`, `preview_url`, `keepalive_url`, `started_at` | Gateway preview is ready. `session_id` is the Gateway token; `preview_runner_session_id` is the supervised process id. |
+| `coordinator.preview_ready` | Mirror | Same as `sandbox.preview_ready` | Coordinator-family mirror for the ready outcome. |
+| `sandbox.preview_failed` | Yes | `run_id`, `work_plan_id`, `tree_hash`, `source`, `reason`, `message` | Preview did not produce a URL; review can continue. |
+| `sandbox.preview_skipped_not_applicable` | Yes | `run_id`, `work_plan_id`, `tree_hash`, `source`, `reason`, `message` or `evidence` | Preview intentionally skipped, including infra unavailable. |
+| `workflow.step` | Stage state | `step: "preview"`, `status`, `label`, `message`, `timestamp_utc` | Drives graph/run-tree preview status. |
 
-## Preview failure reasons
+## Failure and skip reasons
 
-| Reason | Emitter | Meaning |
+| Reason | Meaning |
+| --- | --- |
+| `preview_infra_unavailable` | Pod-per-run or Gateway preview infrastructure cannot produce a reachable URL. |
+| `preview_command_unresolved` | The deterministic command resolver could not find how to run the app. |
+| `preview_runner_unauthorized` | AgentHost rejected the preview-runner credential. |
+| `process_exited` | Preview process could not start or exited early. |
+| `port_not_found` | No healthy bound port was observed. |
+| `health_check_failed` | A port was found but did not pass the HTTP health check. |
+| `approval_denied` | Operator denied preview exposure. |
+| `approval_timed_out` | Operator did not approve before the approval timeout. |
+| `port_not_allowed` | Observed port is outside the allowed Gateway preview range. |
+| `registration_failed` | Gateway preview registration failed. |
+| `preview_outcome_missing` | Safety-net guard found no terminal outcome. |
+
+Consumers should display unknown reasons as text and continue.
+
+## Credential lifecycle
+
+| Step | Behavior | Source |
 | --- | --- | --- |
-| `approval_denied` | `SandboxEndpoints` | The HITL approval was denied. |
-| `approval_timed_out` | `SandboxEndpoints` | The HITL approval did not arrive before the approval timeout. |
-| `capacity` | `SandboxEndpoints` | Preview session capacity was exceeded. |
-| `no_bound_pod` | `SandboxEndpoints` / preview service error mapping | No bound sandbox pod was available for the run. |
-| `port_out_of_range` | Endpoint validation | Requested port is outside the configured Gateway preview range. |
-| `preview_probe_failed` | Preview service error mapping | The target port could not be reached through the preview path. |
-| `gateway_failed` | `SandboxEndpoints` | Unexpected Gateway preview provisioning failure. |
-| `preview_outcome_missing` | `CoordinatorAssemblyService` | Build & Test completed without any final preview outcome. |
-| `docs_only` | `CoordinatorAssemblyService` | Not a failure; used as skip reason for documentation-only diffs. |
-| `server_files_changed` / `ambiguous_default_required` | `CoordinatorAssemblyService` | Applicability reasons that make preview required. |
+| Mint | Fresh random value per AgentHost launch. | `PreviewRunnerCredential.Mint` |
+| Delivery | Sent in the `/configure` request body; not env/file/config. | `KubernetesSandboxExecutor.CallAgentHostConfigureAsync` |
+| Storage | Persisted in the run secret store under a deterministic key for cross-replica reconcile. | `PreviewRunnerCredential.SecretKey` |
+| AgentHost memory | Stored in `AgentHostRuntimeState.PreviewRunnerCredential`. | `AgentHostRuntimeState.cs` |
+| Cleanup | Deleted on pod release and orphan reaper sweep. | `KubernetesSandboxExecutor.ReleaseAgentHostPodAsync`, `AgentHostReaperService.TryDeleteOrphanCredentialAsync` |
 
-Consumers must treat unknown `reason` values as displayable text and continue.
+## Web projection
 
-## UI projection
-
-`apps/web/src/pages/CoordinatorRunPage.tsx` reads the latest preview event from `GET /api/runs/{id}/events` and the live stream:
+The coordinator run page reads the latest preview event:
 
 | Latest event | UI state |
 | --- | --- |
-| `sandbox.preview_ready` or `coordinator.preview_ready` with `preview_url` | Shows **Open preview** on the Build & Test row and in the human-review artifacts panel. |
-| `sandbox.preview_pending` | Shows **Preview pending approval**. |
-| `sandbox.preview_failed` | Shows **Preview unavailable** with the backend reason/message; human review remains actionable. |
-| No preview events | Shows no Build & Test preview affordance. |
-
-## Source
-
-| Concern | File |
-| --- | --- |
-| PreviewRunner tool provider and process lifecycle | `apps/Agentweaver.AgentHost/PreviewRunner.cs` |
-| Build & Test prompt | `packages/Agentweaver.AgentRuntime/Workflow/BuildTestTurnExecutor.cs` |
-| Coordinator guard and applicability | `apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyService.cs` |
-| Endpoint events and Gateway preview response | `apps/Agentweaver.Api/Endpoints/SandboxEndpoints.cs` |
-| HITL/auto-approve policy | `apps/Agentweaver.Api/Sandbox/Preview/AgentPreviewGate.cs` |
-| Event constants | `packages/Agentweaver.Domain/EventTypes.cs` |
-| Web event projection | `apps/web/src/pages/CoordinatorRunPage.tsx` |
+| `sandbox.preview_ready` or `coordinator.preview_ready` | **Open preview** on Build & Test and human review. |
+| `sandbox.preview_pending` | **Preview pending approval**. |
+| `sandbox.preview_failed` | **Preview unavailable** with reason/message; review remains actionable. |
+| `sandbox.preview_skipped_not_applicable` | No unavailable error; preview was intentionally skipped. |
 
 ## See also
 
-- [Events reference](./events.md#event-taxonomy)
-- [Coordinator reference](./coordinator.md#phase-3-collective-assembly-and-terminal-status)
+- [Events reference](./events.md)
+- [Coordinator reference](./coordinator.md)
 - [Sandbox browser preview — Reference](./sandbox-browser-preview.md)

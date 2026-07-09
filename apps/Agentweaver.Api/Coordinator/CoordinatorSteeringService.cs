@@ -46,7 +46,15 @@ public static class SteeringKind
     /// <summary>Descoped in Phase 2 — accepted only to produce an explicit rejection.</summary>
     public const string Pause = "pause";
 
-    public static bool IsSupported(string kind) => kind is Stop or Send or Redirect or Amend;
+    /// <summary>
+    /// UNIFIED AUTONOMOUS STEERING (rev8 §4a) — the human mirror of the coordinator's conscious
+    /// direction-B choice. Resets the target subtask(s) + relaunches fresh, always emitting
+    /// <c>coordinator.steering_decision{decision:"dispatch_fresh"}</c> first. Routes to the same
+    /// direction-B executor as an autopilot-chosen fresh dispatch — never an automatic reflex.
+    /// </summary>
+    public const string DispatchFresh = "dispatch-fresh";
+
+    public static bool IsSupported(string kind) => kind is Stop or Send or Redirect or Amend or DispatchFresh;
 
     /// <summary>True for the verbs that queue and apply at the child's next safe boundary.</summary>
     public static bool IsNextBoundary(string kind) => kind is Send or Redirect or Amend;
@@ -62,7 +70,22 @@ public static class SteeringStatus
     public const string Pending = "pending";
     public const string Queued = "queued";
     public const string Relayed = "relayed";
+
+    /// <summary>UNIFIED STEERING (rev8 §3c): the coordinator committed a direction (action + target +
+    /// attempt recorded, budget incremented) but has NOT yet executed it. Recovery re-drives execution.</summary>
+    public const string Decided = "decided";
+
+    /// <summary>UNIFIED STEERING (rev8 §3d): the chosen action is executing (lease stamped via
+    /// <c>ExecStartedAt</c>); a stale <c>executing</c> directive is re-driven idempotently by recovery.</summary>
+    public const string Executing = "executing";
+
     public const string Applied = "applied";
+
+    /// <summary>UNIFIED STEERING (rev8 §6, execution loop-bound) — a Decision-A directive whose bounded
+    /// EXECUTION retries were exhausted (e.g. the resumed revision never wrote a checkpoint) is parked
+    /// here (a visible terminal for the directive) instead of being re-driven forever. The plan is
+    /// escalated to human review / terminal alongside.</summary>
+    public const string NeedsAttention = "needs_attention";
 }
 
 /// <summary>
@@ -257,9 +280,21 @@ public sealed class CoordinatorSteeringQueue(IServiceScopeFactory scopeFactory)
 
         while (!ct.IsCancellationRequested)
         {
+            // UNIFIED AUTONOMOUS STEERING (rev8, CR-C invariant): the next-turn-boundary drain must
+            // NEVER deliver a unified-steering / assembly-gate directive to a child. Those directives
+            // are routed EXCLUSIVELY through the coordinator decider (CoordinatorSteeringDecider) — the
+            // gate mints them with a non-null Source (e.g. `gate:rubberduck`) and a subtask-scoped
+            // TargetScope, and TargetChildRunId==null. A crash between the gate's inline claim
+            // (queued->relayed) and the DecideAsync commit lets recovery reclaim such a directive back to
+            // `queued`; without this guard the broadcast branch (TargetChildRunId==null) below would let
+            // that orphaned, UN-DECIDED gate directive be applied as a redirect revision to whichever
+            // unrelated child hits its next turn boundary first — exactly the "felt like a glitch" class
+            // this feature removes. Legacy human /steer directives leave Source==null and remain
+            // claimable, so coordinator-wide sends are unaffected.
             var query = db.SteeringDirectives.AsNoTracking()
                 .Where(d => d.CoordinatorRunId == coordinatorRunId
-                    && d.Status == SteeringStatus.Queued);
+                    && d.Status == SteeringStatus.Queued
+                    && d.Source == null);
             if (requiredPlanStatus is not null)
                 query = query.Where(d => db.WorkPlans.Any(w => w.CoordinatorRunId == coordinatorRunId && w.Status == requiredPlanStatus));
             if (childRunId is not null)
@@ -446,6 +481,160 @@ public sealed class CoordinatorSteeringService
         return await QueueNextBoundaryAsync(
             coordinatorRunId, directiveId, normalized, targetChildRunId, resolvedInstruction, createdBy, createdAt, ct)
             .ConfigureAwait(false);
+    }
+
+    // -----------------------------------------------------------------------
+    // UNIFIED AUTONOMOUS STEERING (rev8 §3) — the single façade every source normalizes into.
+    // -----------------------------------------------------------------------
+
+    /// <summary>
+    /// The ONE unified steering entry point (rev8 §3). Every correction-feedback source — human review,
+    /// the RAI gate, the rubber-duck gate, build-test, another agent, the coordinator, or another step —
+    /// normalizes into a <see cref="SteeringSignal"/> and calls this. It does ONLY three things and
+    /// NEVER executes recovery (BLOCKER-1 fix): (1) persists the signal as a <see cref="SteeringDirective"/>
+    /// (<c>pending</c>) reusing the same persistence as <see cref="SteerAsync"/>, (2) enqueues it for the
+    /// coordinator (<c>queued</c>) via the replica-safe <see cref="CoordinatorSteeringQueue"/>, (3) emits
+    /// <c>coordinator.steering_received</c> so the action is visible immediately, then wakes an
+    /// assembly-blocked / idle coordinator loop. It MUST NOT call
+    /// <see cref="TryResumeParkedCoordinatorAsync"/> — the conscious A/B/C/D decision (and any reset)
+    /// happens later, in <c>CoordinatorSteeringDecider</c>, with a preceding, visible decision event.
+    /// </summary>
+    public async Task<SteeringDirectiveView> SubmitSteeringAsync(SteeringSignal signal, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(signal);
+        if (!SteeringSource.IsKnown(signal.Source))
+            throw new SteeringValidationException(
+                $"Unknown steering source '{signal.Source}'. Known: human-review, rai, rubberduck, build-test, agent, coordinator, step.");
+        if (!SteeringSeverity.IsKnown(signal.Severity))
+            throw new SteeringValidationException(
+                $"Unknown steering severity '{signal.Severity}'. Known: advisory, request-changes, blocking.");
+
+        var verb = (signal.Verb ?? string.Empty).Trim().ToLowerInvariant();
+        if (verb.Length == 0)
+            verb = signal.Severity == SteeringSeverity.Advisory ? SteeringKind.Send : SteeringKind.Redirect;
+        if (!SteeringKind.IsSupported(verb))
+            throw new SteeringValidationException(
+                $"Unknown steering verb '{signal.Verb}'. Supported: stop, send, redirect, amend, dispatch-fresh.");
+
+        var targetChildRunId = signal.TargetScope?.ChildRunId;
+        var targetScopeJson = signal.TargetScope?.ToJson();
+        var feedback = signal.Feedback ?? string.Empty;
+
+        int directiveId;
+        using (var scope = _scopeFactory.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var directive = new SteeringDirective
+            {
+                CoordinatorRunId = signal.CoordinatorRunId,
+                TargetChildRunId = targetChildRunId,
+                Kind = verb,
+                Instruction = feedback,
+                Status = SteeringStatus.Pending,
+                CreatedBy = signal.CreatedBy,
+                CreatedAt = signal.Timestamp,
+                Source = signal.Source,
+                Severity = signal.Severity,
+                TargetScopeJson = targetScopeJson,
+                TreeHash = signal.TreeHash,
+            };
+            db.SteeringDirectives.Add(directive);
+            await db.SaveChangesAsync(ct).ConfigureAwait(false);
+            directiveId = directive.Id;
+        }
+
+        // pending -> queued (persist/surface only; NEVER auto-execute).
+        await UpdateDirectiveAsync(directiveId, SteeringStatus.Queued, relayedAt: null, ct).ConfigureAwait(false);
+
+        await EmitReplicaSafeAsync(signal.CoordinatorRunId, EventTypes.CoordinatorSteeringReceived, new
+        {
+            directiveId,
+            source = signal.Source,
+            severity = signal.Severity,
+            verb,
+            targetScope = signal.TargetScope,
+            treeHash = signal.TreeHash,
+            feedback,
+        }, ct).ConfigureAwait(false);
+        _waitRegistry.Signal(signal.CoordinatorRunId);
+
+        _logger.LogInformation(
+            "Unified steering received for coordinator {RunId} (directive {DirectiveId}) from source={Source} severity={Severity} verb={Verb}; queued for coordinator decision (no auto-execute)",
+            signal.CoordinatorRunId, directiveId, signal.Source, signal.Severity, verb);
+
+        return new SteeringDirectiveView(
+            directiveId, signal.CoordinatorRunId, targetChildRunId, verb, feedback,
+            SteeringStatus.Queued, signal.CreatedBy, signal.Timestamp, RelayedAt: null);
+    }
+
+    /// <summary>
+    /// Claim-durability recovery (rev8 §3c): resets stale <c>relayed</c> directives back to
+    /// <c>queued</c> so a decider that crashed AFTER the atomic <c>queued→relayed</c> claim but BEFORE
+    /// committing its decision cannot strand (silently lose) the signal. A <c>relayed</c> directive
+    /// whose <see cref="SteeringDirective.RelayedAt"/> is older than <paramref name="staleBefore"/> is a
+    /// dead claim. A directive that DID commit is already <c>decided</c>/<c>executing</c>/<c>applied</c>
+    /// (no longer <c>relayed</c>) so it is never reclaimed here; a live decider heartbeats its lease so
+    /// its fresh <c>RelayedAt</c> keeps it out of range. Must be invoked in the SAME reclaim step as the
+    /// plan-lease reclaim (§3b.4) so only the reclaim-winner pod resets directives — never stealing from
+    /// a live decider. Returns the number of directives returned to <c>queued</c>.
+    /// </summary>
+    public async Task<int> ReclaimStaleRelayedDirectivesAsync(
+        string coordinatorRunId, DateTimeOffset staleBefore, CancellationToken ct)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        // Two-step (query candidate ids, then atomic conditional update by id) to stay translatable on
+        // both SQLite and Postgres; the WHERE Status == relayed on the update keeps the claim atomic so a
+        // directive a live decider just committed (no longer relayed) is never reclaimed.
+        var candidateIds = await db.SteeringDirectives.AsNoTracking()
+            .Where(d => d.CoordinatorRunId == coordinatorRunId && d.Status == SteeringStatus.Relayed)
+            .Select(d => new { d.Id, d.RelayedAt })
+            .ToListAsync(ct).ConfigureAwait(false);
+        var staleIds = candidateIds
+            .Where(d => d.RelayedAt == null || d.RelayedAt < staleBefore)
+            .Select(d => d.Id)
+            .ToList();
+        if (staleIds.Count == 0)
+            return 0;
+
+        var reclaimed = await db.SteeringDirectives
+            .Where(d => staleIds.Contains(d.Id) && d.Status == SteeringStatus.Relayed)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(d => d.Status, SteeringStatus.Queued)
+                .SetProperty(d => d.RelayedAt, (DateTimeOffset?)null), ct)
+            .ConfigureAwait(false);
+
+        if (reclaimed > 0)
+            _logger.LogWarning(
+                "Claim-durability recovery: returned {Count} stale relayed steering directive(s) to queued for coordinator {RunId}",
+                reclaimed, coordinatorRunId);
+        return reclaimed;
+    }
+
+    /// <summary>
+    /// Emits an arbitrary coordinator timeline event REPLICA-SAFELY, mirroring <see cref="EmitSteeringAsync"/>:
+    /// records on the in-memory stream when this replica owns it, else appends directly to the durable
+    /// <see cref="IRunEventStream"/> so cross-pod timelines stay correct. Used for the new
+    /// <c>coordinator.steering_received</c> / <c>coordinator.steering_decision</c> events (§8).
+    /// </summary>
+    internal async Task EmitReplicaSafeAsync(
+        string coordinatorRunId, string eventType, object payload, CancellationToken ct)
+    {
+        var entry = _streamStore.Get(coordinatorRunId);
+        if (entry is not null)
+        {
+            entry.RecordNext(eventType, payload);
+            return;
+        }
+        if (_eventStream is not null)
+        {
+            await _eventStream.AppendAsync(
+                coordinatorRunId, new RunEvent(0, eventType, payload), ct).ConfigureAwait(false);
+            return;
+        }
+        _logger.LogWarning(
+            "Coordinator event {EventType} for run {RunId} could not be surfaced: this replica does not own the stream and no durable event stream is configured",
+            eventType, coordinatorRunId);
     }
 
     // -----------------------------------------------------------------------

@@ -383,7 +383,8 @@ public sealed class RunOrchestrator
     /// this is the mechanism a queued <c>redirect</c>/<c>amend</c> steering directive uses to inject
     /// the steered instruction at the child's next turn boundary.
     /// </summary>
-    public async Task StartRevisionAsync(Run run, string revisedTask, CancellationToken ct, bool isChild = false)
+    public async Task StartRevisionAsync(Run run, string revisedTask, CancellationToken ct, bool isChild = false,
+        int? steeringDirectiveId = null, int? steeringAttempt = null)
     {
         if (string.IsNullOrEmpty(run.WorktreePath))
             throw new InvalidOperationException($"Run {run.Id} has no worktree path; cannot start revision.");
@@ -419,7 +420,7 @@ public sealed class RunOrchestrator
         var ctsRegistered = false;
         try
         {
-            var streamingRun = await StartWorkflowOrFailAsync(input, run.Id, entry, runCts.Token, isChild).ConfigureAwait(false);
+            var streamingRun = await StartWorkflowOrFailAsync(input, run.Id, entry, runCts.Token, isChild, steeringDirectiveId, steeringAttempt).ConfigureAwait(false);
             var runCt = _registry.Register(run.Id.ToString(), streamingRun, runCts);
             ctsRegistered = true;
             _watchLoop.StartWatching(run.Id.ToString(), streamingRun, entry, run.SubmittingUser, runCt);
@@ -444,11 +445,13 @@ public sealed class RunOrchestrator
         RunId runId,
         RunStreamEntry entry,
         CancellationToken ct,
-        bool isChild = false)
+        bool isChild = false,
+        int? steeringDirectiveId = null,
+        int? steeringAttempt = null)
     {
         try
         {
-            return await _workflowFactory.StartAsync(input, runId.ToString(), ct, isChild).ConfigureAwait(false);
+            return await _workflowFactory.StartAsync(input, runId.ToString(), ct, isChild, steeringDirectiveId, steeringAttempt).ConfigureAwait(false);
         }
         catch (WorkflowBindException ex)
         {

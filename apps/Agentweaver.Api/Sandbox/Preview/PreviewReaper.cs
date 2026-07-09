@@ -37,6 +37,20 @@ public static class PreviewReaper
     public const string AnnotationTargetPort = "agentweaver.dev/preview-target-port";
     public const string AnnotationStartedAt = "agentweaver.dev/preview-started-at";
 
+    /// <summary>
+    /// PreviewRunner PROCESS session id (spec-006 §3.4 / BLOCKER B) — distinct from the Gateway
+    /// capability token (<see cref="AnnotationToken"/>). Persisted so keepalive can dual-touch the
+    /// separate PreviewRunner idle clock via <c>/preview-runner/processes/{sessionId}/health-check</c>.
+    /// </summary>
+    public const string AnnotationPreviewRunnerSessionId = "agentweaver.dev/preview-runner-session-id";
+
+    /// <summary>
+    /// ORIGINAL (un-sanitized) run id, persisted so keepalive can resolve the AgentHost pod origin
+    /// and preview-runner credential for the dual-touch (<see cref="AnnotationRun"/> holds the
+    /// label-sanitized form, which the origin/credential lookups cannot use).
+    /// </summary>
+    public const string AnnotationRunId = "agentweaver.dev/preview-run-id";
+
     public const string LabelPartOf = "app.kubernetes.io/part-of";
     public const string LabelPartOfValue = "agentweaver";
     public const string LabelToken = "agentweaver.dev/preview-token";

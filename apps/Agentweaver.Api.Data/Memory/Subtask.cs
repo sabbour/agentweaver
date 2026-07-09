@@ -49,6 +49,21 @@ public sealed class Subtask
     /// </summary>
     public int RecoveryAttempts { get; set; }
 
+    // ── UNIFIED AUTONOMOUS STEERING (rev8) — additive, nullable ─────────────────────────────────
+    /// <summary>The steering directive id that last reset this subtask via a conscious fresh dispatch
+    /// (direction B). Together with <see cref="LastResetAttempt"/> this is the durable
+    /// <c>(directiveId, attempt)</c> idempotency stamp so a crash-recovery replay of the B action is a
+    /// no-op for a subtask already reset for this attempt.</summary>
+    public int? LastResetDirectiveId { get; set; }
+
+    /// <summary>The action attempt number of the last B reset for this subtask (idempotency key).</summary>
+    public int? LastResetAttempt { get; set; }
+
+    /// <summary>While non-null and in the future, this subtask's child worktree/checkpoints/session
+    /// meta are RETAINED (terminal checkpoint delete/GC suppressed) so an in-place steer (A) can
+    /// resume with context. Bounded by the assembly window + the plan iteration cap so it cannot leak.</summary>
+    public DateTimeOffset? SteeringRetentionUntil { get; set; }
+
     public DateTimeOffset CreatedAt { get; set; }
     public DateTimeOffset UpdatedAt { get; set; }
 }

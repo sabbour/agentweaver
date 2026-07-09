@@ -89,6 +89,17 @@ export function useCoordinatorRunModel(runId: string, runStatus?: string): Coord
         case 'coordinator.assembly_changes_requested':
         case 'coordinator.assembly_declined':
           assemblyReviewResolved = true; break;
+        case 'coordinator.steering_decision': {
+          // A conscious coordinator action on steering feedback consumes a pending
+          // review (compat with the assembly_changes_requested alias). The values are
+          // the exact backend SteeringDirection constants. Advisory is surfaced but
+          // takes no action, so it does NOT resolve the review.
+          const decision = String((e.payload as Record<string, unknown>)['decision'] ?? '');
+          if (decision === 'in_place_steer' || decision === 'dispatch_fresh' || decision === 'proceed') {
+            assemblyReviewResolved = true;
+          }
+          break;
+        }
         default: break;
       }
     }

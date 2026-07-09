@@ -32,6 +32,15 @@ public static class SandboxClaimConventions
     public const string RunCommandClaimPrefix = "run-";
 
     /// <summary>
+    /// Annotation carrying the ORIGINAL (un-truncated) run id on an AgentHost claim. The claim name
+    /// is a lossy 12-char derivation of the run id, so the reaper cannot reverse it back to a run id
+    /// to clean up run-scoped side artifacts (e.g. the per-run preview-runner credential in the
+    /// secret store). Persisting the full run id here lets the orphan-sweep path derive
+    /// <c>PreviewRunnerCredential.SecretKey(runId)</c> and delete it (spec-006 decouple-preview).
+    /// </summary>
+    public const string RunIdAnnotation = "agentweaver.io/run-id";
+
+    /// <summary>
     /// Derives the AgentHost <c>SandboxClaim</c> name for <paramref name="runId"/>:
     /// hyphens stripped, truncated to 12 chars, prefixed with <see cref="AgentHostClaimPrefix"/>.
     /// MUST stay identical to the name used when the claim is created/released so any replica
@@ -177,6 +186,28 @@ public static class SandboxClaimConventions
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// Reads the original run id persisted at <c>metadata.annotations["agentweaver.io/run-id"]</c>
+    /// (see <see cref="RunIdAnnotation"/>), or <see langword="null"/> when the annotation is absent.
+    /// Pure — safe to unit test without a cluster.
+    /// </summary>
+    public static string? TryGetRunIdAnnotation(JsonElement root)
+    {
+        if (!root.TryGetProperty("metadata", out var metadata) ||
+            !metadata.TryGetProperty("annotations", out var annotations) ||
+            annotations.ValueKind != JsonValueKind.Object)
+            return null;
+
+        if (annotations.TryGetProperty(RunIdAnnotation, out var runId) &&
+            runId.ValueKind == JsonValueKind.String)
+        {
+            var value = runId.GetString();
+            return string.IsNullOrEmpty(value) ? null : value;
+        }
+
+        return null;
     }
 
     /// <summary>

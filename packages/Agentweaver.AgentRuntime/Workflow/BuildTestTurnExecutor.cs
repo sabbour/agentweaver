@@ -7,18 +7,13 @@ using Agentweaver.SandboxExec;
 
 namespace Agentweaver.AgentRuntime.Workflow;
 
-/// <summary>Platform-owned Build & Test gate with a single canned prompt and preview activation guidance.</summary>
+/// <summary>Platform-owned Build & Test gate with a single canned prompt.</summary>
 public sealed class BuildTestTurnExecutor : Executor<AgentTurnOutput, WorkflowReviewDecision>, IWorkflowNodeMeta
 {
     public const string CannedPrompt =
         "Run the project's build and ALL tests. Execute all available build commands and test runners for the repository. " +
         "The step passes only if the build succeeds AND all tests pass. Report any failures with full error output. " +
-        "Do not approve if there are compilation errors, test failures, or lint errors that indicate broken code. " +
-        "After tests pass, if the project is a web application or service, start its development/preview server so stakeholders can access the running changes before human review. " +
-        "Use the managed PreviewRunner tools for this: call `start_preview_process(command=..., cwd=...)`, then `observe_bound_port(session_id=...)`, and only then call `start_preview(port=PORT)`. " +
-        "Do NOT assume a hardcoded or pre-configured port — the port is not known ahead of time and can differ per execution. " +
-        "Instead, discover how to run the app by inspecting the project itself (package.json scripts, Dockerfile, Makefile, README, framework defaults, etc.), start the server, and then observe the actual port it binds to from the process stdout/logs. " +
-        "Once PreviewRunner reports the server is up and verified, register it by calling the `start_preview(port=PORT)` tool with the exact port the server actually bound to, so the preview sandbox attaches to the running process.";
+        "Do not approve if there are compilation errors, test failures, or lint errors that indicate broken code.";
 
     public string LogicalNodeId { get; }
     public string DisplayLabel { get; }
@@ -181,8 +176,8 @@ public sealed class BuildTestTurnExecutor : Executor<AgentTurnOutput, WorkflowRe
         --- END DIFF ---
 
         Issue exactly one verdict on its own line:
-        - APPROVED — build succeeds, all tests pass, and preview was registered when applicable.
-        - REQUEST_CHANGES — build/tests/lint fail, preview verification fails, or required checks cannot be completed.
+        - APPROVED — build succeeds and all tests pass.
+        - REQUEST_CHANGES — build/tests/lint fail, or required checks cannot be completed.
         - DECLINED — the work is not viable or should not continue.
         """;
 

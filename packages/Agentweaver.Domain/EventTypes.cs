@@ -276,6 +276,24 @@ public static class EventTypes
     public const string CoordinatorSteering = "coordinator.steering";
 
     /// <summary>
+    /// UNIFIED AUTONOMOUS STEERING (rev8): emitted the moment a steering signal from ANY source
+    /// (human-review | rai | rubberduck | build-test | agent | coordinator | step) is persisted and
+    /// queued to the coordinator, so the action is immediately visible ("never a glitch"). This is
+    /// the source-agnostic receipt; the coordinator's subsequent choice is
+    /// <see cref="CoordinatorSteeringDecision"/>. Payload: { directiveId, source, severity, verb,
+    /// targetScope, feedback, treeHash }.
+    /// </summary>
+    public const string CoordinatorSteeringReceived = "coordinator.steering_received";
+
+    /// <summary>
+    /// UNIFIED AUTONOMOUS STEERING (rev8): emitted BEFORE any steering action executes, recording the
+    /// coordinator's conscious choice among {in_place_steer | dispatch_fresh | proceed | advisory}
+    /// with a rationale. A fresh dispatch is thus never silent. Payload: { directiveId, decision,
+    /// rationale, targetSubtaskIds, attempt, decidedBy }.
+    /// </summary>
+    public const string CoordinatorSteeringDecision = "coordinator.steering_decision";
+
+    /// <summary>
     /// Emitted on the COORDINATOR run's stream once EVERY child subtask has reached a terminal
     /// state (completed / assemble_ready / failed) and the dispatch + observe loop has drained.
     /// The coordinator run now awaits Phase 3 collective assembly (merge), which is NOT yet built —

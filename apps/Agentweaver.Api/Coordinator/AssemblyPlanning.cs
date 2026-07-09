@@ -158,89 +158,13 @@ public static class AssemblyPlanning
         return files;
     }
 
-    /// <summary>
-    /// D6 rejection routing. Given reviewer feedback (free text + optional explicit
-    /// <paramref name="targetFiles"/>), the files each child subtask touched, and the dependency
-    /// edges, selects the subtasks to RE-DISPATCH: every child whose touched files intersect the
-    /// inferred file set, PLUS all of their (transitive) dependents. FALLBACK: if no files can be
-    /// inferred, or no child matches, ALL subtasks are selected (re-dispatch everything).
-    /// </summary>
-    public static AssemblyRejectionPlan InferRedispatch(
-        string? feedback,
-        IReadOnlyCollection<string>? targetFiles,
-        IReadOnlyDictionary<int, IReadOnlySet<string>> touchedFilesBySubtask,
-        IReadOnlyCollection<(int SubtaskId, int DependsOnSubtaskId)> edges)
-    {
-        var allIds = touchedFilesBySubtask.Keys.ToHashSet();
-
-        // Inferred file set = explicit target_files ∪ tokens parsed from the free-text feedback.
-        var inferred = new List<string>();
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var f in (targetFiles ?? []).Concat(ExtractFileTokens(feedback)))
-        {
-            var n = NormalizePath(f);
-            if (n.Length > 0 && seen.Add(n)) inferred.Add(n);
-        }
-
-        if (inferred.Count == 0)
-            return new AssemblyRejectionPlan(allIds.OrderBy(x => x).ToList(), inferred, FellBackToAll: true);
-
-        // Direct matches: a child whose touched files intersect the inferred set.
-        var directlyMatched = new HashSet<int>();
-        foreach (var (subtaskId, touched) in touchedFilesBySubtask)
-            if (touched.Any(tf => inferred.Any(inf => FilesMatch(tf, inf))))
-                directlyMatched.Add(subtaskId);
-
-        if (directlyMatched.Count == 0)
-            return new AssemblyRejectionPlan(allIds.OrderBy(x => x).ToList(), inferred, FellBackToAll: true);
-
-        // Expand to include every (transitive) dependent of a matched subtask.
-        var selected = new HashSet<int>(directlyMatched);
-        bool changed = true;
-        while (changed)
-        {
-            changed = false;
-            foreach (var (dependent, dependency) in edges)
-                if (selected.Contains(dependency) && allIds.Contains(dependent) && selected.Add(dependent))
-                    changed = true;
-        }
-
-        return new AssemblyRejectionPlan(selected.OrderBy(x => x).ToList(), inferred, FellBackToAll: false);
-    }
-
-    /// <summary>
-    /// A touched repo path <paramref name="touched"/> matches an inferred token <paramref name="inferred"/>
-    /// when they are equal, when the touched path ends with <c>/inferred</c> (token is a suffix path),
-    /// or when their file names match (token is a bare filename). All comparisons forward-slash,
-    /// case-insensitive (cross-platform reviewer feedback is forgiving).
-    /// </summary>
-    private static bool FilesMatch(string touched, string inferred)
-    {
-        if (string.Equals(touched, inferred, StringComparison.OrdinalIgnoreCase)) return true;
-        if (touched.EndsWith("/" + inferred, StringComparison.OrdinalIgnoreCase)) return true;
-        if (inferred.EndsWith("/" + touched, StringComparison.OrdinalIgnoreCase)) return true;
-        // Bare filename token (no separator) matches the touched path's filename.
-        if (!inferred.Contains('/') &&
-            string.Equals(FileName(touched), inferred, StringComparison.OrdinalIgnoreCase)) return true;
-        return false;
-    }
-
-    private static string FileName(string path)
-    {
-        var idx = path.LastIndexOf('/');
-        return idx >= 0 ? path[(idx + 1)..] : path;
-    }
+    // UNIFIED AUTONOMOUS STEERING (rev8, §9): the fragile prose-parsing InferRedispatch heuristic and
+    // its AssemblyRejectionPlan result record are DELETED. Reviewer feedback no longer selects
+    // subtasks by parsing prose; the coordinator (or the deterministic direction-B executor in
+    // CoordinatorAssemblyService.RequestChangesAsync) chooses targets explicitly. The tokenizers
+    // (ExtractFileTokens / ExtractTouchedFiles / NormalizePath) are retained: output-conflict
+    // detection still uses them.
 
     private static string NormalizePath(string path) =>
         path.Replace('\\', '/').Trim().TrimStart('/');
 }
-
-/// <summary>
-/// Outcome of <see cref="AssemblyPlanning.InferRedispatch"/>: the subtask ids to re-dispatch, the
-/// inferred file set (for the <c>coordinator.assembly_changes_requested</c> event), and whether the
-/// fallback (re-dispatch ALL) was triggered.
-/// </summary>
-public sealed record AssemblyRejectionPlan(
-    IReadOnlyList<int> SubtaskIds,
-    IReadOnlyList<string> InferredFiles,
-    bool FellBackToAll);

@@ -32,6 +32,14 @@ internal sealed class AgentHostRuntimeState
     public string TurnBearerToken { get; private set; } = string.Empty;
 
     /// <summary>
+    /// Per-run preview-runner credential (spec-006 decouple-preview, BLOCKER A). Delivered in-memory
+    /// via <c>POST /configure</c> — never in pod env/file, so it cannot be inherited by the untrusted
+    /// preview process. <c>PreviewRunnerEndpointAuth</c> accepts EITHER this or
+    /// <see cref="TurnBearerToken"/>; when set, preview-runner auth is fail-closed.
+    /// </summary>
+    public string PreviewRunnerCredential { get; private set; } = string.Empty;
+
+    /// <summary>
     /// Key Vault secret name for the run owner's GitHub token (Option C warm-pool path).
     /// Supplied by the executor in the /configure call; consumed by
     /// <see cref="KeyVaultUserTokenProvider"/>. Null on the file-mount/shared-store paths.
@@ -55,6 +63,7 @@ internal sealed class AgentHostRuntimeState
         RunId = options.RunId ?? string.Empty;
         UserId = options.UserId ?? string.Empty;
         TurnBearerToken = options.TurnBearerToken ?? string.Empty;
+        PreviewRunnerCredential = string.Empty; // not available on env-var launch path
         KvUserSecretName = options.KvUserSecretName;
         GitHubAccessToken = null; // not available on env-var launch path
     }
@@ -63,7 +72,7 @@ internal sealed class AgentHostRuntimeState
     /// Atomically transitions the pod from standby to configured. Returns <see langword="false"/>
     /// when the pod was already configured (one-time semantics → caller returns 409).
     /// </summary>
-    public bool TryConfigure(string runId, string userId, string turnBearerToken, string? kvUserSecretName, string? gitHubAccessToken)
+    public bool TryConfigure(string runId, string userId, string turnBearerToken, string? kvUserSecretName, string? gitHubAccessToken, string? previewRunnerCredential = null)
     {
         if (Interlocked.CompareExchange(ref _configured, 1, 0) != 0)
             return false;
@@ -71,6 +80,7 @@ internal sealed class AgentHostRuntimeState
         RunId = runId ?? string.Empty;
         UserId = userId ?? string.Empty;
         TurnBearerToken = turnBearerToken ?? string.Empty;
+        PreviewRunnerCredential = previewRunnerCredential ?? string.Empty;
         KvUserSecretName = string.IsNullOrWhiteSpace(kvUserSecretName) ? null : kvUserSecretName;
         GitHubAccessToken = string.IsNullOrWhiteSpace(gitHubAccessToken) ? null : gitHubAccessToken;
         return true;

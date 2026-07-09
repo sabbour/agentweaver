@@ -2027,6 +2027,42 @@ function sessionTreeRoleRank(meta: { nodeId: string; label: string; roleKey?: st
   return 100;
 }
 
+export interface RunTreeSiblingMeta {
+  nodeId: string;
+  label: string;
+  roleKey?: string;
+  isSubtask: boolean;
+  startedAt?: number;
+  x: number;
+  y: number;
+}
+
+// Sibling ordering for the run/session tree. PRIMARY key is startedAt (ascending)
+// so the tree reads chronologically (Ahmed: "the run tree is all over the place, it
+// is not sorted properly at all"). Convention chosen: a sibling WITH a startedAt sorts
+// BEFORE one without — started work is chronologically anchored and reads first, while
+// not-yet-started (pending) siblings trail at the bottom, which is the natural reading
+// order for a run tree. When both startedAt are equal or both missing, fall back to the
+// prior deterministic chain (role rank → numeric subtask key → label → layout y/x →
+// nodeId) so ties are stable and re-renders never reshuffle.
+export function compareRunTreeSiblings(a: RunTreeSiblingMeta, b: RunTreeSiblingMeta): number {
+  const aStarted = a.startedAt;
+  const bStarted = b.startedAt;
+  if (aStarted != null && bStarted != null) {
+    if (aStarted !== bStarted) return aStarted - bStarted;
+  } else if (aStarted != null) {
+    return -1;
+  } else if (bStarted != null) {
+    return 1;
+  }
+  return sessionTreeRoleRank(a) - sessionTreeRoleRank(b)
+    || subtaskSortKey(a.nodeId).localeCompare(subtaskSortKey(b.nodeId), undefined, { numeric: true })
+    || a.label.localeCompare(b.label)
+    || (a.y - b.y)
+    || (a.x - b.x)
+    || a.nodeId.localeCompare(b.nodeId);
+}
+
 function runTreeStatusIcon(status: string) {
   const color = semanticStateColorForStatus(status);
   if (color === 'success') return <CheckmarkRegular aria-hidden="true" />;
@@ -3216,16 +3252,7 @@ export function CoordinatorRunPage() {
     const buildTree = (nodeId: string): RunSessionTree => {
       const meta = sessionMeta.get(nodeId)!;
       const children = [...(childIdsByParent.get(nodeId) ?? [])]
-        .sort((a, b) => {
-          const childA = sessionMeta.get(a)!;
-          const childB = sessionMeta.get(b)!;
-          return sessionTreeRoleRank(childA) - sessionTreeRoleRank(childB)
-            || subtaskSortKey(childA.nodeId).localeCompare(subtaskSortKey(childB.nodeId), undefined, { numeric: true })
-            || childA.label.localeCompare(childB.label)
-            || (childA.y - childB.y)
-            || (childA.x - childB.x)
-            || childA.nodeId.localeCompare(childB.nodeId);
-        })
+        .sort((a, b) => compareRunTreeSiblings(sessionMeta.get(a)!, sessionMeta.get(b)!))
         .map((childId) => buildTree(childId));
       return {
         nodeId: meta.nodeId,

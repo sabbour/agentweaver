@@ -1,5 +1,69 @@
 # Squad Decisions
 
+## 2026-07-09T04:23:58-07:00: No feature flags for alpha features
+
+**Date:** 2026-07-09T04:23:58-07:00  
+**Author:** Ahmed (@sabbour), recorded by Scribe  
+**Status:** ACTIVE DIRECTIVE
+
+**Decision:** AgentWeaver is alpha software; new features ship on by default. Do not add feature flags for new behavior. When a feature replaces an old path, replace/remove the legacy path outright instead of dual-pathing. `Sandbox:Preview:Enabled` remains a real infrastructure-capability toggle, not a feature flag.
+
+**Applied this session:** Removed the `Coordinator:Preview:DeterministicStep` rollout flag / `!IsProduction` gate and kept the deterministic preview path as the only path. Unified steering also ships on by default, with old auto-reset/redispatch behavior replaced rather than retained behind `Coordinator:UnifiedSteering`.
+
+**Sources:** `.squad/decisions/inbox/coordinator-no-feature-flags.md`; session directive from Ahmed.
+
+---
+
+## 2026-07-09T04:23:58-07:00: Decoupled preview from Build/Test verdict and removed preview feature flag
+
+**Date:** 2026-07-09T04:23:58-07:00  
+**Author:** Morpheus; reviewed by rubber-duck / code-review / security  
+**Status:** SHIPPED
+
+**Decision:** Live preview is a deterministic platform step that runs after Build/Test returns and before the Build/Test verdict is applied. Preview runs for applicable work whether Build/Test approved or requested changes; it is skipped only for declined/terminal runs or when preview infrastructure is unavailable. Preview outcomes do not become code `REQUEST_CHANGES`, do not trigger reset/redispatch, and do not block human review.
+
+**Implementation contract:** `PreviewStep` owns exactly one terminal preview outcome per `{runId, workPlanId, treeHash}`: `sandbox.preview_ready`, `sandbox.preview_failed`, or `sandbox.preview_skipped_not_applicable`. The old approval-time guard remains as a safety net, while the model-mediated Build/Test prompt path is no longer the source of preview readiness. `Coordinator:Preview:DeterministicStep` was removed under the no-feature-flags directive.
+
+**Sources:** `.squad/decisions/inbox/morpheus-decouple-preview-design.md`; `.squad/decisions/inbox/coordinator-no-feature-flags.md`; prior preview decision entries in `.squad/decisions.md`.
+
+---
+
+## 2026-07-09T04:23:58-07:00: Unified autonomous steering shipped as the only correction path
+
+**Date:** 2026-07-09T04:23:58-07:00  
+**Author:** Tank and Trinity; reviewed by rduck-integration, creview-integration, seraph-integration  
+**Status:** SHIPPED
+
+**Decision:** All correction sources normalize into one `SteeringSignal` path: Build/Test, RAI, Rubberduck, human review, agents, coordinator, and workflow steps submit source-agnostic feedback to the coordinator. The coordinator-agent is the sole decider. It chooses A/B/C/D: A = `in_place_steer` resume on the same child context/session/worktree, B = `dispatch_fresh` conscious logged fresh dispatch, C = `proceed` / terminal, D = `advisory` surfaced with no reset.
+
+**Durability and liveness:** `coordinator.steering_received` records the incoming signal and `coordinator.steering_decision` records the chosen effect before execution. Direction A uses a per-child effect marker keyed by `(directiveId, attempt, runId)` so recovery proves the specific revision attempt ran before marking applied. Direction B is never automatic; resets happen only after a visible `dispatch_fresh` decision. Execution is bounded by `CoordinatorSteeringDecider.MaxExecutionAttempts = 3`; exhaustion parks the directive in visible `needs_attention` instead of looping.
+
+**UI contract:** Trinity renders the canonical backend decision strings exactly: `in_place_steer`, `dispatch_fresh`, `proceed`, and `advisory`. `dispatch_fresh` is deliberately prominent, `in_place_steer` resolves pending review as context-preserving steering, `proceed` advances review/terminal state, and `advisory` remains visible without resolving pending review. The run tree now sorts siblings primarily by `startedAt` ascending, with pending/no-start items trailing and deterministic fallback ordering.
+
+**Sources:** `.squad/decisions/inbox/tank-unified-steering-design.md`; `.squad/decisions/inbox/coordinator-unified-steering-directive.md`; `.squad/decisions/inbox/trinity-steering-ui.md`; `.squad/decisions/inbox/coordinator-no-feature-flags.md`.
+
+---
+
+## 2026-07-08T21:00:00-07:00: Preview provisioning implemented and shipped to staging as v0.9.11-rc1
+
+**Date:** 2026-07-08T21:00:00-07:00  
+**Author:** Scribe  
+**Status:** SHIPPED TO STAGING — AWAITING AHMED VALIDATION
+
+**Decision:** Preview provisioning is implemented and shipped to staging as `v0.9.11-rc1` at commit `4f314457`. Ahmed's three decisions are locked: preview approval reuses the existing `AgentPreviewGate` toggle with no auto-approve bypass; missing preview does not block human review; and the shippable path uses a proper AgentHost `PreviewRunner` rather than shell-backgrounding.
+
+**Implementation summary:** Morpheus delivered the AgentHost `PreviewRunner`, managed process-group supervision, port discovery, health checks, teardown, runtime tool surface, and Build/Test wiring. Tank delivered deterministic preview-outcome events and guard enforcement, reused the existing preview approval seam, kept preview failures out of the reset/redispatch route, and fixed the stale null-keyed `sandbox.preview_pending` stall by threading `work_plan_id` and `tree_hash` through pending payloads and requiring a positive tree match. Trinity surfaced preview ready/pending/unavailable states from `/events` on the Build & Test step and human-review artifacts panel. Link published the live-preview provisioning documentation set and updated coordinator, events, sandbox, review, and web docs.
+
+**Gates:** Design rubber-duck passed GO after three rounds. Seraph returned SHIP with no exploitable findings: execution remains inside the sandbox pod boundary, the approval seam is intact, the port range is enforced, token isolation is preserved, and reapers are present. Code review returned SHIP after the stale-pending stall was fixed and regression-tested.
+
+**Validation:** Targeted implementation validation passed across the wave: Morpheus build plus 24 tests, Tank 764 targeted tests after the stale-pending fix, Trinity web build and tests, docs build plus drift-check, and full backend suite 1614 passed. Coordinator bumped `VERSION` to `0.9.11-rc1`, rebuilt api/agent-host/frontend, retagged mcp, deployed to staging `agentweaver-aks-2`, verified rollouts green, `/health=200`, and pods on `v0.9.11-rc1`.
+
+**References:** commit `4f314457`; inbox sources `coordinator-preview-decisions.md`, `tank-preview-outcome-guard.md`, `tank-context-preserving-revision.md`, `morpheus-buildtest-pod-binding.md`, `morpheus-buildtest-preview-wiring.md`, `morpheus-previewrunner-tool-surface.md`, `trinity-preview-event-ui.md`.
+
+**Next:** Await Ahmed staging validation before PR merge or issue close.
+
+---
+
 ## 2026-07-05T20-29-22: Fix workflow save 500: extend AllowedWorkflowIds when saving a new workflow (#175)
 
 **Date:** 2026-07-05T20-29-22  
@@ -3810,3 +3874,93 @@ Rationale: Keep only substantive unfinished OAuth SecretProviderClass work under
 - No UI changes were required for this slice.
 
 **Sources merged:** `cypher-wf-gen-editing.md`.
+
+---
+
+## 2026-07-09T03:30:00Z: Preview-provisioning design approved; deterministic preview readiness guard required
+
+**Date:** 2026-07-09T03:30:00Z  
+**Author:** Morpheus; reviewed by rubberduck-preview / rubberduck-preview-rev / rubberduck-preview-final  
+**Status:** DESIGN APPROVED — IMPLEMENTATION ON HOLD pending Ahmed's approach decision
+
+**Decision:** Preview-provisioning design is approved after design-review GO. The root cause is reframed: `BuildTestTurnExecutor` already instructs the agent to run the app, discover the actual bound port, and call `start_preview(port)`. The missing contract is that preview is currently model-mediated and best-effort rather than a first-class, enforced, evented artifact. A run can complete with only `coordinator.assembly_review_approved` and no `preview_url`.
+
+**Approved Phase 1 smallest slice:** For preview-required projects, Build/Test approval must have a deterministic approval-time post-condition: a durable `sandbox.preview_ready` with non-empty `preview_url` must exist before approval is applied. The guard belongs between `RunBuildTestAsync` and `ApplyAuthoredGateDecisionAsync` in `CoordinatorAssemblyService` (around lines 689-710). If the guard fails, emit `sandbox.preview_failed` plus `workflow.step` preview failed, then return to Steering or park/block. Do **not** call `ApplyAuthoredGateDecisionAsync` with `RequestChanges=true`; that reset/redispatch route is legacy/manual-opt-in only and off the approved GO path.
+
+**Contract additions:** Phase 1 adds durable preview applicability/result states: `preview_required`, `preview_skipped_not_applicable` with reason, `preview_ready`, and `preview_failed`. Executor-stage failure eventing must distinguish `port_not_found`, `app_exited`, `preview_not_requested`, and `preview_required_but_missing`. Reachable `preview_url` semantics require pod-per-run plus Gateway preview enabled.
+
+**Open decisions:** Implementation remains on hold pending Ahmed's approach decision because this intersects the assembly-gate simplification / steering-only direction. Ahmed still needs to decide the preview applicability policy, deployment prerequisite semantics, and exact approval guard placement/policy before code starts.
+
+**Source:** `.squad/decisions/inbox/morpheus-buildtest-preview-wiring.md` (kept in inbox as active design reference)
+
+---
+
+## 2026-07-09T03:30:00Z: Coordinator Build/Test must bind to a routable coordinator AgentHost pod for assembly preview
+
+**Date:** 2026-07-09T03:30:00Z  
+**Author:** Morpheus  
+**Status:** DESIGN / TRACK A REFERENCE
+
+**Decision:** Assembly Build/Test should explicitly acquire a dedicated AgentHost pod bound to the coordinator run id, configure it to the detached assembly worktree, and keep the pod/worktree alive until assembly is terminal or review/preview cleanup completes. Reusing a child pod is rejected because child pods are scoped to child run ids, tokens, worktrees, and lifecycle, and do not create the coordinator SandboxClaim required by preview routing.
+
+**Rationale:** `start_preview` resolves preview routes through the run's sandbox claim. A coordinator-run claim makes the preview Gateway route to the pod that runs the integration build/test server, keeps files visible during Human Review, and avoids converting pod/A2A infrastructure failures into code feedback. The detached worktree must be under the shared `/workspace` PVC and passed to `/configure`; passing `WorktreePath` on an A2A turn is not sufficient.
+
+**Source:** `.squad/decisions/inbox/morpheus-buildtest-pod-binding.md` (kept in inbox as design reference)
+
+---
+
+## 2026-07-09T03:30:00Z: Steering-only assembly revisions target same child run and same branch, not fresh redispatch
+
+**Date:** 2026-07-09T03:30:00Z  
+**Author:** Tank  
+**Status:** DESIGN ONLY — DO NOT IMPLEMENT YET
+
+**Decision:** Gate request-changes should use Steering as the only child revision mechanism. The revised target is same child run id and same branch revision, with explicit durable stream reopen and idempotent Steering directives. The design must not claim literal MAF/Copilot conversation preservation with current code; the honest MVP is same-child, same-branch revision, with checkpoint-resumed context only after a future proof point.
+
+**Rationale:** Terminal child runs currently complete streams, discard later appends, stop subscribers, and delete checkpoints. Safe steering-only revision therefore requires durable stream lifecycle state, epoch-aware reopen/replay semantics, CAS/idempotency for gate decisions, bounded checkpoint/event retention, and durable observability for assembly blocked/failed states. Missing same-child steering support should block clearly rather than silently falling back to a fresh child run unless an explicit operator escape hatch requests context-losing retry.
+
+**Source:** `.squad/decisions/inbox/tank-context-preserving-revision.md` (kept in inbox as active design reference)
+
+---
+
+## 2026-07-09T03:30:00Z: Assembly gate order follows workflow graph approval path
+
+**Date:** 2026-07-09T03:30:00Z  
+**Author:** Tank  
+**Status:** MERGED
+
+**Decision:** Collective assembly gate resolution orders workflow-derived gates by approval-path traversal from the workflow `start` node instead of YAML declaration order. The traversal follows unconditional and approval/happy-path verdict edges, canonicalizes platform stages, and dedupes duplicate canonical stages only after traversal ordering.
+
+**Rationale:** Software-delivery graph semantics already route RAI before Build & Test. Declaration-order enumeration allowed misordered YAML to render or execute Build & Test before RAI. Built-in software workflow YAML and generation guidance were updated as defense in depth.
+
+**Source:** `.squad/decisions/inbox/tank-assembly-gate-order.md`
+
+---
+
+## 2026-07-09T03:30:00Z: Run page and run tree preview/revision UX fixes merged
+
+**Date:** 2026-07-09T03:30:00Z  
+**Authors:** Trinity  
+**Status:** MERGED
+
+**Decision:** Coordinator run UI now distinguishes pending operator/review states, detects Build & Test as a `build_test` gate instead of human review, surfaces active preview links on the Build & Test node/selection, hydrates active previews from the sandbox port-forward API and `preview_url` stream payloads, and converts live gate/child statuses to failed for terminal failed runs. Run-tree ordering is deterministic by stage rank, outcome-spec JSON renders as Coordinator-authored outcome-plan fields, RAI placeholder rationales are treated as empty, assembly-gate system prompts are hidden, and assembly changes-requested events render as revision cycles.
+
+**Validation:** `npm --prefix apps/web run build` passed; `npm --prefix apps/web test -- --run` passed.
+
+**Sources:** `.squad/decisions/inbox/trinity-runtree-preview-ux.md`, `.squad/decisions/inbox/trinity-runpage-bugs.md`
+
+---
+
+## 2026-07-09T03:30:00Z: API image includes git CLI for assembly worktrees
+
+**Date:** 2026-07-09T03:30:00Z  
+**Author:** Link  
+**Status:** MERGED
+
+**Decision:** The API Docker image includes the `git` CLI.
+
+**Rationale:** `WorktreeManager` shells out to `git worktree` during the Build/Test assembly gate. Libgit2 covers headless operations but not this worktree command path.
+
+**Source:** `.squad/decisions/inbox/link-api-image-git.md`
+
+

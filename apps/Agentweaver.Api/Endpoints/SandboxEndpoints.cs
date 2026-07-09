@@ -246,23 +246,12 @@ public static class SandboxEndpoints
         // ── Gateway-direct preview path (replica-safe) ───────────────────────────────
         if (previewService.Enabled)
         {
-            // Preview ports are constrained to the gateway-only ingress range allowed by
-            // k8s/networkpolicy-sandbox.yaml (Sandbox:Preview:AllowedPortMin/Max) so we never
-            // provision a preview the NetworkPolicy would black-hole. The legacy kubectl
-            // fallback below is unaffected (still 1-65535).
-            if (!Agentweaver.Api.Sandbox.Preview.SandboxPreviewOptions.IsPortInRange(
-                    targetPort, previewService.AllowedPortMin, previewService.AllowedPortMax))
-            {
-                return Results.BadRequest(new
-                {
-                    error = $"preview port must be between {previewService.AllowedPortMin} and {previewService.AllowedPortMax}.",
-                });
-            }
+            var registration = await TryRegisterPreviewAsync(
+                runId, targetPort, run.SubmittingUser, previewService, ct);
 
-            try
+            if (registration.Status == PreviewRegistrationStatus.Success)
             {
-                var preview = await previewService.StartPreviewAsync(
-                    runId, targetPort, run.SubmittingUser, ct);
+                var preview = registration.Session!;
                 var keepaliveUrl = $"/api/runs/{runId}/sandbox/preview/{preview.Token}/keepalive";
                 var context = LatestPreviewContext(streamStore, runId);
                 var readyPayload = new
@@ -274,6 +263,7 @@ public static class SandboxEndpoints
                     target_port = preview.TargetPort,
                     pod_name = preview.PodName,
                     session_id = preview.Token,
+                    preview_runner_session_id = registration.PreviewRunnerSessionId,
                     preview_url = preview.PreviewUrl,
                     keepalive_url = keepaliveUrl,
                     started_at = preview.StartedAt,
@@ -294,24 +284,18 @@ public static class SandboxEndpoints
                     keepalive_url = keepaliveUrl,
                 });
             }
-            catch (PortForwardLimitExceededException ex)
+
+            // Single-owner emission: the helper emitted nothing — this caller emits exactly one
+            // preview_failed for the typed error and returns the matching HTTP status.
+            EmitPreviewFailure(streamStore, runId, targetPort, registration.Reason!, registration.Message!);
+            return registration.Status switch
             {
-                logger.LogWarning(ex, "Preview session limit exceeded for run {RunId}", runId);
-                EmitPreviewFailure(streamStore, runId, targetPort, "capacity", ex.Message);
-                return Results.Json(new { error = ex.Message }, statusCode: StatusCodes.Status429TooManyRequests);
-            }
-            catch (InvalidOperationException ex)
-            {
-                logger.LogWarning(ex, "Preview start failed for run {RunId}", runId);
-                EmitPreviewFailure(streamStore, runId, targetPort, PreviewFailureReason(ex), ex.Message);
-                return Results.Conflict(new { error = ex.Message });
-            }
-            catch (Exception ex)
-            {
-                logger.LogError(ex, "Preview start error for run {RunId}", runId);
-                EmitPreviewFailure(streamStore, runId, targetPort, "gateway_failed", "Failed to start preview.");
-                return Results.Problem("Failed to start preview.", statusCode: 500);
-            }
+                PreviewRegistrationStatus.PortNotAllowed => Results.BadRequest(new { error = registration.Message }),
+                PreviewRegistrationStatus.Capacity =>
+                    Results.Json(new { error = registration.Message }, statusCode: StatusCodes.Status429TooManyRequests),
+                PreviewRegistrationStatus.Conflict => Results.Conflict(new { error = registration.Message }),
+                _ => Results.Problem("Failed to start preview.", statusCode: 500),
+            };
         }
 
         // ── Legacy kubectl port-forward fallback (local dev) ─────────────────────────
@@ -347,6 +331,57 @@ public static class SandboxEndpoints
             pod_name    = session.PodName,
             started_at  = session.StartedAt,
         });
+    }
+
+    /// <summary>
+    /// Lower-level Gateway-direct preview registration (spec-006 decouple-preview, BLOCKER 3). Runs
+    /// the port-range guard + <see cref="ISandboxPreviewService.StartPreviewAsync"/> and returns a
+    /// TYPED result. It <b>emits NOTHING</b> onto the run stream — the single caller
+    /// (<see cref="StartPreviewForRunAsync"/> or the deterministic <c>PreviewStep</c>) owns emission,
+    /// so there is exactly one terminal preview outcome per tree. The port-range rejection is
+    /// surfaced as <see cref="PreviewRegistrationStatus.PortNotAllowed"/> instead of a silent
+    /// <c>BadRequest</c>.
+    /// </summary>
+    internal static async Task<PreviewRegistrationResult> TryRegisterPreviewAsync(
+        string runId,
+        int targetPort,
+        string ownerUserId,
+        ISandboxPreviewService previewService,
+        CancellationToken ct,
+        string? previewRunnerSessionId = null)
+    {
+        if (!Agentweaver.Api.Sandbox.Preview.SandboxPreviewOptions.IsPortInRange(
+                targetPort, previewService.AllowedPortMin, previewService.AllowedPortMax))
+        {
+            return PreviewRegistrationResult.Error(
+                PreviewRegistrationStatus.PortNotAllowed,
+                "port_not_allowed",
+                $"preview port must be between {previewService.AllowedPortMin} and {previewService.AllowedPortMax}.");
+        }
+
+        try
+        {
+            var preview = await previewService.StartPreviewAsync(
+                runId, targetPort, ownerUserId, ct, previewRunnerSessionId);
+            return PreviewRegistrationResult.Ok(preview, previewRunnerSessionId);
+        }
+        catch (PortForwardLimitExceededException ex)
+        {
+            return PreviewRegistrationResult.Error(PreviewRegistrationStatus.Capacity, "capacity", ex.Message);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return PreviewRegistrationResult.Error(PreviewRegistrationStatus.Conflict, PreviewFailureReason(ex), ex.Message);
+        }
+        catch (Exception) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception)
+        {
+            return PreviewRegistrationResult.Error(
+                PreviewRegistrationStatus.GatewayFailed, "gateway_failed", "Failed to start preview.");
+        }
     }
 
     private static void EmitPreviewFailure(
@@ -439,4 +474,35 @@ public sealed record StartPreviewRequest
 {
     [System.Text.Json.Serialization.JsonPropertyName("target_port")]
     public int TargetPort { get; init; }
+}
+
+/// <summary>Typed status of a Gateway-direct preview registration (spec-006 decouple-preview).</summary>
+public enum PreviewRegistrationStatus
+{
+    Success,
+    PortNotAllowed,
+    Capacity,
+    Conflict,
+    NoBoundPod,
+    GatewayFailed,
+}
+
+/// <summary>
+/// Emit-nothing typed result of <see cref="SandboxEndpoints.TryRegisterPreviewAsync"/>. On success
+/// carries the <see cref="Agentweaver.Api.Sandbox.Preview.PreviewSession"/> and the distinct
+/// PreviewRunner process session id (BLOCKER B); on failure carries a closed-set reason + message.
+/// </summary>
+public sealed record PreviewRegistrationResult(
+    PreviewRegistrationStatus Status,
+    Agentweaver.Api.Sandbox.Preview.PreviewSession? Session,
+    string? Reason,
+    string? Message,
+    string? PreviewRunnerSessionId = null)
+{
+    public static PreviewRegistrationResult Ok(
+        Agentweaver.Api.Sandbox.Preview.PreviewSession session, string? previewRunnerSessionId) =>
+        new(PreviewRegistrationStatus.Success, session, null, null, previewRunnerSessionId);
+
+    public static PreviewRegistrationResult Error(PreviewRegistrationStatus status, string reason, string message) =>
+        new(status, null, reason, message);
 }

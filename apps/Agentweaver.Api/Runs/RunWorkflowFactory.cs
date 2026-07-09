@@ -22,7 +22,7 @@ namespace Agentweaver.Api.Runs;
 /// Builds the MAF Workflow instance, checkpoint manager, and provides the methods
 /// to launch and resume streaming workflow runs.
 /// </summary>
-public sealed class RunWorkflowFactory
+public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisionCheckpointIndex
 {
     private readonly GitHubCopilotClientFactory _copilotClientFactory;
     private readonly IGitHubTokenScopeProvider _scopeProvider;
@@ -42,6 +42,8 @@ public sealed class RunWorkflowFactory
     private readonly WorkflowRegistry? _workflowRegistry;
     private readonly IBacklogTaskStore? _backlogTaskStore;
     private readonly CheckpointManager _checkpointManager;
+    private readonly JsonCheckpointStore _runsCheckpointStore;
+    private readonly Func<IRevisionEffectConfirmer?>? _revisionEffectConfirmerAccessor;
     private readonly string _checkpointDir;
     private readonly ICheckpointStoreFactory _checkpointStoreFactory;
     private readonly string? _apiBaseUrl;
@@ -133,7 +135,8 @@ public sealed class RunWorkflowFactory
         WorkflowRegistry? workflowRegistry,
         IRunEventStream? eventStream = null,
         IBacklogTaskStore? backlogTaskStore = null,
-        ICheckpointStoreFactory? checkpointStoreFactory = null)
+        ICheckpointStoreFactory? checkpointStoreFactory = null,
+        Func<IRevisionEffectConfirmer?>? revisionEffectConfirmerAccessor = null)
     {
         _ = agentRunner; // retained for DI/test compatibility; agents now come from IWorkflowAgentFactory
         _copilotClientFactory = copilotClientFactory;
@@ -176,6 +179,8 @@ public sealed class RunWorkflowFactory
         // The selector is optional so the convenience ctor / tests still get the file store.
         var store = (_checkpointStoreFactory = checkpointStoreFactory ?? new FileCheckpointStoreFactory())
             .Create("runs", _checkpointDir, _loggerFactory.CreateLogger<RunWorkflowFactory>());
+        _runsCheckpointStore = store;
+        _revisionEffectConfirmerAccessor = revisionEffectConfirmerAccessor;
         _checkpointManager = CheckpointManager.CreateJson(store);
     }
 
@@ -1287,7 +1292,8 @@ public sealed class RunWorkflowFactory
     /// (the run carries <c>ParentRunId</c>), the trimmed coordinator CHILD pipeline is used:
     /// agent terminating assemble-ready, with no per-child RAI / review gate / merge / scribe.
     /// </summary>
-    public async Task<StreamingRun> StartAsync(AgentTurnInput input, string runId, CancellationToken ct, bool isChild = false)
+    public async Task<StreamingRun> StartAsync(AgentTurnInput input, string runId, CancellationToken ct, bool isChild = false,
+        int? steeringDirectiveId = null, int? steeringAttempt = null)
     {
         var effectiveDefinition = isChild
             ? null
@@ -1300,8 +1306,56 @@ public sealed class RunWorkflowFactory
         // descriptor; it is persisted alongside other RunEvents at terminal states so the REST
         // seed path (/api/runs/{id}/events) and /api/runs/{id}/graph work for finished runs.
         _streamStore.Get(runId)?.RecordNext(EventTypes.WorkflowGraph, descriptor);
+
+        // UNIFIED AUTONOMOUS STEERING (rev8 §3d): for an in-place steering (direction A) revision
+        // launch we wrap ONLY THIS launch's checkpoint manager in the per-launch effect decorator, so
+        // the running revision writes the durable, attempt-specific effect marker on its first
+        // superstep checkpoint. Normal runs keep the shared, undecorated manager (blast radius scoped
+        // to this launch only).
+        var checkpointManager = _checkpointManager;
+        if (steeringDirectiveId is int directiveId && steeringAttempt is int attempt)
+        {
+            var confirmer = _revisionEffectConfirmerAccessor?.Invoke();
+            if (confirmer is not null)
+            {
+                if (_runsCheckpointStore is Agentweaver.Api.Infrastructure.Ef.PostgresJsonCheckpointStore pg)
+                {
+                    // Production (Postgres): co-commit the effect row in the SAME SaveChanges as the
+                    // launch's FIRST checkpoint insert — atomic, no confirm-after-write crash window.
+                    var launchRunId = runId;
+                    var decorated = pg.WithFirstCheckpointEffect(
+                        (db, ict) => confirmer.ConfirmRevisionEffectOnContextAsync(
+                            db, directiveId, attempt, launchRunId, ict));
+                    checkpointManager = CheckpointManager.CreateJson(decorated);
+                }
+                else
+                {
+                    // Dev/file store (non-transactional): the decorator confirms AFTER the checkpoint
+                    // write; the recovery path corroborates a crash-in-between via the monotonic
+                    // checkpoint watermark (see CoordinatorSteeringDecider.ProbeRevisionEffectAsync).
+                    var decorated = new SteeringRevisionCheckpointStore(
+                        _runsCheckpointStore, directiveId, attempt, confirmer,
+                        _loggerFactory.CreateLogger<SteeringRevisionCheckpointStore>());
+                    checkpointManager = CheckpointManager.CreateJson(decorated);
+                }
+            }
+        }
+
         return await InProcessExecution.RunStreamingAsync(
-            workflow, input, _checkpointManager, runId, ct).ConfigureAwait(false);
+            workflow, input, checkpointManager, runId, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// UNIFIED AUTONOMOUS STEERING (rev8 §4) — <see cref="IRevisionCheckpointIndex"/>: returns the count
+    /// of durable checkpoints for a session from the SHARED "runs" checkpoint store (never a second file
+    /// store, which would take a conflicting exclusive directory lock). The steering decider uses this
+    /// strictly-monotonic count to corroborate a crash-before-confirm in-place revision on the
+    /// non-transactional dev/file store.
+    /// </summary>
+    public async Task<int> CountCheckpointsAsync(string sessionId, CancellationToken ct = default)
+    {
+        var index = await _runsCheckpointStore.RetrieveIndexAsync(sessionId).ConfigureAwait(false);
+        return index.Count();
     }
 
     /// <summary>

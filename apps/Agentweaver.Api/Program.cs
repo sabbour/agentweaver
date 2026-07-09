@@ -134,6 +134,20 @@ builder.Services.AddSingleton<Agentweaver.Api.Coordinator.ICoordinatorDispatch>(
 builder.Services.AddSingleton<Agentweaver.Api.Coordinator.CoordinatorSteeringQueue>();
 builder.Services.AddSingleton<Agentweaver.Api.Coordinator.CoordinatorSteeringWaitRegistry>();
 builder.Services.AddSingleton<Agentweaver.Api.Coordinator.CoordinatorSteeringService>();
+builder.Services.AddSingleton<Agentweaver.Api.Coordinator.CoordinatorSteeringDecider>();
+// UNIFIED AUTONOMOUS STEERING (rev8 §3d): the decider IS the revision-effect confirmer. Exposed via a
+// DEFERRED accessor so RunWorkflowFactory can invoke it lazily at revision-launch time WITHOUT forming
+// a ctor DI cycle (RunWorkflowFactory -> confirmer -> decider -> steering service -> RunWorkflowFactory).
+builder.Services.AddSingleton<Agentweaver.Api.Infrastructure.IRevisionEffectConfirmer>(
+    sp => sp.GetRequiredService<Agentweaver.Api.Coordinator.CoordinatorSteeringDecider>());
+builder.Services.AddSingleton<Func<Agentweaver.Api.Infrastructure.IRevisionEffectConfirmer?>>(
+    sp => () => sp.GetService<Agentweaver.Api.Infrastructure.IRevisionEffectConfirmer>());
+// UNIFIED AUTONOMOUS STEERING (rev8 §4): the decider corroborates a crash-before-confirm in-place
+// revision on the non-transactional dev/file checkpoint store via the strictly-monotonic checkpoint
+// count. RunWorkflowFactory exposes that count (IRevisionCheckpointIndex) over the SHARED runs store;
+// a DEFERRED accessor avoids a ctor DI cycle (decider -> index -> RunWorkflowFactory -> confirmer -> decider).
+builder.Services.AddSingleton<Func<Agentweaver.Api.Infrastructure.IRevisionCheckpointIndex?>>(
+    sp => () => sp.GetService<RunWorkflowFactory>());
 builder.Services.AddSingleton<Agentweaver.Api.Coordinator.ICoordinatorSpecDrafter,
     Agentweaver.Api.Coordinator.CopilotCoordinatorSpecDrafter>();
 builder.Services.AddSingleton<Agentweaver.Api.Coordinator.IWorkflowSelectionModel,
@@ -167,6 +181,10 @@ else
 {
     builder.Services.AddSingleton<IGitHubTokenStore, OsCredentialStoreGitHubTokenStore>();
     builder.Services.AddSingleton<IGitHubDeviceFlowStore, InMemoryGitHubDeviceFlowStore>();
+    // Provide an in-memory ISecretStore so replica-safe run-secret consumers (e.g. the per-run
+    // preview-runner credential — spec-006 decouple-preview) always resolve a store outside the
+    // Key Vault deployment. Harmless in single-node/local dev.
+    builder.Services.AddSingleton<ISecretStore, InMemorySecretStore>();
 }
 var scopeProviderName = builder.Configuration["Auth:GitHub:ScopeProvider"] ?? "caller";
 if (string.Equals(scopeProviderName, "installation", StringComparison.OrdinalIgnoreCase))
@@ -396,6 +414,36 @@ builder.Services.AddSingleton<ISandboxExecutor>(sp =>
         .AddHttpMessageHandler(sp => new ConnectRefusedRetryHandler(
             logger: sp.GetRequiredService<ILoggerFactory>().CreateLogger<ConnectRefusedRetryHandler>()));
 
+    // spec-006 decouple-preview (BLOCKER 1): AgentHost ORIGIN resolver — scheme://podIP:port with
+    // NO A2A path, so the root-mounted /preview-runner/* endpoints are reachable. Distinct from the
+    // A2A endpoint resolver which appends AgentHostA2APath (→ 404 for preview-runner).
+    builder.Services.AddSingleton<Agentweaver.Api.Sandbox.IAgentHostOriginResolver>(sp =>
+    {
+        var loggerFactory = sp.GetRequiredService<ILoggerFactory>();
+        if (!SandboxExecutorFactory.IsInCluster)
+            return new Agentweaver.Api.Sandbox.NoOpAgentHostOriginResolver();
+
+        try
+        {
+            var k8sClient = new Kubernetes(KubernetesClientConfiguration.InClusterConfig());
+            var podRegistry = sp.GetRequiredService<IPodNameRegistry>();
+            var ns = builder.Configuration["Sandbox:Kubernetes:Namespace"] ?? "agentweaver";
+            return new Agentweaver.Api.Sandbox.KubernetesAgentHostOriginResolver(
+                k8sClient, podRegistry, ns, sandboxAgentOptions,
+                loggerFactory.CreateLogger<Agentweaver.Api.Sandbox.KubernetesAgentHostOriginResolver>());
+        }
+        catch
+        {
+            return new Agentweaver.Api.Sandbox.NoOpAgentHostOriginResolver();
+        }
+    });
+
+    // Typed preview-runner HTTP client (targets origin + root path; bearer = turn token OR per-run
+    // preview-runner credential; 401 → preview_runner_unauthorized).
+    builder.Services.AddSingleton<
+        Agentweaver.Api.Sandbox.Preview.IPreviewRunnerHttpClient,
+        Agentweaver.Api.Sandbox.Preview.PreviewRunnerHttpClient>();
+
     // RemoteWorkflowAgentFactory registered as an alternative to WorkflowAgentFactory.
     builder.Services.AddSingleton<RemoteWorkflowAgentFactory>();
 
@@ -496,11 +544,31 @@ builder.Services.AddSingleton<PortForwardService>();
             }
         }
 
-        return new SandboxPreviewService(k8sClient, previewOptions, logger);
+        return new SandboxPreviewService(
+            k8sClient, previewOptions, logger,
+            clock: null,
+            previewRunnerClient: sp.GetService<Agentweaver.Api.Sandbox.Preview.IPreviewRunnerHttpClient>(),
+            originResolver: sp.GetService<Agentweaver.Api.Sandbox.IAgentHostOriginResolver>(),
+            secretStore: sp.GetService<Agentweaver.Api.Auth.ISecretStore>());
     });
 
     // Replica-safe annotation-driven reaper. No-ops when preview disabled.
     builder.Services.AddHostedService<SandboxPreviewReaperService>();
+
+    // spec-006 decouple-preview: deterministic heuristic run-command resolver + the platform-owned
+    // PreviewStep (single terminal-outcome emitter; runs after Build&Test in the coordinator loop).
+    builder.Services.AddSingleton<Agentweaver.Api.Sandbox.Preview.PreviewCommandResolver>();
+    builder.Services.AddSingleton<Agentweaver.Api.Coordinator.Preview.PreviewStep>(sp =>
+        new Agentweaver.Api.Coordinator.Preview.PreviewStep(
+            sp.GetRequiredService<ISandboxPreviewService>(),
+            sp.GetRequiredService<Agentweaver.Api.Sandbox.Preview.AgentPreviewGate>(),
+            sp.GetRequiredService<Agentweaver.Api.Sandbox.Preview.IPreviewRunnerHttpClient>(),
+            sp.GetRequiredService<Agentweaver.Api.Sandbox.Preview.PreviewCommandResolver>(),
+            sp.GetRequiredService<Agentweaver.AgentRuntime.Workflow.IAgentHostTurnTokenRegistry>(),
+            sp.GetRequiredService<Agentweaver.Api.Infrastructure.RunStreamStore>(),
+            sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<SandboxRuntimeOptions>>().Value,
+            sp.GetRequiredService<ILoggerFactory>().CreateLogger<Agentweaver.Api.Coordinator.Preview.PreviewStep>(),
+            sp.GetService<Agentweaver.Api.Auth.ISecretStore>()));
 }
 
 // Kubernetes runtime environment detection (pod name, in-cluster flag).

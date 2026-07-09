@@ -75,6 +75,7 @@ export default withMermaid({
             { text: 'Web UI', link: '/reference/web' },
             { text: 'Events', link: '/reference/events' },
             { text: 'Coordinator', link: '/reference/coordinator' },
+            { text: 'Unified steering', link: '/reference/unified-steering' },
             { text: 'Browser console', link: '/reference/browser-console' },
             { text: 'Memory', link: '/reference/memory' },
             { text: 'Agent communication', link: '/reference/agent-communication' },
@@ -107,6 +108,7 @@ export default withMermaid({
             { text: 'Browser console', link: '/experience/browser-console' },
             { text: 'Runs board & watch', link: '/experience/runs-board-watch' },
             { text: 'Coordinator & orchestration', link: '/experience/coordinator-orchestration' },
+            { text: 'Unified steering', link: '/experience/unified-steering' },
             { text: 'Review workspace & merge', link: '/experience/review-workspace-merge' },
             { text: 'Team casting & memory', link: '/experience/team-casting-memory' },
             { text: 'Workflows & backlog', link: '/experience/workflows-backlog' },
@@ -144,6 +146,7 @@ export default withMermaid({
           items: [
             { text: 'Orchestration', link: '/deep-dive/orchestration' },
             { text: 'Coordinator internals', link: '/deep-dive/coordinator-internals' },
+            { text: 'Unified steering', link: '/deep-dive/unified-steering' },
             { text: 'Workflow engine', link: '/deep-dive/workflow-engine' },
             { text: 'Workflow selection', link: '/deep-dive/workflow-selection' },
             { text: 'Team & casting', link: '/deep-dive/team-casting' },

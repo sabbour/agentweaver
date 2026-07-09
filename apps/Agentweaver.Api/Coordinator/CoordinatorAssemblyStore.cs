@@ -115,7 +115,53 @@ public sealed class CoordinatorAssemblyStore
         return updated > 0;
     }
 
-    /// <summary>Sets the work-plan <see cref="WorkPlan.Status"/> (e.g. in_review, complete, assembly_*).</summary>
+    /// <summary>
+    /// UNIFIED AUTONOMOUS STEERING (rev8 §3b.4/§3c): reclaims a stale <see cref="WorkPlanStatus.AssemblySteering"/>
+    /// decision-in-progress lease back to <c>awaiting_assembly</c> so a resurrected pod re-enters the
+    /// assembly boundary and re-invokes the decider. Treated exactly like the <c>assembling</c> lease:
+    /// only reclaimed when <see cref="WorkPlan.AssemblyStartedAt"/> is null or older than
+    /// <paramref name="staleBefore"/> — a FRESH lease (a live decider on another replica, heartbeating)
+    /// is left untouched, so at most one decider is active at a time. The caller that wins this reclaim
+    /// also resets the run's stale <c>relayed</c> steering directives back to <c>queued</c> (via
+    /// <see cref="CoordinatorSteeringService.ReclaimStaleRelayedDirectivesAsync"/>) in the SAME recovery
+    /// step, closing the claim-durability window (§3c). Returns <c>true</c> for the single reclaim winner.
+    /// </summary>
+    public async Task<bool> TryReclaimStaleAssemblySteeringAsync(
+        int workPlanId, DateTimeOffset staleBefore, CancellationToken ct)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var now = DateTimeOffset.UtcNow;
+
+        if (db.Database.IsSqlite())
+        {
+            var rows = await db.Database.ExecuteSqlInterpolatedAsync($"""
+                UPDATE "WorkPlans"
+                   SET "Status" = {WorkPlanStatus.AwaitingAssembly},
+                       "AssemblyStage" = NULL,
+                       "AssemblyTerminalStage" = NULL,
+                       "AssemblyStatusReason" = NULL,
+                       "UpdatedAt" = {now}
+                 WHERE "Id" = {workPlanId}
+                   AND "Status" = {WorkPlanStatus.AssemblySteering}
+                   AND ("AssemblyStartedAt" IS NULL OR "AssemblyStartedAt" < {staleBefore})
+                """, ct).ConfigureAwait(false);
+            return rows > 0;
+        }
+
+        var updated = await db.WorkPlans
+            .Where(w => w.Id == workPlanId
+                     && w.Status == WorkPlanStatus.AssemblySteering
+                     && (w.AssemblyStartedAt == null || w.AssemblyStartedAt < staleBefore))
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(w => w.Status, WorkPlanStatus.AwaitingAssembly)
+                .SetProperty(w => w.AssemblyStage, (string?)null)
+                .SetProperty(w => w.AssemblyTerminalStage, (string?)null)
+                .SetProperty(w => w.AssemblyStatusReason, (string?)null)
+                .SetProperty(w => w.UpdatedAt, now), ct)
+            .ConfigureAwait(false);
+        return updated > 0;
+    }
     public async Task SetStatusAsync(int workPlanId, string status, CancellationToken ct)
     {
         using var scope = _scopeFactory.CreateScope();
@@ -177,6 +223,32 @@ public sealed class CoordinatorAssemblyStore
                 .SetProperty(w => w.AssemblyStage, stage)
                 .SetProperty(w => w.AssemblyTerminalStage, (string?)null)
                 .SetProperty(w => w.AssemblyStatusReason, (string?)null)
+                .SetProperty(w => w.UpdatedAt, now), ct)
+            .ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// UNIFIED AUTONOMOUS STEERING (rev8 §3b/§3c, RD#3/CR#1) — enters the
+    /// <see cref="WorkPlanStatus.AssemblySteering"/> decision-in-progress lease AND stamps
+    /// <see cref="WorkPlan.AssemblyStartedAt"/> as the lease heartbeat. The reclaim path
+    /// (<see cref="TryReclaimStaleAssemblySteeringAsync"/>) keys fresh-vs-stale on
+    /// <c>AssemblyStartedAt</c>; the generic <see cref="SetStatusAndStageAsync"/> does NOT stamp it, so
+    /// a crash mid-steering would otherwise look permanently stale (or, if left from a prior phase,
+    /// permanently fresh). Using a dedicated stamp here makes the heartbeat the reclaim relies on real.
+    /// </summary>
+    public async Task SetAssemblySteeringAsync(int workPlanId, CancellationToken ct)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var now = DateTimeOffset.UtcNow;
+        await db.WorkPlans
+            .Where(w => w.Id == workPlanId)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(w => w.Status, WorkPlanStatus.AssemblySteering)
+                .SetProperty(w => w.AssemblyStage, (string?)null)
+                .SetProperty(w => w.AssemblyTerminalStage, (string?)null)
+                .SetProperty(w => w.AssemblyStatusReason, (string?)null)
+                .SetProperty(w => w.AssemblyStartedAt, now)
                 .SetProperty(w => w.UpdatedAt, now), ct)
             .ConfigureAwait(false);
     }

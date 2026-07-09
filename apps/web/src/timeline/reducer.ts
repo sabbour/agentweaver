@@ -506,6 +506,8 @@ function processEvent(
     case 'subtask.failed':
     case 'coordinator.children_complete':
     case 'coordinator.steering':
+    case 'coordinator.steering_received':
+    case 'coordinator.steering_decision':
     case 'coordinator.assembly_started':
     case 'coordinator.integration_conflict_auto_resolved':
     case 'coordinator.assembly_rai_started':

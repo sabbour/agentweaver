@@ -1,54 +1,50 @@
-# Live-preview provisioning
+# Decoupled live-preview provisioning
 
-Live-preview provisioning is what makes the **Build & Test** gate feel like a real running artifact, not just a log summary. When the assembled work produces a web app or service, Agentweaver starts it inside the sandbox pod, exposes it through the preview Gateway, and shows the URL before you make the final human-review decision.
+When a coordinator run reaches **Build & Test**, Agentweaver now tries to show you the assembled app running before you make the final human-review decision. This preview is a platform step after Build & Test, not something the Build & Test agent may or may not do.
 
-For the event and tool contracts, see the [reference](../reference/live-preview-provisioning.md). For how the coordinator enforces the outcome, see the [deep dive](../deep-dive/live-preview-provisioning.md).
+For implementation details, see the [deep dive](../deep-dive/live-preview-provisioning.md). For event and endpoint details, see the [reference](../reference/live-preview-provisioning.md).
 
-## When a preview appears
+## When it runs
 
-A preview can appear on coordinator runs that reach the platform-owned **Build & Test** gate. The backend decides applicability from the assembled diff:
+The preview step runs after Build & Test for:
 
-- docs-only work is skipped as not applicable;
-- app/server-looking work is preview-required;
-- ambiguous non-doc work defaults to preview-required so absence is visible.
+- Build & Test **approved**;
+- Build & Test **requested changes**.
 
-If preview is required, Build & Test starts the app, discovers the actual port, health-checks it, and asks to expose it. If the existing preview approval toggle is off, you will see the normal tool-approval card before any URL is provisioned. There is no separate preview bypass.
+It skips when Build & Test **declines**, because the gate is already terminal. It also self-skips when the deployment cannot produce a reachable Gateway preview, and records that as a skipped preview outcome. There is no feature flag; this is the default behavior.
 
-## What you see in the run tree
+## What you see
 
-The coordinator run page projects the latest preview event onto the **Build & Test** row:
-
-| State | What it means | What you can do |
+| State | Meaning | What to do |
 | --- | --- | --- |
-| **Open preview** | The Gateway URL is ready. | Open it in a new tab and inspect the assembled app before review. |
-| **Preview pending approval** | The run is waiting on the existing tool-approval gate. | Approve or deny the request from the timeline approval card. |
-| **Preview unavailable** | The preview failed, was denied/timed out, or no final preview outcome was recorded. | Continue to human review; inspect the reason and decide whether to approve, request changes, or decline. |
+| **Open preview** | The assembled app is reachable at a Gateway preview URL. | Open it and inspect the running result before approving or requesting changes. |
+| **Preview pending approval** | The existing preview approval gate is waiting for your decision. | Approve or deny the normal tool-approval card. |
+| **Preview unavailable** | The app could not be started, a port was not found, approval failed, or registration failed. | Continue review; preview failure does not block you. |
+| No preview state | Preview was not applicable or was skipped by infrastructure. | Review the diff normally. |
 
-The same preview state appears in the human-review artifacts panel so you do not need to search the event timeline for the URL.
+The preview URL appears on the Build & Test row and in the human-review artifacts panel.
 
 ## Step by step
 
-1. Start or open a coordinator orchestration.
-2. Confirm the outcome spec and let the child subtasks complete.
-3. Wait for collective assembly to run RAI and **Build & Test**.
-4. If Build & Test reaches a previewable app, approve the preview request when the standard tool-approval card appears.
-5. Use **Open preview** on the Build & Test row or human-review panel to inspect the running assembled app.
-6. Complete human review:
-   - approve if the app and diff are correct;
-   - request changes if the running app exposes a product issue;
-   - decline if the combined output should not land.
+1. Start a coordinator run and confirm the outcome spec.
+2. Let child subtasks finish and collective assembly run.
+3. Build & Test evaluates the assembled tree.
+4. If the verdict is approved or request-changes, Agentweaver starts the preview step.
+5. If approval is required, approve the preview request in the normal tool-approval card.
+6. Open the preview URL if it is available.
+7. Complete human review: approve, request changes, or decline based on the diff and the running app.
 
 ## What to expect
 
-- **The port is discovered, not assumed.** The preview runner observes the actual bound port from logs or socket state before calling `start_preview`.
-- **Approval policy is unchanged.** The same `AgentPreviewGate` toggle and tool-approval path govern the preview.
-- **Preview is visible but not mandatory to continue.** A failed or missing preview is shown as **Preview unavailable**, but it does not block human review.
-- **The URL points at the assembled tree.** During human review, the retained Build & Test AgentHost pod and worktree keep the app running against the combined output.
-- **Cleanup is automatic.** Terminal run cleanup stops Gateway previews and releases the Build & Test resources best-effort.
+- **Actual port discovery.** The platform starts the app and observes the port it really bound to; it does not assume port `3000`.
+- **All-interface bind.** Known frameworks are started with host/port arguments or environment variables that make the app reachable from the Gateway.
+- **Verdict independence.** A Build & Test request-changes verdict can still produce a preview so you can inspect what failed or what needs polish.
+- **Preview failure is non-blocking.** A failed preview is visible as **Preview unavailable**, but it never forces a changes request and never prevents human review.
+- **Credential isolation.** The preview-runner credential is per-run, delivered in memory, scrubbed from child process environment, and deleted on terminal cleanup or orphan reaping.
 
 ## Related reading
 
-- [Live-preview provisioning — Deep Dive](../deep-dive/live-preview-provisioning.md)
-- [Live-preview provisioning — Reference](../reference/live-preview-provisioning.md)
+- [Decoupled live-preview provisioning — Deep Dive](../deep-dive/live-preview-provisioning.md)
+- [Decoupled live-preview provisioning — Reference](../reference/live-preview-provisioning.md)
 - [Reviewing and Merging](../guide/review.md#build--test-preview)
 - [Sandbox browser preview](./sandbox-browser-preview.md)

@@ -173,9 +173,9 @@ The coordinator node also carries a **View session** button that scrolls to the 
 
 #### Build & Test preview status
 
-When the run emits durable preview events, the coordinator run page reads them from `GET /api/runs/{id}/events` and uses the latest preview event as the UI source of truth. `sandbox.preview_ready` and `coordinator.preview_ready` show an **Open preview** button on the **Build & Test** row and in the human-review artifacts panel. `sandbox.preview_pending` shows **Preview pending approval**. `sandbox.preview_failed` shows **Preview unavailable** with the backend reason while leaving human review actionable.
+When the run emits durable preview events, the coordinator run page reads them from `GET /api/runs/{id}/events` and uses the latest preview event as the UI source of truth. `sandbox.preview_ready` and `coordinator.preview_ready` show an **Open preview** button on the **Build & Test** row and in the human-review artifacts panel. `sandbox.preview_pending` shows **Preview pending approval**. `sandbox.preview_failed` shows **Preview unavailable** with the backend reason while leaving human review actionable. `sandbox.preview_skipped_not_applicable` is treated as an intentional skip, not a blocking error.
 
-See [Live-preview provisioning](./live-preview-provisioning.md) for the event contract and [the user guide](../experience/live-preview-provisioning.md) for the review workflow.
+See [Decoupled live-preview provisioning](./live-preview-provisioning.md) for the event contract and [the user guide](../experience/live-preview-provisioning.md) for the review workflow.
 
 #### Graph rendering affordances (edges, cards, minimap, zoom)
 
@@ -231,7 +231,7 @@ When the orchestration reaches the collective human-review stage, the page prese
 
 - **`awaiting_assembly` / `assembling`** — an "Assembling collective output…" panel with a spinner.
 - **`in_review`** (or a `coordinator.assembly_review_requested` event) — an **Assembly review** panel that surfaces the integration diff/summary (read from the event payload's `diff` / `summary` / `treeHash` fields) and **Approve** / **Request changes** / **Decline** buttons. These POST to `POST /api/runs/{coordinatorRunId}/assembly/review` via `apiClient.reviewAssembly(runId, { decision, comment? })`. A comment is required for request-changes and decline.
-- **`coordinator.assembly_changes_requested`** — the coordinator status chip shows **Revising after {Gate} feedback** while the phase returns to dispatching, and subtasks listed in `redispatchedSubtaskIds` / `redispatchSubtaskIds` show **Changes requested — revising** until a later terminal subtask event supersedes the marker (`apps/web/src/pages/CoordinatorRunPage.tsx:713`, `:2703`).
+- **`coordinator.steering_received` / `coordinator.steering_decision`** — correction feedback is shown as a source-agnostic steering signal followed by the coordinator's decision. The timeline labels distinguish **steered in place** from **fresh dispatch**, so a reset is never presented as an unexplained graph jump (`apps/web/src/components/LifecycleEventCard.tsx:564`).
 - **`failed` / `blocked` / `declined`** — the human-readable **reason** (from the `coordinator.assembly_failed`/`blocked`/`declined` event payload or `coordinator_status_reason`) plus guidance that the subtasks are parked and can be redirected/amended via the steering chat box. The stuck state never renders a bare "Failed" with no explanation.
 
 #### Steering bar

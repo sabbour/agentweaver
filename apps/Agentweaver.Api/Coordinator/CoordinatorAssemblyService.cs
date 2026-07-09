@@ -102,6 +102,7 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
     private readonly SandboxRuntimeOptions _sandboxRuntime;
     private readonly CoordinatorSteeringWaitRegistry _steeringWaits;
     private readonly CoordinatorSteeringQueue _steeringQueue;
+    private readonly Preview.PreviewStep? _previewStep;
     private readonly ILogger<CoordinatorAssemblyService> _logger;
     private readonly CancellationToken _appStopping;
     private readonly TimeSpan _reviewTimeout;
@@ -127,7 +128,8 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         IOptions<SandboxRuntimeOptions>? sandboxRuntime = null,
         IKubernetesEnvironment? k8sEnv = null,
         IProjectStore? projectStore = null,
-        WorkflowRegistry? workflowRegistry = null)
+        WorkflowRegistry? workflowRegistry = null,
+        Preview.PreviewStep? previewStep = null)
     {
         _runStore = runStore;
         _streamStore = streamStore;
@@ -144,6 +146,7 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         _sandboxRuntime = sandboxRuntime?.Value ?? new SandboxRuntimeOptions();
         _steeringWaits = steeringWaits ?? new CoordinatorSteeringWaitRegistry();
         _steeringQueue = new CoordinatorSteeringQueue(scopeFactory);
+        _previewStep = previewStep;
         _logger = logger;
         _appStopping = lifetime.ApplicationStopping;
         var reviewTimeoutMinutes = configuration?.GetValue("Coordinator:AssemblyReviewTimeoutMinutes", 60.0) ?? 60.0;
@@ -165,6 +168,26 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         $"agentweaver/integration/{coordinatorRunId}";
 
     /// <summary>
+    /// spec-006 §3.2 / focus item 3: decides whether the deterministic preview step runs after
+    /// build-test. The step is ALWAYS the behavior (no feature flag) — it runs whenever it is wired
+    /// and the build-test verdict is APPROVED or REQUEST_CHANGES. A DECLINED verdict is
+    /// <c>CollectiveGateDecision(Approved:false, RequestChanges:false)</c> — that run is about to
+    /// terminate as <c>assembly_declined</c>, so provisioning a live preview process + Gateway
+    /// HTTPRoute for a soon-torn-down assembly would be wasted work; the step is skipped. (Preview
+    /// infra unavailability is a further behavioral self-skip inside PreviewStep itself, emitting
+    /// <c>preview_skipped(preview_infra_unavailable)</c>.)
+    /// </summary>
+    internal static bool ShouldRunDeterministicPreviewStep(
+        bool hasStep, CollectiveGateDecision buildTest)
+    {
+        if (!hasStep)
+            return false;
+
+        // Run for APPROVED or REQUEST_CHANGES; skip the terminating DECLINED verdict.
+        return buildTest.Approved || buildTest.RequestChanges;
+    }
+
+    /// <summary>
     /// Returns true when two subtasks are likely to conflict in the shared orchestration worktree
     /// and must therefore run serially rather than in parallel.
     ///
@@ -173,8 +196,8 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
     /// <item>If either subtask declares no file-path tokens in its <see cref="Subtask.Scope"/>,
     ///   the scope is undeclared and they are assumed to conflict (safe default).</item>
     /// <item>If both declare file-path tokens, they conflict when any token from one subtask
-    ///   suffix-matches or filename-matches a token from the other (same logic as
-    ///   <see cref="AssemblyPlanning.FilesMatch"/> in D6 rejection routing).</item>
+    ///   suffix-matches or filename-matches a token from the other (see
+    ///   <see cref="FilesMatchPublic"/>).</item>
     /// </list>
     ///
     /// Called by the dispatch loop to decide parallel vs serial scheduling before dispatching a
@@ -528,6 +551,31 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
                 }
             }
 
+            if (planStatus == WorkPlanStatus.AssemblySteering)
+            {
+                // UNIFIED AUTONOMOUS STEERING (rev8 §3b/§3c, RD#3/CR#1) — the restart-router routes an
+                // AssemblySteering plan here (ReArmAssembly). The AwaitingAssembly-scoped CAS in
+                // TryStartAssemblyAsync would otherwise DEAD-END on this status, permanently wedging the
+                // run mid-steering. Reclaim the stale decision lease back to awaiting_assembly ONLY if it
+                // is stale (owner likely dead); if it is fresh, a live decider on another replica owns it
+                // — bail. The single reclaim WINNER also returns this run's stale `relayed` directives to
+                // `queued` in the SAME step (claim-durability §3c), then falls through to
+                // RunAssemblyCoreAsync whose TryStartAssemblyAsync re-establishes the claim and
+                // DriveOutstandingSteeringExecutionAsync re-drives the outstanding directive.
+                var staleBefore = DateTimeOffset.UtcNow - _assemblyLeaseStaleTtl;
+                if (!await _assemblyStore.TryReclaimStaleAssemblySteeringAsync(workPlanId, staleBefore, ct)
+                        .ConfigureAwait(false))
+                {
+                    _logger.LogInformation(
+                        "Collective assembly: run {RunId} steering decision is owned by a live decider (fresh lease); skipping",
+                        context.CoordinatorRunId);
+                    return;
+                }
+                var steering = _serviceProvider.GetRequiredService<CoordinatorSteeringService>();
+                await steering.ReclaimStaleRelayedDirectivesAsync(
+                    context.CoordinatorRunId, staleBefore, ct).ConfigureAwait(false);
+            }
+
             await RunAssemblyCoreAsync(context, workPlanId, subtasks, edges, ct).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -575,6 +623,14 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
             subtaskCount = subtasks.Count,
         });
         await EmitGraphAsync(context.CoordinatorRunId, workPlanId, ct).ConfigureAwait(false);
+
+        // UNIFIED AUTONOMOUS STEERING (rev8 §3d, recovery): before doing any assembly work, drive any
+        // outstanding decided/executing steering directive to completion. On the normal path after an
+        // in-place (A) resume this advances the directive to `applied` once the durable effect marker is
+        // confirmed; on crash recovery it re-drives the in-place resume exactly once (and returns true,
+        // aborting this pass because the plan is now dispatching again).
+        if (await DriveOutstandingSteeringExecutionAsync(context, workPlanId, edges, ct).ConfigureAwait(false))
+            return;
 
         // D2 eligibility gate — NO partial assembly.
         var statusById = subtasks.ToDictionary(s => s.Id, s => s.Status);
@@ -714,6 +770,38 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
                     return;
                 }
 
+                // spec-006 §3.2: deterministic, platform-owned preview step. Runs AFTER build-test
+                // for an APPROVED or REQUEST_CHANGES verdict and BEFORE the authored gate decision /
+                // human review, on the SAME retained coordinator pod + detached worktree. It is the
+                // SINGLE emitter of the terminal preview outcome; a preview failure NEVER blocks review.
+                // Skipped on a DECLINED verdict (see ShouldRunDeterministicPreviewStep).
+                if (ShouldRunDeterministicPreviewStep(_previewStep is not null, buildTest))
+                {
+                    try
+                    {
+                        await _previewStep!.RunAsync(
+                            new Preview.PreviewStepRequest(
+                                RunId: context.CoordinatorRunId,
+                                WorkPlanId: workPlanId,
+                                TreeHash: aggregateTreeHash,
+                                WorktreePath: _pipeline.GetBuildTestWorktreePath(context.CoordinatorRunId),
+                                SubmittingUser: context.SubmittingUser),
+                            ct).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        throw;
+                    }
+                    catch (Exception ex)
+                    {
+                        // Defensive: PreviewStep already self-contains preview failures; a leak here must
+                        // still never block human review.
+                        _logger.LogWarning(ex,
+                            "Deterministic preview step threw for coordinator run {RunId}; proceeding with review.",
+                            context.CoordinatorRunId);
+                    }
+                }
+
                 var previewOutcome = await EnsureFinalPreviewOutcomeBeforeApprovalAsync(
                     context.CoordinatorRunId,
                     workPlanId,
@@ -741,6 +829,8 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
                             Feedback: buildTest.Feedback,
                             TargetFiles: null,
                             Reviewer: "build-test"),
+                        SteeringSource.BuildTest,
+                        aggregateTreeHash,
                         ct).ConfigureAwait(false))
                     return;
 
@@ -799,19 +889,16 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
 
                 if (rubberduck.RequestChanges)
                 {
-                    await RequestChangesAsync(
-                        context,
-                        workPlanId,
-                        edges,
-                        new AssemblyReviewDecision(
-                            Approved: false,
-                            RequestChanges: true,
-                            Feedback: rubberduck.Feedback,
-                            TargetFiles: null,
-                            Reviewer: "rubberduck"),
-                        touchedFilesBySubtask,
-                        ct).ConfigureAwait(false);
-                    return;
+                    // UNIFIED AUTONOMOUS STEERING (rev8): the gate NEVER calls RequestChangesAsync
+                    // directly. It normalizes the feedback into a steering signal and routes it to the
+                    // coordinator, which consciously decides the direction. If the decision terminalized
+                    // or re-dispatched the plan the loop returns; an advisory decision continues.
+                    if (await RouteAssemblyGateThroughSteeringAsync(
+                            context, workPlanId, edges, SteeringSource.Rubberduck,
+                            rubberduck.Feedback, touchedFilesBySubtask, aggregateTreeHash, ct)
+                        .ConfigureAwait(false))
+                        return;
+                    continue;
                 }
 
                 continue;
@@ -851,6 +938,8 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
                         edges,
                         touchedFilesBySubtask,
                         decision,
+                        SteeringSource.HumanReview,
+                        aggregateTreeHash,
                         ct).ConfigureAwait(false))
                     return;
             }
@@ -986,8 +1075,12 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
 
         if (decision.RequestChanges)
         {
-            await RequestChangesAsync(
-                context, workPlanId, edges, decision, touchedFilesBySubtask, ct).ConfigureAwait(false);
+            // UNIFIED AUTONOMOUS STEERING (rev8 §3a, RD#4): the deferred human-review request-changes
+            // path ALSO routes through the coordinator's steering decider — it never calls
+            // RequestChangesAsync directly. The coordinator consciously chooses A/B/C/D.
+            await RouteAssemblyGateThroughSteeringAsync(
+                context, workPlanId, edges, SteeringSource.HumanReview, decision.Feedback,
+                touchedFilesBySubtask, aggregateTreeHash, ct).ConfigureAwait(false);
             return;
         }
 
@@ -1019,6 +1112,8 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         IReadOnlyCollection<(int, int)> edges,
         IReadOnlyDictionary<int, IReadOnlySet<string>> touchedFilesBySubtask,
         AssemblyReviewDecision decision,
+        string steeringSource,
+        string aggregateTreeHash,
         CancellationToken ct)
     {
         if (decision.Approved)
@@ -1037,9 +1132,15 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
 
         if (decision.RequestChanges)
         {
-            await RequestChangesAsync(
-                context, workPlanId, edges, decision, touchedFilesBySubtask, ct).ConfigureAwait(false);
-            return false;
+            // UNIFIED AUTONOMOUS STEERING (rev8 §3a, RD#4): ALL correction feedback — including
+            // build-test and human-review request-changes — normalizes into a SteeringSignal and routes
+            // to the coordinator, which CONSCIOUSLY chooses the direction. The source NEVER forces a
+            // reset+dispatch. RouteAssembly returns true when the gate loop should stop (terminalized or
+            // re-dispatched/in-place-steered); false = advisory, continue the loop.
+            var stop = await RouteAssemblyGateThroughSteeringAsync(
+                context, workPlanId, edges, steeringSource, decision.Feedback,
+                touchedFilesBySubtask, aggregateTreeHash, ct).ConfigureAwait(false);
+            return !stop;
         }
 
         const string declineReason = "assembly_declined";
@@ -1547,16 +1648,37 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         IReadOnlyDictionary<int, IReadOnlySet<string>> touchedFilesBySubtask,
         CancellationToken ct)
     {
-        var rejection = AssemblyPlanning.InferRedispatch(
-            decision.Feedback, decision.TargetFiles, touchedFilesBySubtask, edges);
+        // UNIFIED AUTONOMOUS STEERING (rev8, §9): the fragile prose-parsing InferRedispatch heuristic
+        // is DELETED. This method is now the deterministic direction-B (conscious fresh dispatch)
+        // executor: the target is the set of assembly-eligible subtasks that produced changes (the
+        // keys of the touched-files map), never a set inferred from reviewer prose. Explicit
+        // TargetFiles from a source that actually knows (e.g. build-test) narrow the set when present.
+        var candidateIds = touchedFilesBySubtask.Keys.ToHashSet();
+        IReadOnlyList<int> targetIds;
+        if (decision.TargetFiles is { Count: > 0 })
+        {
+            var wanted = decision.TargetFiles
+                .Select(f => f.Replace('\\', '/').Trim().TrimStart('/'))
+                .Where(f => f.Length > 0)
+                .ToList();
+            var matched = touchedFilesBySubtask
+                .Where(kv => kv.Value.Any(tf => wanted.Any(w =>
+                    string.Equals(tf, w, StringComparison.OrdinalIgnoreCase)
+                    || tf.EndsWith("/" + w, StringComparison.OrdinalIgnoreCase))))
+                .Select(kv => kv.Key)
+                .ToHashSet();
+            targetIds = (matched.Count > 0 ? matched : candidateIds).OrderBy(x => x).ToList();
+        }
+        else
+        {
+            targetIds = candidateIds.OrderBy(x => x).ToList();
+        }
 
         Emit(context.CoordinatorRunId, EventTypes.CoordinatorAssemblyChangesRequested, new
         {
             workPlanId,
-            redispatchSubtaskIds = rejection.SubtaskIds,
-            redispatchedSubtaskIds = rejection.SubtaskIds,
-            inferredFiles = rejection.InferredFiles,
-            fellBackToAll = rejection.FellBackToAll,
+            redispatchSubtaskIds = targetIds,
+            redispatchedSubtaskIds = targetIds,
             feedback = decision.Feedback,
         });
 
@@ -1574,7 +1696,7 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
 
         // Reset the selected subtasks to pending (leave others' results intact); clear stage and move
         // the plan back to dispatching so the dispatch engine re-runs the affected frontier.
-        await ResetSubtasksToPendingAsync(rejection.SubtaskIds, decision.Feedback ?? string.Empty, ct).ConfigureAwait(false);
+        await ResetSubtasksToPendingAsync(targetIds, decision.Feedback ?? string.Empty, ct).ConfigureAwait(false);
         await _assemblyStore.SetStatusAndStageAsync(
             workPlanId, WorkPlanStatus.Dispatching, null, ct).ConfigureAwait(false);
         await CoordinatorAssemblyReviewPersistence.ClearAsync(_scopeFactory, context.CoordinatorRunId, ct)
@@ -1591,8 +1713,494 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         dispatch.StartDispatch(context);
 
         _logger.LogInformation(
-            "Collective assembly: changes requested for run {RunId}; re-dispatching subtasks [{Ids}] (fallbackAll={Fallback})",
-            context.CoordinatorRunId, string.Join(",", rejection.SubtaskIds), rejection.FellBackToAll);
+            "Collective assembly: changes requested for run {RunId}; re-dispatching subtasks [{Ids}]",
+            context.CoordinatorRunId, string.Join(",", targetIds));
+    }
+
+    /// <summary>
+    /// UNIFIED AUTONOMOUS STEERING (rev8 §3a/§9) — the coordinator-owned routing for an assembly-gate
+    /// request-changes signal. This is THE unconditional behavior: gates never call
+    /// <see cref="RequestChangesAsync"/> directly (the old auto-reset+redispatch reflex). It:
+    /// (1) stamps the <see cref="WorkPlanStatus.AssemblySteering"/> decision-in-progress lease, (2)
+    /// normalizes the feedback into a <see cref="SteeringSignal"/> and submits it to the coordinator via
+    /// <see cref="CoordinatorSteeringService.SubmitSteeringAsync"/> (persist/queue/surface), (3) claims
+    /// it and invokes the <see cref="CoordinatorSteeringDecider"/> SYNCHRONOUSLY INLINE (the assembly
+    /// loop is the single writer here), then (4) executes the chosen direction: A → a TRUE in-place,
+    /// context-preserving resume of the target child (<see cref="ExecuteInPlaceSteerAsync"/>); B → a
+    /// conscious fresh reset+redispatch (<see cref="RequestChangesAsync"/>); C → escalate to terminal
+    /// (<c>steering_budget_exhausted</c>) breaking any loop; D → advisory no-op. The
+    /// <c>coordinator.steering_decision</c> action is emitted first and matches the actual effect.
+    /// Returns true when the gate loop should stop (a decision terminalized or re-dispatched the plan).
+    /// </summary>
+    private async Task<bool> RouteAssemblyGateThroughSteeringAsync(
+        CoordinatorDispatchContext context,
+        int workPlanId,
+        IReadOnlyCollection<(int, int)> edges,
+        string source,
+        string? feedback,
+        IReadOnlyDictionary<int, IReadOnlySet<string>> touchedFilesBySubtask,
+        string aggregateTreeHash,
+        CancellationToken ct)
+    {
+        var steering = _serviceProvider.GetRequiredService<CoordinatorSteeringService>();
+        var decider = _serviceProvider.GetRequiredService<CoordinatorSteeringDecider>();
+        var targetIds = touchedFilesBySubtask.Keys.OrderBy(x => x).ToArray();
+
+        // Decision-in-progress lease (§3b): a cross-pod claim can't race the inline decision, and a
+        // restart re-enters the same boundary (recovery routes AssemblySteering → ReArmAssembly). Stamp
+        // AssemblyStartedAt as the lease heartbeat so the reclaim path can tell fresh from stale.
+        await _assemblyStore.SetAssemblySteeringAsync(workPlanId, ct).ConfigureAwait(false);
+
+        var signal = SteeringSignal.Create(
+            context.CoordinatorRunId, source, SteeringTargetScope.ForSubtasks(targetIds),
+            feedback ?? string.Empty, SteeringSeverity.RequestChanges, SteeringKind.Redirect,
+            createdBy: $"gate:{source}", treeHash: aggregateTreeHash);
+        var view = await steering.SubmitSteeringAsync(signal, ct).ConfigureAwait(false);
+
+        // Claim the queued directive for the inline decision (single-writer boundary → direct CAS).
+        using (var scope = _scopeFactory.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var relayedAt = DateTimeOffset.UtcNow;
+            await db.SteeringDirectives
+                .Where(d => d.Id == view.Id && d.Status == SteeringStatus.Queued)
+                .ExecuteUpdateAsync(s => s
+                    .SetProperty(d => d.Status, SteeringStatus.Relayed)
+                    .SetProperty(d => d.RelayedAt, relayedAt), ct)
+                .ConfigureAwait(false);
+        }
+
+        var decision = await decider.DecideAsync(view.Id, autopilotOn: false, ct: ct).ConfigureAwait(false);
+        var direction = decision?.Direction ?? SteeringDirection.Proceed;
+        var attempt = decision?.Attempt ?? 0;
+
+        if (direction == SteeringDirection.InPlaceSteer)
+        {
+            // A — TRUE in-place resume (rev8 §3d, Ahmed's headline #3): the target subtask's child run
+            // resumes its SAME session/worktree with the feedback as a revision turn — context PRESERVED,
+            // NO fresh pod, NO reset-to-pending. The decorated checkpoint manager writes the durable
+            // attempt-specific effect marker on the resumed workflow's first superstep. The directive is
+            // left `executing`; DriveOutstandingSteeringExecutionAsync (next assembly pass / recovery)
+            // probes the effect marker and advances to `applied`. The steering_decision event's action
+            // is in_place — matching the actual effect (no lie to the UI).
+            await decider.MarkDirectiveExecutingAsync(view.Id, ct).ConfigureAwait(false);
+            await ExecuteInPlaceSteerAsync(
+                context, workPlanId, edges, decision!.SubtaskIds, view.Id, attempt, feedback ?? string.Empty, ct)
+                .ConfigureAwait(false);
+            return true;
+        }
+
+        if (direction == SteeringDirection.DispatchFresh)
+        {
+            // B — CONSCIOUS fresh dispatch: reset the target subtasks to pending and re-dispatch fresh
+            // (new pods). This is the ONLY path that discards context, and only because the coordinator
+            // deliberately chose it. The steering_decision event's action is dispatch_fresh.
+            await decider.MarkDirectiveExecutingAsync(view.Id, ct).ConfigureAwait(false);
+            await RequestChangesAsync(
+                context, workPlanId, edges,
+                new AssemblyReviewDecision(
+                    Approved: false, RequestChanges: true, Feedback: feedback,
+                    TargetFiles: null, Reviewer: source),
+                touchedFilesBySubtask, ct).ConfigureAwait(false);
+            await decider.MarkDirectiveAppliedAsync(view.Id, ct).ConfigureAwait(false);
+            return true;
+        }
+
+        if (direction == SteeringDirection.Proceed)
+        {
+            // C — escalate to terminal, breaking any steering loop (bounded by the budget CAS).
+            const string reason = "steering_budget_exhausted";
+            await CleanupAssemblyBuildTestResourcesAsync(
+                context.CoordinatorRunId, context.RepositoryPath, ct).ConfigureAwait(false);
+            await _assemblyStore.SetTerminalStatusAsync(
+                workPlanId, WorkPlanStatus.AssemblyBlocked, reason, ct).ConfigureAwait(false);
+            Emit(context.CoordinatorRunId, EventTypes.CoordinatorAssemblyBlocked, new
+            {
+                workPlanId,
+                reason,
+                detail = decision?.Rationale,
+                retryable = true,
+            });
+            await decider.MarkDirectiveAppliedAsync(view.Id, ct).ConfigureAwait(false);
+            return true;
+        }
+
+        // D — advisory: surfaced (steering_decision emitted), no reset; restore the assembly stage and
+        // let the gate loop continue.
+        await _assemblyStore.SetStatusAndStageAsync(
+            workPlanId, WorkPlanStatus.Assembling, null, ct).ConfigureAwait(false);
+        await decider.MarkDirectiveAppliedAsync(view.Id, ct).ConfigureAwait(false);
+        return false;
+    }
+
+    /// <summary>
+    /// UNIFIED AUTONOMOUS STEERING (rev8 §3d, Decision A) — executes a TRUE in-place, context-preserving
+    /// steer of the target subtask(s). For each target it: (1) probes the durable
+    /// <c>SteeringRevisionExecution</c> effect marker — if already confirmed, skips (recovery advances
+    /// the directive), (2) inserts the Phase-1 <c>initiated</c> marker under the UNIQUE
+    /// <c>(directiveId, attempt)</c> key BEFORE launch, (3) resumes the child run's SAME session/worktree
+    /// via <see cref="RunOrchestrator.StartRevisionAsync"/> (isChild:true) with the feedback as a
+    /// revision turn — NO reset-to-pending, NO fresh pod, context PRESERVED — threading
+    /// <c>(directiveId, attempt)</c> so the per-launch checkpoint decorator confirms the effect marker on
+    /// the resumed workflow's first superstep, (4) sets the subtask <see cref="SubtaskStatus.Running"/>
+    /// keeping its <c>ChildRunId</c>. Then it returns the plan to <see cref="WorkPlanStatus.Dispatching"/>
+    /// and re-arms dispatch, whose recovery-aware re-arm re-observes the Running child and re-arms
+    /// assembly when it completes. The directive is left <c>executing</c>; the next assembly pass
+    /// (<see cref="DriveOutstandingSteeringExecutionAsync"/>) probes the effect and advances to
+    /// <c>applied</c> — so we NEVER mark applied before a durable effect is observed.
+    /// </summary>
+    private async Task ExecuteInPlaceSteerAsync(
+        CoordinatorDispatchContext context,
+        int workPlanId,
+        IReadOnlyCollection<(int, int)> edges,
+        IReadOnlyList<int> targetSubtaskIds,
+        int directiveId,
+        int attempt,
+        string feedback,
+        CancellationToken ct)
+    {
+        var decider = _serviceProvider.GetRequiredService<CoordinatorSteeringDecider>();
+        var orchestrator = _serviceProvider.GetRequiredService<RunOrchestrator>();
+        var guidance = BuildAssemblyFeedbackGuidance(feedback);
+
+        List<Subtask> targets;
+        using (var scope = _scopeFactory.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            targets = await db.Subtasks
+                .Where(s => s.WorkPlanId == workPlanId && targetSubtaskIds.Contains(s.Id))
+                .ToListAsync(ct).ConfigureAwait(false);
+        }
+
+        // Identify the resumable target children (same session/worktree preserved). Direction A can
+        // target MULTIPLE subtasks; each is its own child run and gets its OWN per-child effect marker
+        // (RD-B) keyed (directiveId, attempt, childRunId).
+        var resumable = new List<(Subtask Subtask, RunId RunId, Run Run)>();
+        foreach (var subtask in targets)
+        {
+            if (string.IsNullOrWhiteSpace(subtask.ChildRunId)
+                || !RunId.TryParse(subtask.ChildRunId, out var childRunId))
+                continue;
+            var childRun = await _runStore.GetAsync(childRunId, ct).ConfigureAwait(false);
+            if (childRun is null)
+                continue;
+            resumable.Add((subtask, childRunId, childRun));
+        }
+
+        if (resumable.Count == 0)
+        {
+            // FIX (RD#6): Decision A cannot resume any child (runs GC'd / never had a child). Decision A
+            // must NOT silently degrade to B — that reintroduces the "fresh dispatch felt like a glitch"
+            // bug. Make a CONSCIOUS dispatch_fresh decision (emit coordinator.steering_decision with
+            // action=dispatch_fresh, durably record DecidedAction=dispatch_fresh so the persisted decision
+            // matches the real effect), THEN reset+dispatch.
+            await ConsciousDispatchFreshFallbackAsync(
+                context, workPlanId, edges, targetSubtaskIds, directiveId, feedback, ct).ConfigureAwait(false);
+            return;
+        }
+
+        // PER-CHILD idempotency (RD-B): probe each target child's durable effect marker. A child whose
+        // effect is already confirmed (ran ≥1 superstep) is SKIPPED — never re-injected — while the
+        // remaining unconfirmed children are (re)launched. This is what lets a partial multi-target
+        // crash (first child confirmed, pod died before the second launched) resume ONLY the missing
+        // children instead of marking the whole directive applied.
+        var pending = new List<(Subtask Subtask, RunId RunId, Run Run)>();
+        foreach (var r in resumable)
+        {
+            var childProbe = await decider
+                .ProbeRevisionEffectAsync(directiveId, attempt, r.Subtask.ChildRunId!, ct)
+                .ConfigureAwait(false);
+            if (childProbe != RevisionRecoveryAction.Advance)
+                pending.Add(r);
+        }
+
+        if (pending.Count == 0)
+        {
+            // Every targeted child already durably confirmed its effect — nothing to (re)launch.
+            // DriveOutstandingSteeringExecutionAsync advances the directive to applied once it sees ALL
+            // children confirmed. Just return the plan to dispatching so assembly re-arms on completion.
+            await ReturnPlanToDispatchingAfterSteerAsync(context, workPlanId, edges, ct).ConfigureAwait(false);
+            return;
+        }
+
+        // Bounded per-directive EXECUTION retry (rev8 §6, RD#2): each drive/re-drive that ACTUALLY
+        // launches ≥1 child consumes one execution attempt via an atomic guarded CAS. SEPARATE from the
+        // decision budget so a revision that finishes/errors before EVER writing a checkpoint (never
+        // confirms its effect marker) still TERMINATES — recovery re-drives are capped. On exhaustion the
+        // directive is parked needs_attention (visible) and the plan escalates to a terminal; NEVER an
+        // infinite loop.
+        // FIX (Nit 1): the increment is here — AFTER we know there is at least one child to launch — so a
+        // pure no-op re-drive (all children already confirmed) never burns an execution attempt.
+        if (!await decider.TryIncrementExecutionAttemptAsync(directiveId, ct).ConfigureAwait(false))
+        {
+            await EscalateSteeringExecutionExhaustedAsync(
+                context, workPlanId, edges, directiveId, ct).ConfigureAwait(false);
+            return;
+        }
+
+        var launched = 0;
+        foreach (var (subtask, childRunId, childRun) in pending)
+        {
+            // PER-CHILD launch claim (RD-A recovery relaunch): insert the Phase-1 `initiated` marker for
+            // THIS child if absent, OR relaunch against an existing `initiated` marker (a transient crash
+            // BEFORE the first checkpoint — the old code no-oped here and wedged the run). Only an already
+            // CONFIRMED child returns Skip. The AssemblySteering/reclaim lease held across this whole
+            // assembly pass serializes launchers, so exactly one pod is here — relaunch is safe.
+            var launchDecision = await decider
+                .ClaimRevisionLaunchAsync(subtask.ChildRunId!, directiveId, attempt, ct).ConfigureAwait(false);
+            if (launchDecision == RevisionLaunchDecision.Skip)
+                continue;
+
+            // Resume the SAME session + worktree: drop the completed child stream, flip the run back to
+            // InProgress (same runId — never restarted), and inject the feedback as a revision turn.
+            // (directiveId, attempt) thread through so the decorated checkpoint manager confirms the
+            // per-child effect marker on the resumed workflow's first superstep.
+            _streamStore.Remove(subtask.ChildRunId!);
+            await _runStore.UpdateStatusAsync(childRunId, RunStatus.InProgress, null, ct)
+                .ConfigureAwait(false);
+            await orchestrator.StartRevisionAsync(
+                childRun, guidance, ct, isChild: true,
+                steeringDirectiveId: directiveId, steeringAttempt: attempt).ConfigureAwait(false);
+            await SetSubtaskRunningPreservingContextAsync(
+                subtask.Id, subtask.ChildRunId!, directiveId, attempt, guidance, ct).ConfigureAwait(false);
+            launched++;
+        }
+
+        await ReturnPlanToDispatchingAfterSteerAsync(context, workPlanId, edges, ct).ConfigureAwait(false);
+
+        _logger.LogInformation(
+            "Steering(A): in-place resume dispatched for run {RunId}; directive {DirectiveId} attempt {Attempt}, launched {Launched}/{Pending} pending child(ren), targets [{Ids}]",
+            context.CoordinatorRunId, directiveId, attempt, launched, pending.Count, string.Join(",", targetSubtaskIds));
+    }
+
+    /// <summary>
+    /// Returns the plan to <see cref="WorkPlanStatus.Dispatching"/> after an in-place steer (or a
+    /// confirmed-effect no-op) and re-arms dispatch, whose recovery-aware re-arm re-observes the Running
+    /// child and re-arms assembly when it completes. The directive stays <c>executing</c> until the
+    /// effect is confirmed by <see cref="DriveOutstandingSteeringExecutionAsync"/>.
+    /// </summary>
+    private async Task ReturnPlanToDispatchingAfterSteerAsync(
+        CoordinatorDispatchContext context,
+        int workPlanId,
+        IReadOnlyCollection<(int, int)> edges,
+        CancellationToken ct)
+    {
+        await _assemblyStore.SetStatusAndStageAsync(
+            workPlanId, WorkPlanStatus.Dispatching, null, ct).ConfigureAwait(false);
+        await CoordinatorAssemblyReviewPersistence.ClearAsync(_scopeFactory, context.CoordinatorRunId, ct)
+            .ConfigureAwait(false);
+        await EmitGraphAsync(context.CoordinatorRunId, workPlanId, ct).ConfigureAwait(false);
+        await EmitTopologyAsync(context.CoordinatorRunId, workPlanId, WorkPlanStatus.Dispatching, edges, ct)
+            .ConfigureAwait(false);
+
+        var dispatch = _serviceProvider.GetRequiredService<ICoordinatorDispatch>();
+        dispatch.StartDispatch(context);
+    }
+
+    /// <summary>
+    /// UNIFIED AUTONOMOUS STEERING (rev8 §3c, RD#6) — Decision A chose in-place steer but no resumable
+    /// child exists. Rather than silently doing B (which would LIE to the UI), the coordinator makes a
+    /// CONSCIOUS <c>dispatch_fresh</c> decision: it emits <c>coordinator.steering_decision</c> with
+    /// action=<c>dispatch_fresh</c> and a rationale, durably overrides the persisted
+    /// <see cref="SteeringDirective.DecidedAction"/> to <c>dispatch_fresh</c> (persisted decision matches
+    /// the real effect), THEN performs the reset+dispatch and settles the directive <c>applied</c>.
+    /// </summary>
+    private async Task ConsciousDispatchFreshFallbackAsync(
+        CoordinatorDispatchContext context,
+        int workPlanId,
+        IReadOnlyCollection<(int, int)> edges,
+        IReadOnlyList<int> targetSubtaskIds,
+        int directiveId,
+        string feedback,
+        CancellationToken ct)
+    {
+        var decider = _serviceProvider.GetRequiredService<CoordinatorSteeringDecider>();
+
+        const string rationale = "in_place_unresumable: no resumable child session — conscious fresh dispatch";
+        _logger.LogInformation(
+            "Steering(A→B): directive {DirectiveId} has no resumable child; coordinator consciously chooses dispatch_fresh for run {RunId}",
+            directiveId, context.CoordinatorRunId);
+
+        // Durably record the real effect BEFORE acting so recovery can never observe a stale in_place
+        // decision that no longer matches the effect.
+        await decider.OverrideDecidedActionAsync(directiveId, SteeringDirection.DispatchFresh, ct)
+            .ConfigureAwait(false);
+
+        // Visible decision event (Ahmed's #8) — action MATCHES the actual effect (dispatch_fresh).
+        Emit(context.CoordinatorRunId, EventTypes.CoordinatorSteeringDecision, new
+        {
+            workPlanId,
+            directiveId,
+            decision = SteeringDirection.DispatchFresh,
+            rationale,
+            targetSubtaskIds,
+        });
+
+        var touched = targetSubtaskIds.ToDictionary(id => id, _ => (IReadOnlySet<string>)new HashSet<string>());
+        await RequestChangesAsync(
+            context, workPlanId, edges,
+            new AssemblyReviewDecision(
+                Approved: false, RequestChanges: true, Feedback: feedback,
+                TargetFiles: null, Reviewer: "coordinator"),
+            touched, ct).ConfigureAwait(false);
+
+        await decider.MarkDirectiveAppliedAsync(directiveId, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// UNIFIED AUTONOMOUS STEERING (rev8 §6, RD#2) — the per-directive EXECUTION retry budget is
+    /// exhausted (a revision kept finishing/erroring before confirming its effect). Park the directive
+    /// in the terminal <c>needs_attention</c> state, emit a visible event, and block the plan (retryable
+    /// terminal). NEVER re-drive again.
+    /// </summary>
+    private async Task EscalateSteeringExecutionExhaustedAsync(
+        CoordinatorDispatchContext context,
+        int workPlanId,
+        IReadOnlyCollection<(int, int)> edges,
+        int directiveId,
+        CancellationToken ct)
+    {
+        var decider = _serviceProvider.GetRequiredService<CoordinatorSteeringDecider>();
+        await decider.MarkDirectiveNeedsAttentionAsync(directiveId, ct).ConfigureAwait(false);
+
+        const string reason = "steering_execution_exhausted";
+        _logger.LogWarning(
+            "Steering(A): directive {DirectiveId} exhausted execution retries for run {RunId}; parking needs_attention + blocking plan",
+            directiveId, context.CoordinatorRunId);
+
+        await CleanupAssemblyBuildTestResourcesAsync(
+            context.CoordinatorRunId, context.RepositoryPath, ct).ConfigureAwait(false);
+        await _assemblyStore.SetTerminalStatusAsync(
+            workPlanId, WorkPlanStatus.AssemblyBlocked, reason, ct).ConfigureAwait(false);
+        Emit(context.CoordinatorRunId, EventTypes.CoordinatorSteeringDecision, new
+        {
+            workPlanId,
+            directiveId,
+            decision = SteeringDirection.Proceed,
+            rationale = reason,
+            phase = "execution_exhausted_needs_attention",
+        });
+        Emit(context.CoordinatorRunId, EventTypes.CoordinatorAssemblyBlocked, new
+        {
+            workPlanId,
+            reason,
+            retryable = true,
+        });
+        await EmitGraphAsync(context.CoordinatorRunId, workPlanId, ct).ConfigureAwait(false);
+        await EmitTopologyAsync(context.CoordinatorRunId, workPlanId, WorkPlanStatus.AssemblyBlocked, edges, ct)
+            .ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Sets a subtask <see cref="SubtaskStatus.Running"/> while PRESERVING its <c>ChildRunId</c> (the
+    /// in-place steer contract — context is NOT discarded). Records the steering
+    /// <c>(directiveId, attempt)</c> that drove the resume on the subtask so a replayed drive is a
+    /// no-op at the subtask level (complementing the durable RevisionEffectRecord probe).
+    /// </summary>
+    private async Task SetSubtaskRunningPreservingContextAsync(
+        int subtaskId, string childRunId, int directiveId, int attempt, string guidance, CancellationToken ct)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var now = DateTimeOffset.UtcNow;
+        await db.Subtasks
+            .Where(s => s.Id == subtaskId)
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(s => s.Status, SubtaskStatus.Running)
+                .SetProperty(s => s.ChildRunId, childRunId)
+                .SetProperty(s => s.RecoveryGuidance, guidance)
+                .SetProperty(s => s.LastResetDirectiveId, directiveId)
+                .SetProperty(s => s.LastResetAttempt, attempt)
+                .SetProperty(s => s.UpdatedAt, now), ct)
+            .ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// UNIFIED AUTONOMOUS STEERING (rev8 §3d, recovery) — drives an outstanding
+    /// <c>decided</c>/<c>executing</c> steering directive to completion at the start of an assembly pass
+    /// (both the normal re-assembly after an in-place resume AND crash recovery). For a Decision-A
+    /// (in-place) directive it probes the durable effect marker: <c>effect_confirmed</c> → advance the
+    /// directive to <c>applied</c> (the resumed revision truly ran ≥1 superstep) and continue; marker
+    /// absent/unconfirmed → RE-DRIVE the in-place resume exactly once (idempotent under the unique
+    /// <c>(directiveId, attempt)</c> key) and return true so the caller aborts this assembly pass (the
+    /// plan is now dispatching again). B/C directives left <c>decided</c>/<c>executing</c> by a crash
+    /// are advanced to <c>applied</c> (their effect — plan status / reset — is already persisted).
+    /// Returns true when it re-drove execution (caller must stop the current assembly pass).
+    /// </summary>
+    private async Task<bool> DriveOutstandingSteeringExecutionAsync(
+        CoordinatorDispatchContext context,
+        int workPlanId,
+        IReadOnlyCollection<(int, int)> edges,
+        CancellationToken ct)
+    {
+        SteeringDirective? directive;
+        using (var scope = _scopeFactory.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            directive = await db.SteeringDirectives.AsNoTracking()
+                .Where(d => d.CoordinatorRunId == context.CoordinatorRunId
+                    && (d.Status == SteeringStatus.Decided || d.Status == SteeringStatus.Executing))
+                .OrderByDescending(d => d.Id)
+                .FirstOrDefaultAsync(ct).ConfigureAwait(false);
+        }
+        if (directive is null)
+            return false;
+
+        // Resolve the decider only once an outstanding directive actually exists (keeps the common
+        // no-steering assembly pass free of any steering-service dependency).
+        var decider = _serviceProvider.GetRequiredService<CoordinatorSteeringDecider>();
+
+        if (directive.DecidedAction != SteeringDirection.InPlaceSteer)
+        {
+            // B/C: the durable effect (reset+dispatch already ran, or terminal status already set) is
+            // recorded elsewhere; just settle the directive so it is not re-driven forever.
+            await decider.MarkDirectiveAppliedAsync(directive.Id, ct).ConfigureAwait(false);
+            return false;
+        }
+
+        var attempt = directive.ActionAttempt ?? 0;
+
+        // PER-CHILD advance gate (RD-B): resolve the set of target children this A directive should
+        // resume (target subtasks with a live ChildRunId) and advance to `applied` only when EVERY one of
+        // them has a confirmed effect marker. A single confirmed child must NOT settle the whole directive
+        // — otherwise a partial multi-target crash (first child confirmed, pod died before the second
+        // launched) would mark the directive applied while some requested subtasks never received the
+        // steering revision.
+        var targetIds = SteeringTargetScope.FromJson(directive.TargetScopeJson)?.SubtaskIds ?? [];
+        List<string> expectedChildRunIds;
+        using (var scope = _scopeFactory.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            expectedChildRunIds = await db.Subtasks.AsNoTracking()
+                .Where(s => s.WorkPlanId == workPlanId && targetIds.Contains(s.Id) && s.ChildRunId != null)
+                .Select(s => s.ChildRunId!)
+                .ToListAsync(ct).ConfigureAwait(false);
+        }
+
+        var allConfirmed = expectedChildRunIds.Count > 0
+            && await decider.AreAllRevisionEffectsConfirmedAsync(directive.Id, attempt, expectedChildRunIds, ct)
+                .ConfigureAwait(false);
+        if (allConfirmed)
+        {
+            await decider.MarkDirectiveAppliedAsync(directive.Id, ct).ConfigureAwait(false);
+            Emit(context.CoordinatorRunId, EventTypes.CoordinatorSteeringDecision, new
+            {
+                workPlanId,
+                directiveId = directive.Id,
+                action = directive.DecidedAction,
+                attempt,
+                phase = "effect_confirmed_applied",
+            });
+            return false;
+        }
+
+        // At least one target child has no confirmed effect → the resume never durably ran for it;
+        // re-drive. ExecuteInPlaceSteerAsync probes per-child and (re)launches ONLY the unconfirmed
+        // children, so already-confirmed children are never re-injected.
+        await ExecuteInPlaceSteerAsync(
+            context, workPlanId, edges, targetIds, directive.Id, attempt, directive.Instruction, ct)
+            .ConfigureAwait(false);
+        return true;
     }
 
     private async Task ParkBuildTestInfrastructureFailureAsync(

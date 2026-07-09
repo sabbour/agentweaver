@@ -169,6 +169,10 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
     // Resolves the run owner's GitHub token so the API can pass it in /configure, avoiding the need
     // for the kata VM pod to call Azure AD or Key Vault (blocked by Cilium FQDN policies).
     private readonly IGitHubTokenStore? _tokenStore;
+    // Replica-safe run secret store used to persist the per-run preview-runner credential so a
+    // reconcile/keepalive on either API replica can re-fetch it, and to durably DELETE it on pod
+    // release (spec-006 decouple-preview, BLOCKER A / RESIDUAL). Null in unit tests → no minting.
+    private readonly ISecretStore? _secretStore;
 
     public bool IsRealIsolation => true;
     public string BackendName => "kubernetes-sandbox-claim";
@@ -186,7 +190,8 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
         IAgentHostReadinessProbe? readinessProbe = null,
         IRunSubmittingUserResolver? submittingUserResolver = null,
         IHttpClientFactory? httpClientFactory = null,
-        IGitHubTokenStore? tokenStore = null)
+        IGitHubTokenStore? tokenStore = null,
+        ISecretStore? secretStore = null)
     {
         _client = client;
         _options = options;
@@ -197,6 +202,7 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
         _submittingUserResolver = submittingUserResolver;
         _httpClientFactory = httpClientFactory;
         _tokenStore = tokenStore;
+        _secretStore = secretStore;
     }
 
     public async Task<SandboxExecResult> ExecuteAsync(
@@ -344,7 +350,7 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
             // SandboxTemplate, or warm pool — the pod is already warm and gets its per-run context
             // via the /configure POST below.
             claimCreated = await CreateAgentHostClaimAsync(
-                claimName, _options.AgentHostWarmPoolRef, requestedWorkingDirectory, ct).ConfigureAwait(false);
+                claimName, _options.AgentHostWarmPoolRef, requestedWorkingDirectory, runId, ct).ConfigureAwait(false);
 
             if (!claimCreated && requestedWorkingDirectory is not null)
             {
@@ -366,7 +372,7 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
                     await Task.Delay(1000, ct).ConfigureAwait(false);
                     await CheckQuotaHeadroomAsync(ct).ConfigureAwait(false);
                     claimCreated = await CreateAgentHostClaimAsync(
-                        claimName, _options.AgentHostWarmPoolRef, requestedWorkingDirectory, ct).ConfigureAwait(false);
+                        claimName, _options.AgentHostWarmPoolRef, requestedWorkingDirectory, runId, ct).ConfigureAwait(false);
                     if (!claimCreated)
                     {
                         throw new InvalidOperationException(
@@ -458,6 +464,9 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
                 await DeleteClaimAsync(claimName).ConfigureAwait(false);
             _podRegistry?.Unregister(runId);
             _turnTokenRegistry?.UnregisterTurnToken(runId);
+            // Crash/timeout during launch: delete any credential minted before the failure so it is
+            // never left behind (spec-006 decouple-preview, RESIDUAL rev3 gap).
+            await DeletePreviewRunnerCredentialAsync(runId, CancellationToken.None).ConfigureAwait(false);
             throw;
         }
     }
@@ -474,6 +483,7 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
         await DeleteClaimAsync(claimName).ConfigureAwait(false);
         _podRegistry?.Unregister(runId);
         _turnTokenRegistry?.UnregisterTurnToken(runId);
+        await DeletePreviewRunnerCredentialAsync(runId, ct).ConfigureAwait(false);
 
         _logger.LogInformation(
             "KubernetesSandboxExecutor: AgentHost pod released for run {RunId}", runId);
@@ -536,9 +546,15 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
     /// (<see cref="CallAgentHostConfigureAsync"/>).
     /// </summary>
     private async Task<bool> CreateAgentHostClaimAsync(
-        string claimName, string warmPoolName, string? workingDirectory, CancellationToken ct)
+        string claimName, string warmPoolName, string? workingDirectory, string runId, CancellationToken ct)
     {
-        var annotations = new Dictionary<string, string>();
+        var annotations = new Dictionary<string, string>
+        {
+            // Persist the ORIGINAL run id so the reaper can recover it from an orphaned claim (the
+            // claim name is a lossy 12-char derivation) and delete run-scoped side artifacts such as
+            // the per-run preview-runner credential (spec-006 decouple-preview).
+            [SandboxClaimConventions.RunIdAnnotation] = runId,
+        };
         if (!string.IsNullOrWhiteSpace(workingDirectory))
             annotations["agentweaver.io/working-directory"] = workingDirectory;
 
@@ -679,6 +695,13 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
 
         var scheme = AgentHostEndpoint.Scheme(_options.RequireMtls);
         var configureUrl = $"{scheme}://{podIp}:{port}/configure";
+
+        // Mint a FRESH per-run preview-runner credential (spec-006 decouple-preview, BLOCKER A).
+        // Delivered in-memory via this /configure body ONLY (never pod env/file), and persisted to the
+        // run secret store so any replica can re-fetch it for reconcile/keepalive. Durably deleted on
+        // pod release. Every launch/relaunch mints a new value — the old one is never reused.
+        var previewRunnerCredential = await MintPreviewRunnerCredentialAsync(runId, ct).ConfigureAwait(false);
+
         var body = new
         {
             runId,
@@ -687,6 +710,7 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
             kvUserSecretName,
             gitHubAccessToken,
             workingDirectory,
+            previewRunnerCredential,
         };
 
         _logger.LogInformation(
@@ -703,6 +727,64 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
             var detail = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
             throw new InvalidOperationException(
                 $"AgentHost /configure for run '{runId}' failed: HTTP {(int)response.StatusCode} {detail}");
+        }
+    }
+
+    /// <summary>
+    /// Mints and persists a fresh per-run preview-runner credential and returns it for in-memory
+    /// delivery via <c>/configure</c>. Returns <see cref="string.Empty"/> when no secret store is
+    /// available (unit tests) — the pod then relies on the turn token only. The persisted key is
+    /// derived deterministically from the run id (<see cref="Preview.PreviewRunnerCredential.SecretKey"/>)
+    /// so the release-time delete matches (spec-006 decouple-preview, BLOCKER A).
+    /// </summary>
+    private async Task<string> MintPreviewRunnerCredentialAsync(string runId, CancellationToken ct)
+    {
+        if (_secretStore is null)
+            return string.Empty;
+
+        var credential = Preview.PreviewRunnerCredential.Mint();
+        var key = Preview.PreviewRunnerCredential.SecretKey(runId);
+        try
+        {
+            await _secretStore.SetSecretAsync(key, credential, etag: null, ct).ConfigureAwait(false);
+            _logger.LogInformation(
+                "KubernetesSandboxExecutor: minted per-run preview-runner credential for run {RunId}", runId);
+            return credential;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // Best-effort: a persist failure must not fail the launch. The pod still receives the
+            // credential in-memory (same-process affinity uses the turn token anyway), but a
+            // cross-replica reconcile could not re-fetch it — acceptable degradation.
+            _logger.LogWarning(ex,
+                "KubernetesSandboxExecutor: failed to persist preview-runner credential for run {RunId}; " +
+                "delivering in-memory only.", runId);
+            return credential;
+        }
+    }
+
+    /// <summary>
+    /// Durably deletes the per-run preview-runner credential from the run secret store. No-op when
+    /// absent (<see cref="ISecretStore.DeleteSecretAsync"/> ignores a missing key). Never throws —
+    /// a delete failure must not break terminal cleanup. Called on EVERY terminal path (happy
+    /// release + crash/timeout/failed-run via the pod-release seam) so the credential's durable
+    /// lifetime is bounded by the pod's (spec-006 decouple-preview, RESIDUAL rev3 gap).
+    /// </summary>
+    private async Task DeletePreviewRunnerCredentialAsync(string runId, CancellationToken ct)
+    {
+        if (_secretStore is null)
+            return;
+
+        try
+        {
+            await _secretStore.DeleteSecretAsync(Preview.PreviewRunnerCredential.SecretKey(runId), ct)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(ex,
+                "KubernetesSandboxExecutor: failed to delete preview-runner credential for run {RunId} (best-effort)",
+                runId);
         }
     }
 

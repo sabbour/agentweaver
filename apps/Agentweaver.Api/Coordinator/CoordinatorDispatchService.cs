@@ -2129,6 +2129,15 @@ public static class WorkPlanStatus
     /// child branches into the integration branch conflicted. Terminal/parked.</summary>
     public const string AssemblyBlocked = "assembly_blocked";
 
+    /// <summary>
+    /// UNIFIED AUTONOMOUS STEERING (rev8): the plan is inside the assembly-owned steering DECISION
+    /// window — a gate delivered a steering signal and the <c>CoordinatorSteeringDecider</c> is
+    /// choosing/executing a direction. Durable so a crash re-enters the SAME decision boundary under a
+    /// stale-lease reclaim (see <c>CoordinatorReconciler</c>/<c>CoordinatorRecoveryRouter</c>) rather
+    /// than defaulting to Dispatch. Bounded by the per-plan steering-iteration cap so it cannot leak.
+    /// </summary>
+    public const string AssemblySteering = "assembly_steering";
+
     /// <summary>The collective merge of the integration branch into origin failed. Terminal.</summary>
     public const string AssemblyFailed = "assembly_failed";
 

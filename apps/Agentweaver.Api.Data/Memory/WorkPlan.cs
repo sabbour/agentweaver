@@ -51,6 +51,13 @@ public sealed class WorkPlan
     /// </summary>
     public string? CoordinatorPodId { get; set; }
 
+    /// <summary>
+    /// UNIFIED AUTONOMOUS STEERING (rev8): per-plan count of steering iterations applied. Bounded by
+    /// the configurable plan cap (default 6) so gate-driven steering cannot loop forever; at the cap
+    /// the decider escalates to human review / terminal instead of steering again.
+    /// </summary>
+    public int SteeringIterations { get; set; }
+
     public DateTimeOffset CreatedAt { get; set; }
     public DateTimeOffset UpdatedAt { get; set; }
 }

@@ -91,18 +91,23 @@ Conceptually, event types fall into families:
 | Tooling and gates | Tool calls, tool results, tool errors, approval requests, auto-approval, and questions | `tool.call`, `tool.result`, `tool.error`, `tool.approval_required`, `tool.auto_approved`, `agent.question_asked` |
 | Review and merge | Human review gates and repository integration | `review.requested`, `review.approved`, `review.declined`, `merge.started`, `merge.completed`, `merge.failed` |
 | Workflow graph | Server-authored graph descriptors and step transitions, including the first-class preview stage | `run.workflow_graph`, `workflow.step` |
-| Preview provisioning | Build & Test preview applicability, approval, readiness, and failure outcomes | `sandbox.preview_applicability`, `sandbox.preview_pending`, `sandbox.preview_ready`, `sandbox.preview_failed`, `sandbox.preview_skipped_not_applicable`, `coordinator.preview_ready` |
+| Preview provisioning | Deterministic Build & Test preview start, readiness, failure, and skip outcomes | `sandbox.preview_applicability`, `sandbox.preview_start_requested`, `sandbox.preview_pending`, `sandbox.preview_ready`, `sandbox.preview_failed`, `sandbox.preview_skipped_not_applicable`, `coordinator.preview_ready` |
+| Unified steering | Source-agnostic correction feedback and the coordinator's conscious routing decision | `coordinator.steering_received`, `coordinator.steering_decision`, `coordinator.steering` |
 | RAI and safety | RAI verdicts and degraded-but-continuing conditions | `rai.verdict`, `run.degraded` |
 | Coordinator orchestration | Outcome specs, work plans, topology, child lifecycle, steering, and assembly | `coordinator.started`, `coordinator.work_plan`, `coordinator.topology`, `subtask.dispatched`, `coordinator.assembly_completed` |
 
 The important rebuild rule is to keep event types **domain-shaped**, not UI-shaped. For example, emit "tool approval required" with the request identity and message; let the frontend decide how to render an approval card. Emit a coordinator topology snapshot or delta; let the frontend render the graph without inventing scheduling rules.
 
 Preview provisioning follows the same rule. The coordinator emits durable preview facts, not UI commands:
-`sandbox.preview_applicability` records whether a preview is required or skipped, `sandbox.preview_pending`
+`sandbox.preview_start_requested` records the deterministic platform attempt, `sandbox.preview_pending`
 records an existing tool-approval wait, `sandbox.preview_ready` / `coordinator.preview_ready` records the
-URL, and `sandbox.preview_failed` records why the preview is unavailable. The preview stage also emits
-`workflow.step` with `step: "preview"` so graph consumers can show the stage without special-casing the
-Build & Test log text. See [Live-preview provisioning](./live-preview-provisioning.md).
+URL, and `sandbox.preview_failed` or `sandbox.preview_skipped_not_applicable` records why no URL is available.
+The preview stage also emits `workflow.step` with `step: "preview"` so graph consumers can show the stage
+without special-casing the Build & Test log text. See [Decoupled live-preview provisioning](./live-preview-provisioning.md).
+
+Unified steering uses the event stream to make correction routing auditable. `coordinator.steering_received`
+captures the incoming signal and source; `coordinator.steering_decision` captures the coordinator's chosen
+effect and rationale before any in-place steer or fresh dispatch happens. See [Unified autonomous steering](./unified-steering.md).
 
 ### Payload discipline
 

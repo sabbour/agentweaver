@@ -282,6 +282,110 @@ describe('LifecycleEventCard — coordinator.integration_conflict_auto_resolved'
   });
 });
 
+describe('LifecycleEventCard — coordinator steering events (unified steering)', () => {
+  it('renders coordinator.steering_received naming the source and feedback', () => {
+    render(
+      <Wrapper>
+        <LifecycleEventCard
+          event={makeEvent('coordinator.steering_received', {
+            directiveId: 'dir-1',
+            source: 'rubberduck',
+            severity: 'request-changes',
+            targetScope: 'subtask-2',
+            feedback: 'Missing null check in parser',
+          })}
+        />
+      </Wrapper>,
+    );
+    expect(screen.getByText('steering received')).toBeDefined();
+    expect(screen.getByText(/from rubber-duck review/)).toBeDefined();
+    expect(screen.getByText(/Missing null check in parser/)).toBeDefined();
+  });
+
+  it('renders coordinator.steering_decision dispatch_fresh as an explicit, explained re-dispatch (not a glitch)', () => {
+    render(
+      <Wrapper>
+        <LifecycleEventCard
+          event={makeEvent('coordinator.steering_decision', {
+            directiveId: 'dir-2',
+            decision: 'dispatch_fresh',
+            subtaskIds: ['subtask-3'],
+            attempt: 2,
+            rationale: 'Prior attempt diverged from the spec',
+          })}
+        />
+      </Wrapper>,
+    );
+    expect(screen.getByText('fresh dispatch')).toBeDefined();
+    expect(screen.getByText(/Dispatched fresh subtask/)).toBeDefined();
+    expect(screen.getByText(/subtask subtask-3/)).toBeDefined();
+    expect(screen.getByText(/attempt 2/)).toBeDefined();
+    expect(screen.getByText(/because: Prior attempt diverged from the spec/)).toBeDefined();
+  });
+
+  it('renders coordinator.steering_decision in_place_steer as context-preserving steer', () => {
+    render(
+      <Wrapper>
+        <LifecycleEventCard
+          event={makeEvent('coordinator.steering_decision', {
+            decision: 'in_place_steer',
+            subtaskIds: ['subtask-1'],
+            rationale: 'Small fix',
+          })}
+        />
+      </Wrapper>,
+    );
+    expect(screen.getByText('steered in place')).toBeDefined();
+    expect(screen.getByText(/Steered in place \(context preserved\)/)).toBeDefined();
+  });
+
+  it('renders coordinator.steering_decision proceed as proceeded to review', () => {
+    render(
+      <Wrapper>
+        <LifecycleEventCard
+          event={makeEvent('coordinator.steering_decision', {
+            decision: 'proceed',
+            rationale: 'Output is good enough',
+          })}
+        />
+      </Wrapper>,
+    );
+    expect(screen.getByText('proceeded')).toBeDefined();
+    expect(screen.getByText(/Proceeded to review/)).toBeDefined();
+  });
+
+  it('renders coordinator.steering_decision advisory as surfaced-but-no-action', () => {
+    render(
+      <Wrapper>
+        <LifecycleEventCard
+          event={makeEvent('coordinator.steering_decision', {
+            decision: 'advisory',
+            rationale: 'Consider adding a test later',
+          })}
+        />
+      </Wrapper>,
+    );
+    expect(screen.getByText('advisory noted')).toBeDefined();
+    expect(screen.getByText(/Advisory noted \(no action taken\)/)).toBeDefined();
+  });
+
+  it('renders the legacy coordinator.assembly_changes_requested alias with the same steering treatment', () => {
+    render(
+      <Wrapper>
+        <LifecycleEventCard
+          event={makeEvent('coordinator.assembly_changes_requested', {
+            redispatchedSubtaskIds: ['subtask-4', 'subtask-5'],
+            reason: 'Tests failing',
+          })}
+        />
+      </Wrapper>,
+    );
+    expect(screen.getByText('fresh dispatch')).toBeDefined();
+    expect(screen.getByText(/Dispatched fresh subtask/)).toBeDefined();
+    expect(screen.getByText(/subtasks subtask-4, subtask-5/)).toBeDefined();
+  });
+});
+
 describe('LifecycleEventCard — tool.approval_required resolved/expired states', () => {
   it('shows expired status when pre-rendered with isResolved=true and resolvedScope=expired', () => {
     render(

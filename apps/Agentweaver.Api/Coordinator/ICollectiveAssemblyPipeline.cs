@@ -36,6 +36,14 @@ public interface ICollectiveAssemblyPipeline
         string repositoryPath,
         CancellationToken ct = default);
 
+    /// <summary>
+    /// Absolute path of the coordinator's detached Build/Test worktree (spec-006 decouple-preview).
+    /// The deterministic <c>PreviewStep</c> uses it as its command-discovery root and process cwd.
+    /// The path is deterministic from the coordinator run id and is valid from the moment
+    /// <see cref="RunBuildTestAsync"/> creates the worktree until <see cref="CleanupBuildTestResourcesAsync"/>.
+    /// </summary>
+    string GetBuildTestWorktreePath(string coordinatorRunId);
+
     /// <summary>Performs the ONE collective merge of the integration branch into the originating branch.</summary>
     Task<CollectiveMergeResult> MergeAsync(CollectiveMergeRequest request, CancellationToken ct);
 

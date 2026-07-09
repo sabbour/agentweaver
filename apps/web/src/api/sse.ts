@@ -118,6 +118,8 @@ export type EventType =
   | 'coordinator.work_plan'
   | 'coordinator.topology'
   | 'coordinator.steering'
+  | 'coordinator.steering_received'
+  | 'coordinator.steering_decision'
   | 'coordinator.child_stall_detected'
   | 'coordinator.graph'
   | 'coordinator.workflow_selected'

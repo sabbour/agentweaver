@@ -248,8 +248,8 @@ public sealed class CollectiveAssemblyPipeline : ICollectiveAssemblyPipeline
                 AgentName: request.AgentId);
 
             var decision = await buildTest.HandleAsync(input, NoOpWorkflowContext.Instance, ct).ConfigureAwait(false);
-            if (!_sandboxRuntime.IsPodPerRun)
-                RemoveDetachedWorktreeBestEffort(request.RepositoryPath, detachedWorktree.WorktreePath);
+            // spec-006 §3.3: do NOT remove the worktree here — the deterministic PreviewStep needs it as
+            // its cwd. All worktree/pod teardown is deferred to CleanupBuildTestResourcesAsync.
             return new CollectiveGateDecision(decision.Approved, decision.RequestChanges, decision.Feedback);
         }
         catch (WorkflowAgentInfrastructureException ex)
@@ -305,6 +305,9 @@ public sealed class CollectiveAssemblyPipeline : ICollectiveAssemblyPipeline
 
     private static string BuildTestWorktreeName(string coordinatorRunId) =>
         "assembly-build-test-" + coordinatorRunId;
+
+    public string GetBuildTestWorktreePath(string coordinatorRunId) =>
+        _worktreeManager.DetachedWorktreePath(BuildTestWorktreeName(coordinatorRunId));
 
     private void RemoveDetachedWorktreeBestEffort(string repositoryPath, string worktreePath)
     {
