@@ -111,6 +111,7 @@ const CoordPanelContext = createContext<((nodeId: string) => void) | undefined>(
 
 function topoStatusToStepStatus(status: string): StepStatus {
   switch (status) {
+    case 'revising':
     case 'dispatching':
     case 'assembling':
     case 'in_review':
@@ -191,6 +192,7 @@ function routeGridEdges(edges: Edge[], nodes: Node[]): Edge[] {
 
 function topoStatusToLabel(status: string): string {
   switch (status) {
+    case 'revising':        return 'Changes requested — revising';
     case 'dispatching':     return 'Dispatching';
     case 'assembling':      return 'Assembling';
     case 'in_review':       return 'In review';
@@ -255,6 +257,8 @@ interface OrchState {
   diff?: string;
   conflictFiles?: string[];
   conflictBranch?: string;
+  revisionGateLabel?: string;
+  revisionSubtaskCount?: number;
   sourceLabel: string;
   updatedAt?: string;
 }
@@ -351,6 +355,27 @@ function readGateKind(payload: Record<string, unknown>): string | undefined {
   return gateKind == null ? undefined : String(gateKind).toLowerCase();
 }
 
+function gateLabelForKind(gateKind: string | undefined): string {
+  switch (gateKind) {
+    case 'build-test': return 'Build & Test';
+    case 'rubberduck': return 'Rubberduck';
+    case 'human-review':
+    case undefined: return 'Human Review';
+    default: return gateKind.replace(/[-_]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+  }
+}
+
+function readSubtaskIdsFromPayload(payload: Record<string, unknown>): string[] {
+  const raw = payload['redispatchedSubtaskIds'] ?? payload['redispatchSubtaskIds'];
+  return Array.isArray(raw)
+    ? raw.map((id) => String(id).trim()).filter(Boolean)
+    : [];
+}
+
+function normalizeSubtaskId(value: string): string {
+  return value.trim().replace(/^plan:/i, '').replace(/^subtask-/i, '');
+}
+
 function isHumanReviewGateEvent(evt: RunStreamEvent): boolean {
   const gateKind = readGateKind(evt.payload);
   return gateKind === undefined || gateKind === 'human-review';
@@ -430,9 +455,10 @@ function deriveOrchState(
   reasonField: string | undefined,
   workPlanStatus: string | undefined,
 ): OrchState {
-  let winner: { phase: OrchPhase; payload: Record<string, unknown>; type: string; sequence: number; priority: number } | undefined;
+  let winner: { phase: OrchPhase; payload: Record<string, unknown>; type: string; sequence: number; priority: number; gateLabel?: string } | undefined;
   let latestOutcomeDrafting: RunStreamEvent | undefined;
   let latestOutcomeSupersedingSeq = -1;
+  let latestAssemblyGateLabel = gateLabelForKind(undefined);
   for (const evt of events) {
     if (evt.type === 'coordinator.outcome_spec.drafting') {
       if (!latestOutcomeDrafting || evt.sequence >= latestOutcomeDrafting.sequence) latestOutcomeDrafting = evt;
@@ -445,12 +471,22 @@ function deriveOrchState(
     ) {
       latestOutcomeSupersedingSeq = Math.max(latestOutcomeSupersedingSeq, evt.sequence ?? -1);
     }
+    if (evt.type === 'coordinator.assembly_review_requested') {
+      latestAssemblyGateLabel = gateLabelForKind(readGateKind(evt.payload));
+    }
     const mapped = ASSEMBLY_EVENT_PHASE[evt.type as string];
     if (!mapped) continue;
     const priority = mapped.priority ?? 1;
     const phase = assemblyReviewPhaseForEvent(evt, mapped.phase);
     if (!winner || priority > winner.priority || (priority === winner.priority && evt.sequence >= winner.sequence)) {
-      winner = { phase, payload: evt.payload, type: evt.type, sequence: evt.sequence, priority };
+      winner = {
+        phase,
+        payload: evt.payload,
+        type: evt.type,
+        sequence: evt.sequence,
+        priority,
+        gateLabel: evt.type === 'coordinator.assembly_changes_requested' ? latestAssemblyGateLabel : undefined,
+      };
     }
   }
   if (winner) {
@@ -460,10 +496,12 @@ function deriveOrchState(
       : undefined;
     return {
       phase: winner.phase,
-      reason: readStr(winner.payload, ['reason', 'message', 'error', 'detail']),
+      reason: readStr(winner.payload, ['reason', 'message', 'error', 'detail', 'feedback']),
       diff: readStr(winner.payload, ['diff', 'summary', 'integrationDiff', 'integration_diff', 'treeHash', 'tree_hash']),
       conflictFiles: conflictFiles && conflictFiles.length > 0 ? conflictFiles : undefined,
       conflictBranch: readStr(winner.payload, ['conflictingBranch', 'conflicting_branch']),
+      revisionGateLabel: winner.type === 'coordinator.assembly_changes_requested' ? winner.gateLabel : undefined,
+      revisionSubtaskCount: winner.type === 'coordinator.assembly_changes_requested' ? readSubtaskIdsFromPayload(winner.payload).length : undefined,
       sourceLabel: `${winner.type} event #${winner.sequence}`,
       updatedAt: readEventTimestamp(winner.payload),
     };
@@ -671,7 +709,9 @@ function deriveCoordinatorRunViewState(
   if (orchBucket !== 'unknown') {
     return {
       bucket: orchBucket,
-      label: orchPhaseLabel(orch.phase),
+      label: orch.phase === 'dispatching' && orch.revisionGateLabel
+        ? `Revising after ${orch.revisionGateLabel} feedback`
+        : orchPhaseLabel(orch.phase),
       reason: orch.reason,
       sourceLabel: orch.sourceLabel,
       terminal: orchBucket === 'completed' || orchBucket === 'failed' || orchBucket === 'blocked',
@@ -1890,6 +1930,39 @@ function flattenRunTree(nodes: RunSessionTree[], depth = 0): RunSessionTree[] {
   ]);
 }
 
+const SESSION_TREE_STAGE_RANK: Record<string, number> = {
+  work_plan: 10,
+  outcome_plan: 20,
+  subtask: 30,
+  rai: 40,
+  build_test: 50,
+  review: 60,
+  merge: 70,
+  scribe: 80,
+  rubberduck: 55,
+};
+
+function subtaskSortKey(nodeId: string): string {
+  const match = /(?:^|:)subtask-(\d+)\b/i.exec(nodeId);
+  if (!match) return nodeId;
+  return Number(match[1]).toString().padStart(12, '0');
+}
+
+function sessionTreeRoleRank(meta: { nodeId: string; label: string; roleKey?: string; isSubtask: boolean; y: number; x: number }): number {
+  if (meta.isSubtask) return SESSION_TREE_STAGE_RANK.subtask;
+  const role = meta.roleKey?.toLowerCase();
+  if (role && SESSION_TREE_STAGE_RANK[role] != null) return SESSION_TREE_STAGE_RANK[role];
+  const key = `${meta.nodeId} ${meta.label}`.toLowerCase();
+  if (key.includes('work-plan') || key.includes('work plan')) return SESSION_TREE_STAGE_RANK.work_plan;
+  if (key.includes('outcome-plan') || key.includes('outcome plan')) return SESSION_TREE_STAGE_RANK.outcome_plan;
+  if (key.includes('build') && key.includes('test')) return SESSION_TREE_STAGE_RANK.build_test;
+  if (/\brai\b/.test(key)) return SESSION_TREE_STAGE_RANK.rai;
+  if (key.includes('human review') || key.includes('review')) return SESSION_TREE_STAGE_RANK.review;
+  if (key.includes('merge')) return SESSION_TREE_STAGE_RANK.merge;
+  if (key.includes('scribe')) return SESSION_TREE_STAGE_RANK.scribe;
+  return 100;
+}
+
 function runTreeStatusIcon(status: string) {
   const color = semanticStateColorForStatus(status);
   if (color === 'success') return <CheckmarkRegular aria-hidden="true" />;
@@ -1929,6 +2002,7 @@ function semanticStateColorForStatus(status: string | undefined): SemanticStateC
     case 'awaiting_confirmation':
     case 'awaiting_review':
     case 'in_review':
+    case 'revising':
     case 'needs_clarification':
     case 'needs_resolution':
     case 'rai_flagged':
@@ -1974,6 +2048,7 @@ function runTreeStatusLabel(status: string, confirmedBy?: string): string {
     case 'completed': return 'Completed';
     case 'assemble_ready': return 'Ready for assembly';
     case 'awaiting_review': return 'Action needed';
+    case 'revising': return 'Changes requested — revising';
     case 'awaiting_assembly': return 'Preparing assembly';
     case 'failed': return 'Failed';
     case 'merge_failed': return 'Merge failed';
@@ -1985,7 +2060,7 @@ function runTreeStatusLabel(status: string, confirmedBy?: string): string {
 
 const FAILED_TASK_STATUSES = new Set(['failed', 'merge_failed', 'declined']);
 const BLOCKED_TASK_STATUSES = new Set(['blocked', 'rai_flagged', 'needs_clarification', 'pending_capacity', 'needs_resolution']);
-const WAITING_TASK_STATUSES = new Set(['waiting', 'awaiting_confirmation']);
+const WAITING_TASK_STATUSES = new Set(['waiting', 'awaiting_confirmation', 'revising']);
 const PENDING_TASK_STATUSES = new Set(['pending']);
 const EXECUTING_TASK_STATUSES = new Set(['drafting_outcome', 'planning', 'running', 'dispatched', 'dispatching', 'in_progress', 'awaiting_assembly', 'assembling']);
 
@@ -2624,6 +2699,35 @@ export function CoordinatorRunPage() {
     }
     return map;
   }, [events]);
+
+  const revisingSubtasks = useMemo<Record<string, { gateLabel: string; feedback?: string }>>(() => {
+    let latestChange: { sequence: number; ids: string[]; gateLabel: string; feedback?: string } | null = null;
+    let latestGateLabel = gateLabelForKind(undefined);
+    for (const evt of events) {
+      if (evt.type === 'coordinator.assembly_review_requested') {
+        latestGateLabel = gateLabelForKind(readGateKind(evt.payload));
+      }
+      if (evt.type === 'coordinator.assembly_changes_requested') {
+        latestChange = {
+          sequence: evt.sequence ?? -1,
+          ids: readSubtaskIdsFromPayload(evt.payload).map(normalizeSubtaskId),
+          gateLabel: latestGateLabel,
+          feedback: readStr(evt.payload, ['feedback']),
+        };
+      }
+    }
+    if (!latestChange || latestChange.ids.length === 0) return {};
+    const stillRevising = new Set(latestChange.ids);
+    const terminal = new Set(['subtask.completed', 'subtask.assemble_ready', 'subtask.failed', 'subtask.rai_flagged']);
+    for (const evt of events) {
+      if ((evt.sequence ?? -1) <= latestChange.sequence || !terminal.has(evt.type)) continue;
+      const id = readStr(evt.payload, ['subtaskId', 'subtask_id']);
+      if (id) stillRevising.delete(normalizeSubtaskId(id));
+    }
+    const result: Record<string, { gateLabel: string; feedback?: string }> = {};
+    for (const id of stillRevising) result[id] = { gateLabel: latestChange.gateLabel, feedback: latestChange.feedback };
+    return result;
+  }, [events]);
   // reserve room for expanded child pipelines and the container can grow to fit them.
   const [expandedKeys, setExpandedKeys] = useState<Set<string>>(new Set());
   const toggleExpand = useCallback((key: string) => {
@@ -2733,7 +2837,10 @@ export function CoordinatorRunPage() {
         // node.id is "plan:subtask-{id}"; the subtask.* timing map is keyed by the raw "{id}".
         const subtaskKey  = node.id.replace(/^plan:/, '').replace(/^subtask-/, '');
         const timing      = subtaskTiming[subtaskKey];
-        const topoStatus = terminalizedStatus(topoNode?.status ?? 'pending', shouldTerminalizeLiveNodes, terminalStatus);
+        const revision = revisingSubtasks[normalizeSubtaskId(subtaskKey)];
+        const topoStatus = revision
+          ? 'revising'
+          : terminalizedStatus(topoNode?.status ?? 'pending', shouldTerminalizeLiveNodes, terminalStatus);
         return {
           id:   node.id,
           type: 'subtask',
@@ -2752,6 +2859,8 @@ export function CoordinatorRunPage() {
             startedAt:     timing?.startedAt,
             completedAt:   timing?.completedAt ?? (shouldTerminalizeLiveNodes && isLiveStatus(topoNode?.status) ? Date.now() : undefined),
             executionPodName: topoNode?.executionPodName ?? null,
+            revisionGateLabel: revision?.gateLabel,
+            revisionFeedback: revision?.feedback,
             dir:           'GRID',
           } as SubtaskNodeData,
           position: { x: 0, y: 0 },
@@ -2869,7 +2978,7 @@ export function CoordinatorRunPage() {
       rfNodes:      laidOutNodes,
       displayEdges: routeGridEdges(allEdges, laidOutNodes),
     };
-  }, [planningDescriptor, topology, projectId, runId, coordNodeStatusOverride, orch.phase, subtaskTiming, assemblyTiming, roleByAgent, expandedKeys, latestOutcomePlanDraftingEvent, latestOutcomePlanEvent, specConfirmed, workPlanSeen, coordStatusField, dagContainerSize.width, dagContainerSize.height, viewState.terminal, runStatusColor, activePreviewUrl]);
+  }, [planningDescriptor, topology, projectId, runId, coordNodeStatusOverride, orch.phase, subtaskTiming, assemblyTiming, revisingSubtasks, roleByAgent, expandedKeys, latestOutcomePlanDraftingEvent, latestOutcomePlanEvent, specConfirmed, workPlanSeen, coordStatusField, dagContainerSize.width, dagContainerSize.height, viewState.terminal, runStatusColor, activePreviewUrl]);
 
   const hasSubtaskNodes = useMemo(
     () => (planningDescriptor?.nodes ?? []).some((n) => n.node_type === 'subtask'),
@@ -2963,6 +3072,8 @@ export function CoordinatorRunPage() {
       x: number;
       y: number;
       isCoordinator: boolean;
+      isSubtask: boolean;
+      roleKey?: string;
     }>();
 
     for (const node of candidates) {
@@ -2984,15 +3095,18 @@ export function CoordinatorRunPage() {
           x,
           y,
           isCoordinator: false,
+          isSubtask: true,
+          roleKey: 'subtask',
         });
       } else {
         const data = node.data as WorkflowNodeData;
+        const roleKey = data.def.key;
         const status =
-          data.def.key === 'outcome_plan'
+          roleKey === 'outcome_plan'
             ? (outcomePlanClarifying && !specConfirmed ? 'needs_clarification' : specConfirmed ? 'confirmed' : latestOutcomePlanEvent ? 'awaiting_confirmation' : outcomePlanDraftingActive ? 'drafting_outcome' : 'pending')
-            : data.def.key === 'work_plan'
+            : roleKey === 'work_plan'
               ? (workPlanSeen ? 'completed' : 'pending')
-              : data.def.key === 'review' && orch.phase === 'in_review' && !viewState.terminal
+              : roleKey === 'review' && orch.phase === 'in_review' && !viewState.terminal
                 ? 'awaiting_review'
               : data.state.status === 'started' ? 'running'
                 : data.state.status === 'completed' ? 'completed'
@@ -3009,6 +3123,8 @@ export function CoordinatorRunPage() {
           x,
           y,
           isCoordinator: true,
+          isSubtask: false,
+          roleKey,
         });
       }
     }
@@ -3039,7 +3155,12 @@ export function CoordinatorRunPage() {
         .sort((a, b) => {
           const childA = sessionMeta.get(a)!;
           const childB = sessionMeta.get(b)!;
-          return (childA.depth - childB.depth) || (childA.y - childB.y) || (childA.x - childB.x);
+          return sessionTreeRoleRank(childA) - sessionTreeRoleRank(childB)
+            || subtaskSortKey(childA.nodeId).localeCompare(subtaskSortKey(childB.nodeId), undefined, { numeric: true })
+            || childA.label.localeCompare(childB.label)
+            || (childA.y - childB.y)
+            || (childA.x - childB.x)
+            || childA.nodeId.localeCompare(childB.nodeId);
         })
         .map((childId) => buildTree(childId));
       return {

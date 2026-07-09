@@ -356,6 +356,8 @@ Below the graph, the page uses two columns. The left column is the **Outcome spe
 
 The coordinator session reuses the standard run timeline. It shows the coordinator's own messages, lifecycle cards, tool activity, and stream state. It filters out raw serialized work-plan JSON when the structured plan is already visible in the graph and panels.
 
+Outcome-spec JSON that reaches the agent message stream is rendered as readable **Outcome plan** fields instead of a raw blob, and the row is attributed to **Coordinator (Outcome plan)** (`apps/web/src/components/AgentSessionPanel.tsx:777`, `:791`, `:1438`). RAI verdict cards also suppress placeholder rationales such as `-`, `---`, and `—`, so empty rationales do not show as noisy punctuation (`AgentSessionPanel.tsx:805`, `:1245`).
+
 The coordinator run also surfaces its assembled artifacts through the same **Artifact Browser** used
 on child runs — a compact **Changes** list plus a **Files** tab with a real folder tree — so the
 collective output of an orchestration is inspectable directly from the coordinator view rather than
@@ -365,7 +367,7 @@ Coordinator-only artifacts are also intentionally quiet on misses. The page stop
 
 ### Reading the session log
 
-The session log is tuned to read like a clean narrative rather than a machine trace. A **Show technical details** toggle sits above the timeline and is **OFF by default**. With it off, low-signal plumbing rows — system-prompt scaffolding, tool-call start/stop (shell, file view/edit, raw commands), and file-write rows — are collapsed, leaving agent and coordinator messages, instructions, narrative activity, and human-facing approvals. Nothing is deleted: flipping the toggle on reveals every technical row again. The classification is done entirely client-side from the shape of each event, so turning details on and off is instant.
+The session log is tuned to read like a clean narrative rather than a machine trace. A **Show technical details** toggle sits above the timeline and is **OFF by default**. With it off, low-signal plumbing rows — system-prompt scaffolding, internal assembly-gate prompts, tool-call start/stop (shell, file view/edit, raw commands), and file-write rows — are collapsed, leaving agent and coordinator messages, instructions, narrative activity, and human-facing approvals. Nothing is deleted: flipping the toggle on reveals every technical row again. The classification is done entirely client-side from the shape of each event, so turning details on and off is instant (`apps/web/src/components/AgentSessionPanel.tsx:740`, `:2388`).
 
 The session column is also wider than before so long tool output and messages have room to breathe, and the **Message coordinator** composer at the bottom of the panel is always visible — the input reserves clearance so the graph's minimap can never hide it. Use it to send a message to the coordinator (or the selected child) mid-run without leaving the page. The composer stays enabled while the coordinator is parked in **In review** when the run detail reports `coordinator_steerable: true`, so you can message the coordinator during collective review instead of waiting for the gate to close (`apps/web/src/pages/CoordinatorRunPage.tsx:2192`, `:3216`).
 
@@ -380,6 +382,8 @@ Question cards route answers to the child run that asked. Tool approval cards al
 ### Assembly and review
 
 After child subtasks settle, the coordinator assembles the collective output. During **Awaiting assembly**, **Assembling**, **RAI review**, or **Build & Test**, the page shows progress through the assembly nodes and explains that subtasks are complete and the coordinator is integrating their outputs for collective review. The `coordinator.assembly_review_requested` event can appear for automated gates (`gateKind: "build-test"` or `"rubberduck"`) as well as human review; only `gateKind: "human-review"` (or an older event with no `gateKind`) is treated as action-required for the user.
+
+When any assembly gate requests changes, the revision loop is visible instead of looking like a stalled graph. The run status chip reads **Revising after {Gate} feedback**, affected subtask cards show **Changes requested — revising**, and the coordinator timeline adds `🔁 {Gate} requested changes → revising N subtasks` with the reviewer feedback inline/expandable (`apps/web/src/pages/CoordinatorRunPage.tsx:713`, `:2703`; `apps/web/src/components/AgentSessionPanel.tsx:1599`). The revision marker clears per subtask once a later terminal subtask event arrives.
 
 During **In review**, the page clearly marks that human review is pending and directs the user to the Changes panel. The review stage node in the graph also surfaces a primary **Review now** button while review is action-required; clicking it opens the artifacts/review panel (the same Changes/Files modal) so the user can jump straight from the topology into the collective assembly output. The Changes/Files experience is reused for the coordinator's collective assembly output. Approve, request a change, or decline actions go to the assembly review gate, not to individual children.
 
@@ -471,7 +475,9 @@ The run page now makes the whole work plan visible after decomposition. Once `co
 
 The right-side Agents area is now a selected-task readout. It includes the coordinator root, the outcome/work-plan nodes, every planned subtask, and assembly stages. Planned subtasks are selectable even before they have a child run; their Changes and Files tabs explain that artifacts appear after dispatch (`CoordinatorRunPage.tsx:2702`; `apps/web/src/components/AgentSessionPanel.tsx:1640`).
 
-The message stream is quieter by default. High-signal coordinator updates remain visible, while system prompt scaffolding, raw activity details, tool calls, and file rows sit behind technical-detail toggles (`apps/web/src/components/AgentSessionPanel.tsx:740`, `:2160`). Subtask activity lines include the task title, assigned agent, role, and failure reason when those fields are present in `subtask.*` payloads or the work-plan event (`AgentSessionPanel.tsx:1314`, `:1360`).
+The run tree order is deterministic. Rows sort by workflow stage rank, then by numeric subtask id, then by label/position as tie-breakers: **Work plan**, **Outcome plan**, subtasks, **RAI**, **Build & Test**, **Human Review**, **Merge**, and **Scribe** (`apps/web/src/pages/CoordinatorRunPage.tsx:1933`, `:1951`, `:3155`). This avoids apparent reordering caused by event arrival or graph layout.
+
+The message stream is quieter by default. High-signal coordinator updates remain visible, while system prompt scaffolding, internal assembly-gate prompts, raw activity details, tool calls, and file rows sit behind technical-detail toggles (`apps/web/src/components/AgentSessionPanel.tsx:740`, `:2388`). Outcome-plan JSON in the stream is formatted as readable fields and attributed to **Coordinator (Outcome plan)**, and placeholder RAI rationales are hidden (`AgentSessionPanel.tsx:777`, `:805`, `:1438`).
 
 Steering now happens from the selected-task panel. Selecting the outcome plan focuses the clarification composer; selecting a subtask opens that task's transcript, files, and follow-up surface (`CoordinatorRunPage.tsx:2866`, `:2880`, `:3758`).
 

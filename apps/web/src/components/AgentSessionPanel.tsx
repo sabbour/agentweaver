@@ -719,6 +719,7 @@ interface ConversationRow {
   role: 'system' | 'user' | 'agent' | 'activity';
   content: string;
   timestamp?: number;
+  authorOverride?: { displayName: string; avatarName: string; roleLabel: string; collapsedLabel?: string };
 }
 
 interface ConversationTool {
@@ -766,6 +767,39 @@ function readString(payload: Record<string, unknown>, keys: string[]): string | 
     if (value != null && String(value).trim() !== '') return String(value);
   }
   return undefined;
+}
+
+interface OutcomeSpecMessage {
+  desiredOutcome?: string;
+  scope?: string;
+}
+
+function parseOutcomeSpecMessage(content: string): OutcomeSpecMessage | null {
+  const trimmed = content.trim();
+  if (!trimmed.startsWith('{') || !/"desired_outcome"|"desiredOutcome"/.test(trimmed)) return null;
+  try {
+    const parsed = JSON.parse(trimmed) as Record<string, unknown>;
+    const desiredOutcome = readString(parsed, ['desiredOutcome', 'desired_outcome']);
+    const scope = readString(parsed, ['scope']);
+    if (!desiredOutcome && !scope) return null;
+    return { desiredOutcome, scope };
+  } catch {
+    return null;
+  }
+}
+
+function formatOutcomeSpecMessage(spec: OutcomeSpecMessage): string {
+  return [
+    '### Outcome plan',
+    spec.desiredOutcome ? `**Desired outcome:**\n\n${spec.desiredOutcome}` : null,
+    spec.scope ? `**Scope:**\n\n${spec.scope}` : null,
+  ].filter(Boolean).join('\n\n');
+}
+
+function normalizeRaiRationale(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed || trimmed === '-' || trimmed === '—' || trimmed === '---') return undefined;
+  return trimmed;
 }
 
 function readTimestamp(evt: RunStreamEvent): number | undefined {
@@ -1084,6 +1118,7 @@ function MarkdownMessage({ content }: { content: string }) {
 function statusLabel(status: string): string {
   switch (status) {
     case 'drafting_outcome': return 'Drafting outcome plan';
+    case 'revising': return 'Changes requested — revising';
     case 'planning': return 'Planning';
     case 'dispatched': return 'Dispatching';
     case 'running':
@@ -1127,6 +1162,7 @@ function statusKind(status: string): StatusKind {
     case 'awaiting_confirmation':
     case 'awaiting_review':
     case 'needs_clarification':
+    case 'revising':
       return 'awaiting';
     case 'running':
     case 'dispatched':
@@ -1206,9 +1242,9 @@ function latestRaiVerdict(events: RunStreamEvent[]): RaiVerdict | null {
     const rawVerdict = typeof payload.verdict === 'string' ? payload.verdict : rawTrafficLight;
     return {
       verdict: parseRaiVerdictToken(rawVerdict),
-      rationale: typeof payload.rationale === 'string'
+      rationale: normalizeRaiRationale(typeof payload.rationale === 'string'
         ? payload.rationale
-        : readString(evt.payload, ['message', 'summary']),
+        : readString(evt.payload, ['message', 'summary'])),
     };
   }
   return null;
@@ -1396,6 +1432,19 @@ function buildTurns(events: RunStreamEvent[]): ConversationTurn[] {
       if (tool) tool.settled = true;
     }
   }
+  for (const turn of turns) {
+    for (const row of turn.rows) {
+      if (row.role !== 'agent') continue;
+      const outcomeSpec = parseOutcomeSpecMessage(row.content);
+      if (!outcomeSpec) continue;
+      row.content = formatOutcomeSpecMessage(outcomeSpec);
+      row.authorOverride = {
+        displayName: 'Coordinator (Outcome plan)',
+        avatarName: 'Coordinator',
+        roleLabel: 'outcome plan',
+      };
+    }
+  }
   return turns.filter((turn) => turn.rows.length > 0 || turn.toolCalls.length > 0 || turn.approvals.length > 0);
 }
 
@@ -1412,6 +1461,21 @@ function readArray(payload: Record<string, unknown>, keys: string[]): unknown[] 
     if (Array.isArray(value)) return value;
   }
   return undefined;
+}
+
+function readGateKind(payload: Record<string, unknown>): string | undefined {
+  const gateKind = payload['gateKind'] ?? payload['gate_kind'];
+  return gateKind == null ? undefined : String(gateKind).toLowerCase();
+}
+
+function gateLabelForKind(gateKind: string | undefined): string {
+  switch (gateKind) {
+    case 'build-test': return 'Build & Test';
+    case 'rubberduck': return 'Rubberduck';
+    case 'human-review':
+    case undefined: return 'Human Review';
+    default: return gateKind.replace(/[-_]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+  }
 }
 
 function buildSubtaskInfo(events: RunStreamEvent[]): Map<string, SubtaskNarrativeInfo> {
@@ -1460,7 +1524,7 @@ function subtaskDescription(payload: Record<string, unknown>, subtasks: Map<stri
   return `${title}${actor}`;
 }
 
-function coordinatorActivityLine(evt: RunStreamEvent, subtasks: Map<string, SubtaskNarrativeInfo>): string | null {
+function coordinatorActivityLine(evt: RunStreamEvent, subtasks: Map<string, SubtaskNarrativeInfo>, gateLabelBySequence: Map<number, string>): string | null {
   const p = evt.payload;
   switch (evt.type) {
     case 'coordinator.started': {
@@ -1532,8 +1596,12 @@ function coordinatorActivityLine(evt: RunStreamEvent, subtasks: Map<string, Subt
     }
     case 'coordinator.assembly_review_preserved':
       return 'Human review preserved after coordinator failure.';
-    case 'coordinator.assembly_changes_requested':
-      return 'Human review requested changes; coordinator will redispatch affected subtasks.';
+    case 'coordinator.assembly_changes_requested': {
+      const rawIds = readArray(p, ['redispatchedSubtaskIds', 'redispatchSubtaskIds']) ?? [];
+      const gate = gateLabelBySequence.get(evt.sequence) ?? 'Assembly gate';
+      const feedback = readString(p, ['feedback']);
+      return `🔁 ${gate} requested changes → revising ${rawIds.length} subtask${rawIds.length === 1 ? '' : 's'}${feedback ? ` — Feedback: ${feedback}` : ''}.`;
+    }
     case 'coordinator.assembly_merge_started':
       return 'Collective assembly: merge started.';
     case 'coordinator.assembly_merge_completed': {
@@ -1590,10 +1658,17 @@ function buildCoordinatorTurns(events: RunStreamEvent[]): ConversationTurn[] {
   const subtasks = buildSubtaskInfo(events);
   const turns: ConversationTurn[] = [];
   const resolvedApprovals = new Map<string, string>();
+  const gateLabelBySequence = new Map<number, string>();
+  let latestGateLabel = gateLabelForKind(undefined);
   let firstSystem: ConversationRow | null = null;
   let firstTask: ConversationRow | null = null;
 
   for (const evt of events) {
+    if (evt.type === 'coordinator.assembly_review_requested') {
+      latestGateLabel = gateLabelForKind(readGateKind(evt.payload));
+    } else if (evt.type === 'coordinator.assembly_changes_requested') {
+      gateLabelBySequence.set(evt.sequence, latestGateLabel);
+    }
     if (evt.type === 'tool.approval_resolved' || evt.type === 'coordinator.child_approval_resolved') {
       const requestId = readString(evt.payload, ['requestId', 'request_id']);
       if (!requestId) continue;
@@ -1622,7 +1697,7 @@ function buildCoordinatorTurns(events: RunStreamEvent[]): ConversationTurn[] {
   }
 
   for (const evt of events) {
-    const line = coordinatorActivityLine(evt, subtasks);
+    const line = coordinatorActivityLine(evt, subtasks, gateLabelBySequence);
     if (!line) continue;
     const requestId = readString(evt.payload, ['requestId', 'request_id']) ?? '';
     const resolvedScope = requestId ? (resolvedApprovals.get(requestId) ?? null) : null;
@@ -2143,6 +2218,7 @@ export function AgentSessionPanel({
                           runId={selectedRunId}
                           onPreviewFile={openPreview}
                           showTechnical={showTechnical}
+                          hideSystemRows={selectedIsAssemblyAggregate}
                           activityDetailsExpanded={activityDetailsExpanded}
                           onExpandActivityDetails={() => setActivityDetailsExpanded(true)}
                           participant={selectedIdentity}
@@ -2289,6 +2365,7 @@ function ConversationTurnBlock({
   runId,
   onPreviewFile,
   showTechnical = true,
+  hideSystemRows = false,
   activityDetailsExpanded = false,
   onExpandActivityDetails,
   participant,
@@ -2297,6 +2374,7 @@ function ConversationTurnBlock({
   runId: string;
   onPreviewFile: (path: string) => void;
   showTechnical?: boolean;
+  hideSystemRows?: boolean;
   activityDetailsExpanded?: boolean;
   onExpandActivityDetails?: () => void;
   participant: ParticipantIdentity;
@@ -2309,9 +2387,10 @@ function ConversationTurnBlock({
   const collapsedDetailCount = activityCount + turn.toolCalls.length + turn.filePaths.length;
   // #122: with technical details hidden, drop system-prompt scaffolding rows so the
   // narrative reads cleanly; the rows are revealed (not deleted) when the toggle is on.
+  const baseRows = hideSystemRows ? turn.rows.filter((row) => row.role !== 'system') : turn.rows;
   const visibleRows = showTechnical
-    ? (activityDetailsExpanded ? turn.rows : turn.rows.filter((row) => row.role !== 'activity'))
-    : turn.rows.filter((row) => row.role !== 'system');
+    ? (activityDetailsExpanded ? baseRows : baseRows.filter((row) => row.role !== 'activity'))
+    : baseRows.filter((row) => row.role !== 'system');
   const collapsedSummary = [
     activityCount ? `${activityCount} update${activityCount === 1 ? '' : 's'}` : null,
     turn.toolCalls.length ? `${turn.toolCalls.length} tool call${turn.toolCalls.length === 1 ? '' : 's'}` : null,
@@ -2329,7 +2408,7 @@ function ConversationTurnBlock({
   return (
     <div className={styles.conversationTurn}>
       {visibleRows.map((row) => {
-        const author = authorForRole(row.role, participant);
+        const author = row.authorOverride ?? authorForRole(row.role, participant);
         if (row.role === 'activity') {
           return (
             <div key={row.key} className={styles.activityEventRow} data-testid="session-activity-row">

@@ -419,6 +419,107 @@ describe('CoordinatorRunPage — unified coordinator graph view', () => {
     expect(document.body.textContent).not.toContain('No streamed messages yet for this session.');
   });
 
+  it('orders run tree rows by coordinator workflow stage instead of descriptor/event arrival order', async () => {
+    vi.mocked(apiClient.getRunGraph).mockResolvedValue({
+      ...COORDINATOR_GRAPH_DESCRIPTOR,
+      nodes: [
+        { id: 'coordinator', label: 'Coordinator', role: 'coordinator', kind: 'live', node_type: 'agent' },
+        { id: 'planned:assembly-merge', label: 'Merge', role: 'merge', kind: 'planned', node_type: 'action' },
+        { id: 'plan:subtask-2', label: 'Implement server.js and package.json', role: 'subtask', kind: 'live', node_type: 'subtask', child_run_id: 'child-run-2', agent: 'Trinity' },
+        { id: 'planned:assembly-scribe', label: 'Scribe', role: 'scribe', kind: 'planned', node_type: 'action' },
+        { id: 'build-test', label: 'Build & Test', role: 'build_test', kind: 'planned', node_type: 'gate' },
+        { id: 'planned:assembly-rai', label: 'RAI Check', role: 'rai', kind: 'planned', node_type: 'gate' },
+        { id: 'plan:subtask-1', label: 'Plan minimal preview app structure', role: 'subtask', kind: 'live', node_type: 'subtask', child_run_id: 'child-run-1', agent: 'Neo' },
+        { id: 'planned:assembly-review', label: 'Review Gate', role: 'review', kind: 'planned', node_type: 'gate' },
+      ],
+      edges: [
+        { from: 'coordinator', to: 'planned:assembly-merge', cardinality: 'direct', loopback: false },
+        { from: 'coordinator', to: 'plan:subtask-2', cardinality: 'direct', loopback: false },
+        { from: 'coordinator', to: 'planned:assembly-scribe', cardinality: 'direct', loopback: false },
+        { from: 'coordinator', to: 'build-test', cardinality: 'direct', loopback: false },
+        { from: 'coordinator', to: 'planned:assembly-rai', cardinality: 'direct', loopback: false },
+        { from: 'coordinator', to: 'plan:subtask-1', cardinality: 'direct', loopback: false },
+        { from: 'coordinator', to: 'planned:assembly-review', cardinality: 'direct', loopback: false },
+      ],
+    } as never);
+    mockRunStreamState.current = {
+      events: [
+        { sequence: 1, type: 'coordinator.outcome_spec.confirmed', payload: {} },
+        { sequence: 2, type: 'coordinator.work_plan', payload: {} },
+      ],
+      droppedEventCount: 0,
+      status: 'done',
+      error: null,
+      reconnect: vi.fn(),
+    };
+
+    render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    await screen.findByRole('button', { name: /Select Work plan:/i }, { timeout: 4000 });
+    const labels = screen.getAllByRole('button', { name: /^Select /i })
+      .map((button) => button.getAttribute('aria-label')?.replace(/^Select (.*): .+$/, '$1'))
+      .filter((label): label is string => Boolean(label));
+
+    expect(labels.slice(0, 10)).toEqual([
+      'Coordinator',
+      'Work plan',
+      'Outcome plan',
+      'Plan minimal preview app structure',
+      'Implement server.js and package.json',
+      'RAI Check',
+      'Build & Test',
+      'Review Gate',
+      'Merge',
+      'Scribe',
+    ]);
+  });
+
+  it('surfaces assembly changes-requested as revising state on affected subtasks', async () => {
+    vi.mocked(apiClient.getRunGraph).mockResolvedValue({
+      ...COORDINATOR_GRAPH_DESCRIPTOR,
+      nodes: [
+        { id: 'coordinator', label: 'Coordinator', role: 'coordinator', kind: 'live', node_type: 'agent' },
+        { id: 'plan:subtask-1', label: 'Plan minimal preview app structure', role: 'subtask', kind: 'live', node_type: 'subtask', child_run_id: 'child-run-3', agent: 'Neo' },
+        { id: 'plan:subtask-2', label: 'Implement server.js and package.json', role: 'subtask', kind: 'live', node_type: 'subtask', child_run_id: 'child-run-2', agent: 'Trinity' },
+        { id: 'planned:assembly-review', label: 'Review Gate', role: 'review', kind: 'planned', node_type: 'gate' },
+      ],
+      edges: [
+        { from: 'coordinator', to: 'plan:subtask-1', cardinality: 'direct', loopback: false },
+        { from: 'coordinator', to: 'plan:subtask-2', cardinality: 'direct', loopback: false },
+        { from: 'plan:subtask-1', to: 'planned:assembly-review', cardinality: 'fanin', loopback: false },
+        { from: 'plan:subtask-2', to: 'planned:assembly-review', cardinality: 'fanin', loopback: false },
+      ],
+    } as never);
+    mockRunStreamState.current = {
+      events: [
+        { sequence: 1, type: 'coordinator.outcome_spec.confirmed', payload: {} },
+        { sequence: 2, type: 'coordinator.work_plan', payload: {} },
+        { sequence: 3, type: 'coordinator.assembly_review_requested', payload: { gateKind: 'rubberduck' } },
+        {
+          sequence: 4,
+          type: 'coordinator.assembly_changes_requested',
+          payload: {
+            redispatchSubtaskIds: [1],
+            redispatchedSubtaskIds: [1],
+            feedback: 'Tighten the preview acceptance criteria.',
+          },
+        },
+        { sequence: 5, type: 'subtask.dispatched', payload: { subtaskId: 1, childRunId: 'child-run-3' } },
+      ],
+      droppedEventCount: 0,
+      status: 'done',
+      error: null,
+      reconnect: vi.fn(),
+    };
+
+    render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    const revisedRow = await screen.findByRole('button', { name: /Select Plan minimal preview app structure: Changes requested — revising/i }, { timeout: 4000 });
+    expect(revisedRow.textContent).toContain('Changes requested — revising');
+    expect(screen.getByRole('button', { name: /Select Implement server\.js and package\.json: Pending/i }).textContent).toContain('Pending');
+    expect((await screen.findByTestId('run-status-chip', undefined, { timeout: 4000 })).textContent).toContain('Revising after Rubberduck feedback');
+  });
+
   it('keeps coordinator messaging enabled during review when the backend marks the run steerable', async () => {
     vi.mocked(apiClient.getRun).mockResolvedValue({
       run_id: 'coord-run-1',

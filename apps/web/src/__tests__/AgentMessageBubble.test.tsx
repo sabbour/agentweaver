@@ -209,8 +209,8 @@ describe('AgentMessageBubble', () => {
     expect(container.textContent).toContain('# Heading');
   });
 
-  // SPEC-01: the coordinator's raw outcome-plan JSON is replaced with a pointer to the panel
-  it('replaces a raw outcome-plan JSON blob with a pointer to the Outcome plan panel', () => {
+  // SPEC-01: the coordinator's raw outcome-plan JSON is rendered as readable sections.
+  it('formats a raw outcome-plan JSON blob as readable fields', () => {
     const specJson = JSON.stringify({
       desired_outcome: 'Two new endpoints',
       scope: 'In scope: …',
@@ -222,7 +222,11 @@ describe('AgentMessageBubble', () => {
         <AgentMessageBubble content={specJson} streaming={false} isLiveRun={false} />
       </Wrapper>,
     );
-    expect(screen.getByText(/see the Outcome plan panel/i)).toBeDefined();
+    expect(screen.getByText('Outcome plan')).toBeDefined();
+    expect(screen.getByText(/Desired outcome:/i)).toBeDefined();
+    expect(screen.getByText(/Two new endpoints/i)).toBeDefined();
+    expect(screen.getByText('Scope:')).toBeDefined();
+    expect(screen.getByText(/In scope:/i)).toBeDefined();
     // The raw JSON keys must not be dumped into the timeline.
     expect(screen.queryByText(/desired_outcome/)).toBeNull();
   });
