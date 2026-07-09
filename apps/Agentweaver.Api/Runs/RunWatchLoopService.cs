@@ -295,6 +295,24 @@ public sealed class RunWatchLoopService
 
                 case ExecutorFailedEvent failed:
                     EmitExecutorStep(runId, entry, failed.ExecutorId, "failed");
+                    // STRUCTURAL ROOT CAUSE (in-place steering revision wedge): an executor throw
+                    // halts the MAF workflow and yields NO WorkflowOutputEvent. The trimmed
+                    // coordinator CHILD graph (agent -> child-assemble-ready) has no failure->terminal
+                    // edge, so without this the stream would simply END with no terminal and the run
+                    // would be failed as `watch_stream_completed_without_terminal_event` — fragile,
+                    // uninformative, and only via the stream-end fallback. Terminalize a CHILD run as
+                    // a VISIBLE Failure immediately so: (a) the watcher ALWAYS produces a terminal
+                    // after an executor failure (never a hung stream), and (b) the subtask is marked
+                    // Failed, so the coordinator's failed-target path consciously re-dispatches the
+                    // revision (steering feedback preserved) rather than losing the work. Scoped to
+                    // child runs: the child pipeline is strictly linear, so an executor failure there
+                    // is definitively terminal (no fan-out/recovery node could still emit output).
+                    if (await IsChildRunAsync(runId, ct).ConfigureAwait(false))
+                    {
+                        await FailRunSafeAsync(
+                            runId, entry, $"child_executor_failed:{failed.ExecutorId}").ConfigureAwait(false);
+                        return;
+                    }
                     break;
 
                 case RequestInfoEvent rie:
@@ -667,6 +685,20 @@ public sealed class RunWatchLoopService
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Best-effort worktree cleanup failed for run {RunId}", runId);
+        }
+    }
+
+    private async Task<bool> IsChildRunAsync(string runId, CancellationToken ct)
+    {
+        try
+        {
+            var run = await _runStore.GetAsync(RunId.Parse(runId), ct).ConfigureAwait(false);
+            return run?.ParentRunId is not null;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Could not determine child-run status for {RunId}; treating as non-child", runId);
+            return false;
         }
     }
 

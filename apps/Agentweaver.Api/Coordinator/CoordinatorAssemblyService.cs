@@ -1860,7 +1860,6 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         CancellationToken ct)
     {
         var decider = _serviceProvider.GetRequiredService<CoordinatorSteeringDecider>();
-        var orchestrator = _serviceProvider.GetRequiredService<RunOrchestrator>();
         var guidance = BuildAssemblyFeedbackGuidance(feedback);
 
         List<Subtask> targets;
@@ -1939,6 +1938,10 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         }
 
         var launched = 0;
+        // Resolve the orchestrator LAZILY — only once we know at least one child will actually be
+        // (re)launched. The unresumable (→ conscious dispatch_fresh) and all-confirmed early-returns
+        // above never launch a revision, so they must not depend on RunOrchestrator being resolvable.
+        var orchestrator = _serviceProvider.GetRequiredService<RunOrchestrator>();
         foreach (var (subtask, childRunId, childRun) in pending)
         {
             // PER-CHILD launch claim (RD-A recovery relaunch): insert the Phase-1 `initiated` marker for
@@ -2012,14 +2015,15 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         IReadOnlyList<int> targetSubtaskIds,
         int directiveId,
         string feedback,
-        CancellationToken ct)
+        CancellationToken ct,
+        string? rationale = null)
     {
         var decider = _serviceProvider.GetRequiredService<CoordinatorSteeringDecider>();
 
-        const string rationale = "in_place_unresumable: no resumable child session — conscious fresh dispatch";
+        rationale ??= "in_place_unresumable: no resumable child session — conscious fresh dispatch";
         _logger.LogInformation(
-            "Steering(A→B): directive {DirectiveId} has no resumable child; coordinator consciously chooses dispatch_fresh for run {RunId}",
-            directiveId, context.CoordinatorRunId);
+            "Steering(A→B): directive {DirectiveId} consciously falls back to dispatch_fresh for run {RunId} ({Rationale})",
+            directiveId, context.CoordinatorRunId, rationale);
 
         // Durably record the real effect BEFORE acting so recovery can never observe a stale in_place
         // decision that no longer matches the effect.
@@ -2160,27 +2164,109 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
 
         var attempt = directive.ActionAttempt ?? 0;
 
-        // PER-CHILD advance gate (RD-B): resolve the set of target children this A directive should
-        // resume (target subtasks with a live ChildRunId) and advance to `applied` only when EVERY one of
-        // them has a confirmed effect marker. A single confirmed child must NOT settle the whole directive
-        // — otherwise a partial multi-target crash (first child confirmed, pod died before the second
-        // launched) would mark the directive applied while some requested subtasks never received the
-        // steering revision.
+        // Resolve the target subtasks of this in-place directive with their AUTHORITATIVE status. The
+        // in-place resume can target MULTIPLE subtasks; each is its own child run with its own per-child
+        // effect marker (RD-B). The directive is driven by SUBTASK STATUS (not the effect marker alone):
+        // any FAILED target → conscious dispatch_fresh; all eligible → applied; otherwise re-drive/wait.
         var targetIds = SteeringTargetScope.FromJson(directive.TargetScopeJson)?.SubtaskIds ?? [];
-        List<string> expectedChildRunIds;
+        List<(int Id, string Status, string? ChildRunId)> targets;
         using (var scope = _scopeFactory.CreateScope())
         {
             var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
-            expectedChildRunIds = await db.Subtasks.AsNoTracking()
-                .Where(s => s.WorkPlanId == workPlanId && targetIds.Contains(s.Id) && s.ChildRunId != null)
-                .Select(s => s.ChildRunId!)
+            var rows = await db.Subtasks.AsNoTracking()
+                .Where(s => s.WorkPlanId == workPlanId && targetIds.Contains(s.Id))
+                .Select(s => new { s.Id, s.Status, s.ChildRunId })
                 .ToListAsync(ct).ConfigureAwait(false);
+            targets = rows.Select(r => (r.Id, r.Status, r.ChildRunId)).ToList();
         }
 
-        var allConfirmed = expectedChildRunIds.Count > 0
-            && await decider.AreAllRevisionEffectsConfirmedAsync(directive.Id, attempt, expectedChildRunIds, ct)
+        // ROOT-CAUSE GUARD (live v0.9.12-rc1 assembly_failed): the durable per-child effect marker only
+        // proves the in-place revision durably LAUNCHED and ran ≥1 superstep — it is NOT a proxy for the
+        // revised subtask re-reaching a clean assemble_ready terminal. On real infra a resumed child ran a
+        // full agent turn (agent.turn.end) but its run ended `watch_stream_completed_without_terminal_event`
+        // (the resumed workflow never re-emitted the terminal WorkflowOutputEvent the watcher requires — a
+        // Runtime/MAF checkpoint-resume seam), so the child run — and therefore the subtask — was marked
+        // FAILED even though the effect marker was confirmed. Advancing to `applied` on the marker alone
+        // then let the FAILED subtask fall through to the eligibility gate → assembly_blocked
+        // (ineligible_subtasks) → terminal assembly_failed, with NO visible steering action (a "glitch").
+        // The authoritative success signal for an in-place steer is the TARGET SUBTASK's status, not the
+        // marker. A target that ended FAILED means the revision did not achieve its goal: do NOT mark the
+        // directive applied; make a CONSCIOUS, VISIBLE dispatch_fresh decision (reset+dispatch a fresh pod
+        // for the failed target only, preserving healthy targets) so the subtask re-enters assembly cleanly
+        // — never a silent wedge (Ahmed's rule). This also subsumes the crash-before-first-checkpoint case
+        // (effect unconfirmed + subtask FAILED), routing it to a bounded conscious fresh dispatch instead of
+        // burning execution attempts on a doomed resume.
+        var failedTargets = targets
+            .Where(t => t.Status == SubtaskStatus.Failed)
+            .Select(t => t.Id)
+            .OrderBy(id => id)
+            .ToList();
+        if (failedTargets.Count > 0)
+        {
+            _logger.LogWarning(
+                "Steering(A): directive {DirectiveId} in-place revision left target subtask(s) [{Failed}] FAILED " +
+                "(revision child ended without a clean assemble_ready terminal); consciously falling back to " +
+                "dispatch_fresh for run {RunId} instead of wedging assembly",
+                directive.Id, string.Join(",", failedTargets), context.CoordinatorRunId);
+
+            // Explicit, visible CAUSE event (Ahmed's "never a glitch") — the conscious dispatch_fresh
+            // decision itself is emitted inside ConsciousDispatchFreshFallbackAsync.
+            Emit(context.CoordinatorRunId, EventTypes.CoordinatorSteeringDecision, new
+            {
+                workPlanId,
+                directiveId = directive.Id,
+                action = directive.DecidedAction,
+                attempt,
+                failedSubtaskIds = failedTargets,
+                phase = "in_place_revision_failed_terminal",
+            });
+
+            await ConsciousDispatchFreshFallbackAsync(
+                context, workPlanId, edges, failedTargets, directive.Id, directive.Instruction, ct,
+                rationale: "in_place_revision_no_terminal: revised child ended without a clean assemble_ready " +
+                    "terminal (marked failed) — conscious fresh dispatch so the subtask re-enters assembly")
                 .ConfigureAwait(false);
-        if (allConfirmed)
+            return true;
+        }
+
+        // Advance the directive to `applied` ONLY when BOTH conditions hold (AND, not OR):
+        //   (i)  every target subtask reached a clean, assembly-eligible terminal
+        //        (assemble_ready/completed) — the authoritative SUCCESS signal (fixes the live
+        //        v0.9.12-rc1 wedge where the marker was confirmed but the child ended FAILED), AND
+        //   (ii) every target child's PER-CHILD effect marker (directiveId, attempt, childRunId) is
+        //        confirmed — proving the revision actually LAUNCHED and ran ≥1 superstep (RD-B).
+        // Neither condition alone is sufficient:
+        //   - Status-only is unsafe in the CRASH-BEFORE-LAUNCH window: MarkDirectiveExecutingAsync flips
+        //     the directive to `executing` BEFORE ExecuteInPlaceSteerAsync launches the revision and flips
+        //     the targets to Running. A crash in that gap leaves the targets holding their PRE-steer
+        //     assemble_ready/completed status. Status-only would then read allEligible=true and mark the
+        //     directive `applied` WITHOUT any revision ever having run → the steering feedback is silently
+        //     DROPPED. Requiring the per-child effect marker closes this window: no launch ⇒ no marker ⇒
+        //     not applied ⇒ re-drive ⇒ ExecuteInPlaceSteerAsync (re)launches the unconfirmed child (RD-A
+        //     crash-before-first-checkpoint recovery).
+        //   - Marker-only is the ORIGINAL live bug: the marker confirms on the first superstep while the
+        //     child is still Running; the child then ended without a clean terminal and was marked FAILED
+        //     AFTER the directive was already applied — leaving no outstanding directive to catch it, so
+        //     assembly wedged silently. The eligibility condition + the failedTargets branch above catch
+        //     that. A confirmed-but-still-Running child satisfies neither branch → falls through to the
+        //     re-drive/wait below until it reaches a terminal, at which point this method re-evaluates.
+        var expectedChildRunIds = targets
+            .Select(t => t.ChildRunId)
+            .Where(id => !string.IsNullOrWhiteSpace(id))
+            .Select(id => id!)
+            .Distinct()
+            .ToList();
+        var allEligible = targets.Count > 0
+            && targets.All(t => t.Status is SubtaskStatus.AssembleReady or SubtaskStatus.Completed);
+        // Every target must have a resumable child run id AND a confirmed per-child effect marker. If any
+        // target lacks a ChildRunId it cannot have a marker → not confirmed → re-drive (which routes an
+        // unresumable target to a conscious dispatch_fresh).
+        var allEffectsConfirmed = allEligible
+            && expectedChildRunIds.Count == targets.Count
+            && await decider
+                .AreAllRevisionEffectsConfirmedAsync(directive.Id, attempt, expectedChildRunIds, ct)
+                .ConfigureAwait(false);
+        if (allEligible && allEffectsConfirmed)
         {
             await decider.MarkDirectiveAppliedAsync(directive.Id, ct).ConfigureAwait(false);
             Emit(context.CoordinatorRunId, EventTypes.CoordinatorSteeringDecision, new
@@ -2194,9 +2280,16 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
             return false;
         }
 
-        // At least one target child has no confirmed effect → the resume never durably ran for it;
-        // re-drive. ExecuteInPlaceSteerAsync probes per-child and (re)launches ONLY the unconfirmed
-        // children, so already-confirmed children are never re-injected.
+        // No target has FAILED (handled above) and the applied gate did NOT fire — either not all targets
+        // are eligible yet (a revision is still in flight) OR (crash-before-launch recovery) a target is
+        // eligible-looking but its per-child effect marker is NOT confirmed (the revision never durably
+        // launched). Re-drive: ExecuteInPlaceSteerAsync probes each target child's per-child effect marker
+        // — a CONFIRMED child is SKIPPED (never re-injected, no duplicate turn), an UNCONFIRMED child is
+        // (re)launched (RD-A crash-before-first-checkpoint recovery) — then returns the plan to dispatching
+        // so assembly re-arms when the child reaches its terminal, at which point this method re-evaluates
+        // the authoritative subtask status AND the marker. A confirmed-but-still-running child is thus
+        // safely left to finish; an eligible-but-unconfirmed (crash-before-launch) target is relaunched so
+        // the steering feedback is never silently dropped.
         await ExecuteInPlaceSteerAsync(
             context, workPlanId, edges, targetIds, directive.Id, attempt, directive.Instruction, ct)
             .ConfigureAwait(false);

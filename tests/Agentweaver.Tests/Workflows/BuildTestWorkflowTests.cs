@@ -87,7 +87,10 @@ public sealed class BuildTestWorkflowTests
 
         decision.Approved.Should().BeTrue();
         BuildTestTurnExecutor.CannedPrompt.Should().Contain("ALL tests");
-        BuildTestTurnExecutor.CannedPrompt.Should().Contain("start_preview(port=PORT)");
+        // The model-mediated preview paragraph (start_preview_process -> observe_bound_port ->
+        // start_preview) was intentionally removed from the CannedPrompt: preview is now provisioned
+        // by the deterministic platform-owned PreviewStep after build-test, not by the agent.
+        BuildTestTurnExecutor.CannedPrompt.Should().NotContain("start_preview");
     }
 
     [Fact]

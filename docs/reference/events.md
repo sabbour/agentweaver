@@ -138,7 +138,7 @@ This event is emitted exclusively by the watch loop (`RunWatchLoopService`) when
 
 ### `run.failed`
 
-This event marks a terminal failure. The `reason` field identifies the cause. When the agent's output is blocked by content safety policy, `reason` is `"content_safety"` and the run never reaches the review gate. Other values reflect infrastructure or watch-loop errors (for example, `"watch_loop_error"`).
+This event marks a terminal failure. The `reason` field identifies the cause. When the agent's output is blocked by content safety policy, `reason` is `"content_safety"` and the run never reaches the review gate. For coordinator child runs, an executor throw terminalizes as `child_executor_failed:{executor}` and is paired with a failed `workflow.step`; this makes in-place steering revision failures visible before the coordinator falls back to fresh dispatch. Other values reflect infrastructure or watch-loop errors (for example, `"watch_loop_error"`).
 
 ### `run.bounded`
 

@@ -66,6 +66,16 @@ Assembly gate request-changes no longer calls a separate assembly-gate reset rou
 
 The assembly decision lease is recoverable. `AssemblySteering` routes back to assembly recovery rather than dispatch, and the reconciler scans it as an assembly state (`apps/Agentweaver.Api/Coordinator/CoordinatorRecoveryRouter.cs:55`, `apps/Agentweaver.Api/Coordinator/CoordinatorReconciler.cs:128`).
 
+## Failure recovery & reliability
+
+In-place steering is now recovery-aware all the way through the assembly-gate revision path. When an assembly-gate revision commit succeeds, the coordinator resumes the same child run and worktree, returns the plan to dispatching, and re-arms assembly after that child reaches `assemble_ready` (`apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyService.cs:1935`, `:1966`). This is the context-preserving path: no fresh pod is introduced unless the coordinator later makes a visible `dispatch_fresh` decision.
+
+The revision executor retries transient post-turn git commit failures three times with short backoff, covering stale `index.lock` and similar worktree-state races from lingering child processes (`packages/Agentweaver.AgentRuntime/Workflow/AgentTurnExecutor.cs:142`, `:203`). If all attempts fail, it emits a failed `workflow.step` and rethrows instead of pretending the revision produced no changes (`AgentTurnExecutor.cs:160`). The child watch loop then terminalizes child executor failures as `run.failed` with reason `child_executor_failed:{executor}` and records the executor's failed step (`apps/Agentweaver.Api/Runs/RunWatchLoopService.cs:296`, `:313`). That replaces the old stream-end fallback `watch_stream_completed_without_terminal_event` and gives the coordinator an authoritative failed subtask to react to.
+
+A failed in-place revision does not silently wedge assembly or drop feedback. `DriveOutstandingSteeringExecutionAsync` detects failed target subtasks and emits a visible `coordinator.steering_decision` before consciously falling back to `dispatch_fresh` for the failed targets only (`CoordinatorAssemblyService.cs:2170`, `:2218`). The original steering instruction is preserved and re-run on fresh work.
+
+Crash-window hardening is strict: an in-place directive is marked `applied` only after every target subtask is assembly-eligible (`assemble_ready` or `completed`) **and** every target child has a confirmed `SteeringRevisionExecution` effect marker for that directive attempt (`CoordinatorAssemblyService.cs:2233`, `apps/Agentweaver.Api/Coordinator/CoordinatorSteeringDecider.cs:403`). A crash before the revision launches leaves no confirmed marker, so recovery re-drives the missing child instead of silently dropping the feedback.
+
 ## Loop bounds and idempotency
 
 Steering cannot loop forever:

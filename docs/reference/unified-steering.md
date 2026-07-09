@@ -48,6 +48,17 @@ The separate Assembly Gate route was removed; correction feedback uses unified s
 
 The web timeline renders `dispatch_fresh` as **fresh dispatch**, `in_place_steer` / `in-place` as **steered in place**, and `advisory` as **advisory noted** (`apps/web/src/components/LifecycleEventCard.tsx:260`).
 
+## Failure and recovery semantics
+
+| Case | Observable result | Recovery behavior |
+| --- | --- | --- |
+| Transient in-place revision commit failure | The child stays on the same run/worktree while commit is retried. | `AgentTurnExecutor` retries `CommitChanges` up to 3 attempts before surfacing failure. |
+| Persistent child executor failure during in-place revision | Child run terminalizes with `run.failed` reason `child_executor_failed:{executor}` and the corresponding `workflow.step` is `failed`. | The coordinator preserves the steering instruction and emits a visible `dispatch_fresh` steering decision for failed targets. |
+| Crash before revision launch or before first confirmed effect | The steering directive remains outstanding; it is not marked `applied`. | Recovery re-drives unconfirmed targets. Confirmed child effects are skipped so successful children are not re-injected. |
+| Successful in-place revision | Same child run/worktree re-enters assembly after reaching `assemble_ready` or `completed`. | The directive is marked `applied` only when every target is assembly-eligible and every target child has a confirmed `SteeringRevisionExecution` marker. |
+
+`child_executor_failed:{executor}` is terminal for coordinator child runs. It replaces the previous uninformative `watch_stream_completed_without_terminal_event` path for child executor throws, so operators see the executor that failed and the timeline gets a failed `workflow.step`.
+
 ## Budgets
 
 | Bound | Default | Source |

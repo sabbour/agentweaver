@@ -60,6 +60,21 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         services.AddDbContext<MemoryDbContext>(o => o.UseSqlite(_memoryConn));
         services.AddSingleton<ICoordinatorDispatch>(_dispatch);
         services.AddSingleton<IRunStore>(_runStore);
+        // The assembly service resolves CoordinatorSteeringDecider (and its CoordinatorSteeringService
+        // dependency) from the provider when it must drive an outstanding steering directive
+        // (DriveOutstandingSteeringExecutionAsync). Existing tests never seed a Decided/Executing
+        // directive so this path was previously unexercised; the unified-steering regression tests do.
+        services.AddSingleton(sp => new CoordinatorSteeringService(
+            _streamStore,
+            new RunWorkflowRegistry(),
+            sp.GetRequiredService<IServiceScopeFactory>(),
+            NullLogger<CoordinatorSteeringService>.Instance,
+            waitRegistry: _steeringWaits,
+            runStore: _runStore));
+        services.AddSingleton(sp => new CoordinatorSteeringDecider(
+            sp.GetRequiredService<IServiceScopeFactory>(),
+            sp.GetRequiredService<CoordinatorSteeringService>(),
+            NullLogger<CoordinatorSteeringDecider>.Instance));
         _provider = services.BuildServiceProvider();
 
         using (var scope = _provider.CreateScope())
@@ -152,6 +167,137 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         persistedEntry.GetProperty("title").GetString().Should().Be("t1");
         persistedEntry.GetProperty("status").GetString().Should().Be("failed");
         persistedEntry.GetProperty("agent").GetString().Should().Be("morpheus");
+    }
+
+    // ── UNIFIED AUTONOMOUS STEERING (live v0.9.12-rc1 regression): an in-place revision whose child
+    //    run ends WITHOUT a clean assemble_ready terminal (watch_stream_completed_without_terminal_event)
+    //    left the target subtask FAILED. Advancing the directive to `applied` on the durable effect
+    //    marker alone then let the FAILED subtask fall through the eligibility gate → assembly_blocked
+    //    (ineligible_subtasks) → terminal assembly_failed, with NO visible steering action ("a glitch").
+    //    DriveOutstandingSteeringExecutionAsync must instead detect the FAILED target and make a
+    //    CONSCIOUS, VISIBLE dispatch_fresh decision so the subtask re-enters assembly — never a silent
+    //    wedge. ───────────────────────────────────────────────────────────────────────────────────────
+    [Fact]
+    public async Task RunAssembly_InPlaceSteer_TargetSubtaskFailed_ConsciouslyDispatchesFresh_NeverWedges()
+    {
+        var coordinatorRunId = RunId.New().ToString();
+        await SeedCoordinatorRunAsync(coordinatorRunId);
+        _streamStore.Create(coordinatorRunId, "alice");
+
+        // Two targeted subtasks: s0 healthy (the revision re-reached assemble_ready), s1 the in-place
+        // revision that ran a full agent turn but ended FAILED (its child stream closed without a
+        // terminal event, so RunWatchLoopService marked the run — and the subtask — failed).
+        var childRunIds = new string?[] { RunId.New().ToString(), RunId.New().ToString() };
+        var (workPlanId, subtaskIds) = await SeedPlanAsync(
+            coordinatorRunId,
+            new[] { SubtaskStatus.AssembleReady, SubtaskStatus.Failed },
+            childRunIds);
+
+        // An outstanding in-place steer directive is mid-execution (Status=executing) targeting BOTH
+        // subtasks — exactly the live rubberduck-gate in_place_steer over subtasks [14,15].
+        var directiveId = await SeedExecutingInPlaceDirectiveAsync(
+            coordinatorRunId, subtaskIds, attempt: 1,
+            instruction: "Fix the two server.js bugs the rubberduck found.");
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        await _sut.RunAssemblyAsync(Context(coordinatorRunId), cts.Token);
+
+        var types = EventTypes_(coordinatorRunId);
+
+        // The failed in-place revision must NOT silently wedge assembly.
+        types.Should().NotContain(EventTypes.CoordinatorAssemblyBlocked,
+            "a failed in-place revision must consciously fall back to dispatch_fresh, never wedge on ineligible_subtasks");
+        types.Should().NotContain(EventTypes.CoordinatorAssemblyFailed,
+            "the run must not terminate assembly_failed for a recoverable failed in-place revision");
+
+        // A CONSCIOUS, VISIBLE dispatch_fresh decision is emitted (Ahmed's "never a glitch").
+        var decisions = _streamStore.Get(coordinatorRunId)!.GetSnapshotSince(0).Events
+            .Where(e => e.Type == EventTypes.CoordinatorSteeringDecision)
+            .Select(e => JsonSerializer.SerializeToNode(e.Payload)!.AsObject())
+            .ToList();
+        decisions.Should().Contain(
+            d => d["decision"] != null
+                 && d["decision"]!.GetValue<string>() == SteeringDirection.DispatchFresh,
+            "the coordinator must emit a conscious dispatch_fresh decision for the failed in-place revision");
+        // The visible CAUSE event names the failed subtask so the transition is never a glitch.
+        decisions.Should().Contain(
+            d => d["phase"] != null
+                 && d["phase"]!.GetValue<string>() == "in_place_revision_failed_terminal",
+            "the CAUSE (revision ended without a clean terminal) is surfaced before the fresh dispatch");
+
+        // The failed target is reset to pending (never left failed) and a fresh pod is re-dispatched;
+        // the healthy subtask keeps its assemble_ready result.
+        var s0 = await GetSubtaskStatusAsync(subtaskIds[0]);
+        var s1 = await GetSubtaskStatusAsync(subtaskIds[1]);
+        s0.Should().Be(SubtaskStatus.AssembleReady, "the healthy target's result is preserved");
+        s1.Should().Be(SubtaskStatus.Pending, "the failed target is reset for a conscious fresh dispatch");
+        _dispatch.StartDispatchCalls.Should().NotBeEmpty("a fresh pod is re-dispatched for the failed subtask");
+
+        // The persisted decision matches the real effect (dispatch_fresh) and the directive settles.
+        var directive = await GetDirectiveAsync(directiveId);
+        directive!.DecidedAction.Should().Be(SteeringDirection.DispatchFresh,
+            "the durable DecidedAction must match the actual effect");
+        directive.Status.Should().Be(SteeringStatus.Applied);
+    }
+
+    // ── UNIFIED STEERING (rubber-duck RD-B round-3, crash-BEFORE-launch): the directive is flipped to
+    //    `executing` (MarkDirectiveExecutingAsync) BEFORE ExecuteInPlaceSteerAsync launches the revision
+    //    and flips the targets to Running. A crash in that gap leaves the targets holding their PRE-steer
+    //    assemble_ready/completed status with NO per-child effect marker written. A STATUS-ONLY advance
+    //    gate would then read allEligible=true and mark the directive `applied` WITHOUT any revision ever
+    //    having run — silently DROPPING the steering feedback. The corrected gate requires BOTH subtask
+    //    eligibility AND every per-child effect marker confirmed, so a crash-before-launch is NOT falsely
+    //    applied; it re-drives through ExecuteInPlaceSteerAsync (which here, with no resumable child run
+    //    in the store, makes a CONSCIOUS dispatch_fresh) — steering is never silently dropped. ─────────
+    [Fact]
+    public async Task RunAssembly_InPlaceSteer_CrashBeforeLaunch_EffectUnconfirmed_DoesNotFalselyApply()
+    {
+        var coordinatorRunId = RunId.New().ToString();
+        await SeedCoordinatorRunAsync(coordinatorRunId);
+        _streamStore.Create(coordinatorRunId, "alice");
+
+        // Both targets still hold their PRE-steer eligible status (assemble_ready) — the crash happened
+        // after the directive was flipped to `executing` but BEFORE the revision launched / flipped them
+        // to Running. Crucially: NO SteeringRevisionExecution effect marker is seeded for either child.
+        var childRunIds = new string?[] { RunId.New().ToString(), RunId.New().ToString() };
+        var (_, subtaskIds) = await SeedPlanAsync(
+            coordinatorRunId,
+            new[] { SubtaskStatus.AssembleReady, SubtaskStatus.AssembleReady },
+            childRunIds);
+
+        var directiveId = await SeedExecutingInPlaceDirectiveAsync(
+            coordinatorRunId, subtaskIds, attempt: 1,
+            instruction: "Fix the rubberduck findings.");
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        await _sut.RunAssemblyAsync(Context(coordinatorRunId), cts.Token);
+
+        var decisions = _streamStore.Get(coordinatorRunId)!.GetSnapshotSince(0).Events
+            .Where(e => e.Type == EventTypes.CoordinatorSteeringDecision)
+            .Select(e => JsonSerializer.SerializeToNode(e.Payload)!.AsObject())
+            .ToList();
+
+        // THE REGRESSION GUARD: the directive must NOT be falsely settled `applied` on subtask status
+        // alone while its per-child effect marker is unconfirmed (that would silently drop the steer).
+        decisions.Should().NotContain(
+            d => d["phase"] != null && d["phase"]!.GetValue<string>() == "effect_confirmed_applied",
+            "an eligible-status target whose per-child effect marker is NOT confirmed (crash-before-launch) " +
+            "must NOT be marked applied — that would silently drop the steering feedback");
+
+        // The steering is NOT dropped: it re-drives through ExecuteInPlaceSteerAsync. With no resumable
+        // child run persisted (the launch never happened), the re-drive makes a CONSCIOUS, VISIBLE
+        // dispatch_fresh decision (RD#6) rather than degrading silently.
+        decisions.Should().Contain(
+            d => d["decision"] != null
+                 && d["decision"]!.GetValue<string>() == SteeringDirection.DispatchFresh,
+            "the unconfirmed crash-before-launch directive is re-driven, not silently applied");
+
+        var directive = await GetDirectiveAsync(directiveId);
+        directive!.DecidedAction.Should().Be(SteeringDirection.DispatchFresh,
+            "the persisted decision must match the real effect — never a silent in_place `applied`");
+
+        EventTypes_(coordinatorRunId).Should().NotContain(EventTypes.CoordinatorAssemblyFailed,
+            "an unconfirmed in-place directive must be re-driven, not wedge assembly");
     }
 
     [Fact]
@@ -1436,6 +1582,40 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         using var scope = _provider.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
         return await db.SteeringDirectives.AsNoTracking().FirstOrDefaultAsync(d => d.Id == directiveId);
+    }
+
+    private async Task<string> GetSubtaskStatusAsync(int subtaskId)
+    {
+        using var scope = _provider.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        return await db.Subtasks.AsNoTracking().Where(s => s.Id == subtaskId)
+            .Select(s => s.Status).FirstAsync();
+    }
+
+    private async Task<int> SeedExecutingInPlaceDirectiveAsync(
+        string coordinatorRunId, IReadOnlyList<int> targetSubtaskIds, int attempt, string instruction)
+    {
+        using var scope = _provider.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var directive = new SteeringDirective
+        {
+            CoordinatorRunId = coordinatorRunId,
+            TargetChildRunId = null,
+            Kind = SteeringKind.Redirect,
+            Instruction = instruction,
+            Status = SteeringStatus.Executing,
+            CreatedBy = "gate:rubberduck",
+            CreatedAt = DateTimeOffset.UtcNow,
+            Source = SteeringSource.Rubberduck,
+            Severity = SteeringSeverity.RequestChanges,
+            TargetScopeJson = SteeringTargetScope.ForSubtasks(targetSubtaskIds.ToArray()).ToJson(),
+            DecidedAction = SteeringDirection.InPlaceSteer,
+            ActionAttempt = attempt,
+            ExecStartedAt = DateTimeOffset.UtcNow,
+        };
+        db.SteeringDirectives.Add(directive);
+        await db.SaveChangesAsync();
+        return directive.Id;
     }
 
     private async Task SeedDeferredAssemblyDecisionAsync(string coordinatorRunId, AssemblyReviewDecision decision)

@@ -135,20 +135,42 @@ public sealed class AgentTurnExecutor : Executor<AgentTurnInput, AgentTurnOutput
                 AgentName: input.AgentName);
         }
 
+        // POST-TURN BOOKKEEPING. The agent turn itself has already completed here (agent.turn.end
+        // was emitted). CommitChanges is the only operation below that can throw — GetDiff and
+        // GetStepCount are best-effort and swallow their own errors.
+        //
+        // ROOT CAUSE (in-place steering revision wedge): the coordinator CHILD pipeline is a trimmed
+        // graph (agent -> child-assemble-ready) with NO failure->terminal edge, so any executor throw
+        // hangs the stream (RunWatchLoopService then fails the run with
+        // `watch_stream_completed_without_terminal_event`). The observed trigger was a TRANSIENT
+        // LibGit2 worktree-state error on a resumed revision (a lingering child process holding
+        // index.lock — the benign 'kill needs PID' tool.error seen live). Two-part handling:
+        //   1. TRANSIENT: retry the commit a bounded number of times so a flaky lock/index/ref error
+        //      still commits the revision's edits and the child terminalizes assemble-ready on the
+        //      SAME worktree (context preserved — no fresh pod).
+        //   2. PERSISTENT: after retries are exhausted, do NOT fabricate a no-change assemble-ready.
+        //      That would silently DROP the revision's uncommitted edits and hide the failure. Emit a
+        //      visible failed step and rethrow: the child run terminalizes as a VISIBLE Failure (the
+        //      watch loop converts a child ExecutorFailedEvent into a terminal Failed run), which
+        //      marks the subtask failed so the coordinator consciously re-dispatches the revision
+        //      (steering feedback preserved) instead of losing work inside a fake success.
         string treeHash;
-        string diff;
-        int stepCount;
         try
         {
-            treeHash = _worktreeOps.CommitChanges(input.WorktreePath, input.RunId);
-            diff = _worktreeOps.GetDiff(input.RepositoryPath, input.OriginatingBranch, input.WorktreeBranch);
-            stepCount = _worktreeOps.GetStepCount(input.RunId);
+            treeHash = await CommitChangesWithRetryAsync(input.WorktreePath, input.RunId, ct).ConfigureAwait(false);
         }
-        catch
+        catch (Exception ex)
         {
-            WorkflowStepEvents.Emit(writer, _logger, input.RunId, LogicalNodeId, "failed", DisplayLabel);
+            _logger.LogError(ex,
+                "Post-turn CommitChanges failed for run {RunId} after bounded retries; terminalizing the run as a visible failure (never a silent no-change success)",
+                input.RunId);
+            WorkflowStepEvents.Emit(writer, _logger, input.RunId, LogicalNodeId, "failed", DisplayLabel,
+                agentName: input.AgentName);
             throw;
         }
+
+        var diff = _worktreeOps.GetDiff(input.RepositoryPath, input.OriginatingBranch, input.WorktreeBranch);
+        var stepCount = _worktreeOps.GetStepCount(input.RunId);
 
         WorkflowStepEvents.Emit(writer, _logger, input.RunId, LogicalNodeId, "completed", DisplayLabel,
             agentName: input.AgentName);
@@ -167,6 +189,34 @@ public sealed class AgentTurnExecutor : Executor<AgentTurnInput, AgentTurnOutput
             SubmittingUser: input.SubmittingUser,
             ProjectId: input.ProjectId,
             AgentName: input.AgentName);
+    }
+
+    /// <summary>
+    /// Commits the worktree with a bounded retry so a TRANSIENT git failure (a LibGit2 index.lock /
+    /// ref race — e.g. a lingering child process briefly holding the lock) does not strand the run.
+    /// The executor is intentionally decoupled from LibGit2Sharp types (it only sees
+    /// <see cref="IWorktreeOperations"/>), so retryability is by bounded attempts + short backoff
+    /// rather than by exception-type classification. A genuinely PERSISTENT failure (corrupt/missing
+    /// repo) still surfaces after the final attempt — the caller then terminalizes the run visibly
+    /// instead of fabricating a no-change success.
+    /// </summary>
+    private async Task<string> CommitChangesWithRetryAsync(string worktreePath, string runId, CancellationToken ct)
+    {
+        const int maxAttempts = 3;
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                return _worktreeOps.CommitChanges(worktreePath, runId);
+            }
+            catch (Exception ex) when (attempt < maxAttempts)
+            {
+                _logger.LogWarning(ex,
+                    "Post-turn CommitChanges failed for run {RunId} (attempt {Attempt}/{MaxAttempts}); retrying after backoff",
+                    runId, attempt, maxAttempts);
+                await Task.Delay(TimeSpan.FromMilliseconds(150 * attempt), ct).ConfigureAwait(false);
+            }
+        }
     }
 
     private static bool IsContentSafetyViolation(Exception ex)

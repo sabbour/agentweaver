@@ -45,6 +45,12 @@ Previously, a request-changes gate could look like a glitch: subtasks reset and 
 - **Loops are bounded.** A subtask can be recovered at most three times; a plan can steer at most six times.
 - **Human review stays understandable.** Review request-changes becomes a steering signal instead of a hidden assembly reset.
 
+## Failure recovery
+
+In-place steering is expected to return to assembly on the same child worktree after the revision commits. If a transient git lock blocks that commit, AgentWeaver retries before giving up, so a flaky `index.lock` does not force a fresh pod.
+
+If the revision genuinely fails, the child run now fails visibly with `child_executor_failed:{executor}` and a failed workflow step. The coordinator then makes a new, visible **fresh dispatch** decision for the failed target and re-runs the preserved steering instruction. You should not see a silent hang, a dropped request-changes comment, or a mysterious assembly reset.
+
 ## Step by step
 
 1. Open a coordinator run.
