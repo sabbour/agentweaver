@@ -338,9 +338,11 @@ app.MapPost("/preview-runner/processes/{sessionId}/observe-bound-port", async (
     {
         session_id = result.SessionId,
         port = result.Port,
+        app_port = result.AppPort,
         evidence = result.Evidence,
         healthy = result.Healthy,
         health_evidence = result.HealthEvidence,
+        reason = result.Reason,
     });
 });
 

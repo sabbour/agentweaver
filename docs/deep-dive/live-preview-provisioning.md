@@ -13,7 +13,8 @@ flowchart LR
     Check{Approved or<br/>request changes?}
     Resolve[PreviewCommandResolver<br/>find run command]
     Runner[AgentHost /preview-runner<br/>start supervised process]
-    Port[observe-bound-port<br/>actual port + health]
+    Port[observe app port<br/>loopback health]
+    Forward[forwarder<br/>0.0.0.0:publicPort]
     Approval[AgentPreviewGate<br/>existing approval policy]
     Route[Gateway HTTPRoute<br/>preview_url]
     Outcome[preview_ready / failed / skipped]
@@ -21,7 +22,7 @@ flowchart LR
 
     Gate --> Check
     Check -- declined --> Review
-    Check -- yes --> Resolve --> Runner --> Port --> Approval --> Route --> Outcome --> Review
+    Check -- yes --> Resolve --> Runner --> Port --> Forward --> Approval --> Route --> Outcome --> Review
     Resolve -- infra unavailable --> Outcome
     Port -- failure --> Outcome
 ```
@@ -36,10 +37,12 @@ There is no feature flag. If the service is wired and the verdict is not decline
 
 1. Resolve a command from the detached worktree with `PreviewCommandResolver`. It checks `package.json`, `.csproj`, Dockerfile, Makefile, Python, Go, and simple Node entry points, forcing all-interface binds where known (`apps/Agentweaver.Api/Sandbox/Preview/PreviewCommandResolver.cs:25`).
 2. Call `POST /preview-runner/processes` on the run-bound AgentHost pod origin, not the A2A path (`apps/Agentweaver.Api/Sandbox/Preview/PreviewRunnerHttpClient.cs:35`, `:78`).
-3. Call `observe-bound-port`; AgentHost parses logs and socket state, then verifies HTTP health before returning the actual port (`apps/Agentweaver.AgentHost/PreviewRunner.cs:246`).
-4. Register the preview with the existing `AgentPreviewGate` and `SandboxPreviewService`. The platform passes the actual observed port; it never assumes a fixed port (`PreviewStep.cs:146`, `:166`).
+3. Call `observe-bound-port`; AgentHost parses logs and socket state, verifies HTTP health on the app's actual port, starts `TcpPortForwarder`, then verifies HTTP health again through the forwarder's public port (`apps/Agentweaver.AgentHost/PreviewRunner.cs:246`, `:315`).
+4. Register the preview with the existing `AgentPreviewGate` and `SandboxPreviewService`. The platform passes the forwarder public port — scanned from `3000-9000` — so the Gateway always targets a pod-IP-reachable listener instead of assuming a fixed port (`PreviewStep.cs:146`, `:166`, `apps/Agentweaver.AgentHost/TcpPortForwarder.cs:75`).
 
-`PreviewStep` is the single terminal outcome emitter for this stage: `sandbox.preview_ready`, `sandbox.preview_failed`, or `sandbox.preview_skipped_not_applicable` (`PreviewStep.cs:229`, `:258`, `:272`).
+`PreviewStep` is the single terminal outcome emitter for this stage: `sandbox.preview_ready`, `sandbox.preview_failed`, or `sandbox.preview_skipped_not_applicable` (`PreviewStep.cs:229`, `:258`, `:272`). The forwarder adds two distinct failure reasons: `bound_unreachable` when the public port fails the through-forwarder health check, and `no_public_port_available` when the allowed public range has no free port (`PreviewRunner.cs:321`, `:346`).
+
+The command resolver no longer pins `PORT=3000` or appends `--port`. It may add host-bind hints for known frameworks, but the app otherwise uses its framework default or `process.env.PORT`; port selection belongs to the platform observation/forwarder path (`apps/Agentweaver.Api/Sandbox/Preview/PreviewCommandResolver.cs:25`).
 
 ## Gateway and lifetime alignment
 
@@ -80,6 +83,7 @@ The older approval-time outcome guard remains as a safety net. If no terminal pr
 | AgentHost preview-runner HTTP client | `apps/Agentweaver.Api/Sandbox/Preview/PreviewRunnerHttpClient.cs` |
 | AgentHost preview-runner endpoints and auth | `apps/Agentweaver.AgentHost/Program.cs` |
 | Supervised process runner | `apps/Agentweaver.AgentHost/PreviewRunner.cs` |
+| Pod-local TCP forwarder | `apps/Agentweaver.AgentHost/TcpPortForwarder.cs` |
 | Per-run credential helper | `apps/Agentweaver.Api/Sandbox/Preview/PreviewRunnerCredential.cs` |
 | Gateway preview + dual keepalive | `apps/Agentweaver.Api/Sandbox/Preview/SandboxPreviewService.cs` |
 | Credential cleanup on pod release/reap | `apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs`, `apps/Agentweaver.Api/Sandbox/AgentHostReaperService.cs` |

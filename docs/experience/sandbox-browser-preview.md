@@ -64,9 +64,13 @@ hands.
 ## Build & Test preview
 
 Workflows that include the platform-owned **Build & Test** step can also produce a browser preview. After
-builds and tests pass, that step is instructed to start the app/service, discover the actual port from the
-server logs, verify it, and register the preview with `start_preview(port=PORT)`
-(`packages/Agentweaver.AgentRuntime/Workflow/BuildTestTurnExecutor.cs:10`). The preview backend resolves
+builds and tests pass, the platform starts the app/service, discovers the actual port, and registers a preview
+URL automatically. It no longer injects `PORT=3000` or `--port`; apps use their framework default or honor
+`process.env.PORT` if they already support it. Before registration, AgentHost fronts the observed app port with
+a pod-local TCP forwarder on an allowed public port (`3000-9000`), so even a loopback-only app is reachable from
+the Gateway.
+
+The preview backend resolves
 either the run's AgentHost claim or a retained command-sandbox claim, so previews work whether the server was
 started in the `agent-{runId}` pod-per-run sandbox or the `run-{runId}` Build & Test command sandbox
 (`apps/Agentweaver.Api/Sandbox/SandboxClaimConventions.cs:28`, `apps/Agentweaver.Api/Sandbox/Preview/SandboxPreviewService.cs:432`).
@@ -83,8 +87,12 @@ started in the `agent-{runId}` pod-per-run sandbox or the `run-{runId}` Build & 
 - **Auto-expiry.** A preview is reaped after **30 minutes** idle (no keepalive), after a hard **8-hour**
   cap, or once its pod is gone — whichever comes first. By default it survives the run ending (you can keep
   previewing a finished run's artifact) until one of those limits or an explicit **Stop**.
-- **Bind to `0.0.0.0`.** For a server to be previewable it must listen on all interfaces, not just
-  `127.0.0.1`. When the feature is enabled, agents are told this automatically.
+- **Platform previews handle loopback binds.** The Build & Test live-preview path registers the forwarder's
+  pod-IP-reachable public port, so apps that only bind `127.0.0.1` can still be previewed. Manual previews
+  still expose the port you enter directly, so prefer all-interface binds there.
+- **Failure is actionable, not blocking.** If the forwarder cannot make the app reachable you see
+  **Preview unavailable** with reasons such as `bound_unreachable` or `no_public_port_available`; review can
+  continue.
 
 ## Related reading
 

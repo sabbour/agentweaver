@@ -23,6 +23,13 @@ internal sealed class PreviewRunnerOptions
     public int IdleTimeoutMinutes { get; init; } = 30;
     public int MaxLifetimeHours { get; init; } = 8;
     public int ReaperIntervalSeconds { get; init; } = 60;
+
+    // Public-port range for the pod-local TCP forwarder (spec-006 preview-forwarder). MUST MIRROR
+    // SandboxPreviewOptions.AllowedPortMin/Max AND k8s/networkpolicy-sandbox.yaml (ingress
+    // "port 3000 endPort 9000"): a public port outside this range is rejected by the Gateway or
+    // black-holed by the NetworkPolicy. Keep these three in lockstep.
+    public int PublicPortRangeMin { get; init; } = 3000;
+    public int PublicPortRangeMax { get; init; } = 9000;
 }
 
 internal sealed record PreviewProcessStartResult(
@@ -36,7 +43,9 @@ internal sealed record PreviewPortObservation(
     int Port,
     string Evidence,
     bool Healthy,
-    string HealthEvidence);
+    string HealthEvidence,
+    int AppPort = 0,
+    string? Reason = null);
 
 internal sealed record PreviewHealthResult(
     string SessionId,
@@ -116,7 +125,10 @@ internal sealed class PreviewRunnerToolProvider(IPreviewRunner runner) : IAgentR
                     "/",
                     ct).ConfigureAwait(false);
 
-                return $"bound_port_observed: session_id={observed.SessionId}, port={observed.Port}, healthy={observed.Healthy}, evidence={observed.Evidence}, health={observed.HealthEvidence}. Call start_preview(port={observed.Port}) next.";
+                var nextStep = observed.Healthy
+                    ? $"Call start_preview(port={observed.Port}) next."
+                    : $"Observation is NOT healthy (reason={observed.Reason ?? "unknown"}); do NOT call start_preview. Fix the app so it comes up on the discovered port and retry observe_bound_port.";
+                return $"bound_port_observed: session_id={observed.SessionId}, port={observed.Port}, app_port={observed.AppPort}, healthy={observed.Healthy}, reason={observed.Reason ?? "n/a"}, evidence={observed.Evidence}, health={observed.HealthEvidence}. {nextStep}";
             },
             "observe_bound_port",
             "Observe the actual port the supervised preview process bound to. Parses stdout/stderr and falls back to socket diff; verifies HTTP before returning.");
@@ -271,7 +283,8 @@ internal sealed class PreviewRunner : BackgroundService, IPreviewRunner
                 if (health.Healthy)
                 {
                     state.MarkPort(port);
-                    return new PreviewPortObservation(sessionId, port, evidence, true, health.Evidence);
+                    return await BuildForwardedObservationAsync(state, port, evidence, health.Evidence, healthPath, ct)
+                        .ConfigureAwait(false);
                 }
                 lastHealthFailure = new InvalidOperationException(health.Evidence);
             }
@@ -284,7 +297,8 @@ internal sealed class PreviewRunner : BackgroundService, IPreviewRunner
                 {
                     var evidence = $"socket_diff:ss -ltnp reported new listening port {port}";
                     state.MarkPort(port);
-                    return new PreviewPortObservation(sessionId, port, evidence, true, health.Evidence);
+                    return await BuildForwardedObservationAsync(state, port, evidence, health.Evidence, healthPath, ct)
+                        .ConfigureAwait(false);
                 }
                 lastHealthFailure = new InvalidOperationException(health.Evidence);
             }
@@ -295,6 +309,68 @@ internal sealed class PreviewRunner : BackgroundService, IPreviewRunner
         throw new TimeoutException(
             $"Timed out waiting for preview process {sessionId} to expose a healthy HTTP port. " +
             $"Last health failure: {lastHealthFailure?.Message ?? "none"}. Logs: {state.Buffer.SnapshotText(20)}");
+    }
+
+    /// <summary>
+    /// Ensures the pod-local <see cref="TcpPortForwarder"/> is running for the discovered app port and
+    /// verifies reachability THROUGH the forwarder's public port before greenlighting registration
+    /// (spec-006 preview-forwarder, observe/register consistency). The returned observation reports the
+    /// public (pod-IP-reachable) port as <see cref="PreviewPortObservation.Port"/> — that is what the
+    /// Gateway registers — and keeps the app's real loopback port in <see cref="PreviewPortObservation.AppPort"/>
+    /// and the evidence string. If the forwarder public port itself does not pass a health check, the
+    /// observation is returned unhealthy with a distinct <c>bound_unreachable</c> reason (never silent).
+    /// </summary>
+    private async Task<PreviewPortObservation> BuildForwardedObservationAsync(
+        PreviewProcessState state,
+        int appPort,
+        string appEvidence,
+        string appHealthEvidence,
+        string healthPath,
+        CancellationToken ct)
+    {
+        TcpPortForwarder forwarder;
+        try
+        {
+            forwarder = state.EnsureForwarder(appPort, _options.PublicPortRangeMin, _options.PublicPortRangeMax, _logger);
+        }
+        catch (NoPublicPortAvailableException ex)
+        {
+            _logger.LogWarning(ex, "PreviewRunner: no free public port for session {SessionId} app port {AppPort}", state.SessionId, appPort);
+            return new PreviewPortObservation(
+                state.SessionId,
+                0,
+                $"public_port_exhausted:[{_options.PublicPortRangeMin},{_options.PublicPortRangeMax}]; app_evidence={appEvidence}",
+                false,
+                ex.Message,
+                appPort,
+                "no_public_port_available");
+        }
+
+        var publicPort = forwarder.PublicPort;
+
+        var forwardedHealth = await HealthCheckAsync(state.SessionId, publicPort, healthPath, ct).ConfigureAwait(false);
+        var forwardEvidence = $"forwarder:0.0.0.0:{publicPort}->127.0.0.1:{appPort}; app_evidence={appEvidence}";
+
+        if (!forwardedHealth.Healthy)
+        {
+            return new PreviewPortObservation(
+                state.SessionId,
+                publicPort,
+                forwardEvidence,
+                false,
+                $"bound_unreachable: forwarder public port {publicPort} did not pass a health check ({forwardedHealth.Evidence})",
+                appPort,
+                "bound_unreachable");
+        }
+
+        return new PreviewPortObservation(
+            state.SessionId,
+            publicPort,
+            forwardEvidence,
+            true,
+            $"reachable via forwarder public port {publicPort}: {forwardedHealth.Evidence} (app health: {appHealthEvidence})",
+            appPort,
+            null);
     }
 
     public async Task<PreviewHealthResult> HealthCheckAsync(
@@ -352,6 +428,8 @@ internal sealed class PreviewRunner : BackgroundService, IPreviewRunner
     {
         if (!_sessions.TryRemove(sessionId, out var state))
             return new PreviewStopResult(sessionId, false, reason);
+
+        await state.DisposeForwarderAsync().ConfigureAwait(false);
 
         var process = state.Process;
         if (process is not null)
@@ -629,6 +707,8 @@ internal sealed class PreviewRunner : BackgroundService, IPreviewRunner
     private sealed class PreviewProcessState : IDisposable
     {
         private int _exited;
+        private readonly object _forwarderLock = new();
+        private TcpPortForwarder? _forwarder;
 
         public PreviewProcessState(
             string sessionId,
@@ -671,6 +751,39 @@ internal sealed class PreviewRunner : BackgroundService, IPreviewRunner
         public void AttachProcess(Process process) => Process = process;
         public void Touch(DateTimeOffset now) => LastTouchedAt = now;
         public void MarkPort(int port) => ObservedPort = port;
+
+        /// <summary>
+        /// Idempotently starts (or returns the existing) pod-local TCP forwarder fronting
+        /// <paramref name="appPort"/> on an in-range public port. One forwarder per session; a second
+        /// observe reuses it. Propagates <see cref="NoPublicPortAvailableException"/> on range exhaustion.
+        /// </summary>
+        public TcpPortForwarder EnsureForwarder(int appPort, int rangeMin, int rangeMax, ILogger logger)
+        {
+            lock (_forwarderLock)
+            {
+                if (_forwarder is not null)
+                    return _forwarder;
+
+                var forwarder = new TcpPortForwarder(appPort, rangeMin, rangeMax, logger);
+                forwarder.Start();
+                _forwarder = forwarder;
+                return forwarder;
+            }
+        }
+
+        public async ValueTask DisposeForwarderAsync()
+        {
+            TcpPortForwarder? forwarder;
+            lock (_forwarderLock)
+            {
+                forwarder = _forwarder;
+                _forwarder = null;
+            }
+
+            if (forwarder is not null)
+                await forwarder.DisposeAsync().ConfigureAwait(false);
+        }
+
         public void MarkExited(int exitCode, DateTimeOffset now)
         {
             ExitCode = exitCode;
@@ -678,7 +791,21 @@ internal sealed class PreviewRunner : BackgroundService, IPreviewRunner
             Volatile.Write(ref _exited, 1);
         }
 
-        public void Dispose() => Process?.Dispose();
+        public void Dispose()
+        {
+            // Best-effort: forwarder is normally torn down via DisposeForwarderAsync in
+            // StopPreviewProcessAsync; guard against a leak on any synchronous disposal path.
+            TcpPortForwarder? forwarder;
+            lock (_forwarderLock)
+            {
+                forwarder = _forwarder;
+                _forwarder = null;
+            }
+            if (forwarder is not null)
+                _ = forwarder.DisposeAsync().AsTask();
+
+            Process?.Dispose();
+        }
     }
 
     private sealed class RingBuffer

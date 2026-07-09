@@ -46,7 +46,7 @@ Clients should order and deduplicate events by `sequence`.
 | `sandbox.preview_pending` | When the existing AgentPreviewGate is waiting for approval to expose the Build & Test preview port | `run_id`, `work_plan_id`, `tree_hash`, `target_port`, `approval`, `request_id` |
 | `sandbox.preview_ready` | When Gateway preview provisioning succeeds for the run | `run_id`, `work_plan_id`, `tree_hash`, `target_port`, `pod_name`, `session_id`, `preview_runner_session_id`, `preview_url`, `keepalive_url`, `started_at` |
 | `coordinator.preview_ready` | Coordinator-scoped mirror of `sandbox.preview_ready` for the assembly preview | Same as `sandbox.preview_ready` |
-| `sandbox.preview_failed` | When preview approval, app readiness, Gateway provisioning, or the approval-time outcome guard fails | `run_id`, `work_plan_id`, `tree_hash`, `source`, `reason`, `message`; optional `target_port` |
+| `sandbox.preview_failed` | When preview approval, app readiness, forwarder reachability, Gateway provisioning, or the approval-time outcome guard fails | `run_id`, `work_plan_id`, `tree_hash`, `source`, `reason`, `message`; optional `target_port` |
 | `sandbox.preview_skipped_not_applicable` | Final preview outcome for non-previewable assembled work or unavailable preview infrastructure | `run_id`, `work_plan_id`, `tree_hash`, `source`, `reason`, `message` or `evidence` |
 | `review.requested` | After the worktree is committed and the review tree hash is stored | `tree_hash`, `request_id` |
 | `review.approved` | When the owner approves the run and the merge proceeds | *(none)* |

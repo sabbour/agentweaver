@@ -36,8 +36,8 @@ The preview URL appears on the Build & Test row and in the human-review artifact
 
 ## What to expect
 
-- **Actual port discovery.** The platform starts the app and observes the port it really bound to; it does not assume port `3000`.
-- **All-interface bind.** Known frameworks are started with host/port arguments or environment variables that make the app reachable from the Gateway.
+- **Actual port discovery.** The platform starts the app and observes the port it really bound to; it does not assume port `3000` and does not inject `PORT=3000` or `--port`.
+- **Pod-IP reachability.** AgentHost fronts the app with a pod-local TCP forwarder on an allowed public port, so the Gateway URL works even when the app only listened on `127.0.0.1`.
 - **Verdict independence.** A Build & Test request-changes verdict can still produce a preview so you can inspect what failed or what needs polish.
 - **Preview failure is non-blocking.** A failed preview is visible as **Preview unavailable**, but it never forces a changes request and never prevents human review.
 - **Credential isolation.** The preview-runner credential is per-run, delivered in memory, scrubbed from child process environment, and deleted on terminal cleanup or orphan reaping.

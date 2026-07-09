@@ -9,8 +9,11 @@ namespace Agentweaver.Api.Sandbox.Preview;
 /// <summary>Result of starting a supervised preview process on the AgentHost pod.</summary>
 public sealed record PreviewRunnerStartResult(string SessionId, int Pid, string? WorkingDirectory);
 
-/// <summary>Result of the deterministic bound-port observation.</summary>
-public sealed record PreviewRunnerPortResult(string SessionId, int Port, bool Healthy, string? Evidence);
+/// <summary>Result of the deterministic bound-port observation. <see cref="Port"/> is the pod-IP-reachable
+/// public (forwarder) port the Gateway registers; <see cref="AppPort"/> is the app's real loopback port
+/// (evidence only). <see cref="Reason"/> carries a distinct failure code (e.g. <c>bound_unreachable</c>).</summary>
+public sealed record PreviewRunnerPortResult(
+    string SessionId, int Port, bool Healthy, string? Evidence, int AppPort = 0, string? Reason = null);
 
 /// <summary>Result of an HTTP liveness health-check.</summary>
 public sealed record PreviewRunnerHealthResult(string SessionId, int Port, bool Healthy, int? StatusCode);
@@ -95,7 +98,7 @@ public sealed class PreviewRunnerHttpClient : IPreviewRunnerHttpClient
             HttpMethod.Post, $"{origin}/preview-runner/processes/{Uri.EscapeDataString(sessionId)}/observe-bound-port",
             bearer, body, ct).ConfigureAwait(false);
         var dto = await ReadJsonAsync<ObserveResponse>(resp, ct).ConfigureAwait(false);
-        return new PreviewRunnerPortResult(dto.SessionId ?? sessionId, dto.Port, dto.Healthy, dto.Evidence);
+        return new PreviewRunnerPortResult(dto.SessionId ?? sessionId, dto.Port, dto.Healthy, dto.Evidence, dto.AppPort, dto.Reason);
     }
 
     public Task<PreviewRunnerHealthResult> HealthCheckAsync(
@@ -203,8 +206,10 @@ public sealed class PreviewRunnerHttpClient : IPreviewRunnerHttpClient
     {
         [JsonPropertyName("session_id")] public string? SessionId { get; init; }
         [JsonPropertyName("port")] public int Port { get; init; }
+        [JsonPropertyName("app_port")] public int AppPort { get; init; }
         [JsonPropertyName("healthy")] public bool Healthy { get; init; }
         [JsonPropertyName("evidence")] public string? Evidence { get; init; }
+        [JsonPropertyName("reason")] public string? Reason { get; init; }
     }
 
     private sealed record HealthResponse

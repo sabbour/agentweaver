@@ -76,7 +76,9 @@ public sealed class RunOrchestrator
              - Web app / frontend  -> `npm start`, `npm run dev`, `vite`, `next dev`, etc.
              - Static site / files -> `python -m http.server PORT` from the output directory.
              - API / backend        -> run the server binary or `uvicorn`/`node server.js`/etc.
-           Bind to ALL interfaces (host 0.0.0.0), NOT just 127.0.0.1, on a port you choose (e.g. 3000).
+           Bind to ALL interfaces (host 0.0.0.0), NOT just 127.0.0.1. Do NOT hardcode or force a
+           specific port — let the app use its framework default (or process.env.PORT if it honors
+           one) and read back the actual port it printed on startup.
         2. VERIFY the port is live BEFORE registering it. You MUST confirm the server is actually
            accepting connections and returning a real response with `curl` (or `wget`), e.g.
            `curl -sSf http://localhost:PORT/` — fix errors and retry until it responds. Do NOT call

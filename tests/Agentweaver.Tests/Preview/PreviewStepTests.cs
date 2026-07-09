@@ -146,6 +146,55 @@ public sealed class PreviewStepTests : IDisposable
         Str(h.Single(EventTypes.SandboxPreviewFailed), "reason").Should().Be("health_check_failed");
     }
 
+    [Fact]
+    public async Task ForwarderUnreachable_EmitsDistinctBoundUnreachable()
+    {
+        // spec-006 preview-forwarder item D: observe verifies reachability THROUGH the forwarder;
+        // a public-port health miss surfaces the distinct actionable reason (never health_check_failed).
+        var h = new Harness(_worktree);
+        h.PreviewRunner.PortResult = new PreviewRunnerPortResult(
+            "proc-sess-1", 45678, Healthy: false, "bound_unreachable: forwarder port 45678 unreachable",
+            AppPort: 3000, Reason: "bound_unreachable");
+
+        await h.Step.RunAsync(Request(), CancellationToken.None);
+
+        var failure = h.Single(EventTypes.SandboxPreviewFailed);
+        Str(failure, "reason").Should().Be("bound_unreachable");
+        h.TerminalKinds().Should().ContainSingle(); // proceeds, single terminal
+    }
+
+    [Fact]
+    public async Task NoPublicPortAvailable_EmitsDistinctReason_AndStopsProcess()
+    {
+        // spec-006 preview-forwarder BLOCKER #1: range exhaustion surfaces a distinct actionable reason,
+        // and the started process must be stopped (not leaked) since registration never succeeds.
+        var h = new Harness(_worktree);
+        h.PreviewRunner.PortResult = new PreviewRunnerPortResult(
+            "proc-sess-1", 0, Healthy: false, "public_port_exhausted:[3000,9000]",
+            AppPort: 5173, Reason: "no_public_port_available");
+
+        await h.Step.RunAsync(Request(), CancellationToken.None);
+
+        Str(h.Single(EventTypes.SandboxPreviewFailed), "reason").Should().Be("no_public_port_available");
+        h.PreviewRunner.StopCalls.Should().Be(1); // process released, not leaked
+    }
+
+    [Fact]
+    public async Task PostStartFailure_StopsProcess_ButSuccessDoesNot()
+    {
+        // A registration failure after a successful start must release the process + forwarder.
+        var fail = new Harness(_worktree);
+        fail.PreviewService.StartBehavior = () => throw new InvalidOperationException("gateway boom");
+        await fail.Step.RunAsync(Request(), CancellationToken.None);
+        fail.PreviewRunner.StopCalls.Should().Be(1);
+
+        // The happy path keeps the process alive to serve the preview (no stop).
+        var ok = new Harness(_worktree);
+        await ok.Step.RunAsync(Request(), CancellationToken.None);
+        ok.All(EventTypes.SandboxPreviewReady).Should().ContainSingle();
+        ok.PreviewRunner.StopCalls.Should().Be(0);
+    }
+
     // ── Registration failures (single-owner emission) ──────────────────────────────────
 
     [Fact]
@@ -329,6 +378,8 @@ public sealed class PreviewStepTests : IDisposable
     private sealed class FakePreviewRunnerClient : IPreviewRunnerHttpClient
     {
         public int StartCalls;
+        public int StopCalls;
+        public string? LastStopReason;
         public Func<PreviewRunnerStartResult>? StartBehavior;
         public Func<PreviewRunnerPortResult>? ObserveBehavior;
         public PreviewRunnerPortResult PortResult = new("proc-sess-1", 3000, Healthy: true, "ok");
@@ -352,8 +403,12 @@ public sealed class PreviewStepTests : IDisposable
             string runId, string? bearer, string sessionId, int port, string path, CancellationToken ct) =>
             Task.FromResult(new PreviewRunnerHealthResult(sessionId, port, true, 200));
 
-        public Task StopProcessAsync(string runId, string? bearer, string sessionId, string reason, CancellationToken ct) =>
-            Task.CompletedTask;
+        public Task StopProcessAsync(string runId, string? bearer, string sessionId, string reason, CancellationToken ct)
+        {
+            StopCalls++;
+            LastStopReason = reason;
+            return Task.CompletedTask;
+        }
 
         public Task<PreviewRunnerHealthResult> HealthCheckByOriginAsync(
             string origin, string? bearer, string sessionId, int port, string path, CancellationToken ct) =>

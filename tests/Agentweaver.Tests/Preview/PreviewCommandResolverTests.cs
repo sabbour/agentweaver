@@ -34,11 +34,12 @@ public sealed class PreviewCommandResolverTests : IDisposable
     {
         WritePackageJson("\"dev\": \"vite\"");
 
-        var result = _resolver.Resolve(_dir, port: 3000);
+        var result = _resolver.Resolve(_dir);
 
         result.Resolved.Should().BeTrue();
         result.Command.Should().Contain("--host 0.0.0.0");
         AssertNoLoopback(result.Command!);
+        AssertNoHardcodedPort(result.Command!);
     }
 
     [Fact]
@@ -46,11 +47,12 @@ public sealed class PreviewCommandResolverTests : IDisposable
     {
         WritePackageJson("\"start\": \"next start\"");
 
-        var result = _resolver.Resolve(_dir, port: 3000);
+        var result = _resolver.Resolve(_dir);
 
         result.Resolved.Should().BeTrue();
         result.Command.Should().Contain("-H 0.0.0.0");
         AssertNoLoopback(result.Command!);
+        AssertNoHardcodedPort(result.Command!);
     }
 
     [Fact]
@@ -58,11 +60,12 @@ public sealed class PreviewCommandResolverTests : IDisposable
     {
         File.WriteAllText(Path.Combine(_dir, "Web.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk.Web\" />");
 
-        var result = _resolver.Resolve(_dir, port: 5000);
+        var result = _resolver.Resolve(_dir);
 
         result.Resolved.Should().BeTrue();
-        result.Command.Should().Contain("ASPNETCORE_URLS=http://0.0.0.0:5000");
+        result.Command.Should().Contain("ASPNETCORE_URLS=http://0.0.0.0:0");
         AssertNoLoopback(result.Command!);
+        AssertNoHardcodedPort(result.Command!);
     }
 
     [Fact]
@@ -70,11 +73,12 @@ public sealed class PreviewCommandResolverTests : IDisposable
     {
         File.WriteAllText(Path.Combine(_dir, "server.js"), "require('http');");
 
-        var result = _resolver.Resolve(_dir, port: 3000);
+        var result = _resolver.Resolve(_dir);
 
         result.Resolved.Should().BeTrue();
         result.Command.Should().Contain("HOST=0.0.0.0");
         AssertNoLoopback(result.Command!);
+        AssertNoHardcodedPort(result.Command!);
     }
 
     [Fact]
@@ -82,11 +86,12 @@ public sealed class PreviewCommandResolverTests : IDisposable
     {
         File.WriteAllText(Path.Combine(_dir, "app.py"), "print('hi')");
 
-        var result = _resolver.Resolve(_dir, port: 8000);
+        var result = _resolver.Resolve(_dir);
 
         result.Resolved.Should().BeTrue();
         result.Command.Should().Contain("--host 0.0.0.0");
         AssertNoLoopback(result.Command!);
+        AssertNoHardcodedPort(result.Command!);
     }
 
     [Fact]
@@ -94,11 +99,12 @@ public sealed class PreviewCommandResolverTests : IDisposable
     {
         WritePackageJson("\"start\": \"node build/index.js\"");
 
-        var result = _resolver.Resolve(_dir, port: 4000);
+        var result = _resolver.Resolve(_dir);
 
         result.Resolved.Should().BeTrue();
         result.Command.Should().Contain("HOST=0.0.0.0");
         AssertNoLoopback(result.Command!);
+        AssertNoHardcodedPort(result.Command!);
     }
 
     [Fact]
@@ -123,5 +129,16 @@ public sealed class PreviewCommandResolverTests : IDisposable
     {
         command.Should().NotContain("127.0.0.1");
         command.Should().NotContain("localhost");
+    }
+
+    // spec-006 preview-forwarder item C: the platform must NEVER pin the app's port (no hardcoded
+    // 3000). The app keeps its framework default; the AgentHost discovers the actual bound port and
+    // the forwarder exposes a dynamically-chosen public port.
+    private static void AssertNoHardcodedPort(string command)
+    {
+        command.Should().NotContain("PORT=3000");
+        command.Should().NotContain("--port 3000");
+        command.Should().NotContain("-p 3000");
+        command.Should().NotContain(":3000");
     }
 }

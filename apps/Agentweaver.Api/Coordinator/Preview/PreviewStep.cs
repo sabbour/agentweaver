@@ -106,7 +106,10 @@ public sealed class PreviewStep
             //    preview-runner credential from the run secret store for a cross-replica reconcile.
             var bearer = await ResolveBearerAsync(runId, ct).ConfigureAwait(false);
 
-            // 5. Start the supervised process (deterministic).
+            // 5. Start the supervised process (deterministic). Once started, EVERY non-success terminal
+            //    exit below best-effort stops the process (which disposes the forwarder) so we never
+            //    leak the app process + forwarder until the idle reaper — only a SUCCESSFUL
+            //    registration keeps them alive.
             PreviewRunnerStartResult started;
             try
             {
@@ -126,6 +129,7 @@ public sealed class PreviewStep
             }
 
             // 6. Observe the ACTUAL bound port (deterministic; parses stdout/socket-diff + HTTP verify).
+            //    Returns the forwarder PUBLIC port (pod-IP reachable) as Port; AppPort is the app's port.
             PreviewRunnerPortResult port;
             try
             {
@@ -134,25 +138,32 @@ public sealed class PreviewStep
             }
             catch (PreviewRunnerHttpException ex) when (ex.Reason == "preview_runner_unauthorized")
             {
+                await TryStopProcessAsync(runId, bearer, started.SessionId, "preview_runner_unauthorized", ct).ConfigureAwait(false);
                 EmitFailed(request, "preview_runner_unauthorized", "AgentHost rejected the preview-runner credential.");
                 return;
             }
             catch (PreviewRunnerHttpException ex)
             {
+                await TryStopProcessAsync(runId, bearer, started.SessionId, "port_not_found", ct).ConfigureAwait(false);
                 EmitFailed(request, "port_not_found", $"Could not observe a bound port: {ex.Message}");
+                return;
+            }
+
+            // Reachability first: an unhealthy observation carries a DISTINCT reason (bound_unreachable,
+            // no_public_port_available, …) that must win over the generic port-range check below.
+            if (!port.Healthy)
+            {
+                var reason = string.IsNullOrWhiteSpace(port.Reason) ? "health_check_failed" : port.Reason!;
+                await TryStopProcessAsync(runId, bearer, started.SessionId, reason, ct).ConfigureAwait(false);
+                EmitFailed(request, reason,
+                    $"The preview process on public port {port.Port} (app port {port.AppPort}) is not reachable. {port.Evidence}");
                 return;
             }
 
             if (port.Port is <= 0 or > 65535)
             {
+                await TryStopProcessAsync(runId, bearer, started.SessionId, "port_not_found", ct).ConfigureAwait(false);
                 EmitFailed(request, "port_not_found", "The preview process did not bind a discoverable port.");
-                return;
-            }
-
-            if (!port.Healthy)
-            {
-                EmitFailed(request, "health_check_failed",
-                    $"The preview process on port {port.Port} did not pass a health check.");
                 return;
             }
 
@@ -162,6 +173,7 @@ public sealed class PreviewStep
             if (approval != PreviewApprovalOutcome.Approved)
             {
                 var reason = approval == PreviewApprovalOutcome.TimedOut ? "approval_timed_out" : "approval_denied";
+                await TryStopProcessAsync(runId, bearer, started.SessionId, reason, ct).ConfigureAwait(false);
                 EmitFailed(request, reason, "Preview approval was denied or timed out.");
                 return;
             }
@@ -173,6 +185,7 @@ public sealed class PreviewStep
 
             if (registration.Status == PreviewRegistrationStatus.Success)
             {
+                // SUCCESS: keep the process + forwarder alive to serve the preview.
                 EmitReady(request, registration.Session!, started.SessionId);
                 return;
             }
@@ -180,6 +193,7 @@ public sealed class PreviewStep
             var failReason = registration.Status == PreviewRegistrationStatus.PortNotAllowed
                 ? "port_not_allowed"
                 : "registration_failed";
+            await TryStopProcessAsync(runId, bearer, started.SessionId, failReason, ct).ConfigureAwait(false);
             EmitFailed(request, failReason, registration.Message ?? "Preview registration failed.");
         }
         catch (OperationCanceledException)
@@ -191,6 +205,23 @@ public sealed class PreviewStep
             // Unhandled preview error is still a preview failure (never park, never block review).
             _logger.LogWarning(ex, "PreviewStep: unexpected error for run {RunId}; emitting preview_failed", runId);
             EmitFailed(request, "registration_failed", "Preview step failed unexpectedly.");
+        }
+    }
+
+    /// <summary>
+    /// Best-effort stop of the supervised preview process after a post-start terminal FAILURE, so the
+    /// app process + pod-local forwarder are released immediately instead of lingering until the idle
+    /// reaper. Never throws — cleanup must not mask the preview outcome.
+    /// </summary>
+    private async Task TryStopProcessAsync(string runId, string? bearer, string sessionId, string reason, CancellationToken ct)
+    {
+        try
+        {
+            await _httpClient.StopProcessAsync(runId, bearer, sessionId, $"preview_step_failed:{reason}", ct).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogDebug(ex, "PreviewStep: best-effort stop of session {SessionId} for run {RunId} failed (ignored).", sessionId, runId);
         }
     }
 

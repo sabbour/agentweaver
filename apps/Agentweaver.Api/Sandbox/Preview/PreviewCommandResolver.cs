@@ -15,22 +15,20 @@ public sealed record PreviewCommandResolution(
 
 /// <summary>
 /// Pure, deterministic (Phase 1, heuristic-only) run-command discovery from worktree files
-/// (spec-006 decouple-preview §4). No model turn. Produces a <c>(command, cwd)</c> that forces
-/// ALL-INTERFACE binding for every known stack (BLOCKER 4): a loopback-only bind passes the pod's
-/// 127.0.0.1 health probe but fails Gateway pod-IP reachability, yielding a silent no-URL. Where a
-/// bind cannot be forced the resolution is marked <see cref="PreviewCommandResolution.BindUncertain"/>
-/// and still attempted (registration is the backstop).
+/// (spec-006 decouple-preview §4 + preview-forwarder). No model turn. Produces a <c>(command, cwd)</c>
+/// that forces ALL-INTERFACE binding *hints* for every known stack (a loopback-only bind is still made
+/// reachable by the pod-local TCP forwarder, but the hint is free and harmless). The platform NEVER
+/// pins the app's port: the app uses its own framework default, the AgentHost discovers the actual
+/// bound port, and a pod-IP-reachable public port is chosen dynamically by the forwarder. This removes
+/// the old hardcoded <c>PORT=3000</c> injection so a busy 3000 can never break preview.
 /// </summary>
 public sealed class PreviewCommandResolver
 {
-    /// <summary>Default preview port pinned when a stack lets us choose one.</summary>
-    public const int DefaultPort = 3000;
-
     /// <summary>
     /// Resolves a run command from the files under <paramref name="worktreePath"/>. Never throws:
     /// any IO/parse error degrades to <see cref="PreviewCommandResolution.Unresolved"/>.
     /// </summary>
-    public PreviewCommandResolution Resolve(string worktreePath, int port = DefaultPort)
+    public PreviewCommandResolution Resolve(string worktreePath)
     {
         if (string.IsNullOrWhiteSpace(worktreePath) || !Directory.Exists(worktreePath))
             return PreviewCommandResolution.Unresolved(worktreePath ?? string.Empty);
@@ -41,16 +39,17 @@ public sealed class PreviewCommandResolver
             var packageJson = Path.Combine(worktreePath, "package.json");
             if (File.Exists(packageJson))
             {
-                var node = ResolveFromPackageJson(packageJson, worktreePath, port);
+                var node = ResolveFromPackageJson(packageJson, worktreePath);
                 if (node is not null)
                     return node;
             }
 
-            // 2. ASP.NET / .NET single project.
+            // 2. ASP.NET / .NET single project. Bind all-interfaces on an OS-assigned port (":0");
+            //    Kestrel logs the actual port, which the AgentHost observes.
             var csproj = Directory.EnumerateFiles(worktreePath, "*.csproj", SearchOption.TopDirectoryOnly).FirstOrDefault();
             if (csproj is not null)
             {
-                var url = $"http://0.0.0.0:{port}";
+                const string url = "http://0.0.0.0:0";
                 return new PreviewCommandResolution(
                     true,
                     $"ASPNETCORE_URLS={url} dotnet run --urls {url}",
@@ -81,10 +80,10 @@ public sealed class PreviewCommandResolver
             // 5. Single Python entrypoint.
             if (File.Exists(Path.Combine(worktreePath, "app.py")))
                 return new PreviewCommandResolution(
-                    true, $"python app.py --host 0.0.0.0 --port {port}", worktreePath, "python-app", BindUncertain: true);
+                    true, "python app.py --host 0.0.0.0", worktreePath, "python-app", BindUncertain: true);
             if (File.Exists(Path.Combine(worktreePath, "main.py")))
                 return new PreviewCommandResolution(
-                    true, $"python main.py --host 0.0.0.0 --port {port}", worktreePath, "python-main", BindUncertain: true);
+                    true, "python main.py --host 0.0.0.0", worktreePath, "python-main", BindUncertain: true);
 
             // 6. Single Go entrypoint.
             if (File.Exists(Path.Combine(worktreePath, "main.go")))
@@ -93,10 +92,10 @@ public sealed class PreviewCommandResolver
             // 7. Single Node server file.
             if (File.Exists(Path.Combine(worktreePath, "server.js")))
                 return new PreviewCommandResolution(
-                    true, $"HOST=0.0.0.0 PORT={port} node server.js", worktreePath, "node-server");
+                    true, "HOST=0.0.0.0 node server.js", worktreePath, "node-server");
             if (File.Exists(Path.Combine(worktreePath, "index.js")))
                 return new PreviewCommandResolution(
-                    true, $"HOST=0.0.0.0 PORT={port} node index.js", worktreePath, "node-index");
+                    true, "HOST=0.0.0.0 node index.js", worktreePath, "node-index");
 
             return PreviewCommandResolution.Unresolved(worktreePath);
         }
@@ -106,7 +105,7 @@ public sealed class PreviewCommandResolver
         }
     }
 
-    private static PreviewCommandResolution? ResolveFromPackageJson(string packageJson, string cwd, int port)
+    private static PreviewCommandResolution? ResolveFromPackageJson(string packageJson, string cwd)
     {
         Dictionary<string, string>? scripts = null;
         try
@@ -134,7 +133,7 @@ public sealed class PreviewCommandResolver
             if (!scripts.TryGetValue(name, out var scriptBody))
                 continue;
 
-            var (bindArgs, env) = FrameworkBind(scriptBody, port);
+            var (bindArgs, env) = FrameworkBind(scriptBody);
             // `npm run <name>` — pass bind flags after `--` so they reach the underlying tool.
             var runner = $"npm run {name}";
             if (!string.IsNullOrEmpty(bindArgs))
@@ -148,30 +147,31 @@ public sealed class PreviewCommandResolver
 
     /// <summary>
     /// Returns extra CLI args (appended after <c>--</c>) and/or leading env vars that force an
-    /// all-interface bind for the detected framework in <paramref name="scriptBody"/>.
+    /// all-interface bind for the detected framework in <paramref name="scriptBody"/>. The port is
+    /// never pinned — the app keeps its framework default and the platform discovers/forwards it.
     /// </summary>
-    private static (string BindArgs, string Env) FrameworkBind(string scriptBody, int port)
+    private static (string BindArgs, string Env) FrameworkBind(string scriptBody)
     {
         var body = scriptBody.ToLowerInvariant();
 
-        // Vite: --host 0.0.0.0 (+ pinned port).
+        // Vite: --host 0.0.0.0.
         if (body.Contains("vite"))
-            return ($"--host 0.0.0.0 --port {port}", "");
+            return ("--host 0.0.0.0", "");
 
-        // Next.js: -H 0.0.0.0 -p <port>.
+        // Next.js: -H 0.0.0.0.
         if (body.Contains("next"))
-            return ($"-H 0.0.0.0 -p {port}", "");
+            return ("-H 0.0.0.0", "");
 
-        // react-scripts / CRA and generic Node servers read HOST/PORT from env.
+        // react-scripts / CRA and generic Node servers read HOST from env.
         if (body.Contains("react-scripts") || body.Contains("react-app-rewired"))
-            return ("", $"HOST=0.0.0.0 PORT={port}");
+            return ("", "HOST=0.0.0.0");
 
         // Angular CLI.
         if (body.Contains("ng serve") || body.Contains("angular"))
-            return ($"--host 0.0.0.0 --port {port}", "");
+            return ("--host 0.0.0.0", "");
 
-        // Everything else: set HOST/PORT env — many servers honor process.env.HOST.
-        return ("", $"HOST=0.0.0.0 PORT={port}");
+        // Everything else: set HOST env — many servers honor process.env.HOST.
+        return ("", "HOST=0.0.0.0");
     }
 
     private static string? ResolveFromDockerfile(string dockerfile)

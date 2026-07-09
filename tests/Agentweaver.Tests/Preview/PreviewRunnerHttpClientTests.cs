@@ -53,6 +53,24 @@ public sealed class PreviewRunnerHttpClientTests
     }
 
     [Fact]
+    public async Task ObserveBoundPort_ParsesPublicPortAppPortAndReason()
+    {
+        // spec-006 preview-forwarder: observe now returns the public (forwarder) port plus the app's
+        // real loopback port and a distinct failure reason. The client must thread all three through.
+        var handler = new CapturingHandler(
+            """{ "session_id": "sess-1", "port": 45678, "app_port": 3000, "healthy": false, "evidence": "fwd", "reason": "bound_unreachable" }""");
+        var client = CreateClient(handler);
+
+        var result = await client.ObserveBoundPortAsync(
+            "run-1", "cred", "sess-1", 60, "/", CancellationToken.None);
+
+        result.Port.Should().Be(45678);
+        result.AppPort.Should().Be(3000);
+        result.Healthy.Should().BeFalse();
+        result.Reason.Should().Be("bound_unreachable");
+    }
+
+    [Fact]
     public async Task HealthCheckByOrigin_TargetsExplicitOrigin()
     {
         var handler = new CapturingHandler(

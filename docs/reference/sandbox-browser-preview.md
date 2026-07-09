@@ -1,7 +1,9 @@
 # Sandbox browser preview — Reference
 
 Terse reference for the **sandbox browser preview** API: the routes that start, keep alive, stop, and list a
-live HTTPS preview of a server an agent started **inside its run's sandbox pod**.
+live HTTPS preview of a server inside a run's sandbox pod. For the platform-owned Build & Test live-preview
+path, AgentHost also fronts the app with a pod-local TCP forwarder so the Gateway always targets a pod-IP-
+reachable port.
 
 When `Sandbox:Preview:Enabled=true` (the default in AKS deployments), `POST …/port-forward` provisions a **Gateway-direct
 reverse proxy** — a per-preview HTTPRoute → per-run ClusterIP Service → the run's sandbox pod — and returns a
@@ -80,7 +82,7 @@ From [`apps/web/src/api/types.ts:1169`](#source).
 |---|---|---|
 | `session_id` | string | Session identifier. In the preview path this **is** the capability token; used as `{sessionId}` to stop the preview. |
 | `local_port` | number | Loopback port on the API host (local fallback only). In the preview path this is `0` — the preview is a public URL, not a loopback. |
-| `target_port` | number | Port **inside** the sandbox pod being exposed. |
+| `target_port` | number | Port **inside** the sandbox pod being exposed. For manual previews this is the user-requested app port. For platform live-preview this is the forwarder's pod-IP-reachable public port; the app's real port is observed separately by AgentHost. |
 | `pod_name` | string | Bound sandbox pod the preview targets (resolved from the run's `SandboxClaim` status). |
 | `started_at` | string | ISO timestamp of when the preview started. |
 | `preview_url` / `previewUrl` | string \| null | Public HTTPS capability URL `https://{token}-preview.{ZoneSuffix}` (preview path). The web UI embeds it in a `no-referrer` iframe and offers **Open preview**. |
@@ -100,8 +102,8 @@ Bound from the `Sandbox:Preview` section into [`SandboxPreviewOptions.cs`](#sour
 | `Sandbox:Preview:IdleTimeoutMinutes` | `30` | Sliding idle TTL; a preview not kept alive within this window is reaped. |
 | `Sandbox:Preview:MaxLifetimeHours` | `8` | Hard cap; a preview is always reaped after this, regardless of keepalive. |
 | `Sandbox:Preview:KeepAfterRun` | `true` | Retain the preview after the run completes / pod is released; only the reaper or an explicit stop removes it. |
-| `Sandbox:Preview:AllowedPortMin` | `3000` | Lowest `target_port` a preview may expose (inclusive). Mirrors the NetworkPolicy range. |
-| `Sandbox:Preview:AllowedPortMax` | `9000` | Highest `target_port` a preview may expose (inclusive). |
+| `Sandbox:Preview:AllowedPortMin` | `3000` | Lowest `target_port` a preview may expose (inclusive). Mirrors the NetworkPolicy range and the AgentHost forwarder public-port scan. |
+| `Sandbox:Preview:AllowedPortMax` | `9000` | Highest `target_port` a preview may expose (inclusive). Mirrors the NetworkPolicy range and the AgentHost forwarder public-port scan. |
 | `Sandbox:Preview:AutoApprove` (env `SANDBOX_PREVIEW_AUTO_APPROVE`) | `false` | When `true`, the agent-initiated `start_preview` approval gate auto-grants without an operator. Read in [`AgentPreviewGate.cs:125`](#source). Keep `false` in production. |
 
 ## Status codes
@@ -113,6 +115,11 @@ Bound from the `Sandbox:Preview` section into [`SandboxPreviewOptions.cs`](#sour
 | `403 Forbidden` | Caller does not own the run (operator route); or — on the agent route — the caller is neither the owner nor the run's own agent callback, **or** the agent-preview approval was denied / timed out at the HITL gate. |
 | `404 Not Found` | Run does not exist; or (keepalive/`DELETE`, preview path) the token's HTTPRoute does not carry the matching run (run↔token binding). |
 | `409 Conflict` | No bound sandbox pod for the run (the `SandboxClaim` is missing or not yet `Bound`), or the Gateway preview is not enabled on the keepalive path. |
+
+Platform live-preview failures are emitted as `sandbox.preview_failed` events rather than API status codes. The
+forwarder-specific reasons are `bound_unreachable` (the app was reachable on loopback, but the forwarder's
+public pod-IP port failed health check) and `no_public_port_available` (no free public port in the allowed
+`3000-9000` range). See [Decoupled live-preview provisioning — Reference](./live-preview-provisioning.md).
 | `429 Too Many Requests` | A session cap was hit on the port-forward fallback. |
 | `500` | Unexpected failure provisioning the preview (or `kubectl` failed to start the fallback tunnel). |
 
@@ -154,6 +161,9 @@ DELETE /api/runs/run_01HXYZ/sandbox/port-forward/swift-falcon-amber-k7m2q9x4n8b3
 | `start_preview` agent tool (run-scoped HTTP callback) | `packages/Agentweaver.AgentRuntime/AgentweaverApiTools.cs` |
 | Owner-or-agent-callback authorization | `apps/Agentweaver.Api/Endpoints/EndpointHelpers.cs` |
 | Preview provisioning, keepalive, stop, reap | `apps/Agentweaver.Api/Sandbox/Preview/SandboxPreviewService.cs` |
+| Live-preview pod-local TCP forwarder | `apps/Agentweaver.AgentHost/TcpPortForwarder.cs` |
+| Live-preview runner observation and forwarder lifecycle | `apps/Agentweaver.AgentHost/PreviewRunner.cs` |
+| Deterministic live-preview step | `apps/Agentweaver.Api/Coordinator/Preview/PreviewStep.cs` |
 | Config defaults & port-range check | `apps/Agentweaver.Api/Sandbox/Preview/SandboxPreviewOptions.cs` |
 | Capability token | `apps/Agentweaver.Api/Sandbox/Preview/PreviewToken.cs` |
 | SandboxClaim CRD coordinates + bound-pod parsing | `apps/Agentweaver.Api/Sandbox/SandboxClaimConventions.cs` |
