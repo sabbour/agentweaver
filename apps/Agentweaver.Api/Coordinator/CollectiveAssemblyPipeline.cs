@@ -5,8 +5,10 @@ using Agentweaver.AgentRuntime.Providers;
 using Agentweaver.AgentRuntime.Workflow;
 using Agentweaver.Api.Git;
 using Agentweaver.Api.Runs;
+using Agentweaver.Api.Sandbox;
 using Agentweaver.Domain;
 using Agentweaver.SandboxExec;
+using Microsoft.Extensions.Options;
 
 namespace Agentweaver.Api.Coordinator;
 
@@ -37,6 +39,8 @@ public sealed class CollectiveAssemblyPipeline : ICollectiveAssemblyPipeline
     private readonly ISandboxPolicyStore _sandboxPolicyStore;
     private readonly IShellApprovalStore _approvalStore;
     private readonly IToolApprovalGate _toolApprovalGate;
+    private readonly IAgentHostPodLifecycle? _podLifecycle;
+    private readonly SandboxRuntimeOptions _sandboxRuntime;
     private readonly ILoggerFactory _loggerFactory;
     private readonly ILogger<CollectiveAssemblyPipeline> _logger;
 
@@ -50,7 +54,9 @@ public sealed class CollectiveAssemblyPipeline : ICollectiveAssemblyPipeline
         ISandboxPolicyStore sandboxPolicyStore,
         IShellApprovalStore approvalStore,
         IToolApprovalGate toolApprovalGate,
-        ILoggerFactory loggerFactory)
+        ILoggerFactory loggerFactory,
+        IAgentHostPodLifecycle? podLifecycle = null,
+        IOptions<SandboxRuntimeOptions>? sandboxRuntime = null)
     {
         _worktreeManager = worktreeManager;
         _mergeLock = mergeLock;
@@ -61,6 +67,8 @@ public sealed class CollectiveAssemblyPipeline : ICollectiveAssemblyPipeline
         _sandboxPolicyStore = sandboxPolicyStore;
         _approvalStore = approvalStore;
         _toolApprovalGate = toolApprovalGate;
+        _podLifecycle = podLifecycle;
+        _sandboxRuntime = sandboxRuntime?.Value ?? new SandboxRuntimeOptions();
         _loggerFactory = loggerFactory;
         _logger = loggerFactory.CreateLogger<CollectiveAssemblyPipeline>();
     }
@@ -142,27 +150,85 @@ public sealed class CollectiveAssemblyPipeline : ICollectiveAssemblyPipeline
     public async Task<CollectiveGateDecision> RunBuildTestAsync(CollectiveBuildTestRequest request, CancellationToken ct)
     {
         WorktreeInfo? detachedWorktree = null;
-        var buildTest = new BuildTestTurnExecutor(
-            _copilotClientFactory, _scopeProvider, _sandboxExecutor, _sandboxPolicyStore,
-            _approvalStore, _toolApprovalGate, _loggerFactory,
-            _workflowFactory.GetRecordingWriter,
-            name: "assembly-build-test",
-            logicalNodeId: request.GateNodeId ?? "assembly-build-test",
-            displayLabel: request.DisplayLabel ?? "Build & Test",
-            createSubStream: _workflowFactory.CreateSubStreamWriter,
-            completeSubStream: _workflowFactory.CompleteSubStream,
-            agentFactory: _workflowFactory.AgentFactory,
-            agentId: request.AgentId,
-            projectId: request.ProjectId,
-            apiBaseUrl: _workflowFactory.ApiBaseUrl,
-            apiKey: _workflowFactory.ApiKey);
-
         try
         {
             detachedWorktree = _worktreeManager.AddDetachedWorktree(
                 request.RepositoryPath,
                 request.IntegrationBranch,
-                "assembly-build-test-" + request.CoordinatorRunId);
+                BuildTestWorktreeName(request.CoordinatorRunId));
+
+            if (_sandboxRuntime.IsPodPerRun)
+            {
+                if (_podLifecycle is null)
+                {
+                    throw new CollectiveBuildTestInfrastructureException(
+                        "agenthost_lifecycle_unavailable",
+                        "Pod-per-run Build & Test requires IAgentHostPodLifecycle, but it is not configured.",
+                        retryable: false);
+                }
+
+                try
+                {
+                    await _podLifecycle.LaunchAgentHostPodAsync(
+                        request.CoordinatorRunId, detachedWorktree.WorktreePath, ct).ConfigureAwait(false);
+                }
+                catch (AgentHostCapacityPendingException ex)
+                {
+                    throw new CollectiveBuildTestInfrastructureException(
+                        "agenthost_capacity_pending",
+                        ex.Message,
+                        retryable: true,
+                        ex);
+                }
+                catch (AgentHostPodReconcilerErrorException ex)
+                {
+                    throw new CollectiveBuildTestInfrastructureException(
+                        "agenthost_reconciler_error",
+                        ex.Message,
+                        retryable: false,
+                        ex);
+                }
+                catch (AgentHostQuotaExceededException ex)
+                {
+                    throw new CollectiveBuildTestInfrastructureException(
+                        "agenthost_quota_exceeded",
+                        ex.Message,
+                        retryable: true,
+                        ex);
+                }
+                catch (InvalidOperationException ex) when (
+                    ex.Message.Contains("submitting user", StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new CollectiveBuildTestInfrastructureException(
+                        "agenthost_config_missing_submitting_user",
+                        ex.Message,
+                        retryable: false,
+                        ex);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    throw new CollectiveBuildTestInfrastructureException(
+                        "agenthost_launch_failed",
+                        $"AgentHost pod launch failed for Build & Test: {ex.Message}",
+                        retryable: true,
+                        ex);
+                }
+            }
+
+            var buildTest = new BuildTestTurnExecutor(
+                _copilotClientFactory, _scopeProvider, _sandboxExecutor, _sandboxPolicyStore,
+                _approvalStore, _toolApprovalGate, _loggerFactory,
+                _workflowFactory.GetRecordingWriter,
+                name: "assembly-build-test",
+                logicalNodeId: request.GateNodeId ?? "assembly-build-test",
+                displayLabel: request.DisplayLabel ?? "Build & Test",
+                createSubStream: _workflowFactory.CreateSubStreamWriter,
+                completeSubStream: _workflowFactory.CompleteSubStream,
+                agentFactory: _workflowFactory.AgentFactory,
+                agentId: request.AgentId,
+                projectId: request.ProjectId,
+                apiBaseUrl: _workflowFactory.ApiBaseUrl,
+                apiKey: _workflowFactory.ApiKey);
 
             var input = new AgentTurnOutput(
                 RunId: request.CoordinatorRunId,
@@ -179,23 +245,72 @@ public sealed class CollectiveAssemblyPipeline : ICollectiveAssemblyPipeline
                 AgentName: request.AgentId);
 
             var decision = await buildTest.HandleAsync(input, NoOpWorkflowContext.Instance, ct).ConfigureAwait(false);
+            if (!_sandboxRuntime.IsPodPerRun)
+                RemoveDetachedWorktreeBestEffort(request.RepositoryPath, detachedWorktree.WorktreePath);
             return new CollectiveGateDecision(decision.Approved, decision.RequestChanges, decision.Feedback);
         }
-        finally
+        catch (WorkflowAgentInfrastructureException ex)
         {
-            if (detachedWorktree is not null)
+            throw new CollectiveBuildTestInfrastructureException(
+                ex.Reason,
+                ex.Message,
+                retryable: true,
+                ex);
+        }
+        catch
+        {
+            if (detachedWorktree is not null && !_sandboxRuntime.IsPodPerRun)
+                RemoveDetachedWorktreeBestEffort(request.RepositoryPath, detachedWorktree.WorktreePath);
+            throw;
+        }
+    }
+
+    public async Task CleanupBuildTestResourcesAsync(
+        string coordinatorRunId,
+        string repositoryPath,
+        CancellationToken ct = default)
+    {
+        if (_sandboxRuntime.IsPodPerRun && _podLifecycle is not null)
+        {
+            try
             {
-                try
-                {
-                    _worktreeManager.RemoveDetachedWorktree(request.RepositoryPath, detachedWorktree.WorktreePath);
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogWarning(ex,
-                        "Collective Build/Test: failed to remove detached worktree {Path}",
-                        detachedWorktree.WorktreePath);
-                }
+                await _podLifecycle.ReleaseAgentHostPodAsync(coordinatorRunId, ct).ConfigureAwait(false);
             }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _logger.LogWarning(ex,
+                    "Collective Build/Test: failed to release AgentHost pod for coordinator run {RunId}",
+                    coordinatorRunId);
+            }
+        }
+
+        var path = _worktreeManager.DetachedWorktreePath(BuildTestWorktreeName(coordinatorRunId));
+        try
+        {
+            _worktreeManager.RemoveDetachedWorktree(repositoryPath, path);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(ex,
+                "Collective Build/Test: failed to remove detached worktree {Path}",
+                path);
+        }
+    }
+
+    private static string BuildTestWorktreeName(string coordinatorRunId) =>
+        "assembly-build-test-" + coordinatorRunId;
+
+    private void RemoveDetachedWorktreeBestEffort(string repositoryPath, string worktreePath)
+    {
+        try
+        {
+            _worktreeManager.RemoveDetachedWorktree(repositoryPath, worktreePath);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "Collective Build/Test: failed to remove detached worktree {Path}",
+                worktreePath);
         }
     }
 

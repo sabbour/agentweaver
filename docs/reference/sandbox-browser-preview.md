@@ -35,10 +35,14 @@ never target another run.
 The platform-owned **Build & Test** step can use the same preview surface. Its canned prompt tells the agent
 to build, run all tests, start the web/service preview server after tests pass, observe the actual bound
 port, verify it, and call `start_preview(port=PORT)` with that port
-([`BuildTestTurnExecutor.cs:10`](#source)). Preview pod resolution accepts both retained claim naming
-conventions for the run — `agent-{runId}` for AgentHost pod-per-run claims and `run-{runId}` for retained
-command-sandbox claims — before returning `409` for "no bound pod" ([`SandboxClaimConventions.cs:28`](#source),
-[`SandboxPreviewService.cs:432`](#source)).
+([`BuildTestTurnExecutor.cs:10`](#source)). During coordinator assembly in `pod-per-run` mode, Build & Test
+runs in a dedicated AgentHost pod bound to the coordinator run id and configured with the detached integration
+worktree as `workingDirectory` ([`CollectiveAssemblyPipeline.cs:155`](#source),
+[`KubernetesSandboxExecutor.cs:423`](#source)). `start_preview` therefore provisions the preview HTTPRoute to
+that run-bound pod, keeping the assembled preview reachable during human review. Preview pod resolution accepts
+both retained claim naming conventions for the run — `agent-{runId}` for AgentHost pod-per-run claims and
+`run-{runId}` for retained command-sandbox claims — before returning `409` for "no bound pod"
+([`SandboxClaimConventions.cs:28`](#source), [`SandboxPreviewService.cs:432`](#source)).
 
 The request routes through a **human-in-the-loop approval gate** before any preview is provisioned
 ([`AgentPreviewGate.RequestApprovalAsync`, `AgentPreviewGate.cs:85`](#source)):

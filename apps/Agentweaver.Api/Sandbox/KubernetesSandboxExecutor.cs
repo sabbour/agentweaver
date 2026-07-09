@@ -293,9 +293,19 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
     // ── IAgentHostPodLifecycle — pod-per-run lifecycle (spec §9 / Q3) ─────────────
 
     /// <inheritdoc/>
-    public async Task<string> LaunchAgentHostPodAsync(string runId, CancellationToken ct = default)
+    public Task<string> LaunchAgentHostPodAsync(string runId, CancellationToken ct = default) =>
+        LaunchAgentHostPodAsync(runId, workingDirectoryOverride: null, ct);
+
+    /// <inheritdoc/>
+    public async Task<string> LaunchAgentHostPodAsync(
+        string runId,
+        string? workingDirectoryOverride,
+        CancellationToken ct = default)
     {
         var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
+        var requestedWorkingDirectory = string.IsNullOrWhiteSpace(workingDirectoryOverride)
+            ? null
+            : Path.GetFullPath(workingDirectoryOverride);
 
         // Fail fast before creating the claim if the namespace quota cannot admit another agent pod
         // (2 CPU). Without this the claim is accepted but the controller's pod reconcile is rejected
@@ -331,7 +341,37 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
             // Bind to the SHARED, pre-warmed AgentHost warm pool (replicas: 2). No per-run SPC,
             // SandboxTemplate, or warm pool — the pod is already warm and gets its per-run context
             // via the /configure POST below.
-            claimCreated = await CreateAgentHostClaimAsync(claimName, _options.AgentHostWarmPoolRef, ct).ConfigureAwait(false);
+            claimCreated = await CreateAgentHostClaimAsync(
+                claimName, _options.AgentHostWarmPoolRef, requestedWorkingDirectory, ct).ConfigureAwait(false);
+
+            if (!claimCreated && requestedWorkingDirectory is not null)
+            {
+                var existingWorkingDirectory = await TryGetAgentHostClaimWorkingDirectoryAsync(claimName, ct)
+                    .ConfigureAwait(false);
+                var sameWorktree = string.Equals(
+                    existingWorkingDirectory, requestedWorkingDirectory, StringComparison.Ordinal);
+                var hasTurnToken = !string.IsNullOrWhiteSpace(_turnTokenRegistry?.TryGetTurnToken(runId));
+
+                if (!sameWorktree || !hasTurnToken)
+                {
+                    _logger.LogWarning(
+                        "KubernetesSandboxExecutor: existing AgentHost claim {Claim} for run {RunId} " +
+                        "is not reusable (sameWorktree={SameWorktree}, hasTurnToken={HasTurnToken}); recreating.",
+                        claimName, runId, sameWorktree, hasTurnToken);
+                    await DeleteClaimAsync(claimName).ConfigureAwait(false);
+                    _podRegistry?.Unregister(runId);
+                    _turnTokenRegistry?.UnregisterTurnToken(runId);
+                    await Task.Delay(1000, ct).ConfigureAwait(false);
+                    claimCreated = await CreateAgentHostClaimAsync(
+                        claimName, _options.AgentHostWarmPoolRef, requestedWorkingDirectory, ct).ConfigureAwait(false);
+                    if (!claimCreated)
+                    {
+                        throw new InvalidOperationException(
+                            $"AgentHost claim '{claimName}' for run '{runId}' was deleted for worktree reconfiguration, " +
+                            "but the replacement create still conflicted. Retrying later avoids reusing a token-less or stale pod.");
+                    }
+                }
+            }
 
             var podName = await WaitForBoundAsync(claimName, ct).ConfigureAwait(false);
             _logger.LogInformation(
@@ -340,7 +380,8 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
             // Register also persists sandbox.execution_pod.bound into the shared RunEvents store so
             // graph snapshots/deltas on any API replica can resolve the execution pod.
             _podRegistry?.Register(runId, podName);
-            _turnTokenRegistry?.RegisterTurnToken(runId, turnToken);
+            if (claimCreated)
+                _turnTokenRegistry?.RegisterTurnToken(runId, turnToken);
 
             var podIp = await GetPodIpAsync(podName, ct).ConfigureAwait(false);
 
@@ -385,11 +426,20 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
             // (and therefore its file-tool root) matches the path the run's system prompt references —
             // without it, warm pods default to the static /workspace env and sibling agents of one
             // parent write to divergent dirs, breaking cross-stage file hand-off.
-            await CallAgentHostConfigureAsync(
-                podIp, _options.AgentHostPort, runId, submittingUser, turnToken, kvUserSecretName,
-                await ResolveGitHubAccessTokenAsync(submittingUser, ct).ConfigureAwait(false),
-                await ResolveWorkingDirectoryAsync(runId, ct).ConfigureAwait(false), ct)
-                .ConfigureAwait(false);
+            if (claimCreated)
+            {
+                await CallAgentHostConfigureAsync(
+                    podIp, _options.AgentHostPort, runId, submittingUser, turnToken, kvUserSecretName,
+                    await ResolveGitHubAccessTokenAsync(submittingUser, ct).ConfigureAwait(false),
+                    requestedWorkingDirectory ?? await ResolveWorkingDirectoryAsync(runId, ct).ConfigureAwait(false), ct)
+                    .ConfigureAwait(false);
+            }
+            else
+            {
+                _logger.LogInformation(
+                    "KubernetesSandboxExecutor: reusing already-configured AgentHost claim {Claim} for run {RunId}",
+                    claimName, runId);
+            }
 
             _podRegistry?.RegisterAgentEndpoint(runId, endpointUrl);
 
@@ -483,13 +533,22 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
     /// (<see cref="CallAgentHostConfigureAsync"/>).
     /// </summary>
     private async Task<bool> CreateAgentHostClaimAsync(
-        string claimName, string warmPoolName, CancellationToken ct)
+        string claimName, string warmPoolName, string? workingDirectory, CancellationToken ct)
     {
+        var annotations = new Dictionary<string, string>();
+        if (!string.IsNullOrWhiteSpace(workingDirectory))
+            annotations["agentweaver.io/working-directory"] = workingDirectory;
+
         var manifest = new
         {
             apiVersion = $"{ApiGroup}/{ApiVersion}",
             kind = "SandboxClaim",
-            metadata = new { name = claimName, @namespace = _options.Namespace },
+            metadata = new
+            {
+                name = claimName,
+                @namespace = _options.Namespace,
+                annotations = annotations.Count == 0 ? null : annotations,
+            },
             spec = new
             {
                 // v0.5.0 v1beta1 SandboxClaimSpec: spec.warmPoolRef.name references the
@@ -514,6 +573,31 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
                 claimName);
             return false;
         }
+    }
+
+    private async Task<string?> TryGetAgentHostClaimWorkingDirectoryAsync(string claimName, CancellationToken ct)
+    {
+        try
+        {
+            var raw = await _client.CustomObjects.GetNamespacedCustomObjectAsync(
+                ApiGroup, ApiVersion, _options.Namespace, ClaimPlural, claimName,
+                cancellationToken: ct).ConfigureAwait(false);
+            var json = JsonSerializer.Serialize(raw);
+            using var doc = JsonDocument.Parse(json);
+            if (doc.RootElement.TryGetProperty("metadata", out var meta) &&
+                meta.TryGetProperty("annotations", out var ann) &&
+                ann.TryGetProperty("agentweaver.io/working-directory", out var wd) &&
+                wd.ValueKind == JsonValueKind.String)
+                return wd.GetString();
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(ex,
+                "KubernetesSandboxExecutor: failed to read working-directory annotation for claim {Claim}",
+                claimName);
+        }
+
+        return null;
     }
 
     /// <summary>

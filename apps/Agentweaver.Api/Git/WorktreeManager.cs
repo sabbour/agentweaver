@@ -54,6 +54,18 @@ public sealed class WorktreeManager
             ? Path.Combine(AppPaths.DataDirectory, "worktrees")
             : Path.GetFullPath(configuredBase);
 
+        var workspaceMount = configuration["Sandbox:Kubernetes:WorkspaceMountPath"]
+            ?? configuration["Workspace:PersistentVolume:MountRoot"]
+            ?? configuration["Workspace:Path"]
+            ?? "/workspace";
+        if (!string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("KUBERNETES_SERVICE_HOST")) &&
+            !IsPathUnder(_basePath, Path.GetFullPath(workspaceMount)))
+        {
+            throw new InvalidOperationException(
+                $"Worktrees:BasePath must resolve under the shared workspace mount '{workspaceMount}' in Kubernetes. " +
+                $"Resolved value: '{_basePath}'.");
+        }
+
         Directory.CreateDirectory(_basePath);
 
         var authorName = configuration["Git:Author:Name"];
@@ -160,7 +172,7 @@ public sealed class WorktreeManager
     public WorktreeInfo AddDetachedWorktree(string repositoryPath, string sourceBranch, string worktreeName)
     {
         var safeName = SanitizeWorktreeName(worktreeName);
-        var worktreePath = Path.Combine(_basePath, safeName);
+        var worktreePath = DetachedWorktreePath(safeName);
 
         if (Directory.Exists(worktreePath))
             Directory.Delete(worktreePath, recursive: true);
@@ -181,6 +193,18 @@ public sealed class WorktreeManager
             WorktreePath = worktreePath,
             BranchName = string.Empty,
         };
+    }
+
+    public string DetachedWorktreePath(string worktreeName) =>
+        Path.Combine(_basePath, SanitizeWorktreeName(worktreeName));
+
+    private static bool IsPathUnder(string path, string root)
+    {
+        var fullPath = Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var fullRoot = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        return fullPath.Equals(fullRoot, StringComparison.OrdinalIgnoreCase)
+            || fullPath.StartsWith(fullRoot + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)
+            || fullPath.StartsWith(fullRoot + Path.AltDirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
     }
 
     public void RemoveDetachedWorktree(string repositoryPath, string worktreePath)

@@ -150,9 +150,13 @@ worker runs and ordinary single-agent runs still receive it when the feature is 
 
 Build & Test gets its own preview instruction. `BuildTestTurnExecutor.CannedPrompt` tells that gate to run the
 project's builds and tests, then start the web/service server, discover the real bound port from logs, verify
-it with a probe such as `curl`, and call `start_preview(port=PORT)` (`BuildTestTurnExecutor.cs:10`). The
-preview service supports this by resolving both run claim conventions: the AgentHost `agent-{runId}` claim
-and the retained command-sandbox `run-{runId}` claim (`SandboxClaimConventions.cs:28`,
+it with a probe such as `curl`, and call `start_preview(port=PORT)` (`BuildTestTurnExecutor.cs:10`). During
+coordinator assembly in `pod-per-run` mode, that turn runs inside a dedicated AgentHost pod bound to the
+coordinator run id and configured with the detached integration worktree as its working directory
+(`CollectiveAssemblyPipeline.cs:155`, `KubernetesSandboxExecutor.cs:423`). The preview service therefore
+creates the HTTPRoute to that AgentHost pod, so the review URL reaches the server running from the assembled
+tree. The preview service supports this by resolving both run claim conventions: the AgentHost
+`agent-{runId}` claim and the retained command-sandbox `run-{runId}` claim (`SandboxClaimConventions.cs:28`,
 `SandboxPreviewService.cs:432`).
 
 ## Agent-initiated preview (`start_preview`)

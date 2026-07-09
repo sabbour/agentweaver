@@ -145,6 +145,11 @@ public sealed class BuildTestTurnExecutor : Executor<AgentTurnOutput, WorkflowRe
                 RequestChanges: true,
                 Feedback: string.IsNullOrWhiteSpace(response) ? "Build & Test did not return a parseable verdict." : response.Trim());
         }
+        catch (WorkflowAgentInfrastructureException)
+        {
+            WorkflowStepEvents.Emit(writer, _logger, input.RunId, LogicalNodeId, "failed", DisplayLabel, agentName: _agentId);
+            throw;
+        }
         catch (Exception ex)
         {
             WorkflowStepEvents.Emit(writer, _logger, input.RunId, LogicalNodeId, "failed", DisplayLabel, agentName: _agentId);

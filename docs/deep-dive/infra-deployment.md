@@ -226,7 +226,7 @@ All application state — runs, projects, backlog tasks, revisions, memory, deci
 
 ### Workspace PVC: shared worktrees and sandbox files
 
-The workspace PVC is an Azure Files share mounted ReadWriteMany. The API and sandbox pods both need to see project workspaces and generated files, which makes a shared filesystem a simpler fit than copying files between pods.
+The workspace PVC is an Azure Files share mounted ReadWriteMany. The API and sandbox pods both need to see project workspaces and generated files, which makes a shared filesystem a simpler fit than copying files between pods. Kubernetes sandbox startup asserts that resolved detached worktrees sit under the shared workspace mount (`Sandbox:Kubernetes:WorkspaceMountPath`, default `/workspace`); otherwise the executor rejects the path instead of configuring an AgentHost that cannot see the files (`apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs:31`, `:1002`).
 
 The custom StorageClass exists because ownership matters. Containers run as uid/gid 1000 with locked-down filesystems. A default Azure Files mount can appear root-owned and ignore pod `fsGroup`, causing ordinary workspace writes to fail. The repo-owned StorageClass pins mount options so files are usable by the non-root containers.
 

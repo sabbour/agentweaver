@@ -100,7 +100,9 @@ internal sealed class KubernetesPodAgentEndpointResolver : ISandboxAgentEndpoint
                     "KubernetesPodAgentEndpointResolver: pod {PodName} for run {RunId} has no IP yet " +
                     "(phase={Phase}). Returning null.",
                     podName, runId, pod?.Status?.Phase);
-                return null;
+                throw new WorkflowAgentInfrastructureException(
+                    "agenthost_ip_not_ready",
+                    $"AgentHost pod '{podName}' for run '{runId}' is bound but has no pod IP yet.");
             }
 
             var endpoint = new Uri(
@@ -115,6 +117,9 @@ internal sealed class KubernetesPodAgentEndpointResolver : ISandboxAgentEndpoint
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
+            if (ex is WorkflowAgentInfrastructureException)
+                throw;
+
             _logger.LogError(ex,
                 "KubernetesPodAgentEndpointResolver: failed to resolve pod IP for run {RunId} (pod={PodName})",
                 runId, podName);
@@ -169,7 +174,10 @@ internal sealed class KubernetesPodAgentEndpointResolver : ISandboxAgentEndpoint
                     "KubernetesPodAgentEndpointResolver: AgentHost pod capacity pending for run {RunId} " +
                     "({Reason}: {Used}/{Hard} CPU used); not launched this turn — will retry",
                     runId, cap.Reason, cap.UsedCpu, cap.HardCpu);
-                return null;
+                throw new WorkflowAgentInfrastructureException(
+                    "agenthost_capacity_pending",
+                    $"AgentHost pod capacity pending for run '{runId}' ({cap.Reason}: {cap.UsedCpu}/{cap.HardCpu} CPU used).",
+                    cap);
             }
 
             // Map the known, actionable launch failures to a precise FailureReason so the run row
@@ -186,7 +194,11 @@ internal sealed class KubernetesPodAgentEndpointResolver : ISandboxAgentEndpoint
             _logger.LogError(ex,
                 "KubernetesPodAgentEndpointResolver: failed to launch AgentHost pod for run {RunId}{Reason}",
                 runId, reason is null ? string.Empty : $" ({reason})");
-            return null;
+            throw new WorkflowAgentInfrastructureException(
+                reason ?? "agenthost_launch_failed",
+                $"AgentHost pod launch failed for run '{runId}'" +
+                (reason is null ? $": {ex.Message}" : $" ({reason})."),
+                ex);
         }
     }
 

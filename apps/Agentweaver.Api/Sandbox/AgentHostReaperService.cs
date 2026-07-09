@@ -92,7 +92,8 @@ public sealed class AgentHostReaperService : IAgentHostReaper
     }
 
     /// <summary>
-    /// Maps every AgentHost claim name that belongs to a currently active run (InProgress or Pending)
+    /// Maps every AgentHost claim name that belongs to a currently active run (InProgress, Pending,
+    /// or AwaitingReview) 
     /// to that run's id. Any <c>agent-*</c> claim whose name is not a key here is an orphan. The
     /// derivation is lossy (12-char truncation), so on the rare collision the last run wins — only
     /// the run-id label is approximate; the active/orphaned decision stays correct.
@@ -101,7 +102,7 @@ public sealed class AgentHostReaperService : IAgentHostReaper
     {
         var active = new Dictionary<string, string>(StringComparer.Ordinal);
 
-        foreach (var status in new[] { RunStatus.InProgress, RunStatus.Pending })
+        foreach (var status in new[] { RunStatus.InProgress, RunStatus.Pending, RunStatus.AwaitingReview })
         {
             var runs = await _runStore.GetByStatusAsync(status, ct).ConfigureAwait(false);
             foreach (var run in runs)

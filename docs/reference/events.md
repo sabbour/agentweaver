@@ -65,7 +65,7 @@ Clients should order and deduplicate events by `sequence`.
 | `coordinator.children_complete` | When every child subtask has reached a terminal status and the work plan moves to `awaiting_assembly` | `workPlanId` |
 | `coordinator.assembly_started` | When the collective-assembly pipeline claims the plan (`awaiting_assembly → assembling`, exactly-once) | `workPlanId`, `integrationBranch`, `subtaskCount` |
 | `coordinator.integration_conflict_auto_resolved` | When the integration-branch build auto-resolves a child conflict by accepting the child's version and continues | `workPlanId`, `conflictingBranch`, `conflictingFiles`, `strategy: "accept_child"` |
-| `coordinator.assembly_blocked` | When assembly stops with NO partial work — an ineligible subtask set | `workPlanId`, `reason`, `ineligibleSubtaskIds`, `ineligibleSubtasks` |
+| `coordinator.assembly_blocked` | When assembly stops with NO partial work — an ineligible subtask set, or when retryable Build & Test infrastructure is unavailable | `workPlanId`, `reason`; `ineligibleSubtaskIds`, `ineligibleSubtasks` for subtask eligibility blocks; `detail`, `retryable` for retryable Build & Test infrastructure blocks |
 | `coordinator.assembly_rai_started` / `coordinator.assembly_rai_completed` | The ONE collective RAI pass over the aggregate diff | `workPlanId`, `integrationBranch`, `gateId` / `raiSafetyFlagged` |
 | `coordinator.assembly_review_requested` | When an assembly gate starts. Emitted for automated Build & Test (`gateKind: "build-test"`), automated Rubberduck critique (`"rubberduck"`), and actionable human review (`"human-review"`; legacy events may omit `gateKind`) | `workPlanId`, `integrationBranch`, `treeHash`, `gateId`, `gateKind`, `hasChanges`; `includedSubtaskIds` on human review |
 | `coordinator.assembly_review_approved` | When a gate approves or passes the combined output | `workPlanId`, `reviewer` |
@@ -74,7 +74,7 @@ Clients should order and deduplicate events by `sequence`.
 | `coordinator.assembly_scribe_started` / `coordinator.assembly_scribe_completed` | The ONE collective scribe pass after a successful merge (best-effort) | `workPlanId` |
 | `coordinator.assembly_completed` | When collective assembly finishes and the work plan reaches `complete` | `workPlanId`, `integrationBranch`, `commitHash` |
 | `coordinator.assembly_declined` | When the reviewer declines the combined output (terminal); the coordinator run ends `declined` | `workPlanId`, `reason`, `reviewer` |
-| `coordinator.assembly_failed` | When the assembly background task hits an UNEXPECTED fault; the work plan moves to `assembly_failed` and the coordinator run ends with a human-readable `assembly_error: <message>` result | `workPlanId`, `reason`, `phase` |
+| `coordinator.assembly_failed` | When the assembly background task hits an UNEXPECTED fault, or when Build & Test infrastructure fails with a non-retryable configuration error; the work plan moves to `assembly_failed` and the coordinator run ends with a human-readable reason | `workPlanId`, `reason`, `phase` for unexpected faults; `detail` for Build & Test infrastructure failures |
 | `coordinator.child_question` | When a coordinator child run bubbles a question via `ask_question`; re-projected onto the coordinator stream so the operator can answer the child run | `childRunId`, `subtaskId`, `requestId`, `question` |
 | `coordinator.child_approval_required` | When a coordinator child run pauses on a tool-approval gate; re-projected onto the coordinator stream so the operator can grant/deny on the child run | `childRunId`, `subtaskId`, `requestId`, `toolName`, `url` (optional), `message` (optional) |
 | `coordinator.autopilot_answered` | When the coordinator's Autopilot option is ON and the coordinator model auto-answers a clarifying question (its own or one bubbled from a child); the answer is also resolved on the child's question gate, so the normal `agent.question_answered` still surfaces | `runId`, `childRunId` (optional), `requestId`, `question`, `answer` |
@@ -186,6 +186,20 @@ The agent's self-assessment of task completion. `achieved: true` when the agent 
 ### `review.changes_requested`
 
 Emitted when the human reviewer calls `POST /api/runs/{id}/request-changes`. `comment` is the reviewer's feedback passed to the agent for the revision cycle.
+
+### Build & Test infrastructure reasons
+
+Automated assembly Build & Test reports sandbox/A2A infrastructure separately from authored code feedback. Retryable failures emit `coordinator.assembly_blocked` and set `reason` to `build_test_infra_{reason}`; non-retryable configuration errors emit `coordinator.assembly_failed`. Current typed reasons are:
+
+| Reason suffix | Meaning |
+| --- | --- |
+| `agenthost_capacity_pending` | Namespace capacity cannot admit another AgentHost pod yet. |
+| `agenthost_launch_failed` | AgentHost pod launch failed for a retryable, non-specific launch error. |
+| `agenthost_ip_not_ready` | The claim is bound but the pod has no IP yet. |
+| `a2a_endpoint_unavailable` | No A2A endpoint could be resolved for the run-bound AgentHost pod. |
+| `a2a_transport_failure` | The A2A turn transport failed after endpoint setup. |
+
+The full event reason is prefixed, for example `build_test_infra_a2a_endpoint_unavailable`. These values come from `WorkflowAgentInfrastructureException` and the assembly parking path (`packages/Agentweaver.AgentRuntime/Workflow/WorkflowAgentInfrastructureException.cs:7`, `apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyService.cs:1567`).
 
 ### `tool.approval_required`
 

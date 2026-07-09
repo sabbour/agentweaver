@@ -1845,7 +1845,13 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
 
     private static bool CanRecoverAssemblyBlockedOnEligibility(string? reason) =>
         !string.IsNullOrWhiteSpace(reason)
-        && reason.Contains("ineligible_subtasks", StringComparison.Ordinal);
+        && (reason.Contains("ineligible_subtasks", StringComparison.Ordinal)
+            || reason.Contains("build_test_infra_agenthost_capacity_pending", StringComparison.Ordinal)
+            || reason.Contains("build_test_infra_agenthost_quota_exceeded", StringComparison.Ordinal)
+            || reason.Contains("build_test_infra_agenthost_ip_not_ready", StringComparison.Ordinal)
+            || reason.Contains("build_test_infra_agenthost_launch_failed", StringComparison.Ordinal)
+            || reason.Contains("build_test_infra_a2a_endpoint_unavailable", StringComparison.Ordinal)
+            || reason.Contains("build_test_infra_a2a_transport_failure", StringComparison.Ordinal));
 
     // -----------------------------------------------------------------------
     // Event projection on the coordinator stream

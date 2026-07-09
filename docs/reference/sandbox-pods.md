@@ -87,7 +87,7 @@ No per-run `SecretProviderClass`, cloned `SandboxTemplate`, CSI user-token volum
 | `gitHubAccessToken` | No | API-pre-resolved GitHub access token; when present, the pod skips the Key Vault fetch. |
 | `workingDirectory` | No | The run's `WorktreePath` (for example `/workspace/{worktree}`), used as the AgentHost `SetupAsync` working directory and file-tool root. |
 
-`IRunSubmittingUserResolver.GetWorkingDirectoryAsync(runId)` resolves `workingDirectory` from the run row and strips coordinator suffixes such as `-coordinator-decompose`, so sibling child stages share the parent's worktree. If the resolver fails or no worktree exists yet, the executor omits the field and AgentHost falls back to `AgentHost__WorkingDirectory`.
+`IRunSubmittingUserResolver.GetWorkingDirectoryAsync(runId)` resolves `workingDirectory` from the run row and strips coordinator suffixes such as `-coordinator-decompose`, so sibling child stages share the parent's worktree. Assembly Build & Test can override this field explicitly with its detached integration worktree; the executor validates that path resolves under the shared `/workspace` mount before configuring the pod. If the resolver fails or no worktree exists yet, the executor omits the field and AgentHost falls back to `AgentHost__WorkingDirectory`.
 
 ### Lifetime and cleanup
 

@@ -11,6 +11,7 @@ using Agentweaver.Api.Git;
 using Agentweaver.Api.Memory;
 using Agentweaver.Api.Runs;
 using Agentweaver.Api.Sandbox;
+using Agentweaver.Api.Sandbox.Preview;
 using Agentweaver.Api.Workflows;
 using Agentweaver.Domain;
 
@@ -682,19 +683,29 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
                     hasChanges = integration.HasChanges,
                 });
 
-                var buildTest = await _pipeline.RunBuildTestAsync(
-                    new CollectiveBuildTestRequest(
-                        context.CoordinatorRunId,
-                        context.ProjectId?.Value.ToString(),
-                        context.RepositoryPath,
-                        integrationBranch,
-                        aggregateTreeHash,
-                        aggregateDiff,
-                        context.SubmittingUser,
-                        gate.GraphNodeId,
-                        gate.Label,
-                        gate.AgentId),
-                    ct).ConfigureAwait(false);
+                CollectiveGateDecision buildTest;
+                try
+                {
+                    buildTest = await _pipeline.RunBuildTestAsync(
+                        new CollectiveBuildTestRequest(
+                            context.CoordinatorRunId,
+                            context.ProjectId?.Value.ToString(),
+                            context.RepositoryPath,
+                            integrationBranch,
+                            aggregateTreeHash,
+                            aggregateDiff,
+                            context.SubmittingUser,
+                            gate.GraphNodeId,
+                            gate.Label,
+                            gate.AgentId),
+                        ct).ConfigureAwait(false);
+                }
+                catch (CollectiveBuildTestInfrastructureException ex)
+                {
+                    await ParkBuildTestInfrastructureFailureAsync(
+                        context, workPlanId, edges, ex, ct).ConfigureAwait(false);
+                    return;
+                }
 
                 if (!await ApplyAuthoredGateDecisionAsync(
                         context,
@@ -1526,6 +1537,9 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
             feedback = decision.Feedback,
         });
 
+        await CleanupAssemblyBuildTestResourcesAsync(
+            context.CoordinatorRunId, context.RepositoryPath, ct).ConfigureAwait(false);
+
         // Reset the selected subtasks to pending (leave others' results intact); clear stage and move
         // the plan back to dispatching so the dispatch engine re-runs the affected frontier.
         await ResetSubtasksToPendingAsync(rejection.SubtaskIds, decision.Feedback ?? string.Empty, ct).ConfigureAwait(false);
@@ -1547,6 +1561,47 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         _logger.LogInformation(
             "Collective assembly: changes requested for run {RunId}; re-dispatching subtasks [{Ids}] (fallbackAll={Fallback})",
             context.CoordinatorRunId, string.Join(",", rejection.SubtaskIds), rejection.FellBackToAll);
+    }
+
+    private async Task ParkBuildTestInfrastructureFailureAsync(
+        CoordinatorDispatchContext context,
+        int workPlanId,
+        IReadOnlyCollection<(int, int)> edges,
+        CollectiveBuildTestInfrastructureException ex,
+        CancellationToken ct)
+    {
+        var status = ex.Retryable ? WorkPlanStatus.AssemblyBlocked : WorkPlanStatus.AssemblyFailed;
+        var reason = $"build_test_infra_{ex.Reason}";
+        await CleanupAssemblyBuildTestResourcesAsync(
+            context.CoordinatorRunId, context.RepositoryPath, ct).ConfigureAwait(false);
+        await _assemblyStore.SetTerminalStatusAsync(workPlanId, status, reason, ct).ConfigureAwait(false);
+
+        if (ex.Retryable)
+        {
+            Emit(context.CoordinatorRunId, EventTypes.CoordinatorAssemblyBlocked, new
+            {
+                workPlanId,
+                reason,
+                detail = ex.Message,
+                retryable = true,
+            });
+        }
+        else
+        {
+            Emit(context.CoordinatorRunId, EventTypes.CoordinatorAssemblyFailed, new
+            {
+                workPlanId,
+                reason,
+                detail = ex.Message,
+            });
+            await TerminalizeCoordinatorRunAsync(
+                context.CoordinatorRunId, RunStatus.Failed, reason, ct).ConfigureAwait(false);
+        }
+
+        await EmitTopologyAsync(context.CoordinatorRunId, workPlanId, status, edges, ct).ConfigureAwait(false);
+        _logger.LogWarning(ex,
+            "Collective assembly Build/Test infrastructure failure for run {RunId}: {Reason} (retryable={Retryable})",
+            context.CoordinatorRunId, ex.Reason, ex.Retryable);
     }
 
     // -----------------------------------------------------------------------
@@ -1758,14 +1813,19 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
     private async Task TerminalizeCoordinatorRunAsync(
         string coordinatorRunId, RunStatus status, string result, CancellationToken ct)
     {
+        string? repositoryPath = null;
         if (RunId.TryParse(coordinatorRunId, out var id))
+        {
+            var run = await _runStore.GetAsync(id, ct).ConfigureAwait(false);
+            repositoryPath = run?.RepositoryPath;
             await _runStore.TrySetTerminalStatusAsync(id, status, DateTimeOffset.UtcNow, result, ct)
                 .ConfigureAwait(false);
+        }
 
         // CRITICAL (orphan cleanup): when assembly blocks/fails (e.g. ineligible_subtasks, rai_blocked,
         // review_timeout) the coordinator run terminates but its AgentHost pod (2 CPU / 4 Gi) would
         // otherwise keep running and eventually exhaust the namespace CPU quota. Release it best-effort.
-        await ReleaseAgentHostPodSafeAsync(coordinatorRunId, ct).ConfigureAwait(false);
+        await CleanupAssemblyBuildTestResourcesAsync(coordinatorRunId, repositoryPath, ct).ConfigureAwait(false);
     }
 
     private async Task MarkCoordinatorAwaitingReviewAsync(string coordinatorRunId, CancellationToken ct)
@@ -1802,6 +1862,40 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         {
             _logger.LogWarning(ex,
                 "CoordinatorAssemblyService: failed to release AgentHost pod for run {RunId} (best-effort)",
+                runId);
+        }
+    }
+
+    private async Task CleanupAssemblyBuildTestResourcesAsync(
+        string runId,
+        string? repositoryPath,
+        CancellationToken ct)
+    {
+        await StopPreviewsSafeAsync(runId, ct).ConfigureAwait(false);
+
+        if (!string.IsNullOrWhiteSpace(repositoryPath))
+            await _pipeline.CleanupBuildTestResourcesAsync(runId, repositoryPath, ct).ConfigureAwait(false);
+        else
+            await ReleaseAgentHostPodSafeAsync(runId, ct).ConfigureAwait(false);
+    }
+
+    private async Task StopPreviewsSafeAsync(string runId, CancellationToken ct)
+    {
+        try
+        {
+            using var scope = _scopeFactory.CreateScope();
+            var previewService = scope.ServiceProvider.GetService<ISandboxPreviewService>();
+            if (previewService is null || !previewService.Enabled)
+                return;
+
+            var previews = await previewService.ListForRunAsync(runId, ct).ConfigureAwait(false);
+            foreach (var preview in previews)
+                await previewService.StopPreviewAsync(preview.Token, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(ex,
+                "CoordinatorAssemblyService: failed to stop Build/Test previews for run {RunId} (best-effort)",
                 runId);
         }
     }

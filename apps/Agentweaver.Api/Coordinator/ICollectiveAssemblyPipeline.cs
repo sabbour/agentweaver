@@ -30,6 +30,12 @@ public interface ICollectiveAssemblyPipeline
     /// <summary>Runs the collective Build & Test gate over the assembled integration branch.</summary>
     Task<CollectiveGateDecision> RunBuildTestAsync(CollectiveBuildTestRequest request, CancellationToken ct);
 
+    /// <summary>Releases any coordinator-scoped Build/Test pod and detached worktree.</summary>
+    Task CleanupBuildTestResourcesAsync(
+        string coordinatorRunId,
+        string repositoryPath,
+        CancellationToken ct = default);
+
     /// <summary>Performs the ONE collective merge of the integration branch into the originating branch.</summary>
     Task<CollectiveMergeResult> MergeAsync(CollectiveMergeRequest request, CancellationToken ct);
 
@@ -78,6 +84,23 @@ public sealed record CollectiveBuildTestRequest(
 
 /// <summary>Normalized pass/revise decision from an authored collective assembly gate.</summary>
 public sealed record CollectiveGateDecision(bool Approved, bool RequestChanges, string? Feedback);
+
+public sealed class CollectiveBuildTestInfrastructureException : Exception
+{
+    public string Reason { get; }
+    public bool Retryable { get; }
+
+    public CollectiveBuildTestInfrastructureException(
+        string reason,
+        string message,
+        bool retryable = true,
+        Exception? innerException = null)
+        : base(message, innerException)
+    {
+        Reason = string.IsNullOrWhiteSpace(reason) ? "build_test_infrastructure_failure" : reason;
+        Retryable = retryable;
+    }
+}
 
 /// <summary>Inputs to the single collective merge of the integration branch into origin.</summary>
 public sealed record CollectiveMergeRequest(

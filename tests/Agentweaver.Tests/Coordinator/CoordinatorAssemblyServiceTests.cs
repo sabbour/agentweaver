@@ -1,11 +1,14 @@
 using System.Reflection;
 using System.Text.Json;
 using FluentAssertions;
+using LibGit2Sharp;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using Agentweaver.Api.Coordinator;
 using Agentweaver.Api.Contracts;
 using Agentweaver.Api.Endpoints;
@@ -14,8 +17,10 @@ using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Memory;
 using Agentweaver.Api.Runs;
 using Agentweaver.Api.Runs.Graph;
+using Agentweaver.Api.Sandbox;
 using Agentweaver.Tests.Helpers;
 using Agentweaver.Domain;
+using Agentweaver.SandboxExec;
 using Run = Agentweaver.Domain.Run;
 
 namespace Agentweaver.Tests.Coordinator;
@@ -619,6 +624,84 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         _dispatch.StartDispatchCalls.Should().ContainSingle().Which.CoordinatorRunId.Should().Be(coordinatorRunId);
     }
 
+    [Fact]
+    public async Task RunBuildTestAsync_BareLaunchInvalidOperation_MapsToRetryableInfrastructureFailure()
+    {
+        var repoPath = CreateGitRepository();
+        var worktreesBase = Path.Combine(Path.GetTempPath(), $"agentweaver-buildtest-wt-{Guid.NewGuid():N}");
+
+        try
+        {
+            var worktreeManager = new WorktreeManager(
+                new ConfigurationBuilder()
+                    .AddInMemoryCollection(new Dictionary<string, string?>
+                    {
+                        ["Worktrees:BasePath"] = worktreesBase,
+                    })
+                    .Build(),
+                NullLogger<WorktreeManager>.Instance);
+            var pipeline = new CollectiveAssemblyPipeline(
+                worktreeManager,
+                null!,
+                null!,
+                null!,
+                null!,
+                null!,
+                null!,
+                null!,
+                null!,
+                NullLoggerFactory.Instance,
+                new ThrowingLaunchPodLifecycle(new InvalidOperationException("AgentHost pod did not become ready within 90s.")),
+                Options.Create(new SandboxRuntimeOptions { AgentExecutionMode = "pod-per-run" }));
+
+            var act = () => pipeline.RunBuildTestAsync(
+                new CollectiveBuildTestRequest(
+                    RunId.New().ToString(),
+                    ProjectId: null,
+                    repoPath,
+                    "main",
+                    "tree",
+                    "diff",
+                    "alice"),
+                CancellationToken.None);
+
+            var ex = await act.Should().ThrowAsync<CollectiveBuildTestInfrastructureException>();
+            ex.Which.Reason.Should().Be("agenthost_launch_failed");
+            ex.Which.Retryable.Should().BeTrue();
+        }
+        finally
+        {
+            TryDeleteDirectory(repoPath);
+            TryDeleteDirectory(worktreesBase);
+        }
+    }
+
+    [Fact]
+    public async Task BuildTestRetryableInfrastructureFailure_ParksAssemblyBlocked_NotPermanentFailed()
+    {
+        var coordinatorRunId = RunId.New().ToString();
+        var (workPlanId, _) = await SeedPlanAsync(coordinatorRunId,
+            new[] { SubtaskStatus.Completed, SubtaskStatus.AssembleReady });
+        await SeedCoordinatorRunAsync(coordinatorRunId);
+        _streamStore.Create(coordinatorRunId, "alice");
+
+        await InvokeParkBuildTestInfrastructureFailureAsync(
+            Context(coordinatorRunId),
+            workPlanId,
+            new CollectiveBuildTestInfrastructureException(
+                "agenthost_launch_failed",
+                "AgentHost pod did not become ready within 90s.",
+                retryable: true));
+
+        var state = await _assemblyStore.GetAsync(workPlanId, default);
+        state!.Status.Should().Be(WorkPlanStatus.AssemblyBlocked);
+        state.AssemblyStatusReason.Should().Be("build_test_infra_agenthost_launch_failed");
+        EventTypes_(coordinatorRunId).Should().Contain(EventTypes.CoordinatorAssemblyBlocked);
+        EventTypes_(coordinatorRunId).Should().NotContain(EventTypes.CoordinatorAssemblyFailed);
+        (await _runStore.GetAsync(RunId.Parse(coordinatorRunId), default))!.Status
+            .Should().Be(RunStatus.InProgress);
+    }
+
     // ── Terminal coordinator-run status + reason (so the UI never shows a bare "Failed") ──────────
 
     [Fact]
@@ -976,6 +1059,58 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         await task.ConfigureAwait(false);
     }
 
+    private async Task InvokeParkBuildTestInfrastructureFailureAsync(
+        CoordinatorDispatchContext context,
+        int workPlanId,
+        CollectiveBuildTestInfrastructureException exception)
+    {
+        var method = typeof(CoordinatorAssemblyService).GetMethod(
+            "ParkBuildTestInfrastructureFailureAsync",
+            BindingFlags.NonPublic | BindingFlags.Instance);
+        method.Should().NotBeNull("Build/Test infra failures must park outside the request-changes path");
+
+        var task = (Task)method!.Invoke(_sut,
+        [
+            context,
+            workPlanId,
+            Array.Empty<(int, int)>(),
+            exception,
+            CancellationToken.None,
+        ])!;
+        await task.ConfigureAwait(false);
+    }
+
+    private static string CreateGitRepository()
+    {
+        var repoPath = Path.Combine(Path.GetTempPath(), $"agentweaver-buildtest-repo-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(repoPath);
+        Repository.Init(repoPath);
+        using var repo = new Repository(repoPath);
+
+        File.WriteAllText(Path.Combine(repoPath, "readme.txt"), "initial");
+        Commands.Stage(repo, "*");
+        var sig = new Signature("Test", "test@localhost", DateTimeOffset.UtcNow);
+        repo.Commit("initial", sig, sig);
+
+        if (!string.Equals(repo.Head.FriendlyName, "main", StringComparison.Ordinal))
+            repo.Branches.Rename(repo.Head, "main");
+
+        return repoPath;
+    }
+
+    private static void TryDeleteDirectory(string path)
+    {
+        try
+        {
+            if (Directory.Exists(path))
+                Directory.Delete(path, recursive: true);
+        }
+        catch
+        {
+            // Best-effort cleanup for git worktrees that may still have transient handles.
+        }
+    }
+
     private async Task WaitUntilArmedAsync(string coordinatorRunId)
     {
         for (var i = 0; i < 200 && !_reviewGate.IsArmed(coordinatorRunId); i++)
@@ -1181,6 +1316,11 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
             return Task.FromResult(new CollectiveGateDecision(Approved: true, RequestChanges: false, Feedback: null));
         }
 
+        public Task CleanupBuildTestResourcesAsync(
+            string coordinatorRunId,
+            string repositoryPath,
+            CancellationToken ct = default) => Task.CompletedTask;
+
         public Task<CollectiveMergeResult> MergeAsync(CollectiveMergeRequest request, CancellationToken ct)
         {
             Merges++;
@@ -1193,6 +1333,24 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
             Scribes++;
             return Task.CompletedTask;
         }
+    }
+
+    private sealed class ThrowingLaunchPodLifecycle(Exception exception) : IAgentHostPodLifecycle
+    {
+        public Task<string> LaunchAgentHostPodAsync(string runId, CancellationToken ct = default) =>
+            Task.FromException<string>(exception);
+
+        public Task<string> LaunchAgentHostPodAsync(
+            string runId,
+            string? workingDirectoryOverride,
+            CancellationToken ct = default) =>
+            Task.FromException<string>(exception);
+
+        public Task CheckAgentHostCapacityAsync(CancellationToken ct = default) =>
+            Task.CompletedTask;
+
+        public Task ReleaseAgentHostPodAsync(string runId, CancellationToken ct = default) =>
+            Task.CompletedTask;
     }
 
     private sealed class FakeDispatch : ICoordinatorDispatch

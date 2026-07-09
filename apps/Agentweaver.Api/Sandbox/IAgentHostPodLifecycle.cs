@@ -34,6 +34,16 @@ public interface IAgentHostPodLifecycle
     Task<string> LaunchAgentHostPodAsync(string runId, CancellationToken ct = default);
 
     /// <summary>
+    /// Provisions an AgentHost pod for <paramref name="runId"/> and configures it with an explicit
+    /// working directory instead of the run row's default worktree. Used by assembly Build/Test,
+    /// whose live preview must run from a detached integration worktree.
+    /// </summary>
+    Task<string> LaunchAgentHostPodAsync(
+        string runId,
+        string? workingDirectoryOverride,
+        CancellationToken ct = default);
+
+    /// <summary>
     /// Pre-flight capacity gate: checks whether the namespace can currently admit another AgentHost
     /// pod (one pod's worth of CPU headroom). Throws <see cref="AgentHostCapacityPendingException"/>
     /// when there is not enough headroom so the caller can park-and-retry rather than launching a

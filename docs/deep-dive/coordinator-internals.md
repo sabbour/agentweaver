@@ -493,7 +493,7 @@ After the integration branch is built, the coordinator resolves assembly gates f
 
 Known assembly gates are `rai`, `rubberduck`, `build-test`, and `human-review`; `build_test` workflow nodes normalize to `build-test` (`CoordinatorAssemblyService.cs:1128`). The built-in software workflows now put RAI before Build & Test on the approval path: bug fix runs RAI -> Build & Test -> Human Review, while software delivery runs RAI -> Rubberduck -> Code Review -> Build & Test -> Human Review.
 
-Build & Test is a platform gate, not a human action. The assembly service emits `coordinator.assembly_review_requested` with `gateKind: "build-test"`, creates a detached worktree from the integration branch, runs the build/test/preview instruction, and routes its verdict before the human-review gate (`CoordinatorAssemblyService.cs:671`, `apps/Agentweaver.Api/Git/WorktreeManager.cs:155`). Because that detached worktree uses the `git` CLI (`WorktreeManager.cs:546`), the API runtime image installs `git` alongside `libgit2` (`apps/Agentweaver.Api/Dockerfile:58`).
+Build & Test is a platform gate, not a human action. The assembly service emits `coordinator.assembly_review_requested` with `gateKind: "build-test"`, creates a detached worktree from the integration branch, runs the build/test/preview instruction, and routes its verdict before the human-review gate (`CoordinatorAssemblyService.cs:671`, `apps/Agentweaver.Api/Git/WorktreeManager.cs:155`). In `pod-per-run` mode, the pipeline launches a dedicated AgentHost pod bound to the coordinator run id and passes the detached worktree path as the working-directory override (`apps/Agentweaver.Api/Coordinator/CollectiveAssemblyPipeline.cs:155`, `apps/Agentweaver.Api/Sandbox/IAgentHostPodLifecycle.cs:30`). `/configure` then sets the AgentHost working directory/file-tool root to that path before the first turn (`apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs:300`, `:423`). This gives the automated gate a routable A2A endpoint and makes `start_preview` target the preview server running from the assembled integration tree. Because that detached worktree uses the `git` CLI (`WorktreeManager.cs:546`), the API runtime image installs `git` alongside `libgit2` (`apps/Agentweaver.Api/Dockerfile:58`).
 
 ### Eligibility gate
 
@@ -511,6 +511,10 @@ Eligible child branches are merged into one integration branch in dependency ord
 
 The production pipeline reuses the existing RAI executor over the aggregate diff. A collective RAI safety flag is a hard stop: the WorkPlan is marked `rai_blocked`, the coordinator run is failed, and a human override/recovery path is required.
 
+### Build & Test infrastructure classification
+
+Build/test code feedback and sandbox infrastructure failures take different paths. A `request-changes` decision from the Build & Test agent is authored feedback and uses normal redispatch routing. Infrastructure failures are classified before that verdict layer: capacity pending, launch failure, missing pod IP, missing A2A endpoint, and A2A transport errors become `build_test_infra_*` reasons (`CollectiveAssemblyPipeline.cs:174`, `:252`; `KubernetesPodAgentEndpointResolver.cs:103`, `:177`; `RemoteAgentProxy.cs:119`, `:243`). Retryable cases park the plan as `assembly_blocked` so the reconciler can re-arm it; non-retryable configuration errors mark `assembly_failed` and terminalize the coordinator (`CoordinatorAssemblyService.cs:1567`, `CoordinatorReconciler.cs:267`). They no longer masquerade as `REQUEST_CHANGES`, so they do not create a redispatch loop that keeps asking workers to fix unavailable infrastructure.
+
 ### One collective review
 
 The human reviews the combined integration result once. The gate is an in-memory, owner-scoped task keyed by coordinator run id. It is at-most-once: double submissions find no armed gate after the decision is consumed.
@@ -523,6 +527,8 @@ Review decisions:
 - **Timeout/cancel** — leave recoverable or mark failed depending on path.
 
 ### Request-changes routing
+
+The assembly Build & Test pod, detached worktree, and any Gateway preview are intentionally retained while the run waits at human review, so reviewers can open the preview URL against the exact assembled tree. They are cleaned up on terminal outcomes and before an authored request-changes redispatch resets affected subtasks (`CoordinatorAssemblyService.cs:1519`, `:1813`, `:1869`). `AgentHostReaperService` treats `AwaitingReview` as active, so review/preview AgentHost claims are not reaped during that window (`apps/Agentweaver.Api/Sandbox/AgentHostReaperService.cs:86`, `:102`).
 
 When the reviewer requests changes, the coordinator tries to avoid redoing everything:
 
@@ -653,7 +659,8 @@ The provider-neutral `AgentRunnerDispatcher` can route one-shot runner calls to 
 | Assembly has ineligible subtasks | Block whole assembly; no partial merge. |
 | Integration branch conflict | Mark needs resolution; do not enter review/merge. |
 | Collective RAI flagged | Current behavior: mark `rai_blocked` and terminalize failed. |
-| Review requests changes | Reset inferred subtasks and dependents; re-dispatch. |
+| Build & Test infrastructure failure | Classify as `build_test_infra_*`; retryable cases park as `assembly_blocked`, non-retryable configuration errors fail assembly. |
+| Review requests changes | Reset inferred subtasks and dependents; release the assembly Build & Test preview resources, then re-dispatch. |
 | Review declines | Mark assembly declined and terminalize. |
 | Merge conflict | Mark needs resolution / merge failed. |
 | Scribe fails after merge | Emit failure event but keep assembly successful. |

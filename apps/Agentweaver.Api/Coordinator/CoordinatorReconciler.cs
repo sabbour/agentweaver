@@ -261,8 +261,18 @@ public sealed class CoordinatorReconciler
             .Select(w => w.AssemblyStatusReason)
             .FirstOrDefaultAsync(ct)
             .ConfigureAwait(false);
-        if (string.IsNullOrWhiteSpace(reason)
-            || !reason.Contains("ineligible_subtasks", StringComparison.Ordinal))
+        if (string.IsNullOrWhiteSpace(reason))
+            return false;
+
+        if (reason.Contains("build_test_infra_agenthost_capacity_pending", StringComparison.Ordinal)
+            || reason.Contains("build_test_infra_agenthost_quota_exceeded", StringComparison.Ordinal)
+            || reason.Contains("build_test_infra_agenthost_ip_not_ready", StringComparison.Ordinal)
+            || reason.Contains("build_test_infra_agenthost_launch_failed", StringComparison.Ordinal)
+            || reason.Contains("build_test_infra_a2a_endpoint_unavailable", StringComparison.Ordinal)
+            || reason.Contains("build_test_infra_a2a_transport_failure", StringComparison.Ordinal))
+            return true;
+
+        if (!reason.Contains("ineligible_subtasks", StringComparison.Ordinal))
             return false;
 
         var statuses = await db.Subtasks.AsNoTracking()
