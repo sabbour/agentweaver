@@ -9,6 +9,7 @@ using Agentweaver.Api.Contracts;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Memory;
 using Agentweaver.Api.Runs;
+using Agentweaver.AgentRuntime.Workflow;
 using Agentweaver.Domain;
 
 namespace Agentweaver.Api.Git;
@@ -741,6 +742,100 @@ public sealed class WorktreeManager
                 "WorktreeManager: failed to clean stale index lock file in repository {Path} (best-effort)",
                 repositoryPath);
         }
+    }
+
+    /// <summary>
+    /// Conservatively clears a STALE <c>index.lock</c> for a run's worktree between post-turn commit
+    /// retries (the in-place-revision wedge: a lingering/crashed process left the index locked). This
+    /// is the age-checked pattern used by <see cref="TryDeleteStaleLock"/> — NOT the unconditional
+    /// direct-delete anti-pattern — extended to resolve the ACTUAL gitdir for LINKED worktrees (their
+    /// <c>.git</c> is a pointer file, and the per-worktree index.lock lives under the resolved gitdir,
+    /// not <c>worktreePath/.git/index.lock</c>).
+    /// <para>
+    /// The SOLE guard is the configurable AGE threshold (<c>Coordinator:StaleLockThresholdSeconds</c>,
+    /// default 15s). We deliberately do NOT consult a host-global <c>git</c> process list: our own
+    /// commits use IN-PROCESS LibGit2Sharp (no subprocess), while a busy coordinator almost always has
+    /// SOME unrelated <c>git</c> process running (our own <c>git worktree add/prune</c> subprocesses,
+    /// agents invoking git as a tool). A global check would therefore refuse the clear in exactly the
+    /// concurrent scenario Fix-A #1 targets, re-wedging commit-retry. A lock older than the threshold
+    /// with no in-process git operation is safe to clear.
+    /// </para>
+    /// Never throws; returns diagnostics for the child-turn-failed evidence trail. The
+    /// <c>LiveGitProcessDetected</c> evidence field is retained for contract stability and is always
+    /// <c>false</c> under the age-only guard.
+    /// </summary>
+    public IndexLockClearResult ClearStaleIndexLock(string worktreePath)
+    {
+        try
+        {
+            var gitDir = ResolveGitDir(worktreePath);
+            if (gitDir is null)
+                return new IndexLockClearResult(false, false, null, false, null, "gitdir_unresolved");
+
+            var lockPath = Path.Combine(gitDir, "index.lock");
+            if (!File.Exists(lockPath))
+                return new IndexLockClearResult(false, false, null, false, lockPath, "no_lock_present");
+
+            var ageSeconds = (DateTime.UtcNow - File.GetLastWriteTimeUtc(lockPath)).TotalSeconds;
+
+            // The AGE gate is the sole guard. A lock younger than the configurable stale threshold is
+            // presumed actively held by a concurrent operation — refuse. A lock OLDER than the
+            // threshold is safe to clear: our own commits go through IN-PROCESS LibGit2Sharp (no git
+            // subprocess), so nothing of ours legitimately holds an index.lock for longer than the
+            // threshold. (We deliberately do NOT consult a host-global `git` process list — on a busy
+            // coordinator our own `git worktree add/prune` subprocesses and agent git-tool invocations
+            // mean a `git` process is almost always present, which would make the clear NEVER fire in
+            // exactly the concurrent scenario Fix-A #1 targets and re-wedge commit-retry. See
+            // decision note morpheus-fixa-inplace-terminal-design.md.)
+            if (ageSeconds < _staleLockThreshold.TotalSeconds)
+            {
+                _logger.LogDebug(
+                    "WorktreeManager: index.lock {Path} is only {AgeSec:F1}s old (< {ThresholdSec:F0}s); refusing to clear (likely active)",
+                    lockPath, ageSeconds, _staleLockThreshold.TotalSeconds);
+                return new IndexLockClearResult(true, false, ageSeconds, false, lockPath, "lock_too_recent");
+            }
+
+            File.Delete(lockPath);
+            _logger.LogWarning(
+                "WorktreeManager: cleared stale index.lock {Path} (age {AgeSec:F1}s) before post-turn commit retry",
+                lockPath, ageSeconds);
+            return new IndexLockClearResult(true, true, ageSeconds, false, lockPath, "cleared");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "WorktreeManager: best-effort stale index.lock clear failed for worktree {Path}", worktreePath);
+            return new IndexLockClearResult(false, false, null, false, null, $"error:{ex.GetType().Name}");
+        }
+    }
+
+    /// <summary>
+    /// Resolves the real gitdir for a worktree. A MAIN worktree has a <c>.git</c> DIRECTORY; a LINKED
+    /// worktree has a <c>.git</c> FILE containing <c>gitdir: &lt;abs-or-rel path&gt;</c>. Returns null
+    /// when neither is found.
+    /// </summary>
+    private static string? ResolveGitDir(string worktreePath)
+    {
+        var dotGit = Path.Combine(worktreePath, ".git");
+        if (Directory.Exists(dotGit))
+            return dotGit;
+        if (File.Exists(dotGit))
+        {
+            const string prefix = "gitdir:";
+            foreach (var rawLine in File.ReadAllLines(dotGit))
+            {
+                var line = rawLine.Trim();
+                if (!line.StartsWith(prefix, StringComparison.Ordinal))
+                    continue;
+                var pointer = line[prefix.Length..].Trim();
+                if (pointer.Length == 0)
+                    return null;
+                return Path.IsPathRooted(pointer)
+                    ? Path.GetFullPath(pointer)
+                    : Path.GetFullPath(Path.Combine(worktreePath, pointer));
+            }
+        }
+        return null;
     }
 
     private void TryRunGitWorktreePrune(string repositoryPath)

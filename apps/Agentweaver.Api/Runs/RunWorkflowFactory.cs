@@ -384,7 +384,11 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
             _loggerFactory.CreateLogger<AgentTurnExecutor>(),
             apiBaseUrl: _apiBaseUrl,
             apiKey: _apiKey,
-            agentNodeCharter: agentNodeCharter);
+            agentNodeCharter: agentNodeCharter,
+            // Trimmed child/revision pipeline only: a persistent post-turn commit fault is RETURNED
+            // as a typed terminal-failure output routed by the child graph's failure->terminal edge
+            // (FIX 2). The full pipeline keeps rethrowing to the watcher backstop.
+            emitTerminalFailureOutput: isChild);
 
         var mergeExecutor = new MergeExecutor(
             _mergeCoordinator,
@@ -472,6 +476,18 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
                 HasChanges: !string.IsNullOrEmpty(input.Diff),
                 StepCount: input.StepCount,
                 RaiSafetyFlagged: input.ContentSafetyFlagged)));
+
+        // Child failure terminal (FIX 2): the trimmed child pipeline's graph-native failure->terminal.
+        // When a child's agent turn ends cleanly but the POST-TURN commit fails PERSISTENTLY (the
+        // executor could not clear the blocker), the executor returns an AgentTurnOutput carrying
+        // TerminalFailureReason; the conditional edge below routes it here to yield exactly ONE
+        // terminal ChildTurnFailedOutput (a VISIBLE failure, never a fabricated no-change success).
+        ExecutorBinding childTurnFailed = new VisualFunctionExecutor<AgentTurnOutput, ChildTurnFailedOutput>(
+            "child-turn-failed", "child-turn-failed", "Turn failed", "assembly", "terminal", false,
+            (input, ctx, ct) => new ValueTask<ChildTurnFailedOutput>(new ChildTurnFailedOutput(
+                RunId: input.RunId,
+                Reason: input.TerminalFailureReason ?? "child_turn_failed",
+                Evidence: input.TerminalFailureEvidence)));
 
         ExecutorBinding terminalDeclined = new VisualFunctionExecutor<WorkflowReviewDecision, DeclinedOutput>(
             "terminal-declined", "terminal-declined", "Declined", "plumbing", "terminal", true,
@@ -763,8 +779,15 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
         {
             var childBuilder = new GraphDescriptorBuilder(agentInputStorer)
                 .AddEdge(agentInputStorer, agentBinding)
-                .AddEdge(agentBinding, childAssembleReady)
-                .WithOutputFrom(childAssembleReady);
+                // FIX 2 — conditional failure->terminal edge: a clean turn (TerminalFailureReason == null)
+                // terminalizes assemble-ready on the SAME worktree (context preserved); a persistent
+                // post-turn commit fault routes to child-turn-failed (one VISIBLE terminal). Mirrors the
+                // full pipeline's typed AgentTurnOutput edge conditions (RunWorkflowGraphBinder).
+                .AddEdge<AgentTurnOutput>(agentBinding, childAssembleReady,
+                    output => output is null || output.TerminalFailureReason is null)
+                .AddEdge<AgentTurnOutput>(agentBinding, childTurnFailed,
+                    output => output is not null && output.TerminalFailureReason is not null)
+                .WithOutputFrom(childAssembleReady, childTurnFailed);
             var childWf = childBuilder.Build();
             var childDescriptor = childBuilder.BuildDescriptor("agentweaver-workflow-child", "child");
             return (childWf, childDescriptor, childBuilder.BuildExecutorMetaMap());

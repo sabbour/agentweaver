@@ -39,6 +39,15 @@ public sealed class AgentTurnExecutorRevisionTerminalTests
         _ => null,
         NullLogger<AgentTurnExecutor>.Instance);
 
+    // Trimmed child/revision pipeline executor: a persistent post-turn commit fault is RETURNED as a
+    // typed terminal-failure AgentTurnOutput (routed to child-turn-failed) instead of rethrown.
+    private static AgentTurnExecutor NewChildExecutor(IWorktreeOperations worktree) => new(
+        new CleanTurnAgent(),
+        worktree,
+        _ => null,
+        NullLogger<AgentTurnExecutor>.Instance,
+        emitTerminalFailureOutput: true);
+
     [Fact]
     public async Task TransientCommitFailure_IsRetried_ThenSucceeds_OnSameWorktree()
     {
@@ -56,14 +65,17 @@ public sealed class AgentTurnExecutorRevisionTerminalTests
         result.TreeHash.Should().Be("committed-tree-after-retry",
             "a transient commit failure must be retried so the revision's edits still commit (context preserved)");
         result.Diff.Should().Be("diff --git a/file.txt b/file.txt");
+        result.TerminalFailureReason.Should().BeNull("a recovered commit is a clean success, not a terminal failure");
         worktree.CommitAttempts.Should().Be(3, "the bounded retry must re-attempt the transient commit");
+        worktree.ClearLockCalls.Should().Be(2, "the stale index.lock clear must run between each failed attempt (FIX 1)");
         worktree.GetTreeHashCalled.Should().BeFalse("there is no HEAD-tree fallback anymore — success must be a real commit");
     }
 
     [Fact]
     public async Task PersistentCommitFailure_Rethrows_VisibleFailure_NeverFakeSuccess()
     {
-        // Every attempt throws (corrupt/unopenable repo) — must NOT degrade to a no-change success.
+        // FULL pipeline (emitTerminalFailureOutput=false): every attempt throws (corrupt/unopenable
+        // repo) — must rethrow (watcher backstop terminalizes), never degrade to a no-change success.
         var worktree = new StubWorktreeOperations
         {
             FailuresBeforeSuccess = int.MaxValue,
@@ -74,8 +86,33 @@ public sealed class AgentTurnExecutorRevisionTerminalTests
         var act = async () => await executor.HandleAsync(RevisionInput(), context: null!, CancellationToken.None);
 
         await act.Should().ThrowAsync<InvalidOperationException>(
-            "a persistent commit failure must surface as a VISIBLE executor failure (the child run then terminalizes as Failed), never a fabricated no-change assemble_ready");
+            "a persistent commit failure in the full pipeline must surface as a VISIBLE executor failure, never a fabricated no-change assemble_ready");
         worktree.CommitAttempts.Should().Be(3, "the bounded retry exhausts its attempts before rethrowing");
+        worktree.GetTreeHashCalled.Should().BeFalse("the removed HEAD-tree fallback must not silently mask the failure");
+    }
+
+    [Fact]
+    public async Task PersistentCommitFailure_InChildPipeline_ReturnsTerminalFailureOutput_NotThrow()
+    {
+        // CHILD/revision pipeline (emitTerminalFailureOutput=true): a persistent commit fault is
+        // RETURNED as a typed terminal-failure output so the child graph's failure->terminal edge
+        // yields exactly one ChildTurnFailedOutput — NOT a throw, NOT a fabricated assemble_ready.
+        var worktree = new StubWorktreeOperations
+        {
+            FailuresBeforeSuccess = int.MaxValue,
+            HeadTreeHash = "pre-revision-head",
+        };
+        var executor = NewChildExecutor(worktree);
+
+        var result = await executor.HandleAsync(RevisionInput(), context: null!, CancellationToken.None);
+
+        result.TerminalFailureReason.Should().Be("commit_failed_persistent",
+            "the child pipeline returns a typed terminal failure the conditional edge routes to child-turn-failed");
+        result.TreeHash.Should().BeEmpty("a failed turn produced no committed tree — never a fake HEAD-tree success");
+        result.TerminalFailureEvidence.Should().NotBeNullOrEmpty("the persistent fault must carry evidence for live debugging");
+        result.TerminalFailureEvidence.Should().Contain("exception=", "evidence includes the commit exception summary");
+        worktree.CommitAttempts.Should().Be(3, "the bounded retry exhausts its attempts before returning the failure");
+        worktree.ClearLockCalls.Should().Be(2, "the stale index.lock clear must run between each failed attempt (FIX 1)");
         worktree.GetTreeHashCalled.Should().BeFalse("the removed HEAD-tree fallback must not silently mask the failure");
     }
 
@@ -131,6 +168,7 @@ public sealed class AgentTurnExecutorRevisionTerminalTests
         public string DiffText { get; set; } = string.Empty;
         public int CommitAttempts { get; private set; }
         public bool GetTreeHashCalled { get; private set; }
+        public int ClearLockCalls { get; private set; }
 
         public string CommitChanges(string worktreePath, string runId)
         {
@@ -138,6 +176,14 @@ public sealed class AgentTurnExecutorRevisionTerminalTests
             if (CommitAttempts <= FailuresBeforeSuccess)
                 throw new InvalidOperationException("simulated LibGit2 failure during post-turn commit");
             return CommittedTreeHash;
+        }
+
+        public IndexLockClearResult TryClearStaleIndexLock(string worktreePath)
+        {
+            ClearLockCalls++;
+            return new IndexLockClearResult(
+                LockPresent: true, Cleared: true, LockAgeSeconds: 30.0,
+                LiveGitProcessDetected: false, LockPath: worktreePath + "/.git/index.lock", Detail: "cleared");
         }
 
         public string GetDiff(string repositoryPath, string originatingBranch, string worktreeBranch) => DiffText;

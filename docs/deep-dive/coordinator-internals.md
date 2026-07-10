@@ -760,3 +760,7 @@ When the coordinator fails while the review is open, `MarkCoordinatorFailedAsync
 - `apps/Agentweaver.Api/Memory/`
 - `packages/Agentweaver.AgentRuntime/Workflow/`
 - `packages/Agentweaver.AgentRuntime/CopilotAIAgent.cs`
+
+## See also
+
+- [Resilient assembly-review loop — Deep Dive](./resilient-assembly-review.md) — the hardening built on top of the assembly pipeline: budget-exhausted escalation, accumulated context, reviewer-rejection lockout, and reliable child-turn terminal emission.

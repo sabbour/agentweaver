@@ -64,5 +64,6 @@ If the revision genuinely fails, the child run now fails visibly with `child_exe
 
 - [Unified autonomous steering — Deep Dive](../deep-dive/unified-steering.md)
 - [Unified autonomous steering — Reference](../reference/unified-steering.md)
+- [Resilient assembly-review loop](./resilient-assembly-review.md) — what you observe when the budget is exhausted: the human-review gate opens automatically, prior-round feedback is visible, and rejected-author rotation is auditable.
 - [Coordinator orchestration](./coordinator-orchestration.md)
 - [Events reference](../reference/events.md)

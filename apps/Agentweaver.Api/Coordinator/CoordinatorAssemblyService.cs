@@ -1696,7 +1696,8 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
 
         // Reset the selected subtasks to pending (leave others' results intact); clear stage and move
         // the plan back to dispatching so the dispatch engine re-runs the affected frontier.
-        await ResetSubtasksToPendingAsync(targetIds, decision.Feedback ?? string.Empty, ct).ConfigureAwait(false);
+        await ResetSubtasksToPendingAsync(
+            context.CoordinatorRunId, targetIds, decision.Feedback ?? string.Empty, ct).ConfigureAwait(false);
         await _assemblyStore.SetStatusAndStageAsync(
             workPlanId, WorkPlanStatus.Dispatching, null, ct).ConfigureAwait(false);
         await CoordinatorAssemblyReviewPersistence.ClearAsync(_scopeFactory, context.CoordinatorRunId, ct)
@@ -1746,6 +1747,35 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         var decider = _serviceProvider.GetRequiredService<CoordinatorSteeringDecider>();
         var targetIds = touchedFilesBySubtask.Keys.OrderBy(x => x).ToArray();
 
+        // UNIFIED AUTONOMOUS STEERING (Fix-B, change #2/#4): a HUMAN request-changes that arrives AFTER
+        // the autonomous budget was exhausted (and the plan escalated to review) is a FRESH mandate, not
+        // another autonomous loop iteration. Persistently (cross-replica/crash-safe) count the human
+        // round-trip; while at/under the configured cap, RESET the autonomous steering budget so the
+        // coordinator's decider can converge again under human guidance. Autonomous sources
+        // (rubberduck/rai/build-test/agent) NEVER reset their own budget — that reset-gating is exactly
+        // what stops the infinite loop the budget exists to bound. Past the cap we do NOT reset: the
+        // decider returns Proceed → the plan re-parks at human review (autonomy stops re-steering, the
+        // human stays in control — never terminal, never a hidden loop).
+        if (source == SteeringSource.HumanReview)
+        {
+            var roundTrips = await _assemblyStore
+                .IncrementHumanReviewRoundTripAsync(workPlanId, ct).ConfigureAwait(false);
+            var underCap = roundTrips <= CoordinatorSteeringDecider.DefaultMaxHumanReviewRoundTrips;
+            if (underCap)
+                await decider.ResetSteeringBudgetAsync(workPlanId, targetIds, ct).ConfigureAwait(false);
+            Emit(context.CoordinatorRunId, EventTypes.CoordinatorSteering, new
+            {
+                workPlanId,
+                source,
+                humanReviewRoundTrip = roundTrips,
+                maxHumanReviewRoundTrips = CoordinatorSteeringDecider.DefaultMaxHumanReviewRoundTrips,
+                budgetReset = underCap,
+                note = underCap
+                    ? "human request-changes: autonomous steering budget reset for a fresh convergence pass"
+                    : "human round-trip cap reached: budget NOT reset; will re-park at human review",
+            });
+        }
+
         // Decision-in-progress lease (§3b): a cross-pod claim can't race the inline decision, and a
         // restart re-enters the same boundary (recovery routes AssemblySteering → ReArmAssembly). Stamp
         // AssemblyStartedAt as the lease heartbeat so the reclaim path can tell fresh from stale.
@@ -1773,6 +1803,23 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         var decision = await decider.DecideAsync(view.Id, autopilotOn: false, ct: ct).ConfigureAwait(false);
         var direction = decision?.Direction ?? SteeringDirection.Proceed;
         var attempt = decision?.Attempt ?? 0;
+
+        // Req-2 (change #6) — REJECTION vs GUIDANCE discriminator. A reviewer REQUEST-CHANGES
+        // (SteeringSeverity.RequestChanges/Blocking) is a REJECTION → Strict Lockout: the current author
+        // is locked out and a DIFFERENT eligible agent owns the revision (never in-place same author).
+        // An ADVISORY steer/refine is GUIDANCE → in-place same agent (the A/D path below). Assembly
+        // gates always submit RequestChanges, so a rejection under budget routes to lockout rotation.
+        var isRejection = IsReviewerRejection(SteeringSeverity.RequestChanges);
+        if (isRejection
+            && (direction == SteeringDirection.InPlaceSteer || direction == SteeringDirection.DispatchFresh))
+        {
+            // Req-2 (Strict Lockout) — lock the rejected author out and rotate to a different eligible
+            // agent with FULL context (Req-1). Deadlock / no-eligible-agent → escalate to human review.
+            await decider.MarkDirectiveExecutingAsync(view.Id, ct).ConfigureAwait(false);
+            return await ExecuteLockoutRotationAsync(
+                context, workPlanId, edges, decision!.SubtaskIds, view.Id, attempt,
+                feedback ?? string.Empty, aggregateTreeHash, touchedFilesBySubtask, ct).ConfigureAwait(false);
+        }
 
         if (direction == SteeringDirection.InPlaceSteer)
         {
@@ -1808,20 +1855,20 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
 
         if (direction == SteeringDirection.Proceed)
         {
-            // C — escalate to terminal, breaking any steering loop (bounded by the budget CAS).
-            const string reason = "steering_budget_exhausted";
-            await CleanupAssemblyBuildTestResourcesAsync(
-                context.CoordinatorRunId, context.RepositoryPath, ct).ConfigureAwait(false);
-            await _assemblyStore.SetTerminalStatusAsync(
-                workPlanId, WorkPlanStatus.AssemblyBlocked, reason, ct).ConfigureAwait(false);
-            Emit(context.CoordinatorRunId, EventTypes.CoordinatorAssemblyBlocked, new
-            {
-                workPlanId,
-                reason,
-                detail = decision?.Rationale,
-                retryable = true,
-            });
-            await decider.MarkDirectiveAppliedAsync(view.Id, ct).ConfigureAwait(false);
+            // C — UNIFIED AUTONOMOUS STEERING (Fix-B): the autonomous steering budget is exhausted. DO
+            // NOT latch terminal AssemblyBlocked (that wedged the run with no way for a human to
+            // intervene — Ahmed: "we should be resilient to change requests and follow through"). Instead
+            // ESCALATE to the human-review gate: open awaiting_review so a human can approve / decline /
+            // steer, carrying the accumulated gate feedback. Escalation is modeled as a RECOVERABLE
+            // executable effect: mark the directive `executing` FIRST (change #1: a crash before the
+            // review is durably open re-drives the escalation, never silently marks it applied), then
+            // park the plan at review, settle the directive AFTER the review is durably OPEN (change #2:
+            // never block the directive on the human decision), and live-await the human choice.
+            await decider.MarkDirectiveExecutingAsync(view.Id, ct).ConfigureAwait(false);
+            await EscalateToHumanReviewAsync(
+                context, workPlanId, edges, view.Id,
+                decision?.Rationale ?? "steering_budget_exhausted",
+                aggregateTreeHash, touchedFilesBySubtask, ct).ConfigureAwait(false);
             return true;
         }
 
@@ -1831,6 +1878,532 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
             workPlanId, WorkPlanStatus.Assembling, null, ct).ConfigureAwait(false);
         await decider.MarkDirectiveAppliedAsync(view.Id, ct).ConfigureAwait(false);
         return false;
+    }
+
+    /// <summary>
+    /// UNIFIED AUTONOMOUS STEERING (Req-2, change #6) — the REJECTION vs GUIDANCE discriminator. A
+    /// reviewer REQUEST-CHANGES (<see cref="SteeringSeverity.RequestChanges"/>) or a BLOCKING signal is
+    /// a REJECTION that triggers Strict Lockout (rotate to a different eligible agent). Everything else
+    /// (advisory / refine / steer / guidance) stays in-place with the SAME author, context preserved.
+    /// </summary>
+    internal static bool IsReviewerRejection(string? severity) =>
+        severity is SteeringSeverity.RequestChanges or SteeringSeverity.Blocking;
+
+    private IAssemblyAuthorRotationSelector RotationSelector =>
+        _serviceProvider.GetService<IAssemblyAuthorRotationSelector>() ?? SquadAuthorRotationSelector.Instance;
+
+    /// <summary>
+    /// UNIFIED AUTONOMOUS STEERING (Req-2, Strict Lockout — squad.agent.md §"Reviewer Rejection Lockout
+    /// Semantics"). A CONTEXT-COMPLETE reviewer rejection locks the current author out of the artifact
+    /// and rotates the revision to a DIFFERENT eligible agent, dispatched CONSCIOUSLY and VISIBLY with
+    /// FULL context (Req-1 accumulated feedback + prior-work pointer). Gated on Req-1 (change #3): if the
+    /// context bundle carries nothing, we do NOT rotate blind — that would just reproduce the amnesia
+    /// loop with a new agent; we escalate instead. If ANY target subtask has NO domain-eligible agent
+    /// outside the locked-out set (change #5 — a single-eligible-agent domain deadlocks after the first
+    /// rejection), the run ESCALATES to human review (protocol step 7) with the accumulated feedback +
+    /// locked-out roster attached — never a rotation to an unrelated agent, never a terminal wedge.
+    /// Returns true (the gate loop stops: either the rotation re-dispatched the plan, or it escalated).
+    /// </summary>
+    private async Task<bool> ExecuteLockoutRotationAsync(
+        CoordinatorDispatchContext context,
+        int workPlanId,
+        IReadOnlyCollection<(int, int)> edges,
+        IReadOnlyList<int> targetSubtaskIds,
+        int directiveId,
+        int attempt,
+        string feedback,
+        string aggregateTreeHash,
+        IReadOnlyDictionary<int, IReadOnlySet<string>> touchedFilesBySubtask,
+        CancellationToken ct)
+    {
+        var decider = _serviceProvider.GetRequiredService<CoordinatorSteeringDecider>();
+
+        // Req-2 (change #3) — GATE rotation on Req-1 context. The rotated pod is re-dispatched via
+        // RequestChangesAsync → ResetSubtasksToPendingAsync, which threads the accumulated feedback +
+        // prior-child pointer. If there is NOTHING to carry (no latest feedback AND no accumulated
+        // rejection history) rotation would be a blind re-dispatch — escalate rather than rotate.
+        var priorRounds = await BuildPriorReviewRoundsAsync(context.CoordinatorRunId, targetSubtaskIds, ct)
+            .ConfigureAwait(false);
+        var hasContext = !string.IsNullOrWhiteSpace(feedback) || priorRounds.Count > 0;
+
+        // Load the rejection targets' current authors + domain context.
+        List<Subtask> targets;
+        using (var scope = _scopeFactory.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            targets = await db.Subtasks
+                .Where(s => s.WorkPlanId == workPlanId && targetSubtaskIds.Contains(s.Id))
+                .ToListAsync(ct).ConfigureAwait(false);
+        }
+
+        // Plan the rotation for EACH target BEFORE mutating anything: pick a different eligible author.
+        var planned = new List<(Subtask Subtask, RotationChoice Choice)>();
+        var deadlockRoster = new List<string>();
+        var deadlocked = !hasContext;
+        foreach (var subtask in targets)
+        {
+            var lockedOut = new HashSet<string>(
+                await _assemblyStore.GetLockedOutAgentsAsync(subtask.Id, ct).ConfigureAwait(false),
+                StringComparer.OrdinalIgnoreCase);
+            var choice = hasContext
+                ? RotationSelector.SelectRotationAuthor(
+                    context.RepositoryPath,
+                    new RotationSubtaskContext(subtask.Id, subtask.AssignedAgent, subtask.Title, subtask.Scope, subtask.Phase),
+                    lockedOut)
+                : null;
+            if (choice is null)
+            {
+                deadlocked = true;
+                // Record the full locked-out roster (existing lockouts + the author being rejected now).
+                var roster = new List<string>(lockedOut) { subtask.AssignedAgent };
+                deadlockRoster.AddRange(roster);
+                continue;
+            }
+            planned.Add((subtask, choice));
+        }
+
+        if (deadlocked)
+        {
+            // DEADLOCK (all eligible agents locked out for ≥1 target) OR no context to carry → escalate
+            // to human review (protocol step 7). NEVER rotate to an unrelated agent, NEVER terminal.
+            var roster = deadlockRoster.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            await decider.OverrideDecidedActionAsync(directiveId, SteeringDirection.Proceed, ct)
+                .ConfigureAwait(false);
+            Emit(context.CoordinatorRunId, EventTypes.CoordinatorSteeringDecision, new
+            {
+                workPlanId,
+                directiveId,
+                decision = SteeringDirection.Proceed,
+                disposition = "rejection",
+                rationale = hasContext
+                    ? "lockout_deadlock: all eligible agents locked out — escalating to human review"
+                    : "lockout_no_context: nothing to carry — escalating to human review",
+                lockedOutRoster = roster,
+                targetSubtaskIds,
+            });
+            _logger.LogWarning(
+                "Steering(lockout): directive {DirectiveId} DEADLOCK for run {RunId} (roster locked out: [{Roster}]) — escalating to human review",
+                directiveId, context.CoordinatorRunId, string.Join(",", roster));
+            await EscalateToHumanReviewAsync(
+                context, workPlanId, edges, directiveId,
+                hasContext ? "lockout_deadlock" : "lockout_no_context",
+                aggregateTreeHash, touchedFilesBySubtask, ct).ConfigureAwait(false);
+            return true;
+        }
+
+        // Rotate every target atomically (change #4): append the rejected author to the durable
+        // locked-out set + persist the new author/model/charter in one guarded CAS per subtask.
+        var rotated = new List<(Subtask Subtask, RotationChoice Choice)>();
+        foreach (var (subtask, choice) in planned)
+        {
+            var result = await _assemblyStore.TryRotateSubtaskAuthorAsync(
+                subtask.Id, subtask.AssignedAgent, choice.AgentName, choice.SelectedModelId, choice.AgentCharter, ct)
+                .ConfigureAwait(false);
+
+            // Defensive: only the replica that WON the guarded CAS re-dispatches this target's handoff.
+            // The directive-level single-writer lease already serializes replicas, so this is belt-and-
+            // suspenders — a CAS loser must never launch a handoff child + repoint the subtask.
+            if (result.Won)
+                rotated.Add((subtask, choice));
+
+            // Visible, conscious rotation event (never a glitch): who was locked out, who now owns it.
+            Emit(context.CoordinatorRunId, EventTypes.CoordinatorSteeringDecision, new
+            {
+                workPlanId,
+                directiveId,
+                decision = SteeringDirection.DispatchFresh,
+                disposition = "rejection",
+                rationale = result.Won
+                    ? "strict_lockout: reviewer rejection — author locked out, rotating revision to a different eligible agent with full context"
+                    : "strict_lockout: rotation already applied by a concurrent replica (no-op)",
+                subtaskId = subtask.Id,
+                rotatedFrom = subtask.AssignedAgent,
+                rotatedTo = choice.AgentName,
+                lockedOutRoster = result.LockedOutRoster,
+                attempt,
+            });
+            _logger.LogInformation(
+                "Steering(lockout): directive {DirectiveId} rotated subtask {SubtaskId} from {From} to {To} for run {RunId} (won={Won}, lockedOut=[{Locked}])",
+                directiveId, subtask.Id, subtask.AssignedAgent, choice.AgentName, context.CoordinatorRunId,
+                result.Won, string.Join(",", result.LockedOutRoster));
+        }
+
+        // The persisted decision matches the real effect (a conscious fresh dispatch to the new author).
+        await decider.OverrideDecidedActionAsync(directiveId, SteeringDirection.DispatchFresh, ct)
+            .ConfigureAwait(false);
+
+        // Re-dispatch via the CONTEXT-CARRYING handoff: instead of the plain fresh dispatch (which
+        // provisions a brand-new worktree branched from the integration branch and DISCARDS the
+        // locked-out author's uncommitted/staged worktree work), hand off to the ROTATED (different,
+        // non-locked-out) agent via RunOrchestrator.StartChildRevisionHandoffAsync. That mints a NEW
+        // SDK session (lockout-correct — the new agent does NOT inherit the locked-out author's
+        // conversation) while REUSING the prior child's worktree/branch and injecting the accumulated
+        // review feedback. The rotated author was already persisted on the subtask above (change #4).
+        await DispatchLockoutHandoffAsync(context, workPlanId, edges, rotated, feedback, ct)
+            .ConfigureAwait(false);
+
+        await decider.MarkDirectiveAppliedAsync(directiveId, ct).ConfigureAwait(false);
+        return true;
+    }
+
+    /// <summary>
+    /// UNIFIED AUTONOMOUS STEERING (Fix-A(3a) Path-2 wiring) — re-dispatches each lockout-rotated
+    /// subtask to its NEW (non-locked-out) author via the CONTEXT-CARRYING handoff
+    /// <see cref="RunOrchestrator.StartChildRevisionHandoffAsync"/> rather than a plain fresh dispatch.
+    /// For each rotated target it: (1) resolves the locked-out author's PRIOR child run (the durable
+    /// worktree/branch source captured before any reset — <see cref="Subtask.ChildRunId"/> still points
+    /// at it here), (2) builds the STABLE <see cref="AccumulatedReviewFeedback"/> bundle
+    /// (target+rejection-scoped prior rounds + <c>PriorWorktreeBranch</c>), (3) allocates a fresh child
+    /// run (NEW <see cref="RunId"/> ⇒ new deterministic session ⇒ lockout-correct) carrying the ROTATED
+    /// author/model/charter and the prior child's base task — WITHOUT the rendered guidance (the handoff
+    /// appends <see cref="AccumulatedReviewFeedback.RenderedGuidance"/> itself; never double-append) —
+    /// and does NOT pre-insert the row (the handoff calls <c>InsertAsync</c>, mirroring
+    /// <c>StartChildRunAsync</c>), (4) launches the handoff (which reuses the prior worktree when safe,
+    /// else visibly branches a clean worktree from the prior branch), and (5) points the subtask at the
+    /// new child (<see cref="SubtaskStatus.Running"/>, prior pointer retained) so the re-armed dispatch
+    /// loop RE-OBSERVES it (never re-dispatches a duplicate). A rotated target that has NO resolvable
+    /// prior child (nothing to reuse) falls back to the plain fresh dispatch (reset-to-pending; the
+    /// dispatch engine composes a fresh child that still carries the accumulated guidance via
+    /// <c>RecoveryGuidance</c>). Worktree safety + the <c>coordinator.child_revision_handoff</c> strategy
+    /// event are OWNED by the handoff method; this method does not handle poisoned-tree fallback.
+    /// </summary>
+    private async Task DispatchLockoutHandoffAsync(
+        CoordinatorDispatchContext context,
+        int workPlanId,
+        IReadOnlyCollection<(int, int)> edges,
+        IReadOnlyList<(Subtask Subtask, RotationChoice Choice)> planned,
+        string feedback,
+        CancellationToken ct)
+    {
+        var targetIds = planned.Select(p => p.Subtask.Id).OrderBy(x => x).ToList();
+
+        Emit(context.CoordinatorRunId, EventTypes.CoordinatorAssemblyChangesRequested, new
+        {
+            workPlanId,
+            redispatchSubtaskIds = targetIds,
+            redispatchedSubtaskIds = targetIds,
+            feedback,
+        });
+
+        // The reviewer here is the coordinator's automated assembly gate — RETAIN the Build/Test pod +
+        // detached worktree across the rotation (mirrors RequestChangesAsync's automated-gate branch)
+        // so the prior worktree the handoff reuses is not torn down underneath it.
+        _logger.LogInformation(
+            "Collective assembly: retaining Build/Test pod and detached worktree for lockout rotation handoff on run {RunId}",
+            context.CoordinatorRunId);
+
+        var freshFallbackIds = new List<int>();
+        // Resolve the handoff seam LAZILY — only when at least one target actually has a reusable prior
+        // child. Targets that fall through to the plain fresh dispatch never need it.
+        IChildRevisionHandoff? handoff = null;
+        foreach (var (subtask, choice) in planned)
+        {
+            var priorChildRunId = subtask.ChildRunId;
+            Run? priorChild = null;
+            if (!string.IsNullOrWhiteSpace(priorChildRunId) && RunId.TryParse(priorChildRunId, out var priorRunId))
+                priorChild = await _runStore.GetAsync(priorRunId, ct).ConfigureAwait(false);
+
+            if (priorChild is null)
+            {
+                // No prior child run to hand off from (nothing to reuse) → plain fresh dispatch for this
+                // target: reset-to-pending threads the accumulated guidance via RecoveryGuidance and the
+                // dispatch engine composes a fresh child under the ROTATED author (already persisted).
+                freshFallbackIds.Add(subtask.Id);
+                continue;
+            }
+
+            // STABLE contract bundle: target+rejection-scoped prior rounds + PriorWorktreeBranch (prior
+            // child branch, falling back to the integration branch so the handoff precondition always
+            // holds) + deterministic RenderedGuidance. Built BEFORE we repoint the subtask's ChildRunId.
+            var bundle = await BuildAccumulatedReviewFeedbackAsync(
+                context.CoordinatorRunId, subtask.Id, feedback, priorChildRunId, ct).ConfigureAwait(false);
+
+            // Allocate the NEW agent's child run like a fresh child (new RunId ⇒ new deterministic
+            // session ⇒ lockout-correct) but DO NOT pre-insert — the handoff inserts it itself. Carry
+            // the ROTATED author/model/charter; keep the prior child's repo/branch/project/user so the
+            // new agent works the SAME subtask. The base Task is the GUIDANCE-FREE canonical subtask
+            // text derived from the Subtask definition — NOT priorChild.Task (which, on the 2nd+
+            // rotation, is itself a prior handoff child whose Task already embeds an earlier round's
+            // rendered guidance; chaining it would double-carry that guidance and compound each
+            // rotation). The handoff appends bundle.RenderedGuidance (ALL accumulated rounds) exactly
+            // once, so this base MUST carry no guidance — preserving the "never double-append" invariant.
+            var newAgentRun = priorChild with
+            {
+                Id = RunId.New(),
+                ParentRunId = context.CoordinatorRunId,
+                SubtaskId = subtask.Id.ToString(),
+                AgentName = choice.AgentName,
+                ModelId = choice.SelectedModelId,
+                AgentCharter = choice.AgentCharter,
+                Task = BuildCanonicalSubtaskTask(subtask),
+                Status = RunStatus.InProgress,
+                StartedAt = DateTimeOffset.UtcNow,
+                EndedAt = null,
+                Result = null,
+                WorktreePath = null,
+                WorktreeBranch = null,
+            };
+
+            handoff ??= _serviceProvider.GetRequiredService<IChildRevisionHandoff>();
+            await handoff.StartChildRevisionHandoffAsync(newAgentRun, priorChild, bundle, ct)
+                .ConfigureAwait(false);
+
+            // Point the subtask at the NEW child, retain the prior pointer, and mark Running so the
+            // re-armed dispatch loop RE-OBSERVES this child (does not re-dispatch a duplicate).
+            await SetSubtaskHandoffRunningAsync(
+                subtask.Id, newAgentRun.Id.ToString(), priorChildRunId!, ct).ConfigureAwait(false);
+
+            _logger.LogInformation(
+                "Steering(lockout): subtask {SubtaskId} handed off to {Agent} via StartChildRevisionHandoffAsync " +
+                "(newChild={NewChild}, priorChild={PriorChild}, priorBranch={Branch}) for run {RunId}",
+                subtask.Id, choice.AgentName, newAgentRun.Id, priorChildRunId, bundle.PriorWorktreeBranch,
+                context.CoordinatorRunId);
+        }
+
+        // Targets with no reusable prior child → plain fresh dispatch (dispatch engine relaunches).
+        if (freshFallbackIds.Count > 0)
+            await ResetSubtasksToPendingAsync(context.CoordinatorRunId, freshFallbackIds, feedback, ct)
+                .ConfigureAwait(false);
+
+        // Return the plan to dispatching and re-arm the loop, whose recovery-aware re-arm re-observes the
+        // Running handoff child(ren) and re-arms assembly when they complete (Fix-A's failure→terminal
+        // edge governs terminal emission for the trimmed child pipeline the handoff launches).
+        await _assemblyStore.SetStatusAndStageAsync(
+            workPlanId, WorkPlanStatus.Dispatching, null, ct).ConfigureAwait(false);
+        await CoordinatorAssemblyReviewPersistence.ClearAsync(_scopeFactory, context.CoordinatorRunId, ct)
+            .ConfigureAwait(false);
+        await EmitGraphAsync(context.CoordinatorRunId, workPlanId, ct).ConfigureAwait(false);
+        await EmitTopologyAsync(context.CoordinatorRunId, workPlanId, WorkPlanStatus.Dispatching, edges, ct)
+            .ConfigureAwait(false);
+
+        var dispatch = _serviceProvider.GetRequiredService<ICoordinatorDispatch>();
+        dispatch.StartDispatch(context);
+
+        _logger.LogInformation(
+            "Collective assembly: lockout rotation re-dispatched for run {RunId}; handed off [{Handoff}] via revision handoff, fresh-fallback [{Fresh}]",
+            context.CoordinatorRunId,
+            string.Join(",", targetIds.Except(freshFallbackIds)),
+            string.Join(",", freshFallbackIds));
+    }
+
+    /// <summary>
+    /// The GUIDANCE-FREE canonical task text for a subtask, derived solely from its
+    /// <see cref="Subtask"/> definition (<c>Title</c> + <c>Scope</c>) — matching the base composed by
+    /// <c>CoordinatorDispatchService.ComposeChildTaskAsync</c> before any recovery guidance is appended.
+    /// Used as the handoff base <see cref="Run.Task"/> so the ONLY guidance present on the new agent's
+    /// task is the single <see cref="AccumulatedReviewFeedback.RenderedGuidance"/> the handoff appends —
+    /// never a prior handoff child's already-embedded guidance (which would compound each rotation).
+    /// </summary>
+    private static string BuildCanonicalSubtaskTask(Subtask subtask) =>
+        string.IsNullOrWhiteSpace(subtask.Scope)
+            ? subtask.Title
+            : $"{subtask.Title}\n\n{subtask.Scope}";
+
+    /// <summary>
+    /// Points a lockout-rotated subtask at its NEW handoff child run: sets
+    /// <see cref="SubtaskStatus.Running"/>, repoints <c>ChildRunId</c> to the new run, and RETAINS the
+    /// prior child pointer in <c>PriorChildRunId</c> (durable provenance / worktree source). Unlike the
+    /// in-place resume, this does NOT write <c>RecoveryGuidance</c> — the handoff injects the accumulated
+    /// guidance into the new agent's task prompt directly (avoids double-carrying it).
+    /// </summary>
+    private async Task SetSubtaskHandoffRunningAsync(
+        int subtaskId, string newChildRunId, string priorChildRunId, CancellationToken ct)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var now = DateTimeOffset.UtcNow;
+        await db.Subtasks
+            .Where(s => s.Id == subtaskId)
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(s => s.Status, SubtaskStatus.Running)
+                .SetProperty(s => s.ChildRunId, newChildRunId)
+                .SetProperty(s => s.PriorChildRunId, priorChildRunId)
+                .SetProperty(s => s.UpdatedAt, now), ct)
+            .ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// UNIFIED AUTONOMOUS STEERING (Fix-B) — ESCALATES an exhausted steering budget to the human-review
+    /// gate instead of latching terminal AssemblyBlocked. Durably PARKS the plan at review (idempotent
+    /// effect) and — for the replica that won the escalation — settles the directive as soon as the
+    /// review is durably OPEN (change #2: the directive is NEVER blocked on the human decision) and then
+    /// live-awaits the human choice via the SAME gate machinery a normal human review uses
+    /// (approve → complete/merge, request-changes → route back through steering, decline → terminal).
+    /// A replica that LOST the park CAS simply returns — the winning replica (or the reconciler's
+    /// <c>ResumeInReviewAsync</c> after a crash) owns the live await. Because the park is durable and the
+    /// directive is settled only after it, a crash BEFORE the review opens leaves the directive
+    /// <c>executing</c> → recovery re-drives the escalation (never a silent drop).
+    /// </summary>
+    private async Task EscalateToHumanReviewAsync(
+        CoordinatorDispatchContext context,
+        int workPlanId,
+        IReadOnlyCollection<(int, int)> edges,
+        int directiveId,
+        string reason,
+        string aggregateTreeHash,
+        IReadOnlyDictionary<int, IReadOnlySet<string>> touchedFilesBySubtask,
+        CancellationToken ct)
+    {
+        var won = await ParkAtHumanReviewAsync(
+            context, workPlanId, directiveId, reason, aggregateTreeHash, ct).ConfigureAwait(false);
+        if (!won)
+            return;
+
+        // The park is durably open and the directive is settled; live-await the human decision on THIS
+        // replica (a crash here is recovered by ResumeInReviewAsync, which re-reads the durable review
+        // record and applies the eventual decision). Not blocking the directive means autopilot-with-no-
+        // human simply parks at awaiting_review showing the preview — never auto-approve/decline (§5).
+        var decision = await AwaitReviewDecisionAsync(context, workPlanId, edges, ct).ConfigureAwait(false);
+        if (decision is null)
+            return;
+
+        await ApplyReviewDecisionAsync(
+            context, workPlanId, edges, IntegrationBranchName(context.CoordinatorRunId),
+            aggregateTreeHash, touchedFilesBySubtask, decision, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// UNIFIED AUTONOMOUS STEERING (Fix-B) — the DURABLE, IDEMPOTENT escalation effect. GUARDED-CAS
+    /// transitions the plan AssemblySteering/Assembling → InReview/stage "review" (change #3: a second
+    /// replica that finds the plan already InReview NO-OPs, preventing double-escalation from clobbering
+    /// an open review record). The winner: writes the durable review request, emits the review-requested
+    /// event carrying the exhaustion reason + accumulated gate feedback (so the escalation is VISIBLE —
+    /// never a glitch), marks the coordinator run awaiting_review, and settles the directive `applied`
+    /// AFTER the review is durably OPEN (change #2). Returns true iff this replica won the escalation.
+    /// </summary>
+    private async Task<bool> ParkAtHumanReviewAsync(
+        CoordinatorDispatchContext context,
+        int workPlanId,
+        int directiveId,
+        string reason,
+        string aggregateTreeHash,
+        CancellationToken ct)
+    {
+        var won = await _assemblyStore.TryEscalateToInReviewAsync(workPlanId, ct).ConfigureAwait(false);
+        var decider = _serviceProvider.GetRequiredService<CoordinatorSteeringDecider>();
+        var integrationBranch = IntegrationBranchName(context.CoordinatorRunId);
+
+        if (!won)
+        {
+            // Lost the CAS: the plan is already InReview — either a concurrent replica escalated it, OR a
+            // PRIOR escalation of THIS directive crashed after the InReview transition but before the
+            // durable review request was written (change #1 crash window). Verify a durable review record
+            // exists; if it is MISSING, complete the escalation here (write it) so the human gate is never
+            // left open-in-status-only with no card. If a record already exists we do NOT touch it (a
+            // concurrent replica owns it and may already hold a submitted human decision — change #3).
+            var existing = await CoordinatorAssemblyReviewPersistence
+                .GetAsync(_scopeFactory, context.CoordinatorRunId, ct).ConfigureAwait(false);
+            if (existing is null)
+            {
+                await CoordinatorAssemblyReviewPersistence.UpsertReviewRequestAsync(
+                    _scopeFactory, context.CoordinatorRunId, context.SubmittingUser,
+                    integrationBranch, aggregateTreeHash, ct).ConfigureAwait(false);
+                await EmitGraphAsync(context.CoordinatorRunId, workPlanId, ct).ConfigureAwait(false);
+                Emit(context.CoordinatorRunId, EventTypes.CoordinatorAssemblyReviewRequested, new
+                {
+                    workPlanId,
+                    integrationBranch,
+                    treeHash = aggregateTreeHash,
+                    gateKind = "human-review",
+                    escalated = true,
+                    reason,
+                    recovered = true,
+                });
+                await MarkCoordinatorAwaitingReviewAsync(context.CoordinatorRunId, ct).ConfigureAwait(false);
+            }
+            await decider.MarkDirectiveAppliedAsync(directiveId, ct).ConfigureAwait(false);
+            return false;
+        }
+
+        var accumulatedFeedback = await BuildAccumulatedGateFeedbackAsync(context.CoordinatorRunId, ct)
+            .ConfigureAwait(false);
+
+        await CoordinatorAssemblyReviewPersistence.UpsertReviewRequestAsync(
+            _scopeFactory,
+            context.CoordinatorRunId,
+            context.SubmittingUser,
+            integrationBranch,
+            aggregateTreeHash,
+            ct).ConfigureAwait(false);
+
+        await EmitGraphAsync(context.CoordinatorRunId, workPlanId, ct).ConfigureAwait(false);
+        Emit(context.CoordinatorRunId, EventTypes.CoordinatorAssemblyReviewRequested, new
+        {
+            workPlanId,
+            integrationBranch,
+            treeHash = aggregateTreeHash,
+            gateKind = "human-review",
+            escalated = true,
+            reason,
+            accumulatedFeedback,
+        });
+
+        await MarkCoordinatorAwaitingReviewAsync(context.CoordinatorRunId, ct).ConfigureAwait(false);
+
+        // Settle the directive ONLY now that the review is durably OPEN (change #2). A crash BEFORE this
+        // point leaves the directive `executing` → DriveOutstandingSteeringExecutionAsync re-drives the
+        // escalation on recovery (change #1) rather than silently marking it applied.
+        await decider.MarkDirectiveAppliedAsync(directiveId, ct).ConfigureAwait(false);
+        return true;
+    }
+
+    /// <summary>
+    /// UNIFIED AUTONOMOUS STEERING (Fix-B, §7) — collects the accumulated gate feedback for the escalated
+    /// review card, bounded and structured by gate source + round. Reads the run's steering directives
+    /// (each carries its source + instruction/feedback) so the human sees WHY the autonomous loop could
+    /// not converge before they approve / decline / steer.
+    /// </summary>
+    private async Task<IReadOnlyList<object>> BuildAccumulatedGateFeedbackAsync(
+        string coordinatorRunId, CancellationToken ct)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var rows = await db.SteeringDirectives.AsNoTracking()
+            .Where(d => d.CoordinatorRunId == coordinatorRunId && d.Instruction != null)
+            .OrderBy(d => d.Id)
+            .Select(d => new { d.Source, d.Instruction })
+            .Take(32)
+            .ToListAsync(ct).ConfigureAwait(false);
+        var round = 0;
+        return rows
+            .Select(r => (object)new
+            {
+                round = ++round,
+                gate = r.Source,
+                feedback = Truncate(r.Instruction, 2000),
+            })
+            .ToList();
+    }
+
+    private static string? Truncate(string? value, int max)
+        => value is null || value.Length <= max ? value : value[..max];
+
+    /// <summary>
+    /// UNIFIED AUTONOMOUS STEERING (Fix-B, change #1) — true iff the human-review escalation is durably
+    /// OPEN: the plan is <see cref="WorkPlanStatus.InReview"/> at the canonical <see cref="AssemblyStage.Review"/>
+    /// stage AND a durable review request record exists. Used by recovery to decide whether a crashed
+    /// Proceed→escalation directive can be settled (both true) or must be RE-DRIVEN (either false).
+    /// </summary>
+    private async Task<bool> IsEscalationDurablyOpenAsync(
+        string coordinatorRunId, int workPlanId, CancellationToken ct)
+    {
+        bool inReview;
+        using (var scope = _scopeFactory.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            inReview = await db.WorkPlans.AsNoTracking()
+                .AnyAsync(w => w.Id == workPlanId
+                    && w.Status == WorkPlanStatus.InReview
+                    && w.AssemblyStage == AssemblyStage.Review, ct)
+                .ConfigureAwait(false);
+        }
+        if (!inReview)
+            return false;
+        var record = await CoordinatorAssemblyReviewPersistence
+            .GetAsync(_scopeFactory, coordinatorRunId, ct).ConfigureAwait(false);
+        return record is not null
+            && !string.IsNullOrEmpty(record.IntegrationBranch)
+            && !string.IsNullOrEmpty(record.AggregateTreeHash);
     }
 
     /// <summary>
@@ -1860,7 +2433,16 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         CancellationToken ct)
     {
         var decider = _serviceProvider.GetRequiredService<CoordinatorSteeringDecider>();
-        var guidance = BuildAssemblyFeedbackGuidance(feedback);
+        // Req-1 (change #6, in-place): the caller REMOVES the child stream before the revision restart
+        // (_streamStore.Remove below), so the resumed agent can NOT rely on replayed stream history for
+        // prior-round feedback. Thread the ACCUMULATED, target+rejection-scoped feedback EXPLICITLY into
+        // the revision task so an in-place resume also sees every prior requirement, not just the latest.
+        var priorRounds = await BuildPriorReviewRoundsAsync(context.CoordinatorRunId, targetSubtaskIds, ct)
+            .ConfigureAwait(false);
+        // In-place resume PRESERVES the child session — pass no prior worktree branch (the agent
+        // continues where it left off; there is no "build on prior work" fresh-pod pointer to inject).
+        var guidance = ReviewFeedbackRenderer.RenderForRevisionPrompt(
+            feedback, priorRounds, priorWorktreeBranch: null);
 
         List<Subtask> targets;
         using (var scope = _scopeFactory.CreateScope())
@@ -2156,8 +2738,32 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
 
         if (directive.DecidedAction != SteeringDirection.InPlaceSteer)
         {
-            // B/C: the durable effect (reset+dispatch already ran, or terminal status already set) is
-            // recorded elsewhere; just settle the directive so it is not re-driven forever.
+            if (directive.DecidedAction == SteeringDirection.Proceed)
+            {
+                // C (Fix-B, change #1): a Proceed directive's durable effect is the human-review
+                // ESCALATION, which is a MULTI-STEP effect (InReview transition + durable review request +
+                // awaiting_review). It is unsafe to blindly mark it applied: a crash mid-escalation could
+                // leave the plan not-yet-InReview or InReview-without-a-review-card. Verify the escalation
+                // is durably OPEN — plan.Status == InReview AND a durable review request exists — before
+                // settling. If not, RE-DRIVE the escalation (idempotent: ParkAtHumanReviewAsync CAS wins
+                // only if not yet InReview, else completes a missing review card) so steering is never
+                // silently dropped.
+                var escalationOpen = await IsEscalationDurablyOpenAsync(
+                    context.CoordinatorRunId, workPlanId, ct).ConfigureAwait(false);
+                if (escalationOpen)
+                {
+                    await decider.MarkDirectiveAppliedAsync(directive.Id, ct).ConfigureAwait(false);
+                    return false;
+                }
+                await ParkAtHumanReviewAsync(
+                    context, workPlanId, directive.Id,
+                    directive.Instruction, directive.TreeHash ?? string.Empty, ct).ConfigureAwait(false);
+                // Re-drove the escalation; the review gate now owns the plan — stop this assembly pass.
+                return true;
+            }
+
+            // B: the durable effect (reset+dispatch already ran) is recorded elsewhere; just settle the
+            // directive so it is not re-driven forever.
             await decider.MarkDirectiveAppliedAsync(directive.Id, ct).ConfigureAwait(false);
             return false;
         }
@@ -3045,35 +3651,114 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
             state?.AssemblyStatusReason));
     }
 
-    private async Task ResetSubtasksToPendingAsync(IReadOnlyCollection<int> subtaskIds, string feedback, CancellationToken ct)
+    private async Task ResetSubtasksToPendingAsync(
+        string coordinatorRunId, IReadOnlyCollection<int> subtaskIds, string feedback, CancellationToken ct)
     {
         if (subtaskIds.Count == 0) return;
-        var guidance = BuildAssemblyFeedbackGuidance(feedback);
+        // Req-1 (change #1 + #2): for EACH target subtask, build the STABLE AccumulatedReviewFeedback
+        // handoff bundle (target+rejection-scoped prior rounds + prior worktree branch) and write its
+        // deterministic RenderedGuidance so a fresh/rotated pod addresses every prior requirement AND
+        // builds on the prior work — fixing the amnesia loop. Bundles are built BEFORE ChildRunId is
+        // cleared, capturing the prior child pointer (PriorChildRunId) that Morpheus's
+        // StartChildRevisionHandoffAsync consumes.
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
         var now = DateTimeOffset.UtcNow;
-        await db.Subtasks
+        var rows = await db.Subtasks
             .Where(s => subtaskIds.Contains(s.Id))
-            .ExecuteUpdateAsync(setters => setters
-                .SetProperty(s => s.Status, SubtaskStatus.Pending)
-                .SetProperty(s => s.ChildRunId, (string?)null)
-                .SetProperty(s => s.RecoveryGuidance, guidance)
-                .SetProperty(s => s.UpdatedAt, now), ct)
-            .ConfigureAwait(false);
+            .ToListAsync(ct).ConfigureAwait(false);
+        foreach (var s in rows)
+        {
+            var priorChild = s.ChildRunId;
+            var bundle = await BuildAccumulatedReviewFeedbackAsync(
+                coordinatorRunId, s.Id, feedback, priorChild, ct).ConfigureAwait(false);
+            if (!string.IsNullOrWhiteSpace(priorChild))
+                s.PriorChildRunId = priorChild;
+            s.Status = SubtaskStatus.Pending;
+            s.ChildRunId = null;
+            s.RecoveryGuidance = bundle.RenderedGuidance;
+            s.UpdatedAt = now;
+        }
+        await db.SaveChangesAsync(ct).ConfigureAwait(false);
     }
 
     /// <summary>
-    /// Builds the guidance text written into a re-dispatched subtask's <c>RecoveryGuidance</c> when
-    /// the collective assembly reviewer requested changes. Mirrors the pattern used by
-    /// <see cref="CoordinatorSteeringService"/> for steering-driven recovery, adapted for the
-    /// assembly feedback path. <see cref="CoordinatorDispatchService.ComposeChildTask"/> reads this
-    /// field when composing the child's re-dispatch prompt so the child receives the reviewer's
-    /// exact feedback and does not repeat the same output verbatim.
+    /// UNIFIED AUTONOMOUS STEERING (Req-1, changes #1/#2) — builds the STABLE
+    /// <see cref="AccumulatedReviewFeedback"/> runtime handoff contract (Fix-A "3b") for ONE subtask's
+    /// revision. The coordinator is the SINGLE SOURCE OF TRUTH: consumers (e.g. Morpheus's
+    /// StartChildRevisionHandoffAsync) MUST consume this DTO (or its <c>RenderedGuidance</c>) and MUST
+    /// NOT read <c>SteeringDirective</c> rows directly. <see cref="AccumulatedReviewFeedback.PriorRounds"/>
+    /// is TARGET-scoped (only rounds that targeted this subtask) and REJECTION-scoped (request-changes /
+    /// blocking only, never advisories — the discriminator). <paramref name="priorChildRunId"/> (usually
+    /// the subtask's prior <c>ChildRunId</c>, captured before a reset clears it) resolves the prior
+    /// worktree branch so the new agent REUSES the branch while minting a NEW session.
     /// </summary>
-    private static string BuildAssemblyFeedbackGuidance(string feedback) =>
-        $"Recovery guidance from the assembly reviewer: {feedback}\n\n" +
-        "Context: The collective assembly reviewer requested changes to your output. " +
-        "Re-do this work against the latest repository state and address the feedback above.";
+    internal async Task<AccumulatedReviewFeedback> BuildAccumulatedReviewFeedbackAsync(
+        string coordinatorRunId, int subtaskId, string currentChangeRequest,
+        string? priorChildRunId, CancellationToken ct)
+    {
+        var priorRounds = await BuildPriorReviewRoundsAsync(coordinatorRunId, new[] { subtaskId }, ct)
+            .ConfigureAwait(false);
+
+        // Resolve the prior worktree branch (so the consumer can reuse the branch/worktree while minting
+        // a NEW SDK session for the non-locked-out agent). Fall back to the integration branch.
+        var priorWorktreeBranch = IntegrationBranchName(coordinatorRunId);
+        if (!string.IsNullOrWhiteSpace(priorChildRunId) && RunId.TryParse(priorChildRunId, out var priorRunId))
+        {
+            var priorRun = await _runStore.GetAsync(priorRunId, ct).ConfigureAwait(false);
+            if (priorRun is not null && !string.IsNullOrWhiteSpace(priorRun.WorktreeBranch))
+                priorWorktreeBranch = priorRun.WorktreeBranch;
+        }
+
+        var bundle = new AccumulatedReviewFeedback(
+            SubtaskId: subtaskId.ToString(),
+            CurrentChangeRequest: currentChangeRequest,
+            PriorRounds: priorRounds,
+            PriorWorktreeBranch: priorWorktreeBranch);
+        return bundle with { RenderedGuidance = bundle.RenderForRevisionPrompt() };
+    }
+
+    /// <summary>
+    /// The TARGET-scoped, REJECTION-scoped prior review rounds for a single subtask, ordered
+    /// oldest→newest. Reads the run's <c>SteeringDirective</c> rows filtered to request-changes/blocking
+    /// severities (a reviewer rejection, not an advisory) whose target scope includes this subtask (or is
+    /// plan-wide). Unlike <see cref="BuildAccumulatedGateFeedbackAsync"/> (which aggregates ALL run
+    /// directives for the human REVIEW CARD), this is scoped to ONE subtask for the child-retry handoff.
+    /// </summary>
+    internal async Task<IReadOnlyList<ReviewFeedbackRound>> BuildPriorReviewRoundsAsync(
+        string coordinatorRunId, IReadOnlyCollection<int> subtaskIds, CancellationToken ct)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var rows = await db.SteeringDirectives.AsNoTracking()
+            .Where(d => d.CoordinatorRunId == coordinatorRunId
+                && d.Instruction != null
+                && (d.Severity == SteeringSeverity.RequestChanges || d.Severity == SteeringSeverity.Blocking))
+            .OrderBy(d => d.Id)
+            .Select(d => new { d.Source, d.CreatedBy, d.Instruction, d.TargetScopeJson, d.CreatedAt })
+            .Take(64)
+            .ToListAsync(ct).ConfigureAwait(false);
+
+        var result = new List<ReviewFeedbackRound>();
+        var round = 0;
+        foreach (var r in rows)
+        {
+            // TARGET-scoped: keep a directive only when it targeted one of THESE subtasks (or is plan-wide
+            // with no explicit subtask scope). TargetScopeJson parses in memory (the id set is JSON, not
+            // queryable).
+            var scopeIds = SteeringTargetScope.FromJson(r.TargetScopeJson)?.SubtaskIds;
+            var targetsThese = scopeIds is null || scopeIds.Count == 0
+                || subtaskIds.Count == 0 || scopeIds.Any(subtaskIds.Contains);
+            if (!targetsThese)
+                continue;
+            round++;
+            var reviewer = string.IsNullOrWhiteSpace(r.CreatedBy) ? (r.Source ?? "gate") : r.CreatedBy!;
+            result.Add(new ReviewFeedbackRound(
+                round, reviewer, Truncate(r.Instruction, 2000) ?? string.Empty, r.CreatedAt));
+        }
+        return result;
+    }
+
 
     private async Task<(int WorkPlanId, string Status, List<Subtask> Subtasks, List<(int, int)> Edges)?> LoadPlanAsync(
         string coordinatorRunId, CancellationToken ct)

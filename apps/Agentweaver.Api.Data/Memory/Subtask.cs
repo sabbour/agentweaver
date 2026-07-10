@@ -26,6 +26,17 @@ public sealed class Subtask
     public string? LockedOutAgents { get; set; }
 
     /// <summary>
+    /// UNIFIED AUTONOMOUS STEERING (Req-1, change #1) — the <c>ChildRunId</c> of the PRIOR child run,
+    /// captured immediately BEFORE a conscious fresh dispatch (or a lockout rotation) clears
+    /// <see cref="ChildRunId"/> to <c>null</c>. This is the durable, mechanically-recoverable pointer to
+    /// the prior attempt's work (its run/worktree/diff + the run's integration branch), so a fresh /
+    /// rotated agent can be handed the prior diff + integration state instead of starting from a blank
+    /// pod. Consumed when composing the retry guidance/handoff bundle. Null until the subtask has been
+    /// dispatched-fresh at least once.
+    /// </summary>
+    public string? PriorChildRunId { get; set; }
+
+    /// <summary>
     /// Optional bespoke charter authored inline by the coordinator's decomposition when no catalog
     /// role adequately covers this subtask's function. When set, it flows to the dispatched child
     /// <see cref="Agentweaver.Domain.Run.AgentCharter"/> and overrides file-based charter resolution,

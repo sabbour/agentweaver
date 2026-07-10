@@ -3,6 +3,7 @@ using System;
 using Agentweaver.Api.Memory;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -10,9 +11,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace Agentweaver.Api.Migrations
 {
     [DbContext(typeof(MemoryDbContext))]
-    partial class MemoryDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260710004451_AddHumanReviewRoundTrips")]
+    partial class AddHumanReviewRoundTrips
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder.HasAnnotation("ProductVersion", "9.0.7");
@@ -737,9 +740,6 @@ namespace Agentweaver.Api.Migrations
 
                     b.Property<string>("Phase")
                         .IsRequired()
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("PriorChildRunId")
                         .HasColumnType("TEXT");
 
                     b.Property<int>("RecoveryAttempts")

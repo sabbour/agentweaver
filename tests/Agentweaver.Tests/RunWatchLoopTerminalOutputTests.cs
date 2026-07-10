@@ -134,6 +134,22 @@ public sealed class RunWatchLoopTerminalOutputTests : IClassFixture<ReviewWebApp
         result.Should().BeTrue("an empty-diff child still terminalizes cleanly as assemble_ready");
     }
 
+    [Fact]
+    public async Task HandleTerminalOutput_ChildTurnFailed_ReturnsTrue_AndCompletesStream()
+    {
+        var (svc, entry, runId) = CreateServiceAndEntry();
+        var woe = new WorkflowOutputEvent(
+            new ChildTurnFailedOutput(runId, "commit_failed_persistent", "exception=InvalidOperationException: index.lock held | attempt1: cleared=false"),
+            "child-turn-failed");
+
+        var result = await svc.HandleTerminalOutputAsync(runId, woe, entry, CancellationToken.None);
+
+        result.Should().BeTrue("a child-turn-failed output is a genuinely terminal VISIBLE failure");
+        entry.HasEventType(EventTypes.RunFailed).Should().BeTrue(
+            "the persistent commit fault must surface as a visible run.failed event (never a hung stream)");
+        entry.IsCompleted.Should().BeTrue("the failure terminal completes the stream (single terminal emission)");
+    }
+
     private (RunWatchLoopService Service, RunStreamEntry Entry, string RunId) CreateServiceAndEntry()
     {
         var scope = _factory.Services.CreateScope();

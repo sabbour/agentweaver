@@ -46,6 +46,8 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
     private readonly FakePipeline _pipeline = new();
     private readonly FakeDispatch _dispatch = new();
     private readonly CoordinatorSteeringWaitRegistry _steeringWaits = new();
+    private readonly ConfigurableRotationSelector _rotation = new();
+    private readonly FakeChildRevisionHandoff _handoff;
     private readonly CoordinatorAssemblyService _sut;
     private readonly CoordinatorSteeringService _steering;
 
@@ -75,6 +77,17 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
             sp.GetRequiredService<IServiceScopeFactory>(),
             sp.GetRequiredService<CoordinatorSteeringService>(),
             NullLogger<CoordinatorSteeringDecider>.Instance));
+        // Req-2 (Strict Lockout): the assembly service resolves IAssemblyAuthorRotationSelector to pick
+        // a DIFFERENT eligible agent on a reviewer rejection. The harness repo path ("repo") has no team
+        // roster, so a real SquadReader would always deadlock; register a configurable fake whose default
+        // returns a rotated author (preserving "steers again" intent). Deadlock/single-eligible tests set
+        // _rotation.Impl to return null.
+        services.AddSingleton<IAssemblyAuthorRotationSelector>(_rotation);
+        // Fix-A(3a) Path-2: the lockout rotation hands off to a DIFFERENT agent via the
+        // IChildRevisionHandoff seam. The harness constructs no live RunOrchestrator, so register a fake
+        // that records the handoff bundle and inserts the new child run (mirroring the real InsertAsync).
+        _handoff = new FakeChildRevisionHandoff(_runStore);
+        services.AddSingleton<IChildRevisionHandoff>(_handoff);
         _provider = services.BuildServiceProvider();
 
         using (var scope = _provider.CreateScope())
@@ -298,6 +311,579 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
 
         EventTypes_(coordinatorRunId).Should().NotContain(EventTypes.CoordinatorAssemblyFailed,
             "an unconfirmed in-place directive must be re-driven, not wedge assembly");
+    }
+
+    // ── UNIFIED AUTONOMOUS STEERING (Fix-B): resilient assembly-review loop ────────────────────────
+    //    When the autonomous steering budget is exhausted the run must ESCALATE to the human-review gate
+    //    (open awaiting_review so a human can approve / decline / steer) instead of latching terminal
+    //    WorkPlanStatus.AssemblyBlocked and hanging with no way to intervene. Escalation is a durable,
+    //    idempotent, recoverable effect; a human request-changes resets the autonomous budget bounded by
+    //    a persisted round-trip counter. ─────────────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task RouteAssembly_BudgetExhausted_EscalatesToHumanReview_NotTerminal()
+    {
+        var coordinatorRunId = RunId.New().ToString();
+        await SeedCoordinatorRunAsync(coordinatorRunId);
+        _streamStore.Create(coordinatorRunId, "alice");
+        var (workPlanId, subtaskIds) = await SeedPlanAsync(
+            coordinatorRunId, new[] { SubtaskStatus.AssembleReady, SubtaskStatus.AssembleReady });
+        // Autonomous budget already exhausted → the decider returns Proceed.
+        await SetPlanSteeringStateAsync(workPlanId, steeringIterations: 6);
+
+        var touched = subtaskIds.ToDictionary(id => id, _ => (IReadOnlySet<string>)new HashSet<string>());
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+
+        // Route a rubberduck request-changes through steering. Budget-exhausted → escalate → park at
+        // review, then the escalation live-awaits the human. Wait until the review is durably OPEN, then
+        // cancel the (indefinite) human wait so the test does not hang; the durable escalation state is
+        // already committed BEFORE the await.
+        var route = InvokeRouteAssemblyGateThroughSteeringAsync(
+            Context(coordinatorRunId), workPlanId, SteeringSource.Rubberduck,
+            "Two server.js bugs remain.", touched, "tree-abc", cts.Token);
+        await WaitForEventAsync(coordinatorRunId, EventTypes.CoordinatorAssemblyReviewRequested, cts.Token);
+        cts.Cancel();
+        try { await route; } catch (OperationCanceledException) { }
+
+        var types = EventTypes_(coordinatorRunId);
+        types.Should().NotContain(EventTypes.CoordinatorAssemblyBlocked,
+            "budget exhaustion must escalate to human review, NEVER latch terminal AssemblyBlocked");
+
+        var escalation = _streamStore.Get(coordinatorRunId)!.GetSnapshotSince(0).Events
+            .Where(e => e.Type == EventTypes.CoordinatorAssemblyReviewRequested)
+            .Select(e => JsonSerializer.SerializeToNode(e.Payload)!.AsObject())
+            .Single();
+        escalation["escalated"]!.GetValue<bool>().Should().BeTrue("the escalation must be visible, never a glitch");
+        escalation["reason"]!.GetValue<string>().Should().Contain("budget");
+
+        var (_, _, status, stage) = await GetPlanSteeringStateAsync(workPlanId);
+        status.Should().Be(WorkPlanStatus.InReview, "the plan parks at human review");
+        stage.Should().Be(AssemblyStage.Review, "the canonical review stage opens the human gate");
+
+        var record = await CoordinatorAssemblyReviewPersistence.GetAsync(_scopeFactory, coordinatorRunId, default);
+        record.Should().NotBeNull("a durable review request must back the escalated gate");
+
+        (await _runStore.GetAsync(RunId.Parse(coordinatorRunId), default))!.Status
+            .Should().Be(RunStatus.AwaitingReview, "the coordinator run parks awaiting human review");
+
+        var directive = await GetLatestDirectiveAsync(coordinatorRunId);
+        directive!.DecidedAction.Should().Be(SteeringDirection.Proceed);
+        directive.Status.Should().Be(SteeringStatus.Applied,
+            "the escalation directive settles only AFTER the review is durably open");
+    }
+
+    [Fact]
+    public async Task RouteAssembly_BudgetExhausted_Escalate_HumanApproves_Completes()
+    {
+        var coordinatorRunId = RunId.New().ToString();
+        await SeedCoordinatorRunAsync(coordinatorRunId);
+        _streamStore.Create(coordinatorRunId, "alice");
+        var (workPlanId, subtaskIds) = await SeedPlanAsync(
+            coordinatorRunId, new[] { SubtaskStatus.AssembleReady, SubtaskStatus.AssembleReady });
+        await SetPlanSteeringStateAsync(workPlanId, steeringIterations: 6);
+
+        var touched = subtaskIds.ToDictionary(id => id, _ => (IReadOnlySet<string>)new HashSet<string>());
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+
+        var route = InvokeRouteAssemblyGateThroughSteeringAsync(
+            Context(coordinatorRunId), workPlanId, SteeringSource.Rubberduck,
+            "Fix remaining issues.", touched, "tree-approve", cts.Token);
+
+        // The escalation opens the human-review gate; the human APPROVES → assembly completes (merge).
+        await WaitUntilArmedAsync(coordinatorRunId);
+        _reviewGate.TrySubmit(coordinatorRunId, "alice",
+            new AssemblyReviewDecision(Approved: true, RequestChanges: false, Feedback: null, TargetFiles: null, Reviewer: "alice"));
+        await route;
+
+        var types = EventTypes_(coordinatorRunId);
+        types.Should().Contain(EventTypes.CoordinatorAssemblyReviewApproved,
+            "the escalated review gate honors an approve exactly like a normal human gate");
+        types.Should().Contain(EventTypes.CoordinatorAssemblyCompleted, "approve → merge → complete");
+        _pipeline.Merges.Should().BeGreaterThan(0);
+        (await _runStore.GetAsync(RunId.Parse(coordinatorRunId), default))!.Status
+            .Should().Be(RunStatus.Completed);
+    }
+
+    [Fact]
+    public async Task RouteAssembly_HumanRequestChanges_UnderCap_ResetsBudget_SteersAgain()
+    {
+        var coordinatorRunId = RunId.New().ToString();
+        await SeedCoordinatorRunAsync(coordinatorRunId);
+        _streamStore.Create(coordinatorRunId, "alice");
+        // No resumable child runs → after the budget reset the decider steers via CONSCIOUS dispatch_fresh.
+        var (workPlanId, subtaskIds) = await SeedPlanAsync(
+            coordinatorRunId, new[] { SubtaskStatus.AssembleReady, SubtaskStatus.AssembleReady });
+        // Budget exhausted, but this is a HUMAN request-changes and we are under the round-trip cap.
+        await SetPlanSteeringStateAsync(workPlanId, steeringIterations: 6, humanReviewRoundTrips: 0);
+
+        var touched = subtaskIds.ToDictionary(id => id, _ => (IReadOnlySet<string>)new HashSet<string>());
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+
+        await InvokeRouteAssemblyGateThroughSteeringAsync(
+            Context(coordinatorRunId), workPlanId, SteeringSource.HumanReview,
+            "Please fix the signup validation.", touched, "tree-human", cts.Token);
+
+        var (_, roundTrips, _, _) = await GetPlanSteeringStateAsync(workPlanId);
+        roundTrips.Should().Be(1, "the human round-trip is persisted (cross-replica/crash-safe)");
+
+        var reset = _streamStore.Get(coordinatorRunId)!.GetSnapshotSince(0).Events
+            .Where(e => e.Type == EventTypes.CoordinatorSteering)
+            .Select(e => JsonSerializer.SerializeToNode(e.Payload)!.AsObject())
+            .FirstOrDefault(o => o["budgetReset"] != null);
+        reset.Should().NotBeNull("the budget reset must be a visible steering event");
+        reset!["budgetReset"]!.GetValue<bool>().Should().BeTrue();
+        reset["humanReviewRoundTrip"]!.GetValue<int>().Should().Be(1);
+
+        // Budget had headroom after the reset → the coordinator STEERS again (not Proceed/escalate).
+        var decisions = _streamStore.Get(coordinatorRunId)!.GetSnapshotSince(0).Events
+            .Where(e => e.Type == EventTypes.CoordinatorSteeringDecision)
+            .Select(e => JsonSerializer.SerializeToNode(e.Payload)!.AsObject())
+            .ToList();
+        decisions.Should().NotContain(
+            d => d["decision"] != null && d["decision"]!.GetValue<string>() == SteeringDirection.Proceed,
+            "a human request-changes under the cap resets the budget so the coordinator converges again");
+    }
+
+    [Fact]
+    public async Task RouteAssembly_HumanRequestChanges_OverCap_DoesNotReset_ReParksAtReview()
+    {
+        var coordinatorRunId = RunId.New().ToString();
+        await SeedCoordinatorRunAsync(coordinatorRunId);
+        _streamStore.Create(coordinatorRunId, "alice");
+        var (workPlanId, subtaskIds) = await SeedPlanAsync(
+            coordinatorRunId, new[] { SubtaskStatus.AssembleReady, SubtaskStatus.AssembleReady });
+        // Already at the round-trip cap (3) → this human request-changes must NOT reset the budget.
+        await SetPlanSteeringStateAsync(workPlanId, steeringIterations: 6, humanReviewRoundTrips: 3);
+
+        var touched = subtaskIds.ToDictionary(id => id, _ => (IReadOnlySet<string>)new HashSet<string>());
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+
+        var route = InvokeRouteAssemblyGateThroughSteeringAsync(
+            Context(coordinatorRunId), workPlanId, SteeringSource.HumanReview,
+            "Still not right.", touched, "tree-cap", cts.Token);
+        await WaitForEventAsync(coordinatorRunId, EventTypes.CoordinatorAssemblyReviewRequested, cts.Token);
+        cts.Cancel();
+        try { await route; } catch (OperationCanceledException) { }
+
+        var (_, roundTrips, status, _) = await GetPlanSteeringStateAsync(workPlanId);
+        roundTrips.Should().Be(4, "the round-trip counter still increments past the cap");
+
+        var reset = _streamStore.Get(coordinatorRunId)!.GetSnapshotSince(0).Events
+            .Where(e => e.Type == EventTypes.CoordinatorSteering)
+            .Select(e => JsonSerializer.SerializeToNode(e.Payload)!.AsObject())
+            .FirstOrDefault(o => o["budgetReset"] != null);
+        reset.Should().NotBeNull();
+        reset!["budgetReset"]!.GetValue<bool>().Should().BeFalse("past the cap the autonomous budget is NOT reset");
+
+        // Autonomy stops re-steering; the plan RE-PARKS at human review (never terminal, never a loop).
+        status.Should().Be(WorkPlanStatus.InReview);
+        EventTypes_(coordinatorRunId).Should().NotContain(EventTypes.CoordinatorAssemblyBlocked);
+        var decisions = _streamStore.Get(coordinatorRunId)!.GetSnapshotSince(0).Events
+            .Where(e => e.Type == EventTypes.CoordinatorSteeringDecision)
+            .Select(e => JsonSerializer.SerializeToNode(e.Payload)!.AsObject())
+            .ToList();
+        decisions.Should().Contain(
+            d => d["decision"] != null && d["decision"]!.GetValue<string>() == SteeringDirection.Proceed,
+            "over the cap the coordinator no longer steers — it parks at review");
+    }
+
+    [Fact]
+    public async Task DriveOutstanding_ProceedDirective_CrashBeforeReviewOpen_ReDrivesEscalation()
+    {
+        var coordinatorRunId = RunId.New().ToString();
+        await SeedCoordinatorRunAsync(coordinatorRunId);
+        _streamStore.Create(coordinatorRunId, "alice");
+        var (workPlanId, subtaskIds) = await SeedPlanAsync(
+            coordinatorRunId, new[] { SubtaskStatus.AssembleReady, SubtaskStatus.AssembleReady });
+        // Simulate a crash AFTER MarkDirectiveExecuting but BEFORE the review opened: the plan is still
+        // in the AssemblySteering lease, NO durable review request exists, and the Proceed directive is
+        // left `executing`. A status-only recovery would silently mark it applied (drop the escalation).
+        await SetPlanSteeringStateAsync(workPlanId, status: WorkPlanStatus.AssemblySteering, steeringIterations: 6);
+        var directiveId = await SeedExecutingProceedDirectiveAsync(coordinatorRunId, subtaskIds, "tree-crash");
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        var redrove = await InvokeDriveOutstandingSteeringExecutionAsync(
+            Context(coordinatorRunId), workPlanId, cts.Token);
+
+        redrove.Should().BeTrue("recovery re-drives the unfinished escalation and stops the assembly pass");
+        var (_, _, status, stage) = await GetPlanSteeringStateAsync(workPlanId);
+        status.Should().Be(WorkPlanStatus.InReview, "the escalation is completed on recovery, never dropped");
+        stage.Should().Be(AssemblyStage.Review);
+        (await CoordinatorAssemblyReviewPersistence.GetAsync(_scopeFactory, coordinatorRunId, default))
+            .Should().NotBeNull("recovery writes the durable review request that the crash skipped");
+        EventTypes_(coordinatorRunId).Should().Contain(EventTypes.CoordinatorAssemblyReviewRequested);
+        (await GetDirectiveAsync(directiveId))!.Status.Should().Be(SteeringStatus.Applied,
+            "the directive settles only after the review is durably open");
+    }
+
+    [Fact]
+    public async Task DriveOutstanding_ProceedDirective_ReviewAlreadyOpen_SettlesWithoutReDriving()
+    {
+        var coordinatorRunId = RunId.New().ToString();
+        await SeedCoordinatorRunAsync(coordinatorRunId);
+        _streamStore.Create(coordinatorRunId, "alice");
+        var (workPlanId, subtaskIds) = await SeedPlanAsync(
+            coordinatorRunId, new[] { SubtaskStatus.AssembleReady, SubtaskStatus.AssembleReady });
+        // The escalation already completed before the crash: plan InReview + durable review request.
+        await SetPlanSteeringStateAsync(workPlanId, status: WorkPlanStatus.InReview);
+        await SetPlanReviewStateAsync(workPlanId);
+        await CoordinatorAssemblyReviewPersistence.UpsertReviewRequestAsync(
+            _scopeFactory, coordinatorRunId, "alice",
+            IntegrationBranchName_(coordinatorRunId), "tree-open", default);
+        var directiveId = await SeedExecutingProceedDirectiveAsync(coordinatorRunId, subtaskIds, "tree-open");
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        var redrove = await InvokeDriveOutstandingSteeringExecutionAsync(
+            Context(coordinatorRunId), workPlanId, cts.Token);
+
+        redrove.Should().BeFalse("a durably-open escalation is simply settled, not re-driven");
+        (await GetDirectiveAsync(directiveId))!.Status.Should().Be(SteeringStatus.Applied);
+        var (_, _, status, _) = await GetPlanSteeringStateAsync(workPlanId);
+        status.Should().Be(WorkPlanStatus.InReview, "recovery must not disturb the already-open review");
+    }
+
+    private static string IntegrationBranchName_(string coordinatorRunId) =>
+        CoordinatorAssemblyService.IntegrationBranchName(coordinatorRunId);
+
+    // ── UNIFIED AUTONOMOUS STEERING (Req-1 context-carry + Req-2 Strict Lockout) ───────────────────
+    //    Req-1: every revision re-trigger (conscious fresh dispatch AND in-place resume) must hand the
+    //    revising agent FULL context — the ACCUMULATED reviewer feedback across ALL prior rejection
+    //    rounds (not just the latest) plus a pointer to the prior work — so repeated rejections reflect
+    //    genuine quality problems, not agent amnesia. Req-2: a CONTEXT-COMPLETE reviewer rejection locks
+    //    the author out and rotates the revision to a DIFFERENT eligible agent (conscious, visible); a
+    //    single-eligible-agent domain / deadlock escalates to human review, never rotates blind, never
+    //    terminal. Req-2 is mechanically gated on Req-1. ────────────────────────────────────────────
+
+    [Fact]
+    public async Task RouteAssembly_Rejection_DispatchFresh_CarriesAccumulatedFeedbackAndPriorWork()
+    {
+        var coordinatorRunId = RunId.New().ToString();
+        await SeedCoordinatorRunAsync(coordinatorRunId);
+        _streamStore.Create(coordinatorRunId, "alice");
+
+        // One rejected subtask that already has PRIOR work (a child run) to preserve a pointer to. The
+        // prior child run carries the worktree branch the fresh/rotated agent will REUSE (new session).
+        var priorChildRunId = RunId.New().ToString();
+        var (workPlanId, subtaskIds) = await SeedPlanAsync(
+            coordinatorRunId, new[] { SubtaskStatus.AssembleReady }, new string?[] { priorChildRunId });
+        await SeedChildRunAsync(RunId.Parse(priorChildRunId), "agentweaver/wt/child-hero", DiffTouching("index.html"));
+
+        // Two PRIOR rejection rounds already recorded for this target (accumulated history).
+        await SeedPriorRejectionDirectiveAsync(
+            coordinatorRunId, subtaskIds, SteeringSource.Rubberduck, "gate:rubberduck",
+            "Round1: the signup form is missing client-side validation.");
+        await SeedPriorRejectionDirectiveAsync(
+            coordinatorRunId, subtaskIds, SteeringSource.BuildTest, "gate:build-test",
+            "Round2: the build fails — lint errors in server.js.");
+
+        var touched = subtaskIds.ToDictionary(id => id, _ => (IReadOnlySet<string>)new HashSet<string>());
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+
+        // A fresh rubberduck rejection (round 3). The default rotation fake returns a different eligible
+        // author → conscious dispatch_fresh, which (because a reusable prior child exists) re-dispatches
+        // via the CONTEXT-CARRYING handoff (StartChildRevisionHandoffAsync), NOT a plain fresh dispatch.
+        await InvokeRouteAssemblyGateThroughSteeringAsync(
+            Context(coordinatorRunId), workPlanId, SteeringSource.Rubberduck,
+            "Round3: the landing page hero is not visually stunning.", touched, "tree-r3", cts.Token);
+
+        var (_, _, priorPointer, _) = await GetSubtaskFieldsAsync(subtaskIds[0]);
+        priorPointer.Should().Be(priorChildRunId,
+            "the prior child run pointer is captured BEFORE ChildRunId is repointed (change #1)");
+
+        // The re-dispatch went through the context-carrying handoff exactly once, threading the
+        // ACCUMULATED feedback + the prior worktree branch to a NEW (non-locked-out) agent session.
+        _handoff.Calls.Should().ContainSingle("the reusable prior child re-dispatches via the handoff, not a plain fresh dispatch");
+        var call = _handoff.Calls[0];
+        call.NewAgentRun.Id.ToString().Should().NotBe(priorChildRunId,
+            "the handoff mints a NEW run id ⇒ a new deterministic session ⇒ lockout-correct");
+        call.NewAgentRun.AgentName.Should().Be("rotated-morpheus",
+            "the handoff dispatches under the ROTATED (non-locked-out) author");
+        call.PriorChild.Id.ToString().Should().Be(priorChildRunId,
+            "the prior (locked-out author's) child run is handed off as the worktree/branch source");
+        call.Feedback.PriorWorktreeBranch.Should().Be("agentweaver/wt/child-hero",
+            "the handoff reuses the prior worktree branch while minting a NEW session");
+        call.Feedback.RenderedGuidance.Should().NotBeNullOrEmpty(
+            "RenderedGuidance is prompt-ready so the consumer need not re-derive it");
+        call.Feedback.RenderedGuidance!.Should().Contain("Round1").And.Contain("Round2").And.Contain("Round3",
+            "the handoff carries ACCUMULATED feedback across ALL prior rounds, not just the latest (change #2)");
+        call.Feedback.RenderedGuidance!.Should().Contain("agentweaver/wt/child-hero",
+            "the guidance points the new agent at the prior worktree branch so it builds on prior work (Req-1)");
+
+        // The STABLE AccumulatedReviewFeedback handoff contract (Morpheus 3b) is populated correctly.
+        var bundle = await _sut.BuildAccumulatedReviewFeedbackAsync(
+            coordinatorRunId, subtaskIds[0], "Round3: the landing page hero is not visually stunning.",
+            priorChildRunId, default);
+        bundle.SubtaskId.Should().Be(subtaskIds[0].ToString());
+        bundle.PriorWorktreeBranch.Should().Be("agentweaver/wt/child-hero",
+            "the consumer reuses the prior worktree branch while minting a NEW session for the non-locked-out agent");
+        bundle.PriorRounds.Should().HaveCountGreaterThanOrEqualTo(3, "PriorRounds is target+rejection-scoped across all rounds");
+        bundle.RenderedGuidance.Should().NotBeNullOrEmpty("RenderedGuidance is prompt-ready so the consumer need not re-derive it");
+
+        var freshDecision = _streamStore.Get(coordinatorRunId)!.GetSnapshotSince(0).Events
+            .Where(e => e.Type == EventTypes.CoordinatorSteeringDecision)
+            .Select(e => JsonSerializer.SerializeToNode(e.Payload)!.AsObject())
+            .FirstOrDefault(d => d["decision"]?.GetValue<string>() == SteeringDirection.DispatchFresh
+                && d["disposition"]?.GetValue<string>() == "rejection");
+        freshDecision.Should().NotBeNull("a reviewer rejection rotates via a VISIBLE conscious dispatch_fresh");
+    }
+
+    [Fact]
+    public async Task InPlaceRetryGuidance_CarriesAccumulatedFeedback_PreservesSession_NoPriorPodPointer()
+    {
+        var coordinatorRunId = RunId.New().ToString();
+        await SeedCoordinatorRunAsync(coordinatorRunId);
+        _streamStore.Create(coordinatorRunId, "alice");
+        var (_, subtaskIds) = await SeedPlanAsync(
+            coordinatorRunId, new[] { SubtaskStatus.AssembleReady });
+
+        await SeedPriorRejectionDirectiveAsync(
+            coordinatorRunId, subtaskIds, SteeringSource.Rubberduck, "gate:rubberduck",
+            "Round1: add a password strength meter.");
+        await SeedPriorRejectionDirectiveAsync(
+            coordinatorRunId, subtaskIds, SteeringSource.Rai, "gate:rai",
+            "Round2: sanitize the email input.");
+
+        // The in-place resume path (ExecuteInPlaceSteerAsync) builds its guidance from the SAME
+        // accumulated-feedback + guidance builders, with priorChildRunId:null (the session is preserved,
+        // not a fresh pod). Assert both: accumulated feedback is threaded, and NO fresh-pod pointer.
+        var guidance = await InvokeBuildAccumulatedRetryGuidanceAsync(
+            coordinatorRunId, subtaskIds, "Latest: tighten the validation copy.",
+            priorChildRunId: null, integrationBranch: null);
+
+        guidance.Should().Contain("Round1").And.Contain("Round2",
+            "the in-place resume explicitly carries accumulated feedback (the stream is removed before restart, change #6)");
+        guidance.Should().Contain("Latest: tighten the validation copy.");
+        guidance.Should().NotContain("Prior work",
+            "in-place resume preserves the child session — it does not thread a fresh prior-pod pointer");
+    }
+
+    [Fact]
+    public async Task RouteAssembly_Rejection_LocksOutAuthor_RotatesToDifferentEligibleAgent()
+    {
+        var coordinatorRunId = RunId.New().ToString();
+        await SeedCoordinatorRunAsync(coordinatorRunId);
+        _streamStore.Create(coordinatorRunId, "alice");
+        var (workPlanId, subtaskIds) = await SeedPlanAsync(
+            coordinatorRunId, new[] { SubtaskStatus.AssembleReady });
+
+        var touched = subtaskIds.ToDictionary(id => id, _ => (IReadOnlySet<string>)new HashSet<string>());
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+
+        // Default rotation fake returns a different eligible author ("rotated-morpheus").
+        await InvokeRouteAssemblyGateThroughSteeringAsync(
+            Context(coordinatorRunId), workPlanId, SteeringSource.Rubberduck,
+            "The hero section is broken.", touched, "tree-rot", cts.Token);
+
+        var (assigned, lockedOut, _, _) = await GetSubtaskFieldsAsync(subtaskIds[0]);
+        assigned.Should().Be("rotated-morpheus",
+            "a reviewer rejection rotates the revision to a DIFFERENT eligible agent (Strict Lockout)");
+        lockedOut.Should().NotBeNull();
+        lockedOut!.Should().Contain("morpheus",
+            "the rejected author is durably locked out of the artifact (change #4)");
+
+        var rotation = _streamStore.Get(coordinatorRunId)!.GetSnapshotSince(0).Events
+            .Where(e => e.Type == EventTypes.CoordinatorSteeringDecision)
+            .Select(e => JsonSerializer.SerializeToNode(e.Payload)!.AsObject())
+            .Single(d => d["decision"]?.GetValue<string>() == SteeringDirection.DispatchFresh
+                && d["rotatedTo"] != null);
+        rotation["rotatedFrom"]!.GetValue<string>().Should().Be("morpheus");
+        rotation["rotatedTo"]!.GetValue<string>().Should().Be("rotated-morpheus");
+        rotation["disposition"]!.GetValue<string>().Should().Be("rejection");
+        EventTypes_(coordinatorRunId).Should().NotContain(EventTypes.CoordinatorAssemblyBlocked);
+    }
+
+    [Fact]
+    public async Task RouteAssembly_Rejection_Lockout_DispatchesToDifferentAgentViaContextCarryingHandoff()
+    {
+        var coordinatorRunId = RunId.New().ToString();
+        await SeedCoordinatorRunAsync(coordinatorRunId);
+        _streamStore.Create(coordinatorRunId, "alice");
+
+        // The rejected subtask has PRIOR work (a child run under the locked-out author "morpheus"). Its
+        // worktree branch is the source the rotated (different) agent REUSES while minting a NEW session.
+        var priorChildRunId = RunId.New().ToString();
+        var (workPlanId, subtaskIds) = await SeedPlanAsync(
+            coordinatorRunId, new[] { SubtaskStatus.AssembleReady }, new string?[] { priorChildRunId });
+        await SeedChildRunAsync(RunId.Parse(priorChildRunId), "agentweaver/wt/child-prior", DiffTouching("app.ts"));
+
+        await SeedPriorRejectionDirectiveAsync(
+            coordinatorRunId, subtaskIds, SteeringSource.Rubberduck, "gate:rubberduck",
+            "Round1: accessibility labels are missing.");
+
+        var touched = subtaskIds.ToDictionary(id => id, _ => (IReadOnlySet<string>)new HashSet<string>());
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+
+        // Default rotation fake rotates "morpheus" → "rotated-morpheus" (different eligible agent).
+        await InvokeRouteAssemblyGateThroughSteeringAsync(
+            Context(coordinatorRunId), workPlanId, SteeringSource.Rubberduck,
+            "Round2: contrast ratios fail WCAG AA.", touched, "tree-handoff", cts.Token);
+
+        // The different-agent lockout rotation dispatches through StartChildRevisionHandoffAsync — NOT a
+        // plain fresh dispatch that would provision a blank worktree and discard the prior work.
+        _handoff.Calls.Should().ContainSingle("the reviewer rejection with reusable prior work rotates via the context-carrying handoff");
+        var call = _handoff.Calls[0];
+
+        // new run id ≠ prior child (a NEW deterministic session ⇒ lockout-correct)
+        call.NewAgentRun.Id.ToString().Should().NotBe(priorChildRunId);
+        call.PriorChild.Id.ToString().Should().Be(priorChildRunId,
+            "the locked-out author's child run is the worktree/branch source handed to the new agent");
+
+        // rotated agent ≠ locked-out author
+        call.NewAgentRun.AgentName.Should().Be("rotated-morpheus");
+        call.NewAgentRun.AgentName.Should().NotBe("morpheus", "the locked-out author may not produce the next version");
+
+        // feedback threaded (target+rejection-scoped accumulated feedback + prior worktree branch)
+        call.Feedback.SubtaskId.Should().Be(subtaskIds[0].ToString());
+        call.Feedback.PriorWorktreeBranch.Should().Be("agentweaver/wt/child-prior");
+        call.Feedback.RenderedGuidance.Should().NotBeNullOrEmpty();
+        call.Feedback.RenderedGuidance!.Should().Contain("Round1").And.Contain("Round2",
+            "the new agent receives ACCUMULATED feedback across all prior rejection rounds");
+
+        // The subtask now points at the NEW child and retains the prior pointer; the author is rotated.
+        var (assigned, lockedOut, priorPointer, recoveryGuidance) = await GetSubtaskFieldsAsync(subtaskIds[0]);
+        assigned.Should().Be("rotated-morpheus");
+        lockedOut!.Should().Contain("morpheus");
+        priorPointer.Should().Be(priorChildRunId, "the prior pointer is retained for provenance / worktree source");
+        recoveryGuidance.Should().BeNull(
+            "the handoff injects guidance into the new agent's prompt directly — it is NOT re-carried via RecoveryGuidance");
+
+        // Re-dispatch went back through the loop, and never latched terminal.
+        _dispatch.StartDispatchCalls.Should().NotBeEmpty("the plan returns to dispatching so the loop re-observes the handoff child");
+        EventTypes_(coordinatorRunId).Should().NotContain(EventTypes.CoordinatorAssemblyBlocked);
+    }
+
+    [Fact]
+    public async Task RouteAssembly_Rejection_Lockout_TwoRotations_Round1GuidanceAppearsExactlyOnce()
+    {
+        var coordinatorRunId = RunId.New().ToString();
+        await SeedCoordinatorRunAsync(coordinatorRunId);
+        _streamStore.Create(coordinatorRunId, "alice");
+
+        // The rejected subtask starts with a prior child under the original author "morpheus".
+        var originalChildRunId = RunId.New().ToString();
+        var (workPlanId, subtaskIds) = await SeedPlanAsync(
+            coordinatorRunId, new[] { SubtaskStatus.AssembleReady }, new string?[] { originalChildRunId });
+        await SeedChildRunAsync(RunId.Parse(originalChildRunId), "agentweaver/wt/child-prior", DiffTouching("app.ts"));
+
+        var touched = subtaskIds.ToDictionary(id => id, _ => (IReadOnlySet<string>)new HashSet<string>());
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+
+        // A distinctive round-1 marker that must appear in the FINAL child's task EXACTLY once (never
+        // doubled by chaining a prior handoff child's already-guidance-embedding Task).
+        const string round1Marker = "ROUND1_UNIQUE_MARKER_a11y";
+
+        // ── Rotation 1: morpheus locked out → rotated-morpheus; guidance carries round-1's feedback. ──
+        await InvokeRouteAssemblyGateThroughSteeringAsync(
+            Context(coordinatorRunId), workPlanId, SteeringSource.Rubberduck,
+            $"{round1Marker}: accessibility labels are missing.", touched, "tree-r1", cts.Token);
+
+        _handoff.Calls.Should().ContainSingle();
+        var firstRotationChildId = _handoff.Calls[0].NewAgentRun.Id;
+        // The 1st rotation's child DOES embed round-1 guidance in its persisted Task — it becomes the
+        // 2nd rotation's priorChild, which is exactly the chaining source the fix must NOT re-carry.
+        (await GetRunTaskAsync(firstRotationChildId))!.Should().Contain(round1Marker);
+
+        // Simulate the rotated child being rejected AGAIN: return the subtask to a routable state while
+        // KEEPING ChildRunId pointing at the 1st rotation's child (the 2nd rotation's priorChild).
+        await ResetSubtaskForNextRejectionKeepingChildAsync(subtaskIds[0]);
+
+        // ── Rotation 2: rotated-morpheus locked out → a further different agent; priorChild = child1. ──
+        await InvokeRouteAssemblyGateThroughSteeringAsync(
+            Context(coordinatorRunId), workPlanId, SteeringSource.Rubberduck,
+            "ROUND2_UNIQUE_MARKER: contrast ratios fail WCAG AA.", touched, "tree-r2", cts.Token);
+
+        _handoff.Calls.Should().HaveCount(2);
+        var secondRotation = _handoff.Calls[1];
+        secondRotation.PriorChild.Id.Should().Be(firstRotationChildId,
+            "the 2nd rotation reuses the 1st rotation's child as its prior work source");
+        secondRotation.NewAgentRun.AgentName.Should().NotBe("morpheus").And.NotBe("rotated-morpheus",
+            "each rejection additionally locks out that revision's author (Strict Lockout step 6)");
+
+        // ROOT-CAUSE ASSERTION: the FINAL child's persisted Task carries round-1's guidance EXACTLY once.
+        // The handoff appends the single accumulated RenderedGuidance onto a GUIDANCE-FREE canonical base
+        // (BuildCanonicalSubtaskTask), so the 1st rotation's already-embedded round-1 guidance is NOT
+        // chained via priorChild.Task — no compounding duplication across rotations.
+        var finalTask = await GetRunTaskAsync(secondRotation.NewAgentRun.Id);
+        (finalTask!.Split(round1Marker).Length - 1).Should().Be(1,
+            "round-1 guidance appears once (via accumulated prior rounds), never doubled by chaining priorChild.Task");
+    }
+
+    [Fact]
+    public async Task RouteAssembly_Rejection_SingleEligibleDomain_EscalatesToHumanReview_NotTerminal()
+    {
+        var coordinatorRunId = RunId.New().ToString();
+        await SeedCoordinatorRunAsync(coordinatorRunId);
+        _streamStore.Create(coordinatorRunId, "alice");
+        var (workPlanId, subtaskIds) = await SeedPlanAsync(
+            coordinatorRunId, new[] { SubtaskStatus.AssembleReady, SubtaskStatus.AssembleReady });
+
+        // No eligible agent outside the current author (single-eligible-agent domain) → deadlock. The
+        // coordinator must escalate to human review, NEVER rotate to an unrelated agent, NEVER terminal.
+        _rotation.Impl = (_, _, _) => null;
+
+        var touched = subtaskIds.ToDictionary(id => id, _ => (IReadOnlySet<string>)new HashSet<string>());
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+
+        var route = InvokeRouteAssemblyGateThroughSteeringAsync(
+            Context(coordinatorRunId), workPlanId, SteeringSource.Rubberduck,
+            "Needs a specialist we do not have.", touched, "tree-deadlock", cts.Token);
+        await WaitForEventAsync(coordinatorRunId, EventTypes.CoordinatorAssemblyReviewRequested, cts.Token);
+        cts.Cancel();
+        try { await route; } catch (OperationCanceledException) { }
+
+        EventTypes_(coordinatorRunId).Should().NotContain(EventTypes.CoordinatorAssemblyBlocked,
+            "a lockout deadlock escalates to human review, NEVER latches terminal AssemblyBlocked");
+
+        var deadlock = _streamStore.Get(coordinatorRunId)!.GetSnapshotSince(0).Events
+            .Where(e => e.Type == EventTypes.CoordinatorSteeringDecision)
+            .Select(e => JsonSerializer.SerializeToNode(e.Payload)!.AsObject())
+            .Single(d => d["decision"]?.GetValue<string>() == SteeringDirection.Proceed
+                && d["disposition"]?.GetValue<string>() == "rejection");
+        deadlock["rationale"]!.GetValue<string>().Should().Contain("lockout_deadlock");
+        deadlock["lockedOutRoster"]!.AsArray().Select(n => n!.GetValue<string>())
+            .Should().Contain("morpheus", "the escalated card shows why autonomy handed off (locked-out roster)");
+
+        var (_, _, status, stage) = await GetPlanSteeringStateAsync(workPlanId);
+        status.Should().Be(WorkPlanStatus.InReview, "the deadlocked plan parks at human review");
+        stage.Should().Be(AssemblyStage.Review);
+        (await CoordinatorAssemblyReviewPersistence.GetAsync(_scopeFactory, coordinatorRunId, default))
+            .Should().NotBeNull("a durable review request backs the escalated gate");
+    }
+
+    [Fact]
+    public void IsReviewerRejection_Discriminates_RequestChangesAndBlocking_FromAdvisory()
+    {
+        // Change #6 — the rejection/guidance discriminator: reviewer request-changes (RequestChanges) or
+        // a blocking finding ⇒ lockout/rotate; advisory/refine/steer ⇒ in-place same agent.
+        CoordinatorAssemblyService.IsReviewerRejection(SteeringSeverity.RequestChanges).Should().BeTrue();
+        CoordinatorAssemblyService.IsReviewerRejection(SteeringSeverity.Blocking).Should().BeTrue();
+        CoordinatorAssemblyService.IsReviewerRejection(SteeringSeverity.Advisory).Should().BeFalse();
+        CoordinatorAssemblyService.IsReviewerRejection(null).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task TryRotateSubtaskAuthor_ConcurrentReplicas_ExactlyOneWins_NoDoubleAppend()
+    {
+        var coordinatorRunId = RunId.New().ToString();
+        await SeedCoordinatorRunAsync(coordinatorRunId);
+        var (_, subtaskIds) = await SeedPlanAsync(
+            coordinatorRunId, new[] { SubtaskStatus.AssembleReady });
+        var subtaskId = subtaskIds[0];
+
+        // Two replicas race to rotate the SAME rejected author. The guarded CAS (WHERE AssignedAgent ==
+        // expectedAuthor) must let exactly ONE win; the loser no-ops (Won=false) and does not double-append.
+        var t1 = _assemblyStore.TryRotateSubtaskAuthorAsync(subtaskId, "morpheus", "neo", "model-neo", null, default);
+        var t2 = _assemblyStore.TryRotateSubtaskAuthorAsync(subtaskId, "morpheus", "trinity", "model-trin", null, default);
+        var results = await Task.WhenAll(t1, t2);
+
+        results.Count(r => r.Won).Should().Be(1, "exactly one replica wins the guarded CAS rotation");
+        results.Count(r => !r.Won).Should().Be(1, "the losing replica no-ops (already rotated by a peer)");
+
+        var (assigned, lockedOut, _, _) = await GetSubtaskFieldsAsync(subtaskId);
+        new[] { "neo", "trinity" }.Should().Contain(assigned, "the winner's author is persisted");
+        var locked = System.Text.Json.JsonSerializer.Deserialize<List<string>>(lockedOut ?? "[]")!;
+        locked.Count(a => string.Equals(a, "morpheus", StringComparison.OrdinalIgnoreCase))
+            .Should().Be(1, "the rejected author is appended exactly once, never duplicated across replicas");
     }
 
     [Fact]
@@ -1498,6 +2084,135 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         return await task.ConfigureAwait(false);
     }
 
+    private async Task<bool> InvokeRouteAssemblyGateThroughSteeringAsync(
+        CoordinatorDispatchContext context,
+        int workPlanId,
+        string source,
+        string? feedback,
+        IReadOnlyDictionary<int, IReadOnlySet<string>> touchedFilesBySubtask,
+        string aggregateTreeHash,
+        CancellationToken ct)
+    {
+        var method = typeof(CoordinatorAssemblyService).GetMethod(
+            "RouteAssemblyGateThroughSteeringAsync",
+            BindingFlags.NonPublic | BindingFlags.Instance);
+        method.Should().NotBeNull("unified steering routes every gate through the coordinator");
+        var task = (Task<bool>)method!.Invoke(_sut,
+        [
+            context,
+            workPlanId,
+            Array.Empty<(int, int)>(),
+            source,
+            feedback,
+            touchedFilesBySubtask,
+            aggregateTreeHash,
+            ct,
+        ])!;
+        return await task.ConfigureAwait(false);
+    }
+
+    private async Task<bool> InvokeParkAtHumanReviewAsync(
+        CoordinatorDispatchContext context,
+        int workPlanId,
+        int directiveId,
+        string reason,
+        string aggregateTreeHash,
+        CancellationToken ct)
+    {
+        var method = typeof(CoordinatorAssemblyService).GetMethod(
+            "ParkAtHumanReviewAsync",
+            BindingFlags.NonPublic | BindingFlags.Instance);
+        method.Should().NotBeNull("escalation parks the plan at the human-review gate durably");
+        var task = (Task<bool>)method!.Invoke(_sut,
+        [
+            context,
+            workPlanId,
+            directiveId,
+            reason,
+            aggregateTreeHash,
+            ct,
+        ])!;
+        return await task.ConfigureAwait(false);
+    }
+
+    private async Task<bool> InvokeDriveOutstandingSteeringExecutionAsync(
+        CoordinatorDispatchContext context,
+        int workPlanId,
+        CancellationToken ct)
+    {
+        var method = typeof(CoordinatorAssemblyService).GetMethod(
+            "DriveOutstandingSteeringExecutionAsync",
+            BindingFlags.NonPublic | BindingFlags.Instance);
+        method.Should().NotBeNull("recovery drives outstanding steering directives to completion");
+        var task = (Task<bool>)method!.Invoke(_sut,
+        [
+            context,
+            workPlanId,
+            Array.Empty<(int, int)>(),
+            ct,
+        ])!;
+        return await task.ConfigureAwait(false);
+    }
+
+    private async Task SetPlanSteeringStateAsync(
+        int workPlanId, string? status = null, int? steeringIterations = null, int? humanReviewRoundTrips = null)
+    {
+        using var scope = _provider.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var plan = await db.WorkPlans.FirstAsync(p => p.Id == workPlanId);
+        if (status is not null) plan.Status = status;
+        if (steeringIterations is not null) plan.SteeringIterations = steeringIterations.Value;
+        if (humanReviewRoundTrips is not null) plan.HumanReviewRoundTrips = humanReviewRoundTrips.Value;
+        plan.UpdatedAt = DateTimeOffset.UtcNow;
+        await db.SaveChangesAsync();
+    }
+
+    private async Task<(int SteeringIterations, int HumanReviewRoundTrips, string Status, string? Stage)> GetPlanSteeringStateAsync(int workPlanId)
+    {
+        using var scope = _provider.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var p = await db.WorkPlans.AsNoTracking().Where(w => w.Id == workPlanId)
+            .Select(w => new { w.SteeringIterations, w.HumanReviewRoundTrips, w.Status, w.AssemblyStage })
+            .FirstAsync();
+        return (p.SteeringIterations, p.HumanReviewRoundTrips, p.Status, p.AssemblyStage);
+    }
+
+    private async Task<SteeringDirective?> GetLatestDirectiveAsync(string coordinatorRunId)
+    {
+        using var scope = _provider.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        return await db.SteeringDirectives.AsNoTracking()
+            .Where(d => d.CoordinatorRunId == coordinatorRunId)
+            .OrderByDescending(d => d.Id)
+            .FirstOrDefaultAsync();
+    }
+
+    private async Task<int> SeedExecutingProceedDirectiveAsync(
+        string coordinatorRunId, IReadOnlyList<int> targetSubtaskIds, string treeHash)
+    {
+        using var scope = _provider.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var directive = new SteeringDirective
+        {
+            CoordinatorRunId = coordinatorRunId,
+            Kind = SteeringKind.Redirect,
+            Instruction = "Budget exhausted — escalate to human review.",
+            Status = SteeringStatus.Executing,
+            CreatedBy = "gate:rubberduck",
+            CreatedAt = DateTimeOffset.UtcNow,
+            Source = SteeringSource.Rubberduck,
+            Severity = SteeringSeverity.RequestChanges,
+            TargetScopeJson = SteeringTargetScope.ForSubtasks(targetSubtaskIds.ToArray()).ToJson(),
+            TreeHash = treeHash,
+            DecidedAction = SteeringDirection.Proceed,
+            ActionAttempt = 0,
+            ExecStartedAt = DateTimeOffset.UtcNow,
+        };
+        db.SteeringDirectives.Add(directive);
+        await db.SaveChangesAsync();
+        return directive.Id;
+    }
+
     private static string CreateGitRepository()
     {
         var repoPath = Path.Combine(Path.GetTempPath(), $"agentweaver-buildtest-repo-{Guid.NewGuid():N}");
@@ -1591,6 +2306,67 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         return await db.Subtasks.AsNoTracking().Where(s => s.Id == subtaskId)
             .Select(s => s.Status).FirstAsync();
     }
+
+    private async Task<(string AssignedAgent, string? LockedOutAgents, string? PriorChildRunId, string? RecoveryGuidance)>
+        GetSubtaskFieldsAsync(int subtaskId)
+    {
+        using var scope = _provider.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var s = await db.Subtasks.AsNoTracking().Where(x => x.Id == subtaskId)
+            .Select(x => new { x.AssignedAgent, x.LockedOutAgents, x.PriorChildRunId, x.RecoveryGuidance })
+            .FirstAsync();
+        return (s.AssignedAgent, s.LockedOutAgents, s.PriorChildRunId, s.RecoveryGuidance);
+    }
+
+    /// <summary>
+    /// Returns a lockout-rotated subtask to a routable state (as if its rotated child completed and was
+    /// re-reviewed/rejected) WITHOUT touching its <c>ChildRunId</c>, so the NEXT rotation resolves the
+    /// prior handoff child as its <c>priorChild</c> — exercising the compounding-guidance path.
+    /// </summary>
+    private async Task ResetSubtaskForNextRejectionKeepingChildAsync(int subtaskId)
+    {
+        using var scope = _provider.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var subtask = await db.Subtasks.FirstAsync(s => s.Id == subtaskId);
+        subtask.Status = SubtaskStatus.AssembleReady;
+        subtask.UpdatedAt = DateTimeOffset.UtcNow;
+        await db.SaveChangesAsync();
+    }
+
+    private async Task<string?> GetRunTaskAsync(RunId runId)
+        => (await _runStore.GetAsync(runId, default))?.Task;
+
+    private async Task SeedPriorRejectionDirectiveAsync(
+        string coordinatorRunId, IReadOnlyList<int> targetSubtaskIds, string source, string createdBy, string feedback)
+    {
+        using var scope = _provider.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        db.SteeringDirectives.Add(new SteeringDirective
+        {
+            CoordinatorRunId = coordinatorRunId,
+            Kind = SteeringKind.Redirect,
+            Instruction = feedback,
+            Status = SteeringStatus.Applied,
+            CreatedBy = createdBy,
+            CreatedAt = DateTimeOffset.UtcNow,
+            Source = source,
+            Severity = SteeringSeverity.RequestChanges,
+            TargetScopeJson = SteeringTargetScope.ForSubtasks(targetSubtaskIds.ToArray()).ToJson(),
+        });
+        await db.SaveChangesAsync();
+    }
+
+    private async Task<string> InvokeBuildAccumulatedRetryGuidanceAsync(
+        string coordinatorRunId, IReadOnlyList<int> targetIds, string latestFeedback,
+        string? priorChildRunId, string? integrationBranch)
+    {
+        // Exercise the IN-PLACE render path exactly as ExecuteInPlaceSteerAsync does: the target+rejection
+        // -scoped prior rounds rendered WITHOUT a prior-worktree pointer (the session is preserved).
+        var rounds = await _sut.BuildPriorReviewRoundsAsync(
+            coordinatorRunId, targetIds, CancellationToken.None).ConfigureAwait(false);
+        return ReviewFeedbackRenderer.RenderForRevisionPrompt(latestFeedback, rounds, integrationBranch);
+    }
+
 
     private async Task<int> SeedExecutingInPlaceDirectiveAsync(
         string coordinatorRunId, IReadOnlyList<int> targetSubtaskIds, int attempt, string instruction)
@@ -1822,6 +2598,58 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         public List<CoordinatorDispatchContext> StartDispatchCalls { get; } = [];
         public void StartDispatch(CoordinatorDispatchContext context) => StartDispatchCalls.Add(context);
         public bool IsDispatchActive(string coordinatorRunId) => false;
+    }
+
+    /// <summary>
+    /// Req-2 (Strict Lockout) test double for <see cref="IAssemblyAuthorRotationSelector"/>. Default
+    /// rotates to a synthetic different author ("rotated-{current}"); tests override <see cref="Impl"/>
+    /// to return null (deadlock / single-eligible-agent domain → escalate) or a specific candidate.
+    /// </summary>
+    private sealed class ConfigurableRotationSelector : IAssemblyAuthorRotationSelector
+    {
+        public Func<string, RotationSubtaskContext, IReadOnlySet<string>, RotationChoice?> Impl { get; set; }
+            = (_, s, _) => new RotationChoice($"rotated-{s.CurrentAuthor}", "model-rotated", null);
+
+        public RotationChoice? SelectRotationAuthor(
+            string repositoryPath, RotationSubtaskContext subtask, IReadOnlySet<string> lockedOut)
+            => Impl(repositoryPath, subtask, lockedOut);
+    }
+
+    /// <summary>
+    /// Fake <see cref="IChildRevisionHandoff"/> — records each context-carrying handoff and inserts the
+    /// new child run (mirroring the real orchestrator's InsertAsync), persisting its Task as
+    /// <c>base + RenderedGuidance</c> exactly as <c>RunOrchestrator.StartChildRevisionHandoffAsync</c>
+    /// does, so tests can assert the new agent's persisted Task carries the guidance without compounding.
+    /// Captures the exact contract the coordinator hands to Morpheus.
+    /// </summary>
+    private sealed class FakeChildRevisionHandoff : IChildRevisionHandoff
+    {
+        private readonly SqliteRunStore _runStore;
+        public FakeChildRevisionHandoff(SqliteRunStore runStore) => _runStore = runStore;
+
+        public readonly List<(Run NewAgentRun, Run PriorChild, AccumulatedReviewFeedback Feedback)> Calls = new();
+
+        public async Task StartChildRevisionHandoffAsync(
+            Run newAgentRun, Run priorChild, AccumulatedReviewFeedback feedback, CancellationToken ct)
+        {
+            Calls.Add((newAgentRun, priorChild, feedback));
+
+            // Mirror RunOrchestrator: the guidance is appended to the base Task ONCE by the handoff.
+            var guidance = string.IsNullOrWhiteSpace(feedback.RenderedGuidance)
+                ? feedback.RenderForRevisionPrompt()
+                : feedback.RenderedGuidance!;
+            var handoffTask = string.IsNullOrWhiteSpace(newAgentRun.Task)
+                ? guidance
+                : newAgentRun.Task + "\n\n" + guidance;
+
+            await _runStore.InsertAsync(
+                newAgentRun with
+                {
+                    Status = RunStatus.InProgress,
+                    StartedAt = DateTimeOffset.UtcNow,
+                    Task = handoffTask,
+                }, ct);
+        }
     }
 
     private sealed class TestHostApplicationLifetime : IHostApplicationLifetime

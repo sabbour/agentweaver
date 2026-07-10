@@ -161,6 +161,53 @@ public sealed class StallCascadeAndLockRetryTests : IAsyncDisposable
             "a fresh lock file (likely actively held) must NOT be deleted");
     }
 
+    [Fact]
+    public void ClearStaleIndexLock_ClearsStaleLock_WhenOnlyAgeGateApplies_NoFalseLiveProcessRefusal()
+    {
+        // FIX-1 (Fix-A #1 regression guard): the stale index.lock clear must FIRE on the age gate
+        // alone. The prior host-global `git` process check refused the clear whenever ANY unrelated
+        // `git` process existed on the host — which, on a busy coordinator (our own `git worktree
+        // add/prune` + agent git-tool subprocesses), is almost always. That re-wedged commit-retry in
+        // exactly the concurrent scenario Fix-A targets. This test would fail under that old guard on
+        // any host running a git process.
+        var repoPath = CreateTempGitRepo();
+        var manager = new WorktreeManager(
+            new ConfigurationBuilder().Build(), NullLogger<WorktreeManager>.Instance);
+
+        var lockPath = Path.Combine(repoPath, ".git", "index.lock");
+        File.WriteAllText(lockPath, "stale index lock from a crashed turn");
+        // Backdate well beyond the default 15s stale threshold so ONLY the age gate is relevant.
+        File.SetLastWriteTimeUtc(lockPath, DateTime.UtcNow.AddMinutes(-5));
+
+        var result = manager.ClearStaleIndexLock(repoPath);
+
+        result.LockPresent.Should().BeTrue();
+        result.Cleared.Should().BeTrue("a lock older than the stale threshold must be cleared on the age gate alone");
+        result.LiveGitProcessDetected.Should().BeFalse("the host-global git-process guard was removed (age-only guard)");
+        result.LockAgeSeconds.Should().BeGreaterThan(15);
+        File.Exists(lockPath).Should().BeFalse("the stale index.lock file must be deleted");
+    }
+
+    [Fact]
+    public void ClearStaleIndexLock_RefusesFreshLock_WithinStaleThreshold()
+    {
+        // The age gate is the SOLE guard, so a fresh lock (within threshold) must still be refused.
+        var repoPath = CreateTempGitRepo();
+        var manager = new WorktreeManager(
+            new ConfigurationBuilder().Build(), NullLogger<WorktreeManager>.Instance);
+
+        var lockPath = Path.Combine(repoPath, ".git", "index.lock");
+        File.WriteAllText(lockPath, "fresh lock held by an active in-process operation");
+        // Freshly written → within the 15s stale threshold.
+
+        var result = manager.ClearStaleIndexLock(repoPath);
+
+        result.LockPresent.Should().BeTrue();
+        result.Cleared.Should().BeFalse("a lock younger than the stale threshold is presumed actively held");
+        result.Detail.Should().Be("lock_too_recent");
+        File.Exists(lockPath).Should().BeTrue("a fresh lock must NOT be deleted");
+    }
+
     // -----------------------------------------------------------------------
     // Stall cascade: stalled subtask marks dependents as blocked (not failed)
     // -----------------------------------------------------------------------

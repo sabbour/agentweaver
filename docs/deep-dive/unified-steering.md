@@ -101,5 +101,6 @@ The decider increments the budget exactly once for in-place or fresh-dispatch ac
 
 - [Unified autonomous steering — Reference](../reference/unified-steering.md)
 - [Unified autonomous steering — User Guide](../experience/unified-steering.md)
+- [Resilient assembly-review loop — Deep Dive](./resilient-assembly-review.md) — how budget exhaustion escalates to human review, context-preserving revisions, and the reviewer-rejection lockout built on top of unified steering.
 - [Coordinator internals](./coordinator-internals.md)
 - [Events & observability](./events-observability.md)

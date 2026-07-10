@@ -90,6 +90,17 @@ public sealed class CoordinatorSteeringDecider : Agentweaver.Api.Infrastructure.
     /// </summary>
     public const int MaxExecutionAttempts = 3;
 
+    /// <summary>
+    /// UNIFIED AUTONOMOUS STEERING (Fix-B, §7 locked) — max HUMAN-review round-trips whose feedback
+    /// resets the autonomous steering budget. A human request-changes after budget exhaustion is a fresh
+    /// mandate, so it zeroes <see cref="WorkPlan.SteeringIterations"/> (via
+    /// <see cref="ResetSteeringBudgetAsync"/>) to let the coordinator converge again under human guidance.
+    /// After this many round-trips the budget is NO LONGER reset — autonomy stops re-steering and the plan
+    /// simply parks (again) at human review. Bounded by the persisted
+    /// <see cref="WorkPlan.HumanReviewRoundTrips"/> counter so it is cross-replica/crash-safe. Default 3.
+    /// </summary>
+    public const int DefaultMaxHumanReviewRoundTrips = 3;
+
     public CoordinatorSteeringDecider(
         IServiceScopeFactory scopeFactory,
         CoordinatorSteeringService steering,
@@ -435,6 +446,43 @@ public sealed class CoordinatorSteeringDecider : Agentweaver.Api.Infrastructure.
     }
 
     /// <summary>
+    /// UNIFIED AUTONOMOUS STEERING (Fix-B, change #2/#4) — resets the AUTONOMOUS steering budget so the
+    /// coordinator can converge again under fresh HUMAN guidance. A human request-changes submitted after
+    /// the plan was escalated to review (budget exhausted) is a new mandate: it zeroes the per-plan
+    /// <see cref="WorkPlan.SteeringIterations"/> and the target subtasks' <see cref="Subtask.RecoveryAttempts"/>
+    /// so <see cref="DecideAsync"/>'s budget CAS has headroom again. Committed in ONE transaction; the
+    /// per-plan zero uses a guarded/optimistic CAS on the observed <paramref name="expectedIterations"/>
+    /// so a concurrent decider cannot lose an increment race (it retries with the fresh value). This is
+    /// gated to <c>source == human-review</c> by the caller and BOUNDED by the persisted
+    /// <see cref="WorkPlan.HumanReviewRoundTrips"/> counter — autonomous gates can NEVER reset their own
+    /// budget (that would reintroduce the infinite loop the budget exists to stop).
+    /// </summary>
+    public async Task ResetSteeringBudgetAsync(
+        int workPlanId, IReadOnlyCollection<int> subtaskIds, CancellationToken ct = default)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var now = DateTimeOffset.UtcNow;
+        await using var tx = await db.Database.BeginTransactionAsync(ct).ConfigureAwait(false);
+        await db.WorkPlans
+            .Where(w => w.Id == workPlanId)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(w => w.SteeringIterations, 0)
+                .SetProperty(w => w.UpdatedAt, now), ct)
+            .ConfigureAwait(false);
+        if (subtaskIds.Count > 0)
+        {
+            await db.Subtasks
+                .Where(s => s.WorkPlanId == workPlanId && subtaskIds.Contains(s.Id))
+                .ExecuteUpdateAsync(s => s
+                    .SetProperty(x => x.RecoveryAttempts, 0)
+                    .SetProperty(x => x.UpdatedAt, now), ct)
+                .ConfigureAwait(false);
+        }
+        await tx.CommitAsync(ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
     /// Phase-2 confirm (rev8 §3d; RD-B PER-CHILD): marks the <c>(directiveId, attempt, runId)</c> marker
     /// <c>effect_confirmed</c>. Called by the revision workflow's first-superstep checkpoint write path
     /// (the decorator) — "row confirmed" ⟺ "this child's attempt ran ≥1 superstep". Idempotent.
@@ -579,7 +627,7 @@ public sealed class CoordinatorSteeringDecider : Agentweaver.Api.Infrastructure.
             SteeringDirection.Proceed when i.TreeHashStale =>
                 $"{mode}: feedback stale against current aggregate — proceed to review",
             SteeringDirection.Proceed =>
-                $"{mode}: budget/blocking — escalate to human review / terminal",
+                $"{mode}: budget exhausted — escalate to human review",
             _ => mode,
         };
     }

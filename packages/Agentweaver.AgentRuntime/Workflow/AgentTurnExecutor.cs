@@ -34,6 +34,7 @@ public sealed class AgentTurnExecutor : Executor<AgentTurnInput, AgentTurnOutput
     private readonly string? _apiKey;
     private readonly string? _agentNodeCharter;
     private readonly string? _agentNodePrompt;
+    private readonly bool _emitTerminalFailureOutput;
 
     public AgentTurnExecutor(
         IWorkflowTurnAgent agent,
@@ -44,6 +45,7 @@ public sealed class AgentTurnExecutor : Executor<AgentTurnInput, AgentTurnOutput
         string? apiKey = null,
         string? agentNodeCharter = null,
         string? agentNodePrompt = null,
+        bool emitTerminalFailureOutput = false,
         string name = "agent-turn",
         string logicalNodeId = "agent",
         string displayLabel = "Agent")
@@ -59,6 +61,7 @@ public sealed class AgentTurnExecutor : Executor<AgentTurnInput, AgentTurnOutput
         _apiKey = apiKey;
         _agentNodeCharter = string.IsNullOrWhiteSpace(agentNodeCharter) ? null : agentNodeCharter;
         _agentNodePrompt = string.IsNullOrWhiteSpace(agentNodePrompt) ? null : agentNodePrompt;
+        _emitTerminalFailureOutput = emitTerminalFailureOutput;
     }
 
     public override async ValueTask<AgentTurnOutput> HandleAsync(
@@ -155,17 +158,53 @@ public sealed class AgentTurnExecutor : Executor<AgentTurnInput, AgentTurnOutput
         //      marks the subtask failed so the coordinator consciously re-dispatches the revision
         //      (steering feedback preserved) instead of losing work inside a fake success.
         string treeHash;
+        var commitDiagnostics = new List<string>();
         try
         {
-            treeHash = await CommitChangesWithRetryAsync(input.WorktreePath, input.RunId, ct).ConfigureAwait(false);
+            treeHash = await CommitChangesWithRetryAsync(
+                input.WorktreePath, input.RunId, commitDiagnostics, ct).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex,
-                "Post-turn CommitChanges failed for run {RunId} after bounded retries; terminalizing the run as a visible failure (never a silent no-change success)",
-                input.RunId);
             WorkflowStepEvents.Emit(writer, _logger, input.RunId, LogicalNodeId, "failed", DisplayLabel,
                 agentName: input.AgentName);
+
+            // FIX 2 (graph-native failure->terminal): in the trimmed child/revision pipeline the
+            // executor is constructed with emitTerminalFailureOutput=true. A PERSISTENT post-turn
+            // commit fault (the bounded clear+retry could not clear the blocker) is RETURNED as a
+            // typed AgentTurnOutput carrying TerminalFailureReason — the child graph's conditional
+            // edge routes it to the child-turn-failed terminal (exactly one WorkflowOutputEvent),
+            // instead of a bare rethrow that only the watcher stream-abort backstop could catch. We
+            // still NEVER fabricate a no-change assemble_ready — the failure is VISIBLE, with evidence.
+            var evidence = BuildCommitFailureEvidence(ex, commitDiagnostics);
+            if (_emitTerminalFailureOutput)
+            {
+                _logger.LogError(ex,
+                    "Post-turn CommitChanges failed for child run {RunId} after bounded clear+retry; emitting graph-native child-turn-failed terminal (evidence: {Evidence})",
+                    input.RunId, evidence);
+                return new AgentTurnOutput(
+                    input.RunId,
+                    TreeHash: string.Empty,
+                    Diff: string.Empty,
+                    StepCount: 0,
+                    input.WorktreePath,
+                    input.WorktreeBranch,
+                    input.RepositoryPath,
+                    input.OriginatingBranch,
+                    ContentSafetyFlagged: false,
+                    Iteration: input.Iteration,
+                    SubmittingUser: input.SubmittingUser,
+                    ProjectId: input.ProjectId,
+                    AgentName: input.AgentName,
+                    TerminalFailureReason: "commit_failed_persistent",
+                    TerminalFailureEvidence: evidence);
+            }
+
+            // Full pipeline: preserve existing behavior — rethrow so the fault terminalizes via the
+            // watcher's ExecutorFailedEvent backstop (never a silent no-change success).
+            _logger.LogError(ex,
+                "Post-turn CommitChanges failed for run {RunId} after bounded clear+retry; terminalizing the run as a visible failure (evidence: {Evidence})",
+                input.RunId, evidence);
             throw;
         }
 
@@ -195,12 +234,25 @@ public sealed class AgentTurnExecutor : Executor<AgentTurnInput, AgentTurnOutput
     /// Commits the worktree with a bounded retry so a TRANSIENT git failure (a LibGit2 index.lock /
     /// ref race — e.g. a lingering child process briefly holding the lock) does not strand the run.
     /// The executor is intentionally decoupled from LibGit2Sharp types (it only sees
-    /// <see cref="IWorktreeOperations"/>), so retryability is by bounded attempts + short backoff
-    /// rather than by exception-type classification. A genuinely PERSISTENT failure (corrupt/missing
-    /// repo) still surfaces after the final attempt — the caller then terminalizes the run visibly
+    /// <see cref="IWorktreeOperations"/>), so retryability is by bounded attempts rather than by
+    /// exception-type classification.
+    /// <para>
+    /// FIX 1 (context-preserving retry — the rate driver): between attempts it asks the worktree to
+    /// clear a STALE index.lock (conservatively: real gitdir resolution, age threshold, live-process
+    /// guard). This is what converts the common in-place-revision wedge (a crashed/lingering process
+    /// left the index locked) from a lost-context <c>dispatch_fresh</c> into a clean commit on the
+    /// SAME worktree. Each clear attempt's diagnostics are appended to <paramref name="diagnostics"/>
+    /// for the child-turn-failed evidence trail. NOTE: no process-group reap is performed — there is
+    /// no run-owned PID/process-group tracking to make that ownership-proven (Registry.Abandon only
+    /// cancels the CTS), so we deliberately rely on stale-lock handling + a VISIBLE failure instead of
+    /// killing by path/name (which could reap an unrelated process).
+    /// </para>
+    /// A genuinely PERSISTENT failure still surfaces after the final attempt — the caller then
+    /// terminalizes the run visibly (typed child-turn-failed output, or rethrow in the full pipeline)
     /// instead of fabricating a no-change success.
     /// </summary>
-    private async Task<string> CommitChangesWithRetryAsync(string worktreePath, string runId, CancellationToken ct)
+    private async Task<string> CommitChangesWithRetryAsync(
+        string worktreePath, string runId, List<string> diagnostics, CancellationToken ct)
     {
         const int maxAttempts = 3;
         for (var attempt = 1; ; attempt++)
@@ -212,11 +264,35 @@ public sealed class AgentTurnExecutor : Executor<AgentTurnInput, AgentTurnOutput
             catch (Exception ex) when (attempt < maxAttempts)
             {
                 _logger.LogWarning(ex,
-                    "Post-turn CommitChanges failed for run {RunId} (attempt {Attempt}/{MaxAttempts}); retrying after backoff",
+                    "Post-turn CommitChanges failed for run {RunId} (attempt {Attempt}/{MaxAttempts}); clearing stale index.lock then retrying",
                     runId, attempt, maxAttempts);
+
+                // Clear a stale index.lock the lingering/crashed process left behind, so the retry
+                // can actually succeed (a plain time-backoff retry re-hits the same held lock).
+                try
+                {
+                    var clear = _worktreeOps.TryClearStaleIndexLock(worktreePath);
+                    diagnostics.Add(
+                        $"attempt{attempt}: lock_present={clear.LockPresent} cleared={clear.Cleared} " +
+                        $"age_s={(clear.LockAgeSeconds.HasValue ? clear.LockAgeSeconds.Value.ToString("F1") : "n/a")} " +
+                        $"live_git_proc={clear.LiveGitProcessDetected} detail={clear.Detail}");
+                }
+                catch (Exception clearEx)
+                {
+                    diagnostics.Add($"attempt{attempt}: index_lock_clear_error={clearEx.GetType().Name}");
+                }
+
                 await Task.Delay(TimeSpan.FromMilliseconds(150 * attempt), ct).ConfigureAwait(false);
             }
         }
+    }
+
+    private static string BuildCommitFailureEvidence(Exception ex, List<string> diagnostics)
+    {
+        var exSummary = $"exception={ex.GetType().Name}: {ex.Message}";
+        return diagnostics.Count == 0
+            ? exSummary
+            : exSummary + " | " + string.Join(" | ", diagnostics);
     }
 
     private static bool IsContentSafetyViolation(Exception ex)
