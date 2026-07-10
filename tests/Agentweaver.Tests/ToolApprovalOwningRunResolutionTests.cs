@@ -2,8 +2,13 @@ using FluentAssertions;
 using Agentweaver.AgentRuntime;
 using Agentweaver.Api.Endpoints;
 using Agentweaver.Api.Infrastructure;
+using Agentweaver.Api.Memory;
+using Agentweaver.Api.Runs;
 using Agentweaver.Domain;
 using Agentweaver.Tests.Helpers;
+using Microsoft.Data.Sqlite;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Agentweaver.Tests.Api;
 
@@ -110,5 +115,51 @@ public sealed class ToolApprovalOwningRunResolutionTests
             coordinatorId.ToString(), coordinatorRun, "toolu_01missing", gate, store, CancellationToken.None);
 
         owningRunId.Should().BeNull("no run knows this request_id, so the endpoint should return 404");
+    }
+
+    [Fact]
+    public async Task Resolve_FromCoordinatorEvent_ReturnsChild_WhenDurableGateIsUnknown()
+    {
+        await using var testDb = await TestSqliteDb.CreateAsync();
+        var store = new SqliteRunStore(testDb.Db);
+        var gate = new InMemoryToolApprovalGate();
+        var coordinatorId = RunId.New();
+        var childId = RunId.New();
+        var coordinatorRun = await InsertRunAsync(
+            store, coordinatorId, parentRunId: null, agentName: "Coordinator");
+        await InsertRunAsync(
+            store, childId, parentRunId: coordinatorId.ToString(), agentName: "Researcher");
+
+        await using var connection = new SqliteConnection("Data Source=:memory:");
+        await connection.OpenAsync();
+        var services = new ServiceCollection()
+            .AddDbContext<MemoryDbContext>(options => options.UseSqlite(connection))
+            .BuildServiceProvider();
+        await using (var scope = services.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            await db.Database.EnsureCreatedAsync();
+            db.RunEvents.Add(new RunEventRecord
+            {
+                RunId = coordinatorId.ToString(),
+                Sequence = 1,
+                EventType = EventTypes.CoordinatorChildApprovalRequired,
+                PayloadJson = $$"""{"childRunId":"{{childId}}","requestId":"request-from-pod"}""",
+                CreatedAt = DateTime.UtcNow,
+            });
+            await db.SaveChangesAsync();
+        }
+
+        var owningRunId = await EndpointHelpers.ResolveApprovalOwningRunIdAsync(
+            coordinatorId.ToString(),
+            coordinatorRun,
+            "request-from-pod",
+            gate,
+            store,
+            CancellationToken.None,
+            services.GetRequiredService<IServiceScopeFactory>());
+
+        owningRunId.Should().Be(childId.ToString());
+        await services.DisposeAsync();
     }
 }

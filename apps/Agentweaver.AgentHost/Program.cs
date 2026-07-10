@@ -283,6 +283,10 @@ app.Use(async (ctx, next) =>
 app.MapGet("/healthz", (AgentHostStartupService startup) =>
     Results.Ok(startup.IsReady ? "ready" : "standby"));
 
+// ── Tool approval endpoints ───────────────────────────────────────────────────
+app.MapPost("/tool-approvals", ToolApprovalEndpointHandlers.GrantAsync);
+app.MapPost("/tool-denials", ToolApprovalEndpointHandlers.DenyAsync);
+
 // ── PreviewRunner endpoints ───────────────────────────────────────────────────
 // API/Coordinator uses these to manage the pod-local preview process lifecycle. The model-facing
 // tools call the same PreviewRunner service in-process; these HTTP endpoints are for platform
@@ -477,6 +481,86 @@ internal sealed record PreviewHealthCheckRequest
 {
     public int Port { get; init; }
     public string? Path { get; init; }
+}
+
+internal sealed record AgentHostToolApprovalRequest
+{
+    public string? RunId { get; init; }
+    public string? RequestId { get; init; }
+    public string Scope { get; init; } = "once";
+}
+
+internal static class ToolApprovalEndpointHandlers
+{
+    public static async Task<IResult> GrantAsync(
+        HttpContext ctx,
+        AgentHostToolApprovalRequest request,
+        IToolApprovalGate gate,
+        AgentHostRuntimeState runtimeState)
+    {
+        if (!PreviewRunnerEndpointAuth.Authorize(ctx, runtimeState))
+            return Results.Unauthorized();
+        if (string.IsNullOrWhiteSpace(request.RequestId))
+            return Results.BadRequest(new { error = "requestId is required" });
+        if (IsRunMismatch(request.RunId, runtimeState.RunId))
+            return Results.Conflict(new { error = "run mismatch", state = "run_mismatch" });
+
+        var scope = request.Scope switch
+        {
+            "run" => ApprovalScope.Run,
+            "always" => ApprovalScope.Always,
+            "tool" => ApprovalScope.Tool,
+            _ => ApprovalScope.Once,
+        };
+
+        // A pod serves one run, so "always" is effectively run-scoped and does not survive pod restart.
+        await gate.GrantAsync(runtimeState.RunId, request.RequestId, scope).ConfigureAwait(false);
+        return ResultFor(gate.GetRequestState(runtimeState.RunId, request.RequestId));
+    }
+
+    public static Task<IResult> DenyAsync(
+        HttpContext ctx,
+        AgentHostToolApprovalRequest request,
+        IToolApprovalGate gate,
+        AgentHostRuntimeState runtimeState)
+    {
+        if (!PreviewRunnerEndpointAuth.Authorize(ctx, runtimeState))
+            return Task.FromResult<IResult>(Results.Unauthorized());
+        if (string.IsNullOrWhiteSpace(request.RequestId))
+            return Task.FromResult<IResult>(Results.BadRequest(new { error = "requestId is required" }));
+        if (IsRunMismatch(request.RunId, runtimeState.RunId))
+            return Task.FromResult<IResult>(Results.Conflict(new { error = "run mismatch", state = "run_mismatch" }));
+
+        gate.Deny(runtimeState.RunId, request.RequestId);
+        return Task.FromResult(ResultFor(gate.GetRequestState(runtimeState.RunId, request.RequestId)));
+    }
+
+    private static bool IsRunMismatch(string? requestedRunId, string runtimeRunId) =>
+        !string.IsNullOrWhiteSpace(requestedRunId)
+        && !string.IsNullOrWhiteSpace(runtimeRunId)
+        && !string.Equals(requestedRunId, runtimeRunId, StringComparison.Ordinal);
+
+    private static IResult ResultFor(ToolApprovalRequestState state) =>
+        state switch
+        {
+            ToolApprovalRequestState.Approved or
+            ToolApprovalRequestState.Denied or
+            ToolApprovalRequestState.Expired =>
+                Results.Ok(new { resolved = true, state = FormatState(state) }),
+            ToolApprovalRequestState.Pending =>
+                Results.Conflict(new { resolved = false, state = "pending" }),
+            _ => Results.NotFound(new { resolved = false, state = "unknown" }),
+        };
+
+    private static string FormatState(ToolApprovalRequestState state) =>
+        state switch
+        {
+            ToolApprovalRequestState.Approved => "approved",
+            ToolApprovalRequestState.Denied => "denied",
+            ToolApprovalRequestState.Expired => "expired",
+            ToolApprovalRequestState.Pending => "pending",
+            _ => "unknown",
+        };
 }
 
 internal static class PreviewRunnerEndpointAuth

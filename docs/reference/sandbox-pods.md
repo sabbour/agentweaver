@@ -49,6 +49,7 @@ turns) rather than only ad-hoc shell commands.
 | Provisioning | Claimed from a **warm pool** via a `SandboxClaim`; the executor waits until the claim is bound to a concrete pod. AgentHost uses the shared `agentweaver-agent-host` pool (`replicas: 2`), then receives per-run context through `POST /configure` before `/healthz` is expected to become ready. No separate per-run template or per-run warm pool is created for AgentHost. |
 | AgentHost readiness gate | Warm AgentHost pods start in standby. After binding, the executor calls `POST /configure` with run/user/token/KV secret context plus `workingDirectory`, then polls `GET {scheme}://{podIP}:8088/healthz` (bounded `Sandbox:Kubernetes:AgentHostReadyTimeoutSeconds`, default `90`s; `…ReadyPollIntervalMs`, default `1000`) before the first A2A turn. `/configure` is excluded from readiness and returns `409` if called again. The `a2a-sandbox-pod` HttpClient additionally retries connection-refused only. |
 | A2A turn authentication | Run launch generates a 256-bit random turn bearer token, sends it to the claimed warm pod in `POST /configure`, and registers it in `IAgentHostTurnTokenRegistry`. `RemoteAgentProxy` sends `Authorization: Bearer {token}` on `message:stream`; each pod accepts only its configured run token. |
+| Tool-approval return path | When the API-side durable approval gate reports `Unknown`, pod-per-run mode forwards the grant/deny to the owning AgentHost pod's authenticated root endpoint so its in-memory gate can resolve. |
 | Per-pod resources | Sized for a real agent runtime (a live session + model I/O), not a minimal standby placeholder — materially larger CPU/memory requests than the shell-only baseline. Exact numbers are a capacity decision. |
 | Quota | Namespace `ResourceQuota` caps pod count, CPU/memory requests, and sandbox-claim count. Heavier per-pod requests plus multiple web/worker replicas require these caps to be **raised deliberately** via a reviewed manifest change, never a live patch. |
 | Lifetime | Bounded by the run and the claim TTL. Under the hybrid model, a pod is released on suspend and a fresh pod is re-claimed on resume; pods never persist past the run. |
@@ -94,6 +95,7 @@ No per-run `SecretProviderClass`, cloned `SandboxTemplate`, CSI user-token volum
 | `kvUserSecretName` | No | Key Vault secret name for the submitting user's GitHub token. |
 | `gitHubAccessToken` | No | API-pre-resolved GitHub access token; when present, the pod skips the Key Vault fetch. |
 | `workingDirectory` | No | The run's `WorktreePath` (for example `/workspace/{worktree}`), used as the AgentHost `SetupAsync` working directory and file-tool root. |
+| `previewRunnerCredential` | No | Fresh per-run bearer for authenticated pod-root control calls, including tool-approval forwarding. It is persisted using `PreviewRunnerCredential.SecretKey(runId)`; inside the pod it is stored only in AgentHost memory. |
 
 `IRunSubmittingUserResolver.GetWorkingDirectoryAsync(runId)` resolves `workingDirectory` from the run row and strips coordinator suffixes such as `-coordinator-decompose`, so sibling child stages share the parent's worktree. Assembly Build & Test can override this field explicitly with its detached integration worktree; the executor validates that path resolves under the shared `/workspace` mount before configuring the pod. If the resolver fails or no worktree exists yet, the executor omits the field and AgentHost falls back to `AgentHost__WorkingDirectory`.
 
@@ -134,6 +136,42 @@ The A2A turn endpoint has a separate per-run bearer token from the GitHub user t
 5. `AgentHost` rejects turn requests whose header does not exactly match its own `AgentHostOptions.TurnBearerToken`.
 
 This is application-layer auth on top of the A2A NetworkPolicy/mTLS boundary. The important blast-radius property is that a stolen token from one run cannot be reused against another run's pod.
+
+## Tool-approval forwarding endpoints
+
+These are internal API-to-AgentHost routes, not public client endpoints. The public caller continues
+to use `/api/runs/{id}/tool-approvals` and `/api/runs/{id}/tool-denials`.
+
+| Method | AgentHost path | Body | Purpose |
+| --- | --- | --- | --- |
+| `POST` | `/tool-approvals` | `runId`, `requestId`, `scope` | Grant the pod-local pending request. Unknown scope values use `once`; `always` is pod/run-scoped and does not survive restart. |
+| `POST` | `/tool-denials` | `runId`, `requestId` | Deny the pod-local pending request. |
+
+Both routes accept the same pod-root bearer authorization used by PreviewRunner controls: either the
+configured turn bearer or the per-run `previewRunnerCredential`. A mismatched `runId` returns
+`409 state: "run_mismatch"`.
+
+| AgentHost response | Meaning |
+| --- | --- |
+| `200` with `resolved: true` | State is `approved`, `denied`, or `expired` |
+| `404` with `state: "unknown"` | The pod-local gate does not know the request |
+| `409` with `state: "pending"` | The request remains pending |
+| `401` | The bearer did not match the configured pod credentials |
+
+The API locates the pod with `IAgentHostOriginResolver`, calls it through the `a2a-sandbox-pod`
+client, and caps the decision call at 10 seconds. Missing origins, timeouts, transport failures,
+5xx responses, and invalid responses surface publicly as `503 state: "agenthost_unreachable"`.
+Terminal forwards cause the API to emit `tool.approval_resolved` for the owning run.
+
+The credential's secret-store key is derived by `PreviewRunnerCredential.SecretKey(runId)` with the
+prefix `preview-runner-cred--`; `KubernetesSandboxExecutor` mints it, persists it, and delivers its
+value in-memory through `/configure`.
+
+Sources: `apps/Agentweaver.AgentHost/Program.cs:287-288,486-588`,
+`apps/Agentweaver.Api/Sandbox/AgentHostApprovalHttpClient.cs:28-112`,
+`apps/Agentweaver.Api/Endpoints/RunEndpoints.cs:2590-2718`,
+`apps/Agentweaver.Api/Sandbox/Preview/PreviewRunnerCredential.cs:22-35`, and
+`apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs:706-759`.
 
 ## Pod naming and the executing-pod surface
 
@@ -276,3 +314,5 @@ sequenceDiagram
 - [Sandbox pod execution experience](../experience/sandbox-pod-execution.md) — the user/operator view.
 - [Sandbox browser preview](../reference/sandbox-browser-preview.md) — preview routes (start/keepalive/stop)
   that expose a pod-internal server over a public HTTPS reverse proxy.
+- [Tool Approval SSE Contract](../tool-approval-sse-contract.md) — public approval outcomes and
+  coordinator-to-child routing.

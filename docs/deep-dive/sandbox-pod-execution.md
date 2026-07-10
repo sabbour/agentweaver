@@ -433,6 +433,63 @@ and the git remote(s) the run legitimately needs. Everything else — especially
 services and the database — is denied. Sandbox pods talk to the worker tier, never directly to the
 database.
 
+The pod-root control endpoints use the separately minted per-run preview-runner credential. It is
+delivered only in the `/configure` body, stored in `AgentHostRuntimeState`, and persisted under the
+replica-safe key returned by `PreviewRunnerCredential.SecretKey(runId)`. The API re-fetches this
+credential when it must call back into the pod for preview control or tool-approval resolution.
+
+## Returning tool-approval decisions to AgentHost
+
+Pod-per-run moves the approval wait into AgentHost: its in-memory `IToolApprovalGate` owns the pending
+request while the public approval endpoint runs in the API process with a `DurableToolApprovalGate`.
+Issue #196 closed the missing API-to-pod return leg.
+
+When an operator posts either the child run id or its coordinator run id, the API resolves the owning
+child. If the durable gate reports `Unknown` and `Sandbox:AgentExecutionMode` is `pod-per-run`, the API
+resolves the pod origin, loads the per-run credential, and forwards the decision over the existing
+`a2a-sandbox-pod` HTTP client. AgentHost authenticates the request and resolves its local gate. A
+terminal result is mapped to HTTP 200 and the API emits `tool.approval_resolved`; `unknown`, `pending`,
+and unreachable results map to 404, 409, and 503 respectively.
+
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
+sequenceDiagram
+    participant User as Operator
+    participant API as Run approval endpoint
+    participant Events as Persisted run events
+    participant Durable as DurableToolApprovalGate
+    participant Client as AgentHostApprovalHttpClient
+    participant Host as AgentHost pod
+    participant Local as In-memory IToolApprovalGate
+    User->>API: POST coordinator or child run decision
+    API->>Durable: resolve posted run + request
+    opt coordinator does not own request
+        API->>Events: find coordinator.child_approval_required
+        Events-->>API: owning childRunId
+    end
+    API->>Durable: grant/deny owning child
+    alt durable gate resolves
+        Durable-->>API: terminal state
+    else Unknown and pod-per-run
+        API->>Client: childRunId + per-run bearer
+        Client->>Host: POST /tool-approvals or /tool-denials
+        Host->>Local: grant/deny request
+        Local-->>Host: approved / denied / expired
+        Host-->>Client: terminal response
+        Client-->>API: resolved state
+        API->>API: emit tool.approval_resolved
+    end
+    API-->>User: 200 terminal result
+```
+
+| Source | Role |
+| --- | --- |
+| `apps/Agentweaver.Api/Endpoints/EndpointHelpers.cs:43-98` | Resolves a coordinator post to the owning child, including persisted approval-required events. |
+| `apps/Agentweaver.Api/Endpoints/RunEndpoints.cs:1559-1705` | Tries the durable gate, invokes the pod fallback, and exposes the public status contract. |
+| `apps/Agentweaver.Api/Endpoints/RunEndpoints.cs:2590-2718` | Loads the per-run credential, maps pod outcomes, and emits `tool.approval_resolved`. |
+| `apps/Agentweaver.Api/Sandbox/AgentHostApprovalHttpClient.cs:28-112` | Resolves the pod origin and sends authenticated decisions through `a2a-sandbox-pod`. |
+| `apps/Agentweaver.AgentHost/Program.cs:287-288,486-588` | Hosts and authenticates the pod-local approval routes and resolves the in-memory gate. |
+
 ## Reaching into the pod: browser preview
 
 Default-deny egress governs traffic *out* of the pod. A separate, deliberate path lets an operator (or a
@@ -591,3 +648,5 @@ Where this lives:
   carries agent turns to the pod.
 - [Sandbox browser preview](./sandbox-browser-preview.md) — exposing a server running inside the run's pod
   to the user over a public HTTPS reverse proxy.
+- [Tool Approval SSE Contract](../tool-approval-sse-contract.md) — public approval outcomes and
+  `tool.approval_resolved` behavior.

@@ -641,12 +641,22 @@ Request:
 ```
 
 Scope values: `once` = this call only; `run` = all calls to the same tool+url this run; `always` = all calls this server session; `tool` = all calls to this tool regardless of url.
+For a decision forwarded to a pod-local gate, `always` is effectively run-scoped and does not survive a pod restart.
 
-Response `200 OK` `{ "run_id", "request_id", "approved": true }`. The returned `run_id` is the run that actually **owned** the approval, which may differ from `{id}` (see owning-run resolution below).
+Response `200 OK` `{ "run_id", "request_id", "approved": true }`. Terminal/replayed and pod-forwarded responses also include `resolved: true`, `expired`, and `state: "approved" | "denied" | "expired"`. The returned `run_id` is the run that actually **owned** the approval, which may differ from `{id}`.
 
-**Owning-run resolution.** The approval context lives on the run that *raised* the tool call. In a coordinator orchestration that is a CHILD subtask run, not the coordinator itself — yet operators grant from the coordinator view and may POST the coordinator run id. When `{id}` is a coordinator run (`ParentRunId == null` and `AgentName == "Coordinator"`) that does not itself hold the pending `request_id`, the server searches its child subtask runs (`runStore.GetRunsByParentAsync`) and routes the grant to the child that owns the request. Approving therefore works whether the client posts the coordinator id or the child id (`EndpointHelpers.ResolveApprovalOwningRunIdAsync`, recurrence of #196).
+**Owning-run resolution.** The approval context lives on the run that *raised* the tool call. When `{id}` is a coordinator run (`ParentRunId == null` and `AgentName == "Coordinator"`), the API checks its children and then scans persisted `coordinator.child_approval_required` events for the matching `requestId` and `childRunId`. Approving therefore works whether the client posts the coordinator id or the child id.
 
-Errors: `400` invalid run id / missing `request_id`; `404` run not found; `403` caller is not the run owner; `409` no pending approval for this `request_id` or run is not active.
+**Pod-per-run fallback.** If the API's `DurableToolApprovalGate` returns `Unknown` for the resolved child, the API uses `IAgentHostOriginResolver` and `AgentHostApprovalHttpClient` to forward the decision to the pod's authenticated `/tool-approvals` route through the `a2a-sandbox-pod` client. The bearer is re-fetched with `PreviewRunnerCredential.SecretKey(runId)`. A successful terminal forward emits `tool.approval_resolved` on the child run.
+
+| Status | Approval result |
+| --- | --- |
+| `200 OK` | The request is terminal (`approved`, `denied`, or `expired`) |
+| `404 Not Found` | `state: "unknown"` after owning-run resolution and any pod forward, or the run does not exist |
+| `409 Conflict` | `state: "pending"` and the decision should be retried, or the run is not active |
+| `503 Service Unavailable` | `state: "agenthost_unreachable"` because the AgentHost origin/call/response was unavailable |
+
+Other errors: `400` invalid run id / missing `request_id`; `403` caller is not the run owner.
 
 ### POST /api/runs/{id}/tool-denials
 
@@ -658,9 +668,14 @@ Request:
 { "request_id": "string" }
 ```
 
-Response `200 OK` `{ "run_id", "request_id", "denied": true }`. Like approvals, the denial uses **owning-run resolution**: on a coordinator run the server routes the denial to the child subtask run that raised the tool call, so the returned `run_id` may differ from `{id}` (`EndpointHelpers.ResolveApprovalOwningRunIdAsync`).
+Response `200 OK` `{ "run_id", "request_id", "denied": true }`. Terminal/replayed and pod-forwarded responses also include `resolved: true`, `expired`, and `state`. Denials use the same persisted coordinator-to-child owning-run resolution and authenticated pod fallback as approvals, so the returned `run_id` may differ from `{id}`.
 
-Errors: `400` invalid run id / missing `request_id`; `404` run not found; `403` caller is not the run owner; `409` no pending denial for this `request_id` or run is not active.
+Status codes are the same as tool approvals: `200` terminal, `404 state: "unknown"`, `409 state: "pending"`, and `503 state: "agenthost_unreachable"`, plus `400` validation, `403` ownership, and `409` inactive-run errors.
+
+Sources: `apps/Agentweaver.Api/Endpoints/RunEndpoints.cs:1559-1705`,
+`apps/Agentweaver.Api/Endpoints/RunEndpoints.cs:2590-2718`,
+`apps/Agentweaver.Api/Endpoints/EndpointHelpers.cs:43-98`,
+`apps/Agentweaver.Api/Sandbox/AgentHostApprovalHttpClient.cs:28-112`.
 
 ### POST /api/runs/{id}/questions/{requestId}/answer
 

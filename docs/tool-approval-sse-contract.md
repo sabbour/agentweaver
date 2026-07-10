@@ -1,8 +1,7 @@
-# Tool Approval SSE Contract (issue #174)
+# Tool Approval SSE Contract (issues #174 and #196)
 
-This document describes the backend changes introduced to fix the 409 "No pending approval
-found" bug. Trinity (frontend) must consume these events to keep approval cards in sync with
-server state.
+This document describes the backend contract for resolving tool approvals and keeping approval
+cards in sync with server state.
 
 ---
 
@@ -17,6 +16,17 @@ server state.
    request IDs. A second click or late click returns HTTP 200 with `resolved: true`,
    `state: "approved" | "denied" | "expired"`, and `expired`; a wrong run id or bad request id
    returns HTTP 404 with `state: "unknown"`.
+
+3. **Pod-local approval return path (#196).** In `pod-per-run` mode, the pending approval is held by
+   the AgentHost pod's in-memory `IToolApprovalGate`, not the API process's
+   `DurableToolApprovalGate`. If the durable gate reports `Unknown`, the API forwards the decision
+   to the owning pod's authenticated `POST /tool-approvals` or `POST /tool-denials` endpoint. A
+   terminal pod response is returned as HTTP 200 and the API emits `tool.approval_resolved`;
+   an unreachable AgentHost returns HTTP 503 with `state: "agenthost_unreachable"`.
+
+4. **Coordinator-to-child routing (#196).** A request posted to a coordinator run is resolved to
+   the child run that raised it. The API first checks the child gates, then scans persisted
+   `coordinator.child_approval_required` events for the matching `requestId` and `childRunId`.
 
 ---
 
@@ -69,7 +79,10 @@ This mirrors the child's `tool.approval_resolved` so coordinator-stream consumer
 
 ## Posting approvals — which run id to use
 
-**Always POST to the child subtask run id** — not the coordinator run id.
+POSTing the **child subtask run id** remains the most direct form. A client operating from the
+coordinator view may instead POST the coordinator run id; the API resolves the owning child from
+the matching persisted `coordinator.child_approval_required` event and returns that child id as
+`run_id`.
 
 The `coordinator.child_approval_required` event (emitted on the coordinator stream) carries:
 ```json
@@ -84,12 +97,41 @@ The `coordinator.child_approval_required` event (emitted on the coordinator stre
 
 Endpoints:
 ```
-POST /api/runs/{childRunId}/tool-approvals   { "request_id": "...", "scope": "once|run|tool|always" }
-POST /api/runs/{childRunId}/tool-denials     { "request_id": "..." }
+POST /api/runs/{runId}/tool-approvals   { "request_id": "...", "scope": "once|run|tool|always" }
+POST /api/runs/{runId}/tool-denials     { "request_id": "..." }
 ```
 
 The `request_id` must match exactly what the `tool.approval_required` (and
 `coordinator.child_approval_required`) events carry. It is a full UUID — do not truncate it.
+
+---
+
+## Pod-per-run forwarding
+
+The public API routes and request bodies are unchanged for callers. Internally, when the resolved
+child run is `pod-per-run` and the API-side durable gate returns `Unknown`:
+
+1. The API resolves the AgentHost origin with `IAgentHostOriginResolver`.
+2. It reads the per-run credential using `PreviewRunnerCredential.SecretKey(runId)`.
+3. `AgentHostApprovalHttpClient` sends the decision through the `a2a-sandbox-pod` HTTP client to
+   the pod-root `/tool-approvals` or `/tool-denials` route.
+4. AgentHost authenticates the bearer and resolves its in-memory `IToolApprovalGate`.
+5. A terminal result causes the API to emit `tool.approval_resolved` on the owning child run.
+
+Forwarded outcome states:
+
+| HTTP | `state` | Meaning |
+|---|---|---|
+| `200` | `approved`, `denied`, or `expired` | Terminal decision; `resolved: true` |
+| `404` | `unknown` | Neither the API nor the owning pod knows the request |
+| `409` | `pending` | The request remains pending and should be retried |
+| `503` | `agenthost_unreachable` | The pod origin, call, or response was unavailable |
+
+Sources: `apps/Agentweaver.Api/Endpoints/RunEndpoints.cs:1594-1625`,
+`apps/Agentweaver.Api/Endpoints/RunEndpoints.cs:2590-2718`,
+`apps/Agentweaver.Api/Endpoints/EndpointHelpers.cs:43-98`,
+`apps/Agentweaver.Api/Sandbox/AgentHostApprovalHttpClient.cs:28-112`, and
+`apps/Agentweaver.AgentHost/Program.cs:287-288,486-588`.
 
 ---
 
@@ -123,4 +165,11 @@ tool.approval_resolved  →  disable / remove card
 If the client receives a resolved response from `POST /tool-approvals` or `POST /tool-denials`
 with `state: "approved" | "denied" | "expired"`, it means a `tool.approval_resolved` event is
 in-flight or was missed on reconnect. The card should be hidden. HTTP 404 with `state: "unknown"`
-means the client posted to the wrong run id or used a request id that was never registered there.
+means the request was not found after coordinator-child resolution and any pod forward. HTTP 503
+with `state: "agenthost_unreachable"` is retryable while the run and pod remain active.
+
+## Related reading
+
+- [API reference](./reference/api.md#post-api-runs-id-tool-approvals) — public request and status contract.
+- [Sandbox pod execution deep dive](./deep-dive/sandbox-pod-execution.md#returning-tool-approval-decisions-to-agenthost) — end-to-end API-to-pod flow.
+- [Sandbox pods reference](./reference/sandbox-pods.md#tool-approval-forwarding-endpoints) — internal AgentHost routes and authentication.

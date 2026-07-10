@@ -445,6 +445,9 @@ builder.Services.AddSingleton<ISandboxExecutor>(sp =>
     builder.Services.AddSingleton<
         Agentweaver.Api.Sandbox.Preview.IPreviewRunnerHttpClient,
         Agentweaver.Api.Sandbox.Preview.PreviewRunnerHttpClient>();
+    builder.Services.AddSingleton<
+        Agentweaver.Api.Sandbox.IAgentHostApprovalHttpClient,
+        Agentweaver.Api.Sandbox.AgentHostApprovalHttpClient>();
 
     // RemoteWorkflowAgentFactory registered as an alternative to WorkflowAgentFactory.
     builder.Services.AddSingleton<RemoteWorkflowAgentFactory>();

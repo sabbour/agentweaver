@@ -16,6 +16,7 @@ using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Projects;
 using Agentweaver.Api.Runs;
 using Agentweaver.Api.Sandbox;
+using Agentweaver.Api.Sandbox.Preview;
 using Agentweaver.Api.Security;
 using Agentweaver.Api.Workflows;
 using Agentweaver.Domain;
@@ -1561,6 +1562,11 @@ app.MapPost("/api/runs/{id}/tool-approvals", async (
     ToolApprovalRequest body,
     IRunStore runStore,
     IToolApprovalGate approvalGate,
+    IAgentHostApprovalHttpClient agentHostApprovalClient,
+    IOptions<SandboxRuntimeOptions> sandboxRuntime,
+    RunStreamStore streamStore,
+    IServiceScopeFactory scopeFactory,
+    ISecretStore secretStore,
     CancellationToken ct) =>
 {
     if (!RunId.TryParse(id, out var runId))
@@ -1586,7 +1592,7 @@ app.MapPost("/api/runs/{id}/tool-approvals", async (
     // run and the request was raised by a child subtask, resolve to that child so the grant lands
     // on the owning run instead of 404ing on the parent (recurrence of #196).
     var targetRunId = await EndpointHelpers.ResolveApprovalOwningRunIdAsync(
-        id, run, body.RequestId, approvalGate, runStore, ct) ?? id;
+        id, run, body.RequestId, approvalGate, runStore, ct, scopeFactory) ?? id;
 
     var resolved = await approvalGate.GrantAsync(targetRunId, body.RequestId, approvalScope);
     if (!resolved)
@@ -1604,11 +1610,26 @@ app.MapPost("/api/runs/{id}/tool-approvals", async (
             });
 
         if (state is ToolApprovalRequestState.Unknown)
+        {
+            var podOutcome = await TryResolveAgentHostApprovalAsync(
+                approve: true,
+                targetRunId,
+                body.RequestId,
+                body.Scope,
+                sandboxRuntime.Value,
+                agentHostApprovalClient,
+                secretStore,
+                streamStore,
+                ct).ConfigureAwait(false);
+            if (podOutcome is not null)
+                return MapAgentHostApprovalOutcome(podOutcome, targetRunId, body.RequestId, approve: true);
+
             return Results.NotFound(new
             {
                 error = "No approval request found for this request_id on this run. Verify you are posting to the child subtask run id and that the request_id matches exactly.",
                 state = "unknown",
             });
+        }
 
         return Results.Conflict(new { error = "Tool approval request is pending but could not be resolved. Retry the request.", state = "pending" });
     }
@@ -1622,6 +1643,11 @@ app.MapPost("/api/runs/{id}/tool-denials", async (
     ToolApprovalRequest body,
     IRunStore runStore,
     IToolApprovalGate approvalGate,
+    IAgentHostApprovalHttpClient agentHostApprovalClient,
+    IOptions<SandboxRuntimeOptions> sandboxRuntime,
+    RunStreamStore streamStore,
+    IServiceScopeFactory scopeFactory,
+    ISecretStore secretStore,
     CancellationToken ct) =>
 {
     if (!RunId.TryParse(id, out var runId))
@@ -1639,7 +1665,7 @@ app.MapPost("/api/runs/{id}/tool-denials", async (
     // Same owning-run resolution as tool-approvals: deny must land on the child subtask run that
     // raised the tool call, not the parent coordinator run the operator is viewing (#196).
     var targetRunId = await EndpointHelpers.ResolveApprovalOwningRunIdAsync(
-        id, run, body.RequestId, approvalGate, runStore, ct) ?? id;
+        id, run, body.RequestId, approvalGate, runStore, ct, scopeFactory) ?? id;
 
     var resolved = approvalGate.Deny(targetRunId, body.RequestId);
     if (!resolved)
@@ -1657,11 +1683,26 @@ app.MapPost("/api/runs/{id}/tool-denials", async (
             });
 
         if (state is ToolApprovalRequestState.Unknown)
+        {
+            var podOutcome = await TryResolveAgentHostApprovalAsync(
+                approve: false,
+                targetRunId,
+                body.RequestId,
+                body.Scope,
+                sandboxRuntime.Value,
+                agentHostApprovalClient,
+                secretStore,
+                streamStore,
+                ct).ConfigureAwait(false);
+            if (podOutcome is not null)
+                return MapAgentHostApprovalOutcome(podOutcome, targetRunId, body.RequestId, approve: false);
+
             return Results.NotFound(new
             {
                 error = "No approval request found for this request_id on this run. Verify you are posting to the child subtask run id and that the request_id matches exactly.",
                 state = "unknown",
             });
+        }
 
         return Results.Conflict(new { error = "Tool approval request is pending but could not be resolved. Retry the request.", state = "pending" });
     }
@@ -2544,6 +2585,142 @@ static string FormatApprovalState(ToolApprovalRequestState state) => state switc
     ToolApprovalRequestState.Pending => "pending",
     _ => "unknown",
 };
+
+internal static async Task<AgentHostApprovalOutcome?> TryResolveAgentHostApprovalAsync(
+    bool approve,
+    string targetRunId,
+    string requestId,
+    string scope,
+    SandboxRuntimeOptions sandboxRuntime,
+    IAgentHostApprovalHttpClient agentHostApprovalClient,
+    ISecretStore? secretStore,
+    RunStreamStore streamStore,
+    CancellationToken ct)
+{
+    if (!sandboxRuntime.IsPodPerRun)
+        return null;
+
+    string? bearer = null;
+    if (secretStore is not null)
+    {
+        try
+        {
+            var secret = await secretStore.GetSecretAsync(
+                PreviewRunnerCredential.SecretKey(targetRunId), ct).ConfigureAwait(false);
+            bearer = secret.Found ? secret.Value : null;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            bearer = null;
+        }
+    }
+
+    var outcome = approve
+        ? await agentHostApprovalClient.GrantAsync(targetRunId, requestId, scope, bearer, ct).ConfigureAwait(false)
+        : await agentHostApprovalClient.DenyAsync(targetRunId, requestId, bearer, ct).ConfigureAwait(false);
+
+    if (!outcome.Unreachable && (outcome.Resolved || IsTerminalApprovalState(outcome.State)))
+        EmitAgentHostApprovalResolved(streamStore, targetRunId, requestId, outcome.State);
+
+    return outcome;
+}
+
+private static IResult MapAgentHostApprovalOutcome(
+    AgentHostApprovalOutcome outcome,
+    string targetRunId,
+    string requestId,
+    bool approve)
+{
+    if (outcome.Unreachable)
+        return Results.Json(
+            new { error = "AgentHost approval endpoint is unreachable.", state = "agenthost_unreachable" },
+            statusCode: StatusCodes.Status503ServiceUnavailable);
+
+    if (outcome.Resolved || IsTerminalApprovalState(outcome.State))
+    {
+        var approved = string.Equals(outcome.State, "approved", StringComparison.OrdinalIgnoreCase);
+        var expired = string.Equals(outcome.State, "expired", StringComparison.OrdinalIgnoreCase);
+        if (approve)
+        {
+            return Results.Ok(new
+            {
+                run_id = targetRunId,
+                request_id = requestId,
+                approved,
+                resolved = true,
+                expired,
+                state = outcome.State,
+            });
+        }
+
+        return Results.Ok(new
+        {
+            run_id = targetRunId,
+            request_id = requestId,
+            denied = !approved,
+            resolved = true,
+            expired,
+            state = outcome.State,
+        });
+    }
+
+    if (string.Equals(outcome.State, "unknown", StringComparison.OrdinalIgnoreCase))
+        return Results.NotFound(new
+        {
+            error = "No approval request found for this request_id on the AgentHost pod.",
+            state = "unknown",
+        });
+
+    if (string.Equals(outcome.State, "pending", StringComparison.OrdinalIgnoreCase))
+        return Results.Conflict(new
+        {
+            error = "Tool approval request is pending but could not be resolved. Retry the request.",
+            state = "pending",
+        });
+
+    return Results.Json(
+        new { error = "AgentHost approval endpoint returned an invalid response.", state = "agenthost_unreachable" },
+        statusCode: StatusCodes.Status503ServiceUnavailable);
+}
+
+private static bool IsTerminalApprovalState(string state) =>
+    string.Equals(state, "approved", StringComparison.OrdinalIgnoreCase)
+    || string.Equals(state, "denied", StringComparison.OrdinalIgnoreCase)
+    || string.Equals(state, "expired", StringComparison.OrdinalIgnoreCase);
+
+private static void EmitAgentHostApprovalResolved(
+    RunStreamStore streamStore,
+    string runId,
+    string requestId,
+    string state)
+{
+    var entry = streamStore.Get(runId);
+    if (entry is null)
+        return;
+
+    lock (entry)
+    {
+        var alreadyEmitted = entry.GetSnapshotSince(0).Events.Any(evt =>
+            evt.Type == EventTypes.ToolApprovalResolved
+            && PayloadRequestId(evt.Payload) == requestId);
+        if (alreadyEmitted)
+            return;
+
+        entry.RecordNext(EventTypes.ToolApprovalResolved, new
+        {
+            requestId,
+            runId,
+            approved = string.Equals(state, "approved", StringComparison.OrdinalIgnoreCase),
+            expired = string.Equals(state, "expired", StringComparison.OrdinalIgnoreCase),
+        });
+    }
+}
+
+private static string? PayloadRequestId(object payload)
+{
+    var json = System.Text.Json.JsonSerializer.SerializeToElement(payload);
+    return json.TryGetProperty("requestId", out var requestId) ? requestId.GetString() : null;
+}
 }
 
 /// <summary>
