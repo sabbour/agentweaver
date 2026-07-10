@@ -348,7 +348,9 @@ public sealed class CoordinatorAssemblyStore
         string newAuthor,
         string newModel,
         string? newCharter,
-        CancellationToken ct)
+        CancellationToken ct,
+        int? directiveId = null,
+        int? attempt = null)
     {
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
@@ -365,7 +367,11 @@ public sealed class CoordinatorAssemblyStore
             lockedSet.Add(expectedAuthor);
         var newJson = JsonSerializer.Serialize(lockedSet);
 
-        // Guarded CAS on AssignedAgent == expectedAuthor: exactly one replica wins the rotation.
+        // Guarded CAS on AssignedAgent == expectedAuthor: exactly one replica wins the rotation. The
+        // (directiveId, attempt) idempotency stamp is written ATOMICALLY with the rotation so a crash can
+        // never leave the author rotated but the stamp missing (which would let a re-drive double-rotate
+        // off the already-rotated author). DriveOutstandingSteeringExecutionAsync's re-drive reads this
+        // stamp to SKIP re-rotating a subtask this directive/attempt already rotated.
         var rows = await db.Subtasks
             .Where(s => s.Id == subtaskId && s.AssignedAgent == expectedAuthor)
             .ExecuteUpdateAsync(setters => setters
@@ -373,6 +379,8 @@ public sealed class CoordinatorAssemblyStore
                 .SetProperty(s => s.SelectedModelId, newModel)
                 .SetProperty(s => s.AgentCharter, newCharter)
                 .SetProperty(s => s.LockedOutAgents, newJson)
+                .SetProperty(s => s.LastResetDirectiveId, s => directiveId ?? s.LastResetDirectiveId)
+                .SetProperty(s => s.LastResetAttempt, s => attempt ?? s.LastResetAttempt)
                 .SetProperty(s => s.UpdatedAt, now), ct)
             .ConfigureAwait(false);
 

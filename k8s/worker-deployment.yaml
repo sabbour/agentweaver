@@ -144,6 +144,9 @@ spec:
               value: pod-per-run
             - name: Sandbox__Kubernetes__Namespace
               value: agentweaver
+            # Mirror api-deployment.yaml: worker launches Phase-3 Build/Test AgentHost pods and must use the same plain-http healthz scheme.
+            - name: Sandbox__AgentHost__RequireMtls
+              value: "false"
             # GitHub OAuth metadata (callback/frontend for any per-run GitHub auth flows).
             - name: Auth__GitHub__AllowedOrg
               value: microsoft

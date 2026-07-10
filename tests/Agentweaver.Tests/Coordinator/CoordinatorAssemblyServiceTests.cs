@@ -567,6 +567,9 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         var (workPlanId, subtaskIds) = await SeedPlanAsync(
             coordinatorRunId, new[] { SubtaskStatus.AssembleReady }, new string?[] { priorChildRunId });
         await SeedChildRunAsync(RunId.Parse(priorChildRunId), "agentweaver/wt/child-hero", DiffTouching("index.html"));
+        // DECIDER-OWNED ROUTING: lapse retention so the decider judges the target UNRESUMABLE →
+        // DispatchFresh → lockout rotation (the prior child remains the handoff source).
+        await LapseSteeringRetentionAsync(subtaskIds[0]);
 
         // Two PRIOR rejection rounds already recorded for this target (accumulated history).
         await SeedPriorRejectionDirectiveAsync(
@@ -705,6 +708,8 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         var (workPlanId, subtaskIds) = await SeedPlanAsync(
             coordinatorRunId, new[] { SubtaskStatus.AssembleReady }, new string?[] { priorChildRunId });
         await SeedChildRunAsync(RunId.Parse(priorChildRunId), "agentweaver/wt/child-prior", DiffTouching("app.ts"));
+        // DECIDER-OWNED ROUTING: lapse retention so the target is UNRESUMABLE → DispatchFresh → lockout.
+        await LapseSteeringRetentionAsync(subtaskIds[0]);
 
         await SeedPriorRejectionDirectiveAsync(
             coordinatorRunId, subtaskIds, SteeringSource.Rubberduck, "gate:rubberduck",
@@ -764,6 +769,9 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         var (workPlanId, subtaskIds) = await SeedPlanAsync(
             coordinatorRunId, new[] { SubtaskStatus.AssembleReady }, new string?[] { originalChildRunId });
         await SeedChildRunAsync(RunId.Parse(originalChildRunId), "agentweaver/wt/child-prior", DiffTouching("app.ts"));
+        // DECIDER-OWNED ROUTING: lapse retention so BOTH rejections route DispatchFresh → lockout
+        // rotation (SetSubtaskHandoffRunningAsync never re-arms retention, so it stays lapsed for round 2).
+        await LapseSteeringRetentionAsync(subtaskIds[0]);
 
         var touched = subtaskIds.ToDictionary(id => id, _ => (IReadOnlySet<string>)new HashSet<string>());
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
@@ -850,15 +858,202 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
             .Should().NotBeNull("a durable review request backs the escalated gate");
     }
 
+    // ── DECIDER-OWNED ROUTING (Fix-B, run 19cec519) ───────────────────────────────────────────────
+    //    The coordinator's decider is the SINGLE authority on how gate feedback is applied. There is NO
+    //    post-decision override that force-rotates every RequestChanges to a different agent. A RESUMABLE
+    //    target routes to an IN-PLACE steer (SAME author, context preserved) — NOT a lockout rotation.
     [Fact]
-    public void IsReviewerRejection_Discriminates_RequestChangesAndBlocking_FromAdvisory()
+    public async Task RouteAssembly_Rejection_ResumableTarget_SteersInPlace_SameAuthor_NoLockoutRosterMutation()
     {
-        // Change #6 — the rejection/guidance discriminator: reviewer request-changes (RequestChanges) or
-        // a blocking finding ⇒ lockout/rotate; advisory/refine/steer ⇒ in-place same agent.
-        CoordinatorAssemblyService.IsReviewerRejection(SteeringSeverity.RequestChanges).Should().BeTrue();
-        CoordinatorAssemblyService.IsReviewerRejection(SteeringSeverity.Blocking).Should().BeTrue();
-        CoordinatorAssemblyService.IsReviewerRejection(SteeringSeverity.Advisory).Should().BeFalse();
-        CoordinatorAssemblyService.IsReviewerRejection(null).Should().BeFalse();
+        var coordinatorRunId = RunId.New().ToString();
+        await SeedCoordinatorRunAsync(coordinatorRunId);
+        _streamStore.Create(coordinatorRunId, "alice");
+
+        // A RESUMABLE target: it references a child run and retention is NOT lapsed → the decider chooses
+        // in_place_steer. (The child run is intentionally absent from the run store so the in-place path
+        // makes a conscious fallback rather than launching via an unavailable RunOrchestrator — either way
+        // the point stands: the author is NOT rotated and NO lockout roster is mutated.)
+        var childRunId = RunId.New().ToString();
+        var (workPlanId, subtaskIds) = await SeedPlanAsync(
+            coordinatorRunId, new[] { SubtaskStatus.AssembleReady }, new string?[] { childRunId });
+
+        var touched = subtaskIds.ToDictionary(id => id, _ => (IReadOnlySet<string>)new HashSet<string>());
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+
+        await InvokeRouteAssemblyGateThroughSteeringAsync(
+            Context(coordinatorRunId), workPlanId, SteeringSource.BuildTest,
+            "The build fails — fix the compile error in server.js.", touched, "tree-inplace", cts.Token);
+
+        // The decider chose in_place_steer (NOT lockout rotation) — the pre-fix override forced rotation.
+        var decisions = _streamStore.Get(coordinatorRunId)!.GetSnapshotSince(0).Events
+            .Where(e => e.Type == EventTypes.CoordinatorSteeringDecision)
+            .Select(e => JsonSerializer.SerializeToNode(e.Payload)!.AsObject())
+            .ToList();
+        decisions.Should().Contain(
+            d => d["decision"] != null && d["decision"]!.GetValue<string>() == SteeringDirection.InPlaceSteer,
+            "a RESUMABLE request-changes routes to in_place_steer, not a forced lockout rotation");
+
+        // SAME author, NO lockout roster mutation, and NO context-carrying handoff to a different agent.
+        var (assigned, lockedOut, _, _) = await GetSubtaskFieldsAsync(subtaskIds[0]);
+        assigned.Should().Be("morpheus", "in-place steer keeps the SAME author (context preserved)");
+        lockedOut.Should().BeNull("in-place steer must NOT lock out the author or mutate the roster");
+        _handoff.Calls.Should().BeEmpty("in-place steer never rotates to a different agent via the handoff");
+        decisions.Should().NotContain(
+            d => d["rotatedTo"] != null,
+            "no lockout rotation occurs on a resumable in-place steer");
+        EventTypes_(coordinatorRunId).Should().NotContain(EventTypes.CoordinatorAssemblyBlocked);
+    }
+
+    // ── CRASH RECOVERY (rubber-duck change #1): a DispatchFresh directive left `executing` by a crash
+    //    after MarkDirectiveExecutingAsync but before the lockout rotation/handoff completed must be
+    //    RE-DRIVEN by DriveOutstandingSteeringExecutionAsync (the rotation actually happens), NOT silently
+    //    marked `applied` (which would drop the rotation). ───────────────────────────────────────────
+    [Fact]
+    public async Task DriveOutstanding_DispatchFreshExecuting_CrashBeforeEffect_ReDrivesRotation_NotSilentlyApplied()
+    {
+        var coordinatorRunId = RunId.New().ToString();
+        await SeedCoordinatorRunAsync(coordinatorRunId);
+        _streamStore.Create(coordinatorRunId, "alice");
+
+        var priorChildRunId = RunId.New().ToString();
+        var (workPlanId, subtaskIds) = await SeedPlanAsync(
+            coordinatorRunId, new[] { SubtaskStatus.AssembleReady }, new string?[] { priorChildRunId });
+        await SeedChildRunAsync(RunId.Parse(priorChildRunId), "agentweaver/wt/child-crash", DiffTouching("app.ts"));
+
+        // A DispatchFresh directive stuck `executing` — the crash happened after MarkDirectiveExecutingAsync
+        // but BEFORE any rotation ran (the author is still "morpheus", no lockout, no handoff).
+        var directiveId = await SeedExecutingDispatchFreshDirectiveAsync(
+            coordinatorRunId, subtaskIds, attempt: 1,
+            instruction: "The target session is unresumable — rotate the author.");
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        var reDrove = await InvokeDriveOutstandingSteeringExecutionAsync(
+            Context(coordinatorRunId), workPlanId, cts.Token);
+
+        reDrove.Should().BeTrue("a DispatchFresh directive stuck executing must be RE-DRIVEN, not settled blindly");
+
+        // The rotation actually happened (never a silent apply): author rotated + rejected author locked out.
+        var (assigned, lockedOut, priorPointer, _) = await GetSubtaskFieldsAsync(subtaskIds[0]);
+        assigned.Should().Be("rotated-morpheus", "the re-drive performs the lockout rotation that the crash dropped");
+        lockedOut!.Should().Contain("morpheus", "the rejected author is locked out by the re-driven rotation");
+        priorPointer.Should().Be(priorChildRunId, "the prior child is retained as the handoff source");
+        _handoff.Calls.Should().ContainSingle("the re-drive dispatches the rotated author via the context-carrying handoff");
+
+        var directive = await GetDirectiveAsync(directiveId);
+        directive!.DecidedAction.Should().Be(SteeringDirection.DispatchFresh, "the persisted decision matches the real effect");
+        directive.Status.Should().Be(SteeringStatus.Applied, "the re-drive settles the directive after the effect completes");
+    }
+
+    // ── PARTIAL-ROTATION CRASH → PER-TARGET DEADLOCK (Fix-B guard, regression): a MULTI-target
+    //    DispatchFresh directive can crash AFTER rotating+stamping target A but BEFORE target B. On
+    //    re-drive, target A matches its (directiveId, attempt) stamp (already-rotated, carried), while
+    //    target B genuinely DEADLOCKS (all eligible authors locked out → SelectRotationAuthor returns
+    //    null). The idempotent-re-drive override (planned==0 && alreadyRotated>0 → deadlocked=false) must
+    //    NOT fire here: it is guarded on deadlockRoster.Count==0, so a genuine per-target deadlock still
+    //    ESCALATES TO HUMAN REVIEW (lockout_deadlock) — target B is NEVER silently marked applied/dropped.
+    [Fact]
+    public async Task DispatchFreshReDrive_PartialRotationThenDeadlock_EscalatesToHumanReview_NoSilentDrop()
+    {
+        var coordinatorRunId = RunId.New().ToString();
+        await SeedCoordinatorRunAsync(coordinatorRunId);
+        _streamStore.Create(coordinatorRunId, "alice");
+
+        // Two rejection targets (A, B) under a single multi-target DispatchFresh directive.
+        var (workPlanId, subtaskIds) = await SeedPlanAsync(
+            coordinatorRunId, new[] { SubtaskStatus.AssembleReady, SubtaskStatus.AssembleReady });
+        var targetA = subtaskIds[0];
+        var targetB = subtaskIds[1];
+
+        // The directive crashed mid-effect: it is still `executing` with a non-empty instruction (so the
+        // re-drive has context to carry → the deadlock rationale is lockout_deadlock, not lockout_no_context).
+        const int attempt = 1;
+        var directiveId = await SeedExecutingDispatchFreshDirectiveAsync(
+            coordinatorRunId, subtaskIds, attempt,
+            instruction: "Both artifacts were rejected — rotate the authors.");
+        // Mid-DispatchFresh execution the plan sits in the AssemblySteering lease (the escalation CAS
+        // transitions AssemblySteering/Assembling → InReview).
+        await SetPlanSteeringStateAsync(workPlanId, status: WorkPlanStatus.AssemblySteering, steeringIterations: 6);
+
+        // Target A was ALREADY rotated + durably stamped by THIS (directiveId, attempt) before the crash:
+        // it now carries the durable (LastResetDirectiveId, LastResetAttempt) stamp, so the re-drive treats
+        // it as already-rotated (carried under its current author, never re-selected).
+        using (var scope = _provider.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var a = await db.Subtasks.FirstAsync(s => s.Id == targetA);
+            a.AssignedAgent = "rotated-morpheus";
+            a.LastResetDirectiveId = directiveId;
+            a.LastResetAttempt = attempt;
+            a.UpdatedAt = DateTimeOffset.UtcNow;
+            await db.SaveChangesAsync();
+        }
+
+        // Target B has NOT been rotated yet, and its eligible authors are ALL locked out → the rotation
+        // selector returns null for it (a GENUINE per-target deadlock). Target A is skipped by the stamp,
+        // so this null only affects target B.
+        _rotation.Impl = (_, _, _) => null;
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        var reDrove = await InvokeDriveOutstandingSteeringExecutionAsync(
+            Context(coordinatorRunId), workPlanId, cts.Token);
+
+        reDrove.Should().BeTrue("the re-drive escalates the genuine per-target deadlock and stops the assembly pass");
+
+        // The genuine deadlock ESCALATED to human review (lockout_deadlock) — the override did NOT suppress it.
+        EventTypes_(coordinatorRunId).Should().NotContain(EventTypes.CoordinatorAssemblyBlocked,
+            "a genuine per-target deadlock escalates to human review, NEVER latches terminal AssemblyBlocked");
+        var deadlock = _streamStore.Get(coordinatorRunId)!.GetSnapshotSince(0).Events
+            .Where(e => e.Type == EventTypes.CoordinatorSteeringDecision)
+            .Select(e => JsonSerializer.SerializeToNode(e.Payload)!.AsObject())
+            .Single(d => d["decision"]?.GetValue<string>() == SteeringDirection.Proceed
+                && d["disposition"]?.GetValue<string>() == "rejection");
+        deadlock["rationale"]!.GetValue<string>().Should().Contain("lockout_deadlock",
+            "the surviving deadlock (target B) escalates — the re-drive override must NOT force deadlocked=false");
+        deadlock["lockedOutRoster"]!.AsArray().Select(n => n!.GetValue<string>())
+            .Should().Contain("morpheus", "target B's locked-out author is shown on the escalated card");
+
+        // The plan parked at human review with a durable review card — target B was NOT silently dropped.
+        var (_, _, status, stage) = await GetPlanSteeringStateAsync(workPlanId);
+        status.Should().Be(WorkPlanStatus.InReview, "the deadlocked plan parks at human review, never silently applied");
+        stage.Should().Be(AssemblyStage.Review);
+        (await CoordinatorAssemblyReviewPersistence.GetAsync(_scopeFactory, coordinatorRunId, default))
+            .Should().NotBeNull("a durable review request backs the escalated gate (target B not dropped)");
+
+        // Target B was neither rotated nor handed off — it is genuinely deadlocked, awaiting a human.
+        _handoff.Calls.Should().BeEmpty("the deadlock escalation returns before any rotation/handoff runs");
+        var (assignedB, lockedOutB, _, _) = await GetSubtaskFieldsAsync(targetB);
+        assignedB.Should().Be("morpheus", "target B is NOT rotated (its authors are all locked out)");
+    }
+
+    // ── NO WHOLE-ROSTER LOCKOUT (rubber-duck must-preserve): a single-target rejection rotates ONLY that
+    //    subtask's author — sibling subtasks are untouched. ─────────────────────────────────────────────
+    [Fact]
+    public async Task RouteAssembly_Rejection_RotatesOnlyTargetSubtask_NeverWholeRoster()
+    {
+        var coordinatorRunId = RunId.New().ToString();
+        await SeedCoordinatorRunAsync(coordinatorRunId);
+        _streamStore.Create(coordinatorRunId, "alice");
+
+        // Two subtasks; ONLY the first is a rejection target (no ChildRunId → unresumable → DispatchFresh).
+        var (workPlanId, subtaskIds) = await SeedPlanAsync(
+            coordinatorRunId, new[] { SubtaskStatus.AssembleReady, SubtaskStatus.AssembleReady });
+
+        var touched = new Dictionary<int, IReadOnlySet<string>>
+        {
+            [subtaskIds[0]] = new HashSet<string>(),
+        };
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+
+        await InvokeRouteAssemblyGateThroughSteeringAsync(
+            Context(coordinatorRunId), workPlanId, SteeringSource.Rubberduck,
+            "Only the first artifact is broken.", touched, "tree-target-only", cts.Token);
+
+        var (assigned0, lockedOut0, _, _) = await GetSubtaskFieldsAsync(subtaskIds[0]);
+        var (assigned1, lockedOut1, _, _) = await GetSubtaskFieldsAsync(subtaskIds[1]);
+        assigned0.Should().Be("rotated-morpheus", "the TARGET subtask's author is rotated");
+        lockedOut0!.Should().Contain("morpheus", "the target's rejected author is locked out");
+        assigned1.Should().Be("morpheus", "a NON-target sibling's author is NOT rotated (never whole-roster)");
+        lockedOut1.Should().BeNull("a NON-target sibling's lockout roster is NOT mutated");
     }
 
     [Fact]
@@ -2299,6 +2494,21 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         return await db.SteeringDirectives.AsNoTracking().FirstOrDefaultAsync(d => d.Id == directiveId);
     }
 
+    /// <summary>
+    /// Forces a subtask UNRESUMABLE in the decider's eyes (lapses <c>SteeringRetentionUntil</c> into the
+    /// past) WITHOUT clearing its <c>ChildRunId</c>, so a RequestChanges routes to DispatchFresh → lockout
+    /// rotation while the prior child run remains available as the context-carrying handoff source.
+    /// </summary>
+    private async Task LapseSteeringRetentionAsync(int subtaskId)
+    {
+        using var scope = _provider.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var subtask = await db.Subtasks.FirstAsync(s => s.Id == subtaskId);
+        subtask.SteeringRetentionUntil = DateTimeOffset.UtcNow.AddMinutes(-5);
+        subtask.UpdatedAt = DateTimeOffset.UtcNow;
+        await db.SaveChangesAsync();
+    }
+
     private async Task<string> GetSubtaskStatusAsync(int subtaskId)
     {
         using var scope = _provider.CreateScope();
@@ -2386,6 +2596,32 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
             Severity = SteeringSeverity.RequestChanges,
             TargetScopeJson = SteeringTargetScope.ForSubtasks(targetSubtaskIds.ToArray()).ToJson(),
             DecidedAction = SteeringDirection.InPlaceSteer,
+            ActionAttempt = attempt,
+            ExecStartedAt = DateTimeOffset.UtcNow,
+        };
+        db.SteeringDirectives.Add(directive);
+        await db.SaveChangesAsync();
+        return directive.Id;
+    }
+
+    private async Task<int> SeedExecutingDispatchFreshDirectiveAsync(
+        string coordinatorRunId, IReadOnlyList<int> targetSubtaskIds, int attempt, string instruction)
+    {
+        using var scope = _provider.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var directive = new SteeringDirective
+        {
+            CoordinatorRunId = coordinatorRunId,
+            TargetChildRunId = null,
+            Kind = SteeringKind.Redirect,
+            Instruction = instruction,
+            Status = SteeringStatus.Executing,
+            CreatedBy = "gate:rubberduck",
+            CreatedAt = DateTimeOffset.UtcNow,
+            Source = SteeringSource.Rubberduck,
+            Severity = SteeringSeverity.RequestChanges,
+            TargetScopeJson = SteeringTargetScope.ForSubtasks(targetSubtaskIds.ToArray()).ToJson(),
+            DecidedAction = SteeringDirection.DispatchFresh,
             ActionAttempt = attempt,
             ExecStartedAt = DateTimeOffset.UtcNow,
         };

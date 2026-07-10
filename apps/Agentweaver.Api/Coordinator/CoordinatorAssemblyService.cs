@@ -1804,23 +1804,16 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         var direction = decision?.Direction ?? SteeringDirection.Proceed;
         var attempt = decision?.Attempt ?? 0;
 
-        // Req-2 (change #6) — REJECTION vs GUIDANCE discriminator. A reviewer REQUEST-CHANGES
-        // (SteeringSeverity.RequestChanges/Blocking) is a REJECTION → Strict Lockout: the current author
-        // is locked out and a DIFFERENT eligible agent owns the revision (never in-place same author).
-        // An ADVISORY steer/refine is GUIDANCE → in-place same agent (the A/D path below). Assembly
-        // gates always submit RequestChanges, so a rejection under budget routes to lockout rotation.
-        var isRejection = IsReviewerRejection(SteeringSeverity.RequestChanges);
-        if (isRejection
-            && (direction == SteeringDirection.InPlaceSteer || direction == SteeringDirection.DispatchFresh))
-        {
-            // Req-2 (Strict Lockout) — lock the rejected author out and rotate to a different eligible
-            // agent with FULL context (Req-1). Deadlock / no-eligible-agent → escalate to human review.
-            await decider.MarkDirectiveExecutingAsync(view.Id, ct).ConfigureAwait(false);
-            return await ExecuteLockoutRotationAsync(
-                context, workPlanId, edges, decision!.SubtaskIds, view.Id, attempt,
-                feedback ?? string.Empty, aggregateTreeHash, touchedFilesBySubtask, ct).ConfigureAwait(false);
-        }
-
+        // DECIDER-OWNED ROUTING (Fix-B, run 19cec519) — the coordinator's decider (CoordinatorSteeringDecider
+        // / SteeringPolicy) is the SINGLE authority on how iterative build-test/reviewer feedback is applied.
+        // There is NO post-decision override that force-rotates every RequestChanges to a different agent
+        // (that OVERRODE the decider's in_place_steer choice on EVERY assembly gate, discarding context).
+        // We route PURELY by decision.Direction:
+        //   • InPlaceSteer  → context-preserving resume of the SAME author (ExecuteInPlaceSteerAsync).
+        //   • DispatchFresh → the target session is unresumable → CONSCIOUS lockout rotation to a DIFFERENT
+        //     eligible agent, target-author only, with FULL accumulated context (ExecuteLockoutRotationAsync).
+        //   • Proceed       → budget exhausted / blocking → escalate to human review (EscalateToHumanReviewAsync).
+        //   • Advisory      → surface, no reset (restore assembling + mark applied).
         if (direction == SteeringDirection.InPlaceSteer)
         {
             // A — TRUE in-place resume (rev8 §3d, Ahmed's headline #3): the target subtask's child run
@@ -1839,18 +1832,18 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
 
         if (direction == SteeringDirection.DispatchFresh)
         {
-            // B — CONSCIOUS fresh dispatch: reset the target subtasks to pending and re-dispatch fresh
-            // (new pods). This is the ONLY path that discards context, and only because the coordinator
-            // deliberately chose it. The steering_decision event's action is dispatch_fresh.
+            // B — CONSCIOUS lockout rotation: the decider judged the target session UNRESUMABLE, so the
+            // rejected author is LOCKED OUT and the revision rotates to a DIFFERENT eligible agent
+            // (target-author only) dispatched with FULL accumulated context (Req-1). A no-eligible-agent
+            // deadlock (or no context to carry) escalates to human review — never a blind rotation, never
+            // terminal. The steering_decision event's action is dispatch_fresh (matching the real effect).
+            // The directive is left `executing` first (change #1: a crash before the rotation/handoff
+            // completes re-drives the rotation idempotently via DriveOutstandingSteeringExecutionAsync,
+            // never a silent applied); ExecuteLockoutRotationAsync settles it `applied` after the effect.
             await decider.MarkDirectiveExecutingAsync(view.Id, ct).ConfigureAwait(false);
-            await RequestChangesAsync(
-                context, workPlanId, edges,
-                new AssemblyReviewDecision(
-                    Approved: false, RequestChanges: true, Feedback: feedback,
-                    TargetFiles: null, Reviewer: source),
-                touchedFilesBySubtask, ct).ConfigureAwait(false);
-            await decider.MarkDirectiveAppliedAsync(view.Id, ct).ConfigureAwait(false);
-            return true;
+            return await ExecuteLockoutRotationAsync(
+                context, workPlanId, edges, decision!.SubtaskIds, view.Id, attempt,
+                feedback ?? string.Empty, aggregateTreeHash, touchedFilesBySubtask, ct).ConfigureAwait(false);
         }
 
         if (direction == SteeringDirection.Proceed)
@@ -1879,15 +1872,6 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         await decider.MarkDirectiveAppliedAsync(view.Id, ct).ConfigureAwait(false);
         return false;
     }
-
-    /// <summary>
-    /// UNIFIED AUTONOMOUS STEERING (Req-2, change #6) — the REJECTION vs GUIDANCE discriminator. A
-    /// reviewer REQUEST-CHANGES (<see cref="SteeringSeverity.RequestChanges"/>) or a BLOCKING signal is
-    /// a REJECTION that triggers Strict Lockout (rotate to a different eligible agent). Everything else
-    /// (advisory / refine / steer / guidance) stays in-place with the SAME author, context preserved.
-    /// </summary>
-    internal static bool IsReviewerRejection(string? severity) =>
-        severity is SteeringSeverity.RequestChanges or SteeringSeverity.Blocking;
 
     private IAssemblyAuthorRotationSelector RotationSelector =>
         _serviceProvider.GetService<IAssemblyAuthorRotationSelector>() ?? SquadAuthorRotationSelector.Instance;
@@ -1937,11 +1921,24 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         }
 
         // Plan the rotation for EACH target BEFORE mutating anything: pick a different eligible author.
+        // IDEMPOTENT RE-DRIVE (change #1): a target this directive/attempt ALREADY rotated (the durable
+        // (LastResetDirectiveId, LastResetAttempt) stamp written atomically with the rotation) is NOT
+        // re-selected — re-selecting off its now-rotated author would DOUBLE-ROTATE it to a third agent.
+        // It is carried straight to the handoff under its CURRENT (already-rotated) author so a crash
+        // between the rotation and the handoff still completes the handoff (never a silent drop).
         var planned = new List<(Subtask Subtask, RotationChoice Choice)>();
+        var alreadyRotated = new List<(Subtask Subtask, RotationChoice Choice)>();
         var deadlockRoster = new List<string>();
         var deadlocked = !hasContext;
         foreach (var subtask in targets)
         {
+            if (subtask.LastResetDirectiveId == directiveId && subtask.LastResetAttempt == attempt)
+            {
+                // Already rotated by THIS directive/attempt — carry under the current rotated author.
+                alreadyRotated.Add((subtask,
+                    new RotationChoice(subtask.AssignedAgent, subtask.SelectedModelId, subtask.AgentCharter)));
+                continue;
+            }
             var lockedOut = new HashSet<string>(
                 await _assemblyStore.GetLockedOutAgentsAsync(subtask.Id, ct).ConfigureAwait(false),
                 StringComparer.OrdinalIgnoreCase);
@@ -1961,6 +1958,17 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
             }
             planned.Add((subtask, choice));
         }
+
+        // A pure re-drive where EVERY target is already rotated by this directive/attempt has nothing to
+        // re-select — it is NOT a deadlock (the rotation already succeeded); fall through to the handoff.
+        // GUARD (change #5): only suppress the deadlock escalation when there is NO genuine per-target
+        // deadlock recorded. A multi-target directive can crash after rotating+stamping target A but
+        // before target B, then genuinely deadlock on target B (all eligible authors locked out) on
+        // re-drive. In that case planned is empty and alreadyRotated has target A, but deadlockRoster is
+        // non-empty — we MUST let the `if (deadlocked)` branch escalate to human review rather than force
+        // deadlocked=false, which would silently drop target B (never in planned nor alreadyRotated).
+        if (planned.Count == 0 && alreadyRotated.Count > 0 && deadlockRoster.Count == 0)
+            deadlocked = false;
 
         if (deadlocked)
         {
@@ -1997,7 +2005,8 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         foreach (var (subtask, choice) in planned)
         {
             var result = await _assemblyStore.TryRotateSubtaskAuthorAsync(
-                subtask.Id, subtask.AssignedAgent, choice.AgentName, choice.SelectedModelId, choice.AgentCharter, ct)
+                subtask.Id, subtask.AssignedAgent, choice.AgentName, choice.SelectedModelId, choice.AgentCharter,
+                ct, directiveId, attempt)
                 .ConfigureAwait(false);
 
             // Defensive: only the replica that WON the guarded CAS re-dispatches this target's handoff.
@@ -2039,7 +2048,10 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         // SDK session (lockout-correct — the new agent does NOT inherit the locked-out author's
         // conversation) while REUSING the prior child's worktree/branch and injecting the accumulated
         // review feedback. The rotated author was already persisted on the subtask above (change #4).
-        await DispatchLockoutHandoffAsync(context, workPlanId, edges, rotated, feedback, ct)
+        // Freshly-rotated targets AND any already-rotated targets carried in from a crash re-drive are
+        // handed off together (the handoff is itself idempotent — see DispatchLockoutHandoffAsync).
+        var handoffTargets = rotated.Concat(alreadyRotated).ToList();
+        await DispatchLockoutHandoffAsync(context, workPlanId, edges, handoffTargets, feedback, ct)
             .ConfigureAwait(false);
 
         await decider.MarkDirectiveAppliedAsync(directiveId, ct).ConfigureAwait(false);
@@ -2109,6 +2121,19 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
                 // target: reset-to-pending threads the accumulated guidance via RecoveryGuidance and the
                 // dispatch engine composes a fresh child under the ROTATED author (already persisted).
                 freshFallbackIds.Add(subtask.Id);
+                continue;
+            }
+
+            // IDEMPOTENT RE-DRIVE (change #1): if the subtask's CURRENT child already belongs to the
+            // ROTATED (target) author, this handoff already ran for this rotation — SKIP minting another
+            // child (a re-drive after a crash between the handoff launch and MarkDirectiveApplied must not
+            // double-dispatch). On the FIRST pass the child still belongs to the locked-out author, so
+            // this never short-circuits a genuine handoff.
+            if (string.Equals(priorChild.AgentName, choice.AgentName, StringComparison.OrdinalIgnoreCase))
+            {
+                _logger.LogInformation(
+                    "Steering(lockout): subtask {SubtaskId} already handed off to {Agent} (child {Child}) — re-drive no-op for run {RunId}",
+                    subtask.Id, choice.AgentName, priorChildRunId, context.CoordinatorRunId);
                 continue;
             }
 
@@ -2762,10 +2787,44 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
                 return true;
             }
 
-            // B: the durable effect (reset+dispatch already ran) is recorded elsewhere; just settle the
-            // directive so it is not re-driven forever.
-            await decider.MarkDirectiveAppliedAsync(directive.Id, ct).ConfigureAwait(false);
-            return false;
+            // B (DispatchFresh, change #1): a DispatchFresh directive at an assembly gate maps to a
+            // LOCKOUT ROTATION — a MULTI-STEP effect (rotation-author selection, per-target guarded
+            // rotation CAS, context-carrying handoff / fresh fallback, status re-arm, MarkDirectiveApplied).
+            // Blindly marking it `applied` on a crash after MarkDirectiveExecutingAsync but before the
+            // effect completed would silently DROP the rotation/handoff. Instead RE-DRIVE the rotation
+            // (idempotent: TryRotateSubtaskAuthorAsync's guarded CAS + the durable (LastResetDirectiveId,
+            // LastResetAttempt) stamp SKIP re-rotating an already-rotated target, and the handoff SKIPS a
+            // target whose child already belongs to the rotated author — so a re-drive never double-rotates
+            // nor double-dispatches). If the directive carries insufficient context to safely rebuild the
+            // rotation (no target subtask ids), ESCALATE to human review rather than silently applying.
+            var freshTargetIds = SteeringTargetScope.FromJson(directive.TargetScopeJson)?.SubtaskIds ?? [];
+            if (freshTargetIds.Count == 0)
+            {
+                _logger.LogWarning(
+                    "Steering(lockout): dispatch_fresh directive {DirectiveId} has no target subtask ids to re-drive " +
+                    "for run {RunId} — escalating to human review instead of silently applying",
+                    directive.Id, context.CoordinatorRunId);
+                var noTargets = new Dictionary<int, IReadOnlySet<string>>();
+                await EscalateToHumanReviewAsync(
+                    context, workPlanId, edges, directive.Id,
+                    "dispatch_fresh_insufficient_context", directive.TreeHash ?? string.Empty, noTargets, ct)
+                    .ConfigureAwait(false);
+                return true;
+            }
+
+            var freshAttempt = directive.ActionAttempt ?? 0;
+            var freshTouched = freshTargetIds.ToDictionary(id => id, _ => (IReadOnlySet<string>)new HashSet<string>());
+            _logger.LogInformation(
+                "Steering(lockout): re-driving dispatch_fresh directive {DirectiveId} (attempt {Attempt}, targets [{Ids}]) " +
+                "for run {RunId} — idempotent rotation re-drive (crash recovery)",
+                directive.Id, freshAttempt, string.Join(",", freshTargetIds), context.CoordinatorRunId);
+            await ExecuteLockoutRotationAsync(
+                context, workPlanId, edges, freshTargetIds, directive.Id, freshAttempt,
+                directive.Instruction, directive.TreeHash ?? string.Empty, freshTouched, ct)
+                .ConfigureAwait(false);
+            // Re-drove the rotation (which settles the directive + re-arms dispatch or escalates) — stop
+            // this assembly pass so the re-armed dispatch loop re-observes the rotated/handed-off child.
+            return true;
         }
 
         var attempt = directive.ActionAttempt ?? 0;

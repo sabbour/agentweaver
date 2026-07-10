@@ -204,3 +204,44 @@ Two coupled issues surfaced while proving the preview:
 ### Metadata
 - Reproducible: yes (02e337e5 dead-ended assembly_blocked after 4 rejects; fbf68ea4 clean goal passed first try)
 - Related Files: apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyService.cs (RouteAssemblyGateThroughSteeringAsync ~1737-1835), apps/Agentweaver.Api/Coordinator/CoordinatorSteeringDecider.cs (BuildRationale ~571-585)
+
+## [ERR-20260709-TLS] assembly_blocked — worker RequireMtls drift breaks Build/Test AgentHost launch
+
+**Logged**: 2026-07-09T21:55:00Z
+**Priority**: critical
+**Status**: in_progress
+**Area**: infra
+
+### Summary
+Complex software-delivery runs dead-end at `assembly_blocked` on staging because the Phase-3
+Build/Test AgentHost pod never becomes ready. Root cause is deployment config drift, NOT
+steering/lockout/context (explicitly ruled out per user directive).
+
+### Error
+`CollectiveBuildTestInfrastructureException: agenthost_launch_failed (retryable=true)`
+AgentHost healthz probe to `https://<podIP>:8088/healthz` failed 91x/90s with
+`System.Security.Authentication.AuthenticationException: Cannot determine the frame size or a
+corrupted frame was received` (TLS ClientHello to a plaintext-HTTP endpoint).
+
+### Context
+- Assembly (Phase 3) runs in `agentweaver-worker`. It launches the Build/Test AgentHost pod via
+  `KubernetesSandboxExecutor.LaunchAgentHostPodAsync` → readiness probe URL scheme =
+  `AgentHostEndpoint.Scheme(RequireMtls)` → https when RequireMtls=true.
+- Code default `RequireMtls = true` (KubernetesSandboxExecutor.cs:68, SandboxAgentOptions.cs:65).
+- `k8s/api-deployment.yaml:143` sets `Sandbox__AgentHost__RequireMtls: "false"` (PoC plain-http path).
+- `k8s/worker-deployment.yaml` does NOT set it → worker defaults true → https healthz → agent-host
+  serves plain http → TLS corrupted-frame → launch times out → assembly_blocked.
+- Run 8200cae7 (v0.9.17-rc1). Earlier PROVEN preview run fbf68ea4 (v0.9.16) predated/avoided the
+  worker assembly path, masking the drift.
+
+### Suggested Fix
+Add `Sandbox__AgentHost__RequireMtls: "false"` to k8s/worker-deployment.yaml env, mirroring
+api-deployment.yaml. Manifest-only; no image rebuild. `kubectl apply` worker + rollout restart.
+
+### Metadata
+- Reproducible: yes
+- Related Files: k8s/worker-deployment.yaml, k8s/api-deployment.yaml,
+  apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs,
+  apps/Agentweaver.Api/Coordinator/CollectiveAssemblyPipeline.cs
+
+---

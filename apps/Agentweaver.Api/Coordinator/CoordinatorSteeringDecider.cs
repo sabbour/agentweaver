@@ -46,7 +46,9 @@ public static class SteeringPolicy
         if (i.TargetResumable)
             return SteeringDirection.InPlaceSteer;
 
-        // 3. request-changes, target NOT resumable → B (conscious, logged fresh dispatch).
+        // 3. request-changes, target NOT resumable → B. At an assembly gate this maps to a CONSCIOUS
+        //    LOCKOUT ROTATION (ExecuteLockoutRotationAsync): the current author is locked out and the
+        //    revision rotates to a DIFFERENT eligible agent, dispatched with full accumulated context.
         return SteeringDirection.DispatchFresh;
     }
 }
@@ -623,7 +625,7 @@ public sealed class CoordinatorSteeringDecider : Agentweaver.Api.Infrastructure.
             SteeringDirection.InPlaceSteer =>
                 $"{mode}: request-changes, target resumable, under cap — steer in place preserving context",
             SteeringDirection.DispatchFresh =>
-                $"{mode}: target session unresumable (target_unresumable) — conscious fresh dispatch",
+                $"{mode}: target session unresumable (target_unresumable) — conscious lockout rotation to a different eligible agent",
             SteeringDirection.Proceed when i.TreeHashStale =>
                 $"{mode}: feedback stale against current aggregate — proceed to review",
             SteeringDirection.Proceed =>
