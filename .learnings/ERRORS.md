@@ -245,3 +245,81 @@ api-deployment.yaml. Manifest-only; no image rebuild. `kubectl apply` worker + r
   apps/Agentweaver.Api/Coordinator/CollectiveAssemblyPipeline.cs
 
 ---
+
+## [ERR-20260710-WFRACE] orchestration_start_400_harness_shell
+
+**Logged**: 2026-07-10T02:45:00-07:00
+**Status**: resolved
+**Priority**: medium
+**Area**: tests
+
+### Summary
+CORRECTED ROOT CAUSE: preview-landing.ps1 got a deterministic 400 (empty body) on POST /api/projects/{id}/orchestrations — but ONLY when run under Windows PowerShell 5.1 (`powershell -File`). The API is fine: both replicas return 201 when probed directly (kubectl exec curl), and the identical request from pwsh 7 / fresh connections returns 201. The 400 is injected at the App Routing gateway on Windows PowerShell 5.1's reused keep-alive connection AFTER the two casting POSTs precede the larger orchestration POST (WinPS 5.1 HttpWebRequest connection-reuse/framing quirk). No API pod logs the 400 because the gateway rejects it pre-upstream.
+
+### Initial WRONG hypotheses (ruled out)
+- NOT a cross-replica AllowedWorkflowIds propagation race (workflows showed converged on check 1, still 400'd).
+- NOT the em-dash/non-ASCII goal (ConvertTo-Json escapes to \uXXXX; em-dash body succeeds).
+- NOT a bad replica (both pods 201 via direct kubectl exec curl).
+- NOT the workflow_override_id (fails with and without it under WinPS 5.1; succeeds both ways under pwsh 7).
+
+### Fix (applied)
+Run the driver with `pwsh -ExecutionPolicy Bypass -File ...` (PowerShell 7 uses SocketsHttpHandler, no quirk) instead of `powershell -File` (WinPS 5.1). Verified: pwsh 7 run started coordinator run 4e1e4934 first try. (Kept the harmless allowed_workflow_ids convergence poll added to the driver.)
+
+### Metadata
+- Reproducible: yes, under Windows PowerShell 5.1 with casting-then-orchestrate on one process; not under pwsh 7
+- Related Files: session-state files/preview-landing.ps1 (harness only — NOT a product bug)
+
+### Resolution
+- **Resolved**: 2026-07-10T02:52:00-07:00
+- **Notes**: Harness shell issue. Use pwsh 7 for these API-driving PowerShell drivers. No product code change needed.
+
+---
+
+## [ERR-20260711-DEPBASE] dependent subtask branches from base missing its dependency's files (QA re-implements app)
+
+**Logged**: 2026-07-11T00:00:00Z
+**Priority**: high
+**Status**: pending
+**Area**: backend
+
+### Summary
+In a coordinator run, a validation subtask (37 tests, depends on 36 impl) saw "only plan.md
+exists — the app was never committed" and RE-IMPLEMENTED the app itself. Ahmed flagged the
+run tree / topology graph step-ordering as "out of whack." Root cause is NOT the readiness
+frontier (that logic is correct) — it is a diff-propagation race in the dependency-base
+integration branch rebuild.
+
+### Root cause
+- SubtaskFrontier.ReadyPending + GetReadyPendingSubtasksAsync are CORRECT: a dependent only
+  becomes ready once every dependency reaches assemble_ready/completed (SubtaskStatus.Satisfies).
+  So 37 does dispatch AFTER 36 is assemble_ready — ordering IS enforced.
+- Data propagation is the defect. A dependent subtask's worktree is CREATED from the run's
+  integration branch (CoordinatorDispatchService.ResolveChildBaseBranchAsync). That integration
+  branch is rebuilt by RebuildDependencyBaseBranchAsync, fired from ApplyChildResultAsync the
+  instant a dependency reaches AssembleReady/Completed.
+- RebuildDependencyBaseBranchAsync only merges a dependency's worktree branch when
+  `!string.IsNullOrEmpty(run.WorktreeBranch) && !string.IsNullOrEmpty(run.Diff)`.
+- The child's terminal AssembleReady status/event is produced (ObserveChildAsync /
+  TryResolveFromStoreAsync) independently of run.Diff persistence (child worktree commit +
+  diff computation). If AssembleReady is observed BEFORE run.Diff is persisted, the rebuild
+  skips the dependency's branch -> integration branch contains only the earlier plan subtask ->
+  the dependent (37) branches from a base with only plan.md -> QA re-implements the app.
+- Symptom also drives the "ordering out of whack" display: 36 can appear Running again / late
+  while 37 already reached assemble_ready off a stale base.
+
+### Suggested Fix (needs Ahmed sign-off + rubber-duck design gate + code-review gate)
+- Make the dependency-base rebuild wait for the dependency's Diff to be persisted before (or as
+  part of) marking it dependency-satisfying for base-branch purposes — e.g. gate the AssembleReady
+  observation on Diff availability, or re-run RebuildDependencyBaseBranchAsync once Diff lands, or
+  have the rebuild fetch the committed worktree tree directly rather than relying on run.Diff being
+  non-empty. Also emit a loud diagnostic when a dependency is skipped for empty Diff (today it is
+  silent).
+
+### Metadata
+- Reproducible: yes (complex multi-subtask run: plan -> impl -> tests)
+- Related Files: apps/Agentweaver.Api/Coordinator/CoordinatorDispatchService.cs
+  (ResolveChildBaseBranchAsync, RebuildDependencyBaseBranchAsync, ApplyChildResultAsync,
+  ObserveChildAsync), apps/Agentweaver.Api/Coordinator/SubtaskFrontier.cs (frontier is correct)
+- See Also: ERR-20260709-TLS, memory "coordinator propagation" (issue #197)
+
+---

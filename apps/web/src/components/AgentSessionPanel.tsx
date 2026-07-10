@@ -40,6 +40,7 @@ import { formatApiErrorMessage } from '../api/errors';
 import type { RaiVerdictEventPayload, RaiVerdictToken, WorkspaceFileEntry, WorkspaceNode } from '../api/types';
 import { useArtifactBrowser, type ArtifactBrowserAdapter } from '../hooks/useArtifactBrowser';
 import { mergeRunEvents as sharedMergeRunEvents, SEED_STATUSES } from '../timeline/mergeRunEvents';
+import { isSerializedWorkPlan } from '../timeline/coordinatorPlanFilter';
 import { AgentAvatar } from './AgentAvatar';
 import { CompactChangesList, FilesTabPanel } from './ArtifactBrowser';
 import { FileViewerModal } from './FileViewerModal';
@@ -1386,6 +1387,7 @@ function buildTurns(events: RunStreamEvent[]): ConversationTurn[] {
     if (evt.type === 'agent.message' || evt.type === 'agent.message.delta') {
       const content = readString(evt.payload, ['content', 'delta', 'text']);
       if (!content) continue;
+      if (isSerializedWorkPlan(content)) continue;
       appendAgentText(evt, content);
       continue;
     }
@@ -1662,6 +1664,7 @@ function buildCoordinatorTurns(events: RunStreamEvent[]): ConversationTurn[] {
   let latestGateLabel = gateLabelForKind(undefined);
   let firstSystem: ConversationRow | null = null;
   let firstTask: ConversationRow | null = null;
+  let activityTurn: ConversationTurn | null = null;
 
   for (const evt of events) {
     if (evt.type === 'coordinator.assembly_review_requested') {
@@ -1704,13 +1707,18 @@ function buildCoordinatorTurns(events: RunStreamEvent[]): ConversationTurn[] {
     const approvals = evt.type === 'coordinator.child_approval_required'
       ? [{ event: evt, isResolved: resolvedScope !== null, resolvedScope }]
       : [];
-    turns.push({
-      key: `coordinator-activity-${evt.sequence}`,
-      rows: [{ key: `activity-${evt.sequence}`, role: 'activity', content: line, timestamp: readTimestamp(evt) }],
-      toolCalls: [],
-      approvals,
-      filePaths: [],
-    });
+    if (!activityTurn) {
+      activityTurn = {
+        key: `coordinator-activity-${evt.sequence}`,
+        rows: [],
+        toolCalls: [],
+        approvals: [],
+        filePaths: [],
+      };
+      turns.push(activityTurn);
+    }
+    activityTurn.rows.push({ key: `activity-${evt.sequence}`, role: 'activity', content: line, timestamp: readTimestamp(evt) });
+    activityTurn.approvals.push(...approvals);
   }
 
   return turns.length > 0 ? turns : buildTurns(events);

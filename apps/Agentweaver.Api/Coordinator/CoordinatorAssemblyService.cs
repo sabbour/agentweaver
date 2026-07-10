@@ -103,6 +103,7 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
     private readonly CoordinatorSteeringWaitRegistry _steeringWaits;
     private readonly CoordinatorSteeringQueue _steeringQueue;
     private readonly Preview.PreviewStep? _previewStep;
+    private readonly WorktreeManager? _worktreeManager;
     private readonly ILogger<CoordinatorAssemblyService> _logger;
     private readonly CancellationToken _appStopping;
     private readonly TimeSpan _reviewTimeout;
@@ -129,7 +130,8 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         IKubernetesEnvironment? k8sEnv = null,
         IProjectStore? projectStore = null,
         WorkflowRegistry? workflowRegistry = null,
-        Preview.PreviewStep? previewStep = null)
+        Preview.PreviewStep? previewStep = null,
+        WorktreeManager? worktreeManager = null)
     {
         _runStore = runStore;
         _streamStore = streamStore;
@@ -147,6 +149,7 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         _steeringWaits = steeringWaits ?? new CoordinatorSteeringWaitRegistry();
         _steeringQueue = new CoordinatorSteeringQueue(scopeFactory);
         _previewStep = previewStep;
+        _worktreeManager = worktreeManager;
         _logger = logger;
         _appStopping = lifetime.ApplicationStopping;
         var reviewTimeoutMinutes = configuration?.GetValue("Coordinator:AssemblyReviewTimeoutMinutes", 60.0) ?? 60.0;
@@ -669,7 +672,7 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
             return;
         }
 
-        var assemblyInputs = await BuildAssemblyInputsAsync(subtasks, edges, ct).ConfigureAwait(false);
+        var assemblyInputs = await BuildAssemblyInputsAsync(context, subtasks, edges, ct).ConfigureAwait(false);
         var branchesInOrder = assemblyInputs.BranchesInOrder;
         var touchedFilesBySubtask = assemblyInputs.TouchedFilesBySubtask;
         var includedSubtaskIds = assemblyInputs.IncludedSubtaskIds;
@@ -954,6 +957,7 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
     // -----------------------------------------------------------------------
 
     private async Task<CoordinatorAssemblyInputs> BuildAssemblyInputsAsync(
+        CoordinatorDispatchContext context,
         IReadOnlyCollection<Subtask> subtasks,
         IReadOnlyCollection<(int, int)> edges,
         CancellationToken ct)
@@ -972,12 +976,47 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
             if (!RunId.TryParse(childRunId, out var parsed)) continue;
             var run = await _runStore.GetAsync(parsed, ct).ConfigureAwait(false);
             if (run is null) continue;
+            // run.Diff is kept ONLY for UI / touched-file extraction — never as inclusion authority.
             touchedFilesBySubtask[id] = AssemblyPlanning.ExtractTouchedFiles(run.Diff);
-            if (!string.IsNullOrEmpty(run.WorktreeBranch)
-                && !string.IsNullOrEmpty(run.Diff))
+
+            // BLOCKING #1 (issue #197): gate FINAL-assembly branch inclusion on branch VALIDITY (exists +
+            // tip tree == recorded handoff TreeHash), NOT on run.Diff. GetDiff can swallow an error and
+            // leave run.Diff empty even after a real commit, which previously dropped a committed child
+            // from the collective assembly. The committed worktree branch is the authoritative artifact.
+            if (_worktreeManager is null)
             {
-                branchesInOrder.Add(run.WorktreeBranch);
-                includedSubtaskIds.Add(id);
+                // No git access (e.g. unit context) — preserve legacy behavior: include when a branch and
+                // a display diff are both present.
+                if (!string.IsNullOrEmpty(run.WorktreeBranch) && !string.IsNullOrEmpty(run.Diff))
+                {
+                    branchesInOrder.Add(run.WorktreeBranch);
+                    includedSubtaskIds.Add(id);
+                }
+                continue;
+            }
+
+            var decision = DependencyBranchInclusion.Evaluate(
+                _worktreeManager, context.RepositoryPath, run.WorktreeBranch, run.TreeHash);
+            switch (decision)
+            {
+                case BranchInclusionOutcome.Include:
+                    branchesInOrder.Add(run.WorktreeBranch!);
+                    includedSubtaskIds.Add(id);
+                    break;
+                case BranchInclusionOutcome.ExcludeMissingBranch:
+                    _logger.LogError(
+                        "Coordinator assembly: subtask {SubtaskId} (child run {ChildRunId}) excluded from FINAL collective " +
+                        "assembly for run {RunId} because its worktree branch is missing (WorktreeBranch={WorktreeBranch}, " +
+                        "TreeHash={TreeHash}) — committed child work may be omitted (issue #197).",
+                        id, childRunId, context.CoordinatorRunId, run.WorktreeBranch ?? "<null>", run.TreeHash ?? "<null>");
+                    break;
+                case BranchInclusionOutcome.ExcludeTreeMismatch:
+                    _logger.LogError(
+                        "Coordinator assembly: subtask {SubtaskId} (child run {ChildRunId}) excluded from FINAL collective " +
+                        "assembly for run {RunId} because its branch tip tree does not match the recorded handoff contract " +
+                        "(WorktreeBranch={WorktreeBranch}, expected TreeHash={TreeHash}) — stale/diverged branch (issue #197).",
+                        id, childRunId, context.CoordinatorRunId, run.WorktreeBranch ?? "<null>", run.TreeHash ?? "<null>");
+                    break;
             }
         }
 
@@ -1003,7 +1042,7 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
             return;
         }
 
-        var inputs = await BuildAssemblyInputsAsync(subtasks, edges, ct).ConfigureAwait(false);
+        var inputs = await BuildAssemblyInputsAsync(context, subtasks, edges, ct).ConfigureAwait(false);
         var decision = string.IsNullOrEmpty(persisted.DecisionJson)
             ? await AwaitReviewDecisionAsync(context, workPlanId, edges, ct).ConfigureAwait(false)
             : JsonSerializer.Deserialize<AssemblyReviewDecision>(persisted.DecisionJson, JsonDefaults.Options);

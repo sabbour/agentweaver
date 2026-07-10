@@ -159,6 +159,58 @@ describe('AgentSessionPanel', () => {
     expect(document.body.textContent).not.toContain('No streamed messages yet for this session.');
   });
 
+  it('does not show coordinator decomposition messages as the RAI gate response', async () => {
+    currentEvents = [
+      { sequence: 1, type: 'agent.turn.start', payload: { turnId: 'decompose' } },
+      {
+        sequence: 2,
+        type: 'agent.message',
+        payload: { content: '[{"title":"Raw decomposed task","scope":"Implement the task","role":"Engineer","depends_on":[]}]' },
+      },
+      { sequence: 3, type: 'agent.turn.end', payload: {} },
+      {
+        sequence: 4,
+        type: 'coordinator.work_plan',
+        payload: { subtasks: [{ id: '1', title: 'Raw decomposed task', scope: 'Implement the task' }] },
+      },
+      { sequence: 5, type: 'coordinator.assembly_rai_started', payload: {} },
+    ];
+    const gateTree: RunSessionTree[] = [
+      {
+        ...tree[0],
+        children: [
+          {
+            nodeId: 'planned:assembly-rai',
+            label: 'RAI Review',
+            agentName: 'Coordinator',
+            agentRole: 'Risk gate',
+            status: 'running',
+            depth: 1,
+            children: [],
+          },
+        ],
+      },
+    ];
+
+    render(
+      <Wrapper>
+        <AgentSessionPanel
+          open
+          onClose={vi.fn()}
+          tree={gateTree}
+          selectedNodeId="planned:assembly-rai"
+          onSelectNode={vi.fn()}
+          coordinatorRunId="coord-run-1"
+          projectId="p1"
+        />
+      </Wrapper>,
+    );
+
+    await waitFor(() => expect(document.body.textContent).toContain('No streamed messages yet for this session.'), { timeout: 4000 });
+    expect(document.body.textContent).not.toContain('Raw decomposed task');
+    expect(document.body.textContent).not.toContain('Implement the task');
+  });
+
   it('renders a red RAI verdict as an error state for a completed RAI gate', async () => {
     currentEvents = [
       {
@@ -618,6 +670,8 @@ describe('AgentSessionPanel', () => {
     // collapsed behind an explicit control until the operator asks for it.
     await userEvent.click(screen.getByRole('switch', { name: 'Technical details hidden' }));
     await waitFor(() => expect(screen.getAllByTestId('activity-details-summary').length).toBeGreaterThan(0));
+    expect(screen.getAllByTestId('activity-details-summary')).toHaveLength(1);
+    expect(screen.getByTestId('activity-details-summary').textContent).toContain('6 updates');
     expect(screen.queryByText('Coordinator created a work plan with 1 subtasks.')).toBeNull();
     await waitFor(() => expect(screen.getAllByText('System prompt')).toHaveLength(1));
     await userEvent.click(screen.getByRole('button', { name: /Expand activity details/i }));

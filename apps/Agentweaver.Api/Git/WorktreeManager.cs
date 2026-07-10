@@ -224,6 +224,76 @@ public sealed class WorktreeManager
         return repo.Branches[branchName] is not null;
     }
 
+    /// <summary>
+    /// Validates a child branch tip against the run handoff contract (issue #197 dependency-base fix).
+    /// Returns <c>true</c> when <paramref name="branchName"/> exists AND — when
+    /// <paramref name="expectedTreeSha"/> is non-empty — the branch tip's TREE sha equals it. This is the
+    /// authoritative "does this committed child carry the artifacts the coordinator recorded?" check,
+    /// replacing the unreliable <c>run.Diff</c> display string as the inclusion predicate. A non-empty
+    /// <paramref name="expectedTreeSha"/> that mismatches the branch tip means the branch is stale /
+    /// diverged from the recorded handoff (e.g. an in-place steer re-commit whose row was not observed),
+    /// so the caller must NOT include it silently. An empty/absent <paramref name="expectedTreeSha"/> is
+    /// treated as "no contract to verify" and passes as long as the branch exists.
+    /// <see cref="BranchExists"/> alone is too weak — it cannot detect a stale/mismatched tip.
+    /// </summary>
+    public bool BranchTipMatchesTree(string repositoryPath, string branchName, string? expectedTreeSha)
+    {
+        if (string.IsNullOrEmpty(branchName) || !Repository.IsValid(repositoryPath))
+            return false;
+
+        using var repo = new Repository(repositoryPath);
+        var tip = repo.Branches[branchName]?.Tip;
+        if (tip is null)
+            return false;
+        if (string.IsNullOrEmpty(expectedTreeSha))
+            return true;
+        return string.Equals(tip.Tree.Sha, expectedTreeSha, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Returns the tip COMMIT sha of <paramref name="branchName"/>, or <c>null</c> when the branch is
+    /// absent/empty. Used by the dependency-base contains-check to obtain a concrete commit id to feed
+    /// into <see cref="BranchContains"/> (which needs a commit, not the run's TREE hash).
+    /// </summary>
+    public string? GetBranchTipCommitSha(string repositoryPath, string branchName)
+    {
+        if (string.IsNullOrEmpty(branchName) || !Repository.IsValid(repositoryPath))
+            return null;
+
+        using var repo = new Repository(repositoryPath);
+        return repo.Branches[branchName]?.Tip?.Sha;
+    }
+
+    /// <summary>
+    /// Ancestor / containment check used to VERIFY that an integration branch actually incorporates a
+    /// required dependency's HEAD before a dependent child dispatches from it (issue #197, BLOCKING #3).
+    /// Returns <c>true</c> when <paramref name="candidateTipSha"/> is reachable from
+    /// <paramref name="branchName"/>'s tip (i.e. the merge-base of the two is exactly the candidate),
+    /// meaning the candidate commit is contained in the branch. An empty <paramref name="candidateTipSha"/>
+    /// is vacuously contained. This is the authoritative guard against a clobbered / stale / incomplete
+    /// integration branch (BuildIntegrationBranch deletes+recreates the ref each rebuild), so a concurrent
+    /// or crashed rebuild that dropped a required child is detected here and repaired before dispatch.
+    /// </summary>
+    public bool BranchContains(string repositoryPath, string branchName, string candidateTipSha)
+    {
+        if (string.IsNullOrEmpty(candidateTipSha))
+            return true;
+        if (string.IsNullOrEmpty(branchName) || !Repository.IsValid(repositoryPath))
+            return false;
+
+        using var repo = new Repository(repositoryPath);
+        var branchTip = repo.Branches[branchName]?.Tip;
+        if (branchTip is null)
+            return false;
+
+        var candidate = repo.Lookup<Commit>(candidateTipSha);
+        if (candidate is null)
+            return false;
+
+        var mergeBase = repo.ObjectDatabase.FindMergeBase(branchTip, candidate);
+        return mergeBase is not null && string.Equals(mergeBase.Sha, candidate.Sha, StringComparison.Ordinal);
+    }
+
     public string CommitChanges(string worktreePath, RunId runId)
     {
         using var repo = new Repository(worktreePath);

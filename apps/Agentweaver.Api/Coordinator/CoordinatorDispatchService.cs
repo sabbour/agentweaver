@@ -577,8 +577,15 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
 
         var childTask = await ComposeChildTaskAsync(context, workPlanId, subtask, ct).ConfigureAwait(false);
 
-        var childBaseBranch = await ResolveChildBaseBranchAsync(context, subtaskId, edges, ct)
+        var childBaseBranch = await ResolveChildBaseBranchAsync(context, workPlanId, subtaskId, statusById, edges, ct)
             .ConfigureAwait(false);
+
+        // A null base branch is the dispatch-BLOCKING sentinel (BLOCKING #3/#4): the integration branch
+        // exists but is still missing a required upstream head after a repair. Do NOT dispatch the
+        // dependent from an incomplete base — leave the subtask pending; a later upstream completion
+        // triggers another rebuild and re-evaluation. The block was already logged loudly.
+        if (childBaseBranch is null)
+            return null;
 
         var childRun = new Run
         {
@@ -691,9 +698,24 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         }
     }
 
-    private async Task<string> ResolveChildBaseBranchAsync(
+    /// <summary>
+    /// Resolves the base branch a dependent child dispatches from. Returns the coordinator integration
+    /// branch (the assembled dependency base) after MANDATORY verification (BLOCKING #3/#4) that it
+    /// actually CONTAINS every satisfied upstream dependency's committed HEAD. If a required head is
+    /// missing, it repairs once (re-runs <see cref="RebuildDependencyBaseBranchAsync"/>) and re-checks.
+    /// <list type="bullet">
+    /// <item>Returns <see cref="CoordinatorDispatchContext.OriginatingBranch"/> when the subtask has no
+    /// dependencies, or when the integration branch is ENTIRELY ABSENT (existing loud fallback).</item>
+    /// <item>Returns <c>null</c> (a dispatch-BLOCKING sentinel) when the integration branch exists but,
+    /// even after a repair, is still missing a required upstream head — we must NOT silently dispatch a
+    /// dependent from a base missing upstream artifacts (issue #197 symptom B).</item>
+    /// </list>
+    /// </summary>
+    private async Task<string?> ResolveChildBaseBranchAsync(
         CoordinatorDispatchContext context,
+        int workPlanId,
         int subtaskId,
+        IReadOnlyDictionary<int, string> statusById,
         IReadOnlyCollection<(int SubtaskId, int DependsOnSubtaskId)> edges,
         CancellationToken ct)
     {
@@ -705,19 +727,49 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         var integrationBranch = CoordinatorAssemblyService.IntegrationBranchName(context.CoordinatorRunId);
         try
         {
-            if (_worktreeManager.BranchExists(context.RepositoryPath, integrationBranch))
+            if (!_worktreeManager.BranchExists(context.RepositoryPath, integrationBranch))
+            {
+                // A dependent subtask reached dispatch but the integration branch its upstreams should
+                // have produced does not exist. This is NOT a normal fallback: the child would start
+                // from the coordinator's originating branch and silently miss upstream artifacts
+                // (issue #197 symptom B). Surface it loudly so the degradation is visible instead of
+                // masquerading as a clean run built on the parent goal.
+                _logger.LogError(
+                    "Coordinator dispatch: dependent subtask {SubtaskId} found no integration branch {IntegrationBranch} for run {RunId}; " +
+                    "upstream artifacts may be missing. Falling back to originating branch {Origin} — investigate assembly rebuild.",
+                    subtaskId, integrationBranch, context.CoordinatorRunId, context.OriginatingBranch);
+                return context.OriginatingBranch;
+            }
+
+            // BLOCKING #3/#4: verify the integration branch CONTAINS every satisfied upstream head this
+            // dependent needs. BuildIntegrationBranch deletes+recreates the ref each rebuild, so a
+            // concurrent/stale rebuild could have clobbered it or dropped a child. If anything is
+            // missing, repair ONCE and re-verify.
+            var missing = await FindMissingRequiredHeadsAsync(
+                context, workPlanId, subtaskId, integrationBranch, statusById, edges, ct).ConfigureAwait(false);
+            if (missing.Count == 0)
                 return integrationBranch;
 
-            // A dependent subtask reached dispatch but the integration branch its upstreams should
-            // have produced does not exist. This is NOT a normal fallback: the child would start
-            // from the coordinator's originating branch and silently miss upstream artifacts
-            // (issue #197 symptom B). Surface it loudly so the degradation is visible instead of
-            // masquerading as a clean run built on the parent goal.
+            _logger.LogWarning(
+                "Coordinator dispatch: integration branch {IntegrationBranch} for run {RunId} is missing required upstream head(s) " +
+                "for dependent subtask {SubtaskId}: {Missing}. Repairing (rebuilding dependency base) before dispatch.",
+                integrationBranch, context.CoordinatorRunId, subtaskId, string.Join(", ", missing));
+
+            await RebuildDependencyBaseBranchAsync(context, workPlanId, statusById, edges, ct).ConfigureAwait(false);
+
+            var stillMissing = await FindMissingRequiredHeadsAsync(
+                context, workPlanId, subtaskId, integrationBranch, statusById, edges, ct).ConfigureAwait(false);
+            if (stillMissing.Count == 0)
+                return integrationBranch;
+
+            // Repair did not converge — do NOT silently fall back to the originating branch (that would
+            // ship a dependent built on a base missing upstream work). Block the dispatch loudly.
             _logger.LogError(
-                "Coordinator dispatch: dependent subtask {SubtaskId} found no integration branch {IntegrationBranch} for run {RunId}; " +
-                "upstream artifacts may be missing. Falling back to originating branch {Origin} — investigate assembly rebuild.",
-                subtaskId, integrationBranch, context.CoordinatorRunId, context.OriginatingBranch);
-            return context.OriginatingBranch;
+                "Coordinator dispatch: integration branch {IntegrationBranch} for run {RunId} STILL missing required upstream head(s) " +
+                "for dependent subtask {SubtaskId} after a repair rebuild: {Missing}. BLOCKING dispatch — refusing to launch the " +
+                "dependent from an incomplete base (issue #197). Subtask remains pending.",
+                integrationBranch, context.CoordinatorRunId, subtaskId, string.Join(", ", stillMissing));
+            return null;
         }
         catch (Exception ex)
         {
@@ -727,6 +779,82 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
             return context.OriginatingBranch;
         }
     }
+
+    /// <summary>
+    /// Returns the names of satisfied upstream dependency branches (transitive) whose committed HEAD is
+    /// NOT contained in <paramref name="integrationBranch"/>. An empty list means the integration branch
+    /// is a valid base for <paramref name="subtaskId"/>. Only VALID branches (exist + tip tree matches
+    /// the recorded handoff contract) are required — a missing/mismatched branch is a separate loud error
+    /// surfaced by <see cref="RebuildDependencyBaseBranchAsync"/> and is intentionally not double-counted
+    /// here (it cannot be "contained", and blocking on it would deadlock a genuinely-absent upstream).
+    /// </summary>
+    private async Task<IReadOnlyList<string>> FindMissingRequiredHeadsAsync(
+        CoordinatorDispatchContext context,
+        int workPlanId,
+        int subtaskId,
+        string integrationBranch,
+        IReadOnlyDictionary<int, string> statusById,
+        IReadOnlyCollection<(int SubtaskId, int DependsOnSubtaskId)> edges,
+        CancellationToken ct)
+    {
+        if (_worktreeManager is null)
+            return [];
+
+        var requiredIds = TransitiveDependencies(subtaskId, edges);
+        if (requiredIds.Count == 0)
+            return [];
+
+        var subtasks = await ReloadSubtasksAsync(workPlanId, ct).ConfigureAwait(false);
+        var byId = subtasks.ToDictionary(s => s.Id);
+
+        var missing = new List<string>();
+        foreach (var depId in requiredIds)
+        {
+            if (!statusById.TryGetValue(depId, out var status) || !SubtaskStatus.Satisfies(status))
+                continue;
+            if (!byId.TryGetValue(depId, out var dep) ||
+                string.IsNullOrEmpty(dep.ChildRunId) ||
+                !RunId.TryParse(dep.ChildRunId, out var depRunId))
+                continue;
+
+            var run = await _runStore.GetAsync(depRunId, ct).ConfigureAwait(false);
+            // Only VALID branches are required-and-containable. Missing/mismatched branches are handled
+            // (loudly) by the rebuild path, not blocked on here.
+            if (DependencyBranchInclusion.Evaluate(
+                    _worktreeManager, context.RepositoryPath, run?.WorktreeBranch, run?.TreeHash)
+                != BranchInclusionOutcome.Include)
+                continue;
+
+            var tipSha = _worktreeManager.GetBranchTipCommitSha(context.RepositoryPath, run!.WorktreeBranch!);
+            if (string.IsNullOrEmpty(tipSha))
+                continue;
+
+            if (!_worktreeManager.BranchContains(context.RepositoryPath, integrationBranch, tipSha))
+                missing.Add(run.WorktreeBranch!);
+        }
+
+        return missing;
+    }
+
+    /// <summary>All subtasks the given subtask depends on, transitively (upstream closure via edges).</summary>
+    private static HashSet<int> TransitiveDependencies(
+        int subtaskId, IReadOnlyCollection<(int SubtaskId, int DependsOnSubtaskId)> edges)
+    {
+        var result = new HashSet<int>();
+        var queue = new Queue<int>();
+        queue.Enqueue(subtaskId);
+        while (queue.Count > 0)
+        {
+            var current = queue.Dequeue();
+            foreach (var e in edges.Where(e => e.SubtaskId == current))
+            {
+                if (result.Add(e.DependsOnSubtaskId))
+                    queue.Enqueue(e.DependsOnSubtaskId);
+            }
+        }
+        return result;
+    }
+
 
     private async Task RebuildDependencyBaseBranchAsync(
         CoordinatorDispatchContext context,
@@ -753,12 +881,50 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
                 continue;
 
             var run = await _runStore.GetAsync(childRunId, ct).ConfigureAwait(false);
-            if (!string.IsNullOrEmpty(run?.WorktreeBranch) && !string.IsNullOrEmpty(run.Diff))
-                branches.Add(run.WorktreeBranch);
+
+            // Issue #197 root-cause fix: include a satisfied dependency based on branch VALIDITY, NOT
+            // on run.Diff (a best-effort display string that GetDiff can leave EMPTY after a real
+            // commit). The committed worktree branch — whose tip tree == run.TreeHash — is the
+            // authoritative artifact. BuildIntegrationBranch no-ops/fast-forwards an unchanged branch,
+            // so passing a genuinely-empty (no-op) dependency is safe and cannot deadlock.
+            var decision = DependencyBranchInclusion.Evaluate(
+                _worktreeManager, context.RepositoryPath, run?.WorktreeBranch, run?.TreeHash);
+            switch (decision)
+            {
+                case BranchInclusionOutcome.Include:
+                    branches.Add(run!.WorktreeBranch!);
+                    break;
+                case BranchInclusionOutcome.ExcludeMissingBranch:
+                    _logger.LogError(
+                        "Coordinator dispatch: SATISFIED dependency subtask {SubtaskId} (child run {ChildRunId}) excluded from " +
+                        "dependency-base integration branch for run {RunId} because its worktree branch is missing " +
+                        "(WorktreeBranch={WorktreeBranch}, TreeHash={TreeHash}). A satisfied child must have committed its " +
+                        "branch — dependents may branch from a base missing upstream artifacts (issue #197).",
+                        id, subtask.ChildRunId, context.CoordinatorRunId, run?.WorktreeBranch ?? "<null>", run?.TreeHash ?? "<null>");
+                    break;
+                case BranchInclusionOutcome.ExcludeTreeMismatch:
+                    _logger.LogError(
+                        "Coordinator dispatch: SATISFIED dependency subtask {SubtaskId} (child run {ChildRunId}) excluded from " +
+                        "dependency-base integration branch for run {RunId} because its branch tip tree does not match the " +
+                        "recorded handoff contract (WorktreeBranch={WorktreeBranch}, expected TreeHash={TreeHash}). The branch " +
+                        "is stale/diverged — refusing to propagate a mismatched base (issue #197).",
+                        id, subtask.ChildRunId, context.CoordinatorRunId, run?.WorktreeBranch ?? "<null>", run?.TreeHash ?? "<null>");
+                    break;
+            }
         }
 
         var integrationBranch = CoordinatorAssemblyService.IntegrationBranchName(context.CoordinatorRunId);
 
+        // Replica/concurrency (BLOCKING #5): BuildIntegrationBranch deletes+recreates the integration
+        // ref on every rebuild (WorktreeManager.BuildIntegrationBranch), so a concurrent or crashed
+        // rebuild could clobber/leave the ref incomplete. We deliberately DO NOT add cross-process
+        // locking here: the dispatch loop is single-writer per plan (StartDispatch's _active guard), and
+        // the AUTHORITATIVE guard against a clobbered/stale/incomplete integration branch is the
+        // mandatory contains-check + repair in ResolveChildBaseBranchAsync — a dependent never dispatches
+        // from an integration branch that is missing a required upstream head; it repairs (re-runs this
+        // rebuild) and re-verifies first. This rebuild is itself headless + idempotent (reset-to-origin
+        // then re-merge), so a re-run re-derives the same branch deterministically.
+        //
         // Retry up to 3 times on lock contention: a stale .lock file from a crashed prior process
         // causes LibGit2Sharp.LockedFileException. Clean the stale lock and retry with backoff.
         // The whole method is best-effort — failure here must never crash the dispatch loop.
@@ -777,6 +943,19 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
                         context.CoordinatorRunId,
                         result.ConflictingBranch,
                         string.Join(", ", result.ConflictingFiles ?? []));
+                }
+
+                // Conflict behavior (BLOCKING #6): BuildIntegrationBranch auto-resolves a sibling
+                // conflict by accepting the later child's version. That silently overwrites earlier
+                // child work, so surface EACH auto-resolution LOUDLY (naming branch + files) — never let
+                // it be swallowed at Information level inside the git layer.
+                foreach (var (branch, files) in result.AutoResolutions)
+                {
+                    _logger.LogWarning(
+                        "Coordinator dispatch: dependency-base rebuild for run {RunId} AUTO-RESOLVED a conflict by accepting " +
+                        "later child branch {Branch} — earlier child work on these files was overwritten: {Files}. Verify the " +
+                        "collective result is intended (issue #85).",
+                        context.CoordinatorRunId, branch, string.Join(", ", files));
                 }
                 return;
             }
