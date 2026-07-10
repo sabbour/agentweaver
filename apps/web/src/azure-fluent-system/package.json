@@ -1,0 +1,14 @@
+{
+  "name": "@azure-fluent-system/core",
+  "private": true,
+  "type": "module",
+  "sideEffects": [
+    "./tokens.css",
+    "./showcase/showcase.css"
+  ],
+  "scripts": {
+    "showcase:dev": "node ../../node_modules/vite/bin/vite.js --config showcase/vite.config.ts",
+    "showcase:build": "node ../../node_modules/vite/bin/vite.js build --config showcase/vite.config.ts",
+    "showcase:preview": "node ../../node_modules/vite/bin/vite.js preview --config showcase/vite.config.ts"
+  }
+}

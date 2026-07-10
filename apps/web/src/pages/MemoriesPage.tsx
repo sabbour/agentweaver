@@ -20,6 +20,7 @@ import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
 import type { DecisionDto, AgentMemoryDto, DecisionInboxEntryDto } from '../api/types';
 import { PageHeader } from '../components/PageHeader';
+import { AzureEmptyState, AzurePage, AzureSectionHeader, AzureSurface } from '../components/azure/AzureLayout';
 
 // ---------------------------------------------------------------------------
 // Styles
@@ -43,7 +44,9 @@ const useStyles = makeStyles({
     textDecoration: 'none',
   },
   tabContent: {
-    marginTop: tokens.spacingVerticalM,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalM,
   },
   empty: {
     color: tokens.colorNeutralForeground3,
@@ -55,10 +58,6 @@ const useStyles = makeStyles({
     gap: tokens.spacingVerticalM,
   },
   item: {
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: tokens.borderRadiusMedium,
-    padding: `${tokens.spacingVerticalM} ${tokens.spacingHorizontalM}`,
-    backgroundColor: tokens.colorNeutralBackground2,
     display: 'flex',
     flexDirection: 'column',
     gap: tokens.spacingVerticalXS,
@@ -109,9 +108,6 @@ const useStyles = makeStyles({
   },
   proposedItem: {
     border: `1px dashed ${tokens.colorNeutralStroke2}`,
-    borderRadius: tokens.borderRadiusMedium,
-    padding: `${tokens.spacingVerticalM} ${tokens.spacingHorizontalM}`,
-    backgroundColor: tokens.colorNeutralBackground1,
     display: 'flex',
     flexDirection: 'column',
     gap: tokens.spacingVerticalXS,
@@ -266,7 +262,7 @@ export function MemoriesPage() {
   const busy = busyAction !== null;
 
   return (
-    <div className={styles.root}>
+    <AzurePage className={styles.root}>
       <PageHeader
         title="Team Memory"
         subtitle="Decisions and learnings the team has captured."
@@ -290,7 +286,7 @@ export function MemoriesPage() {
         <Tab value="memory">Agent Memory</Tab>
       </TabList>
 
-      <div className={styles.tabContent}>
+      <AzureSurface className={styles.tabContent}>
         {loading && <Spinner size="small" label="Loading…" />}
         {loadError && (
           <MessageBar intent="error">
@@ -306,13 +302,13 @@ export function MemoriesPage() {
 
         {!loading && !loadError && selectedTab === 'decisions' && (
           !hasActiveDecisions && pending.length === 0
-            ? <Text className={styles.empty}>No decisions recorded yet.</Text>
+            ? <AzureEmptyState title="No decisions recorded yet." body="Accepted decisions and pending proposals will appear here." />
             : (
               <>
                 {hasActiveDecisions && (
                   <div className={styles.itemList}>
                     {decisions!.map(d => (
-                      <div key={d.id} className={styles.item}>
+                      <AzureSurface key={d.id} className={styles.item} tone="subtle" density="compact">
                         <div className={styles.itemHeader}>
                           <span className={styles.itemTitle}>{d.title}</span>
                           <Badge appearance="tint" color="informative">{d.type}</Badge>
@@ -323,20 +319,19 @@ export function MemoriesPage() {
                         {d.rationale && (
                           <span className={styles.itemRationale}>Rationale: {d.rationale}</span>
                         )}
-                      </div>
+                      </AzureSurface>
                     ))}
                   </div>
                 )}
 
                 {pending.length > 0 && (
                   <section className={styles.proposedSection} aria-label="Proposed decisions awaiting Coordinator">
-                    <span className={styles.proposedHeading}>Proposed — awaiting Coordinator</span>
-                    <Text className={styles.proposedCaption}>
-                      Review pending proposals and merge, promote, or reject them. Approving a proposal
-                      promotes these proposals into active Team Memory.
-                    </Text>
+                    <AzureSectionHeader
+                      title="Proposed — awaiting Coordinator"
+                      description="Review pending proposals and merge, promote, or reject them. Approving a proposal promotes these proposals into active Team Memory."
+                    />
                     {pending.map(e => (
-                      <div key={e.id} className={styles.proposedItem}>
+                      <AzureSurface key={e.id} className={styles.proposedItem} tone="flat" density="compact">
                         <div className={styles.itemHeader}>
                           <span className={styles.itemTitle}>{e.title}</span>
                           <Badge appearance="tint" color="warning">Proposed</Badge>
@@ -353,7 +348,7 @@ export function MemoriesPage() {
                           <Button size="small" disabled={busy} onClick={() => void runInboxAction(e.id, 'promote')}>Promote</Button>
                           <Button size="small" appearance="outline" disabled={busy} onClick={() => void runInboxAction(e.id, 'reject')}>Reject</Button>
                         </div>
-                      </div>
+                      </AzureSurface>
                     ))}
                   </section>
                 )}
@@ -381,11 +376,11 @@ export function MemoriesPage() {
               </Button>
             </section>
             {memory === null || memory.length === 0
-              ? <Text className={styles.empty}>No agent memory recorded yet.</Text>
+              ? <AzureEmptyState title="No agent memory recorded yet" body="Create a memory entry to capture durable team learnings." />
               : (
                 <div className={styles.itemList}>
                   {memory.map(m => (
-                    <div key={m.id} className={styles.item}>
+                    <AzureSurface key={m.id} className={styles.item} tone="subtle" density="compact">
                       <div className={styles.itemHeader}>
                         <Badge appearance="outline">{m.agent_name}</Badge>
                         <Badge appearance="tint" color={
@@ -416,13 +411,13 @@ export function MemoriesPage() {
                           </div>
                         </>
                       )}
-                    </div>
+                    </AzureSurface>
                   ))}
                 </div>
               )}
           </>
         )}
-      </div>
-    </div>
+      </AzureSurface>
+    </AzurePage>
   );
 }

@@ -13,7 +13,6 @@ import {
   TableHeaderCell,
   TableRow,
   Text,
-  Title3,
   makeStyles,
   tokens,
 } from '@fluentui/react-components';
@@ -30,6 +29,7 @@ import type {
   SandboxClaimObjectDto,
 } from '../api/types';
 import { PageHeader } from '../components/PageHeader';
+import { AzurePage, AzureSectionHeader, AzureSurface } from '../components/azure/AzureLayout';
 import { RefreshCountdown } from '../hooks/useRefreshCountdown';
 
 // Cluster (spec-018) — Kubernetes cluster health and capacity view.
@@ -53,10 +53,6 @@ const useStyles = makeStyles({
     display: 'flex',
     flexDirection: 'column',
     gap: tokens.spacingVerticalXXS,
-    padding: tokens.spacingVerticalM,
-    backgroundColor: tokens.colorNeutralBackground1,
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: tokens.borderRadiusMedium,
   },
   kpiLabel: {
     fontSize: tokens.fontSizeBase200,
@@ -112,11 +108,11 @@ function podBadgeColor(status: string): 'success' | 'warning' | 'informative' {
 function KpiCard({ label, value, sub }: { label: string; value: number | string; sub?: string }) {
   const styles = useStyles();
   return (
-    <div className={styles.kpiCard}>
+    <AzureSurface className={styles.kpiCard} density="compact">
       <Text className={styles.kpiLabel}>{label}</Text>
       <Text className={styles.kpiValue}>{value}</Text>
       {sub && <Text className={styles.kpiSub}>{sub}</Text>}
-    </div>
+    </AzureSurface>
   );
 }
 
@@ -165,8 +161,8 @@ function AgentPodsTable({ pods, label }: { pods: AgentPodInfoDto[]; label: strin
       <TableBody>
         {pods.map((p) => (
           <TableRow key={p.claim_name}>
-            <TableCell style={{ fontFamily: 'monospace', fontSize: tokens.fontSizeBase200 }}>{p.claim_name}</TableCell>
-            <TableCell style={{ fontFamily: 'monospace', fontSize: tokens.fontSizeBase200 }}>{p.pod_name ?? '—'}</TableCell>
+            <TableCell style={{ fontFamily: tokens.fontFamilyMonospace, fontSize: tokens.fontSizeBase200 }}>{p.claim_name}</TableCell>
+            <TableCell style={{ fontFamily: tokens.fontFamilyMonospace, fontSize: tokens.fontSizeBase200 }}>{p.pod_name ?? '—'}</TableCell>
             <TableCell>
               <Badge appearance="tint" color={podBadgeColor(p.status)}>{p.status}</Badge>
             </TableCell>
@@ -198,7 +194,7 @@ function PendingCapacityTable({ rows }: { rows: PendingCapacityRunDto[] }) {
           <TableRow key={r.subtask_id}>
             <TableCell>{r.subtask_id}</TableCell>
             <TableCell>{r.work_plan_id}</TableCell>
-            <TableCell style={{ fontFamily: 'monospace', fontSize: tokens.fontSizeBase200 }}>{r.child_run_id ?? '—'}</TableCell>
+            <TableCell style={{ fontFamily: tokens.fontFamilyMonospace, fontSize: tokens.fontSizeBase200 }}>{r.child_run_id ?? '—'}</TableCell>
             <TableCell>{r.status}</TableCell>
             <TableCell>{r.reason ?? '—'}</TableCell>
             <TableCell>{formatAge(r.age_seconds)}</TableCell>
@@ -225,7 +221,7 @@ function WarmPoolsTable({ rows }: { rows: WarmPoolStatusDto[] }) {
       <TableBody>
         {rows.map((p) => (
           <TableRow key={p.name}>
-            <TableCell style={{ fontFamily: 'monospace', fontSize: tokens.fontSizeBase200 }}>{p.name}</TableCell>
+            <TableCell style={{ fontFamily: tokens.fontFamilyMonospace, fontSize: tokens.fontSizeBase200 }}>{p.name}</TableCell>
             <TableCell>
               <Badge appearance="tint" color={healthBadgeColor(p.status)}>{p.status}</Badge>
             </TableCell>
@@ -255,7 +251,7 @@ function SandboxObjectsTable({ rows }: { rows: SandboxObjectDto[] }) {
       <TableBody>
         {rows.map((s) => (
           <TableRow key={s.name}>
-            <TableCell style={{ fontFamily: 'monospace', fontSize: tokens.fontSizeBase200 }}>{s.name}</TableCell>
+            <TableCell style={{ fontFamily: tokens.fontFamilyMonospace, fontSize: tokens.fontSizeBase200 }}>{s.name}</TableCell>
             <TableCell>
               <Badge appearance="tint" color={s.phase === 'running' ? 'success' : s.phase === 'pending' ? 'warning' : 'subtle'}>{s.phase}</Badge>
             </TableCell>
@@ -289,13 +285,13 @@ function SandboxClaimsTable({ rows }: { rows: SandboxClaimObjectDto[] }) {
       <TableBody>
         {rows.map((c) => (
           <TableRow key={c.name}>
-            <TableCell style={{ fontFamily: 'monospace', fontSize: tokens.fontSizeBase200 }}>{c.name}</TableCell>
+            <TableCell style={{ fontFamily: tokens.fontFamilyMonospace, fontSize: tokens.fontSizeBase200 }}>{c.name}</TableCell>
             <TableCell>
               <Badge appearance="tint" color={c.phase === 'bound' ? 'success' : 'warning'}>{c.phase}</Badge>
             </TableCell>
-            <TableCell style={{ fontFamily: 'monospace', fontSize: tokens.fontSizeBase200 }}>{c.bound_sandbox ?? '—'}</TableCell>
+            <TableCell style={{ fontFamily: tokens.fontFamilyMonospace, fontSize: tokens.fontSizeBase200 }}>{c.bound_sandbox ?? '—'}</TableCell>
             <TableCell style={{ fontSize: tokens.fontSizeBase200 }}>{c.warm_pool ?? '—'}</TableCell>
-            <TableCell style={{ fontFamily: 'monospace', fontSize: tokens.fontSizeBase200 }}>{c.run_id ?? '—'}</TableCell>
+            <TableCell style={{ fontFamily: tokens.fontFamilyMonospace, fontSize: tokens.fontSizeBase200 }}>{c.run_id ?? '—'}</TableCell>
             <TableCell>{formatAge(c.age_seconds)}</TableCell>
           </TableRow>
         ))}
@@ -352,7 +348,7 @@ export function ClusterPage() {
   }, [load, autoRefresh]);
 
   return (
-    <div className={styles.root}>
+    <AzurePage className={styles.root}>
       <PageHeader
         title="Cluster"
         subtitle="Kubernetes cluster health and capacity."
@@ -413,48 +409,48 @@ export function ClusterPage() {
           </div>
 
           {/* Health checks */}
-          <div className={styles.section}>
-            <Title3>Health checks</Title3>
+          <AzureSurface className={styles.section}>
+            <AzureSectionHeader title="Health checks" />
             <HealthChecksTable rows={data.checks} />
-          </div>
+          </AzureSurface>
 
           {/* Sandbox claims — moved up: shows bound pods, making active-pods section redundant */}
-          <div className={styles.section}>
-            <Title3>Sandbox claims ({data.sandbox_claims?.length ?? 0})</Title3>
+          <AzureSurface className={styles.section}>
+            <AzureSectionHeader title={`Sandbox claims (${data.sandbox_claims?.length ?? 0})`} />
             <SandboxClaimsTable rows={data.sandbox_claims ?? []} />
-          </div>
+          </AzureSurface>
 
           {/* Active agent pods removed — already captured in Sandbox claims */}
 
           {/* Orphaned agent pods */}
           {data.orphaned_agent_pods.length > 0 && (
-            <div className={styles.section}>
-              <Title3>Orphaned agent pods ({data.orphaned_agent_pods.length})</Title3>
+            <AzureSurface className={styles.section}>
+              <AzureSectionHeader title={`Orphaned agent pods (${data.orphaned_agent_pods.length})`} />
               <AgentPodsTable pods={data.orphaned_agent_pods} label="Orphaned agent pods" />
-            </div>
+            </AzureSurface>
           )}
 
           {/* Pending capacity runs */}
-          <div className={styles.section}>
-            <Title3>Pending capacity ({data.pending_capacity_runs.length})</Title3>
+          <AzureSurface className={styles.section}>
+            <AzureSectionHeader title={`Pending capacity (${data.pending_capacity_runs.length})`} />
             <PendingCapacityTable rows={data.pending_capacity_runs} />
-          </div>
+          </AzureSurface>
 
           {/* Warm pools */}
-          <div className={styles.section}>
-            <Title3>Warm pools ({data.warm_pools?.length ?? 0})</Title3>
+          <AzureSurface className={styles.section}>
+            <AzureSectionHeader title={`Warm pools (${data.warm_pools?.length ?? 0})`} />
             <WarmPoolsTable rows={data.warm_pools ?? []} />
-          </div>
+          </AzureSurface>
 
           {/* Sandbox objects */}
-          <div className={styles.section}>
-            <Title3>Sandbox objects ({data.sandbox_objects?.length ?? 0})</Title3>
+          <AzureSurface className={styles.section}>
+            <AzureSectionHeader title={`Sandbox objects (${data.sandbox_objects?.length ?? 0})`} />
             <SandboxObjectsTable rows={data.sandbox_objects ?? []} />
-          </div>
+          </AzureSurface>
 
           <Text className={styles.generated}>Generated {data.generated_utc} · {data.total_duration_ms.toFixed(0)} ms</Text>
         </>
       )}
-    </div>
+    </AzurePage>
   );
 }

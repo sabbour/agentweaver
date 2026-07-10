@@ -8,6 +8,7 @@ import type { BoardDto, ModelUsageBreakdownDto, OverviewDto, Project, ProjectMet
 import { costChipLabel } from '../components/CostChip';
 import { MetricCardHeader, MetricEmptyState, MetricSectionHeading } from '../components/MetricTypography';
 import { PageHeader } from '../components/PageHeader';
+import { AzurePage } from '../components/azure/AzureLayout';
 import { RefreshCountdown } from '../hooks/useRefreshCountdown';
 
 const REFRESH_MS = 10000;
@@ -19,7 +20,7 @@ interface AttentionItem { key: string; severity: 'error' | 'warning'; title: str
 const modelColors = ['#0f6cbd', '#107c10', '#ca5010', '#5c2e91', '#8a8886'];
 
 const useStyles = makeStyles({
-  root: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXXL, maxWidth: '1480px', margin: '0 auto', '@media (max-width: 720px)': { gap: tokens.spacingVerticalXL } },
+  root: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXXL, '@media (max-width: 720px)': { gap: tokens.spacingVerticalXL } },
   generated: { fontSize: tokens.fontSizeBase200, color: tokens.colorNeutralForeground3 },
   headerActions: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM, flexWrap: 'wrap', justifyContent: 'flex-end' },
   commandStrip: { display: 'grid', gridTemplateColumns: 'minmax(220px, .95fr) minmax(0, 2fr) auto', gap: tokens.spacingHorizontalL, alignItems: 'stretch', padding: tokens.spacingVerticalL, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusXLarge, backgroundColor: tokens.colorNeutralBackground1, boxShadow: tokens.shadow4, '@media (max-width: 980px)': { gridTemplateColumns: '1fr' }, '@media (max-width: 720px)': { gap: tokens.spacingVerticalM, padding: tokens.spacingVerticalM } },
@@ -232,7 +233,7 @@ export function OverviewPage() {
   const groupedActivity = useMemo(() => { const today = new Date().toDateString(); const groups = new Map<string, RecentActivityDto[]>(); for (const item of overview?.recent_activity ?? []) { const label = new Date(item.timestamp_utc).toDateString() === today ? 'Today' : new Date(item.timestamp_utc).toLocaleDateString(); groups.set(label, [...(groups.get(label) ?? []), item]); } return [...groups.entries()]; }, [overview]);
   const focusRollup = rollups[0];
   const health = overview?.at_a_glance.health === 'healthy' ? 'healthy' : 'degraded';
-  return <div className={styles.root}>
+  return <AzurePage className={styles.root}>
     <PageHeader title="Overview" subtitle="A live command center for projects, AI performance, activity, and work that needs attention." actions={<div className={styles.headerActions}>{lastUpdated && <RefreshCountdown className={styles.generated} intervalMs={REFRESH_MS} lastRefreshedAt={new Date(lastUpdated)} refreshing={refreshing} />}{refreshing && overview && <Spinner size="extra-tiny" aria-label="Refreshing overview" />}<Button appearance="secondary" icon={<ArrowSyncRegular />} disabled={loading} onClick={() => { setLoading(true); void load({ cancelled: false }); }}>Refresh</Button></div>} />
     {error && <MessageBar intent="error"><MessageBarBody>{error}</MessageBarBody><MessageBarActions><Button appearance="transparent" onClick={() => { setLoading(true); void load({ cancelled: false }); }}>Try again</Button></MessageBarActions></MessageBar>}
     {loading && !overview && <LoadingOverview />}
@@ -273,5 +274,5 @@ export function OverviewPage() {
         </section>
       </div>
     </> : null}
-  </div>;
+  </AzurePage>;
 }

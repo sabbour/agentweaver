@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18">
+  <defs>
+    <linearGradient id="fc16e596-49aa-4d22-9477-7d6d179471c7" x1="5.465" y1="774.504" x2="5.465" y2="790.56" gradientTransform="matrix(1, 0, 0, -1, 0, 791.516)" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#005ba1" />
+      <stop offset="1" stop-color="#0078d4" />
+    </linearGradient>
+    <linearGradient id="b85c8c7a-9182-493b-8f86-fb7f140bad78" x1="11.069" y1="17.044" x2="11.069" y2="10.569" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#32bedd" />
+      <stop offset="0.302" stop-color="#36c3e1" />
+      <stop offset="0.66" stop-color="#41d1ee" />
+      <stop offset="1" stop-color="#50e6ff" />
+    </linearGradient>
+  </defs>
+  <g id="f510e8cf-8bc7-4bfa-bc5e-7461716c6c28">
+    <g>
+      <path d="M10.173,16.473a.528.528,0,0,1-.519.538H1.276a.529.529,0,0,1-.529-.529V1.494a.529.529,0,0,1,.52-.538H9.644a.528.528,0,0,1,.538.519.061.061,0,0,1,0,.019Z" fill="url(#fc16e596-49aa-4d22-9477-7d6d179471c7)" />
+      <path d="M2.089,6.585A1.018,1.018,0,0,1,3.107,5.564H7.878a1.02,1.02,0,0,1,.992,1.02h0A1.02,1.02,0,0,1,7.859,7.614H3.127a1.029,1.029,0,0,1-1.038-1.02Z" fill="#003067" />
+      <path d="M2.089,3.544A1.03,1.03,0,0,1,3.117,2.513H7.878a1.02,1.02,0,0,1,.992,1.03h0a1.02,1.02,0,0,1-1.02,1.02H3.127a1.02,1.02,0,0,1-1.038-1Z" fill="#003067" />
+      <circle cx="3.194" cy="3.544" r="0.689" fill="#50e6ff" />
+      <circle cx="3.194" cy="6.585" r="0.689" fill="#50e6ff" />
+      <g>
+        <path d="M5.3,17.044h5.953a.417.417,0,0,0,.3-.124l5.578-5.639a.418.418,0,0,0-.3-.712H5.3a.418.418,0,0,0-.418.418v5.639A.418.418,0,0,0,5.3,17.044Z" fill="url(#b85c8c7a-9182-493b-8f86-fb7f140bad78)" />
+        <polygon points="11.375 12.487 11.375 14.892 9.297 16.1 9.297 13.692 11.375 12.487" fill="#fff" opacity="0.6" />
+        <polygon points="11.375 12.487 9.297 13.695 7.217 12.484 9.297 11.276 11.375 12.487" fill="#fff" opacity="0.9" />
+        <polygon points="9.297 13.695 9.297 16.1 7.217 14.892 7.217 12.484 9.297 13.695" fill="#fff" opacity="0.75" />
+      </g>
+    </g>
+  </g>
+</svg>

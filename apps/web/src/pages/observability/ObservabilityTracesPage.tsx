@@ -5,6 +5,7 @@ import { ArrowSyncRegular } from '@fluentui/react-icons';
 import { apiClient } from '../../api/apiClient';
 import { ApiError } from '../../api/client';
 import type { Project, WorkflowRunDto } from '../../api/types';
+import { AzureEmptyState, AzureSurface } from '../../components/azure/AzureLayout';
 import { ObservabilityLayout } from '../../components/observability/ObservabilityLayout';
 import { TransactionTracePanel } from '../../components/runs/TransactionTracePanel';
 import { isCoordinatorRun } from '../../utils/runKind';
@@ -19,10 +20,6 @@ const useStyles = makeStyles({
     display: 'flex',
     flexDirection: 'column',
     gap: tokens.spacingVerticalM,
-    padding: tokens.spacingVerticalL,
-    backgroundColor: tokens.colorNeutralBackground1,
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: tokens.borderRadiusMedium,
   },
   rowHead: {
     display: 'flex',
@@ -126,7 +123,7 @@ export function ObservabilityTracesPage() {
             const runId = run.workflow_run_id ?? run.execution_id;
             const status = run.coordinator_status ?? run.status;
             return (
-              <div key={runId} className={styles.row}>
+              <AzureSurface key={runId} className={styles.row}>
                 <div className={styles.rowHead}>
                   <div>
                     <Text className={styles.task}>{run.task ?? '(no task description)'}</Text>
@@ -143,10 +140,12 @@ export function ObservabilityTracesPage() {
                   </Button>
                 </div>
                 {expandedRunId === runId && <TracePreview runId={runId} />}
-              </div>
+              </AzureSurface>
             );
           })}
-          {!loading && runs.length === 0 && <Text>No coordinator traces yet.</Text>}
+          {!loading && runs.length === 0 && (
+            <AzureEmptyState title="No coordinator traces yet" body="Recent coordinator traces will appear after orchestrations emit telemetry." />
+          )}
         </div>
       )}
     </ObservabilityLayout>

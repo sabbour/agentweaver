@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18">
+  <defs>
+    <linearGradient id="e4f0976d-ea11-4bea-9d52-a8cd6db750b3" x1="-556.155" y1="1018.688" x2="-556.155" y2="1005.666" gradientTransform="matrix(1, 0, 0, -1, 564, 1025.516)" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#5e9eee" />
+      <stop offset="1" stop-color="#0078d2" />
+    </linearGradient>
+    <linearGradient id="f6f076cf-14df-4a7e-9bdf-fcd773eb3def" x1="7.852" y1="-0.076" x2="7.852" y2="9.479" gradientUnits="userSpaceOnUse">
+      <stop offset="0.207" stop-color="#5e9eee" />
+      <stop offset="1" stop-color="#0078d2" />
+    </linearGradient>
+    <radialGradient id="ed4668c0-204c-4dc7-a50a-58ba50330bd9" cx="-573.874" cy="1026.346" r="6.412" gradientTransform="matrix(0.94, 0.01, 0.01, -0.94, 543.285, 982.862)" gradientUnits="userSpaceOnUse">
+      <stop offset="0.27" stop-color="#ffd70f" />
+      <stop offset="1" stop-color="#fea11b" />
+    </radialGradient>
+  </defs>
+  <g id="a4e0f71f-a7fd-4f0a-be42-3ed274251ff7">
+    <g id="a9a01e62-78e4-4155-afb0-163566bf4c1e">
+      <g>
+        <g>
+          <path d="M14.285,17.507a1.4,1.4,0,0,0,1.4-1.391.777.777,0,0,0,0-.167c-.554-4.393-3.054-7.971-7.834-7.971S.489,11.012.008,15.959A1.4,1.4,0,0,0,1.252,17.5H14.285Z" fill="url(#e4f0976d-ea11-4bea-9d52-a8cd6db750b3)" />
+          <path d="M7.852,9.024a4.276,4.276,0,0,1-2.374-.7l2.353,6.16,2.343-6.119A4.349,4.349,0,0,1,7.852,9.024Z" fill="#fff" opacity="0.8" />
+          <circle cx="7.852" cy="4.631" r="4.403" fill="url(#f6f076cf-14df-4a7e-9bdf-fcd773eb3def)" />
+        </g>
+        <g>
+          <path id="b8a5d9a1-eec3-4dcf-84a9-cb51d3b6d08f" d="M17.653,11.587a1.183,1.183,0,0,0,0-1.672l0,0h0L15.624,7.822a1.171,1.171,0,0,0-1.657-.017l-.017.017h0L11.858,9.851a1.193,1.193,0,0,0,0,1.684l1.684,1.715a.32.32,0,0,1,.094.23v3.138a.38.38,0,0,0,.126.293l.763.784a.281.281,0,0,0,.387,0l.753-.753h0l.44-.449a.147.147,0,0,0,0-.208l0,0-.324-.324a.176.176,0,0,1,0-.24l.324-.325a.135.135,0,0,0,.017-.191l-.017-.018-.314-.324a.179.179,0,0,1,0-.241l.324-.324a.146.146,0,0,0,0-.207l0,0-.439-.45v-.115ZM14.8,8.334a.691.691,0,0,1,.67.68.659.659,0,0,1-.648.67h-.032a.68.68,0,0,1,0-1.349Z" fill="url(#ed4668c0-204c-4dc7-a50a-58ba50330bd9)" />
+          <path id="af2db031-6c45-4f3b-aed3-cb7b44fc65f9" d="M14.233,16.744h0a.148.148,0,0,0,.207,0,.152.152,0,0,0,.044-.107V14.076a.171.171,0,0,0-.063-.136h0a.147.147,0,0,0-.23.126v2.573A.136.136,0,0,0,14.233,16.744Z" fill="#ff9300" opacity="0.75" />
+          <rect id="aac72530-3b97-45c3-8a1c-a7a3cdaf8eac" x="14.624" y="9.088" width="0.397" height="3.358" rx="0.178" transform="translate(3.965 25.523) rotate(-89.65)" fill="#ff9300" opacity="0.75" />
+          <rect id="fe83832b-8a42-49dc-a848-e30a42614faa" x="14.613" y="9.74" width="0.397" height="3.358" rx="0.178" transform="translate(3.303 26.16) rotate(-89.65)" fill="#ff9300" opacity="0.75" />
+        </g>
+      </g>
+    </g>
+  </g>
+</svg>

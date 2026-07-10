@@ -46,6 +46,7 @@ import { GITHUB_AUTHORIZE_URL } from '../config';
 import { ApiError } from '../api/client';
 import type { CreateProjectRequest, GitHubAccount, GitHubRepo, Project } from '../api/types';
 import { PageHeader } from '../components/PageHeader';
+import { AzurePage } from '../components/azure/AzureLayout';
 import {
   BlueprintPanel,
   applyBlueprintToRequest,
@@ -940,7 +941,7 @@ export function ProjectGalleryPage() {
   const showGalleryActions = !loading && !authError && projects.length > 0;
 
   return (
-    <div className={styles.root}>
+    <AzurePage className={styles.root}>
       <Toaster toasterId={toasterId} position="bottom-end" />
       <PageHeader
         title="Projects"
@@ -1006,6 +1007,6 @@ export function ProjectGalleryPage() {
           ))}
         </div>
       )}
-    </div>
+    </AzurePage>
   );
 }

@@ -1,5 +1,6 @@
 import { Navigate } from 'react-router-dom';
 import { MessageBar, MessageBarBody } from '@fluentui/react-components';
+import { AzurePage } from '../../components/azure/AzureLayout';
 import { getLastActiveProjectId } from '../../components/shell/projectContext';
 
 export function ObservabilityRedirectPage({ suffix = '' }: { suffix?: string }) {
@@ -9,8 +10,10 @@ export function ObservabilityRedirectPage({ suffix = '' }: { suffix?: string }) 
   }
 
   return (
-    <MessageBar intent="warning">
-      <MessageBarBody>Select a project to view observability data.</MessageBarBody>
-    </MessageBar>
+    <AzurePage>
+      <MessageBar intent="warning">
+        <MessageBarBody>Select a project to view observability data.</MessageBarBody>
+      </MessageBar>
+    </AzurePage>
   );
 }

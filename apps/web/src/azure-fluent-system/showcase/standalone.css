@@ -1,0 +1,25 @@
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  min-height: 100%;
+  padding: 0;
+  font-family: "Segoe UI", "Segoe UI Web (West European)", -apple-system, BlinkMacSystemFont, Roboto, "Helvetica Neue", sans-serif;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+body {
+  background-color: var(--colorNeutralBackground2, #fafafa);
+  color: var(--colorNeutralForeground1, #242424);
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}

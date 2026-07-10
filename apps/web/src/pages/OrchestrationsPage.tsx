@@ -24,6 +24,7 @@ import { ApiError } from '../api/client';
 import { isCoordinatorRun } from '../utils/runKind';
 import type { Project, WorkflowRunDto } from '../api/types';
 import { PageHeader } from '../components/PageHeader';
+import { AzurePage } from '../components/azure/AzureLayout';
 
 // Orchestrations — a project-level list of coordinator orchestration runs. Each
 // row opens the existing coordinator topology view. Data comes from the project's
@@ -325,7 +326,7 @@ export function OrchestrationsPage() {
   if (!projectId) return null;
 
   return (
-    <div className={styles.root}>
+    <AzurePage className={styles.root}>
       <PageHeader
         title="Orchestrations"
         subtitle="Coordinator runs across this project."
@@ -486,6 +487,6 @@ export function OrchestrationsPage() {
           </DialogBody>
         </DialogSurface>
       </Dialog>
-    </div>
+    </AzurePage>
   );
 }

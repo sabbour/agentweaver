@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18">
+  <defs>
+    <linearGradient id="b569a248-4ee1-4295-b21f-3b89c7ad1d8a" x1="9.057" y1="17.5" x2="9.057" y2="12.317" gradientUnits="userSpaceOnUse">
+      <stop offset="0.001" stop-color="#76bc2d" />
+      <stop offset="1" stop-color="#86d633" />
+    </linearGradient>
+    <linearGradient id="a770b1fd-8888-497b-ae9e-4f0c92ef142b" x1="-554.929" y1="1026.006" x2="-555.277" y2="1011.996" gradientTransform="matrix(1, 0, 0, -1, 564, 1025.516)" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#5ea0ef" />
+      <stop offset="1" stop-color="#0078d4" />
+    </linearGradient>
+    <linearGradient id="a3f57ed9-9549-4bd2-89aa-e743e73e229d" x1="8.892" y1="10.863" x2="8.892" y2="3.986" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#9cebff" />
+      <stop offset="1" stop-color="#c3f1ff" />
+    </linearGradient>
+  </defs>
+  <g id="e223a4f6-3a69-48a1-968c-0fa3a3e8e9ad">
+    <g>
+      <rect x="0.5" y="15.171" width="17" height="1.826" rx="0.913" fill="#005ba1" />
+      <path d="M13.387,14.668H10.1V12.317H8.012v2.351H4.727a.284.284,0,0,0-.284.284v2.264a.284.284,0,0,0,.284.284h8.66a.284.284,0,0,0,.284-.284V14.952A.284.284,0,0,0,13.387,14.668Z" fill="url(#b569a248-4ee1-4295-b21f-3b89c7ad1d8a)" />
+      <path d="M16.15,1.888H9.475a.359.359,0,0,1-.2-.059L7.37.56a.355.355,0,0,0-.2-.06H1.564a.358.358,0,0,0-.358.356h0V12.639A.357.357,0,0,0,1.564,13H16.15a.357.357,0,0,0,.358-.356h0V2.243A.357.357,0,0,0,16.15,1.888Z" fill="#005ba1" />
+      <path d="M16.15,1.871H8.82a.357.357,0,0,0-.255.1L7.388,3.155a.356.356,0,0,1-.255.1H1.564a.358.358,0,0,0-.358.357h0v9.006a.357.357,0,0,0,.358.356H16.15a.357.357,0,0,0,.358-.356h0V2.228a.357.357,0,0,0-.357-.357Z" fill="url(#a770b1fd-8888-497b-ae9e-4f0c92ef142b)" />
+      <path d="M13.742,8.708a2.179,2.179,0,0,0-1.891-2.094A2.746,2.746,0,0,0,9.022,3.988,2.816,2.816,0,0,0,6.33,5.824a2.6,2.6,0,0,0-2.288,2.5,2.639,2.639,0,0,0,2.735,2.535c.081,0,.161,0,.24-.01h4.422a.438.438,0,0,0,.114-.018A2.205,2.205,0,0,0,13.742,8.708Z" fill="url(#a3f57ed9-9549-4bd2-89aa-e743e73e229d)" />
+    </g>
+  </g>
+</svg>

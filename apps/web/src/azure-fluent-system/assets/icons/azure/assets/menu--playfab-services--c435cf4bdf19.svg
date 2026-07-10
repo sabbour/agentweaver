@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18">
+  <defs>
+    <linearGradient id="bb2519e9-94d4-4277-b0cb-b30a2e47eaa8" x1="-425.496" y1="-211.623" x2="-425.496" y2="-208.973" gradientTransform="matrix(1, 0, 0, -1, 427.126, -205.758)" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ef7100" />
+      <stop offset="0.999" stop-color="#f78d1e" />
+    </linearGradient>
+    <linearGradient id="b5bfa25a-a061-4463-8cab-4cda026714de" x1="-425.496" y1="-216.003" x2="-425.496" y2="-213.363" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ef7100" />
+      <stop offset="0.999" stop-color="#f78d1e" />
+    </linearGradient>
+    <linearGradient id="bbb7cfa0-ac82-431e-8a9e-ce11a728d9dc" x1="-425.496" y1="-220.553" x2="-425.496" y2="-217.903" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ef7100" />
+      <stop offset="0.999" stop-color="#f78d1e" />
+    </linearGradient>
+  </defs>
+  <g id="a909f5bd-f7a0-4149-ba1a-b7e2ff5ff792">
+    <path d="M4.45,3.815H16.96a.728.728,0,0,1,.73.725h0a.728.728,0,0,1-.73.725H4.45a.728.728,0,0,1-.73-.725h0A.728.728,0,0,1,4.45,3.815Z" fill="#8a8a8a" />
+    <path d="M4.45,8.2H16.96a.728.728,0,0,1,.73.725h0a.728.728,0,0,1-.73.725H4.45a.728.728,0,0,1-.73-.725h0A.728.728,0,0,1,4.45,8.2Z" fill="#8a8a8a" />
+    <path d="M4.45,12.745H16.96a.728.728,0,0,1,.73.725h0a.728.728,0,0,1-.73.725H4.45a.728.728,0,0,1-.73-.725h0A.728.728,0,0,1,4.45,12.745Z" fill="#8a8a8a" />
+    <path d="M1.63,3.215h0a1.32,1.32,0,0,1,1.32,1.32h0a1.32,1.32,0,0,1-1.32,1.32h0A1.32,1.32,0,0,1,.31,4.535h0A1.32,1.32,0,0,1,1.63,3.215Z" fill="url(#bb2519e9-94d4-4277-b0cb-b30a2e47eaa8)" />
+    <path d="M1.63,7.605h0a1.32,1.32,0,0,1,1.32,1.32h0a1.32,1.32,0,0,1-1.32,1.32h0A1.32,1.32,0,0,1,.31,8.925h0A1.32,1.32,0,0,1,1.63,7.605Z" fill="url(#b5bfa25a-a061-4463-8cab-4cda026714de)" />
+    <path d="M1.63,12.145h0a1.32,1.32,0,0,1,1.32,1.32h0a1.32,1.32,0,0,1-1.32,1.32h0a1.32,1.32,0,0,1-1.32-1.32h0A1.32,1.32,0,0,1,1.63,12.145Z" fill="url(#bbb7cfa0-ac82-431e-8a9e-ce11a728d9dc)" />
+  </g>
+</svg>

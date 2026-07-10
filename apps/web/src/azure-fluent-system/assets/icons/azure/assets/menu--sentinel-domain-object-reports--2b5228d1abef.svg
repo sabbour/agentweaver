@@ -1,0 +1,62 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18">
+  <defs>
+    <linearGradient id="a0450055-d300-4854-8acf-c595ccc511c0" x1="8.966" y1="21.453" x2="9.018" y2="2.459" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#0078d4" />
+      <stop offset="0.156" stop-color="#1380da" />
+      <stop offset="0.528" stop-color="#3c91e5" />
+      <stop offset="0.822" stop-color="#559cec" />
+      <stop offset="1" stop-color="#5ea0ef" />
+    </linearGradient>
+    <linearGradient id="e94023f6-31bd-41cc-ab5b-72a064593054" x1="10.169" y1="17.695" x2="10.169" y2="8.455" gradientUnits="userSpaceOnUse">
+      <stop offset="0.003" stop-color="#0078d4" stop-opacity="0" />
+      <stop offset="1" stop-color="#fff" />
+    </linearGradient>
+    <linearGradient id="b5fae48c-ee82-4eb0-b12c-d58e16e1f1bd" x1="12.165" y1="19.589" x2="12.165" y2="7.24" gradientUnits="userSpaceOnUse">
+      <stop offset="0.003" stop-color="#0078d4" stop-opacity="0" />
+      <stop offset="1" stop-color="#fff" />
+    </linearGradient>
+    <linearGradient id="be619117-474b-4e74-b11d-dc754d0d0ec6" x1="14.161" y1="20.07" x2="14.161" y2="6.931" gradientUnits="userSpaceOnUse">
+      <stop offset="0.003" stop-color="#0078d4" stop-opacity="0" />
+      <stop offset="1" stop-color="#fff" />
+    </linearGradient>
+    <linearGradient id="e7236bdc-f3e2-4b12-a58f-bb91435090a5" x1="12.165" y1="18.769" x2="12.165" y2="7.691" gradientUnits="userSpaceOnUse">
+      <stop offset="0.003" stop-color="#0078d4" stop-opacity="0" />
+      <stop offset="1" stop-color="#fff" />
+    </linearGradient>
+    <linearGradient id="b7661e78-7d1d-4b51-9c84-37b3d4f68e76" x1="5.362" y1="14.223" x2="5.362" y2="5.271" gradientUnits="userSpaceOnUse">
+      <stop offset="0.003" stop-color="#0078d4" stop-opacity="0" />
+      <stop offset="1" stop-color="#fff" />
+    </linearGradient>
+    <linearGradient id="b8fcb078-6476-451e-83da-6a6f9b8c1544" x1="5.195" y1="18.799" x2="5.195" y2="7.73" gradientUnits="userSpaceOnUse">
+      <stop offset="0.003" stop-color="#0078d4" stop-opacity="0" />
+      <stop offset="1" stop-color="#fff" />
+    </linearGradient>
+    <linearGradient id="bcb5a55f-182a-41d3-9802-2915b97a69ee" x1="5.547" y1="17.775" x2="5.547" y2="6.706" gradientUnits="userSpaceOnUse">
+      <stop offset="0.003" stop-color="#0078d4" stop-opacity="0" />
+      <stop offset="1" stop-color="#fff" />
+    </linearGradient>
+  </defs>
+  <g id="f1b7d0c8-8264-4b86-950c-482a989f5e0c">
+    <g>
+      <g>
+        <path d="M1.413,13.707l7.3,4.217a.567.567,0,0,0,.566,0l7.3-4.217a.566.566,0,0,0,.283-.49V4.783a.566.566,0,0,0-.283-.49L9.283.076a.567.567,0,0,0-.566,0l-7.3,4.217a.566.566,0,0,0-.283.49v8.434A.566.566,0,0,0,1.413,13.707Z" fill="url(#a0450055-d300-4854-8acf-c595ccc511c0)" />
+        <g>
+          <g>
+            <rect x="9.345" y="8.734" width="1.647" height="3.333" rx="0.281" fill="url(#e94023f6-31bd-41cc-ab5b-72a064593054)" />
+            <rect x="11.341" y="4.027" width="1.647" height="8.04" rx="0.281" fill="url(#b5fae48c-ee82-4eb0-b12c-d58e16e1f1bd)" />
+            <rect x="13.337" y="5.649" width="1.647" height="6.418" rx="0.281" fill="url(#be619117-474b-4e74-b11d-dc754d0d0ec6)" />
+          </g>
+          <rect x="9.345" y="12.507" width="5.639" height="0.635" rx="0.281" fill="url(#e7236bdc-f3e2-4b12-a58f-bb91435090a5)" />
+        </g>
+      </g>
+      <g>
+        <g>
+          <path d="M8.073,8.836A2.84,2.84,0,1,1,6.207,5.279c.067.021.133.044.2.07a.087.087,0,0,1,.049.116L5.428,7.837a.087.087,0,0,0,.1.119l2.53-.526a.088.088,0,0,1,.1.071A2.821,2.821,0,0,1,8.073,8.836Z" fill="url(#b7661e78-7d1d-4b51-9c84-37b3d4f68e76)" />
+          <path d="M8.5,7.022l-2.53.526a.086.086,0,0,1-.1-.119L6.9,5.056a.088.088,0,0,1,.116-.045,2.844,2.844,0,0,1,1.554,1.9A.087.087,0,0,1,8.5,7.022Z" fill="#fff" />
+        </g>
+        <rect x="3.088" y="12.542" width="4.215" height="0.634" rx="0.281" fill="url(#b8fcb078-6476-451e-83da-6a6f9b8c1544)" />
+        <rect x="3.088" y="11.518" width="4.918" height="0.634" rx="0.281" fill="url(#bcb5a55f-182a-41d3-9802-2915b97a69ee)" />
+      </g>
+    </g>
+  </g>
+</svg>

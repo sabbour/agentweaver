@@ -25,6 +25,7 @@ const useStyles = makeStyles({
     height: '100vh',
     minHeight: 0,
     backgroundColor: tokens.colorNeutralBackground2,
+    color: tokens.colorNeutralForeground1,
   },
   body: {
     flex: 1,
@@ -38,7 +39,11 @@ const useStyles = makeStyles({
     flex: 1,
     minHeight: 0,
     overflow: 'auto',
-    padding: `${tokens.spacingVerticalXXL} ${tokens.spacingHorizontalXXL}`,
+    padding: `${tokens.spacingVerticalXXL} ${tokens.spacingHorizontalXXXL}`,
+    backgroundColor: tokens.colorNeutralBackground2,
+    '@media (max-width: 720px)': {
+      padding: tokens.spacingVerticalL,
+    },
   },
 });
 

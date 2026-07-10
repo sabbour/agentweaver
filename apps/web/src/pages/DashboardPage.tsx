@@ -33,6 +33,7 @@ import { AgentInvocationChart } from '../components/dashboard/AgentInvocationCha
 import { ModelPerformancePanels } from '../components/dashboard/ModelPerformancePanels';
 import { MetricEmptyState, MetricSectionHeading } from '../components/MetricTypography';
 import { PageHeader } from '../components/PageHeader';
+import { AzurePage } from '../components/azure/AzureLayout';
 import { formatAic } from '../components/CostChip';
 import { RefreshCountdown } from '../hooks/useRefreshCountdown';
 
@@ -820,7 +821,7 @@ export function DashboardPage() {
   if (!projectId) return null;
 
   return (
-    <div className={styles.root}>
+    <AzurePage className={styles.root}>
       <PageHeader
         title="Dashboard"
         subtitle="Project command center for live work, agent output, and throughput quality."
@@ -1168,6 +1169,6 @@ export function DashboardPage() {
           </section>
         </>
       )}
-    </div>
+    </AzurePage>
   );
 }

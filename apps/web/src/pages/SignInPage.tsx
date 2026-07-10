@@ -1,4 +1,5 @@
 import {
+  Button,
   Text,
   Title1,
   makeStyles,
@@ -6,6 +7,7 @@ import {
 } from '@fluentui/react-components';
 import { GITHUB_AUTHORIZE_URL } from '../config';
 import { GitHubIcon } from '../components/GitHubIcon';
+import { AzureSurface } from '../components/azure/AzureLayout';
 
 const useStyles = makeStyles({
   page: {
@@ -16,6 +18,14 @@ const useStyles = makeStyles({
     justifyContent: 'center',
     backgroundColor: tokens.colorNeutralBackground2,
     gap: tokens.spacingVerticalM,
+    padding: tokens.spacingVerticalXXL,
+  },
+  card: {
+    width: 'min(420px, 100%)',
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    gap: tokens.spacingVerticalL,
   },
   branding: {
     display: 'flex',
@@ -32,19 +42,6 @@ const useStyles = makeStyles({
     color: tokens.colorNeutralForeground2,
     fontSize: tokens.fontSizeBase300,
   },
-  githubButton: {
-    backgroundColor: '#24292e',
-    color: '#ffffff',
-    border: 'none',
-    borderRadius: '6px',
-    padding: '12px 24px',
-    fontSize: '16px',
-    fontWeight: '600',
-    cursor: 'pointer',
-    display: 'flex',
-    alignItems: 'center',
-    gap: '10px',
-  },
   errorText: {
     fontSize: tokens.fontSizeBase200,
     color: tokens.colorPaletteRedForeground1,
@@ -59,21 +56,24 @@ export function SignInPage() {
 
   return (
     <div className={styles.page}>
-      <div className={styles.branding}>
-        <img src="/agentweaver.png" alt="Agentweaver" className={styles.logo} />
-        <Title1>Agentweaver</Title1>
-        <Text className={styles.tagline}>Build workflows from specialized agents</Text>
-      </div>
+      <AzureSurface className={styles.card} density="spacious" tone="raised">
+        <div className={styles.branding}>
+          <img src="/agentweaver.png" alt="Agentweaver" className={styles.logo} />
+          <Title1>Agentweaver</Title1>
+          <Text className={styles.tagline}>Build workflows from specialized agents</Text>
+        </div>
 
-      <button
-        className={styles.githubButton}
-        onClick={() => { window.location.href = GITHUB_AUTHORIZE_URL; }}
-      >
-        <GitHubIcon size={20} />
-        Sign in with GitHub
-      </button>
+        <Button
+          appearance="primary"
+          size="large"
+          icon={<GitHubIcon size={20} />}
+          onClick={() => { window.location.href = GITHUB_AUTHORIZE_URL; }}
+        >
+          Sign in with GitHub
+        </Button>
 
-      {authError && <Text className={styles.errorText}>{authError}</Text>}
+        {authError && <Text className={styles.errorText}>{authError}</Text>}
+      </AzureSurface>
     </div>
   );
 }

@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18">
+  <defs>
+    <linearGradient id="f7283c45-0810-4d51-be0e-24307a28a9cb" x1="8.964" y1="2.169" x2="9.125" y2="29.342" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#32bedd" />
+      <stop offset=".257" stop-color="#2fb9d9" />
+      <stop offset=".576" stop-color="#28a9cc" />
+      <stop offset=".928" stop-color="#1c90b8" />
+      <stop offset="1" stop-color="#198ab3" />
+    </linearGradient>
+  </defs>
+  <path d="M9.44 9.9V3.144H8.56V9.9a1.757 1.757 0 1 0 .878 0z" fill="#949494" />
+  <circle cx="9" cy="2.486" r="1.537" fill="#50e6ff" />
+  <path d="M17.673 6.34a8.857 8.857 0 0 0-2.279-4.284.4.4 0 0 0-.545-.017l-.728.644a.4.4 0 0 0-.015.58A7.1 7.1 0 1 1 2.839 4.656c.1-.17.21-.32.32-.48a.119.119 0 0 1 .14-.023l.078.045 1.17.675a.125.125 0 0 0 .183-.14l-.857-3.2a.279.279 0 0 0-.342-.2L.332 2.2a.124.124 0 0 0-.03.228l1.247.717a.124.124 0 0 1 .045.17l-.3.46a8.869 8.869 0 1 0 16.37 2.564z" fill="url(#f7283c45-0810-4d51-be0e-24307a28a9cb)" />
+</svg>
