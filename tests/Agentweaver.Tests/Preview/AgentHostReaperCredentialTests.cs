@@ -101,6 +101,55 @@ public sealed class AgentHostReaperCredentialTests
     }
 
     [Fact]
+    public void IsReapable_YoungInactiveClaim_IsProtectedByCreationGrace()
+    {
+        var now = new DateTimeOffset(2026, 7, 10, 18, 0, 0, TimeSpan.Zero);
+        AgentHostReaperService.IsReapable(
+                ClaimCreatedAt(now - TimeSpan.FromSeconds(10)),
+                isActive: false,
+                now,
+                TimeSpan.FromMinutes(5))
+            .Should().BeFalse();
+    }
+
+    [Fact]
+    public void IsReapable_OldInactiveClaim_IsReaped()
+    {
+        var now = new DateTimeOffset(2026, 7, 10, 18, 0, 0, TimeSpan.Zero);
+        AgentHostReaperService.IsReapable(
+                ClaimCreatedAt(now - TimeSpan.FromMinutes(10)),
+                isActive: false,
+                now,
+                TimeSpan.FromMinutes(5))
+            .Should().BeTrue();
+    }
+
+    [Fact]
+    public void IsReapable_ActiveClaim_IsNeverReaped()
+    {
+        var now = new DateTimeOffset(2026, 7, 10, 18, 0, 0, TimeSpan.Zero);
+        AgentHostReaperService.IsReapable(
+                ClaimCreatedAt(now - TimeSpan.FromMinutes(10)),
+                isActive: true,
+                now,
+                TimeSpan.FromMinutes(5))
+            .Should().BeFalse();
+    }
+
+    [Fact]
+    public void EffectiveCreationGrace_IsFlooredAboveReadinessTimeout()
+    {
+        var options = new KubernetesSandboxOptions
+        {
+            AgentHostReadyTimeoutSeconds = 400,
+            AgentHostClaimCreationGraceSeconds = 60,
+        };
+
+        AgentHostReaperService.EffectiveCreationGrace(options)
+            .Should().Be(TimeSpan.FromSeconds(430));
+    }
+
+    [Fact]
     public void RunIdAnnotation_RoundTrips_ThroughClaimJson()
     {
         var json = ClaimsListJson(
@@ -121,6 +170,16 @@ public sealed class AgentHostReaperCredentialTests
 
         SandboxClaimConventions.TryGetRunIdAnnotation(item).Should().BeNull();
     }
+
+    private static AgentHostClaimInfo ClaimCreatedAt(DateTimeOffset? createdAt) =>
+        new(
+            ClaimName: "agent-test",
+            RunId: null,
+            PodName: null,
+            Ready: false,
+            CreatedAt: createdAt,
+            Orphaned: true,
+            AnnotatedRunId: null);
 
     /// <summary>Minimal <see cref="IRunStore"/> that reports no active runs (every claim is orphaned).</summary>
     private sealed class EmptyRunStore : IRunStore

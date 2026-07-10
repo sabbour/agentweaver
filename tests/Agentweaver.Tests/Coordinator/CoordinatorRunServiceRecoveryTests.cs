@@ -8,6 +8,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Agentweaver.AgentRuntime;
 using Agentweaver.AgentRuntime.Workflow;
 using Agentweaver.Api.Coordinator;
+using Agentweaver.Api.Git;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Memory;
 using Agentweaver.Api.Runs;
@@ -17,9 +18,8 @@ using Agentweaver.Tests.Helpers;
 namespace Agentweaver.Tests.Coordinator;
 
 /// <summary>
-/// Tests for the RC-2 fix: <c>CoordinatorRunService.FailRunSafeAsync</c> must check the boolean
-/// returned by <c>TrySetTerminalStatusAsync</c> and return early (without writing RunEvents) when
-/// the transition is a no-op — i.e. the run was already set to a terminal status by another replica.
+/// Coordinator restart-recovery regression tests, including final-Scribe bounded admission/dedup and
+/// the RC-2 <c>FailRunSafeAsync</c> losing-replica behavior.
 ///
 /// <para>Without the fix, the losing pod still calls <c>RecordNext</c> and fires
 /// <c>PersistRunEventsAsync</c>, racing with the winning pod and causing Postgres 40001
@@ -160,21 +160,148 @@ public sealed class CoordinatorRunServiceRecoveryTests : IAsyncDisposable
         }
     }
 
+    [Fact]
+    public async Task RecoverInterruptedRunsAsync_TwentyTerminalRuns_BoundsConcurrentFinalScribes()
+    {
+        var coordinatorRuns = new List<Run>();
+        for (var i = 0; i < 20; i++)
+            coordinatorRuns.Add(await SeedTerminalCoordinatorRunAsync());
+
+        var config = BuildConfiguration(new Dictionary<string, string?>
+        {
+            ["Coordinator:FinalScribeMaxConcurrency"] = "2",
+        });
+        var streamStore = new RunStreamStore();
+        var pipeline = new CountingScribePipeline(block: true);
+        var assembly = BuildAssembly(_runStore, streamStore, pipeline, config);
+        var svc = BuildCoordinatorRunService(_runStore, streamStore, assembly, config);
+
+        await svc.RecoverInterruptedRunsAsync(CancellationToken.None);
+        await WaitUntilAsync(() => pipeline.InvocationCount == 2);
+        await Task.Delay(100);
+
+        pipeline.InvocationCount.Should().Be(2,
+            "blocked Scribe executions beyond the configured limit must wait for admission");
+        pipeline.MaxObservedConcurrency.Should().Be(2);
+
+        pipeline.Release();
+        await WaitUntilAsync(() => pipeline.InvocationCount == coordinatorRuns.Count);
+        await WaitUntilAsync(async () =>
+        {
+            foreach (var run in coordinatorRuns)
+            {
+                var children = await _runStore.GetRunsByParentAsync(run.Id.ToString());
+                if (!children.Any(IsCompletedScribe))
+                    return false;
+            }
+
+            return true;
+        });
+
+        pipeline.MaxObservedConcurrency.Should().BeLessThanOrEqualTo(2);
+    }
+
+    [Fact]
+    public async Task RecoverInterruptedRunsAsync_CompletedScribe_DoesNotReenqueue()
+    {
+        var coordinatorRun = await SeedTerminalCoordinatorRunAsync();
+        await SeedScribeAttemptAsync(coordinatorRun, RunStatus.Completed);
+
+        var config = BuildConfiguration();
+        var streamStore = new RunStreamStore();
+        var pipeline = new CountingScribePipeline();
+        var assembly = BuildAssembly(_runStore, streamStore, pipeline, config);
+        var svc = BuildCoordinatorRunService(_runStore, streamStore, assembly, config);
+
+        await svc.RecoverInterruptedRunsAsync(CancellationToken.None);
+        await Task.Delay(100);
+
+        pipeline.InvocationCount.Should().Be(0);
+        (await _runStore.GetRunsByParentAsync(coordinatorRun.Id.ToString()))
+            .Where(IsScribe)
+            .Should()
+            .ContainSingle()
+            .Which.Status.Should().Be(RunStatus.Completed);
+    }
+
+    [Fact]
+    public async Task RecoverInterruptedRunsAsync_ThreeFailedScribes_DoesNotReenqueue()
+    {
+        var coordinatorRun = await SeedTerminalCoordinatorRunAsync();
+        var config = BuildConfiguration(new Dictionary<string, string?>
+        {
+            ["Coordinator:FinalScribeMaxAttempts"] = "3",
+        });
+        var streamStore = new RunStreamStore();
+        var pipeline = new CountingScribePipeline(failScribes: true);
+        var assembly = BuildAssembly(_runStore, streamStore, pipeline, config);
+
+        for (var attempt = 1; attempt <= 3; attempt++)
+        {
+            var expectedAttempt = attempt;
+            while (pipeline.InvocationCount < expectedAttempt)
+            {
+                assembly.EnsureFinalScribe(coordinatorRun);
+                await Task.Delay(20);
+            }
+            await WaitUntilAsync(async () =>
+            {
+                var children = await _runStore.GetRunsByParentAsync(coordinatorRun.Id.ToString());
+                return children.Count(r => IsScribe(r) && r.Status == RunStatus.Failed) == expectedAttempt;
+            });
+        }
+
+        var svc = BuildCoordinatorRunService(_runStore, streamStore, assembly, config);
+        await svc.RecoverInterruptedRunsAsync(CancellationToken.None);
+        await Task.Delay(100);
+
+        pipeline.InvocationCount.Should().Be(3);
+        (await _runStore.GetRunsByParentAsync(coordinatorRun.Id.ToString()))
+            .Count(r => IsScribe(r) && r.Status == RunStatus.Failed)
+            .Should().Be(3);
+    }
+
+    [Fact]
+    public async Task EnsureFinalScribe_ConcurrentCallsForSameRun_ExecutesPipelineOnce()
+    {
+        var coordinatorRun = await SeedTerminalCoordinatorRunAsync();
+        var config = BuildConfiguration();
+        var streamStore = new RunStreamStore();
+        var pipeline = new CountingScribePipeline(block: true);
+        var assembly = BuildAssembly(_runStore, streamStore, pipeline, config);
+
+        await Task.WhenAll(Enumerable.Range(0, 20)
+            .Select(_ => Task.Run(() => assembly.EnsureFinalScribe(coordinatorRun))));
+        await WaitUntilAsync(() => pipeline.InvocationCount == 1);
+        await Task.Delay(100);
+
+        pipeline.InvocationCount.Should().Be(1);
+
+        pipeline.Release();
+        await WaitUntilAsync(async () =>
+        {
+            var children = await _runStore.GetRunsByParentAsync(coordinatorRun.Id.ToString());
+            return children.Count(IsCompletedScribe) == 1;
+        });
+
+        pipeline.InvocationCount.Should().Be(1);
+        (await _runStore.GetRunsByParentAsync(coordinatorRun.Id.ToString()))
+            .Where(IsScribe)
+            .Should()
+            .ContainSingle();
+    }
+
     // =========================================================================
     // Helpers
     // =========================================================================
 
     private CoordinatorRunService BuildCoordinatorRunService(
         IRunStore runStore,
-        RunStreamStore streamStore)
+        RunStreamStore streamStore,
+        ICoordinatorAssembly? assembly = null,
+        IConfiguration? configuration = null)
     {
-        var config = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                ["Checkpoints:Path"] = _checkpointsPath,
-                ["Coordinator:AutoDispatch"] = "false",
-            })
-            .Build();
+        var config = configuration ?? BuildConfiguration();
 
         var loggerFactory = NullLoggerFactory.Instance;
 
@@ -228,13 +355,122 @@ public sealed class CoordinatorRunServiceRecoveryTests : IAsyncDisposable
             runWorkflowFactory: runWorkflowFactory,
             dispatchService: null!,   // not invoked in ResumeSpecPhase → FailRunSafeAsync path
             assemblyStore: null!,     // not invoked in this path
-            assembly: new NoOpAssembly(),
+            assembly: assembly ?? new NoOpAssembly(),
             scopeFactory: _scopeFactory,
             runOptions: null!,        // not invoked in this path
             backlogStore: null!,      // not invoked (run.Origin == Interactive)
             lifetime: new TestHostApplicationLifetime(),
             configuration: config,
             logger: NullLogger<CoordinatorRunService>.Instance);
+    }
+
+    private IConfiguration BuildConfiguration(
+        IReadOnlyDictionary<string, string?>? overrides = null)
+    {
+        var values = new Dictionary<string, string?>
+        {
+            ["Checkpoints:Path"] = _checkpointsPath,
+            ["Coordinator:AutoDispatch"] = "false",
+        };
+        if (overrides is not null)
+        {
+            foreach (var (key, value) in overrides)
+                values[key] = value;
+        }
+
+        return new ConfigurationBuilder()
+            .AddInMemoryCollection(values)
+            .Build();
+    }
+
+    private CoordinatorAssemblyService BuildAssembly(
+        IRunStore runStore,
+        RunStreamStore streamStore,
+        ICollectiveAssemblyPipeline pipeline,
+        IConfiguration configuration) =>
+        new(
+            runStore,
+            streamStore,
+            assemblyStore: null!,
+            reviewGate: null!,
+            pipeline,
+            _scopeFactory,
+            _memoryServiceProvider,
+            new TestHostApplicationLifetime(),
+            NullLogger<CoordinatorAssemblyService>.Instance,
+            configuration);
+
+    private async Task<Run> SeedTerminalCoordinatorRunAsync()
+    {
+        var run = new Run
+        {
+            Id = RunId.New(),
+            AgentName = "Coordinator",
+            ParentRunId = null,
+            Status = RunStatus.Completed,
+            RepositoryPath = _checkpointsPath,
+            OriginatingBranch = "main",
+            ModelSource = ModelSource.GitHubCopilot,
+            Task = "test goal",
+            SubmittingUser = "test-user",
+            StartedAt = DateTimeOffset.UtcNow,
+            EndedAt = DateTimeOffset.UtcNow,
+            Result = "complete",
+            Origin = RunOrigin.Interactive,
+        };
+        await _runStore.InsertAsync(run);
+        return run;
+    }
+
+    private Task SeedScribeAttemptAsync(Run coordinatorRun, RunStatus status) =>
+        _runStore.InsertAsync(new Run
+        {
+            Id = RunId.New(),
+            AgentName = "Scribe",
+            ParentRunId = coordinatorRun.Id.ToString(),
+            SubtaskId = CoordinatorAssemblyService.AssemblyScribeSubtaskId,
+            Status = status,
+            RepositoryPath = coordinatorRun.RepositoryPath,
+            OriginatingBranch = coordinatorRun.OriginatingBranch,
+            ModelSource = coordinatorRun.ModelSource,
+            Task = "final scribe",
+            SubmittingUser = coordinatorRun.SubmittingUser,
+            StartedAt = DateTimeOffset.UtcNow,
+            EndedAt = status == RunStatus.InProgress ? null : DateTimeOffset.UtcNow,
+            Result = status == RunStatus.Failed ? "simulated failure" : "complete",
+            Origin = RunOrigin.Interactive,
+        });
+
+    private static bool IsScribe(Run run) =>
+        string.Equals(run.AgentName, "Scribe", StringComparison.Ordinal)
+        && string.Equals(
+            run.SubtaskId,
+            CoordinatorAssemblyService.AssemblyScribeSubtaskId,
+            StringComparison.Ordinal);
+
+    private static bool IsCompletedScribe(Run run) =>
+        IsScribe(run) && run.Status == RunStatus.Completed;
+
+    private static async Task WaitUntilAsync(Func<bool> condition)
+    {
+        var deadline = DateTimeOffset.UtcNow.AddSeconds(10);
+        while (!condition())
+        {
+            if (DateTimeOffset.UtcNow >= deadline)
+                throw new TimeoutException("Condition was not met within 10 seconds.");
+            await Task.Delay(20);
+        }
+    }
+
+    private static async Task WaitUntilAsync(Func<Task<bool>> condition)
+    {
+        var deadline = DateTimeOffset.UtcNow.AddSeconds(10);
+        while (!await condition())
+        {
+            if (DateTimeOffset.UtcNow >= deadline)
+                throw new TimeoutException("Condition was not met within 10 seconds.");
+            await Task.Delay(20);
+        }
     }
 
     // -------------------------------------------------------------------------
@@ -290,6 +526,95 @@ public sealed class CoordinatorRunServiceRecoveryTests : IAsyncDisposable
         public bool IsAssemblyActive(string coordinatorRunId) => false;
         public void AbandonStaleReview(CoordinatorDispatchContext context) { }
         public void FailAssembly(CoordinatorDispatchContext context, string reason) { }
+    }
+
+    private sealed class CountingScribePipeline(
+        bool block = false,
+        bool failScribes = false) : ICollectiveAssemblyPipeline
+    {
+        private readonly TaskCompletionSource<bool> _release = CreateRelease(block);
+        private int _invocationCount;
+        private int _currentConcurrency;
+        private int _maxObservedConcurrency;
+
+        public int InvocationCount => Volatile.Read(ref _invocationCount);
+        public int MaxObservedConcurrency => Volatile.Read(ref _maxObservedConcurrency);
+
+        public void Release() => _release.TrySetResult(true);
+
+        public async Task RunScribeAsync(CollectiveScribeRequest request, CancellationToken ct)
+        {
+            Interlocked.Increment(ref _invocationCount);
+            var current = Interlocked.Increment(ref _currentConcurrency);
+            UpdateMaxConcurrency(current);
+            try
+            {
+                await _release.Task.WaitAsync(ct);
+                if (failScribes)
+                    throw new InvalidOperationException("simulated Scribe failure");
+            }
+            finally
+            {
+                Interlocked.Decrement(ref _currentConcurrency);
+            }
+        }
+
+        private void UpdateMaxConcurrency(int current)
+        {
+            var observed = Volatile.Read(ref _maxObservedConcurrency);
+            while (current > observed)
+            {
+                var previous = Interlocked.CompareExchange(
+                    ref _maxObservedConcurrency,
+                    current,
+                    observed);
+                if (previous == observed)
+                    return;
+                observed = previous;
+            }
+        }
+
+        private static TaskCompletionSource<bool> CreateRelease(bool block)
+        {
+            var release = new TaskCompletionSource<bool>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            if (!block)
+                release.SetResult(true);
+            return release;
+        }
+
+        public IntegrationBranchResult BuildIntegrationBranch(CollectiveIntegrationRequest request) =>
+            throw new NotImplementedException();
+
+        public void PrepareIntegrationBranchRetry(CollectiveIntegrationRequest request) =>
+            throw new NotImplementedException();
+
+        public Task<CollectiveRaiResult> RunRaiAsync(CollectiveRaiRequest request, CancellationToken ct) =>
+            throw new NotImplementedException();
+
+        public Task<CollectiveGateDecision> RunRubberduckAsync(
+            CollectiveRubberduckRequest request,
+            CancellationToken ct) =>
+            throw new NotImplementedException();
+
+        public Task<CollectiveGateDecision> RunBuildTestAsync(
+            CollectiveBuildTestRequest request,
+            CancellationToken ct) =>
+            throw new NotImplementedException();
+
+        public Task CleanupBuildTestResourcesAsync(
+            string coordinatorRunId,
+            string repositoryPath,
+            CancellationToken ct = default) =>
+            throw new NotImplementedException();
+
+        public string GetBuildTestWorktreePath(string coordinatorRunId) =>
+            throw new NotImplementedException();
+
+        public Task<CollectiveMergeResult> MergeAsync(
+            CollectiveMergeRequest request,
+            CancellationToken ct) =>
+            throw new NotImplementedException();
     }
 
     private sealed class ThrowingWorktreeOps : IWorktreeOperations

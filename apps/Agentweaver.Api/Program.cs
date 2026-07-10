@@ -503,8 +503,23 @@ if (SandboxExecutorFactory.IsInCluster)
             builder.Services.AddSingleton<IKubernetes>(sharedK8sClient);
 
             var reaperNamespace = builder.Configuration["Sandbox:Kubernetes:Namespace"] ?? "agentweaver";
+            var reaperReadyTimeoutSeconds = int.TryParse(
+                builder.Configuration["Sandbox:Kubernetes:AgentHostReadyTimeoutSeconds"],
+                out var configuredReadyTimeoutSeconds)
+                ? configuredReadyTimeoutSeconds
+                : 90;
+            var reaperCreationGraceSeconds = int.TryParse(
+                builder.Configuration["Sandbox:Kubernetes:AgentHostClaimCreationGraceSeconds"],
+                out var configuredCreationGraceSeconds)
+                ? configuredCreationGraceSeconds
+                : 300;
             builder.Services.AddSingleton<KubernetesSandboxOptions>(
-                new KubernetesSandboxOptions { Namespace = reaperNamespace });
+                new KubernetesSandboxOptions
+                {
+                    Namespace = reaperNamespace,
+                    AgentHostReadyTimeoutSeconds = reaperReadyTimeoutSeconds,
+                    AgentHostClaimCreationGraceSeconds = reaperCreationGraceSeconds,
+                });
             builder.Services.AddSingleton<IAgentHostReaper, AgentHostReaperService>();
         }
     }

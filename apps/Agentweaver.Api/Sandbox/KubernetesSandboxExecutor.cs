@@ -87,6 +87,14 @@ public sealed class KubernetesSandboxOptions
     public int AgentHostReadyPollIntervalMs { get; init; } = 1000;
 
     /// <summary>
+    /// Minimum age before the orphan reaper may delete an AgentHost claim that is absent from the
+    /// active-run map. Config key: <c>Sandbox:Kubernetes:AgentHostClaimCreationGraceSeconds</c>.
+    /// The effective value is floored above <see cref="AgentHostReadyTimeoutSeconds"/>.
+    /// Default: 300s.
+    /// </summary>
+    public int AgentHostClaimCreationGraceSeconds { get; init; } = 300;
+
+    /// <summary>
     /// Azure Key Vault URI injected into AgentHost pods as <c>AgentHost__KeyVaultUri</c> so the
     /// warm pod can fetch the run owner's GitHub token via workload identity at /configure-time
     /// (Option C). Sourced from the API's own KV config (<c>Auth:TokenStore:KeyVaultUri</c>). When

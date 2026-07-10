@@ -31,6 +31,8 @@ namespace Agentweaver.Api.Sandbox;
 /// </summary>
 public sealed class AgentHostReaperService : IAgentHostReaper
 {
+    private const int ReadinessGraceMarginSeconds = 30;
+
     private readonly IKubernetes _client;
     private readonly IRunStore _runStore;
     private readonly KubernetesSandboxOptions _options;
@@ -56,14 +58,23 @@ public sealed class AgentHostReaperService : IAgentHostReaper
     {
         var activeMap = await GetActiveClaimMapAsync(ct).ConfigureAwait(false);
         var claims = await ListAgentHostClaimsAsync(ct).ConfigureAwait(false);
+        var now = DateTimeOffset.UtcNow;
+        var creationGrace = EffectiveCreationGrace(_options);
 
         var reaped = 0;
         foreach (var claim in claims)
         {
             ct.ThrowIfCancellationRequested();
 
-            // The claim belongs to a run that is still InProgress/Pending — leave it running.
-            if (activeMap.ContainsKey(claim.ClaimName))
+            var isActive = activeMap.ContainsKey(claim.ClaimName);
+            if (!isActive && claim.CreatedAt is null)
+            {
+                _logger.LogDebug(
+                    "AgentHostReaper: claim {Claim} has no parseable creationTimestamp; creation grace does not apply",
+                    claim.ClaimName);
+            }
+
+            if (!IsReapable(claim, isActive, now, creationGrace))
                 continue;
 
             if (await TryDeleteClaimAsync(claim.ClaimName, ct).ConfigureAwait(false))
@@ -85,6 +96,19 @@ public sealed class AgentHostReaperService : IAgentHostReaper
 
         return reaped;
     }
+
+    internal static bool IsReapable(
+        AgentHostClaimInfo claim,
+        bool isActive,
+        DateTimeOffset now,
+        TimeSpan creationGrace) =>
+        !isActive &&
+        (claim.CreatedAt is null || now - claim.CreatedAt.Value >= creationGrace);
+
+    internal static TimeSpan EffectiveCreationGrace(KubernetesSandboxOptions options) =>
+        TimeSpan.FromSeconds(Math.Max(
+            options.AgentHostClaimCreationGraceSeconds,
+            options.AgentHostReadyTimeoutSeconds + ReadinessGraceMarginSeconds));
 
     /// <inheritdoc />
     public async Task<IReadOnlyList<AgentHostClaimInfo>> GetClaimInventoryAsync(CancellationToken ct = default)

@@ -86,7 +86,11 @@ public interface ICoordinatorAssembly
 /// </summary>
 public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
 {
-    private const string AssemblyScribeSubtaskId = "assembly-scribe";
+    internal const string AssemblyScribeSubtaskId = "assembly-scribe";
+    internal const int DefaultFinalScribeMaxConcurrency = 2;
+    internal const int DefaultFinalScribeMaxAttempts = 3;
+    private const string FinalScribeMaxConcurrencyConfigurationKey = "Coordinator:FinalScribeMaxConcurrency";
+    private const string FinalScribeMaxAttemptsConfigurationKey = "Coordinator:FinalScribeMaxAttempts";
     private readonly IRunStore _runStore;
     private readonly RunStreamStore _streamStore;
     private readonly CoordinatorAssemblyStore _assemblyStore;
@@ -109,8 +113,11 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
     private readonly TimeSpan _reviewTimeout;
     private readonly TimeSpan _steeringWaitTimeout;
     private readonly TimeSpan _assemblyLeaseStaleTtl;
+    private readonly SemaphoreSlim _finalScribeConcurrency;
+    private readonly int _finalScribeMaxAttempts;
 
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> _active = new();
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> _finalScribeAdmissions = new();
 
     public CoordinatorAssemblyService(
         IRunStore runStore,
@@ -164,6 +171,14 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         // a normal integration-branch build so a live merge is never stolen mid-flight (default 120 s).
         var assemblyLeaseSecs = configuration?.GetValue("Coordinator:AssemblyLeaseStaleTtlSeconds", 120) ?? 120;
         _assemblyLeaseStaleTtl = TimeSpan.FromSeconds(Math.Max(10, assemblyLeaseSecs));
+        var finalScribeMaxConcurrency = configuration?.GetValue(
+            FinalScribeMaxConcurrencyConfigurationKey,
+            DefaultFinalScribeMaxConcurrency) ?? DefaultFinalScribeMaxConcurrency;
+        finalScribeMaxConcurrency = Math.Max(1, finalScribeMaxConcurrency);
+        _finalScribeConcurrency = new SemaphoreSlim(
+            finalScribeMaxConcurrency,
+            finalScribeMaxConcurrency);
+        _finalScribeMaxAttempts = GetFinalScribeMaxAttempts(configuration);
     }
 
     /// <summary>The integration branch name (D1) derived from the coordinator run id.</summary>
@@ -289,10 +304,22 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
             || !string.Equals(coordinatorRun.AgentName, "Coordinator", StringComparison.Ordinal))
             return;
 
+        var coordinatorRunId = coordinatorRun.Id.ToString();
+        if (!_finalScribeAdmissions.TryAdd(coordinatorRunId, 0))
+        {
+            _logger.LogDebug(
+                "Coordinator final scribe already admitted for run {RunId}; skipping",
+                coordinatorRun.Id);
+            return;
+        }
+
         _ = Task.Run(async () =>
         {
+            var entered = false;
             try
             {
+                await _finalScribeConcurrency.WaitAsync(_appStopping).ConfigureAwait(false);
+                entered = true;
                 await EnsureFinalScribeAsync(coordinatorRun, _appStopping).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (_appStopping.IsCancellationRequested)
@@ -304,7 +331,13 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
                     "Coordinator final scribe recovery failed for run {RunId}",
                     coordinatorRun.Id);
             }
-        }, _appStopping);
+            finally
+            {
+                if (entered)
+                    _finalScribeConcurrency.Release();
+                _finalScribeAdmissions.TryRemove(coordinatorRunId, out _);
+            }
+        });
     }
 
     /// <inheritdoc />
@@ -1595,6 +1628,9 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         if (existingCompleted is not null)
             return (existingCompleted, false);
 
+        if (!ShouldAttemptFinalScribe(existingChildren, _finalScribeMaxAttempts))
+            return (null, false);
+
         var scribeRun = new Run
         {
             Id = RunId.New(),
@@ -1615,6 +1651,31 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
 
         await _runStore.InsertAsync(scribeRun, ct).ConfigureAwait(false);
         return (scribeRun, true);
+    }
+
+    internal static int GetFinalScribeMaxAttempts(IConfiguration? configuration) =>
+        Math.Max(1, configuration?.GetValue(
+            FinalScribeMaxAttemptsConfigurationKey,
+            DefaultFinalScribeMaxAttempts) ?? DefaultFinalScribeMaxAttempts);
+
+    internal static bool ShouldAttemptFinalScribe(
+        IEnumerable<Run> existingChildren,
+        int maxAttempts)
+    {
+        var scribeAttempts = existingChildren.Where(r =>
+            string.Equals(r.SubtaskId, AssemblyScribeSubtaskId, StringComparison.Ordinal)
+            && string.Equals(r.AgentName, "Scribe", StringComparison.Ordinal));
+
+        var failedAttempts = 0;
+        foreach (var attempt in scribeAttempts)
+        {
+            if (attempt.Status is RunStatus.Completed or RunStatus.InProgress)
+                return false;
+            if (attempt.Status == RunStatus.Failed)
+                failedAttempts++;
+        }
+
+        return failedAttempts < Math.Max(1, maxAttempts);
     }
 
     private async Task<Run?> TryGetCoordinatorRunAsync(string coordinatorRunId, CancellationToken ct)

@@ -58,6 +58,7 @@ public sealed class CoordinatorRunService
     private readonly IAgentHostPodLifecycle? _podLifecycle;
     private readonly SandboxRuntimeOptions _sandboxRuntime;
     private readonly bool _autoDispatch;
+    private readonly int _finalScribeMaxAttempts;
     private readonly CancellationToken _appStopping;
 
     public CoordinatorRunService(
@@ -99,6 +100,7 @@ public sealed class CoordinatorRunService
         // confirm/decline lifecycle and the decompose+persist contract stay deterministic; the
         // dispatch-frontier logic is covered by a focused unit test instead.
         _autoDispatch = configuration.GetValue("Coordinator:AutoDispatch", true);
+        _finalScribeMaxAttempts = CoordinatorAssemblyService.GetFinalScribeMaxAttempts(configuration);
         _appStopping = lifetime.ApplicationStopping;
     }
 
@@ -987,6 +989,14 @@ public sealed class CoordinatorRunService
             {
                 if (run.ParentRunId is not null
                     || !string.Equals(run.AgentName, "Coordinator", StringComparison.Ordinal))
+                    continue;
+
+                var existingChildren = await _runStore
+                    .GetRunsByParentAsync(run.Id.ToString(), ct)
+                    .ConfigureAwait(false);
+                if (!CoordinatorAssemblyService.ShouldAttemptFinalScribe(
+                        existingChildren,
+                        _finalScribeMaxAttempts))
                     continue;
 
                 _assembly.EnsureFinalScribe(run);
