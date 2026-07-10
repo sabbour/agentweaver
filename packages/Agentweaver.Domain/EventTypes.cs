@@ -46,6 +46,16 @@ public static class EventTypes
     /// </summary>
     public const string ToolApprovalRequired = "tool.approval_required";
 
+    /// <summary>
+    /// Heartbeat emitted repeatedly while a run is blocked on a tool-approval gate awaiting an
+    /// operator decision. It keeps the pod's outbound A2A/SSE stream moving so the buffered
+    /// <see cref="ToolApprovalRequired"/> frame is delivered and durably persisted promptly, and
+    /// so the parent coordinator's subtask-stall timer is reset during the (human-paced) wait
+    /// instead of false-firing <c>agent_stall_timeout</c> (issue #212). Non-terminal and
+    /// idempotent; consumers that do not care may ignore it. Payload: { requestId, displayId?, toolName? }
+    /// </summary>
+    public const string ToolApprovalPending = "tool.approval_pending";
+
     public const string SandboxPreviewApplicability = "sandbox.preview_applicability";
     public const string SandboxPreviewPending = "sandbox.preview_pending";
     public const string SandboxPreviewStartRequested = "sandbox.preview_start_requested";

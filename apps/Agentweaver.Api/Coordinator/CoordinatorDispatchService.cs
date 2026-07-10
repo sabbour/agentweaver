@@ -1434,6 +1434,9 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
     {
         var lastSeq = 0;
         object? lastPartialOutput = null;
+        // Tracks the requestId of an unresolved tool-approval gate the child is blocked on, so the
+        // stall path can distinguish a legitimate human-paced approval wait from a true stall (#212).
+        string? pendingApprovalRequestId = null;
 
         while (!ct.IsCancellationRequested)
         {
@@ -1461,6 +1464,16 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
                     if (IsPartialOutputEvent(evt))
                         lastPartialOutput = evt.Payload;
 
+                    // Track approval-gate state so the stall path treats an unresolved gate as a
+                    // legitimate wait rather than agent_stall_timeout (#212). tool.approval_pending
+                    // heartbeats keep the flag set; ANY other real event (tool.result on grant,
+                    // tool.error on deny/expiry, tool.approval_resolved, agent output, terminal, …)
+                    // clears it so the guard self-heals and can never latch (#212 review finding 1).
+                    if (evt.Type == EventTypes.ToolApprovalRequired)
+                        pendingApprovalRequestId = ReadString(evt.Payload, "requestId");
+                    else if (evt.Type != EventTypes.ToolApprovalPending)
+                        pendingApprovalRequestId = null;
+
                     if (TryMapTerminalEvent(evt, out var outcome))
                     {
                         terminalOutcome = outcome;
@@ -1475,6 +1488,24 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
             {
                 if (await TryResolveFromStoreAsync(childRunId, ct).ConfigureAwait(false) is { } resolved)
                     return new ChildResult(subtaskId, childRunId, resolved);
+
+                // Defense-in-depth (#212): a child blocked on an unresolved tool-approval gate is a
+                // legitimate human-paced wait, not a stall. While the most recent observed
+                // interaction is an unresolved tool.approval_required (only tool.approval_pending
+                // heartbeats have followed), do NOT classify the child as agent_stall_timeout —
+                // reset the window and keep observing. Normal stall detection resumes as soon as ANY
+                // other real event arrives (grant, deny, expiry tool.error, terminal, …), so a truly
+                // hung pod after gate self-expiry is still caught. This also covers gate sites that
+                // do not emit heartbeats (e.g. the preview gate, which emits tool.approval_required).
+                if (pendingApprovalRequestId is not null)
+                {
+                    _logger.LogInformation(
+                        "Coordinator observation: child {ChildRunId} (subtask {SubtaskId}) stall TTL " +
+                        "({Timeout}) elapsed while tool approval {RequestId} is pending — treating as a " +
+                        "legitimate wait, not stalled",
+                        childRunId, subtaskId, _stallTimeout, pendingApprovalRequestId);
+                    continue;
+                }
 
                 // Stall TTL expired: child emitted no event within the configured window.
                 _logger.LogWarning(

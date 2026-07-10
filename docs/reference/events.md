@@ -28,6 +28,7 @@ Clients should order and deduplicate events by `sequence`.
 | `tool.result` | After an approved tool runs successfully | `callId`, `content` |
 | `tool.error` | After a tool is denied by the sandbox policy, or fails for any other reason such as a missing file or I/O failure | `callId`, `errorMessage` |
 | `tool.approval_required` | When a tool call is paused awaiting human approval | `request_id`, `tool_name`, `url` (optional), `intention` (optional) |
+| `tool.approval_pending` | Heartbeat re-emitted every ~20s while a tool call is blocked on a human-approval gate; keeps the run's stream flowing so the buffered `tool.approval_required` is delivered/persisted and the coordinator stall timer is reset. Non-terminal; consumers may ignore it | `requestId`, `displayId`, `toolName` |
 | `tool.auto_approved` | When the per-run auto-approve-tools option is ON and an allow-with-approval tool request is auto-granted at the gate instead of waiting for a human; audit-only (the tool then runs) | `requestId`, `toolName`, `url` (optional) |
 | `agent.question_asked` | When an agent calls `ask_question` to bubble a clarifying question or permission request; the run suspends inside the tool call until answered or timed out | `requestId`, `question` |
 | `agent.question_answered` | When a pending `ask_question` request is answered (or resolved by timeout) and the agent resumes | `requestId`, `answer`, `timedOut` |
@@ -219,6 +220,10 @@ innermost exception when different), `exceptionMessage`, `innerExceptionMessage`
 ### `tool.approval_required`
 
 Emitted when a tool call is paused waiting for human approval. `request_id` identifies the request and is used by `POST /api/runs/{id}/tool-approvals` and `POST /api/runs/{id}/tool-denials`. `tool_name` is the tool being called. `url` is the resource being accessed (for `web_fetch` and similar tools). `intention` is an optional human-readable description of what the agent intends to do. The run is paused until the human approves or denies; `tool.result` or `tool.error` follows once settled.
+
+### `tool.approval_pending`
+
+A lightweight **heartbeat** emitted repeatedly on the child run's stream while a tool call is blocked on a human-approval gate (issue #212). It fires every ~20 seconds (`ApprovalHeartbeatInterval`) from when the gate arms until it resolves, carrying the same `requestId` as the `tool.approval_required` card plus its short `displayId` and the `toolName`. Its purpose is operational, not a state change: it keeps the pod's outbound A2A/SSE stream flushing so the buffered `tool.approval_required` frame is delivered and durably persisted promptly, and it resets the parent coordinator's subtask-stall timer so a human-paced wait is not misclassified as `agent_stall_timeout`. The frame is non-terminal and idempotent — clients that already render the approval card may ignore it — and a prompt approval emits none. Emitted by both the pod runtime (`CopilotAIAgent`) and the in-API runner (`GitHubCopilotAgentRunner`). See the [Tool Approval SSE Contract](../tool-approval-sse-contract.md#tool-approval-pending-heartbeat-issue-212) for the full frame and the coordinator stall-guard behavior.
 
 ### `workflow.step`
 

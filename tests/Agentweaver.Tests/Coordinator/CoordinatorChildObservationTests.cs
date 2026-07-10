@@ -140,6 +140,83 @@ public sealed class CoordinatorChildObservationTests : IAsyncDisposable
     }
 
     // -----------------------------------------------------------------------
+    // #212: unresolved tool-approval gate is a legitimate wait, not a stall
+    // -----------------------------------------------------------------------
+
+    [Fact]
+    public async Task ObserveChild_UnresolvedToolApproval_PastStallTtl_NotClassifiedAsStalled()
+    {
+        var stream = new SqliteRunEventStream(_streamConfig);
+        var childRunId = await SeedChildRunAsync(RunStatus.InProgress);
+
+        // Child raises a tool-approval gate then goes silent (the operator is deciding). The gate
+        // is never resolved and the stream is never completed, so the child stays pending PAST the
+        // stall window. The coordinator must treat this as a human-paced wait, not agent_stall_timeout.
+        await stream.AppendAsync(childRunId, new RunEvent(0, EventTypes.ToolApprovalRequired,
+            new { requestId = "appr-212", toolName = "web_fetch", url = "https://example.com/data" }));
+
+        const string coord = "obs-approval-coord";
+        var (_, ids) = await SeedPlanAsync(coord, [(SubtaskStatus.Running, childRunId)]);
+        _streamStore.Create(coord, "owner");
+
+        // Extremely short stall TTL (≈60 ms) so many windows elapse within the test window; then
+        // cancel to end the (otherwise indefinite) approval wait.
+        var sut = BuildDispatch(stream, stallTimeoutMinutes: 0.001);
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+        try
+        {
+            await sut.RunDispatchLoopAsync(Context(coord), cts.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            // Expected: the guard keeps observing the pending approval until we cancel the loop.
+        }
+
+        var subtask = await GetSubtaskAsync(ids[0]);
+        subtask.Status.Should().Be(SubtaskStatus.Running,
+            "an unresolved tool-approval gate is a legitimate human-paced wait, not a stall (#212)");
+
+        var coordEvents = _streamStore.Get(coord)!.GetSnapshotSince(0).Events;
+        coordEvents.Should().Contain(e => e.Type == EventTypes.CoordinatorChildApprovalRequired,
+            "the child's tool.approval_required must be bubbled onto the coordinator stream");
+        coordEvents.Should().NotContain(e => e.Type == EventTypes.CoordinatorChildStallDetected,
+            "the coordinator must NOT emit a stall signal while a tool approval is pending (#212)");
+    }
+
+    [Fact]
+    public async Task ObserveChild_ApprovalGateExpiresThenSilence_IsClassifiedAsStalled_GuardDoesNotLatch()
+    {
+        var stream = new SqliteRunEventStream(_streamConfig);
+        var childRunId = await SeedChildRunAsync(RunStatus.InProgress);
+
+        // Child raises a tool-approval gate, then the gate SELF-EXPIRES (pod emits ONLY tool.error,
+        // never tool.approval_resolved), after which the pod genuinely hangs (no further events).
+        // The guard must clear on tool.error and NOT latch — so the ensuing silence past the stall
+        // TTL is correctly classified as agent_stall_timeout (#212 review finding 1: no permanent
+        // suppression).
+        await stream.AppendAsync(childRunId, new RunEvent(0, EventTypes.ToolApprovalRequired,
+            new { requestId = "appr-expire", toolName = "web_fetch", url = "https://example.com/data" }));
+        await stream.AppendAsync(childRunId, new RunEvent(0, EventTypes.ToolError,
+            new { requestId = "appr-expire", message = "URL fetch approval expired." }));
+
+        const string coord = "obs-approval-expire-coord";
+        var (_, ids) = await SeedPlanAsync(coord, [(SubtaskStatus.Running, childRunId)]);
+        _streamStore.Create(coord, "owner");
+
+        var sut = BuildDispatch(stream, stallTimeoutMinutes: 0.001);
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await sut.RunDispatchLoopAsync(Context(coord), cts.Token);
+
+        var subtask = await GetSubtaskAsync(ids[0]);
+        subtask.Status.Should().Be(SubtaskStatus.Failed,
+            "after gate self-expiry (tool.error) the guard clears, so a hung pod IS caught as stalled (#212)");
+
+        var coordEvents = _streamStore.Get(coord)!.GetSnapshotSince(0).Events;
+        coordEvents.Should().Contain(e => e.Type == EventTypes.CoordinatorChildStallDetected,
+            "silence after the gate expiry must produce a stall signal — the guard must not latch forever");
+    }
+
+    // -----------------------------------------------------------------------
     // US2-AC4: terminal event → subscription ends cleanly
     // -----------------------------------------------------------------------
 

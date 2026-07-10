@@ -43,6 +43,15 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
     private static readonly HashSet<string> SuppressedInternalTools =
         new(StringComparer.OrdinalIgnoreCase) { "report_intent", "report_outcome", "glob" };
 
+    /// <summary>
+    /// Cadence for the <see cref="EventTypes.ToolApprovalPending"/> heartbeat emitted while the
+    /// permission handler is blocked on a tool-approval gate. Kept well under the parent
+    /// coordinator's stall timeout (default 5 min) so each wait window is punctuated by an event
+    /// that keeps the outbound stream flowing and resets the stall timer (issue #212).
+    /// Settable so tests can shrink the cadence; production keeps the 20s default.
+    /// </summary>
+    internal TimeSpan ApprovalHeartbeatInterval { get; set; } = TimeSpan.FromSeconds(20);
+
     private readonly GitHubCopilotClientFactory _factory;
     private readonly IGitHubTokenScopeProvider _scopeProvider;
     private readonly ISandboxExecutor _executor;
@@ -565,6 +574,20 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
                 _logger.LogInformation(
                     "Tool HITL gate — waiting for operator approval: requestId={RequestId} url={Url} runId={RunId}",
                     displayId, rawUrl.Length > 80 ? rawUrl[..80] : rawUrl, runId);
+
+                // Heartbeat-punctuated wait — see CopilotAIAgent for the pod-per-run rationale
+                // (issue #212). Emits a lightweight tool.approval_pending frame every
+                // ApprovalHeartbeatInterval so the outbound stream keeps moving and the parent
+                // coordinator's stall timer is reset while the operator decides.
+                while (!approvalTask.Wait((int)ApprovalHeartbeatInterval.TotalMilliseconds))
+                {
+                    emit(EventTypes.ToolApprovalPending, new
+                    {
+                        requestId,
+                        displayId,
+                        toolName = "web_fetch",
+                    });
+                }
 
                 var approved = approvalTask.ConfigureAwait(false).GetAwaiter().GetResult();
 

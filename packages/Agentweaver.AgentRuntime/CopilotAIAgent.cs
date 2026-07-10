@@ -163,6 +163,15 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
     /// </summary>
     internal TimeSpan StreamIdleTimeout { get; set; } = ResolveStreamIdleTimeoutDefault();
 
+    /// <summary>
+    /// Cadence for the <see cref="EventTypes.ToolApprovalPending"/> heartbeat emitted while the
+    /// permission handler is blocked on a tool-approval gate. Must stay well under the parent
+    /// coordinator's <c>Coordinator:SubtaskStallTimeoutMinutes</c> (default 5 min) so each wait
+    /// window is punctuated by an event that keeps the outbound stream flowing and resets the
+    /// stall timer (issue #212).
+    /// </summary>
+    internal static readonly TimeSpan ApprovalHeartbeatInterval = TimeSpan.FromSeconds(20);
+
     private static TimeSpan ResolveStreamIdleTimeoutDefault()
     {
         var raw = Environment.GetEnvironmentVariable("AGENTWEAVER_AGENT_TURN_IDLE_TIMEOUT_SECONDS");
@@ -1122,6 +1131,22 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
                 _logger.LogInformation(
                     "Tool HITL gate — waiting for operator approval: requestId={RequestId} url={Url} runId={RunId}",
                     displayId, rawUrl.Length > 80 ? rawUrl[..80] : rawUrl, runId);
+
+                // Heartbeat-punctuated wait: block the SDK callback thread on the gate, but wake
+                // every ApprovalHeartbeatInterval to emit a lightweight tool.approval_pending frame.
+                // The bridge drains the run-event channel on a separate task, so each heartbeat is
+                // flushed over A2A/SSE immediately — keeping the pod's outbound stream moving while
+                // the operator decides so the buffered tool.approval_required is delivered + durably
+                // persisted promptly and the parent coordinator's stall timer is reset (issue #212).
+                while (!approvalTask.Wait((int)ApprovalHeartbeatInterval.TotalMilliseconds))
+                {
+                    emit(EventTypes.ToolApprovalPending, new
+                    {
+                        requestId,
+                        displayId,
+                        toolName = "web_fetch",
+                    });
+                }
 
                 var approved = approvalTask.ConfigureAwait(false).GetAwaiter().GetResult();
 
