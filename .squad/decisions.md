@@ -3981,6 +3981,1138 @@ Rationale: Keep only substantive unfinished OAuth SecretProviderClass work under
 
 **Source:** `.squad/decisions/inbox/link-api-image-git.md`
 
+## 2026-07-11T00:00:00Z: Release note — v0.9.19-rc1 → STAGING (image-efficient)
 
+**Source:** `.squad/decisions/inbox/link-release-v0919rc1.md`
 
+# Release note — v0.9.19-rc1 → STAGING (image-efficient)
 
+- **Author:** Link (Platform Engineer)
+- **Date:** 2026-07-11T00:00:00Z
+- **Requested by:** Ahmed Sabbour
+- **Environment:** AKS INT/Staging — ctx `agentweaver-aks-2`, ns `agentweaver`, ACR `agentweaverregistry`, RG `agentweaver-rg`
+- **Previous deployed:** v0.9.18-rc1 (commit abde9585)
+
+## HOLD status (per request)
+- **NOT pushed to origin** — local `main` is ahead of `origin/main` by **17** commits (16 prior + this release commit). All held for Ahmed's validation.
+- **No PRs merged. No issues closed. No `git push`. No tag pushed.** Annotated tag `v0.9.19-rc1` exists **locally only**.
+
+## Release gate (both green — deploy proceeded)
+- **Backend build:** `dotnet build apps/Agentweaver.Api/Agentweaver.Api.csproj -c Release --no-restore` → **succeeded, 0 warnings, 0 errors**.
+- **Backend tests:** `dotnet test ... --filter "Coordinator|Assembly|Steer|Worktree|IntegrationBranch" -c Release` → **537 passed / 0 failed / 0 skipped** (Total 537, ~3m06s).
+- **Frontend build:** `npm --prefix apps/web run build` → **succeeded** (vite prod build).
+- **Frontend FULL suite:** `npm --prefix apps/web test -- --run` → **71 files / 590 tests passed** (0 failed, ~145s). happy-dom `insertRule`/forced-colors stderr warnings are non-fatal (exit 0).
+
+## Local commit + tag (NOT pushed)
+- **Commit SHA:** `fdbe983250a881a67e0714d0b1e308d7ada7e246` (`fdbe9832`)
+- **Message summary:** dependency-base propagation fix (branch-validity inclusion replacing `run.Diff` sentinel; mandatory integration-branch contains-check; final-assembly inclusion fix) + UI fixes (RAI node no longer echoes decomposition JSON; coordinator activity rows coalesced). Includes `Co-authored-by: Copilot`.
+- **VERSION:** `0.9.18-rc1` → `0.9.19-rc1`
+- **Tag:** annotated `v0.9.19-rc1` (local only)
+
+## Images (IMAGE_TAG=v0.9.19-rc1)
+Rebuilt (source changed) via `az acr build`, in parallel:
+| Image | Action | Digest |
+|-------|--------|--------|
+| agentweaver-api | **rebuilt** (apps/Agentweaver.Api/** changed; worker uses same image) | `sha256:b2e99d3cd4c5915930ac072b89ad9cfb29d01d1f0ac1a96875f101b47c931c3c` |
+| agentweaver-frontend | **rebuilt** (apps/web/** changed) | `sha256:27e8a9f96170e51b850fdda5a46fbd8524ee87e4125cf3daf549f5bdb09e33aa` |
+
+Retagged server-side via `az acr import` from v0.9.18-rc1 (no rebuild — content byte-identical):
+| Image | Action | Digest |
+|-------|--------|--------|
+| agentweaver-mcp | retagged | `sha256:f1c63117a1fdec5c9b4c513770feb341a2b3aeddcf24f2c2e3ccb888ee4308a4` |
+| agentweaver-agent-host | retagged | `sha256:d5aa840bbdc948c243f217d64dffad2c46734332b06cf1f88e36432c2ff2d9b1` |
+
+> agent-host safe to retag: verified `packages/Agentweaver.AgentRuntime`, `packages/Agentweaver.AgentTools`, and `apps/Agentweaver.AgentHost` were **NOT** changed (working tree + HEAD diff).
+
+Note: the frontend `az acr build` initially crashed the local az **log stream** on the vite `✓` glyph (cp1252 `UnicodeEncodeError` — documented in 20-build-push-images.sh). Re-run through the UTF-8-safe interpreter (`python.exe -X utf8 -m azure.cli ... --output none`) succeeded (Run ID cc1c).
+
+## Deploy (`scripts/aks/30-deploy.sh`)
+Env: `IMAGE_TAG=v0.9.19-rc1 TENANT_ID=72f988bf-… IDENTITY_CLIENT_ID=bfd29d05-…` (KEYVAULT_NAME defaulted to agentweaver-kv). Line endings normalized (`sed -i 's/\r$//'`). All manifests applied; both gateways Programmed; all four rollouts reported success.
+
+## Rollout verification
+| Deployment | Image | Ready |
+|------------|-------|-------|
+| agentweaver-api | agentweaver-api:v0.9.19-rc1 | **2/2** |
+| agentweaver-frontend | agentweaver-frontend:v0.9.19-rc1 | **2/2** |
+| agentweaver-mcp | agentweaver-mcp:v0.9.19-rc1 | **1/1** |
+| agentweaver-worker | agentweaver-api:v0.9.19-rc1 (worker uses api image) | **1/1** |
+| agent-host SandboxTemplate | agentweaver-agent-host:v0.9.19-rc1 | template updated |
+| agent-host warm pool | 2 pods recycled onto v0.9.19-rc1 (bqn8f, m8cwh) | **2/2** |
+
+- **API serving:** `/api/health` → **200**, `/api/ping` → **200** (via ready pod); service endpoint bound.
+- **Warm pool refreshed:** old pods (v0.9.18-rc1 tag, byte-identical) deleted; controller refilled 2 pods on v0.9.19-rc1.
+
+## Caveat (pre-existing, not a code regression)
+Both api replicas **OOMKilled during startup** (JIT/warmup peak vs 4Gi limit) and the readiness/liveness probes (1s timeout) failed transiently before the app warmed. Both recovered to 1/1 and the deployment settled at **2/2 ready**. This is a startup memory/probe-tightness characteristic of the api pod (unrelated to the coordinator/UI changes in this release). Suggest a follow-up to raise the api memory request/limit headroom and/or relax probe timeouts.
+
+## Gateway / URLs
+- Frontend: https://agentweaver.6a4e90c828ad2500015a1010.westus2.staging.aksapp.io/
+- API: …/api/  · MCP: …/mcp/  · Gateway IP: 20.115.253.136
+
+---
+
+## 2026-07-11T00:00:00Z: Design: Fix-A(3a) — reliable terminal emission on in-place-revision (runtime/MAF)
+
+**Source:** `.squad/decisions/inbox/morpheus-fixa-inplace-terminal-design.md`
+
+# Design: Fix-A(3a) — reliable terminal emission on in-place-revision (runtime/MAF)
+
+**Author:** Morpheus (Runtime / MAF)
+**Date:** 2026-07-09T17:30:00-07:00
+**Status:** DESIGN passed rubber-duck (GO-WITH-CHANGES). **Path-1 IMPLEMENTED (§8).** **Path-2 IMPLEMENTED + READY-FOR-CODE-REVIEW (§9)** — combined tree with Tank's Fix-B, build clean, 759 tests green.
+**Requested by:** Ahmed (@sabbour)
+**Priority:** fast-follow (lower than Tank's Fix-B; must NOT block Fix-B ship)
+**Related:** Tank `tank-assembly-review-resilience-design.md` §3a (this is my half) + §3b (coordinator contract, Tank-owned); `.learnings/ERRORS.md` ERR-20260709-STEER1 (resolved v0.9.13-rc1, with the OPEN follow-up this design closes); **Reviewer Rejection Lockout Protocol** `.github/agents/squad.agent.md:788-809` (strict lockout — original author locked out on rejection, a DIFFERENT agent owns the revision); prior `morpheus-*` STEER1 work.
+**Scope (Morpheus-owned):** `packages/Agentweaver.AgentRuntime/Workflow/AgentTurnExecutor.cs`, `.../IWorktreeOperations.cs`, `AgentTurnOutput` record, `apps/Agentweaver.Api/Runs/RunWorkflowFactory.cs` (child graph), `apps/Agentweaver.Api/Runs/RunWatchLoopService.cs`, `apps/Agentweaver.Api/Runs/RunOrchestrator.cs` (revision + child-dispatch context assembly), `apps/Agentweaver.Api/Git/WorktreeManager.cs` (+ `WorktreeOperationsAdapter`). **Do NOT touch** `CoordinatorAssemblyService.cs` (Tank/3b) or the coordinator contract — I only expose/guarantee the runtime handoff Tank drives.
+
+---
+
+## 0. Two context-complete paths (framing)
+
+Per Ahmed's non-negotiable — **every** revision, whether same-agent or a lockout re-dispatch, MUST carry FULL context: the reviewer's change-requests, ALL accumulated prior-round feedback, and the prior subtask work/session/branch state ("the re-dispatch to fix should maintain the context and session details"). The Reviewer Rejection Lockout Protocol (`squad.agent.md:788-809`) means a **REJECTION** locks out the original author and hands the revision to a **DIFFERENT** agent — a conscious, visible dispatch. So Fix-A spans two paths, both context-complete:
+
+- **Path 1 — in-place same-agent revision** (non-rejection STEER/guidance/request-changes): resume the same child on the same worktree/branch/session and **reliably emit the terminal `child-assemble-ready` event even when `CommitChanges` degrades** (the core 3a task; §1–§2 FIX 1 + FIX 2).
+- **Path 2 — conscious dispatch to a DIFFERENT agent** (reviewer rejection / lockout; coordinator-owned by Tank): the new agent must **inherit the full context bundle** (feedback history + prior work/branch/session), NOT start blank. Runtime's job here is to make the handoff *carry* that bundle (§2.5); Tank owns *when/who* is dispatched and the bundle contract shape.
+
+Both paths ultimately re-submit the revised work to the gate and consume the same steering/revision budget (Tank 3b). Path 1's reliability reduces how often we fall to Path 2; Path 2 guarantees that when we do, no context is lost.
+
+---
+
+## 1. Problem & root cause (verified in code)
+
+**Goal (from Tank §3a + STEER1 follow-up):** raise the in-place-revision *clean-terminal* rate from ~1/3 toward the dominant path, so change-requests are applied **in-context** (same worktree/session) and re-submitted to the gate, converging within budget — instead of degrading to a conscious `dispatch_fresh` (context lost) 2/3 of the time.
+
+### 1.1 What actually happens today (traced through the code)
+
+`in_place_steer` resumes a subtask child via `RunOrchestrator.StartRevisionAsync` (`RunOrchestrator.cs:388`) — a **fresh** `RunStreamingAsync` with `isChild:true, IsRevision:true`, the **same** trimmed child graph and the **same** watch loop as a fresh dispatch. So the emission path is structurally identical to a fresh dispatch, with two revision-specific differences:
+
+1. **Child graph is trimmed with NO failure→terminal edge** (`RunWorkflowFactory.cs:759-772`):
+   `agentInputStorer → agentBinding → childAssembleReady`, `.WithOutputFrom(childAssembleReady)`. `childAssembleReady` (`:465-473`) is the **only** node that yields a terminal `WorkflowOutputEvent` (`AssembleReadyOutput`). There is no node/edge that can terminalize a post-turn *fault*.
+
+2. **`AgentTurnExecutor` post-turn (post-STEER1)** (`AgentTurnExecutor.cs:60-190`): after `agent.turn.end`, the only throwing op is `CommitChangesWithRetryAsync` (`:195-220`). On a **persistent** throw it emits a `failed` step and **rethrows** → MAF `ExecutorFailedEvent`. The ONLY thing that then produces a terminal is the backstop in `RunWatchLoopService.WatchAsync` `ExecutorFailedEvent` case (`:250-311`): for a child run it calls `FailRunSafeAsync("child_executor_failed:{id}")` → child run **Failed** → subtask **Failed** → Tank's `failedTargets` → conscious `dispatch_fresh` (**context lost**).
+
+### 1.2 The two coupled root causes of the 2/3 degrade
+
+- **R1 — the bounded commit retry never clears the actual blocker (the rate killer).**
+  `CommitChangesWithRetryAsync` retries 3× on a **time backoff only** (`:200-219`) — it re-runs the *same contended commit* without clearing what blocks it. The live failure signature (ERR-STEER1: a benign `tool.error 'kill needs PID'` immediately before `turn.end`, then the wedge) points at a **lingering worktree process** the turn spawned (e.g. a dev-server it started to self-test and failed to kill) and/or a **stale `.git/index.lock`** left behind. LibGit2 `WorktreeManager.CommitChanges` (`WorktreeManager.cs:226` — `new Repository()` + `Unstage` + `Stage` + `Commit`) then fails, and because the retry never removes the lock/reaps the process, **all three attempts fail the same way** → rethrow → `dispatch_fresh`. A fresh pod has no such lingering state, which is exactly why fresh dispatch terminates cleanly ~always and the *resumed revision* does not.
+
+- **R2 — no graph-native failure→terminal path (the structural gap the STEER1 follow-up named).**
+  Terminalization of a post-turn fault depends **entirely** on the watcher's `ExecutorFailedEvent` backstop. That backstop can only mark the child **Failed** (→ `dispatch_fresh`); there is **no** graph path that can terminalize a fault as **assemble_ready-on-the-same-worktree**, and any fault that is *not* surfaced as an `ExecutorFailedEvent` (or that races stream drain) still risks the fragile `watch_stream_completed_without_terminal_event` stream-end fallback.
+
+### 1.3 Ruled out (so we fix the right layer)
+- **No-op commit is NOT the failure.** `CommitChanges` returns `headTree.Sha` (a valid, non-empty SHA) when nothing staged (`WorktreeManager.cs:240-243`); it does **not** throw. So a legit no-op revision terminalizes `assemble_ready` (HasChanges=false) **cleanly** at the runtime layer. Whatever the coordinator then does with a no-change revision is **3b (Tank)**, not runtime.
+- **`CopilotAIAgent.StreamTurnOnceAsync` / `ResumeSessionAsync` are not the seam.** `RunTurnAsync(isRevision:true)` resumes the deterministic SDK session (`CopilotAIAgent.cs:389-395`, `:366-383`) and the turn **ends cleanly** (`agent.turn.end` observed live). The fault is strictly **post-turn** (the commit), so the fix belongs in the post-turn/graph layer, not the streaming loop.
+
+---
+
+## 2. Design — two complementary fixes + one invariant
+
+### FIX 1 (PRIMARY — the rate driver): context-preserving commit that clears the blocker
+
+Root-cause R1: make the post-turn commit retry **clear the clearable blocker between attempts**, so a lock/lingering-process contention (the live signature) actually **succeeds on retry** and the revision commits its edits and terminalizes `assemble_ready` on the **SAME worktree** (context preserved — no fresh pod).
+
+Concretely, in `AgentTurnExecutor.CommitChangesWithRetryAsync`, on a caught attempt (before the next try):
+1. **Reap the run's lingering child process group** — the turn is over, so best-effort signal the run's own spawned process group (reuse the existing group-signal seam already used by preview `StopProcessTree`/`SendUnixProcessGroupSignal`; exposed to the executor via a narrow injected reaper or an `IWorktreeOperations` sibling seam). This removes the `'kill needs PID'` leak that holds worktree/index state.
+2. **Remove a STALE `.git/index.lock`** — via a new narrow `IWorktreeOperations.TryClearStaleIndexLock(worktreePath)` (impl in `WorktreeManager`): delete `<gitdir>/index.lock` **only if** it exists AND is stale (mtime older than a short threshold, e.g. 2s) AND no live git process owns it. Scoped to the run's own worktree; single-writer per child run.
+3. Retry the commit.
+
+Classification stays **by bounded attempts** (the executor remains decoupled from LibGit2 types, per the existing comment at `:195-205`): we always *attempt* the clear+retry; a **genuinely persistent** failure (corrupt/missing repo) still surfaces after the final attempt → Fix 2's visible failure terminal (never a fake success).
+
+> This is the actual conversion of the 2/3: lock-contention commit faults become clean `assemble_ready` on the same worktree instead of `dispatch_fresh`.
+
+### FIX 2 (STRUCTURAL — the invariant): add the failure→terminal edge to the child graph
+
+Root-cause R2 + Tank's explicit ask ("add the failure→terminal edge … or equivalently guarantee terminal emission on the revision post-turn path"). Make a terminalized fault **graph-native** — a real MAF `WorkflowOutputEvent` from a dedicated child terminal — instead of a bare rethrow that relies on the watcher stream-abort backstop.
+
+1. **Discriminate the output.** Add a nullable `TerminalFailureReason` (+ short `TerminalFailureEvidence`) to `AgentTurnOutput` (default `null` = success). After Fix 1's clear+retry is exhausted, `AgentTurnExecutor` **RETURNS** an `AgentTurnOutput` with `TerminalFailureReason` set and the captured commit-exception summary — **instead of rethrowing**. (An in-turn agent/setup throw keeps today's rethrow → backstop; the handled, common post-turn commit fault becomes a typed return.)
+2. **Route it in the child graph** (`RunWorkflowFactory.cs:759-772`), using the conditional-edge API that already exists (`GraphDescriptorBuilder.AddEdge<T>(src, tgt, Func<T?,bool>)`, `:51`), mirroring how the full pipeline routes verdicts:
+   - `agentBinding → childAssembleReady` **WHEN** `o => o?.TerminalFailureReason is null` (happy path, existing behavior).
+   - `agentBinding → childTurnFailed` (**new** terminal node) **WHEN** `o => o?.TerminalFailureReason is not null`. `childTurnFailed` yields a terminal `ChildTurnFailedOutput(RunId, Reason, Evidence)` → `WorkflowOutputEvent`.
+3. **Map the terminal** in `RunWatchLoopService.HandleTerminalOutputAsync`: `ChildTurnFailedOutput` → child run **Failed(reason)** (VISIBLE, structured) → subtask Failed → Tank's `failedTargets` → conscious `dispatch_fresh` (**contract unchanged**). Keep the `ExecutorFailedEvent`→child-terminalize handler as **defense-in-depth** for unhandled throws (infra faults, in-turn throws), but the normal fault path is now typed & deterministic.
+
+**Honors the prior gate (no fake success):** a persistent fault is a **VISIBLE FAILURE** terminal — never a fabricated no-change `assemble_ready` that would silently drop the revision's edits. Fix 2 only makes that failure graph-native, typed, testable, and glitch-free. Fix 1 is what reduces how often we reach it.
+
+### FIX 3 / §2.5 (PATH 2 — lockout re-dispatch carries full context)
+
+Reviewer **rejection** → the coordinator (Tank) consciously dispatches the revision to a **DIFFERENT** agent (lockout; `squad.agent.md:788-809`). Runtime's obligation: the new child run must **inherit the full context bundle**, not start blank. Grounding in code (verified):
+
+- Same-agent revision today (`RunOrchestrator.StartRevisionAsync`, `:388-433`) already preserves context by (a) **reusing `run.WorktreePath` + `run.WorktreeBranch`** (prior commits/branch state — builds on top), (b) **reusing the same stream entry** (`_streamStore.Get` — full prior event history for replay), and (c) threading the accumulated feedback in via **`revisedTask`** → `BuildContextAsync(run with { Task = revisedTask })`.
+- A DIFFERENT-agent dispatch, however, currently routes through fresh child launch (`StartChildRunAsync`, `:207`) which creates a **new** worktree and, for children, `BuildContextAsync` returns the **lean** child prompt keyed on the *new* agent's charter (`:534-576`) — it does **not** re-attach the rejected artifact's branch, prior session events, or the round-by-round review feedback. That is the "starts blank" gap.
+
+**Runtime change (Path 2):** provide a context-complete child re-dispatch seam that Tank drives on lockout — a `StartChildRevisionHandoffAsync(newAgentRun, priorChild, feedbackBundle, ct)` (or an overload of `StartRevisionAsync` accepting a different `AgentName`/charter). It:
+1. **Reuses the prior child's worktree + branch** (`priorChild.WorktreePath` / `WorktreeBranch`) so the new agent builds on the locked-out author's committed work — the session/branch state is preserved, not recreated. (The lockout is about *authorship*, not *discarding the work-in-progress*.)
+2. **Carries the accumulated feedback bundle** — reviewer change-requests + ALL prior-round feedback — injected via the task/instruction path (`revisedTask` equivalent) so it reaches the new agent's turn, PLUS the prior stream entry retained for replay/history where the coordinator wants continuity.
+3. Runs the **trimmed child pipeline** with the SAME terminal-emission guarantees as Path 1 (FIX 2 invariant applies identically — the re-dispatched turn also emits exactly one `child-assemble-ready` or `child-turn-failed`).
+
+**Contract boundary (coordinate with Tank):** Tank owns *when* lockout triggers, *who* the new agent is (mechanical not-original-author enforcement, `squad.agent.md:788-809 #3`), and the **shape of the feedback bundle** (his §3b context-propagation root-cause audit). I own that the runtime handoff *accepts and applies* that bundle + the prior branch/session, and that the re-dispatched child terminalizes reliably. The bundle contract is a shared artifact — I will consume whatever structured feedback record Tank's audit standardizes (I do not invent a competing shape). **Open coordination item Q5 (below).**
+
+> Net: Path 1 (same agent, reliable terminal) and Path 2 (different agent, full-context handoff) are symmetric — both reuse branch+session and both honor the FIX 2 single-terminal invariant. Neither ever starts the revision blank.
+
+### The terminal-emission INVARIANT (the thing to get right; testable at the workflow layer)
+
+For **every** child/revision run, after `agent.turn.end` the workflow yields **exactly one** terminal `WorkflowOutputEvent`:
+
+| Case | Terminal | Context |
+|---|---|---|
+| Commit ok (incl. legit no-op → HEAD tree) | `AssembleReadyOutput` (assemble_ready) | preserved |
+| Fault cleared by Fix 1 clear+retry | `AssembleReadyOutput` (assemble_ready, same worktree) | **preserved** |
+| Persistent fault (clear+retry exhausted) | `ChildTurnFailedOutput` (visible failure + evidence) | dispatch_fresh (Tank) |
+| Unhandled in-turn/infra throw | `ExecutorFailedEvent` → watcher child-terminalize (backstop) | dispatch_fresh (Tank) |
+
+⇒ the child path can **never** reach `watch_stream_completed_without_terminal_event`.
+
+### VISIBILITY
+The captured commit-exception (type + message) rides in `ChildTurnFailedOutput.Evidence` **and** a visible run event, so the true persistent cause is finally observable (today only the downstream wedge is logged, not the LibGit2 throw).
+
+---
+
+## 3. Coordination with Tank (3b) — no contract change
+
+- Authoritative success remains the **subtask STATUS** (Tank's `DriveOutstandingSteeringExecutionAsync`). A `ChildTurnFailedOutput` marks the subtask **Failed** → Tank's `failedTargets` → conscious **visible** `dispatch_fresh`; both in-place retries and the fallback consume the **same** steering budget; on exhaustion → Fix-B human-review escalation.
+- **Reviewer-rejection lockout (Path 2) is Tank-owned:** Tank decides *when* a rejection triggers lockout, selects the DIFFERENT revision author (mechanical not-original-author check, `squad.agent.md:788-809`), and defines the **feedback-bundle shape** (his §3b context-propagation audit). I expose the runtime handoff seam (§2.5) that *accepts* that bundle + reuses the prior branch/session, and I guarantee the re-dispatched child terminalizes under the same FIX 2 invariant. I consume Tank's bundle contract — I do NOT define a competing one.
+- I only (a) raise the **in-context `assemble_ready` rate** (Fix 1, Path 1) and (b) make the failure/handoff terminals **deterministic & typed** (Fix 2, both paths) and (c) ensure Path 2's dispatch **carries context** (§2.5). I do **not** modify `CoordinatorAssemblyService.cs` or the contract. Fix-B remains independently sufficient to remove the hang; 3a is a rate + context-fidelity layer on top.
+
+---
+
+## 4. Files & functions (before → after)
+
+| File | Change |
+|---|---|
+| `packages/Agentweaver.AgentRuntime/Workflow/AgentTurnExecutor.cs` | Fix 1: `CommitChangesWithRetryAsync` reaps the run process group + `TryClearStaleIndexLock` between attempts. Fix 2: on exhausted persistent fault, **return** `AgentTurnOutput{ TerminalFailureReason, TerminalFailureEvidence }` instead of rethrow; capture the exception summary. |
+| `packages/Agentweaver.AgentRuntime/Workflow/IWorktreeOperations.cs` (+ `WorktreeOperationsAdapter.cs`, `apps/.../Git/WorktreeManager.cs`) | Fix 1: add narrow `bool TryClearStaleIndexLock(string worktreePath)` (+ optional process-group reap seam). Executor stays decoupled from LibGit2 types. |
+| `packages/Agentweaver.AgentRuntime/…/AgentTurnOutput` record | add `string? TerminalFailureReason = null`, `string? TerminalFailureEvidence = null` (nullable, default null — full-pipeline consumers unaffected). |
+| `apps/Agentweaver.Api/Runs/RunWorkflowFactory.cs` (child graph `759-772`) | Fix 2: new `childTurnFailed` terminal `ExecutorBinding` (`AgentTurnOutput → ChildTurnFailedOutput`); replace the single happy edge with two **conditional** edges keyed on `TerminalFailureReason`; `.WithOutputFrom` both terminals. |
+| `apps/Agentweaver.Api/Runs/RunWatchLoopService.cs` | Fix 2: `HandleTerminalOutputAsync` maps `ChildTurnFailedOutput` → Failed(reason) + visible event; keep `ExecutorFailedEvent` backstop. |
+| *(new)* `ChildTurnFailedOutput` record (Domain/runtime outputs, next to `AssembleReadyOutput`) | `(RunId, Reason, Evidence)`. |
+| `apps/Agentweaver.Api/Runs/RunOrchestrator.cs` | **Path 2 (§2.5):** add a context-complete child re-dispatch seam (`StartChildRevisionHandoffAsync` or a `StartRevisionAsync` overload accepting a different agent/charter) that reuses `priorChild.WorktreePath`/`WorktreeBranch` + retains the prior stream entry + injects the accumulated feedback bundle into the new agent's turn. No change to `StartChildRunAsync`'s fresh-launch path. |
+
+No schema change. No feature flag. Full-pipeline golden-descriptor parity preserved (child graph is the only topology touched). Path-2 seam is additive (new method) — existing dispatch unaffected; Tank calls it on lockout.
+
+---
+
+## 5. Risks & mitigations
+
+1. **Clearing `.git/index.lock` races a live git op** → only remove when **stale** (mtime threshold) AND no live owning process; scoped to the run's own worktree; single-writer per child run. If in doubt, don't remove (fall through to visible failure — no data loss).
+2. **Reaping the process group kills something the next turn needs** → the turn is already over (post-`turn.end`); reap only the run's **own** spawned group via the existing `StopProcessTree` group-signal semantics. Fresh dispatch already starts a clean pod.
+3. **`AgentTurnOutput` new field ripples to full-pipeline consumers** → nullable/default-null; full-pipeline predicates key on existing fields and are unchanged; add a golden-descriptor parity assertion.
+4. **Double-terminalization (graph `ChildTurnFailedOutput` AND watcher `ExecutorFailedEvent`)** → the handled fault now **returns** (no throw ⇒ no `ExecutorFailedEvent`); the backstop fires only for unhandled throws; the watcher is idempotent on terminal (first terminal wins, `return`).
+5. **Fix 1 masks a genuinely broken repo** → clear+retry is bounded; a persistent failure still surfaces as a **visible** `ChildTurnFailedOutput` with the captured exception — never a fake success. The prior gate's invariant is preserved.
+6. **Over-preserving context on a truly poisoned worktree** → if the same fault recurs across in-place attempts, Tank's budget + conscious `dispatch_fresh` still bound it; Fix 1 does not remove that safety net, it just makes the common recoverable case recover.
+7. **Path 2 handoff reuses a worktree the locked-out author left mid-edit** → the lockout is about *authorship*, not discarding work; reusing the branch/worktree is the intended context preservation. If Fix 1's post-turn clear didn't run (author's turn faulted hard), the new agent's own post-turn commit (with Fix 1's clear+reap) resolves any residual lock. Tank's not-original-author check is unaffected (runtime doesn't pick the agent).
+8. **Bundle-shape drift between Tank and me** → I consume Tank's standardized feedback record; if it isn't finalized when I implement, I gate Path 2 behind an agreed interface stub and land Path 1 (the core 3a) first (see Q3/Q5). Path 1 has zero dependency on the bundle shape.
+
+---
+
+## 6. Test plan
+
+**Unit — `tests/Agentweaver.Tests/Workflows/AgentTurnExecutorRevisionTerminalTests.cs` (extend):**
+1. *Lock-contention commit fails-then-succeeds after blocker cleared* → `assemble_ready` on same worktree; assert the **clear/reap hook was invoked** between attempts; assert **no** HEAD-tree fake-fallback (extends the existing transient-retry test).
+2. *Persistent commit fault (clear+retry exhausted)* → executor **RETURNS** `AgentTurnOutput{ TerminalFailureReason != null, TerminalFailureEvidence has the exception summary }` — **not** a throw, **not** a fake `assemble_ready`. (Replaces the current "rethrow" assertion; the visible terminal is now graph-native.)
+3. *Legit no-op commit (HEAD tree, nothing staged)* → `assemble_ready`, `HasChanges=false` (unchanged).
+
+**Workflow-level — new `tests/.../Workflows/ChildGraphTerminalEmissionTests.cs`:**
+4. Build the trimmed child graph; drive an agent turn whose post-turn commit faults persistently → assert exactly **one** terminal `WorkflowOutputEvent` of type `ChildTurnFailedOutput` (**never** stream-end-without-terminal).
+5. Success drive → exactly **one** `AssembleReadyOutput`. Asserts the invariant §2 directly.
+
+**Watch-loop — `RunWatchLoopChildExecutorFailureTests` / `RunWatchLoopTerminalOutputTests` (extend):**
+6. `ChildTurnFailedOutput` terminal → child run terminalized **Failed(reason)**, VISIBLE; assert **no** `watch_stream_completed_without_terminal_event`.
+7. Unhandled in-turn throw still hits the `ExecutorFailedEvent` backstop → child terminalized Failed (defense-in-depth intact).
+
+**Path 2 handoff — new `tests/.../Runs/RunOrchestratorChildRevisionHandoffTests.cs`:**
+8. `StartChildRevisionHandoffAsync` with a DIFFERENT agent → the `AgentTurnInput` carries the **prior child's `WorktreePath` + `WorktreeBranch`** (not a fresh worktree) and the new agent's charter/name; assert no new worktree is created.
+9. The accumulated feedback bundle (reviewer change-requests + prior-round feedback) is present in the composed task/instruction reaching the new agent's turn (assert the bundle text threads through, not dropped).
+10. The re-dispatched child honors the FIX 2 invariant → exactly one terminal (`AssembleReadyOutput` on success / `ChildTurnFailedOutput` on persistent fault) — same as Path 1.
+
+**Regression (must stay green):** existing STEER1 suite, fresh-dispatch `assemble_ready`, golden-descriptor parity for the full pipeline, InReview/approve/decline suites.
+
+**Live proof:** re-run the non-trivial app (`ed53860d`/`02e337e5` class). Expect: repeated rubberduck request-changes → in-place revisions **converge in-context** (`assemble_ready` on the same worktree) as the **dominant** share; `dispatch_fresh` only on genuine persistent faults; the child **never** wedges on `watch_stream_completed_without_terminal_event`; the in-context terminal rate is materially above the prior ~1/3.
+
+**Build/test gate (at implementation time):** `dotnet build Agentweaver.sln -c Release`; `dotnet test tests/Agentweaver.Tests/Agentweaver.Tests.csproj --filter "Assembly|Coordinator|Steer|Revision|Preview|WatchLoop|Terminal|Workflow" -c Release` (delete `%TEMP%\memory.db*` first). Green counts reported; no stubs.
+
+---
+
+## 7. Open questions for the gate
+1. **Fix-1 scope of the process reap** — reuse the preview `SendUnixProcessGroupSignal` seam directly, or add a dedicated `IProcessGroupReaper` injected into `AgentTurnExecutor`? (Proposed: a narrow injected reaper so the runtime executor stays testable and decoupled from the AgentHost preview code.)
+2. **`index.lock` staleness threshold** (proposed 2s) — constant or config? (Proposed: constant; it's a race-window guard, not a tuning knob.)
+3. **Fix 1 vs Fix 2 sequencing** — land both together (they share the tests), or Fix 1 first (immediate rate win) then Fix 2 (structural invariant) as a stacked change? (Proposed: together — Fix 2's typed terminal is what the Fix-1 persistent-fault test asserts against.)
+4. **Is the process-leak (`'kill needs PID'`) worth an independent fix** at the tool layer (why did the agent's kill tool have no PID)? (Proposed: out of scope here — flag to Ahmed as a separate tool-reliability item; Fix 1 makes preview/steer robust to it regardless.)
+5. **Path 2 feedback-bundle contract (with Tank):** what is the canonical shape of the accumulated feedback record the lockout re-dispatch carries (reviewer change-requests + all prior rounds)? I will *consume* Tank's §3b standardized record rather than define my own. Needs a shared interface before Path 2 implementation; Path 1 can land first (no dependency). Also: does Tank want the prior child's **stream entry** replayed to the new agent (full event history) or only the distilled feedback text? (Proposed: distilled feedback text into the turn + branch/worktree reuse for the actual work state; full replay only if Tank's contract asks for it.)
+
+---
+
+**READY-FOR-RUBBERDUCK.**
+
+---
+
+## 8. Implementation status — Path-1 LANDED (gate GO-WITH-CHANGES applied), Path-2 pending Tank DTO
+
+Rubber-duck greenlit implementation with 5 blocking changes; Path-1 (Fix 1 + Fix 2) is implemented per the mandated sequencing ("land Fix 1 + Fix 2 together for Path-1 first, tests green"). Path-2 (different-agent handoff) is deferred until the shared feedback DTO (#5) and new-session semantics (#1) are settled with Tank.
+
+### How each blocking change was addressed
+- **#1 (new SDK session on lockout handoff) — DEFERRED to Path-2.** Not on the Path-1 path. Recorded as a hard requirement for `StartChildRevisionHandoffAsync`: reuse prior branch/worktree state but mint a NEW SDK session/run identity (never resume `agentweaver-run-{priorRunId}`), prior stream preserved as coordinator-visible history / distilled prompt context only. Same-agent in-place `StartRevisionAsync` keeps resuming as-is.
+- **#2 (conservative stale-lock clear) — DONE.** `WorktreeManager.ClearStaleIndexLock` resolves the ACTUAL gitdir (handles linked-worktree `.git` pointer files; the per-worktree `index.lock` lives under the resolved gitdir), uses the existing `Coordinator:StaleLockThresholdSeconds` (default 15s, NOT a 2s hammer), refuses when a live `git` process is detected, and is best-effort (never throws; on uncertainty it does NOT delete → the persistent fault surfaces as `child-turn-failed`). Mirrors the age-check pattern (`TryDeleteStaleLock`), not the direct-delete anti-pattern.
+- **#3 (ownership-proven reap) — CORRECTLY SKIPPED.** `RunWorkflowRegistry.Abandon` only cancels the CTS; there is no run-owned PID/process-group tracking, so NO `IProcessGroupReaper` was added and NOTHING is killed by path/name. We rely on stale-lock handling + a visible failure, exactly as instructed. (Documented in `CommitChangesWithRetryAsync` xmldoc.)
+- **#4 (don't overstate the invariant) — DONE.** Narrowed: *handled* post-turn commit faults in the child pipeline yield exactly one terminal `WorkflowOutputEvent` via the graph-native `agent -> child-turn-failed` edge; *unhandled* throws (in-turn agent throw, infra) still terminalize via the watcher `ExecutorFailedEvent` backstop (`RunWatchLoopService` child-terminalize). New watch-loop test asserts the `ChildTurnFailedOutput` path completes the stream with a visible `run.failed` (reason `commit_failed_persistent`) — never `watch_stream_completed_without_terminal_event`. The existing `RunWatchLoopChildExecutorFailureTests` (in-turn throw) is unchanged, proving the backstop still covers unhandled throws.
+- **#5 (shared typed bundle) — BLOCKED ON TANK, signature below.** Path-2 does not read `SteeringDirective` rows or invent a shape; it will CONSUME Tank's named DTO/rendered-guidance string.
+
+### Non-blocking items
+- **Structured evidence — DONE.** `ChildTurnFailedOutput.Evidence` carries `exception={Type}: {message}` plus per-attempt `lock_present / cleared / age_s / live_git_proc / detail`. `TerminalFailureEvidence` threads from the executor.
+- **`StartChildRevisionHandoffAsync` preflight (WorktreeExists / dirty diff / lock presence / last tree; visible fallback) — DEFERRED to Path-2** (it's part of that seam).
+
+### Files changed (Path-1)
+- `packages/Agentweaver.AgentRuntime/Workflow/WorkflowMessages.cs` — `AgentTurnOutput` gains `TerminalFailureReason` + `TerminalFailureEvidence` (nullable, default null); new `ChildTurnFailedOutput(RunId, Reason, Evidence)` terminal record.
+- `packages/Agentweaver.AgentRuntime/Workflow/IWorktreeOperations.cs` — new `TryClearStaleIndexLock(worktreePath)` seam (no-op default) + `IndexLockClearResult` diagnostics record.
+- `packages/Agentweaver.AgentRuntime/Workflow/AgentTurnExecutor.cs` — ctor flag `emitTerminalFailureOutput`; `CommitChangesWithRetryAsync` clears the stale lock between attempts + collects diagnostics (FIX 1); on persistent fault, child pipeline RETURNS a typed terminal-failure output (FIX 2), full pipeline still rethrows.
+- `apps/Agentweaver.Api/Git/WorktreeManager.cs` — `ClearStaleIndexLock` + `ResolveGitDir` (linked-worktree aware) + `IsAnyGitProcessRunning`.
+- `apps/Agentweaver.Api/Runs/WorktreeOperationsAdapter.cs` — forwards `TryClearStaleIndexLock` to `WorktreeManager`.
+- `apps/Agentweaver.Api/Runs/RunWorkflowFactory.cs` — child executor built with `emitTerminalFailureOutput: isChild`; new `child-turn-failed` terminal binding; child graph now routes `agent` via two conditional `AddEdge<AgentTurnOutput>` edges (success→assemble-ready, TerminalFailureReason→child-turn-failed).
+- `apps/Agentweaver.Api/Runs/RunWatchLoopService.cs` — `HandleTerminalOutputAsync` maps `ChildTurnFailedOutput` → visible Failed(reason) + `run.failed` event, worktree preserved.
+- Tests: `AgentTurnExecutorRevisionTerminalTests` (clear-hook assertion + child-mode typed-failure test), `RunWatchLoopTerminalOutputTests` (new `ChildTurnFailed` terminal test), `CoordinatorWorkflowGraphDescriptorTests` + `RunWorkflowDefinitionBindingTests` (child graph now has the 2nd terminal + fan-out edges).
+
+### Validation
+- `dotnet build Agentweaver.sln -c Release`: **clean (0 warnings, 0 errors)** for the Path-1 change set. NOTE: the shared working tree currently also carries Tank's in-flight Fix-B (`CoordinatorAssemblyService.cs`), which does not yet compile (`CS0103 IsReviewerRejection / ExecuteLockoutRotationAsync`). To validate WITHOUT touching Tank's file, Path-1 was built+tested in an isolated `git worktree` at HEAD with ONLY my 11 files applied.
+- `dotnet test --filter "Assembly|Coordinator|Steer|Revision|Preview|WatchLoop|Terminal|Workflow" -c Release`: **745 passed / 0 failed / 12 skipped** (Postgres integration skipped locally).
+
+### §8 — Exact contract I need from Tank for Path-2 (#5)
+Please expose a NAMED public DTO (replacing the private anonymous `IReadOnlyList<object>` at `CoordinatorAssemblyService.cs:1996-2013`) OR a single rendered guidance string. Proposed shape I will consume verbatim:
+
+```csharp
+// Owned by Tank (Coordinator). I consume it read-only as the handoff input.
+public sealed record AccumulatedReviewFeedback(
+    string SubtaskId,
+    string CurrentChangeRequest,          // the latest reviewer rejection/change-request
+    IReadOnlyList<ReviewFeedbackRound> PriorRounds,  // all accumulated prior-round feedback, oldest->newest
+    string PriorWorktreeBranch,           // the locked-out author's branch (work to build on)
+    string? RenderedGuidance = null);     // optional pre-rendered prompt block; if set I inject it verbatim
+
+public sealed record ReviewFeedbackRound(int Round, string Reviewer, string Feedback, DateTimeOffset At);
+```
+
+Runtime seam I will add on my side once the DTO name is fixed:
+```csharp
+// RunOrchestrator (Morpheus). Reuses prior branch/worktree; mints a NEW SDK session for newAgentRun (lockout #1).
+public Task StartChildRevisionHandoffAsync(
+    Run newAgentRun,                 // the DIFFERENT (non-locked-out) agent Tank selected
+    Run priorChild,                  // prior author's child run (branch/worktree/session source)
+    AccumulatedReviewFeedback feedback,
+    CancellationToken ct);
+```
+
+Please confirm the DTO type name + namespace (or that you'll hand me a single `RenderedGuidance` string instead). I will not wire Path-2 until this is fixed. — Morpheus
+
+## 9. Path-2 IMPLEMENTED + READY-FOR-CODE-REVIEW (combined tree, Tank's Fix-B landed)
+
+Tank confirmed the DTO at **`packages/Agentweaver.Domain/AccumulatedReviewFeedback.cs`**, namespace **`Agentweaver.Domain`** (NOT Api — the reference graph is Api→AgentRuntime→Domain, so the seam compiles). Producer: `internal CoordinatorAssemblyService.BuildAccumulatedReviewFeedbackAsync(...)`. I consume the DTO read-only; I do NOT read `SteeringDirective` rows.
+
+### What Path-2 does (`RunOrchestrator.StartChildRevisionHandoffAsync(Run newAgentRun, Run priorChild, AccumulatedReviewFeedback feedback, CancellationToken ct)`)
+- **BLOCKING #1 (lockout correctness) — SATISFIED two ways:** the new agent runs under **`newAgentRun.Id`** (→ a distinct deterministic session id `agentweaver-run-{newAgentRun.Id}`) AND the `AgentTurnInput` is built with **`IsRevision:false`** → `CreateSessionAsync` (NOT `ResumeSessionAsync`). The new agent therefore never inherits the locked-out author's Copilot conversation/instructions/charter state. The same-agent in-place `StartRevisionAsync` still resumes as before.
+- **Prior work preserved:** if the prior child's worktree exists and is not held by a live git process / clearable stale lock, it is **REUSED** (`worktree_strategy=reused_prior`, commits stack on the prior branch). Otherwise a **VISIBLE fallback** branches a fresh worktree from `feedback.PriorWorktreeBranch` (`worktree_strategy=fresh_from_prior_branch`) so committed prior work is still inherited — never starts on a broken/locked worktree.
+- **Full context injected:** `feedback.RenderedGuidance` (all prior rejection rounds; falls back to `feedback.RenderForRevisionPrompt()`) is appended to the new agent's task. Child runs use `input.Task` (no separate agent-node prompt), so the guidance reaches the agent even with `IsRevision:false`.
+- **Preflight + visibility:** best-effort `ClearStaleIndexLock` on the prior worktree; a `coordinator.child_revision_handoff` stream event records prior-child id, subtask, branch, chosen worktree strategy, and lock diagnostics. A NEW stream is opened on the new run id (the locked-out author's stream is never reused).
+- **Terminal invariant unchanged:** the handoff launches the SAME trimmed child pipeline via `StartWorkflowOrFailAsync(isChild:true)`, so Path-1's graph-native failure→terminal edge still governs its terminal emission.
+
+### Files changed (Path-2)
+- `apps/Agentweaver.Api/Runs/RunOrchestrator.cs` — new public `StartChildRevisionHandoffAsync` (consumes `Agentweaver.Domain.AccumulatedReviewFeedback`).
+- `tests/Agentweaver.Tests/Coordinator/RunOrchestratorChildRevisionHandoffTests.cs` — new: reuse-prior-worktree + guidance-injection + new-run-identity test; missing-worktree → fresh-branch-from-prior-branch fallback test.
+- Did NOT touch `CoordinatorAssemblyService.cs` (Tank's producer consumed via the public method / DI).
+
+### Validation (COMBINED tree — Tank's Fix-B present and green)
+- `dotnet build Agentweaver.sln -c Release`: **clean (0 warnings, 0 errors)**.
+- `dotnet test tests/Agentweaver.Tests/Agentweaver.Tests.csproj --filter "Assembly|Coordinator|Steer|Revision|Preview|WatchLoop|Terminal|Workflow|Lockout" -c Release`: **759 passed / 0 failed / 12 skipped** (Postgres integration skipped locally).
+
+## 10. Code-review follow-ups
+
+### FIX-1 (Medium) — stale-lock clear must not be blocked by a host-global git process — DONE
+Root cause: `WorktreeManager.ClearStaleIndexLock` gated deletion behind a host-global `IsAnyGitProcessRunning()` (`Process.GetProcessesByName("git")`). On a busy coordinator (our own `git worktree add/prune` subprocesses + agents invoking git as a tool) a `git` process is almost always present → the clear returned `live_git_process_detected` and refused → the stale-lock clear never fired in exactly the concurrent scenario Fix-A #1 targets → commit-retry exhausted → the wedge returned.
+
+**Decision — option (b): drop the global process check; the AGE gate is the sole guard.** Cross-platform command-line scoping (option a) needs WMI/`Get-CimInstance Win32_Process` on Windows and `/proc` on Linux — no clean built-in .NET `Process.CommandLine`, so it's fragile. Our commits go through IN-PROCESS LibGit2Sharp (no git subprocess), so a lock older than the configurable `Coordinator:StaleLockThresholdSeconds` (default 15s) with no in-process git op is safe to clear. Removed `IsAnyGitProcessRunning`; `LiveGitProcessDetected` evidence field retained (always `false`) for contract stability. Documented in the method xmldoc.
+- Files: `apps/Agentweaver.Api/Git/WorktreeManager.cs` (removed the global check + method, updated xmldoc/inline rationale).
+- Tests: `StallCascadeAndLockRetryTests.ClearStaleIndexLock_ClearsStaleLock_WhenOnlyAgeGateApplies_NoFalseLiveProcessRefusal` (proves the clear FIRES on the age gate alone — would fail under the old guard on any host with a git process) + `..._RefusesFreshLock_WithinStaleThreshold` (age gate still refuses a fresh lock).
+- Combined validation: build clean; `--filter "Assembly|Coordinator|Steer|Revision|Preview|WatchLoop|Terminal|Workflow|Lockout"` → **761 passed / 0 failed / 12 skipped**.
+
+### FIX-2 — wire the handoff from Tank's lockout rotation — READY FOR TANK
+`StartChildRevisionHandoffAsync` is implemented, tested, and DI-reachable; it is not yet invoked in production. Injection point Tank needs from the assembly service (already have `RunOrchestrator` via DI):
+```csharp
+// RunOrchestrator (public; call from ExecuteLockoutRotationAsync instead of a plain fresh dispatch)
+public Task StartChildRevisionHandoffAsync(
+    Run newAgentRun,                 // the DIFFERENT (non-locked-out) agent's child run — allocated by the coordinator
+    Run priorChild,                  // the locked-out author's prior child run (worktree/branch source)
+    Agentweaver.Domain.AccumulatedReviewFeedback feedback, // Tank's producer output (BuildAccumulatedReviewFeedbackAsync)
+    CancellationToken ct);
+```
+Preconditions for Tank:
+- **Who allocates `newAgentRun`:** the coordinator, exactly as it allocates a fresh child today (new `RunId` ⇒ new deterministic SDK session `agentweaver-run-{newAgentRun.Id}` ⇒ lockout-correct). Do NOT pre-insert the run row — the method calls `InsertAsync` itself (mirrors `StartChildRunAsync`). Set `ParentRunId`, `SubtaskId`, `AgentName`, `RepositoryPath`, `OriginatingBranch`, `Task` (base subtask text); the method appends `feedback.RenderedGuidance`.
+- **Worktree safety is handled here:** reuses `priorChild`'s worktree when present + age-gate-clearable; otherwise VISIBLY falls back to a fresh worktree branched from `feedback.PriorWorktreeBranch` (records `coordinator.child_revision_handoff` with `worktree_strategy`). A different agent never inherits a poisoned/dirty/locked tree.
+- **`feedback.PriorWorktreeBranch`** must be `priorChild.WorktreeBranch ?? IntegrationBranchName(coordinatorRunId)` (Tank's producer already does this).
+- The launched run uses the SAME trimmed child pipeline (`isChild:true`), so Path-1's failure→terminal edge governs its terminal emission.
+
+---
+
+## 2026-07-11T00:00:00Z: Decision note — Deterministic preview: pod-local TCP forwarder for guaranteed pod-IP reachability
+
+**Source:** `.squad/decisions/inbox/morpheus-preview-forwarder.md`
+
+# Decision note — Deterministic preview: pod-local TCP forwarder for guaranteed pod-IP reachability
+
+**Author:** Morpheus (Runtime)  •  **Requested by:** Ahmed (@sabbour)  •  **Spec:** spec-006 preview-forwarder
+**Status:** implemented, build + preview/sandbox tests green (362 passed / 0 failed)
+
+## Problem (live run d6f9b040)
+The deterministic `PreviewStep` injected `HOST=0.0.0.0 PORT=3000` (a HARDCODED default port). The AgentHost
+`PreviewRunner` discovered the bound port and health-checked `http://127.0.0.1:{port}` (LOOPBACK), but the
+Gateway registration probe (`SandboxPreviewService.IsPreviewTargetReachableAsync`) TCP-connects to
+`pod.Status.PodIP:{port}` (ROUTABLE). A loopback-only app therefore PASSED observe but FAILED registration:
+`registration_failed` → "Nothing is listening on sandbox pod {pod} port 3000". No reachable URL was ever produced.
+
+## Decision
+Guarantee pod-IP reachability at the platform layer with a **pod-local TCP forwarder**, and stop pinning the
+app's port entirely. Reachability no longer depends on how the app binds (loopback OR all-interfaces) or which
+port it chose.
+
+## Implementation
+- **A. Forwarder (`apps/Agentweaver.AgentHost/TcpPortForwarder.cs`, new):** `TcpListener` on `0.0.0.0:0` — the OS
+  assigns a FREE public port, always distinct from the app port (the app already holds `127.0.0.1:appPort`, so the
+  OS won't hand it back). Accept loop bidirectionally pumps each connection to `127.0.0.1:appPort`. Defensive
+  concurrency cap (256), full cancellation, no socket/thread leaks, non-blocking shutdown via `IAsyncDisposable`.
+- **Lifecycle (`PreviewRunner.cs`):** one forwarder per session, started idempotently inside
+  `ObserveBoundPortAsync` once a healthy app port is found (`PreviewProcessState.EnsureForwarder`). Torn down in
+  `StopPreviewProcessAsync` (→ reaper idle/max-lifetime/exited paths, `StopAsync` shutdown) and best-effort in
+  `PreviewProcessState.Dispose`.
+- **B. Register the public port:** `PreviewPortObservation` gained `AppPort` + `Reason`; `ObserveBoundPortAsync`
+  now returns `Port = publicPort` (what the Gateway registers) with the app's loopback port in `AppPort`/evidence.
+  Threaded through the AgentHost `observe-bound-port` endpoint (`app_port`, `reason` fields) →
+  `PreviewRunnerHttpClient.ObserveResponse` / `PreviewRunnerPortResult` → `PreviewStep`, which already registers
+  `port.Port`. Single-terminal-emission contract preserved.
+- **C. No hardcoded 3000 (`PreviewCommandResolver.cs`):** removed `DefaultPort=3000` and all `PORT=`/`--port`/`-p`
+  injection and the `port` parameter. The app keeps its framework default; ASP.NET uses `:0` (OS-assigned, Kestrel
+  logs the real port). All-interface HINTS (`--host 0.0.0.0`, `-H 0.0.0.0`, `HOST=0.0.0.0`, `ASPNETCORE_URLS`) kept
+  (harmless; forwarder is the real guarantee). A busy 3000 can never break preview.
+- **D. Observe/register consistency:** `ObserveBoundPortAsync` health-checks THROUGH the forwarder public port
+  before returning success. A public-port health miss returns `Healthy=false` with the distinct reason
+  `bound_unreachable` (never silent/empty); `PreviewStep` emits `preview_failed(bound_unreachable)`.
+- **E. Removed the agent/user port burden:** `AgentBasePrompt.cs`, `agentweaver.agent.md`, and
+  `CharterCompiler.cs` now tell the model NOT to pick/hardcode a host/port — honor the framework default /
+  `process.env.PORT`; the platform discovers the port and guarantees reachability.
+
+## Which port is registered / how threaded
+The forwarder's **public port** (pod-IP reachable) is registered with the Gateway. Thread:
+`PreviewRunner.ObserveBoundPortAsync` → AgentHost `observe-bound-port` (`port`=public, `app_port`, `reason`) →
+`PreviewRunnerHttpClient` → `PreviewStep` gate + `SandboxEndpoints.TryRegisterPreviewAsync(port.Port, …)`.
+`appPort` stays in evidence/logs only.
+
+## Tests
+- `TcpPortForwarderTests` (new): loopback-only echo app reachable through the public port (public ≠ app port);
+  truly-unreachable app → connection closed (no fake success, no hang).
+- `PreviewRunnerHttpClientTests`: observe parses `app_port` + `reason` (`bound_unreachable`).
+- `PreviewStepTests`: `bound_unreachable` maps to a distinct single terminal `preview_failed`.
+- `PreviewCommandResolverTests`: assert NO hardcoded port (`PORT=3000`/`--port 3000`/`-p 3000`/`:3000`) while host
+  hints remain.
+- `dotnet build Agentweaver.sln -c Release` clean; `dotnet test … --filter "Preview|Sandbox|StartPreview|PreviewRunner|PreviewStep|PreviewCommand"` → 362 passed, 0 failed.
+
+## Post-gate revision (NO-GO → fixed)
+- **BLOCKER #1 — public port MUST be in-range [3000,9000].** The forwarder previously bound
+  `TcpListener(IPAddress.Any, 0)` → an OS-ephemeral port (~32768+), which the Gateway rejects
+  (`SandboxPreviewOptions.AllowedPortMin/Max`) and the sandbox NetworkPolicy black-holes
+  (`k8s/networkpolicy-sandbox.yaml` ingress `port 3000 endPort 9000`) → registration would still fail
+  live. Fixed: `TcpPortForwarder` now SCANS `[rangeMin,rangeMax]` (random start offset for concurrency
+  spread, skips the app port, retries on `AddressInUse`) and binds a free in-range port; exhaustion
+  throws `NoPublicPortAvailableException` → distinct `preview_failed(no_public_port_available)`. New
+  config `PreviewRunnerOptions.PublicPortRangeMin/Max` (default 3000/9000) with a comment that it
+  MIRRORS `SandboxPreviewOptions.AllowedPortMin/Max` + `networkpolicy-sandbox.yaml` (keep the three in
+  lockstep). Up to 3 concurrent previews/run each get a distinct in-range port via the scan.
+- **SHOULD-FIX #2 — accept loop no longer dies on transient SocketException.** `AcceptLoopAsync` now
+  breaks ONLY on cancellation / `ObjectDisposedException`; other `SocketException`s (e.g. ECONNABORTED
+  on a client RST between SYN and accept) are logged at debug and the loop `continue`s.
+- **SHOULD-FIX #3 — DisposeAsync drains in-flight pumps.** Pump tasks are tracked in a
+  `ConcurrentDictionary`; `DisposeAsync` awaits `Task.WhenAll(outstanding).WaitAsync(5s)` BEFORE
+  disposing `_connLimit`/`_cts`; the pump `finally` also swallows `ObjectDisposedException` on
+  `_connLimit.Release()` as a belt-and-suspenders.
+- **SHOULD-FIX #4 — no process/forwarder leak on failed PreviewStep paths.** After a successful
+  `StartProcessAsync`, EVERY post-start terminal FAILURE (observe unauthorized/error, unhealthy /
+  bound_unreachable / no_public_port_available, approval denied/timeout, registration failed/
+  port_not_allowed) now best-effort calls `_httpClient.StopProcessAsync` (which disposes the
+  forwarder). Only a SUCCESSFUL registration keeps them alive. Single-terminal-emission contract
+  unchanged. Reachability (`!Healthy`) is now checked BEFORE the port-range check so the distinct
+  reason wins.
+- **SHOULD-FIX #5 — half-close-aware pump (no truncated responses).** Each direction copies then
+  `Socket.Shutdown(Send)` on its destination so the peer sees a clean EOF and can flush trailing bytes
+  (full HTML body); after `WhenAny`, the opposite direction gets a bounded 5s drain grace before
+  teardown.
+
+Tests added/updated: `TcpPortForwarderTests` — PublicPort ∈ [3000,9000] and ≠ appPort; range-exhaustion
+throws `NoPublicPortAvailableException`; loopback-only app reachable via public port; dead app → closed.
+`PreviewStepTests` — `no_public_port_available` distinct reason + process stopped; post-start failure
+stops process while success does not. Build clean; filter `Preview|Sandbox|StartPreview|PreviewRunner|
+PreviewStep|PreviewCommand|TcpPortForwarder` → 365 passed / 0 failed.
+
+## Residual risk (post-revision)
+- Range scan is O(range) worst case (6001 ports) only when the range is heavily saturated; typical bind
+  is O(1). Concurrency is bounded to 3 previews/run so contention is minimal.
+- Forwarder connects to `127.0.0.1:appPort` (loopback) which observe already proved healthy; an app
+  binding a non-loopback-only interface is covered by the `--host 0.0.0.0` hints.
+- L4 pass-through: no Host-header rewrite; HTTP/1.1 + WS upgrade pass unchanged.
+
+---
+
+## 2026-07-11T00:00:00Z: Design: Resilient assembly-review loop — follow-through on change requests + escalate-to-human instead of terminal `assembly_blocked`
+
+**Source:** `.squad/decisions/inbox/tank-assembly-review-resilience-design.md`
+
+# Design: Resilient assembly-review loop — follow-through on change requests + escalate-to-human instead of terminal `assembly_blocked`
+
+**Author:** Tank (Backend / Coordinator)
+**Date:** 2026-07-09T17:16:00-07:00
+**Status:** §1–§11 IMPLEMENTED (escalation state-machine + 5 hardening changes + Req-1 context-propagation fix + Req-2 Strict Lockout rotation + rubber-duck RE-GATE's 6 additional changes) — build clean, targeted tests green (**653 passed / 0 failed / 6 skipped**). Ready for code-review. See §11 for the implemented lockout+context wave.
+**Requested by:** Ahmed (@sabbour)
+**Related:** `.learnings/ERRORS.md` ERR-20260709-STEER1 (resolved v0.9.13-rc1, with an explicit *follow-up*), prior `tank-unified-steering-design.md`, `coordinator-unified-steering-directive.md`
+
+---
+
+## 1. Problem & root cause (verified against current code)
+
+Live-preview works end-to-end (v0.9.16-rc1). The **assembly-review loop is not resilient**. On a non-trivial app the internal rubberduck gate requested changes repeatedly, the autonomous steering budget exhausted, and the run **latched terminal `WorkPlanStatus.AssemblyBlocked` and hung** — preview never ran, and **no human could intervene**.
+
+- Live repro: run `ed53860d-1f8e-4130-b3f2-6344fb160b25` (project `9d7569e0…`) → `assembling → assembly_blocked` in ~6s. Earlier: `02e337e5`, `ed53860d`.
+
+Two coupled root causes, both confirmed in code:
+
+### 1a. Budget-exhausted dead-ends at a terminal instead of escalating (Fix-B, the headline)
+`CoordinatorAssemblyService.RouteAssemblyGateThroughSteeringAsync` (`CoordinatorAssemblyService.cs:1735`), **`Proceed` branch `~1809-1830`**:
+
+```csharp
+if (direction == SteeringDirection.Proceed)
+{
+    const string reason = "steering_budget_exhausted";
+    await CleanupAssemblyBuildTestResourcesAsync(...);
+    await _assemblyStore.SetTerminalStatusAsync(workPlanId, WorkPlanStatus.AssemblyBlocked, reason, ct);
+    Emit(..., CoordinatorAssemblyBlocked, new { reason, retryable = true });
+    await decider.MarkDirectiveAppliedAsync(view.Id, ct);
+    return true;
+}
+```
+
+The decider itself *says* the intent is human review — `CoordinatorSteeringDecider.BuildRationale` (`:571-585`): `Proceed => "budget/blocking — escalate to human review / terminal"` — but the code writes a **terminal** status. `WorkPlanStatus.AssemblyBlocked` is only recoverable by the reconciler if `CanRecoverBlockedAssemblyOnEligibility(reason)` is true; `steering_budget_exhausted` is **not eligibility-recoverable**, so `WaitForBlockedAssemblySteeringAsync` parks the run waiting for an *external* steer that autopilot never sends → hang. This violates Ahmed's standing directives ("all steering goes to the coordinator, which chooses how to direct subtasks"; "missing preview shouldn't block human review").
+
+### 1b. In-place revision can fail to emit the terminal subtask event the watcher recognizes (Fix-A, follow-through)
+ERR-STEER1 root cause (Morpheus, confirmed in code): the coordinator **child** pipeline is a **trimmed graph** `agent → child-assemble-ready` with **no failure→terminal edge** (`RunWorkflowFactory.cs:761-767`). `in_place_steer` resumes via `RunOrchestrator.StartRevisionAsync` (a fresh `RunStreamingAsync`, `isChild:true, IsRevision:true`). Post-turn `AgentTurnExecutor.CommitChanges` is the only throwing op; on throw the old code rethrew → MAF `ExecutorFailedEvent`, which `RunWatchLoopService.WatchAsync` records as a step but does **not** terminate on → stream ends → `FailRunSafeAsync("watch_stream_completed_without_terminal_event")` → subtask `failed` → ineligible → assembly wedged.
+
+ERR-STEER1 was **resolved in v0.9.13-rc1** (AgentTurnExecutor transient-commit retry + visible rethrow; `RunWatchLoopService` child `ExecutorFailedEvent` terminalization; coordinator conscious-visible `dispatch_fresh` on in-place-no-terminal). **But the logged follow-up is the open gap for this task:**
+
+> in-place revision produced a clean terminal only **1/3** times; the other 2 fell back to conscious `dispatch_fresh` (`in_place_revision_no_terminal`). Context-preservation works but is not yet the dominant path. Deeper in-place *resume* seam remains.
+
+So today the loop *progresses* (no wedge from STEER1), but change-request **follow-through relies on losing context 2/3 of the time**, which burns the steering budget faster → hits 1a sooner. Fix-A raises in-place terminal reliability so the budget is spent converging, not thrashing.
+
+---
+
+## 2. Fix-B — escalate budget-exhausted → human review gate (state-machine change)
+
+**Principle:** budget bounds *autonomous* convergence, not the run. When autonomy can't converge, hand the SAME assembled changes to the SAME human-review gate the normal happy path uses — the human then approves / declines / steers. Never a terminal dead-end.
+
+### 2.1 New state transition
+Replace the `Proceed` branch terminal write with an **escalation to the human-review gate**, reusing the existing D5 machinery verbatim (so recovery, StageId semantics, and the approve path all keep working):
+
+| Before | After |
+|---|---|
+| `SetTerminalStatusAsync(AssemblyBlocked, "steering_budget_exhausted")` | `SetStatusAndStageAsync(InReview, <human-review StageId>)` |
+| `Emit(CoordinatorAssemblyBlocked{retryable=true})` | `Emit(CoordinatorSteeringDecision{decision="proceed", rationale, escalation="human_review"})` **then** the standard `CoordinatorAssemblyReviewRequested{gateKind="human-review", reason="steering_budget_exhausted"}` |
+| run hangs awaiting external steer | `UpsertReviewRequestAsync(...)` + `AwaitReviewDecisionAsync(...)` → `ApplyReviewDecisionAsync(...)` (human approve/decline/steer) |
+
+Concretely: the `Proceed` branch calls a new private `EscalateToHumanReviewAsync(context, workPlanId, edges, aggregateTreeHash, touchedFilesBySubtask, reason, ct)` that mirrors the existing `gate.GateKind == "human-review"` block (`CoordinatorAssemblyService.cs:906-950`):
+
+1. Resolve the human-review gate node from `ResolveAssemblyGatesAsync(workPlanId)` to reuse its **`StageId` (canonical `"review"`)** and `GraphNodeId` — keeps the graph/topology consistent, does **not** invent a new stage.
+2. `SetStatusAndStageAsync(workPlanId, InReview, humanGate.StageId)`; `EmitGraphAsync`.
+3. Emit `CoordinatorAssemblyReviewRequested{ gateKind="human-review", reason="steering_budget_exhausted", treeHash, integrationBranch, includedSubtaskIds }` so the UI opens the review card (with the exhaustion reason visible — no glitch).
+4. `CoordinatorAssemblyReviewPersistence.UpsertReviewRequestAsync(...)` — durable so a crash mid-await recovers via the existing `planStatus == InReview → ResumeInReviewAsync` path (`:532`, `:987`). No new recovery code.
+5. `AwaitReviewDecisionAsync(...)` → `ApplyReviewDecisionAsync(...)`.
+6. `MarkDirectiveAppliedAsync(view.Id)` (the autonomous directive is settled; the human now owns the loop). `return true`.
+
+### 2.2 What approve / decline / steer then do
+- **Approve** → existing `ApplyReviewDecisionAsync`/`ApplyAuthoredGateDecisionAsync(Approved)` (`:1119`): clear review record, `SetStatusAndStage(Assembling)`, fall through to `CompleteAfterApprovalAsync` → **one merge → scribe → complete**. Preview/complete now reached. ✔
+- **Decline** → existing `assembly_declined` terminal (`:1146`). A conscious human decision, not a glitch. ✔
+- **Request-changes / steer** → routes through `RouteAssemblyGateThroughSteeringAsync` with `source = human-review` (already unified, `:1133`). **Key addition:** a human steer is a *fresh mandate* — it must **reset the autonomous steering budget** so the coordinator can converge again under human guidance. See §2.3.
+
+### 2.3 Budget reset on human intervention (prevents immediate re-exhaustion)
+`WorkPlan.SteeringIterations` and `Subtask.RecoveryAttempts` bound *autonomous* iteration (`CoordinatorSteeringDecider.DecideAsync` CAS, `:190-215`). When a **human** submits request-changes/steer after escalation, the coordinator resets those counters (guarded CAS, same transaction that relays the human directive) — the human is now in the loop, so autonomy gets a fresh budget window to act on the human's specific feedback. Without this, the human's very first steer would re-hit `Proceed` and bounce straight back to review (a livelock between review and steering).
+
+- New: `CoordinatorSteeringDecider.ResetSteeringBudgetAsync(workPlanId, subtaskIds, ct)` — optimistic-concurrency CAS zeroing `SteeringIterations` (+ target `RecoveryAttempts`), called **only** for `source == human-review` request-changes, before `DecideAsync`. Emitted as part of the visible `steering_received`/`steering_decision` so the reset is auditable.
+- Loop-prevention preserved: the reset is gated to *human-sourced* directives; autonomous gates can never reset their own budget (that would reintroduce the infinite loop the budget exists to stop). A configurable **max human-review round-trips** (default 3) backstops a human who keeps rejecting without converging → after N, the gate stays open (awaiting human) but autonomy stops re-steering — never terminal, never looping.
+
+### 2.4 Why not just make `AssemblyBlocked` recoverable?
+Because `AssemblyBlocked` semantics = "the *plan* can't proceed, wait for external input"; overloading it for "autonomy exhausted, ask the human" conflates two states and keeps the run in a status the reconciler treats as a passive park. `InReview` is the **existing** state whose entire machinery (gate arm, deferred-decision poll, crash recovery, gate preservation on failure) is built for exactly "a human must decide now." Reusing it is the root-cause fix; adding recovery to `AssemblyBlocked` is symptom-plastering.
+
+---
+
+## 3. Fix-A — reliable terminal emission on in-place revision (follow-through)
+
+Goal: raise the in-place-steer clean-terminal rate from ~1/3 toward the dominant path, so change-requests are applied **in-context** and re-submitted to the gate, converging within budget. Two layers:
+
+### 3a. Runtime/MAF (Morpheus-owned) — the structural root cause
+The trimmed child graph `agent → child-assemble-ready` (`RunWorkflowFactory.cs:761-767`) needs a **failure→terminal edge** so a post-turn fault still yields a terminal `WorkflowOutputEvent` (mirroring the fresh-dispatch graph). Equivalently: the revision path must **emit the same terminal subtask event (`child-assemble-ready`) a fresh dispatch emits** after `agent.turn.end`, even when `CommitChanges` degrades (e.g. no-op commit → HEAD tree). This is the "deeper in-place resume seam" the STEER1 follow-up names. **Owner: Morpheus** (I will pair; `RunOrchestrator.StartRevisionAsync`, `RunWorkflowFactory`, `RunWatchLoopService`, `CopilotAIAgent.StreamTurnOnceAsync`). Tank does not modify these.
+
+### 3b. Coordinator contract (Tank-owned) — the guarantee regardless of 3a
+The coordinator must never depend on 3a being perfect. Contract, already partially in place from STEER1, hardened here:
+
+1. **Authoritative success = target subtask STATUS, not the effect marker** (already shipped: `DriveOutstandingSteeringExecutionAsync` advances `applied` only when every target is `assemble_ready`/`completed` **AND** every per-child effect marker is confirmed).
+2. **Non-clean terminal ⇒ CONSCIOUS visible `dispatch_fresh`** (already shipped: `failedTargets → ConsciousDispatchFreshFallbackAsync`, emits `in_place_revision_failed_terminal` + `dispatch_fresh`). This is what keeps the loop progressing today (the 2/3 fallback).
+3. **New (this design):** the conscious `dispatch_fresh` fallback and the in-place retries both **consume the same steering budget**, and on budget exhaustion route to §2's human-review escalation — so "in-place kept failing → fell back to fresh → still failing" ends at the human, never at a terminal.
+
+Net: Fix-A (3a) makes the *common* case converge in-context; Fix-B guarantees the *tail* (still can't converge) reaches a human. Both visible, both bounded.
+
+---
+
+## 4. Files & functions to change (before / after)
+
+| File | Function | Before | After |
+|---|---|---|---|
+| `apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyService.cs` | `RouteAssemblyGateThroughSteeringAsync` `Proceed` branch (`~1809-1830`) | terminal `AssemblyBlocked` + `CoordinatorAssemblyBlocked` | call new `EscalateToHumanReviewAsync(...)`; emit `steering_decision{decision="proceed", escalation="human_review"}` |
+| ″ | **new** `EscalateToHumanReviewAsync(...)` | — | mirror the `human-review` gate block (`:906-950`): resolve human gate node, `SetStatusAndStage(InReview, "review")`, emit `AssemblyReviewRequested{reason="steering_budget_exhausted"}`, `UpsertReviewRequestAsync`, `AwaitReviewDecisionAsync`, `ApplyReviewDecisionAsync`, settle directive |
+| ″ | `ApplyAuthoredGateDecisionAsync` / `ApplyReviewDecisionAsync` request-changes (`:1133`) | routes human steer through steering (no budget reset) | for `source == human-review`, call `ResetSteeringBudgetAsync(...)` before routing; bounded by max human round-trips |
+| `apps/Agentweaver.Api/Coordinator/CoordinatorSteeringDecider.cs` | **new** `ResetSteeringBudgetAsync(workPlanId, subtaskIds, ct)` | — | guarded CAS zeroing `SteeringIterations` + target `RecoveryAttempts`, single transaction, emitted for audit |
+| ″ | `BuildRationale` `Proceed` (`:582`) | "escalate to human review / terminal" | "escalate to human review" (drop "/ terminal" — code now honors it) |
+| `packages/Agentweaver.AgentRuntime/Workflow/RunWorkflowFactory.cs` (`761-767`) + `RunOrchestrator.cs` (revision watch) | trimmed child graph terminal edge | **Morpheus** — add failure→terminal edge / emit `child-assemble-ready` on revision post-turn | (Tank pairs, does not own) |
+
+No schema change (reuses `WorkPlanStatus.InReview`, existing review-request persistence, existing `SteeringIterations`/`RecoveryAttempts` columns). No feature flag.
+
+---
+
+## 5. Risks & mitigations
+
+1. **Review ↔ steering livelock** (human rejects → reset budget → autonomy re-exhausts → back to review). *Mitigation:* §2.3 max-human-round-trips backstop; after N, gate stays open for the human but autonomy stops re-steering (never terminal, never looping).
+2. **Crash while awaiting the escalated review.** *Mitigation:* durable `UpsertReviewRequestAsync` + existing `InReview → ResumeInReviewAsync` recovery (`:532`, `:987`) — no new recovery path; verified by an existing InReview recovery test pattern.
+3. **Replica races on the escalation** (two pods both escalate). *Mitigation:* the escalation runs inside the existing AssemblySteering decision lease (`SetAssemblySteeringAsync` heartbeat, `:1752`); `SetStatusAndStage(InReview)` is a CAS from `AssemblySteering`/`Assembling`; the review gate arm is single-writer per coordinator run. Second pod no-ops (already-InReview).
+4. **StageId / 409 regressions.** *Mitigation:* escalation reuses the resolved human-review gate's canonical `StageId ("review")` and `GraphNodeId`; rai stays `"rai"`; the approve path is unchanged (`ApplyAuthoredGateDecisionAsync(Approved)`), so no new 409 on approve.
+5. **Budget reset weakens loop-prevention.** *Mitigation:* reset is strictly gated to `source == human-review`; autonomous gates can never reset their own budget. Human presence *is* the new bound.
+6. **Fix-A depends on Morpheus.** *Mitigation:* Fix-B is independent and sufficient to eliminate the hang; Fix-A(3b) coordinator contract already guarantees progression today. 3a is an optimization of the in-context rate, not a correctness dependency.
+
+---
+
+## 6. Test plan
+
+### Unit / integration (`tests/Agentweaver.Tests/Coordinator/CoordinatorAssemblyServiceTests.cs`)
+1. **Budget-exhausted escalates to review, not terminal:** seed a plan where the decider returns `Proceed` (force `SteeringIterations >= max`); run assembly with a rubberduck request-changes gate → assert **no** `CoordinatorAssemblyBlocked`, **no** `WorkPlanStatus.AssemblyBlocked`; assert `WorkPlanStatus.InReview`, a `CoordinatorAssemblyReviewRequested{reason="steering_budget_exhausted"}`, a durable review-request row, and the coordinator run `AwaitingReview`.
+2. **Escalated review → approve → merge/complete:** from state (1), submit approve → assert `Assembling` → merge → `assembly_complete`.
+3. **Escalated review → human request-changes resets budget:** from state (1), submit request-changes → assert `ResetSteeringBudgetAsync` zeroed `SteeringIterations`, a visible `steering_received{source=human-review}` + `steering_decision`, and the loop can steer again (not immediate re-`Proceed`).
+4. **Human round-trip backstop:** N+1 human rejects → assert gate remains open awaiting human, autonomy stops re-steering, still no terminal.
+5. **Crash-mid-escalated-review recovery:** set `InReview` + review-request, drop the pod, re-run → `ResumeInReviewAsync` resumes the same gate (no new gate, no wedge).
+6. **Regression guards (do not break):** existing steering tests — `RunAssembly_InPlaceSteer_TargetSubtaskFailed_ConsciouslyDispatchesFresh_NeverWedges`, `RunAssembly_InPlaceSteer_CrashBeforeLaunch_EffectUnconfirmed_DoesNotFalselyApply`, and the InReview/approve/decline suite — stay green.
+
+### Live proof
+- Re-run the non-trivial app (visually-stunning landing page + signup + database) that produced `ed53860d` / `02e337e5`. Expected: repeated rubberduck request-changes → in-place revisions converge (Fix-A) OR conscious `dispatch_fresh` fallbacks (visible) → on budget exhaustion the run opens **human review** (reachable review card + preview), a human approves → **merge/complete**. The run **never** latches `assembly_blocked`.
+- Repro harness: the intended `files/preview-landing.ps1` live-orchestration script is **not present in-tree today** — this design assumes it is added (or the existing software-delivery orchestration path is used) as the live-repro driver; flag to Ahmed so the harness is provisioned for the re-gate/live proof.
+
+### Build/test gate (at implementation time)
+`dotnet build Agentweaver.sln -c Release` then `dotnet test tests/Agentweaver.Tests/Agentweaver.Tests.csproj --filter "Assembly|Coordinator|Steer|Revision|Preview" -c Release` (delete `%TEMP%\memory.db*` first). Green counts reported; no stubs.
+
+---
+
+## 7. Open questions for the gate
+1. **Max human round-trips** default (proposed 3) — configurable via existing coordinator options, or constant?
+2. Should the escalated review card **auto-attach the accumulated gate feedback** (all rubberduck rejections) so the human sees why autonomy gave up? (Proposed: yes — pass the aggregated feedback as the review-request context.)
+3. Fix-A(3a) scheduling: pair now with Morpheus, or ship Fix-B first (eliminates the hang) and land 3a as a follow-up rate-improvement? (Proposed: Fix-B first, 3a fast-follow — Fix-B is the correctness fix.)
+
+---
+
+## 8. IMPLEMENTED — Fix-B (GO-WITH-CHANGES; rubber-duck's 5 required changes folded in)
+
+**Status:** IMPLEMENTED — ship-first. Fix-A(3a) remains Morpheus's fast-follow (coordinate on the 3b contract; Fix-B stands alone). Build green (`Agentweaver.sln -c Release`, 0 warn/0 err); targeted tests green (`--filter "Assembly|Coordinator|Steer|Revision|Preview"` → **646 passed, 0 failed, 6 skipped** Postgres-integration).
+
+### §7 locked decisions
+- **Max human round-trips = 3** — `CoordinatorSteeringDecider.DefaultMaxHumanReviewRoundTrips = 3` (the configurable knob; no options-class exists yet, mirrors the existing `DefaultMaxPlanSteeringIterations` const pattern — no feature flag).
+- **Persisted per-plan** — `WorkPlan.HumanReviewRoundTrips` (new column; SQLite + Postgres migrations `20260710004451_AddHumanReviewRoundTrips`).
+- **Accumulated gate feedback attached** to the escalated review card, bounded/structured by gate source + round (`BuildAccumulatedGateFeedbackAsync`, cap 32 directives × 2000 chars).
+
+### The 5 required changes (as implemented)
+1. **Crash-safe/idempotent escalation as an executable effect.** The `Proceed` branch now `MarkDirectiveExecutingAsync` FIRST, then `EscalateToHumanReviewAsync`. Recovery (`DriveOutstandingSteeringExecutionAsync`, the `DecidedAction == Proceed` branch) verifies the escalation is **durably open** (`IsEscalationDurablyOpenAsync`: `WorkPlan.Status == InReview && stage == "review"` AND a durable review-request row exists) BEFORE `MarkDirectiveAppliedAsync`; if not open it **re-drives** `ParkAtHumanReviewAsync` (idempotent) — steering is never silently dropped. The CAS-lost branch of `ParkAtHumanReviewAsync` also completes a review-request that a crash-after-InReview/before-Upsert left missing.
+2. **Settle the directive AFTER the review is durably OPEN, not after the human acts.** `ParkAtHumanReviewAsync` sequences `TryEscalateToInReviewAsync` (guarded CAS) → `UpsertReviewRequestAsync` → emit review-requested → `MarkCoordinatorAwaitingReviewAsync` → `MarkDirectiveAppliedAsync`, then returns. `EscalateToHumanReviewAsync` only afterwards live-awaits `AwaitReviewDecisionAsync` — the directive is never blocked on the human (which could wait forever).
+3. **Real CAS for AssemblySteering→InReview.** New `CoordinatorAssemblyStore.TryEscalateToInReviewAsync` — guarded `ExecuteUpdateAsync` `WHERE Status ∈ {AssemblySteering, Assembling} → InReview, stage "review"`; a second replica that finds the plan already `InReview` gets `false` and NO-OPs (no double-escalation, no clobber of a submitted decision). Distinct from the unconditional `SetStatusAndStageAsync`.
+4. **Persist human round-trip count.** New `CoordinatorAssemblyStore.IncrementHumanReviewRoundTripAsync` (atomic increment + read, single tx) → `WorkPlan.HumanReviewRoundTrips`. At the top of `RouteAssemblyGateThroughSteeringAsync`, `source == human-review` increments it; while `≤ 3` it calls the decider's new guarded `ResetSteeringBudgetAsync` (zero `SteeringIterations` + target `RecoveryAttempts`, single tx) so the coordinator converges again; past 3 it does NOT reset (decider → `Proceed` → re-park at review). Autonomous sources can never reset their own budget. A visible `coordinator.steering` event records the round-trip + reset decision.
+5. **Autopilot/no-human = explicit park at review.** Escalation opens `awaiting_review` with the exhaustion reason + accumulated gate feedback attached; with no human, `AwaitReviewDecisionAsync` parks indefinitely (existing human-gate semantics) — NEVER auto-approve/decline, never terminal, never a hidden loop. For the live preview demo the run sits at the review gate showing the preview.
+
+### Files changed
+- `apps/Agentweaver.Api.Data/Memory/WorkPlan.cs` — `HumanReviewRoundTrips` column.
+- `apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyStore.cs` — `TryEscalateToInReviewAsync`, `IncrementHumanReviewRoundTripAsync`.
+- `apps/Agentweaver.Api/Coordinator/CoordinatorSteeringDecider.cs` — `DefaultMaxHumanReviewRoundTrips`, `ResetSteeringBudgetAsync`, `BuildRationale` Proceed text ("escalate to human review").
+- `apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyService.cs` — Proceed branch → escalate; `EscalateToHumanReviewAsync`, `ParkAtHumanReviewAsync`, `BuildAccumulatedGateFeedbackAsync`, `IsEscalationDurablyOpenAsync`; human round-trip/reset wiring; recovery branch.
+- `apps/Agentweaver.Api/Migrations/20260710004451_AddHumanReviewRoundTrips.cs` (+ Designer + snapshot); `apps/Agentweaver.Api.Migrations.Postgres/Migrations/20260710004451_AddHumanReviewRoundTrips.cs`.
+- `tests/Agentweaver.Tests/Coordinator/CoordinatorAssemblyServiceTests.cs` — 6 new tests (below).
+
+### Tests added (all green)
+1. `RouteAssembly_BudgetExhausted_EscalatesToHumanReview_NotTerminal` — no `AssemblyBlocked`; plan `InReview`/stage "review"; durable review row; `escalated=true` event; run `AwaitingReview`; directive `Applied`.
+2. `RouteAssembly_BudgetExhausted_Escalate_HumanApproves_Completes` — approve → merge → `assembly_complete`; run `Completed`.
+3. `RouteAssembly_HumanRequestChanges_UnderCap_ResetsBudget_SteersAgain` — round-trip persisted =1, visible `budgetReset=true`, decision ≠ `Proceed`.
+4. `RouteAssembly_HumanRequestChanges_OverCap_DoesNotReset_ReParksAtReview` — round-trip =4, `budgetReset=false`, re-parks `InReview`, no terminal, decision = `Proceed`.
+5. `DriveOutstanding_ProceedDirective_CrashBeforeReviewOpen_ReDrivesEscalation` — recovery re-drives, plan `InReview`, durable review written, directive `Applied`, returns true.
+6. `DriveOutstanding_ProceedDirective_ReviewAlreadyOpen_SettlesWithoutReDriving` — durably-open escalation settled (not re-driven), returns false.
+Plus the two regression guards stay green.
+
+---
+
+## 9. DELTA — Reviewer Rejection Lockout: CONTEXT root-cause FIRST (Requirement 1, LOAD-BEARING)
+
+Ahmed (verbatim): *"for fix B, also follow the lockout procedure (defined in the Squad agent definition). But be sure that the root cause is NOT the retrigger/steering missing the context."* Before any lockout/rotation, prove the repeated-rejection loop is (or isn't) caused by lost context on the re-trigger path. Audit below is **verified in code**.
+
+### 9.1 Context-propagation audit (what each re-trigger hands the revising agent, today)
+
+| Re-trigger path | Prior work (session / worktree) | Latest reviewer feedback | ACCUMULATED cross-round feedback | Verdict |
+|---|---|---|---|---|
+| **A — in_place_steer** `ExecuteInPlaceSteerAsync` → `RunOrchestrator.StartRevisionAsync` | **PRESERVED.** `StartRevisionAsync` reuses the SAME stream entry ("prior events preserved for replay"), the SAME `WorktreePath`/`WorktreeBranch` (`RunOrchestrator.cs:396,408-409`), flips the run back `InProgress`, injects a revision turn (`IsRevision:true`, line 417). | **CARRIED.** `guidance = BuildAssemblyFeedbackGuidance(feedback)` is the revision task (`CoordinatorAssemblyService.cs:2076`). | **IMPLICIT** via the preserved session history (prior turns' feedback is in the replayed stream), but NOT re-stated in the explicit task. | ✅ Context preserved — the good path. |
+| **B — dispatch_fresh** `ConsciousDispatchFreshFallbackAsync` → `RequestChangesAsync` → `ResetSubtasksToPendingAsync` | **DROPPED.** Subtask reset to `Pending`, `ChildRunId = null` (`CoordinatorAssemblyService.cs:3296`) → new pod, fresh worktree, prior child session gone. | **CARRIED (latest only).** `RecoveryGuidance = BuildAssemblyFeedbackGuidance(feedback)`; `ComposeChildTaskAsync` appends it to the child task (`CoordinatorDispatchService.cs:1941-1942`). | **❌ LOST.** `RecoveryGuidance` is a SINGLE field OVERWRITTEN each reset (`ResetSubtasksToPendingAsync`, `CoordinatorAssemblyService.cs:3296`). Only the newest round survives; all prior rounds' feedback is discarded. | ⚠️ **Amnesia**: near-blank pod — no prior work, only the newest complaint. |
+
+### 9.2 ROOT CAUSE (Requirement 1 finding)
+
+**The dispatch_fresh (B) path is the amnesia source and a genuine root cause of the repeated-rejection loop.** When in_place cannot resume (GC'd child, no resumable session — the common case after pods are released under pod-per-run) the coordinator falls to conscious dispatch_fresh, which restarts the subtask from a blank pod carrying ONLY the latest round's feedback. The new agent cannot see (a) what prior attempts produced, or (b) the full accumulated set of requirements across rounds → it re-violates earlier feedback → gets rejected again → loops. **This is agent amnesia masquerading as a quality problem.** It MUST be fixed before any author-rotation, or rotation would just paper over a context bug (and rotate blame between amnesiac pods).
+
+The in_place (A) path is NOT the amnesia source (session + worktree preserved). Its only weakness is that accumulated feedback is implicit (session history) rather than restated — a minor strengthening, not a root cause.
+
+### 9.3 FIX (Requirement 1) — context-carrying revision (both paths), implement BEFORE lockout
+
+1. **Accumulated, not latest.** Replace the single-round `BuildAssemblyFeedbackGuidance(latestFeedback)` used by BOTH `ResetSubtasksToPendingAsync` (B) and `ExecuteInPlaceSteerAsync` (A) with an ACCUMULATED, structured guidance built from `BuildAccumulatedGateFeedbackAsync` (already added in §8) — all prior rounds' feedback, structured by gate source + round. Durable source of truth = the per-run `SteeringDirective` rows (already one per source/round); **no new column** — `BuildAccumulatedGateFeedbackAsync` already reads them, so accumulation is crash/replica-safe by construction.
+2. **Carry prior work on the fresh dispatch.** For B (new pod), the guidance must also hand the new agent the PRIOR CONTEXT that "fresh" otherwise drops: a pointer/summary of the prior child's produced diff + the integration-branch state, so it starts from prior work, not a blank slate. This is exactly Fix-A's *"make the conscious dispatch carry context reliably"* contract — **3b split with Morpheus:** Fix-A guarantees `StartRevisionAsync`/the conscious dispatch propagate the prior child's worktree+diff to the (possibly different) revision agent; Fix-B supplies the accumulated-feedback payload + the selected author.
+3. **Outcome:** repeated rejections then reflect GENUINE quality problems, at which point author-rotation (§10) is the correct next lever — not before.
+
+---
+
+## 10. DELTA — Strict Lockout revision cycle (Requirement 2, DESIGN ONLY — HOLD until re-gate)
+
+Layer `.github/agents/squad.agent.md:788-809` (Reviewer Rejection Protocol + Strict Lockout) into the assembly-gate rejection cycle. **No lockout/rotation code is written until this delta passes the rubber-duck re-gate.**
+
+### 10.1 The boundary — REJECTION vs GUIDANCE (the key new semantic)
+
+- **REJECTION → lockout + rotate to a DIFFERENT agent.** A Reviewer requests changes on an artifact: sources `rubberduck`, `build-test`, `human-review` (human REJECTS / requests-changes), or another agent acting as reviewer — severity `request-changes`. The artifact's CURRENT author is locked out and MAY NOT produce the next version (protocol steps 1–4). A different eligible agent owns the revision via a coordinator-owned, CONSCIOUS, VISIBLE dispatch carrying FULL context (§9 accumulated feedback + prior work). This is NOT in-place same-author.
+- **GUIDANCE / STEER → in-place, SAME agent, context preserved.** A coordinator directive to refine, a human "steer/refine" (not a reject), an RAI `advisory`, or an `agent`/`step` advisory (severity `advisory`). No lockout — resume the same session in place (`StartRevisionAsync`). This is the path Fix-A's in-place-terminal work serves.
+
+Disposition is derived from `(source, severity)`: `request-changes` from a reviewer ⇒ REJECTION; everything else ⇒ GUIDANCE.
+
+### 10.2 Decision-policy change
+
+Today `CoordinatorSteeringDecider` / `SteeringPolicy` pick in_place vs dispatch_fresh purely on resumability + budget. The lockout reframes this: **a REJECTION disposition FORCES a rotate-to-different-agent dispatch (never in_place same author), regardless of resumability.** A GUIDANCE disposition keeps the existing in_place preference.
+- Add a `disposition` decision input (rejection | guidance).
+- On REJECTION: `SelectRevisionAuthor(roster \ lockedOut)` — reuse `CoordinatorOrchestratorExecutor.ResolveRoster(repoPath)` + best-fit `SelectRosterMember`, filtered to EXCLUDE the subtask's locked-out set. Emit a visible `coordinator.steering_decision { decision = dispatch_fresh, disposition = rejection, rotatedFrom = <prevAuthor>, rotatedTo = <newAuthor>, lockedOut = [...] }` — the rotation is never a glitch.
+
+### 10.3 Durable lockout roster — reuse the DORMANT `Subtask.LockedOutAgents` column
+
+`Subtask.LockedOutAgents` already exists in the schema (since the initial `20260617224038_AddCoordinatorWorkPlan` migration) but is NEVER read/written anywhere in code — a reserved, dormant field. **No new migration needed.**
+- On each REJECTION: atomically APPEND the just-rejected author to `Subtask.LockedOutAgents` (JSON string set), via a guarded/crash-safe update (mirror the §8 CAS patterns) so it is cross-replica correct.
+- Select the next author from `roster \ LockedOutAgents`.
+- Lockout scope = the specific artifact/subtask (protocol step 5). Duration = the revision cycle; each subsequent rejection locks that revision's author too (step 6).
+
+### 10.4 Budget bounds the ROTATION, and deadlock/exhaustion → §1–§8 human-review escalation (protocol step 7)
+
+- The steering budget (`SteeringIterations`) now counts DISTINCT-AGENT revision attempts (rotations) before escalation, not same-agent re-steers. The Fix-B human round-trip counter (change #4) is unchanged.
+- **Deadlock** (`roster \ LockedOutAgents == ∅`, all eligible agents locked out) OR rotation budget exhausted OR human round-trips exhausted ⇒ **escalate to human review** via the already-implemented `EscalateToHumanReviewAsync` (§8) — NEVER terminal. This IS protocol step 7 ("escalate to the user").
+- Extend the escalated review card / `BuildAccumulatedGateFeedbackAsync` payload with `lockedOutRoster` + per-round author so the human sees WHY autonomy handed off (which agents tried, what each rejection said). Attach alongside the accumulated gate feedback.
+
+### 10.5 Interaction with Fix-A (Morpheus) — 3b contract
+
+- **Fix-A owns:** reliable in-place terminal emission for the GUIDANCE path; AND making the CONSCIOUS dispatch carry context reliably (propagate the prior child's worktree + diff to the — possibly different — revision agent).
+- **Fix-B / lockout owns:** the rejection→rotate decision, the durable `LockedOutAgents` roster, the accumulated-feedback payload (§9), and the deadlock→human-review escalation (§8).
+- **3b contract:** Fix-A guarantees the dispatch propagates prior worktree+diff to the selected author; Fix-B passes the accumulated feedback + the non-locked author id. Fix-B does not wait on Fix-A (escalation stands alone); the lockout rotation's context-carry quality DEPENDS on Fix-A landing (documented ordering — §9 fix is the prerequisite).
+
+### 10.6 Risks
+
+- **Small roster / single implementer role.** First rejection locks the only eligible agent ⇒ immediate deadlock ⇒ escalate to human review after ONE autonomous attempt. Acceptable (never terminal, never wedge), but must be explicit: with a 1-eligible-agent artifact, strict lockout means autonomy cannot self-revise — it degrades to human review, NOT to re-admitting the locked author (protocol step 7 forbids re-admission). Surfaced as a visible escalation with the lockout reason.
+- **Rotation thrash without Fix-A context-carry.** Rotating authors mid-artifact while the fresh dispatch is still amnesiac would make things worse — hence §9 (context fix) is a hard prerequisite and ordered first.
+- **Mislabelled disposition.** If a coordinator/human "refine" steer is misclassified as a rejection it would wrongly lock the author; the `(source, severity)` mapping must be precise and unit-tested.
+
+### 10.7 Test plan (add at implement time, POST re-gate)
+
+1. **Context (Req 1):** dispatch_fresh carries ACCUMULATED feedback (all rounds), not just latest; in_place preserves session/worktree. (Assert child task / RecoveryGuidance contains prior-round markers.)
+2. **Rejection → rotate:** reviewer rejects → a DIFFERENT agent owns the revision; original appended to durable `LockedOutAgents`; visible `rotatedTo` event.
+3. **Second rejection → second lockout:** revision rejected → its author also locked; third agent selected.
+4. **Deadlock → escalate:** all eligible agents locked ⇒ `EscalateToHumanReviewAsync` with `lockedOutRoster` + accumulated feedback attached; never terminal.
+5. **Guidance/advisory → in-place SAME agent:** an advisory/coordinator-refine steer does NOT lock the author and resumes in place.
+6. **Budget bounds rotations:** N distinct-agent attempts then escalate (not infinite rotation).
+7. **Regression:** all §8 escalation tests + prior steering regressions stay green.
+
+### 10.8 What is ALREADY safe to keep (no re-gate needed)
+
+§1–§8 (escalation state-machine + 5 hardening changes) are implemented and independent of the lockout delta: they only change the budget-exhausted DEAD-END into a human-review escalation. The lockout delta ADDS author-rotation ABOVE that escalation and the §9 context fix BELOW it; neither invalidates the escalation. Escalation stays the terminal-avoidance backstop for BOTH "budget exhausted" and "deadlock (all agents locked)".
+
+## 11. IMPLEMENTED — Req-1 context-propagation fix + Req-2 Strict Lockout (RE-GATE GO-WITH-CHANGES; 6 additional changes folded in)
+
+**Status:** IMPLEMENTED. Build clean (`Agentweaver.sln -c Release`, 0 warn/0 err). Targeted tests green (`--filter "Assembly|Coordinator|Steer|Revision|Preview|Lockout"` → **653 passed, 0 failed, 6 skipped**). Implemented in strict order: (a) Req-1 context fix on BOTH paths + tests → (b) escalation + 5 hardening [already landed §8] → (c) Req-2 lockout gated on (a).
+
+### 11.1 Req-1 — context-propagation root-cause fix (rubber-duck changes #1, #2, #6-in-place)
+
+- **#1 — capture prior child pointer BEFORE clearing `ChildRunId`.** New `Subtask.PriorChildRunId` column (SQLite ef migration `20260710013137_AddSubtaskPriorChildRunId` + hand-written Postgres mirror). `ResetSubtasksToPendingAsync` (rewritten, new signature `(coordinatorRunId, subtaskIds, feedback, ct)`) now sets `PriorChildRunId = old ChildRunId` **before** nulling `ChildRunId`, so "prior diff + integration state" is mechanically recoverable by the fresh dispatch.
+- **#2 — accumulated feedback is TARGET-scoped and REJECTION-scoped, exposed as a STABLE named contract.** The accumulated gate feedback is exposed as a **shared named DTO** (`AccumulatedReviewFeedback` / `ReviewFeedbackRound`) — see §11.6 for the finalized cross-assembly contract. It filters `SteeringDirective` rows by `Severity ∈ {RequestChanges, Blocking}` AND target-subtask overlap (parses `TargetScopeJson` in memory) — ALL prior rounds, not just the latest — and renders a deterministic revision prompt via `ReviewFeedbackRenderer.RenderForRevisionPrompt` (used by BOTH the in-place resume and the conscious fresh/rotated dispatch). Replaces the removed private `AccumulatedFeedbackEntry` record + `BuildContextCarryingRetryGuidance`.
+- **#6 in-place carry.** `ExecuteInPlaceSteerAsync` now builds guidance from `BuildContextCarryingRetryGuidance(feedback, accumulated, priorChildRunId:null, ...)` — the stream is removed before restart, so accumulated feedback is threaded EXPLICITLY (never relies on stream history). `priorChildRunId:null` because the in-place resume preserves the child session (no fresh pod).
+
+### 11.2 Req-2 — Strict Lockout rotation (rubber-duck changes #3, #4, #5, #6-discriminator)
+
+- **#6 discriminator.** `IsReviewerRejection(severity) => severity is RequestChanges or Blocking`. In `RouteAssemblyGateThroughSteeringAsync`, after the decider decision: a reviewer REJECTION with an actionable direction (`InPlaceSteer`|`DispatchFresh`) → `MarkDirectiveExecutingAsync` then `ExecuteLockoutRotationAsync` (lockout/rotate). Advisory/refine/steer stays on the existing in-place A/D path (same agent, context preserved).
+- **#3 gate rotation on Req-1.** `ExecuteLockoutRotationAsync` computes `hasContext = feedback≠∅ || accumulated.Count>0`; if false it does NOT rotate blind — escalates with reason `lockout_no_context`. The rotated re-dispatch reuses `RequestChangesAsync → ResetSubtasksToPendingAsync`, which threads the Req-1 accumulated guidance + prior pointer.
+- **#5 real domain-eligibility.** New `IAssemblyAuthorRotationSelector` (+ default `SquadAuthorRotationSelector`, `CoordinatorAuthorRotation.cs`) reads the project team roster (`SquadReader`), filters to dispatchable members that are NOT locked-out and NOT the current author, and requires a **strictly-positive** domain-capability score. A single-eligible-agent domain → no positive candidate after excluding the author → `null` → deadlock → escalate to human review (never rotate to an unrelated agent).
+- **#4 atomic CAS rotation.** `CoordinatorAssemblyStore.TryRotateSubtaskAuthorAsync` does a guarded `ExecuteUpdate WHERE Id==id AND AssignedAgent==expectedAuthor`: first replica wins (swaps `AssignedAgent`/`SelectedModelId`/`AgentCharter` + appends the rejected author to `LockedOutAgents` JSON), a concurrent second matches 0 rows → `Won=false` no-op (no double-append). `GetLockedOutAgentsAsync` reads the durable roster before each rotation.
+- **Deadlock / no-context → escalate (protocol step 7).** `OverrideDecidedActionAsync(Proceed)` + a visible `coordinator_steering_decision` event (`disposition=rejection`, rationale `lockout_deadlock`/`lockout_no_context`, `lockedOutRoster`) + `EscalateToHumanReviewAsync` (§8). Never terminal, never blind rotation.
+- **Visibility.** Every rotation emits a `coordinator_steering_decision` event: `{decision=dispatch_fresh, disposition=rejection, rotatedFrom, rotatedTo, lockedOutRoster, attempt}` — the conscious/visible dispatch Ahmed required (never a silent glitch).
+
+### 11.3 Files changed
+
+- `apps/Agentweaver.Api.Data/Memory/Subtask.cs` — new `PriorChildRunId` column.
+- `apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyService.cs` — discriminator + `ExecuteLockoutRotationAsync` + `IsReviewerRejection` + `RotationSelector`; rewritten `ResetSubtasksToPendingAsync`; new internal `BuildAccumulatedReviewFeedbackAsync` (per-subtask bundle producer, returns the named `AccumulatedReviewFeedback` contract) + `BuildPriorReviewRoundsAsync` (target+rejection-scoped rounds); in-place + rotation + reset all render via `ReviewFeedbackRenderer.RenderForRevisionPrompt`; removed private `AccumulatedFeedbackEntry`/`BuildContextCarryingRetryGuidance`/`BuildAssemblyFeedbackGuidance`.
+- `packages/Agentweaver.Domain/AccumulatedReviewFeedback.cs` (NEW) — the STABLE cross-assembly `AccumulatedReviewFeedback` + `ReviewFeedbackRound` DTOs + `ReviewFeedbackRenderer.RenderForRevisionPrompt` (Morpheus Path-2 handoff contract). Lives in `Agentweaver.Domain` so BOTH `Agentweaver.Api` and `Agentweaver.AgentRuntime` can reference it.
+- `apps/Agentweaver.Api/Coordinator/CoordinatorAuthorRotation.cs` (NEW) — `IAssemblyAuthorRotationSelector`, `SquadAuthorRotationSelector`, `RotationSubtaskContext`, `RotationChoice`.
+- `apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyStore.cs` — `TryRotateSubtaskAuthorAsync` + `GetLockedOutAgentsAsync` + `SubtaskRotationResult` (guarded CAS).
+- `apps/Agentweaver.Api/Migrations/20260710013137_AddSubtaskPriorChildRunId.*` (SQLite ef) + `apps/Agentweaver.Api.Migrations.Postgres/Migrations/20260710013137_AddSubtaskPriorChildRunId.cs` (hand-written).
+- `tests/Agentweaver.Tests/Coordinator/CoordinatorAssemblyServiceTests.cs` — `ConfigurableRotationSelector` fake + 6 new tests (below).
+
+### 11.4 Tests added (all green)
+
+1. `RouteAssembly_Rejection_DispatchFresh_CarriesAccumulatedFeedbackAndPriorWork` — Req-1 #1/#2: fresh dispatch carries all prior rounds + prior-child pointer.
+2. `InPlaceRetryGuidance_CarriesAccumulatedFeedback_PreservesSession_NoPriorPodPointer` — Req-1 #6: in-place threads accumulated feedback, omits the fresh-pod pointer.
+3. `RouteAssembly_Rejection_LocksOutAuthor_RotatesToDifferentEligibleAgent` — Req-2: rotation to a different eligible agent, durable `LockedOutAgents`, visible `rotatedTo` event.
+4. `RouteAssembly_Rejection_SingleEligibleDomain_EscalatesToHumanReview_NotTerminal` — Req-2 #5: single-eligible domain deadlocks → escalate (never terminal), `lockedOutRoster` on the card.
+5. `IsReviewerRejection_Discriminates_RequestChangesAndBlocking_FromAdvisory` — Req-2 #6 discriminator.
+6. `TryRotateSubtaskAuthor_ConcurrentReplicas_ExactlyOneWins_NoDoubleAppend` — Req-2 #4: guarded CAS, exactly one winner, no double-append.
+
+Plus all prior §8 escalation + steering regression tests stay green.
+
+### 11.5 Morpheus 3b/Path-2 contract (runtime handoff seam) — STABLE named DTO
+
+See **§11.6** for the FINALIZED cross-assembly contract (`AccumulatedReviewFeedback` in `Agentweaver.Domain`). Tank owns the coordinator-side threading and the stable named contract Morpheus consumes; Morpheus's `StartChildRevisionHandoffAsync` MUST consume this DTO (or its `RenderedGuidance`) — it MUST NOT read `SteeringDirective` rows or define a parallel shape. Fix-B does not wait on Morpheus; the coordinator-side context-carry + rotation stand alone.
+
+### 11.6 Contract addendum (FINALIZED) — shared handoff DTO moved to `Agentweaver.Domain`
+
+The handoff DTO must be referenceable from BOTH the producer (`Agentweaver.Api` / `CoordinatorAssemblyService`) AND Morpheus's consumer seam (`Agentweaver.AgentRuntime`). Project graph: `Agentweaver.Api → Agentweaver.AgentRuntime → Agentweaver.Domain`; AgentRuntime does NOT reference Api. Therefore the shared contract lives in **`Agentweaver.Domain`** (the only project both reference). The earlier Api-local `AccumulatedGateFeedback` was unreferenceable from AgentRuntime and has been replaced.
+
+- **DTOs (namespace `Agentweaver.Domain`, `packages/Agentweaver.Domain/AccumulatedReviewFeedback.cs`):**
+  ```csharp
+  public sealed record AccumulatedReviewFeedback(
+      string SubtaskId,
+      string CurrentChangeRequest,
+      IReadOnlyList<ReviewFeedbackRound> PriorRounds,
+      string PriorWorktreeBranch,
+      string? RenderedGuidance = null);
+  public sealed record ReviewFeedbackRound(int Round, string Reviewer, string Feedback, DateTimeOffset At);
+  ```
+- **Renderer:** `public static string ReviewFeedbackRenderer.RenderForRevisionPrompt(string? currentChangeRequest, IReadOnlyList<ReviewFeedbackRound> priorRounds, string? priorWorktreeBranch)` (+ a `this AccumulatedReviewFeedback` bundle overload). Deterministic, prompt-ready. The `PriorWorktreeBranch` line is emitted ONLY when a branch is supplied — the in-place resume renders with `priorWorktreeBranch: null` (session preserved, no fresh pod); the fresh/rotated dispatch always carries a branch (prior child `WorktreeBranch`, falling back to the integration branch).
+- **Producer:** `internal Task<AccumulatedReviewFeedback> CoordinatorAssemblyService.BuildAccumulatedReviewFeedbackAsync(string coordinatorRunId, int subtaskId, string currentChangeRequest, string? priorChildRunId, CancellationToken ct)` — per-subtask bundle; resolves `PriorWorktreeBranch` from the prior child `Run.WorktreeBranch ?? IntegrationBranchName(coordinatorRunId)`; sets `RenderedGuidance`. Target+rejection-scoped rounds come from `internal Task<IReadOnlyList<ReviewFeedbackRound>> BuildPriorReviewRoundsAsync(string coordinatorRunId, IReadOnlyCollection<int> subtaskIds, CancellationToken ct)`.
+- **Consumer (Morpheus Path-2):** `Task StartChildRevisionHandoffAsync(Run newAgentRun, Run priorChild, AccumulatedReviewFeedback feedback, CancellationToken ct)` — reuses `PriorWorktreeBranch` while minting a NEW SDK session for the non-locked-out agent (must NOT resume `agentweaver-run-{runId}`), injecting `RenderedGuidance` into the new agent's task prompt.
+- **Validation:** build clean (`Agentweaver.sln -c Release`, 0/0); targeted tests green (`--filter "Assembly|Coordinator|Steer|Revision|Preview|Lockout"` → **653 passed, 0 failed, 6 skipped**).
+
+### 11.7 Path-2 WIRING (code-review follow-up) — lockout rotation dispatches via the context-carrying handoff
+
+Code review flagged that the lockout rotation (`ExecuteLockoutRotationAsync`) was allocating a fresh child (new session ⇒ lockout-correct) but going through the PLAIN fresh dispatch (`RequestChangesAsync → ResetSubtasksToPendingAsync → StartDispatch → StartChildRunAsync`), which provisions a BRAND-NEW worktree branched from the integration branch and DISCARDS the locked-out author's uncommitted/staged worktree work. `StartChildRevisionHandoffAsync` (reuse prior worktree/branch + NEW session + inject accumulated feedback, with a visible clean-worktree fallback for a poisoned tree) was tested-but-unwired dead code. Now wired:
+
+- **New method `CoordinatorAssemblyService.DispatchLockoutHandoffAsync`** replaces the `RequestChangesAsync` call at the end of `ExecuteLockoutRotationAsync` (different-agent lockout path ONLY). For each rotated target it: (1) resolves the locked-out author's prior child run (`Subtask.ChildRunId`, still pointing at it here — the durable worktree/branch source), (2) builds the `AccumulatedReviewFeedback` bundle, (3) allocates a fresh child run (`priorChild with { Id = RunId.New(), AgentName/ModelId/AgentCharter = rotated author, ParentRunId, SubtaskId, base Task = prior child's task WITHOUT rendered guidance }`) — NOT pre-inserted (the handoff calls `InsertAsync` itself), (4) launches `IChildRevisionHandoff.StartChildRevisionHandoffAsync`, and (5) repoints the subtask at the new child (`SubtaskStatus.Running`, `PriorChildRunId` retained) via `SetSubtaskHandoffRunningAsync` so the re-armed dispatch loop RE-OBSERVES it (never re-dispatches a duplicate). Then the plan returns to `Dispatching` + `StartDispatch`. Guidance is injected by the handoff — the subtask's `RecoveryGuidance` is deliberately NOT set on this path (no double-carry).
+- **Fallback:** a rotated target with NO resolvable prior child (nothing to reuse) falls through to the plain fresh dispatch (`ResetSubtasksToPendingAsync`, which threads the accumulated guidance via `RecoveryGuidance`; the dispatch engine composes a fresh child under the already-persisted rotated author).
+- **DI seam `IChildRevisionHandoff`** (`apps/Agentweaver.Api/Coordinator/IChildRevisionHandoff.cs`, production impl `RunOrchestratorChildRevisionHandoff` registered in `Program.cs`) — a thin pass-through to `RunOrchestrator.StartChildRevisionHandoffAsync` so the coordinator consumes the handoff via an interface the orchestration unit tests can substitute. **`RunOrchestrator.cs` is UNCHANGED** (Morpheus owns it; consumed via DI). Worktree safety + the `coordinator.child_revision_handoff` strategy event stay entirely in his method.
+- **Guardrails honored:** wiring is scoped to the different-agent lockout rotation (reviewer `RequestChanges`/`Blocking` ⇒ rotate); the same-agent advisory/steer in-place path (`StartRevisionAsync`) is untouched; a locked-out author is never selected (eligibility predicate); deadlock / budget-exhausted still escalates to human review (never a handoff, never terminal); the trimmed child pipeline (`isChild:true`) means Fix-A's failure→terminal edge governs terminal emission.
+- **Tests:** `RouteAssembly_Rejection_Lockout_DispatchesToDifferentAgentViaContextCarryingHandoff` (new — asserts the handoff is invoked once with `NewAgentRun.Id ≠ priorChild`, rotated author ≠ locked-out author, target+rejection-scoped feedback + prior worktree branch threaded, prior pointer retained, no `RecoveryGuidance` double-carry, never terminal). `RouteAssembly_Rejection_DispatchFresh_CarriesAccumulatedFeedbackAndPriorWork` updated to assert the same via the handoff seam (a reusable prior child now routes through the handoff, not `RecoveryGuidance`).
+- **Validation:** build clean (`Agentweaver.sln -c Release`, 0 warn/0 err); `dotnet test --filter "Assembly|Coordinator|Steer|Revision|Preview|WatchLoop|Terminal|Workflow|Lockout" -c Release` → **762 passed, 0 failed, 12 skipped**.
+
+### 11.8 Delta code-review fixes — guidance-free handoff base + CAS-winner guard
+
+A delta code review of the §11.7 wiring found one Medium/High bug and one cheap defensive nit:
+
+- **BUG — compounding guidance duplication across repeated rotations.** `DispatchLockoutHandoffAsync` built the new agent's run as `priorChild with { … }`, which does NOT reset `Task`, so `newAgentRun.Task == priorChild.Task`. On the FIRST rotation `priorChild` is the original fresh child (guidance-free), so the handoff's single `RenderedGuidance` append was the only guidance — correct. But on the 2nd+ rotation `priorChild` is itself a PRIOR HANDOFF child whose persisted `Task` is already `base + guidance(round1…)` (RunOrchestrator persists `Task = newAgentRun.Task + "\n\n" + guidance`). Because `BuildPriorReviewRoundsAsync` re-renders ALL prior request-changes rounds (oldest→newest), `bundle.RenderedGuidance` already contains round-1's feedback; appending it onto a `Task` that ALREADY embeds round-1 duplicated round-1's guidance — compounding on every further rotation. Not a lockout bypass or crash, but unbounded prompt duplication that dilutes the new agent's task and burns tokens, violating the "never double-append" invariant.
+  - **Root-cause fix:** the handoff base `Task` is now the GUIDANCE-FREE canonical subtask text derived from the `Subtask` definition via the new `BuildCanonicalSubtaskTask(subtask)` helper (`Title` + optional `\n\n` + `Scope`, mirroring `CoordinatorDispatchService.ComposeChildTaskAsync`'s pre-guidance base) — NOT `priorChild.Task`. The handoff's single `RenderedGuidance` append is therefore the ONLY guidance present on every rotation.
+- **Nit — guard the handoff dispatch on the rotation CAS winner.** `ExecuteLockoutRotationAsync`'s rotation loop now collects only the targets whose `TryRotateSubtaskAuthorAsync` returned `result.Won` into a `rotated` list and passes THAT (not `planned`) to `DispatchLockoutHandoffAsync`. The directive-level single-writer lease already serializes replicas, so this is belt-and-suspenders — a CAS-loser can never launch a handoff child + repoint the subtask.
+- **Test:** `RouteAssembly_Rejection_Lockout_TwoRotations_Round1GuidanceAppearsExactlyOnce` drives TWO consecutive lockout rotations on the same subtask (rotation 2's `priorChild` is rotation 1's handoff child, which embeds round-1 guidance) and asserts the round-1 marker appears EXACTLY ONCE in the final child's persisted `Task` — proving no compounding duplication. The test fake `FakeChildRevisionHandoff` now mirrors `RunOrchestrator` by persisting the inserted child's `Task = base + "\n\n" + RenderedGuidance`, so the regression is observable.
+- **Validation:** build clean (`Agentweaver.sln -c Release`, 0 warn/0 err); `dotnet test --filter "Assembly|Coordinator|Steer|Revision|Preview|WatchLoop|Terminal|Workflow|Lockout" -c Release` → **763 passed, 0 failed, 12 skipped**. **`RunOrchestrator.cs` remains UNCHANGED.**
+
+---
+
+## 2026-07-11T00:00:00Z: Decision: Dependency-base propagation fix — IMPLEMENTATION
+
+**Source:** `.squad/decisions/inbox/tank-depbase-impl.md`
+
+# Decision: Dependency-base propagation fix — IMPLEMENTATION
+
+- **Author:** Tank (Backend Engineer)
+- **Date:** 2026-07-11
+- **Status:** Implemented — pending code-review / release (Link owns release)
+- **Requested by:** Ahmed Sabbour
+- **Design gate:** Rubber-duck GO-WITH-CHANGES (5 BLOCKING required changes, all folded in)
+- **Root-cause only** (Ahmed's hard rule): no retries/sleeps/symptom-plaster added.
+
+## Root cause (confirmed)
+`run.Diff` is a best-effort DISPLAY string. `WorktreeOperationsAdapter.GetDiff` swallows all
+exceptions and can return EMPTY even after a real commit. Code used empty `run.Diff` as the sentinel
+for "this branch has no artifacts," silently dropping committed child branches. The authoritative
+artifact is the committed worktree branch (tip tree == `run.TreeHash`), not the diff string.
+
+## Implementation (approach (c) + all 5 BLOCKING changes)
+
+### New inclusion authority
+`apps/Agentweaver.Api/Coordinator/DependencyBranchInclusion.cs` — single source of truth for the
+inclusion predicate. `Evaluate(worktreeManager, repoPath, worktreeBranch, treeHash)` returns
+`Include | ExcludeMissingBranch | ExcludeTreeMismatch`. Diff is **not** an input. Used by #1 and #2.
+
+### WorktreeManager helpers (BLOCKING #2/#3)
+`apps/Agentweaver.Api/Git/WorktreeManager.cs`:
+- `BranchTipMatchesTree(repo, branch, expectedTreeSha)` — validity predicate (exists AND, when
+  expectedTreeSha non-empty, tip.Tree.Sha == expectedTreeSha). Replaces weak `BranchExists`.
+- `GetBranchTipCommitSha(repo, branch)` — tip commit sha for the contains-check.
+- `BranchContains(repo, branch, candidateTipSha)` — merge-base ancestor check (FindMergeBase).
+
+### #1 RebuildDependencyBaseBranchAsync (CoordinatorDispatchService)
+Include a satisfied dependency by branch VALIDITY, not `run.Diff`. LOUD `LogError` (subtaskId,
+childRunId, WorktreeBranch, TreeHash) when a satisfied dependency is excluded for a missing branch or
+a tip-tree mismatch. No-op branches are Included (BuildIntegrationBranch no-ops them) — no deadlock.
+
+### #2 (BLOCKING #1) BuildAssemblyInputsAsync (CoordinatorAssemblyService)
+Same validity rule for FINAL collective assembly. `Diff` kept ONLY for touched-file extraction. LOUD
+`LogError` on exclusion. Added optional `WorktreeManager` ctor param (DI singleton already
+registered); when absent (pure unit contexts) it preserves legacy branch+diff behaviour.
+
+### #4 (BLOCKING #3) ResolveChildBaseBranchAsync — mandatory verify + repair
+Before returning the integration branch, verify it CONTAINS every satisfied transitive dependency
+HEAD (`BranchContains`). If missing → repair once (`RebuildDependencyBaseBranchAsync`) → re-check. If
+still incomplete → do NOT silently fall back to origin: LOUD `LogError` and return `null` (a
+dispatch-BLOCKING sentinel; `DispatchOneAsync` leaves the subtask pending). Existing loud fallback log
+for an ENTIRELY-ABSENT integration branch is preserved.
+
+### #5 (BLOCKING #4) Replica/concurrency
+Added a code comment documenting that the contains-check + repair in #4 is the authoritative guard
+against a clobbered/incomplete integration ref (BuildIntegrationBranch deletes+recreates the ref).
+No new cross-process lock added: the dispatch loop is single-writer per plan (StartDispatch `_active`
+guard) and the rebuild is headless + idempotent, so a re-run re-derives the same branch. Documented
+why this is sufficient.
+
+### #6 (BLOCKING #5) Conflict behavior
+Dependency-base rebuild now emits a LOUD `LogWarning` for EACH auto-resolution (naming branch +
+files) so accepting a later child's version never silently overwrites earlier work at Information
+level. The existing `IntegrationBranchOutcome.Conflict` warning path is retained.
+
+## Tests
+`tests/Agentweaver.Tests/Coordinator/DependencyBasePropagationTests.cs` (11 tests, real temp git repo +
+real SqliteRunStore + real EF MemoryDbContext; private methods invoked via reflection):
+- WorktreeManager helpers (validity, contains, stale mismatch).
+- Inclusion authority: committed child with empty diff → Include; missing → ExcludeMissingBranch;
+  stale tree → ExcludeTreeMismatch; no-op branch → Include.
+- Rebuild: empty-diff committed dependency included and files reach the base; multi-dependency merged
+  in topological order; stale/mismatched branch excluded.
+- Resolve: repairs an incomplete integration branch before returning; no-op dependency proceeds (no
+  hang); in-place-steer regression — after a re-commit the repair uses the NEW tip (asserts blob ==
+  `v2 - steered`).
+- Final assembly: BuildAssemblyInputsAsync includes the committed child with empty Diff.
+
+These genuinely fail against pre-fix code (which required a non-empty `run.Diff` to include a branch).
+
+## Validation
+- `dotnet build apps/Agentweaver.Api/Agentweaver.Api.csproj -c Release --no-restore` → 0 warnings, 0 errors.
+- `dotnet test ... --filter "Coordinator|Assembly|Steer|Worktree|IntegrationBranch" -c Release` →
+  **537 passed, 0 failed** (includes the 11 new tests).
+
+## Files changed
+- `apps/Agentweaver.Api/Coordinator/DependencyBranchInclusion.cs` (new)
+- `apps/Agentweaver.Api/Git/WorktreeManager.cs`
+- `apps/Agentweaver.Api/Coordinator/CoordinatorDispatchService.cs`
+- `apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyService.cs`
+- `tests/Agentweaver.Tests/Coordinator/DependencyBasePropagationTests.cs` (new)
+
+## Not done (per instructions)
+No VERSION bump, no commit/push/deploy — coordinator (Link) handles release after code-review.
+
+---
+
+## 2026-07-11T00:00:00Z: Decision: Dependency-base propagation fix (integration-branch rebuild sentinel)
+
+**Source:** `.squad/decisions/inbox/tank-depbase-propagation-fix.md`
+
+# Decision: Dependency-base propagation fix (integration-branch rebuild sentinel)
+
+- **Author:** Tank (Backend Engineer)
+- **Date:** 2026-07-11
+- **Status:** Proposed — pending rubber-duck design gate
+- **Requested by:** Ahmed Sabbour
+- **Scope:** DESIGN ONLY. No source changed.
+
+## Problem
+In a coordinator run with dependent subtasks (plan #35 -> impl #36 -> tests #37),
+the validation subtask (#37) branched from an integration base that contained only
+`plan.md` — the implemented app (#36) was missing — so QA re-implemented the app.
+
+## Verification finding (race REFUTED, real root cause identified)
+The literal "AssembleReady observed before run.Diff persisted" timing race is **refuted**:
+`EfRunStore.SetAssembleReadyAsync` writes `Status=assemble_ready`, `TreeHash`, `WorktreeBranch`
+and `Diff` in a **single atomic `ExecuteUpdateAsync`**, and `RunWatchLoopService` emits
+`RunAssembleReady` only **after** that write returns. So whenever the coordinator observes
+assemble_ready (store fast-path or event -> `GetAsync`), `run.Diff` is already whatever value it
+will ever be.
+
+The real defect: `run.Diff` is a **best-effort textual display artifact**. In
+`AgentTurnExecutor` the worktree is committed first (`CommitChangesWithRetryAsync` -> real
+`treeHash`, real branch commit = source of truth), then `diff = _worktreeOps.GetDiff(...)` is
+computed best-effort (the surrounding contract says GetDiff/GetStepCount swallow their own
+errors). A dependency can therefore have a **committed worktree branch with real files** but an
+**empty `run.Diff`** string. `RebuildDependencyBaseBranchAsync` gates inclusion on
+`!string.IsNullOrEmpty(run.Diff)`, so it silently drops that dependency's branch from the
+integration branch -> dependents branch from a base missing the app.
+
+## Chosen approach: (c) Source inclusion from the committed worktree branch
+`RebuildDependencyBaseBranchAsync` will include a satisfied dependency's `run.WorktreeBranch`
+whenever that branch **exists** in the repo (via `WorktreeManager.BranchExists`), NOT based on the
+`run.Diff` string. `WorktreeManager.BuildIntegrationBranch` already no-ops unchanged branches
+(merge-base == child tip) and fast-forwards, so passing a genuinely-empty dependency is safe and
+cannot deadlock. When a satisfied dependency is excluded (branch name empty or branch missing) we
+emit a **LOUD** `LogError` (today it is silent) — that is a real contract violation because a
+satisfied child must have committed its branch.
+
+This distinguishes the two cases correctly:
+- committed changes but empty/unreliable Diff -> branch exists & ahead of base -> **INCLUDED** (bug fixed)
+- intentionally no changes -> branch exists, no-op merge -> **PROCEEDS** (no deadlock)
+- branch genuinely missing -> **LOUD error** (should never happen post-assemble_ready)
+
+Secondary hardening (fold in): `ResolveChildBaseBranchAsync` verifies the integration branch tip
+contains each satisfied dependency's HEAD and triggers a rebuild/repair if not (approach (d) as a
+belt-and-suspenders guard before dispatching a dependent).
+
+## Alternatives rejected
+- **(a) Gate assemble_ready handoff on Diff availability** — treats a non-existent timing race as
+  real; would deadlock/stall on legitimately empty-diff dependencies; Diff empty != no artifacts.
+- **(b) Re-run rebuild once Diff "lands"** — symptom-plaster (retries/waits); Diff may never become
+  non-empty (GetDiff swallowed an error / genuine no-op); Ahmed's hard rule forbids this.
+- **(d) alone** — good defensiveness but leaves the wrong sentinel in the primary rebuild path;
+  adopted only as secondary hardening on top of (c).
+
+## Replica safety
+Dispatch loop is single-writer per plan; the fix reads git branch state (source of truth) and the
+run row, adds no new cross-writer state, and `BuildIntegrationBranch` is headless + idempotent
+(reset-to-origin then re-merge), so a re-run or crash-mid-rebuild re-derives the same branch.
+
+## Files touched (planned, not implemented)
+- `apps/Agentweaver.Api/Coordinator/CoordinatorDispatchService.cs`
+  - `RebuildDependencyBaseBranchAsync`: replace `&& !string.IsNullOrEmpty(run.Diff)` with a
+    branch-existence check; add LOUD LogError on exclusion of a satisfied dependency.
+  - `ResolveChildBaseBranchAsync`: verify/repair integration branch contains each dependency HEAD.
+- Tests under `tests/Agentweaver.Tests/Coordinator/` (see design doc test plan).
+
+---
+
+## 2026-07-11T00:00:00Z: Design: Decider-owned routing for the assembly-gate steering handler (in-place vs. lockout rotation)
+
+**Source:** `.squad/decisions/inbox/tank-fixb-decider-owned-routing.md`
+
+# Design: Decider-owned routing for the assembly-gate steering handler (in-place vs. lockout rotation)
+
+**Author:** Tank (Backend / Coordinator)
+**Date:** 2026-07-09T00:00:00Z
+**Status:** IMPLEMENTED — build clean (API + tests, 0 warnings / 0 errors), targeted tests green (**508 passed / 0 failed / 0 skipped** on filter `Steer|Coordinator|Assembly`).
+**Requested by:** Ahmed (@sabbour)
+**Related:** run `19cec519` (live root-cause), rubber-duck gate (3 required changes), prior `tank-assembly-review-resilience-design.md` (Fix-B / Strict Lockout wave).
+
+---
+
+## 1. Problem & root cause
+
+Iterative build-test / reviewer feedback at an assembly gate was ALWAYS being force-rotated to a
+DIFFERENT agent, discarding the accumulated context of the current author, even when the decider had
+correctly chosen `in_place_steer`. Root cause in `CoordinatorAssemblyService.RouteAssemblyGateThroughSteeringAsync`:
+
+```csharp
+var isRejection = IsReviewerRejection(SteeringSeverity.RequestChanges); // ALWAYS true (gate hard-codes RequestChanges)
+if (isRejection && (direction == InPlaceSteer || direction == DispatchFresh))
+    return ExecuteLockoutRotationAsync(...); // OVERRODE the decider's in_place_steer choice on EVERY gate
+```
+
+The decider (`CoordinatorSteeringDecider` / `SteeringPolicy`) was already authoritative and correct;
+the blanket post-decision override defeated it.
+
+## 2. The fix (decider-owned routing)
+
+Deleted the blanket `isRejection` override. The gate now routes PURELY by `decision.Direction`:
+
+- `InPlaceSteer`  → `ExecuteInPlaceSteerAsync` (SAME author, session/worktree resumed, context preserved).
+- `DispatchFresh` → `ExecuteLockoutRotationAsync` (conscious lockout rotation to a DIFFERENT eligible
+  agent, target-author only, full accumulated context; deadlock / no-context → escalate to human review).
+- `Proceed`       → `EscalateToHumanReviewAsync` (budget exhausted / blocking — Fix-B preserved).
+- `Advisory`      → restore assembling + mark applied.
+
+The decider's decision logic and thresholds were NOT touched.
+
+## 3. Rubber-duck required changes
+
+1. **Crash-recoverability of DispatchFresh (BLOCKING).** `DriveOutstandingSteeringExecutionAsync`
+   previously blindly marked any non-in-place, non-proceed directive `applied`. With DispatchFresh now
+   mapping to the multi-step `ExecuteLockoutRotationAsync`, a crash after `MarkDirectiveExecutingAsync`
+   but before the effect completed would silently drop the rotation/handoff. FIX: a DispatchFresh
+   directive stuck `executing` is now RE-DRIVEN via `ExecuteLockoutRotationAsync` (mirroring how
+   in-place and proceed are re-driven). Idempotency:
+   - `TryRotateSubtaskAuthorAsync` writes the durable `(LastResetDirectiveId, LastResetAttempt)` stamp
+     ATOMICALLY with the rotation CAS; the re-drive SKIPS re-selecting an author for an already-rotated
+     target (never double-rotates off the rotated author), carrying it straight to the handoff.
+   - `DispatchLockoutHandoffAsync` SKIPS a target whose current child already belongs to the rotated
+     author (never double-dispatches).
+   - Insufficient context (no target subtask ids on the directive) → escalate to human review rather
+     than silently apply.
+2. **Kept the pre-decision human-review budget reset** (`source == HumanReview` branch). Only the
+   POST-decision override was deleted — Fix-B's "human request-changes after budget exhaustion gets a
+   fresh autonomous convergence pass" is intact.
+3. **Aligned dispatch_fresh comments/rationale** in `CoordinatorSteeringDecider` (policy comment #3 and
+   `BuildRationale`) to say DispatchFresh at an assembly gate = conscious lockout rotation to a
+   different eligible agent. Thresholds/logic unchanged.
+
+## 4. Must-preserve (verified)
+
+- Lockout deadlock (no eligible agent) → override to Proceed + escalate to human review (never terminal).
+- Target-only lockout (per-subtask `TryRotateSubtaskAuthorAsync`, never whole-roster).
+- In-place preserves accumulated feedback + resumes same child run/session.
+- Proceed → human review on budget exhaustion (Fix-B).
+- Per-subtask (`RecoveryAttempts < 3`) and per-plan (`SteeringIterations < 6`) budgets still route
+  exhaustion to Proceed→human, not another in-place loop.
+
+## 5. IsReviewerRejection disposition
+
+The only production caller was the deleted override → the helper is production-dead. Removed the helper
+and its unit test (`IsReviewerRejection_Discriminates_...`).
+
+## 6. Tests
+
+Updated the existing lockout tests (`DispatchFresh_CarriesAccumulatedFeedbackAndPriorWork`,
+`Lockout_DispatchesToDifferentAgentViaContextCarryingHandoff`, `Lockout_TwoRotations_...`) to lapse
+`SteeringRetentionUntil` so the decider judges the target UNRESUMABLE → DispatchFresh → lockout (keeping
+the ChildRunId as the handoff source). Added:
+
+- `RouteAssembly_Rejection_ResumableTarget_SteersInPlace_SameAuthor_NoLockoutRosterMutation`
+- `DriveOutstanding_DispatchFreshExecuting_CrashBeforeEffect_ReDrivesRotation_NotSilentlyApplied`
+- `RouteAssembly_Rejection_RotatesOnlyTargetSubtask_NeverWholeRoster`
+
+Budget-exhausted→human review is already covered by `RouteAssembly_BudgetExhausted_EscalatesToHumanReview_NotTerminal`.
+
+## 7. Validate
+
+- `dotnet build apps/Agentweaver.Api/Agentweaver.Api.csproj -c Release --no-restore` → 0 errors / 0 warnings.
+- `dotnet test tests/Agentweaver.Tests/Agentweaver.Tests.csproj --filter "Steer|Coordinator|Assembly" -c Release`
+  → **508 passed / 0 failed / 0 skipped**.
+
+## 8. Files changed
+
+- `apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyService.cs` — deleted override, rerouted
+  DispatchFresh→lockout, idempotent re-drive of DispatchFresh, handoff idempotency, removed
+  `IsReviewerRejection`.
+- `apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyStore.cs` — `TryRotateSubtaskAuthorAsync` writes
+  the `(LastResetDirectiveId, LastResetAttempt)` idempotency stamp atomically with the rotation CAS.
+- `apps/Agentweaver.Api/Coordinator/CoordinatorSteeringDecider.cs` — dispatch_fresh comment/rationale alignment.
+- `tests/Agentweaver.Tests/Coordinator/CoordinatorAssemblyServiceTests.cs` — updated + new tests, removed dead-helper test.
+
+---
+
+## 2026-07-11T00:00:00Z: Trinity UI diagnosis: RAI output + collapsed activity rows
+
+**Source:** `.squad/decisions/inbox/trinity-ui-rai-activity.md`
+
+# Trinity UI diagnosis: RAI output + collapsed activity rows
+
+Date: 2026-07-11T00:00:00Z
+Requested by: Ahmed Sabbour
+
+## Issue 1: RAI Reviewer shows raw decomposition JSON
+
+Root cause: the RAI/assembly node is treated as an assembly aggregate and reads the coordinator run stream, not a distinct RAI response stream. In `AgentSessionPanel.tsx`, `selectedRunId` maps assembly aggregates to `coordinatorRunId`, while non-root RAI nodes use `buildTurns(events)`, so coordinator `agent.message` content can be rendered in the RAI panel. The raw decomposition JSON shape is already recognized by `timeline/coordinatorPlanFilter.ts` for other timelines, but that filter was not applied in this session panel path.
+
+Applied frontend fix: import `isSerializedWorkPlan` into `AgentSessionPanel.tsx` and skip serialized work-plan JSON in `buildTurns` before appending agent text. Added a regression test ensuring RAI gate panels do not show coordinator decomposition JSON.
+
+Longer-term proposal: if RAI/Rubberduck have persisted sub-run streams, pass their real child run id to the session panel; otherwise show only the explicit `rai.verdict` card/status fallback for RAI nodes.
+
+## Issue 2: many empty `Activity collapsed · 1 update` rows
+
+Root cause: `buildCoordinatorTurns` emitted every coordinator lifecycle line as a separate `ConversationTurn`. With docked panels defaulting technical details on and activity details collapsed, `ConversationTurnBlock` hid each activity row but still rendered one summary button per turn, producing many visually empty rows.
+
+Applied frontend fix: `buildCoordinatorTurns` now appends coordinator activity rows into a single activity turn and accumulates approvals there, so collapsed technical activity renders as one `Activity collapsed · N updates` control.
+
+Validation: `npm --prefix apps/web test -- --run src/__tests__/AgentSessionPanel.test.tsx` passed, and `npm --prefix apps/web run build` passed.
+
+---

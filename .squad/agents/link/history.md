@@ -104,3 +104,7 @@ Link's trace hierarchy work (#166) shipped in the v0.8.0 staging wave; follow-up
 ## 2026-07-07T00:00:00Z — v0.9.2 staging ship
 
 Link shipped v0.9.2 wave documentation (`58907d8`) across the affected docs; VitePress build was green. Coordinator tagged v0.9.2, deployed to `agentweaver-aks-2`, and verified all deployments healthy with `/api/health` 200.
+
+## 2026-07-11T00:00:00Z — v0.9.19-rc1 staging release held for validation
+
+Published the dependency-base propagation and UI fixes to staging as local-only v0.9.19-rc1: rebuilt api/frontend images, retagged unchanged mcp/agent-host images from v0.9.18-rc1, rolled out successfully, and verified /api/health=200. Commit fdbe9832 and tag v0.9.19-rc1 remain local and unpushed pending Ahmed validation.

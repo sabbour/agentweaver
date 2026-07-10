@@ -146,3 +146,7 @@ Trinity's conversational browser TUI/console work (#50, commit fdb2ad5) shipped 
 ## 2026-07-07T00:00:00Z — v0.9.2 staging ship
 
 Trinity shipped the frontend Review now fix (`388b993`): the Assembly and review CTA now opens the artifacts panel directly with `setArtifactsPanelOpen(true)`, and dead `reviewRef` / `scrollToReview` plumbing was removed. The fix is included in v0.9.2 on staging AKS.
+
+## 2026-07-11T00:00:00Z — RAI session panel and coordinator activity UI fixes
+
+Fixed two frontend-only run-panel defects for the staging wave: RAI Reviewer panels filter serialized coordinator work-plan JSON, and coordinator activity updates coalesce into one collapsed activity control instead of many empty rows. The changes rode with Link's local-only v0.9.19-rc1 staging release.
