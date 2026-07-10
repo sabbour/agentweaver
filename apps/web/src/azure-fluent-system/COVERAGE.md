@@ -4,7 +4,7 @@ This document answers a single question: **what does the library cover today, ho
 back to the Figma sources, and how is fidelity guaranteed?** It synthesizes the three locked catalog
 inventories ([`catalog/COMPONENTS.md`](./catalog/COMPONENTS.md),
 [`catalog/PATTERNS.md`](./catalog/PATTERNS.md), [`catalog/ICONS.md`](./catalog/ICONS.md)) plus the
-design doctrine in [`DESIGN.md`](./DESIGN.md) into one status view. Every number here is the same
+design guidance in [`DESIGN.md`](./DESIGN.md) into one status view. Every number here is the same
 value the test suite locks against `componentCatalogData.inventoryCoverage`; none of it is
 hand-maintained prose.
 
@@ -15,11 +15,11 @@ hand-maintained prose.
 | Surface | Source module | Count | Notes |
 | --- | --- | --- | --- |
 | Theme provider | `provider.tsx` | 1 | `AzureFluentProvider` — Fluent v9 provider wired to the Azure token overrides |
-| Fluent 2 foundations | `foundations.tsx` | ~75 | Direct, typed re-exports of upstream `@fluentui/react-components` primitives so downstream apps consume one dependency |
+| Approved Fluent primitives | `foundations.tsx` | ~75 | Direct, typed re-exports of upstream `@fluentui/react-components` primitives so downstream apps consume one dependency |
 | Composed components | `components.tsx` | 40 (+3 aliases) | Azure-specific compositions (blade header, command bar, Copilot surfaces, resource lists, etc.) |
 | Patterns | `patterns.tsx` | 12 | Multi-component page/blade recipes (stepped-form blade, browse resource, delete resource, Copilot workspace, …) + 2 library-authored composed scenarios (coordinator run, agentic approval) |
 | Icon catalog | `icons.tsx` + `assets/icons/azure` | 1441 unique SVG assets · 27 collections · 1637 raw exports | Full vendored Azure icon set, surfaced by the showcase icon browser |
-| Examples | `examples/*.example.tsx` | 24 | Checked-in, self-contained usage samples |
+| Examples | `examples/*.example.tsx` | 26 | Checked-in, self-contained usage samples |
 | Barrel | `index.ts` | — | Re-exports types, provider, icons, components, foundations, patterns (showcase app is intentionally not re-exported) |
 
 The public entry point is the barrel `index.ts`. Downstream consumers get provider + foundations +
@@ -102,7 +102,7 @@ catalog) are complete and verified.
 
 ## 5. Are examples and the showcase up to date?
 
-Yes. 24 checked-in examples exercise the composed components; the showcase renders (a) a component
+Yes. 26 checked-in examples exercise the composed components; the showcase renders (a) a component
 preview browser built from [`catalog/COMPONENTS.md`](./catalog/COMPONENTS.md), (b) an icon browser
 built from [`catalog/ICONS.md`](./catalog/ICONS.md), and (c) a pattern example browser built from
 [`catalog/PATTERNS.md`](./catalog/PATTERNS.md). The showcase reads the same locked
@@ -117,9 +117,9 @@ the test suite fails if they do.
    `get_variable_defs` — never eyeballed from a screenshot.
 2. **Node-ID citations.** Each composed component's source comment cites the Figma node it was
    extracted from, so fidelity is auditable at the code level.
-3. **Verify gates on every change.** `tsc -b` (EXIT=0) + `azureFluentSystem.test.tsx` (21/21) +
-   `validate-pattern-doctrine.mjs` must all pass. The doctrine validator locks the catalog to
-   exactly three inventory files and locks the coverage counts so the docs cannot silently drift.
+3. **Verify on every change.** `tsc -b`, `azureFluentSystem.test.tsx`, and a real
+   browser pass must all pass. The focused tests lock the catalog to exactly
+   three inventory files and lock the coverage counts so the docs cannot silently drift.
 4. **Local-first downstream.** Per [`DESIGN.md`](./DESIGN.md), downstream consumption and review do
    not require Figma MCP — the checked-in catalog + tokens are the local source of truth. Figma MCP
    is used only when intentionally refreshing the catalog.

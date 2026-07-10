@@ -2,13 +2,13 @@ import { useState } from 'react';
 import { Button, ResourceTagEditor, type AzfResourceTagRow } from '..';
 
 const initialRows: AzfResourceTagRow[] = [
-  { id: 'tag-1', name: 'env', value: 'prod', resourceId: 'vm-01' },
+  { id: 'tag-1', name: 'env', value: 'sample', resourceId: 'vm-01' },
   { id: 'tag-2', name: 'owner', value: 'platform', resourceId: 'vm-02' },
 ];
 
 const resources = [
-  { id: 'vm-01', label: 'vm-contoso-prod-01' },
-  { id: 'vm-02', label: 'vm-contoso-prod-02' },
+  { id: 'vm-01', label: 'vm-sample-01' },
+  { id: 'vm-02', label: 'vm-sample-02' },
 ];
 
 export function ResourceTagEditorExample() {

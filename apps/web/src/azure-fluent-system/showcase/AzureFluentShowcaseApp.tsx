@@ -1,3 +1,4 @@
+/* eslint-disable react-refresh/only-export-components */
 import { useMemo, useState, type ReactElement, type ReactNode } from 'react';
 import {
   Avatar,
@@ -97,6 +98,7 @@ import {
   SettingsRegular,
   ShieldTaskRegular,
   SparkleRegular,
+  CheckmarkRegular,
 } from '@fluentui/react-icons';
 import {
   AgenticProgress,
@@ -111,8 +113,10 @@ import {
   AzureStepList,
   AzureTabList,
   AzureToolbar,
+  ArtifactPill,
   BladeHeader,
   Button,
+  CalloutPopover,
   CodeSnippet,
   CommandBar,
   CopyButton,
@@ -120,35 +124,48 @@ import {
   CopilotResponse,
   CopilotPromptRibbon,
   ChainOfThought,
+  DataToolbar,
+  DeleteConfirmationDialog,
   DeleteResourceDialog,
   EssentialsGrid,
   FeedbackFooter,
   FileUpload,
+  FilterBar,
   FilterableComboBox,
   FilterPills,
   FormFieldRow,
   FormFooter,
+  HelpPopover,
+  IconActionButton,
   Input,
   InlineCopilot,
   Link,
   NotificationPane,
   Pager,
+  PortalCommandBar,
   PortalLayout,
   PortalRail,
   PortalTopNav,
   ProgressBarWithLabel,
   ResourceTagEditor,
   ServiceMenu,
+  StatusIconText,
   Text,
 } from '..';
 import {
   AgenticApprovalPattern,
   BrowseResourcePattern,
   CoordinatorRunPattern,
-  CopilotWorkspacePattern,
+  CopilotTriagePanelPattern,
+  CreateResourcePattern,
+  ErrorPattern,
+  FilteringPattern,
+  FormBladePattern,
   ManageResourcePattern,
   NotificationPattern,
+  ResourceOperationHeaderPattern,
   ServiceOverviewPattern,
+  StepWizardPattern,
 } from '../patterns';
 import { componentCatalogData, patternCatalogData } from './catalogData';
 import iconSummary from '../assets/icons/azure/iconcloud-azure-icons-full-summary.json';
@@ -268,8 +285,6 @@ interface ComponentPreviewEntry {
   preview: () => ReactElement;
 }
 
-type ComponentInventoryFilter = 'all' | 'implemented-rendered' | 'showcase-placeholder' | 'needs-mcp-extraction' | 'needs-implementation' | 'local-only-needed';
-
 interface InventorySourceNode {
   nodeId: string;
   name: string;
@@ -310,12 +325,21 @@ interface ResourceRecord {
   status: 'Healthy' | 'Needs attention' | 'Updating';
 }
 
+interface AksResourceRecord {
+  id: string;
+  name: string;
+  resourceGroup: string;
+  subscription: string;
+  type: string;
+  status: 'Running' | 'Warning' | 'Updating';
+}
+
 const componentInventory = componentCatalogData as ComponentInventoryManifest;
 const patternGuide = patternCatalogData as PatternInventoryManifest;
 
 const showcaseTabs = [
-  { id: 'components', label: 'Components', description: 'Preview library primitives' },
-  { id: 'patterns', label: 'Patterns', description: 'Browse composed examples' },
+  { id: 'components', label: 'Components', description: 'Preview reusable building blocks' },
+  { id: 'patterns', label: 'Patterns', description: 'Browse composed product flows' },
   { id: 'icons', label: 'Icons', description: 'Browse local icon assets' },
 ] as const;
 
@@ -328,7 +352,6 @@ const iconCatalogSnapshot = {
 const showcaseIconRegistry = {
   'Compute/Virtual Machine': { src: virtualMachineIcon, alt: 'Virtual machine' },
   'Storage/Storage Accounts': { src: storageAccountsIcon, alt: 'Storage accounts' },
-  FluentFallback: { element: <SparkleRegular />, alt: 'Fluent fallback icon' },
 } as const;
 
 const iconBrowserItems = [
@@ -343,12 +366,6 @@ const iconBrowserItems = [
     alias: 'StorageAccounts',
     source: 'Vendored Azure SVG',
     note: 'Checked-in Azure icon asset for resource-browser and summary views.',
-  },
-  {
-    name: 'FluentFallback',
-    alias: 'Generic status/action',
-    source: 'Fluent UI fallback',
-    note: 'Use when a local Azure asset is not part of the shipped icon set.',
   },
 ] as const;
 
@@ -395,9 +412,9 @@ const azureCatalogCollections = [
 const AZURE_ICON_GRID_CAP = 180;
 
 const resourceRows: ResourceRecord[] = [
-  { id: '1', name: 'aks-observability-prod-eus', owner: 'Platform SRE', location: 'East US', status: 'Needs attention' },
-  { id: '2', name: 'stsharedarchive01', owner: 'Operations', location: 'West US 2', status: 'Healthy' },
-  { id: '3', name: 'vnet-platform-hub', owner: 'Networking', location: 'Central US', status: 'Updating' },
+  { id: '1', name: 'aks-cluster-primary', owner: 'Platform operations', location: 'East US', status: 'Needs attention' },
+  { id: '2', name: 'kubernetes-fleet-member', owner: 'Cluster team', location: 'West US 2', status: 'Healthy' },
+  { id: '3', name: 'nodepool-system', owner: 'Platform operations', location: 'Central US', status: 'Updating' },
 ];
 
 const gridColumns = [
@@ -405,6 +422,28 @@ const gridColumns = [
   { columnId: 'owner', header: 'Owner', sortable: true, sortValue: (item: ResourceRecord) => item.owner, renderCell: (item: ResourceRecord) => item.owner },
   { columnId: 'location', header: 'Location', sortable: true, sortValue: (item: ResourceRecord) => item.location, renderCell: (item: ResourceRecord) => item.location },
   { columnId: 'status', header: 'Status', sortable: true, sortValue: (item: ResourceRecord) => item.status, renderCell: (item: ResourceRecord) => item.status },
+] as const;
+
+const aksResourceRows: AksResourceRecord[] = [
+  { id: 'aks-1', name: 'aks-cluster-alpha', resourceGroup: 'rg-sample-alpha', subscription: 'Sample subscription A', type: 'Kubernetes service', status: 'Running' },
+  { id: 'aks-2', name: 'aks-cluster-beta', resourceGroup: 'rg-sample-beta', subscription: 'Sample subscription B', type: 'Kubernetes fleet member', status: 'Warning' },
+  { id: 'aks-3', name: 'aks-nodepool-system', resourceGroup: 'rg-sample-alpha', subscription: 'Sample subscription A', type: 'Node pool', status: 'Updating' },
+];
+
+const aksResourceColumns = [
+  { columnId: 'name', header: 'Name', sortable: true, sortValue: (item: AksResourceRecord) => item.name, renderCell: (item: AksResourceRecord) => item.name },
+  { columnId: 'resourceGroup', header: 'Resource group', sortable: true, sortValue: (item: AksResourceRecord) => item.resourceGroup, renderCell: (item: AksResourceRecord) => item.resourceGroup },
+  { columnId: 'subscription', header: 'Subscription', sortable: true, sortValue: (item: AksResourceRecord) => item.subscription, renderCell: (item: AksResourceRecord) => item.subscription },
+  { columnId: 'type', header: 'Type', sortable: true, sortValue: (item: AksResourceRecord) => item.type, renderCell: (item: AksResourceRecord) => item.type },
+  {
+    columnId: 'status',
+    header: 'Status',
+    sortable: true,
+    sortValue: (item: AksResourceRecord) => item.status,
+    renderCell: (item: AksResourceRecord) => (
+      <StatusIconText status={item.status === 'Running' ? 'success' : item.status === 'Warning' ? 'warning' : 'info'}>{item.status}</StatusIconText>
+    ),
+  },
 ] as const;
 
 const serviceMenuGroups = [
@@ -527,12 +566,54 @@ const codeSnippetLines = [
     tokens: [
       { text: '"name"', tone: 'key' as const },
       { text: ': ', tone: 'operator' as const },
-      { text: '"appi-observability-prod-eus"' },
+      { text: '"app-insights-sample"' },
     ],
   },
   { lineNumber: 10, indentLevel: 2, text: '}', tokens: [{ text: '}', tone: 'operator' as const }] },
   { lineNumber: 11, indentLevel: 1, text: ']', tokens: [{ text: ']', tone: 'operator' as const }] },
   { lineNumber: 12, text: '}', tokens: [{ text: '}', tone: 'operator' as const }] },
+] as const;
+
+const kustoSnippetLines = [
+  { lineNumber: 1, tokens: [{ text: 'AKSControlPlane', tone: 'key' as const }] },
+  {
+    lineNumber: 2,
+    tokens: [
+      { text: '| ', tone: 'operator' as const },
+      { text: 'where', tone: 'keyword' as const },
+      { text: ' PreciseTimeStamp > ', tone: 'plain' as const },
+      { text: 'ago', tone: 'keyword' as const },
+      { text: '(2h)', tone: 'plain' as const },
+    ],
+  },
+  {
+    lineNumber: 3,
+    tokens: [
+      { text: '| ', tone: 'operator' as const },
+      { text: 'where', tone: 'keyword' as const },
+      { text: ' Region == ', tone: 'plain' as const },
+      { text: '"eastus"', tone: 'string' as const },
+    ],
+  },
+  {
+    lineNumber: 4,
+    tokens: [
+      { text: '| ', tone: 'operator' as const },
+      { text: 'summarize', tone: 'keyword' as const },
+      { text: ' errors=countif(Level == ', tone: 'plain' as const },
+      { text: '"Error"', tone: 'string' as const },
+      { text: ') by ClusterName', tone: 'plain' as const },
+    ],
+  },
+  {
+    lineNumber: 5,
+    tokens: [
+      { text: '| ', tone: 'operator' as const },
+      { text: 'order by', tone: 'keyword' as const },
+      { text: ' errors ', tone: 'plain' as const },
+      { text: 'desc', tone: 'keyword' as const },
+    ],
+  },
 ] as const;
 
 const copilotResponseParts = [
@@ -544,16 +625,20 @@ const copilotResponseParts = [
     badge: 'AI-generated content may be incorrect',
     content: (
       <div className="azf-stack azf-gap-s">
-        <Text>Telemetry drift was isolated to the East US cluster and two dependent workbooks.</Text>
-        <CodeSnippet title="Kusto" lines={codeSnippetLines.slice(0, 4)} maxHeight={152} />
+        <Text>Telemetry drift is isolated to the East US cluster and two dependent workbooks. The query below scopes the error rate for the review window.</Text>
+        <CodeSnippet title="Kusto" lines={kustoSnippetLines} maxHeight={152} />
       </div>
     ),
     supportingText: '1 request left',
+    footerActions: [
+      { id: 'copy-summary', label: 'Copy summary', onClick: () => undefined },
+      { id: 'open-workbook', label: 'Open workbook', onClick: () => undefined },
+    ],
   },
   {
     id: 'confirmation',
     type: 'confirmation' as const,
-    content: 'Run the remediation script against the selected cluster?',
+    content: 'Run the remediation script against aks-cluster-sample?',
     confirmLabel: 'Run remediation',
     cancelLabel: 'Review first',
     onConfirm: () => undefined,
@@ -571,8 +656,8 @@ const agenticPreviewSteps = [
   },
   {
     id: 'approve',
-    title: 'Request production approval',
-    body: 'The next step modifies live clusters and may increase spend.',
+    title: 'Request operator approval',
+    body: 'The next step modifies sample clusters and may increase spend.',
     needsInput: true,
     status: 'warning' as const,
     riskText: 'Approve to let the run continue, or deny to stop the workflow.',
@@ -603,7 +688,7 @@ const chainOfThoughtSteps = [
   {
     id: 'approve',
     title: 'Requesting approval to modify resources',
-    body: "To proceed, I need your approval to access and modify resources in the 'Contoso Production' subscription. This will let me automatically apply the necessary fixes and optimizations.",
+    body: "To proceed, I need your approval to access and modify resources in the 'Sample subscription A' subscription. This will let me automatically apply the necessary fixes and optimizations.",
     disclaimer: 'Denying will immediately stop reasoning, and it can’t be restarted. Continuing may incur costs.',
     approveLabel: 'Approve modifications',
     denyLabel: 'Deny modifications',
@@ -621,10 +706,10 @@ const chainOfThoughtArtifacts = [
 
 const copilotWorkspaceGroups = [
   {
-    id: 'copilot',
-    label: 'Copilot',
+    id: 'tasks',
+    label: 'Tasks',
     items: [
-      { id: 'chat', label: 'Workspace chat' },
+      { id: 'chat', label: 'Chat' },
       { id: 'artifacts', label: 'Artifacts' },
     ],
   },
@@ -682,39 +767,76 @@ function extractNodeIdFromCatalogReference(reference: string) {
 function formatComponentCoverageStatus(status: string) {
   switch (status) {
     case 'implemented-rendered':
-      return 'Rendered';
+      return 'Rendered example';
     case 'showcase-placeholder':
-      return 'Not implemented yet';
+      return 'Related example';
     case 'needs-mcp-extraction':
-      return 'Needs Figma extraction';
+      return 'Needs review';
     case 'needs-implementation':
-      return 'Needs local implementation';
+      return 'Planned example';
     case 'local-only-needed':
-      return 'Local follow-up';
+      return 'Review later';
     default:
       return status;
+  }
+}
+
+function formatComponentReferenceStatus(status: string) {
+  const coverageLabel = formatComponentCoverageStatus(status);
+  if (coverageLabel !== status) return coverageLabel;
+  if (/design-context|variable-def/i.test(status)) return 'Reviewed';
+  if (/error|failed/i.test(status)) return 'Needs review';
+  return status.replace(/[-_]/g, ' ');
+}
+
+function getComponentFallbackSummary(status: string, exportNames: readonly string[]) {
+  switch (status) {
+    case 'showcase-placeholder':
+      return exportNames.length > 0
+        ? 'This item is grouped under a parent component. Use the related example rather than adding a standalone card.'
+        : 'This item is included for completeness but is not offered as a reusable library component.';
+    case 'needs-mcp-extraction':
+      return 'This item needs local design-system review before it becomes a rendered example.';
+    case 'needs-implementation':
+      return 'A dedicated example can be added when this component is implemented.';
+    default:
+      return 'This component is tracked for future browser improvements.';
   }
 }
 
 function getComponentNextAction(status: string, exportNames: readonly string[]) {
   switch (status) {
     case 'implemented-rendered':
-      return exportNames.length > 0
-        ? `Open the ${exportNames.join(', ')} preview and verify the local implementation.`
-        : 'Open the live preview and verify the local implementation.';
+      return 'Verify the rendered behavior in context.';
     case 'showcase-placeholder':
       return exportNames.length > 0
-        ? `This entry can reuse local work from ${exportNames.join(', ')} once it has its own dedicated implementation.`
-        : 'This entry still needs its own dedicated implementation.';
+        ? 'Use the parent component example for this item.'
+        : 'Keep this item listed as a non-reusable detail unless it becomes a library component.';
     case 'needs-mcp-extraction':
-      return 'Extract this Figma component before promoting it into a standalone local preview.';
+      return 'Review the design reference before adding a standalone preview.';
     case 'needs-implementation':
-      return 'Build a dedicated local preview for this Figma component.';
+      return 'Add a rendered example when this component is ready.';
     case 'local-only-needed':
-      return 'Decide whether this inventory row should become a reusable local export or remain a documented follow-up.';
+      return 'Keep it as a related detail unless it becomes a reusable component.';
     default:
-      return 'Review the inventory row and decide the next local implementation step.';
+      return 'Review this entry and choose the next browser update.';
   }
+}
+
+function formatShowcaseReferenceLabel(item: string) {
+  return item
+    .replace(/\s*\(\d+:\d+\)/g, '')
+    .replace(/^\s*[.\u21aa]\s*/, '')
+    .replace(/\bCoT\b/g, 'activity')
+    .replace(/\bFooteractions\b/g, 'Footer actions')
+    .replace(/\bSend_Icon\b/g, 'Send icon')
+    .replace(/\bInput Footer_(LG|Sm)\b/g, 'Input footer')
+    .replace(/\bNum Dropdown\b/g, 'Rows-per-page menu')
+    .trim();
+}
+
+function formatDesignReferenceName(name: string) {
+  return formatShowcaseReferenceLabel(name).replace(/\s+/g, ' ');
 }
 
 function PreviewCard({
@@ -741,13 +863,13 @@ function RelatedCoverageNote({ title, items, body }: { title: string; items: str
   return (
     <section className="azf-showcase-coverage-note" aria-label={title}>
       <div className="azf-showcase-coverage-note__header">
-        <Badge appearance="tint">Showcase verification</Badge>
+        <Badge appearance="tint">Related pieces</Badge>
         <Text weight="semibold">{title}</Text>
       </div>
       <Text className="azf-muted">{body}</Text>
       <ul className="azf-showcase-list azf-showcase-list--compact">
         {items.map((item) => (
-          <li key={item}>{item}</li>
+          <li key={item}>{formatShowcaseReferenceLabel(item)}</li>
         ))}
       </ul>
     </section>
@@ -755,98 +877,144 @@ function RelatedCoverageNote({ title, items, body }: { title: string; items: str
 }
 
 function PortalShellPreview() {
-  const [menuQuery, setMenuQuery] = useState('net');
-
   return (
     <PreviewCard title="Portal shell preview" frameClassName="azf-showcase-preview__frame--portal">
-      <div className="azf-showcase-demo-grid azf-showcase-demo-grid--two-up">
-        <section className="azf-showcase-demo-panel">
-          <div className="azf-showcase-demo-panel__copy">
-            <Text weight="semibold">Portal shell</Text>
-            <Text className="azf-muted">Local shell preview with neutral showcase framing so the portal chrome keeps its own shape.</Text>
-          </div>
-          <PortalLayout
-            className="azf-showcase-shell-preview"
-            topNav={(
-              <PortalTopNav
-                brand={{ product: 'Microsoft Azure', area: 'Portal' }}
-                startActions={[
-                  { id: 'all-services', label: 'All services', icon: <AppsListRegular /> },
-                  { id: 'toggle-nav', label: 'Toggle navigation', icon: <NavigationRegular /> },
-                ]}
-                searchValue="platform"
-                onSearchChange={() => undefined}
-                copilotAction={{ id: 'copilot', label: 'Copilot', icon: <SparkleRegular /> }}
-                endActions={[{ id: 'settings', label: 'Settings', icon: <SettingsRegular /> }]}
-                persona={{ name: 'Ahmed Sabbour', secondaryText: 'Contoso Engineering', icon: <PersonCircleRegular /> }}
-              />
-            )}
-            rail={(
-              <PortalRail
+      <div className="azf-showcase-portal-demo">
+        <PortalLayout
+          className="azf-showcase-shell-preview"
+          topNav={(
+            <PortalTopNav
+              brand={{ product: 'Microsoft Azure', area: 'Portal' }}
+              startActions={[
+                { id: 'all-services', label: 'All services', icon: <AppsListRegular /> },
+                { id: 'toggle-nav', label: 'Toggle navigation', icon: <NavigationRegular /> },
+              ]}
+              searchValue="kubernetes"
+              onSearchChange={() => undefined}
+              copilotAction={{ id: 'copilot', label: 'Copilot', icon: <SparkleRegular /> }}
+              endActions={[{ id: 'settings', label: 'Settings', icon: <SettingsRegular /> }]}
+              persona={{ name: 'Signed-in user', secondaryText: 'Organization directory', icon: <PersonCircleRegular /> }}
+            />
+          )}
+          rail={(
+            <PortalRail
+              items={[
+                { id: 'home', label: 'Home', icon: <HomeRegular />, selected: true },
+                { id: 'insights', label: 'Insights', icon: <DataTrendingRegular /> },
+              ]}
+            />
+          )}
+          breadcrumb={<Text>Home / Kubernetes services / aks-cluster-alpha</Text>}
+          header={<BladeHeader title="aks-cluster-alpha" subtitle="Kubernetes service · East US" />}
+          commandBar={(
+            <CommandBar
+              primaryActions={[
+                { id: 'create', label: 'Create', appearance: 'primary', onClick: () => undefined },
+                { id: 'refresh', label: 'Refresh', icon: <ArrowClockwiseRegular />, onClick: () => undefined },
+              ]}
+            />
+          )}
+        >
+          <div className="azf-showcase-portal-demo__body">
+            <AzureDataGrid items={aksResourceRows} columns={[...aksResourceColumns]} ariaLabel="AKS resources" />
+            <div className="azf-showcase-portal-flyout-stack">
+              <section className="azf-showcase-portal-flyout" aria-label="Global search flyout">
+                <div className="azf-showcase-portal-flyout__header">
+                  <Text weight="semibold">Global search</Text>
+                </div>
+                <SearchBox value="kubernetes" aria-label="Search services and resources" />
+                <div className="azf-showcase-portal-flyout__results" role="list">
+                  <div role="listitem"><Text weight="semibold">Kubernetes services</Text><Text className="azf-muted">Service picker result</Text></div>
+                  <div role="listitem"><Text weight="semibold">AKS resource list</Text><Text className="azf-muted">Recent resource result</Text></div>
+                </div>
+              </section>
+              <section className="azf-showcase-portal-flyout" aria-label="Settings flyout">
+                <div className="azf-showcase-portal-flyout__header">
+                  <Text weight="semibold">Settings</Text>
+                  <Button appearance="subtle" icon={<DismissRegular />} aria-label="Close settings" />
+                </div>
+                <div className="azf-showcase-portal-flyout__results" role="list">
+                  <div role="listitem"><Text>Directories and subscriptions</Text></div>
+                  <div role="listitem"><Text>Appearance and startup views</Text></div>
+                </div>
+              </section>
+              <NotificationPane
+                surface="flyout"
+                title="Activity"
                 items={[
-                  { id: 'home', label: 'Home', icon: <HomeRegular />, selected: true },
-                  { id: 'insights', label: 'Insights', icon: <DataTrendingRegular /> },
+                  {
+                    id: 'portal-activity',
+                    title: 'Cluster policy review needed',
+                    body: 'Cluster policy requires review before rollout continues.',
+                    tone: 'warning',
+                    timestamp: 'Now',
+                    unread: true,
+                    actions: [{ id: 'open-policy', label: 'Open policy', onClick: () => undefined }],
+                  },
                 ]}
               />
-            )}
-            breadcrumb={<Text>Home / Resource type</Text>}
-            header={<BladeHeader title="Resource Type" subtitle="Portal shell, blade header, and focused task body" />}
-            commandBar={(
-              <CommandBar
-                primaryActions={[
-                  { id: 'create', label: 'Create', appearance: 'primary', onClick: () => undefined },
-                  { id: 'refresh', label: 'Refresh', icon: <ArrowClockwiseRegular />, onClick: () => undefined },
-                ]}
-              />
-            )}
-            footer={<FeedbackFooter body="Keep command surfaces flat and restrained inside the shell." action={{ id: 'feedback', label: 'Give feedback', onClick: () => undefined }} />}
-          >
-            <AzureDataGrid items={resourceRows.slice(0, 2)} columns={[...gridColumns]} />
-          </PortalLayout>
-        </section>
-        <section className="azf-showcase-demo-panel">
-          <div className="azf-showcase-demo-panel__copy">
-            <Text weight="semibold">Portal navigation details</Text>
-            <Text className="azf-muted">Search and navigation states stay adjacent to the shell without wrapping the shell itself in showcase labels.</Text>
+            </div>
           </div>
-          <div className="azf-showcase-demo-grid">
-            <section className="azf-showcase-demo-panel azf-showcase-demo-panel--subtle">
-              <Text weight="semibold">Expanded search menu</Text>
-              <Text className="azf-muted">Search, nested navigation, badges, and favorites stay visible instead of hiding behind metadata.</Text>
-              <ServiceMenu
-                groups={serviceMenuGroups.map((group) => ({ ...group, items: [...group.items] }))}
-                selectedId="private-access"
-                searchValue={menuQuery}
-                onSearchChange={setMenuQuery}
-                onSelect={() => undefined}
-                onToggleFavorite={() => undefined}
-              />
-            </section>
-            <section className="azf-showcase-demo-panel azf-showcase-demo-panel--subtle">
-              <Text weight="semibold">Collapsed navigation row</Text>
-              <Text className="azf-muted">Compact icon-only mode keeps the same information architecture reachable in narrow layouts.</Text>
-              <ServiceMenu
-                groups={serviceMenuGroups.map((group) => ({ ...group, items: [...group.items] }))}
-                selectedId="overview"
-                searchable={false}
-                collapsed
-                onSelect={() => undefined}
-              />
-            </section>
-          </div>
-          <RelatedCoverageNote
-            title="Related shell details visible here"
-            body="The shell preview calls out related portal surfaces that share the same local implementation."
-            items={[
-              '.Search Menu (40971:35680)',
-              '.Menu header (32610:9876)',
-              '.search button (32610:9923)',
-              'Service Menu item (41544:8562)',
-              '.L1 Mobile Nav (35431:15337)',
-            ]}
-          />
-        </section>
+        </PortalLayout>
       </div>
+    </PreviewCard>
+  );
+}
+
+function PortalGlobalSearchPreview() {
+  return (
+    <PreviewCard title="Global search">
+      <section className="azf-showcase-portal-flyout" aria-label="Global search flyout">
+        <div className="azf-showcase-portal-flyout__header">
+          <Text weight="semibold">Global search</Text>
+        </div>
+        <SearchBox value="kubernetes" aria-label="Search services and resources" />
+        <div className="azf-showcase-portal-flyout__results" role="list">
+          <div role="listitem"><Text weight="semibold">Azure Kubernetes Service</Text><Text className="azf-muted">Service picker result</Text></div>
+          <div role="listitem"><Text weight="semibold">AKS resource list</Text><Text className="azf-muted">Recent resource result</Text></div>
+          <div role="listitem"><Text weight="semibold">Kubernetes services</Text><Text className="azf-muted">Browse service result</Text></div>
+        </div>
+      </section>
+    </PreviewCard>
+  );
+}
+
+function PortalSettingsFlyoutPreview() {
+  return (
+    <PreviewCard title="Settings flyout">
+      <section className="azf-showcase-portal-flyout" aria-label="Settings flyout">
+        <div className="azf-showcase-portal-flyout__header">
+          <Text weight="semibold">Portal settings</Text>
+          <Button appearance="subtle" icon={<DismissRegular />} aria-label="Close settings" />
+        </div>
+        <div className="azf-showcase-portal-flyout__results" role="list">
+          <div role="listitem"><Text>Directories and subscriptions</Text></div>
+          <div role="listitem"><Text>Appearance and startup views</Text></div>
+          <div role="listitem"><Text>Language and region</Text></div>
+        </div>
+      </section>
+    </PreviewCard>
+  );
+}
+
+function PortalActivityFlyoutPreview() {
+  return (
+    <PreviewCard title="Activity flyout">
+      <NotificationPane
+        surface="flyout"
+        title="Portal activity"
+        items={[
+          {
+            id: 'portal-activity-pattern',
+            title: 'Cluster policy review needed',
+            body: 'Synthetic AKS cluster policy requires review before rollout continues.',
+            tone: 'warning',
+            timestamp: 'Now',
+            unread: true,
+            actions: [{ id: 'open-policy', label: 'Open policy', onClick: () => undefined }],
+          },
+        ]}
+      />
     </PreviewCard>
   );
 }
@@ -877,7 +1045,7 @@ function FormFieldRowPreview() {
           info="Subscriptions scope policy, quota, and billing. The info label stays inline with the fixed label column."
           hint="This row preserves the narrow Azure blade reading width."
         >
-          <Input id="component-preview-subscription" value="Contoso Platform Production" readOnly />
+          <Input id="component-preview-subscription" value="Sample subscription A" readOnly />
         </FormFieldRow>
         <FormFieldRow
           label="Resource group"
@@ -981,27 +1149,57 @@ function EmptyStatePreview() {
 
 function NotificationPanePreview() {
   return (
-    <PreviewCard title="Notification pane preview">
-      <NotificationPane
-        items={[
-          {
-            id: 'notification-1',
-            title: 'Firewall validation blocked',
-            body: 'Resolve the private endpoint policy before the next rollout.',
-            tone: 'warning',
-            timestamp: 'Now',
-            unread: true,
-            actions: [{ id: 'open', label: 'Open resource', onClick: () => undefined }],
-          },
-          {
-            id: 'notification-2',
-            title: 'Backup policy updated',
-            body: 'Nightly snapshots now apply to every production account in West US 2.',
-            tone: 'success',
-            timestamp: '2 min ago',
-          },
-        ]}
-      />
+    <PreviewCard
+      title="Notification pane preview"
+      canvasClassName="azf-showcase-preview__canvas--intrinsic"
+    >
+      <div className="azf-showcase-notification-demo">
+        <NotificationPane
+          className="azf-showcase-notification-demo__pane"
+          title="Activity updates"
+          items={[
+            {
+              id: 'notification-1',
+              title: 'Firewall validation blocked',
+              body: 'Cluster policy requires review before rollout continues.',
+              tone: 'warning',
+              timestamp: 'Now',
+              unread: true,
+              actions: [
+                { id: 'open', label: 'Open resource', onClick: () => undefined },
+                { id: 'assign', label: 'Assign policy', onClick: () => undefined },
+              ],
+            },
+            {
+              id: 'notification-2',
+              title: 'Backup policy updated',
+              body: 'Maintenance configuration now applies to selected clusters in West US 2.',
+              tone: 'success',
+              timestamp: '2 min ago',
+              actions: [{ id: 'view-change', label: 'View change', onClick: () => undefined }],
+            },
+            {
+              id: 'notification-3',
+              title: 'Cost alert threshold reached',
+              body: 'Forecasted compute spend is near the configured monthly budget.',
+              tone: 'info',
+              timestamp: '18 min ago',
+            },
+          ]}
+          footer={<Button appearance="subtle">View all activity</Button>}
+        />
+        <section className="azf-showcase-notification-demo__detail" aria-label="Selected notification detail">
+          <Text weight="semibold">Selected update</Text>
+          <StatusIconText status="warning">Firewall validation blocked</StatusIconText>
+          <Text className="azf-muted">
+            Open the affected Kubernetes resource and review policy before approving rollout.
+          </Text>
+          <div className="azf-row azf-gap-xs azf-wrap">
+            <Button appearance="primary">Review policy</Button>
+            <Button>Dismiss</Button>
+          </div>
+        </section>
+      </div>
     </PreviewCard>
   );
 }
@@ -1011,7 +1209,7 @@ function FeedbackFooterPreview() {
     <PreviewCard title="Feedback footer preview">
       <FeedbackFooter
         title="Was this task flow clear?"
-        body="Feedback/CES/CVA guidance keeps the affordance low emphasis and right-aligned."
+        body="Customer feedback prompts stay low emphasis and right-aligned."
         action={{ id: 'give-feedback', label: 'Give feedback', onClick: () => undefined }}
       />
     </PreviewCard>
@@ -1024,7 +1222,7 @@ function DeleteDialogPreview() {
     <PreviewCard title="Delete confirmation preview">
       <div className="azf-showcase-inline-actions">
         <DeleteResourceDialog
-          resourceName="stcontososhared01"
+          resourceName="sample-resource"
           softDelete
           confirmationText="Soft delete remains available for 14 days, but connected workloads lose access immediately."
           consequences={[
@@ -1100,14 +1298,17 @@ function CopilotComposerPreview() {
   const [readyPrompt, setReadyPrompt] = useState('Summarize the rollout failures and attach the kubelet log snippet.');
   const [runningPrompt, setRunningPrompt] = useState('Draft the approval comment and attach the rollout log.');
   const [agentMode, setAgentMode] = useState(true);
-  const [agentsOff, setAgentsOff] = useState(false);
 
   return (
-    <PreviewCard title="Composer with attachment and stop flow">
-      <div className="azf-showcase-demo-grid azf-showcase-demo-grid--two-up">
-        <section className="azf-showcase-demo-panel">
-          <Badge appearance="outline">Ready to send</Badge>
+    <PreviewCard
+      title="Composer with attachment and stop flow"
+      canvasClassName="azf-showcase-preview__canvas--intrinsic"
+    >
+      <div className="azf-showcase-composer-demo">
+        <section className="azf-showcase-composer-demo__primary" aria-label="Ready composer">
+          <Text weight="semibold">Ready</Text>
           <CopilotComposer
+            className="azf-showcase-composer-demo__composer"
             value={readyPrompt}
             onChange={setReadyPrompt}
             onSend={() => undefined}
@@ -1115,39 +1316,41 @@ function CopilotComposerPreview() {
             onAgentModeChange={setAgentMode}
             attachments={[{ id: 'log', name: 'kubelet.log', onRemove: () => undefined }]}
             onAddAttachment={() => undefined}
+            placeholder="Ask Copilot about this rollout"
           />
         </section>
-        <section className="azf-showcase-demo-panel">
-          <Badge appearance="outline">Running / agents off</Badge>
+        <section className="azf-showcase-composer-demo__secondary" aria-label="Running composer">
+          <Text weight="semibold">Running</Text>
           <CopilotComposer
+            className="azf-showcase-composer-demo__composer azf-showcase-composer-demo__composer--compact"
             value={runningPrompt}
             onChange={setRunningPrompt}
             onSend={() => undefined}
             isRunning
             onStop={() => undefined}
-            agentMode={agentsOff}
-            onAgentModeChange={setAgentsOff}
+            agentMode={false}
+            onAgentModeChange={() => undefined}
             attachments={[{ id: 'rollout', name: 'rollout-summary.md', onRemove: () => undefined }]}
             onAddAttachment={() => undefined}
+            placeholder="Ask Copilot about this rollout"
           />
         </section>
       </div>
-      <RelatedCoverageNote
-        title="Related composer details visible here"
-        body="This standalone card is the showcase gate for the extracted composer children rather than relying on metadata-only coverage."
-        items={['Agent Toggle', 'Agents Off Icon', '.Input Footer_LG', '.Input Footer_Sm', '.Send_Icon']}
-      />
     </PreviewCard>
   );
 }
 
 function CopilotResponsePreview() {
   return (
-    <PreviewCard title="Response, confirmation, and action row">
-      <div className="azf-showcase-demo-grid azf-showcase-demo-grid--two-up">
-        <section className="azf-showcase-demo-panel">
-          <Badge appearance="outline">Resolved answer</Badge>
+    <PreviewCard
+      title="Response, confirmation, and action row"
+      canvasClassName="azf-showcase-preview__canvas--intrinsic"
+    >
+      <div className="azf-showcase-response-demo">
+        <section className="azf-showcase-response-demo__primary" aria-label="Resolved Copilot response">
+          <Text weight="semibold">Resolved response</Text>
           <CopilotResponse
+            className="azf-showcase-response-demo__response"
             parts={[...copilotResponseParts]}
             actions={[
               { id: 'open-incident', label: 'Open incident', onClick: () => undefined },
@@ -1155,9 +1358,10 @@ function CopilotResponsePreview() {
             ]}
           />
         </section>
-        <section className="azf-showcase-demo-panel">
-          <Badge appearance="outline">Loading and request count</Badge>
+        <section className="azf-showcase-response-demo__secondary" aria-label="Loading response">
+          <Text weight="semibold">Loading</Text>
           <CopilotResponse
+            className="azf-showcase-response-demo__response azf-showcase-response-demo__response--compact"
             parts={[
               { id: 'user-loading', type: 'text', author: 'user', content: 'Compare the East US and West US rollout failures.' },
               {
@@ -1173,11 +1377,6 @@ function CopilotResponsePreview() {
           />
         </section>
       </div>
-      <RelatedCoverageNote
-        title="Related response details visible here"
-        body="The response preview doubles as the verification surface for related Copilot response parts that share one reusable implementation."
-        items={['.Footeractions', '.Code Snippet', '.data grid', '.single selection', '.Multiple selection', 'Request Count / Latency']}
-      />
     </PreviewCard>
   );
 }
@@ -1228,27 +1427,27 @@ function AgenticProgressPreview() {
   const cotArtifacts = [...chainOfThoughtArtifacts];
   return (
     <>
-      <PreviewCard title="Chain of thought and approval-gated progress">
+      <PreviewCard title="Activity and approval-gated progress">
         <ChainOfThought
-          title="Reasoning"
-          subtitle={`${cotArtifacts.length} artifacts created`}
+          title="Run activity"
+          subtitle={`${cotArtifacts.length} updates captured`}
           steps={chainOfThoughtSteps.map((step) => ({ ...step }))}
           artifacts={cotArtifacts}
           onApprove={() => undefined}
           onDeny={() => undefined}
         />
         <RelatedCoverageNote
-          title="Related chain-of-thought details visible here"
-          body="ChainOfThought owns the reasoning header, Activity/Artifacts tabs, the actions-completed summary, the status-icon step rows, and the inline approval block (body, disclaimer, Approve/Deny) — all rebuilt from the Figma spec nodes rather than the generic accordion primitive."
-          items={['Chain of thought', '.Reasoning (CoT)', '.Complete (CoT)', '.Needs user input (CoT)', '.Show artifacts (CoT)', '.Artifact row (CoT)', '.Approval (CoT)']}
+          title="Related activity details visible here"
+          body="This activity panel groups progress, outputs, completed actions, step state, and inline approval in one review surface."
+          items={['Activity panel', 'Review state', 'Complete state', 'Needs user input', 'Show outputs', 'Output row', 'Approval']}
         />
       </PreviewCard>
-      <PreviewCard title="Agentic progress list (underlying primitive)">
+      <PreviewCard title="Automation progress list">
         <AgenticProgress steps={[...agenticPreviewSteps]} defaultOpenItems={['approve']} onApprove={() => undefined} onDeny={() => undefined} />
         <RelatedCoverageNote
-          title="Primitive reasoning stream"
-          body="AgenticProgress is the accordion-based reasoning list used on its own where the full Chain-of-thought panel chrome isn't needed."
-          items={['.Agentic List (CoT)', '.Action swap (CoT)', '.Artifact pill (CoT)']}
+          title="Compact activity stream"
+          body="Use this accordion-based activity list on its own when the full review panel is not needed."
+          items={['Automation list', 'Action swap', 'Output pill']}
         />
       </PreviewCard>
     </>
@@ -1259,20 +1458,36 @@ function CopilotWorkspacePreview() {
   const [prompt, setPrompt] = useState('Draft the remediation comment for the deployment review.');
 
   return (
-    <PreviewCard title="Copilot workspace composition">
-      <CopilotWorkspacePattern
-        title="Copilot workspace"
-        serviceMenuGroups={copilotWorkspaceGroups.map((group) => ({ ...group, items: [...group.items] }))}
-        selectedMenuId="chat"
-        onMenuSelect={() => undefined}
-        response={{ parts: [...copilotResponseParts] }}
-        composer={{
-          value: prompt,
-          onChange: setPrompt,
-          onSend: () => undefined,
-          attachments: [{ id: 'summary', name: 'summary.md' }],
-        }}
-      />
+    <PreviewCard
+      title="Copilot workspace preview"
+      frameClassName="azf-showcase-preview__frame--copilot-workspace"
+    >
+      <section className="azf-copilot-workspace-demo" aria-label="Compact Copilot workspace preview">
+        <ServiceMenu
+          className="azf-copilot-workspace-demo__nav"
+          groups={copilotWorkspaceGroups.map((group) => ({ ...group, items: [...group.items] }))}
+          selectedId="chat"
+          onSelect={() => undefined}
+        />
+        <div className="azf-copilot-workspace-demo__main">
+          <div className="azf-copilot-workspace-demo__prompt">
+            <Text weight="semibold">Prompt</Text>
+            <Text>Summarize the rollout failures and attach the Kusto query.</Text>
+          </div>
+          <CopilotResponse
+            className="azf-copilot-workspace-demo__response"
+            parts={copilotResponseParts.filter((part) => part.id !== 'user')}
+          />
+          <CopilotComposer
+            className="azf-copilot-workspace-demo__composer"
+            value={prompt}
+            onChange={setPrompt}
+            onSend={() => undefined}
+            attachments={[{ id: 'kusto', name: 'rollout-failures.kql' }]}
+            placeholder="Ask Copilot about this rollout"
+          />
+        </div>
+      </section>
     </PreviewCard>
   );
 }
@@ -1283,8 +1498,8 @@ function CoordinatorRunPreview() {
 
   return (
     <CoordinatorRunPattern
-      title="Coordinator · rollout-remediation-run"
-      subtitle="Multi-agent run · 3 of 4 steps complete"
+      title="Run review workspace"
+      subtitle="Remediation review · 3 of 4 steps complete"
       runActions={[
         { id: 'pause', label: 'Pause run', onClick: () => undefined },
         { id: 'logs', label: 'View logs', appearance: 'subtle', onClick: () => undefined },
@@ -1304,7 +1519,7 @@ function CoordinatorRunPreview() {
         onChange: setSteering,
         onSend: () => undefined,
         attachments: [{ id: 'run', name: 'run-context.md' }],
-        placeholder: 'Steer the coordinator run…',
+        placeholder: 'Add guidance for the next step…',
       }}
     />
   );
@@ -1313,8 +1528,8 @@ function CoordinatorRunPreview() {
 function AgenticApprovalPreview() {
   return (
     <AgenticApprovalPattern
-      title="Approve production remediation"
-      summary="The coordinator paused for a human decision before modifying live clusters."
+      title="Approve sample remediation"
+      summary="The workflow paused for a human decision before modifying sample clusters."
       steps={agenticPreviewSteps.map((step) => ({ ...step }))}
       defaultOpenItems={['approve']}
       onApprove={() => undefined}
@@ -1323,31 +1538,112 @@ function AgenticApprovalPreview() {
   );
 }
 
+function CopilotTriagePanelPreview() {
+  const [triagePrompt, setTriagePrompt] = useState('Draft the owner update and include the blocked policy name.');
+
+  return (
+    <CopilotTriagePanelPattern
+      title="Copilot triage panel"
+      summary="A compact side panel for reviewing findings, recommended action, and owner follow-up in one place."
+      actions={[
+        { id: 'assign', label: 'Assign owner', onClick: () => undefined },
+        { id: 'open-resource', label: 'Open resource', appearance: 'subtle', onClick: () => undefined },
+      ]}
+      steps={agenticPreviewSteps.map((step) => ({ ...step }))}
+      response={{
+        parts: [
+          {
+            id: 'triage-summary',
+            type: 'text',
+            title: 'Copilot',
+            badge: 'AI-generated content may be incorrect',
+            content: 'East US remediation is blocked by a private endpoint policy. Assign the networking owner before retrying the rollout.',
+            supportingText: 'Ready to share',
+          },
+          {
+            id: 'triage-confirm',
+            type: 'confirmation',
+            content: 'Send the owner update to the incident channel?',
+            confirmLabel: 'Send update',
+            cancelLabel: 'Review message',
+            onConfirm: () => undefined,
+            onCancel: () => undefined,
+          },
+        ],
+      }}
+      composer={{
+        value: triagePrompt,
+        onChange: setTriagePrompt,
+        onSend: () => undefined,
+        attachments: [{ id: 'policy', name: 'policy-findings.json' }],
+      }}
+    />
+  );
+}
+
+function ResourceOperationHeaderPreview() {
+  return (
+    <ResourceOperationHeaderPattern
+      title="Sample resource"
+      subtitle="Storage account · East US"
+      resourceIcon={<ShieldTaskRegular />}
+      actions={[
+        { id: 'refresh', label: 'Refresh', icon: <ArrowClockwiseRegular />, onClick: () => undefined },
+        { id: 'pin', label: 'Pin', appearance: 'subtle', onClick: () => undefined },
+      ]}
+      commandActions={[
+        { id: 'start-backup', label: 'Start backup', appearance: 'primary', onClick: () => undefined },
+        { id: 'open-activity', label: 'View activity', onClick: () => undefined },
+      ]}
+      statusItems={[
+        { id: 'health', title: 'Health', body: 'One networking policy needs attention before the next rollout.' },
+        { id: 'backup', title: 'Backup', body: 'Last snapshot completed 12 minutes ago.' },
+        { id: 'access', title: 'Access', body: 'Private endpoint access is enabled.' },
+      ]}
+    >
+      <AzureDataGrid items={resourceRows.slice(0, 2)} columns={[...gridColumns]} caption="Recent operation status" />
+    </ResourceOperationHeaderPattern>
+  );
+}
+
 const composedScenarios: {
   id: string;
   title: string;
-  exportName: string;
+  parts: string;
   summary: string;
-  lineage: string;
   preview: () => ReactElement;
 }[] = [
   {
-    id: 'coordinator-run',
-    title: 'Coordinator run workspace',
-    exportName: 'CoordinatorRunPattern',
+    id: 'run-review-workspace',
+    title: 'Run review workspace',
+    parts: 'Header, reasoning panel, Copilot answer, composer',
     summary:
-      'Blade header over a run reasoning stream (ChainOfThought) with an aside for the run summary (CopilotResponse) and operator steering (CopilotComposer). Maps directly to the Agentweaver CoordinatorRunPage.',
-    lineage: 'BladeHeader 32615:9834 · ChainOfThought 386:75088 · CopilotResponse 32382:38129 · CopilotComposer 32382:38468',
+      'Review progress, artifacts, approvals, and follow-up guidance without leaving the task workspace.',
     preview: CoordinatorRunPreview,
   },
   {
-    id: 'agentic-approval',
-    title: 'Agentic approval checkpoint',
-    exportName: 'AgenticApprovalPattern',
+    id: 'approval-checkpoint',
+    title: 'Approval checkpoint',
+    parts: 'Approval card and progress list',
     summary:
-      'Compact human-in-the-loop approval card built on AgenticProgress. Maps to the CoordinatorRunPage automation-toggle / approval-gate moment where a run pauses for consent.',
-    lineage: 'AgenticProgress 27950:10571 / 27880:13472 · loader 386:75129 · ArtifactPill 27865:11293',
+      'Pause a sensitive operation, explain the risk, and keep approve or deny actions close to the affected step.',
     preview: AgenticApprovalPreview,
+  },
+  {
+    id: 'copilot-triage-panel',
+    title: 'Copilot triage panel',
+    parts: 'Action strip, progress list, Copilot answer, composer',
+    summary:
+      'Summarize an active issue, show the recommended next step, and let the user send a focused follow-up.',
+    preview: CopilotTriagePanelPreview,
+  },
+  {
+    id: 'resource-operation-header',
+    title: 'Resource operation header',
+    parts: 'Blade header, command strip, status cards, grid',
+    summary:
+      'Place resource identity, primary commands, health cues, and recent operations at the top of a management flow.',
+    preview: ResourceOperationHeaderPreview,
   },
 ];
 
@@ -1358,10 +1654,10 @@ function ComposedScenariosSection() {
         <div>
           <Text as="h2" size={600} weight="semibold">Composed scenarios</Text>
           <Text className="azf-muted">
-            Library-authored compositions beyond the eight Figma pattern families. Each reuses only MCP-grounded primitives; constituent node IDs are cited under every preview.
+            Practical product flows built from the same reviewed Azure Fluent components shown in this browser.
           </Text>
         </div>
-        <Badge appearance="tint" color="brand">Library composition</Badge>
+        <Badge appearance="tint" color="brand">Scenario patterns</Badge>
       </div>
       <div className="azf-showcase-scenarios__grid">
         {composedScenarios.map((scenario) => {
@@ -1371,17 +1667,248 @@ function ComposedScenariosSection() {
               <div className="azf-stack azf-gap-xs">
                 <div className="azf-row azf-showcase-scenario__head">
                   <Text as="h3" size={500} weight="semibold">{scenario.title}</Text>
-                  <span className="azf-showcase-scenario__export">{scenario.exportName}</span>
+                  <span className="azf-showcase-scenario__export">{scenario.parts}</span>
                 </div>
                 <Text className="azf-muted">{scenario.summary}</Text>
               </div>
               <PreviewCard title={scenario.title}>
                 <ScenarioPreview />
               </PreviewCard>
-              <Text size={200} className="azf-showcase-scenario__lineage">MCP lineage · {scenario.lineage}</Text>
             </article>
           );
         })}
+      </div>
+    </section>
+  );
+}
+
+const reusablePatternExamples: {
+  id: string;
+  title: string;
+  codeName: string;
+  summary: string;
+  preview: () => ReactElement;
+}[] = [
+  {
+    id: 'browse-resource-pattern',
+    title: 'AKS resource list',
+    codeName: 'BrowseResourcePattern',
+    summary: 'Search, filter, command, and dense table anatomy for Kubernetes resources.',
+    preview: BrowseResourcePatternPreview,
+  },
+  {
+    id: 'filtering-pattern',
+    title: 'Filtered resource list',
+    codeName: 'FilteringPattern',
+    summary: 'A browse flow variant focused on narrowing an existing list.',
+    preview: FilteringPatternPreview,
+  },
+  {
+    id: 'manage-resource-pattern',
+    title: 'Manage resource',
+    codeName: 'ManageResourcePattern',
+    summary: 'Scoped navigation with compact forms and status lists for routine settings.',
+    preview: ManageResourcePatternPreview,
+  },
+  {
+    id: 'form-blade-pattern',
+    title: 'Form blade',
+    codeName: 'FormBladePattern',
+    summary: 'A focused edit form with message, fields, and docked actions.',
+    preview: FormBladePatternPreview,
+  },
+  {
+    id: 'step-wizard-pattern',
+    title: 'Step wizard',
+    codeName: 'StepWizardPattern',
+    summary: 'Guided configuration steps with contextual content and footer actions.',
+    preview: StepWizardPatternPreview,
+  },
+  {
+    id: 'create-resource-pattern',
+    title: 'Create resource',
+    codeName: 'CreateResourcePattern',
+    summary: 'A create flow with validation and review content.',
+    preview: CreateResourcePatternComponentPreview,
+  },
+  {
+    id: 'error-pattern',
+    title: 'Error message',
+    codeName: 'ErrorPattern',
+    summary: 'A concise blocking message with a next action.',
+    preview: ErrorPatternPreview,
+  },
+  {
+    id: 'notification-pattern',
+    title: 'Notification message',
+    codeName: 'NotificationPattern',
+    summary: 'A lightweight status message for inline task feedback.',
+    preview: () => <NotificationPattern title="Backup policy updated" body="Nightly snapshots now apply to sample storage accounts." intent="success" />,
+  },
+  {
+    id: 'service-overview-pattern',
+    title: 'Service overview',
+    codeName: 'ServiceOverviewPattern',
+    summary: 'Summary cards and actions for a service landing surface.',
+    preview: ServiceOverviewPatternPreview,
+  },
+  {
+    id: 'copilot-workspace-pattern',
+    title: 'Copilot workspace',
+    codeName: 'CopilotWorkspacePattern',
+    summary: 'Navigation, response content, and prompt composer for a Copilot task area.',
+    preview: CopilotWorkspacePreview,
+  },
+  {
+    id: 'coordinator-run-pattern',
+    title: 'Run review workspace',
+    codeName: 'CoordinatorRunPattern',
+    summary: 'A progress review workspace with artifacts, approvals, and guidance.',
+    preview: CoordinatorRunPreview,
+  },
+  {
+    id: 'agentic-approval-pattern',
+    title: 'Approval checkpoint',
+    codeName: 'AgenticApprovalPattern',
+    summary: 'A compact approval card for sensitive workflow steps.',
+    preview: AgenticApprovalPreview,
+  },
+  {
+    id: 'copilot-triage-panel-pattern',
+    title: 'Copilot triage panel',
+    codeName: 'CopilotTriagePanelPattern',
+    summary: 'A triage panel for findings, recommended action, and owner follow-up.',
+    preview: CopilotTriagePanelPreview,
+  },
+  {
+    id: 'resource-operation-header-pattern',
+    title: 'Resource operation header',
+    codeName: 'ResourceOperationHeaderPattern',
+    summary: 'Resource identity, commands, health cues, and recent operations.',
+    preview: ResourceOperationHeaderPreview,
+  },
+];
+
+const portalCapturePatternFamilies: PatternFamily[] = [
+  {
+    id: 'aks-resource-list',
+    name: 'AKS resource list',
+    status: 'showcase',
+    pageNodeId: 'local-aks-resource-list',
+    pageNodeUrl: '',
+    representativeNodes: [],
+    libraryMappings: ['BrowseResourcePattern', 'AzureDataGrid'],
+    antiRules: [],
+    localExamples: ['showcase/AzureFluentShowcaseApp.tsx'],
+    implementationFiles: ['patterns.tsx', 'components.tsx', 'tokens.css'],
+  },
+  {
+    id: 'portal-global-search',
+    name: 'Global search',
+    status: 'showcase',
+    pageNodeId: 'local-portal-global-search',
+    pageNodeUrl: '',
+    representativeNodes: [],
+    libraryMappings: ['SearchBox'],
+    antiRules: [],
+    localExamples: ['showcase/AzureFluentShowcaseApp.tsx'],
+    implementationFiles: ['components.tsx', 'tokens.css'],
+  },
+  {
+    id: 'portal-settings-flyout',
+    name: 'Settings flyout',
+    status: 'showcase',
+    pageNodeId: 'local-portal-settings-flyout',
+    pageNodeUrl: '',
+    representativeNodes: [],
+    libraryMappings: ['Button', 'Text'],
+    antiRules: [],
+    localExamples: ['showcase/AzureFluentShowcaseApp.tsx'],
+    implementationFiles: ['components.tsx', 'tokens.css'],
+  },
+  {
+    id: 'portal-activity-flyout',
+    name: 'Activity flyout',
+    status: 'showcase',
+    pageNodeId: 'local-portal-activity-flyout',
+    pageNodeUrl: '',
+    representativeNodes: [],
+    libraryMappings: ['NotificationPane'],
+    antiRules: [],
+    localExamples: ['showcase/AzureFluentShowcaseApp.tsx'],
+    implementationFiles: ['components.tsx', 'tokens.css'],
+  },
+];
+
+const showcasePatternFamilies: PatternFamily[] = [...portalCapturePatternFamilies, ...patternGuide.families];
+
+function ReusablePatternComponentsSection() {
+  return (
+    <section className="azf-showcase-app__surface azf-showcase-scenarios">
+      <div className="azf-showcase-app__surface-header">
+        <div>
+          <Text as="h2" size={600} weight="semibold">Reusable pattern components</Text>
+          <Text className="azf-muted">
+            Every reusable pattern component has a visible example so consumers can choose the right building block.
+          </Text>
+        </div>
+        <Badge appearance="tint" color="brand">All patterns shown</Badge>
+      </div>
+      <div className="azf-showcase-scenarios__grid">
+        {reusablePatternExamples.map((example) => {
+          const ExamplePreview = example.preview;
+          return (
+            <article key={example.id} className="azf-stack azf-gap-s">
+              <div className="azf-stack azf-gap-xs">
+                <div className="azf-row azf-showcase-scenario__head">
+                  <Text as="h3" size={500} weight="semibold">{example.title}</Text>
+                  <span className="azf-showcase-scenario__export">Reusable pattern</span>
+                </div>
+                <Text className="azf-muted">{example.summary}</Text>
+              </div>
+              <PreviewCard title={example.title}>
+                <ExamplePreview />
+              </PreviewCard>
+            </article>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+function PortalCaptureHighlights({
+  onOpenPattern,
+}: {
+  onOpenPattern: (patternId: string) => void;
+}) {
+  const highlights = [
+    { id: 'aks-resource-list', label: 'AKS resource list', description: 'Azure Kubernetes Service list with resource group, subscription, type, and status columns.' },
+    { id: 'portal-global-search', label: 'Global search', description: 'Portal-style service and resource picker flyout.' },
+    { id: 'portal-settings-flyout', label: 'Settings flyout', description: 'Compact Portal settings pane with flat action rows.' },
+    { id: 'portal-activity-flyout', label: 'Activity flyout', description: 'Portal activity and notifications flyout with actionable updates.' },
+  ];
+
+  return (
+    <section className="azf-showcase-capture-highlights" aria-label="Portal-style showcase highlights">
+      <div className="azf-showcase-capture-highlights__copy">
+        <Text weight="semibold">Portal-style patterns now visible</Text>
+        <Text className="azf-muted">
+          Open the Patterns view for the sanitized AKS and flyout examples.
+        </Text>
+      </div>
+      <div className="azf-showcase-capture-highlights__links">
+        {highlights.map((highlight) => (
+          <button
+            key={highlight.id}
+            type="button"
+            className="azf-showcase-capture-highlights__link"
+            onClick={() => onOpenPattern(highlight.id)}
+          >
+            <Text as="span" weight="semibold">{highlight.label}</Text>
+            <Text as="span" className="azf-muted">{highlight.description}</Text>
+          </button>
+        ))}
       </div>
     </section>
   );
@@ -1435,8 +1962,8 @@ function FileUploadPreview() {
     <PreviewCard title="File upload preview">
       <div className="azf-showcase-form-column">
         <FileUpload label="Certificate (.pfx)" placeholder="Select File" />
-        <FileUpload label="Uploading" state="progress" fileName="prod-cert.pfx" progress={0.6} />
-        <FileUpload label="Uploaded" state="success" fileName="prod-cert.pfx" />
+        <FileUpload label="Uploading" state="progress" fileName="sample-cert.pfx" progress={0.6} />
+        <FileUpload label="Uploaded" state="success" fileName="sample-cert.pfx" />
         <FileUpload label="Bulk import" state="dragdrop" multiple />
       </div>
     </PreviewCard>
@@ -1444,7 +1971,7 @@ function FileUploadPreview() {
 }
 
 function FilterableComboBoxPreview() {
-  const [selected, setSelected] = useState<string | undefined>('sub-prod');
+  const [selected, setSelected] = useState<string | undefined>('sub-a');
 
   return (
     <PreviewCard title="Filterable combo box preview">
@@ -1454,9 +1981,9 @@ function FilterableComboBoxPreview() {
           info="Type to filter across all subscriptions you can access."
           placeholder="Select a subscription"
           options={[
-            { id: 'sub-prod', label: 'Contoso Production' },
-            { id: 'sub-stage', label: 'Contoso Staging' },
-            { id: 'sub-dev', label: 'Contoso Development' },
+            { id: 'sub-a', label: 'Sample subscription A' },
+            { id: 'sub-b', label: 'Sample subscription B' },
+            { id: 'sub-c', label: 'Sample subscription C' },
             { id: 'sub-shared', label: 'Shared Platform Services' },
             { id: 'sub-sandbox', label: 'Innovation Sandbox' },
           ]}
@@ -1502,24 +2029,54 @@ function PortalTopNavPreview() {
           { id: 'settings', label: 'Settings', icon: <SettingsRegular /> },
           { id: 'notifications', label: 'Notifications', icon: <InfoRegular /> },
         ]}
-        persona={{ name: 'Ahmed Sabbour', secondaryText: 'Contoso Engineering', icon: <PersonCircleRegular /> }}
+        persona={{ name: 'Signed-in user', secondaryText: 'Organization directory', icon: <PersonCircleRegular /> }}
+      />
+    </PreviewCard>
+  );
+}
+
+function PortalRailPreview() {
+  return (
+    <PreviewCard title="Portal rail preview" canvasClassName="azf-showcase-preview__canvas--intrinsic">
+      <PortalRail
+        items={[
+          { id: 'home', label: 'Home', icon: <HomeRegular />, selected: true },
+          { id: 'insights', label: 'Insights', icon: <DataTrendingRegular /> },
+          { id: 'settings', label: 'Settings', icon: <SettingsRegular /> },
+        ]}
       />
     </PreviewCard>
   );
 }
 
 function ServiceMenuPreview() {
-  const [menuQuery, setMenuQuery] = useState('');
+  const [menuQuery, setMenuQuery] = useState('net');
   return (
-    <PreviewCard title="Service menu preview">
-      <ServiceMenu
-        groups={serviceMenuGroups.map((group) => ({ ...group, items: [...group.items] }))}
-        selectedId="overview"
-        searchValue={menuQuery}
-        onSearchChange={setMenuQuery}
-        onSelect={() => undefined}
-        onToggleFavorite={() => undefined}
-      />
+    <PreviewCard
+      title="Service menu preview"
+      frameClassName="azf-showcase-preview__frame--compact"
+      canvasClassName="azf-showcase-preview__canvas--intrinsic"
+    >
+      <div className="azf-showcase-service-menu-demo">
+        <ServiceMenu
+          className="azf-showcase-service-menu-demo__menu"
+          groups={serviceMenuGroups.map((group) => ({ ...group, items: [...group.items] }))}
+          selectedId="private-access"
+          searchValue={menuQuery}
+          onSearchChange={setMenuQuery}
+          onSelect={() => undefined}
+          onToggleFavorite={() => undefined}
+        />
+        <section className="azf-showcase-service-menu-demo__detail" aria-label="Selected service menu item">
+          <Text weight="semibold">Private access</Text>
+          <Text className="azf-muted">Selected navigation rows keep focus in the service blade while related items stay searchable.</Text>
+          <div className="azf-row azf-gap-xs azf-wrap">
+            <Badge appearance="tint">Selected</Badge>
+            <Badge appearance="outline">Networking</Badge>
+          </div>
+          <Button appearance="subtle">Open private endpoint settings</Button>
+        </section>
+      </div>
     </PreviewCard>
   );
 }
@@ -1530,10 +2087,10 @@ function BladeHeaderPreview() {
   return (
     <PreviewCard title="Blade header preview">
       <BladeHeader
-        title="Contoso Platform Production"
+        title="Sample resource"
         menuLabel="Overview"
         subtitle="Storage account"
-        resourceIcon={<img src={storageAccountsIcon} alt="" width={28} height={28} />}
+        resourceIcon={<ShieldTaskRegular />}
         pinned={pinned}
         onPin={() => setPinned((value) => !value)}
         starred={starred}
@@ -1566,8 +2123,8 @@ function ResourceTagEditorPreview() {
       <ResourceTagEditor
         rows={rows}
         resources={[
-          { id: 'vm', label: 'contoso-vm' },
-          { id: 'storage', label: 'contosostorage' },
+          { id: 'vm', label: 'sample-vm' },
+          { id: 'storage', label: 'sample-storage' },
         ]}
         onRowChange={(rowId, patch) =>
           setRows((prev) => prev.map((row) => (row.id === rowId ? { ...row, ...patch } : row)))
@@ -1596,7 +2153,7 @@ function AzureFormPreview() {
           onSubmit={() => undefined}
         >
           <FormFieldRow label="Name" htmlFor="azure-form-name">
-            <Input id="azure-form-name" value="contoso-platform" readOnly />
+            <Input id="azure-form-name" value="sample-platform" readOnly />
           </FormFieldRow>
           <FormFieldRow label="Region" htmlFor="azure-form-region">
             <Input id="azure-form-region" value="East US 2" readOnly />
@@ -1607,17 +2164,34 @@ function AzureFormPreview() {
   );
 }
 
+function FormFooterPreview() {
+  return (
+    <PreviewCard title="Form footer preview">
+      <FormFooter
+        primaryAction={{ id: 'save-footer', label: 'Save', appearance: 'primary', onClick: () => undefined }}
+        secondaryAction={{ id: 'discard-footer', label: 'Discard', onClick: () => undefined }}
+        feedback={<Link href="#" onClick={(event) => event.preventDefault()}>Give feedback</Link>}
+      />
+    </PreviewCard>
+  );
+}
+
 function EssentialsGridPreview() {
   return (
-    <PreviewCard title="Essentials preview">
+    <PreviewCard
+      title="Essentials preview"
+      frameClassName="azf-showcase-preview__frame--compact"
+      canvasClassName="azf-showcase-preview__canvas--intrinsic"
+    >
       <EssentialsGrid
+        className="azf-showcase-essentials-preview"
         properties={[
-          { id: 'rg', label: 'Resource group', value: 'contoso-platform-rg', href: '#' },
+          { id: 'rg', label: 'Resource group', value: 'sample-platform-rg', href: '#' },
           { id: 'status', label: 'Status', value: 'Running' },
           { id: 'location', label: 'Location', value: 'East US 2' },
-          { id: 'subscription', label: 'Subscription', value: 'Contoso Production', href: '#' },
-          { id: 'sub-id', label: 'Subscription ID', value: '9f2a1c40-c71b' },
-          { id: 'tags', label: 'Tags', value: 'environment : production', tags: ['costCenter : 4415'] },
+          { id: 'subscription', label: 'Subscription', value: 'Sample subscription A', href: '#' },
+          { id: 'sub-id', label: 'Subscription ID', value: 'redacted-subscription-id' },
+          { id: 'tags', label: 'Tags', value: 'environment : sample', tags: ['costCenter : 4415'] },
         ]}
       />
     </PreviewCard>
@@ -1629,21 +2203,219 @@ function FilterPillsPreview() {
   const toggle = (id: string) =>
     setSelected((prev) => (prev.includes(id) ? prev.filter((value) => value !== id) : [...prev, id]));
   return (
-    <PreviewCard title="Filter pills preview">
-      <FilterPills
-        pills={[
-          { id: 'all', label: 'All' },
-          { id: 'compute', label: 'Compute' },
-          { id: 'storage', label: 'Storage' },
-          { id: 'networking', label: 'Networking' },
+    <PreviewCard
+      title="Search filter pills preview"
+      frameClassName="azf-showcase-preview__frame--compact"
+      canvasClassName="azf-showcase-preview__canvas--intrinsic"
+    >
+      <div className="azf-showcase-filter-pills-demo" aria-label="Search filter pills example">
+        <FilterPills
+          pills={[
+            { id: 'all', label: 'All' },
+            { id: 'compute', label: 'Compute' },
+            { id: 'storage', label: 'Storage' },
+            { id: 'networking', label: 'Networking' },
+          ]}
+          selectedIds={selected}
+          onToggle={toggle}
+          overflowPills={[
+            { id: 'databases', label: 'Databases' },
+            { id: 'ai', label: 'AI + machine learning' },
+            { id: 'security', label: 'Security' },
+          ]}
+        />
+      </div>
+    </PreviewCard>
+  );
+}
+
+function ProviderPreview() {
+  return (
+    <PreviewCard title="Provider density preview" canvasClassName="azf-showcase-preview__canvas--intrinsic">
+      <AzureFluentProvider density="cozy">
+        <Card style={{ maxWidth: 320 }}>
+          <CardHeader
+            header={<Text weight="semibold">Cozy density surface</Text>}
+            description={<Text className="azf-muted">Provider applies Azure tokens and density classes around product UI.</Text>}
+          />
+          <Button appearance="primary">Primary action</Button>
+        </Card>
+      </AzureFluentProvider>
+    </PreviewCard>
+  );
+}
+
+function IconRegistryPreview() {
+  return (
+    <PreviewCard title="Icon registry preview" canvasClassName="azf-showcase-preview__canvas--intrinsic">
+      <AzureIconProvider registry={showcaseIconRegistry}>
+        <div className="azf-showcase-inline-actions">
+          <AzureIcon name="Storage/Storage Accounts" label="Storage account" size={24} />
+          <AzureIcon name="Compute/Virtual Machine" label="Virtual machine" size={24} />
+        </div>
+      </AzureIconProvider>
+    </PreviewCard>
+  );
+}
+
+function IconActionButtonPreview() {
+  return (
+    <PreviewCard title="Icon action button preview" canvasClassName="azf-showcase-preview__canvas--intrinsic">
+      <div className="azf-showcase-inline-actions">
+        <IconActionButton id="refresh-icon" label="Refresh" icon={<ArrowClockwiseRegular />} onClick={() => undefined} />
+        <IconActionButton id="delete-icon" label="Delete" icon={<DeleteRegular />} destructive onClick={() => undefined} />
+        <IconActionButton id="loading-icon" label="Saving" loading onClick={() => undefined} />
+      </div>
+    </PreviewCard>
+  );
+}
+
+function StatusIconTextPreview() {
+  return (
+    <PreviewCard title="Status icon text preview" canvasClassName="azf-showcase-preview__canvas--intrinsic">
+      <div className="azf-showcase-form-column">
+        <StatusIconText status="success">Backup completed</StatusIconText>
+        <StatusIconText status="warning">Policy review needed</StatusIconText>
+        <StatusIconText status="danger">Deployment blocked</StatusIconText>
+      </div>
+    </PreviewCard>
+  );
+}
+
+function CopilotPromptRibbonPreview() {
+  return (
+    <PreviewCard title="Copilot prompt ribbon preview">
+      <BladeHeader
+        title="Sample resource"
+        subtitle="Storage account"
+        promptRibbon={(
+          <CopilotPromptRibbon
+            prompts={[
+              { id: 'summarize', label: 'Summarize health' },
+              { id: 'cost', label: 'Analyze cost' },
+            ]}
+          />
+        )}
+      />
+    </PreviewCard>
+  );
+}
+
+function DataToolbarPreview() {
+  return (
+    <PreviewCard title="Data toolbar preview">
+      <DataToolbar
+        title="Resource actions"
+        actions={[
+          { id: 'create', label: 'Create', appearance: 'primary', icon: <AddRegular />, onClick: () => undefined },
+          { id: 'refresh', label: 'Refresh', icon: <ArrowClockwiseRegular />, onClick: () => undefined },
         ]}
-        selectedIds={selected}
-        onToggle={toggle}
-        overflowPills={[
-          { id: 'databases', label: 'Databases' },
-          { id: 'ai', label: 'AI + machine learning' },
-          { id: 'security', label: 'Security' },
+      >
+        <Badge appearance="outline">3 selected</Badge>
+      </DataToolbar>
+    </PreviewCard>
+  );
+}
+
+function PortalCommandBarPreview() {
+  return (
+    <PreviewCard title="Portal command bar preview">
+      <PortalCommandBar
+        title="Portal commands"
+        description="Use this export when product code names the command strip after the portal shell."
+        primaryActions={[
+          { id: 'save', label: 'Save', icon: <CheckmarkRegular />, onClick: () => undefined },
+          { id: 'refresh', label: 'Refresh', icon: <ArrowClockwiseRegular />, onClick: () => undefined },
         ]}
+      />
+    </PreviewCard>
+  );
+}
+
+function FilterBarPreview() {
+  const [query, setQuery] = useState('east');
+
+  return (
+    <PreviewCard title="Filter bar preview">
+      <FilterBar
+        searchValue={query}
+        onSearchChange={setQuery}
+        searchPlaceholder="Search resources"
+        filters={[
+          { id: 'location', label: 'Location', value: 'East US', selected: true, removable: true, onRemove: () => undefined },
+          { id: 'status', label: 'Status', value: 'Healthy', selected: false },
+        ]}
+      />
+    </PreviewCard>
+  );
+}
+
+function ArtifactPillPreview() {
+  return (
+    <PreviewCard title="Artifact pill preview" canvasClassName="azf-showcase-preview__canvas--intrinsic">
+      <div className="azf-showcase-form-column">
+        {chainOfThoughtArtifacts.slice(0, 2).map((artifact) => <ArtifactPill key={artifact.id} artifact={artifact} />)}
+      </div>
+    </PreviewCard>
+  );
+}
+
+function ChainOfThoughtPreview() {
+  return (
+    <PreviewCard title="Reasoning panel preview">
+      <ChainOfThought
+        title="Reasoning"
+        subtitle={`${chainOfThoughtArtifacts.length} artifacts created`}
+        steps={chainOfThoughtSteps.map((step) => ({ ...step }))}
+        artifacts={[...chainOfThoughtArtifacts]}
+        onApprove={() => undefined}
+        onDeny={() => undefined}
+      />
+    </PreviewCard>
+  );
+}
+
+function HelpPopoverPreview() {
+  return (
+    <PreviewCard title="Help popover preview" canvasClassName="azf-showcase-preview__canvas--intrinsic">
+      <HelpPopover
+        trigger={<Button icon={<InfoRegular />}>Explain backup policy</Button>}
+        title="Backup policy"
+        body="Nightly snapshots keep recoverability available for sample accounts."
+        actions={[{ id: 'learn-more', label: 'Learn more', onClick: () => undefined }]}
+      />
+    </PreviewCard>
+  );
+}
+
+function CalloutPopoverPreview() {
+  return (
+    <PreviewCard title="Callout popover preview" canvasClassName="azf-showcase-preview__canvas--intrinsic">
+      <CalloutPopover
+        trigger={<Button appearance="primary">Review recommendation</Button>}
+        title="Recommendation"
+        body="Move the policy update before the rollout retry so the deployment can continue."
+        tone="brand"
+      />
+    </PreviewCard>
+  );
+}
+
+function DeleteConfirmationDialogPreview() {
+  const [acknowledged, setAcknowledged] = useState(false);
+  return (
+    <PreviewCard title="Delete confirmation alias preview">
+      <DeleteConfirmationDialog
+        resourceName="resource-group-sample"
+        confirmationText="Deleting this resource group removes all contained test resources."
+        acknowledgement={{
+          label: 'I understand the test resources will be removed.',
+          checked: acknowledged,
+          onChange: setAcknowledged,
+        }}
+        trigger={<Button appearance="outline" icon={<DeleteRegular />}>Open confirmation</Button>}
+        onCancel={() => setAcknowledged(false)}
+        onConfirm={() => undefined}
       />
     </PreviewCard>
   );
@@ -1656,7 +2428,7 @@ function FilterPillsPreview() {
 // primitives on the Figma "Azure UI Kit (Fluent 2)" foundations page (node 25156-116,
 // mirrored at https://fluent2.microsoft.design/components/web/react/) are consumed
 // straight from Fluent v9, re-exported from `azure-fluent-system/foundations.tsx`, and
-// surfaced here as live previews merged into the same Components inventory so agents can
+// surfaced here as rendered examples merged into the same Components inventory so agents can
 // discover and use them. Catalog table lives in `catalog/COMPONENTS.md`.
 // ---------------------------------------------------------------------------
 const FOUNDATION_ROW: React.CSSProperties = { display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' };
@@ -1715,7 +2487,7 @@ const fluent2Foundations: FoundationSpec[] = [
         <BreadcrumbDivider />
         <BreadcrumbItem><BreadcrumbButton>Resource groups</BreadcrumbButton></BreadcrumbItem>
         <BreadcrumbDivider />
-        <BreadcrumbItem><BreadcrumbButton current>rg-prod-eastus</BreadcrumbButton></BreadcrumbItem>
+        <BreadcrumbItem><BreadcrumbButton current>rg-sample-eastus</BreadcrumbButton></BreadcrumbItem>
       </Breadcrumb>
     ),
   },
@@ -1728,7 +2500,7 @@ const fluent2Foundations: FoundationSpec[] = [
       <Card style={{ maxWidth: 280 }}>
         <CardHeader
           header={<Text weight="semibold">Storage account</Text>}
-          description={<Text className="azf-muted">stprodeastus · Healthy</Text>}
+          description={<Text className="azf-muted">storage-sample-eastus · Healthy</Text>}
         />
         <Text>2 containers · East US · Standard LRS</Text>
       </Card>
@@ -1737,12 +2509,12 @@ const fluent2Foundations: FoundationSpec[] = [
   {
     exportName: 'Carousel',
     title: 'Carousel',
-    summary: 'Cycle through a set of cards or promotional slides in a bounded region.',
+    summary: 'Cycle through a bounded set of DOM-rendered cards.',
     usageNotes: ['Fluent 2 Carousel with CarouselSlider/CarouselCard/CarouselNav.', `Docs: ${FLUENT2_DOCS}carousel`],
     preview: () => (
       <div style={FOUNDATION_ROW}>
-        <Card style={{ width: 160 }}><Text weight="semibold">Slide 1</Text><Text className="azf-muted">Getting started</Text></Card>
-        <Card style={{ width: 160 }}><Text weight="semibold">Slide 2</Text><Text className="azf-muted">Best practices</Text></Card>
+        <Card style={{ width: 160 }}><Text weight="semibold">Getting started</Text><Text className="azf-muted">First guidance card</Text></Card>
+        <Card style={{ width: 160 }}><Text weight="semibold">Best practices</Text><Text className="azf-muted">Second guidance card</Text></Card>
       </div>
     ),
   },
@@ -1782,7 +2554,7 @@ const fluent2Foundations: FoundationSpec[] = [
         </DialogTrigger>
         <DialogSurface>
           <DialogBody>
-            <DialogTitle>Delete rg-prod-eastus?</DialogTitle>
+            <DialogTitle>Delete rg-sample-eastus?</DialogTitle>
             <DialogContent>This permanently deletes the resource group and all resources in it.</DialogContent>
             <DialogActions>
               <DialogTrigger disableButtonEnhancement><Button>Cancel</Button></DialogTrigger>
@@ -1799,11 +2571,28 @@ const fluent2Foundations: FoundationSpec[] = [
     summary: 'Separate content groups horizontally or vertically, optionally with a label.',
     usageNotes: ['Supports inset, vertical, and labelled variants.', `Docs: ${FLUENT2_DOCS}divider`],
     preview: () => (
-      <div style={FOUNDATION_COL}>
-        <Text>Overview</Text>
-        <Divider />
-        <Divider>Networking</Divider>
-        <Text>Inbound rules</Text>
+      <div className="azf-showcase-divider-demo">
+        <section className="azf-showcase-divider-demo__group" aria-label="Horizontal divider example">
+          <div className="azf-showcase-divider-demo__content">
+            <Text weight="semibold">Activity summary</Text>
+            <Text className="azf-muted">Last deployment completed with two warnings.</Text>
+          </div>
+          <Divider />
+          <div className="azf-showcase-divider-demo__content">
+            <Text weight="semibold">Recommended action</Text>
+            <Text className="azf-muted">Review the East US rollout before approving the next stage.</Text>
+          </div>
+        </section>
+        <section className="azf-showcase-divider-demo__group" aria-label="Labeled divider example">
+          <Divider>Review checkpoints</Divider>
+          <div className="azf-showcase-divider-demo__toolbar">
+            <Button appearance="subtle">Refresh</Button>
+            <Divider vertical />
+            <Button appearance="subtle">Export</Button>
+            <Divider vertical />
+            <Button appearance="subtle">Open logs</Button>
+          </div>
+        </section>
       </div>
     ),
   },
@@ -1910,8 +2699,8 @@ const fluent2Foundations: FoundationSpec[] = [
     usageNotes: ['Compose with ListItem; supports selection.', `Docs: ${FLUENT2_DOCS}list`],
     preview: () => (
       <List style={{ maxWidth: 280 }}>
-        <ListItem>vm-prod-01 · Running</ListItem>
-        <ListItem>vm-prod-02 · Stopped</ListItem>
+        <ListItem>vm-sample-01 · Running</ListItem>
+        <ListItem>vm-sample-02 · Stopped</ListItem>
         <ListItem>vm-staging-01 · Running</ListItem>
       </List>
     ),
@@ -1943,7 +2732,7 @@ const fluent2Foundations: FoundationSpec[] = [
     preview: () => (
       <div style={FOUNDATION_COL}>
         <MessageBar intent="success">
-          <MessageBarBody><MessageBarTitle>Deployed</MessageBarTitle> vm-prod-01 is running.</MessageBarBody>
+          <MessageBarBody><MessageBarTitle>Deployed</MessageBarTitle> vm-sample-01 is running.</MessageBarBody>
         </MessageBar>
         <MessageBar intent="warning">
           <MessageBarBody><MessageBarTitle>Action needed</MessageBarTitle> Renew the TLS certificate.</MessageBarBody>
@@ -2085,7 +2874,7 @@ const fluent2Foundations: FoundationSpec[] = [
     usageNotes: ['Tag, InteractionTag, TagGroup.', `Docs: ${FLUENT2_DOCS}tag`],
     preview: () => (
       <TagGroup aria-label="Resource tags">
-        <Tag>env: prod</Tag>
+        <Tag>env: sample</Tag>
         <Tag dismissible>owner: platform</Tag>
         <InteractionTag><InteractionTagPrimary>East US</InteractionTagPrimary></InteractionTag>
       </TagGroup>
@@ -2147,7 +2936,7 @@ const fluent2Foundations: FoundationSpec[] = [
     preview: () => (
       <Toast style={{ maxWidth: 300 }}>
         <ToastTitle>Deployment complete</ToastTitle>
-        <ToastBody>vm-prod-01 started successfully.</ToastBody>
+        <ToastBody>vm-sample-01 started successfully.</ToastBody>
       </Toast>
     ),
   },
@@ -2186,7 +2975,7 @@ const fluent2Foundations: FoundationSpec[] = [
         <TreeItem itemType="branch" value="sub">
           <TreeItemLayout>Subscription</TreeItemLayout>
           <Tree>
-            <TreeItem itemType="leaf"><TreeItemLayout>rg-prod-eastus</TreeItemLayout></TreeItem>
+            <TreeItem itemType="leaf"><TreeItemLayout>rg-sample-eastus</TreeItemLayout></TreeItem>
             <TreeItem itemType="leaf"><TreeItemLayout>rg-staging</TreeItemLayout></TreeItem>
           </Tree>
         </TreeItem>
@@ -2195,7 +2984,164 @@ const fluent2Foundations: FoundationSpec[] = [
   },
 ];
 
+
+function reuseFoundationPreview(exportName: string): () => ReactElement {
+  return () => {
+    const Preview = fluent2Foundations.find((spec) => spec.exportName === exportName)?.preview;
+    return Preview ? <Preview /> : <Text>No preview available.</Text>;
+  };
+}
+
+const foundationCompanionSpecs: FoundationSpec[] = [
+  { exportName: 'CounterBadge', title: 'Counter badge', summary: 'Count badge used in the Badge foundation example.', usageNotes: ['Use with Badge for compact counts and notifications.'], preview: reuseFoundationPreview('Badge') },
+  { exportName: 'PresenceBadge', title: 'Presence badge', summary: 'Presence indicator used in the Badge and Avatar foundation examples.', usageNotes: ['Use beside people or agents when availability matters.'], preview: reuseFoundationPreview('Badge') },
+  { exportName: 'BreadcrumbItem', title: 'Breadcrumb item', summary: 'Breadcrumb item used in the Breadcrumb foundation example.', usageNotes: ['Compose inside Breadcrumb to describe one level of location.'], preview: reuseFoundationPreview('Breadcrumb') },
+  { exportName: 'BreadcrumbButton', title: 'Breadcrumb button', summary: 'Breadcrumb link/button used in the Breadcrumb foundation example.', usageNotes: ['Use for navigable ancestors in a resource path.'], preview: reuseFoundationPreview('Breadcrumb') },
+  { exportName: 'BreadcrumbDivider', title: 'Breadcrumb divider', summary: 'Separator used in the Breadcrumb foundation example.', usageNotes: ['Use between breadcrumb levels; do not replace with custom text separators.'], preview: reuseFoundationPreview('Breadcrumb') },
+  { exportName: 'NavDrawer', title: 'Navigation drawer', summary: 'Navigation drawer used in the Nav foundation example.', usageNotes: ['Use for primary app or service navigation when a portal rail is not appropriate.'], preview: reuseFoundationPreview('Nav') },
+  { exportName: 'NavItem', title: 'Navigation item', summary: 'Navigation row used in the Nav foundation example.', usageNotes: ['Use inside NavDrawer for destinations and selected state.'], preview: reuseFoundationPreview('Nav') },
+  { exportName: 'NavCategory', title: 'Navigation category', summary: 'Navigation grouping component for larger nav drawers.', usageNotes: ['Use to group related navigation destinations when the drawer grows.'], preview: reuseFoundationPreview('Nav') },
+  { exportName: 'CardHeader', title: 'Card header', summary: 'Header region used in the Card foundation example.', usageNotes: ['Use for title and supporting description inside a card.'], preview: reuseFoundationPreview('Card') },
+  { exportName: 'CardFooter', title: 'Card footer', summary: 'Footer region for card-level actions.', usageNotes: ['Use for actions that belong to the card, not the whole page.'], preview: reuseFoundationPreview('Card') },
+  { exportName: 'CardPreview', title: 'Card preview', summary: 'Media or visual preview region for cards.', usageNotes: ['Use when a card needs a bounded visual preview.'], preview: reuseFoundationPreview('Card') },
+  { exportName: 'CarouselCard', title: 'Carousel card', summary: 'Card item used with Carousel.', usageNotes: ['Use inside carousel regions for bounded instructional content.'], preview: reuseFoundationPreview('Carousel') },
+  { exportName: 'OverlayDrawer', title: 'Overlay drawer', summary: 'Overlay side panel variant for temporary secondary content.', usageNotes: ['Use when the drawer should cover content temporarily.'], preview: reuseFoundationPreview('Drawer') },
+  { exportName: 'InlineDrawer', title: 'Inline drawer', summary: 'Inline side panel variant shown in the Drawer foundation example.', usageNotes: ['Use when the drawer participates in the page layout.'], preview: reuseFoundationPreview('Drawer') },
+  { exportName: 'DrawerHeader', title: 'Drawer header', summary: 'Header region shown in the Drawer foundation example.', usageNotes: ['Use for drawer titles and close affordances.'], preview: reuseFoundationPreview('Drawer') },
+  { exportName: 'DrawerBody', title: 'Drawer body', summary: 'Content region shown in the Drawer foundation example.', usageNotes: ['Use for drawer content that supports the current task.'], preview: reuseFoundationPreview('Drawer') },
+  { exportName: 'DialogSurface', title: 'Dialog surface', summary: 'Dialog surface used in the Dialog foundation example.', usageNotes: ['Use as the modal surface that contains a focused task.'], preview: reuseFoundationPreview('Dialog') },
+  { exportName: 'DialogBody', title: 'Dialog body', summary: 'Dialog body used in the Dialog foundation example.', usageNotes: ['Use to structure title, content, and actions.'], preview: reuseFoundationPreview('Dialog') },
+  { exportName: 'DialogTitle', title: 'Dialog title', summary: 'Dialog title used in the Dialog foundation example.', usageNotes: ['Keep titles concise and specific to the decision.'], preview: reuseFoundationPreview('Dialog') },
+  { exportName: 'DialogActions', title: 'Dialog actions', summary: 'Dialog action row used in the Dialog foundation example.', usageNotes: ['Keep primary and secondary choices clear.'], preview: reuseFoundationPreview('Dialog') },
+  { exportName: 'DialogContent', title: 'Dialog content', summary: 'Dialog content region used in the Dialog foundation example.', usageNotes: ['Use for concise supporting explanation.'], preview: reuseFoundationPreview('Dialog') },
+  { exportName: 'DialogTrigger', title: 'Dialog trigger', summary: 'Dialog trigger used in the Dialog foundation example.', usageNotes: ['Use a clear button or link to open the dialog.'], preview: reuseFoundationPreview('Dialog') },
+  { exportName: 'Option', title: 'Option', summary: 'Selectable option used in Dropdown examples.', usageNotes: ['Use inside Dropdown or FilterableComboBox option lists.'], preview: reuseFoundationPreview('Dropdown') },
+  { exportName: 'OptionGroup', title: 'Option group', summary: 'Grouping component for option lists.', usageNotes: ['Use when a long option list benefits from labeled groups.'], preview: reuseFoundationPreview('Dropdown') },
+  { exportName: 'Radio', title: 'Radio', summary: 'Single choice item used in the Radio group foundation example.', usageNotes: ['Use inside RadioGroup for mutually exclusive choices.'], preview: reuseFoundationPreview('RadioGroup') },
+  { exportName: 'RatingDisplay', title: 'Rating display', summary: 'Read-only rating summary shown in the Rating foundation example.', usageNotes: ['Use when summarizing a rating rather than collecting input.'], preview: reuseFoundationPreview('Rating') },
+  { exportName: 'ColorSwatch', title: 'Color swatch', summary: 'Color option used in the Swatch picker foundation example.', usageNotes: ['Use inside SwatchPicker for color choices.'], preview: reuseFoundationPreview('SwatchPicker') },
+  { exportName: 'ListItem', title: 'List item', summary: 'List row used in the List foundation example.', usageNotes: ['Use inside List for semantic vertical lists.'], preview: reuseFoundationPreview('List') },
+  { exportName: 'SkeletonItem', title: 'Skeleton item', summary: 'Loading placeholder item used in the Skeleton foundation example.', usageNotes: ['Use to mirror the shape of loading content.'], preview: reuseFoundationPreview('Skeleton') },
+  { exportName: 'InteractionTag', title: 'Interaction tag', summary: 'Interactive tag used in the Tag foundation example.', usageNotes: ['Use when a tag acts as a selectable or clickable affordance.'], preview: reuseFoundationPreview('Tag') },
+  { exportName: 'TagGroup', title: 'Tag group', summary: 'Group container used in the Tag foundation example.', usageNotes: ['Use to keep related tags announced together.'], preview: reuseFoundationPreview('Tag') },
+  { exportName: 'TagPickerControl', title: 'Tag picker control', summary: 'Control region for tag-picking experiences.', usageNotes: ['Use with TagPicker when building a full tokenized picker.'], preview: reuseFoundationPreview('TagPicker') },
+  { exportName: 'TreeItem', title: 'Tree item', summary: 'Tree row used in the Tree foundation example.', usageNotes: ['Use inside Tree or FlatTree for hierarchical items.'], preview: reuseFoundationPreview('Tree') },
+  { exportName: 'FlatTree', title: 'Flat tree', summary: 'Flat data variant of the Tree foundation component.', usageNotes: ['Use when tree data is already flattened for rendering.'], preview: reuseFoundationPreview('Tree') },
+  { exportName: 'MenuTrigger', title: 'Menu trigger', summary: 'Trigger used in the Menu foundation example.', usageNotes: ['Use to anchor contextual menus to a button or split-button affordance.'], preview: reuseFoundationPreview('Menu') },
+  { exportName: 'MenuList', title: 'Menu list', summary: 'Menu list used in the Menu foundation example.', usageNotes: ['Use to contain menu items inside the popover.'], preview: reuseFoundationPreview('Menu') },
+  { exportName: 'MenuItem', title: 'Menu item', summary: 'Command row used in the Menu foundation example.', usageNotes: ['Use for contextual commands and overflow actions.'], preview: reuseFoundationPreview('Menu') },
+  { exportName: 'MenuPopover', title: 'Menu popover', summary: 'Popover surface used in the Menu foundation example.', usageNotes: ['Use as the menu surface anchored to the trigger.'], preview: reuseFoundationPreview('Menu') },
+  { exportName: 'MessageBarBody', title: 'Message bar body', summary: 'Message content region used in the Message bar foundation example.', usageNotes: ['Use for the primary message copy.'], preview: reuseFoundationPreview('MessageBar') },
+  { exportName: 'MessageBarActions', title: 'Message bar actions', summary: 'Action region used in the Message bar foundation example.', usageNotes: ['Use for contextual next steps.'], preview: reuseFoundationPreview('MessageBar') },
+  { exportName: 'MessageBarTitle', title: 'Message bar title', summary: 'Message title used in the Message bar foundation example.', usageNotes: ['Use a short title to make the message scannable.'], preview: reuseFoundationPreview('MessageBar') },
+  { exportName: 'ToastTitle', title: 'Toast title', summary: 'Toast title used in the Toast foundation example.', usageNotes: ['Use for short notification headlines.'], preview: reuseFoundationPreview('Toast') },
+  { exportName: 'Toaster', title: 'Toaster', summary: 'Runtime host for toast notifications.', usageNotes: ['Place once near the application root when dispatching toasts.'], preview: reuseFoundationPreview('Toast') },
+  { exportName: 'ToolbarButton', title: 'Toolbar button', summary: 'Command button used in the Toolbar foundation example.', usageNotes: ['Use inside Toolbar for related command groups.'], preview: reuseFoundationPreview('Toolbar') },
+  { exportName: 'ToolbarDivider', title: 'Toolbar divider', summary: 'Divider used in the Toolbar foundation example.', usageNotes: ['Use sparingly to separate command groups.'], preview: reuseFoundationPreview('Toolbar') },
+];
+
+const compositeChildFoundationExportNames = new Set([
+  'BreadcrumbButton',
+  'BreadcrumbDivider',
+  'BreadcrumbItem',
+  'CardFooter',
+  'CardHeader',
+  'CardPreview',
+  'CarouselCard',
+  'DialogActions',
+  'DialogBody',
+  'DialogContent',
+  'DialogSurface',
+  'DialogTitle',
+  'DialogTrigger',
+  'DrawerBody',
+  'DrawerHeader',
+  'InlineDrawer',
+  'MenuItem',
+  'MenuList',
+  'MenuPopover',
+  'MenuTrigger',
+  'MessageBarActions',
+  'MessageBarBody',
+  'MessageBarTitle',
+  'Option',
+  'OptionGroup',
+  'OverlayDrawer',
+  'TagPickerControl',
+  'ToastTitle',
+  'ToolbarButton',
+  'ToolbarDivider',
+]);
+const publicFoundationExportNames = new Set(fluent2Foundations.map((spec) => spec.exportName));
+const allFluent2Foundations: FoundationSpec[] = [...fluent2Foundations, ...foundationCompanionSpecs];
+
 const componentCatalog: ComponentPreviewEntry[] = [
+  {
+    exportName: 'AzureFluentProvider',
+    title: 'Azure Fluent provider',
+    category: 'System setup',
+    summary: 'Wrap product UI with Azure Fluent tokens, theme, and density settings.',
+    usageNotes: [
+      'Place it near the application or showcase root so all child components share the same theme contract.',
+      'Use compact density for dense portal surfaces and cozy density for more spacious task flows.',
+    ],
+    preview: ProviderPreview,
+  },
+  {
+    exportName: 'AzureIcon',
+    title: 'Azure icon',
+    category: 'System setup',
+    summary: 'Show registered Azure resource glyphs at supported portal sizes.',
+    usageNotes: [
+      'Wrap product screens in AzureIconProvider when icons come from a shared registry.',
+      'Keep labels on meaningful icons and mark purely decorative icons as decorative.',
+    ],
+    preview: IconRegistryPreview,
+  },
+  {
+    exportName: 'AzureIconProvider',
+    title: 'Azure icon provider',
+    category: 'System setup',
+    summary: 'AzureIconProvider supplies the icon registry consumed by AzureIcon in product screens.',
+    usageNotes: [
+      'Use the provider for resource-specific icon sets instead of passing image URLs through every component.',
+      'Registry helper functions are code utilities and are documented in source; the provider and AzureIcon are the visible UI pieces.',
+    ],
+    preview: IconRegistryPreview,
+  },
+  {
+    exportName: 'IconActionButton',
+    title: 'Icon action button',
+    category: 'Core controls',
+    summary: 'Use compact, tooltip-backed icon commands in headers, rails, and dense action rows.',
+    usageNotes: [
+      'Use for secondary actions where the icon is familiar and the tooltip provides the accessible label.',
+      'Pair destructive actions with clear surrounding copy rather than relying only on the icon.',
+    ],
+    preview: IconActionButtonPreview,
+  },
+  {
+    exportName: 'StatusIconText',
+    title: 'Status icon text',
+    category: 'Status and feedback',
+    summary: 'StatusIconText pairs success, warning, danger, or info glyphs with short status copy.',
+    usageNotes: [
+      'Keep text specific to the object being summarized.',
+      'Use inside lists, notifications, and detail cards where a full message bar would be too heavy.',
+    ],
+    preview: StatusIconTextPreview,
+  },
+  {
+    exportName: 'CopilotPromptRibbon',
+    title: 'Copilot prompt ribbon',
+    category: 'Copilot and automation',
+    summary: 'CopilotPromptRibbon adds a compact Copilot entry point and suggested prompts inside a task header.',
+    usageNotes: [
+      'Keep suggested prompts short and task-specific.',
+      'Use the ribbon near the surface it helps, not as a global replacement for search or navigation.',
+    ],
+    preview: CopilotPromptRibbonPreview,
+  },
   {
     exportName: 'AzureAccordion',
     title: 'Accordion',
@@ -2233,7 +3179,7 @@ const componentCatalog: ComponentPreviewEntry[] = [
     exportName: 'AzureSlider',
     title: 'Slider',
     category: 'Core controls',
-    summary: 'AzureSlider wraps the Fluent Slider with an inline label, optional info tooltip, and a live value readout for scalar Azure inputs like vCores or throughput.',
+    summary: 'Use a labeled slider with optional info tooltip and live value readout for scalar Azure inputs like vCores or throughput.',
     usageNotes: [
       'Pair the value readout with a formatter so the number carries its unit (for example "8 vCores").',
       'Use info labels for capacity or billing consequences instead of long helper paragraphs.',
@@ -2274,10 +3220,43 @@ const componentCatalog: ComponentPreviewEntry[] = [
     preview: CommandBarPreview,
   },
   {
+    exportName: 'PortalCommandBar',
+    title: 'Portal command bar',
+    category: 'Shell and navigation',
+    summary: 'PortalCommandBar is the portal-named command strip export for pages that want shell-specific terminology.',
+    usageNotes: [
+      'Use it the same way as CommandBar when aligning a page with portal shell language.',
+      'Keep primary and secondary actions grouped so the top of the blade remains scannable.',
+    ],
+    preview: PortalCommandBarPreview,
+  },
+  {
+    exportName: 'DataToolbar',
+    title: 'Data toolbar',
+    category: 'Data and lists',
+    summary: 'DataToolbar places compact list actions above grids and result sets.',
+    usageNotes: [
+      'Use it with grid-level actions such as create, refresh, export, or bulk operations.',
+      'Keep selection summaries short and adjacent to the related action group.',
+    ],
+    preview: DataToolbarPreview,
+  },
+  {
+    exportName: 'FilterBar',
+    title: 'Filter bar',
+    category: 'Data and lists',
+    summary: 'FilterBar combines search with selected filter chips above a browse surface.',
+    usageNotes: [
+      'Use removable chips for active filters and keep search scoped to the list below.',
+      'Pair with DataToolbar and AzureDataGrid for browse pages.',
+    ],
+    preview: FilterBarPreview,
+  },
+  {
     exportName: 'AzureToolbar',
     title: 'Toolbar',
     category: 'Shell and navigation',
-    summary: 'AzureToolbar renders a Fluent Toolbar of subtle command buttons with dividers and an optional top-of-page bottom border for blade command strips.',
+    summary: 'Group subtle command buttons with dividers for blade command strips.',
     usageNotes: [
       'Enable topOfPage when the toolbar anchors the top of a blade so it reads as a bounded command surface.',
       'Insert an action with id "divider" to separate destructive or grouped commands.',
@@ -2332,7 +3311,7 @@ const componentCatalog: ComponentPreviewEntry[] = [
     exportName: 'FilterableComboBox',
     title: 'Filterable combo box',
     category: 'Forms and create flows',
-    summary: 'FilterableComboBox wraps the Fluent Combobox with client-side type-to-filter for long subscription, region, or resource pickers.',
+    summary: 'Use type-to-filter selection for long subscription, region, or resource pickers.',
     usageNotes: [
       'Use freeform filtering for long lists; keep option labels short so matches stay scannable.',
       'Reach for multiselect only when the field genuinely accepts several values, and surface selections as tags nearby.',
@@ -2374,9 +3353,9 @@ const componentCatalog: ComponentPreviewEntry[] = [
   },
   {
     exportName: 'CopilotComposer',
-    title: 'CopilotComposer',
-    category: 'Copilot and agentic',
-    summary: 'CopilotComposer keeps prompting, attachments, and stop controls in one compact task-local surface.',
+    title: 'Copilot composer',
+    category: 'Copilot and automation',
+    summary: 'Keep prompts, attachments, and stop controls in one compact task-local Copilot input.',
     usageNotes: [
       'Use one attachment row and a short prompt region instead of stacking a full card shell around the composer.',
       'Reserve agent mode for workflow-oriented prompts that may request approvals or produce artifacts.',
@@ -2385,9 +3364,9 @@ const componentCatalog: ComponentPreviewEntry[] = [
   },
   {
     exportName: 'CopilotResponse',
-    title: 'CopilotResponse',
-    category: 'Copilot and agentic',
-    summary: 'CopilotResponse handles text, confirmations, and lightweight action rows without exposing hidden reasoning.',
+    title: 'Copilot response',
+    category: 'Copilot and automation',
+    summary: 'Show Copilot answers, confirmations, and lightweight action rows without exposing hidden reasoning.',
     usageNotes: [
       'Keep actions local to the generated answer, such as copy, open, or confirm.',
       'Use confirmation parts when the next step changes real resources or costs.',
@@ -2396,8 +3375,8 @@ const componentCatalog: ComponentPreviewEntry[] = [
   },
   {
     exportName: 'InlineCopilot',
-    title: 'InlineCopilot',
-    category: 'Copilot and agentic',
+    title: 'Inline Copilot',
+    category: 'Copilot and automation',
     summary: 'InlineCopilot provides contextual rewrite/generate help anchored to the field the user is already editing.',
     usageNotes: [
       'Anchor it near the current task instead of navigating the user to a separate chat surface.',
@@ -2407,9 +3386,9 @@ const componentCatalog: ComponentPreviewEntry[] = [
   },
   {
     exportName: 'AgenticProgress',
-    title: 'AgenticProgress',
-    category: 'Copilot and agentic',
-    summary: 'AgenticProgress exposes run status, artifacts, and approvals as a readable operator-first list.',
+    title: 'Agentic progress',
+    category: 'Copilot and automation',
+    summary: 'Automation progress exposes run activity, generated outputs, and approvals as a readable operator-first list.',
     usageNotes: [
       'Keep risk and approval language in the expanded row so the operator can decide in context.',
       'Artifact rows should point to specific outputs, not to generic activity feeds.',
@@ -2417,10 +3396,32 @@ const componentCatalog: ComponentPreviewEntry[] = [
     preview: AgenticProgressPreview,
   },
   {
+    exportName: 'ArtifactPill',
+    title: 'Artifact pill',
+    category: 'Copilot and automation',
+    summary: 'ArtifactPill shows a compact file or output chip with type information and an open action.',
+    usageNotes: [
+      'Use for small sets of generated outputs or review packets inside activity panels.',
+      'Keep titles recognizable and reserve size/type details for secondary text.',
+    ],
+    preview: ArtifactPillPreview,
+  },
+  {
+    exportName: 'ChainOfThought',
+    title: 'Reasoning panel',
+    category: 'Copilot and automation',
+    summary: 'The reasoning panel presents activity, outputs, step state, and approvals in a reviewable Copilot workflow panel.',
+    usageNotes: [
+      'Use when the user needs to audit progress or approve a sensitive next step.',
+      'Keep approval copy close to the affected step so decisions stay contextual.',
+    ],
+    preview: ChainOfThoughtPreview,
+  },
+  {
     exportName: 'CopilotWorkspacePattern',
-    title: 'CopilotWorkspacePattern',
-    category: 'Copilot and agentic',
-    summary: 'CopilotWorkspacePattern composes service navigation, response content, and the composer into a focused workspace.',
+    title: 'Copilot workspace',
+    category: 'Copilot and automation',
+    summary: 'A compact Copilot task workspace with navigation, response, actions, and composer.',
     usageNotes: [
       'Use it when Copilot is a primary task surface, not when the prompt should stay inline.',
       'Keep the menu narrow and the main content column dedicated to response + composer flow.',
@@ -2429,9 +3430,9 @@ const componentCatalog: ComponentPreviewEntry[] = [
   },
   {
     exportName: 'NotificationPane',
-    title: 'NotificationPane',
+    title: 'Notification pane',
     category: 'Status and feedback',
-    summary: 'NotificationPane turns notification-family guidance into a reusable side-pane list with local actions and unread emphasis.',
+    summary: 'Notification pane turns actionable updates into a reusable side-pane list with local actions and unread emphasis.',
     usageNotes: [
       'Use notification panes for actionable status near the affected task surface, not as a detached toast wall.',
       'Pair with contextual grids or detail panes when the notification opens a remediation workflow.',
@@ -2440,9 +3441,9 @@ const componentCatalog: ComponentPreviewEntry[] = [
   },
   {
     exportName: 'FeedbackFooter',
-    title: 'FeedbackFooter',
+    title: 'Feedback footer',
     category: 'Status and feedback',
-    summary: 'FeedbackFooter captures CES/CVA footer guidance with restrained copy and right-aligned action emphasis.',
+    summary: 'Feedback footer captures customer satisfaction prompts with restrained copy and right-aligned action emphasis.',
     usageNotes: [
       'Reserve the footer for feedback or next-step affordances after the main work is readable.',
       'Do not let feedback compete with primary task completion actions.',
@@ -2451,14 +3452,47 @@ const componentCatalog: ComponentPreviewEntry[] = [
   },
   {
     exportName: 'DeleteResourceDialog',
-    title: 'DeleteResourceDialog',
+    title: 'Delete resource dialog',
     category: 'Dialogs and confirmations',
-    summary: 'DeleteResourceDialog keeps destructive actions explicit, consequence-driven, and optionally gated by acknowledgement.',
+    summary: 'Keep destructive actions explicit, consequence-driven, and optionally gated by acknowledgement.',
     usageNotes: [
       'Use soft-delete or recoverability copy when the service supports it.',
       'Keep danger styling focused on the destructive affordance, not the entire surrounding surface.',
     ],
     preview: DeleteDialogPreview,
+  },
+  {
+    exportName: 'DeleteConfirmationDialog',
+    title: 'Delete confirmation dialog',
+    category: 'Dialogs and confirmations',
+    summary: 'DeleteConfirmationDialog is the confirmation-oriented export for the same destructive action flow.',
+    usageNotes: [
+      'Use when product copy names the flow as a confirmation rather than a resource-specific dialog.',
+      'Keep acknowledgement requirements explicit before enabling the destructive action.',
+    ],
+    preview: DeleteConfirmationDialogPreview,
+  },
+  {
+    exportName: 'HelpPopover',
+    title: 'Help popover',
+    category: 'Dialogs and confirmations',
+    summary: 'HelpPopover provides lightweight contextual guidance anchored to the control it explains.',
+    usageNotes: [
+      'Use for short explanations that would otherwise interrupt form scanning.',
+      'Keep actions secondary to the explanation unless the popover is part of onboarding.',
+    ],
+    preview: HelpPopoverPreview,
+  },
+  {
+    exportName: 'CalloutPopover',
+    title: 'Callout popover',
+    category: 'Dialogs and confirmations',
+    summary: 'CalloutPopover is the callout-named export for the same anchored guidance surface.',
+    usageNotes: [
+      'Use when product copy treats the anchored content as a recommendation or callout.',
+      'Keep the trigger close to the recommendation it explains.',
+    ],
+    preview: CalloutPopoverPreview,
   },
   {
     exportName: 'PortalTopNav',
@@ -2472,10 +3506,21 @@ const componentCatalog: ComponentPreviewEntry[] = [
     preview: PortalTopNavPreview,
   },
   {
+    exportName: 'PortalRail',
+    title: 'Portal rail',
+    category: 'Shell and navigation',
+    summary: 'PortalRail provides the compact left rail for high-level portal destinations.',
+    usageNotes: [
+      'Use it for primary destinations that need to stay reachable while the blade content changes.',
+      'Keep labels available through tooltips when the rail is icon-only.',
+    ],
+    preview: PortalRailPreview,
+  },
+  {
     exportName: 'ServiceMenu',
     title: 'Service menu',
     category: 'Shell and navigation',
-    summary: 'ServiceMenu renders grouped, searchable portal navigation with nested items, favorites, badges, and a collapsed icon-only mode.',
+    summary: 'Provide grouped portal navigation with search, nested items, favorites, badges, and collapsed mode.',
     usageNotes: [
       'Enable search once the menu passes a handful of groups so deep items stay reachable.',
       'Use the collapsed mode for narrow layouts instead of hiding navigation entirely.',
@@ -2508,7 +3553,7 @@ const componentCatalog: ComponentPreviewEntry[] = [
     exportName: 'AzureForm',
     title: 'Form',
     category: 'Forms and create flows',
-    summary: 'AzureForm wraps stacked form rows with an optional status message and a sticky footer for the primary and secondary actions.',
+    summary: 'Use stacked form rows with an optional status message and sticky footer actions.',
     usageNotes: [
       'Keep the form in a narrow reading column and let FormFieldRow own the label alignment.',
       'Use the message slot for form-level status instead of repeating it on every field.',
@@ -2516,10 +3561,21 @@ const componentCatalog: ComponentPreviewEntry[] = [
     preview: AzureFormPreview,
   },
   {
+    exportName: 'FormFooter',
+    title: 'Form footer',
+    category: 'Forms and create flows',
+    summary: 'FormFooter keeps primary, secondary, and feedback actions docked together at the end of a task form.',
+    usageNotes: [
+      'Use it for save/cancel flows so actions remain predictable across edit and create blades.',
+      'Keep feedback secondary to the primary task action.',
+    ],
+    preview: FormFooterPreview,
+  },
+  {
     exportName: 'EssentialsGrid',
     title: 'Essentials',
     category: 'Data and lists',
-    summary: 'EssentialsGrid renders the collapsible resource-summary property grid with label/value pairs, links, and inline tags.',
+    summary: 'Essentials renders the collapsible resource-summary property grid with label/value pairs, links, and inline tags.',
     usageNotes: [
       'Keep property labels short and let values carry links or tags rather than extra helper text.',
       'Collapse to a single column on narrow blades so the summary stays readable.',
@@ -2530,7 +3586,7 @@ const componentCatalog: ComponentPreviewEntry[] = [
     exportName: 'FilterPills',
     title: 'Search filter pills',
     category: 'Data and lists',
-    summary: 'FilterPills renders selectable category pills with an optional overflow menu for less-common facets above a result list.',
+    summary: 'Use compact category pills to refine search results, with overflow for less-common facets.',
     usageNotes: [
       'Keep the most common facets visible and move the long tail into the Filters overflow menu.',
       'Drive selection through selectedIds so the pills stay controlled alongside the result query.',
@@ -2664,19 +3720,19 @@ const groupedComponentInventoryEntries: ComponentInventoryBrowserEntry[] = inven
       ? 'showcase-placeholder'
       : bestCoverageStatus(group);
 
-  const title = isInternalBucket
-    ? 'Internal component layers'
-    : previewEntry?.title ?? representative.name ?? representative.nodeId;
-
   const summary = isInternalBucket
-    ? `${group.members.length} internal Figma sub-layers (rows, headers, popovers, and menu parts) that compose the components above rather than shipping as standalone exports.`
-    : previewEntry?.summary ?? representative.coverageReason ?? inventoryRow?.implementedMapping ?? 'No checked-in preview summary yet.';
+    ? `${group.members.length} shared rows, headers, popovers, and menu parts are represented through the component previews above.`
+    : previewEntry?.summary ?? getComponentFallbackSummary(coverageStatus, exportNames);
+
+  const title = isInternalBucket
+    ? 'Shared component details'
+    : previewEntry?.title ?? representative.name ?? representative.nodeId;
 
   const exportLabel = isInternalBucket
     ? 'Composed into other components'
     : exportNames.length > 0
       ? exportNames.join(', ')
-      : 'No local export yet';
+      : 'No reusable code export yet';
 
   return {
     nodeId: representative.nodeId,
@@ -2702,7 +3758,7 @@ const groupedComponentInventoryEntries: ComponentInventoryBrowserEntry[] = inven
 // Build inventory entries for the Fluent 2 foundation primitives so they appear in the
 // same Components inventory (not a separate tab). Each uses a synthetic, collision-free
 // nodeId and empty sourceNodes — the 148 Figma source-node audit stays intact.
-const foundationInventoryEntries: ComponentInventoryBrowserEntry[] = fluent2Foundations.map((spec) => {
+const foundationInventoryEntries: ComponentInventoryBrowserEntry[] = allFluent2Foundations.map((spec) => {
   const previewEntry: ComponentPreviewEntry = {
     exportName: spec.exportName,
     title: spec.title,
@@ -2732,11 +3788,43 @@ const foundationInventoryEntries: ComponentInventoryBrowserEntry[] = fluent2Foun
   };
 });
 
+const copilotComponentExportOrder = [
+  'CopilotComposer',
+  'CopilotResponse',
+  'InlineCopilot',
+  'CopilotPromptRibbon',
+  'ArtifactPill',
+  'AgenticProgress',
+  'ChainOfThought',
+  'CopilotWorkspacePattern',
+];
+
+const copilotComponentExportNames = new Set(copilotComponentExportOrder);
+
+function isCopilotComponentInventoryEntry(entry: ComponentInventoryBrowserEntry): boolean {
+  return entry.exportNames.some((exportName) => copilotComponentExportNames.has(exportName));
+}
+
 function compareInventoryTitle(a: ComponentInventoryBrowserEntry, b: ComponentInventoryBrowserEntry): number {
-  // Force the internal-layers bucket to the very end; otherwise sort alphabetically by title.
-  const aInternal = a.title === 'Internal component layers';
-  const bInternal = b.title === 'Internal component layers';
+  const aInternal = a.title === 'Shared component details';
+  const bInternal = b.title === 'Shared component details';
   if (aInternal !== bInternal) return aInternal ? 1 : -1;
+
+  const aCopilot = isCopilotComponentInventoryEntry(a);
+  const bCopilot = isCopilotComponentInventoryEntry(b);
+  if (aCopilot !== bCopilot) return aCopilot ? -1 : 1;
+  if (aCopilot && bCopilot) {
+    const aRank = Math.min(...a.exportNames.map((exportName) => {
+      const rank = copilotComponentExportOrder.indexOf(exportName);
+      return rank >= 0 ? rank : copilotComponentExportOrder.length;
+    }));
+    const bRank = Math.min(...b.exportNames.map((exportName) => {
+      const rank = copilotComponentExportOrder.indexOf(exportName);
+      return rank >= 0 ? rank : copilotComponentExportOrder.length;
+    }));
+    if (aRank !== bRank) return aRank - bRank;
+  }
+
   return a.title.localeCompare(b.title, 'en', { sensitivity: 'base' });
 }
 
@@ -2745,7 +3833,14 @@ export const showcaseComponentInventoryEntries: ComponentInventoryBrowserEntry[]
   ...foundationInventoryEntries,
 ].sort(compareInventoryTitle);
 
-export const showcaseComponentInventoryNodeIds = showcaseComponentInventoryEntries.map(({ nodeId }) => nodeId);
+export const publicShowcaseComponentInventoryEntries = showcaseComponentInventoryEntries.filter(
+  (entry) => entry.coverageStatus === 'implemented-rendered'
+    && Boolean(entry.previewEntry)
+    && !entry.exportNames.some((exportName) => compositeChildFoundationExportNames.has(exportName))
+    && (entry.sourceNodes.length > 0 || entry.exportNames.some((exportName) => publicFoundationExportNames.has(exportName))),
+);
+
+export const showcaseComponentInventoryNodeIds = publicShowcaseComponentInventoryEntries.map(({ nodeId }) => nodeId);
 
 // Flat list of every Figma node represented across the grouped inventory (one entry per catalog row),
 // used to guarantee the grouping never drops a component from coverage.
@@ -2754,15 +3849,16 @@ export const showcaseComponentInventorySourceNodeIds = showcaseComponentInventor
 );
 
 export const showcaseComponentMenuExportNames = componentCatalog.map(({ exportName }) => exportName);
-// Doctrine marker: Exactly two primary experiences: a component preview and a pattern example browser
-// Doctrine marker: Built from `catalog/COMPONENTS.md`
-// Doctrine marker: Built from `catalog/ICONS.md`
-// Doctrine marker: Local source mappings
+// Showcase marker: Three primary experiences: component preview, pattern example browser, and icon browser
+// Showcase marker: Built from `catalog/COMPONENTS.md`
+// Showcase marker: Built from `catalog/ICONS.md`
+// Showcase marker: Built from `catalog/PATTERNS.md`
+// Showcase marker: Local source mappings
 
 function CreateSteppedFormPatternPreview() {
   const [currentStep, setCurrentStep] = useState('basics');
-  const [resourceName, setResourceName] = useState('aks-observability-prod-eus');
-  const [resourceGroup, setResourceGroup] = useState('rg-observability-prod');
+  const [resourceName, setResourceName] = useState('aks-cluster-primary');
+  const [resourceGroup, setResourceGroup] = useState('resource-group-sample');
 
   return (
     <PortalLayout
@@ -2777,11 +3873,11 @@ function CreateSteppedFormPatternPreview() {
           searchValue="monitored resource"
           onSearchChange={() => undefined}
           endActions={[{ id: 'help', label: 'Help', icon: <InfoRegular /> }, { id: 'settings', label: 'Settings', icon: <SettingsRegular /> }]}
-          persona={{ name: 'Ahmed Sabbour', secondaryText: 'Contoso Engineering', icon: <PersonCircleRegular /> }}
+          persona={{ name: 'Signed-in user', secondaryText: 'Organization directory', icon: <PersonCircleRegular /> }}
         />
       )}
       breadcrumb={<Text>Home / Observability / Create monitored resource</Text>}
-      header={<BladeHeader title="Create monitored resource" subtitle="Contoso Platform Production" actions={[{ id: 'dismiss', label: 'Close', icon: <DismissRegular />, onClick: () => undefined }]} />}
+      header={<BladeHeader title="Create monitored resource" subtitle="Sample resource" actions={[{ id: 'dismiss', label: 'Close', icon: <DismissRegular />, onClick: () => undefined }]} />}
       footer={(
         <FormFooter
           primaryAction={{ id: 'next', label: currentStep === 'review' ? 'Create' : 'Next', appearance: 'primary', onClick: () => setCurrentStep(currentStep === 'review' ? 'review' : currentStep === 'basics' ? 'networking' : 'review') }}
@@ -2802,12 +3898,12 @@ function CreateSteppedFormPatternPreview() {
           ]}
         />
         <Text className="azf-showcase-copy">
-          This example follows the concrete `3203:24770` anatomy: breadcrumb above blade title, horizontal numbered step list, narrow form column, and a docked footer.
+          This flow keeps orientation, form content, validation, and footer actions visible without turning the task into a modal wizard.
         </Text>
         {currentStep === 'basics' && (
           <>
             <FormFieldRow label="Subscription" htmlFor="create-subscription" info="Inherited from the current landing zone context.">
-              <Input id="create-subscription" value="Contoso Platform Production" readOnly />
+              <Input id="create-subscription" value="Sample subscription A" readOnly />
             </FormFieldRow>
             <FormFieldRow label="Resource name" htmlFor="create-resource-name" hint="Use the Azure naming guidance before moving to networking.">
               <Input id="create-resource-name" value={resourceName} onChange={(_, data) => setResourceName(data.value)} />
@@ -2823,7 +3919,7 @@ function CreateSteppedFormPatternPreview() {
               <Input id="create-private-endpoint" value="Enable private access" readOnly />
             </FormFieldRow>
             <FormFieldRow label="Subnet" htmlFor="create-subnet">
-              <Input id="create-subnet" value="snet-observability-private" readOnly />
+              <Input id="create-subnet" value="subnet-private-sample" readOnly />
             </FormFieldRow>
           </>
         )}
@@ -2842,22 +3938,150 @@ function CreateSteppedFormPatternPreview() {
 function BrowseResourcePatternPreview() {
   const [query, setQuery] = useState('aks');
   const filteredRows = useMemo(
-    () => resourceRows.filter((row) => !query.trim() || row.name.toLowerCase().includes(query.toLowerCase())),
+    () => aksResourceRows.filter((row) => !query.trim() || row.name.toLowerCase().includes(query.toLowerCase()) || row.type.toLowerCase().includes(query.toLowerCase())),
     [query],
   );
 
   return (
     <BrowseResourcePattern
-      title="Browse resource"
-      subtitle="Browse surfaces keep search, filter, grid, and pager in one compact flow."
+      title="AKS resource list"
+      subtitle="Browse Kubernetes resources with resource group, subscription, type, and status anatomy."
       items={filteredRows}
-      columns={[...gridColumns]}
-      filters={[{ id: 'location', label: 'Location', value: 'All', selected: false }]}
+      columns={[...aksResourceColumns]}
+      filters={[{ id: 'type', label: 'Type', value: 'Kubernetes services', selected: true }]}
       toolbarActions={[{ id: 'create', label: 'Create resource', appearance: 'primary', onClick: () => undefined }]}
       headerActions={[{ id: 'refresh', label: 'Refresh', icon: <ArrowClockwiseRegular />, onClick: () => undefined }]}
       searchValue={query}
       onSearchChange={setQuery}
-      emptyState="No resources matched the current browse query."
+      emptyState="No AKS resources match the current filters."
+    />
+  );
+}
+
+function FilteringPatternPreview() {
+  const [query, setQuery] = useState('aks');
+  const filteredRows = useMemo(
+    () => resourceRows.filter((row) => !query.trim() || row.name.toLowerCase().includes(query.toLowerCase())),
+    [query],
+  );
+
+  return (
+    <FilteringPattern
+      title="Filtered resources"
+      subtitle="A list surface for narrowing resources without leaving the current task."
+      items={filteredRows}
+      columns={[...gridColumns]}
+      filters={[
+        { id: 'status', label: 'Status', value: 'Needs attention', selected: true },
+        { id: 'location', label: 'Location', value: 'All regions', selected: false },
+      ]}
+      searchValue={query}
+      onSearchChange={setQuery}
+      toolbarActions={[{ id: 'export', label: 'Export results', onClick: () => undefined }]}
+      emptyState="No resources match the selected filters."
+    />
+  );
+}
+
+function FormBladePatternPreview() {
+  return (
+    <FormBladePattern
+      title="Update diagnostic settings"
+      subtitle="Sample resource"
+      primaryAction={{ id: 'save', label: 'Save', appearance: 'primary', onClick: () => undefined }}
+      secondaryAction={{ id: 'cancel', label: 'Cancel', onClick: () => undefined }}
+      message="Changes apply to new telemetry after saving."
+      feedback={<Link href="#" onClick={(event) => event.preventDefault()}>Give feedback</Link>}
+    >
+      <FormFieldRow label="Destination" htmlFor="form-blade-destination" hint="Choose where diagnostic logs are sent.">
+        <Input id="form-blade-destination" value="Monitoring workspace" readOnly />
+      </FormFieldRow>
+      <FormFieldRow label="Retention" htmlFor="form-blade-retention">
+        <Input id="form-blade-retention" value="30 days" readOnly />
+      </FormFieldRow>
+    </FormBladePattern>
+  );
+}
+
+function StepWizardPatternPreview() {
+  const [currentStep, setCurrentStep] = useState('basics');
+
+  return (
+    <StepWizardPattern
+      title="Configure backup policy"
+      subtitle="Step through scope, schedule, and review before saving."
+      currentStepId={currentStep}
+      onStepSelect={setCurrentStep}
+      steps={[
+        {
+          id: 'basics',
+          label: 'Basics',
+          description: 'Scope',
+          content: <FormFieldRow label="Policy name" htmlFor="wizard-policy"><Input id="wizard-policy" value="Nightly sample backup" readOnly /></FormFieldRow>,
+        },
+        {
+          id: 'schedule',
+          label: 'Schedule',
+          description: 'Frequency',
+          content: <FormFieldRow label="Run time" htmlFor="wizard-time"><Input id="wizard-time" value="02:00 UTC" readOnly /></FormFieldRow>,
+        },
+        {
+          id: 'review',
+          label: 'Review',
+          description: 'Confirm',
+          status: 'warning',
+          content: <NotificationPattern title="Ready to review" body="Confirm retention and destination before saving." intent="info" />,
+        },
+      ]}
+      primaryAction={{ id: 'continue', label: currentStep === 'review' ? 'Save' : 'Continue', appearance: 'primary', onClick: () => undefined }}
+      secondaryAction={{ id: 'back', label: 'Back', onClick: () => undefined }}
+    />
+  );
+}
+
+function CreateResourcePatternComponentPreview() {
+  const [currentStep, setCurrentStep] = useState('basics');
+
+  return (
+    <CreateResourcePattern
+      title="Create monitored resource"
+      subtitle="Sample resource"
+      currentStepId={currentStep}
+      onStepSelect={setCurrentStep}
+      steps={[
+        {
+          id: 'basics',
+          label: 'Basics',
+          description: 'Name and scope',
+          content: <FormFieldRow label="Name" htmlFor="create-component-name"><Input id="create-component-name" value="aks-cluster-primary" readOnly /></FormFieldRow>,
+        },
+        {
+          id: 'networking',
+          label: 'Networking',
+          description: 'Private access',
+          content: <FormFieldRow label="Private endpoint" htmlFor="create-component-private"><Input id="create-component-private" value="Enabled" readOnly /></FormFieldRow>,
+        },
+        {
+          id: 'review',
+          label: 'Review',
+          description: 'Validate',
+          status: 'warning',
+          content: <Text>Review diagnostics, tags, and private access before creating.</Text>,
+        },
+      ]}
+      reviewContent={currentStep === 'review' ? <NotificationPattern title="Validation warning" body="One policy assignment will be checked during create." intent="warning" /> : undefined}
+      primaryAction={{ id: 'create', label: currentStep === 'review' ? 'Create' : 'Next', appearance: 'primary', onClick: () => undefined }}
+      secondaryAction={{ id: 'previous', label: 'Previous', onClick: () => undefined }}
+    />
+  );
+}
+
+function ErrorPatternPreview() {
+  return (
+    <ErrorPattern
+      title="Deployment retry blocked"
+      body="Resolve the private endpoint policy assignment before retrying the operation."
+      actions={<Button appearance="secondary">Open policy</Button>}
     />
   );
 }
@@ -2865,30 +4089,39 @@ function BrowseResourcePatternPreview() {
 function NotificationsPatternPreview() {
   return (
     <div className="azf-showcase-pattern-stack">
-      <NotificationPane
-        items={[
-          {
-            id: 'pane-1',
-            title: 'Backup policy updated',
-            body: 'Nightly snapshots now apply to every production account in West US 2.',
-            tone: 'success',
-            timestamp: '2 min ago',
-          },
-          {
-            id: 'pane-2',
-            title: 'Firewall validation blocked',
-            body: 'Resolve the private endpoint policy before rollout.',
-            tone: 'warning',
-            unread: true,
-            timestamp: 'Now',
-            actions: [{ id: 'open', label: 'Open resource', onClick: () => undefined }],
-          },
-        ]}
-      />
-      <AzureEmptyState
-        title="Context pane is clear."
-        body="Notification families often pair a side pane with an empty or grid-backed remediation region."
-      />
+      <div className="azf-showcase-notification-demo">
+        <NotificationPane
+          className="azf-showcase-notification-demo__pane"
+          title="Activity updates"
+          items={[
+            {
+              id: 'pane-1',
+              title: 'Backup policy updated',
+              body: 'Nightly snapshots now apply to every sample account in West US 2.',
+              tone: 'success',
+              timestamp: '2 min ago',
+              actions: [{ id: 'view-change', label: 'View change', onClick: () => undefined }],
+            },
+            {
+              id: 'pane-2',
+              title: 'Firewall validation blocked',
+              body: 'Resolve the private endpoint policy before rollout.',
+              tone: 'warning',
+              unread: true,
+              timestamp: 'Now',
+              actions: [{ id: 'open', label: 'Open resource', onClick: () => undefined }],
+            },
+          ]}
+        />
+        <section className="azf-showcase-notification-demo__detail" aria-label="Notification remediation detail">
+          <Text weight="semibold">Remediation</Text>
+          <Text className="azf-muted">Apply the private endpoint policy, then rerun validation from the affected resource.</Text>
+          <div className="azf-row azf-gap-xs azf-wrap">
+            <Button appearance="primary">Open policy</Button>
+            <Button>View activity log</Button>
+          </div>
+        </section>
+      </div>
     </div>
   );
 }
@@ -2898,7 +4131,7 @@ function DeleteResourcePatternPreview() {
   return (
     <div className="azf-showcase-pattern-stack">
       <Text className="azf-showcase-copy">
-        Delete families combine implication copy, dependency review, and a dialog or footer confirmation. The destructive action stays gated until the operator has reviewed the consequences.
+        Review dependent resources and recovery details before enabling a destructive action.
       </Text>
       <AzureDataGrid
         items={[
@@ -2910,7 +4143,7 @@ function DeleteResourcePatternPreview() {
       />
       <div className="azf-showcase-inline-actions">
         <DeleteResourceDialog
-          resourceName="stcontososhared01"
+          resourceName="sample-resource"
           softDelete
           confirmationText="Soft delete remains available for 14 days, but connected workloads lose access immediately."
           consequences={[
@@ -2934,17 +4167,17 @@ function DeleteResourcePatternPreview() {
 function ManageResourcePatternPreview() {
   return (
     <ManageResourcePattern
-      header={<BladeHeader title="Manage monitored resource" subtitle="Compact management surfaces with local navigation" />}
+      header={<BladeHeader title="Manage monitored resource" subtitle="Private access and network settings" />}
       serviceMenu={<ServiceMenu groups={serviceMenuGroups.map((group) => ({ ...group, items: [...group.items] }))} selectedId="networking" onSelect={() => undefined} />}
     >
       <div className="azf-showcase-form-column">
-        <FormFieldRow label="Public network access" htmlFor="manage-public-access" hint="Routine manage flows should stay inline instead of expanding into a wizard.">
+        <FormFieldRow label="Public network access" htmlFor="manage-public-access" hint="Routine network changes stay inline instead of expanding into a wizard.">
           <Input id="manage-public-access" value="Disabled" readOnly />
         </FormFieldRow>
         <FormFieldRow label="Private endpoint" htmlFor="manage-private-endpoint">
-          <Input id="manage-private-endpoint" value="pe-observability-prod-001" readOnly />
+          <Input id="manage-private-endpoint" value="private-endpoint-sample" readOnly />
         </FormFieldRow>
-        <AzureDataGrid items={resourceRows.slice(0, 2)} columns={[...gridColumns]} caption="Status cells and compact lists remain visible inside the management view." />
+        <AzureDataGrid items={resourceRows.slice(0, 2)} columns={[...gridColumns]} caption="Policy status and compact resource lists remain visible inside the management view." />
       </div>
     </ManageResourcePattern>
   );
@@ -2954,7 +4187,7 @@ function ServiceOverviewPatternPreview() {
   return (
     <ServiceOverviewPattern
       title="Service overview"
-      subtitle="Overview families summarize status, follow-up actions, and concise card details."
+    subtitle="Summarize service health, recommendations, and next actions in concise cards."
       primaryAction={{ id: 'create', label: 'Create resource', appearance: 'primary', onClick: () => undefined }}
       secondaryAction={{ id: 'open-docs', label: 'Open docs', onClick: () => undefined }}
       overviewCards={[
@@ -2976,7 +4209,7 @@ function FeedbackPatternPreview() {
       </div>
       <FeedbackFooter
         title="Did this page help you finish the task?"
-        body="Feedback / CES / CVA families rely on clear prompts and restrained footer placement."
+        body="Customer feedback relies on a clear prompt and restrained footer placement."
         action={{ id: 'share-feedback', label: 'Share feedback', onClick: () => undefined }}
       />
     </div>
@@ -2986,37 +4219,61 @@ function FeedbackPatternPreview() {
 function PatternIndexPreview() {
   return (
     <div className="azf-showcase-pattern-index">
-      {patternGuide.families.map((family) => (
-        <button key={family.id} type="button" className="azf-showcase-pattern-index__item">
-          <div className="azf-showcase-pattern-index__copy">
-            <Text weight="semibold">{family.name}</Text>
-            <Text className="azf-muted">{formatPatternDesignSource(family.status)} · {family.pageNodeId}</Text>
-          </div>
-          <Badge appearance="tint" color={getPatternReadiness(family.id).color}>
-            {getPatternReadiness(family.id).label}
-          </Badge>
-        </button>
-      ))}
+      {showcasePatternFamilies.map((family) => {
+        const preview = patternPreviewCatalog.find((entry) => entry.familyId === family.id);
+        return (
+          <button key={family.id} type="button" className="azf-showcase-pattern-index__item">
+            <div className="azf-showcase-pattern-index__copy">
+              <Text weight="semibold">{formatPatternFamilyName(family)}</Text>
+              <Text className="azf-muted">{preview?.summary ?? 'Open the pattern for guidance and a rendered example.'}</Text>
+            </div>
+          </button>
+        );
+      })}
     </div>
   );
 }
 
 const patternPreviewCatalog: PatternPreviewEntry[] = [
   {
+    familyId: 'aks-resource-list',
+    summary: 'Azure Kubernetes Service list with compact command, filter, and resource group/subscription/type/status table anatomy.',
+    anatomy: ['AKS resource list', 'Resource group column', 'Subscription column', 'Type column', 'Status column'],
+    preview: BrowseResourcePatternPreview,
+  },
+  {
+    familyId: 'portal-global-search',
+    summary: 'Portal-style global search flyout that combines service picker and recent resource result rows.',
+    anatomy: ['Global search input', 'Service picker result', 'Recent resource result', 'Compact result rows'],
+    preview: PortalGlobalSearchPreview,
+  },
+  {
+    familyId: 'portal-settings-flyout',
+    summary: 'Portal settings flyout with compact flyout header, close action, and flat settings rows.',
+    anatomy: ['Settings flyout header', 'Close command', 'Flat settings rows'],
+    preview: PortalSettingsFlyoutPreview,
+  },
+  {
+    familyId: 'portal-activity-flyout',
+    summary: 'Activity flyout using the notification pane surface for actionable Portal activity updates.',
+    anatomy: ['Activity flyout', 'Notification row', 'Affected resource copy', 'Inline action'],
+    preview: PortalActivityFlyoutPreview,
+  },
+  {
     familyId: 'create-stepped-form-blade',
-    summary: 'Concrete `3203:24770` worked example with portal shell, breadcrumb, blade header, horizontal numbered steps, narrow form column, and docked footer.',
+    summary: 'A worked create flow with portal shell, breadcrumb, blade header, horizontal numbered steps, narrow form column, and docked footer.',
     anatomy: ['Portal header', 'Breadcrumb row', 'Blade title', 'Horizontal numbered step list', '728px form column', 'Docked footer'],
     preview: CreateSteppedFormPatternPreview,
   },
   {
     familyId: 'browse-resource',
-    summary: 'Browse flows keep command bar, filter strip, dense grid, and pager readable inside the shell.',
+    summary: 'Find and filter resources that need attention while keeping actions, grid results, and pagination in one flow.',
     anatomy: ['Blade header', 'Toolbar', 'Filter strip', 'Dense grid', 'Pager or footer actions'],
     preview: BrowseResourcePatternPreview,
   },
   {
     familyId: 'notifications',
-    summary: 'Notification families combine pane content, local actions, and contextual empty/grid regions.',
+    summary: 'Actionable notifications connect the update, the affected resource, and the remediation step.',
     anatomy: ['Notification pane', 'Context pane', 'Status rows', 'Empty state'],
     preview: NotificationsPatternPreview,
   },
@@ -3028,57 +4285,108 @@ const patternPreviewCatalog: PatternPreviewEntry[] = [
   },
   {
     familyId: 'manage-resource',
-    summary: 'Manage flows combine local navigation, compact forms, accordions, and status lists without widening into dashboard cards.',
-    anatomy: ['Local navigation', 'Compact form rows', 'Accordion-like sections', 'Status cells'],
+    summary: 'Manage private access and network settings with compact forms, scoped navigation, and nearby status lists.',
+    anatomy: ['Scoped navigation', 'Compact form rows', 'Expandable sections', 'Status cells'],
     preview: ManageResourcePatternPreview,
   },
   {
     familyId: 'service-overview',
-    summary: 'Service overview families summarize action readiness with tightly scoped cards and concise follow-up actions.',
+    summary: 'Summarize service health, recommendations, and next actions with tightly scoped cards.',
     anatomy: ['Overview cards', 'Action strip', 'Concise status copy', 'Card footer'],
     preview: ServiceOverviewPatternPreview,
   },
   {
     familyId: 'feedback-ces-cva',
-    summary: 'Feedback/CES/CVA surfaces stay lightweight: clear prompt, local input, and restrained footer action.',
+    summary: 'Feedback surfaces stay lightweight with a clear prompt, local input, and restrained footer action.',
     anatomy: ['Prompt copy', 'Input area', 'Footer affordance', 'Non-blocking action hierarchy'],
     preview: FeedbackPatternPreview,
   },
   {
     familyId: 'pattern-index',
-    summary: 'The pattern index is a taxonomy reference: use it to classify families and navigate examples, not as an end-user workflow.',
-    anatomy: ['Pattern list', 'Status badges', 'Node references'],
+    summary: 'The pattern index helps teams browse available examples without treating the index as a product workflow.',
+    anatomy: ['Pattern list', 'Short descriptions', 'Clean row alignment'],
     preview: PatternIndexPreview,
   },
 ];
 
-type PatternReadiness = { label: string; color: 'success' | 'informative' };
-
-// Q2 cleanup: implementation readiness and Figma extraction depth are two orthogonal
-// signals that used to be collapsed into one raw "status" badge. Readiness answers
-// "is this built and previewable?" — every family with a live preview plus a library
-// mapping is "Live preview"; anything missing a preview falls back to "Reference only"
-// so the badge can never overstate readiness.
-function getPatternReadiness(familyId: string): PatternReadiness {
-  const family = patternGuide.families.find((entry) => entry.id === familyId);
-  const hasPreview = patternPreviewCatalog.some((entry) => entry.familyId === familyId);
-  const hasImplementation = (family?.libraryMappings.length ?? 0) > 0;
-  return hasPreview && hasImplementation
-    ? { label: 'Live preview', color: 'success' }
-    : { label: 'Reference only', color: 'informative' };
+function formatPatternFamilyName(family: PatternFamily) {
+  switch (family.id) {
+    case 'aks-resource-list':
+      return 'AKS resource list';
+    case 'portal-global-search':
+      return 'Global search';
+    case 'portal-settings-flyout':
+      return 'Settings flyout';
+    case 'portal-activity-flyout':
+      return 'Activity flyout';
+    case 'create-stepped-form-blade':
+      return 'Create resource flow';
+    case 'browse-resource':
+      return 'Browse resources';
+    case 'delete-resource':
+      return 'Delete resource';
+    case 'manage-resource':
+      return 'Manage resource';
+    case 'feedback-ces-cva':
+      return 'Feedback footer';
+    case 'pattern-index':
+      return 'Pattern index';
+    default:
+      return family.name;
+  }
 }
 
-// Humanize the raw Figma extraction-depth label into a readable design-source badge.
-function formatPatternDesignSource(status: string): string {
-  switch (status) {
-    case 'rich-context':
-      return 'Rich design context';
-    case 'page-index-only':
-      return 'Page index';
-    case 'component-inventory':
-      return 'Component inventory';
+function getPatternUsageGuidance(familyId: string): string[] {
+  switch (familyId) {
+    case 'aks-resource-list':
+      return ['Use for Azure Kubernetes Service browse pages that need resource group, subscription, type, and status in the first scan.', 'Keep names synthetic in examples and keep commands, filters, and results in one compact flow.'];
+    case 'portal-global-search':
+      return ['Use for shell-level search surfaces that combine services and recent resources.', 'Keep result rows compact and grouped by the task people are trying to resume.'];
+    case 'portal-settings-flyout':
+      return ['Use for shell settings that should open without navigating away from the current blade.', 'Keep settings rows flat and short so the flyout scans quickly.'];
+    case 'portal-activity-flyout':
+      return ['Use for actionable Portal activity or notification updates.', 'Keep the affected resource, severity, and next action close together.'];
+    case 'create-stepped-form-blade':
+      return ['Use for multi-step create flows that need validation before submit.', 'Keep the step list, form column, and footer actions visible together.'];
+    case 'browse-resource':
+      return ['Use when people need to find resources that need attention.', 'Keep search, filters, result count, grid, and pagination in one compact flow.'];
+    case 'notifications':
+      return ['Use when an update should lead directly to a remediation task.', 'Keep the message, affected resource, and action close together.'];
+    case 'delete-resource':
+      return ['Use when destructive actions require consequence review.', 'Keep dependent resources and recovery details visible before confirmation.'];
+    case 'manage-resource':
+      return ['Use for focused configuration tasks such as private access or network settings.', 'Keep routine changes inline unless the task truly requires a wizard.'];
+    case 'service-overview':
+      return ['Use for service health, recommendations, and next actions.', 'Keep each card scoped to one decision or follow-up action.'];
+    case 'feedback-ces-cva':
+      return ['Use for lightweight customer feedback after the primary task is complete.', 'Keep the prompt short and subordinate to the page task.'];
     default:
-      return status;
+      return ['Use this index to choose a pattern before opening the rendered example.', 'Treat the index as navigation, not as a product workflow.'];
+  }
+}
+
+function getPatternInteractionGuidance(familyId: string): string[] {
+  switch (familyId) {
+    case 'aks-resource-list':
+      return ['Default to dense table rows for scan-heavy Kubernetes resource lists.', 'Use clear synthetic names in reusable examples rather than real tenant or resource identifiers.'];
+    case 'portal-global-search':
+      return ['Preserve keyboard focus in the search box while results update.', 'Avoid turning the search flyout into a full blade unless people need a multi-step task.'];
+    case 'portal-settings-flyout':
+      return ['Keep close and escape behavior predictable.', 'Use short labels and avoid nested cards inside the flyout.'];
+    case 'portal-activity-flyout':
+      return ['Use unread emphasis only for items that still require attention.', 'Prefer one direct action over multiple competing links.'];
+    case 'delete-resource':
+      return ['Do not enable destructive actions until acknowledgement requirements are met.', 'Use danger styling on the action, not across the whole page.'];
+    case 'manage-resource':
+      return ['Preserve scoped navigation for larger settings sets.', 'Use compact rows and expandable sections to keep the current task readable.'];
+    case 'service-overview':
+      return ['Prefer recommendations and next steps over decorative metrics.', 'Keep primary actions close to the overview they affect.'];
+    case 'feedback-ces-cva':
+      return ['Do not let feedback compete with save, create, or delete actions.', 'Use plain language such as feedback or customer satisfaction.'];
+    case 'notifications':
+      return ['Keep notifications actionable when they indicate a problem.', 'Avoid disconnected notification walls that do not lead to a next step.'];
+    default:
+      return ['Start with the rendered example for layout and interaction behavior.', 'Compose only the reusable parts needed for the task at hand.'];
   }
 }
 
@@ -3126,8 +4434,8 @@ function IconBrowserView() {
           <div className="azf-showcase-component-browser__header-block">
             <Text as="h2" size={600} weight="semibold">Icon browser</Text>
             <Text className="azf-muted">
-              Browse the vendored Azure icon set ({azureCatalogIcons.length} glyphs) plus the registry
-              references used by the library. Filter by name or collection and inspect live local previews.
+              Browse the Azure icon set ({azureCatalogIcons.length} glyphs) plus a few registered icon examples.
+              Filter by name or collection and inspect rendered icons.
             </Text>
           </div>
         </div>
@@ -3160,7 +4468,7 @@ function IconBrowserView() {
         </div>
 
         <div className="azf-showcase-icon-catalog__section">
-          <Text as="h3" size={400} weight="semibold">Registry references</Text>
+          <Text as="h3" size={400} weight="semibold">Icon examples</Text>
           <div className="azf-showcase-icon-catalog__tiles">
             {filteredIcons.map((item) => (
               <div key={item.name} className="azf-showcase-icon-catalog__tile">
@@ -3238,23 +4546,18 @@ function ComponentInventoryPlaceholder({
   onOpenRelatedPreview?: () => void;
 }) {
   return (
-    <section className="azf-showcase-preview" aria-label="Component inventory status">
+    <section className="azf-showcase-preview" aria-label="Component preview">
       <div className="azf-showcase-preview__canvas azf-showcase-preview__canvas--placeholder">
         <div className="azf-showcase-placeholder">
-          <div className="azf-showcase-section-heading">
-            <Badge appearance="outline">{item.statusLabel}</Badge>
-            {item.exportNames.length > 0 && <Badge appearance="outline">{item.exportLabel}</Badge>}
-          </div>
-          <Text weight="semibold">Live preview not available yet</Text>
+          <Text weight="semibold">Standalone example not available</Text>
           <Text className="azf-muted">{item.summary}</Text>
           <div className="azf-showcase-placeholder__meta">
-            <Text className="azf-muted">Source node: {item.nodeId}</Text>
-            <Text className="azf-muted">Next action: {item.nextAction}</Text>
+            <Text className="azf-muted">Guidance: {item.nextAction}</Text>
           </div>
           {onOpenRelatedPreview && (
             <div>
               <Button appearance="secondary" onClick={onOpenRelatedPreview}>
-                Open related preview
+                Open related example
               </Button>
             </div>
           )}
@@ -3268,10 +4571,9 @@ export function AzureFluentShowcaseApp() {
   const [view, setView] = useState<ShowcaseView>('components');
   const [selectedComponentNodeId, setSelectedComponentNodeId] = useState('30028:627');
   const [componentQuery, setComponentQuery] = useState('');
-  const [componentFilter, setComponentFilter] = useState<ComponentInventoryFilter>('all');
-  const [selectedPattern, setSelectedPattern] = useState('create-stepped-form-blade');
+  const [selectedPattern, setSelectedPattern] = useState('aks-resource-list');
 
-  const selectedInventoryItem = showcaseComponentInventoryEntries.find((item) => item.nodeId === selectedComponentNodeId) ?? showcaseComponentInventoryEntries[0];
+  const selectedInventoryItem = publicShowcaseComponentInventoryEntries.find((item) => item.nodeId === selectedComponentNodeId) ?? publicShowcaseComponentInventoryEntries[0];
   const componentPreview = selectedInventoryItem.previewEntry;
   const componentInventoryGroups = uniqueStrings(selectedInventoryItem.exportNames).flatMap((exportName) => componentGroupsByExport[exportName] ?? []);
   const componentMcpNodes = componentInventoryGroups.flatMap((group) => group.mcpNodes ?? []);
@@ -3288,22 +4590,22 @@ export function AzureFluentShowcaseApp() {
   const filteredComponentInventory = useMemo(() => {
     const normalizedQuery = componentQuery.trim().toLowerCase();
 
-    return showcaseComponentInventoryEntries.filter((item) => {
-      const matchesFilter = componentFilter === 'all' || item.coverageStatus === componentFilter;
+    return publicShowcaseComponentInventoryEntries.filter((item) => {
       const matchesQuery = normalizedQuery.length === 0
         || item.title.toLowerCase().includes(normalizedQuery)
         || item.pageName.toLowerCase().includes(normalizedQuery)
         || item.exportLabel.toLowerCase().includes(normalizedQuery)
         || item.nodeId.toLowerCase().includes(normalizedQuery);
 
-      return matchesFilter && matchesQuery;
+      return matchesQuery;
     });
-  }, [componentFilter, componentQuery]);
-  const componentCoverageSummary = `Showing ${showcaseComponentInventoryEntries.length} inventory items: ${showcaseComponentInventoryEntries.filter((item) => item.coverageStatus === 'implemented-rendered').length} rendered, ${showcaseComponentInventoryEntries.filter((item) => item.coverageStatus === 'showcase-placeholder').length} placeholders, ${showcaseComponentInventoryEntries.filter((item) => item.coverageStatus === 'needs-mcp-extraction').length} needing extraction, ${showcaseComponentInventoryEntries.filter((item) => item.coverageStatus === 'needs-implementation').length} needing implementation, ${showcaseComponentInventoryEntries.filter((item) => item.coverageStatus === 'local-only-needed').length} local follow-up.`;
+  }, [componentQuery]);
+  const filteredCopilotInventory = filteredComponentInventory.filter(isCopilotComponentInventoryEntry);
+  const filteredGeneralInventory = filteredComponentInventory.filter((item) => !isCopilotComponentInventoryEntry(item));
   const SelectedComponentPreview = componentPreview?.preview;
   const canRenderSelectedPreview = selectedInventoryItem.coverageStatus === 'implemented-rendered' && Boolean(SelectedComponentPreview);
 
-  const selectedPatternFamily = patternGuide.families.find((family) => family.id === selectedPattern) ?? patternGuide.families[0];
+  const selectedPatternFamily = showcasePatternFamilies.find((family) => family.id === selectedPattern) ?? showcasePatternFamilies[0];
   const selectedPatternPreview = patternPreviewCatalog.find((entry) => entry.familyId === selectedPattern) ?? patternPreviewCatalog[0];
   const SelectedPatternPreview = selectedPatternPreview.preview;
 
@@ -3320,7 +4622,7 @@ export function AzureFluentShowcaseApp() {
           <div className="azf-showcase-app__header-copy">
             <Text as="h1" size={700} weight="semibold">Azure Fluent System showcase</Text>
             <Text className="azf-muted">
-              Three focused views: live component previews, composed patterns, and a dedicated local icon browser.
+              Three focused views: rendered component examples, composed product patterns, and a dedicated icon browser.
             </Text>
           </div>
           <AzureTabList
@@ -3332,47 +4634,34 @@ export function AzureFluentShowcaseApp() {
           />
         </header>
 
+        <PortalCaptureHighlights
+          onOpenPattern={(patternId) => {
+            setSelectedPattern(patternId);
+            setView('patterns');
+          }}
+        />
+
         <div className="azf-showcase-app__content">
           <aside className="azf-showcase-app__sidebar">
             {view === 'components' ? (
               <>
-                <Text as="h2" weight="semibold">Component inventory</Text>
-                <Text className="azf-muted">
-                  Browse every cataloged Figma component. Rendered entries open a live preview; the rest stay visible with status and next-step guidance.
-                </Text>
-                <Text className="azf-muted">{componentCoverageSummary}</Text>
+                <Text as="h2" weight="semibold">Component browser</Text>
                 <div className="azf-showcase-form-column">
                   <Input
-                    aria-label="Filter component inventory"
+                    aria-label="Filter components"
                     value={componentQuery}
                     onChange={(_, data) => setComponentQuery(data.value)}
                     contentBefore={<SearchRegular />}
-                    placeholder="Filter by component, export, page, or node"
+                    placeholder="Filter by component or area"
                   />
                 </div>
-                <div className="azf-showcase-filter-row" aria-label="Component inventory filters">
-                  {([
-                    ['all', 'All'],
-                    ['implemented-rendered', 'Rendered'],
-                    ['showcase-placeholder', 'Placeholder'],
-                    ['needs-mcp-extraction', 'Needs extraction'],
-                    ['needs-implementation', 'Needs implementation'],
-                    ['local-only-needed', 'Local follow-up'],
-                  ] as const).map(([filterValue, label]) => (
-                    <button
-                      key={filterValue}
-                      type="button"
-                      className="azf-showcase-filter-chip"
-                      aria-pressed={componentFilter === filterValue}
-                      data-selected={componentFilter === filterValue || undefined}
-                      onClick={() => setComponentFilter(filterValue)}
-                    >
-                      {label}
-                    </button>
-                  ))}
-                </div>
-                <div className="azf-showcase-nav-list" role="list" aria-label="Component inventory entries">
-                  {filteredComponentInventory.map((item) => (
+                <div className="azf-showcase-nav-list" role="list" aria-label="Component entries">
+                  {filteredCopilotInventory.length > 0 && (
+                    <div className="azf-showcase-nav-list__family">
+                      <Text as="span" size={200} weight="semibold">Copilot</Text>
+                    </div>
+                  )}
+                  {filteredCopilotInventory.map((item) => (
                     <div key={item.nodeId} role="listitem">
                       <button
                         type="button"
@@ -3383,8 +4672,22 @@ export function AzureFluentShowcaseApp() {
                       >
                         <span className="azf-showcase-nav-item__copy">
                           <span>{item.title}</span>
-                          <span className="azf-showcase-nav-item__meta-copy">{item.statusLabel} · {item.exportLabel}</span>
-                          <span className="azf-showcase-nav-item__meta-copy">{item.pageName} · {item.nodeId}</span>
+                        </span>
+                      </button>
+                    </div>
+                  ))}
+                  {filteredGeneralInventory.map((item) => (
+                    <div key={item.nodeId} role="listitem">
+                      <button
+                        type="button"
+                        className="azf-showcase-nav-item azf-showcase-nav-item--inventory"
+                        aria-label={item.title}
+                        data-selected={item.nodeId === selectedInventoryItem.nodeId || undefined}
+                        onClick={() => setSelectedComponentNodeId(item.nodeId)}
+                      >
+                        <span className="azf-showcase-nav-item__copy">
+                          <span>{item.title}</span>
+                          <span className="azf-showcase-nav-item__meta-copy">{item.pageName}</span>
                         </span>
                       </button>
                     </div>
@@ -3392,7 +4695,7 @@ export function AzureFluentShowcaseApp() {
                   {filteredComponentInventory.length === 0 && (
                     <div className="azf-showcase-empty-note" role="listitem">
                       <Text weight="semibold">No components matched</Text>
-                      <Text className="azf-muted">Try a broader name, export, page, or node.</Text>
+                      <Text className="azf-muted">Try a broader name or area.</Text>
                     </div>
                   )}
                 </div>
@@ -3401,10 +4704,10 @@ export function AzureFluentShowcaseApp() {
               <>
                 <Text as="h2" weight="semibold">Pattern browser</Text>
                 <Text className="azf-muted">
-                  Built from `catalog/PATTERNS.md`. Local examples, source mappings, and citations are checked in.
+                  Explore task-focused Azure Fluent flows and see how components work together.
                 </Text>
                 <div className="azf-showcase-nav-list">
-                  {patternGuide.families.map((family) => (
+                  {showcasePatternFamilies.map((family) => (
                     <button
                       key={family.id}
                       type="button"
@@ -3412,10 +4715,7 @@ export function AzureFluentShowcaseApp() {
                       data-selected={family.id === selectedPattern || undefined}
                       onClick={() => setSelectedPattern(family.id)}
                     >
-                      <span>{family.name}</span>
-                      <Badge appearance="tint" color={getPatternReadiness(family.id).color}>
-                        {getPatternReadiness(family.id).label}
-                      </Badge>
+                      <span>{formatPatternFamilyName(family)}</span>
                     </button>
                   ))}
                 </div>
@@ -3424,7 +4724,7 @@ export function AzureFluentShowcaseApp() {
               <>
                 <Text as="h2" weight="semibold">Icons</Text>
                 <Text className="azf-muted">
-                  Search icon names and aliases, then inspect the live local previews.
+                  Search icon names and aliases, then inspect the rendered icons.
                 </Text>
               </>
             )}
@@ -3436,17 +4736,13 @@ export function AzureFluentShowcaseApp() {
                 <section className="azf-showcase-app__surface azf-showcase-component-browser">
                   <div className="azf-showcase-app__surface-header azf-showcase-component-browser__surface-header">
                     <div className="azf-showcase-component-browser__header-block">
-                      <Text as="h2" size={600} weight="semibold">{selectedInventoryItem.title}</Text>
-                      <Text className="azf-muted">{selectedInventoryItem.summary}</Text>
-                    </div>
-                    <div className="azf-showcase-badge-row">
-                      <Badge appearance="outline">{selectedInventoryItem.statusLabel}</Badge>
-                      <Badge appearance="outline">{selectedInventoryItem.exportLabel}</Badge>
+                      <Text as="h2" size={500} weight="semibold">{selectedInventoryItem.title}</Text>
+                      <Text size={300} className="azf-muted">{selectedInventoryItem.summary}</Text>
                     </div>
                   </div>
 
                   <div className="azf-showcase-component-browser__body">
-                    <section className="azf-showcase-component-preview-panel" aria-label="Live component preview">
+                    <section className="azf-showcase-component-preview-panel" aria-label="Component example">
                     {canRenderSelectedPreview && SelectedComponentPreview ? (
                       <SelectedComponentPreview />
                       ) : (
@@ -3471,45 +4767,42 @@ export function AzureFluentShowcaseApp() {
                 <details className="azf-showcase-disclosure">
                   <summary className="azf-showcase-disclosure__summary">
                     <div className="azf-showcase-disclosure__summary-copy">
-                      <Text as="span" weight="semibold">Selection details</Text>
+                      <Text as="span" weight="semibold">Reference details</Text>
                       <Text as="span" className="azf-muted">
-                        Selected-component metadata stays below the main surface so the preview or placeholder remains first.
+                        Additional source and code details stay below the main preview.
                       </Text>
                     </div>
                     <div className="azf-showcase-badge-row">
                       <Badge appearance="outline">{selectedInventoryItem.pageName}</Badge>
                       <Badge appearance="outline">{selectedInventoryItem.type}</Badge>
-                      <Badge appearance="outline">Showcase: {selectedInventoryItem.showcaseStatus}</Badge>
                     </div>
                   </summary>
 
                   <div className="azf-showcase-disclosure__body">
                     <div className="azf-showcase-disclosure__grid">
                       <section className="azf-showcase-disclosure__section">
-                        <Text as="h3" weight="semibold">Status</Text>
+                        <Text as="h3" weight="semibold">Browser guidance</Text>
                         <Text className="azf-muted">{selectedInventoryItem.summary}</Text>
-                        <Text className="azf-muted">Next action: {selectedInventoryItem.nextAction}</Text>
-                        <Text className="azf-muted">Extraction status: {selectedInventoryItem.extractionStatus}</Text>
-                        <Text className="azf-muted">Extraction date: {selectedInventoryItem.extractionDate}</Text>
+                        <Text className="azf-muted">Guidance: {selectedInventoryItem.nextAction}</Text>
                       </section>
 
                       <section className="azf-showcase-disclosure__section">
-                        <Text as="h3" weight="semibold">Source node</Text>
-                        <Text className="azf-muted">{selectedInventoryItem.figmaNodeReference}</Text>
+                        <Text as="h3" weight="semibold">Design reference</Text>
+                        <Text className="azf-muted">{selectedInventoryItem.pageName}</Text>
                         {selectedInventoryItem.nodeUrl && (
                           <Text className="azf-muted">
                             <Link href={selectedInventoryItem.nodeUrl} target="_blank" rel="noreferrer">
-                              Open {selectedInventoryItem.nodeId}
+                              Open design reference
                             </Link>
                           </Text>
                         )}
-                        <Text className="azf-muted">Related local export: {selectedInventoryItem.exportLabel}</Text>
+                        <Text className="azf-muted">Component API: {selectedInventoryItem.exportLabel}</Text>
                         {selectedInventoryItem.sourceNodes.length > 1 && (
                           <div className="azf-showcase-metadata-block">
-                            <Text weight="semibold">Grouped from {selectedInventoryItem.sourceNodes.length} Figma nodes</Text>
+                            <Text weight="semibold">Related design pieces</Text>
                             <ul className="azf-showcase-list azf-showcase-list--compact">
                               {selectedInventoryItem.sourceNodes.map((node) => (
-                                <li key={node.nodeId}>{node.name} ({node.nodeId})</li>
+                                <li key={node.nodeId}>{formatDesignReferenceName(node.name)}</li>
                               ))}
                             </ul>
                           </div>
@@ -3517,25 +4810,25 @@ export function AzureFluentShowcaseApp() {
                       </section>
 
                       <section className="azf-showcase-disclosure__section">
-                        <Text as="h3" weight="semibold">Local files</Text>
+                        <Text as="h3" weight="semibold">Build references</Text>
                         <div className="azf-showcase-metadata-block">
-                          <Text weight="semibold">Checked-in examples</Text>
+                          <Text weight="semibold">Example paths</Text>
                           {componentExamplePaths.length > 0 ? (
                             <ul className="azf-showcase-list azf-showcase-list--compact">
                               {componentExamplePaths.map((examplePath) => <li key={examplePath}>{examplePath}</li>)}
                             </ul>
                           ) : (
-                            <Text className="azf-muted">No checked-in example path mapped.</Text>
+                            <Text className="azf-muted">No example path listed.</Text>
                           )}
                         </div>
                         <div className="azf-showcase-metadata-block">
-                          <Text weight="semibold">Implementation files</Text>
+                          <Text weight="semibold">Library files</Text>
                           {componentImplementationFiles.length > 0 ? (
                             <ul className="azf-showcase-list azf-showcase-list--compact">
                               {componentImplementationFiles.map((filePath) => <li key={filePath}>{filePath}</li>)}
                             </ul>
                           ) : (
-                            <Text className="azf-muted">No implementation file list mapped.</Text>
+                            <Text className="azf-muted">No library file list available.</Text>
                           )}
                         </div>
                       </section>
@@ -3548,13 +4841,13 @@ export function AzureFluentShowcaseApp() {
                               {componentPreview.usageNotes.map((note) => <li key={note}>{note}</li>)}
                             </ul>
                           ) : (
-                            <Text className="azf-muted">This inventory row does not have a standalone live preview yet.</Text>
+                            <Text className="azf-muted">This entry does not have a standalone rendered example yet.</Text>
                           )}
                           {componentMcpNodes.length > 0 && (
                             <ul className="azf-showcase-list azf-showcase-list--compact">
                               {componentMcpNodes.slice(0, 4).map((node) => (
                                 <li key={`${selectedInventoryItem.nodeId}-${node.component}-${node.nodeId ?? node.status}`}>
-                                  {node.component}: {node.status}
+                                  {formatDesignReferenceName(node.component)}: {formatComponentReferenceStatus(node.status)}
                                 </li>
                               ))}
                             </ul>
@@ -3570,40 +4863,20 @@ export function AzureFluentShowcaseApp() {
                 <section className="azf-showcase-app__surface">
                   <div className="azf-showcase-app__surface-header">
                     <div>
-                      <Text as="h2" size={600} weight="semibold">{selectedPatternFamily.name}</Text>
+                      <Text as="h2" size={600} weight="semibold">{formatPatternFamilyName(selectedPatternFamily)}</Text>
                       <Text className="azf-muted">{selectedPatternPreview.summary}</Text>
-                    </div>
-                    <div className="azf-showcase-badge-row">
-                      <Badge appearance="tint" color={getPatternReadiness(selectedPatternFamily.id).color}>
-                        {getPatternReadiness(selectedPatternFamily.id).label}
-                      </Badge>
-                      <Badge appearance="outline">{formatPatternDesignSource(selectedPatternFamily.status)}</Badge>
                     </div>
                   </div>
                   <SelectedPatternPreview />
                 </section>
 
+                <ComposedScenariosSection />
+                <ReusablePatternComponentsSection />
+
                 <div className="azf-showcase-app__metadata-grid">
-                  <MetadataCard title="Local examples & source mappings">
+                  <MetadataCard title="When to use">
                     <ul className="azf-showcase-list">
-                      {(selectedPatternFamily.localExamples ?? []).map((examplePath) => <li key={examplePath}>{examplePath}</li>)}
-                      {(selectedPatternFamily.implementationFiles ?? []).map((filePath) => <li key={filePath}>{filePath}</li>)}
-                    </ul>
-                  </MetadataCard>
-                  <MetadataCard title="Traceability citations">
-                    <Text className="azf-muted">Local files are authoritative for ordinary usage; dev-mode URLs are citations only.</Text>
-                    <Text className="azf-muted">
-                      Dev-mode URL:{' '}
-                      <Link href={selectedPatternFamily.pageNodeUrl} target="_blank" rel="noreferrer">
-                        {selectedPatternFamily.pageNodeId}
-                      </Link>
-                    </Text>
-                    <ul className="azf-showcase-list">
-                      {selectedPatternFamily.representativeNodes.map((node) => (
-                        <li key={node.nodeId}>
-                          <Link href={node.url} target="_blank" rel="noreferrer">{node.nodeId}</Link> — {node.name} ({node.sourceType})
-                        </li>
-                      ))}
+                      {getPatternUsageGuidance(selectedPatternFamily.id).map((item) => <li key={item}>{item}</li>)}
                     </ul>
                   </MetadataCard>
                   <MetadataCard title="Key anatomy">
@@ -3611,21 +4884,19 @@ export function AzureFluentShowcaseApp() {
                       {selectedPatternPreview.anatomy.map((item) => <li key={item}>{item}</li>)}
                     </ul>
                   </MetadataCard>
-                  <MetadataCard title="Anti-rules">
+                  <MetadataCard title="Interaction guidance">
                     <ul className="azf-showcase-list">
-                      {selectedPatternFamily.antiRules.map((rule) => <li key={rule}>{rule}</li>)}
+                      {getPatternInteractionGuidance(selectedPatternFamily.id).map((item) => <li key={item}>{item}</li>)}
                     </ul>
                   </MetadataCard>
-                  <MetadataCard title="Library mappings">
-                    <Text className="azf-muted">{selectedPatternFamily.libraryMappings.join(', ')}</Text>
-                  </MetadataCard>
-                  <MetadataCard title="Local workflow">
+                  <MetadataCard title="Using this pattern">
                     <ul className="azf-showcase-list">
-                      {(patternGuide.localConsumptionWorkflow ?? []).map((step) => <li key={step}>{step}</li>)}
+                      <li>Start with the rendered example for layout and interaction behavior.</li>
+                      <li>Keep the copy specific to the product task and affected resource.</li>
+                      <li>Use only the pieces needed for the task at hand.</li>
                     </ul>
                   </MetadataCard>
                 </div>
-                <ComposedScenariosSection />
               </>
             ) : (
               <IconBrowserView />

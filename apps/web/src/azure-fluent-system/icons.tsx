@@ -12,6 +12,9 @@ import './tokens.css';
 //    IconCloud and registered through AzureIconProvider/createIconCloudRegistry.
 // 3. Figma Community iconography files are visual reference only unless assets are
 //    explicitly exported under acceptable terms.
+// `useAzureIconRegistry` and the `createIconCloudRegistry*` functions are
+// non-visual helper APIs for wiring icon data into AzureIconProvider; the visible
+// showcase representation is AzureIconProvider + AzureIcon.
 
 export type AzureIconSize = 12 | 16 | 18 | 20 | 24 | 28 | 32;
 

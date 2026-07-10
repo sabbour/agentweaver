@@ -9,15 +9,31 @@
   --azf-radius-control: var(--borderRadiusMedium);
   --azf-radius-small: var(--borderRadiusSmall);
   --azf-radius-toolbar: var(--borderRadiusSmall);
-  --azf-radius-panel: var(--borderRadiusXLarge);
-  --azf-shadow-flyout: var(--shadow16);
-  --azf-surface-border: var(--colorNeutralStroke2);
+  --azf-radius-panel: var(--borderRadiusSmall);
+  --azf-shadow-flyout: 0 6.4px 14.4px rgb(0 0 0 / 13.3%), 0 1.2px 3.6px rgb(0 0 0 / 11%);
+  --azf-surface-border: var(--azf-portal-border);
   --azf-surface-background: var(--colorNeutralBackground1);
-  --azf-surface-subtle: var(--colorNeutralBackground2);
-  --azf-brand-text: var(--colorBrandForeground1);
+  --azf-surface-subtle: var(--colorNeutralBackground1);
+  --azf-brand-text: var(--azf-portal-brand);
   --azf-brand-soft: var(--colorBrandBackground2);
   --azf-nav-selected-rail: 2px;
-  --azf-grid-row-min-height: 32px;
+  --azf-grid-row-min-height: var(--azf-portal-row-height);
+  --azf-portal-font-family: az_ea_font, 'Segoe UI', az_font, system-ui, -apple-system, BlinkMacSystemFont, Roboto, 'Helvetica Neue', sans-serif;
+  --azf-portal-font-size: 13px;
+  --azf-portal-line-height: 18px;
+  --azf-portal-foreground: rgb(41 40 39);
+  --azf-portal-secondary-foreground: rgb(50 49 48);
+  --azf-portal-brand: rgb(0 120 212);
+  --azf-portal-brand-hover: rgb(0 90 158);
+  --azf-portal-border: rgb(214 214 214);
+  --azf-portal-selected: rgb(243 242 241);
+  --azf-portal-topbar-height: 40px;
+  --azf-portal-row-height: 32px;
+  --azf-portal-control-height: 32px;
+  font-family: var(--azf-portal-font-family);
+  font-size: var(--azf-portal-font-size);
+  line-height: var(--azf-portal-line-height);
+  color: var(--azf-portal-foreground);
   --azf-chat-radius: 12px;
   --azf-radius-composer: var(--borderRadius3XLarge); /* Figma 32382:38450 Copilot input shell. */
   --azf-blade-header-divider-width: 2.2734375px; /* Exact MCP vector width from Figma node 32615:9840. */
@@ -30,8 +46,8 @@
 }
 
 .azf-density-compact {
-  --azf-density-row-height: 32px;
-  --azf-density-field-height: 32px;
+  --azf-density-row-height: var(--azf-portal-row-height);
+  --azf-density-field-height: var(--azf-portal-control-height);
   --azf-density-gap: var(--spacingHorizontalXS);
 }
 
@@ -136,8 +152,8 @@
 
 .azf-blade-header__subtitle {
   color: var(--colorNeutralForeground2);
-  font-size: var(--fontSizeBase200);
-  line-height: var(--lineHeightBase200);
+  font-size: 12px;
+  line-height: 16px;
 }
 
 /* Pipe divider: exact 2.2734375px neutral vector, fixed 24px tall per Figma node 32615:9840. */
@@ -239,12 +255,12 @@
   display: grid;
   grid-template-columns: auto minmax(240px, 1fr) auto;
   align-items: center;
-  gap: var(--spacingHorizontalM);
-  min-height: 48px;
-  padding: 0 var(--spacingHorizontalM) 0 var(--spacingHorizontalS);
+  gap: var(--spacingHorizontalS);
+  min-height: var(--azf-portal-topbar-height);
+  padding: 0 var(--spacingHorizontalS);
   border: 0;
   border-radius: 0;
-  background: var(--colorBrandBackground);
+  background: var(--azf-portal-brand);
   color: var(--colorNeutralForegroundOnBrand);
 }
 
@@ -270,11 +286,12 @@
 .azf-portal-topnav__search {
   width: 100%;
   min-width: 0;
-  max-width: 680px;
+  max-width: 660px;
 }
 
 .azf-portal-topnav__search .fui-Input,
 .azf-portal-topnav__search .fui-SearchBox {
+  min-height: var(--azf-portal-control-height);
   border-radius: var(--azf-radius-small);
   background: var(--colorNeutralBackground1);
   color: var(--colorNeutralForeground1);
@@ -317,7 +334,7 @@
 
 .azf-portal-layout__frame {
   display: grid;
-  grid-template-columns: 56px minmax(0, 1fr);
+  grid-template-columns: 48px minmax(0, 1fr);
   min-height: 0;
   border: 1px solid var(--azf-surface-border);
   border-radius: 0;
@@ -334,18 +351,20 @@
 }
 
 .azf-portal-layout__rail {
-  background: var(--colorBrandBackground);
+  background: var(--azf-portal-brand);
 }
 
 .azf-portal-rail {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: var(--spacingHorizontalXS);
-  padding: var(--spacingVerticalS) var(--spacingHorizontalXXS);
+  gap: var(--spacingHorizontalXXS);
+  padding: var(--spacingVerticalXXS) var(--spacingHorizontalXXS);
 }
 
 .azf-portal-rail__button {
+  min-width: 40px;
+  min-height: 40px;
   color: color-mix(in srgb, var(--colorNeutralForegroundOnBrand) 86%, transparent);
 }
 
@@ -358,7 +377,7 @@
   display: flex;
   flex-direction: column;
   min-width: 0;
-  padding: var(--spacingVerticalM) var(--spacingHorizontalL);
+  padding: 12px var(--spacingHorizontalXL);
   background: var(--azf-surface-background);
 }
 
@@ -405,6 +424,9 @@
   justify-content: flex-start;
   text-align: start;
   color: var(--colorNeutralForeground1);
+  transition:
+    background-color var(--durationFaster) var(--curveEasyEase),
+    color var(--durationFaster) var(--curveEasyEase);
 }
 
 .azf-service-menu__item:hover {
@@ -429,6 +451,8 @@
   width: var(--azf-nav-selected-rail);
   border-radius: var(--borderRadiusCircular);
   background: var(--colorBrandStroke1);
+  transform-origin: center;
+  animation: azf-selected-rail-settle var(--durationNormal) var(--curveEasyEase);
 }
 
 .azf-service-menu__icon,
@@ -443,6 +467,7 @@
 .azf-service-menu__icon {
   width: 16px;
   height: 16px;
+  transition: color var(--durationFaster) var(--curveEasyEase);
 }
 
 .azf-service-menu__label {
@@ -454,7 +479,8 @@
 .azf-command-bar {
   justify-content: space-between;
   gap: var(--spacingHorizontalM);
-  padding: var(--spacingVerticalS) 0;
+  min-height: var(--azf-portal-control-height);
+  padding: var(--spacingVerticalXXS) 0;
   border-bottom: 1px solid var(--azf-surface-border);
 }
 
@@ -472,12 +498,26 @@
 }
 
 .azf-filter-bar {
+  min-height: var(--azf-portal-control-height);
   gap: var(--spacingHorizontalS);
-  padding: var(--spacingVerticalS) 0;
+  padding: var(--spacingVerticalXXS) 0;
 }
 
 .azf-filter-pill {
   gap: 0;
+}
+
+.azf-visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 
 .azf-empty-state {
@@ -505,6 +545,7 @@
 .azf-data-grid-shell {
   width: 100%;
   min-width: 0;
+  overflow-x: auto;
 }
 
 .azf-data-grid {
@@ -515,27 +556,35 @@
 .azf-data-grid .fui-TableHeaderCell,
 .azf-data-grid .fui-TableCell {
   height: var(--azf-density-row-height);
-  padding-inline: var(--spacingHorizontalMNudge);
+  padding-inline: var(--spacingHorizontalS);
+  border-bottom: var(--strokeWidthThin) solid var(--azf-surface-border);
 }
 
 .azf-data-grid .fui-TableHeaderCell {
-  font-size: var(--fontSizeBase300);
-  line-height: var(--lineHeightBase300);
+  font-size: var(--azf-portal-font-size);
+  line-height: var(--azf-portal-line-height);
   font-weight: var(--fontWeightSemibold);
   color: var(--colorNeutralForeground1);
 }
 
 .azf-data-grid .fui-TableHeaderCell__button {
-  min-height: calc(var(--spacingVerticalMNudge) + var(--spacingVerticalXXL));
+  min-height: var(--azf-portal-control-height);
+  max-width: 100%;
   padding-inline: 0;
   color: inherit;
   font: inherit;
 }
 
+.azf-data-grid .fui-TableHeaderCell__button .fui-Button {
+  min-width: 0;
+  max-width: 100%;
+  padding-inline: 0;
+}
+
 .azf-data-grid .fui-TableCell {
-  font-size: var(--fontSizeBase300);
-  line-height: var(--lineHeightBase300);
-  color: var(--colorNeutralForeground1);
+  font-size: var(--azf-portal-font-size);
+  line-height: var(--azf-portal-line-height);
+  color: var(--azf-portal-foreground);
 }
 
 .azf-data-grid__caption {
@@ -721,6 +770,18 @@
   padding-inline: var(--spacingHorizontalSNudge);
   border-radius: var(--azf-radius-control);
   color: var(--colorNeutralForeground1);
+  transition:
+    background-color var(--durationFaster) var(--curveEasyEase),
+    color var(--durationFaster) var(--curveEasyEase),
+    transform var(--durationFaster) var(--curveEasyEase);
+}
+
+.azf-copy-button:hover {
+  background: var(--colorNeutralBackground1Hover);
+}
+
+.azf-copy-button:active {
+  transform: translateY(1px);
 }
 
 .azf-copy-button[data-has-label='true'] {
@@ -744,11 +805,35 @@
   height: var(--azf-control-icon-size);
 }
 
+.azf-copy-button[data-visual-state='copied'] .azf-copy-button__icon {
+  animation: azf-copy-confirm var(--durationNormal) var(--curveEasyEase);
+}
+
 .azf-copy-button__label {
   font-weight: var(--fontWeightSemibold);
 }
 
+@keyframes azf-selected-rail-settle {
+  from {
+    transform: scaleY(0.6);
+  }
+  to {
+    transform: scaleY(1);
+  }
+}
+
+@keyframes azf-copy-confirm {
+  from {
+    opacity: 0.72;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
 .azf-code-snippet {
+  max-width: 100%;
+  min-width: 0;
   border: 1px solid var(--colorNeutralStroke1);
   border-radius: var(--borderRadiusLarge);
   background: var(--colorNeutralBackground1);
@@ -842,11 +927,27 @@
 }
 
 .azf-notification-pane {
-  gap: var(--spacingVerticalS);
-  padding: var(--spacingVerticalM);
+  gap: 0;
+  padding: 0;
   border: 1px solid var(--azf-surface-border);
   border-radius: var(--azf-radius-panel);
   background: var(--azf-surface-background);
+}
+
+.azf-notification-pane[data-surface='flyout'] {
+  width: min(360px, 100%);
+  border-radius: 0;
+  box-shadow: var(--azf-shadow-flyout);
+}
+
+.azf-notification-pane__header {
+  min-height: var(--azf-portal-topbar-height);
+  padding: 0 var(--spacingHorizontalM);
+  border-bottom: 1px solid var(--azf-surface-border);
+}
+
+.azf-notification-pane__body {
+  gap: 0;
 }
 
 .azf-notification-pane__header,
@@ -856,10 +957,11 @@
 }
 
 .azf-notification-pane__item {
-  padding: var(--spacingVerticalS) var(--spacingHorizontalM);
-  border: 1px solid var(--azf-surface-border);
-  border-radius: var(--azf-radius-control);
-  background: var(--azf-surface-subtle);
+  padding: var(--spacingVerticalXS) var(--spacingHorizontalS);
+  border: 0;
+  border-bottom: 1px solid var(--azf-surface-border);
+  border-radius: 0;
+  background: var(--azf-surface-background);
 }
 
 .azf-notification-pane__item[data-unread='true'] {
@@ -910,14 +1012,18 @@
 
 .azf-copilot-composer__attachments {
   align-items: flex-start;
+  flex-wrap: wrap;
+  min-width: 0;
 }
 
 .azf-copilot-composer__attachment {
+  max-width: 100%;
   border-radius: var(--borderRadiusMedium);
 }
 
 .azf-copilot-composer__footer {
   justify-content: space-between;
+  flex-wrap: wrap;
   gap: var(--spacingHorizontalM);
 }
 
@@ -953,11 +1059,13 @@
 
 .azf-response-actions {
   justify-content: flex-end;
+  flex-wrap: wrap;
   gap: var(--spacingHorizontalXS);
 }
 
 .azf-copilot-response__surface {
   gap: var(--spacingVerticalXS);
+  min-width: 0;
 }
 
 .azf-copilot-response__header {
@@ -968,6 +1076,7 @@
 }
 
 .azf-copilot-response__body {
+  min-width: 0;
   color: var(--colorNeutralForeground1);
 }
 
@@ -1303,8 +1412,21 @@
 
 @media (prefers-reduced-motion: reduce) {
   .azf-copilot-loader,
-  .azf-copilot-loader-bar {
+  .azf-copilot-loader-bar,
+  .azf-service-menu__item[data-selected='true']::before,
+  .azf-copy-button[data-visual-state='copied'] .azf-copy-button__icon {
     animation: none;
+  }
+
+  .azf-service-menu .azf-service-menu__item,
+  .azf-service-menu__icon,
+  .azf-copy-button,
+  .azf-copy-button__icon {
+    transition: none;
+  }
+
+  .azf-copy-button:active {
+    transform: none;
   }
 }
 
@@ -1489,9 +1611,9 @@
 }
 
 .azf-artifact-pill__title {
-  font-size: var(--fontSizeBase300);
-  line-height: var(--lineHeightBase300);
-  color: var(--colorNeutralForeground1);
+  font-size: var(--azf-portal-font-size);
+  line-height: var(--azf-portal-line-height);
+  color: var(--azf-portal-foreground);
   white-space: nowrap;
 }
 
@@ -1577,6 +1699,21 @@
   line-height: var(--lineHeightBase200);
 }
 
+@media (max-width: 480px) {
+  .azf-tabs {
+    max-width: 100%;
+  }
+
+  .azf-tabs .fui-Tab {
+    min-width: auto;
+    padding-inline: var(--spacingHorizontalS);
+  }
+
+  .azf-tabs .azf-tab__description {
+    display: none;
+  }
+}
+
 .azf-step-list__label {
   display: inline-flex;
   align-items: center;
@@ -1620,6 +1757,45 @@
   grid-template-columns: auto minmax(0, 1fr);
   align-items: start;
   gap: var(--spacingHorizontalL);
+}
+
+.azf-copilot-workspace-demo {
+  box-sizing: border-box;
+  width: min(100%, 960px);
+  padding: var(--spacingVerticalL);
+  border: var(--strokeWidthThin) solid var(--colorNeutralStroke2);
+  border-radius: var(--borderRadiusLarge);
+  background: var(--colorNeutralBackground1);
+  box-shadow: var(--shadow4);
+}
+
+.azf-copilot-workspace-demo .azf-pattern-grid {
+  grid-template-columns: 172px minmax(0, 720px);
+  gap: var(--spacingHorizontalL);
+}
+
+.azf-copilot-workspace-demo .azf-copilot-response__surface {
+  padding: var(--spacingVerticalM) var(--spacingHorizontalL);
+  border: var(--strokeWidthThin) solid var(--colorNeutralStroke2);
+  border-radius: var(--borderRadiusLarge);
+  background: var(--colorNeutralBackground1);
+}
+
+.azf-copilot-workspace-demo .azf-copilot-composer {
+  max-width: 720px;
+  border-color: var(--colorNeutralStroke1);
+  box-shadow: var(--shadow2);
+}
+
+.azf-copilot-workspace-demo .azf-copilot-composer__field {
+  gap: var(--spacingVerticalS);
+  padding: var(--spacingVerticalM) var(--spacingHorizontalL) var(--spacingVerticalS);
+}
+
+.azf-copilot-workspace-demo .azf-copilot-composer__textarea .fui-Textarea__textarea {
+  min-height: 48px;
+  font-size: var(--fontSizeBase300);
+  line-height: var(--lineHeightBase300);
 }
 
 /* Composed scenario — Coordinator run workspace (library composition of BladeHeader +
@@ -1845,9 +2021,10 @@
 .azf-toolbar {
   justify-content: space-between;
   gap: var(--spacingHorizontalS);
-  padding: var(--spacingVerticalS) var(--spacingHorizontalS);
-  border-radius: var(--azf-radius-toolbar);
-  border: var(--strokeWidthThin) solid var(--colorNeutralBackground3);
+  min-height: var(--azf-portal-control-height);
+  padding: 0 var(--spacingHorizontalXS);
+  border-radius: 0;
+  border: var(--strokeWidthThin) solid transparent;
   background: var(--colorNeutralBackground1);
   color: var(--colorNeutralForeground1);
 }
@@ -1883,7 +2060,7 @@
 
 .azf-toolbar--top-of-page {
   border-color: transparent;
-  border-bottom: var(--strokeWidthThin) solid var(--colorNeutralBackground3);
+  border-bottom: var(--strokeWidthThin) solid var(--azf-surface-border);
   border-end-start-radius: 0;
   border-end-end-radius: 0;
 }
@@ -1918,14 +2095,14 @@
 /* Essentials grid (Figma 25412:8797) */
 .azf-essentials {
   border: 1px solid var(--colorNeutralStroke2);
-  border-radius: var(--azf-radius-control);
+  border-radius: 0;
   background-color: var(--colorNeutralBackground1);
 }
 
 .azf-essentials-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--spacingVerticalS) var(--spacingHorizontalXXL);
+  gap: var(--spacingVerticalXS) var(--spacingHorizontalXXL);
   margin: 0;
 }
 
@@ -1936,7 +2113,7 @@
 .azf-essentials-grid__cell {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 1px;
   min-width: 0;
 }
 
@@ -1960,6 +2137,15 @@
   display: inline-flex;
   gap: var(--spacingHorizontalXS);
   flex-wrap: wrap;
+}
+
+.azf-essentials .fui-AccordionHeader__button {
+  min-height: var(--azf-portal-control-height);
+  padding-block: var(--spacingVerticalXS);
+}
+
+.azf-essentials .fui-AccordionPanel__content {
+  padding: 0 var(--spacingHorizontalM) var(--spacingVerticalS);
 }
 
 @media (max-width: 960px) {

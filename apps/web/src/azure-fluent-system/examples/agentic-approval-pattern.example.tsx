@@ -4,7 +4,7 @@ export function AgenticApprovalPatternExample() {
   return (
     <AgenticApprovalPattern
       title="Approve production remediation"
-      summary="The coordinator paused for a human decision before modifying live clusters."
+    summary="The automation paused for a human decision before modifying live clusters."
       defaultOpenItems={['approve']}
       steps={[
         {

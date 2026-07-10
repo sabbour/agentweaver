@@ -6,16 +6,16 @@ export function CoordinatorRunPatternExample() {
 
   return (
     <CoordinatorRunPattern
-      title="Coordinator · rollout-remediation-run"
-      subtitle="Multi-agent run · 3 of 4 steps complete"
+      title="Automation run · rollout remediation"
+      subtitle="Run review · 3 of 4 steps complete"
       runActions={[
         { id: 'pause', label: 'Pause run', onClick: () => undefined },
         { id: 'logs', label: 'View logs', appearance: 'subtle', onClick: () => undefined },
       ]}
       copilotActions={[{ id: 'summarize', label: 'Summarize run', onClick: () => undefined }]}
       reasoning={{
-        title: 'Run reasoning',
-        subtitle: '3 artifacts created',
+        title: 'Run activity',
+        subtitle: '3 outputs created',
         steps: [
           {
             id: 'context',
@@ -33,8 +33,8 @@ export function CoordinatorRunPatternExample() {
           {
             id: 'approve',
             title: 'Requesting approval to modify resources',
-            body: "I need approval to modify resources in the 'Contoso Production' subscription before applying fixes.",
-            disclaimer: 'Denying will immediately stop reasoning, and it can’t be restarted. Continuing may incur costs.',
+            body: "I need approval to modify resources in the 'Sample subscription A' subscription before applying fixes.",
+            disclaimer: 'Denying will immediately stop the run. Continuing may incur costs.',
             approveLabel: 'Approve modifications',
             denyLabel: 'Deny modifications',
             needsInput: true,
@@ -67,7 +67,7 @@ export function CoordinatorRunPatternExample() {
         onChange: setSteering,
         onSend: () => undefined,
         attachments: [{ id: 'run', name: 'run-context.md' }],
-        placeholder: 'Steer the coordinator run…',
+        placeholder: 'Add guidance for the next step…',
       }}
     />
   );

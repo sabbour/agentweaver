@@ -6,8 +6,6 @@ This showcase is the library-local product shell for `apps/web/src/azure-fluent-
 2. **Patterns** — a pattern example browser backed by `catalog/PATTERNS.md`
 3. **Icons** — a visual icon browser backed by `catalog/ICONS.md`
 
-Historical doctrine markers retained for validation: "exactly two primary experiences" and "inline icon catalog surface".
-
 It is intentionally standalone and portable. Do not couple it to app routes, app state, or assets outside this library. Downstream projects should be able to use this showcase, the examples, the three checked-in catalog files, and the library sources without Figma MCP.
 
 Start with the package-local `../DESIGN.md` when adopting this library in another project. The showcase is the live companion to that portable design addendum.
@@ -18,7 +16,7 @@ The Components view is the fastest way to inspect the full checked-in Figma comp
 
 - Browse every inventoried component row with status filters.
 - Select a rendered entry to see its focused live preview.
-- Select a mapped or unextracted entry to see a concise status and next-step placeholder.
+- Select a mapped or unextracted entry to see a concise reference note and next step.
 - Review local example paths, implementation files, and source-node links only for the selected entry.
 
 ## Patterns view
@@ -73,14 +71,11 @@ npm run showcase:dev
 
 Open `http://127.0.0.1:4174/`.
 
-## Validation gate
+## Validation
 
-Run the doctrine gate whenever the showcase app or `DESIGN.md` changes:
-
-```powershell
-cd apps/web/src/azure-fluent-system
-npm run showcase:validate-doctrine
-```
+When the showcase app or `DESIGN.md` changes, run the focused Azure Fluent tests,
+the web build, and a real browser pass through the Components, Patterns, and
+Icons views.
 
 ## First viewport render integrity
 

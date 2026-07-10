@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import {
   AgenticProgress,
@@ -27,6 +27,7 @@ import {
 import type { AzureIconDefinition } from '../azure-fluent-system';
 import {
   AzureFluentShowcaseApp,
+  publicShowcaseComponentInventoryEntries,
   showcaseComponentInventoryEntries,
   showcaseComponentInventoryNodeIds,
   showcaseComponentInventorySourceNodeIds,
@@ -65,6 +66,20 @@ function parseComponentCatalogRows(markdown: string) {
         showcase,
       };
     });
+}
+
+function exportedRuntimeNames(source: string) {
+  return Array.from(source.matchAll(/^export\s+(?:function|const|class)\s+(\w+)/gm), (match) => match[1]);
+}
+
+function foundationExportNames(source: string) {
+  const exportStart = source.indexOf('export {');
+  const exportEnd = source.indexOf("} from '@fluentui/react-components'");
+  return source
+    .slice(exportStart, exportEnd)
+    .split(/\r?\n/)
+    .map((line) => line.trim().replace(/,$/, ''))
+    .filter((line) => line && !line.startsWith('//') && !line.startsWith('export'));
 }
 
 afterEach(() => cleanup());
@@ -169,7 +184,7 @@ describe('azure-fluent-system hardened components', () => {
         <AgenticProgress
           defaultOpenItems={['deploy']}
           onApprove={onApprove}
-          steps={[{ id: 'deploy', title: 'Deploy change', body: 'Waiting for approval', needsInput: true, riskText: 'This updates production.' }]}
+          steps={[{ id: 'deploy', title: 'Deploy change', body: 'Waiting for approval', needsInput: true, riskText: 'This updates sample resources.' }]}
         />
       </Wrapper>,
     );
@@ -257,13 +272,14 @@ describe('azure-fluent-system hardened components', () => {
     const onCopy = vi.fn(async () => undefined);
     render(
       <Wrapper>
-        <CopyButton value="az aks show --name prod" label="Click here to copy" onCopy={onCopy} />
+        <CopyButton value="az aks show --name aks-cluster-sample" label="Click here to copy" onCopy={onCopy} />
       </Wrapper>,
     );
 
     fireEvent.click(screen.getByRole('button', { name: 'Click here to copy' }));
-    expect(onCopy).toHaveBeenCalledWith('az aks show --name prod');
-    expect(await screen.findByText('Copied')).toBeDefined();
+    expect(onCopy).toHaveBeenCalledWith('az aks show --name aks-cluster-sample');
+    expect(await screen.findByRole('button', { name: 'Copied' })).toBeDefined();
+    expect(screen.getByRole('status').textContent).toBe('Copied');
   });
 
   it('renders CodeSnippet with line numbers and fold markers', () => {
@@ -273,7 +289,7 @@ describe('azure-fluent-system hardened components', () => {
           title="ARM template"
           lines={[
             { lineNumber: 1, text: '{', foldState: 'expanded' },
-            { lineNumber: 2, tokens: [{ text: '\"name\"', tone: 'key' }, { text: ': ', tone: 'operator' }, { text: '\"prod\"' }] },
+            { lineNumber: 2, tokens: [{ text: '"name"', tone: 'key' }, { text: ': ', tone: 'operator' }, { text: '"sample"' }] },
             { lineNumber: 3, text: '}', tokens: [{ text: '}', tone: 'operator' }] },
           ]}
         />
@@ -303,7 +319,7 @@ describe('azure-fluent-system hardened components', () => {
               description: 'Name and scope',
               content: (
                 <FormFieldRow label="Subscription" htmlFor="test-subscription">
-                  <input id="test-subscription" value="Contoso" readOnly />
+                  <input id="test-subscription" value="Sample subscription" readOnly />
                 </FormFieldRow>
               ),
             },
@@ -339,7 +355,7 @@ describe('azure-fluent-system hardened components', () => {
               brand={{ product: 'Microsoft Azure', area: 'Portal' }}
               searchValue="storage"
               onSearchChange={onSearchChange}
-              persona={{ name: 'Ahmed Sabbour', secondaryText: 'Contoso Engineering' }}
+              persona={{ name: 'Signed-in user', secondaryText: 'Organization directory' }}
             />
           }
           rail={
@@ -361,6 +377,31 @@ describe('azure-fluent-system hardened components', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Insights' }));
     expect(onInsights).toHaveBeenCalledTimes(1);
     expect(screen.getByText('Portal body')).toBeDefined();
+  });
+
+
+
+  it('exposes live Portal capture density tokens and flyout notification anatomy', () => {
+    const systemRoot = resolve(process.cwd(), 'src', 'azure-fluent-system');
+    const tokens = readFileSync(resolve(systemRoot, 'tokens.css'), 'utf8');
+    expect(tokens).toContain('--azf-portal-font-size: 13px');
+    expect(tokens).toContain('--azf-portal-topbar-height: 40px');
+    expect(tokens).toContain('--azf-portal-control-height: 32px');
+    expect(tokens).toContain('--azf-density-row-height: var(--azf-portal-row-height)');
+    expect(tokens).toContain('--azf-portal-brand: rgb(0 120 212)');
+
+    render(
+      <Wrapper>
+        <NotificationPane
+          surface="flyout"
+          title="Activity"
+          items={[{ id: 'n1', title: 'Policy review needed', body: 'Review the affected resource before continuing.', tone: 'warning', unread: true }]}
+        />
+      </Wrapper>,
+    );
+
+    expect(screen.getByLabelText('Activity').getAttribute('data-surface')).toBe('flyout');
+    expect(screen.getByText('Policy review needed')).toBeDefined();
   });
 
   it('renders step and notification primitives from grouped inventory', () => {
@@ -416,7 +457,7 @@ describe('azure-fluent-system hardened components', () => {
     expect(registry['Storage/Storage Accounts']).toBeUndefined();
   });
 
-  it('documents the pattern doctrine in DESIGN.md', () => {
+  it('documents the pattern guidance in DESIGN.md', () => {
     const design = readFileSync(resolve(process.cwd(), '..', '..', 'DESIGN.md'), 'utf8');
     expect(design).toContain('Coverage is not fidelity.');
     expect(design).toContain('Resource Type node `4417:3962` is representative of one pattern family, not the whole showcase scope.');
@@ -428,16 +469,34 @@ describe('azure-fluent-system hardened components', () => {
     const libraryReadme = readFileSync(resolve(process.cwd(), 'src', 'azure-fluent-system', 'README.md'), 'utf8');
     const readme = readFileSync(resolve(process.cwd(), 'src', 'azure-fluent-system', 'showcase', 'README.md'), 'utf8');
     const patternsCatalog = readFileSync(resolve(process.cwd(), 'src', 'azure-fluent-system', 'catalog', 'PATTERNS.md'), 'utf8');
+    const webPackage = JSON.parse(readFileSync(resolve(process.cwd(), 'package.json'), 'utf8')) as { scripts?: Record<string, string> };
+    const packagePackage = JSON.parse(readFileSync(resolve(process.cwd(), 'src', 'azure-fluent-system', 'package.json'), 'utf8')) as { scripts?: Record<string, string> };
+    const rootGitignore = readFileSync(resolve(process.cwd(), '..', '..', '.gitignore'), 'utf8');
+    const removedScriptName = ['showcase', 'validate-readiness'].join(':');
+    const removedValidatorFile = ['validate-showcase', 'readiness.mjs'].join('-');
+    const removedSidecarDir = ['.impeccable'].join('');
+    const removedSidecarFile = ['design', 'json'].join('.');
+    const removedSidecarPath = ['apps/web/src/azure-fluent-system', removedSidecarDir, removedSidecarFile].join('/');
     expect(portableDesign).toContain('# Azure Fluent System — usage contract');
     expect(portableDesign).toContain('Refresh a catalog row from Figma MCP only when');
+    expect(portableDesign).toContain('Public showcase rules');
+    expect(portableDesign).toContain('primary UI must not display status/readiness chrome');
     expect(portableDesign).not.toContain('Agentweaver');
     expect(libraryReadme).toContain('Local-first downstream workflow');
+    expect(libraryReadme).toContain('Sanitized Portal capture note');
     expect(libraryReadme).toContain('Use `DESIGN.md` as the portable design-system addendum');
     expect(readme).toContain('Local-first workflow');
     expect(readme).toContain('Read `../DESIGN.md` for the enforceable package-local rules and anti-rules.');
     expect(readme).toContain('Ordinary downstream consumption should work from local files only:');
+    expect(readme).toContain('focused Azure Fluent tests');
+    expect(readme).not.toContain(removedScriptName);
     expect(patternsCatalog).toContain('Use this workflow in downstream projects where Figma MCP may not exist:');
     expect(patternsCatalog).toContain('Use local artifacts for ordinary consumption.');
+    expect(Object.keys(webPackage.scripts ?? {})).not.toContain(removedScriptName);
+    expect(Object.keys(packagePackage.scripts ?? {})).not.toContain(removedScriptName);
+    expect(existsSync(resolve(process.cwd(), 'src', 'azure-fluent-system', 'showcase', removedValidatorFile))).toBe(false);
+    expect(existsSync(resolve(process.cwd(), 'src', 'azure-fluent-system', removedSidecarDir, removedSidecarFile))).toBe(false);
+    expect(rootGitignore).not.toContain(removedSidecarPath);
     expect(componentCatalogData.portability?.downstreamConsumptionDoesNotRequireFigmaMcp).toBe(true);
     expect(componentCatalogData.localConsumptionWorkflow?.length).toBeGreaterThan(2);
     expect(componentCatalogData.traceabilityNotes?.[0]).toContain('without Figma MCP');
@@ -454,29 +513,87 @@ describe('azure-fluent-system hardened components', () => {
     expect(componentCatalogData.groups.some((group) => group.id === 'copilot-composer' && group.mcpNodes?.some((node) => node.nodeId === '32382:38689' && node.status === 'showcase-placeholder'))).toBe(true);
     expect(componentCatalogData.groups.some((group) => group.id === 'agentic-progress' && group.mcpNodes?.some((node) => node.nodeId === '27950:10571' && node.status === 'implemented-rendered'))).toBe(true);
     expect(componentCatalogData.inventoryCoverage?.inventoryComponentCount).toBe(148);
-    expect(componentCatalogData.inventoryCoverage?.exactManifestNameNodeAudit?.coveredCount).toBe(105);
-    expect(componentCatalogData.inventoryCoverage?.exactManifestNameNodeAudit?.missingCount).toBe(43);
+    expect(componentCatalogData.inventoryCoverage?.exactManifestNameNodeAudit?.coveredCount).toBe(104);
+    expect(componentCatalogData.inventoryCoverage?.exactManifestNameNodeAudit?.missingCount).toBe(44);
     expect(componentCatalogData.inventoryCoverage?.components?.length).toBe(148);
     expect(componentCatalogData.inventoryCoverage?.coverageTable.reduce((sum, row) => sum + row.count, 0)).toBe(148);
-    expect(componentCatalogData.inventoryCoverage?.coverageTable.some((row) => row.status === 'implemented-rendered' && row.count === 26)).toBe(true);
+    expect(componentCatalogData.inventoryCoverage?.coverageTable.some((row) => row.status === 'implemented-rendered' && row.count === 25)).toBe(true);
     expect(componentCatalogData.inventoryCoverage?.coverageTable.some((row) => row.status === 'needs-mcp-extraction' && row.count === 45)).toBe(true);
-    expect(componentCatalogData.inventoryCoverage?.coverageTable.some((row) => row.status === 'showcase-placeholder' && row.count === 77)).toBe(true);
+    expect(componentCatalogData.inventoryCoverage?.coverageTable.some((row) => row.status === 'showcase-placeholder' && row.count === 78)).toBe(true);
     expect(componentCatalogData.inventoryCoverage?.components?.some((row) => row.nodeId === '30028:627' && row.coverageStatus === 'implemented-rendered')).toBe(true);
     expect(componentCatalogData.inventoryCoverage?.components?.some((row) => row.nodeId === '32382:40353' && row.coverageStatus === 'implemented-rendered')).toBe(true);
   });
 
-  it('exposes three primary showcase experiences with preview-first browsers', () => {
-    render(<AzureFluentShowcaseApp />);
+  it('keeps public Azure Fluent components and approved Fluent foundations represented in the showcase browser', () => {
+    const systemRoot = resolve(process.cwd(), 'src', 'azure-fluent-system');
+    const showcaseSource = readFileSync(resolve(systemRoot, 'showcase', 'AzureFluentShowcaseApp.tsx'), 'utf8');
+    const representedNames = new Set([
+      ...Array.from(showcaseSource.matchAll(/exportName:\s*'([^']+)'/g), (match) => match[1]),
+      ...Array.from(showcaseSource.matchAll(/codeName:\s*'([^']+)'/g), (match) => match[1]),
+    ]);
+
+    const helperOnly = new Set(['useAzureIconRegistry', 'createIconCloudRegistry', 'createIconCloudRegistryFromManifest', 'useToastController']);
+    const publicRuntimeComponents = [
+      ...exportedRuntimeNames(readFileSync(resolve(systemRoot, 'components.tsx'), 'utf8')),
+      ...exportedRuntimeNames(readFileSync(resolve(systemRoot, 'patterns.tsx'), 'utf8')),
+      ...exportedRuntimeNames(readFileSync(resolve(systemRoot, 'provider.tsx'), 'utf8')),
+      ...exportedRuntimeNames(readFileSync(resolve(systemRoot, 'icons.tsx'), 'utf8')),
+      ...foundationExportNames(readFileSync(resolve(systemRoot, 'foundations.tsx'), 'utf8')),
+    ].filter((name) => !helperOnly.has(name));
+
+    expect(publicRuntimeComponents.filter((name) => !representedNames.has(name))).toEqual([]);
+    expect(readFileSync(resolve(systemRoot, 'icons.tsx'), 'utf8')).toContain('non-visual helper APIs');
+    expect(readFileSync(resolve(systemRoot, 'foundations.tsx'), 'utf8')).toContain('approved building blocks');
+  });
+
+  it('blocks screenshot and arbitrary media artifacts from public showcase previews', () => {
+    const systemRoot = resolve(process.cwd(), 'src', 'azure-fluent-system');
+    const showcaseSource = readFileSync(resolve(systemRoot, 'showcase', 'AzureFluentShowcaseApp.tsx'), 'utf8');
+    const examplesRoot = resolve(systemRoot, 'examples');
+    const exampleSources = readdirSync(examplesRoot)
+      .filter((fileName) => fileName.endsWith('.example.tsx'))
+      .map((fileName) => readFileSync(resolve(examplesRoot, fileName), 'utf8'))
+      .join('\n');
+
+    const publicPreviewSource = `${showcaseSource}\n${exampleSources}`;
+    expect(publicPreviewSource).not.toMatch(/_largeimage|largeimage|devtools|test-pattern|wallpaper|scenery|browser screenshot|network screenshot/i);
+    expect(publicPreviewSource).not.toMatch(/Slide\s+\d+|contact[- ]sheet|presentation screenshot|slide deck|numbered slides/i);
+    expect(publicPreviewSource).not.toMatch(/Ahmed|Sabbour|Contoso|stcontoso|aks-prod|prod-eastus|vm-prod|rg-prod|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}/i);
+    expect(publicPreviewSource).not.toMatch(/\.(png|jpe?g|webp|gif)\b/i);
+    expect(exampleSources).not.toMatch(/<img|backgroundImage|background-image/i);
+
+    const imgMatches = Array.from(showcaseSource.matchAll(/<img\b/g));
+    expect(imgMatches).toHaveLength(1);
+    expect(showcaseSource.slice(Math.max(0, imgMatches[0].index - 400), imgMatches[0].index + 400)).toContain('azf-showcase-icon-grid__glyph');
+  });
+
+  it('exposes primary showcase experiences with preview-first browsers', () => {
+    const showcaseSource = readFileSync(resolve(process.cwd(), 'src', 'azure-fluent-system', 'showcase', 'AzureFluentShowcaseApp.tsx'), 'utf8');
+    const { container } = render(<AzureFluentShowcaseApp />);
 
     expect(screen.getByRole('tab', { name: /^Components/i }).getAttribute('aria-selected')).toBe('true');
     expect(screen.getByRole('tab', { name: /^Patterns/i })).toBeDefined();
+    expect(screen.queryByRole('tab', { name: /^Usage examples/i })).toBeNull();
     expect(screen.getByRole('tab', { name: /^Icons/i })).toBeDefined();
-    expect(screen.getByText('Component inventory')).toBeDefined();
-    expect(screen.getByText(/Browse every cataloged Figma component/i)).toBeDefined();
-    expect(screen.getByLabelText('Filter component inventory')).toBeDefined();
-    expect(screen.getByRole('button', { name: 'Needs extraction' })).toBeDefined();
-    expect(screen.getByLabelText('Live component preview')).toBeDefined();
-    expect(screen.getByText('Selection details')).toBeDefined();
+    expect(screen.getByRole('region', { name: 'Portal-style showcase highlights' })).toBeDefined();
+    expect(screen.getAllByText('AKS resource list').length).toBeGreaterThan(0);
+    expect(screen.getByText(/Azure Kubernetes Service list with resource group, subscription, type, and status columns/i)).toBeDefined();
+    expect(screen.getAllByText('Global search').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Settings flyout').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Activity flyout').length).toBeGreaterThan(0);
+    expect(screen.getByText('Component browser')).toBeDefined();
+    expect(screen.queryByText(/Browse Azure Fluent components/i)).toBeNull();
+    expect(screen.queryByText(/Showing \d+ entries/i)).toBeNull();
+    expect(screen.getByLabelText('Filter components')).toBeDefined();
+    expect(screen.queryByRole('button', { name: 'All' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Live preview' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Related preview' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Design review' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Planned preview' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Review planned' })).toBeNull();
+    expect(showcaseSource).not.toMatch(/Live preview|Related preview|Design review|Planned preview|Review planned/);
+    expect(screen.getByLabelText('Component example')).toBeDefined();
+    expect(screen.getByText('Reference details')).toBeDefined();
     expect(screen.getByRole('heading', { name: 'Accordion' })).toBeDefined();
     expect(screen.getByRole('button', { name: 'Accordion' })).toBeDefined();
     expect(screen.queryByText('Traceability citations')).toBeNull();
@@ -484,18 +601,87 @@ describe('azure-fluent-system hardened components', () => {
     expect(screen.queryByText('Inventory coverage')).toBeNull();
     expect(screen.queryByText('Icon catalog surface')).toBeNull();
 
-    const inventoryList = screen.getByRole('list', { name: 'Component inventory entries' });
+    const inventoryList = screen.getByRole('list', { name: 'Component entries' });
+    const inventoryButtonNames = within(inventoryList).getAllByRole('button').map((button) => button.getAttribute('aria-label') ?? '');
+    const copilotEntryNames = [
+      'Copilot composer',
+      'Copilot response',
+      'Inline Copilot',
+      'Copilot prompt ribbon',
+      'Artifact pill',
+      'Agentic progress',
+      'Reasoning panel',
+      'Copilot workspace',
+    ];
+    const groupedCopilotEntryNames = inventoryButtonNames.filter((name) => copilotEntryNames.includes(name));
+    const copilotEntryIndexes = groupedCopilotEntryNames.map((name) => inventoryButtonNames.indexOf(name));
+    expect(within(inventoryList).getByText('Copilot')).toBeDefined();
+    expect(groupedCopilotEntryNames).toContain('Copilot composer');
+    expect(groupedCopilotEntryNames).toContain('Copilot response');
+    expect(groupedCopilotEntryNames).toContain('Copilot workspace');
+    expect(groupedCopilotEntryNames.length).toBeGreaterThan(3);
+    expect(Math.max(...copilotEntryIndexes) - Math.min(...copilotEntryIndexes) + 1).toBe(groupedCopilotEntryNames.length);
+    expect(inventoryButtonNames.slice(copilotEntryIndexes[0], copilotEntryIndexes[0] + groupedCopilotEntryNames.length)).toEqual(groupedCopilotEntryNames);
 
     // Grouped entries surface friendly export titles. The old look-alike child-layer names
     // (".Chat Input [Azure]", ".Reasoning (CoT)", "Copilot Row Swap", "Upload File") are collapsed
     // into their owning components and must no longer appear as standalone sidebar rows.
     expect(within(inventoryList).getByRole('button', { name: 'File upload' })).toBeDefined();
-    expect(within(inventoryList).getByRole('button', { name: 'Scrollbar' })).toBeDefined();
+    expect(within(inventoryList).getByRole('button', { name: 'Avatar' })).toBeDefined();
+    expect(within(inventoryList).getByRole('button', { name: 'Breadcrumb' })).toBeDefined();
+    expect(within(inventoryList).getByRole('button', { name: 'Card' })).toBeDefined();
+    expect(within(inventoryList).getByRole('button', { name: 'Carousel' })).toBeDefined();
+    expect(within(inventoryList).getByRole('button', { name: 'Dialog' })).toBeDefined();
+    expect(within(inventoryList).getByRole('button', { name: 'Dropdown' })).toBeDefined();
+    expect(within(inventoryList).getByRole('button', { name: 'Drawer' })).toBeDefined();
+    expect(within(inventoryList).getByRole('button', { name: 'Menu' })).toBeDefined();
+    expect(within(inventoryList).getByRole('button', { name: 'Message bar' })).toBeDefined();
+    expect(within(inventoryList).getByRole('button', { name: 'Tag picker' })).toBeDefined();
+    expect(within(inventoryList).getByRole('button', { name: 'Toast' })).toBeDefined();
+    expect(within(inventoryList).getAllByRole('button', { name: 'Toolbar' }).length).toBeGreaterThan(0);
     expect(within(inventoryList).queryByRole('button', { name: '.Chat Input [Azure]' })).toBeNull();
     expect(within(inventoryList).queryByRole('button', { name: 'Copilot Row Swap' })).toBeNull();
     expect(within(inventoryList).queryByRole('button', { name: 'Upload File' })).toBeNull();
+    expect(within(inventoryList).queryByRole('button', { name: 'Scrollbar' })).toBeNull();
+    expect(within(inventoryList).queryByRole('button', { name: '.Horizontal Swap' })).toBeNull();
+    expect(within(inventoryList).queryByRole('button', { name: '.Popover Content (Dark)' })).toBeNull();
+    expect(within(inventoryList).queryByRole('button', { name: 'Breadcrumb button' })).toBeNull();
+    expect(within(inventoryList).queryByRole('button', { name: 'Breadcrumb divider' })).toBeNull();
+    expect(within(inventoryList).queryByRole('button', { name: 'Breadcrumb item' })).toBeNull();
+    expect(within(inventoryList).queryByRole('button', { name: 'Dialog surface' })).toBeNull();
+    expect(within(inventoryList).queryByRole('button', { name: 'Dialog body' })).toBeNull();
+    expect(within(inventoryList).queryByRole('button', { name: 'Dialog title' })).toBeNull();
+    expect(within(inventoryList).queryByRole('button', { name: 'Dialog actions' })).toBeNull();
+    expect(within(inventoryList).queryByRole('button', { name: 'Dialog content' })).toBeNull();
+    expect(within(inventoryList).queryByRole('button', { name: 'Dialog trigger' })).toBeNull();
+    expect(within(inventoryList).queryByRole('button', { name: 'Card header' })).toBeNull();
+    expect(within(inventoryList).queryByRole('button', { name: 'Card footer' })).toBeNull();
+    expect(within(inventoryList).queryByRole('button', { name: 'Card preview' })).toBeNull();
+    expect(within(inventoryList).queryByRole('button', { name: 'Carousel card' })).toBeNull();
+    expect(within(inventoryList).queryByRole('button', { name: 'Drawer header' })).toBeNull();
+    expect(within(inventoryList).queryByRole('button', { name: 'Drawer body' })).toBeNull();
+    expect(within(inventoryList).queryByRole('button', { name: 'Overlay drawer' })).toBeNull();
+    expect(within(inventoryList).queryByRole('button', { name: 'Inline drawer' })).toBeNull();
+    expect(within(inventoryList).queryByRole('button', { name: 'Menu trigger' })).toBeNull();
+    expect(within(inventoryList).queryByRole('button', { name: 'Menu list' })).toBeNull();
+    expect(within(inventoryList).queryByRole('button', { name: 'Menu item' })).toBeNull();
+    expect(within(inventoryList).queryByRole('button', { name: 'Menu popover' })).toBeNull();
+    expect(within(inventoryList).queryByRole('button', { name: 'Message bar body' })).toBeNull();
+    expect(within(inventoryList).queryByRole('button', { name: 'Message bar actions' })).toBeNull();
+    expect(within(inventoryList).queryByRole('button', { name: 'Message bar title' })).toBeNull();
+    expect(within(inventoryList).queryByRole('button', { name: 'Option' })).toBeNull();
+    expect(within(inventoryList).queryByRole('button', { name: 'Option group' })).toBeNull();
+    expect(within(inventoryList).queryByRole('button', { name: 'Tag picker control' })).toBeNull();
+    expect(within(inventoryList).queryByRole('button', { name: 'Toast title' })).toBeNull();
+    expect(within(inventoryList).queryByRole('button', { name: 'Toolbar button' })).toBeNull();
+    expect(within(inventoryList).queryByRole('button', { name: 'Toolbar divider' })).toBeNull();
 
-    // Export-backed groups render live previews addressed by their friendly title.
+    fireEvent.click(within(inventoryList).getByRole('button', { name: 'Carousel' }));
+    expect(screen.getByRole('heading', { name: 'Carousel' })).toBeDefined();
+    expect(container.querySelector('.azf-showcase-component-preview-panel img')).toBeNull();
+    expect(screen.queryByText(/Slide\s+\d+|0(?:3[0-9]|4[0-9])|contact[- ]sheet|presentation/i)).toBeNull();
+
+    // Export-backed groups render examples addressed by their friendly title.
     fireEvent.click(within(inventoryList).getByRole('button', { name: 'Code snippet' }));
     expect(screen.getByRole('heading', { name: 'Code snippet' })).toBeDefined();
     expect(screen.getByRole('button', { name: 'Copy' })).toBeDefined();
@@ -504,28 +690,145 @@ describe('azure-fluent-system hardened components', () => {
     expect(screen.getByRole('navigation', { name: 'Pagination' })).toBeDefined();
     expect(screen.getByRole('combobox', { name: 'Rows per page' })).toBeDefined();
 
-    fireEvent.click(within(inventoryList).getByRole('button', { name: 'CopilotComposer' }));
-    expect(screen.getByRole('heading', { name: 'CopilotComposer' })).toBeDefined();
+    fireEvent.click(within(inventoryList).getByRole('button', { name: 'Divider' }));
+    expect(screen.getByRole('heading', { name: 'Divider' })).toBeDefined();
+    expect(screen.getByLabelText('Horizontal divider example')).toBeDefined();
+    expect(screen.getByText('Activity summary')).toBeDefined();
+    expect(screen.getByText('Recommended action')).toBeDefined();
+    expect(screen.getByText('Review checkpoints')).toBeDefined();
+    expect(screen.getByRole('button', { name: 'Open logs' })).toBeDefined();
+    expect(screen.queryByText('Inbound rules')).toBeNull();
+
+    fireEvent.click(within(inventoryList).getByRole('button', { name: 'Essentials' }));
+    expect(screen.getByRole('heading', { name: 'Essentials' })).toBeDefined();
+    expect(screen.getByText('Resource group')).toBeDefined();
+    expect(screen.getByText('sample-platform-rg')).toBeDefined();
+    expect(screen.getAllByText(/Essentials renders the collapsible resource-summary/i).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/EssentialsGrid renders/i)).toBeNull();
+
+    fireEvent.click(within(inventoryList).getByRole('button', { name: 'Search filter pills' }));
+    expect(screen.getByRole('heading', { name: 'Search filter pills' })).toBeDefined();
+    expect(screen.getByLabelText('Search filter pills example')).toBeDefined();
+    expect(screen.getByRole('button', { name: 'Compute' })).toBeDefined();
+    expect(screen.getAllByText(/Use compact category pills to refine search results/i).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/FilterPills renders/i)).toBeNull();
+
+    fireEvent.click(within(inventoryList).getByRole('button', { name: 'Service menu' }));
+    expect(screen.getByRole('heading', { name: 'Service menu' })).toBeDefined();
+    expect(screen.getByRole('navigation', { name: 'Service navigation' })).toBeDefined();
+    expect(screen.getByLabelText('Selected service menu item')).toBeDefined();
+    expect(screen.getAllByText('Private access').length).toBeGreaterThan(0);
+    expect(screen.getByRole('button', { name: 'Open private endpoint settings' })).toBeDefined();
+    expect(container.querySelector('.azf-showcase-component-preview-panel img')).toBeNull();
+    expect(screen.queryByText(/game|media|wallpaper|scenery|desktop|diagram|test-pattern/i)).toBeNull();
+
+    fireEvent.click(within(inventoryList).getByRole('button', { name: 'Notification pane' }));
+    expect(screen.getByRole('heading', { name: 'Notification pane' })).toBeDefined();
+    expect(screen.getByRole('complementary', { name: 'Activity updates' })).toBeDefined();
+    expect(screen.getByLabelText('Selected notification detail')).toBeDefined();
+    expect(screen.getAllByText('Firewall validation blocked').length).toBeGreaterThan(0);
+    expect(screen.getByRole('button', { name: 'Review policy' })).toBeDefined();
+    expect(screen.getByRole('button', { name: 'View all activity' })).toBeDefined();
+    expect(container.querySelector('.azf-showcase-component-preview-panel img')).toBeNull();
+    expect(screen.queryByText(/test-pattern|scenery|desktop|diagram/i)).toBeNull();
+
+    fireEvent.click(within(inventoryList).getByRole('button', { name: 'Portal shell / top nav / rail' }));
+    expect(screen.getByRole('heading', { name: 'Portal shell / top nav / rail' })).toBeDefined();
+    expect(screen.getByText('Microsoft Azure')).toBeDefined();
+    expect(screen.getAllByText('aks-cluster-alpha').length).toBeGreaterThan(0);
+    expect(screen.getByRole('table', { name: 'AKS resources' })).toBeDefined();
+    expect(screen.getAllByText('Resource group').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Subscription').length).toBeGreaterThan(0);
+    expect(screen.getAllByLabelText('Global search flyout').length).toBeGreaterThan(0);
+    expect(screen.getAllByLabelText('Settings flyout').length).toBeGreaterThan(0);
+    expect(screen.getByRole('complementary', { name: 'Activity' })).toBeDefined();
+    expect(container.querySelector('.azf-showcase-component-preview-panel img')).toBeNull();
+    expect(screen.queryByText(/test-pattern|scenery|desktop|diagram|wallpaper|screenshot/i)).toBeNull();
+    expect(screen.queryByText(/Related shell details|Local shell preview|Portal navigation details/i)).toBeNull();
+
+    fireEvent.click(within(inventoryList).getByRole('button', { name: 'Copilot composer' }));
+    expect(screen.getByRole('heading', { name: 'Copilot composer' })).toBeDefined();
+    expect(screen.queryByRole('heading', { name: 'CopilotComposer' })).toBeNull();
+    expect(screen.getByLabelText('Ready composer')).toBeDefined();
+    expect(screen.getByLabelText('Running composer')).toBeDefined();
+    expect(screen.queryByText('Live preview')).toBeNull();
+    expect(screen.queryByText('Running / agents off')).toBeNull();
     expect(screen.getByRole('button', { name: 'Agents on' })).toBeDefined();
     expect(screen.getByRole('button', { name: 'Agents off' })).toBeDefined();
+
+    fireEvent.click(within(inventoryList).getByRole('button', { name: 'Copilot response' }));
+    expect(screen.getByRole('heading', { name: 'Copilot response' })).toBeDefined();
+    expect(screen.queryByRole('heading', { name: 'CopilotResponse' })).toBeNull();
+    expect(screen.getByLabelText('Resolved Copilot response')).toBeDefined();
+    expect(screen.getByLabelText('Loading response')).toBeDefined();
+    expect(screen.getByText('AKSControlPlane')).toBeDefined();
+    expect(screen.getByRole('button', { name: 'Open incident' })).toBeDefined();
+    expect(screen.getByRole('button', { name: 'Helpful' })).toBeDefined();
+    expect(screen.queryByText('Resolved answer')).toBeNull();
+    expect(screen.queryByText('Loading and request count')).toBeNull();
+    expect(screen.queryByText(/deploymentTemplate\.json/i)).toBeNull();
+
+    fireEvent.click(within(inventoryList).getByRole('button', { name: 'Copilot workspace' }));
+    const copilotWorkspacePreview = screen.getByLabelText('Component example');
+    expect(container.querySelector('.azf-copilot-workspace-demo')).toBeDefined();
+    expect(screen.getAllByRole('heading', { name: 'Copilot workspace' })).toHaveLength(1);
+    expect(within(copilotWorkspacePreview).queryByRole('heading', { name: 'Copilot workspace' })).toBeNull();
+    expect(within(copilotWorkspacePreview).getByLabelText('Compact Copilot workspace preview')).toBeDefined();
+    expect(screen.queryByText(/Copilot workspace composes/i)).toBeNull();
+    expect(screen.getAllByText('A compact Copilot task workspace with navigation, response, actions, and composer.').length).toBeGreaterThan(0);
+    expect(within(copilotWorkspacePreview).getByText('Tasks')).toBeDefined();
+    expect(within(copilotWorkspacePreview).getByText('Chat')).toBeDefined();
+    expect(within(copilotWorkspacePreview).queryByText('Workspace chat')).toBeNull();
+    expect(screen.getByText('AKSControlPlane')).toBeDefined();
+    expect(screen.getByText('rollout-failures.kql')).toBeDefined();
+    expect(screen.getByRole('button', { name: 'Open workbook' })).toBeDefined();
+    expect(screen.queryByText(/deploymentTemplate\.json/i)).toBeNull();
 
     fireEvent.click(within(inventoryList).getByRole('button', { name: 'File upload' }));
     expect(screen.getByRole('heading', { name: 'File upload' })).toBeDefined();
     expect(screen.queryByText('Live preview not available yet')).toBeNull();
 
-    // A grouped entry that still needs MCP extraction shows the placeholder rather than a live preview.
-    fireEvent.click(within(inventoryList).getByRole('button', { name: 'Scrollbar' }));
-    expect(screen.getByText('Live preview not available yet')).toBeDefined();
+    expect(screen.queryByText('Live preview not available yet')).toBeNull();
 
     fireEvent.click(screen.getByRole('tab', { name: /^Patterns/i }));
 
     expect(screen.getByText('Pattern browser')).toBeDefined();
-    expect(screen.getByRole('button', { name: 'Create / stepped form blade Live preview' })).toBeDefined();
-    expect(screen.getByRole('button', { name: 'Delete A Resource Live preview' })).toBeDefined();
-    expect(screen.getByText('Rich design context')).toBeDefined();
-    expect(screen.getByText(/Local files are authoritative for ordinary usage/i)).toBeDefined();
-    expect(screen.getByText(/Dev-mode URL:/i)).toBeDefined();
-    expect(screen.getAllByText(/3203:24770/).length).toBeGreaterThan(0);
+    expect(container.querySelector('.azf-showcase-app__main img')).toBeNull();
+    expect(screen.queryByText(/Slide\s+\d+|0(?:3[0-9]|4[0-9])|contact[- ]sheet|presentation/i)).toBeNull();
+    expect(screen.getAllByRole('button', { name: /AKS resource list/i }).length).toBeGreaterThan(0);
+    expect(screen.getAllByRole('button', { name: /Global search/i }).length).toBeGreaterThan(0);
+    expect(screen.getAllByRole('button', { name: /Settings flyout/i }).length).toBeGreaterThan(0);
+    expect(screen.getAllByRole('button', { name: /Activity flyout/i }).length).toBeGreaterThan(0);
+    expect(screen.getAllByRole('heading', { name: 'AKS resource list' }).length).toBeGreaterThan(0);
+    expect(screen.getAllByRole('table').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Kubernetes service').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Resource group').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Subscription').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Type').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Status').length).toBeGreaterThan(0);
+    expect(screen.getByRole('button', { name: 'Create resource flow' })).toBeDefined();
+    expect(screen.getByRole('button', { name: 'Delete resource' })).toBeDefined();
+    expect(screen.queryByText('Live preview')).toBeNull();
+    expect(screen.getByText('When to use')).toBeDefined();
+    expect(screen.getByText(/Use for Azure Kubernetes Service browse pages/i)).toBeDefined();
+    fireEvent.click(screen.getAllByRole('button', { name: /Global search/i })[0]);
+    expect(screen.getByRole('heading', { name: 'Global search' })).toBeDefined();
+    expect(screen.getAllByLabelText('Global search flyout').length).toBeGreaterThan(0);
+    expect(screen.getByText('Azure Kubernetes Service')).toBeDefined();
+    fireEvent.click(screen.getAllByRole('button', { name: /Settings flyout/i })[0]);
+    expect(screen.getByRole('heading', { name: 'Settings flyout' })).toBeDefined();
+    expect(screen.getAllByLabelText('Settings flyout').length).toBeGreaterThan(0);
+    expect(screen.getByText('Portal settings')).toBeDefined();
+    fireEvent.click(screen.getAllByRole('button', { name: /Activity flyout/i })[0]);
+    expect(screen.getByRole('heading', { name: 'Activity flyout' })).toBeDefined();
+    expect(screen.getByRole('complementary', { name: 'Portal activity' })).toBeDefined();
+    expect(screen.getByText('Composed scenarios')).toBeDefined();
+    expect(screen.getAllByText('Copilot triage panel').length).toBeGreaterThan(0);
+    expect(screen.queryByText(/Dev-mode URL:/i)).toBeNull();
+    expect(screen.queryByRole('tab', { name: /^Usage examples/i })).toBeNull();
+    expect(screen.queryByText(/Live examples are rendered here as product scenarios/i)).toBeNull();
+    expect(screen.queryByRole('heading', { name: 'Provider and resource layout' })).toBeNull();
+    expect(screen.queryByText(/examples\//i)).toBeNull();
 
     fireEvent.click(screen.getByRole('tab', { name: /^Icons/i }));
 
@@ -534,7 +837,7 @@ describe('azure-fluent-system hardened components', () => {
     expect(screen.getByLabelText('Filter icons')).toBeDefined();
     expect(screen.getByText('Compute/Virtual Machine')).toBeDefined();
     expect(screen.getByText('Storage/Storage Accounts')).toBeDefined();
-    expect(screen.getByText('FluentFallback')).toBeDefined();
+    expect(screen.queryByText(new RegExp(`Fluent${'Fallback'}`))).toBeNull();
 
     fireEvent.change(screen.getByLabelText('Filter icons'), { target: { value: 'storage' } });
     expect(screen.getByText('Storage/Storage Accounts')).toBeDefined();
@@ -561,40 +864,60 @@ describe('azure-fluent-system hardened components', () => {
     expect(catalogMarkdown).toContain('| `Pager` | `examples/azure-data-grid-filtering.example.tsx` · pager rendered | Yes |');
   });
 
-  it('shows the grouped component inventory in the browser and keeps non-rendered rows discoverable', () => {
+  it('shows only rendered public component inventory in the browser', () => {
     const catalogMarkdown = readFileSync(resolve(process.cwd(), 'src', 'azure-fluent-system', 'catalog', 'COMPONENTS.md'), 'utf8');
     const parsedRows = parseComponentCatalogRows(catalogMarkdown);
     render(<AzureFluentShowcaseApp />);
 
-    const inventoryList = screen.getByRole('list', { name: 'Component inventory entries' });
+    const inventoryList = screen.getByRole('list', { name: 'Component entries' });
     const items = within(inventoryList).getAllByRole('listitem');
-    expect(items).toHaveLength(showcaseComponentInventoryEntries.length);
+    expect(items).toHaveLength(publicShowcaseComponentInventoryEntries.length);
     expect(items.length).toBeLessThan(parsedRows.length);
+    expect(publicShowcaseComponentInventoryEntries.length).toBeLessThan(
+      showcaseComponentInventoryEntries.filter((entry) => entry.coverageStatus === 'implemented-rendered' && Boolean(entry.previewEntry)).length,
+    );
+    expect(publicShowcaseComponentInventoryEntries.every((entry) => entry.previewEntry)).toBe(true);
 
-    // A rendered, export-backed component stays reachable under the default filter.
+    // Rendered, export-backed components stay reachable without exposing status-only entries.
     expect(within(inventoryList).getByRole('button', { name: 'Accordion' })).toBeDefined();
-
-    // Non-rendered rows remain discoverable through the coverage filters. Drive the assertion
-    // from the grouped entries so it tracks the real coverage split instead of hard-coded counts.
-    const needsExtractionCount = showcaseComponentInventoryEntries.filter(
-      (entry) => entry.coverageStatus === 'needs-mcp-extraction',
-    ).length;
-    fireEvent.click(screen.getByRole('button', { name: 'Needs extraction' }));
-    if (needsExtractionCount > 0) {
-      expect(within(inventoryList).getAllByRole('listitem')).toHaveLength(needsExtractionCount);
-    } else {
-      expect(within(inventoryList).getByText('No components matched')).toBeDefined();
-    }
-    expect(within(inventoryList).queryByRole('button', { name: 'Accordion' })).toBeNull();
-
-    const needsImplementationCount = showcaseComponentInventoryEntries.filter(
-      (entry) => entry.coverageStatus === 'needs-implementation',
-    ).length;
-    fireEvent.click(screen.getByRole('button', { name: 'Needs implementation' }));
-    if (needsImplementationCount > 0) {
-      expect(within(inventoryList).getAllByRole('listitem')).toHaveLength(needsImplementationCount);
-    } else {
-      expect(within(inventoryList).getByText('No components matched')).toBeDefined();
-    }
+    expect(within(inventoryList).queryByRole('button', { name: 'Scrollbar' })).toBeNull();
+    expect(within(inventoryList).queryByRole('button', { name: '.Horizontal Swap' })).toBeNull();
+    expect(within(inventoryList).queryByRole('button', { name: '.Popover Content (Dark)' })).toBeNull();
+    expect(publicShowcaseComponentInventoryEntries.map((entry) => entry.title)).toEqual(
+      expect.not.arrayContaining([
+        'Breadcrumb button',
+        'Breadcrumb divider',
+        'Breadcrumb item',
+        'Card header',
+        'Card footer',
+        'Card preview',
+        'Carousel card',
+        'Dialog actions',
+        'Dialog surface',
+        'Dialog body',
+        'Dialog content',
+        'Dialog title',
+        'Dialog trigger',
+        'Drawer body',
+        'Drawer header',
+        'Inline drawer',
+        'Menu trigger',
+        'Menu list',
+        'Menu item',
+        'Menu popover',
+        'Message bar actions',
+        'Message bar body',
+        'Message bar title',
+        'Option',
+        'Option group',
+        'Overlay drawer',
+        'Tag picker control',
+        'Toast title',
+        'Toolbar button',
+        'Toolbar divider',
+      ]),
+    );
+    expect(screen.queryByText('Design review')).toBeNull();
+    expect(screen.queryByText('Planned preview')).toBeNull();
   });
 });

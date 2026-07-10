@@ -221,7 +221,7 @@ export function CreateResourcePattern({
   const current = steps.find((step) => step.id === currentStepId) ?? steps[0];
 
   return (
-    <section className={mergeClasses('azf-stack azf-pattern-shell', className)} data-provenance="derived-from-related-patterns">
+    <section className={mergeClasses('azf-stack azf-pattern-shell', className)}>
       <BladeHeader title={title} subtitle={subtitle} />
       {validationSummary && <MessageBar intent="error"><MessageBarBody>{validationSummary}</MessageBarBody></MessageBar>}
       <AzureStepList
@@ -430,5 +430,78 @@ export function AgenticApprovalPattern({
       </div>
       <AgenticProgress steps={steps} onApprove={onApprove} onDeny={onDeny} defaultOpenItems={defaultOpenItems} />
     </Card>
+  );
+}
+
+export interface CopilotTriagePanelPatternProps {
+  title: ReactNode;
+  summary?: ReactNode;
+  response: CopilotResponseProps;
+  composer?: CopilotComposerProps;
+  steps?: AzfAgentStep[];
+  actions?: AzfAction[];
+  className?: string;
+}
+
+export function CopilotTriagePanelPattern({
+  title,
+  summary,
+  response,
+  composer,
+  steps,
+  actions,
+  className,
+}: CopilotTriagePanelPatternProps) {
+  return (
+    <Card className={mergeClasses('azf-stack azf-gap-m azf-copilot-triage', className)}>
+      <div className="azf-stack azf-gap-xs">
+        <Text weight="semibold">{title}</Text>
+        {summary && <Text className="azf-muted">{summary}</Text>}
+      </div>
+      {actions && actions.length > 0 && <DataToolbar actions={actions} />}
+      {steps && steps.length > 0 && <AgenticProgress steps={steps} />}
+      <CopilotResponse {...response} />
+      {composer && <CopilotComposer {...composer} />}
+    </Card>
+  );
+}
+
+export interface ResourceOperationHeaderPatternProps {
+  title: ReactNode;
+  subtitle?: ReactNode;
+  resourceIcon?: ReactNode;
+  actions?: AzfAction[];
+  commandActions?: AzfAction[];
+  statusItems?: Array<{ id: string; title: ReactNode; body?: ReactNode }>;
+  children?: ReactNode;
+  className?: string;
+}
+
+export function ResourceOperationHeaderPattern({
+  title,
+  subtitle,
+  resourceIcon,
+  actions,
+  commandActions,
+  statusItems = [],
+  children,
+  className,
+}: ResourceOperationHeaderPatternProps) {
+  return (
+    <section className={mergeClasses('azf-stack azf-pattern-shell azf-resource-operation-header', className)}>
+      <BladeHeader title={title} subtitle={subtitle} resourceIcon={resourceIcon} actions={actions} />
+      {commandActions && commandActions.length > 0 && <DataToolbar actions={commandActions} />}
+      {statusItems.length > 0 && (
+        <div className="azf-overview-grid">
+          {statusItems.map((item) => (
+            <Card key={item.id}>
+              <Text weight="semibold">{item.title}</Text>
+              {item.body && <Text className="azf-muted">{item.body}</Text>}
+            </Card>
+          ))}
+        </div>
+      )}
+      {children}
+    </section>
   );
 }

@@ -2,15 +2,15 @@ import { useState } from 'react';
 import { FilterableComboBox } from '..';
 
 const subscriptions = [
-  { id: 'sub-prod', label: 'Contoso Production' },
-  { id: 'sub-stage', label: 'Contoso Staging' },
-  { id: 'sub-dev', label: 'Contoso Development' },
+  { id: 'sub-a', label: 'Sample subscription A' },
+  { id: 'sub-stage', label: 'Sample subscription B' },
+  { id: 'sub-dev', label: 'Sample subscription C' },
   { id: 'sub-shared', label: 'Shared Platform Services' },
   { id: 'sub-sandbox', label: 'Innovation Sandbox' },
 ];
 
 export function FilterableComboBoxExample() {
-  const [selected, setSelected] = useState<string | undefined>('sub-prod');
+  const [selected, setSelected] = useState<string | undefined>('sub-a');
 
   return (
     <div className="azf-stack azf-gap-m">

@@ -406,7 +406,7 @@ Extraction guardrails:
 - Several image attachments were blank/tiny node renders; do not treat them as visual source reference.
 - Collapse Figma's large variant matrices into practical Fluent recipes. Implementers should not expose every Figma variant as a product choice.
 
-### Pattern doctrine
+### Pattern guidance
 
 - Treat the Azure Pattern Templates source reference as a pattern language, not a single screenshot target. The Resource Type node `4417:3962` is representative of one pattern family, not the whole showcase scope.
 - Successful MCP inventory on page-level nodes is still source reference: it can identify the pattern family, page name, and dependent components even when design-context extraction cannot target the node directly. For `TXALL9CS0727dvGcZo84Bg` / `4417:3962`, the inventory source reference identifies pageName `↪ Browse Resource`, the `Location summary` component on the browse page, and related pattern families such as Browse Resource, Notifications, Delete A Resource, Manage A Resource, Service overview, Feedback/CES/CVA, and Table of contents.
@@ -429,7 +429,7 @@ Extraction guardrails:
 - Page-level links are useful for inventory, pattern-family discovery, and dependency mapping.
 - `get_design_context` and `get_variable_defs` may fail on page-level nodes with errors such as **"You currently have nothing selected."** That is a signal to drill into a concrete frame, layer, or component node, not to discard the inventory source reference. The page-level `list-components` result is still useful because it classifies the family and points to concrete child anatomy like `Location summary`, notification panes, delete footers, manage controls, overview cards, and feedback blocks.
 - For `TXALL9CS0727dvGcZo84Bg` / `4417:3962`, treat the page-level response as valid inventory source reference for Browse Resource and adjacent families, while using child frames/components for renderable design-context extraction.
-- Screenshot paste is not the primary workflow. Prefer: page-level MCP inventory → concrete child node extraction → doctrine/recipe mapping → implementation → visual validation.
+- Screenshot paste is not the primary workflow. Prefer: page-level MCP inventory → concrete child node extraction → pattern guidance/recipe mapping → implementation → visual validation.
 
 #### Expected prompt workflow
 
@@ -484,7 +484,7 @@ Extraction guardrails:
 #### Recipe mapping and fidelity gate
 
 - Every public recipe must record: pattern family, concrete Figma source reference, visible anatomy, mapped library components, and known derived assumptions.
-- If a surface is derived from multiple Pattern Templates nodes, say so explicitly in the recipe and in the design doctrine.
+- If a surface is derived from multiple Pattern Templates nodes, say so explicitly in the recipe and in the design guidance.
 - Coverage is not fidelity: if the visual anatomy is wrong, the recipe is incomplete even when the API surface is broad.
 
 ### Pattern rules and anti-rules
@@ -499,12 +499,12 @@ Extraction guardrails:
 - **Do not** treat page-level links as direct extraction targets; they are inventory anchors, not render targets. Use concrete frames, layers, or components for design-context and variable extraction.
 - **Do not** require machine-local/session-state paths in committed docs or consumer guidance.
 
-### Showcase gate
+### Showcase expectations
 
-- Before merging showcase or design-doctrine updates, verify `DESIGN.md` contains this pattern doctrine and that the showcase README describes multiple pattern families, not only Resource Type.
+- Before merging showcase or design guidance updates, verify `DESIGN.md` contains this pattern guidance and that the showcase README describes multiple pattern families, not only Resource Type.
 - The showcase must demonstrate at least one shell/pattern family, one data/query family, and one create/review or feedback family; otherwise it is too narrow.
 - If the showcase update narrows back to one pattern, reject it and expand the navigation/workbench surfaces first.
-- The checked-in gate for this rule is `npm --prefix apps/web/src/azure-fluent-system run showcase:validate-doctrine`.
+- Verify this rule with focused Azure Fluent tests, build, and a real browser pass.
 
 #### First viewport render integrity
 
@@ -645,7 +645,7 @@ These rules come from the cached MCP design-context outputs and supersede broad 
 | Offline component handoff ledger | `comprehensive-component-cache-ledger.json`, `raw\component-node-source reference-*.json`, `raw\toc-no-published-node-*.json` | For handoff work, first consult the ledger. `directly-cached` entries have node-specific graph source reference; `directly-cached-wrapper-plus-children` entries pair sparse wrappers with child/subnode anatomy; `unavailable-or-inaccessible` entries document TOC labels with no published node. Do not treat earlier `low-priority`, `documentation-sufficient`, or `covered-by-parent` categories as missing unless the ledger lacks a node-level record. |
 | Catalog overview | `apps/web/src/azure-fluent-system/catalog/COMPONENTS.md`, `apps/web/src/azure-fluent-system/catalog/PATTERNS.md`, and `apps/web/src/azure-fluent-system/catalog/ICONS.md` | Consolidated public-surface summary for package boundaries, portable API expectations, component/pattern/icon coverage snapshots, derived-surface notes, and guidance on how the checked-in catalog replaces the old split source reference/planning structure. |
 | Component coverage ledger | `apps/web/src/azure-fluent-system/catalog/COMPONENTS.md` | Explicit component inventory, grouped implementation mappings, exact audit counts, and durable per-row extraction/mapping/showcase accounting. |
-| Pattern coverage ledger | `apps/web/src/azure-fluent-system/catalog/PATTERNS.md` | Durable pattern-family doctrine, anti-rules, representative nodes, implementation files, and family-level extraction/mapping/showcase accounting. |
+| Pattern coverage ledger | `apps/web/src/azure-fluent-system/catalog/PATTERNS.md` | Durable pattern-family design guidance, anti-rules, representative nodes, implementation files, and family-level extraction/mapping/showcase accounting. |
 | Icon coverage ledger | `apps/web/src/azure-fluent-system/catalog/ICONS.md` | Durable icon inventory, IconCloud/source references, alias strategy, local asset mappings, and showcase visibility accounting. |
 | Checked-in usage samples | `apps/web/src/azure-fluent-system/examples/` | TSX examples for provider/layout, BladeHeader, ResourceTagEditor, AzureDataGrid + filtering, Copilot composer/response, CreateResourcePattern, and icon registry usage. These are library-local reference files for other agents and future consumers. |
 | Standalone implementation module | `apps/web/src/azure-fluent-system` | The first implementation lives as an isolated web source module because the repo has no workspace package convention yet. It exports provider, tokens/CSS, hardened ready-to-use components, patterns, icon registry adapters, focused tests, and a public index; it is structured to move later into `packages/azure-fluent-system` or `@org/azure-fluent-system` without migrating Agentweaver pages first. Priority surfaces now carry explicit loading/error/disabled/selection/interaction states rather than scaffold-only wrappers. |

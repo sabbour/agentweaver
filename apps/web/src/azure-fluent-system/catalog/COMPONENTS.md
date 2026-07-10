@@ -16,7 +16,7 @@ Checked-in component inventory for `apps/web/src/azure-fluent-system`, sourced f
 | not-in-inventory | 0 |
 
 
-## Fluent 2 foundation components
+## Approved Fluent primitive components
 
 The Azure UI Kit is built directly on **Fluent 2** (`@fluentui/react-components` v9). The base
 primitives on the Figma [Azure UI Kit (Fluent 2) foundations page](https://www.figma.com/design/q2TdO4dVcMhNWYp0N6Bc05/Azure-UI-Kit--Fluent-2-?node-id=25156-116&m=dev)
@@ -36,7 +36,7 @@ Figma-node coverage inventory below and is not part of the 148-node audit.
 | Badge | `Badge`, `CounterBadge`, `PresenceBadge` | Compact status, count, or presence markers on or beside another element. |
 | Breadcrumb | `Breadcrumb`, `BreadcrumbItem`, `BreadcrumbButton`, `BreadcrumbDivider` | Show hierarchical location and let users navigate back up a resource path. |
 | Card | `Card`, `CardHeader`, `CardFooter`, `CardPreview` | Group related content and actions into a single contained surface. |
-| Carousel | `Carousel`, `CarouselCard` | Cycle through a set of cards or promotional slides in a bounded region. |
+| Carousel | `Carousel`, `CarouselCard` | Cycle through a bounded set of DOM-rendered cards. |
 | Checkbox | `Checkbox` | Toggle an independent boolean option, or drive tri-state/mixed selection. |
 | Copilot for Azure | `CopilotWorkspacePattern`, `CopilotComposer`, `CopilotResponse`, `InlineCopilot`, `AgenticProgress`, `ChainOfThought` | Azure Copilot surfaces — full workspace shell, chat composer, responses, inline entry point, agentic progress, and the chain-of-thought reasoning panel (Activity/Artifacts tabs, actions-completed summary, approval-gated steps). |
 | Date Picker | _add `@fluentui/react-datepicker-compat`_ | Pick a calendar date. Not bundled by default; add the compat package, or use `Input` with a date affordance. |
@@ -241,6 +241,6 @@ Figma-node coverage inventory below and is not part of the 148-node audit.
 - Concrete dev-mode URLs are recorded separately for supplied example/doc nodes and for exact inventory components. When an exact inventory node is present but not yet extracted, this catalog marks it `needs-mcp-extraction` rather than claiming high fidelity, and downstream work can continue without Figma MCP.
 - Downstream agents can still use the checked-in catalog, examples, showcase, CSS tokens, and library source files without Figma MCP.
 - Coverage counts come from the full figma-list_file_components_for_code_connect inventory and remain intentionally conservative so grouped mappings do not read as full fidelity.
-- Canonical step-wizard node 3203:24770 is referenced throughout checked-in design doctrine and catalog docs, but direct MCP lookup returned node-not-found during this pass. That does not block ordinary library consumption because the checked-in local files already carry the usable mappings and examples.
+- Canonical step-wizard node 3203:24770 is referenced throughout checked-in design guidance and catalog docs, but direct MCP lookup returned node-not-found during this pass. That does not block ordinary library consumption because the checked-in local files already carry the usable mappings and examples.
 - Direct Create Resource pattern node `6672:54683` still resolves to update-notice-only source references, so the library implements `CreateResourcePattern` as a derived composition of Forms + Step Wizard references. Refreshing those source references later is optional and MCP-dependent.
-- Exact name/node audit now stands at 105 covered and 43 missing from the external inventory comparison; use the 148-row inventory table above as the authoritative list and do not treat grouped local mappings as full fidelity.
+- Exact name/node audit now stands at 104 covered and 44 missing from the external inventory comparison; use the 148-row inventory table above as the authoritative list and do not treat grouped local mappings as full fidelity.

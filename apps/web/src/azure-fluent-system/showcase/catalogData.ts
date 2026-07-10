@@ -2082,7 +2082,7 @@ export const componentCatalogData: ComponentCatalogData = {
     "Concrete dev-mode URLs are recorded separately for supplied example/doc nodes and for exact inventory components. When an exact inventory node is present but not yet extracted, the manifest marks it needs-mcp-extraction rather than claiming high fidelity, and downstream work can continue without Figma MCP.",
     "Downstream agents can still use the checked-in catalog, examples, showcase, CSS tokens, and React sources without Figma MCP.",
     "Coverage counts come from the full figma-list_file_components_for_code_connect inventory and remain intentionally conservative so grouped mappings do not read as full fidelity.",
-    "Canonical step-wizard node 3203:24770 is referenced throughout checked-in design doctrine and catalog docs, but direct MCP lookup returned node-not-found during this pass. That does not block ordinary library consumption because the checked-in local files already carry the usable mappings and examples.",
+    "Canonical step-wizard node 3203:24770 is referenced throughout checked-in design guidance and catalog docs, but direct MCP lookup returned node-not-found during this pass. That does not block ordinary library consumption because the checked-in local files already carry the usable mappings and examples.",
     "Direct Create Resource pattern node 6672:54683 still resolves to update-notice-only source references, so the library implements CreateResourcePattern as a derived composition of Forms + Step Wizard references. Refreshing those source references later is optional and MCP-dependent.",
     "Exact name/node audit now stands at 105 covered and 43 missing from the external inventory comparison; use the 148-row inventory table as the authoritative list and do not treat grouped local mappings as full fidelity."
   ],
@@ -5025,7 +5025,7 @@ export const patternCatalogData: PatternCatalogData = {
       "extractionStatus": "component-inventory",
       "extractionDate": "Unknown",
       "extractedFrom": "Figma `TXALL9CS0727dvGcZo84Bg` \u00b7 page/index + representative dev-mode citations in row",
-      "implementedMapping": "Pattern doctrine only (`showcase navigation`)",
+      "implementedMapping": "Pattern guidance only (`showcase navigation`)",
       "showcase": "Yes"
     }
   ]

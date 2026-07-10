@@ -35,7 +35,7 @@ export function ProviderLayoutExample() {
         header={
           <BladeHeader
             title="Virtual machines"
-            subtitle="Contoso production subscription"
+            subtitle="Sample subscription A subscription"
             actions={[
               { id: 'refresh', label: 'Refresh', onClick: () => undefined },
               { id: 'pin', label: 'Pin', appearance: 'subtle', onClick: () => undefined },

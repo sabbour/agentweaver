@@ -1,5 +1,6 @@
+/* eslint-disable react-refresh/only-export-components */
 /**
- * Fluent 2 foundation components.
+ * Approved Fluent primitive components.
  *
  * The Azure UI Kit is built directly on Fluent 2 (`@fluentui/react-components`),
  * so the base primitives on the Figma "Azure UI Kit (Fluent 2)" foundations page
@@ -12,8 +13,12 @@
  * MessageBar, Button, ProgressBar, Slider, Text) are intentionally omitted here to
  * avoid duplicate barrel exports — import those from the same barrel as usual.
  *
- * See `catalog/COMPONENTS.md` → "Fluent 2 foundation components" for the catalog
- * table and the live "Foundations" tab in the showcase for interactive previews.
+ * See `catalog/COMPONENTS.md` → "Approved Fluent primitive components" for the catalog
+ * table. These are approved building blocks for Azure Fluent components and
+ * product surfaces and may be represented as Fluent foundation previews in the
+ * showcase. The one non-visual export here, `useToastController`, is a Fluent
+ * hook/helper used with `Toaster`; it is intentionally documented here instead of
+ * shown as its own rendered component.
  */
 export {
   // Avatar & presence

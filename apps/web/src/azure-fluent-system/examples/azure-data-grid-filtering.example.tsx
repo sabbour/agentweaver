@@ -9,9 +9,9 @@ interface ResourceRecord {
 }
 
 const allResources: ResourceRecord[] = [
-  { id: 'vm-01', name: 'vm-contoso-prod-01', type: 'Virtual machine', region: 'West US 2' },
-  { id: 'db-01', name: 'sql-contoso-prod-01', type: 'SQL database', region: 'East US' },
-  { id: 'st-01', name: 'stcontososhared01', type: 'Storage account', region: 'West US 2' },
+  { id: 'vm-01', name: 'vm-sample-01', type: 'Virtual machine', region: 'West US 2' },
+  { id: 'db-01', name: 'sql-sample-prod-01', type: 'SQL database', region: 'East US' },
+  { id: 'st-01', name: 'stsampleshared01', type: 'Storage account', region: 'West US 2' },
 ];
 
 const columns: AzfColumn<ResourceRecord>[] = [

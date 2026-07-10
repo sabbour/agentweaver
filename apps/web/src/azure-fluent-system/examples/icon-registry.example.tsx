@@ -1,4 +1,3 @@
-import { BoxRegular } from '@fluentui/react-icons';
 import { AzureIcon, AzureIconProvider, createIconCloudRegistry, createIconCloudRegistryFromManifest } from '..';
 
 const staticRegistry = createIconCloudRegistry(['VirtualMachine'] as const, {
@@ -22,7 +21,6 @@ const manifestRegistry = createIconCloudRegistryFromManifest(
 const combinedRegistry = {
   ...staticRegistry,
   ...manifestRegistry,
-  FluentFallback: { element: <BoxRegular />, alt: 'Fallback icon' },
 };
 
 export function IconRegistryExample() {
@@ -32,7 +30,6 @@ export function IconRegistryExample() {
         <AzureIcon name="VirtualMachine" label="Virtual machine" size={18} />
         <AzureIcon name="Compute/Virtual Machine" label="Compute virtual machine" size={20} />
         <AzureIcon name="Storage/Storage Accounts" label="Storage accounts" size={20} />
-        <AzureIcon name="FluentFallback" label="Fallback icon" size={16} />
       </div>
     </AzureIconProvider>
   );

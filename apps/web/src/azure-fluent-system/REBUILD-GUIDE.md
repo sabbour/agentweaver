@@ -38,17 +38,21 @@ do not block the rebuild — but do not invent them.
 
 ---
 
+## 1a. Live Portal capture refresh
+
+The current library includes a sanitized live Azure Portal capture pass. It changed only reusable visual structure: `tokens.css` now centralizes Portal-like 13px Segoe density, `rgb(0 120 212)` Azure blue, neutral foreground/borders, 40px masthead, 32px row/control rhythm, flatter surfaces, compact command bars, tighter Essentials spacing, and a `NotificationPane` flyout surface. Treat those as package tokens and public component behavior; do not add real tenant, subscription, resource, or user data when rebuilding downstream screens.
+
 ## 2. What the library hands the LLM (the inputs)
 
 | Artifact | Path | What it provides for the rebuild |
 | --- | --- | --- |
 | Usage contract | `DESIGN.md` | The enforceable rules: import surface, provider, tokens, pattern rules, do/don't, **fidelity gate** (`Coverage is not fidelity.` / `Recipe mapping and fidelity gate`). Load this first. |
 | Tokens | `tokens.css` | The only styling source. Spacing, color, radius, typography, motion, reduced-motion + forced-colors guards. No new hex allowed. |
-| Public surface | `index.ts` | The barrel — the **only** import entry. Provider, icons, components, Fluent 2 foundations, and all patterns. |
+| Public surface | `index.ts` | The barrel — the **only** import entry. Provider, icons, components, approved Fluent primitives, and all patterns. |
 | Components | `components.tsx` | 40+ composed Azure components (BladeHeader, ServiceMenu, EssentialsGrid, DataGrid, Copilot surfaces, ChainOfThought, AgenticProgress, …), each with node-ID lineage. |
 | Patterns | `patterns.tsx` | 12 page-level compositions (see §4). Start here — patterns first, components second, foundations third. |
 | Component inventory | `catalog/COMPONENTS.md` | 148-node inventory: export mapping + extraction status. Use to check whether a surface already exists. |
-| Pattern inventory | `catalog/PATTERNS.md` | The 8 Figma pattern families + doctrine + traceability. |
+| Pattern inventory | `catalog/PATTERNS.md` | The 8 Figma pattern families + design guidance + traceability. |
 | Icon inventory | `catalog/ICONS.md` | 1441-glyph / 27-collection vendored catalog + import status. |
 | Coverage ledger | `COVERAGE.md` | Truthful high-fidelity vs. placeholder split, Copilot-surface fidelity table, gap list. Read before promising fidelity. |
 | Examples | `examples/*.example.tsx` | Minimal, runnable usage of each pattern/component. Copy-paste starting points. |
@@ -88,7 +92,7 @@ Agentweaver has ~19 pages. Rebuild by archetype, not one-off. Recommended mappin
 | `SettingsPage`, `ProjectSettingsPage` | Settings form | `FormBladePattern` (+ `FormFooter`) |
 | `DiagnosticsPage`, `HeartbeatPage` | Status / telemetry | `AzureDataGrid` + status components |
 | cross-page toasts / failures | Notification / error | `NotificationPattern` / `ErrorPattern` |
-| `SignInPage` | Auth | Fluent 2 foundations (no dedicated pattern) |
+| `SignInPage` | Auth | approved Fluent primitives (no dedicated pattern) |
 
 ### Phase 3 — Rebuild page-by-page, pattern-first
 
@@ -103,17 +107,14 @@ ReactFlow graph, routing, and API clients exactly as they are. Bind them to patt
 (`value`/`onChange`/`onSend`, `steps`, `onApprove`/`onDeny`, `items`/`columns`, `actions`). The
 rebuild changes the render tree, not the data flow.
 
-### Phase 5 — Verify against the fidelity gate
+### Phase 5 — Verify against the fidelity checks
 
-Run the same gates this library holds itself to (from `DESIGN.md` → *Recipe mapping and fidelity
-gate*):
+Run the same checks this library holds itself to:
 
 ```
 # from apps/web
 npx tsc -b --pretty false
 npx vitest run --config vitest.config.ts src/__tests__/azureFluentSystem.test.tsx
-# from apps/web/src/azure-fluent-system
-node showcase/validate-pattern-doctrine.mjs
 ```
 
 Then compare the rebuilt page against the showcase in a real browser. `Coverage is not fidelity` —
@@ -180,7 +181,7 @@ patterns live — use it as the pixel oracle while wiring the real data.
 
 ## 5. Guardrails the rebuilding LLM must follow
 
-These are lifted straight from `DESIGN.md` §6 (Do / don't) and the doctrine:
+These are lifted straight from `DESIGN.md` §6 (Do / don't) and the design guidance:
 
 - **Import only from the barrel.** No deep imports, no second component kit.
 - **Tokens only.** No raw hex, rgb, or px color values. If a value is missing, add a token — don't
@@ -190,7 +191,7 @@ These are lifted straight from `DESIGN.md` §6 (Do / don't) and the doctrine:
 - **Never eyeball a Figma surface.** If a new surface is needed, extract it via the Figma MCP and
   cite the node ID in a lineage comment — exactly how every component here was built.
 - **Presentational only.** Keep app state/data in the app; pass it in as props.
-- **Verify before "done."** tsc + tests + doctrine + a real browser pass. Coverage is not fidelity.
+- **Verify before "done."** tsc + focused tests + a real browser pass. Coverage is not fidelity.
 
 ---
 
@@ -216,7 +217,7 @@ These are lifted straight from `DESIGN.md` §6 (Do / don't) and the doctrine:
 > logic and bind it to pattern props; never eyeball a Figma surface — if a new one is needed,
 > extract it via the Figma MCP and cite the node ID. Start with `CoordinatorRunPage` using
 > `CoordinatorRunPattern` + `AgenticApprovalPattern` (see §4). After each page, run `tsc -b`, the
-> `azureFluentSystem` tests, and `validate-pattern-doctrine.mjs`, then compare against the live
+> `azureFluentSystem` tests, then compare against the live
 > showcase before moving on.
 
 See also: `COVERAGE.md` (what's high-fidelity vs. placeholder) and `DESIGN.md` (the enforceable

@@ -15,7 +15,7 @@ export function CreateResourcePatternExample() {
   return (
     <CreateResourcePattern
       title="Create storage account"
-      subtitle="Derived from Forms + Step Wizard references"
+    subtitle="Validate settings before creating the resource"
       currentStepId={currentStepId}
       onStepSelect={setCurrentStepId}
       validationSummary={currentStepId === 'review' ? undefined : 'Subscription and resource group are required before review.'}
@@ -35,19 +35,19 @@ export function CreateResourcePatternExample() {
                 info="Subscriptions scope quota, billing, and policy. Keep the current subscription unless the deployment needs isolation."
                 status={<StatusIconText status="info">Inherited from the current tenant context.</StatusIconText>}
               >
-                <Input id="create-resource-subscription" value="Contoso production" readOnly />
+                <Input id="create-resource-subscription" value="Sample subscription A" readOnly />
               </FormFieldRow>
               <FormFieldRow
                 label="Resource group"
                 htmlFor="create-resource-group"
                 hint="Use a shared resource group only when lifecycle ownership already matches."
               >
-                <Input id="create-resource-group" value="rg-contoso-shared" readOnly />
+                <Input id="create-resource-group" value="rg-sample-shared" readOnly />
               </FormFieldRow>
               <FormFieldRow
                 label="Delete protection"
                 htmlFor="create-resource-protection"
-                hint="This mirrors the small status line + helper layout from the Azure form-row references."
+                hint="Use the helper line for short consequences or validation guidance."
               >
                 <Input id="create-resource-protection" value={deleteProtection} onChange={(_, data) => setDeleteProtection(data.value)} />
               </FormFieldRow>

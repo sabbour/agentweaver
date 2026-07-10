@@ -41,7 +41,7 @@ export function ServiceOverviewFeedbackExample() {
           {
             id: 'backup-policy',
             title: 'Backup policy updated',
-            body: 'The nightly snapshot schedule now applies to every production account in West US 2.',
+            body: 'The nightly snapshot schedule now applies to every sample account in West US 2.',
             tone: 'success',
             timestamp: '2 min ago',
             actions: [{ id: 'view-change', label: 'View change', onClick: () => undefined }],
@@ -59,7 +59,7 @@ export function ServiceOverviewFeedbackExample() {
         footer={
           <FeedbackFooter
             title="Was this notification placement useful?"
-            body="Azure feedback references keep the action low-emphasis and non-blocking."
+            body="Customer feedback stays low-emphasis and non-blocking."
             action={{ id: 'give-feedback', label: 'Give feedback', onClick: () => undefined }}
           />
         }
@@ -67,7 +67,7 @@ export function ServiceOverviewFeedbackExample() {
 
       <NotificationPattern
         title="Backup policy updated"
-        body="The nightly snapshot schedule now applies to every production account in West US 2."
+        body="The nightly snapshot schedule now applies to every sample account in West US 2."
         intent="success"
         actions={<Button appearance="subtle">View change</Button>}
       />
@@ -79,7 +79,7 @@ export function ServiceOverviewFeedbackExample() {
       />
 
       <DeleteResourceDialog
-        resourceName="stcontososhared01"
+        resourceName="stsampleshared01"
         softDelete
         trigger={<Button appearance="outline" icon={<DeleteRegular />}>Delete resource</Button>}
         confirmationText="Soft delete stays enabled for 14 days, but dependent workloads lose access immediately."

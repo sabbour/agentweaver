@@ -2,8 +2,8 @@ import { useMemo, useState } from 'react';
 import { AzureForm, FormFieldRow, FormFooter, Input, StatusIconText, StepWizardPattern, Text } from '..';
 
 export function FormWizardExample() {
-  const [subscription, setSubscription] = useState('Contoso production');
-  const [resourceGroup, setResourceGroup] = useState('rg-contoso-platform');
+  const [subscription, setSubscription] = useState('Sample subscription A');
+  const [resourceGroup, setResourceGroup] = useState('rg-sample-platform');
   const [currentStepId, setCurrentStepId] = useState('scope');
 
   const validationMessage = useMemo(() => {

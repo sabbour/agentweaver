@@ -6,7 +6,7 @@ export function BladeHeaderExample() {
   return (
     <BladeHeader
       title="Storage accounts"
-      subtitle="Contoso shared services"
+      subtitle="Sample shared services"
       resourceIcon={<SparkleRegular />}
       menuLabel="Storage account actions"
       actions={[

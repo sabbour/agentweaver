@@ -31,7 +31,7 @@ interface ResourceRow {
 }
 
 const rows: ResourceRow[] = [
-  { id: 'run-1', name: 'AKS fleet rollout', owner: 'Platform SRE', status: 'Healthy' },
+  { id: 'run-1', name: 'AKS fleet rollout', owner: 'Platform operations', status: 'Healthy' },
   { id: 'run-2', name: 'Storage backup review', owner: 'Operations', status: 'Needs attention' },
 ];
 
@@ -82,7 +82,7 @@ export function PortalShellExample() {
           onSearchChange={setSearchValue}
           copilotAction={{ id: 'copilot', label: 'Copilot', icon: <SparkleRegular /> }}
           endActions={[{ id: 'settings', label: 'Settings', icon: <SettingsRegular /> }]}
-          persona={{ name: 'Ahmed Sabbour', secondaryText: 'Contoso Engineering', icon: <PersonCircleRegular /> }}
+          persona={{ name: 'Signed-in user', secondaryText: 'Organization directory', icon: <PersonCircleRegular /> }}
         />
       }
       rail={
@@ -93,8 +93,8 @@ export function PortalShellExample() {
           ]}
         />
       }
-      breadcrumb={<Text>Home / Resource type</Text>}
-      header={<BladeHeader title="Resource Type" subtitle="Contoso Engineering Directory" />}
+      breadcrumb={<Text>Home / Kubernetes services</Text>}
+      header={<BladeHeader title="Kubernetes resources" subtitle="Organization directory" />}
       commandBar={
         <CommandBar
           primaryActions={[

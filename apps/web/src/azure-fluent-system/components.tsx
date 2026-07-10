@@ -173,6 +173,10 @@ function renderStateContent(emptyState: ReactNode) {
   return emptyState;
 }
 
+function copyStatusText(label: ReactNode) {
+  return typeof label === 'string' || typeof label === 'number' ? String(label) : 'Copied';
+}
+
 export interface IconActionButtonProps extends AzfAction {
   size?: 'small' | 'medium' | 'large';
 }
@@ -1277,18 +1281,25 @@ export function CopyButton({
   };
 
   return (
-    <Button
-      appearance="transparent"
-      className={mergeClasses('azf-copy-button', className)}
-      data-has-label={!isIconOnly || undefined}
-      data-visual-state={resolvedState}
-      icon={<span className="azf-copy-button__icon">{resolvedState === 'copied' ? <CheckmarkRegular /> : <CopyRegular />}</span>}
-      aria-label={resolvedState === 'copied' ? 'Copied' : ariaLabel ?? (isIconOnly ? 'Copy value' : undefined)}
-      onClick={() => { void handleCopy(); }}
-      disabled={disabled}
-    >
-      {!isIconOnly && <span className="azf-copy-button__label">{resolvedState === 'copied' ? copiedLabel : label}</span>}
-    </Button>
+    <>
+      <Button
+        appearance="transparent"
+        className={mergeClasses('azf-copy-button', className)}
+        data-has-label={!isIconOnly || undefined}
+        data-visual-state={resolvedState}
+        icon={<span className="azf-copy-button__icon">{resolvedState === 'copied' ? <CheckmarkRegular /> : <CopyRegular />}</span>}
+        aria-label={resolvedState === 'copied' ? 'Copied' : ariaLabel ?? (isIconOnly ? 'Copy value' : undefined)}
+        onClick={() => { void handleCopy(); }}
+        disabled={disabled}
+      >
+        {!isIconOnly && <span className="azf-copy-button__label">{resolvedState === 'copied' ? copiedLabel : label}</span>}
+      </Button>
+      {!visualState && (
+        <span className="azf-visually-hidden" role="status" aria-live="polite">
+          {copied ? copyStatusText(copiedLabel) : ''}
+        </span>
+      )}
+    </>
   );
 }
 
@@ -1373,6 +1384,7 @@ export interface NotificationPaneProps {
   items: NotificationPaneItem[];
   emptyState?: ReactNode;
   footer?: ReactNode;
+  surface?: 'inline' | 'flyout';
   className?: string;
 }
 
@@ -1381,10 +1393,11 @@ export function NotificationPane({
   items,
   emptyState = <AzureEmptyState compact title="No notifications" body="You're all caught up." />,
   footer,
+  surface = 'inline',
   className,
 }: NotificationPaneProps) {
   return (
-    <aside className={mergeClasses('azf-stack azf-notification-pane', className)} aria-label={optionText(title)}>
+    <aside className={mergeClasses('azf-stack azf-notification-pane', className)} data-surface={surface} aria-label={optionText(title)}>
       <div className="azf-row azf-notification-pane__header">
         <Text as="h2" weight="semibold">{title}</Text>
         {items.length > 0 && <Badge appearance="tint">{items.length}</Badge>}

@@ -10,10 +10,10 @@ interface ResourceRecord {
 }
 
 const resources: ResourceRecord[] = [
-  { id: 'aks-prod', name: 'aks-contoso-prod', type: 'AKS cluster', region: 'West US 2', status: 'Healthy' },
-  { id: 'aks-dr', name: 'aks-contoso-dr', type: 'AKS cluster', region: 'East US', status: 'Needs attention' },
-  { id: 'kv-shared', name: 'kv-contoso-shared', type: 'Key vault', region: 'West US 2', status: 'Healthy' },
-  { id: 'vnet-prod', name: 'vnet-contoso-prod', type: 'Virtual network', region: 'Central US', status: 'Healthy' },
+  { id: 'aks-primary', name: 'aks-cluster-primary', type: 'AKS cluster', region: 'West US 2', status: 'Healthy' },
+  { id: 'aks-secondary', name: 'aks-cluster-secondary', type: 'AKS cluster', region: 'East US', status: 'Needs attention' },
+  { id: 'kv-shared', name: 'keyvault-shared', type: 'Key vault', region: 'West US 2', status: 'Healthy' },
+  { id: 'vnet-hub', name: 'vnet-hub', type: 'Virtual network', region: 'Central US', status: 'Healthy' },
 ];
 
 const columns: AzfColumn<ResourceRecord>[] = [
