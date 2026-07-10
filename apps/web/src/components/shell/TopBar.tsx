@@ -18,10 +18,13 @@ const useStyles = makeStyles({
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: tokens.spacingHorizontalL,
+    minHeight: '52px',
     padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalXXL}`,
     borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground1,
     flexShrink: 0,
+    boxShadow: tokens.shadow2,
+    zIndex: 1,
   },
   left: {
     display: 'flex',
@@ -32,8 +35,15 @@ const useStyles = makeStyles({
   right: {
     display: 'flex',
     alignItems: 'center',
-    gap: tokens.spacingHorizontalL,
+    gap: tokens.spacingHorizontalM,
     flexShrink: 0,
+  },
+  alphaBadge: {
+    borderTopColor: tokens.colorStatusWarningBorder1,
+    borderRightColor: tokens.colorStatusWarningBorder1,
+    borderBottomColor: tokens.colorStatusWarningBorder1,
+    borderLeftColor: tokens.colorStatusWarningBorder1,
+    backgroundColor: tokens.colorStatusWarningBackground1,
   },
 });
 
@@ -59,7 +69,7 @@ export function TopBar({
   return (
     <header className={styles.topBar}>
       <div className={styles.left}>
-        <Badge appearance="outline" color="warning" title="Agentweaver is alpha software under active development.">
+        <Badge className={styles.alphaBadge} appearance="outline" color="warning" title="Agentweaver is alpha software under active development.">
           Alpha{version ? ` v${version}` : ''}
         </Badge>
         <ProjectSwitcher

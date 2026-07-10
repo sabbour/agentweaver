@@ -1,0 +1,31 @@
+<svg id="uuid-697c67ae-09d4-4fe9-8d19-af30eae08be3" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18">
+  <defs>
+    <linearGradient id="uuid-3dd78887-bc9f-4551-af72-3fb8e6043e12" x1="-557.106" y1="1018.991" x2="-557.106" y2="1010.648" gradientTransform="translate(564 1025.516) scale(1 -1)" gradientUnits="userSpaceOnUse">
+      <stop offset=".203" stop-color="#5ea0ef" />
+      <stop offset="1" stop-color="#0078d4" />
+    </linearGradient>
+    <linearGradient id="uuid-23d74a20-7a32-4ce5-90ec-ae6cc709e77f" x1="-550.53" y1="1025.441" x2="-550.53" y2="1016.913" gradientTransform="translate(564 1025.516) scale(1 -1)" gradientUnits="userSpaceOnUse">
+      <stop offset=".139" stop-color="#5ea0ef" />
+      <stop offset="1" stop-color="#0078d4" />
+    </linearGradient>
+    <linearGradient id="uuid-b20be109-d9ee-433c-909f-ce7054f57008" x1="-559.862" y1="1026.052" x2="-559.862" y2="1016.427" gradientTransform="translate(564 1025.516) scale(1 -1)" gradientUnits="userSpaceOnUse">
+      <stop offset=".002" stop-color="#8de971" />
+      <stop offset="1" stop-color="#4aa647" />
+    </linearGradient>
+    <linearGradient id="uuid-d20ba84f-3794-49d3-b097-5c858d2525a4" x1="13.886" y1="9.566" x2="13.886" y2="18.653" gradientTransform="matrix(1,0,0,1,0,0)" gradientUnits="userSpaceOnUse">
+      <stop offset=".002" stop-color="#8de971" />
+      <stop offset="1" stop-color="#4aa647" />
+    </linearGradient>
+  </defs>
+  <g id="uuid-6e6af5dd-82c9-4c82-b995-5fbce49b9054">
+    <g>
+      <path d="M10.341,13.196v1.382h-.696c-3.424-.006-6.197-2.783-6.197-6.207v-1.016h1.372v1.016c.005,2.663,2.163,4.821,4.826,4.826h.696Z" fill="url(#uuid-3dd78887-bc9f-4551-af72-3fb8e6043e12)" />
+      <g>
+        <circle cx="13.47" cy="4.552" r="3.978" fill="url(#uuid-23d74a20-7a32-4ce5-90ec-ae6cc709e77f)" />
+        <path d="M16.271,4.771v-.437c0-.155-.126-.281-.281-.281h-2.019v-2.019c0-.155-.126-.281-.281-.281h-.437c-.155,0-.282.125-.282.28,0,0,0,0,0,.001v2.019h-2.018c-.155,0-.282.125-.282.28,0,0,0,0,0,.001v.437c0,.156.126.282.282.282h2.018v2.018c0,.156.126.282.282.282h.437c.155,0,.281-.126.281-.281,0,0,0,0,0-.001v-2.018h2.019c.155,0,.281-.126.281-.281,0,0,0,0,0-.001Z" fill="#fff" />
+      </g>
+    </g>
+    <rect x=".003" y="0" width="8.27" height="8.27" rx="4.135" ry="4.135" fill="url(#uuid-b20be109-d9ee-433c-909f-ce7054f57008)" />
+    <circle cx="13.886" cy="13.889" r="4.111" fill="url(#uuid-d20ba84f-3794-49d3-b097-5c858d2525a4)" />
+  </g>
+</svg>

@@ -32,6 +32,7 @@ import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
 import type { Project, WorkflowDetailDto, WorkflowListResponse, WorkflowSummaryDto } from '../api/types';
 import { PageHeader } from '../components/PageHeader';
+import { AzurePage } from '../components/azure/AzureLayout';
 import { WorkflowEditor, BLANK_TEMPLATE } from '../components/WorkflowEditor';
 import { VisualWorkflowEditor } from '../components/VisualWorkflowEditor';
 import { WorkflowDefinitionInlinePanel } from '../components/WorkflowGraphPanel';
@@ -443,7 +444,7 @@ export function WorkflowsPage() {
   };
 
   return (
-    <div className={styles.root}>
+    <AzurePage className={styles.root}>
       <PageHeader
         title="Workflows"
         subtitle="Reusable pipeline definitions."
@@ -653,6 +654,6 @@ export function WorkflowsPage() {
           )}
         </>
       )}
-    </div>
+    </AzurePage>
   );
 }

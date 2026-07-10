@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18">
+  <defs>
+    <linearGradient id="fe6a1bf5-a62c-4388-b7e7-5fd90cbcda4f" x1="8.098" y1="13.787" x2="8.098" y2="2.449" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#0078d2" />
+      <stop offset="1" stop-color="#5e9eee" />
+    </linearGradient>
+    <linearGradient id="f6e9895a-3667-452e-a8df-0664c0ea1fc6" x1="4.048" y1="11.567" x2="4.048" y2="6.886" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#50e6ff" />
+      <stop offset="0.817" stop-color="#9cebff" />
+    </linearGradient>
+    <linearGradient id="fbd8ac6c-2ed5-400c-bfc6-50b252550552" x1="4.068" y1="8.249" x2="4.068" y2="3.985" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#50e6ff" />
+      <stop offset="0.817" stop-color="#9cebff" />
+    </linearGradient>
+  </defs>
+  <g id="b71e4be1-47e4-4bf9-b7c8-16ab35ba7678">
+    <rect y="2.449" width="16.196" height="11.337" rx="0.54" fill="url(#fe6a1bf5-a62c-4388-b7e7-5fd90cbcda4f)" />
+    <g>
+      <path d="M6.364,11.15a.5.5,0,0,0,.5-.5.408.408,0,0,0,0-.061c-.2-1.575-1.1-2.859-2.811-2.859-1.745,0-2.645,1.087-2.821,2.863a.5.5,0,0,0,.45.553l.051,0Z" fill="url(#f6e9895a-3667-452e-a8df-0664c0ea1fc6)" />
+      <path d="M4.079,8.105a1.577,1.577,0,0,1-.856-.252l.847,2.214.842-2.2A1.575,1.575,0,0,1,4.079,8.105Z" fill="#fff" opacity="0.8" />
+      <circle cx="4.068" cy="6.524" r="1.581" fill="url(#fbd8ac6c-2ed5-400c-bfc6-50b252550552)" />
+    </g>
+    <path d="M14.085,6.451H8.641A.543.543,0,0,1,8.1,5.909h0a.543.543,0,0,1,.543-.543h5.444a.542.542,0,0,1,.542.543h0A.542.542,0,0,1,14.085,6.451Zm.542,1.667h0a.542.542,0,0,0-.542-.543H8.641a.543.543,0,0,0-.543.543h0a.543.543,0,0,0,.543.543h5.444A.542.542,0,0,0,14.627,8.118Zm-.522,2.21h0a.543.543,0,0,0-.543-.543H8.641a.543.543,0,0,0-.543.543h0a.543.543,0,0,0,.543.542h4.921A.543.543,0,0,0,14.105,10.328Z" fill="#8ec1fa" />
+    <circle cx="14.105" cy="12.824" r="3.895" fill="#86d633" />
+    <g>
+      <path d="M12.32,12.382h.506a.156.156,0,0,1,.156.156v2.01a.156.156,0,0,1-.156.156h-.35a.156.156,0,0,1-.156-.156V12.382a0,0,0,0,1,0,0Z" transform="translate(31.173 14.173) rotate(135)" fill="#fff" />
+      <path d="M14.525,10.287h.506a0,0,0,0,1,0,0V14.91a.156.156,0,0,1-.156.156h-.35a.156.156,0,0,1-.156-.156V10.443A.156.156,0,0,1,14.525,10.287Z" transform="translate(16.131 32.035) rotate(-135)" fill="#f0f0f0" />
+    </g>
+  </g>
+  <metadata>
+    <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+      <rdf:li>public:true</rdf:li>
+      <rdf:li>sdk:false</rdf:li>
+      <rdf:li>category:Other</rdf:li>
+    </rdf:RDF>
+  </metadata>
+</svg>

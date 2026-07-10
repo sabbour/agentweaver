@@ -1,0 +1,19 @@
+<svg id="aeb0fcec-e9f6-4227-8dca-d3805011cf1c" data-name="azure-fluent-icons" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="18" height="18" viewBox="0 0 18 18">
+  <defs>
+    <linearGradient id="ae4fafda-5e33-4d03-b3ad-6b8d981a47b0" x1="8.598" y1="-7.325" x2="9.112" y2="19.744" gradientUnits="userSpaceOnUse">
+      <stop offset="0.225" stop-color="#32d4f5" />
+      <stop offset="0.473" stop-color="#31d1f3" />
+      <stop offset="0.633" stop-color="#2ec9eb" />
+      <stop offset="0.768" stop-color="#29bade" />
+      <stop offset="0.888" stop-color="#22a5cb" />
+      <stop offset="0.999" stop-color="#198ab3" />
+      <stop offset="1" stop-color="#198ab3" />
+    </linearGradient>
+  </defs>
+  <title>Icon-Lock-security-250</title>
+  <g>
+    <path d="M14.9,8.681h-.934l0-2.992a5.67,5.67,0,0,0-1.448-3.817A4.64,4.64,0,0,0,8.913.251a4.682,4.682,0,0,0-3.6,1.621,5.577,5.577,0,0,0-1.45,3.816l0,2.993H3.081a.685.685,0,0,0-.676.672v7.725a.686.686,0,0,0,.676.672H14.9a.684.684,0,0,0,.675-.672V9.353A.683.683,0,0,0,14.9,8.681Zm-3.275,0H6.209V5.64a3.074,3.074,0,0,1,.842-2.091,2.417,2.417,0,0,1,3.67,0,3.008,3.008,0,0,1,.315.42h0a2.9,2.9,0,0,1,.585,1.671Z" fill="url(#ae4fafda-5e33-4d03-b3ad-6b8d981a47b0)" />
+    <path d="M14.919,8.681H3.093a.668.668,0,0,0-.434.167l12.694,8.788a.675.675,0,0,0,.242-.508V9.357A.686.686,0,0,0,14.919,8.681Z" fill="#50e6ff" style="isolation: isolate" />
+    <path d="M3.105,8.681H14.931a.668.668,0,0,1,.434.167L2.671,17.636a.671.671,0,0,1-.241-.508V9.357A.685.685,0,0,1,3.105,8.681Z" fill="#fff" opacity="0.2" style="isolation: isolate" />
+  </g>
+</svg>

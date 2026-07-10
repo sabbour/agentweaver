@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18">
+  <defs>
+    <linearGradient id="a5fe32c2-b2f8-43b5-abff-62dc1dbf068a" x1="9" y1="7.681" x2="16.022" y2="7.681" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ccc" />
+      <stop offset="0.325" stop-color="#dfdfdf" />
+      <stop offset="0.673" stop-color="#ececec" />
+      <stop offset="1" stop-color="#f0f0f0" />
+    </linearGradient>
+  </defs>
+  <g id="f4ef425e-cc3b-4989-b942-9d5baf44a2b0">
+    <g>
+      <path d="M17.051,1.921H.949a.7.7,0,0,0-.732.673V14.7a.7.7,0,0,0,.732.672h16.1a.7.7,0,0,0,.732-.672V2.594A.7.7,0,0,0,17.051,1.921Z" fill="#0078d4" />
+      <path d="M17.114,1.921H8.97V15.37h8.144a.67.67,0,0,0,.669-.672V2.594A.671.671,0,0,0,17.114,1.921Z" fill="#005ba1" />
+      <path d="M7.6,0H2.329a.352.352,0,0,0-.351.353v13.4a.352.352,0,0,0,.351.353H7.6A1.281,1.281,0,0,1,9,15.362V1.413A1.408,1.408,0,0,0,7.6,0Z" fill="#f2f2f2" />
+      <path d="M10.4,0h5.267a.352.352,0,0,1,.351.353v13.4a.352.352,0,0,1-.351.353H10.4A1.281,1.281,0,0,0,9,15.362V1.413A1.408,1.408,0,0,1,10.4,0Z" fill="url(#a5fe32c2-b2f8-43b5-abff-62dc1dbf068a)" />
+      <g>
+        <path id="a90333bb-4c62-4cdb-9ab4-b2f91f697353" d="M14.078,13.689a2.394,2.394,0,0,1-3.2,0l-.2,3.969a.315.315,0,0,0,.54.237l1.231-1.249,1.24,1.259a.316.316,0,0,0,.54-.234Z" fill="#a67af4" />
+        <ellipse id="a630dc12-805e-49a5-b16b-44a5a9dfef0a" cx="12.511" cy="11.655" rx="2.854" ry="2.863" fill="#b796f9" />
+        <ellipse id="f4cb47f6-6066-4347-b4a6-799ab50b00f6" cx="12.511" cy="11.655" rx="2.165" ry="2.172" fill="#ffd400" />
+      </g>
+      <rect x="3.083" y="2.06" width="4.812" height="0.706" rx="0.293" fill="#ccc" />
+      <rect x="3.083" y="4.177" width="4.812" height="0.706" rx="0.293" fill="#ccc" />
+      <rect x="3.083" y="6.503" width="4.812" height="0.706" rx="0.293" fill="#ccc" />
+      <rect x="3.083" y="8.62" width="4.812" height="0.706" rx="0.293" fill="#ccc" />
+      <rect x="3.206" y="10.737" width="2.46" height="0.706" rx="0.293" fill="#ccc" />
+    </g>
+  </g>
+</svg>

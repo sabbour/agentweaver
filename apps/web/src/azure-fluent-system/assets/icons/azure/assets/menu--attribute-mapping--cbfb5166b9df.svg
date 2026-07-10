@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18">
+  <defs>
+    <linearGradient id="a8649495-30c2-45f1-89d0-376a599256f7" x1="16.044" y1="13.301" x2="16.044" y2="17.787" gradientUnits="userSpaceOnUse">
+      <stop offset="0.323" stop-color="#5ea0ef" />
+      <stop offset="1" stop-color="#0078d4" />
+    </linearGradient>
+    <linearGradient id="f8ccb0cb-1647-4642-a3b3-1bf123385588" x1="16.044" y1="0.299" x2="16.044" y2="4.656" gradientUnits="userSpaceOnUse">
+      <stop offset="0.271" stop-color="#5ea0ef" />
+      <stop offset="1" stop-color="#0078d4" />
+    </linearGradient>
+    <linearGradient id="ed13dedf-d4f8-4275-aa6f-95b8cfd040c0" x1="6.716" y1="14.216" x2="6.716" y2="6.413" gradientUnits="userSpaceOnUse">
+      <stop offset="0.001" stop-color="#773adc" />
+      <stop offset="0.256" stop-color="#7f45e0" />
+      <stop offset="0.704" stop-color="#9563eb" />
+      <stop offset="1" stop-color="#a67af4" />
+    </linearGradient>
+  </defs>
+  <g id="a35f55d3-85db-4184-b0c0-9b5f56fcd451">
+    <g>
+      <polygon points="12.164 11.258 16.504 14.948 15.584 16.018 10.754 11.908 10.754 9.718 5.564 9.718 5.564 8.308 10.754 8.308 10.754 6.108 15.784 1.978 16.684 3.058 12.164 6.778 12.164 11.258" fill="#86d633" />
+      <path d="M14.69,13.528H17.4a.6.6,0,0,1,.6.6v2.707a.6.6,0,0,1-.6.6H14.689a.6.6,0,0,1-.6-.6V14.13A.6.6,0,0,1,14.69,13.528Z" fill="url(#a8649495-30c2-45f1-89d0-376a599256f7)" />
+      <path d="M14.69.562H17.4a.6.6,0,0,1,.6.6V3.87a.6.6,0,0,1-.6.6H14.689a.6.6,0,0,1-.6-.6V1.164a.6.6,0,0,1,.6-.6Z" fill="url(#f8ccb0cb-1647-4642-a3b3-1bf123385588)" />
+      <polygon points="9.009 11.615 9.009 6.413 4.505 3.812 0 6.413 0 11.615 4.505 14.216 9.009 11.615" fill="#a67af4" />
+      <polygon points="9.009 6.413 4.422 9.014 4.505 14.216 9.009 11.615 9.009 6.413" fill="url(#ed13dedf-d4f8-4275-aa6f-95b8cfd040c0)" />
+      <polygon points="0 6.413 4.422 9.014 4.505 14.216 0 11.615 0 6.413" fill="#773adc" />
+      <path d="M.7,7.505l1.268.748v3.883L.7,11.4Zm1.657,4.834,1.428.825L3.776,9.278,2.361,8.45Z" fill="#b796f9" />
+    </g>
+  </g>
+</svg>

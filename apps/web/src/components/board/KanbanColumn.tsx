@@ -18,8 +18,8 @@ const useStyles = makeStyles({
     // Fit-content height — empty columns must not leave a giant vertical gap.
     alignSelf: 'flex-start',
     padding: tokens.spacingVerticalM,
-    backgroundColor: tokens.colorNeutralBackground1,
-    borderRadius: tokens.borderRadiusLarge,
+    backgroundColor: tokens.colorNeutralBackground2,
+    borderRadius: tokens.borderRadiusXLarge,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     boxShadow: tokens.shadow2,
   },
@@ -36,7 +36,7 @@ const useStyles = makeStyles({
     gap: tokens.spacingVerticalXXS,
     minWidth: 0,
     flex: 1,
-    paddingTop: tokens.spacingVerticalXS,
+    padding: `${tokens.spacingVerticalS} 0 0`,
     borderTop: `3px solid ${tokens.colorNeutralStroke2}`,
   },
   titleRow: {
@@ -88,7 +88,7 @@ const useStyles = makeStyles({
   cards: {
     display: 'flex',
     flexDirection: 'column',
-    gap: tokens.spacingVerticalXS,
+    gap: tokens.spacingVerticalS,
   },
   dropzone: {
     display: 'flex',
@@ -99,6 +99,7 @@ const useStyles = makeStyles({
     borderRadius: tokens.borderRadiusMedium,
     border: `1px dashed ${tokens.colorNeutralStroke2}`,
     color: tokens.colorNeutralForeground3,
+    backgroundColor: tokens.colorNeutralBackground1,
     fontSize: tokens.fontSizeBase200,
     lineHeight: tokens.lineHeightBase200,
     textAlign: 'center',

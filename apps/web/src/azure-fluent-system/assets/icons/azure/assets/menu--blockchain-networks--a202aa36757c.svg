@@ -1,0 +1,27 @@
+<svg id="f09fa21a-24b3-4fa1-bdb6-25e9853bfc9d" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18">
+  <defs>
+    <linearGradient id="f733e20b-0783-446d-8f3f-1c8ede265625" x1="5.24" y1="5.552" x2="7.037" y2="10.126" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#b77af4" />
+      <stop offset="0.997" stop-color="#773adc" />
+    </linearGradient>
+    <linearGradient id="af22a3b2-22d8-4522-a9e6-e82c19a647f8" x1="10.278" y1="10.188" x2="12.075" y2="14.762" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#b77af4" />
+      <stop offset="0.997" stop-color="#773adc" />
+    </linearGradient>
+    <linearGradient id="af2e24b6-8987-4c0f-bd15-33d3e97b470f" x1="14.954" y1="1.858" x2="16.751" y2="6.432" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#b77af4" />
+      <stop offset="0.997" stop-color="#773adc" />
+    </linearGradient>
+    <linearGradient id="aa61e5de-c5f7-4018-9d6e-3ba80e560595" x1="1.023" y1="10.992" x2="2.82" y2="15.567" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#b77af4" />
+      <stop offset="0.997" stop-color="#773adc" />
+    </linearGradient>
+  </defs>
+  <g>
+    <polygon points="15.482 3.84 10.968 11.877 6.194 7.01 1.263 13.388 2.428 14.297 6.326 9.255 11.29 14.316 16.766 4.567 15.482 3.84" fill="#b796f9" />
+    <ellipse cx="6.252" cy="8.127" rx="1.855" ry="1.863" fill="url(#f733e20b-0783-446d-8f3f-1c8ede265625)" />
+    <ellipse cx="11.29" cy="12.763" rx="1.855" ry="1.863" fill="url(#af22a3b2-22d8-4522-a9e6-e82c19a647f8)" />
+    <ellipse cx="15.965" cy="4.433" rx="1.855" ry="1.863" fill="url(#af2e24b6-8987-4c0f-bd15-33d3e97b470f)" />
+    <ellipse cx="2.035" cy="13.567" rx="1.855" ry="1.863" fill="url(#aa61e5de-c5f7-4018-9d6e-3ba80e560595)" />
+  </g>
+</svg>

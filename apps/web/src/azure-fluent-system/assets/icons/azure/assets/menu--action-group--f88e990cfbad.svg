@@ -1,0 +1,26 @@
+<svg id="uuid-799da9d6-2ba5-4c7e-8b70-a6f47a3edc95" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18">
+  <defs>
+    <linearGradient id="uuid-428896fc-a1a4-499b-8805-e65d31f1910a" x1="9" y1="2.027" x2="9" y2="16.518" gradientUnits="userSpaceOnUse">
+      <stop offset=".204" stop-color="#5ea0ef" />
+      <stop offset=".316" stop-color="#579ded" />
+      <stop offset=".469" stop-color="#4695e8" />
+      <stop offset=".644" stop-color="#2989e0" />
+      <stop offset=".836" stop-color="#0278d4" />
+      <stop offset=".847" stop-color="#0078d4" />
+    </linearGradient>
+    <linearGradient id="uuid-6886c552-70ba-434f-b4ca-92f1a79c06ae" x1="-125.907" y1="1092.158" x2="-125.907" y2="1101.027" gradientTransform="translate(158.873 1140.203) scale(1.156 -1.029)" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#fea11b" />
+      <stop offset=".284" stop-color="#fea51a" />
+      <stop offset=".547" stop-color="#feb018" />
+      <stop offset=".8" stop-color="#ffc314" />
+      <stop offset="1" stop-color="#ffd70f" />
+    </linearGradient>
+  </defs>
+  <rect y="1.55" width="18" height="12.959" rx=".708" ry=".708" fill="url(#uuid-428896fc-a1a4-499b-8805-e65d31f1910a)" />
+  <g>
+    <path d="m9.024,10.424v-.004H2.677c-.311,0-.563.252-.563.563s.252.563.563.563h6.323s.002,0,.003,0c.311,0,.563-.252.563-.563,0-.304-.242-.547-.542-.559Z" fill="#fff" />
+    <path d="m10.549,7.467h0s-7.872,0-7.872,0h0c-.311,0-.563.252-.563.563s.252.563.563.563c0,0,0,0,0,0h7.848v-.005c.008,0,.016.005.024.005.311,0,.563-.252.563-.563s-.252-.563-.563-.563Z" fill="#fff" />
+    <path d="m15.307,4.514s0,0-.001,0H2.679s0,0-.001,0c-.311,0-.563.252-.563.563s.252.563.563.563h0s12.63,0,12.63,0h0c.311,0,.563-.252.563-.563s-.252-.563-.563-.563Z" fill="#fff" />
+  </g>
+  <path d="m12.952,12.404h-2.059c-.061-.004-.11-.053-.114-.114v-.057l2.46-4.862c0-.057.057-.057.114-.057h2.402c.061.004.11.053.114.114v.057l-2.917,3.832h2.803c.061.004.11.053.114.114,0,.032-.026.057-.057.057h0l-4.69,4.862c-.057,0-.343.286-.229-.114h0l2.059-3.832Z" fill="url(#uuid-6886c552-70ba-434f-b4ca-92f1a79c06ae)" />
+</svg>

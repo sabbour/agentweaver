@@ -24,6 +24,7 @@ import type { ReactElement } from 'react';
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
 import { PageHeader } from '../components/PageHeader';
+import { AzurePage, AzureSectionHeader, AzureSurface } from '../components/azure/AzureLayout';
 import type {
   Project,
   SandboxPolicy,
@@ -115,6 +116,10 @@ const useStyles = makeStyles({
     flexShrink: 0,
     position: 'sticky',
     top: '0',
+    padding: tokens.spacingVerticalS,
+    backgroundColor: tokens.colorNeutralBackground1,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusXLarge,
   },
   railItem: {
     display: 'flex',
@@ -176,8 +181,6 @@ const useStyles = makeStyles({
     display: 'flex',
     flexDirection: 'column',
     gap: tokens.spacingVerticalM,
-    paddingBottom: tokens.spacingVerticalL,
-    borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
   },
   actions: {
     display: 'flex',
@@ -188,9 +191,7 @@ const useStyles = makeStyles({
     display: 'flex',
     flexDirection: 'column',
     gap: tokens.spacingVerticalM,
-    padding: tokens.spacingVerticalL,
     border: `1px solid ${tokens.colorPaletteRedBorder2}`,
-    borderRadius: tokens.borderRadiusMedium,
     maxWidth: '640px',
   },
   listBox: {
@@ -440,7 +441,7 @@ export function ProjectSettingsPage() {
   const activeDef = SECTIONS.find((s) => s.id === activeSection) ?? SECTIONS[0];
 
   return (
-    <div className={styles.root}>
+    <AzurePage className={styles.root}>
       <PageHeader
         title="Project settings"
         subtitle="Project configuration and pickup behavior."
@@ -485,14 +486,11 @@ export function ProjectSettingsPage() {
           </nav>
 
           <div className={styles.pane}>
-            <div className={styles.paneHeader}>
-              <Title3>{activeDef.label}</Title3>
-              <Text className={styles.paneDescription}>{activeDef.description}</Text>
-            </div>
+            <AzureSectionHeader title={activeDef.label} description={activeDef.description} />
 
             {activeSection === 'general' && (
               <div className={styles.section}>
-                <div className={styles.subBlock}>
+                <AzureSurface className={styles.subBlock}>
                   <Title3>Rename project</Title3>
                   <Field label="Name">
                     <Input value={newName} onChange={(_, v) => setNewName(v.value)} />
@@ -513,9 +511,9 @@ export function ProjectSettingsPage() {
                   {renameSuccess && (
                     <MessageBar intent="success"><MessageBarBody>Project renamed.</MessageBarBody></MessageBar>
                   )}
-                </div>
+                </AzureSurface>
 
-                <div className={styles.subBlock}>
+                <AzureSurface className={styles.subBlock}>
                   <Title3>Default run model</Title3>
                   <Field label="GitHub Copilot model">
                     <Input value={copilotModel} onChange={(_, v) => setCopilotModel(v.value)} placeholder="e.g. gpt-4o" />
@@ -532,9 +530,9 @@ export function ProjectSettingsPage() {
                   {modelSuccess && (
                     <MessageBar intent="success"><MessageBarBody>Model settings saved.</MessageBarBody></MessageBar>
                   )}
-                </div>
+                </AzureSurface>
 
-                <div className={styles.section}>
+                <AzureSurface className={styles.section}>
                   <Title3>Generation models</Title3>
                   <Text className={styles.helperText}>
                     Leave a field blank to inherit the global generation default ({GENERATION_DEFAULT_MODEL}).
@@ -585,12 +583,12 @@ export function ProjectSettingsPage() {
                   {generationSuccess && (
                     <MessageBar intent="success"><MessageBarBody>Generation model settings saved.</MessageBarBody></MessageBar>
                   )}
-                </div>
+                </AzureSurface>
               </div>
             )}
 
             {activeSection === 'sandbox' && (
-              <div className={styles.section}>
+              <AzureSurface className={styles.section}>
                 {sandboxLoading && <Spinner size="extra-tiny" label="Loading policy" />}
                 {sandboxError && (
                   <MessageBar intent="error"><MessageBarBody>{sandboxError}</MessageBarBody></MessageBar>
@@ -667,11 +665,11 @@ export function ProjectSettingsPage() {
                     )}
                   </>
                 )}
-              </div>
+              </AzureSurface>
             )}
 
             {activeSection === 'danger' && (
-              <div className={styles.dangerSection}>
+              <AzureSurface className={styles.dangerSection}>
                 <Title3>Delete project</Title3>
                 <Text>This action cannot be undone. The project and all its run history will be permanently removed.</Text>
                 <Checkbox
@@ -693,11 +691,11 @@ export function ProjectSettingsPage() {
                 {deleteError && (
                   <MessageBar intent="error"><MessageBarBody>{deleteError}</MessageBarBody></MessageBar>
                 )}
-              </div>
+              </AzureSurface>
             )}
           </div>
         </div>
       )}
-    </div>
+    </AzurePage>
   );
 }

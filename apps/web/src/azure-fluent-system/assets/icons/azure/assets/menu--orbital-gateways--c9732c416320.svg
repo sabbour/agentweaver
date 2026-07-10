@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18">
+  <defs>
+    <linearGradient id="e70027a6-dede-48f5-9361-494412fe8ecd" x1="307.004" y1="385.722" x2="307.004" y2="401.699" gradientTransform="matrix(0.707, 0.707, 0.707, -0.707, -487.048, 70.879)" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#0078d4" />
+      <stop offset="1" stop-color="#5ea0ef" />
+    </linearGradient>
+    <linearGradient id="b1a481e9-98f2-487e-ac90-fb9daf8921ed" x1="5.066" y1="10.946" x2="5.066" y2="6.958" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#32bedd" />
+      <stop offset="0.336" stop-color="#41d2ee" />
+      <stop offset="0.699" stop-color="#4ce1fb" />
+      <stop offset="1" stop-color="#50e6ff" />
+    </linearGradient>
+    <linearGradient id="bc936e9e-f8e0-471b-9355-9483627b5404" x1="12.952" y1="10.946" x2="12.952" y2="6.958" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#32bedd" />
+      <stop offset="0.34" stop-color="#41d3ee" />
+      <stop offset="0.698" stop-color="#4ce1fb" />
+      <stop offset="1" stop-color="#50e6ff" />
+    </linearGradient>
+  </defs>
+  <g id="f85e79b8-f02e-4b3b-a27c-4127b5e46221">
+    <g>
+      <rect x="2.823" y="2.823" width="12.355" height="12.355" rx="0.57" transform="translate(-3.728 9) rotate(-45)" fill="url(#e70027a6-dede-48f5-9361-494412fe8ecd)" />
+      <path d="M7.058,4.678,8.939,2.8a.1.1,0,0,1,.14,0l1.931,1.88a.091.091,0,0,1,.016.127.088.088,0,0,1-.086.033H9.789a.1.1,0,0,0-.1.1h0V7.369a.09.09,0,0,1-.09.09H8.429a.091.091,0,0,1-.1-.079V4.938a.1.1,0,0,0-.09-.1H7.128a.1.1,0,0,1-.09-.109A.107.107,0,0,1,7.058,4.678Z" fill="#fff" />
+      <path d="M11.01,13.322,9.079,15.2a.1.1,0,0,1-.14,0l-1.881-1.88a.1.1,0,0,1,.02-.14.085.085,0,0,1,.05-.02H8.239a.1.1,0,0,0,.09-.1V10.631a.09.09,0,0,1,.089-.091H9.6a.09.09,0,0,1,.09.09h0v2.431a.1.1,0,0,0,.1.1h1.1a.1.1,0,0,1,.14.02A.1.1,0,0,1,11.01,13.322Z" fill="#fff" />
+      <path d="M5.348,10.841V9.74a.111.111,0,0,0-.1-.1H2.817a.1.1,0,0,1-.1-.09V8.38a.109.109,0,0,1,.1-.1H5.248a.1.1,0,0,0,.1-.09V7.079A.09.09,0,0,1,5.508,7L7.389,8.9a.09.09,0,0,1,0,.127l0,0L5.508,10.911a.092.092,0,0,1-.127.016A.088.088,0,0,1,5.348,10.841Z" fill="url(#b1a481e9-98f2-487e-ac90-fb9daf8921ed)" />
+      <path d="M12.671,7.079V8.19a.1.1,0,0,0,.1.09H15.2a.11.11,0,0,1,.1.1V9.55a.1.1,0,0,1-.1.09H12.771a.109.109,0,0,0-.1.1v1.1a.09.09,0,0,1-.16.07L10.63,9a.09.09,0,0,1,0-.127l0,0L12.511,7a.089.089,0,0,1,.124-.026A.09.09,0,0,1,12.671,7.079Z" fill="url(#bc936e9e-f8e0-471b-9355-9483627b5404)" />
+    </g>
+  </g>
+</svg>

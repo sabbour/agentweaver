@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react';
-import { Button, MessageBar, MessageBarBody, Select, Spinner, Text } from '@fluentui/react-components';
+import { Button, MessageBar, MessageBarBody, Select, Spinner } from '@fluentui/react-components';
 import { ArrowSyncRegular } from '@fluentui/react-icons';
 import { useParams } from 'react-router-dom';
 import { apiClient } from '../../api/apiClient';
 import { ApiError } from '../../api/client';
 import type { Project, ProjectMetricsDto } from '../../api/types';
+import { AzureEmptyState } from '../../components/azure/AzureLayout';
 import { ModelPerformancePanels } from '../../components/dashboard/ModelPerformancePanels';
 import { ObservabilityLayout } from '../../components/observability/ObservabilityLayout';
 
@@ -92,7 +93,7 @@ export function ObservabilityOverviewPage() {
       ) : (
         <>
           <ModelPerformancePanels metrics={metrics} />
-          {!metrics && <Text>No observability data yet.</Text>}
+          {!metrics && <AzureEmptyState title="No observability data yet" body="Run activity metrics will appear after project runs emit telemetry." />}
         </>
       )}
     </ObservabilityLayout>

@@ -1,0 +1,16 @@
+<svg id="a7b206c9-4d4d-4158-9bd7-c3e9b51eb172" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18">
+  <defs>
+    <linearGradient id="bbc20bf9-0cf8-40b0-8fcb-60b5fcb80bc6" x1="-75.355" y1="200.199" x2="-79.913" y2="203.326" gradientTransform="matrix(0.531, 1.052, 0.851, -0.661, -121.905, 225.275)" gradientUnits="userSpaceOnUse">
+      <stop offset="0.22" stop-color="#50c7e8" />
+      <stop offset="0.47" stop-color="#4bc6e8" />
+      <stop offset="1" stop-color="#1989b2" />
+    </linearGradient>
+  </defs>
+  <g>
+    <rect x="11.515" y="0.896" width="1.738" height="4.211" transform="translate(3.265 11.902) rotate(-57.93)" fill="#2e76bb" />
+    <path d="M2.937,15.042l.168,2.943L5.753,16.8a2.043,2.043,0,0,0,1.034-.888h0L3.272,13.69h0A2.4,2.4,0,0,0,2.937,15.042Z" fill="#f2f2f2" />
+    <path d="M13.834.291l.33.206a1.905,1.905,0,0,1,.609,2.624l-.163.26h0L11.048,1.16h0L11.211.9A1.9,1.9,0,0,1,13.834.291Z" fill="#699bd2" />
+    <polygon points="2.991 16.43 4.537 17.369 3.095 18.003 2.991 16.43" fill="#2e76bb" />
+    <rect x="1.743" y="6.782" width="13.945" height="4.218" transform="translate(-3.44 11.582) rotate(-58.055)" fill="url(#bbc20bf9-0cf8-40b0-8fcb-60b5fcb80bc6)" />
+  </g>
+</svg>

@@ -10,7 +10,7 @@ import {
   Tab,
   TabList,
   Text,
-  Title3,
+  mergeClasses,
   makeStyles,
   tokens,
 } from '@fluentui/react-components';
@@ -23,6 +23,7 @@ import {
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
 import { PageHeader } from '../components/PageHeader';
+import { AzurePage, AzureSectionHeader, AzureSurface } from '../components/azure/AzureLayout';
 import { RefreshCountdown } from '../hooks/useRefreshCountdown';
 import type {
   DiagnosticsCheckDto,
@@ -51,10 +52,6 @@ const useStyles = makeStyles({
     display: 'flex',
     flexDirection: 'column',
     gap: tokens.spacingVerticalXXS,
-    padding: tokens.spacingVerticalM,
-    backgroundColor: tokens.colorNeutralBackground1,
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: tokens.borderRadiusMedium,
   },
   summaryLabel: {
     fontSize: tokens.fontSizeBase200,
@@ -75,11 +72,7 @@ const useStyles = makeStyles({
     display: 'flex',
     alignItems: 'flex-start',
     gap: tokens.spacingHorizontalM,
-    padding: `${tokens.spacingVerticalM} ${tokens.spacingHorizontalM}`,
-    backgroundColor: tokens.colorNeutralBackground1,
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
     borderLeftWidth: '3px',
-    borderRadius: tokens.borderRadiusMedium,
   },
   checkPass: { borderLeftColor: tokens.colorPaletteGreenBorderActive },
   checkWarn: { borderLeftColor: tokens.colorPaletteYellowBorderActive },
@@ -140,7 +133,7 @@ function CheckCard({ check, styles }: { check: DiagnosticsCheckDto; styles: Retu
       <DismissCircleRegular className={styles.iconFail} aria-hidden="true" />
     );
   return (
-    <div className={`${styles.checkCard} ${accent}`} role="listitem">
+    <AzureSurface className={mergeClasses(styles.checkCard, accent)} role="listitem" density="compact">
       {icon}
       <div className={styles.checkBody}>
         <div className={styles.checkHeader}>
@@ -152,7 +145,7 @@ function CheckCard({ check, styles }: { check: DiagnosticsCheckDto; styles: Retu
         </div>
         <Text className={styles.checkDetail}>{check.detail}</Text>
       </div>
-    </div>
+    </AzureSurface>
   );
 }
 
@@ -205,7 +198,7 @@ export function DiagnosticsPage() {
   const checks = active?.checks ?? [];
 
   return (
-    <div className={styles.root}>
+    <AzurePage className={styles.root}>
       <PageHeader
         title="Diagnostics"
         subtitle="System and project health checks."
@@ -259,45 +252,45 @@ export function DiagnosticsPage() {
 
       {scope === 'global' && global && (
         <div className={styles.summaryCards}>
-          <div className={styles.summaryCard}>
+          <AzureSurface className={styles.summaryCard} density="compact">
             <Text className={styles.summaryLabel}>API version</Text>
             <Text className={styles.summaryValue}>{global.api_version}</Text>
-          </div>
-          <div className={styles.summaryCard}>
+          </AzureSurface>
+          <AzureSurface className={styles.summaryCard} density="compact">
             <Text className={styles.summaryLabel}>Uptime</Text>
             <Text className={styles.summaryValue}>{humanizeUptime(global.uptime_seconds)}</Text>
-          </div>
-          <div className={styles.summaryCard}>
+          </AzureSurface>
+          <AzureSurface className={styles.summaryCard} density="compact">
             <Text className={styles.summaryLabel}>Total projects</Text>
             <Text className={styles.summaryValue}>{global.total_projects}</Text>
-          </div>
-          <div className={styles.summaryCard}>
+          </AzureSurface>
+          <AzureSurface className={styles.summaryCard} density="compact">
             <Text className={styles.summaryLabel}>Total runs</Text>
             <Text className={styles.summaryValue}>{global.total_runs}</Text>
-          </div>
-          <div className={styles.summaryCard}>
+          </AzureSurface>
+          <AzureSurface className={styles.summaryCard} density="compact">
             <Text className={styles.summaryLabel}>Active runs</Text>
             <Text className={styles.summaryValue}>{global.active_runs}</Text>
-          </div>
+          </AzureSurface>
         </div>
       )}
 
       {scope === 'project' && project && (
         <div className={styles.summaryCards}>
-          <div className={styles.summaryCard}>
+          <AzureSurface className={styles.summaryCard} density="compact">
             <Text className={styles.summaryLabel}>Project</Text>
             <Text className={styles.summaryValue}>{project.project_name}</Text>
-          </div>
-          <div className={styles.summaryCard}>
+          </AzureSurface>
+          <AzureSurface className={styles.summaryCard} density="compact">
             <Text className={styles.summaryLabel}>Checks</Text>
             <Text className={styles.summaryValue}>{project.checks.length}</Text>
-          </div>
+          </AzureSurface>
         </div>
       )}
 
       {active && (
-        <div>
-          <Title3>Checks ({checks.length}) · {Math.round(active.total_duration_ms)} ms</Title3>
+        <AzureSurface>
+          <AzureSectionHeader title={`Checks (${checks.length}) · ${Math.round(active.total_duration_ms)} ms`} />
           <div
             className={styles.checks}
             role="list"
@@ -310,8 +303,8 @@ export function DiagnosticsPage() {
               checks.map((c) => <CheckCard key={c.name} check={c} styles={styles} />)
             )}
           </div>
-        </div>
+        </AzureSurface>
       )}
-    </div>
+    </AzurePage>
   );
 }

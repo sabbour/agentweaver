@@ -1,0 +1,39 @@
+<svg id="b9387544-77b0-4ec1-8981-755e4bca3fe4" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18">
+  <defs>
+    <linearGradient id="b6e39f87-6a57-4936-b4f3-e833ade45473" x1="9" y1="788.2393" x2="9" y2="773.7214" gradientTransform="matrix(1, 0, 0, -1, 0, 792)" gradientUnits="userSpaceOnUse">
+      <stop offset="0.117" stop-color="#5ea0ef" />
+      <stop offset="0.271" stop-color="#4595e8" />
+      <stop offset="0.531" stop-color="#1f85dd" />
+      <stop offset="0.741" stop-color="#087cd6" />
+      <stop offset="0.873" stop-color="#0078d4" />
+    </linearGradient>
+    <radialGradient id="fd54fdfd-a202-431e-8cf4-7061f5675dbe" cx="9.6322" cy="11.9097" r="3.7977" gradientUnits="userSpaceOnUse">
+      <stop offset="0.0043" stop-color="#5ea0ef" />
+      <stop offset="0.4876" stop-color="#5ea0ef" />
+      <stop offset="0.781" stop-color="#76b0f5" />
+      <stop offset="1" stop-color="#83b9f9" />
+    </radialGradient>
+    <linearGradient id="a0bf7507-e4c9-4c87-be90-7ff950477934" x1="9.0263" y1="787.1198" x2="8.9803" y2="782.9771" gradientTransform="matrix(1, 0, 0, -1, 0, 792)" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#0078d4" />
+      <stop offset="1" stop-color="#005ba1" />
+    </linearGradient>
+    <linearGradient id="fa5e590a-3f3b-4c46-83d8-de9639f2ae4c" x1="45.9236" y1="802.9558" x2="45.9236" y2="799.9289" gradientTransform="matrix(-0.9732, 0.2301, 0.2301, 0.9732, -131.1437, -787.358)" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#005ba1" />
+      <stop offset="1" stop-color="#0078d4" />
+    </linearGradient>
+  </defs>
+  <path d="M17,6V17.4375A.5626.5626,0,0,1,16.4372,18H1.5628A.5626.5626,0,0,1,1,17.4375V6Z" fill="url(#b6e39f87-6a57-4936-b4f3-e833ade45473)" />
+  <polygon points="13.856 12.89 9.606 11.64 9.5 12 9.574 11.632 5.824 10.882 5.676 11.618 8.316 12.146 4.589 13.911 4.911 14.589 9.216 12.549 9.881 16.315 10.619 16.185 9.974 12.531 13.644 13.61 13.856 12.89" fill="url(#fd54fdfd-a202-431e-8cf4-7061f5675dbe)" />
+  <path d="M1,6H17V8.5H1Z" fill="url(#a0bf7507-e4c9-4c87-be90-7ff950477934)" />
+  <path d="M3,6,2,8H4L5,6ZM7,6,6,8H8L9,6Zm4,0L10,8h2l1-2Zm4,0L14,8h2l1-2Z" fill="#5ea0ef" />
+  <g>
+    <path d="M1,6.0108.5543,4.1246a.5626.5626,0,0,1,.418-.6771L15.4411.026a.5625.5625,0,0,1,.6768.4181L16.5636,2.33Z" fill="url(#fa5e590a-3f3b-4c46-83d8-de9639f2ae4c)" />
+    <path d="M15.13.6134,16.5636,2.33l-1.9463.46L13.184,1.0737Zm-3.8927.9206,1.4333,1.7168-1.9464.46L9.2913,1.9942Zm-3.8927.92L8.7782,4.1714l-1.9464.46L5.3985,2.9148ZM3.4522,3.375,4.8855,5.0919l-1.9464.46L1.5058,3.8353Z" fill="#5ea0ef" />
+  </g>
+  <circle cx="5.75" cy="11.25" r="0.75" fill="#50e6ff" />
+  <circle cx="5.75" cy="11.25" r="0.75" fill="#9cebff" />
+  <circle cx="4.75" cy="14.25" r="0.75" fill="#9cebff" />
+  <circle cx="10.25" cy="16.25" r="0.75" fill="#9cebff" />
+  <circle cx="13.75" cy="13.25" r="0.75" fill="#9cebff" />
+  <path d="M12.1853,11.8252l-3.8882-2.16A.2.2,0,0,0,8,9.84v4.32a.2.2,0,0,0,.2971.1748l3.8882-2.16A.2.2,0,0,0,12.1853,11.8252Z" fill="#c3f1ff" />
+</svg>

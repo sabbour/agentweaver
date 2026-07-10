@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18">
+  <defs>
+    <linearGradient id="a7a5cbb6-d8ac-4af6-8b00-b0a2cc4223ff" x1="8.998" y1="-0.081" x2="8.998" y2="4.962" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#5ea0ef" />
+      <stop offset="1" stop-color="#0078d4" />
+    </linearGradient>
+    <linearGradient id="a86e7d5c-6f86-4b86-b662-9c7457534f1e" x1="8.998" y1="14.088" x2="8.998" y2="17.995" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#5ea0ef" />
+      <stop offset="1" stop-color="#0078d4" />
+    </linearGradient>
+    <linearGradient id="eec57e5b-eb03-41bc-a3aa-6fa9dd09199f" x1="1.954" y1="11.409" x2="1.954" y2="15.317" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#5ea0ef" />
+      <stop offset="1" stop-color="#0078d4" />
+    </linearGradient>
+    <linearGradient id="f734bd81-4a07-4783-a604-00430e06044c" x1="16.046" y1="10.828" x2="16.046" y2="14.736" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#5ea0ef" />
+      <stop offset="1" stop-color="#0078d4" />
+    </linearGradient>
+  </defs>
+  <path d="M12.605,8.9a1.792,1.792,0,0,0-1.249-.5H9.591V3.183h-1.2V8.4H6.8a1.792,1.792,0,0,0-1.276.528L1.744,12.7l.851.851,3.779-3.78A.6.6,0,0,1,6.8,9.6H8.388v6.251h1.2V9.6h1.765a.593.593,0,0,1,.416.168L15.1,12.952l.832-.868Z" fill="#86d633" />
+  <rect x="6.476" y="0.005" width="5.043" height="5.043" rx="0.601" fill="url(#a7a5cbb6-d8ac-4af6-8b00-b0a2cc4223ff)" />
+  <rect x="7.044" y="14.088" width="3.907" height="3.907" rx="0.601" fill="url(#a86e7d5c-6f86-4b86-b662-9c7457534f1e)" />
+  <rect y="11.409" width="3.907" height="3.907" rx="0.601" fill="url(#eec57e5b-eb03-41bc-a3aa-6fa9dd09199f)" />
+  <rect x="14.093" y="10.828" width="3.907" height="3.907" rx="0.601" fill="url(#f734bd81-4a07-4783-a604-00430e06044c)" />
+</svg>

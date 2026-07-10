@@ -47,6 +47,7 @@ import type {
 } from '../api/types';
 import { SyncPanel } from '../components/SyncPanel';
 import { PageHeader } from '../components/PageHeader';
+import { AzurePage } from '../components/azure/AzureLayout';
 
 type FilterTab = 'all' | 'active' | 'retired';
 type PanelTab = 'overview' | 'charter' | 'capabilities';
@@ -944,7 +945,7 @@ export function TeamPage() {
   const builtInMembers = filteredMembers.filter((m) => m.is_built_in);
 
   return (
-    <div className={styles.root}>
+    <AzurePage className={styles.root}>
       <div className={styles.breadcrumb}>
         <Link to="/" className={styles.breadcrumbLink}>Projects</Link>
         <span>/</span>
@@ -1073,6 +1074,6 @@ export function TeamPage() {
           />
         )}
       </OverlayDrawer>
-    </div>
+    </AzurePage>
   );
 }

@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18">
+  <defs>
+    <linearGradient id="bbff467b-d0c3-4c02-ab67-52668683d311" x1="14.854" y1="2.421" x2="14.854" y2="11.497" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#5ea0ef" />
+      <stop offset="1" stop-color="#0078d4" />
+    </linearGradient>
+    <linearGradient id="f08a4256-6af0-4f51-a821-6ee29d3c64f6" x1="3.146" y1="8.665" x2="3.146" y2="19.361" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#50e6ff" />
+      <stop offset="0.5" stop-color="#32bedd" />
+      <stop offset="1" stop-color="#198ab3" />
+    </linearGradient>
+    <linearGradient id="a198238a-fa3c-480f-99fb-cae1ab036fdb" x1="8.198" y1="10.278" x2="8.198" y2="18.143" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#32bedd" />
+      <stop offset="1" stop-color="#198ab3" />
+    </linearGradient>
+  </defs>
+  <polygon points="17.377 2.945 12.34 5.909 7.274 2.945 12.34 0 17.377 2.945" fill="#83b9f9" />
+  <polygon points="12.33 5.909 12.33 11.78 7.274 8.825 7.274 2.945 12.33 5.909" fill="#5ea0ef" />
+  <polygon points="12.33 5.89 12.33 11.78 17.377 8.825 17.377 2.945 12.33 5.89" fill="url(#bbff467b-d0c3-4c02-ab67-52668683d311)" />
+  <path d="M13.97,6.288l-1.8-1.742c-.2-.2-.361-.127-.361.176v.783a.22.22,0,0,1-.019.085.2.2,0,0,1-.122.114.223.223,0,0,1-.085.013c-1.156,0-4.379.3-4.5,4.711a.227.227,0,0,0,.226.227H8.461a.24.24,0,0,0,.091-.02.218.218,0,0,0,.075-.053.262.262,0,0,0,.048-.08.222.222,0,0,0,.011-.092,2.7,2.7,0,0,1,2.938-3.261.226.226,0,0,1,.226.226V8.1c0,.363.114.422.363.177L13.97,6.661a.211.211,0,0,0,.073-.081.229.229,0,0,0,0-.21A.221.221,0,0,0,13.97,6.288Z" fill="#c3f1ff" />
+  <polygon points="10.726 9.156 5.689 12.12 0.623 9.156 5.689 6.211 10.726 9.156" fill="#50e6ff" />
+  <polygon points="5.67 12.12 5.67 18 0.623 15.036 0.623 9.156 5.67 12.12" fill="url(#f08a4256-6af0-4f51-a821-6ee29d3c64f6)" />
+  <polygon points="5.67 12.101 5.67 18 10.726 15.036 10.726 9.156 5.67 12.101" fill="url(#a198238a-fa3c-480f-99fb-cae1ab036fdb)" />
+</svg>

@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import { Button, makeStyles, tokens } from '@fluentui/react-components';
 import { PageHeader } from '../PageHeader';
+import { AzureCommandStrip, AzurePage } from '../azure/AzureLayout';
 
 const useStyles = makeStyles({
   root: {
@@ -52,7 +53,7 @@ export function ObservabilityLayout({
   ] as const;
 
   return (
-    <div className={styles.root}>
+    <AzurePage className={styles.root}>
       <PageHeader
         title={title}
         subtitle={subtitle}
@@ -69,14 +70,14 @@ export function ObservabilityLayout({
         )}
         actions={actions}
       />
-      <div className={styles.tabs}>
+      <AzureCommandStrip className={styles.tabs}>
         {tabs.map((tab) => (
           <Link key={tab.key} to={tab.href} style={{ textDecoration: 'none' }}>
             <Button appearance={activeTab === tab.key ? 'primary' : 'secondary'}>{tab.label}</Button>
           </Link>
         ))}
-      </div>
+      </AzureCommandStrip>
       {children}
-    </div>
+    </AzurePage>
   );
 }

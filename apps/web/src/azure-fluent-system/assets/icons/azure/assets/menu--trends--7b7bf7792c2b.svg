@@ -1,0 +1,18 @@
+<svg id="b2cac4e4-6f37-4bf1-a7f4-2a8ba9af1dce" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18">
+  <defs>
+    <linearGradient id="a930f9a5-b883-4ab2-88a4-b78c9e2293e2" x1="9.05" y1="10.41" x2="9.05" y2="19.63" gradientTransform="matrix(1, 0, 0, -1, 0, 20)" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#5e9624" />
+      <stop offset="0.26" stop-color="#70a828" />
+      <stop offset="0.79" stop-color="#9fd732" />
+      <stop offset="1" stop-color="#b4ec36" />
+    </linearGradient>
+  </defs>
+  <title>Icon-408Artboard 1</title>
+  <g id="bcbeaa8f-4991-4731-9648-99d9d21303d1">
+    <rect x="5.77" y="9.18" width="2.49" height="8.4" rx="0.28" fill="#0078d4" />
+    <rect x="9.73" y="11.7" width="2.49" height="5.87" rx="0.28" fill="#0078d4" />
+    <rect x="13.69" y="6.73" width="2.49" height="10.84" rx="0.28" fill="#0078d4" />
+    <rect x="1.82" y="11.7" width="2.49" height="5.87" rx="0.28" fill="#0078d4" />
+    <path d="M15.88,5.05,14.73,3.83l-.57-.57-4,4a.18.18,0,0,1-.25,0h0L7.44,4.9,2.85,9.49a.19.19,0,0,1-.26,0h0L2,9a.21.21,0,0,1,0-.29L7.3,3.36a.19.19,0,0,1,.26,0h0L10,5.74l3.32-3.32-.58-.57L11.5.7a.16.16,0,0,1,0-.23.21.21,0,0,1,.11,0H16a.16.16,0,0,1,.16.16h0V4.93a.16.16,0,0,1-.12.2A.15.15,0,0,1,15.88,5.05Z" fill="url(#a930f9a5-b883-4ab2-88a4-b78c9e2293e2)" />
+  </g>
+</svg>

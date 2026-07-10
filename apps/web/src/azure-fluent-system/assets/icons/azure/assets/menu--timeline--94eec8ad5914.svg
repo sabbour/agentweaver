@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18">
+  <defs>
+    <linearGradient id="ea970b80-f9a6-4f23-8acd-92827198d421" x1="9" y1="12.485" x2="9" y2="1.128" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#0078d4" />
+      <stop offset="0.817" stop-color="#5ea0ef" />
+    </linearGradient>
+    <linearGradient id="e67d61fa-b684-477e-89b2-d7aa598206b8" x1="9" y1="16.872" x2="9" y2="12.485" gradientUnits="userSpaceOnUse">
+      <stop offset="0.149" stop-color="#ccc" />
+      <stop offset="1" stop-color="#707070" />
+    </linearGradient>
+  </defs>
+  <g id="b0c3c0df-91cf-4d6c-8c57-d7264f245d9e">
+    <g>
+      <g>
+        <rect x="0.5" y="1.128" width="17" height="11.357" rx="0.568" fill="url(#ea970b80-f9a6-4f23-8acd-92827198d421)" />
+        <path d="M12.407,15.92c-1.681-.263-1.747-1.479-1.742-3.435H7.33c0,1.956-.061,3.172-1.742,3.435a.991.991,0,0,0-.838.952h8.5A1,1,0,0,0,12.407,15.92Z" fill="url(#e67d61fa-b684-477e-89b2-d7aa598206b8)" />
+      </g>
+      <rect x="2.284" y="4.7" width="1.137" height="4.784" rx="0.143" fill="#fff" />
+      <rect x="6.962" y="4.7" width="1.137" height="4.784" rx="0.143" fill="#c3f1ff" />
+      <rect x="14.579" y="4.7" width="1.137" height="4.784" rx="0.143" fill="#50e6ff" />
+      <rect x="9.271" y="4.7" width="1.137" height="4.784" rx="0.143" fill="#50e6ff" />
+      <rect x="12.661" y="4.7" width="1.137" height="4.784" rx="0.143" fill="#50e6ff" />
+    </g>
+  </g>
+  <metadata>
+    <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+      <rdf:li>public:true</rdf:li>
+      <rdf:li>sdk:false</rdf:li>
+      <rdf:li>category:intune</rdf:li>
+    </rdf:RDF>
+  </metadata>
+</svg>
