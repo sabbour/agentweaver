@@ -93,3 +93,4 @@ Removed project relink end-to-end to close arbitrary server-path exposure: front
 
 ## 2026-07-06 v0.9.0 staging wave
 - Re-reviewed the skills-import SSRF fix and cleared it green for release.
+📌 Team update (2026-07-10T05:55:00-07:00): #207 redesign remains YELLOW until fenced claims, tenant-scoped capabilities, fail-closed remote execution, fair bounded recovery, deletion cancellation/idempotency, audit redaction, and mTLS are mandatory. — decided by Seraph

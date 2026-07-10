@@ -144,3 +144,4 @@ Read-only forensics found no v0.7.11 identity or installation-scope regression f
 
 ## 2026-07-06 v0.9.0 staging wave
 - Shipped live coordinator send routing plus the server-side Operator run direction; tests passed.
+📌 Team update (2026-07-10T05:55:00-07:00): #208 is independent of #207 and stems from client-aborted overview requests amplifying cancellation warnings. Morpheus owns the independent #207 redesign under durable fencing, queueing, tenancy, recovery, deletion, audit, and mTLS requirements. — decided by Rubber-duck and Seraph

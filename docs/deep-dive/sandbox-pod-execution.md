@@ -532,6 +532,9 @@ Coordinator:ReaperIntervalTicks   (default 12)
 
 With the default heartbeat interval the reaper fires roughly **every 2 minutes** (12 ticks × ~10 s). It terminates orphaned pods and emits a telemetry event for each one reaped.
 
+Fresh claims are protected by the creation-grace policy documented in the
+[sandbox pods reference](../reference/sandbox-pods.md#orphan-reaper-creation-grace).
+
 All stall-fail and cancellation paths in `CoordinatorDispatchService` call `ReleaseAgentHostPodAsync` explicitly to minimize the reaper's workload. The reaper is the belt to that suspender.
 
 ### Pre-dispatch quota check

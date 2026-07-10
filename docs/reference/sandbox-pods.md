@@ -17,6 +17,7 @@ isolation model — filesystem containment, governance, executor selection, and 
 |---|---|---|---|
 | `Sandbox:AgentExecutionMode` | `in-api`, `pod-per-run` | `in-api` | `in-api` runs the agent turn in-process in the API/worker (today's behavior, the **rollback path**). `pod-per-run` relocates each run's agent turn into its own Kata-isolated sandbox pod via the A2A bridge. |
 | `Sandbox:ReleasePodOnSuspend` | `true`, `false` | `true` | When `pod-per-run` is active and the workflow graph suspends on an external gate (a HITL/review `RequestPort`, or the coordinator idling while it awaits child runs), `true` checkpoints the run and **releases** the pod back to the warm pool. `false` keeps the pod warm across the suspension for low-latency resume or debugging, at the cost of held capacity. |
+| `Sandbox:Kubernetes:AgentHostClaimCreationGraceSeconds` | Positive integer seconds | `300` | Minimum age before the orphan reaper may delete an AgentHost claim that is absent from the active-run map. The effective grace is the larger of this value and `Sandbox:Kubernetes:AgentHostReadyTimeoutSeconds + 30` seconds. |
 | `AgentHost:KeyVaultUri` | URI | *(unset)* | Enables runtime Key Vault user-token fetch in warm AgentHost pods. The executor still injects this static value through the claim env because the pod needs the vault URI before `/configure` arrives. |
 
 ### Flag semantics
@@ -53,6 +54,13 @@ turns) rather than only ad-hoc shell commands.
 | Lifetime | Bounded by the run and the claim TTL. Under the hybrid model, a pod is released on suspend and a fresh pod is re-claimed on resume; pods never persist past the run. |
 | Egress | Default-deny NetworkPolicy with a narrow allowlist (see [Security properties](#security-properties)). |
 | Storage | Mounts the **shared workspace volume** (the worktree path) so worktree commit/diff stays on the worker side; the pod is otherwise stateless beyond the live turn. |
+
+### Orphan reaper creation grace
+
+An AgentHost claim missing from the active-run map is not reaped while its Kubernetes
+`creationTimestamp` is inside the effective creation-grace window. This keeps a newly bound claim
+alive through the readiness wait (`AgentHostReadyTimeoutSeconds`, default `90` seconds); a missing or
+unparseable timestamp receives no grace and remains eligible for cleanup.
 
 ## Run-scoped GitHub token delivery
 

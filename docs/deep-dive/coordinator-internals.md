@@ -595,6 +595,18 @@ re-arms the correct service. For `dispatching` plans it honors the distributed `
 lease first, skipping freshly owned plans and stealing only stale ones. Each candidate is isolated
 by try/catch so one corrupt plan does not stop the sweep.
 
+### Bounded final-Scribe recovery
+
+At startup, recovery checks terminal coordinator runs for a missing final Scribe. It skips runs that
+already have a Completed or InProgress Scribe child, and stops retrying after the configured number
+of Failed attempts. Per-run admission prevents duplicate local launches, while a `SemaphoreSlim`
+bounds concurrent in-process Scribe pipelines.
+
+| Configuration key | Default | Effect |
+|---|---:|---|
+| `Coordinator:FinalScribeMaxConcurrency` | `2` | Maximum final-Scribe recovery pipelines admitted concurrently in this process; values below `1` are floored to `1`. |
+| `Coordinator:FinalScribeMaxAttempts` | `3` | Maximum Failed final-Scribe child attempts before recovery stops admitting another attempt; values below `1` are floored to `1`. |
+
 ### Reaper as the 3rd heartbeat phase
 
 `CoordinatorHeartbeatService` drives three phases per tick:

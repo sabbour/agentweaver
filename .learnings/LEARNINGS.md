@@ -34,3 +34,26 @@ the revised turn emits the same assemble_ready terminal a first-time dispatch do
 - Tags: steering, in-place-revision, assemble-ready-terminal
 
 ---
+
+## [LRN-20260710-001] correction
+
+**Logged**: 2026-07-10T05:18:22-07:00
+**Priority**: high
+**Status**: pending
+**Area**: infra
+
+### Summary
+“Agentweaver API only” excludes the specialized `agentweaver` agent and Agentweaver MCP orchestration tools.
+
+### Details
+The coordinator misread an API-only validation objective as permission to launch the specialized `agentweaver` custom agent and may prematurely treat missing harness credentials as a product defect.
+
+### Suggested Action
+Dispatch a normal Squad agent that calls the public HTTP API directly. Before declaring authentication blocked, use the current user's existing GitHub OAuth token when explicitly authorized; keep it memory-only and never print or persist it. Treat missing credential setup as harness preflight, not a product defect.
+
+### Metadata
+- Source: user_feedback
+- Related Files: .learnings/LEARNINGS.md
+- Tags: agentweaver, api-only, squad, delegation, authentication, harness-preflight
+
+---
