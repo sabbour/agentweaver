@@ -4,30 +4,49 @@ import {
 import type { SyncStatusDto } from '../api/types';
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
-import { AzureDataGrid,
-  AzureEmptyState,
-  AzureToolbar,
-  BladeHeader,
+import {
+  Badge,
+  Button,
   Field,
   Input,
+  makeStyles,
   MessageBar,
   MessageBarBody,
   Spinner,
-  StatusIconText,
+  Table,
+  TableBody,
+  TableCell,
+  TableHeader,
+  TableHeaderCell,
+  TableRow,
   Text,
-  makeStyles,
-  mergeClasses,
   tokens,
-  type AzfColumn,
-  type AzfTone,
-} from '../copilot-fluent-system';
+} from '@fluentui/react-components';
+import { EmptyState, Body, TitleText } from './ui';
 export interface SyncPanelProps {
   projectId: string;
 }
 
 const useStyles = makeStyles({
   root: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalM,
+    padding: tokens.spacingVerticalL,
+    backgroundColor: tokens.colorNeutralBackground1,
+    borderRadius: tokens.borderRadiusMedium,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
     minWidth: 0,
+  },
+  headerBlock: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalXXS,
+  },
+  toolbar: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalS,
   },
   changePath: {
     fontFamily: tokens.fontFamilyMonospace,
@@ -49,7 +68,7 @@ const useStyles = makeStyles({
 
 type SyncChange = SyncStatusDto['changes'][number];
 
-function changeTone(kind: SyncChange['kind']): AzfTone {
+function changeBadgeColor(kind: SyncChange['kind']): 'success' | 'danger' | 'warning' {
   if (kind === 'added') return 'success';
   if (kind === 'removed') return 'danger';
   return 'warning';
@@ -102,37 +121,14 @@ export function SyncPanel({ projectId }: SyncPanelProps) {
     }
   };
 
-  const changeColumns: AzfColumn<SyncChange>[] = [
-    {
-      columnId: 'kind',
-      header: 'Change',
-      width: '140px',
-      sortable: true,
-      sortValue: (change) => change.kind,
-      renderCell: (change) => (
-        <StatusIconText status={changeTone(change.kind)}>
-          {change.kind}
-        </StatusIconText>
-      ),
-    },
-    {
-      columnId: 'path',
-      header: 'Path',
-      sortable: true,
-      sortValue: (change) => change.path,
-      renderCell: (change) => <Text className={styles.changePath}>{change.path}</Text>,
-    },
-  ];
-
   if (loading) return <Spinner label="Loading sync status" />;
 
   return (
-    <div className={mergeClasses('azf-surface azf-surface--panel azf-surface--padding-comfortable azf-stack azf-gap-m', styles.root)}>
-      <BladeHeader
-        size="compact"
-        title="Sync"
-        subtitle="Review local team-file changes and commit them with the current change-set hash."
-      />
+    <div className={styles.root}>
+      <div className={styles.headerBlock}>
+        <TitleText>Sync</TitleText>
+        <Body tone="muted">Review file changes and commit with the current change-set hash.</Body>
+      </div>
 
       {error && (
         <MessageBar intent="error">
@@ -141,41 +137,54 @@ export function SyncPanel({ projectId }: SyncPanelProps) {
       )}
 
       {status && status.nothing_to_sync && (
-        <AzureEmptyState compact title="Nothing to sync." body="The team files are up to date." />
+        <EmptyState title="Nothing to sync" description="The files are up to date." />
       )}
 
       {status && !status.nothing_to_sync && (
         <>
-          <AzureDataGrid
-            items={status.changes}
-            columns={changeColumns}
-            getRowId={(change) => change.path}
-            ariaLabel="Sync changes"
-            emptyState={<AzureEmptyState compact title="No file changes in this change set." />}
-          />
-          <StatusIconText status="neutral" className={styles.hash}>Hash: {status.change_set_hash}</StatusIconText>
+          <Table aria-label="Sync changes" size="small">
+            <TableHeader>
+              <TableRow>
+                <TableHeaderCell style={{ width: '140px' }}>Change</TableHeaderCell>
+                <TableHeaderCell>Path</TableHeaderCell>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {status.changes.map((change) => (
+                <TableRow key={change.path}>
+                  <TableCell>
+                    <Badge color={changeBadgeColor(change.kind)} size="small">
+                      {change.kind}
+                    </Badge>
+                  </TableCell>
+                  <TableCell>
+                    <Text className={styles.changePath}>{change.path}</Text>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+          <Text className={styles.hash}>Hash: {status.change_set_hash}</Text>
           <Field label="Commit message (optional)">
             <Input
               value={commitMessage}
               onChange={(_, v) => setCommitMessage(v.value)}
-              placeholder="Describe this sync..."
+              placeholder="Describe this sync…"
             />
           </Field>
-          <AzureToolbar
-            actions={[{
-              id: 'commit-sync',
-              label: committing ? 'Committing' : 'Commit',
-              appearance: 'primary',
-              disabled: committing,
-              loading: committing,
-              onClick: () => void handleCommit(),
-            }]}
-            ariaLabel="Sync actions"
-          >
+          <div className={styles.toolbar} role="toolbar" aria-label="Sync actions">
+            <Button
+              appearance="primary"
+              size="small"
+              disabled={committing}
+              onClick={() => void handleCommit()}
+            >
+              {committing ? 'Committing…' : 'Commit'}
+            </Button>
             {commitResult && (
-              <StatusIconText status="success" className={styles.commitResult}>Committed: {commitResult}</StatusIconText>
+              <Text className={styles.commitResult}>Committed: {commitResult}</Text>
             )}
-          </AzureToolbar>
+          </div>
         </>
       )}
     </div>

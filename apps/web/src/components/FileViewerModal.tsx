@@ -1,17 +1,17 @@
 import {
-  BladeHeader,
   Button,
   Dialog,
   DialogActions,
   DialogBody,
   DialogContent,
   DialogSurface,
-  } from '../copilot-fluent-system';
-import { FileViewer } from './FileViewer';
-import { makeStyles,
-  mergeClasses,
+  DialogTitle,
+  makeStyles,
+  Text,
   tokens,
-} from '../copilot-fluent-system';
+  } from '@fluentui/react-components';
+import { DismissRegular } from '@fluentui/react-icons';
+import { FileViewer } from './FileViewer';
 import type { WorkspaceFileContent, WorkspaceFileDiff } from '../api/types';
 // ---------------------------------------------------------------------------
 // Styles
@@ -41,6 +41,17 @@ const useStyles = makeStyles({
     flexDirection: 'column',
     minHeight: 0,
     padding: 0,
+  },
+  subtitle: {
+    paddingLeft: tokens.spacingHorizontalM,
+    paddingRight: tokens.spacingHorizontalM,
+    paddingBottom: tokens.spacingVerticalXS,
+    color: tokens.colorNeutralForeground3,
+    fontFamily: tokens.fontFamilyMonospace,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+    display: 'block',
   },
   actions: {
     paddingTop: tokens.spacingVerticalXS,
@@ -80,14 +91,23 @@ export function FileViewerModal({
 
   return (
     <Dialog open={isOpen} onOpenChange={(_, data) => { if (!data.open) onClose(); }} modalType="modal">
-      <DialogSurface className={mergeClasses('azf-surface', styles.surface)} aria-label={filePath ?? 'File viewer'}>
+      <DialogSurface className={styles.surface} aria-label={filePath ?? 'File viewer'}>
         <DialogBody className={styles.body}>
-          <BladeHeader
-            size="compact"
-            title={fileName}
-            subtitle={filePath ?? undefined}
-            onDismiss={onClose}
-          />
+          <DialogTitle
+            action={
+              <Button
+                appearance="subtle"
+                aria-label="Close"
+                icon={<DismissRegular />}
+                onClick={onClose}
+              />
+            }
+          >
+            {fileName}
+          </DialogTitle>
+          {filePath && (
+            <Text className={styles.subtitle}>{filePath}</Text>
+          )}
           <DialogContent className={styles.content}>
             <FileViewer
               runId={runId}

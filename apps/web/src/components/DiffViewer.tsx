@@ -1,9 +1,5 @@
-import {
-  AzureEmptyState } from '../copilot-fluent-system';
-import { makeStyles,
-  mergeClasses,
-  tokens,
-} from '../copilot-fluent-system';
+import { makeStyles, mergeClasses, tokens } from '@fluentui/react-components';
+import { EmptyState } from './ui';
 import React from 'react';
 import { createElement as syntaxCreateElement, Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneLight } from 'react-syntax-highlighter/dist/esm/styles/prism';
@@ -61,12 +57,17 @@ function DiffTbody({ children }: { children?: React.ReactNode }) {
 
 const useStyles = makeStyles({
   root: {
+    display: 'flex',
+    flexDirection: 'column',
     height: '100%',
     overflow: 'hidden',
     fontFamily: tokens.fontFamilyMonospace,
     fontSize: tokens.fontSizeBase200,
+    backgroundColor: tokens.colorNeutralBackground1,
   },
   fileHeader: {
+    display: 'flex',
+    alignItems: 'center',
     flexShrink: 0,
     justifyContent: 'space-between',
     padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalM}`,
@@ -380,17 +381,17 @@ export function DiffViewer({ diff, filename }: DiffViewerProps) {
   const styles = useStyles();
   const lang = detectLanguage(filename);
   const useSyntax = lang !== 'text';
-  const rootClassName = mergeClasses('azf-stack azf-surface azf-surface--flat', styles.root);
+  const rootClassName = styles.root;
 
   if (!diff) {
     return (
       <div className={rootClassName}>
         {filename && (
-          <div className={mergeClasses('azf-row', styles.fileHeader)}>
+          <div className={styles.fileHeader}>
             <span className={styles.filePath}>{filename}</span>
           </div>
         )}
-        <AzureEmptyState compact title="No changes" className={styles.empty} />
+        <EmptyState title="No changes" className={styles.empty} />
       </div>
     );
   }
@@ -401,7 +402,7 @@ export function DiffViewer({ diff, filename }: DiffViewerProps) {
   return (
     <div className={rootClassName}>
       {filename && (
-        <div className={mergeClasses('azf-row', styles.fileHeader)}>
+        <div className={styles.fileHeader}>
           <span className={styles.filePath}>
             {filename}
           </span>

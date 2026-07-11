@@ -1,13 +1,8 @@
 import {
   apiClient } from '../api/apiClient';
-import { AzureEmptyState,
-  AzureTabList,
-  Spinner,
-  Text } from '../copilot-fluent-system';
+import { makeStyles, Spinner, Tab, TabList, Text, tokens } from '@fluentui/react-components';
+import { EmptyState } from './ui';
 import { DiffViewer } from './DiffViewer';
-import { makeStyles,
-  tokens,
-} from '../copilot-fluent-system';
 import ReactMarkdown from 'react-markdown';
 import rehypeSanitize from 'rehype-sanitize';
 import remarkGfm from 'remark-gfm';
@@ -211,10 +206,9 @@ export function FileViewer({
 
   if (filePath === null) {
     return (
-      <AzureEmptyState
-        compact
+      <EmptyState
         title="Select a file"
-        body="Choose a file from the workbench to view its contents."
+        description="Choose a file to view its contents."
         className={styles.emptyState}
       />
     );
@@ -234,12 +228,15 @@ export function FileViewer({
     <div className={styles.root} aria-label={filePath}>
       {isMarkdown && (
         <div className={styles.tabStrip}>
-          <AzureTabList
-            tabs={tabs}
+          <TabList
             selectedValue={viewMode}
-            onTabSelect={(value) => setViewMode(value as typeof viewMode)}
-            ariaLabel={`${filePath} view mode`}
-          />
+            onTabSelect={(_, data) => setViewMode(data.value as typeof viewMode)}
+            aria-label={`${filePath} view mode`}
+          >
+            {tabs.map((t) => (
+              <Tab key={t.id} value={t.id}>{t.label}</Tab>
+            ))}
+          </TabList>
         </div>
       )}
       <div className={styles.content}>

@@ -1,23 +1,22 @@
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
 import {
-  AzureEmptyState,
+  makeStyles,
+  mergeClasses,
   MessageBar,
   MessageBarBody,
   Spinner,
-  StatusIconText,
   Text,
-  makeStyles,
-  mergeClasses,
   tokens,
-} from '../copilot-fluent-system';
+} from '@fluentui/react-components';
 import {
   ChevronDownRegular,
   ChevronRightRegular,
   DocumentRegular,
   FolderOpenRegular,
   FolderRegular,
-} from '../copilot-fluent-system';
+} from '@fluentui/react-icons';
+import { EmptyState } from './ui';
 import { useEffect, useState } from 'react';
 import type { WorkspaceFileNode, WorkspaceNode } from '../api/types';
 /** Convert the flat ref-aware workspace tree into the nested WorkspaceFileNode tree. */
@@ -55,12 +54,26 @@ function buildFileTree(flat: WorkspaceNode[]): WorkspaceFileNode[] {
 }
 
 const useStyles = makeStyles({
+  wrapper: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalXS,
+  },
   tree: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalXXS,
     maxHeight: '320px',
     overflowY: 'auto',
     padding: tokens.spacingVerticalXS,
+    backgroundColor: tokens.colorNeutralBackground2,
+    borderRadius: tokens.borderRadiusMedium,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
   },
   nodeRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXS,
     padding: `2px ${tokens.spacingHorizontalXS}`,
     borderRadius: tokens.borderRadiusSmall,
     cursor: 'pointer',
@@ -70,9 +83,9 @@ const useStyles = makeStyles({
     },
   },
   nodeRowSelected: {
-    backgroundColor: tokens.colorBrandBackground2,
+    backgroundColor: tokens.colorNeutralBackground3,
     ':hover': {
-      backgroundColor: tokens.colorBrandBackground2Hover,
+      backgroundColor: tokens.colorNeutralBackground3Hover,
     },
   },
   nodeRowDirectory: {
@@ -101,6 +114,9 @@ const useStyles = makeStyles({
     marginTop: tokens.spacingVerticalXXS,
   },
   loadingRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalS,
     padding: tokens.spacingVerticalS,
   },
   emptyMsg: {
@@ -127,7 +143,7 @@ function FileTreeNode({ node, depth, selectedPath, onSelect }: FileTreeNodeProps
     return (
       <>
         <div
-          className={mergeClasses('azf-row azf-gap-xs', styles.nodeRow)}
+          className={styles.nodeRow}
           style={{ paddingLeft: `${indent + 4}px` }}
           onClick={() => setExpanded((v) => !v)}
           role="button"
@@ -160,7 +176,7 @@ function FileTreeNode({ node, depth, selectedPath, onSelect }: FileTreeNodeProps
   const isSelected = selectedPath === node.relative_path;
   return (
     <div
-      className={mergeClasses('azf-row azf-gap-xs', styles.nodeRow, isSelected ? styles.nodeRowSelected : undefined)}
+      className={mergeClasses(styles.nodeRow, isSelected ? styles.nodeRowSelected : undefined)}
       style={{ paddingLeft: `${indent + 20}px` }}
       onClick={() => onSelect(node.relative_path)}
       role="option"
@@ -205,11 +221,11 @@ export function WorkspaceFilePicker({ projectId, workspaceRef, selectedPath, onS
   }, [projectId, workspaceRef]);
 
   return (
-    <div className="azf-stack azf-gap-xs">
+    <div className={styles.wrapper}>
       {loading && (
-        <div className={mergeClasses('azf-row azf-gap-s', styles.loadingRow)}>
+        <div className={styles.loadingRow}>
           <Spinner size="extra-tiny" aria-hidden="true" />
-          <Text>Loading workspace files...</Text>
+          <Text>Loading files…</Text>
         </div>
       )}
       {error && (
@@ -218,9 +234,9 @@ export function WorkspaceFilePicker({ projectId, workspaceRef, selectedPath, onS
         </MessageBar>
       )}
       {!loading && !error && (
-        <div className={mergeClasses('azf-stack azf-gap-xs azf-surface azf-surface--subtle', styles.tree)} role="listbox" aria-label="Workspace files">
+        <div className={styles.tree} role="listbox" aria-label="Workspace files">
           {nodes.length === 0 ? (
-            <AzureEmptyState compact title="No files found in workspace." className={styles.emptyMsg} />
+            <EmptyState title="No files found" />
           ) : (
             nodes.map((node) => (
               <FileTreeNode
@@ -235,7 +251,7 @@ export function WorkspaceFilePicker({ projectId, workspaceRef, selectedPath, onS
         </div>
       )}
       {selectedPath && (
-        <StatusIconText status="info" className={styles.selectedPath}>Selected: {selectedPath}</StatusIconText>
+        <Text className={styles.selectedPath}>Selected: {selectedPath}</Text>
       )}
     </div>
   );
