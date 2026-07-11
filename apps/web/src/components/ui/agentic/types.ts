@@ -31,6 +31,12 @@ export interface AgentStep {
   /** Whether the step panel is open on first render. Defaults to true when status is "running" or needsInput is true. */
   defaultOpen?: boolean;
   artifacts?: AgentArtifact[];
+  /**
+   * Nested sub-steps — e.g. a coordinator step nesting the agents it launched,
+   * or an agent step nesting its tool calls as structured steps.
+   * Rendered as an indented, expandable child list when the parent is open.
+   */
+  children?: AgentStep[];
 }
 
 export interface ToolCall {

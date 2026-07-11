@@ -93,6 +93,29 @@ export const useComposerStyles = makeStyles({
     borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
     padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalM}`,
   },
+  /**
+   * readOnly state — replaces the full composer with a subdued notice.
+   * Used when the user is viewing an agent they cannot steer directly.
+   */
+  readOnly: {
+    display: "flex",
+    alignItems: "center",
+    gap: tokens.spacingHorizontalS,
+    padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM}`,
+    backgroundColor: tokens.colorNeutralBackground2,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusCircular,
+    color: tokens.colorNeutralForeground3,
+    fontSize: tokens.fontSizeBase200,
+    lineHeight: tokens.lineHeightBase200,
+    userSelect: "none",
+  },
+  readOnlyIcon: {
+    display: "flex",
+    alignItems: "center",
+    flexShrink: 0,
+    color: tokens.colorNeutralForeground4,
+  },
 });
 
 // ─── SendButton (mirrors @1js/fai-react-send-button SendButton) ──────────────

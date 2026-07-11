@@ -163,6 +163,19 @@ export const useAgenticStyles = makeStyles({
     gap: tokens.spacingHorizontalXS,
   },
 
+  /**
+   * Container for nested child steps inside an expanded parent panel.
+   * A left border acts as the vertical connector line for the sub-tree;
+   * the 16px left padding provides indentation so child icons have room.
+   */
+  stepChildrenList: {
+    listStyle: 'none',
+    margin: `${tokens.spacingVerticalXS} 0 0 0`,
+    padding: '0',
+    paddingLeft: '12px',
+    borderLeft: `1.5px solid ${tokens.colorNeutralStroke2}`,
+  },
+
   // Status icon colors
   statusComplete: {
     color: '#16a149',

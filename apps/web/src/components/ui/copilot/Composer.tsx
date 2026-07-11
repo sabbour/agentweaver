@@ -22,6 +22,7 @@ import {
   SendRegular,
   StopRegular,
   AttachRegular,
+  LockClosedRegular,
 } from "@fluentui/react-icons";
 import { useComposerStyles, useSendButtonStyles } from "./copilotStyles";
 import { AttachmentList } from "./Attachment";
@@ -63,6 +64,17 @@ export interface ComposerProps {
   actions?: React.ReactNode;
   /** slot: contentBelow — below the input shell (suggestions, etc.) */
   contentBelow?: React.ReactNode;
+  /**
+   * When true, the composer is replaced by a read-only notice — the user can
+   * see the conversation but cannot send messages directly. Use in run views
+   * where the selected agent can only be steered via the Coordinator.
+   */
+  readOnly?: boolean;
+  /**
+   * The text shown in the read-only notice.
+   * Defaults to "Viewing this agent — steer via the Coordinator".
+   */
+  readOnlyNote?: string;
   className?: string;
 }
 
@@ -139,8 +151,11 @@ export function Composer({
   contentBefore,
   actions,
   contentBelow,
+  readOnly = false,
+  readOnlyNote = "Viewing this agent — steer via the Coordinator",
   className,
 }: ComposerProps) {
+  // All hooks must be unconditional — declared before any early return.
   const styles = useComposerStyles();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -150,7 +165,7 @@ export function Composer({
   const canSend = !disabled && !disableSend && !isOverLimit && (hasValue || !hideSendWhenEmpty) && !isSending;
   const hideSend = hideSendWhenEmpty && !hasValue && !isSending;
 
-  // Auto-resize textarea
+  // Auto-resize textarea (no-op when readOnly since textarea is not rendered)
   useEffect(() => {
     const el = textareaRef.current;
     if (!el || appearance === "single") return;
@@ -181,6 +196,19 @@ export function Composer({
     },
     [onStop]
   );
+
+  // ── Read-only mode: replace composer with a subdued notice ──────────────────
+  if (readOnly) {
+    return (
+      <div className={mergeClasses(styles.readOnly, className)} role="status" aria-label={readOnlyNote}>
+        <span className={styles.readOnlyIcon} aria-hidden="true">
+          <LockClosedRegular fontSize={14} />
+        </span>
+        {readOnlyNote}
+      </div>
+    );
+  }
+  // ─────────────────────────────────────────────────────────────────────────────
 
   return (
     <div

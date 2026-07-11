@@ -133,7 +133,8 @@ export function AgentStepItem({ step, onApprove, onDeny }: AgentStepProps) {
       ? step.defaultOpen
       : step.needsInput === true || step.status === 'running';
   const [open, setOpen] = useState(autoOpen);
-  const hasContent = Boolean(step.body || step.needsInput || (step.artifacts && step.artifacts.length > 0));
+  const hasChildren = Boolean(step.children && step.children.length > 0);
+  const hasContent = Boolean(step.body || step.needsInput || (step.artifacts && step.artifacts.length > 0) || hasChildren);
   const headerId = `agent-step-header-${step.id}`;
   const panelId = `agent-step-panel-${step.id}`;
 
@@ -192,6 +193,19 @@ export function AgentStepItem({ step, onApprove, onDeny }: AgentStepProps) {
                 <ArtifactChip key={artifact.id} artifact={artifact} />
               ))}
             </div>
+          )}
+          {/* Nested children — indented sub-tree */}
+          {hasChildren && (
+            <ol className={styles.stepChildrenList} aria-label={`Sub-steps of ${typeof step.title === 'string' ? step.title : 'step'}`}>
+              {step.children!.map((child) => (
+                <AgentStepItem
+                  key={child.id}
+                  step={child}
+                  onApprove={onApprove}
+                  onDeny={onDeny}
+                />
+              ))}
+            </ol>
           )}
         </div>
       )}
