@@ -50,6 +50,8 @@ When the user clicks **Start**, the UI posts the goal, receives the coordinator 
 
 That matters. A broad request such as "Add OAuth sign-in and update the docs and tests" can mean many things: provider choice, scope boundaries, migration expectations, documentation depth, and test coverage. The coordinator's first job is to turn that request into a confirmable contract, not to launch agents immediately.
 
+What the drafted **Scope** covers tracks the breadth the goal asks for, filtered by the team you cast. A full-journey goal — "take this from the initial idea all the way to a working, previewable app" — yields an outcome whose scope enumerates the intermediate deliverables the goal implies (customer/market research, positioning/marketing, user stories, a PRD, UX design, and the built app), but only for deliverables some role on the team can actually produce. A narrow goal (a bug fix or a single document) stays lean and does not sprout extra planning stages. If the breadth is unclear, the coordinator surfaces it as a clarifying question rather than assuming the widest scope — so review the drafted scope before confirming and revise if it is broader or narrower than you intended.
+
 ### Over MCP
 
 MCP starts the same experience with `coordinator_start`:

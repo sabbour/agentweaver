@@ -72,6 +72,8 @@ It captures:
 
 The important design choice is that confirmation happens before decomposition is treated as authoritative. The coordinator can draft an interpretation, receive revision feedback, and loop until the requester or unattended policy confirms it.
 
+Because the confirmed OutcomeSpec is the source of truth for intent, it — not the later decomposition — is where the work's **breadth** originates. When the drafter frames the outcome it reads the project's team roster and honors the breadth the goal explicitly asks for: a full-lifecycle "from the initial idea through to a working app" goal yields an outcome whose scope enumerates the discovery, PM, design, and build deliverables the goal warrants (filtered to what the team can actually produce), while a narrow goal stays lean. Downstream workflow selection and decomposition then faithfully honor that confirmed breadth, so if the outcome is narrowed at drafting time, the whole PM/discovery half is silently dropped everywhere after it. See [How drafting works](./coordinator-internals.md#how-drafting-works) for the roster-awareness and scope-breadth guidance that shapes the draft.
+
 ```mermaid
 stateDiagram-v2
     [*] --> Drafting
