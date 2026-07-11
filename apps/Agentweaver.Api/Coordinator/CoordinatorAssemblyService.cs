@@ -108,6 +108,8 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
     private readonly CoordinatorSteeringQueue _steeringQueue;
     private readonly Preview.PreviewStep? _previewStep;
     private readonly WorktreeManager? _worktreeManager;
+    private readonly IntegrationBuildLock? _integrationBuildLock;
+    private readonly TimeSpan _integrationBuildLockTimeout;
     private readonly ILogger<CoordinatorAssemblyService> _logger;
     private readonly CancellationToken _appStopping;
     private readonly TimeSpan _reviewTimeout;
@@ -138,7 +140,8 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         IProjectStore? projectStore = null,
         WorkflowRegistry? workflowRegistry = null,
         Preview.PreviewStep? previewStep = null,
-        WorktreeManager? worktreeManager = null)
+        WorktreeManager? worktreeManager = null,
+        IntegrationBuildLock? integrationBuildLock = null)
     {
         _runStore = runStore;
         _streamStore = streamStore;
@@ -157,6 +160,7 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         _steeringQueue = new CoordinatorSteeringQueue(scopeFactory);
         _previewStep = previewStep;
         _worktreeManager = worktreeManager;
+        _integrationBuildLock = integrationBuildLock;
         _logger = logger;
         _appStopping = lifetime.ApplicationStopping;
         var reviewTimeoutMinutes = configuration?.GetValue("Coordinator:AssemblyReviewTimeoutMinutes", 60.0) ?? 60.0;
@@ -171,6 +175,8 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         // a normal integration-branch build so a live merge is never stolen mid-flight (default 120 s).
         var assemblyLeaseSecs = configuration?.GetValue("Coordinator:AssemblyLeaseStaleTtlSeconds", 120) ?? 120;
         _assemblyLeaseStaleTtl = TimeSpan.FromSeconds(Math.Max(10, assemblyLeaseSecs));
+        var lockTimeoutSecs = configuration?.GetValue("Coordinator:IntegrationBuildLockAcquireTimeoutSeconds", 120) ?? 120;
+        _integrationBuildLockTimeout = TimeSpan.FromSeconds(Math.Max(1, lockTimeoutSecs));
         var finalScribeMaxConcurrency = configuration?.GetValue(
             FinalScribeMaxConcurrencyConfigurationKey,
             DefaultFinalScribeMaxConcurrency) ?? DefaultFinalScribeMaxConcurrency;
@@ -716,6 +722,15 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         IntegrationBranchResult integration;
         try
         {
+            // Cross-process serialization (issue #218): take the per-project integration-build lock (repo
+            // granularity, NOT per-run) around the final integration build so it never races a dependency-base
+            // rebuild or a peer assembly on the shared /workspace/{projectId}/.git repo. If a peer holds it past
+            // the timeout, proceed anyway — BuildIntegrationBranchWithRetryAsync retries on any residual
+            // LockedFileException as the backstop, so the mandatory final build is never skipped.
+            var lockKey = IntegrationBuildLock.ResolveProjectKey(context.ProjectId?.ToString(), context.RepositoryPath);
+            await using var projectLock = _integrationBuildLock is null
+                ? null
+                : await _integrationBuildLock.TryAcquireAsync(lockKey, _integrationBuildLockTimeout, ct).ConfigureAwait(false);
             integration = await BuildIntegrationBranchWithRetryAsync(
                 context, integrationRequest, ct).ConfigureAwait(false);
         }

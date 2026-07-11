@@ -122,6 +122,7 @@ builder.Services.AddSingleton<RunOrchestrator>();
 builder.Services.AddSingleton<Agentweaver.Api.Coordinator.IChildRevisionHandoff,
     Agentweaver.Api.Coordinator.RunOrchestratorChildRevisionHandoff>();
 builder.Services.AddSingleton<Agentweaver.Api.Coordinator.CoordinatorAssemblyStore>();
+builder.Services.AddSingleton<Agentweaver.Api.Coordinator.IntegrationBuildLock>();
 builder.Services.AddSingleton<Agentweaver.Api.Coordinator.AssemblyReviewGate>();
 builder.Services.AddSingleton<Agentweaver.Api.Coordinator.ICollectiveAssemblyPipeline,
     Agentweaver.Api.Coordinator.CollectiveAssemblyPipeline>();

@@ -26,6 +26,7 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
     public DbSet<McpAuthorizationCode> McpAuthorizationCodes => Set<McpAuthorizationCode>();
     public DbSet<OAuthState> OAuthStates => Set<OAuthState>();
     public DbSet<WebSessionExchangeCode> WebSessionExchangeCodes => Set<WebSessionExchangeCode>();
+    public DbSet<IntegrationBuildLockRecord> IntegrationBuildLocks => Set<IntegrationBuildLockRecord>();
 
     // Replica-safe per-pod / per-run singleton state moved out of process memory.
     public DbSet<PendingRequestRecord> PendingRequests => Set<PendingRequestRecord>();
@@ -115,6 +116,8 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
 
         model.Entity<WebSessionExchangeCode>().HasKey(c => c.Code);
         model.Entity<WebSessionExchangeCode>().HasIndex(c => c.ExpiresAt);
+
+        model.Entity<IntegrationBuildLockRecord>().HasKey(l => l.ProjectId);
 
         model.Entity<PendingRequestRecord>().HasIndex(p => p.RunId).IsUnique();
         model.Entity<PendingRequestRecord>().HasIndex(p => p.ExpiresAt);

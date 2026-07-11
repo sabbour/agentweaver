@@ -361,9 +361,39 @@ The reconciler now checks two things before trying to steal a plan:
 - if another pod owns `CoordinatorPodId` **and** that claim is still fresh, it skips the plan; and
 - if the claim is missing or stale, it tries one conditional UPDATE to take ownership.
 
-A lease is considered stale after `Coordinator:PodLeaseStaleTtlSeconds` (default **60 s**). In
-practice that means a healthy owner keeps the plan by touching `UpdatedAt`, while another replica
-may recover the work if the owner dies and stops refreshing the row.
+A lease is considered stale after `Coordinator:PodLeaseStaleTtlSeconds` (default **120 s**, kept
+above the 90 s `/healthz` probe window so a probe pause never lets a peer steal a live lease).
+
+#### Lease heartbeat
+
+Stamping `CoordinatorPodId` at claim time is not enough on its own. The lease freshness signal is
+`WorkPlan.UpdatedAt`, and for a long time that column was only touched on **status transitions**.
+A dispatch loop that `await`s a single child turn — an implement or debug run can take 5 to 15+
+minutes — made no status change during that wait, so `UpdatedAt` aged past the stale TTL while the
+owner was perfectly healthy. A peer replica's reconciler then read the plan as an orphan, claimed
+it, and started a **second** dispatch loop. Both loops drove the same run and raced the shared
+`/workspace/{projectId}/.git` repo.
+
+To close that gap, a pod that owns a dispatch loop runs an independent heartbeat (a `PeriodicTimer`
+on its own task) that renews the lease every `Coordinator:PodLeaseHeartbeatSeconds` (default
+**30 s**, well under the 120 s TTL). Each tick runs from its **own DI scope and `DbContext`** — never
+the dispatch loop's context, which is not thread-safe — and issues an ownership-keyed conditional
+UPDATE: `WHERE Id = @planId AND CoordinatorPodId = @myPodId AND Status = 'dispatching'`, setting
+`UpdatedAt = now`. A healthy owner therefore keeps the lease fresh for the whole child turn.
+
+The heartbeat also **fences** the loop on lease loss. Loss is decided by ownership, not by the row
+count. When a renew affects zero rows, the heartbeat re-reads the plan:
+
+- if `CoordinatorPodId` now belongs to a different pod, the peer took over — the heartbeat cancels a
+  per-run `CancellationTokenSource` (linked to app shutdown) so the fenced loop stops instead of
+  continuing to race the repo, and `StartDispatch` logs the stop as a fenced hand-off rather than a
+  failure; and
+- if the row is still owned by this pod (the loop itself advanced `dispatching -> awaiting_assembly`)
+  or the row is gone, that is a benign stop — the heartbeat tears down without cancelling anything,
+  so a normal hand-off never self-fences.
+
+The heartbeat is stopped explicitly just before the `awaiting_assembly` hand-off and again in the
+loop's teardown, so it never outlives the loop it renews.
 
 ### Shared worktree conflict control
 
@@ -381,6 +411,38 @@ This favors correctness over maximum parallelism. A poorly scoped subtask may re
 When dispatch rebuilds the dependency-base integration branch for downstream subtasks, it treats git ref-lock contention as a transient recovery case rather than a fatal orchestration fault. If LibGit2Sharp throws a locked-file error, the dispatcher asks `WorktreeManager` to best-effort delete stale `.git/refs/heads/{branch}.lock` and `.git/packed-refs.lock` files, then retries up to three times with a short linear backoff.
 
 This path exists for crashed or interrupted prior processes that left a stale lock behind. If the retry still fails, dispatch logs the problem and continues without refreshing that dependency base branch, instead of crashing the whole coordinator loop.
+
+### Integration-branch build lock (per project)
+
+The repo at `/workspace/{projectId}/.git` is shared by **every run in a project** (Azure Files SMB
+in the cloud), and `WorktreeManager.BuildIntegrationBranch` deletes and recreates the integration ref
+on each rebuild. Two builds racing that same repo produce a `LockedFileException` or a null ref while
+the ref is mid-swap — the second failure mode surfaced as an `ArgumentNullException` from
+`Refs.UpdateTarget` and pushed the run to `assembly_blocked`.
+
+The lease heartbeat removes the usual cause of a second concurrent loop, but one residual window
+remains: `BuildIntegrationBranch` is a synchronous, non-cancellable LibGit2Sharp call, so a loop that
+has just been fenced cannot be drained out of the middle of a build. Two builds can also legitimately
+overlap across separate runs in the same project. To serialize them, both the dispatch dependency-base
+rebuild and the collective-assembly integration build take a **per-project** lock (repo granularity,
+not per-run) around the build.
+
+The lock is a row in the `IntegrationBuildLocks` table, one per `ProjectId`, claimed with a
+conditional UPSERT (`INSERT ... ON CONFLICT (ProjectId) DO UPDATE ... WHERE AcquiredAt < <stale
+threshold>`) so exactly one caller wins. The same SQL runs on SQLite (local and tests) and Postgres
+(staging); a DB row is used rather than a named OS mutex (which would not span pods) or an SMB/git
+file lock (the substrate that fails under the race). Each acquisition mints a token that fences
+release, so a holder whose lock was reclaimed after the stale TTL can never delete the new holder's
+row, and a crashed holder's row is reclaimable after `Coordinator:IntegrationBuildLockStaleTtlSeconds`
+(default **300 s**) rather than deadlocking the project. Acquisition waits up to
+`Coordinator:IntegrationBuildLockAcquireTimeoutSeconds` (default **120 s**).
+
+On the dispatch side the lock is best-effort: if a peer build holds it past the timeout, the rebuild
+is skipped, because the mandatory contains-check and repair before a dependent dispatches re-runs it.
+On the assembly side the final build proceeds even if the lock cannot be taken in time, since the
+existing retry-on-`LockedFileException` is the backstop and the final integration build must not be
+skipped. The pre-existing three-attempt stale-lock retry stays in place for locks left behind by a
+crashed process.
 
 ### Child run construction
 
