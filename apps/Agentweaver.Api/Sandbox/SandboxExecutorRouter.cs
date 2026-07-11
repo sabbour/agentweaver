@@ -1,6 +1,7 @@
 using k8s;
 using Agentweaver.SandboxExec;
 using Agentweaver.AgentRuntime.Workflow;
+using Agentweaver.Api.Infrastructure;
 using Agentweaver.Domain;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
@@ -25,13 +26,15 @@ public sealed class SandboxExecutorRouter : ISandboxExecutorRouter
     private readonly IRunSubmittingUserResolver? _submittingUserResolver;
     private readonly IGitHubTokenStore? _tokenStore;
     private readonly Agentweaver.Api.Auth.ISecretStore? _secretStore;
+    private readonly IRunEventStream? _runEventStream;
 
     public SandboxExecutorRouter(IConfiguration config, ILoggerFactory loggerFactory,
         IPodNameRegistry? podRegistry = null, IHttpClientFactory? httpClientFactory = null,
         IRunSubmittingUserResolver? submittingUserResolver = null,
         IAgentHostTurnTokenRegistry? turnTokenRegistry = null,
         IGitHubTokenStore? tokenStore = null,
-        Agentweaver.Api.Auth.ISecretStore? secretStore = null)
+        Agentweaver.Api.Auth.ISecretStore? secretStore = null,
+        IRunEventStream? runEventStream = null)
     {
         _config = config;
         _loggerFactory = loggerFactory;
@@ -41,6 +44,7 @@ public sealed class SandboxExecutorRouter : ISandboxExecutorRouter
         _submittingUserResolver = submittingUserResolver;
         _tokenStore = tokenStore;
         _secretStore = secretStore;
+        _runEventStream = runEventStream;
     }
 
     public ISandboxExecutor Resolve()
@@ -125,7 +129,7 @@ public sealed class SandboxExecutorRouter : ISandboxExecutorRouter
                 sandboxOptions.Namespace, sandboxOptions.WorkspaceMountPath);
             return new KubernetesSandboxExecutor(
                 k8sClient, sandboxOptions, k8sLogger, _podRegistry, _turnTokenRegistry, readinessProbe,
-                _submittingUserResolver, _httpClientFactory, _tokenStore, _secretStore);
+                _submittingUserResolver, _httpClientFactory, _tokenStore, _secretStore, _runEventStream);
         }
         catch (Exception ex)
         {

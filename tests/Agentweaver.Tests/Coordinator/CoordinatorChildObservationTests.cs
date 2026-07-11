@@ -183,6 +183,51 @@ public sealed class CoordinatorChildObservationTests : IAsyncDisposable
             "the coordinator must NOT emit a stall signal while a tool approval is pending (#212)");
     }
 
+    // -----------------------------------------------------------------------
+    // #217: an AgentHost pod still being provisioned by Kubernetes (claim unbound) is a
+    // legitimate wait, not a stall — the coordinator must not discard the run.
+    // -----------------------------------------------------------------------
+
+    [Fact]
+    public async Task ObserveChild_SandboxProvisioningPending_PastStallTtl_NotClassifiedAsStalled()
+    {
+        var stream = new SqliteRunEventStream(_streamConfig);
+        var childRunId = await SeedChildRunAsync(RunStatus.InProgress);
+
+        // The child's AgentHost pod is still being scheduled by Kubernetes: the only event on its
+        // stream is a sandbox.provisioning_pending heartbeat, and the stream is never completed, so
+        // the child stays silent PAST the stall window. A Pending pod may wait for a node to free up
+        // or the pool to autoscale — the coordinator must treat this as a legitimate wait, not
+        // agent_stall_timeout (#217).
+        await stream.AppendAsync(childRunId, new RunEvent(0, EventTypes.SandboxProvisioningPending,
+            new { claimName = "agent-host-217", timestamp_utc = DateTimeOffset.UtcNow.ToString("O") }));
+
+        const string coord = "obs-provisioning-coord";
+        var (_, ids) = await SeedPlanAsync(coord, [(SubtaskStatus.Running, childRunId)]);
+        _streamStore.Create(coord, "owner");
+
+        // Extremely short stall TTL (≈60 ms) so many windows elapse within the test window; then
+        // cancel to end the (otherwise indefinite) provisioning wait.
+        var sut = BuildDispatch(stream, stallTimeoutMinutes: 0.001);
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+        try
+        {
+            await sut.RunDispatchLoopAsync(Context(coord), cts.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            // Expected: the guard keeps observing the provisioning pod until we cancel the loop.
+        }
+
+        var subtask = await GetSubtaskAsync(ids[0]);
+        subtask.Status.Should().Be(SubtaskStatus.Running,
+            "a pod still being provisioned (sandbox.provisioning_pending) is a legitimate wait, not a stall (#217)");
+
+        var coordEvents = _streamStore.Get(coord)!.GetSnapshotSince(0).Events;
+        coordEvents.Should().NotContain(e => e.Type == EventTypes.CoordinatorChildStallDetected,
+            "the coordinator must NOT emit a stall signal while the AgentHost pod is still provisioning (#217)");
+    }
+
     [Fact]
     public async Task ObserveChild_ApprovalGateExpiresThenSilence_IsClassifiedAsStalled_GuardDoesNotLatch()
     {

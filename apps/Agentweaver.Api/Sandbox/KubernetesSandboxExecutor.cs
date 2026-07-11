@@ -4,6 +4,7 @@ using System.Text;
 using System.Net.Http.Json;
 using System.Text.Json;
 using Agentweaver.Api.Auth;
+using Agentweaver.Api.Infrastructure;
 using Agentweaver.AgentRuntime.Workflow;
 using Agentweaver.Domain;
 using k8s;
@@ -152,11 +153,14 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
     private const string ClaimPlural = SandboxClaimConventions.ClaimPlural;
     private const string ContainerName = "agentweaver-sandbox";
 
-    /// <summary>Namespace ResourceQuota that caps total agent-pod CPU (spec: 24 cores).</summary>
-    private const string ResourceQuotaName = "agentweaver-quota";
-
-    /// <summary>CPU cores reserved by a single AgentHost pod (its <c>limits.cpu</c>).</summary>
-    private const double AgentPodCpuLimit = 2.0;
+    /// <summary>
+    /// Cadence for the <see cref="EventTypes.SandboxProvisioningPending"/> heartbeat emitted while an
+    /// AgentHost <c>SandboxClaim</c> is still being provisioned (unbound). Must stay well under the
+    /// parent coordinator's <c>Coordinator:SubtaskStallTimeoutMinutes</c> (default 5 min) so each
+    /// provisioning wait window is punctuated by an event that keeps the outbound stream flowing and
+    /// resets the stall timer (issue #217, mirrors the #212 tool.approval_pending heartbeat cadence).
+    /// </summary>
+    internal static readonly TimeSpan SandboxProvisioningHeartbeatInterval = TimeSpan.FromSeconds(20);
 
     private readonly IKubernetes _client;
     private readonly KubernetesSandboxOptions _options;
@@ -181,6 +185,11 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
     // reconcile/keepalive on either API replica can re-fetch it, and to durably DELETE it on pod
     // release (spec-006 decouple-preview, BLOCKER A / RESIDUAL). Null in unit tests → no minting.
     private readonly ISecretStore? _secretStore;
+    // Durable run-event log used to emit sandbox.provisioning_pending heartbeats into the CHILD run's
+    // stream while its AgentHost claim is still being scheduled by Kubernetes (unbound). Keeps the
+    // parent coordinator's stall timer alive during a legitimately-long Pending wait (issue #217).
+    // Null in unit tests → the heartbeat is skipped (same null-skip convention as the readiness probe).
+    private readonly IRunEventStream? _runEventStream;
 
     public bool IsRealIsolation => true;
     public string BackendName => "kubernetes-sandbox-claim";
@@ -199,7 +208,8 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
         IRunSubmittingUserResolver? submittingUserResolver = null,
         IHttpClientFactory? httpClientFactory = null,
         IGitHubTokenStore? tokenStore = null,
-        ISecretStore? secretStore = null)
+        ISecretStore? secretStore = null,
+        IRunEventStream? runEventStream = null)
     {
         _client = client;
         _options = options;
@@ -211,6 +221,7 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
         _httpClientFactory = httpClientFactory;
         _tokenStore = tokenStore;
         _secretStore = secretStore;
+        _runEventStream = runEventStream;
     }
 
     public async Task<SandboxExecResult> ExecuteAsync(
@@ -321,14 +332,6 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
             ? null
             : Path.GetFullPath(workingDirectoryOverride);
 
-        var existingClaim = await AgentHostClaimExistsAsync(claimName, ct).ConfigureAwait(false);
-        // Fail fast before creating a NEW claim if the namespace quota cannot admit another agent pod
-        // (2 CPU). Do not gate an existing coordinator Build/Test claim on spare quota: retained
-        // automated-gate retries must be able to reuse their already-bound pod even when the pool is
-        // otherwise full.
-        if (!existingClaim)
-            await CheckQuotaHeadroomAsync(ct).ConfigureAwait(false);
-
         _logger.LogInformation(
             "KubernetesSandboxExecutor: launching AgentHost pod for run {RunId} via claim {Claim}",
             runId, claimName);
@@ -378,7 +381,6 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
                     _podRegistry?.Unregister(runId);
                     _turnTokenRegistry?.UnregisterTurnToken(runId);
                     await Task.Delay(1000, ct).ConfigureAwait(false);
-                    await CheckQuotaHeadroomAsync(ct).ConfigureAwait(false);
                     claimCreated = await CreateAgentHostClaimAsync(
                         claimName, _options.AgentHostWarmPoolRef, requestedWorkingDirectory, runId, ct).ConfigureAwait(false);
                     if (!claimCreated)
@@ -390,7 +392,7 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
                 }
             }
 
-            var podName = await WaitForBoundAsync(claimName, ct).ConfigureAwait(false);
+            var podName = await WaitForBoundWithProvisioningHeartbeatAsync(runId, claimName, ct).ConfigureAwait(false);
             _logger.LogInformation(
                 "KubernetesSandboxExecutor: AgentHost claim {Claim} bound to pod {Pod}", claimName, podName);
 
@@ -627,28 +629,6 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
         return null;
     }
 
-    private async Task<bool> AgentHostClaimExistsAsync(string claimName, CancellationToken ct)
-    {
-        try
-        {
-            await _client.CustomObjects.GetNamespacedCustomObjectAsync(
-                ApiGroup, ApiVersion, _options.Namespace, ClaimPlural, claimName,
-                cancellationToken: ct).ConfigureAwait(false);
-            return true;
-        }
-        catch (HttpOperationException ex) when (ex.Response?.StatusCode == System.Net.HttpStatusCode.NotFound)
-        {
-            return false;
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            _logger.LogWarning(ex,
-                "KubernetesSandboxExecutor: failed to check whether AgentHost claim {Claim} exists; assuming absent",
-                claimName);
-            return false;
-        }
-    }
-
     /// <summary>
     /// Resolves the run owner's GitHub access token from the API-side token store so it can be
     /// forwarded in the /configure body. The kata VM pod cannot reach Azure AD or Key Vault
@@ -796,40 +776,51 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
         }
     }
 
-    /// <inheritdoc/>
-    public Task CheckAgentHostCapacityAsync(CancellationToken ct = default) =>
-        CheckQuotaHeadroomAsync(ct);
+    /// <summary>
+    /// Waits for the AgentHost <c>SandboxClaim</c> to bind while emitting periodic
+    /// <see cref="EventTypes.SandboxProvisioningPending"/> heartbeats into the CHILD run's event
+    /// stream. Scheduling is Kubernetes' job: a claim may sit unbound (pod Pending) for a while until
+    /// a node frees up or the pool autoscales — that is FINE and must not fail the run (issue #217).
+    /// The heartbeat keeps the parent coordinator's subtask-stall timer alive during that legitimate
+    /// wait, mirroring the #212 tool.approval_pending heartbeat. Best-effort: if no
+    /// <see cref="IRunEventStream"/> is wired (unit tests) this degrades to a plain
+    /// <see cref="WaitForBoundAsync"/>.
+    /// </summary>
+    private async Task<string> WaitForBoundWithProvisioningHeartbeatAsync(
+        string runId, string claimName, CancellationToken ct)
+    {
+        if (_runEventStream is null)
+            return await WaitForBoundAsync(claimName, ct).ConfigureAwait(false);
+
+        var boundTask = WaitForBoundAsync(claimName, ct);
+        while (true)
+        {
+            var delayTask = Task.Delay(SandboxProvisioningHeartbeatInterval, ct);
+            var completed = await Task.WhenAny(boundTask, delayTask).ConfigureAwait(false);
+            if (ReferenceEquals(completed, boundTask))
+                return await boundTask.ConfigureAwait(false); // propagates the bound pod name / any error
+
+            // The claim is still unbound after the heartbeat interval — emit a non-terminal
+            // heartbeat so the coordinator's stall window resets while Kubernetes schedules the pod.
+            await delayTask.ConfigureAwait(false); // observe cancellation
+            await EmitProvisioningPendingAsync(runId, claimName, ct).ConfigureAwait(false);
+        }
+    }
 
     /// <summary>
-    /// Pre-launch guard: throws <see cref="AgentHostCapacityPendingException"/> when the namespace
-    /// ResourceQuota has less than one agent pod's worth of CPU headroom
-    /// (<see cref="AgentPodCpuLimit"/>). Capacity-pending is a <i>retry signal</i>, not a hard
-    /// failure: the reaper frees orphaned pods and the node pool can scale out, so the caller queues
-    /// and retries. The quota check itself is best-effort: if the quota does not exist or the read
-    /// fails, it logs a warning and returns so a transient API/quota issue never blocks a launch that
-    /// the controller would otherwise admit.
+    /// Appends a single <see cref="EventTypes.SandboxProvisioningPending"/> heartbeat to
+    /// <paramref name="runId"/>'s durable event stream. Best-effort: a stream-append failure is
+    /// logged and swallowed so it can never fail a launch that Kubernetes would otherwise admit.
     /// </summary>
-    private async Task CheckQuotaHeadroomAsync(CancellationToken ct)
+    private async Task EmitProvisioningPendingAsync(string runId, string claimName, CancellationToken ct)
     {
-        double used;
-        double hard;
         try
         {
-            var quota = await _client.CoreV1.ReadNamespacedResourceQuotaAsync(
-                ResourceQuotaName, _options.Namespace, cancellationToken: ct).ConfigureAwait(false);
-
-            var usedStr = TryGetQuotaValue(quota?.Status?.Used, "limits.cpu");
-            var hardStr = TryGetQuotaValue(quota?.Status?.Hard, "limits.cpu");
-
-            if (usedStr is null || hardStr is null ||
-                !TryParseCpu(usedStr, out used) || !TryParseCpu(hardStr, out hard))
+            await _runEventStream!.AppendAsync(runId, new RunEvent(0, EventTypes.SandboxProvisioningPending, new
             {
-                _logger.LogWarning(
-                    "KubernetesSandboxExecutor: agent pod quota '{Quota}' missing or unparseable " +
-                    "limits.cpu (used={Used}, hard={Hard}); skipping pre-launch quota check",
-                    ResourceQuotaName, usedStr ?? "(none)", hardStr ?? "(none)");
-                return;
-            }
+                claimName,
+                timestamp_utc = DateTimeOffset.UtcNow.ToString("O"),
+            }), ct).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
@@ -838,28 +829,9 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
         catch (Exception ex)
         {
             _logger.LogWarning(ex,
-                "KubernetesSandboxExecutor: could not read ResourceQuota '{Quota}' in namespace " +
-                "{Namespace}; skipping pre-launch quota check (best-effort)",
-                ResourceQuotaName, _options.Namespace);
-            return;
+                "KubernetesSandboxExecutor: failed to emit sandbox.provisioning_pending heartbeat for run {RunId} (best-effort)",
+                runId);
         }
-
-        if (hard - used < AgentPodCpuLimit)
-        {
-            _logger.LogWarning(
-                "KubernetesSandboxExecutor: agent pod quota exhausted ({Used}/{Hard} CPU used); " +
-                "need {Limit} CPU headroom to launch a new agent pod — signalling capacity-pending retry",
-                used, hard, AgentPodCpuLimit);
-            throw new AgentHostCapacityPendingException(used, hard, "quota_exceeded");
-        }
-    }
-
-    private static string? TryGetQuotaValue(
-        IDictionary<string, k8s.Models.ResourceQuantity>? map, string key)
-    {
-        if (map is not null && map.TryGetValue(key, out var quantity) && quantity is not null)
-            return quantity.ToString();
-        return null;
     }
 
     /// <summary>

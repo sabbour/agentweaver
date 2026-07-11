@@ -66,6 +66,17 @@ public static class EventTypes
     public const string CoordinatorPreviewReady = "coordinator.preview_ready";
 
     /// <summary>
+    /// Heartbeat emitted repeatedly on a run's own stream while its AgentHost sandbox pod is being
+    /// provisioned — i.e. the <c>SandboxClaim</c> is not yet <c>Bound</c> because Kubernetes is still
+    /// scheduling the pod (a node may need to free up or the pool may need to autoscale). It keeps the
+    /// run's outbound event stream moving so the parent coordinator's subtask-stall timer is reset
+    /// during the (Kubernetes-paced) provisioning wait instead of false-firing
+    /// <c>agent_stall_timeout</c> (issue #217). Non-terminal and idempotent; consumers that do not
+    /// care may ignore it. Payload: { claimName, timestamp_utc }.
+    /// </summary>
+    public const string SandboxProvisioningPending = "sandbox.provisioning_pending";
+
+    /// <summary>
     /// Emitted on a run's own stream when an agent calls the <c>ask_question</c> tool to bubble a
     /// clarifying question or permission request to the operator (or, for a coordinator child, to
     /// the coordinator watcher). The run suspends inside the tool call until the question is

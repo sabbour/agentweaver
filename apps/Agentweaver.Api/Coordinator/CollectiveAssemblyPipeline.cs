@@ -172,28 +172,12 @@ public sealed class CollectiveAssemblyPipeline : ICollectiveAssemblyPipeline
                     await _podLifecycle.LaunchAgentHostPodAsync(
                         request.CoordinatorRunId, detachedWorktree.WorktreePath, ct).ConfigureAwait(false);
                 }
-                catch (AgentHostCapacityPendingException ex)
-                {
-                    throw new CollectiveBuildTestInfrastructureException(
-                        "agenthost_capacity_pending",
-                        ex.Message,
-                        retryable: true,
-                        ex);
-                }
                 catch (AgentHostPodReconcilerErrorException ex)
                 {
                     throw new CollectiveBuildTestInfrastructureException(
                         "agenthost_reconciler_error",
                         ex.Message,
                         retryable: false,
-                        ex);
-                }
-                catch (AgentHostQuotaExceededException ex)
-                {
-                    throw new CollectiveBuildTestInfrastructureException(
-                        "agenthost_quota_exceeded",
-                        ex.Message,
-                        retryable: true,
                         ex);
                 }
                 catch (InvalidOperationException ex) when (

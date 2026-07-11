@@ -2822,9 +2822,6 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
             CancellationToken ct = default) =>
             Task.FromException<string>(exception);
 
-        public Task CheckAgentHostCapacityAsync(CancellationToken ct = default) =>
-            Task.CompletedTask;
-
         public Task ReleaseAgentHostPodAsync(string runId, CancellationToken ct = default) =>
             Task.CompletedTask;
     }
