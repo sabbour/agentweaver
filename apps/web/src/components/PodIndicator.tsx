@@ -1,13 +1,11 @@
-import {
-  StatusIconText,
-  Tooltip } from '../copilot-fluent-system';
-import { makeStyles,
-  mergeClasses,
-  tokens,
-} from '../copilot-fluent-system';
-import { ServerRegular } from '../copilot-fluent-system';
+import { Tooltip, makeStyles, tokens } from '@fluentui/react-components';
+import { ServerRegular } from '@fluentui/react-icons';
+
 const useStyles = makeStyles({
   pill: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXXS,
     padding: '2px 6px',
     borderRadius: tokens.borderRadiusCircular,
     fontSize: tokens.fontSizeBase100,
@@ -19,10 +17,10 @@ const useStyles = makeStyles({
     overflow: 'hidden',
     whiteSpace: 'nowrap',
   },
-  statusText: {
-    minWidth: 0,
+  icon: {
+    fontSize: '12px',
+    flexShrink: 0,
     color: tokens.colorNeutralForeground3,
-    fontFamily: tokens.fontFamilyMonospace,
   },
   label: {
     overflow: 'hidden',
@@ -43,7 +41,7 @@ interface PodIndicatorProps {
 }
 
 /**
- * Renders a compact Kubernetes pod pill above/over an agent card.
+ * Renders a compact pod pill above/over an agent card.
  * Renders nothing when podName is falsy (local/dev mode).
  */
 export function PodIndicator({ podName }: PodIndicatorProps) {
@@ -58,13 +56,12 @@ export function PodIndicator({ podName }: PodIndicatorProps) {
         withArrow
       >
         <span
-          className={mergeClasses('azf-row azf-gap-xs', s.pill)}
+          className={s.pill}
           aria-label={`Executing in pod ${podName}`}
           role="status"
         >
-          <StatusIconText status="info" icon={<ServerRegular />} className={s.statusText}>
-            <span className={s.label}>{podName}</span>
-          </StatusIconText>
+          <ServerRegular className={s.icon} aria-hidden="true" />
+          <span className={s.label}>{podName}</span>
         </span>
       </Tooltip>
     </div>

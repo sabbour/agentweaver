@@ -1,17 +1,22 @@
+import { useState } from 'react';
 import {
-  AzureDataGrid,
-  AzureEmptyState,
   Badge,
-  BladeHeader,
-  ProgressBarWithLabel,
-  StatusIconText,
-  Text,
-  } from '../../copilot-fluent-system';
-import { costChipLabel } from '../CostChip';
-import { makeStyles,
+  Button,
+  makeStyles,
   mergeClasses,
+  ProgressBar,
+  Table,
+  TableBody,
+  TableCell,
+  TableHeader,
+  TableHeaderCell,
+  TableRow,
+  Text,
   tokens,
-} from '../../copilot-fluent-system';
+} from '@fluentui/react-components';
+import { ChevronDownRegular, ChevronUpRegular } from '@fluentui/react-icons';
+import { costChipLabel } from '../CostChip';
+import { Body, EmptyState, TitleText } from '../ui';
 import type {
   AiCreditUsagePointDto,
   DailyInvocationPointDto,
@@ -19,7 +24,9 @@ import type {
   ModelUsageBreakdownDto,
   ProjectMetricsDto,
 } from '../../api/types';
-import type { AzfColumn } from '../../copilot-fluent-system';
+
+const CHART_LINE = '#635c57';
+
 const useStyles = makeStyles({
   diagnostics: {
     display: 'grid',
@@ -29,11 +36,34 @@ const useStyles = makeStyles({
     '@media (max-width: 980px)': { gridTemplateColumns: '1fr' },
   },
   panel: {
+    backgroundColor: tokens.colorNeutralBackground1,
+    borderRadius: tokens.borderRadiusLarge,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    padding: tokens.spacingVerticalL,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalM,
     minWidth: 0,
   },
   trendPanel: {
     display: 'grid',
     gridTemplateRows: 'auto 1fr',
+  },
+  pendingPanel: {
+    backgroundColor: tokens.colorNeutralBackground2,
+    borderRadius: tokens.borderRadiusLarge,
+    border: `1px dashed ${tokens.colorNeutralStroke2}`,
+    padding: tokens.spacingVerticalL,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalM,
+    minWidth: 0,
+  },
+  panelHeader: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalXXS,
+    minWidth: 0,
   },
   chartStack: {
     display: 'grid',
@@ -66,12 +96,6 @@ const useStyles = makeStyles({
     gap: tokens.spacingVerticalS,
     minWidth: 0,
   },
-  pendingPanel: {
-    borderTopStyle: 'dashed',
-    borderRightStyle: 'dashed',
-    borderBottomStyle: 'dashed',
-    borderLeftStyle: 'dashed',
-  },
   emptyCopy: {
     maxWidth: '72ch',
   },
@@ -95,6 +119,11 @@ const useStyles = makeStyles({
   },
   progress: {
     maxWidth: 'none',
+  },
+  barList: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalS,
   },
 });
 
@@ -140,7 +169,7 @@ function LineChart({
       <text x={pad.left + innerW} y={pad.top + innerH + 16} fontSize={10} fill={tokens.colorNeutralForeground3} textAnchor="end">
         {points.at(-1)?.date ?? ''}
       </text>
-      <path d={path} fill="none" stroke={tokens.colorBrandForeground1} strokeWidth={2} />
+      <path d={path} fill="none" stroke={CHART_LINE} strokeWidth={2} />
     </svg>
   );
 }
@@ -158,7 +187,7 @@ function BarList({
   const max = Math.max(1, ...rows.map(valueOf));
 
   return (
-    <div className="azf-stack azf-gap-s">
+    <div className={styles.barList}>
       {rows.map((row) => {
         const value = valueOf(row);
         const progress = value <= 0 ? 0 : Math.max(0.06, value / max);
@@ -169,9 +198,9 @@ function BarList({
                 <Text>{row.model}</Text>
                 <Text>{valueLabel(row)}</Text>
               </div>
-              <ProgressBarWithLabel className={styles.progress} value={progress} max={1} thickness="large" />
+              <ProgressBar className={styles.progress} value={progress} max={1} thickness="large" />
             </div>
-            <Badge appearance="outline">{row.invocationCount} calls</Badge>
+            <Badge appearance="outline" color="subtle">{row.invocationCount} calls</Badge>
           </div>
         );
       })}
@@ -180,52 +209,70 @@ function BarList({
 }
 
 function PercentilesTable({ rows, emptyLabel }: { rows: MetricPercentilesDto[]; emptyLabel: string }) {
-  const columns: AzfColumn<MetricPercentilesDto>[] = [
-    {
-      columnId: 'label',
-      header: 'Model',
-      renderCell: (row) => <Text>{row.label}</Text>,
-      sortable: true,
-      sortValue: (row) => row.label,
-    },
-    {
-      columnId: 'p50',
-      header: 'P50',
-      renderCell: (row) => (
-        <StatusIconText status={row.p50Ms != null ? 'info' : 'neutral'}>
-          {row.p50Ms != null ? `${Math.round(row.p50Ms)} ms` : '—'}
-        </StatusIconText>
-      ),
-      sortable: true,
-      sortValue: (row) => row.p50Ms ?? null,
-      width: '120px',
-    },
-    {
-      columnId: 'p95',
-      header: 'P95',
-      renderCell: (row) => (
-        <StatusIconText status={row.p95Ms != null ? 'warning' : 'neutral'}>
-          {row.p95Ms != null ? `${Math.round(row.p95Ms)} ms` : '—'}
-        </StatusIconText>
-      ),
-      sortable: true,
-      sortValue: (row) => row.p95Ms ?? null,
-      width: '120px',
-    },
-  ];
+  const [sortKey, setSortKey] = useState<'label' | 'p50' | 'p95'>('label');
+  const [sortAsc, setSortAsc] = useState(true);
 
-  if (rows.length === 0) {
-    return <AzureEmptyState compact title={emptyLabel} />;
-  }
+  if (rows.length === 0) return <EmptyState title={emptyLabel} />;
+
+  const sorted = [...rows].sort((a, b) => {
+    const av = sortKey === 'label' ? a.label : sortKey === 'p50' ? (a.p50Ms ?? null) : (a.p95Ms ?? null);
+    const bv = sortKey === 'label' ? b.label : sortKey === 'p50' ? (b.p50Ms ?? null) : (b.p95Ms ?? null);
+    if (av == null && bv == null) return 0;
+    if (av == null) return 1;
+    if (bv == null) return -1;
+    const r = typeof av === 'string'
+      ? av.localeCompare(bv as string, undefined, { numeric: true, sensitivity: 'base' })
+      : (av as number) - (bv as number);
+    return sortAsc ? r : -r;
+  });
+
+  const sortIcon = (key: 'label' | 'p50' | 'p95') =>
+    sortKey === key && !sortAsc ? <ChevronUpRegular /> : <ChevronDownRegular />;
+
+  const handleSort = (key: 'label' | 'p50' | 'p95') => {
+    if (key === sortKey) setSortAsc((a) => !a);
+    else { setSortKey(key); setSortAsc(true); }
+  };
 
   return (
-    <AzureDataGrid
-      items={rows}
-      columns={columns}
-      getRowId={(row) => row.label}
-      ariaLabel="Latency percentiles"
-      emptyState={<AzureEmptyState compact title={emptyLabel} />}
-    />
+    <Table aria-label="Latency percentiles" size="small">
+      <TableHeader>
+        <TableRow>
+          <TableHeaderCell
+            aria-sort={sortKey === 'label' ? (sortAsc ? 'ascending' : 'descending') : 'none'}
+          >
+            <Button appearance="transparent" iconPosition="after" icon={sortIcon('label')} onClick={() => handleSort('label')}>
+              Model
+            </Button>
+          </TableHeaderCell>
+          <TableHeaderCell
+            style={{ width: '120px' }}
+            aria-sort={sortKey === 'p50' ? (sortAsc ? 'ascending' : 'descending') : 'none'}
+          >
+            <Button appearance="transparent" iconPosition="after" icon={sortIcon('p50')} onClick={() => handleSort('p50')}>
+              P50
+            </Button>
+          </TableHeaderCell>
+          <TableHeaderCell
+            style={{ width: '120px' }}
+            aria-sort={sortKey === 'p95' ? (sortAsc ? 'ascending' : 'descending') : 'none'}
+          >
+            <Button appearance="transparent" iconPosition="after" icon={sortIcon('p95')} onClick={() => handleSort('p95')}>
+              P95
+            </Button>
+          </TableHeaderCell>
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        {sorted.map((row) => (
+          <TableRow key={row.label}>
+            <TableCell><Text>{row.label}</Text></TableCell>
+            <TableCell><Text>{row.p50Ms != null ? `${Math.round(row.p50Ms)} ms` : '—'}</Text></TableCell>
+            <TableCell><Text>{row.p95Ms != null ? `${Math.round(row.p95Ms)} ms` : '—'}</Text></TableCell>
+          </TableRow>
+        ))}
+      </TableBody>
+    </Table>
   );
 }
 
@@ -246,16 +293,15 @@ export function ModelPerformancePanels({ metrics }: { metrics: ProjectMetricsDto
 
   if (!hasAnyTelemetry) {
     return (
-      <div className={mergeClasses('azf-surface azf-surface--subtle azf-surface--padding-comfortable azf-stack azf-gap-m', styles.pendingPanel)}>
-        <BladeHeader
-          size="compact"
-          title="Model telemetry pending"
-          subtitle="No model usage, AI credit, or latency signals are available for this range yet."
-        />
-        <AzureEmptyState
-          compact
+      <div className={styles.pendingPanel}>
+        <div className={styles.panelHeader}>
+          <TitleText as="h2">Model usage pending</TitleText>
+          <Body tone="muted">No model usage, AI credit, or latency signals are available for this range yet.</Body>
+        </div>
+        <EmptyState
           className={styles.emptyCopy}
-          title="Run or complete an agent task to populate model mix, AI credit usage, response duration, and first-token timing."
+          title="No data yet"
+          description="Run or complete an agent task to populate model mix, AI credit usage, response duration, and first-token timing."
         />
       </div>
     );
@@ -263,13 +309,16 @@ export function ModelPerformancePanels({ metrics }: { metrics: ProjectMetricsDto
 
   return (
     <div className={styles.diagnostics}>
-      <div className={mergeClasses('azf-surface azf-surface--panel azf-surface--padding-comfortable azf-stack azf-gap-m', styles.panel, styles.trendPanel)}>
-        <BladeHeader size="compact" title="Model signal trend" subtitle="Run creation is shown as activity context; AI credit movement is the model evidence used for optimization." />
+      <div className={mergeClasses(styles.panel, styles.trendPanel)}>
+        <div className={styles.panelHeader}>
+          <TitleText as="h2">Model signal trend</TitleText>
+          <Body tone="muted">Run creation is shown as activity context; AI credit movement is the model evidence used for optimization.</Body>
+        </div>
         <div className={styles.chartStack}>
           <div className={styles.chartSlot}>
             <Text className={styles.slotTitle}>Runs created</Text>
             {invocationTrend.length === 0 || !hasInvocationTrend ? (
-              <AzureEmptyState compact title="No run-creation data yet." />
+              <EmptyState title="No run-creation data yet." />
             ) : (
               <LineChart points={invocationTrend} valueOf={(point) => 'count' in point ? point.count : 0} label="Runs created over time" />
             )}
@@ -277,7 +326,7 @@ export function ModelPerformancePanels({ metrics }: { metrics: ProjectMetricsDto
           <div className={styles.chartSlot}>
             <Text className={styles.slotTitle}>AI credit usage</Text>
             {aiCreditUsageTrend.length === 0 || !hasAiCreditTrend ? (
-              <AzureEmptyState compact title="No AI credit usage data yet." />
+              <EmptyState title="No AI credit usage data yet." />
             ) : (
               <LineChart
                 points={aiCreditUsageTrend}
@@ -290,12 +339,15 @@ export function ModelPerformancePanels({ metrics }: { metrics: ProjectMetricsDto
         </div>
       </div>
 
-      <div className={mergeClasses('azf-surface azf-surface--panel azf-surface--padding-comfortable azf-stack azf-gap-m', styles.panel)}>
-        <BladeHeader size="compact" title="Model mix" subtitle="Compare spend and invocation share for the models that have emitted usage events." />
+      <div className={styles.panel}>
+        <div className={styles.panelHeader}>
+          <TitleText as="h2">Model mix</TitleText>
+          <Body tone="muted">Compare spend and invocation share for the models that have emitted usage events.</Body>
+        </div>
         <div className={styles.subsection}>
           <Text className={styles.slotTitle}>AI credit usage by model</Text>
           {modelUsage.length === 0 ? (
-            <AzureEmptyState compact title="No AI credit usage data yet." />
+            <EmptyState title="No AI credit usage data yet." />
           ) : (
             <BarList
               rows={modelUsage}
@@ -307,7 +359,7 @@ export function ModelPerformancePanels({ metrics }: { metrics: ProjectMetricsDto
         <div className={styles.subsection}>
           <Text className={styles.slotTitle}>Invocation share</Text>
           {modelUsage.length === 0 ? (
-            <AzureEmptyState compact title="No model invocation data yet." />
+            <EmptyState title="No model invocation data yet." />
           ) : (
             <BarList
               rows={modelUsage}
@@ -318,8 +370,11 @@ export function ModelPerformancePanels({ metrics }: { metrics: ProjectMetricsDto
         </div>
       </div>
 
-      <div className={mergeClasses('azf-surface azf-surface--panel azf-surface--padding-comfortable azf-stack azf-gap-m', styles.panel, styles.latencyPanel)}>
-        <BladeHeader size="compact" title="Latency checkpoints" subtitle="P50 and P95 duration/TTFT stay grouped so slow models are visible without another card row." />
+      <div className={mergeClasses(styles.panel, styles.latencyPanel)}>
+        <div className={styles.panelHeader}>
+          <TitleText as="h2">Latency checkpoints</TitleText>
+          <Body tone="muted">P50 and P95 duration and first-token timing stay grouped so slow models are visible without another card row.</Body>
+        </div>
         <div className={styles.latencyGrid}>
           <div className={styles.subsection}>
             <Text className={styles.slotTitle}>Response duration by model</Text>
@@ -327,7 +382,7 @@ export function ModelPerformancePanels({ metrics }: { metrics: ProjectMetricsDto
           </div>
           <div className={styles.subsection}>
             <Text className={styles.slotTitle}>Time to first token by model</Text>
-            <PercentilesTable rows={ttft} emptyLabel="No TTFT data available yet." />
+            <PercentilesTable rows={ttft} emptyLabel="No first-token timing data available yet." />
           </div>
         </div>
       </div>

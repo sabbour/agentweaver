@@ -1,24 +1,39 @@
-import {
-  AzureEmptyState,
-  BladeHeader,
-  ProgressBarWithLabel,
-  StatusIconText,
-  Text } from '../../copilot-fluent-system';
+import { makeStyles, mergeClasses, ProgressBar, Text, tokens } from '@fluentui/react-components';
+import { InfoRegular } from '@fluentui/react-icons';
 import { AgentIdentity } from '../AgentIdentity';
 import { costChipLabel } from '../CostChip';
-import { makeStyles,
-  mergeClasses,
-  tokens,
-} from '../../copilot-fluent-system';
+import { Body, EmptyState, TitleText } from '../ui';
 import type { AgentUsageBreakdownDto, RunAgentTokenBreakdownDto } from '../../api/types';
+
 const useStyles = makeStyles({
   panel: {
+    backgroundColor: tokens.colorNeutralBackground1,
+    borderRadius: tokens.borderRadiusLarge,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    padding: tokens.spacingVerticalL,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalM,
+    minWidth: 0,
+  },
+  header: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalXXS,
     minWidth: 0,
   },
   note: {
+    display: 'inline-flex',
+    alignItems: 'flex-start',
+    gap: tokens.spacingHorizontalXXS,
     color: tokens.colorNeutralForeground3,
     fontSize: '14px',
     lineHeight: '20px',
+  },
+  noteIcon: {
+    fontSize: '14px',
+    flexShrink: 0,
+    marginTop: '2px',
   },
   rowHead: {
     display: 'flex',
@@ -35,6 +50,16 @@ const useStyles = makeStyles({
   },
   progress: {
     maxWidth: 'none',
+  },
+  usageList: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalS,
+  },
+  usageItem: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalXXS,
   },
 });
 
@@ -59,22 +84,25 @@ export function AgentTokenBreakdown({
   const hasFallbackTotal = !data?.hasAgentData && ((data?.totalTokens ?? 0) > 0 || (data?.totalNanoAiu ?? 0) > 0);
 
   return (
-    <div className={mergeClasses('azf-surface azf-surface--panel azf-surface--padding-comfortable azf-stack azf-gap-m', styles.panel)}>
-      <BladeHeader size="compact" title={title} subtitle={subtitle} />
+    <div className={styles.panel}>
+      <div className={styles.header}>
+        <TitleText as="h2">{title}</TitleText>
+        <Body tone="muted">{subtitle}</Body>
+      </div>
 
       {!data ? (
-        <AzureEmptyState compact title="Loading usage…" />
+        <EmptyState title="Loading usage…" />
       ) : rows.length === 0 && !hasFallbackTotal ? (
-        <AzureEmptyState compact title="No agent usage data yet." />
+        <EmptyState title="No agent usage data yet." />
       ) : (
-        <div className="azf-stack azf-gap-s">
+        <div className={styles.usageList}>
           {rows.map((entry) => (
-            <div key={entry.agentName} className="azf-stack azf-gap-xs">
+            <div key={entry.agentName} className={styles.usageItem}>
               <div className={styles.rowHead}>
                 <AgentIdentity label={entry.agentName} roleByAgent={roleByAgent} className={styles.identity} />
                 <Text className={styles.metric}>{costChipLabel(entry.totalNanoAiu, entry.totalTokens) ?? `${entry.invocationCount} turns`}</Text>
               </div>
-              <ProgressBarWithLabel
+              <ProgressBar
                 className={styles.progress}
                 value={Math.max(0.08, usageValue(entry) / max)}
                 max={1}
@@ -83,19 +111,22 @@ export function AgentTokenBreakdown({
             </div>
           ))}
           {hasFallbackTotal && (
-            <div className="azf-stack azf-gap-xs">
+            <div className={styles.usageItem}>
               <div className={styles.rowHead}>
                 <Text>Total run usage</Text>
                 <Text>{costChipLabel(data.totalNanoAiu, data.totalTokens) ?? '—'}</Text>
               </div>
-              <ProgressBarWithLabel className={styles.progress} value={1} max={1} thickness="large" />
+              <ProgressBar className={styles.progress} value={1} max={1} thickness="large" />
             </div>
           )}
         </div>
       )}
 
       {data?.source === 'events' && (
-        <StatusIconText status="info" className={styles.note}>Showing persisted turn-usage events because AppInsights agent dimensions are not available for this run yet.</StatusIconText>
+        <span className={mergeClasses(styles.note)}>
+          <InfoRegular className={styles.noteIcon} aria-hidden="true" />
+          <Text>Showing persisted turn-usage events because agent dimension data is not yet available for this run.</Text>
+        </span>
       )}
     </div>
   );

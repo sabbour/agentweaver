@@ -1,29 +1,13 @@
-import {
-  Text } from '../copilot-fluent-system';
-import { makeStyles,
-  mergeClasses,
-  tokens,
-} from '../copilot-fluent-system';
+import { makeStyles, mergeClasses, tokens } from '@fluentui/react-components';
 import type { ReactNode } from 'react';
+import { Body, Headline, TitleText } from './ui';
+
 const useStyles = makeStyles({
   sectionHeader: {
     display: 'flex',
     flexDirection: 'column',
     gap: tokens.spacingVerticalXXS,
     minWidth: 0,
-  },
-  sectionTitle: {
-    display: 'block',
-    fontSize: '20px',
-    lineHeight: '28px',
-    fontWeight: tokens.fontWeightSemibold,
-  },
-  sectionSubtitle: {
-    display: 'block',
-    fontSize: '14px',
-    lineHeight: '20px',
-    fontWeight: tokens.fontWeightRegular,
-    color: tokens.colorNeutralForeground3,
   },
   cardHeader: {
     display: 'flex',
@@ -38,26 +22,8 @@ const useStyles = makeStyles({
     gap: tokens.spacingVerticalXXS,
     minWidth: 0,
   },
-  cardTitle: {
-    display: 'block',
-    fontSize: '16px',
-    lineHeight: '22px',
-    fontWeight: tokens.fontWeightSemibold,
-  },
-  cardSubtitle: {
-    display: 'block',
-    fontSize: '14px',
-    lineHeight: '20px',
-    fontWeight: tokens.fontWeightRegular,
-    color: tokens.colorNeutralForeground3,
+  cardSubtitleText: {
     maxWidth: '72ch',
-  },
-  emptyState: {
-    display: 'block',
-    fontSize: '14px',
-    lineHeight: '20px',
-    fontWeight: tokens.fontWeightRegular,
-    color: tokens.colorNeutralForeground2,
   },
 });
 
@@ -74,10 +40,8 @@ export function MetricSectionHeading({
 
   return (
     <div className={mergeClasses(styles.sectionHeader, className)}>
-      <Text as="h2" className={styles.sectionTitle}>
-        {title}
-      </Text>
-      {subtitle ? <Text className={styles.sectionSubtitle}>{subtitle}</Text> : null}
+      <Headline as="h2">{title}</Headline>
+      {subtitle ? <Body tone="muted">{subtitle}</Body> : null}
     </div>
   );
 }
@@ -98,10 +62,8 @@ export function MetricCardHeader({
   return (
     <div className={mergeClasses(styles.cardHeader, className)}>
       <div className={styles.cardHeaderText}>
-        <Text as="h3" className={styles.cardTitle}>
-          {title}
-        </Text>
-        {subtitle ? <Text className={styles.cardSubtitle}>{subtitle}</Text> : null}
+        <TitleText as="h3">{title}</TitleText>
+        {subtitle ? <Body tone="muted" className={styles.cardSubtitleText}>{subtitle}</Body> : null}
       </div>
       {aside}
     </div>
@@ -115,7 +77,5 @@ export function MetricEmptyState({
   children: ReactNode;
   className?: string;
 }) {
-  const styles = useStyles();
-
-  return <Text className={mergeClasses(styles.emptyState, className)}>{children}</Text>;
+  return <Body tone="muted" className={className}>{children}</Body>;
 }

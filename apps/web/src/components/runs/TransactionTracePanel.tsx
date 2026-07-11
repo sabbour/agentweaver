@@ -1,26 +1,54 @@
 import {
   apiClient } from '../../api/apiClient';
-import { AzureEmptyState,
+import {
   Badge,
-  BladeHeader,
-  StatusIconText,
-  Text } from '../../copilot-fluent-system';
+  makeStyles,
+  mergeClasses,
+  Text,
+  tokens,
+} from '@fluentui/react-components';
+import {
+  BotRegular,
+  CheckmarkCircleRegular,
+  ChevronDownRegular,
+  ChevronRightRegular,
+  ErrorCircleRegular,
+  SparkleRegular,
+  WrenchRegular,
+} from '@fluentui/react-icons';
 import { formatModelLabel } from '../../utils/agentIdentity';
 import { AgentIdentity } from '../AgentIdentity';
 import { buildTraceTree,
   collectExpandableKeys,
   findNode } from './traceTree';
-import { makeStyles,
-  mergeClasses,
-  tokens,
-} from '../../copilot-fluent-system';
-import { BotRegular, ChevronDownRegular, ChevronRightRegular, SparkleRegular, WrenchRegular } from '../../copilot-fluent-system';
+import { Body, EmptyState, TitleText } from '../ui';
 import { useEffect, useMemo, useState } from 'react';
 import type { RunTraceDto } from '../../api/types';
 import type { SpanType, TraceNode } from './traceTree';
 import type { ReactNode } from 'react';
+
 const useStyles = makeStyles({
   panel: {
+    backgroundColor: tokens.colorNeutralBackground1,
+    borderRadius: tokens.borderRadiusLarge,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    padding: tokens.spacingVerticalL,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalM,
+    minWidth: 0,
+  },
+  panelHeaderWrapper: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalXXS,
+    minWidth: 0,
+  },
+  panelHeaderTitle: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalS,
+    flexWrap: 'wrap',
     minWidth: 0,
   },
   body: {
@@ -33,6 +61,9 @@ const useStyles = makeStyles({
   },
   tree: {
     minWidth: 0,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalXXS,
   },
   row: {
     width: '100%',
@@ -43,6 +74,9 @@ const useStyles = makeStyles({
     cursor: 'pointer',
     textAlign: 'left',
     minWidth: 0,
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXXS,
     ':hover': {
       backgroundColor: tokens.colorNeutralBackground1Hover,
     },
@@ -83,12 +117,23 @@ const useStyles = makeStyles({
   detail: {
     minWidth: 0,
     height: 'fit-content',
+    backgroundColor: tokens.colorNeutralBackground2,
+    borderRadius: tokens.borderRadiusLarge,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    padding: tokens.spacingVerticalM,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalM,
+  },
+  detailPanelHeader: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalXXS,
+    minWidth: 0,
   },
   detailSectionTitle: {
     fontWeight: tokens.fontWeightSemibold,
     fontSize: tokens.fontSizeBase200,
-    textTransform: 'uppercase',
-    letterSpacing: '0.04em',
     color: tokens.colorNeutralForeground3,
   },
   detailGrid: {
@@ -104,6 +149,21 @@ const useStyles = makeStyles({
   detailValue: {
     fontSize: tokens.fontSizeBase200,
     wordBreak: 'break-word',
+  },
+  statusRow: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXXS,
+  },
+  statusIconSuccess: {
+    fontSize: '14px',
+    flexShrink: 0,
+    color: tokens.colorStatusSuccessForeground1,
+  },
+  statusIconDanger: {
+    fontSize: '14px',
+    flexShrink: 0,
+    color: tokens.colorStatusDangerForeground1,
   },
 });
 
@@ -123,11 +183,11 @@ function typeIcon(type: SpanType) {
   }
 }
 
-function typeBadgeColor(type: SpanType): 'brand' | 'success' | 'informative' {
+function typeBadgeColor(type: SpanType): 'subtle' | 'success' | 'warning' {
   switch (type) {
-    case 'invoke-agent': return 'brand';
+    case 'invoke-agent': return 'subtle';
     case 'llm': return 'success';
-    case 'tool': return 'informative';
+    case 'tool': return 'warning';
   }
 }
 
@@ -178,7 +238,7 @@ function TraceRow({
     <>
       <button
         type="button"
-        className={mergeClasses('azf-row azf-gap-xs', styles.row, isSelected && styles.rowSelected)}
+        className={mergeClasses(styles.row, isSelected && styles.rowSelected)}
         style={{ paddingLeft: `${depth * 20 + 8}px` }}
         onClick={() => onSelect(node)}
         aria-expanded={hasChildren ? isExpanded : undefined}
@@ -250,13 +310,13 @@ function TraceDetail({
 }) {
   const { span, type } = node;
   return (
-    <div className={mergeClasses('azf-surface azf-surface--subtle azf-surface--padding-compact azf-stack azf-gap-m', styles.detail)}>
-      <BladeHeader
-        size="compact"
-        title={typeLabel(type)}
-        subtitle={nodeName(node)}
-        menuLabel={<Badge appearance="tint" color={typeBadgeColor(type)} size="small" icon={typeIcon(type)}>{typeLabel(type)}</Badge>}
-      />
+    <div className={styles.detail}>
+      <div className={styles.detailPanelHeader}>
+        <Badge appearance="tint" color={typeBadgeColor(type)} size="small" icon={typeIcon(type)}>
+          {typeLabel(type)}
+        </Badge>
+        <TitleText as="h3">{nodeName(node)}</TitleText>
+      </div>
       <div>
         <Text className={styles.detailSectionTitle}>Generative AI properties</Text>
         <div className={styles.detailGrid}>
@@ -265,9 +325,13 @@ function TraceDetail({
           <DetailRow
             label="Status"
             value={(
-              <StatusIconText status={span.success ? 'success' : 'danger'}>
-                {span.success ? 'Success' : (span.resultCode?.trim() || 'Failed')}
-              </StatusIconText>
+              <span className={styles.statusRow}>
+                {span.success
+                  ? <CheckmarkCircleRegular className={styles.statusIconSuccess} aria-hidden="true" />
+                  : <ErrorCircleRegular className={styles.statusIconDanger} aria-hidden="true" />
+                }
+                <Text>{span.success ? 'Success' : (span.resultCode?.trim() || 'Failed')}</Text>
+              </span>
             )}
             styles={styles}
           />
@@ -281,7 +345,7 @@ function TraceDetail({
         </div>
       )}
       <div>
-        <Text className={styles.detailSectionTitle}>Resource properties</Text>
+        <Text className={styles.detailSectionTitle}>Properties</Text>
         <div className={styles.detailGrid}>
           {type === 'tool' ? (
             <DetailRow label="Tool" value={span.toolName ?? span.name} styles={styles} />
@@ -301,7 +365,7 @@ function TraceDetail({
 export function TransactionTracePanel({
   runId,
   title = 'Transaction trace',
-  subtitle = 'End-to-end agent, LLM and tool spans from AppInsights distributed traces.',
+  subtitle = 'End-to-end agent, LLM, and tool spans from distributed traces.',
   roleByAgent,
 }: {
   runId: string;
@@ -343,18 +407,19 @@ export function TransactionTracePanel({
   }
 
   return (
-    <div className={mergeClasses('azf-surface azf-surface--panel azf-surface--padding-comfortable azf-stack azf-gap-m', styles.panel)}>
-      <BladeHeader
-        size="compact"
-        title={title}
-        subtitle={subtitle}
-        menuLabel={<Badge appearance="outline" size="small">AppInsights</Badge>}
-      />
+    <div className={styles.panel}>
+      <div className={styles.panelHeaderWrapper}>
+        <div className={styles.panelHeaderTitle}>
+          <TitleText as="h2">{title}</TitleText>
+          <Badge appearance="outline" size="small">Distributed traces</Badge>
+        </div>
+        <Body tone="muted">{subtitle}</Body>
+      </div>
       {tree.length === 0 ? (
-        <AzureEmptyState compact title="No AppInsights trace data available for this run yet." />
+        <EmptyState title="No trace data available for this run yet." />
       ) : (
         <div className={styles.body}>
-          <div className={mergeClasses('azf-stack azf-gap-xs', styles.tree)}>
+          <div className={styles.tree}>
             {tree.map((node) => (
               <TraceRow
                 key={node.key}
@@ -372,8 +437,8 @@ export function TransactionTracePanel({
           {selectedNode ? (
             <TraceDetail node={selectedNode} roleByAgent={roleByAgent} styles={styles} />
           ) : (
-            <div className={mergeClasses('azf-surface azf-surface--subtle azf-surface--padding-compact', styles.detail)}>
-              <AzureEmptyState compact title="Select a span to view its Generative AI properties." />
+            <div className={styles.detail}>
+              <EmptyState title="Select a span to view its details." />
             </div>
           )}
         </div>

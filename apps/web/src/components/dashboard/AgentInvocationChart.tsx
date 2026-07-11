@@ -1,9 +1,29 @@
-import {
-  AzureEmptyState,
-  BladeHeader } from '../../copilot-fluent-system';
-import { tokens,
-} from '../../copilot-fluent-system';
+import { makeStyles, tokens } from '@fluentui/react-components';
+import { Body, EmptyState, TitleText } from '../ui';
 import type { DailyInvocationPointDto } from '../../api/types';
+
+const CHART_LINE = '#635c57';
+const CHART_FILL = 'rgba(99, 92, 87, 0.12)';
+
+const useStyles = makeStyles({
+  panel: {
+    backgroundColor: tokens.colorNeutralBackground1,
+    borderRadius: tokens.borderRadiusLarge,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    padding: tokens.spacingVerticalL,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalM,
+    minWidth: 0,
+  },
+  header: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalXXS,
+    minWidth: 0,
+  },
+});
+
 function LineChart({ points, label }: { points: DailyInvocationPointDto[]; label: string }) {
   const width = 720;
   const height = 180;
@@ -36,8 +56,8 @@ function LineChart({ points, label }: { points: DailyInvocationPointDto[]; label
       <text x={pad.left + innerW} y={pad.top + innerH + 16} fontSize={10} fill={tokens.colorNeutralForeground3} textAnchor="end">
         {points.at(-1)?.date ?? ''}
       </text>
-      <path d={`${path} L${x(points.length - 1)},${pad.top + innerH} L${x(0)},${pad.top + innerH} Z`} fill="rgba(12, 124, 243, 0.12)" />
-      <path d={path} fill="none" stroke={tokens.colorBrandForeground1} strokeWidth={2} />
+      <path d={`${path} L${x(points.length - 1)},${pad.top + innerH} L${x(0)},${pad.top + innerH} Z`} fill={CHART_FILL} />
+      <path d={path} fill="none" stroke={CHART_LINE} strokeWidth={2} />
     </svg>
   );
 }
@@ -53,13 +73,17 @@ export function AgentInvocationChart({
   subtitle?: string;
   emptyLabel?: string;
 }) {
+  const styles = useStyles();
   const series = points ?? [];
 
   return (
-    <div className="azf-surface azf-surface--panel azf-surface--padding-comfortable azf-stack azf-gap-m">
-      <BladeHeader size="compact" title={title} subtitle={subtitle} />
+    <div className={styles.panel}>
+      <div className={styles.header}>
+        <TitleText as="h2">{title}</TitleText>
+        <Body tone="muted">{subtitle}</Body>
+      </div>
       {series.length === 0 ? (
-        <AzureEmptyState compact title={emptyLabel} />
+        <EmptyState title={emptyLabel} />
       ) : (
         <LineChart points={series} label={title} />
       )}
