@@ -144,7 +144,7 @@ public sealed class CollectiveAssemblyPipeline : ICollectiveAssemblyPipeline
             SubmittingUser: request.SubmittingUser);
 
         var decision = await rubberduck.HandleAsync(input, NoOpWorkflowContext.Instance, ct).ConfigureAwait(false);
-        return new CollectiveGateDecision(decision.Approved, decision.RequestChanges, decision.Feedback);
+        return new CollectiveGateDecision(decision.Approved, decision.RequestChanges, decision.Feedback, decision.TargetFiles);
     }
 
     public async Task<CollectiveGateDecision> RunBuildTestAsync(CollectiveBuildTestRequest request, CancellationToken ct)
@@ -234,7 +234,7 @@ public sealed class CollectiveAssemblyPipeline : ICollectiveAssemblyPipeline
             var decision = await buildTest.HandleAsync(input, NoOpWorkflowContext.Instance, ct).ConfigureAwait(false);
             // spec-006 §3.3: do NOT remove the worktree here — the deterministic PreviewStep needs it as
             // its cwd. All worktree/pod teardown is deferred to CleanupBuildTestResourcesAsync.
-            return new CollectiveGateDecision(decision.Approved, decision.RequestChanges, decision.Feedback);
+            return new CollectiveGateDecision(decision.Approved, decision.RequestChanges, decision.Feedback, decision.TargetFiles);
         }
         catch (WorkflowAgentInfrastructureException ex)
         {

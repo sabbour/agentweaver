@@ -287,10 +287,11 @@ public sealed class CoordinatorAssemblyStore
 
     /// <summary>
     /// UNIFIED AUTONOMOUS STEERING (Fix-B, change #4) — atomically increments the persisted per-plan
-    /// HUMAN-review round-trip counter and returns the NEW value. Persisted (not in-memory) so the
-    /// source==human-review budget-reset + max-round-trip backstop is cross-replica/crash-safe. The
-    /// increment and read happen in ONE transaction so concurrent human decisions cannot observe a
-    /// torn/duplicate count.
+    /// HUMAN-review round-trip counter and returns the NEW value. This counter is TELEMETRY ONLY; it
+    /// gates nothing — a human request-changes UNCONDITIONALLY resets the autonomous steering budget
+    /// (there is no human-review round-trip cap). Persisted (not in-memory) so the count is
+    /// cross-replica/crash-safe. The increment and read happen in ONE transaction so concurrent human
+    /// decisions cannot observe a torn/duplicate count.
     /// </summary>
     public async Task<int> IncrementHumanReviewRoundTripAsync(int workPlanId, CancellationToken ct)
     {

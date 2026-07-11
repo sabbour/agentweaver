@@ -75,7 +75,13 @@ public sealed record WorkflowReviewDecision(
     /// <summary>Reviewer's feedback text sent back to the agent for the next iteration.</summary>
     string? Feedback = null,
     /// <summary>The human reviewer that approved the irreversible action, when applicable.</summary>
-    string? ReviewedBy = null);
+    string? ReviewedBy = null,
+    /// <summary>
+    /// #223 — OPTIONAL structured list of repo-relative files the reviewer implicated (parsed from a
+    /// dedicated <c>TARGET_FILES:</c> directive line, never from prose). Lets the coordinator scope a
+    /// request-changes to the subtasks that actually touched those files instead of every contributor.
+    /// Null/empty when the reviewer named no files.</summary>
+    IReadOnlyList<string>? TargetFiles = null);
 
 /// <summary>Input to the merge executor.</summary>
 public sealed record MergeInput(

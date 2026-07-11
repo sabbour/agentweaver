@@ -363,6 +363,14 @@ public static class EventTypes
     /// back to the coordinator). Payload: { workPlanId, reviewer, redispatchedSubtaskIds, inferredFiles }.</summary>
     public const string CoordinatorAssemblyChangesRequested = "coordinator.assembly_changes_requested";
 
+    /// <summary>
+    /// #223 — the implicated-subtask scoping for a request-changes fell back to the broad
+    /// all-contributors set instead of a narrowed reviewer-named subset. Emitted so a silent reversion
+    /// to broad reset/lockout is observable. Payload: { workPlanId, source, reviewer, reason
+    /// (no_target_files_field | target_files_matched_nothing), namedFiles, touchedFiles, contributorIds }.</summary>
+    public const string CoordinatorAssemblyImplicatedScopeFallback = "coordinator.assembly_implicated_scope_fallback";
+
+
     /// <summary>The single collective merge of the integration branch into origin began.
     /// Payload: { workPlanId, integrationBranch }.</summary>
     public const string CoordinatorAssemblyMergeStarted = "coordinator.assembly_merge_started";

@@ -1409,25 +1409,32 @@ Request:
 
 | Field | Type | Required | Notes |
 | --- | --- | --- | --- |
-| `kind` | string | Yes | `stop`, `redirect`, or `amend`. Pause is not supported in Phase 2. |
-| `targetChildRunId` | string | No | The child run to steer; omit to broadcast to every active child. |
-| `instruction` | string | Yes | Direction relayed to the targeted subagent(s). |
+| `kind` | string | Yes | `stop`, `send`, `redirect`, or `amend`. Pause is not supported in Phase 2. |
+| `targetChildRunId` | string | No | The child run to steer; omit to broadcast to every active child. At the assembly review gate (see below) this instead narrows the implicated-subtask scope. |
+| `instruction` | string | Yes | Direction relayed to the targeted subagent(s). Optional for `send`. |
 
-Response `202 Accepted` with the created directive:
+Response `201 Created` with the created directive:
 
 ```json
 {
   "directiveId": "d4c3b2a1-...",
   "kind": "redirect",
   "targetChildRunId": "7c1f...",
-  "status": "pending",
+  "status": "queued",
   "instruction": "Use the existing session store instead of adding a new table"
 }
 ```
 
-A `stop` takes effect immediately: it cancels the targeted child run's in-flight turn. A `redirect` or `amend` takes effect at the targeted subagent's next turn boundary, without restarting the run — it is queued and applied when the child's current turn completes (or when it next suspends at a gate). The directive's progress is observable as `coordinator.steering` events (`pending -> queued -> relayed -> applied`) on the coordinator run stream.
+A `stop` takes effect immediately: it cancels the targeted child run's in-flight turn. A `redirect` or `amend` takes effect at the targeted subagent's next turn boundary, without restarting the run — it is queued and applied when the child's current turn completes (or when it next suspends at a gate). The directive's progress is observable as `coordinator.steering` events (`pending -> queued -> relayed -> applied`, plus `deferred` at the review gate — see below) on the coordinator run stream.
 
-`400 Bad Request` when `id` is not a valid run id, `kind` is not one of `stop`/`redirect`/`amend`, or `instruction` is missing.
+**Steering at the assembly review gate (#226).** When the run is parked at the collective human-review gate (`run.status == awaiting_review`, `coordinator_steerable == true`), `redirect`/`amend`/`send` are intercepted and delivered to the parked assembly loop instead of the child-turn queue (previously they returned `queued` but were silently dropped):
+
+- `redirect` / `amend` → delivered as a request-changes review decision through the **same** mechanism as [`POST /assembly/review`](#post-apirunscoordinatorrunidassemblyreview) with `request_changes: true` — the parked loop re-dispatches the implicated subtasks (`#223` file-scoped implication + transitive dependents) and **unconditionally** resets the steering budget. With no target files the scope defaults to all contributors; set `targetChildRunId` to narrow to that subtask ∪ its co-touching subtasks. Settles `relayed` (or `deferred`, below).
+- `send` → an advisory note on the coordinator timeline; the gate stays armed with no decision and no budget reset. Settles `applied`.
+
+In all cases the directive reaches a definite terminal status and is **never** left silently `queued`. When the review gate is armed on a **different** API replica, the decision is durably persisted for the owning replica's poller to drain: the directive status is `deferred` and the endpoint returns **`202 Accepted`** instead of `201 Created` (mirroring the `/assembly/review` deferred response).
+
+`400 Bad Request` when `id` is not a valid run id, `kind` is not one of `stop`/`send`/`redirect`/`amend`, or `instruction` is missing (required for `redirect`/`amend`).
 `403 Forbidden` when the caller does not own the run.
 `404 Not Found` when the run does not exist.
 `409 Conflict` with `error: "run_not_active"` when no live coordinator run is registered for the id.
@@ -1453,13 +1460,13 @@ Request:
 | --- | --- | --- | --- |
 | `approved` | bool | Yes | `true` continues to the ONE collective merge → ONE collective scribe → `complete`. |
 | `request_changes` | bool | No | When `true` (and `approved` is `false`), the coordinator re-dispatches the affected children rather than declining. |
-| `feedback` | string | No | Free-text reviewer feedback; path-like tokens are parsed to infer which children to redo. |
-| `target_files` | string[] | No | Explicit list of files the changes should target; augments the tokens parsed from `feedback`. |
+| `feedback` | string | No | Free-text reviewer feedback, handed to the revising agent(s). It is **not** parsed for file paths — use `target_files` for the implicated-file hint. |
+| `target_files` | string[] | No | Explicit list of the repo-relative files your changes should target. Used as the structured implicated-file hint: the coordinator reverse-maps it onto the subtasks that committed those files (`AssemblyPlanning.ScopeImplicatedSubtasks`), never prose-scraped from `feedback`. If omitted or unmatched, the re-dispatch falls back to all contributors. |
 
 **Decision routing**
 
 - **Approve** (`approved: true`) → the pipeline merges the integration branch into the originating branch and runs the collective scribe, emitting `coordinator.assembly_merge_*`, `coordinator.assembly_scribe_*`, then `coordinator.assembly_completed`; the work plan reaches `complete`.
-- **Request changes** (`approved: false`, `request_changes: true`) → the coordinator infers the affected children from `target_files` ∪ path tokens in `feedback`, intersects them with each child's persisted touched-files, expands to include dependents, resets those subtasks to `pending` (leaving the rest intact), returns the plan to `dispatching`, and re-dispatches. If no file can be inferred or no child matches, it falls back to re-dispatching **all** children. Emits `coordinator.assembly_changes_requested`.
+- **Request changes** (`approved: false`, `request_changes: true`) → the coordinator scopes the re-dispatch to the subtasks that committed one of your `target_files` (the **implicated** set) plus their transitive dependents, resets those subtasks to `pending` (leaving the rest intact), returns the plan to `dispatching`, and re-dispatches. If `target_files` is omitted or matches no subtask, it falls back to re-dispatching **all** children and emits `coordinator.assembly_implicated_scope_fallback`. Emits `coordinator.assembly_changes_requested`. Because a human request-changes is a supervised action, it also **unconditionally** resets the autonomous steering budget (there is no round-trip cap).
 - **Decline** (`approved: false`, `request_changes: false`) → terminal `assembly_declined`; the coordinator emits `coordinator.assembly_declined` (`reason`, `reviewer`), the work plan moves to `assembly_declined`, the run ends `declined`, and the coordinator stream closes.
 
 When the pipeline arms this gate it emits `coordinator.assembly_review_requested` on the coordinator stream with `integrationBranch`, `treeHash` (the assembled integration tree hash), `includedSubtaskIds` (which subtasks the assembled output covers), `raiSafetyFlagged`, and `hasChanges` — the UI subscribes to this to know a collective human review is being requested and to render the assembled output. If the assembly background task hits an unexpected fault it emits `coordinator.assembly_failed` (`reason`, `phase`) and the run ends `failed` with `result: "assembly_error: &lt;message&gt;"`.

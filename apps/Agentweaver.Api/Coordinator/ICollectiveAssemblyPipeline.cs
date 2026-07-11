@@ -91,7 +91,15 @@ public sealed record CollectiveBuildTestRequest(
     string? AgentId = null);
 
 /// <summary>Normalized pass/revise decision from an authored collective assembly gate.</summary>
-public sealed record CollectiveGateDecision(bool Approved, bool RequestChanges, string? Feedback);
+/// <param name="TargetFiles">
+/// #223 — the reviewer's OPTIONAL structured implicated-file hint (repo-relative diff paths it
+/// actually saw). Reverse-mapped to implicated subtasks deterministically by the coordinator; never
+/// inferred from prose. Null/empty ⇒ the coordinator fails safe to the whole contributor set.</param>
+public sealed record CollectiveGateDecision(
+    bool Approved,
+    bool RequestChanges,
+    string? Feedback,
+    IReadOnlyList<string>? TargetFiles = null);
 
 public sealed class CollectiveBuildTestInfrastructureException : Exception
 {

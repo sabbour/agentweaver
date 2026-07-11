@@ -308,6 +308,7 @@ public sealed class ConsoleTurnService(
             targetChildRunId: null,
             instruction,
             caller.User,
+            caller.GitHubLogin,
             ct).ConfigureAwait(false);
 
         var projectId = project?.Id.ToString() ?? run.ProjectId?.ToString();

@@ -237,9 +237,17 @@ app.MapPost("/api/runs/{coordinatorRunId}/steer", async (
             string.IsNullOrWhiteSpace(request.TargetChildRunId) ? null : request.TargetChildRunId,
             request.Instruction ?? string.Empty,
             caller.User,
+            caller.GitHubLogin,
             ct);
 
-        return Results.Json(MapSteeringDirective(directive), statusCode: StatusCodes.Status201Created);
+        // #226: a redirect/amend delivered to the assembly review gate on a NON-owning replica is durably
+        // deferred (the owning pod's poller drains it). Report it honestly as 202 Accepted, mirroring the
+        // /assembly/review deferred response, instead of a 201 that implies immediate local handling.
+        var statusCode = directive.Status == SteeringStatus.Deferred
+            ? StatusCodes.Status202Accepted
+            : StatusCodes.Status201Created;
+
+        return Results.Json(MapSteeringDirective(directive), statusCode: statusCode);
     }
     catch (SteeringValidationException ex)
     {
@@ -291,39 +299,26 @@ app.MapPost("/api/runs/{coordinatorRunId}/assembly/review", async (
         TargetFiles: request.TargetFiles,
         Reviewer: caller.User);
 
-    var pending = await CoordinatorAssemblyReviewPersistence.ValidatePendingRequestAsync(
+    var delivery = await CoordinatorAssemblyReviewPersistence.DeliverDecisionAsync(
         scopeFactory,
+        reviewGate,
         coordinatorRunId,
+        decision,
         caller.User,
         caller.GitHubLogin,
         ct).ConfigureAwait(false);
-    if (pending == AssemblyReviewPendingDecisionResult.Forbidden)
-        return ForbiddenError();
-    if (pending != AssemblyReviewPendingDecisionResult.Pending)
-        return NoAssemblyReviewPending();
 
-    var result = reviewGate.TrySubmit(coordinatorRunId, caller.User, decision, caller.GitHubLogin);
-    if (result == Agentweaver.Api.Coordinator.AssemblyReviewSubmitResult.Accepted)
-    {
-        await PersistAssemblyReviewDecisionAsync(
-            coordinatorRunId, decision, scopeFactory, CancellationToken.None).ConfigureAwait(false);
-    }
-    else if (result == Agentweaver.Api.Coordinator.AssemblyReviewSubmitResult.NotArmed)
-    {
-        var deferred = await CoordinatorAssemblyReviewPersistence.PersistDecisionForPendingRequestAsync(
-            scopeFactory,
-            coordinatorRunId,
-            decision,
-            caller.User,
-            caller.GitHubLogin,
-            CancellationToken.None).ConfigureAwait(false);
+    logger.LogInformation(
+        "Assembly review decision: {Decision}. RunId={RunId} Reviewer={Reviewer} Result={Result}",
+        request.Approved ? "approved" : (request.RequestChanges ? "request-changes" : "declined"),
+        coordinatorRunId, caller.User, delivery);
 
-        if (deferred == AssemblyReviewPendingDecisionResult.Persisted)
-        {
-            logger.LogInformation(
-                "Assembly review decision deferred durably. RunId={RunId} Reviewer={Reviewer}",
-                coordinatorRunId, caller.User);
-            return Results.Json(
+    return delivery switch
+    {
+        AssemblyReviewDeliveryResult.Accepted =>
+            Results.Json(new { runId = coordinatorRunId, accepted = true, deferred = false }),
+        AssemblyReviewDeliveryResult.Deferred =>
+            Results.Json(
                 new
                 {
                     runId = coordinatorRunId,
@@ -331,25 +326,10 @@ app.MapPost("/api/runs/{coordinatorRunId}/assembly/review", async (
                     deferred = true,
                     message = "The active coordinator will consume this review decision shortly.",
                 },
-                statusCode: StatusCodes.Status202Accepted);
-        }
-
-        if (deferred == AssemblyReviewPendingDecisionResult.Forbidden)
-            return ForbiddenError();
-    }
-
-    logger.LogInformation(
-        "Assembly review decision: {Decision}. RunId={RunId} Reviewer={Reviewer} Result={Result}",
-        request.Approved ? "approved" : (request.RequestChanges ? "request-changes" : "declined"),
-        coordinatorRunId, caller.User, result);
-
-    return result switch
-    {
-        Agentweaver.Api.Coordinator.AssemblyReviewSubmitResult.Accepted =>
-            Results.Json(new { runId = coordinatorRunId, accepted = true, deferred = false }),
-        Agentweaver.Api.Coordinator.AssemblyReviewSubmitResult.Forbidden =>
-            ForbiddenError(),
-        // NotArmed: no collective review is currently awaited (not yet at the gate, or already consumed).
+                statusCode: StatusCodes.Status202Accepted),
+        AssemblyReviewDeliveryResult.Forbidden => ForbiddenError(),
+        // NotPending / AlreadySubmitted: no collective review is currently awaited (not yet at the gate,
+        // or already consumed).
         _ => NoAssemblyReviewPending(),
     };
 });
@@ -613,16 +593,6 @@ static IResult NoAssemblyReviewPending() =>
     ConflictError(
         "no_assembly_review_pending",
         "No active assembly review is awaiting a decision for this coordinator run.");
-
-static async Task PersistAssemblyReviewDecisionAsync(
-    string coordinatorRunId,
-    AssemblyReviewDecision decision,
-    IServiceScopeFactory scopeFactory,
-    CancellationToken ct)
-{
-    await CoordinatorAssemblyReviewPersistence.PersistDecisionAsync(
-        scopeFactory, coordinatorRunId, decision, ct).ConfigureAwait(false);
-}
 
 // Maps a persisted coordinator OutcomeSpec to the web-client-facing camelCase response.
 // Server state is rendered as-is (Principle III); the web panel parses scope/assumptions/

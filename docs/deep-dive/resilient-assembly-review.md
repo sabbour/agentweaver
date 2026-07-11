@@ -47,14 +47,12 @@ flowchart TD
     HumanActs{{Human reviews\nassembled work}}
     Approve[Approve → merge]
     Decline[Decline → terminal\nassembly_declined]
-    HumanChanges[Human request-changes\nBudget RESET\nround-trip ++ ]
-    MaxRoundTrips{Round-trips\n≤ 3?}
-    Park[Park at review\n autonomy paused]
+    HumanChanges[Human request-changes\nBudget ALWAYS reset\nround-trip ++ = telemetry only]
     Done([assembly_complete])
 
     AS --> Gate
     Gate -- advisory/steer\nnon-rejection --> InPlace
-    Gate -- REJECTION\nauthor locked out --> LockoutDispatch
+    Gate -- REJECTION\nimplicated authors locked out\ndependents rebuilt, no lockout --> LockoutDispatch
     Gate -- in-place terminal failure --> FreshDispatch
     InPlace --> BudgetOK
     FreshDispatch --> BudgetOK
@@ -64,9 +62,7 @@ flowchart TD
     Escalate --> HumanActs
     HumanActs --> Approve --> Done
     HumanActs --> Decline
-    HumanActs --> HumanChanges --> MaxRoundTrips
-    MaxRoundTrips -- yes → reset budget --> Gate
-    MaxRoundTrips -- no → park --> Park
+    HumanActs --> HumanChanges --> Gate
 ```
 
 ### Fix-B: budget-exhausted escalation (the headline change)
@@ -85,7 +81,8 @@ calls `EscalateToHumanReviewAsync`, which mirrors the existing `human-review` ga
 3. **Settle the directive** — `MarkDirectiveAppliedAsync` is called only after the review request is
    durably open. The human then owns the loop; the directive is never blocked on how long the human takes.
 4. **Live-await** — `AwaitReviewDecisionAsync` → `ApplyReviewDecisionAsync`. Approve → merge → complete.
-   Decline → `assembly_declined` terminal. Request-changes → budget reset + fresh steering loop (below).
+   Decline → `assembly_declined` terminal. Request-changes → **unconditional** budget reset + fresh steering
+   loop (below).
 
 The emit sequence:
 - `coordinator.steering_decision { decision="proceed", escalation="human_review" }`
@@ -99,21 +96,65 @@ wait for external input." `InReview` is the state whose full machinery (gate arm
 crash recovery) is built for "a human must decide now." Reusing it is the root-cause fix; patching
 `AssemblyBlocked` recovery would be symptom-plastering.
 
-### Human-round-trip budget reset and backstop
+### Human request-changes always resets the steering budget (no round-trip cap)
 
-When the human submits request-changes after an escalation, `ApplyReviewDecisionAsync` increments
-`WorkPlan.HumanReviewRoundTrips` and, while the count is within the cap (default 3), calls
-`CoordinatorSteeringDecider.ResetSteeringBudgetAsync`. This atomically zeros `SteeringIterations` and
-the target subtasks' `RecoveryAttempts` (guarded CAS, single transaction) so autonomy can converge
-again under the human's specific feedback. Without the reset, the human's very first steer would
-immediately re-hit `Proceed` (a livelock). A visible `coordinator.steering` event records the round-trip
-and reset decision for auditability.
+When the human submits request-changes after an escalation, `RouteAssemblyGateThroughSteeringAsync`
+(source `human-review`) **unconditionally** resets the autonomous steering budget via
+`CoordinatorSteeringDecider.ResetSteeringBudgetAsync` — there is **no** round-trip cap. The reset atomically
+zeros the plan's `SteeringIterations` and the re-dispatched subtasks' `RecoveryAttempts` (guarded CAS,
+single transaction) so autonomy can converge again under the human's specific feedback. Without the reset,
+the human's very first steer would immediately re-hit `Proceed` (a livelock).
 
-Once `HumanReviewRoundTrips` exceeds the cap, the reset is skipped and the run re-parks at review
-(autonomy paused, gate stays open) — never a terminal, never a loop.
+**Why the cap was dropped (`DefaultMaxHumanReviewRoundTrips` removed).** A human request-changes is a
+supervised, deliberate action. The old cap (default 3) silently stopped honoring explicit human requests
+once the count was exceeded: the run re-parked at review and ignored the human's guidance — a dead-end. Each
+granted round is still bounded by the **autonomous** budget (`DefaultMaxPlanSteeringIterations`), which is
+exactly what bounds the *unsupervised* loop; only the *human*-round-trip ceiling was removed.
 
-**Loop-prevention invariant:** autonomous gates can never call `ResetSteeringBudgetAsync` on themselves.
-Only `source == human-review` directives trigger the reset.
+`WorkPlan.HumanReviewRoundTrips` is still incremented (`IncrementHumanReviewRoundTripAsync`) and surfaced on
+the `coordinator.steering` event (`humanReviewRoundTrip`), but purely as a telemetry/observability signal —
+it no longer gates anything.
+
+**Loop-prevention invariant:** autonomous gates (rubberduck/rai/build-test/agent) can never call
+`ResetSteeringBudgetAsync` on themselves. Only `source == human-review` directives trigger the reset.
+
+### Operator steering at the review gate (#226)
+
+While a run is parked at the assembly human-review gate (`run.status == awaiting_review`,
+`coordinator_steerable == true`), an operator can talk to the coordinator with
+`POST /api/runs/{id}/steer`. Before #226, a `redirect`/`amend` sent there returned `201` with
+`status: queued` but **nothing drained it** — the parked assembly loop polls the review gate, not the
+steering queue, so the directive was silently dropped. That contradicted the documented `coordinator_steerable`
+promise that operators can steer while the gate is open (`Dtos.cs:174-176`).
+
+#226 intercepts these verbs in `CoordinatorSteeringService.SteerAsync` **before** the normal resume/queue
+fork (`TryDeliverAtAssemblyReviewGateAsync`), and delivers the human's intent through the *same* mechanism
+`POST /assembly/review {request_changes}` uses:
+
+- **redirect / amend** → translated into an `AssemblyReviewDecision { RequestChanges = true, Feedback =
+  instruction }` and delivered via `CoordinatorAssemblyReviewPersistence.DeliverDecisionAsync`. The parked
+  loop wakes and owns `RouteAssemblyGateThroughSteeringAsync` as the single writer, reusing the #223
+  file-scoped implication + transitive dependents and the cap-drop **unconditional** steering-budget reset.
+  `amend` maps to the same `request_changes`; the decider still prefers in-place when resumable (it is not
+  force-pinned to in-place). The directive settles `relayed` (delivered into the live gate on this pod) —
+  **never** `queued`.
+- **Scoping** — a bare redirect/amend carries no target files, so it defaults to the broad
+  all-contributors fallback (identical to `/assembly/review` with no `target_files` → `ScopeFallbackNoField`,
+  emitting `coordinator.assembly_implicated_scope_fallback`). Operators can **optionally narrow** by setting
+  `targetChildRunId`: `ResolveTargetFilesForChildAsync` resolves that subtask's committed files and feeds
+  them through the same `AssemblyPlanning.ScopeImplicatedSubtasks` reverse-map, scoping to that subtask ∪
+  any co-touching subtasks. Prose is never parsed for files or subtask ids.
+- **send** at the gate carries no change request, so it is delivered as an **advisory** note on the
+  coordinator timeline (`DeliverAdvisorySendAtReviewGateAsync`): the gate stays armed, no budget reset, no
+  decision; the directive settles `applied` — never left `queued` forever.
+- **Cross-replica** — if the review gate is armed on a *different* API replica, the decision is durably
+  persisted (`SteeringStatus.Deferred`) for the owning pod's poller to drain; the directive settles
+  `deferred` and the `/steer` endpoint returns **HTTP 202** (mirroring `/assembly/review`'s deferred `202`)
+  instead of `201`.
+
+**B3 single-writer invariant:** the HTTP thread only *delivers* the decision; it never runs
+`RouteAssemblyGateThroughSteeringAsync` itself — the parked assembly loop remains the single writer of the
+subtask/work-plan rows.
 
 ### Fix-A: reliable child-turn terminal emission
 
@@ -158,12 +199,63 @@ shared between `CoordinatorAssemblyService` and `RunOrchestrator`.
 The fresh-dispatch path (`ConsciousDispatchFreshFallbackAsync`) also carries a pointer to the prior child's
 integration-branch diff, so the new agent builds on prior committed work instead of starting blank.
 
+### Scoped re-dispatch: implicated subtasks vs. transitive dependents (#223)
+
+Before #223, an assembly-gate request-changes (from any of rubberduck / rai / build-test / human) reset —
+and locked out — **every** subtask that had touched a file: the coordinator used the raw
+`touchedFilesBySubtask.Keys`. On a non-trivial plan this locked out every author at once, exhausting the
+roster and deadlocking the whole run (an all-agent lockout). #223 replaces that blast radius with a
+structured, reviewer-scoped selection.
+
+**The reviewer emits a structured hint.** A Rubberduck or Build & Test reviewer returning a REVISE verdict
+may also write a dedicated `TARGET_FILES:` directive line listing the repo-relative paths it actually
+implicated. `ReviewTargetFiles.Parse` (called in `RubberduckTurnExecutor` / `BuildTestTurnExecutor`) parses
+that line into `AssemblyReviewDecision.TargetFiles`. This is machine-readable **structured output** — a line
+the reviewer is explicitly instructed to write — **never** natural-language prose scraping. The directive
+line is stripped from the human-facing feedback (`ReviewTargetFiles.IsDirectiveLine`).
+
+**The coordinator scopes to the implicated subtasks.** `AssemblyPlanning.ScopeImplicatedSubtasks`
+reverse-maps the `TARGET_FILES` hint onto only the assembly-eligible subtasks that actually committed one of
+those files — a prose/PRD/UX subtask that committed only unnamed files is **excluded**. Then
+`AssemblyPlanning.TransitiveDependents` sweeps every subtask that depends, directly or transitively, on an
+implicated subtask (the `(SubtaskId, DependsOnSubtaskId)` edges walked in reverse).
+
+**Two distinct sets, used differently:**
+
+| Set | Members | Author lockout? | Why |
+|---|---|---|---|
+| **Implicated** (lockout set) | reviewer-named subtasks only (`ScopeImplicatedSubtasks`) | **Yes** | only these authors produced a rejected artifact |
+| **Re-dispatch** set | implicated ∪ transitive dependents (`implicated.Concat(TransitiveDependents)`) | dependents: **No** | a dependent did nothing wrong but must rebuild against the revised contract |
+
+Locking out a blameless dependent's author would re-create the very roster-exhaustion deadlock #223 exists
+to prevent, so dependents are re-dispatched (`RedispatchDependentsAsync`) **without** lockout — and only if
+they already reached `assemble_ready`/`completed` (a still-running dependent needs no reset, keeping crash
+re-drives idempotent).
+
+**Fail-safe fallback (observable).** The structured hint is optional. When it is missing, or present but
+matching nothing, `ScopeImplicatedSubtasks` returns the **whole contributor set** (a request-changes must
+always reset *something*) and sets an out-param so the reversion is visible rather than silent. The
+coordinator then emits `coordinator.assembly_implicated_scope_fallback` (`EmitImplicatedScopeFallback`) with
+the reason:
+
+- `no_target_files_field` — the reviewer emitted no `TARGET_FILES:` directive at all.
+- `target_files_matched_nothing` — a directive was present but reverse-mapped to no subtask.
+
+Both branches fall back to the prior broad touched-files behavior — fail-safe, just observable.
+
+Both the live steering path (`RouteAssemblyGateThroughSteeringAsync`) and the conscious fresh-dispatch
+executor (`RequestChangesAsync`) use the **same** `ScopeImplicatedSubtasks` + `TransitiveDependents` helpers,
+and the persisted steering directive carries the implicated set so a crash-recovery re-drive recomputes an
+identical re-dispatch closure from the same plan edges.
+
 ### Strict reviewer-rejection lockout
 
-A **rejection** (any gate source with severity `request-changes`) triggers the lockout protocol:
+A **rejection** (any gate source with severity `request-changes`) triggers the lockout protocol, scoped to
+the **implicated** subtasks only (#223 — the reviewer-named set, never every file-toucher):
 
-1. The current author is atomically appended to `Subtask.LockedOutAgents` (a dormant column that existed
-   in the schema since the initial migration but was never read/written; no new migration needed).
+1. For each implicated subtask, the current author is atomically appended to `Subtask.LockedOutAgents` (a
+   dormant column that existed in the schema since the initial migration but was never read/written; no new
+   migration needed).
 2. The coordinator selects a DIFFERENT eligible agent — `roster \ LockedOutAgents` via
    `CoordinatorOrchestratorExecutor.ResolveRoster` + `SelectRosterMember`.
 3. The revision is dispatched via `RunOrchestrator.StartChildRevisionHandoffAsync`: the new agent
@@ -172,6 +264,9 @@ A **rejection** (any gate source with severity `request-changes`) triggers the l
    minted — the rotated agent never inherits the locked-out author's session identity.
 4. The re-dispatched child honors the FIX 2 terminal-emission invariant identically (same conditional
    edge routing; same one-terminal guarantee).
+
+The implicated subtasks' **transitive dependents** are additionally re-dispatched to rebuild against the
+revised contract, but their authors are **never** locked out (#223).
 
 Deadlock (all eligible agents locked out) or budget exhaustion on the lockout path routes to the
 Fix-B human-review escalation — never to a terminal.
@@ -186,9 +281,17 @@ Fix-B human-review escalation — never to a terminal.
 |---|---|
 | Budget-exhausted escalation, `EscalateToHumanReviewAsync`, `ParkAtHumanReviewAsync` | `apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyService.cs` |
 | `BuildAccumulatedGateFeedbackAsync`, human round-trip wiring, `IsEscalationDurablyOpenAsync` | `apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyService.cs` |
+| #223 scoped re-dispatch: `RequestChangesAsync`, `RouteAssemblyGateThroughSteeringAsync`, `RedispatchDependentsAsync`, `EmitImplicatedScopeFallback` | `apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyService.cs` |
+| #226 steer-at-review-gate delivery: `SteerAsync`, `TryDeliverAtAssemblyReviewGateAsync`, `DeliverAdvisorySendAtReviewGateAsync`, `ResolveTargetFilesForChildAsync` | `apps/Agentweaver.Api/Coordinator/CoordinatorSteeringService.cs` |
+| #226 shared review-decision delivery `DeliverDecisionAsync`; `SteeringStatus.Deferred` | `apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyReviewPersistence.cs`; `CoordinatorSteeringService.cs` |
+| #226 `/steer` `201`/`202` (deferred) response mapping | `apps/Agentweaver.Api/Endpoints/CoordinatorEndpoints.cs` |
+| #223 implicated scoping: `ScopeImplicatedSubtasks`, `TransitiveDependents` | `apps/Agentweaver.Api/Coordinator/AssemblyPlanning.cs` |
+| #223 structured `TARGET_FILES:` parser `ReviewTargetFiles.Parse` / `IsDirectiveLine` | `packages/Agentweaver.AgentRuntime/Workflow/ReviewTargetFiles.cs` |
+| Reviewer `TARGET_FILES:` emission | `packages/Agentweaver.AgentRuntime/Workflow/RubberduckTurnExecutor.cs`; `BuildTestTurnExecutor.cs` |
+| `coordinator.assembly_implicated_scope_fallback` event constant | `packages/Agentweaver.Domain/EventTypes.cs` |
 | `TryEscalateToInReviewAsync`, `IncrementHumanReviewRoundTripAsync` | `apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyStore.cs` |
-| `DefaultMaxHumanReviewRoundTrips`, `ResetSteeringBudgetAsync`, `BuildRationale` | `apps/Agentweaver.Api/Coordinator/CoordinatorSteeringDecider.cs` |
-| `HumanReviewRoundTrips` column; migrations | `apps/Agentweaver.Api.Data/Memory/WorkPlan.cs`; `migrations/20260710004451_AddHumanReviewRoundTrips.cs` |
+| Unconditional human-review budget reset (no cap), `ResetSteeringBudgetAsync`, `BuildRationale` | `apps/Agentweaver.Api/Coordinator/CoordinatorSteeringDecider.cs` |
+| `HumanReviewRoundTrips` column (telemetry only); migrations | `apps/Agentweaver.Api.Data/Memory/WorkPlan.cs`; `migrations/20260710004451_AddHumanReviewRoundTrips.cs` |
 | Stale lock recovery `ClearStaleIndexLock`, `ResolveGitDir`, `IsAnyGitProcessRunning` | `apps/Agentweaver.Api/Git/WorktreeManager.cs` |
 | `TryClearStaleIndexLock` seam | `packages/Agentweaver.AgentRuntime/Workflow/IWorktreeOperations.cs`; `apps/Agentweaver.Api/Runs/WorktreeOperationsAdapter.cs` |
 | `AgentTurnOutput.TerminalFailureReason/Evidence`; `ChildTurnFailedOutput` | `packages/Agentweaver.AgentRuntime/Workflow/WorkflowMessages.cs` |

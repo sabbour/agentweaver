@@ -80,6 +80,8 @@ When a budget is exhausted, the decider chooses `proceed` and records the ration
 | `RecoveryAttempts` on subtask | Per-subtask loop bound. |
 | `SteeringIterations` on work plan | Per-plan loop bound. |
 
+A human `redirect`/`amend`/`send` sent to `POST /api/runs/{id}/steer` while the coordinator is parked at the assembly human-review gate (`awaiting_review`) is delivered straight into the review gate rather than the child-turn queue (#226): `redirect`/`amend` become a request-changes decision on the same path as `POST /assembly/review` (settling `relayed`), and `send` becomes an advisory note (settling `applied`). When the gate is armed on a different API replica the directive is durably persisted with the terminal status `deferred` for the owning pod's poller to drain, and the endpoint answers `202 Accepted`. See [resilient assembly review](./resilient-assembly-review.md#operator-steering-at-the-review-gate-226).
+
 ## See also
 
 - [Events reference](./events.md)

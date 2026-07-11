@@ -61,12 +61,11 @@ public sealed class WorkPlan
     /// <summary>
     /// UNIFIED AUTONOMOUS STEERING (Fix-B): per-plan count of HUMAN-review round-trips taken after the
     /// autonomous steering budget was exhausted and the plan was escalated to the human-review gate. A
-    /// human request-changes resets the autonomous <see cref="SteeringIterations"/> budget (a fresh
-    /// mandate) so the coordinator can converge again under human guidance; this counter bounds that
-    /// reset (default cap 3, <c>CoordinatorSteeringDecider.DefaultMaxHumanReviewRoundTrips</c>). Once the
-    /// cap is reached the budget is NO LONGER reset — autonomy stops re-steering and the plan simply
-    /// parks (again) at human review (never terminal, never a hidden loop). Atomically incremented so the
-    /// reset+backstop decision is cross-replica/crash-safe.
+    /// human request-changes is a SUPERVISED action that ALWAYS resets the autonomous
+    /// <see cref="SteeringIterations"/> budget (a fresh convergence mandate) — there is no cap. This
+    /// counter is retained purely as a telemetry/observability signal (how many times a human has
+    /// re-steered the plan); it does NOT gate the reset. Atomically incremented so it is
+    /// cross-replica/crash-safe.
     /// </summary>
     public int HumanReviewRoundTrips { get; set; }
 

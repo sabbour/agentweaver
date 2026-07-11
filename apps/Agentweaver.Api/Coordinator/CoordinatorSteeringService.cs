@@ -71,6 +71,13 @@ public static class SteeringStatus
     public const string Queued = "queued";
     public const string Relayed = "relayed";
 
+    /// <summary>#226: a redirect/amend at the assembly human-review gate was durably persisted for the
+    /// OWNING pod's deferred poller to drain (the gate was armed on a different replica). The human
+    /// action is honestly reported as deferred-to-review (the endpoint maps this to HTTP 202), never
+    /// left silently <c>queued</c>. Mirrors the 202 the <c>/assembly/review</c> endpoint returns for the
+    /// same cross-replica case.</summary>
+    public const string Deferred = "deferred";
+
     /// <summary>UNIFIED STEERING (rev8 §3c): the coordinator committed a direction (action + target +
     /// attempt recorded, budget incremented) but has NOT yet executed it. Recovery re-drives execution.</summary>
     public const string Decided = "decided";
@@ -373,6 +380,7 @@ public sealed class CoordinatorSteeringService
     private readonly RunWorkflowFactory? _runWorkflowFactory;
     private readonly IRunStore? _runStore;
     private readonly IRunEventStream? _eventStream;
+    private readonly AssemblyReviewGate? _reviewGate;
     private readonly ILogger<CoordinatorSteeringService> _logger;
 
     /// <summary>
@@ -391,7 +399,8 @@ public sealed class CoordinatorSteeringService
         CoordinatorSteeringWaitRegistry? waitRegistry = null,
         RunWorkflowFactory? runWorkflowFactory = null,
         IRunStore? runStore = null,
-        IRunEventStream? eventStream = null)
+        IRunEventStream? eventStream = null,
+        AssemblyReviewGate? reviewGate = null)
     {
         _streamStore = streamStore;
         _registry = registry;
@@ -399,6 +408,7 @@ public sealed class CoordinatorSteeringService
         _waitRegistry = waitRegistry ?? new CoordinatorSteeringWaitRegistry();
         _runStore = runStore;
         _eventStream = eventStream;
+        _reviewGate = reviewGate;
         _logger = logger;
         _runWorkflowFactory = runWorkflowFactory;
     }
@@ -413,6 +423,9 @@ public sealed class CoordinatorSteeringService
     /// <param name="targetChildRunId">A specific child run id, or null to broadcast to all active children.</param>
     /// <param name="instruction">The direction the coordinator relays (required for redirect/amend).</param>
     /// <param name="createdBy">GitHub login of the steering human.</param>
+    /// <param name="createdByGitHubLogin">The caller's signed-in GitHub login, when known. Threaded to the
+    /// assembly-review delivery so the gate/persistence ownership check matches a run whose
+    /// <c>SubmittingUser</c> is a GitHub login (backlog-pickup runs). Null for callers/tests without one.</param>
     /// <exception cref="SteeringValidationException">The kind is unsupported/descoped, or a required instruction is missing.</exception>
     public async Task<SteeringDirectiveView> SteerAsync(
         string coordinatorRunId,
@@ -420,7 +433,8 @@ public sealed class CoordinatorSteeringService
         string? targetChildRunId,
         string instruction,
         string createdBy,
-        CancellationToken ct)
+        string? createdByGitHubLogin = null,
+        CancellationToken ct = default)
     {
         var normalized = (kind ?? string.Empty).Trim().ToLowerInvariant();
 
@@ -462,6 +476,23 @@ public sealed class CoordinatorSteeringService
             return await ApplyStopAsync(
                 coordinatorRunId, directiveId, targetChildRunId, resolvedInstruction, createdBy, createdAt, ct)
                 .ConfigureAwait(false);
+
+        // #226: at the collective assembly HUMAN-REVIEW gate the one-shot dispatch loop has already
+        // handed off to the LIVE assembly loop (parked in AwaitReviewDecisionAsync). A redirect/amend/send
+        // that falls through to QueueNextBoundary/QueueSend here persists `queued` but NOTHING drains it
+        // (the assembly loop polls the review gate, not the steering queue) — the drain-into-void bug.
+        // Intercept BEFORE the resume/queue fork and DELIVER the human's intent through the SAME mechanism
+        // POST /assembly/review uses, then let the parked loop wake and own RouteAssemblyGateThroughSteeringAsync
+        // as the single writer (B3: we NEVER run RouteAssembly from this HTTP thread). Returns null when the
+        // run is NOT at the review gate, so the normal fork below still applies.
+        if (normalized is SteeringKind.Redirect or SteeringKind.Amend or SteeringKind.Send)
+        {
+            var reviewGateView = await TryDeliverAtAssemblyReviewGateAsync(
+                coordinatorRunId, directiveId, normalized, targetChildRunId, resolvedInstruction,
+                createdBy, createdByGitHubLogin, createdAt, ct).ConfigureAwait(false);
+            if (reviewGateView is not null)
+                return reviewGateView;
+        }
 
         if (normalized == SteeringKind.Send)
             return await QueueSendAsync(
@@ -715,6 +746,195 @@ public sealed class CoordinatorSteeringService
         return new SteeringDirectiveView(
             directiveId, coordinatorRunId, targetChildRunId, SteeringKind.Stop, instruction,
             SteeringStatus.Applied, createdBy, createdAt, relayedAt);
+    }
+
+    // -----------------------------------------------------------------------
+    // #226 — deliver a human directive at the assembly HUMAN-REVIEW gate.
+    // -----------------------------------------------------------------------
+
+    /// <summary>
+    /// #226: When the coordinator is parked at the collective assembly HUMAN-REVIEW gate
+    /// (<see cref="RunStatus.AwaitingReview"/>), a human <c>redirect</c>/<c>amend</c>/<c>send</c> must NOT
+    /// fall through to <see cref="QueueNextBoundaryAsync"/>/<see cref="QueueSendAsync"/> — the one-shot
+    /// dispatch loop has exited and the LIVE assembly loop drains the review gate, not the steering queue,
+    /// so a queued directive would drain into the void. This intercepts that case:
+    /// <list type="bullet">
+    /// <item><b>redirect / amend</b> → translated into an <see cref="AssemblyReviewDecision"/>
+    /// (<c>RequestChanges</c>, feedback = instruction, scope per Q1) and DELIVERED through the SAME shared
+    /// path <c>POST /assembly/review</c> uses (<see cref="CoordinatorAssemblyReviewPersistence.DeliverDecisionAsync"/>):
+    /// the parked loop wakes and owns <c>RouteAssemblyGateThroughSteeringAsync</c> as the single writer,
+    /// reusing #223 scoping + the cap-drop unconditional human budget reset + the A/B/C/D decider (B3: we
+    /// only DELIVER a decision here; we never run RouteAssembly on this HTTP thread). <c>amend</c> maps to
+    /// the same <c>request_changes</c> — its "never discard completed work" softens to "the decider prefers
+    /// in-place": the decider picks InPlaceSteer when resumable, else DispatchFresh; we do NOT force-pin
+    /// amend→InPlaceSteer (N1).</item>
+    /// <item><b>send</b> at the gate is the same drain-into-void class but carries no change request. It is
+    /// delivered as an ADVISORY timeline note (decider direction D): the message is surfaced via the
+    /// steering event and the directive settles <c>applied</c> — no gate decision, no budget reset, and
+    /// crucially NOT left <c>queued</c> forever (Q4/N3).</item>
+    /// </list>
+    /// Returns <c>null</c> when the run is NOT at the review gate (or the gate/run store is unavailable),
+    /// so the caller's normal resume/queue fork still applies. Never persists a <c>queued</c> directive for
+    /// the handled case (N2): the canonical <see cref="SteeringDirective"/> is created later by the parked
+    /// loop's <c>SubmitSteeringAsync</c>; this row is settled to a non-queued terminal marker.
+    /// </summary>
+    private async Task<SteeringDirectiveView?> TryDeliverAtAssemblyReviewGateAsync(
+        string coordinatorRunId, int directiveId, string kind, string? targetChildRunId, string instruction,
+        string createdBy, string? createdByGitHubLogin, DateTimeOffset createdAt, CancellationToken ct)
+    {
+        // The AwaitingReview interception needs the run store (to confirm the parking state) and the
+        // review gate (to deliver). Lightweight unit tests register neither; fall through to the normal
+        // path so their behavior is unchanged.
+        if (_runStore is null || _reviewGate is null)
+            return null;
+        if (!RunId.TryParse(coordinatorRunId, out var runId))
+            return null;
+
+        var run = await _runStore.GetAsync(runId, ct).ConfigureAwait(false);
+        if (run is null || run.Status != RunStatus.AwaitingReview)
+            return null;
+
+        // send: advisory note on the review timeline (decider direction D — no change request, no reset).
+        if (kind == SteeringKind.Send)
+            return await DeliverAdvisorySendAtReviewGateAsync(
+                coordinatorRunId, directiveId, targetChildRunId, instruction, createdBy, createdAt, ct)
+                .ConfigureAwait(false);
+
+        // redirect / amend → request_changes at the gate. Q1: default to the broad all-contributors
+        // fallback (TargetFiles = null) — a bare human redirect is semantically identical to
+        // /assembly/review {request_changes, feedback} with no target_files, which already reverse-maps to
+        // ScopeFallbackNoField (all contributors), fail-safe and observable via EmitImplicatedScopeFallback.
+        // We do NOT parse files/subtasks out of the prose, nor reuse a prior reviewer's stale scope.
+        // Optional clean narrowing: when a specific child run is targeted, resolve that subtask's touched
+        // files and pass them so they flow through the SAME ScopeImplicatedSubtasks reverse-map.
+        var targetFiles = await ResolveTargetFilesForChildAsync(coordinatorRunId, targetChildRunId, ct)
+            .ConfigureAwait(false);
+
+        var decision = new AssemblyReviewDecision(
+            Approved: false,
+            RequestChanges: true,
+            Feedback: instruction,
+            TargetFiles: targetFiles,
+            Reviewer: createdBy);
+
+        var delivery = await CoordinatorAssemblyReviewPersistence.DeliverDecisionAsync(
+            _scopeFactory, _reviewGate, coordinatorRunId, decision, createdBy, createdByGitHubLogin, ct)
+            .ConfigureAwait(false);
+
+        switch (delivery)
+        {
+            case AssemblyReviewDeliveryResult.Accepted:
+            {
+                // Delivered into the LIVE armed gate on this pod; the parked loop will route it.
+                var relayedAt = DateTimeOffset.UtcNow;
+                await UpdateDirectiveAsync(directiveId, SteeringStatus.Relayed, relayedAt, ct).ConfigureAwait(false);
+                await EmitSteeringAsync(
+                    coordinatorRunId, directiveId, kind, targetChildRunId, SteeringStatus.Relayed, instruction, ct)
+                    .ConfigureAwait(false);
+                _waitRegistry.Signal(coordinatorRunId);
+                _logger.LogInformation(
+                    "Steering {Kind} (directive {DirectiveId}) delivered to the assembly review gate for coordinator {RunId}; the parked assembly loop will route it as request-changes",
+                    kind, directiveId, coordinatorRunId);
+                return new SteeringDirectiveView(
+                    directiveId, coordinatorRunId, targetChildRunId, kind, instruction,
+                    SteeringStatus.Relayed, createdBy, createdAt, relayedAt);
+            }
+
+            case AssemblyReviewDeliveryResult.Deferred:
+            {
+                // Gate armed on a DIFFERENT replica: durably persisted for the owning pod's poller (B2).
+                var relayedAt = DateTimeOffset.UtcNow;
+                await UpdateDirectiveAsync(directiveId, SteeringStatus.Deferred, relayedAt, ct).ConfigureAwait(false);
+                await EmitSteeringAsync(
+                    coordinatorRunId, directiveId, kind, targetChildRunId, SteeringStatus.Deferred, instruction, ct)
+                    .ConfigureAwait(false);
+                _waitRegistry.Signal(coordinatorRunId);
+                _logger.LogInformation(
+                    "Steering {Kind} (directive {DirectiveId}) deferred durably at the assembly review gate for coordinator {RunId}; the owning replica's poller will route it",
+                    kind, directiveId, coordinatorRunId);
+                return new SteeringDirectiveView(
+                    directiveId, coordinatorRunId, targetChildRunId, kind, instruction,
+                    SteeringStatus.Deferred, createdBy, createdAt, relayedAt);
+            }
+
+            case AssemblyReviewDeliveryResult.Forbidden:
+                // Ownership was already validated by the /steer endpoint (IsOwner) before this runs, so a
+                // gate-level Forbidden is an inconsistency rather than an expected outcome. Fall through to
+                // the normal fork rather than silently swallowing the directive.
+                _logger.LogWarning(
+                    "Steering {Kind} (directive {DirectiveId}) for coordinator {RunId} was rejected by the review gate ownership check despite endpoint ownership validation; falling back to the normal steering path",
+                    kind, directiveId, coordinatorRunId);
+                return null;
+
+            default:
+                // NotPending / AlreadySubmitted: the run says AwaitingReview but no review is actually
+                // awaiting a decision (already consumed, or not fully at the gate). Fall through to the
+                // normal resume/queue fork.
+                return null;
+        }
+    }
+
+    /// <summary>
+    /// #226 (Q4/N3): a <c>send</c> at the assembly review gate has no running child and no change request,
+    /// so it cannot drain as a review decision. Rather than leave it <c>queued</c> forever (drain-into-void)
+    /// it is delivered as an ADVISORY note: the message is surfaced on the coordinator timeline and the
+    /// directive settles <c>applied</c>. It does not wake the gate, reset the budget, or reset any subtask.
+    /// </summary>
+    private async Task<SteeringDirectiveView> DeliverAdvisorySendAtReviewGateAsync(
+        string coordinatorRunId, int directiveId, string? targetChildRunId, string instruction,
+        string createdBy, DateTimeOffset createdAt, CancellationToken ct)
+    {
+        var relayedAt = DateTimeOffset.UtcNow;
+        await UpdateDirectiveAsync(directiveId, SteeringStatus.Applied, relayedAt, ct).ConfigureAwait(false);
+        await EmitSteeringAsync(
+            coordinatorRunId, directiveId, SteeringKind.Send, targetChildRunId, SteeringStatus.Applied, instruction, ct)
+            .ConfigureAwait(false);
+        _waitRegistry.Signal(coordinatorRunId);
+        _logger.LogInformation(
+            "Steering send (directive {DirectiveId}) delivered as an advisory note at the assembly review gate for coordinator {RunId}; no review decision or budget reset",
+            directiveId, coordinatorRunId);
+        return new SteeringDirectiveView(
+            directiveId, coordinatorRunId, targetChildRunId, SteeringKind.Send, instruction,
+            SteeringStatus.Applied, createdBy, createdAt, relayedAt);
+    }
+
+    /// <summary>
+    /// #226 Q1 optional narrowing: resolves the <see cref="AssemblyReviewDecision.TargetFiles"/> for a
+    /// targeted child run. When <paramref name="targetChildRunId"/> is a subtask of this coordinator's work
+    /// plan, its child run's touched files (parsed from the run diff, the same source as the assembly's
+    /// <c>touchedFilesBySubtask</c>) are returned so they flow through the SAME
+    /// <c>ScopeImplicatedSubtasks</c> reverse-map (that subtask ∪ any co-touching subtasks). Returns
+    /// <c>null</c> (the broad all-contributors fallback) when no child is targeted, the child is not a
+    /// subtask of this plan, or it touched no files.
+    /// </summary>
+    private async Task<IReadOnlyList<string>?> ResolveTargetFilesForChildAsync(
+        string coordinatorRunId, string? targetChildRunId, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(targetChildRunId) || _runStore is null)
+            return null;
+
+        bool belongsToPlan;
+        using (var scope = _scopeFactory.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            belongsToPlan = await db.Subtasks
+                .AsNoTracking()
+                .AnyAsync(
+                    s => s.ChildRunId == targetChildRunId
+                        && db.WorkPlans.Any(w => w.Id == s.WorkPlanId && w.CoordinatorRunId == coordinatorRunId),
+                    ct)
+                .ConfigureAwait(false);
+        }
+
+        if (!belongsToPlan || !RunId.TryParse(targetChildRunId, out var childId))
+            return null;
+
+        var childRun = await _runStore.GetAsync(childId, ct).ConfigureAwait(false);
+        if (childRun is null)
+            return null;
+
+        var touched = AssemblyPlanning.ExtractTouchedFiles(childRun.Diff);
+        return touched.Count > 0 ? touched.OrderBy(f => f, StringComparer.Ordinal).ToList() : null;
     }
 
     // -----------------------------------------------------------------------

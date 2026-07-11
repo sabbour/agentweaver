@@ -11,11 +11,13 @@ the [user guide](../experience/resilient-assembly-review.md).
 |---|---|---|
 | `Coordinator:StaleLockThresholdSeconds` | `15` | Age in seconds above which a `.git/index.lock` file is considered stale and eligible for removal between commit retry attempts. The check also verifies no live `git` process owns the lock; on any uncertainty the file is left untouched and the fault surfaces as a visible `child-turn-failed` terminal. Applies per child/revision run's own worktree only. Source: `WorktreeManager.ClearStaleIndexLock`. |
 
-**Max human review round-trips** (default `3`) is defined as the constant
-`CoordinatorSteeringDecider.DefaultMaxHumanReviewRoundTrips`. There is no separate config-file key at this
-time — it mirrors the existing `DefaultMaxPlanSteeringIterations` constant pattern. To track the live count
-inspect the `WorkPlan.HumanReviewRoundTrips` database column or the `coordinator.steering` event
-(`budgetReset`, `humanRoundTrip` fields).
+**Human review round-trips are no longer capped.** The former
+`CoordinatorSteeringDecider.DefaultMaxHumanReviewRoundTrips` constant has been **removed**. A human
+request-changes at the assembly review gate now **unconditionally** resets the autonomous steering budget —
+a supervised, deliberate human request must always be honored, so capping it (and silently re-parking the
+run) was a dead-end. Each granted round is still bounded by the autonomous `DefaultMaxPlanSteeringIterations`
+per steering pass. The `WorkPlan.HumanReviewRoundTrips` column is retained purely as telemetry (surfaced on
+the `coordinator.steering` event's `humanReviewRoundTrip` field); it no longer gates anything.
 
 ## Status transitions
 
@@ -33,8 +35,7 @@ The following `WorkPlanStatus` transitions are new or changed in this release:
 | `Assembling` / `AssemblySteering` | Autonomous budget exhausted | `InReview`, stage `"review"` | Guarded CAS via `TryEscalateToInReviewAsync`. Second replica no-ops. |
 | `InReview` | Human approves | `Assembling` → merge → `assembly_complete` | Existing approve path, unchanged. |
 | `InReview` | Human declines | `assembly_declined` (terminal) | Existing decline path, unchanged. |
-| `InReview` | Human request-changes (round-trip ≤ cap) | `AssemblySteering` | Budget reset; autonomous loop restarts. |
-| `InReview` | Human request-changes (round-trip > cap) | `InReview` (stays, re-parked) | Autonomy paused; human gate stays open. Never terminal. |
+| `InReview` | Human request-changes (any round-trip) | `AssemblySteering` | Budget **unconditionally** reset (no cap); autonomous loop restarts under the human's feedback. `HumanReviewRoundTrips` is incremented as telemetry only. |
 
 ## Emitted events
 
@@ -44,7 +45,9 @@ All existing event types; no new event type is introduced. Fields added to exist
 |---|---|---|
 | `coordinator.steering_decision` | `decision="proceed"`, `escalation="human_review"` | When the decider returns `Proceed` (budget exhausted) and the coordinator escalates instead of terminating. |
 | `coordinator.assembly_review_requested` | `gateKind="human-review"`, `reason="steering_budget_exhausted"`, `treeHash`, `integrationBranch`, `includedSubtaskIds` | Immediately after the durable review-request is written. Same event as the normal happy-path human-review gate. |
-| `coordinator.steering` | `budgetReset=true\|false`, `humanRoundTrip=<n>` | Emitted when a human request-changes is received after escalation; records whether the reset was applied and the current round-trip count. |
+| `coordinator.steering` | `source`, `humanReviewRoundTrip=<n>`, `note` | Emitted when a human request-changes is received after escalation. The autonomous budget is **always** reset (there is no cap); `humanReviewRoundTrip` is the telemetry-only round count. |
+| `coordinator.assembly_implicated_scope_fallback` | `workPlanId`, `source`, `reviewer`, `reason` (`no_target_files_field` \| `target_files_matched_nothing`), `namedFiles`, `touchedFiles`, `contributorIds` | Emitted when the #223 implicated-subtask scoping reverts to the broad all-contributors set because the reviewer's structured `TARGET_FILES:` hint was missing or reverse-mapped to nothing. Makes the fail-safe reversion observable. |
+| `coordinator.assembly_changes_requested` | `workPlanId`, `redispatchSubtaskIds`, `redispatchedSubtaskIds`, `implicatedSubtaskIds`, `dependentSubtaskIds`, `feedback` | When a gate requests changes. `implicatedSubtaskIds` are the reviewer-named (lockout-eligible) subtasks; `dependentSubtaskIds` are their transitive dependents (rebuilt, never locked out); `redispatchSubtaskIds` is their union. |
 | `run.failed` (child run) | `reason=commit_failed_persistent`, `evidence=<exception summary + lock diagnostics>` | Emitted when a persistent commit fault exhausts retries in the child pipeline; the child run fails visibly with structured evidence instead of a silent stream drain. |
 
 ### `coordinator.assembly_review_requested` — accumulated feedback payload
@@ -55,9 +58,50 @@ feedback** from all prior autonomous rounds. This is built by `BuildAccumulatedG
 human can see exactly why autonomy could not converge. The same payload is visible in the review card in
 the web UI.
 
+## Implicated-subtask scoping (#223)
+
+A gate request-changes no longer resets/locks out **every** subtask that touched a file. The reviewer
+(Rubberduck or Build & Test) may emit an optional structured `TARGET_FILES:` directive line naming the
+repo-relative paths it implicated; `ReviewTargetFiles.Parse` turns it into `AssemblyReviewDecision.TargetFiles`.
+The coordinator (`AssemblyPlanning.ScopeImplicatedSubtasks`) reverse-maps those paths onto the
+assembly-eligible subtasks that actually committed them, then `AssemblyPlanning.TransitiveDependents` sweeps
+their dependents:
+
+| Set | Members | Author lockout? |
+|---|---|---|
+| **Implicated** | subtasks that committed a named file (`ScopeImplicatedSubtasks`) | Yes |
+| **Re-dispatch** | implicated ∪ transitive dependents | dependents: **No** |
+
+If the `TARGET_FILES:` hint is absent (`no_target_files_field`) or matches no subtask
+(`target_files_matched_nothing`), scoping falls back to the whole contributor set (fail-safe) and emits
+`coordinator.assembly_implicated_scope_fallback`. The same helpers back both the live steering path
+(`RouteAssemblyGateThroughSteeringAsync`) and the conscious fresh-dispatch executor (`RequestChangesAsync`).
+
+## Operator steering at the review gate (#226)
+
+While the run is parked at the human-review gate (`run.status == awaiting_review`,
+`coordinator_steerable == true`), `POST /api/runs/{id}/steer` is honored (previously `redirect`/`amend`
+returned `queued` but were silently dropped). The verbs map as follows:
+
+| `/steer` verb at `awaiting_review` | Effect | Directive status |
+|---|---|---|
+| `redirect` / `amend` | Delivered as a request-changes review decision — the **same** path as `POST /assembly/review {request_changes}`. The parked loop routes it via `RouteAssemblyGateThroughSteeringAsync` with #223 scoping + the unconditional budget reset. | `relayed`, or `deferred` when the gate is armed on another replica |
+| `send` | Advisory note on the coordinator timeline; the gate stays armed — no decision, no budget reset. | `applied` |
+
+**Scoping.** A bare `redirect`/`amend` has no target files, so it uses the broad all-contributors fallback
+(identical to `/assembly/review` with no `target_files`; emits `coordinator.assembly_implicated_scope_fallback`).
+Set `targetChildRunId` on the steer request to narrow: the targeted subtask's committed files flow through
+the same `ScopeImplicatedSubtasks` reverse-map, scoping to that subtask ∪ its co-touching subtasks.
+
+**HTTP status.** `POST /steer` returns `201 Created` normally, and `202 Accepted` when the decision is
+deferred to another replica's poller (directive `deferred`) — mirroring the `/assembly/review` deferred
+response. It is **never** left silently `queued` (the pre-#226 drop bug). The new `deferred` value joins the
+`pending → queued → relayed → applied` steering-directive lifecycle.
+
 ## Reviewer-rejection lockout protocol
 
-When any gate source issues a `request-changes` (rejection) against a subtask:
+When any gate source issues a `request-changes` (rejection), the lockout applies to the **implicated**
+subtasks only (#223 — never every file-toucher):
 
 | Step | What happens |
 |---|---|
@@ -65,6 +109,10 @@ When any gate source issues a `request-changes` (rejection) against a subtask:
 | Select a different agent | `roster \ LockedOutAgents` via `CoordinatorOrchestratorExecutor.ResolveRoster` + `SelectRosterMember`. |
 | Dispatch with context | `RunOrchestrator.StartChildRevisionHandoffAsync` reuses the prior child's worktree + branch; carries the full accumulated feedback bundle; mints a **new** SDK session (never resumes the locked-out author's session). |
 | Deadlock or budget exhaustion | All eligible agents locked out, or budget exhausted on the lockout path → Fix-B human-review escalation. Never a terminal. |
+
+Transitive dependents of the implicated subtasks are re-dispatched to rebuild against the revised contract,
+but their authors are **never** locked out (#223 — locking a blameless dependent re-creates the
+roster-exhaustion deadlock).
 
 Advisory / steer feedback (not a rejection) keeps the same agent in place (`StartRevisionAsync`); no
 lockout is applied.

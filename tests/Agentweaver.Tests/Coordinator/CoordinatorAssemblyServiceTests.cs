@@ -405,7 +405,7 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
     }
 
     [Fact]
-    public async Task RouteAssembly_HumanRequestChanges_UnderCap_ResetsBudget_SteersAgain()
+    public async Task RouteAssembly_HumanRequestChanges_ResetsBudget_SteersAgain()
     {
         var coordinatorRunId = RunId.New().ToString();
         await SeedCoordinatorRunAsync(coordinatorRunId);
@@ -413,7 +413,8 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         // No resumable child runs → after the budget reset the decider steers via CONSCIOUS dispatch_fresh.
         var (workPlanId, subtaskIds) = await SeedPlanAsync(
             coordinatorRunId, new[] { SubtaskStatus.AssembleReady, SubtaskStatus.AssembleReady });
-        // Budget exhausted, but this is a HUMAN request-changes and we are under the round-trip cap.
+        // Budget exhausted; a HUMAN request-changes is a supervised action that ALWAYS grants a fresh
+        // convergence mandate (no cap), so it resets the autonomous budget.
         await SetPlanSteeringStateAsync(workPlanId, steeringIterations: 6, humanReviewRoundTrips: 0);
 
         var touched = subtaskIds.ToDictionary(id => id, _ => (IReadOnlySet<string>)new HashSet<string>());
@@ -423,16 +424,20 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
             Context(coordinatorRunId), workPlanId, SteeringSource.HumanReview,
             "Please fix the signup validation.", touched, "tree-human", cts.Token);
 
-        var (_, roundTrips, _, _) = await GetPlanSteeringStateAsync(workPlanId);
+        var (steeringIterations, roundTrips, _, _) = await GetPlanSteeringStateAsync(workPlanId);
         roundTrips.Should().Be(1, "the human round-trip is persisted (cross-replica/crash-safe)");
+        // The exhausted budget (6) was reset to 0 by the human mandate, then the single conscious steer
+        // decision re-incremented it to 1 — proving the reset happened (without it, it would stay ≥6).
+        steeringIterations.Should().Be(1, "a human request-changes resets the autonomous budget");
 
         var reset = _streamStore.Get(coordinatorRunId)!.GetSnapshotSince(0).Events
             .Where(e => e.Type == EventTypes.CoordinatorSteering)
             .Select(e => JsonSerializer.SerializeToNode(e.Payload)!.AsObject())
-            .FirstOrDefault(o => o["budgetReset"] != null);
+            .FirstOrDefault(o => o["humanReviewRoundTrip"] != null);
         reset.Should().NotBeNull("the budget reset must be a visible steering event");
-        reset!["budgetReset"]!.GetValue<bool>().Should().BeTrue();
-        reset["humanReviewRoundTrip"]!.GetValue<int>().Should().Be(1);
+        reset!["humanReviewRoundTrip"]!.GetValue<int>().Should().Be(1);
+        reset["note"]!.GetValue<string>().Should()
+            .Be("human request-changes: autonomous steering budget reset for a fresh convergence pass");
 
         // Budget had headroom after the reset → the coordinator STEERS again (not Proceed/escalate).
         var decisions = _streamStore.Get(coordinatorRunId)!.GetSnapshotSince(0).Events
@@ -441,50 +446,57 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
             .ToList();
         decisions.Should().NotContain(
             d => d["decision"] != null && d["decision"]!.GetValue<string>() == SteeringDirection.Proceed,
-            "a human request-changes under the cap resets the budget so the coordinator converges again");
+            "a human request-changes resets the budget so the coordinator converges again");
     }
 
     [Fact]
-    public async Task RouteAssembly_HumanRequestChanges_OverCap_DoesNotReset_ReParksAtReview()
+    public async Task RouteAssembly_HumanRequestChanges_HighRoundTripCount_StillResetsBudget_SteersAgain()
     {
         var coordinatorRunId = RunId.New().ToString();
         await SeedCoordinatorRunAsync(coordinatorRunId);
         _streamStore.Create(coordinatorRunId, "alice");
         var (workPlanId, subtaskIds) = await SeedPlanAsync(
             coordinatorRunId, new[] { SubtaskStatus.AssembleReady, SubtaskStatus.AssembleReady });
-        // Already at the round-trip cap (3) → this human request-changes must NOT reset the budget.
-        await SetPlanSteeringStateAsync(workPlanId, steeringIterations: 6, humanReviewRoundTrips: 3);
+        // Many prior human round-trips (5) AND an exhausted autonomous budget (6). There is NO cap on
+        // human round-trips: a supervised human request-changes must STILL reset the budget and let the
+        // coordinator converge again — never a silent dead-end.
+        await SetPlanSteeringStateAsync(workPlanId, steeringIterations: 6, humanReviewRoundTrips: 5);
 
         var touched = subtaskIds.ToDictionary(id => id, _ => (IReadOnlySet<string>)new HashSet<string>());
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
 
-        var route = InvokeRouteAssemblyGateThroughSteeringAsync(
+        await InvokeRouteAssemblyGateThroughSteeringAsync(
             Context(coordinatorRunId), workPlanId, SteeringSource.HumanReview,
-            "Still not right.", touched, "tree-cap", cts.Token);
-        await WaitForEventAsync(coordinatorRunId, EventTypes.CoordinatorAssemblyReviewRequested, cts.Token);
-        cts.Cancel();
-        try { await route; } catch (OperationCanceledException) { }
+            "Still not right — please fix.", touched, "tree-high", cts.Token);
 
-        var (_, roundTrips, status, _) = await GetPlanSteeringStateAsync(workPlanId);
-        roundTrips.Should().Be(4, "the round-trip counter still increments past the cap");
+        var (steeringIterations, roundTrips, status, _) = await GetPlanSteeringStateAsync(workPlanId);
+        roundTrips.Should().Be(6, "the round-trip counter still increments as pure telemetry");
+        // Reset to 0 (unconditional) then re-incremented by the single conscious steer → 1. Without the
+        // reset it would have stayed at 6 (over budget) and the decider would have Proceeded/re-parked.
+        steeringIterations.Should().Be(1, "a high human round-trip count does NOT stop the budget reset");
 
         var reset = _streamStore.Get(coordinatorRunId)!.GetSnapshotSince(0).Events
             .Where(e => e.Type == EventTypes.CoordinatorSteering)
             .Select(e => JsonSerializer.SerializeToNode(e.Payload)!.AsObject())
-            .FirstOrDefault(o => o["budgetReset"] != null);
-        reset.Should().NotBeNull();
-        reset!["budgetReset"]!.GetValue<bool>().Should().BeFalse("past the cap the autonomous budget is NOT reset");
+            .FirstOrDefault(o => o["humanReviewRoundTrip"] != null);
+        reset.Should().NotBeNull("the budget reset must be a visible steering event");
+        reset!["humanReviewRoundTrip"]!.GetValue<int>().Should().Be(6);
+        reset["note"]!.GetValue<string>().Should()
+            .Be("human request-changes: autonomous steering budget reset for a fresh convergence pass");
+        reset.ContainsKey("budgetReset").Should().BeFalse("the cap-gated budgetReset field was removed");
+        reset.ContainsKey("maxHumanReviewRoundTrips").Should().BeFalse("there is no human round-trip cap");
 
-        // Autonomy stops re-steering; the plan RE-PARKS at human review (never terminal, never a loop).
-        status.Should().Be(WorkPlanStatus.InReview);
+        // Budget had headroom after the reset → the coordinator STEERS again; it does NOT re-park at
+        // review and never latches a terminal AssemblyBlocked.
+        status.Should().NotBe(WorkPlanStatus.InReview);
         EventTypes_(coordinatorRunId).Should().NotContain(EventTypes.CoordinatorAssemblyBlocked);
         var decisions = _streamStore.Get(coordinatorRunId)!.GetSnapshotSince(0).Events
             .Where(e => e.Type == EventTypes.CoordinatorSteeringDecision)
             .Select(e => JsonSerializer.SerializeToNode(e.Payload)!.AsObject())
             .ToList();
-        decisions.Should().Contain(
+        decisions.Should().NotContain(
             d => d["decision"] != null && d["decision"]!.GetValue<string>() == SteeringDirection.Proceed,
-            "over the cap the coordinator no longer steers — it parks at review");
+            "a human request-changes ALWAYS resets the budget so the coordinator converges again");
     }
 
     [Fact]
@@ -1308,6 +1320,158 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
             .Should().Be(RunStatus.Completed);
     }
 
+    // ── #226: a human /steer at the LIVE assembly review gate must DRAIN (not queue into the void) ──
+
+    /// <summary>
+    /// #226 end-to-end drain proof: while the assembly loop is parked at the LIVE human-review gate, a
+    /// human <c>/steer redirect</c> must be DELIVERED into that gate (not persisted as a <c>queued</c>
+    /// directive that nothing drains). The parked loop then wakes and routes it through
+    /// <c>RouteAssemblyGateThroughSteeringAsync</c> as request-changes with the cap-drop unconditional
+    /// human budget reset. Without the fix the redirect fell to <c>QueueNextBoundaryAsync</c> and drained
+    /// into the void (run d8ab6b1c).
+    /// </summary>
+    [Fact]
+    public async Task Steer_Redirect_AtLiveAssemblyReviewGate_DeliversRequestChanges_ResetsBudget_NotQueued()
+    {
+        var coordinatorRunId = RunId.New().ToString();
+        await SeedCoordinatorRunAsync(coordinatorRunId);
+        // No resumable child runs → after the budget reset the decider steers via CONSCIOUS dispatch_fresh,
+        // so the gate loop stops and RunAssemblyAsync returns deterministically.
+        var (workPlanId, _) = await SeedPlanAsync(
+            coordinatorRunId, new[] { SubtaskStatus.Completed, SubtaskStatus.AssembleReady });
+        _streamStore.Create(coordinatorRunId, "alice");
+
+        var steering = NewSteeringWithReviewGate();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        var run = _sut.RunAssemblyAsync(Context(coordinatorRunId), cts.Token);
+        await WaitUntilArmedAsync(coordinatorRunId);
+        (await _runStore.GetAsync(RunId.Parse(coordinatorRunId), default))!.Status
+            .Should().Be(RunStatus.AwaitingReview);
+
+        // Exhaust the autonomous budget so the human reset is observable (6 → reset 0 → one steer → 1).
+        await SetPlanSteeringStateAsync(workPlanId, steeringIterations: 6, humanReviewRoundTrips: 0);
+
+        var view = await steering.SteerAsync(
+            coordinatorRunId, "redirect", null, "Please fix the signup validation.", "alice", ct: cts.Token);
+
+        view.Kind.Should().Be("redirect");
+        view.Status.Should().Be(SteeringStatus.Relayed,
+            "the redirect was DELIVERED into the armed review gate on this pod, not queued into the void");
+
+        await run; // the parked loop consumed the decision and routed request-changes to completion.
+
+        var (steeringIterations, roundTrips, _, _) = await GetPlanSteeringStateAsync(workPlanId);
+        roundTrips.Should().Be(1, "a human request-changes at the review gate is persisted as telemetry");
+        steeringIterations.Should().Be(1,
+            "the human redirect ALWAYS resets the exhausted autonomous budget (6→0); the single conscious steer re-incremented to 1");
+
+        // Q5/N2: the delivered redirect must NEVER be left as a queued directive that nothing drains.
+        using var scope = _provider.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        (await db.SteeringDirectives.CountAsync(d =>
+                d.CoordinatorRunId == coordinatorRunId && d.Status == SteeringStatus.Queued))
+            .Should().Be(0, "a redirect delivered to the review gate must not persist a queued directive");
+    }
+
+    /// <summary>
+    /// #226 N1: <c>amend</c> at the live review gate maps to request-changes exactly like <c>redirect</c>
+    /// (the decider prefers in-place when resumable, else dispatch-fresh — not force-pinned). It must
+    /// likewise DRAIN through the gate with the unconditional human budget reset, never queue into the void.
+    /// </summary>
+    [Fact]
+    public async Task Steer_Amend_AtLiveAssemblyReviewGate_DeliversRequestChanges_ResetsBudget_NotQueued()
+    {
+        var coordinatorRunId = RunId.New().ToString();
+        await SeedCoordinatorRunAsync(coordinatorRunId);
+        var (workPlanId, _) = await SeedPlanAsync(
+            coordinatorRunId, new[] { SubtaskStatus.Completed, SubtaskStatus.AssembleReady });
+        _streamStore.Create(coordinatorRunId, "alice");
+
+        var steering = NewSteeringWithReviewGate();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        var run = _sut.RunAssemblyAsync(Context(coordinatorRunId), cts.Token);
+        await WaitUntilArmedAsync(coordinatorRunId);
+        await SetPlanSteeringStateAsync(workPlanId, steeringIterations: 6, humanReviewRoundTrips: 0);
+
+        var view = await steering.SteerAsync(
+            coordinatorRunId, "amend", null, "Also cover the empty-email edge case.", "alice", ct: cts.Token);
+
+        view.Kind.Should().Be("amend");
+        view.Status.Should().Be(SteeringStatus.Relayed);
+
+        await run;
+
+        var (steeringIterations, roundTrips, _, _) = await GetPlanSteeringStateAsync(workPlanId);
+        roundTrips.Should().Be(1);
+        steeringIterations.Should().Be(1, "amend at the review gate also resets the autonomous budget unconditionally");
+
+        using var scope = _provider.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        (await db.SteeringDirectives.CountAsync(d =>
+                d.CoordinatorRunId == coordinatorRunId && d.Status == SteeringStatus.Queued))
+            .Should().Be(0);
+    }
+
+    /// <summary>
+    /// #226 Q4/N3: a <c>send</c> at the live review gate carries no change request, so it is delivered as
+    /// an ADVISORY note (directive settles <c>applied</c>) — NOT left <c>queued</c> forever and NOT turned
+    /// into a review decision. The gate stays armed and the coordinator remains awaiting_review.
+    /// </summary>
+    [Fact]
+    public async Task Steer_Send_AtLiveAssemblyReviewGate_DeliveredAsAdvisory_GateStaysArmed()
+    {
+        var coordinatorRunId = RunId.New().ToString();
+        await SeedCoordinatorRunAsync(coordinatorRunId);
+        await SeedPlanAsync(coordinatorRunId, new[] { SubtaskStatus.Completed, SubtaskStatus.AssembleReady });
+        _streamStore.Create(coordinatorRunId, "alice");
+
+        var steering = NewSteeringWithReviewGate();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        var run = _sut.RunAssemblyAsync(Context(coordinatorRunId), cts.Token);
+        await WaitUntilArmedAsync(coordinatorRunId);
+
+        var view = await steering.SteerAsync(
+            coordinatorRunId, "send", null, "Please explain the assembly risk before I approve.", "alice", ct: cts.Token);
+
+        view.Kind.Should().Be("send");
+        view.Status.Should().Be(SteeringStatus.Applied,
+            "a send at the review gate is an advisory note, not a queued directive and not a review decision");
+
+        // The advisory send does NOT resolve the gate: the loop is still parked awaiting the human decision.
+        run.IsCompleted.Should().BeFalse("an advisory send must not wake or resolve the review gate");
+        _reviewGate.IsArmed(coordinatorRunId).Should().BeTrue("the gate stays armed after an advisory send");
+
+        using (var scope = _provider.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            (await db.SteeringDirectives.CountAsync(d =>
+                    d.CoordinatorRunId == coordinatorRunId && d.Status == SteeringStatus.Queued))
+                .Should().Be(0, "an advisory send must not persist a queued directive");
+        }
+
+        // Clean up the still-parked loop so the test disposes deterministically.
+        _reviewGate.TrySubmit(coordinatorRunId, "alice",
+            new AssemblyReviewDecision(Approved: true, RequestChanges: false, Feedback: null,
+                TargetFiles: null, Reviewer: "alice"))
+            .Should().Be(AssemblyReviewSubmitResult.Accepted);
+        await run;
+    }
+
+    /// <summary>
+    /// Builds a <see cref="CoordinatorSteeringService"/> wired WITH the shared <see cref="_reviewGate"/>
+    /// so the #226 AwaitingReview interception is active (the class-level <c>_steering</c> is intentionally
+    /// constructed without it to preserve the pre-#226 unit-test behavior).
+    /// </summary>
+    private CoordinatorSteeringService NewSteeringWithReviewGate() =>
+        new(
+            _streamStore,
+            new RunWorkflowRegistry(),
+            _scopeFactory,
+            NullLogger<CoordinatorSteeringService>.Instance,
+            waitRegistry: _steeringWaits,
+            runStore: _runStore,
+            reviewGate: _reviewGate);
+
     [Fact]
     public async Task RunAssembly_ApprovedReview_EmitsAssemblySequenceInOrder_AndFlipsNodesToLive()
     {
@@ -1844,7 +2008,7 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         var runTask = _sut.RunAssemblyAsync(Context(coordinatorRunId), cts.Token);
         await WaitForEventAsync(coordinatorRunId, EventTypes.CoordinatorAssemblyBlocked, cts.Token);
 
-        await _steering.SteerAsync(coordinatorRunId, "send", null, "please retry", "alice", cts.Token);
+        await _steering.SteerAsync(coordinatorRunId, "send", null, "please retry", "alice", ct: cts.Token);
         await WaitForEventAsync(coordinatorRunId, EventTypes.CoordinatorRecovered, cts.Token);
 
         var events = _streamStore.Get(coordinatorRunId)!.GetSnapshotSince(0).Events;
@@ -1852,7 +2016,7 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
             "a send message is not a state change and must not re-enter the blocked assembly path");
         _pipeline.IntegrationBuilds.Should().Be(0);
 
-        await _steering.SteerAsync(coordinatorRunId, "stop", null, "", "alice", cts.Token);
+        await _steering.SteerAsync(coordinatorRunId, "stop", null, "", "alice", ct: cts.Token);
         await runTask;
     }
 
@@ -2153,19 +2317,11 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         string coordinatorRunId,
         AssemblyReviewDecision decision)
     {
-        var method = typeof(CoordinatorEndpoints).GetMethod(
-            "PersistAssemblyReviewDecisionAsync",
-            BindingFlags.NonPublic | BindingFlags.Static);
-        method.Should().NotBeNull("the endpoint helper owns durable assembly review persistence");
-
-        var task = (Task)method!.Invoke(null,
-        [
-            coordinatorRunId,
-            decision,
-            _scopeFactory,
-            CancellationToken.None,
-        ])!;
-        await task.ConfigureAwait(false);
+        // #226 S2 refactor: the endpoint's private PersistAssemblyReviewDecisionAsync local was folded
+        // into the shared CoordinatorAssemblyReviewPersistence.DeliverDecisionAsync helper, which delegates
+        // durable persistence to PersistDecisionAsync. Assert against that canonical persistence method.
+        await CoordinatorAssemblyReviewPersistence.PersistDecisionAsync(
+            _scopeFactory, coordinatorRunId, decision, CancellationToken.None).ConfigureAwait(false);
     }
 
     private async Task InvokeParkBuildTestInfrastructureFailureAsync(
@@ -2286,7 +2442,9 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         string? feedback,
         IReadOnlyDictionary<int, IReadOnlySet<string>> touchedFilesBySubtask,
         string aggregateTreeHash,
-        CancellationToken ct)
+        CancellationToken ct,
+        IReadOnlyList<string>? targetFiles = null,
+        IReadOnlyCollection<(int, int)>? edges = null)
     {
         var method = typeof(CoordinatorAssemblyService).GetMethod(
             "RouteAssemblyGateThroughSteeringAsync",
@@ -2296,9 +2454,10 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         [
             context,
             workPlanId,
-            Array.Empty<(int, int)>(),
+            edges ?? Array.Empty<(int, int)>(),
             source,
             feedback,
+            targetFiles,
             touchedFilesBySubtask,
             aggregateTreeHash,
             ct,

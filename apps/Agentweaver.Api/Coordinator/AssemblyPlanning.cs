@@ -165,6 +165,106 @@ public static class AssemblyPlanning
     // (ExtractFileTokens / ExtractTouchedFiles / NormalizePath) are retained: output-conflict
     // detection still uses them.
 
+    // -----------------------------------------------------------------------
+    // #223 implicated-subtask scoping (shared by the deterministic direction-B executor and the
+    // live steering path). Deterministic reverse-map from a reviewer's STRUCTURED file hint onto the
+    // subtasks that touched those files — never prose, never subtask ids. Fail-safe over-include.
+    // -----------------------------------------------------------------------
+
+    /// <summary>Fallback reason: the reviewer emitted no structured <c>targetFiles</c> field at all.</summary>
+    public const string ScopeFallbackNoField = "no_target_files_field";
+
+    /// <summary>Fallback reason: a <c>targetFiles</c> field was present but reverse-mapped to no subtask.</summary>
+    public const string ScopeFallbackNoMatch = "target_files_matched_nothing";
+
+    /// <summary>
+    /// #223 — the SINGLE implicated-scoping rule shared by <c>RequestChangesAsync</c> and the live
+    /// <c>RouteAssemblyGateThroughSteeringAsync</c>. Reverse-maps a reviewer's STRUCTURED
+    /// <paramref name="targetFiles"/> hint (repo-relative diff paths the reviewer actually saw — never
+    /// prose, never subtask ids) onto the assembly-eligible subtasks that touched one of those files.
+    /// Only these subtasks' authors produced a rejected artifact, so only these are eligible for author
+    /// lockout — a prose/research/PRD/UX subtask that committed only unnamed files is EXCLUDED.
+    /// <para>Fail-safe over-include: when no target files are provided (<paramref name="usedFallback"/> =
+    /// true, reason <see cref="ScopeFallbackNoField"/>) OR the provided files match nothing
+    /// (<paramref name="usedFallback"/> = true, reason <see cref="ScopeFallbackNoMatch"/>), the WHOLE
+    /// contributor set is returned — a request-changes must always reset SOMETHING. The out-params make
+    /// the reversion to broad behavior observable rather than silent.</para>
+    /// </summary>
+    /// <param name="touchedFilesBySubtask">Assembly-eligible subtask id → the (normalized) files it committed.</param>
+    /// <param name="targetFiles">The reviewer's structured implicated-file hint (may be null/empty).</param>
+    /// <param name="usedFallback">True when the broad all-contributors set was returned.</param>
+    /// <param name="fallbackReason">
+    /// <see cref="ScopeFallbackNoField"/> / <see cref="ScopeFallbackNoMatch"/> when
+    /// <paramref name="usedFallback"/>; empty otherwise.</param>
+    public static IReadOnlyList<int> ScopeImplicatedSubtasks(
+        IReadOnlyDictionary<int, IReadOnlySet<string>> touchedFilesBySubtask,
+        IReadOnlyList<string>? targetFiles,
+        out bool usedFallback,
+        out string fallbackReason)
+    {
+        var candidateIds = touchedFilesBySubtask.Keys.OrderBy(x => x).ToList();
+
+        var wanted = (targetFiles ?? [])
+            .Select(NormalizePath)
+            .Where(f => f.Length > 0)
+            .ToList();
+
+        if (wanted.Count == 0)
+        {
+            usedFallback = true;
+            fallbackReason = ScopeFallbackNoField;
+            return candidateIds;
+        }
+
+        var matched = touchedFilesBySubtask
+            .Where(kv => kv.Value.Any(tf => wanted.Any(w =>
+                string.Equals(tf, w, StringComparison.OrdinalIgnoreCase)
+                || tf.EndsWith("/" + w, StringComparison.OrdinalIgnoreCase))))
+            .Select(kv => kv.Key)
+            .OrderBy(x => x)
+            .ToList();
+
+        if (matched.Count > 0)
+        {
+            usedFallback = false;
+            fallbackReason = string.Empty;
+            return matched;
+        }
+
+        usedFallback = true;
+        fallbackReason = ScopeFallbackNoMatch;
+        return candidateIds;
+    }
+
+    /// <summary>
+    /// #223 — the transitive DEPENDENT closure of <paramref name="implicated"/>: every subtask that
+    /// depends, directly or transitively, on an implicated subtask (following the
+    /// <c>(SubtaskId, DependsOnSubtaskId)</c> edges in REVERSE). EXCLUDES the implicated subtasks
+    /// themselves. The redispatch set is <c>implicated ∪ dependents</c>: a dependent did nothing wrong
+    /// (its author is NEVER locked out) but must rebuild against the revised contract of the subtask it
+    /// depends on. Deterministic (ascending id), cycle-safe (each id visited once).
+    /// </summary>
+    public static IReadOnlyList<int> TransitiveDependents(
+        IReadOnlyCollection<int> implicated,
+        IReadOnlyCollection<(int SubtaskId, int DependsOnSubtaskId)> edges)
+    {
+        var seed = implicated.ToHashSet();
+        var dependents = new HashSet<int>();
+        var queue = new Queue<int>(seed);
+        while (queue.Count > 0)
+        {
+            var current = queue.Dequeue();
+            foreach (var e in edges.Where(e => e.DependsOnSubtaskId == current))
+            {
+                if (seed.Contains(e.SubtaskId))
+                    continue;
+                if (dependents.Add(e.SubtaskId))
+                    queue.Enqueue(e.SubtaskId);
+            }
+        }
+        return dependents.OrderBy(x => x).ToList();
+    }
+
     private static string NormalizePath(string path) =>
         path.Replace('\\', '/').Trim().TrimStart('/');
 }

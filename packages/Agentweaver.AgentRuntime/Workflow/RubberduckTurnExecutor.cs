@@ -119,6 +119,10 @@ public sealed class RubberduckTurnExecutor : Executor<AgentTurnOutput, WorkflowR
                 - REVISE — the producer should revise before continuing
 
                 If your verdict is REVISE, provide concise, actionable feedback.
+                If specific files are implicated, add a machine-readable directive on its own line:
+                TARGET_FILES: <comma-separated repo-relative paths>
+                List ONLY the files that must change; omit the line entirely if you cannot attribute the
+                problem to specific files.
                 """;
 
             agent = _agentFactory?.CreateRubberduckAgent()
@@ -154,7 +158,8 @@ public sealed class RubberduckTurnExecutor : Executor<AgentTurnOutput, WorkflowR
                     return new WorkflowReviewDecision(
                         Approved: false,
                         RequestChanges: true,
-                        Feedback: ExtractFeedback(response));
+                        Feedback: ExtractFeedback(response),
+                        TargetFiles: ReviewTargetFiles.Parse(response));
                 }
             }
             else
@@ -232,6 +237,7 @@ public sealed class RubberduckTurnExecutor : Executor<AgentTurnOutput, WorkflowR
         var lines = response.Split('\n', StringSplitOptions.RemoveEmptyEntries);
         var feedbackLines = lines
             .SkipWhile(l => StripLeadingMarkers(l).StartsWith("REVISE", StringComparison.Ordinal))
+            .Where(l => !ReviewTargetFiles.IsDirectiveLine(l))
             .ToArray();
         return feedbackLines.Length > 0 ? string.Join('\n', feedbackLines).Trim() : response.Trim();
     }

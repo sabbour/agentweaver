@@ -59,11 +59,29 @@ deliberate human decision — not a platform dead-end.
 
 ### Request changes
 
-The coordinator passes your feedback to the autonomous steering loop, which receives a **fresh budget
-window** (the loop's iteration counter is reset) so it can act on your specific guidance without
-immediately re-exhausting. A round-trip counter is incremented; after **3 human round-trips** the
-autonomy loop is paused (your gate stays open) but the run never terminates on its own — you still hold
-Approve / Decline.
+The coordinator passes your feedback to the autonomous steering loop, which **always** receives a fresh
+budget window (the loop's iteration counter is reset) so it can act on your specific guidance without
+immediately re-exhausting. There is **no cap on human round-trips** — a request-changes is a deliberate,
+supervised instruction, so it is always honored; the run never re-parks or terminates on its own for
+submitting "too many" changes. A round-trip counter is still recorded, but only as telemetry. You always
+hold Approve / Decline, and each granted round is still bounded by the autonomous per-pass steering budget.
+
+### Steer the coordinator while it's parked
+
+While the review card is open (`awaiting_review`, "coordinator steerable"), you can also talk to the
+coordinator directly with `POST /api/runs/{id}/steer` instead of the review card's Request-changes button:
+
+- **`redirect` / `amend`** — treated exactly like a Request-changes: your instruction wakes the parked
+  loop, re-dispatches the implicated work with a fresh steering budget, and the directive settles
+  **`relayed`** (or **`deferred`**, see below). Previously these were accepted but silently dropped at the
+  review gate; now they are always acted upon. By default your instruction re-engages the full contributor
+  set; set `targetChildRunId` to narrow the change to one subtask and the others that touched its files.
+- **`send`** — posts an advisory note onto the coordinator's timeline without changing the gate: no
+  re-dispatch, no budget reset. It settles **`applied`** so you get confirmation it landed.
+
+Whichever verb you use, the directive now reaches a definite outcome — it is never left stuck at `queued`.
+If the review gate happens to be held on a different API replica, the request is durably handed off to the
+owning replica; the directive shows **`deferred`** and the call returns `202 Accepted` instead of `201`.
 
 ## Accumulated feedback across revision rounds
 
@@ -78,7 +96,12 @@ handed to the agent.
 
 ## Reviewer-rejection lockout: how author rotation works
 
-When a reviewer issues a **rejection** (request-changes):
+When a reviewer requests changes, the coordinator no longer touches **every** agent that contributed a
+file. The reviewer names the implicated files (a structured `TARGET_FILES:` hint), and only the subtasks
+that actually produced those files are treated as rejected. This prevents the all-agent lockout that used to
+deadlock large runs (#223).
+
+When a reviewer issues a **rejection** (request-changes) against those implicated subtasks:
 
 1. The current author is **locked out** of that specific subtask for the rest of the revision cycle.
 2. The coordinator selects a **different eligible agent** from the project roster.
@@ -88,6 +111,11 @@ When a reviewer issues a **rejection** (request-changes):
    - a **new session identity** (the new agent never inherits the locked-out author's session).
 4. A visible `coordinator.steering_decision` event records the rotation: who was locked out and who was
    selected.
+
+Subtasks that merely **depend** on an implicated subtask are also re-dispatched — they must rebuild against
+the revised contract — but their authors are **never** locked out (they did nothing wrong). If the reviewer
+provides no usable file hint, the coordinator falls back to the previous broad behavior and emits a
+`coordinator.assembly_implicated_scope_fallback` event so the reversion is visible.
 
 **Advisory or steering feedback (not a rejection)** keeps the same agent in place — no lockout, no
 rotation, just a context-carrying in-place revision.
@@ -113,12 +141,15 @@ context intact.
 ## Configuration
 
 See the [reference](../reference/resilient-assembly-review.md#configuration) for the full config table.
-The two operator-facing knobs are:
+The operator-facing knob is:
 
 | Knob | Default | What to adjust |
 |---|---|---|
 | `Coordinator:StaleLockThresholdSeconds` | `15` | Increase if your CI/CD agents keep git processes alive longer than 15 s after a child turn ends; decrease if you want stale locks cleared faster. A value of `0` is not recommended — it may clear locks owned by a concurrent in-flight git operation. |
-| Max human review round-trips | `3` (constant) | Hard-coded in `CoordinatorSteeringDecider.DefaultMaxHumanReviewRoundTrips`. Contact your platform operator to change this between deployments. |
+
+> Human review round-trips are **not** capped. The former `DefaultMaxHumanReviewRoundTrips` constant was
+> removed — a human request-changes always resets the autonomous steering budget, so there is no operator
+> knob to tune here.
 
 ## Related reading
 

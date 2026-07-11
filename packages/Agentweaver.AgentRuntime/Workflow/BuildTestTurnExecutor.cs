@@ -179,6 +179,12 @@ public sealed class BuildTestTurnExecutor : Executor<AgentTurnOutput, WorkflowRe
         - APPROVED — build succeeds and all tests pass.
         - REQUEST_CHANGES — build/tests/lint fail, or required checks cannot be completed.
         - DECLINED — the work is not viable or should not continue.
+
+        If your verdict is REQUEST_CHANGES and the failures point at specific files, add a
+        machine-readable directive on its own line:
+        TARGET_FILES: <comma-separated repo-relative paths>
+        List ONLY the files that must change; omit the line entirely if you cannot attribute the
+        failures to specific files.
         """;
 
     internal static bool TryParseVerdict(string? response, out WorkflowReviewDecision decision)
@@ -199,7 +205,11 @@ public sealed class BuildTestTurnExecutor : Executor<AgentTurnOutput, WorkflowRe
 
             if (verdict == BuildTestVerdict.RequestChanges)
             {
-                decision = new WorkflowReviewDecision(false, RequestChanges: true, Feedback: ExtractFeedback(response));
+                decision = new WorkflowReviewDecision(
+                    false,
+                    RequestChanges: true,
+                    Feedback: ExtractFeedback(response),
+                    TargetFiles: ReviewTargetFiles.Parse(response));
                 return true;
             }
 
@@ -369,6 +379,7 @@ public sealed class BuildTestTurnExecutor : Executor<AgentTurnOutput, WorkflowRe
             {
                 return TryParseVerdictLine(l, out _);
             })
+            .Where(l => !ReviewTargetFiles.IsDirectiveLine(l))
             .ToArray();
         return lines.Length > 0 ? string.Join('\n', lines).Trim() : response.Trim();
     }

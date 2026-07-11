@@ -625,15 +625,14 @@ discarded (`CoordinatorAssemblyService.cs:1536`, `:1548`, `:1869`, `:1918`). `Ag
 treats `AwaitingReview` as active, so review/preview AgentHost claims are not reaped during that window
 (`apps/Agentweaver.Api/Sandbox/AgentHostReaperService.cs:86`, `:102`).
 
-When the reviewer requests changes, the coordinator tries to avoid redoing everything:
+When a gate requests changes, the coordinator avoids redoing everything by scoping to the reviewer's **implicated** subtasks (#223):
 
-1. Combine explicit target files with path-like tokens parsed from feedback.
-2. Match those files against files touched by each child diff.
-3. Select directly matched subtasks.
-4. Add every transitive dependent of those subtasks.
-5. If no files can be inferred or no child matches, fall back to all subtasks.
+1. Read the reviewer's structured `TARGET_FILES:` hint (`ReviewTargetFiles.Parse`) — a machine-readable directive line, not prose scraped from feedback.
+2. Reverse-map those files onto the assembly-eligible subtasks that actually committed them (`AssemblyPlanning.ScopeImplicatedSubtasks`) — the *implicated* set. Only these authors are eligible for author lockout.
+3. Sweep the implicated set's transitive dependents (`AssemblyPlanning.TransitiveDependents`) — they must rebuild against the revised contract, but their authors are **never** locked out (locking a blameless dependent re-creates the roster-exhaustion deadlock).
+4. If the hint is missing or reverse-maps to nothing, fall back to all contributors (fail-safe) and emit `coordinator.assembly_implicated_scope_fallback`.
 
-Selected subtasks are reset to `pending` with recovery guidance containing the review feedback. Other completed subtasks remain intact. The WorkPlan returns to `dispatching`, and the dispatch loop re-runs the affected frontier. After those children finish, assembly starts again from `awaiting_assembly`.
+The implicated subtasks are reset to `pending` with recovery guidance containing the review feedback; their already-satisfied dependents are reset too (`RedispatchDependentsAsync`). Other completed subtasks remain intact. The WorkPlan returns to `dispatching`, and the dispatch loop re-runs the affected frontier. After those children finish, assembly starts again from `awaiting_assembly`.
 
 ### Merge, scribe, and decision promotion
 

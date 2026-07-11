@@ -92,17 +92,6 @@ public sealed class CoordinatorSteeringDecider : Agentweaver.Api.Infrastructure.
     /// </summary>
     public const int MaxExecutionAttempts = 3;
 
-    /// <summary>
-    /// UNIFIED AUTONOMOUS STEERING (Fix-B, §7 locked) — max HUMAN-review round-trips whose feedback
-    /// resets the autonomous steering budget. A human request-changes after budget exhaustion is a fresh
-    /// mandate, so it zeroes <see cref="WorkPlan.SteeringIterations"/> (via
-    /// <see cref="ResetSteeringBudgetAsync"/>) to let the coordinator converge again under human guidance.
-    /// After this many round-trips the budget is NO LONGER reset — autonomy stops re-steering and the plan
-    /// simply parks (again) at human review. Bounded by the persisted
-    /// <see cref="WorkPlan.HumanReviewRoundTrips"/> counter so it is cross-replica/crash-safe. Default 3.
-    /// </summary>
-    public const int DefaultMaxHumanReviewRoundTrips = 3;
-
     public CoordinatorSteeringDecider(
         IServiceScopeFactory scopeFactory,
         CoordinatorSteeringService steering,
@@ -455,9 +444,11 @@ public sealed class CoordinatorSteeringDecider : Agentweaver.Api.Infrastructure.
     /// so <see cref="DecideAsync"/>'s budget CAS has headroom again. Committed in ONE transaction; the
     /// per-plan zero uses a guarded/optimistic CAS on the observed <paramref name="expectedIterations"/>
     /// so a concurrent decider cannot lose an increment race (it retries with the fresh value). This is
-    /// gated to <c>source == human-review</c> by the caller and BOUNDED by the persisted
-    /// <see cref="WorkPlan.HumanReviewRoundTrips"/> counter — autonomous gates can NEVER reset their own
-    /// budget (that would reintroduce the infinite loop the budget exists to stop).
+    /// gated to <c>source == human-review</c> by the caller: a supervised human request-changes ALWAYS
+    /// grants a fresh convergence mandate (there is no cap). The persisted
+    /// <see cref="WorkPlan.HumanReviewRoundTrips"/> counter is retained purely as a telemetry/observability
+    /// signal, not a gate. Autonomous gates can NEVER reset their own budget (that would reintroduce the
+    /// infinite loop the budget exists to stop).
     /// </summary>
     public async Task ResetSteeringBudgetAsync(
         int workPlanId, IReadOnlyCollection<int> subtaskIds, CancellationToken ct = default)

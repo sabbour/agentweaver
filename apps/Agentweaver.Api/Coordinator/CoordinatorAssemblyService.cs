@@ -878,7 +878,7 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
                             Approved: approved,
                             RequestChanges: requestChanges,
                             Feedback: buildTest.Feedback,
-                            TargetFiles: null,
+                            TargetFiles: buildTest.TargetFiles,
                             Reviewer: "build-test"),
                         SteeringSource.BuildTest,
                         aggregateTreeHash,
@@ -946,7 +946,7 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
                     // or re-dispatched the plan the loop returns; an advisory decision continues.
                     if (await RouteAssemblyGateThroughSteeringAsync(
                             context, workPlanId, edges, SteeringSource.Rubberduck,
-                            rubberduck.Feedback, touchedFilesBySubtask, aggregateTreeHash, ct)
+                            rubberduck.Feedback, rubberduck.TargetFiles, touchedFilesBySubtask, aggregateTreeHash, ct)
                         .ConfigureAwait(false))
                         return;
                     continue;
@@ -1167,7 +1167,7 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
             // RequestChangesAsync directly. The coordinator consciously chooses A/B/C/D.
             await RouteAssemblyGateThroughSteeringAsync(
                 context, workPlanId, edges, SteeringSource.HumanReview, decision.Feedback,
-                touchedFilesBySubtask, aggregateTreeHash, ct).ConfigureAwait(false);
+                decision.TargetFiles, touchedFilesBySubtask, aggregateTreeHash, ct).ConfigureAwait(false);
             return;
         }
 
@@ -1226,7 +1226,7 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
             // re-dispatched/in-place-steered); false = advisory, continue the loop.
             var stop = await RouteAssemblyGateThroughSteeringAsync(
                 context, workPlanId, edges, steeringSource, decision.Feedback,
-                touchedFilesBySubtask, aggregateTreeHash, ct).ConfigureAwait(false);
+                decision.TargetFiles, touchedFilesBySubtask, aggregateTreeHash, ct).ConfigureAwait(false);
             return !stop;
         }
 
@@ -1763,37 +1763,31 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         IReadOnlyDictionary<int, IReadOnlySet<string>> touchedFilesBySubtask,
         CancellationToken ct)
     {
-        // UNIFIED AUTONOMOUS STEERING (rev8, §9): the fragile prose-parsing InferRedispatch heuristic
-        // is DELETED. This method is now the deterministic direction-B (conscious fresh dispatch)
-        // executor: the target is the set of assembly-eligible subtasks that produced changes (the
-        // keys of the touched-files map), never a set inferred from reviewer prose. Explicit
-        // TargetFiles from a source that actually knows (e.g. build-test) narrow the set when present.
-        var candidateIds = touchedFilesBySubtask.Keys.ToHashSet();
-        IReadOnlyList<int> targetIds;
-        if (decision.TargetFiles is { Count: > 0 })
-        {
-            var wanted = decision.TargetFiles
-                .Select(f => f.Replace('\\', '/').Trim().TrimStart('/'))
-                .Where(f => f.Length > 0)
-                .ToList();
-            var matched = touchedFilesBySubtask
-                .Where(kv => kv.Value.Any(tf => wanted.Any(w =>
-                    string.Equals(tf, w, StringComparison.OrdinalIgnoreCase)
-                    || tf.EndsWith("/" + w, StringComparison.OrdinalIgnoreCase))))
-                .Select(kv => kv.Key)
-                .ToHashSet();
-            targetIds = (matched.Count > 0 ? matched : candidateIds).OrderBy(x => x).ToList();
-        }
-        else
-        {
-            targetIds = candidateIds.OrderBy(x => x).ToList();
-        }
+        // UNIFIED AUTONOMOUS STEERING (rev8, §9) + #223: the fragile prose-parsing InferRedispatch
+        // heuristic is DELETED. This method is the deterministic direction-B (conscious fresh dispatch)
+        // executor. The IMPLICATED set is the reviewer-named subtasks (via the SINGLE shared scoping
+        // helper) — never the raw touched-files keys, never a set inferred from prose. The REDISPATCH
+        // set additionally sweeps the implicated subtasks' transitive dependents: they did nothing wrong
+        // (no author lockout — this fresh-dispatch path does not lock out anyway), but they built against
+        // the now-revised contract and must rebuild. #223 fix: a prose/PRD/UX subtask that committed only
+        // unnamed files is no longer swept in — only reviewer-implicated subtasks + their dependents.
+        var implicatedIds = AssemblyPlanning.ScopeImplicatedSubtasks(
+            touchedFilesBySubtask, decision.TargetFiles, out var usedFallback, out var fallbackReason);
+        var dependentIds = AssemblyPlanning.TransitiveDependents(implicatedIds, edges);
+        var targetIds = implicatedIds.Concat(dependentIds).Distinct().OrderBy(x => x).ToList();
+
+        if (usedFallback)
+            EmitImplicatedScopeFallback(
+                context.CoordinatorRunId, workPlanId, source: decision.Reviewer, reviewer: decision.Reviewer,
+                reason: fallbackReason, namedFiles: decision.TargetFiles, touchedFilesBySubtask);
 
         Emit(context.CoordinatorRunId, EventTypes.CoordinatorAssemblyChangesRequested, new
         {
             workPlanId,
             redispatchSubtaskIds = targetIds,
             redispatchedSubtaskIds = targetIds,
+            implicatedSubtaskIds = implicatedIds,
+            dependentSubtaskIds = dependentIds,
             feedback = decision.Feedback,
         });
 
@@ -1809,10 +1803,14 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
                 context.CoordinatorRunId, context.RepositoryPath, ct).ConfigureAwait(false);
         }
 
-        // Reset the selected subtasks to pending (leave others' results intact); clear stage and move
-        // the plan back to dispatching so the dispatch engine re-runs the affected frontier.
+        // Reset the IMPLICATED subtasks to pending (leave others' results intact) and additionally sweep
+        // their transitive dependents that already built against the now-revised contract. Clear stage
+        // and move the plan back to dispatching so the dispatch engine re-runs the affected frontier.
         await ResetSubtasksToPendingAsync(
-            context.CoordinatorRunId, targetIds, decision.Feedback ?? string.Empty, ct).ConfigureAwait(false);
+            context.CoordinatorRunId, implicatedIds, decision.Feedback ?? string.Empty, ct).ConfigureAwait(false);
+        await RedispatchDependentsAsync(
+            context.CoordinatorRunId, workPlanId, dependentIds, decision.Feedback ?? string.Empty, ct)
+            .ConfigureAwait(false);
         await _assemblyStore.SetStatusAndStageAsync(
             workPlanId, WorkPlanStatus.Dispatching, null, ct).ConfigureAwait(false);
         await CoordinatorAssemblyReviewPersistence.ClearAsync(_scopeFactory, context.CoordinatorRunId, ct)
@@ -1831,6 +1829,69 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         _logger.LogInformation(
             "Collective assembly: changes requested for run {RunId}; re-dispatching subtasks [{Ids}]",
             context.CoordinatorRunId, string.Join(",", targetIds));
+    }
+
+    /// <summary>
+    /// #223 — resets an implicated set's TRANSITIVE DEPENDENTS to pending so they rebuild against the
+    /// revised contract, WITHOUT locking out their authors (a dependent did nothing wrong; locking it
+    /// re-creates the roster-exhaustion deadlock). Only dependents that already reached a satisfying
+    /// state (<see cref="SubtaskStatus.AssembleReady"/>/<see cref="SubtaskStatus.Completed"/>) are reset:
+    /// a still-pending/running dependent needs no reset and must never be clobbered (keeps a crash
+    /// re-drive idempotent). Returns the ids actually reset.
+    /// </summary>
+    private async Task<IReadOnlyList<int>> RedispatchDependentsAsync(
+        string coordinatorRunId, int workPlanId, IReadOnlyCollection<int> dependentSubtaskIds,
+        string feedback, CancellationToken ct)
+    {
+        if (dependentSubtaskIds.Count == 0) return [];
+
+        List<int> toRebuild;
+        using (var scope = _scopeFactory.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            toRebuild = await db.Subtasks.AsNoTracking()
+                .Where(s => s.WorkPlanId == workPlanId
+                    && dependentSubtaskIds.Contains(s.Id)
+                    && (s.Status == SubtaskStatus.AssembleReady || s.Status == SubtaskStatus.Completed))
+                .Select(s => s.Id)
+                .OrderBy(id => id)
+                .ToListAsync(ct).ConfigureAwait(false);
+        }
+
+        if (toRebuild.Count > 0)
+        {
+            await ResetSubtasksToPendingAsync(coordinatorRunId, toRebuild, feedback, ct).ConfigureAwait(false);
+            _logger.LogInformation(
+                "Collective assembly: #223 re-dispatching non-implicated dependents [{Ids}] for run {RunId} (rebuild against revised contract; authors NOT locked out)",
+                string.Join(",", toRebuild), coordinatorRunId);
+        }
+        return toRebuild;
+    }
+
+    /// <summary>
+    /// #223 telemetry — surfaces that the implicated-subtask scoping reverted to the broad
+    /// all-contributors set (either no structured <c>targetFiles</c> field was present, or the field
+    /// reverse-mapped to nothing). Emitting this makes a silent reversion to broad reset/lockout
+    /// observable, carrying the raw reviewer-named files vs the touched-file universe.
+    /// </summary>
+    private void EmitImplicatedScopeFallback(
+        string coordinatorRunId, int workPlanId, string? source, string? reviewer, string reason,
+        IReadOnlyList<string>? namedFiles,
+        IReadOnlyDictionary<int, IReadOnlySet<string>> touchedFilesBySubtask)
+    {
+        Emit(coordinatorRunId, EventTypes.CoordinatorAssemblyImplicatedScopeFallback, new
+        {
+            workPlanId,
+            source,
+            reviewer,
+            reason,
+            namedFiles = namedFiles ?? [],
+            touchedFiles = touchedFilesBySubtask.Values.SelectMany(v => v).Distinct().OrderBy(f => f).ToList(),
+            contributorIds = touchedFilesBySubtask.Keys.OrderBy(x => x).ToList(),
+        });
+        _logger.LogInformation(
+            "Collective assembly: #223 implicated-scope fell back to all contributors for run {RunId} (reason={Reason}, source={Source}, namedFiles=[{Named}])",
+            coordinatorRunId, reason, source, string.Join(",", namedFiles ?? []));
     }
 
     /// <summary>
@@ -1854,40 +1915,54 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         IReadOnlyCollection<(int, int)> edges,
         string source,
         string? feedback,
+        IReadOnlyList<string>? targetFiles,
         IReadOnlyDictionary<int, IReadOnlySet<string>> touchedFilesBySubtask,
         string aggregateTreeHash,
         CancellationToken ct)
     {
         var steering = _serviceProvider.GetRequiredService<CoordinatorSteeringService>();
         var decider = _serviceProvider.GetRequiredService<CoordinatorSteeringDecider>();
-        var targetIds = touchedFilesBySubtask.Keys.OrderBy(x => x).ToArray();
 
-        // UNIFIED AUTONOMOUS STEERING (Fix-B, change #2/#4): a HUMAN request-changes that arrives AFTER
-        // the autonomous budget was exhausted (and the plan escalated to review) is a FRESH mandate, not
-        // another autonomous loop iteration. Persistently (cross-replica/crash-safe) count the human
-        // round-trip; while at/under the configured cap, RESET the autonomous steering budget so the
-        // coordinator's decider can converge again under human guidance. Autonomous sources
-        // (rubberduck/rai/build-test/agent) NEVER reset their own budget — that reset-gating is exactly
-        // what stops the infinite loop the budget exists to bound. Past the cap we do NOT reset: the
-        // decider returns Proceed → the plan re-parks at human review (autonomy stops re-steering, the
-        // human stays in control — never terminal, never a hidden loop).
+        // #223 — TWO DISTINCT SETS. The IMPLICATED set (lockoutSet) is the reviewer-named subtasks only
+        // (via the SINGLE shared scoping helper): only these authors produced a rejected artifact, so
+        // ONLY these are the steering target scope (persisted on the directive) and ONLY these are
+        // eligible for author lockout on the DispatchFresh rotation. The REDISPATCH set additionally
+        // sweeps their transitive dependents — they built against the now-revised contract and must
+        // rebuild, but WITHOUT author lockout (locking them re-creates the roster-exhaustion deadlock).
+        // The live path NO LONGER uses the raw touchedFilesBySubtask.Keys as the implicated set (#223).
+        var implicatedIds = AssemblyPlanning.ScopeImplicatedSubtasks(
+            touchedFilesBySubtask, targetFiles, out var usedFallback, out var fallbackReason);
+        var dependentIds = AssemblyPlanning.TransitiveDependents(implicatedIds, edges);
+        var redispatchIds = implicatedIds.Concat(dependentIds).Distinct().OrderBy(x => x).ToList();
+        var targetIds = implicatedIds.OrderBy(x => x).ToArray();
+
+        if (usedFallback)
+            EmitImplicatedScopeFallback(
+                context.CoordinatorRunId, workPlanId, source, reviewer: $"gate:{source}",
+                reason: fallbackReason, namedFiles: targetFiles, touchedFilesBySubtask);
+
+        // UNIFIED AUTONOMOUS STEERING (Fix-B, change #2/#4): a HUMAN request-changes is a SUPERVISED,
+        // deliberate action, so it ALWAYS grants a FRESH convergence mandate — it UNCONDITIONALLY resets
+        // the autonomous steering budget so the coordinator's decider can converge again under human
+        // guidance. There is NO cap: capping human round-trips would silently stop honoring explicit
+        // human requests, a dead-end. The persisted round-trip counter is retained purely as a
+        // telemetry/observability signal. Autonomous sources (rubberduck/rai/build-test/agent) NEVER
+        // reset their own budget — that reset-gating (DefaultMaxPlanSteeringIterations) is exactly what
+        // bounds the UNSUPERVISED loop the budget exists to stop.
         if (source == SteeringSource.HumanReview)
         {
             var roundTrips = await _assemblyStore
                 .IncrementHumanReviewRoundTripAsync(workPlanId, ct).ConfigureAwait(false);
-            var underCap = roundTrips <= CoordinatorSteeringDecider.DefaultMaxHumanReviewRoundTrips;
-            if (underCap)
-                await decider.ResetSteeringBudgetAsync(workPlanId, targetIds, ct).ConfigureAwait(false);
+            // #223 budget hygiene: reset the FULL redispatch closure (implicated ∪ dependents) so no
+            // subtask about to be re-dispatched carries a stale RecoveryAttempts count from a prior,
+            // more-broadly-scoped round.
+            await decider.ResetSteeringBudgetAsync(workPlanId, redispatchIds, ct).ConfigureAwait(false);
             Emit(context.CoordinatorRunId, EventTypes.CoordinatorSteering, new
             {
                 workPlanId,
                 source,
                 humanReviewRoundTrip = roundTrips,
-                maxHumanReviewRoundTrips = CoordinatorSteeringDecider.DefaultMaxHumanReviewRoundTrips,
-                budgetReset = underCap,
-                note = underCap
-                    ? "human request-changes: autonomous steering budget reset for a fresh convergence pass"
-                    : "human round-trip cap reached: budget NOT reset; will re-park at human review",
+                note = "human request-changes: autonomous steering budget reset for a fresh convergence pass",
             });
         }
 
@@ -1896,10 +1971,13 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         // AssemblyStartedAt as the lease heartbeat so the reclaim path can tell fresh from stale.
         await _assemblyStore.SetAssemblySteeringAsync(workPlanId, ct).ConfigureAwait(false);
 
+        // The persisted directive scope is the IMPLICATED set (crash-recovery re-derives dependents from
+        // it + the plan edges), and carries the reviewer's structured file hint so the scope survives a
+        // restart.
         var signal = SteeringSignal.Create(
             context.CoordinatorRunId, source, SteeringTargetScope.ForSubtasks(targetIds),
             feedback ?? string.Empty, SteeringSeverity.RequestChanges, SteeringKind.Redirect,
-            createdBy: $"gate:{source}", treeHash: aggregateTreeHash);
+            createdBy: $"gate:{source}", treeHash: aggregateTreeHash, targetFiles: targetFiles);
         var view = await steering.SubmitSteeringAsync(signal, ct).ConfigureAwait(false);
 
         // Claim the queued directive for the inline decision (single-writer boundary → direct CAS).
@@ -1959,8 +2037,13 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
             // completes re-drives the rotation idempotently via DriveOutstandingSteeringExecutionAsync,
             // never a silent applied); ExecuteLockoutRotationAsync settles it `applied` after the effect.
             await decider.MarkDirectiveExecutingAsync(view.Id, ct).ConfigureAwait(false);
+            // #223: lockout targets = the IMPLICATED set only (decision.SubtaskIds, from the persisted
+            // directive scope). The transitive dependents are re-derived from that same set + the plan
+            // edges so the live path and the crash-recovery re-drive compute an identical redispatch
+            // closure. Dependents are re-dispatched WITHOUT lockout.
+            var freshDependents = AssemblyPlanning.TransitiveDependents(decision!.SubtaskIds, edges);
             return await ExecuteLockoutRotationAsync(
-                context, workPlanId, edges, decision!.SubtaskIds, view.Id, attempt,
+                context, workPlanId, edges, decision.SubtaskIds, freshDependents, view.Id, attempt,
                 feedback ?? string.Empty, aggregateTreeHash, touchedFilesBySubtask, ct).ConfigureAwait(false);
         }
 
@@ -2005,12 +2088,18 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
     /// rejection), the run ESCALATES to human review (protocol step 7) with the accumulated feedback +
     /// locked-out roster attached — never a rotation to an unrelated agent, never a terminal wedge.
     /// Returns true (the gate loop stops: either the rotation re-dispatched the plan, or it escalated).
+    /// <para>#223 — <paramref name="targetSubtaskIds"/> is the IMPLICATED (reviewer-named) set: ONLY
+    /// these authors are locked out. <paramref name="dependentSubtaskIds"/> is their transitive
+    /// dependent closure: those are re-dispatched to rebuild against the revised contract WITHOUT any
+    /// author lockout (locking a blameless dependent re-creates the roster-exhaustion deadlock #223
+    /// fixes). The two sets are NEVER collapsed.</para>
     /// </summary>
     private async Task<bool> ExecuteLockoutRotationAsync(
         CoordinatorDispatchContext context,
         int workPlanId,
         IReadOnlyCollection<(int, int)> edges,
         IReadOnlyList<int> targetSubtaskIds,
+        IReadOnlyList<int> dependentSubtaskIds,
         int directiveId,
         int attempt,
         string feedback,
@@ -2169,7 +2258,8 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         // Freshly-rotated targets AND any already-rotated targets carried in from a crash re-drive are
         // handed off together (the handoff is itself idempotent — see DispatchLockoutHandoffAsync).
         var handoffTargets = rotated.Concat(alreadyRotated).ToList();
-        await DispatchLockoutHandoffAsync(context, workPlanId, edges, handoffTargets, feedback, ct)
+        await DispatchLockoutHandoffAsync(
+            context, workPlanId, edges, handoffTargets, dependentSubtaskIds, feedback, ct)
             .ConfigureAwait(false);
 
         await decider.MarkDirectiveAppliedAsync(directiveId, ct).ConfigureAwait(false);
@@ -2202,6 +2292,7 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         int workPlanId,
         IReadOnlyCollection<(int, int)> edges,
         IReadOnlyList<(Subtask Subtask, RotationChoice Choice)> planned,
+        IReadOnlyList<int> dependentSubtaskIds,
         string feedback,
         CancellationToken ct)
     {
@@ -2212,6 +2303,7 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
             workPlanId,
             redispatchSubtaskIds = targetIds,
             redispatchedSubtaskIds = targetIds,
+            dependentSubtaskIds,
             feedback,
         });
 
@@ -2307,6 +2399,13 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         if (freshFallbackIds.Count > 0)
             await ResetSubtasksToPendingAsync(context.CoordinatorRunId, freshFallbackIds, feedback, ct)
                 .ConfigureAwait(false);
+
+        // #223: transitive dependents of the implicated subtasks are re-dispatched to rebuild against the
+        // revised contract — but WITHOUT any author lockout (they authored nothing rejected). This runs
+        // only on the re-dispatch path (never on escalation to human review), so a blameless dependent is
+        // reset iff the plan is actually going back out for another round.
+        await RedispatchDependentsAsync(context.CoordinatorRunId, workPlanId, dependentSubtaskIds, feedback, ct)
+            .ConfigureAwait(false);
 
         // Return the plan to dispatching and re-arm the loop, whose recovery-aware re-arm re-observes the
         // Running handoff child(ren) and re-arms assembly when they complete (Fix-A's failure→terminal
@@ -2932,12 +3031,16 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
 
             var freshAttempt = directive.ActionAttempt ?? 0;
             var freshTouched = freshTargetIds.ToDictionary(id => id, _ => (IReadOnlySet<string>)new HashSet<string>());
+            // #223: re-derive the transitive dependent closure from the SAME persisted implicated scope
+            // + plan edges, so the crash-recovery re-drive redispatches (without lockout) exactly the set
+            // the live path did.
+            var freshDependents = AssemblyPlanning.TransitiveDependents(freshTargetIds, edges);
             _logger.LogInformation(
                 "Steering(lockout): re-driving dispatch_fresh directive {DirectiveId} (attempt {Attempt}, targets [{Ids}]) " +
                 "for run {RunId} — idempotent rotation re-drive (crash recovery)",
                 directive.Id, freshAttempt, string.Join(",", freshTargetIds), context.CoordinatorRunId);
             await ExecuteLockoutRotationAsync(
-                context, workPlanId, edges, freshTargetIds, directive.Id, freshAttempt,
+                context, workPlanId, edges, freshTargetIds, freshDependents, directive.Id, freshAttempt,
                 directive.Instruction, directive.TreeHash ?? string.Empty, freshTouched, ct)
                 .ConfigureAwait(false);
             // Re-drove the rotation (which settles the directive + re-arms dispatch or escalates) — stop
