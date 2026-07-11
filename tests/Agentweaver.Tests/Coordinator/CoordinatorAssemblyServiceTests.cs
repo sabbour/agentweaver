@@ -828,46 +828,149 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
             "round-1 guidance appears once (via accumulated prior rounds), never doubled by chaining priorChild.Task");
     }
 
+    // ── #233 — SINGLE-ELIGIBLE-AGENT DOMAIN DEGRADES (does NOT dead-end to a human on round 1) ────────
+    //    The live incident (staging run 825ea158): at the collective-assembly review gate, a rubberduck
+    //    request-changes scoped to a subtask whose domain has only ONE eligible agent used to dead-end
+    //    autopilot to human review on the FIRST rejection (the strict cross-agent lockout had no other
+    //    eligible agent, and SquadAuthorRotationSelector returned null → lockout_deadlock → escalate).
+    //    With the fix, when there IS context to carry, the strict lockout DEGRADES to a SAME-AUTHOR fresh
+    //    re-dispatch: same author, NO lockout roster mutation, prior worktree branch reused, and the plan
+    //    returns to dispatching (NOT parked at InReview) on round 1.
     [Fact]
-    public async Task RouteAssembly_Rejection_SingleEligibleDomain_EscalatesToHumanReview_NotTerminal()
+    public async Task RouteAssembly_Rejection_SingleEligibleDomain_DegradesToSameAuthorFreshDispatch_NotEscalate()
     {
         var coordinatorRunId = RunId.New().ToString();
         await SeedCoordinatorRunAsync(coordinatorRunId);
         _streamStore.Create(coordinatorRunId, "alice");
-        var (workPlanId, subtaskIds) = await SeedPlanAsync(
-            coordinatorRunId, new[] { SubtaskStatus.AssembleReady, SubtaskStatus.AssembleReady });
 
-        // No eligible agent outside the current author (single-eligible-agent domain) → deadlock. The
-        // coordinator must escalate to human review, NEVER rotate to an unrelated agent, NEVER terminal.
+        // The rejected subtask has PRIOR work (a child run under the SOLE eligible author "morpheus").
+        // Its worktree branch is the source the SAME author reuses on the degraded fresh re-dispatch.
+        var priorChildRunId = RunId.New().ToString();
+        var (workPlanId, subtaskIds) = await SeedPlanAsync(
+            coordinatorRunId, new[] { SubtaskStatus.AssembleReady }, new string?[] { priorChildRunId });
+        await SeedChildRunAsync(RunId.Parse(priorChildRunId), "agentweaver/wt/child-single", DiffTouching("index.html"));
+        // DECIDER-OWNED ROUTING: lapse retention so the target is UNRESUMABLE → DispatchFresh → lockout
+        // rotation (the prior child remains the context source the degraded re-dispatch reuses).
+        await LapseSteeringRetentionAsync(subtaskIds[0]);
+
+        // Single-eligible-agent domain: no eligible agent outside the current author → the rotation
+        // selector returns null. Pre-#233 this dead-ended to human review on the FIRST rejection.
         _rotation.Impl = (_, _, _) => null;
 
         var touched = subtaskIds.ToDictionary(id => id, _ => (IReadOnlySet<string>)new HashSet<string>());
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
 
+        await InvokeRouteAssemblyGateThroughSteeringAsync(
+            Context(coordinatorRunId), workPlanId, SteeringSource.Rubberduck,
+            "Needs a specialist we do not have.", touched, "tree-single", cts.Token);
+
+        // NOT terminal, and NOT a cross-agent handoff — the degrade is a same-author reset-to-pending.
+        EventTypes_(coordinatorRunId).Should().NotContain(EventTypes.CoordinatorAssemblyBlocked,
+            "a single-eligible-agent domain no longer latches terminal AssemblyBlocked");
+        _handoff.Calls.Should().BeEmpty(
+            "the degrade is a SAME-author fresh re-dispatch (reset-to-pending), NOT a cross-agent handoff");
+
+        // SAME author, NO lockout roster mutation — the strict cross-agent lockout is degraded, not applied.
+        var (assigned, lockedOut, priorPointer, recoveryGuidance) = await GetSubtaskFieldsAsync(subtaskIds[0]);
+        assigned.Should().Be("morpheus",
+            "the degrade keeps the SOLE eligible author (a same-author fresh re-dispatch, never a rotation)");
+        lockedOut.Should().BeNull(
+            "the degrade does NOT lock out the sole eligible author — locking it would re-create the deadlock");
+
+        // The prior worktree/branch is reused so the same author BUILDS ON prior work (context carried,
+        // no amnesia) — exactly the ConsciousDispatchFreshFallbackAsync → ResetSubtasksToPendingAsync path.
+        priorPointer.Should().Be(priorChildRunId,
+            "the prior child pointer is captured so the degraded fresh dispatch reuses the branch (Req-1)");
+        recoveryGuidance.Should().NotBeNullOrEmpty(
+            "the accumulated feedback + prior worktree branch is carried via RecoveryGuidance");
+        recoveryGuidance!.Should().Contain("agentweaver/wt/child-single",
+            "the guidance points the same author at the prior worktree branch (builds on prior work)");
+
+        // The plan does NOT park at human review on round 1 — it returns to dispatching for the re-drive.
+        var (_, _, status, _) = await GetPlanSteeringStateAsync(workPlanId);
+        status.Should().Be(WorkPlanStatus.Dispatching,
+            "the degraded directive re-dispatches; it does NOT dead-end to human review on round 1 (#233)");
+
+        // The degrade is a VISIBLE conscious dispatch_fresh carrying the single_eligible_agent rationale.
+        var degrade = _streamStore.Get(coordinatorRunId)!.GetSnapshotSince(0).Events
+            .Where(e => e.Type == EventTypes.CoordinatorSteeringDecision)
+            .Select(e => JsonSerializer.SerializeToNode(e.Payload)!.AsObject())
+            .FirstOrDefault(d => d["decision"]?.GetValue<string>() == SteeringDirection.DispatchFresh
+                && d["rationale"] != null
+                && d["rationale"]!.GetValue<string>().Contains("single_eligible_agent"));
+        degrade.Should().NotBeNull(
+            "the degrade is surfaced as a conscious dispatch_fresh with a single_eligible_agent rationale");
+    }
+
+    // ── #233 — the same-author degrade loop is BOUNDED (never infinite). A single-eligible-agent domain
+    //    where the reviewer keeps rejecting degrades to a same-author fresh re-dispatch each round, but
+    //    ResetSubtasksToPendingAsync does NOT reset Subtask.RecoveryAttempts, so the decider's per-subtask
+    //    recovery budget (MaxRecoveryAttempts) still bounds it: once exhausted the policy flips to Proceed
+    //    and the gate ESCALATES to human review. ───────────────────────────────────────────────────────
+    [Fact]
+    public async Task RouteAssembly_Rejection_SingleEligibleDomain_RepeatedRejection_BoundedByRecoveryBudget_ThenEscalates()
+    {
+        var coordinatorRunId = RunId.New().ToString();
+        await SeedCoordinatorRunAsync(coordinatorRunId);
+        _streamStore.Create(coordinatorRunId, "alice");
+        var (workPlanId, subtaskIds) = await SeedPlanAsync(
+            coordinatorRunId, new[] { SubtaskStatus.AssembleReady });
+        var subtaskId = subtaskIds[0];
+
+        // Single-eligible-agent domain: no eligible agent outside the current author for EVERY round.
+        _rotation.Impl = (_, _, _) => null;
+
+        // Rounds 1..MaxRecoveryAttempts: each rejection DEGRADES to a same-author fresh re-dispatch (no
+        // escalation, no lockout), consuming exactly ONE per-subtask recovery attempt per round. The
+        // subtask's RecoveryAttempts is NOT reset by the degrade → the budget monotonically approaches
+        // the cap, proving the loop is BOUNDED (it cannot spin forever).
+        for (var round = 1; round <= CoordinatorSteeringService.MaxRecoveryAttempts; round++)
+        {
+            var touched = subtaskIds.ToDictionary(id => id, _ => (IReadOnlySet<string>)new HashSet<string>());
+            using var roundCts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+
+            await InvokeRouteAssemblyGateThroughSteeringAsync(
+                Context(coordinatorRunId), workPlanId, SteeringSource.Rubberduck,
+                $"Round{round}: still not acceptable.", touched, $"tree-round-{round}", roundCts.Token);
+
+            EventTypes_(coordinatorRunId).Should().NotContain(EventTypes.CoordinatorAssemblyBlocked,
+                $"round {round} (≤ budget) degrades — it never latches terminal AssemblyBlocked");
+            var (assigned, lockedOut, _, _) = await GetSubtaskFieldsAsync(subtaskId);
+            assigned.Should().Be("morpheus", $"round {round} keeps the same author (degrade, never a rotation)");
+            lockedOut.Should().BeNull($"round {round} never locks out the sole eligible author");
+            (await GetSubtaskRecoveryAttemptsAsync(subtaskId)).Should().Be(round,
+                "each degrade consumes exactly one recovery attempt (the reset does NOT clear RecoveryAttempts)");
+            var (_, _, midStatus, _) = await GetPlanSteeringStateAsync(workPlanId);
+            midStatus.Should().NotBe(WorkPlanStatus.InReview, $"round {round} (≤ budget) does NOT escalate to human review");
+        }
+
+        // Round MaxRecoveryAttempts+1: the per-subtask recovery budget is now exhausted → the decider's
+        // policy flips to Proceed → this gate ESCALATES to human review (the bounded loop terminates).
+        var finalTouched = subtaskIds.ToDictionary(id => id, _ => (IReadOnlySet<string>)new HashSet<string>());
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
         var route = InvokeRouteAssemblyGateThroughSteeringAsync(
             Context(coordinatorRunId), workPlanId, SteeringSource.Rubberduck,
-            "Needs a specialist we do not have.", touched, "tree-deadlock", cts.Token);
+            "Final: still rejecting.", finalTouched, "tree-final", cts.Token);
         await WaitForEventAsync(coordinatorRunId, EventTypes.CoordinatorAssemblyReviewRequested, cts.Token);
         cts.Cancel();
         try { await route; } catch (OperationCanceledException) { }
 
         EventTypes_(coordinatorRunId).Should().NotContain(EventTypes.CoordinatorAssemblyBlocked,
-            "a lockout deadlock escalates to human review, NEVER latches terminal AssemblyBlocked");
-
-        var deadlock = _streamStore.Get(coordinatorRunId)!.GetSnapshotSince(0).Events
-            .Where(e => e.Type == EventTypes.CoordinatorSteeringDecision)
-            .Select(e => JsonSerializer.SerializeToNode(e.Payload)!.AsObject())
-            .Single(d => d["decision"]?.GetValue<string>() == SteeringDirection.Proceed
-                && d["disposition"]?.GetValue<string>() == "rejection");
-        deadlock["rationale"]!.GetValue<string>().Should().Contain("lockout_deadlock");
-        deadlock["lockedOutRoster"]!.AsArray().Select(n => n!.GetValue<string>())
-            .Should().Contain("morpheus", "the escalated card shows why autonomy handed off (locked-out roster)");
-
+            "the budget-exhausted escalation parks at human review, never a terminal wedge");
         var (_, _, status, stage) = await GetPlanSteeringStateAsync(workPlanId);
-        status.Should().Be(WorkPlanStatus.InReview, "the deadlocked plan parks at human review");
+        status.Should().Be(WorkPlanStatus.InReview,
+            "once the recovery budget is exhausted the bounded same-author loop escalates to a human");
         stage.Should().Be(AssemblyStage.Review);
         (await CoordinatorAssemblyReviewPersistence.GetAsync(_scopeFactory, coordinatorRunId, default))
-            .Should().NotBeNull("a durable review request backs the escalated gate");
+            .Should().NotBeNull("a durable review card backs the budget-exhausted escalation");
+
+        // The terminal escalation is a conscious Proceed decision (budget exhausted), never an infinite
+        // same-author loop and never a no-context amnesia escalation on round 1.
+        var proceed = _streamStore.Get(coordinatorRunId)!.GetSnapshotSince(0).Events
+            .Where(e => e.Type == EventTypes.CoordinatorSteeringDecision)
+            .Select(e => JsonSerializer.SerializeToNode(e.Payload)!.AsObject())
+            .Any(d => d["decision"]?.GetValue<string>() == SteeringDirection.Proceed);
+        proceed.Should().BeTrue("the bounded loop terminates in a conscious Proceed (budget-exhausted) escalation");
     }
 
     // ── DECIDER-OWNED ROUTING (Fix-B, run 19cec519) ───────────────────────────────────────────────
@@ -956,15 +1059,18 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         directive.Status.Should().Be(SteeringStatus.Applied, "the re-drive settles the directive after the effect completes");
     }
 
-    // ── PARTIAL-ROTATION CRASH → PER-TARGET DEADLOCK (Fix-B guard, regression): a MULTI-target
+    // ── #233 — PARTIAL-ROTATION CRASH → SINGLE-ELIGIBLE ON THE SURVIVING TARGET: a MULTI-target
     //    DispatchFresh directive can crash AFTER rotating+stamping target A but BEFORE target B. On
     //    re-drive, target A matches its (directiveId, attempt) stamp (already-rotated, carried), while
-    //    target B genuinely DEADLOCKS (all eligible authors locked out → SelectRotationAuthor returns
-    //    null). The idempotent-re-drive override (planned==0 && alreadyRotated>0 → deadlocked=false) must
-    //    NOT fire here: it is guarded on deadlockRoster.Count==0, so a genuine per-target deadlock still
-    //    ESCALATES TO HUMAN REVIEW (lockout_deadlock) — target B is NEVER silently marked applied/dropped.
+    //    target B has a SINGLE eligible agent (SelectRotationAuthor returns null). BEFORE #233 this
+    //    escalated the whole directive to human review to avoid silently dropping target B. AFTER #233,
+    //    because there IS context to carry (a non-empty instruction), the directive DEGRADES to a
+    //    SAME-AUTHOR fresh re-dispatch for ALL its targets (via ConsciousDispatchFreshFallbackAsync →
+    //    RequestChangesAsync, which resets the FULL target set). The invariant this test protects still
+    //    holds — target B is NEVER silently dropped — now via a same-author re-dispatch (reset-to-pending
+    //    with full context) instead of an escalation. The loop stays BOUNDED by the recovery budget.
     [Fact]
-    public async Task DispatchFreshReDrive_PartialRotationThenDeadlock_EscalatesToHumanReview_NoSilentDrop()
+    public async Task DispatchFreshReDrive_PartialRotationThenSingleEligible_DegradesToSameAuthorFreshDispatch_NoSilentDrop()
     {
         var coordinatorRunId = RunId.New().ToString();
         await SeedCoordinatorRunAsync(coordinatorRunId);
@@ -977,13 +1083,13 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         var targetB = subtaskIds[1];
 
         // The directive crashed mid-effect: it is still `executing` with a non-empty instruction (so the
-        // re-drive has context to carry → the deadlock rationale is lockout_deadlock, not lockout_no_context).
+        // re-drive HAS context to carry → the single-eligible deadlock DEGRADES, it does NOT escalate).
         const int attempt = 1;
         var directiveId = await SeedExecutingDispatchFreshDirectiveAsync(
             coordinatorRunId, subtaskIds, attempt,
             instruction: "Both artifacts were rejected — rotate the authors.");
-        // Mid-DispatchFresh execution the plan sits in the AssemblySteering lease (the escalation CAS
-        // transitions AssemblySteering/Assembling → InReview).
+        // Mid-DispatchFresh execution the plan sits in the AssemblySteering lease; the degrade's
+        // RequestChangesAsync returns it to Dispatching.
         await SetPlanSteeringStateAsync(workPlanId, status: WorkPlanStatus.AssemblySteering, steeringIterations: 6);
 
         // Target A was ALREADY rotated + durably stamped by THIS (directiveId, attempt) before the crash:
@@ -1000,41 +1106,52 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
             await db.SaveChangesAsync();
         }
 
-        // Target B has NOT been rotated yet, and its eligible authors are ALL locked out → the rotation
-        // selector returns null for it (a GENUINE per-target deadlock). Target A is skipped by the stamp,
-        // so this null only affects target B.
+        // Target B has NOT been rotated yet, and its domain has a SINGLE eligible agent → the rotation
+        // selector returns null for it. Target A is skipped by the stamp, so this null only affects B.
         _rotation.Impl = (_, _, _) => null;
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
         var reDrove = await InvokeDriveOutstandingSteeringExecutionAsync(
             Context(coordinatorRunId), workPlanId, cts.Token);
 
-        reDrove.Should().BeTrue("the re-drive escalates the genuine per-target deadlock and stops the assembly pass");
+        reDrove.Should().BeTrue("the re-drive degrades the single-eligible target and stops the assembly pass");
 
-        // The genuine deadlock ESCALATED to human review (lockout_deadlock) — the override did NOT suppress it.
+        // DEGRADE (not escalate): no terminal block, no human-review park, no cross-agent handoff.
         EventTypes_(coordinatorRunId).Should().NotContain(EventTypes.CoordinatorAssemblyBlocked,
-            "a genuine per-target deadlock escalates to human review, NEVER latches terminal AssemblyBlocked");
-        var deadlock = _streamStore.Get(coordinatorRunId)!.GetSnapshotSince(0).Events
+            "a single-eligible deadlock WITH context degrades — it never latches terminal AssemblyBlocked");
+        _handoff.Calls.Should().BeEmpty(
+            "the degrade is a same-author reset-to-pending re-dispatch, NOT a cross-agent handoff");
+        var degrade = _streamStore.Get(coordinatorRunId)!.GetSnapshotSince(0).Events
             .Where(e => e.Type == EventTypes.CoordinatorSteeringDecision)
             .Select(e => JsonSerializer.SerializeToNode(e.Payload)!.AsObject())
-            .Single(d => d["decision"]?.GetValue<string>() == SteeringDirection.Proceed
-                && d["disposition"]?.GetValue<string>() == "rejection");
-        deadlock["rationale"]!.GetValue<string>().Should().Contain("lockout_deadlock",
-            "the surviving deadlock (target B) escalates — the re-drive override must NOT force deadlocked=false");
-        deadlock["lockedOutRoster"]!.AsArray().Select(n => n!.GetValue<string>())
-            .Should().Contain("morpheus", "target B's locked-out author is shown on the escalated card");
+            .FirstOrDefault(d => d["decision"]?.GetValue<string>() == SteeringDirection.DispatchFresh
+                && d["rationale"] != null
+                && d["rationale"]!.GetValue<string>().Contains("single_eligible_agent"));
+        degrade.Should().NotBeNull("the degrade is a VISIBLE conscious dispatch_fresh with a single_eligible_agent rationale");
 
-        // The plan parked at human review with a durable review card — target B was NOT silently dropped.
-        var (_, _, status, stage) = await GetPlanSteeringStateAsync(workPlanId);
-        status.Should().Be(WorkPlanStatus.InReview, "the deadlocked plan parks at human review, never silently applied");
-        stage.Should().Be(AssemblyStage.Review);
-        (await CoordinatorAssemblyReviewPersistence.GetAsync(_scopeFactory, coordinatorRunId, default))
-            .Should().NotBeNull("a durable review request backs the escalated gate (target B not dropped)");
+        // The plan returned to dispatching for the same-author re-drive — it did NOT park at human review.
+        var (_, _, status, _) = await GetPlanSteeringStateAsync(workPlanId);
+        status.Should().Be(WorkPlanStatus.Dispatching,
+            "the degraded directive re-dispatches; it does NOT dead-end to human review");
 
-        // Target B was neither rotated nor handed off — it is genuinely deadlocked, awaiting a human.
-        _handoff.Calls.Should().BeEmpty("the deadlock escalation returns before any rotation/handoff runs");
-        var (assignedB, lockedOutB, _, _) = await GetSubtaskFieldsAsync(targetB);
-        assignedB.Should().Be("morpheus", "target B is NOT rotated (its authors are all locked out)");
+        // INVARIANT (still holds): target B is NEVER silently dropped. It is reset to pending under its
+        // SAME author (no lockout) so the sole eligible agent revises it with full context.
+        var (assignedB, lockedOutB, _, recoveryGuidanceB) = await GetSubtaskFieldsAsync(targetB);
+        assignedB.Should().Be("morpheus", "target B keeps its sole eligible author (same-author fresh re-dispatch)");
+        lockedOutB.Should().BeNull("target B's sole eligible author is NOT locked out (would re-deadlock)");
+        recoveryGuidanceB.Should().NotBeNullOrEmpty("target B is re-dispatched WITH the accumulated feedback (not dropped)");
+        (await GetSubtaskStatusAsync(targetB)).Should().Be(SubtaskStatus.Pending,
+            "target B is reset to pending for its same-author re-dispatch — never silently applied/dropped");
+
+        // Target A (already rotated) is also swept into the same-author fresh re-dispatch, keeping its
+        // already-rotated author — never double-rotated, never dropped.
+        var (assignedA, _, _, _) = await GetSubtaskFieldsAsync(targetA);
+        assignedA.Should().Be("rotated-morpheus", "target A keeps its already-rotated author (never double-rotated)");
+
+        // The directive is settled (applied) with the persisted DispatchFresh effect — no re-drive loop.
+        var directive = await GetDirectiveAsync(directiveId);
+        directive!.DecidedAction.Should().Be(SteeringDirection.DispatchFresh, "the persisted decision matches the real effect");
+        directive.Status.Should().Be(SteeringStatus.Applied, "the degrade settles the directive after the effect completes");
     }
 
     // ── NO WHOLE-ROSTER LOCKOUT (rubber-duck must-preserve): a single-target rejection rotates ONLY that
@@ -2685,6 +2802,14 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
             .Select(x => new { x.AssignedAgent, x.LockedOutAgents, x.PriorChildRunId, x.RecoveryGuidance })
             .FirstAsync();
         return (s.AssignedAgent, s.LockedOutAgents, s.PriorChildRunId, s.RecoveryGuidance);
+    }
+
+    private async Task<int> GetSubtaskRecoveryAttemptsAsync(int subtaskId)
+    {
+        using var scope = _provider.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        return await db.Subtasks.AsNoTracking().Where(x => x.Id == subtaskId)
+            .Select(x => x.RecoveryAttempts).FirstAsync();
     }
 
     /// <summary>

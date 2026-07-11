@@ -2030,9 +2030,11 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         {
             // B — CONSCIOUS lockout rotation: the decider judged the target session UNRESUMABLE, so the
             // rejected author is LOCKED OUT and the revision rotates to a DIFFERENT eligible agent
-            // (target-author only) dispatched with FULL accumulated context (Req-1). A no-eligible-agent
-            // deadlock (or no context to carry) escalates to human review — never a blind rotation, never
-            // terminal. The steering_decision event's action is dispatch_fresh (matching the real effect).
+            // (target-author only) dispatched with FULL accumulated context (Req-1). #233: a
+            // single-eligible-agent deadlock WITH context DEGRADES to a same-author fresh re-dispatch
+            // (bounded by the recovery budget); only a no-context deadlock escalates to human review —
+            // never a blind rotation, never terminal. The steering_decision event's action is
+            // dispatch_fresh (matching the real effect).
             // The directive is left `executing` first (change #1: a crash before the rotation/handoff
             // completes re-drives the rotation idempotently via DriveOutstandingSteeringExecutionAsync,
             // never a silent applied); ExecuteLockoutRotationAsync settles it `applied` after the effect.
@@ -2083,11 +2085,18 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
     /// and rotates the revision to a DIFFERENT eligible agent, dispatched CONSCIOUSLY and VISIBLY with
     /// FULL context (Req-1 accumulated feedback + prior-work pointer). Gated on Req-1 (change #3): if the
     /// context bundle carries nothing, we do NOT rotate blind — that would just reproduce the amnesia
-    /// loop with a new agent; we escalate instead. If ANY target subtask has NO domain-eligible agent
-    /// outside the locked-out set (change #5 — a single-eligible-agent domain deadlocks after the first
-    /// rejection), the run ESCALATES to human review (protocol step 7) with the accumulated feedback +
-    /// locked-out roster attached — never a rotation to an unrelated agent, never a terminal wedge.
-    /// Returns true (the gate loop stops: either the rotation re-dispatched the plan, or it escalated).
+    /// loop with a new agent; we escalate to human review instead (the <c>lockout_no_context</c> case).
+    /// #233 — if a target subtask has NO domain-eligible agent outside the locked-out set BUT there IS
+    /// context to carry (a single-eligible-agent domain — the norm for a one-agent blueprint domain), we
+    /// no longer dead-end to a human on the first rejection: we DEGRADE the strict cross-agent lockout to
+    /// a SAME-AUTHOR fresh re-dispatch with full context (<see cref="ConsciousDispatchFreshFallbackAsync"/>)
+    /// — the same author revises against the accumulated feedback + prior worktree, WITHOUT any lockout
+    /// mutation. That same-author loop is BOUNDED upstream by the per-subtask recovery budget
+    /// (<see cref="CoordinatorSteeringService.MaxRecoveryAttempts"/>): once it is exhausted the decider
+    /// flips to Proceed and this gate escalates to human review — never a rotation to an unrelated agent,
+    /// never a terminal wedge, never an infinite loop.
+    /// Returns true (the gate loop stops: the rotation re-dispatched the plan, the degrade re-dispatched
+    /// the plan, or a no-context deadlock escalated to human review).
     /// <para>#223 — <paramref name="targetSubtaskIds"/> is the IMPLICATED (reviewer-named) set: ONLY
     /// these authors are locked out. <paramref name="dependentSubtaskIds"/> is their transitive
     /// dependent closure: those are re-dispatched to rebuild against the revised contract WITHOUT any
@@ -2179,9 +2188,50 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
 
         if (deadlocked)
         {
-            // DEADLOCK (all eligible agents locked out for ≥1 target) OR no context to carry → escalate
-            // to human review (protocol step 7). NEVER rotate to an unrelated agent, NEVER terminal.
             var roster = deadlockRoster.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+
+            // #233 — SPLIT the two DISTINCT deadlock causes. `deadlocked` becomes true for exactly one of
+            // two reasons, cleanly discriminated by hasContext:
+            //   (a) hasContext == false → NOTHING to carry (this is the INITIAL value of `deadlocked`),
+            //       OR
+            //   (b) hasContext == true BUT ≥1 target's domain has a SINGLE eligible agent, so
+            //       SelectRotationAuthor returned null and its author was recorded in deadlockRoster.
+            //
+            // (b) SINGLE-ELIGIBLE-AGENT WITH CONTEXT (#233 live incident, staging run 825ea158): the strict
+            //     cross-agent lockout has NO other eligible agent to rotate to (the norm for a blueprint
+            //     whose domain has one eligible agent), but we DO have accumulated feedback + a prior
+            //     worktree to carry. Dead-ending an otherwise-recoverable revision to a human on the FIRST
+            //     rejection is exactly the systemic wedge #233 reports. DEGRADE the strict lockout to a
+            //     SAME-AUTHOR fresh re-dispatch with FULL context via ConsciousDispatchFreshFallbackAsync
+            //     → RequestChangesAsync → ResetSubtasksToPendingAsync: it KEEPS AssignedAgent (same
+            //     author — the only eligible one), does NOT mutate LockedOutAgents (locking the sole
+            //     author would re-create the same roster-exhaustion deadlock), writes RecoveryGuidance
+            //     from the accumulated feedback + prior worktree branch, and re-dispatches dependents
+            //     WITHOUT lockout. It covers the FULL targetSubtaskIds set (implicated ∪ dependents), so
+            //     NO target is silently dropped — including a MIXED directive (some targets rotatable in
+            //     `planned`, some deadlocked single-eligible): all its targets uniformly degrade to a
+            //     same-author fresh re-dispatch (the rotatable ones simply keep their current author).
+            //     This same-author loop is BOUNDED UPSTREAM: ResetSubtasksToPendingAsync does NOT reset
+            //     Subtask.RecoveryAttempts, so once the per-subtask recovery budget
+            //     (CoordinatorSteeringService.MaxRecoveryAttempts) is exhausted the decider's policy flips
+            //     to Proceed and THIS gate escalates to human review — it can never loop forever or wedge.
+            if (hasContext)
+            {
+                _logger.LogWarning(
+                    "Steering(lockout): directive {DirectiveId} single-eligible-agent deadlock for run {RunId} " +
+                    "(roster locked out: [{Roster}]) — degrading strict lockout to a same-author fresh re-dispatch " +
+                    "with full context (#233)",
+                    directiveId, context.CoordinatorRunId, string.Join(",", roster));
+                await ConsciousDispatchFreshFallbackAsync(
+                    context, workPlanId, edges, targetSubtaskIds, directiveId, feedback, ct,
+                    rationale: "single_eligible_agent: degrading strict lockout to same-author fresh re-dispatch with full context")
+                    .ConfigureAwait(false);
+                return true;
+            }
+
+            // (a) NO-CONTEXT deadlock → KEEP escalating to human review (protocol step 7). Degrading a
+            //     no-context deadlock to a fresh re-dispatch would carry NOTHING and reproduce the exact
+            //     amnesia loop that the #220/#223 context-carry prevents. NEVER degrade this case.
             await decider.OverrideDecidedActionAsync(directiveId, SteeringDirection.Proceed, ct)
                 .ConfigureAwait(false);
             Emit(context.CoordinatorRunId, EventTypes.CoordinatorSteeringDecision, new
@@ -2190,9 +2240,7 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
                 directiveId,
                 decision = SteeringDirection.Proceed,
                 disposition = "rejection",
-                rationale = hasContext
-                    ? "lockout_deadlock: all eligible agents locked out — escalating to human review"
-                    : "lockout_no_context: nothing to carry — escalating to human review",
+                rationale = "lockout_no_context: nothing to carry — escalating to human review",
                 lockedOutRoster = roster,
                 targetSubtaskIds,
             });
@@ -2201,7 +2249,7 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
                 directiveId, context.CoordinatorRunId, string.Join(",", roster));
             await EscalateToHumanReviewAsync(
                 context, workPlanId, edges, directiveId,
-                hasContext ? "lockout_deadlock" : "lockout_no_context",
+                "lockout_no_context",
                 aggregateTreeHash, touchedFilesBySubtask, ct).ConfigureAwait(false);
             return true;
         }

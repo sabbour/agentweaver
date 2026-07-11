@@ -42,6 +42,8 @@ flowchart TD
     InPlace[In-place revision\nsame agent + worktree]
     FreshDispatch[Conscious dispatch_fresh\naccumulated feedback carried]
     LockoutDispatch[Lockout handoff\nDIFFERENT agent\nprior worktree reused]
+    RejRoute{Alternate eligible\nagent in domain?}
+    DegradeDispatch[Degrade to same-author\nfresh re-dispatch\nfull context — no lockout mutation]
     BudgetOK{Budget OK?}
     Escalate[Escalate to\nhuman-review gate\nInReview / stage=review]
     HumanActs{{Human reviews\nassembled work}}
@@ -52,11 +54,15 @@ flowchart TD
 
     AS --> Gate
     Gate -- advisory/steer\nnon-rejection --> InPlace
-    Gate -- REJECTION\nimplicated authors locked out\ndependents rebuilt, no lockout --> LockoutDispatch
+    Gate -- REJECTION\nimplicated authors locked out\ndependents rebuilt, no lockout --> RejRoute
     Gate -- in-place terminal failure --> FreshDispatch
+    RejRoute -- yes\nrotate to different agent --> LockoutDispatch
+    RejRoute -- no + context\nsingle-eligible degrade --> DegradeDispatch
+    RejRoute -- no + no context\nlockout_no_context --> Escalate
     InPlace --> BudgetOK
     FreshDispatch --> BudgetOK
     LockoutDispatch --> BudgetOK
+    DegradeDispatch --> BudgetOK
     BudgetOK -- yes --> Gate
     BudgetOK -- no --> Escalate
     Escalate --> HumanActs
@@ -268,8 +274,36 @@ the **implicated** subtasks only (#223 — the reviewer-named set, never every f
 The implicated subtasks' **transitive dependents** are additionally re-dispatched to rebuild against the
 revised contract, but their authors are **never** locked out (#223).
 
-Deadlock (all eligible agents locked out) or budget exhaustion on the lockout path routes to the
-Fix-B human-review escalation — never to a terminal.
+#### Single-eligible-agent deadlock: degrade vs. escalate (#233)
+
+`ExecuteLockoutRotationAsync` cannot always rotate. A domain whose blueprint has exactly **one** eligible
+agent has no *other* author to hand the revision to once the rejected author is appended to
+`LockedOutAgents`: `RotationSelector.SelectRotationAuthor` returns `null` and the sole author is recorded in
+the deadlock roster. Before #233 this dead-ended autopilot — the **first** rejection in a single-eligible
+domain escalated straight to human review (`lockout_deadlock`) even though the revision was otherwise
+recoverable, exactly the systemic wedge #233 reports (live staging incident, run `825ea158`).
+
+#233 splits the deadlock branch by whether there is accumulated context to carry — `hasContext` = a
+non-empty latest `feedback` **or** ≥1 prior review round (`BuildPriorReviewRoundsAsync`):
+
+| Deadlock cause | Rationale | What happens |
+|---|---|---|
+| No alternate eligible agent **and** context to carry (single-eligible domain — the norm for a one-agent blueprint domain) | `single_eligible_agent` | **Degrade** the strict cross-agent lockout to a **same-author fresh re-dispatch** with full context via `ConsciousDispatchFreshFallbackAsync`. The sole author revises in a fresh pod carrying the accumulated feedback + prior worktree branch; `AssignedAgent` is **kept**, `LockedOutAgents` is **not** mutated (locking the only author would just re-create the deadlock); dependents are re-dispatched without lockout. Emits `coordinator.steering_decision { decision="dispatch_fresh", rationale="single_eligible_agent…" }`. |
+| No context to carry (`!hasContext` — the initial deadlock value) | `lockout_no_context` | **Escalate** to the Fix-B human-review gate. Degrading here would carry nothing and reproduce the amnesia loop the #220/#223 context-carry prevents. Emits `coordinator.steering_decision { decision="proceed", disposition="rejection", rationale="lockout_no_context…" }`. |
+
+The degrade is **not** an unbounded loop. `ResetSubtasksToPendingAsync` does **not** reset
+`Subtask.RecoveryAttempts`, so the same-author revision keeps consuming the per-subtask recovery budget
+(`CoordinatorSteeringService.MaxRecoveryAttempts` = 3). Once that budget is exhausted,
+`CoordinatorSteeringDecider.DecideAsync` (via `SteeringPolicy.Decide`, over-budget → `Proceed`) flips the
+directive and this gate escalates to human review — never a terminal wedge, never a blind rotation to an
+unrelated agent. A **mixed** directive (some targets rotatable, some single-eligible deadlocked) degrades
+**all** its targets uniformly to a same-author fresh re-dispatch (the rotatable ones simply keep their
+current author), so no target is silently dropped.
+
+This makes the pod-per-run single-eligible path consistent with the already-accepted warm-pool path: when
+`ReleasePodOnSuspend=false` the target's pod stays alive and resumable, so the decider already picks
+`InPlaceSteer` (same author, context preserved, no lockout — `PodPerRunResumabilityProbe`). A single-role
+rejection now self-heals with a same-author revision instead of parking at a human on round one.
 
 **Advisory / steer feedback (not a rejection)** keeps the same agent in place via the normal
 `in_place_steer` path (`StartRevisionAsync`). The lockout disposition is derived from
@@ -316,6 +350,9 @@ The fix replaces the prose scan with a single machine-readable sentinel:
 | Budget-exhausted escalation, `EscalateToHumanReviewAsync`, `ParkAtHumanReviewAsync` | `apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyService.cs` |
 | `BuildAccumulatedGateFeedbackAsync`, human round-trip wiring, `IsEscalationDurablyOpenAsync` | `apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyService.cs` |
 | #223 scoped re-dispatch: `RequestChangesAsync`, `RouteAssemblyGateThroughSteeringAsync`, `RedispatchDependentsAsync`, `EmitImplicatedScopeFallback` | `apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyService.cs` |
+| #233 lockout rotation + single-eligible degrade-vs-escalate split: `ExecuteLockoutRotationAsync` (`if (deadlocked)` → `if (hasContext)` degrade branch at `:2218`; `lockout_no_context` escalation at `:2243`) | `apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyService.cs:2106` |
+| #233 same-author fresh re-dispatch executor `ConsciousDispatchFreshFallbackAsync` (rationale `single_eligible_agent`) | `apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyService.cs:2883` |
+| #233 recovery-budget bound: `CoordinatorSteeringDecider.DecideAsync` → `SteeringPolicy.Decide` (over-budget → `Proceed`); `MaxRecoveryAttempts` = 3 | `apps/Agentweaver.Api/Coordinator/CoordinatorSteeringDecider.cs:119`, `:38`; `apps/Agentweaver.Api/Coordinator/CoordinatorSteeringService.cs:1049` |
 | #226 steer-at-review-gate delivery: `SteerAsync`, `TryDeliverAtAssemblyReviewGateAsync`, `DeliverAdvisorySendAtReviewGateAsync`, `ResolveTargetFilesForChildAsync` | `apps/Agentweaver.Api/Coordinator/CoordinatorSteeringService.cs` |
 | #226 shared review-decision delivery `DeliverDecisionAsync`; `SteeringStatus.Deferred` | `apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyReviewPersistence.cs`; `CoordinatorSteeringService.cs` |
 | #226 `/steer` `201`/`202` (deferred) response mapping | `apps/Agentweaver.Api/Endpoints/CoordinatorEndpoints.cs` |

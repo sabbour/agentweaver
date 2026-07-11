@@ -120,8 +120,17 @@ provides no usable file hint, the coordinator falls back to the previous broad b
 **Advisory or steering feedback (not a rejection)** keeps the same agent in place — no lockout, no
 rotation, just a context-carrying in-place revision.
 
-If all eligible agents become locked out (or the lockout path's budget is exhausted), the run escalates
-to the human-review gate — never to a terminal state.
+If the implicated subtask's domain has **only one eligible agent** — common for a single-role blueprint
+domain — there is no *different* agent to rotate to. Previously this dead-ended on the **first** rejection:
+the run parked at the human-review gate immediately, even though the revision was recoverable. Now, as long
+as there is accumulated feedback to carry, the run **self-heals** — the same (only) author revises in a
+fresh pod carrying the full feedback history and the prior committed work, with **no** lockout applied. That
+same-author revision is bounded by the per-subtask recovery budget (3 attempts); only when it is exhausted —
+or when there is genuinely nothing to carry — does the run escalate to the human-review gate. It never
+dead-ends to a terminal state (#233).
+
+This mirrors the warm-pool path, where a resumable target is steered in place with the same author. A
+single-role rejection now converges on its own instead of interrupting you on round one.
 
 ## Reliable commit and visible failure
 

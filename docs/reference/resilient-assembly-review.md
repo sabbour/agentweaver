@@ -44,6 +44,7 @@ All existing event types; no new event type is introduced. Fields added to exist
 | Event | New / changed fields | When emitted |
 |---|---|---|
 | `coordinator.steering_decision` | `decision="proceed"`, `escalation="human_review"` | When the decider returns `Proceed` (budget exhausted) and the coordinator escalates instead of terminating. |
+| `coordinator.steering_decision` | `decision="dispatch_fresh"`, `rationale="single_eligible_agent…"` (degrade) **or** `decision="proceed"`, `disposition="rejection"`, `rationale="lockout_no_context…"` (escalate) | At the lockout gate when no alternate eligible agent exists (#233). **With** accumulated context the strict lockout degrades to a same-author fresh re-dispatch; **without** context it escalates to human review. Replaces the pre-#233 `lockout_deadlock` rationale. |
 | `coordinator.assembly_review_requested` | `gateKind="human-review"`, `reason="steering_budget_exhausted"`, `treeHash`, `integrationBranch`, `includedSubtaskIds` | Immediately after the durable review-request is written. Same event as the normal happy-path human-review gate. |
 | `coordinator.steering` | `source`, `humanReviewRoundTrip=<n>`, `note` | Emitted when a human request-changes is received after escalation. The autonomous budget is **always** reset (there is no cap); `humanReviewRoundTrip` is the telemetry-only round count. |
 | `coordinator.assembly_implicated_scope_fallback` | `workPlanId`, `source`, `reviewer`, `reason` (`no_target_files_field` \| `target_files_matched_nothing`), `namedFiles`, `touchedFiles`, `contributorIds` | Emitted when the #223 implicated-subtask scoping reverts to the broad all-contributors set because the reviewer's structured `TARGET_FILES:` hint was missing or reverse-mapped to nothing. Makes the fail-safe reversion observable. |
@@ -126,7 +127,9 @@ subtasks only (#223 — never every file-toucher):
 | Lock out the author | The current subtask author is atomically appended to `Subtask.LockedOutAgents` (a persisted JSON set). |
 | Select a different agent | `roster \ LockedOutAgents` via `CoordinatorOrchestratorExecutor.ResolveRoster` + `SelectRosterMember`. |
 | Dispatch with context | `RunOrchestrator.StartChildRevisionHandoffAsync` reuses the prior child's worktree + branch; carries the full accumulated feedback bundle; mints a **new** SDK session (never resumes the locked-out author's session). |
-| Deadlock or budget exhaustion | All eligible agents locked out, or budget exhausted on the lockout path → Fix-B human-review escalation. Never a terminal. |
+| Single-eligible domain **with** context (#233) | The implicated subtask's domain has one eligible agent, so `RotationSelector.SelectRotationAuthor` returns `null`, but there is accumulated context (`hasContext`). **Degrade** the strict lockout to a **same-author fresh re-dispatch** with full context (`ConsciousDispatchFreshFallbackAsync`): `AssignedAgent` kept, `LockedOutAgents` **not** mutated, dependents re-dispatched without lockout. Rationale `single_eligible_agent`. |
+| Single-eligible domain **without** context (#233) | `!hasContext` — nothing to carry → escalate to the Fix-B human-review gate. Rationale `lockout_no_context`. Never a terminal. |
+| Recovery-budget bound | The same-author degrade does **not** reset `Subtask.RecoveryAttempts`; once `MaxRecoveryAttempts` (= 3) is hit, `CoordinatorSteeringDecider.DecideAsync` (`SteeringPolicy.Decide`, over-budget → `Proceed`) escalates this gate to human review. Never an infinite loop, never a terminal. |
 
 Transitive dependents of the implicated subtasks are re-dispatched to rebuild against the revised contract,
 but their authors are **never** locked out (#223 — locking a blameless dependent re-creates the
