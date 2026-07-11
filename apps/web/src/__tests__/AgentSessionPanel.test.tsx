@@ -467,6 +467,8 @@ describe('AgentSessionPanel', () => {
 
     const group = await within(timeline).findByTestId('timeline-tool-group', undefined, { timeout: 4000 });
     expect(group.textContent).toContain('Used 1 tool');
+    // Tool group is collapsed by default; expand to reveal the rows.
+    fireEvent.click(group);
     const rows = within(timeline).getAllByTestId('timeline-tool-row');
     expect(rows).toHaveLength(1);
     expect(rows[0].getAttribute('data-tool-status')).toBe('complete');
@@ -513,6 +515,8 @@ describe('AgentSessionPanel', () => {
     const timeline = await screen.findByTestId('run-timeline', undefined, { timeout: 4000 });
     // With no agent.intent, activity nests under the synthetic "Working" step; expand it.
     fireEvent.click(within(timeline).getByText('Working'));
+    // Tool group is collapsed by default; expand it to reveal the rows.
+    fireEvent.click(await within(timeline).findByTestId('timeline-tool-group', undefined, { timeout: 4000 }));
     const rows = await within(timeline).findAllByTestId('timeline-tool-row', undefined, { timeout: 4000 });
     expect(rows.length).toBeGreaterThan(0);
     expect(vi.mocked(apiClient.getRunFileDiff)).not.toHaveBeenCalled();
@@ -632,6 +636,8 @@ describe('AgentSessionPanel', () => {
 
     const group = await within(timeline).findByTestId('timeline-tool-group', undefined, { timeout: 4000 });
     expect(group.textContent).toContain('Used 1 tool');
+    // Tool group is collapsed by default; expand to reveal the rows.
+    fireEvent.click(group);
     const rows = within(timeline).getAllByTestId('timeline-tool-row');
     expect(rows[0].getAttribute('data-tool-status')).toBe('complete');
     // The agent's narrative message sits in the same step, not a separate loud bubble.
@@ -696,6 +702,8 @@ describe('AgentSessionPanel', () => {
 
     const timeline = await screen.findByTestId('run-timeline', undefined, { timeout: 4000 });
     fireEvent.click(within(timeline).getByText('Working'));
+    // Tool group is collapsed by default; expand it to reveal the rows.
+    fireEvent.click(await within(timeline).findByTestId('timeline-tool-group', undefined, { timeout: 4000 }));
 
     const rows = await within(timeline).findAllByTestId('timeline-tool-row', undefined, { timeout: 4000 });
     expect(rows[0].getAttribute('data-tool-status')).toBe('error');

@@ -430,7 +430,7 @@ function ToolRow({ tool }: { tool: RunTimelineTool }) {
 
 function ToolGroup({ tools }: { tools: RunTimelineTool[] }) {
   const styles = useStyles();
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useState(false);
   return (
     <div className={styles.toolGroup}>
       <Button

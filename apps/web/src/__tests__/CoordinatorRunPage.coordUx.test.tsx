@@ -684,6 +684,10 @@ describe('CoordinatorRunPage operator console redesign', () => {
     // Expand both intent steps to reveal their nested tool calls + messages.
     fireEvent.click(screen.getByText('Inspect the repository'));
     fireEvent.click(screen.getByText('Run the build'));
+    // Tool groups are collapsed by default; expand each to reveal its rows.
+    for (const g of await within(timeline).findAllByTestId('timeline-tool-group', undefined, { timeout: 4000 })) {
+      fireEvent.click(g);
+    }
 
     // Tool calls render as rows under their owning intent, with success/error state.
     await waitFor(() => expect(within(timeline).getAllByTestId('timeline-tool-row').length).toBe(2), { timeout: 4000 });
@@ -731,6 +735,8 @@ describe('CoordinatorRunPage operator console redesign', () => {
 
     const timeline = await screen.findByTestId('run-timeline');
     fireEvent.click(screen.getByText('Apply the change'));
+    // Tool group is collapsed by default; expand it to reveal the edit row.
+    fireEvent.click(await within(timeline).findByTestId('timeline-tool-group', undefined, { timeout: 4000 }));
 
     // The edit row is a button (expandable) with a diff delta as its result meta.
     const editRow = await within(timeline).findByTestId('timeline-tool-row', undefined, { timeout: 4000 });
