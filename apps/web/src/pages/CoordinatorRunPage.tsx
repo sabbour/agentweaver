@@ -1110,15 +1110,16 @@ const useStyles = makeStyles({
     alignItems: 'center',
     gap: tokens.spacingHorizontalS,
     flexWrap: 'wrap',
-    padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalS}`,
-    borderRadius: tokens.borderRadiusMedium,
-    backgroundColor: tokens.colorNeutralBackground2,
+    paddingTop: tokens.spacingVerticalXXS,
     fontSize: tokens.fontSizeBase200,
-    color: tokens.colorNeutralForeground2,
+    color: tokens.colorNeutralForeground3,
   },
   executionKicker: {
     fontWeight: tokens.fontWeightSemibold,
-    color: tokens.colorNeutralForeground1,
+    color: tokens.colorNeutralForeground2,
+  },
+  executionSeparator: {
+    color: tokens.colorNeutralForeground4,
   },
   executionValue: {
     display: 'inline-flex',
@@ -1279,6 +1280,69 @@ const useStyles = makeStyles({
   treeText: {
     display: 'flex',
     flexDirection: 'column',
+    gap: '2px',
+    minWidth: 0,
+  },
+  treeNode: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalSNudge,
+    minWidth: 0,
+  },
+  treeAgentRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXS,
+    minWidth: 0,
+  },
+  treeAgentName: {
+    fontSize: tokens.fontSizeBase300,
+    fontWeight: tokens.fontWeightSemibold,
+    color: tokens.colorNeutralForeground1,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  },
+  treeRolePill: {
+    fontSize: tokens.fontSizeBase100,
+    color: tokens.colorNeutralForeground3,
+    backgroundColor: tokens.colorNeutralBackground3,
+    padding: `0 ${tokens.spacingHorizontalXS}`,
+    borderRadius: tokens.borderRadiusSmall,
+    whiteSpace: 'nowrap',
+    flexShrink: 0,
+  },
+  treeMetaRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXS,
+    minWidth: 0,
+  },
+  treeStatusPill: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXXS,
+    fontSize: tokens.fontSizeBase100,
+    fontWeight: tokens.fontWeightSemibold,
+    padding: `1px ${tokens.spacingHorizontalXS}`,
+    borderRadius: tokens.borderRadiusSmall,
+    backgroundColor: tokens.colorNeutralBackground3,
+    whiteSpace: 'nowrap',
+    flexShrink: 0,
+  },
+  treeStatusDot: {
+    width: '6px',
+    height: '6px',
+    borderRadius: '50%',
+    backgroundColor: 'currentColor',
+    flexShrink: 0,
+  },
+  treeTaskLabel: {
+    fontSize: tokens.fontSizeBase200,
+    color: tokens.colorNeutralForeground2,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
     minWidth: 0,
   },
   treePrimary: {
@@ -1342,12 +1406,26 @@ const useStyles = makeStyles({
   },
   minimapCanvas: {
     position: 'relative',
-    width: '168px',
-    height: '96px',
+    width: '180px',
+    height: '110px',
     overflow: 'hidden',
     borderRadius: tokens.borderRadiusSmall,
     backgroundColor: tokens.colorNeutralBackground2,
     pointerEvents: 'none',
+    '& .react-flow__minimap': {
+      position: 'absolute',
+      top: 0,
+      left: 0,
+      right: 0,
+      bottom: 0,
+      width: '100%',
+      height: '100%',
+      margin: 0,
+    },
+    '& .react-flow__minimap-svg': {
+      width: '100%',
+      height: '100%',
+    },
   },
   minimapCaption: {
     fontSize: tokens.fontSizeBase100,
@@ -2675,9 +2753,6 @@ export function CoordinatorRunPage() {
     ? semanticStateColorForStatus(executingSessionItem.status)
     : semanticStateColorForBucket(viewState.bucket);
   const runStatusColor = semanticStateColorForBucket(viewState.bucket);
-  const executingActor = executingSessionItem?.agentName
-    ? `${executingSessionItem.agentName}${executingSessionItem.agentRole ? ` (${executingSessionItem.agentRole})` : ''}`
-    : undefined;
   const executionWorkflowName = selectedWorkflow?.name ?? 'pending';
   const executionWhy = selectedWorkflow?.rationale
     ?? viewState.reason
@@ -3204,9 +3279,13 @@ export function CoordinatorRunPage() {
     const color = semanticStateColorForStatus(item.status);
     const statusLabel = runTreeStatusLabel(item.status, item.nodeId === 'outcome-plan' ? outcomePlanConfirmedBy : undefined);
     const selected = item.nodeId === activePanelNodeId;
-    const owner = item.agentName
-      ? `${item.agentName}${item.agentRole ? ` (${item.agentRole})` : ''}`
-      : item.agentRole ? `Coordinator (${item.agentRole})` : 'Coordinator';
+    // Root-aware fallback: the coordinator/root node is "Coordinator"; a child without an
+    // agentName is an unassigned agent (or falls back to its task label), never "Coordinator".
+    const isRootNode = item.nodeId === defaultSessionNodeId;
+    const agentDisplay = isRootNode
+      ? 'Coordinator'
+      : (item.agentName ?? (item.agentRole ? 'Unassigned agent' : item.label));
+    const roleText = item.agentRole;
     const layout = (
       <TreeItemLayout
         iconBefore={(
@@ -3221,11 +3300,23 @@ export function CoordinatorRunPage() {
           </span>
         )}
       >
-        <span className={styles.treeText}>
-          <span className={styles.treePrimary}>{item.label}</span>
-          <span className={styles.treeSecondary}>
-            <span className={stateTextClass(color)} data-state-color={color}>{statusLabel}</span>
-            {' \u00b7 '}{owner}
+        <span className={styles.treeNode}>
+          <AgentAvatar name={agentDisplay} size={22} circle />
+          <span className={styles.treeText}>
+            <span className={styles.treeAgentRow}>
+              <span className={styles.treeAgentName}>{agentDisplay}</span>
+              {roleText ? <span className={styles.treeRolePill}>{roleText}</span> : null}
+            </span>
+            <span className={styles.treeMetaRow}>
+              <span
+                className={mergeClasses(styles.treeStatusPill, stateTextClass(color))}
+                data-state-color={color}
+              >
+                <span className={styles.treeStatusDot} aria-hidden="true" />
+                {statusLabel}
+              </span>
+              <span className={styles.treeTaskLabel} title={item.label}>{item.label}</span>
+            </span>
           </span>
         </span>
       </TreeItemLayout>
@@ -3416,19 +3507,17 @@ export function CoordinatorRunPage() {
               </div>
             </div>
             <div className={styles.executionContext} data-testid="coordinator-execution-indicator" aria-label={`${executionKickerLabel} workflow ${executionWorkflowName}. ${executionTaskPrefix} ${executionTaskLabel}. ${executionReasonPrefix}: ${executionContextReason}`}>
-              <span className={styles.executionKicker}>{executionKickerLabel}</span>
+              <span className={mergeClasses(styles.executionKicker, stateTextClass(executionDisplayStateColor))} data-state-color={executionDisplayStateColor}>{executionKickerLabel}</span>
+              <span className={styles.executionSeparator} aria-hidden="true">·</span>
               <span className={styles.executionValue} title={executionWorkflowName}>
                 <FlowchartRegular aria-hidden="true" />
                 <span>Workflow: {executionWorkflowName}</span>
               </span>
+              <span className={styles.executionSeparator} aria-hidden="true">·</span>
               <span className={`${styles.executionValue} ${stateTextClass(executionDisplayStateColor)}`} title={executionTaskLabel} data-state-color={executionDisplayStateColor}>
                 {executionTaskPrefix}: {executionTaskLabel}
               </span>
-              {executingActor && (
-                <span className={styles.executionValue} title={executingActor}>
-                  Owner: {executingActor}
-                </span>
-              )}
+              <span className={styles.executionSeparator} aria-hidden="true">·</span>
               <span className={styles.executionReason} title={executionContextReason}>{executionReasonPrefix}: {executionContextReason}</span>
             </div>
             {runChromeExpanded && <div className={styles.metaRail} aria-label="Run metadata" data-testid="run-metadata">
@@ -3672,7 +3761,24 @@ export function CoordinatorRunPage() {
                           preventScrolling={false}
                           proOptions={{ hideAttribution: true }}
                           style={{ width: '100%', height: '100%' }}
-                        />
+                        >
+                          <MiniMap
+                            nodeStrokeWidth={0}
+                            nodeBorderRadius={2}
+                            pannable={false}
+                            zoomable={false}
+                            bgColor="var(--colorNeutralBackground2)"
+                            maskColor="transparent"
+                            nodeColor={(n) => {
+                              const s = (n.data as SubtaskNodeData | undefined)?.topoStatus as string | undefined;
+                              if (s === 'completed' || s === 'assemble_ready') return '#107c41';
+                              if (s === 'running' || s === 'dispatching' || s === 'awaiting_assembly' || s === 'assembling') return '#8c837c';
+                              if (s === 'waiting') return '#d47c00';
+                              if (s === 'failed' || s === 'declined') return '#c50f1f';
+                              return '#b8afa8';
+                            }}
+                          />
+                        </ReactFlow>
                       </CoordPanelContext.Provider>
                       </CoordExpandContext.Provider>
                       </CoordinatorSessionContext.Provider>
@@ -3680,7 +3786,6 @@ export function CoordinatorRunPage() {
                       </BrowseFilesContext.Provider>
                       </ExecutionModalContext.Provider>
                     </div>
-                    <span className={styles.minimapCaption}>Topology · {displayNodes.length} nodes</span>
                   </div>
                 )}
               </div>

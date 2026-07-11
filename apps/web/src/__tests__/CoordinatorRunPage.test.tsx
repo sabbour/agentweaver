@@ -348,7 +348,7 @@ describe('CoordinatorRunPage — unified coordinator graph view', () => {
     steerBtn.click();
 
     await waitFor(() => {
-      const input = container.querySelector('input[placeholder="Message coordinator..."]') as HTMLInputElement | null;
+      const input = container.querySelector('textarea[placeholder="Message coordinator..."]') as HTMLTextAreaElement | null;
       expect(input).toBeTruthy();
       expect(document.activeElement).toBe(input);
     }, { timeout: 4000 });

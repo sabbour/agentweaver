@@ -613,21 +613,30 @@ describe('CoordinatorRunPage operator console redesign', () => {
     await waitFor(() => expect(screen.getByText('HotelSearchForm.jsx')).toBeTruthy(), { timeout: 4000 });
   });
 
-  it('routes the single composer through coordinator steering and targets a selected child run', async () => {
+  it('keeps the composer read-only when viewing a child agent and steers other agents through the Coordinator', async () => {
     render(<Wrapper><CoordinatorRunPage /></Wrapper>);
 
     await waitFor(() => expect(document.body.textContent).toContain('Subtask 1'), { timeout: 4000 });
-    fireEvent.click(screen.getByRole('treeitem', { name: /Subtask 1/i }));
-    const input = screen.getByPlaceholderText('Message coordinator...');
+
+    // Product decision: viewing a non-coordinator agent is read-only — you steer it
+    // through the Coordinator, not by messaging it directly.
+    fireEvent.click(screen.getByRole('treeitem', { name: /Select Subtask 1/i }));
+    expect(await screen.findByText('Viewing Neo — steer via the Coordinator')).toBeTruthy();
+    expect(screen.queryByPlaceholderText('Message coordinator...')).toBeNull();
+
+    // Selecting the Coordinator root restores an interactive composer that steers the run.
+    fireEvent.click(screen.getByRole('treeitem', { name: /Select Coordinator/i }));
+    const input = await screen.findByPlaceholderText('Message coordinator...');
     fireEvent.change(input, { target: { value: 'Use the cached source' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
 
     await waitFor(() => expect(apiClient.steerCoordinator).toHaveBeenCalled(), { timeout: 4000 });
     expect(vi.mocked(apiClient.steerCoordinator).mock.calls[0][1]).toMatchObject({
       kind: 'send',
       instruction: 'Use the cached source',
-      target_child_run_id: 'child-run-1',
     });
+    // Coordinator-scoped messages steer the whole run, not a specific child.
+    expect(vi.mocked(apiClient.steerCoordinator).mock.calls[0][1]).not.toHaveProperty('target_child_run_id');
     expect(await screen.findByText('Message sent to coordinator.')).toBeTruthy();
   });
 

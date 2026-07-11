@@ -104,6 +104,10 @@ describe('AgentSessionPanel', () => {
     );
 
     await waitFor(() => expect(screen.getByText('Tool Approval Required')).toBeDefined(), { timeout: 4000 });
+    // Approvals render via the native ApprovalGate primitive (components/ui/agentic),
+    // not the legacy lifecycle card.
+    expect(screen.getByTestId('session-approval-gate')).toBeDefined();
+    expect(screen.getByRole('region', { name: 'Approval required' })).toBeDefined();
     await userEvent.click(screen.getByRole('button', { name: 'Allow once' }));
 
     expect(vi.mocked(apiClient.approveTool)).toHaveBeenCalledWith('child-run-1', 'approval-1', 'once');
@@ -621,9 +625,17 @@ describe('AgentSessionPanel', () => {
     expect(screen.getByText('Applying the requested fix.')).toBeDefined();
   });
 
-  it('shows coordinator messaging availability, success, and failure feedback', async () => {
-    const user = userEvent.setup();
-    vi.mocked(apiClient.steerCoordinator).mockResolvedValueOnce({ status: 'applied' });
+  it('streams only the event-level active turn — a completed turn never keeps the spinner', async () => {
+    // Two turns: the first is closed (agent.turn.end), the second is still open
+    // (agent.turn.start with no matching end). The run is live (getRun → in_progress).
+    currentEvents = [
+      { sequence: 1, type: 'agent.turn.start', payload: { turnId: 't1' } },
+      { sequence: 2, type: 'agent.message', payload: { content: 'First response is finished.' } },
+      { sequence: 3, type: 'agent.turn.end', payload: {} },
+      { sequence: 4, type: 'agent.turn.start', payload: { turnId: 't2' } },
+      { sequence: 5, type: 'agent.message', payload: { content: 'Second response still streaming.' } },
+    ];
+
     render(
       <Wrapper>
         <AgentSessionPanel
@@ -639,26 +651,24 @@ describe('AgentSessionPanel', () => {
       </Wrapper>,
     );
 
-    const input = await screen.findByPlaceholderText('Message coordinator...', undefined, { timeout: 4000 });
-    await user.type(input, 'Check the compact view');
-    await user.click(screen.getByRole('button', { name: 'Send message' }));
+    await waitFor(() => expect(screen.getByText('First response is finished.')).toBeDefined(), { timeout: 4000 });
 
-    await waitFor(() => expect(apiClient.steerCoordinator).toHaveBeenCalledWith(
-      'coord-run-1',
-      expect.objectContaining({
-        kind: 'send',
-        instruction: 'Check the compact view',
-        target_child_run_id: 'child-run-1',
-      }),
-    ));
-    expect(await screen.findByText('Message sent to coordinator.')).toBeDefined();
+    const completed = screen.getByText('First response is finished.').closest('[role="article"]') as HTMLElement;
+    const active = screen.getByText('Second response still streaming.').closest('[role="article"]') as HTMLElement;
 
-    vi.mocked(apiClient.steerCoordinator).mockRejectedValueOnce(new Error('message bus unavailable'));
-    await user.type(input, 'Try again');
-    await user.click(screen.getByRole('button', { name: 'Send message' }));
+    // The completed turn must NOT show a streaming ProgressBar; the open turn must.
+    expect(within(completed).queryByRole('progressbar')).toBeNull();
+    expect(within(active).queryByRole('progressbar')).not.toBeNull();
+  });
 
-    expect(await screen.findByText(/message bus unavailable/i)).toBeDefined();
-    cleanup();
+  it('marks a failed tool call with an error status, not a success check', async () => {
+    currentEvents = [
+      { sequence: 1, type: 'agent.turn.start', payload: { turnId: 'worker-turn' } },
+      { sequence: 2, type: 'agent.message', payload: { content: 'Trying a tool.' } },
+      { sequence: 3, type: 'tool.call', payload: { callId: 'c1', toolName: 'web_fetch', arguments: { url: 'https://example.com' } } },
+      { sequence: 4, type: 'tool.error', payload: { callId: 'c1', error: 'boom' } },
+      { sequence: 5, type: 'agent.turn.end', payload: {} },
+    ];
 
     render(
       <Wrapper>
@@ -670,6 +680,72 @@ describe('AgentSessionPanel', () => {
           onSelectNode={vi.fn()}
           coordinatorRunId="coord-run-1"
           projectId="p1"
+        />
+      </Wrapper>,
+    );
+
+    await waitFor(() => expect(screen.getByText('Trying a tool.')).toBeDefined(), { timeout: 4000 });
+    await userEvent.click(screen.getByRole('switch', { name: 'Technical details hidden' }));
+    await userEvent.click(screen.getByRole('button', { name: /Expand activity details/i }));
+    await userEvent.click(screen.getByRole('button', { name: /Tool calls/ }));
+
+    const errorRow = await waitFor(() => {
+      const row = document.querySelector('[data-status="error"]');
+      if (!row) throw new Error('no errored tool row yet');
+      return row as HTMLElement;
+    });
+    expect(errorRow.getAttribute('data-status')).toBe('error');
+    expect(document.querySelector('[data-status="complete"]')).toBeNull();
+  });
+
+  it('shows coordinator messaging availability, success, and failure feedback', async () => {
+    const user = userEvent.setup();
+    vi.mocked(apiClient.steerCoordinator).mockResolvedValueOnce({ status: 'applied' });
+    render(
+      <Wrapper>
+        <AgentSessionPanel
+          open
+          onClose={vi.fn()}
+          tree={tree}
+          selectedNodeId="coordinator"
+          onSelectNode={vi.fn()}
+          coordinatorRunId="coord-run-1"
+          projectId="p1"
+          coordinatorActive
+        />
+      </Wrapper>,
+    );
+
+    const input = await screen.findByPlaceholderText('Message coordinator...', undefined, { timeout: 4000 });
+    await user.type(input, 'Check the compact view');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    await waitFor(() => expect(apiClient.steerCoordinator).toHaveBeenCalledWith(
+      'coord-run-1',
+      expect.objectContaining({
+        kind: 'send',
+        instruction: 'Check the compact view',
+      }),
+    ));
+    expect(await screen.findByText('Message sent to coordinator.')).toBeDefined();
+
+    vi.mocked(apiClient.steerCoordinator).mockRejectedValueOnce(new Error('message bus unavailable'));
+    await user.type(input, 'Try again');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    expect(await screen.findByText(/message bus unavailable/i)).toBeDefined();
+    cleanup();
+
+    render(
+      <Wrapper>
+        <AgentSessionPanel
+          open
+          onClose={vi.fn()}
+          tree={tree}
+          selectedNodeId="coordinator"
+          onSelectNode={vi.fn()}
+          coordinatorRunId="coord-run-1"
+          projectId="p1"
           coordinatorActive={false}
         />
       </Wrapper>,
@@ -677,6 +753,28 @@ describe('AgentSessionPanel', () => {
 
     expect(await screen.findByText('Messaging is unavailable because this coordinator run is not active.')).toBeDefined();
     expect(screen.getByPlaceholderText('Message coordinator...')).toHaveProperty('disabled', true);
+  });
+
+  it('makes the composer read-only when viewing a non-coordinator agent (steer via the Coordinator)', async () => {
+    render(
+      <Wrapper>
+        <AgentSessionPanel
+          open
+          onClose={vi.fn()}
+          tree={tree}
+          selectedNodeId="subtask-1"
+          onSelectNode={vi.fn()}
+          coordinatorRunId="coord-run-1"
+          projectId="p1"
+          coordinatorActive
+        />
+      </Wrapper>,
+    );
+
+    // Viewing a child agent shows a read-only notice, not a message box — you steer
+    // other agents through the Coordinator.
+    expect(await screen.findByText('Viewing Worker — steer via the Coordinator')).toBeDefined();
+    expect(screen.queryByPlaceholderText('Message coordinator...')).toBeNull();
   });
 
   it('guards planned subtasks without childRunId from run/workspace API calls', async () => {

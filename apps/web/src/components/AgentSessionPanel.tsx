@@ -6,7 +6,6 @@ import { formatApiErrorMessage } from '../api/errors';
 import { useRunStream } from '../api/sse';
 import {
   Button,
-  Input,
   MessageBar,
   MessageBarBody,
   Spinner,
@@ -24,18 +23,13 @@ import {
   ChevronRightRegular,
   CircleRegular,
   ClockRegular,
-  CodeRegular,
   DismissCircleFilled,
   DismissRegular,
-  DocumentAddRegular,
-  DocumentEditRegular,
   DocumentRegular,
   EyeRegular,
-  GlobeRegular,
-  SendRegular,
-  WindowConsoleRegular,
 } from '@fluentui/react-icons';
-import { ArtifactChip } from './ui/agentic';
+import { ApprovalGate, ArtifactChip, ToolCallRow } from './ui/agentic';
+import { Composer, CopilotChat, CopilotMessage, OutputCard, UserMessage } from './ui/copilot';
 import { EmptyState } from './ui';
 import { useArtifactBrowser } from '../hooks/useArtifactBrowser';
 import { mergeRunEvents as sharedMergeRunEvents, SEED_STATUSES } from '../timeline/mergeRunEvents';
@@ -43,7 +37,6 @@ import { deriveHumanTitle } from '../timeline/reducer';
 import { AgentAvatar } from './AgentAvatar';
 import { CompactChangesList, FilesTabPanel } from './ArtifactBrowser';
 import { FileViewerModal } from './FileViewerModal';
-import { LifecycleEventCard } from './LifecycleEventCard';
 import { OutcomePlanPanel } from './OutcomePlanPanel';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { EventType, RunStreamEvent } from '../api/sse';
@@ -368,6 +361,11 @@ const useStyles = makeStyles({
     color: tokens.colorNeutralForeground2,
     whiteSpace: 'nowrap',
   },
+  chatFeed: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalM,
+  },
   conversationTurn: {
     display: 'flex',
     flexDirection: 'column',
@@ -625,8 +623,6 @@ const useStyles = makeStyles({
     fontWeight: tokens.fontWeightSemibold,
   },
   stickyComposer: {
-    display: 'flex',
-    gap: tokens.spacingHorizontalS,
     padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalL} ${tokens.spacingVerticalM}`,
     backgroundColor: tokens.colorNeutralBackground1,
   },
@@ -643,6 +639,19 @@ const useStyles = makeStyles({
   },
   composerStatusSuccess: {
     color: tokens.colorPaletteGreenForeground1,
+  },
+  approvalGateWrap: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalXS,
+    marginTop: tokens.spacingVerticalXS,
+  },
+  approvalGateHeading: {
+    fontSize: tokens.fontSizeBase200,
+    color: tokens.colorNeutralForeground2,
+  },
+  approvalResolved: {
+    padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalS}`,
   },
   loadingWrap: {
     padding: tokens.spacingVerticalXL,
@@ -723,6 +732,7 @@ interface ConversationTool {
   toolName: string;
   title: string;
   settled: boolean;
+  errored: boolean;
   args: Record<string, unknown>;
 }
 
@@ -732,6 +742,9 @@ interface ConversationTurn {
   toolCalls: ConversationTool[];
   approvals: Array<{ event: RunStreamEvent; isResolved: boolean; resolvedScope: string | null }>;
   filePaths: string[];
+  // True only for the turn whose agent.turn.start has no matching agent.turn.end —
+  // i.e. the single event-level active turn. Drives the streaming affordance.
+  open?: boolean;
 }
 
 // #122: Distinguish high-signal narrative from low-signal technical plumbing so the
@@ -990,17 +1003,6 @@ function isFileWriteTool(toolName: string): boolean {
 }
 
 // A FluentUI glyph that makes the operation type obvious at a glance.
-function toolKindIcon(kind: ToolOpKind) {
-  switch (kind) {
-    case 'read': return <DocumentRegular />;
-    case 'write': return <DocumentAddRegular />;
-    case 'edit': return <DocumentEditRegular />;
-    case 'web': return <GlobeRegular />;
-    case 'command': return <WindowConsoleRegular />;
-    default: return <CodeRegular />;
-  }
-}
-
 function cleanText(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
   return trimmed ? trimmed : undefined;
@@ -1266,6 +1268,7 @@ function buildTurns(events: RunStreamEvent[]): ConversationTurn[] {
         toolName,
         title: deriveHumanTitle(toolName, args),
         settled: false,
+        errored: false,
         args,
       };
       const turn = ensureTurn();
@@ -1287,9 +1290,16 @@ function buildTurns(events: RunStreamEvent[]): ConversationTurn[] {
     if (evt.type === 'tool.result' || evt.type === 'tool.error') {
       const callId = String(evt.payload['callId'] ?? '');
       const tool = pendingTools.get(callId);
-      if (tool) tool.settled = true;
+      if (tool) {
+        tool.settled = true;
+        if (evt.type === 'tool.error') tool.errored = true;
+      }
     }
   }
+  // The turn still open at loop end (an agent.turn.start with no matching
+  // agent.turn.end) is the single event-level active turn — mark it so only
+  // its agent row streams. Cleared implicitly on agent.turn.end (current=null).
+  if (current) current.open = true;
   return turns.filter((turn) => turn.rows.length > 0 || turn.toolCalls.length > 0 || turn.approvals.length > 0);
 }
 
@@ -1569,7 +1579,10 @@ export function AgentSessionPanel({
   artifactAdapter,
 }: AgentSessionPanelProps) {
   const styles = useStyles();
-  const composerRef = useRef<HTMLInputElement>(null);
+  const composerRef = useRef<HTMLDivElement>(null);
+  const focusComposer = useCallback(() => {
+    composerRef.current?.querySelector('textarea')?.focus();
+  }, []);
   const messagesScrollRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const docked = variant === 'docked';
@@ -1706,16 +1719,16 @@ export function AgentSessionPanel({
       if (selectedItem?.nodeId === 'outcome-plan') {
         setFollowUp((value) => value.trim() ? value : 'Clarify the outcome plan: ');
       }
-      composerRef.current?.focus();
+      focusComposer();
     }
-  }, [composerFocusSignal, selectedItem?.nodeId]);
+  }, [composerFocusSignal, selectedItem?.nodeId, focusComposer]);
 
   const focusOutcomePlanClarification = useCallback(() => {
     setFollowUp((value) => value.trim() ? value : 'Clarify the outcome plan: ');
     setActiveTab('messages');
     onOutcomePlanClarify?.();
-    window.setTimeout(() => composerRef.current?.focus(), 0);
-  }, [onOutcomePlanClarify]);
+    window.setTimeout(() => focusComposer(), 0);
+  }, [onOutcomePlanClarify, focusComposer]);
 
   const jumpToLatestMessage = useCallback(() => {
     messagesEndRef.current?.scrollIntoView({ block: 'end', behavior: 'smooth' });
@@ -1806,6 +1819,12 @@ export function AgentSessionPanel({
   const pendingQuestionCount = events.filter((evt) =>
     evt.type === 'agent.question_asked' || evt.type === 'coordinator.child_question'
   ).length;
+  // A turn "streams" while its run is still live — the coordinator scope tracks coordinatorActive,
+  // a dispatched child tracks its own run status.
+  const LIVE_RUN_STATUSES = new Set(['running', 'in_progress', 'active', 'dispatching', 'awaiting_assembly', 'assembling']);
+  const runIsLive = (selectedItem.isCoordinator || selectedItem.nodeId === 'work-plan')
+    ? coordinatorActive
+    : LIVE_RUN_STATUSES.has((runDetail?.status ?? '').toLowerCase());
   const composerContext = selectedItem.nodeId === 'outcome-plan'
     ? 'Context: Outcome plan'
     : selectedItem.isCoordinator
@@ -1814,6 +1833,12 @@ export function AgentSessionPanel({
   const composerAvailabilityMessage = coordinatorActive
     ? null
     : 'Messaging is unavailable because this coordinator run is not active.';
+  // Product decision: you can MESSAGE the Coordinator (root + work/outcome plan scopes),
+  // but only VIEW other agents — steer them through the Coordinator.
+  const isNonCoordinatorAgentScope = !selectedItem.isCoordinator
+    && selectedItem.nodeId !== 'work-plan'
+    && selectedItem.nodeId !== 'outcome-plan';
+  const readOnlyComposerNote = `Viewing ${selectedItem.agentName ?? selectedItem.label} — steer via the Coordinator`;
 
   return (
     <>
@@ -2010,19 +2035,26 @@ export function AgentSessionPanel({
                         description="Messages will appear here as the run emits activity."
                       />
                     )}
-                    {selectedItem.nodeId !== 'outcome-plan' &&
-                      (showTechnical ? turns : turns.filter(turnHasSignalContent)).map((turn) => (
-                        <ConversationTurnBlock
-                          key={turn.key}
-                          turn={turn}
-                          runId={selectedRunId}
-                          onPreviewFile={openPreview}
-                          showTechnical={showTechnical}
-                          activityDetailsExpanded={activityDetailsExpanded}
-                          onExpandActivityDetails={() => setActivityDetailsExpanded(true)}
-                          participant={selectedIdentity}
-                        />
-                      ))}
+                    {selectedItem.nodeId !== 'outcome-plan' && (() => {
+                      const visibleTurns = showTechnical ? turns : turns.filter(turnHasSignalContent);
+                      return (
+                        <CopilotChat className={styles.chatFeed} label="Session conversation">
+                          {visibleTurns.map((turn) => (
+                            <ConversationTurnBlock
+                              key={turn.key}
+                              turn={turn}
+                              runId={selectedRunId}
+                              onPreviewFile={openPreview}
+                              showTechnical={showTechnical}
+                              activityDetailsExpanded={activityDetailsExpanded}
+                              onExpandActivityDetails={() => setActivityDetailsExpanded(true)}
+                              participant={selectedIdentity}
+                              streaming={Boolean(turn.open) && runIsLive && turn.approvals.every((a) => a.isResolved)}
+                            />
+                          ))}
+                        </CopilotChat>
+                      );
+                    })()}
                     <div ref={messagesEndRef} data-testid="session-message-end" />
                     {selectedItem.nodeId !== 'outcome-plan' && turns.length > 0 && (
                       <div className={styles.jumpToLatestBar}>
@@ -2054,26 +2086,23 @@ export function AgentSessionPanel({
                         </MessageBar>
                       )}
                       <Text className={styles.composerContext}>{composerContext}</Text>
-                      <div className={styles.stickyComposer}>
-                        <Input
-                          ref={composerRef}
-                          className={styles.composerInput}
-                          placeholder="Message coordinator..."
+                      <div className={styles.stickyComposer} ref={composerRef}>
+                        <Composer
                           value={followUp}
-                          aria-describedby="coordinator-message-status"
-                          onChange={(_, data) => {
-                            setFollowUp(data.value);
+                          placeholder="Message coordinator..."
+                          readOnly={isNonCoordinatorAgentScope}
+                          readOnlyNote={readOnlyComposerNote}
+                          onChange={(value) => {
+                            setFollowUp(value);
                             setFollowUpError(null);
                             setFollowUpNotice(null);
                           }}
+                          onSubmit={(_, data) => {
+                            if (data.value.trim()) void handleSendFollowUp();
+                          }}
                           disabled={!coordinatorActive || followUpBusy}
-                        />
-                        <Button
-                          appearance="primary"
-                          aria-label="Send message"
-                          icon={followUpBusy ? <Spinner size="tiny" /> : <SendRegular />}
-                          disabled={!coordinatorActive || followUpBusy || !followUp.trim()}
-                          onClick={() => { void handleSendFollowUp(); }}
+                          disableSend={!coordinatorActive || followUpBusy || !followUp.trim()}
+                          contentBefore={null}
                         />
                       </div>
                       <div id="coordinator-message-status" aria-live="polite">
@@ -2163,6 +2192,113 @@ export function AgentSessionPanel({
   );
 }
 
+// Renders an in-thread approval using the native ApprovalGate primitive (components/ui/agentic).
+// Plain-worded Approve/Deny wired to the SAME approval handlers the legacy card used
+// (apiClient.approveTool/denyTool for tool approvals, approveShell/denyShell for shell
+// approvals). Bubbled child approvals target the child run id from the event payload.
+function InThreadApprovalGate({
+  event,
+  runId,
+  isResolved,
+  resolvedScope,
+}: {
+  event: RunStreamEvent;
+  runId: string;
+  isResolved: boolean;
+  resolvedScope: string | null;
+}) {
+  const styles = useStyles();
+  const [localResolution, setLocalResolution] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+
+  // Server-driven resolution (replay / SSE) is read straight from props; local state only
+  // holds the optimistic outcome of a click. This avoids a set-state-in-effect sync.
+  const resolution = localResolution ?? (isResolved ? (resolvedScope ?? 'expired') : null);
+
+  const isShell = event.type === 'shell.approval_required';
+  const requestId = readString(event.payload, ['requestId', 'request_id']) ?? '';
+  const commandHash = readString(event.payload, ['commandHash', 'command_hash']) ?? '';
+  const toolName = readString(event.payload, ['toolName', 'tool_name']) ?? (isShell ? 'run_command' : 'tool');
+  const rawUrl = readString(event.payload, ['url']) ?? null;
+  const url = rawUrl && rawUrl.length > 80 ? `${rawUrl.slice(0, 80)}…` : rawUrl;
+  const command = readString(event.payload, ['command']);
+  const intention = readString(event.payload, ['intention', 'message']) ?? null;
+  // Bubbled child approvals must target the child subtask run, never the coordinator run.
+  const targetRunId = readString(event.payload, ['childRunId', 'child_run_id']) ?? runId;
+
+  const settle = async (fn: () => Promise<void>, outcome: string) => {
+    if (!targetRunId || resolution !== null || busy) return;
+    setBusy(true);
+    setActionError(null);
+    try {
+      await fn();
+      setLocalResolution(outcome);
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleApprove = () => {
+    void settle(
+      () => (isShell
+        ? apiClient.approveShell(targetRunId, commandHash)
+        : apiClient.approveTool(targetRunId, requestId, 'once')),
+      'once',
+    );
+  };
+  const handleDeny = () => {
+    void settle(
+      () => (isShell
+        ? apiClient.denyShell(targetRunId, commandHash)
+        : apiClient.denyTool(targetRunId, requestId)),
+      'deny',
+    );
+  };
+
+  if (resolution !== null) {
+    const label = resolution === 'expired'
+      ? `This approval request expired · ${toolName}`
+      : resolution === 'deny'
+        ? `Denied · ${toolName}`
+        : `Allowed · ${toolName}`;
+    return (
+      <div className={styles.approvalResolved} data-testid="session-approval-resolved">
+        <Text className={styles.fileMeta}>{label}</Text>
+      </div>
+    );
+  }
+
+  const target = isShell ? (command ?? 'a shell command') : toolName;
+  const detail = isShell ? null : url;
+  const riskText = [
+    `Allow ${target}${detail ? ` to reach ${detail}` : ''}?`,
+    intention ?? undefined,
+    'Nothing runs until you approve. You can review the results afterwards.',
+  ].filter(Boolean).join(' ');
+
+  return (
+    <div className={styles.approvalGateWrap} data-testid="session-approval-gate">
+      <Text className={styles.approvalGateHeading} weight="semibold">
+        {isShell ? 'Command approval required' : 'Tool Approval Required'}
+      </Text>
+      <ApprovalGate
+        stepId={requestId || commandHash || `approval-${event.sequence}`}
+        riskText={riskText}
+        approveLabel="Allow once"
+        denyLabel="Deny"
+        onApprove={handleApprove}
+        onDeny={handleDeny}
+      />
+      {actionError && (
+        <Text className={styles.composerStatus} role="alert">Approval failed: {actionError}</Text>
+      )}
+    </div>
+  );
+}
+
 function ConversationTurnBlock({
   turn,
   runId,
@@ -2171,6 +2307,7 @@ function ConversationTurnBlock({
   activityDetailsExpanded = false,
   onExpandActivityDetails,
   participant,
+  streaming = false,
 }: {
   turn: ConversationTurn;
   runId: string;
@@ -2179,6 +2316,7 @@ function ConversationTurnBlock({
   activityDetailsExpanded?: boolean;
   onExpandActivityDetails?: () => void;
   participant: ParticipantIdentity;
+  streaming?: boolean;
 }) {
   const styles = useStyles();
   const [toolsOpen, setToolsOpen] = useState(false);
@@ -2205,6 +2343,8 @@ function ConversationTurnBlock({
     });
   };
 
+  const lastAgentRowKey = [...visibleRows].reverse().find((row) => row.role === 'agent')?.key;
+
   return (
     <div className={styles.conversationTurn}>
       {visibleRows.map((row) => {
@@ -2221,35 +2361,66 @@ function ConversationTurnBlock({
         const collapsible = row.role === 'system' || (row.role === 'user' && isCoordinatorContextContent(row.content));
         const expanded = !collapsible || expandedRows.has(row.key);
         const disclosureLabel = collapsedRowLabel(row, author.collapsedLabel);
-        return (
-          <div key={row.key} className={styles.messageCard} data-testid="session-message-row">
-            <AgentAvatar name={author.avatarName} size={24} circle />
-            <div className={styles.messageRow}>
-              <div className={styles.messageMeta}>
-                <div className={styles.authorBlock}>
-                  <Text className={styles.authorName}>{author.displayName}</Text>
-                  <Text className={styles.messageRole}>{author.roleLabel}</Text>
+
+        // Collapsible scaffolding (system prompt / coordinator context) keeps the
+        // quiet disclosure affordance instead of a loud chat bubble.
+        if (collapsible) {
+          return (
+            <div key={row.key} className={styles.messageCard} data-testid="session-message-row">
+              <AgentAvatar name={author.avatarName} size={24} circle />
+              <div className={styles.messageRow}>
+                <div className={styles.messageMeta}>
+                  <div className={styles.authorBlock}>
+                    <Text className={styles.authorName}>{author.displayName}</Text>
+                    <Text className={styles.messageRole}>{author.roleLabel}</Text>
+                  </div>
+                  <Text className={styles.fileMeta}>{formatTimestamp(row.timestamp)}</Text>
                 </div>
-                <Text className={styles.fileMeta}>{formatTimestamp(row.timestamp)}</Text>
+                <button className={styles.disclosure} onClick={() => toggleRow(row.key)} aria-expanded={expanded}>
+                  {expanded ? <ChevronDownRegular /> : <ChevronRightRegular />}
+                  <Text>{disclosureLabel}</Text>
+                </button>
+                {expanded && (
+                  <div className={mergeClasses(styles.messageBubble, styles.markdownBody, row.role === 'system' ? styles.bubbleSystem : styles.bubbleUser)}>
+                    <MarkdownMessage content={row.content} />
+                  </div>
+                )}
               </div>
-              {collapsible ? (
-                <>
-                  <button className={styles.disclosure} onClick={() => toggleRow(row.key)} aria-expanded={expanded}>
-                    {expanded ? <ChevronDownRegular /> : <ChevronRightRegular />}
-                    <Text>{disclosureLabel}</Text>
-                  </button>
-                  {expanded && (
-                    <div className={mergeClasses(styles.messageBubble, styles.markdownBody, row.role === 'system' ? styles.bubbleSystem : styles.bubbleUser)}>
-                      <MarkdownMessage content={row.content} />
-                    </div>
-                  )}
-                </>
-              ) : (
-                <div className={mergeClasses(styles.messageBubble, styles.markdownBody, styles.bubbleAgent)}>
+            </div>
+          );
+        }
+
+        // User instructions render as the native UserMessage bubble.
+        if (row.role === 'user') {
+          return (
+            <div key={row.key} data-testid="session-message-row">
+              <UserMessage
+                accessibleHeading={author.displayName}
+                timestamp={formatTimestamp(row.timestamp)}
+              >
+                <div className={styles.markdownBody}>
                   <MarkdownMessage content={row.content} />
                 </div>
-              )}
+              </UserMessage>
             </div>
+          );
+        }
+
+        // Agent responses render as the native CopilotMessage.
+        return (
+          <div key={row.key} data-testid="session-message-row">
+            <CopilotMessage
+              name={author.displayName}
+              avatar={<AgentAvatar name={author.avatarName} size={24} circle />}
+              disclaimer={author.roleLabel}
+              loadingState={row.key === lastAgentRowKey && streaming ? 'streaming' : 'none'}
+              content={
+                <div className={styles.markdownBody}>
+                  <MarkdownMessage content={row.content} />
+                </div>
+              }
+              footnote={<Text className={styles.fileMeta}>{formatTimestamp(row.timestamp)}</Text>}
+            />
           </div>
         );
       })}
@@ -2277,11 +2448,15 @@ function ConversationTurnBlock({
               {turn.toolCalls.map((tool) => {
                 const friendly = friendlyToolLabel(tool, runId);
                 return (
-                  <Text key={tool.callId} className={mergeClasses(styles.toolRow, friendly.muted && styles.toolRowMuted)} title={friendly.detail ?? friendly.label}>
-                    <span className={styles.toolKind} aria-hidden="true">{toolKindIcon(friendly.kind)}</span>
-                    <span className={styles.toolLabel}>{friendly.label}</span>
-                    <span aria-hidden="true">{tool.settled ? <CheckmarkCircleFilled className={styles.toolCheck} /> : <ClockRegular />}</span>
-                  </Text>
+                  <ToolCallRow
+                    key={tool.callId}
+                    toolCall={{
+                      id: tool.callId,
+                      name: friendly.label,
+                      inputSummary: friendly.detail ?? undefined,
+                      status: tool.errored ? 'error' : tool.settled ? 'complete' : 'running',
+                    }}
+                  />
                 );
               })}
             </div>
@@ -2290,7 +2465,7 @@ function ConversationTurnBlock({
       )}
 
       {turn.approvals.map((approval) => (
-        <LifecycleEventCard
+        <InThreadApprovalGate
           key={`approval-${approval.event.sequence}`}
           event={approval.event}
           runId={runId}
@@ -2300,28 +2475,30 @@ function ConversationTurnBlock({
       ))}
 
       {showTechnical && activityDetailsExpanded && turn.filePaths.length > 0 && (
-        <div className={styles.fileRows}>
-          {turn.filePaths.map((path) => {
-            const relPath = normalizeWorkspacePath(path, runId);
-            return (
-              <div key={path} className={styles.fileRow} data-testid="session-file-row">
-                <ArtifactChip
-                  artifact={{
-                    id: relPath,
-                    title: fileName(relPath),
-                    type: 'Workspace file',
-                    icon: <DocumentRegular />,
-                    onOpen: () => onPreviewFile(relPath),
-                  }}
-                />
-                <Text className={styles.fileMeta}>{relPath}</Text>
-                <Button appearance="subtle" size="small" icon={<EyeRegular />} onClick={() => onPreviewFile(relPath)}>
-                  Preview
-                </Button>
-              </div>
-            );
-          })}
-        </div>
+        <OutputCard mode="sidecar" isLoading={Boolean(streaming)}>
+          <div className={styles.fileRows}>
+            {turn.filePaths.map((path) => {
+              const relPath = normalizeWorkspacePath(path, runId);
+              return (
+                <div key={path} className={styles.fileRow} data-testid="session-file-row">
+                  <ArtifactChip
+                    artifact={{
+                      id: relPath,
+                      title: fileName(relPath),
+                      type: 'Workspace file',
+                      icon: <DocumentRegular />,
+                      onOpen: () => onPreviewFile(relPath),
+                    }}
+                  />
+                  <Text className={styles.fileMeta}>{relPath}</Text>
+                  <Button appearance="subtle" size="small" icon={<EyeRegular />} onClick={() => onPreviewFile(relPath)}>
+                    Preview
+                  </Button>
+                </div>
+              );
+            })}
+          </div>
+        </OutputCard>
       )}
     </div>
   );
