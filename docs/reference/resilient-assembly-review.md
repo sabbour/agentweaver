@@ -77,6 +77,24 @@ If the `TARGET_FILES:` hint is absent (`no_target_files_field`) or matches no su
 `coordinator.assembly_implicated_scope_fallback`. The same helpers back both the live steering path
 (`RouteAssemblyGateThroughSteeringAsync`) and the conscious fresh-dispatch executor (`RequestChangesAsync`).
 
+## RAI verdict contract (#231)
+
+The collective-assembly RAI reviewer returns its decision as a machine-readable sentinel, not prose. The
+prompt requires the **last line** of the response to be exactly `VERDICT: <GREEN|YELLOW|REVISE|RED>`; only
+that line is parsed. Prose (including the verdict legend) is **never** scanned, which removes the prior
+heuristic's false-escalation of benign reviews to `RED`.
+
+| Aspect | Contract |
+|---|---|
+| Primary parse | `VERDICT:` sentinel line only (`TryParseSentinelVerdict`). Last sentinel line wins; most-severe token wins on a single ambiguous line. Prose can never yield a passing verdict. |
+| Non-sentinel fallback | Unambiguous emoji only (`TryParseEmojiVerdict`): 🔴 → blocking `RED`, 🟡 → advisory `YELLOW`. Nothing else in prose is consulted. |
+| No parseable verdict | Exactly **one** bounded re-ask (`ReAskPrompt`) demanding only the sentinel; still unparseable → **fail safe to blocking `RED`**, reason `unparseable_after_reask`, emitted as `run.rai_error`. Never a silent `YELLOW`/`GREEN`. |
+| Genuine `RED` | Sentinel `RED` or 🔴 sets `ContentSafetyFlagged` → `RunRaiAsync` `SafetyFlagged` → coordinator `RaiBlockAsync` (blocking). |
+| Human-facing text | `ExtractRationale` / `ExtractFeedback` strip the sentinel line so surfaced feedback is the explanation, not `VERDICT: REVISE`. |
+
+Source: `packages/Agentweaver.AgentRuntime/Workflow/RaiTurnExecutor.cs`;
+`apps/Agentweaver.Api/Coordinator/CollectiveAssemblyPipeline.cs`.
+
 ## Operator steering at the review gate (#226)
 
 While the run is parked at the human-review gate (`run.status == awaiting_review`,

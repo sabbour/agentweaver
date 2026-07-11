@@ -239,7 +239,7 @@ The selected workflow is not just recorded for display. It becomes prompt contex
 
 ### Decomposition strategy
 
-The decomposition turn asks for the **minimum set of independently dispatchable subtasks**. Each subtask must include:
+The decomposition turn asks for a subtask set that is **outcome-complete** — one that covers every lifecycle stage the outcome implies, rather than the fewest subtasks that technically compile. Every distinct deliverable or lifecycle stage the confirmed outcome calls for (customer/market research, business/GTM, user stories, PRD, UX design, implementation, and so on) must map to at least one **independently dispatchable, well-scoped subtask owned by exactly one agent** — a stage the outcome implies is never dropped, and two genuinely distinct deliverables are never merged. A **symmetric anti-over-engineering guard** balances that completeness: a small, well-defined change maps to a single implementation subtask, so trivial outcomes stay lean and no stage is manufactured that the outcome does not imply. Each subtask must include:
 
 - title;
 - exact scope, including files or outputs it owns;
@@ -250,7 +250,7 @@ The decomposition turn asks for the **minimum set of independently dispatchable 
 - advisory isolation hint;
 - 1-based dependency indices.
 
-The prompt pushes the model toward few, bounded subtasks and explicit dependency edges. It also asks parallel file-producing subtasks to write unique outputs, then add a consolidation subtask when parallel research needs synthesis.
+The prompt drives the model toward bounded subtasks and explicit dependency edges, but the selected workflow is **guidance for the stages it covers — not a cap on the plan**. A functional workflow may model only part of the outcome; when the desired outcome implies earlier lifecycle stages the workflow's topology does not enumerate, the coordinator **adds** subtasks for them rather than truncating the plan to the workflow's shape. It also asks parallel file-producing subtasks to write unique outputs, then add a consolidation subtask when parallel research needs synthesis.
 
 The decomposition turn is grounded in:
 

@@ -189,7 +189,8 @@ The coordinator first drafts an **OutcomeSpec** — the intent contract — capt
 the goal, desired outcome, scope, and assumptions, and suspends at a confirmation
 gate. Nothing is dispatched until the spec is confirmed. Once confirmed, it
 produces a **WorkPlan**: the execution contract. The WorkPlan decomposes the goal
-into the minimum set of independently dispatchable **subtasks**, each owned by one
+into an **outcome-complete** set of independently dispatchable **subtasks** — one for
+every lifecycle stage the outcome implies, not the fewest that compile — each owned by one
 agent, each bounded, ordered by explicit **dependency edges** that form a DAG. The
 full decomposition logic is in the
 [Orchestration deep dive](./orchestration.md) and

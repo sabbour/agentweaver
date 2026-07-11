@@ -275,6 +275,40 @@ Fix-B human-review escalation — never to a terminal.
 `in_place_steer` path (`StartRevisionAsync`). The lockout disposition is derived from
 `(source, severity)`: `request-changes` from a reviewer ⇒ rejection; everything else ⇒ guidance.
 
+### RAI verdict contract: a machine-readable sentinel, not prose (#231)
+
+The RAI gate that fronts the software assembly path has the same "structured output, not heuristics"
+requirement as the #223 `TARGET_FILES:` hint — and for the same reason. **Before #231**, the RAI verdict was
+recovered by scanning *every* line of the reviewer's response and treating any line that *started with* a
+verdict token as a vote, then taking the max severity. That heuristic could not tell a decision from prose:
+a legend echo (`- RED — critical violation that must block shipping…`) or a section header (`RED: none`)
+counted as a `RED` vote, so a perfectly benign review **false-escalated to RED** and dead-ended the run at a
+blocking content-safety failure.
+
+The fix replaces the prose scan with a single machine-readable sentinel:
+
+- **Prompt contract.** The RAI reviewer prompt now requires the **last line** of its response to be exactly
+  `` `VERDICT: <GREEN|YELLOW|REVISE|RED>` `` and states plainly that *only* that line is read as the
+  decision — the human-readable explanation (including the verdict legend) is never parsed for the verdict.
+- **Sentinel-only parse.** `TryParseVerdict` consults `TryParseSentinelVerdict` first: it matches only lines
+  that begin with the `VERDICT:` keyword (after stripping bullet/`**` markers). When multiple sentinel lines
+  are present the **last one wins**; if a single sentinel line names more than one token the **most-severe
+  wins**. Because the sentinel is authoritative, prose is *not* scanned at all — so a legend echo or a
+  `RED: none` header can no longer produce any verdict, and **prose can never yield a passing verdict**.
+- **Emoji fallback only.** The single non-sentinel fallback is an unambiguous verdict emoji
+  (`TryParseEmojiVerdict`): 🔴 escalates to a blocking `RED`, 🟡 is an advisory (non-blocking) `YELLOW`.
+  Nothing else in the prose is consulted.
+- **One bounded re-ask, then fail safe to RED.** If neither a sentinel nor an emoji is found, `HandleAsync`
+  issues exactly **one** bounded re-ask (`ReAskPrompt`) demanding *only* the sentinel line. If the verdict is
+  **still** unparseable, the executor **fails safe to a blocking `RED`** (reason `unparseable_after_reask`,
+  emitted as `run.rai_error`) rather than silently passing a `YELLOW`/`GREEN` — a rare, visible, recoverable
+  false-block is strictly preferable to shipping a real `RED` (credentials, PII, harmful content).
+- **A genuine RED still blocks.** A `RED` from the sentinel or 🔴 sets `ContentSafetyFlagged` on the turn
+  output, which the collective-assembly pipeline (`RunRaiAsync`) surfaces as `SafetyFlagged`, routing the
+  coordinator into `RaiBlockAsync` — the safety block is unchanged; only the *parsing* is now deterministic.
+- The surfaced rationale/feedback (`ExtractRationale` / `ExtractFeedback`) deliberately **skip** the sentinel
+  line, so the human sees the explanation instead of a degenerate `VERDICT: REVISE`.
+
 ## Source
 
 | Concern | File |
@@ -287,6 +321,9 @@ Fix-B human-review escalation — never to a terminal.
 | #226 `/steer` `201`/`202` (deferred) response mapping | `apps/Agentweaver.Api/Endpoints/CoordinatorEndpoints.cs` |
 | #223 implicated scoping: `ScopeImplicatedSubtasks`, `TransitiveDependents` | `apps/Agentweaver.Api/Coordinator/AssemblyPlanning.cs` |
 | #223 structured `TARGET_FILES:` parser `ReviewTargetFiles.Parse` / `IsDirectiveLine` | `packages/Agentweaver.AgentRuntime/Workflow/ReviewTargetFiles.cs` |
+| #231 RAI verdict sentinel prompt + one-re-ask → fail-safe-RED flow `HandleAsync`, `ReAskPrompt`, reason `unparseable_after_reask` | `packages/Agentweaver.AgentRuntime/Workflow/RaiTurnExecutor.cs` |
+| #231 sentinel-only parse `TryParseVerdict` / `TryParseSentinelVerdict` / `TryParseSentinelLine` / `TryParseEmojiVerdict`; sentinel-skipping `ExtractRationale` / `ExtractFeedback` | `packages/Agentweaver.AgentRuntime/Workflow/RaiTurnExecutor.cs` |
+| #231 verdict consumption at the gate: `RunRaiAsync` (→ `SafetyFlagged`), RAI gate → `RaiBlockAsync` | `apps/Agentweaver.Api/Coordinator/CollectiveAssemblyPipeline.cs`; `apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyService.cs` |
 | Reviewer `TARGET_FILES:` emission | `packages/Agentweaver.AgentRuntime/Workflow/RubberduckTurnExecutor.cs`; `BuildTestTurnExecutor.cs` |
 | `coordinator.assembly_implicated_scope_fallback` event constant | `packages/Agentweaver.Domain/EventTypes.cs` |
 | `TryEscalateToInReviewAsync`, `IncrementHumanReviewRoundTripAsync` | `apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyStore.cs` |
