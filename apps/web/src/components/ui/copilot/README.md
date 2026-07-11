@@ -1,44 +1,27 @@
 # components/ui/copilot
 
-`@1js/fluentai` + `@1js/fai-react-chat-input` wiring for Agentweaver chat surfaces. Must be rendered **inside** the app's `<FluentProvider theme={agentweaverLightTheme}>`. Do NOT add another `FluentProvider`.
+Native `@fluentui/react-components` chat surface components styled to the copilot.com Day look via our warm-monochrome theme. **No `@1js` dependency** — fully open-sourceable.
 
-## `AgentweaverCopilotProvider`
+Composes with `components/ui/agentic/` so a run view = `MessageList` + `OutputCard` + `AgentStepList`/`ToolCallRow` + `Composer`.
 
-Wraps `CopilotProvider` from `@1js/fluentai` with the warm-monochrome `themeExtension` (no blue flair). Sets the Copilot mode and inherits the parent Fluent theme.
+## Components
 
-```tsx
-import { AgentweaverCopilotProvider } from 'components/ui/copilot';
+### `Composer`
 
-// Docked Console — compact sidecar layout
-<AgentweaverCopilotProvider mode="sidecar">
-  {/* Composer + message list */}
-</AgentweaverCopilotProvider>
-
-// Full-page run/chat — generous canvas layout
-<AgentweaverCopilotProvider mode="canvas">
-  {/* Composer + transcript */}
-</AgentweaverCopilotProvider>
-```
-
-Props:
-
-| Prop | Type | Default | Notes |
-|------|------|---------|-------|
-| `mode` | `"sidecar" \| "canvas"` | `"canvas"` | "sidecar" for the docked Console; "canvas" for a full-page surface |
-| `children` | `ReactNode` | required | Content to render inside the provider |
-
-## `Composer`
-
-Thin wrapper around `@1js/fai-react-chat-input` `ChatInput`. Manages submit/stop callbacks with a clean prop surface.
+Auto-growing pill-shaped chat input. Built on a native `<textarea>` styled with Fluent tokens; no internal Fluent form control wrapper so the pill shape is clean.
 
 ```tsx
 import { Composer } from 'components/ui/copilot';
 
 <Composer
+  value={value}
+  onChange={setValue}
+  onSubmit={(text) => send(text)}
+  onStop={() => cancelStream()}
+  isStreaming={isStreaming}
   placeholder="Ask the coordinator…"
-  onSubmit={(value, ev) => sendMessage(value)}
-  onStop={() => stopStream()}
-  isSending={isStreaming}
+  leftSlot={<AttachButton />}     // optional: attach affordance, model picker, etc.
+  rightSlot={<ModelSelector />}   // optional: rendered between textarea and send
 />
 ```
 
@@ -46,48 +29,108 @@ Props:
 
 | Prop | Type | Default | Notes |
 |------|------|---------|-------|
+| `value` | `string` | required | Controlled |
+| `onChange` | `(value: string) => void` | required | |
+| `onSubmit` | `(value: string) => void` | — | Enter (no Shift) or send button |
+| `onStop` | `() => void` | — | Stop button while `isStreaming` |
 | `placeholder` | `string` | `"Message…"` | |
-| `onSubmit` | `(value: string, ev: ChatInputSubmitEvents) => void` | — | Called when user presses Enter or the send button |
-| `onStop` | `(ev: ChatInputSubmitEvents) => void` | — | Called when user clicks the stop button while `isSending` |
-| `isSending` | `boolean` | — | Shows a stop button instead of send |
-| `disabled` | `boolean` | — | |
-| `contentBefore` | `ChatInputProps["contentBefore"]` | — | Slot rendered before the editor |
-| `actions` | `ChatInputProps["actions"]` | — | Slot rendered in the actions area |
+| `disabled` | `boolean` | `false` | |
+| `isStreaming` | `boolean` | `false` | Shows Stop instead of Send |
+| `leftSlot` | `ReactNode` | — | Left of textarea |
+| `rightSlot` | `ReactNode` | — | Right of textarea, before Send |
+| `aria-label` | `string` | `"Chat composer"` | |
 
-## `OutputBubble`
+### `MessageBubble`
 
-Wrapper around `@1js/fluentai` `OutputCard`. Renders streamed assistant responses in the Copilot-branded card surface.
+A single chat message, user or assistant.
 
 ```tsx
-import { OutputBubble } from 'components/ui/copilot';
+import { MessageBubble } from 'components/ui/copilot';
 
-<OutputBubble isLoading={isStreaming} mode="canvas">
-  <p>{assistantText}</p>
-</OutputBubble>
+// User bubble — right-aligned, near-black background
+<MessageBubble role="user">
+  <Text size={300}>Fix the flaky API test.</Text>
+</MessageBubble>
+
+// Assistant bubble — left-aligned, surface background + border
+<MessageBubble role="assistant" senderName="Coordinator">
+  <Text size={300}>I'll start by reading the test file.</Text>
+</MessageBubble>
+```
+
+Props: `role`, `children`, `senderName?`, `timestamp?`, `className?`.
+
+### `MessageList`
+
+Scrollable container for a sequence of messages. Sets `role="log"` + `aria-live="polite"` for screen readers.
+
+```tsx
+import { MessageList } from 'components/ui/copilot';
+
+<MessageList aria-label="Run conversation">
+  <MessageBubble role="user">…</MessageBubble>
+  <OutputCard isStreaming>…</OutputCard>
+</MessageList>
+```
+
+### `OutputCard`
+
+Assistant response container. Combines a streaming progress bar, body content, and optional feedback buttons. Designed to hold any content — prose, `AgentStepList`, `ToolCallRow`, code, etc.
+
+```tsx
+import { OutputCard } from 'components/ui/copilot';
+
+// While streaming
+<OutputCard isStreaming>
+  <Text size={300}>Generating…</Text>
+</OutputCard>
+
+// Complete, with feedback
+<OutputCard showFeedback onFeedback={(v) => record(v)} feedbackValue={feedback}>
+  <AgentStepList steps={steps} onApprove={onApprove} onDeny={onDeny} />
+</OutputCard>
+
+// Complete, with custom footer actions
+<OutputCard footerActions={<CopyButton />}>
+  <Text size={300}>Here is the result.</Text>
+</OutputCard>
 ```
 
 Props:
 
 | Prop | Type | Default | Notes |
 |------|------|---------|-------|
-| `children` | `ReactNode` | required | Content rendered inside the card |
-| `isLoading` | `boolean` | `false` | Shows animated progress bar while streaming |
-| `mode` | `"canvas" \| "sidecar"` | — | Inherits from `AgentweaverCopilotProvider` when omitted |
+| `children` | `ReactNode` | required | |
+| `isStreaming` | `boolean` | `false` | Indeterminate progress bar |
+| `showFeedback` | `boolean` | `false` | Thumb up/down in footer |
+| `onFeedback` | `(v: "positive"\|"negative") => void` | — | |
+| `feedbackValue` | `"positive"\|"negative"` | — | Controlled selection |
+| `footerActions` | `ReactNode` | — | Custom footer node |
 
-## `CopilotProof` (dev only)
+## Composing with agentic
 
-Isolated proof-of-concept that renders `CopilotProvider` + `ChatInput` + `OutputCard` under React 19 + our theme. **Not included in the main index export.** Import directly for local testing:
+A full run console surface:
 
 ```tsx
-import { CopilotProof } from 'components/ui/copilot/CopilotProof';
+import { MessageList, MessageBubble, OutputCard, Composer } from 'components/ui/copilot';
+import { AgentStepList, ToolCallRow } from 'components/ui/agentic';
+
+<div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+  <MessageList style={{ flex: 1, minHeight: 0 }}>
+    <MessageBubble role="user">Fix the test.</MessageBubble>
+    <OutputCard showFeedback onFeedback={recordFeedback}>
+      <AgentStepList steps={steps} onApprove={approve} onDeny={deny} />
+    </OutputCard>
+  </MessageList>
+  <Composer value={value} onChange={setValue} onSubmit={send} />
+</div>
 ```
 
-## Feed note
+## Design notes
 
-`@1js/fluentai` and `@1js/fai-react-chat-input` are published to the 1JS Azure Artifacts feed (configured in `apps/web/.npmrc`). If a build fails with a feed/auth error, run:
-
-```sh
-npx vsts-npm-auth -config apps/web/.npmrc -F
-```
-
-then `npm install --prefix apps/web`.
+- Warm-monochrome only — no blue, no @1js, fully open-sourceable.
+- All colors and spacing from `@fluentui/react-components` tokens.
+- User bubbles: `colorNeutralForeground1` bg (near-black), `colorNeutralForegroundOnBrand` text.
+- Assistant bubbles / OutputCard: `colorNeutralBackground1` + `colorNeutralStroke2` border.
+- Composer: `borderRadiusCircular` pill shell, auto-grow textarea (max 200px), focus ring via `colorStrokeFocus2`.
+- All transitions respect `prefers-reduced-motion`.

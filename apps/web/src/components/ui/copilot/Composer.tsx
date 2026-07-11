@@ -1,80 +1,145 @@
 /**
- * Composer — thin wrapper around @1js/fai-react-chat-input ChatInput.
+ * Composer — a Copilot-styled chat input built on native @fluentui/react-components.
  *
- * Provides a single, predictable prop surface for the Console and CoordinatorRunPage.
- * The parent must already be inside <AgentweaverCopilotProvider>.
+ * Shape: rounded-pill warm-white card with an auto-growing textarea, a send
+ * button, and optional left/right slots. No @1js dependency.
+ *
+ * Props:
+ *   value        controlled text value
+ *   onChange     called on every keystroke
+ *   onSubmit     called on Enter (without Shift) or send button click
+ *   placeholder  placeholder text (default: "Message…")
+ *   disabled     disables input and buttons
+ *   leftSlot     node rendered to the left of the textarea (e.g. an attach button)
+ *   rightSlot    node rendered between textarea and send (e.g. a model picker)
+ *   isStreaming  true while assistant is responding; shows a Stop button
+ *   onStop       called when the Stop button is clicked
  */
 
-import type { ReactNode } from 'react';
-import { ChatInput } from '@1js/fai-react-chat-input';
-import type { ChatInputSubmitEvents, ChatInputProps } from '@1js/fai-react-chat-input';
-import type { EditorInputValueData } from '@1js/fai-react-editor-input';
+import {
+  type KeyboardEvent,
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useRef,
+} from 'react';
+import { Button, Tooltip, mergeClasses } from '@fluentui/react-components';
+import { SendRegular, StopRegular } from '@fluentui/react-icons';
+import { useCopilotStyles } from './copilotStyles';
 
 export interface ComposerProps {
-  /** Placeholder text shown when the editor is empty. */
+  value: string;
+  onChange: (value: string) => void;
+  onSubmit?: (value: string) => void;
+  onStop?: () => void;
   placeholder?: string;
-  /** Called when the user submits (Enter or send button). */
-  onSubmit?: (value: string, ev: ChatInputSubmitEvents) => void;
-  /** Called when the stop button is clicked while isSending=true. */
-  onStop?: (ev: ChatInputSubmitEvents) => void;
-  /** True while a response is being generated; shows a stop button. */
-  isSending?: boolean;
-  /** Whether the composer is disabled. */
   disabled?: boolean;
-  /** Slot rendered before the editor (e.g. attachment pills). */
-  contentBefore?: ChatInputProps['contentBefore'];
-  /** Slot rendered below the editor (e.g. character count). */
-  actions?: ChatInputProps['actions'];
+  isStreaming?: boolean;
+  /** Node rendered to the left of the textarea (e.g. attach button or model label). */
+  leftSlot?: ReactNode;
+  /** Node rendered to the right of the textarea and before the send button. */
+  rightSlot?: ReactNode;
+  className?: string;
+  'aria-label'?: string;
 }
 
 export function Composer({
-  placeholder,
+  value,
+  onChange,
   onSubmit,
   onStop,
-  isSending,
-  disabled,
-  contentBefore,
-  actions,
+  placeholder = 'Message…',
+  disabled = false,
+  isStreaming = false,
+  leftSlot,
+  rightSlot,
+  className,
+  'aria-label': ariaLabel,
 }: ComposerProps) {
-  const handleSubmit = (ev: ChatInputSubmitEvents, data: EditorInputValueData) => {
-    onSubmit?.(data.value, ev);
+  const styles = useCopilotStyles();
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // Auto-grow: adjust height on value change
+  const adjustHeight = useCallback(() => {
+    const ta = textareaRef.current;
+    if (!ta) return;
+    ta.style.height = 'auto';
+    ta.style.height = `${Math.min(ta.scrollHeight, 200)}px`;
+  }, []);
+
+  useEffect(() => {
+    adjustHeight();
+  }, [value, adjustHeight]);
+
+  const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    // Submit on Enter without Shift
+    if (e.key === 'Enter' && !e.shiftKey && !disabled && !isStreaming) {
+      e.preventDefault();
+      if (value.trim()) {
+        onSubmit?.(value);
+      }
+    }
   };
 
+  const handleSend = () => {
+    if (value.trim() && !disabled && !isStreaming) {
+      onSubmit?.(value);
+    }
+  };
+
+  const canSend = !disabled && !isStreaming && value.trim().length > 0;
+
   return (
-    <ChatInput
-      editor={{ placeholderValue: placeholder ?? 'Message…' }}
-      onSubmit={handleSubmit}
-      onStop={onStop}
-      isSending={isSending}
-      disabled={disabled}
-      contentBefore={contentBefore}
-      actions={actions}
-      // CharactersRemainingMessage is required by the type union (NoMaxLengthProps).
-      // Pass undefined to opt out of character counting.
-      charactersRemainingMessage={undefined}
-    />
+    <div
+      className={mergeClasses(styles.composerShell, className)}
+      aria-label={ariaLabel ?? 'Chat composer'}
+    >
+      <div className={styles.composerRow}>
+        {leftSlot && (
+          <span className={styles.composerLeftSlot}>{leftSlot}</span>
+        )}
+        <textarea
+          ref={textareaRef}
+          className={styles.composerTextarea}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          onKeyDown={handleKeyDown}
+          placeholder={placeholder}
+          disabled={disabled}
+          rows={1}
+          aria-label={ariaLabel ?? 'Message'}
+          aria-multiline="true"
+        />
+        <span className={styles.composerActions}>
+          {rightSlot}
+          {isStreaming ? (
+            <Tooltip content="Stop generating" relationship="label">
+              <Button
+                appearance="subtle"
+                shape="circular"
+                size="small"
+                className={styles.stopButton}
+                icon={<StopRegular />}
+                onClick={onStop}
+                aria-label="Stop generating"
+              />
+            </Tooltip>
+          ) : (
+            <Tooltip content={canSend ? 'Send message' : 'Type a message to send'} relationship="label">
+              <Button
+                appearance="subtle"
+                shape="circular"
+                size="small"
+                className={canSend ? styles.sendButtonActive : styles.sendButtonIdle}
+                icon={<SendRegular />}
+                onClick={handleSend}
+                disabled={!canSend}
+                aria-label="Send message"
+              />
+            </Tooltip>
+          )}
+        </span>
+      </div>
+    </div>
   );
-}
-
-export type { ChatInputSubmitEvents };
-
-/**
- * OutputBubble — light wrapper around @1js/fluentai OutputCard.
- *
- * Renders streamed assistant content inside the Copilot-branded card surface.
- * Pass isLoading=true while the stream is in progress.
- */
-import { OutputCard } from '@1js/fluentai';
-import type { OutputCardProps } from '@1js/fluentai';
-
-export interface OutputBubbleProps {
-  children: ReactNode;
-  /** True while the assistant is still streaming. Shows an animated progress bar. */
-  isLoading?: boolean;
-  mode?: 'canvas' | 'sidecar';
-}
-
-export function OutputBubble({ children, isLoading = false, mode }: OutputBubbleProps) {
-  const cardProps: OutputCardProps = { isLoading, mode };
-  return <OutputCard {...cardProps}>{children}</OutputCard>;
 }
