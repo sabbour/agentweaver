@@ -2,10 +2,9 @@ import { Button, makeStyles, Text, tokens } from '@fluentui/react-components';
 import { GITHUB_AUTHORIZE_URL } from '../config';
 import { GitHubIcon } from '../components/GitHubIcon';
 
-// Azure/Microsoft pre-portal sign-in: a single flat, centered identity card on a
-// plain neutral background. No marketing copy, no gradients, no decorative
-// badges. Functionality preserved: surface an OAuth error from the URL and start
-// the GitHub authorize redirect.
+// Flat, centered sign-in card on a plain neutral background. No marketing copy,
+// no gradients, no decorative badges. Surfaces an OAuth error from the URL and
+// starts the GitHub authorize redirect.
 const useStyles = makeStyles({
   page: {
     minHeight: '100vh',

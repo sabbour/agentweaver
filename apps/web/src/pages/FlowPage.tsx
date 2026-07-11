@@ -1,25 +1,25 @@
-import {
-  fromDto } from '../api/agentQueues';
+import { fromDto } from '../api/agentQueues';
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
-import { Badge,
-  BladeHeader,
+import {
+  Badge,
   Button,
-  CommandBar,
-  EmptyState,
+  makeStyles,
   MessageBar,
   MessageBarBody,
   Spinner,
-  StatusIconText,
   Text,
-  } from '../copilot-fluent-system';
-import { AgentAvatar } from '../components/AgentAvatar';
-import { PageHeader } from '../components/PageHeader';
-import { RefreshCountdown } from '../hooks/useRefreshCountdown';
-import { makeStyles,
   tokens,
-} from '../copilot-fluent-system';
-import { ArrowSyncRegular } from '../copilot-fluent-system';
+} from '@fluentui/react-components';
+import { ArrowSyncRegular } from '@fluentui/react-icons';
+import { AgentAvatar } from '../components/AgentAvatar';
+import { RefreshCountdown } from '../hooks/useRefreshCountdown';
+import {
+  EmptyState,
+  PageContainer,
+  PageHeader,
+  PageSection,
+} from '../components/ui';
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import type { AgentQueueItem } from '../api/agentQueues';
@@ -45,7 +45,7 @@ const useStyles = makeStyles({
     color: tokens.colorNeutralForeground2,
   },
   breadcrumbLink: {
-    color: tokens.colorBrandForeground1,
+    color: tokens.colorNeutralForeground1,
     textDecoration: 'none',
   },
   actions: {
@@ -116,7 +116,7 @@ const useStyles = makeStyles({
     flexWrap: 'wrap',
   },
   runLink: {
-    color: tokens.colorBrandForeground1,
+    color: tokens.colorNeutralForeground1,
     textDecoration: 'none',
     fontSize: tokens.fontSizeBase200,
   },
@@ -161,8 +161,6 @@ const useStyles = makeStyles({
   summaryLabel: {
     color: tokens.colorNeutralForeground3,
     fontSize: tokens.fontSizeBase200,
-    textTransform: 'uppercase',
-    letterSpacing: '0.04em',
   },
   summaryValue: {
     fontSize: tokens.fontSizeBase600,
@@ -223,14 +221,14 @@ function AgentCard({ agent, projectId }: { agent: AgentQueueItem; projectId: str
   const styles = useStyles();
   const hasGroups = agent.orchestrations && agent.orchestrations.length > 0;
   return (
-    <div className={['azf-surface azf-surface--panel azf-surface--padding-comfortable', styles.card].filter(Boolean).join(' ')}>
+    <div className={styles.card}>
       <div className={styles.cardHeader}>
         <AgentAvatar name={agent.agentName} size={24} />
         <span className={styles.agentName}>{agent.agentName}</span>
       </div>
 
       <div className={styles.badges}>
-        {agent.active > 0 && <Badge appearance="tint" color="informative">{agent.active} active</Badge>}
+        {agent.active > 0 && <Badge appearance="tint" color="subtle">{agent.active} active</Badge>}
         {agent.queued > 0 && <Badge appearance="tint" color="subtle">{agent.queued} queued</Badge>}
         {agent.blocked > 0 && <Badge appearance="tint" color="danger">{agent.blocked} blocked</Badge>}
         {agent.done > 0 && <Badge appearance="tint" color="success">{agent.done} done</Badge>}
@@ -247,7 +245,7 @@ function AgentCard({ agent, projectId }: { agent: AgentQueueItem; projectId: str
                 {orch.title ?? `Orchestration ${orch.runId.slice(0, 8)}`}
               </span>
               <div className={styles.orchestrationBadges}>
-                {orch.active > 0 && <Badge appearance="tint" color="informative">{orch.active} active</Badge>}
+                {orch.active > 0 && <Badge appearance="tint" color="subtle">{orch.active} active</Badge>}
                 {orch.queued > 0 && <Badge appearance="tint" color="subtle">{orch.queued} queued</Badge>}
                 {orch.blocked > 0 && <Badge appearance="tint" color="danger">{orch.blocked} blocked</Badge>}
                 {orch.done > 0 && <Badge appearance="tint" color="success">{orch.done} done</Badge>}
@@ -412,13 +410,13 @@ export function FlowPage() {
   if (!projectId) return null;
 
   return (
-    <div className={['azf-stack azf-page azf-pattern-shell', styles.root].filter(Boolean).join(' ')}>
+    <PageContainer>
       <PageHeader
         title="Flow"
-        subtitle={selectedAgent
+        description={selectedAgent
           ? `Live work and terminal-run archive for ${selectedAgent}.`
           : 'What each agent is working on right now.'}
-        breadcrumb={
+        breadcrumbs={
           <div className={styles.breadcrumb}>
             <Link to="/" className={styles.breadcrumbLink}>Projects</Link>
             <span>/</span>
@@ -436,7 +434,7 @@ export function FlowPage() {
             )}
             {loading && <Spinner size="extra-tiny" aria-label="Refreshing" />}
             <Button
-              appearance="secondary"
+              appearance="outline"
               icon={<ArrowSyncRegular />}
               onClick={() => {
                 setLoading(true);
@@ -460,7 +458,7 @@ export function FlowPage() {
 
       {selectedAgent && (
         <div className={styles.filterNote}>
-          <Badge appearance="tint" color="informative">Agent filter</Badge>
+          <Badge appearance="tint" color="subtle">Agent filter</Badge>
           <Text>{selectedAgent}</Text>
           <Link to={`/projects/${projectId}/flow`} className={styles.runLink}>Clear filter</Link>
         </div>
@@ -469,7 +467,7 @@ export function FlowPage() {
       {!loading && !error && visibleAgents.length === 0 && (
         <EmptyState
           title={selectedAgent ? `No active work for ${selectedAgent}` : 'No active agents'}
-          body={
+          description={
             selectedAgent
               ? 'This agent has no current in-flight subtasks. Its completed work remains in the archive below.'
               : 'No agents are currently working in this project. Start an orchestration to see live activity here.'
@@ -478,32 +476,25 @@ export function FlowPage() {
       )}
 
       {visibleAgents.length > 0 && (
-        <section className={['azf-surface azf-surface--raised azf-surface--padding-comfortable', styles.workbenchSurface].filter(Boolean).join(' ')} aria-label="Agent flow workbench">
-          <BladeHeader
-            size="compact"
-            title={selectedAgent ? `${selectedAgent} workbench` : 'Live agent workbench'}
-            subtitle="Azure/Copilot panel for active queues, orchestration groups, and agent workload signals."
-          />
-          <CommandBar
-            title="Flow command surface"
-            description={selectedAgent ? 'Filtered to one agent resource.' : 'All active agent resources in this project.'}
-          >
-            <div className={styles.statusPills}>
-              <StatusIconText className={styles.statusPill} status={totals.active > 0 ? 'info' : 'neutral'}>Active total: {totals.active}</StatusIconText>
-              <StatusIconText className={styles.statusPill} status={totals.queued > 0 ? 'warning' : 'neutral'}>Queued total: {totals.queued}</StatusIconText>
-              <StatusIconText className={styles.statusPill} status={totals.blocked > 0 ? 'danger' : 'success'}>Blocked total: {totals.blocked}</StatusIconText>
-            </div>
-          </CommandBar>
+        <PageSection
+          title={selectedAgent ? `${selectedAgent} workbench` : 'Live agent workbench'}
+          description={selectedAgent ? 'Filtered to one agent.' : 'All active agents in this project.'}
+        >
+          <div className={styles.statusPills}>
+            <span className={styles.statusPill}>Active: {totals.active}</span>
+            <span className={styles.statusPill}>Queued: {totals.queued}</span>
+            <span className={styles.statusPill}>Blocked: {totals.blocked}</span>
+          </div>
           <div className={styles.summaryGrid}>
-            <div className={['azf-surface azf-surface--subtle azf-surface--padding-compact', styles.summaryCard].filter(Boolean).join(' ')}>
+            <div className={styles.summaryCard}>
               <Text className={styles.summaryLabel}>Agents</Text>
               <Text className={styles.summaryValue}>{visibleAgents.length}</Text>
             </div>
-            <div className={['azf-surface azf-surface--subtle azf-surface--padding-compact', styles.summaryCard].filter(Boolean).join(' ')}>
+            <div className={styles.summaryCard}>
               <Text className={styles.summaryLabel}>Active</Text>
               <Text className={styles.summaryValue}>{totals.active}</Text>
             </div>
-            <div className={['azf-surface azf-surface--subtle azf-surface--padding-compact', styles.summaryCard].filter(Boolean).join(' ')}>
+            <div className={styles.summaryCard}>
               <Text className={styles.summaryLabel}>Done</Text>
               <Text className={styles.summaryValue}>{totals.done}</Text>
             </div>
@@ -513,37 +504,41 @@ export function FlowPage() {
               <AgentCard key={agent.agentName} agent={agent} projectId={projectId} />
             ))}
           </div>
-        </section>
+        </PageSection>
       )}
 
       {selectedAgent && (
-        <div aria-label="Previous work archive" className={['azf-surface azf-surface--panel azf-surface--padding-comfortable', styles.archivePanel].filter(Boolean).join(' ')}>
-          <BladeHeader size="compact" title="Previous work archive" subtitle={`Terminal runs for ${selectedAgent}: completed, merged, assemble-ready, declined, failed, and merge-failed work.`} />
-          {historyLoading && <Spinner size="tiny" label="Loading previous work" />}
-          {historyError && (
-            <MessageBar intent="error">
-              <MessageBarBody>{historyError}</MessageBarBody>
-            </MessageBar>
-          )}
-          {!historyLoading && !historyError && history.length === 0 && (
-            <Text>No terminal runs found for this agent.</Text>
-          )}
-          {history.length > 0 && (
-            <div className={styles.archiveList}>
-              {history.map((run) => (
-                <div key={run.execution_id} className={styles.archiveItem}>
-                  <Text>{run.task || `Run ${run.execution_id.slice(0, 8)}`}</Text>
-                  <div className={styles.archiveMeta}>
-                    <Badge appearance="tint" color={terminalStatusColor(run.status)}>{run.status}</Badge>
-                    <span>{formatEndedAt(run)}</span>
-                    {run.model_id && <span>{run.model_id}</span>}
+        <div role="region" aria-label="Previous work archive" className={styles.archivePanel}>
+          <PageSection
+            title="Previous work"
+            description={`Terminal runs for ${selectedAgent}: completed, merged, assemble-ready, declined, failed, and merge-failed work.`}
+          >
+            {historyLoading && <Spinner size="tiny" label="Loading previous work" />}
+            {historyError && (
+              <MessageBar intent="error">
+                <MessageBarBody>{historyError}</MessageBarBody>
+              </MessageBar>
+            )}
+            {!historyLoading && !historyError && history.length === 0 && (
+              <Text>No terminal runs found for this agent.</Text>
+            )}
+            {history.length > 0 && (
+              <div className={styles.archiveList}>
+                {history.map((run) => (
+                  <div key={run.execution_id} className={styles.archiveItem}>
+                    <Text>{run.task || `Run ${run.execution_id.slice(0, 8)}`}</Text>
+                    <div className={styles.archiveMeta}>
+                      <Badge appearance="tint" color={terminalStatusColor(run.status)}>{run.status}</Badge>
+                      <span>{formatEndedAt(run)}</span>
+                      {run.model_id && <span>{run.model_id}</span>}
+                    </div>
                   </div>
-                </div>
-              ))}
-            </div>
-          )}
+                ))}
+              </div>
+            )}
+          </PageSection>
         </div>
       )}
-    </div>
+    </PageContainer>
   );
 }
