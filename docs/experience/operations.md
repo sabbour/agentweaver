@@ -59,10 +59,10 @@ The important operating rule is: Agentweaver shows real state. Diagnostics can w
 | **Diagnostics** | Project **Diagnostics** page | Is the system or project healthy enough to operate? | `diagnostics_get` for global diagnostics |
 | **Heartbeat** | Project **Heartbeat** page | Is background automation enabled, ticking, and acting? | `heartbeat_status` |
 | **Flow** | Project **Flow** page | What is each agent working on right now? | Indirect through board/run/coordinator tools |
-| **Cluster** | Project **Cluster** page (SYSTEM section) | Are pods healthy, is quota available, are any pods orphaned? | `GET /api/diagnostics/cluster` |
+| **Cluster** | Project **Cluster** page (SYSTEM section) | Are pods healthy and scheduling, are any pods orphaned? | `GET /api/diagnostics/cluster` |
 | **Observability > Traces** | Project **Observability** → **Traces** | How did a coordinator transaction move through agent turns, tool calls, and LLM spans? | `GET /api/metrics/runs/{runId}/traces` |
 
-Use **Diagnostics** when something feels broken. Use **Heartbeat** when Ready work is not being claimed. Use **Flow** during active multi-agent work. Use **Settings** before changing command execution posture. Use **Cluster** when capacity warnings appear or pods are accumulating.
+Use **Diagnostics** when something feels broken. Use **Heartbeat** when Ready work is not being claimed. Use **Flow** during active multi-agent work. Use **Settings** before changing command execution posture. Use **Cluster** when runs are slow to schedule or pods are accumulating.
 
 ## Settings experience
 
@@ -414,11 +414,11 @@ The **Cluster** page is the SYSTEM-section operations view for Kubernetes cluste
 The page provides:
 
 - **KPI cards** — Active pods, Orphaned pods, CPU used/total, Pending-capacity runs
-- **Quota bars** — CPU (used vs. limit) and memory (used vs. limit), color-coded green/amber/red by saturation
+- **Quota bars** — CPU and memory usage, color-coded by saturation. Since #217 removed the `ResourceQuota` CPU/memory caps there is no hard limit to fill against, so these bars no longer represent an enforced ceiling; object-count quotas (pods, sandbox claims, PVCs, storage) are the enforced bounds.
 - **Component health table** — 6 checks: Postgres, GitHub token store, Azure Key Vault, namespace quota, warm-pool, Kubernetes API server
 - **Active agent pods table** — pods currently serving a live run
 - **Orphaned agent pods table** — pods with no matching active run (will be reaped on the next sweep)
-- **Pending-capacity runs table** — subtasks waiting for CPU headroom
+- **Pending-capacity runs table** — **legacy / back-compat**; subtasks recorded in the historical `PendingCapacity` status. Empty for new runs, since Kubernetes now owns scheduling.
 
 When the API is not deployed on AKS (or the cluster diagnostics endpoint returns `404`), the page falls back gracefully and shows a message indicating cluster diagnostics are unavailable.
 

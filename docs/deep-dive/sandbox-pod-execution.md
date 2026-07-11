@@ -573,7 +573,7 @@ To rebuild pod-per-run from these ideas:
   brokered checkpoint, so killing a pod loses no run.
 - The whole capability is **reversible by a single flag** (`Sandbox:AgentExecutionMode=in-api`).
 
-## Orphaned-pod reaper and quota lifecycle
+## Orphaned-pod reaper and Kubernetes-owned admission
 
 ### Why orphaned pods happen
 
@@ -594,23 +594,27 @@ Fresh claims are protected by the creation-grace policy documented in the
 
 All stall-fail and cancellation paths in `CoordinatorDispatchService` call `ReleaseAgentHostPodAsync` explicitly to minimize the reaper's workload. The reaper is the belt to that suspender.
 
-### Pre-dispatch quota check
+### Kubernetes owns admission — there is no app-side capacity gate
 
-Before dispatching a new subtask, `KubernetesSandboxExecutor.CheckAgentHostCapacityAsync` checks the namespace's current CPU quota headroom. If the headroom is less than **2 CPU**, the executor throws `AgentHostCapacityPendingException` rather than trying to schedule a pod that would be unschedulable.
+Agentweaver does **not** pre-flight namespace quota before it launches a pod (issue #217). Earlier builds ran a `CheckAgentHostCapacityAsync` headroom check and, if the namespace had less than ~2 CPU of headroom, threw `AgentHostCapacityPendingException`, parked the subtask in `PendingCapacity`, and retried on a fixed interval before hard-failing with `capacity_unavailable`. That made the application second-guess the scheduler and discard runs while nodes sat idle.
 
-### PendingCapacity subtask flow
+The model is now simpler: the executor submits the `SandboxClaim` and **waits for Kubernetes to bind it** (`WaitForBoundWithProvisioningHeartbeatAsync` → `WaitForBoundAsync`). Kubernetes owns pod admission, scheduling, queueing, and — through the cluster autoscaler — headroom. A pod that sits **Pending** while a node frees up or `katapool` autoscales is a **legitimate wait, not a failure**. The namespace `ResourceQuota` no longer caps CPU/memory; it bounds only object counts (see the [sandbox pods reference](../reference/sandbox-pods.md#pod-identity-and-quota)).
 
-`CoordinatorDispatchService` catches `AgentHostCapacityPendingException` and transitions the subtask to the `PendingCapacity` status. The UI emits a `subtask.pending_capacity` SSE event and the frontend renders the subtask node with an amber **⏳ Waiting for capacity** badge. The dispatcher retries the dispatch on a **60-second interval** for up to **10 attempts**. If capacity is still unavailable after 10 retries, the subtask fails with the detail code `capacity_unavailable`.
+### Provisioning heartbeat and the coordinator stall exemption
+
+A claim can stay unbound longer than the coordinator's subtask-stall timeout (`Coordinator:SubtaskStallTimeoutMinutes`, default 5 min). To keep that legitimate wait from being misread as a hung child, the executor emits a `sandbox.provisioning_pending` heartbeat (`EventTypes.SandboxProvisioningPending`) into the **child run's** event stream about every **20 s** (`SandboxProvisioningHeartbeatInterval`) while the claim is unbound. This mirrors the #212 `tool.approval_pending` heartbeat pattern.
+
+The coordinator's child-observation loop exempts a subtask whose most recent event is `sandbox.provisioning_pending`: it resets the stall window and keeps observing instead of firing `agent_stall_timeout`. The guard self-heals and cannot latch — any other real event (the pod binding, agent output, a terminal event) clears the flag, so a pod that genuinely hangs after provisioning is still caught. The heartbeat is best-effort: if the run-event stream is unavailable the wait degrades to a plain bind poll and never fails the launch.
 
 ```mermaid
 %%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
 flowchart TD
-    Dispatch["CoordinatorDispatchService<br/>dispatch subtask"] --> Check{"CheckAgentHostCapacityAsync<br/>headroom ≥ 2 CPU?"}
-    Check -- yes --> Launch["launch pod / claim"]
-    Check -- "no → AgentHostCapacityPendingException" --> Pending["SubtaskStatus.PendingCapacity<br/>emit subtask.pending_capacity SSE"]
-    Pending --> Retry{"retry ≤ 10 × 60s?"}
-    Retry -- yes --> Check
-    Retry -- "no → capacity_unavailable" --> Failed["subtask failed<br/>detail: capacity_unavailable"]
+    Dispatch["CoordinatorDispatchService<br/>dispatch subtask"] --> Submit["KubernetesSandboxExecutor<br/>submit SandboxClaim"]
+    Submit --> Wait{"claim Bound /<br/>pod Ready?"}
+    Wait -- "not yet (pod Pending)" --> HB["emit sandbox.provisioning_pending<br/>heartbeat (~20s)"]
+    HB --> Exempt["coordinator resets stall<br/>timer while pending"]
+    Exempt --> Wait
+    Wait -- "yes → pod bound" --> Run["child run executes"]
 
     classDef core fill:#CFE4FA,stroke:#0F6CBD,stroke-width:2px,color:#242424;
     classDef svc fill:#F3F2F1,stroke:#8A8886,stroke-width:1px,color:#242424;
@@ -619,19 +623,24 @@ flowchart TD
     classDef evt fill:#D6F0F0,stroke:#038387,stroke-width:1px,color:#242424;
 
     class Dispatch core;
-    class Check,Retry svc;
-    class Pending evt;
-    class Failed runtime;
-    class Launch data;
+    class Submit data;
+    class Wait,Exempt svc;
+    class HB evt;
+    class Run runtime;
 ```
 
-The `OutcomeSpecPanel.tsx` sidebar surfaces human-readable messages for all detail codes that reach terminal runs: `agent_stall_timeout`, `agent_quota_exceeded`, `agent_pod_reconciler_error`, and `capacity_unavailable`.
+::: info Legacy states
+The `SubtaskStatus.PendingCapacity` enum, the `subtask.pending_capacity` event, and the amber **⏳ Waiting for capacity** badge are **retained for back-compat only**. New runs never enter `PendingCapacity`; a pre-upgrade subtask stranded in that status is recovered to `pending` and re-attempted. The terminal `capacity_unavailable` detail code is likewise legacy — Kubernetes now absorbs the wait instead of hard-failing.
+:::
+
+`OutcomeSpecPanel.tsx` still surfaces human-readable messages for terminal detail codes such as `agent_stall_timeout` and `agent_pod_reconciler_error`; `capacity_unavailable` and `agent_quota_exceeded` remain mapped for older records but are no longer produced.
 
 Where this lives:
 
+- `apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs` — claim submit, bind wait, `sandbox.provisioning_pending` heartbeat.
+- `apps/Agentweaver.Api/Coordinator/CoordinatorDispatchService.cs` — child-observation stall exemption and the `PendingCapacity → pending` back-compat recovery.
+- `packages/Agentweaver.Domain/EventTypes.cs` — `SandboxProvisioningPending`.
 - `apps/Agentweaver.Api/Sandbox/AgentHostReaperService.cs`
-- `apps/Agentweaver.Api/Sandbox/AgentHostCapacityPendingException.cs`
-- `apps/Agentweaver.Api/Coordinator/CoordinatorDispatchService.cs`
 - `apps/Agentweaver.Api/Coordinator/CoordinatorHeartbeatService.cs`
 
 ## Related reading

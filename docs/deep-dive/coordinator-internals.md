@@ -416,6 +416,8 @@ Observation includes stall handling. If a child emits no events within `Coordina
 
 An unresolved tool-approval gate is exempt from that stall timer (issue #212). While a child's most recent interaction is a `tool.approval_required` that has not resolved — with only `tool.approval_pending` heartbeats (every ~20s) following — the watcher records the pending `requestId` and treats the child as a legitimate human-paced wait, logging and continuing to observe instead of firing `agent_stall_timeout`. The exemption self-heals and cannot latch: any other real event (`tool.result` on grant, `tool.error` on deny/expiry, `tool.approval_resolved`, agent output, or a terminal event) clears the flag, so a pod that genuinely hangs after a gate self-expires is still caught. The guard also protects gate sites that emit no heartbeat, such as the preview gate (`AgentPreviewGate.RequestApprovalAsync`). See the [Tool Approval SSE Contract](../tool-approval-sse-contract.md#stall-resilience-coordinator-approval-gate-guard-212).
 
+A child whose AgentHost sandbox pod is still being provisioned is exempt from the same stall timer (issue #217). Kubernetes owns pod admission and scheduling, so a `SandboxClaim` can sit unbound (pod `Pending`) while a node frees up or `katapool` autoscales — a legitimate wait, not a stall. While the claim is unbound the executor emits a `sandbox.provisioning_pending` heartbeat (about every 20s) on the child stream; the watcher records that the child's most recent event is that heartbeat and, on stall-TTL expiry, resets the window and keeps observing instead of firing `agent_stall_timeout`. Like the approval-gate guard it self-heals and cannot latch: any other real event (the pod binding, agent output, or a terminal event) clears the flag, so a pod that genuinely hangs after provisioning is still caught. This mirrors the #212 `tool.approval_pending` mechanism.
+
 Pending dependents of that stalled prerequisite do not become runnable. Instead, the dispatcher marks them `blocked`: a terminal, assembly-ineligible status that does not satisfy dependencies and means "this subtask never ran because an upstream dependency stalled." That distinction matters operationally: the stalled child owns the failure, while the blocked dependents record the cascade.
 
 ### Topology emission and pod registry projection
@@ -525,7 +527,7 @@ The production pipeline reuses the existing RAI executor over the aggregate diff
 
 Build/test code feedback and sandbox infrastructure failures take different paths. A `request-changes`
 decision from the Build & Test agent is authored feedback and uses normal redispatch routing.
-Infrastructure failures are classified before that verdict layer: capacity pending, launch failure, missing
+Infrastructure failures are classified before that verdict layer: launch failure, missing
 pod IP, missing A2A endpoint, and A2A transport errors become `build_test_infra_*` reasons
 (`CollectiveAssemblyPipeline.cs:174`, `:252`; `KubernetesPodAgentEndpointResolver.cs:103`, `:177`;
 `RemoteAgentProxy.cs:119`, `:243`). Retryable cases park the plan as `assembly_blocked` so the reconciler

@@ -200,7 +200,7 @@ The persisted subtask status values are:
 | `pending` | Planned and waiting for its dependencies and conflict checks. | No | No |
 | `dispatched` | Child run was created and handed off. | No | No |
 | `running` | Child run is actively executing. | No | No |
-| `pending_capacity` | Temporarily parked because no AgentHost pod capacity was available yet. | No | No |
+| `pending_capacity` | **Legacy / historical.** Kubernetes now owns pod admission and scheduling, so new runs never enter this status (issue #217). A pre-upgrade subtask stranded here is recovered to `pending` and re-attempted. | No | No |
 | `assemble_ready` | Child finished with mergeable changes ready for collective assembly. | Yes | Yes |
 | `completed` | Child finished with no further mergeable changes required. | Yes | Yes |
 | `rai_flagged` | Child hit a responsible-AI block. | No | Yes |

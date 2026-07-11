@@ -252,7 +252,7 @@ Six component health checks run **concurrently** with a 5-second individual time
 | `postgresql` | Postgres connectivity |
 | `github_installation_token` | GitHub token-store validity for the configured scope |
 | `key_vault` | Azure Key Vault reachability and required `mcp-oauth-signing-key` lookup. `critical: secret 'mcp-oauth-signing-key' not found` means `scripts/aks/16-provision-oauth-signing-key.sh` was skipped. |
-| `agent_pod_quota` | CPU headroom ≥ 2 CPU in the sandbox namespace |
+| `agent_pod_quota` | CPU headroom in the sandbox namespace. Since #217 removed the `ResourceQuota` CPU cap there is no hard limit to measure against, so this check reports `unknown`. |
 | `warm_pool` | Warm-pool agent-sandbox availability |
 | `kubernetes_api` | Kubernetes API server reachability |
 
@@ -283,10 +283,10 @@ Response `200 OK` — a `ClusterDiagnosticsDto`:
 | Field | Type | Notes |
 | --- | --- | --- |
 | `component_health` | `ComponentHealthDto[]` | One entry per check; `status` is `pass`, `warn`, or `fail`. |
-| `namespace_quota` | object | Current CPU and memory usage vs. namespace limits. |
+| `namespace_quota` | object | Namespace CPU/memory usage. Since #217 removed the `ResourceQuota` CPU/memory caps there is no limit to report against; object-count quotas (pods, sandbox claims, PVCs, storage) are the enforced bounds. |
 | `active_agent_pods` | `AgentPodInfoDto[]` | Pods currently running with a matching active run. |
 | `orphaned_agent_pods` | `AgentPodInfoDto[]` | Pods running with no matching active run (candidates for next reaper sweep). |
-| `pending_capacity_runs` | `PendingCapacityRunDto[]` | Subtasks waiting for CPU capacity to become available. |
+| `pending_capacity_runs` | `PendingCapacityRunDto[]` | **Legacy / back-compat.** Subtasks recorded in the historical `PendingCapacity` status; empty for new runs (Kubernetes now owns scheduling, issue #217). |
 
 See [Cluster diagnostics reference](./cluster-diagnostics.md) for the full DTO schema and field descriptions.
 

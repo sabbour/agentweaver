@@ -42,6 +42,7 @@ Clients should order and deduplicate events by `sequence`.
 | `rai.verdict` | The RAI reviewer's verdict for a run; written to both the parent run stream and the `{runId}-rai` sub-stream | `verdict` (`green` / `yellow` / `red` / `revise`), `runId`, `rationale` |
 | `workflow.step` | When each workflow executor stage transitions (start/complete/fail/skip), for every node in both the full and child pipelines | `step`, `status`, `label`, `timestamp_utc`, `agent_name` (agent step only), `reviewer` (review step only), `message` (optional) |
 | `run.workflow_graph` | Once at run start, carrying the full workflow graph descriptor for rendering the run topology | `GraphDescriptor` (see below) |
+| `sandbox.provisioning_pending` | Heartbeat re-emitted about every 20s on a coordinator **child** run's own stream while its AgentHost `SandboxClaim` is unbound (the pod is still being scheduled by Kubernetes — a node may be freeing up or the pool autoscaling). Keeps the child stream flowing so the parent coordinator's subtask-stall timer resets during a legitimate provisioning wait instead of firing `agent_stall_timeout` (issue #217). Non-terminal and idempotent; consumers may ignore it | `claimName`, `timestamp_utc` |
 | `sandbox.preview_applicability` | Before assembly Build & Test approval is evaluated, records whether the assembled artifact needs a preview or is skipped as not applicable | `run_id`, `work_plan_id`, `tree_hash`, `state`, `reason`, `evidence` |
 | `sandbox.preview_start_requested` | When the deterministic preview step resolves a run command and starts the platform-owned preview attempt | `run_id`, `work_plan_id`, `tree_hash`, `source`, `command_source` |
 | `sandbox.preview_pending` | When the existing AgentPreviewGate is waiting for approval to expose the Build & Test preview port | `run_id`, `work_plan_id`, `tree_hash`, `target_port`, `approval`, `request_id` |
@@ -203,7 +204,7 @@ Automated assembly Build & Test reports sandbox/A2A infrastructure separately fr
 
 | Reason suffix | Meaning |
 | --- | --- |
-| `agenthost_capacity_pending` | Namespace capacity cannot admit another AgentHost pod yet. |
+| `agenthost_capacity_pending` | **Legacy / no longer produced.** Kubernetes now owns admission, so the assembly Build & Test launch waits for the pod to schedule instead of pre-checking capacity (issue #217); still matched for back-compat recovery of pre-upgrade records. |
 | `agenthost_launch_failed` | AgentHost pod launch failed for a retryable, non-specific launch error. |
 | `agenthost_ip_not_ready` | The claim is bound but the pod has no IP yet. |
 | `a2a_endpoint_unavailable` | No A2A endpoint could be resolved for the run-bound AgentHost pod. |
@@ -224,6 +225,10 @@ Emitted when a tool call is paused waiting for human approval. `request_id` iden
 ### `tool.approval_pending`
 
 A lightweight **heartbeat** emitted repeatedly on the child run's stream while a tool call is blocked on a human-approval gate (issue #212). It fires every ~20 seconds (`ApprovalHeartbeatInterval`) from when the gate arms until it resolves, carrying the same `requestId` as the `tool.approval_required` card plus its short `displayId` and the `toolName`. Its purpose is operational, not a state change: it keeps the pod's outbound A2A/SSE stream flushing so the buffered `tool.approval_required` frame is delivered and durably persisted promptly, and it resets the parent coordinator's subtask-stall timer so a human-paced wait is not misclassified as `agent_stall_timeout`. The frame is non-terminal and idempotent — clients that already render the approval card may ignore it — and a prompt approval emits none. Emitted by both the pod runtime (`CopilotAIAgent`) and the in-API runner (`GitHubCopilotAgentRunner`). See the [Tool Approval SSE Contract](../tool-approval-sse-contract.md#tool-approval-pending-heartbeat-issue-212) for the full frame and the coordinator stall-guard behavior.
+
+### `sandbox.provisioning_pending`
+
+A **heartbeat** emitted repeatedly on a coordinator **child** run's own stream while its AgentHost `SandboxClaim` is still being provisioned — i.e. the claim is not yet bound because Kubernetes is still scheduling the pod (a node may need to free up or the pool may need to autoscale). It fires about every 20 seconds (`SandboxProvisioningHeartbeatInterval`) from `KubernetesSandboxExecutor` while the claim is unbound, carrying the `claimName` and a `timestamp_utc`. Like `tool.approval_pending` (issue #212), its purpose is operational: it keeps the child stream moving so the parent coordinator's subtask-stall timer resets during the (Kubernetes-paced) provisioning wait instead of false-firing `agent_stall_timeout` (issue #217). A **Pending** pod is therefore a legitimate wait, not a failure — the platform no longer pre-flights namespace capacity before launching. The frame is non-terminal and idempotent; consumers that do not care may ignore it, and the coordinator's exemption self-heals as soon as any other real event (the pod binding, agent output, or a terminal event) arrives. The emit is best-effort: a stream-append failure is logged and swallowed so it can never fail a launch Kubernetes would otherwise admit.
 
 ### `workflow.step`
 
@@ -319,6 +324,8 @@ Unlike `coordinator.topology`, runtime status is NOT baked into the descriptor �
 ### `subtask.*`
 
 The `subtask.dispatched`, `subtask.running`, `subtask.assemble_ready`, `subtask.rai_flagged`, `subtask.completed`, and `subtask.failed` events track a single subtask's child run through its lifecycle on the coordinator stream. Each carries `subtaskId`, `childRunId`, `assignedAgent`, `selectedModelId`, and `status`. The subtask status advances `pending -> dispatched -> running -> {assemble_ready | rai_flagged | completed | failed}`. Each `subtask.*` event is paired with a `coordinator.topology` delta for the changed node, so observers can choose either the granular per-subtask signal or the graph view.
+
+A `subtask.pending_capacity` event (subtask status `pending_capacity`) is **legacy / historical**: it was emitted when the dispatcher parked a subtask because the namespace had no AgentHost pod capacity. Kubernetes now owns pod admission and scheduling, so new runs never emit it (issue #217) — a pod that is still being scheduled is surfaced instead by `sandbox.provisioning_pending` heartbeats on the child run's own stream, and a pre-upgrade subtask stranded in `pending_capacity` is recovered to `pending`. It is documented only so old records still render.
 
 ### `coordinator.steering`
 

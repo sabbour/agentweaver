@@ -389,8 +389,8 @@ For automated gate feedback, the retry is warmer than a fresh assembly. If Build
 for changes, the coordinator keeps the Build & Test pod and detached integration worktree while it
 re-dispatches the affected subtasks. When assembly reaches Build & Test again, it reuses that same
 run-bound pod/worktree instead of releasing resources and cold-launching a replacement. As an operator, that
-means previews and gate context survive the request-changes cycle, and a second pass should not fail just
-because the namespace no longer has spare quota for another AgentHost pod.
+means previews and gate context survive the request-changes cycle, and a second pass reuses the warm
+pod instead of waiting for Kubernetes to schedule a replacement AgentHost pod.
 
 During **In review**, the page clearly marks that human review is pending and directs the user to the Changes panel. The review stage node in the graph also surfaces a primary **Review now** button while review is action-required; clicking it opens the artifacts/review panel (the same Changes/Files modal) so the user can jump straight from the topology into the collective assembly output. The Changes/Files experience is reused for the coordinator's collective assembly output. Approve, request a change, or decline actions go to the assembly review gate, not to individual children.
 

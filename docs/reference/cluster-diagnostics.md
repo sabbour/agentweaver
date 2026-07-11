@@ -2,7 +2,11 @@
 
 ## Overview
 
-`GET /api/diagnostics/cluster` returns a real-time snapshot of the Agentweaver Kubernetes cluster: component health, namespace quota, active and orphaned agent-host pods, and subtasks waiting for capacity.
+`GET /api/diagnostics/cluster` returns a real-time snapshot of the Agentweaver Kubernetes cluster: component health, namespace quota, active and orphaned agent-host pods, and any legacy subtasks recorded as waiting for capacity.
+
+::: info Kubernetes owns scheduling (issue #217)
+The platform no longer pre-flights namespace capacity before launching a pod, and the namespace `ResourceQuota` no longer caps CPU/memory. Kubernetes owns pod admission, scheduling, and queueing; a **Pending** pod is a legitimate wait. As a result the `agent_pod_quota` CPU-headroom check has no hard cap to measure against, and the `pending_capacity_runs` collection is a **back-compat surface** that new runs do not populate.
+:::
 
 This endpoint is only available in AKS deployments. Non-AKS deployments return `404 Not Found`.
 
@@ -126,7 +130,7 @@ Standard bearer-token authentication is required. See [API reference → Authent
 | `namespace_quota` | `NamespaceQuotaDto` | Current CPU and memory consumption vs. the namespace limits. `null` if quota could not be read. |
 | `active_agent_pods` | `AgentPodInfoDto[]` | Agent-host pods with a matching active run record. |
 | `orphaned_agent_pods` | `AgentPodInfoDto[]` | Agent-host pods with no matching active run (candidates for next reaper sweep). |
-| `pending_capacity_runs` | `PendingCapacityRunDto[]` | Coordinator subtasks currently in `PendingCapacity` status. |
+| `pending_capacity_runs` | `PendingCapacityRunDto[]` | **Legacy / back-compat.** Coordinator subtasks recorded in the historical `PendingCapacity` status. Kubernetes now owns admission (issue #217), so new runs leave this empty. |
 | `warm_pools` | `WarmPoolStatusDto[]` | All SandboxWarmPool CRD objects in the namespace. Empty when the cluster has no warm pools configured. |
 | `sandbox_objects` | `SandboxObjectDto[]` | All Sandbox objects in the namespace, both warm-pool-managed and per-run ad-hoc sandboxes. |
 | `sandbox_claims` | `SandboxClaimObjectDto[]` | All SandboxClaim objects in the namespace. |
@@ -147,7 +151,7 @@ Standard bearer-token authentication is required. See [API reference → Authent
 | `postgresql` | Postgres connectivity |
 | `github_installation_token` | GitHub token-store validity for the configured scope |
 | `key_vault` | Azure Key Vault reachability and required `mcp-oauth-signing-key` lookup. `critical: secret 'mcp-oauth-signing-key' not found` means `scripts/aks/16-provision-oauth-signing-key.sh` was skipped. |
-| `agent_pod_quota` | CPU headroom ≥ 2 cores in the sandbox namespace |
+| `agent_pod_quota` | CPU headroom in the sandbox namespace. Since #217 removed the `ResourceQuota` CPU cap, there is no hard limit to measure against, so this check reports `unknown` where it once judged headroom against a 2-core threshold. |
 | `warm_pool` | Warm-pool agent-sandbox availability for the live AgentHost pool `agentweaver-agent-host` (`replicas: 2`) |
 | `kubernetes_api` | Kubernetes API server reachability |
 
@@ -173,12 +177,14 @@ Appears in both `active_agent_pods` and `orphaned_agent_pods`.
 
 ### PendingCapacityRunDto
 
+> **Legacy / back-compat.** This DTO describes the historical `PendingCapacity` park-and-retry flow, which #217 removed. New runs never populate `pending_capacity_runs`; the fields below are retained only so old records still render.
+
 | Field | Type | Description |
 | --- | --- | --- |
-| `coordinator_run_id` | string | The coordinator run whose subtask is waiting. |
+| `coordinator_run_id` | string | The coordinator run whose subtask was waiting. |
 | `subtask_id` | number | The subtask identifier within the work plan. |
-| `pending_since` | string (ISO 8601) | When the subtask first entered `PendingCapacity` status. |
-| `retry_count` | number | How many dispatch retries have been attempted. Max is 10; the subtask fails with `capacity_unavailable` after 10 retries. |
+| `pending_since` | string (ISO 8601) | When the subtask first entered the historical `PendingCapacity` status. |
+| `retry_count` | number | How many dispatch retries were attempted under the removed park/retry loop. |
 
 ### WarmPoolStatusDto
 
@@ -234,7 +240,7 @@ One entry per SandboxClaim object in the namespace.
 ## Notes
 
 - All 6 component health checks run **concurrently**. The total response time is bounded by the slowest single check (5-second timeout), not the sum.
-- The `agent_pod_quota` check and the `namespace_quota` DTO are computed separately: the check reports a pass/warn/fail threshold judgment; the DTO reports the raw values for the quota bars in the UI.
+- The `agent_pod_quota` check and the `namespace_quota` DTO are computed separately: the check reports a pass/warn/fail threshold judgment; the DTO reports the raw values for the quota bars in the UI. Since #217 removed the `ResourceQuota` CPU/memory caps, both degrade gracefully — the check has no hard cap and the CPU/memory bars have no limit to fill against; the object-count quotas (pods, sandbox claims, PVCs, storage) remain the enforced bounds.
 - The `warm_pool` check covers both the generic command sandbox pool and the AgentHost warm pool; an AgentHost pool below its intended two standby pods indicates slower run starts or capacity pressure.
 - Orphaned pods in `orphaned_agent_pods` are not terminated by this endpoint; they will be reaped on the next `AgentHostReaperService` sweep (default: every ~2 minutes via `Coordinator:ReaperIntervalTicks`).
 
@@ -250,5 +256,5 @@ One entry per SandboxClaim object in the namespace.
 
 - [Cluster page](../experience/cluster-page.md) — user-facing guide to the Cluster UI.
 - [API reference](./api.md) — all endpoints in one place.
-- [Sandbox pod execution](../deep-dive/sandbox-pod-execution.md) — reaper service design, quota pre-flight, and `PendingCapacity` flow.
+- [Sandbox pod execution](../deep-dive/sandbox-pod-execution.md) — reaper service design and Kubernetes-owned pod admission (`sandbox.provisioning_pending`).
 - [Coordinator internals](../deep-dive/coordinator-internals.md) — reaper as the 3rd heartbeat phase.

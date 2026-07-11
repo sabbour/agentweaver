@@ -1,6 +1,10 @@
 # Cluster page
 
-The **Cluster** page gives operators a real-time view of the Kubernetes cluster backing the Agentweaver AKS deployment: sandbox capacity, Kubernetes health checks, and any subtasks waiting for capacity.
+The **Cluster** page gives operators a real-time view of the Kubernetes cluster backing the Agentweaver AKS deployment: sandbox capacity, Kubernetes health checks, and any legacy subtasks recorded as waiting for capacity.
+
+::: info Kubernetes owns scheduling (issue #217)
+The platform no longer pre-gates on quota. It submits the `SandboxClaim` and waits for Kubernetes to schedule and bind the pod, so a **Pending** pod is an expected transient state, not a failure. The namespace `ResourceQuota` no longer caps CPU/memory (only object counts). The **Pending capacity** KPI, the **Waiting for capacity** badge, and the pending-capacity table are **back-compat surfaces** that only reflect historical runs.
+:::
 
 It is available under the **Cluster** nav item in the SYSTEM section of the project left rail. Route: `/projects/:projectId/cluster`.
 
@@ -15,7 +19,7 @@ It is available under the **Cluster** nav item in the SYSTEM section of the proj
 Open the **Cluster** page when:
 
 - a coordinator run shows subtasks in **⏳ Waiting for capacity** (amber badge in the topology graph);
-- runs are dispatching slowly and you suspect pod scheduling or quota issues;
+- runs are dispatching slowly and you suspect pod scheduling or node-pool autoscaling delays;
 - you want to confirm that all Kubernetes API components are reachable;
 - orphaned pods are accumulating (the reaper has not swept them yet);
 - after a deployment or scaling event, to confirm the cluster is healthy.
@@ -27,7 +31,7 @@ The KPI cards at the top of the page summarize the cluster signals the current U
 | Card | What it shows |
 |---|---|
 | **Orphaned** | Agent pods that no longer match an active run. |
-| **Pending capacity** | Subtasks currently waiting for sandbox or pod capacity. |
+| **Pending capacity** | **Legacy.** Subtasks recorded in the historical `PendingCapacity` status; empty for new runs (Kubernetes now owns scheduling). |
 | **Checks OK** | Healthy checks divided by all reported cluster checks. |
 | **Warm pool** | Ready vs. desired warm sandbox replicas when warm-pool data is available. |
 
@@ -42,7 +46,7 @@ Cluster checks run concurrently each time the page loads:
 | **Postgres** | Connectivity to the Postgres database | Network policy, password rotation |
 | **GitHub token store** | Configured GitHub token store validity for the current scope | Token expiry, missing per-user token, GitHub API outage |
 | **Azure Key Vault** | Key Vault reachability and required `mcp-oauth-signing-key` lookup | Managed identity misconfiguration, network policy, or skipped `scripts/aks/16-provision-oauth-signing-key.sh` |
-| **Agent pod quota** | CPU headroom ≥ 2 cores | Too many active pods, under-provisioned node pool |
+| **Agent pod quota** | CPU headroom in the namespace. Since #217 removed the `ResourceQuota` CPU cap there is no hard limit to measure against, so this check now reports `unknown`. | Node-pool autoscaling delays |
 | **Warm pool** | Warm-pool agent-sandbox availability for generic sandboxes (`replicas: 3`) and AgentHost (`replicas: 2`) | Warm-pool replica count below target, SandboxTemplate CRD issue |
 | **Kubernetes API** | Kubernetes API server reachability | In-cluster network policy, apiserver overload |
 
@@ -79,16 +83,16 @@ If orphaned pods are not being cleaned up, check:
 
 ## Pending-capacity runs table
 
-Lists coordinator subtasks currently in `PendingCapacity` status:
+> **Legacy / back-compat.** Kubernetes now owns pod admission and scheduling (issue #217), so new runs never enter `PendingCapacity`. This table stays in the UI only to render historical records; for a live run whose pod is still being scheduled, look for `sandbox.provisioning_pending` heartbeats on the child run rather than an entry here.
+
+Lists coordinator subtasks recorded in the historical `PendingCapacity` status:
 
 | Column | Meaning |
 |---|---|
 | **Coordinator run ID** | The parent coordinator run |
-| **Subtask** | The subtask waiting for capacity |
+| **Subtask** | The subtask that was waiting |
 | **Pending since** | When the subtask entered `PendingCapacity` |
-| **Retry count** | How many dispatch attempts have been made (max 10) |
-
-Each subtask retries every 60 seconds. After 10 retries, the subtask fails with detail code `capacity_unavailable` and the OutcomeSpec panel shows a human-readable explanation.
+| **Retry count** | How many dispatch attempts were made under the removed park/retry loop |
 
 ## Warm pools table
 
@@ -139,5 +143,5 @@ When the API is not deployed on AKS, or the cluster diagnostics endpoint is unav
 
 - [Operations](./operations.md) — all operations surfaces at a glance.
 - [Cluster diagnostics reference](../reference/cluster-diagnostics.md) — full API response schema.
-- [Sandbox pod execution](../deep-dive/sandbox-pod-execution.md) — reaper design, quota pre-flight, and `PendingCapacity` flow.
+- [Sandbox pod execution](../deep-dive/sandbox-pod-execution.md) — reaper design and Kubernetes-owned pod admission (`sandbox.provisioning_pending`).
 - [Heartbeat](./operations.md#heartbeat-experience) — the heartbeat that drives the reaper.
