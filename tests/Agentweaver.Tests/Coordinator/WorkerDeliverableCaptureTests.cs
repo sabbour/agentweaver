@@ -63,6 +63,165 @@ public sealed class WorkerDeliverableCaptureTests : IAsyncDisposable
     }
 
     // -------------------------------------------------------------------------
+    // Issue #222 invariant: staging is scope-INDEPENDENT — every non-ignored change
+    // is committed regardless of the subtask scope prose. The original bug required a
+    // non-null IServiceScopeFactory plus a resolvable subtask scope to trigger the
+    // prose-whitelist filter; that seam (and the whitelist) has been deleted, so these
+    // tests PIN the invariant rather than reproduce the deleted code path. The deletion
+    // and nested-repo tests below genuinely pin their own behaviors.
+    // -------------------------------------------------------------------------
+
+    /// <summary>
+    /// Invariant guard (not a bug reproduction): a deliverable written into nested directories is
+    /// committed even though no subtask scope named it. Pins the scope-independent staging contract;
+    /// the prose-whitelist path that dropped subdirectory trees no longer exists.
+    /// </summary>
+    [Fact]
+    public void CommitChanges_WithSubdirectoryDeliverable_CommitsNestedTree()
+    {
+        // The live #222 symptom: a backend subtask wrote server/** but the scope named only .md
+        // inputs, so the whole tree ended up untracked and uncommitted. Staging is now
+        // scope-independent, so the nested tree must be committed.
+        var (repoPath, worktreePath, runId) = CreateWorktree();
+        var manager = BuildWorktreeManager();
+
+        var target = Path.Combine(worktreePath, "server", "src", "index.js");
+        Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+        File.WriteAllText(target, "console.log('hello');\n");
+
+        manager.CommitChanges(worktreePath, runId);
+
+        using var repo = new Repository(repoPath);
+        var origin = repo.Branches["main"]!;
+        var branch = repo.Branches[WorktreeManager.BranchNameFor(runId)]!;
+        branch.Tip.Should().NotBe(origin.Tip, "a subdirectory deliverable must produce a commit");
+        using var patch = repo.Diff.Compare<Patch>(origin.Tip.Tree, branch.Tip.Tree);
+        patch.Content.Should().Contain("server/src/index.js",
+            "a deliverable written into nested directories must be committed and appear in the diff");
+        branch.Tip.Tree["server/src/index.js"].Should().NotBeNull(
+            "the nested file must exist as a blob in the committed tree");
+    }
+
+    /// <summary>
+    /// Invariant guard (not a bug reproduction): several files across subdirectories — none named by
+    /// any subtask scope — are all committed. Pins the scope-independent staging contract.
+    /// </summary>
+    [Fact]
+    public void CommitChanges_WithMultipleUnnamedFilesAcrossSubdirs_CommitsAll()
+    {
+        var (repoPath, worktreePath, runId) = CreateWorktree();
+        var manager = BuildWorktreeManager();
+
+        var files = new[]
+        {
+            "src/app.ts",
+            "src/util/helpers.ts",
+            "public/index.html",
+            "package.json",
+        };
+        foreach (var rel in files)
+        {
+            var full = Path.Combine(worktreePath, rel.Replace('/', Path.DirectorySeparatorChar));
+            Directory.CreateDirectory(Path.GetDirectoryName(full)!);
+            File.WriteAllText(full, $"// {rel}\n");
+        }
+
+        manager.CommitChanges(worktreePath, runId);
+
+        using var repo = new Repository(repoPath);
+        var branch = repo.Branches[WorktreeManager.BranchNameFor(runId)]!;
+        foreach (var rel in files)
+            branch.Tip.Tree[rel].Should().NotBeNull($"{rel} must be committed even though the scope never named it");
+    }
+
+    [Fact]
+    public void CommitChanges_WithDeletionAndRename_CapturesDeletion()
+    {
+        // Guards B1: the canonical changed set must include deletions and renames. A New/Modified-only
+        // mask would drop the deletion and leave the old blob in the tree.
+        var (repoPath, worktreePath, runId) = CreateWorktree(new Dictionary<string, string>
+        {
+            ["keep.txt"] = "shared content that will be renamed\nline two\nline three\n",
+            ["old.txt"] = "this file will be deleted\n",
+        });
+        var manager = BuildWorktreeManager();
+
+        // Agent deletes old.txt and renames keep.txt -> renamed.txt (delete + recreate same content).
+        File.Delete(Path.Combine(worktreePath, "old.txt"));
+        var keepPath = Path.Combine(worktreePath, "keep.txt");
+        var keepContent = File.ReadAllText(keepPath);
+        File.Delete(keepPath);
+        File.WriteAllText(Path.Combine(worktreePath, "renamed.txt"), keepContent);
+
+        manager.CommitChanges(worktreePath, runId);
+
+        using var repo = new Repository(repoPath);
+        var branch = repo.Branches[WorktreeManager.BranchNameFor(runId)]!;
+        var tree = branch.Tip.Tree;
+
+        tree["old.txt"].Should().BeNull("the deleted file must be absent from the committed tree");
+        tree["keep.txt"].Should().BeNull("the renamed file's old path must be absent from the committed tree");
+        tree["renamed.txt"].Should().NotBeNull("the renamed file's new path must be present");
+
+        // No duplicate content: the shared content must appear exactly once (renamed.txt only).
+        var blobPaths = tree.Where(e => e.TargetType == TreeEntryTargetType.Blob).Select(e => e.Path).ToList();
+        blobPaths.Should().Contain("renamed.txt");
+        blobPaths.Should().NotContain("keep.txt");
+    }
+
+    [Fact]
+    public void CommitChanges_WithGitignore_DoesNotCommitIgnoredFiles()
+    {
+        var (repoPath, worktreePath, runId) = CreateWorktree();
+        var manager = BuildWorktreeManager();
+
+        File.WriteAllText(Path.Combine(worktreePath, ".gitignore"), "node_modules/\n");
+        var nodeModules = Path.Combine(worktreePath, "node_modules", "left-pad");
+        Directory.CreateDirectory(nodeModules);
+        File.WriteAllText(Path.Combine(nodeModules, "index.js"), "module.exports = () => {};\n");
+        File.WriteAllText(Path.Combine(worktreePath, "app.js"), "require('left-pad');\n");
+
+        manager.CommitChanges(worktreePath, runId);
+
+        using var repo = new Repository(repoPath);
+        var branch = repo.Branches[WorktreeManager.BranchNameFor(runId)]!;
+        var tree = branch.Tip.Tree;
+
+        tree["app.js"].Should().NotBeNull("the real deliverable must be committed");
+        tree["node_modules"].Should().BeNull("an ignored directory must never be committed");
+    }
+
+    [Fact]
+    public void CommitChanges_WithNestedGitRepository_SkipsGitlinkButCommitsSibling()
+    {
+        // Guards N2: a subdirectory carrying its own .git (e.g. a create-react-app scaffold) must NOT
+        // be staged as an empty gitlink; a normal sibling file must still commit.
+        var (repoPath, worktreePath, runId) = CreateWorktree();
+        var manager = BuildWorktreeManager();
+
+        // Minimal nested repo: a client/ directory with its own .git and a file.
+        var clientGit = Path.Combine(worktreePath, "client", ".git");
+        Directory.CreateDirectory(clientGit);
+        File.WriteAllText(Path.Combine(clientGit, "HEAD"), "ref: refs/heads/main\n");
+        File.WriteAllText(Path.Combine(worktreePath, "client", "app.jsx"), "export default () => null;\n");
+
+        // A normal sibling deliverable outside the nested repo.
+        File.WriteAllText(Path.Combine(worktreePath, "server.js"), "listen(3000);\n");
+
+        manager.CommitChanges(worktreePath, runId);
+
+        using var repo = new Repository(repoPath);
+        var branch = repo.Branches[WorktreeManager.BranchNameFor(runId)]!;
+        var tree = branch.Tip.Tree;
+
+        tree["server.js"].Should().NotBeNull("the sibling deliverable outside the nested repo must commit");
+        var clientEntry = tree["client"];
+        if (clientEntry is not null)
+            clientEntry.TargetType.Should().NotBe(TreeEntryTargetType.GitLink,
+                "the nested repo must never be committed as a gitlink/submodule pointer");
+    }
+
+    // -------------------------------------------------------------------------
     // (b) Worker writes nothing → no new commit, empty diff, run.no_changes_produced
     // -------------------------------------------------------------------------
 
@@ -247,8 +406,11 @@ public sealed class WorkerDeliverableCaptureTests : IAsyncDisposable
 
     /// Creates a temp git repo at a unique path, renames the initial branch to "main",
     /// and uses WorktreeManager.AddWorktree to create a real linked worktree for <paramref name="runId"/>.
+    /// When <paramref name="baseFiles"/> is provided those files are committed to "main" as the
+    /// starting tree (otherwise a single README.md is committed).
     /// Returns (repoPath, worktreePath, runId) for use in assertions.
-    private (string RepoPath, string WorktreePath, RunId RunId) CreateWorktree()
+    private (string RepoPath, string WorktreePath, RunId RunId) CreateWorktree(
+        IReadOnlyDictionary<string, string>? baseFiles = null)
     {
         var repoPath = Path.Combine(Path.GetTempPath(), $"aw-test-repo-{Guid.NewGuid():N}");
         var worktreesBase = Path.Combine(Path.GetTempPath(), $"aw-test-wt-{Guid.NewGuid():N}");
@@ -259,7 +421,19 @@ public sealed class WorkerDeliverableCaptureTests : IAsyncDisposable
         Repository.Init(repoPath);
         using (var repo = new Repository(repoPath))
         {
-            File.WriteAllText(Path.Combine(repoPath, "README.md"), "init");
+            if (baseFiles is { Count: > 0 })
+            {
+                foreach (var (rel, content) in baseFiles)
+                {
+                    var full = Path.Combine(repoPath, rel.Replace('/', Path.DirectorySeparatorChar));
+                    Directory.CreateDirectory(Path.GetDirectoryName(full)!);
+                    File.WriteAllText(full, content);
+                }
+            }
+            else
+            {
+                File.WriteAllText(Path.Combine(repoPath, "README.md"), "init");
+            }
             Commands.Stage(repo, "*");
             var sig = new Signature("Test", "test@test.com", DateTimeOffset.UtcNow);
             repo.Commit("init", sig, sig);

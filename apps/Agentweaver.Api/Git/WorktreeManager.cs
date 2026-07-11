@@ -2,12 +2,9 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Text.RegularExpressions;
 using LibGit2Sharp;
-using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Agentweaver.Api.Contracts;
 using Agentweaver.Api.Infrastructure;
-using Agentweaver.Api.Memory;
 using Agentweaver.Api.Runs;
 using Agentweaver.AgentRuntime.Workflow;
 using Agentweaver.Domain;
@@ -25,7 +22,6 @@ public sealed class WorktreeManager
     private readonly string _basePath;
     private readonly Signature _signature;
     private readonly ILogger<WorktreeManager> _logger;
-    private readonly IServiceScopeFactory? _scopeFactory;
 
     /// <summary>How old a git lock file must be before it is considered stale (left by a crashed
     /// process) and safe to delete. A lock held by a CONCURRENTLY-RUNNING git operation is only a few
@@ -45,11 +41,9 @@ public sealed class WorktreeManager
 
     public WorktreeManager(
         IConfiguration configuration,
-        ILogger<WorktreeManager> logger,
-        IServiceScopeFactory? scopeFactory = null)
+        ILogger<WorktreeManager> logger)
     {
         _logger = logger;
-        _scopeFactory = scopeFactory;
         var configuredBase = configuration["Worktrees:BasePath"];
         _basePath = string.IsNullOrWhiteSpace(configuredBase)
             ? Path.Combine(AppPaths.DataDirectory, "worktrees")
@@ -300,8 +294,8 @@ public sealed class WorktreeManager
 
         Commands.Unstage(repo, "*");
         var pathsToStage = ResolveStagingPaths(repo, worktreePath, runId);
-        foreach (var path in pathsToStage)
-            Commands.Stage(repo, path);
+        if (pathsToStage.Count > 0)
+            Commands.Stage(repo, pathsToStage);
 
         // Check whether staging produced any actual changes vs HEAD. Creating an empty commit when
         // the agent wrote nothing causes the child branch to diverge from the origin with a
@@ -332,6 +326,13 @@ public sealed class WorktreeManager
             RecurseIgnoredDirs = false,
         });
 
+        // Scope-independent staging (issue #222 root cause): capture EVERY changed entry that is not
+        // ignored. Previously this set was filtered against a whitelist of path-like tokens scraped
+        // from the subtask scope prose, so a deliverable written outside that (mis-scraped) list —
+        // e.g. an entire server/ tree — was silently dropped and never committed, leaving dependent
+        // subtasks unable to see the work. This canonical set already INCLUDES deletions and renames,
+        // so it must NOT be narrowed to a New/Modified-only mask (that would drop deletions and
+        // corrupt renames).
         var changed = status
             .Where(e => e.State != 0 && (e.State & FileStatus.Ignored) == 0)
             .Select(e => NormalizePathSeparators(e.FilePath))
@@ -340,112 +341,75 @@ public sealed class WorktreeManager
         if (changed.Count == 0)
             return [];
 
-        var subtaskScope = TryLoadSubtaskScope(runId);
-        if (string.IsNullOrWhiteSpace(subtaskScope))
+        return ExcludeNestedRepositoryPaths(worktreePath, changed, runId);
+    }
+
+    /// <summary>
+    /// Defensively removes any changed path that lives at or under a NESTED git repository — a
+    /// subdirectory that contains its own <c>.git</c>. Scaffolders such as create-react-app and Vite
+    /// run <c>git init</c>, and libgit2 would stage such a subdirectory as an empty gitlink (a
+    /// submodule pointer) instead of the deliverable file tree, silently losing the work. Any skipped
+    /// nested-repo roots are logged as a warning.
+    /// </summary>
+    private IReadOnlyList<string> ExcludeNestedRepositoryPaths(
+        string worktreePath, IReadOnlyList<string> changed, RunId runId)
+    {
+        var nestedRoots = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var inspected = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var path in changed)
+        {
+            var segments = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
+            // Walk every prefix directory from the top-level segment down to (and INCLUDING) the leaf.
+            // The leaf is probed on purpose: libgit2 reports an embedded repo as a single "client" or
+            // "client/" gitlink entry (no child paths), so unless we test the leaf itself we would miss
+            // it and stage it as an empty gitlink (the N2 case). DirectoryIsGitRepository only matches
+            // real directories containing a .git, so probing a regular file leaf costs one extra stat
+            // and never false-positives — an accepted trade-off; do not "optimize" the leaf probe away.
+            var prefix = string.Empty;
+            for (var i = 0; i < segments.Length; i++)
+            {
+                prefix = i == 0 ? segments[i] : prefix + "/" + segments[i];
+                if (nestedRoots.Contains(prefix))
+                    break;
+                if (inspected.Add(prefix) && DirectoryIsGitRepository(
+                        Path.Combine(worktreePath, prefix.Replace('/', Path.DirectorySeparatorChar))))
+                {
+                    nestedRoots.Add(prefix);
+                    break;
+                }
+            }
+        }
+
+        if (nestedRoots.Count == 0)
             return changed;
 
-        var declaredOutputs = ExtractDeclaredPaths(subtaskScope);
-        if (declaredOutputs.Count > 0)
-        {
-            var selected = changed
-                .Where(path => declaredOutputs.Any(output => PathMatchesDeclaration(path, output)))
-                .ToList();
-            if (selected.Count == 0)
-                _logger.LogWarning(
-                    "Run {RunId} declared output file(s) but none matched changed files; no files will be committed",
-                    runId);
-            return selected;
-        }
+        _logger.LogWarning(
+            "Run {RunId}: skipping {Count} nested git repository root(s) during staging to avoid " +
+            "committing them as empty gitlinks: {Roots}",
+            runId, nestedRoots.Count, string.Join(", ", nestedRoots.OrderBy(r => r, StringComparer.Ordinal)));
 
-        var workingDir = ExtractDeclaredWorkingDirectory(subtaskScope);
-        var newOrModified = status
-            .Where(e => IsNewOrModified(e.State))
-            .Select(e => NormalizePathSeparators(e.FilePath))
-            .Where(path => string.IsNullOrEmpty(workingDir) || IsUnderDirectory(path, workingDir))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
+        return changed
+            .Where(path => !IsUnderAnyRoot(path, nestedRoots))
             .ToList();
-        return newOrModified;
     }
 
-    private string? TryLoadSubtaskScope(RunId runId)
+    private static bool IsUnderAnyRoot(string path, HashSet<string> roots)
     {
-        if (_scopeFactory is null)
-            return null;
-
-        try
+        var trimmed = path.TrimEnd('/');
+        foreach (var root in roots)
         {
-            using var scope = _scopeFactory.CreateScope();
-            var runStore = scope.ServiceProvider.GetRequiredService<IRunStore>();
-            var run = runStore.GetAsync(runId, CancellationToken.None).GetAwaiter().GetResult();
-            if (run?.SubtaskId is null || !int.TryParse(run.SubtaskId, out var subtaskId))
-                return null;
-
-            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
-            return db.Subtasks.AsNoTracking()
-                .Where(s => s.Id == subtaskId)
-                .Select(s => s.Scope)
-                .FirstOrDefault();
+            if (string.Equals(trimmed, root, StringComparison.OrdinalIgnoreCase)
+                || path.StartsWith(root + "/", StringComparison.OrdinalIgnoreCase))
+                return true;
         }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex,
-                "Could not resolve declared output files for run {RunId}; falling back to changed files",
-                runId);
-            return null;
-        }
+        return false;
     }
 
-    private static readonly Regex PathLikeToken = new(
-        @"(?<![\w./\\-])(?:[\w.+\-]+[/\\])+[\w.+\-]+|(?<![\w./\\-])[\w.+\-]+\.[A-Za-z0-9]{1,8}",
-        RegexOptions.Compiled);
-
-    private static IReadOnlyList<string> ExtractDeclaredPaths(string scope)
+    private static bool DirectoryIsGitRepository(string absoluteDirectory)
     {
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var result = new List<string>();
-        foreach (Match match in PathLikeToken.Matches(scope))
-        {
-            var path = NormalizePathSeparators(match.Value).Trim('/');
-            if (path.Length == 0 || path.Split('/').Any(seg => seg == "..") || Path.IsPathRooted(path))
-                continue;
-            if (seen.Add(path))
-                result.Add(path);
-        }
-        return result;
-    }
-
-    private static string? ExtractDeclaredWorkingDirectory(string scope)
-    {
-        var match = Regex.Match(scope,
-            @"(?i)(?:working\s+directory|workdir|directory)\s*[:=]\s*([A-Za-z0-9_.+\-/\\]+)");
-        if (!match.Success)
-            return null;
-        var path = NormalizePathSeparators(match.Groups[1].Value).Trim('/');
-        if (path.Length == 0 || path.Split('/').Any(seg => seg == "..") || Path.IsPathRooted(path))
-            return null;
-        return path;
-    }
-
-    private static bool PathMatchesDeclaration(string changedPath, string declaredPath) =>
-        string.Equals(changedPath, declaredPath, StringComparison.OrdinalIgnoreCase)
-        || changedPath.StartsWith(declaredPath.TrimEnd('/') + "/", StringComparison.OrdinalIgnoreCase);
-
-    private static bool IsUnderDirectory(string changedPath, string directory) =>
-        string.Equals(changedPath, directory, StringComparison.OrdinalIgnoreCase)
-        || changedPath.StartsWith(directory.TrimEnd('/') + "/", StringComparison.OrdinalIgnoreCase);
-
-    private static bool IsNewOrModified(FileStatus state)
-    {
-        const FileStatus mask =
-            FileStatus.NewInIndex
-            | FileStatus.ModifiedInIndex
-            | FileStatus.RenamedInIndex
-            | FileStatus.TypeChangeInIndex
-            | FileStatus.NewInWorkdir
-            | FileStatus.ModifiedInWorkdir
-            | FileStatus.RenamedInWorkdir
-            | FileStatus.TypeChangeInWorkdir;
-        return (state & mask) != 0;
+        var gitPath = Path.Combine(absoluteDirectory, ".git");
+        return Directory.Exists(gitPath) || File.Exists(gitPath);
     }
 
     public string GetDiff(string repositoryPath, string originatingBranch, string worktreeBranch)

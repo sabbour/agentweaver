@@ -15,6 +15,37 @@ public class ProjectGitInitializer
 {
     private readonly ILogger<ProjectGitInitializer> _logger;
 
+    /// <summary>
+    /// Baseline ignore rules seeded into blank projects so dependency/build artifacts are never
+    /// captured by scope-independent staging. Covers the common Node, Python, JVM, and OS caches.
+    /// </summary>
+    internal const string BaselineGitignore =
+        "# Dependencies\n" +
+        "node_modules/\n" +
+        ".venv/\n" +
+        "venv/\n" +
+        "__pycache__/\n" +
+        "*.pyc\n" +
+        ".pytest_cache/\n" +
+        "\n" +
+        "# Build output\n" +
+        "dist/\n" +
+        "build/\n" +
+        ".next/\n" +
+        "out/\n" +
+        "target/\n" +
+        "bin/\n" +
+        "obj/\n" +
+        "\n" +
+        "# Logs & environment\n" +
+        "*.log\n" +
+        ".env\n" +
+        ".env.*\n" +
+        "\n" +
+        "# OS cruft\n" +
+        ".DS_Store\n" +
+        "Thumbs.db\n";
+
     public ProjectGitInitializer(ILogger<ProjectGitInitializer> logger)
     {
         _logger = logger;
@@ -31,7 +62,18 @@ public class ProjectGitInitializer
         Repository.Init(workingDirectory);
         using var repo = new Repository(workingDirectory);
 
-        // Stage nothing — we want an empty initial commit to establish the branch tip.
+        // Seed a baseline .gitignore so greenfield projects don't commit dependency/build junk once
+        // WorktreeManager staging captures every changed file (issue #222). Never clobber an existing
+        // .gitignore if the caller already placed one.
+        var gitignorePath = Path.Combine(workingDirectory, ".gitignore");
+        if (!File.Exists(gitignorePath))
+        {
+            File.WriteAllText(gitignorePath, BaselineGitignore);
+            Commands.Stage(repo, ".gitignore");
+        }
+
+        // Commit the baseline (or an empty commit if a .gitignore was already present) to establish
+        // the branch tip so WorktreeManager.AddWorktree always finds a branch with a tip.
         var sig = new Signature("Agentweaver", "agentweaver@localhost", DateTimeOffset.UtcNow);
         repo.Commit(
             "Initial commit",

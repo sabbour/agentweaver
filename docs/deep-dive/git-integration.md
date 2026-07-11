@@ -140,7 +140,7 @@ A normal run follows this logic:
 1. **Create branch and worktree**: create `agentweaver/{runId}` from the originating branch and check it out in a dedicated worktree.
 2. **Persist before execution**: store the worktree path and branch on the run before the agent starts.
 3. **Agent writes files**: the agent executes inside the worktree.
-4. **Commit candidate result**: stage allowed changes, commit them on the run branch, and compute the tree hash.
+4. **Commit candidate result**: stage every non-ignored change, commit them on the run branch, and compute the tree hash.
 5. **Compute diff**: compare the originating branch tree with the run branch tree.
 6. **Wait for review**: store tree hash, diff, step count, and move to `awaiting_review`.
 7. **Approve, decline, or revise**: human review either merges, declines, or sends the run back into the same worktree for another revision.
@@ -151,12 +151,12 @@ A normal run follows this logic:
 
 Agentweaver commits the worktree branch after the agent turn. The commit message is deterministic: `Agentweaver run {runId}`. The author identity comes from configuration, defaulting to `Agentweaver <agentweaver@localhost>`.
 
-The staging rule has two modes:
+Staging is **scope-independent**. Agentweaver stages every changed, non-ignored path in the worktree — including deletions and renames — regardless of any coordinator subtask scope. There is no whitelist derived from a subtask's declared output paths or declared working directory. An earlier version scraped path-like tokens from the subtask scope prose and committed only matching changes; that whitelist silently dropped deliverables written to subdirectories (for example an entire `server/` tree), leaving dependent subtasks unable to see the work.
 
-- **Normal runs** stage all non-ignored changed paths.
-- **Coordinator subtask runs** can narrow staging based on declared output paths or a declared working directory in the subtask scope.
+Two defensive rules keep that broad capture safe:
 
-That subtask filtering matters because coordinator children may share an orchestration worktree. If a subtask declares outputs, Agentweaver attempts to commit only matching changed paths. If no declared paths are found, it falls back to new or modified files under the declared working directory when one is present.
+- **Nested git repositories are skipped.** Scaffolders such as create-react-app and Vite run their own `git init`, so a changed subdirectory can contain its own `.git`. Agentweaver walks each changed path and excludes anything at or under such a nested repository, because libgit2 would otherwise stage it as an empty gitlink (a submodule pointer) and lose the actual file tree. Skipped nested-repo roots are logged.
+- **Blank projects are seeded with a baseline `.gitignore`.** When a blank project is initialized, Agentweaver writes a baseline ignore file — covering `node_modules/`, `dist/`, `build/`, `.venv/`, `__pycache__/`, `.env*`, `bin/`, `obj/`, and similar — and commits it in the initial commit, without ever clobbering an existing `.gitignore`. This keeps dependency and build artifacts out of the scope-independent staging set.
 
 Agentweaver avoids empty commits. If staging produces no difference from HEAD, it returns the existing HEAD tree hash. That lets the workflow treat the child as a no-change result instead of manufacturing a zero-diff commit that looks like delivered work.
 
@@ -373,7 +373,7 @@ Ref-only merge protects dirty base workspaces from destructive resets. The trade
 
 ### Shared coordinator worktree
 
-Coordinator child runs can collaborate through a shared orchestration worktree. That enables multi-agent decomposition, but it weakens isolation between children. Agentweaver compensates with conservative scheduling, subtask output scoping, and a final integration branch.
+Coordinator child runs can collaborate through a shared orchestration worktree. That enables multi-agent decomposition, but it weakens isolation between children. Agentweaver compensates with conservative scheduling and a final integration branch.
 
 ### SQLite metadata plus git content
 
@@ -384,13 +384,13 @@ This split keeps large file content and history in git while SQLite tracks lifec
 If rebuilding the git integration subsystem, implement it in this order:
 
 1. Define run metadata: repository path, originating branch, worktree path, worktree branch, tree hash, diff, status, merge result, merged commit hash, and conflict list.
-2. Initialize blank repositories with an initial commit so default branches are never unborn.
+2. Initialize blank repositories with a baseline `.gitignore` and an initial commit so default branches are never unborn and dependency/build artifacts stay untracked.
 3. Clone GitHub repositories using ephemeral HTTPS credentials from a refresh-aware token provider.
 4. Create deterministic run branches as `agentweaver/{runId}` from the originating branch.
 5. Add run worktrees under a controlled base path using the run id as directory name.
 6. Persist worktree path and branch before agent execution.
 7. Execute agents with the worktree as their working directory and sandbox boundary.
-8. Stage changed files, respecting coordinator subtask output scopes where applicable.
+8. Stage every changed, non-ignored file (including deletions and renames), skipping nested git repositories to avoid committing them as empty gitlinks.
 9. Avoid empty commits; return the current HEAD tree hash for no-change results.
 10. Store the candidate tree hash, full diff against the originating branch, and review-ready state.
 11. Implement request-changes by reusing the same worktree and branch for revision.
