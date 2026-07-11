@@ -53,7 +53,7 @@ beforeEach(() => { vi.clearAllMocks(); });
 afterEach(() => { cleanup(); });
 
 describe('KanbanColumn — Squadboard restyle', () => {
-  it('renders the header accent color and description for a known stage (Ready = blue)', () => {
+  it('renders the header accent color and description for a known stage (Ready = marigold)', () => {
     const column: BoardColumnDto = {
       id: 'ready', kind: 'intake', label: 'Ready',
       cards: [task('t1', 'A ready task')],
@@ -61,9 +61,9 @@ describe('KanbanColumn — Squadboard restyle', () => {
     renderColumn(column, columnAccentColor('ready', 0));
 
     const section = screen.getByTestId('column-ready');
-    // Blue accent for Ready (fixed mapping).
-    expect(section.getAttribute('data-accent-color')).toBe(tokens.colorPaletteBlueBorderActive);
-    expect((section as HTMLElement).style.borderColor).not.toBe(tokens.colorPaletteBlueBorderActive);
+    // Marigold accent for Ready (intentional no-blue design system change).
+    expect(section.getAttribute('data-accent-color')).toBe(tokens.colorPaletteMarigoldBorderActive);
+    expect((section as HTMLElement).style.borderColor).not.toBe(tokens.colorPaletteMarigoldBorderActive);
     expect(within(section).getByLabelText('Ready summary')).toBeTruthy();
     // Real description copy, not "undefined".
     expect(within(section).getByText(STAGE_DESCRIPTIONS.ready)).toBeTruthy();
@@ -114,7 +114,7 @@ describe('KanbanColumn — Squadboard restyle', () => {
 describe('columnAccentColor — palette mapping', () => {
   it('maps the fixed board columns to stable accents', () => {
     expect(columnAccentColor('backlog', 0)).toBe(tokens.colorNeutralStroke1);
-    expect(columnAccentColor('ready', 0)).toBe(tokens.colorPaletteBlueBorderActive);
+    expect(columnAccentColor('ready', 0)).toBe(tokens.colorPaletteMarigoldBorderActive);
     expect(columnAccentColor('problems', 0)).toBe(tokens.colorPaletteRedBorderActive);
     expect(columnAccentColor('human-review', 1)).toBe(tokens.colorPalettePurpleBorderActive);
     expect(columnAccentColor('active', 2)).toBe(tokens.colorPaletteTealBorderActive);

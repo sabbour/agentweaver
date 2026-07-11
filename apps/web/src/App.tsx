@@ -1,5 +1,5 @@
 import { apiClient } from './api/apiClient';
-import { FluentProvider, Spinner } from '@fluentui/react-components';
+import { FluentProvider, Spinner, makeStyles, tokens } from '@fluentui/react-components';
 import { agentweaverLightTheme } from './theme';
 import { AppShell } from './components/shell/AppShell';
 import { ConsoleRouteRedirect } from './components/shell/ConsoleRouteRedirect';
@@ -34,6 +34,17 @@ import { WorkspacePage } from './pages/WorkspacePage';
 import { CoordinatorRunRoute } from './routes/CoordinatorRunRoute';
 import { useEffect, useState } from 'react';
 import { BrowserRouter, Route, Routes } from 'react-router-dom';
+
+const useAppLoadingStyles = makeStyles({
+  screen: {
+    minHeight: '100vh',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: tokens.colorNeutralBackground2,
+  },
+});
+
 function Shell() {
   return (
     <AppShell>
@@ -106,9 +117,10 @@ function AuthGate() {
     return () => { cancelled = true; };
   }, []);
 
+  const loadingStyles = useAppLoadingStyles();
   if (!authChecked) {
     return (
-      <div className="azf-app-loading-screen">
+      <div className={loadingStyles.screen}>
         <Spinner size="large" />
       </div>
     );

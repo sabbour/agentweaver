@@ -32,6 +32,13 @@ export const agentweaverLightTheme: Theme = {
   fontFamilyBase:
     '"Segoe UI", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, Roboto, "Helvetica Neue", sans-serif',
 
+  // Body base = 15px / 1.5 (DESIGN.md — a hair denser than Copilot's 16px).
+  // Fluent's default <Text> and controls read fontSizeBase300; setting it here
+  // makes the whole app's default prose coherent from one source. The named
+  // roles in components/ui/typography.ts carry the rest of the scale.
+  fontSizeBase300:   '15px',
+  lineHeightBase300: '22px',
+
   // Radius — controls 8px, nav rows / large controls 12px, panels 16px, pills 9999px.
   borderRadiusNone:     '0',
   borderRadiusSmall:    '6px',

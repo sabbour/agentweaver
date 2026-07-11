@@ -1,11 +1,11 @@
-import { AzureToolbar, BladeHeader } from '../copilot-fluent-system';
+import { makeStyles, tokens } from '@fluentui/react-components';
 import type { ReactNode } from 'react';
-// Shared header for every main page: a flat Azure blade header (title, optional
-// "title | context" lockup, and optional subtitle) with an optional right-aligned
-// actions slot and an optional breadcrumb above the title. No decorative resource
-// icon by default — Agentweaver is not an Azure service, so blades don't carry a
-// generic resource glyph. Pass `resourceIcon` only where a real, meaningful glyph
-// applies.
+import { PageHeader as KitPageHeader } from './ui';
+
+// Shared header for every main page. Wraps the shared kit PageHeader so all
+// importer pages stay coherent without any change on their side.
+// Props: title, subtitle (→ description), actions, breadcrumb (→ breadcrumbs),
+// resourceIcon / resourceLabel (rendered as a context row above the title).
 
 export interface PageHeaderProps {
   title: string;
@@ -16,6 +16,17 @@ export interface PageHeaderProps {
   resourceLabel?: ReactNode;
 }
 
+const useStyles = makeStyles({
+  resourceIdentity: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXS,
+    color: tokens.colorNeutralForeground3,
+    fontSize: '13px',
+    lineHeight: '18px',
+  },
+});
+
 export function PageHeader({
   title,
   subtitle,
@@ -24,15 +35,27 @@ export function PageHeader({
   resourceIcon,
   resourceLabel,
 }: PageHeaderProps) {
+  const styles = useStyles();
+
+  // When a resource identity is provided, render it above the breadcrumb trail
+  // so both remain visible in the kit's breadcrumbs slot.
+  const breadcrumbsNode: ReactNode =
+    resourceIcon != null || resourceLabel != null ? (
+      <>
+        <span className={styles.resourceIdentity} aria-hidden="true">
+          {resourceIcon}
+          {resourceLabel}
+        </span>
+        {breadcrumb}
+      </>
+    ) : breadcrumb;
+
   return (
-    <section className="azf-stack azf-page-header-shell" aria-label={`${title} header`}>
-      {breadcrumb}
-      <BladeHeader title={title} subtitle={subtitle} resourceIcon={resourceIcon} menuLabel={resourceLabel} />
-      {actions && (
-        <AzureToolbar actions={[]} topOfPage ariaLabel={`${title} commands`}>
-          {actions}
-        </AzureToolbar>
-      )}
-    </section>
+    <KitPageHeader
+      title={title}
+      description={subtitle}
+      breadcrumbs={breadcrumbsNode}
+      actions={actions}
+    />
   );
 }

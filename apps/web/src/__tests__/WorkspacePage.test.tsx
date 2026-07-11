@@ -90,9 +90,13 @@ describe('WorkspacePage', () => {
   it('uses the loaded project name in the breadcrumb', async () => {
     render(<Wrapper><WorkspacePage /></Wrapper>);
 
-    await waitFor(() =>
-      expect(screen.getByLabelText('Breadcrumb').textContent).toContain('Agentweaver'),
-    );
+    await waitFor(() => {
+      // The kit PageHeader wraps breadcrumbs in an outer <nav aria-label="Breadcrumb">;
+      // WorkspacePage also passes an inner <nav aria-label="Breadcrumb">. Both contain
+      // the project name — check that at least one does.
+      const breadcrumbNavs = screen.getAllByLabelText('Breadcrumb');
+      expect(breadcrumbNavs.some(el => el.textContent?.includes('Agentweaver'))).toBe(true);
+    });
   });
 
   it('renders the file tree from the workspace and shows the current branch', async () => {

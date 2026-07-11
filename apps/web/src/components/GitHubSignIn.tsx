@@ -1,7 +1,9 @@
 import {
   apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
-import { Button,
+import {
+  Button,
+  makeStyles,
   Menu,
   MenuItem,
   MenuList,
@@ -9,16 +11,19 @@ import { Button,
   MenuTrigger,
   Spinner,
   Text,
-  } from '../copilot-fluent-system';
-import { makeStyles,
-  mergeClasses,
-} from '../copilot-fluent-system';
-import { SignOutRegular } from '../copilot-fluent-system';
+  tokens,
+} from '@fluentui/react-components';
+import { SignOutRegular } from '@fluentui/react-icons';
 import { useEffect, useState } from 'react';
 import type { GitHubAuthStatus } from '../api/types';
 const useStyles = makeStyles({
   trigger: {
     cursor: 'pointer',
+  },
+  triggerInner: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalS,
   },
   avatar: {
     width: '28px',
@@ -89,11 +94,13 @@ export function GitHubSignIn() {
       <MenuTrigger disableButtonEnhancement>
         <Button
           appearance="transparent"
-          className={mergeClasses('azf-row azf-gap-s', styles.trigger)}
+          className={styles.trigger}
           type="button"
         >
-          {avatarUrl && <img src={avatarUrl} alt={login ?? ''} className={styles.avatar} />}
-          <Text>{login}</Text>
+          <span className={styles.triggerInner}>
+            {avatarUrl && <img src={avatarUrl} alt={login ?? ''} className={styles.avatar} />}
+            <Text>{login}</Text>
+          </span>
         </Button>
       </MenuTrigger>
       <MenuPopover>

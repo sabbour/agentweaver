@@ -1,8 +1,8 @@
 import {
-  Text } from '../copilot-fluent-system';
-import { makeStyles,
+  makeStyles,
+  Text,
   tokens,
-} from '../copilot-fluent-system';
+} from '@fluentui/react-components';
 import { useEffect, useState } from 'react';
 // Shared auto-refresh countdown. Pages that poll on an interval use this to show
 // a live "Next refresh in Xs" indicator that counts DOWN to the next refresh,

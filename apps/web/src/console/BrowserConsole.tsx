@@ -1,17 +1,7 @@
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
-import {
-  AgenticProgress,
-  BladeHeader,
-  CopilotComposer,
-  CopilotPromptRibbon,
-  CopilotResponse,
-  SparkleRegular,
-  StatusIconText,
-} from '../copilot-fluent-system';
 import { DEFERRED_COMMANDS, parseInput, SLASH_COMMANDS } from './consoleCommands';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { KeyboardEvent } from 'react';
 import { Link as RouterLink, useLocation } from 'react-router-dom';
 import type {
   AgentweaverConsoleResponse,
@@ -20,38 +10,138 @@ import type {
   Project,
   TaskCardDto,
 } from '../api/types';
-import type { AzfAgentStep, AzfResponsePart } from '../copilot-fluent-system';
 import type { SlashCommandName } from './consoleCommands';
-import type { CSSProperties, ReactNode } from 'react';
-// Smart operator dock for the singleton browser console. Natural language goes to
-// the backend Agentweaver facade; slash commands remain secondary shortcuts over
-// the same typed API client surface.
+import type { CSSProperties } from 'react';
+import { makeStyles, tokens } from '@fluentui/react-components';
+import { SparkleRegular } from '@fluentui/react-icons';
+
+import { CopilotChat, CopilotMessage, UserMessage, Composer } from '../components/ui/copilot';
+import { AgentStepList } from '../components/ui/agentic';
+import type { AgentStep, AgentStepStatus } from '../components/ui/agentic';
+import { EmptyState } from '../components/ui';
+
+// Singleton sidecar console. Natural language goes to the backend Agentweaver
+// facade; slash commands are secondary shortcuts over the same API client surface.
 
 const CONSOLE_ROOT_STYLE: CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
   height: '100%',
   minHeight: 0,
   overflow: 'hidden',
-  background: 'var(--azf-copilot-dock-canvas, var(--azf-portal-canvas, var(--colorNeutralBackground2)))',
+  background: 'var(--colorNeutralBackground2)',
 };
 
 const TRANSCRIPT_STYLE: CSSProperties = {
   flex: '1 1 auto',
   minHeight: 0,
   overflowY: 'auto',
-  padding: 'var(--spacingVerticalXL) var(--spacingHorizontalXXXL) var(--spacingVerticalL)',
+  display: 'flex',
+  flexDirection: 'column',
 };
 
 const COMPOSER_WRAP_STYLE: CSSProperties = {
-  flex: '0 0 auto',
-  padding: 'var(--spacingVerticalL) var(--spacingHorizontalXXXL)',
-  borderTop: 'var(--strokeWidthThin) solid var(--colorBrandStroke2)',
-  background: 'var(--azf-copilot-dock-footer, var(--colorNeutralBackground1))',
+  flexShrink: 0,
+  padding: 'var(--spacingVerticalM) var(--spacingHorizontalL)',
+  borderTop: '1px solid var(--colorNeutralStroke2)',
+  background: 'var(--colorNeutralBackground1)',
 };
 
 const MESSAGE_TEXT_STYLE: CSSProperties = {
   whiteSpace: 'pre-wrap',
   overflowWrap: 'anywhere',
 };
+
+const useConsoleStyles = makeStyles({
+  contextHeader: {
+    flexShrink: 0,
+    display: 'flex',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalS,
+    padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalL}`,
+    borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
+    backgroundColor: tokens.colorNeutralBackground1,
+  },
+  contextLabel: {
+    fontSize: tokens.fontSizeBase200,
+    fontWeight: tokens.fontWeightSemibold,
+    color: tokens.colorNeutralForeground2,
+    lineHeight: tokens.lineHeightBase200,
+  },
+  contextBadge: {
+    fontSize: tokens.fontSizeBase100,
+    color: tokens.colorNeutralForeground3,
+    lineHeight: tokens.lineHeightBase200,
+  },
+  contextSep: {
+    fontSize: tokens.fontSizeBase100,
+    color: tokens.colorNeutralForeground4,
+    lineHeight: tokens.lineHeightBase200,
+  },
+  shortcutStrip: {
+    flexShrink: 0,
+    display: 'flex',
+    flexWrap: 'wrap',
+    gap: tokens.spacingHorizontalXS,
+    padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalL}`,
+    borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
+    backgroundColor: tokens.colorNeutralBackground1,
+  },
+  shortcutButton: {
+    background: 'none',
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusLarge,
+    padding: `2px ${tokens.spacingHorizontalS}`,
+    fontSize: tokens.fontSizeBase200,
+    color: tokens.colorNeutralForeground3,
+    cursor: 'pointer',
+    lineHeight: tokens.lineHeightBase200,
+    transition: 'background-color 100ms ease',
+    ':hover': {
+      backgroundColor: tokens.colorNeutralBackground3,
+      color: tokens.colorNeutralForeground1,
+    },
+    ':disabled': {
+      opacity: '0.5',
+      cursor: 'default',
+    },
+  },
+  composerHint: {
+    marginTop: tokens.spacingVerticalXS,
+    fontSize: tokens.fontSizeBase100,
+    color: tokens.colorNeutralForeground4,
+  },
+  statusWarning: {
+    marginTop: tokens.spacingVerticalXS,
+    fontSize: tokens.fontSizeBase200,
+    color: 'var(--colorPaletteYellowForeground2)',
+  },
+  statusDanger: {
+    marginTop: tokens.spacingVerticalXS,
+    fontSize: tokens.fontSizeBase200,
+    color: tokens.colorPaletteRedForeground1,
+  },
+  statusNote: {
+    marginTop: tokens.spacingVerticalXS,
+    fontSize: tokens.fontSizeBase200,
+    color: tokens.colorNeutralForeground3,
+  },
+  linkList: {
+    display: 'flex',
+    flexWrap: 'wrap',
+    gap: tokens.spacingHorizontalXS,
+    marginTop: tokens.spacingVerticalXS,
+  },
+  link: {
+    fontSize: tokens.fontSizeBase200,
+    color: tokens.colorNeutralForeground1,
+    textDecorationLine: 'underline',
+    ':hover': {
+      color: tokens.colorNeutralForeground3,
+    },
+  },
+});
 
 type ConsoleScope = 'global' | 'project' | 'run';
 type MessageKind = 'answer' | 'tool' | 'clarification' | 'gate' | 'error';
@@ -191,14 +281,14 @@ function linkFromProject(p: Project): ConsoleLink {
   return { label: `Open ${p.name}`, to: `/projects/${p.project_id}` };
 }
 
-function toolStepStatus(status: AgentweaverConsoleToolCall['status']): AzfAgentStep['status'] {
+function toolStepStatus(status: AgentweaverConsoleToolCall['status']): AgentStepStatus {
   if (status === 'completed') return 'complete';
   if (status === 'queued' || status === 'running') return 'running';
-  if (status === 'failed') return 'error';
+  if (status === 'failed') return 'blocked';
   return 'warning';
 }
 
-function toolSteps(tools?: AgentweaverConsoleToolCall[]): AzfAgentStep[] {
+function toolSteps(tools?: AgentweaverConsoleToolCall[]): AgentStep[] {
   return (tools ?? []).map((tool, index) => ({
     id: `${tool.name}-${index}`,
     title: tool.name,
@@ -208,25 +298,7 @@ function toolSteps(tools?: AgentweaverConsoleToolCall[]): AzfAgentStep[] {
   }));
 }
 
-function ConsoleLinks({ links }: { links?: ConsoleLink[] }) {
-  if (!links?.length) return null;
-  return (
-    <div className="azf-row azf-wrap azf-gap-xs" aria-label="Related links">
-      {links.map((link, index) => link.to ? (
-        <RouterLink key={`${link.label}-${index}`} className="azf-linkish" to={link.to}>
-          {link.label}
-        </RouterLink>
-      ) : link.href ? (
-        <a key={`${link.label}-${index}`} className="azf-linkish" href={link.href} target="_blank" rel="noreferrer">
-          {link.label}
-        </a>
-      ) : null)}
-    </div>
-  );
-}
-
-function messageTitle(message: ConsoleMessage): ReactNode {
-  if (message.role === 'user') return undefined;
+function messageName(message: ConsoleMessage): string {
   if (message.kind === 'clarification') return 'Clarification needed';
   if (message.kind === 'gate') return message.gateTitle ?? 'Confirmation required';
   if (message.kind === 'error') return message.gateTitle ?? 'Console error';
@@ -234,59 +306,51 @@ function messageTitle(message: ConsoleMessage): ReactNode {
   return 'Agentweaver';
 }
 
-function messageBadge(message: ConsoleMessage): ReactNode {
-  if (message.role === 'user') return undefined;
-  if (message.kind === 'gate') return 'Gate requires review';
-  if (message.kind === 'clarification') return 'Needs input';
-  if (message.kind === 'error') return 'Needs attention';
-  if (message.kind === 'tool') return 'Tool output';
-  return null;
-}
-
-function MessageContent({ message }: { message: ConsoleMessage }) {
-  const steps = toolSteps(message.tools);
+function ConsoleLinks({ links }: { links?: ConsoleLink[] }) {
+  const styles = useConsoleStyles();
+  if (!links?.length) return null;
   return (
-    <div className="azf-stack azf-gap-s azf-console-message" data-kind={message.kind}>
-      {message.text && <div style={MESSAGE_TEXT_STYLE}>{message.text}</div>}
-      {message.kind === 'gate' && (
-        <StatusIconText status="warning">
-          Review or confirmation is still required in the gated surface before work proceeds.
-        </StatusIconText>
-      )}
-      {message.kind === 'clarification' && (
-        <StatusIconText status="warning">Answer the clarification before Agentweaver continues.</StatusIconText>
-      )}
-      {message.kind === 'error' && (
-        <StatusIconText status="danger">The request needs attention before it can continue.</StatusIconText>
-      )}
-      {steps.length > 0 && <AgenticProgress steps={steps} defaultOpenItems={steps.filter((step) => step.defaultOpen).map((step) => step.id)} />}
-      <ConsoleLinks links={message.links} />
+    <div className={styles.linkList} aria-label="Related links">
+      {links.map((link, index) => link.to ? (
+        <RouterLink key={`${link.label}-${index}`} className={styles.link} to={link.to}>
+          {link.label}
+        </RouterLink>
+      ) : link.href ? (
+        <a key={`${link.label}-${index}`} className={styles.link} href={link.href} target="_blank" rel="noreferrer">
+          {link.label}
+        </a>
+      ) : null)}
     </div>
   );
 }
 
-function messageToPart(message: ConsoleMessage): AzfResponsePart {
-  if (message.role === 'user') {
-    return {
-      id: message.id,
-      type: 'text',
-      author: 'user',
-      content: <div style={MESSAGE_TEXT_STYLE}>{message.text}</div>,
-    };
-  }
-  return {
-    id: message.id,
-    type: 'text',
-    title: messageTitle(message),
-    badge: messageBadge(message),
-    content: <MessageContent message={message} />,
-  };
-}
-
-function scopeTone(scope: ConsoleScope): 'neutral' | 'brand' | 'info' {
-  if (scope === 'run') return 'info';
-  if (scope === 'project') return 'brand';
-  return 'neutral';
+function MessageContent({ message }: { message: ConsoleMessage }) {
+  const styles = useConsoleStyles();
+  const steps = toolSteps(message.tools);
+  return (
+    <div data-kind={message.kind}>
+      {message.text && <div style={MESSAGE_TEXT_STYLE}>{message.text}</div>}
+      {message.kind === 'gate' && (
+        <div className={styles.statusWarning}>
+          Review or confirmation is still required before work proceeds.
+        </div>
+      )}
+      {message.kind === 'clarification' && (
+        <div className={styles.statusWarning}>
+          Answer the clarification before Agentweaver continues.
+        </div>
+      )}
+      {message.kind === 'error' && (
+        <div className={styles.statusDanger}>
+          The request needs attention before it can continue.
+        </div>
+      )}
+      {steps.length > 0 && (
+        <AgentStepList steps={steps} aria-label="Tool actions" />
+      )}
+      <ConsoleLinks links={message.links} />
+    </div>
+  );
 }
 
 export function BrowserConsole() {
@@ -518,87 +582,119 @@ export function BrowserConsole() {
 
   const scopeLabel = effectiveScope === 'run' ? 'Run' : effectiveScope === 'project' ? 'Project' : 'Global';
   const effectiveProjectBadgeLabel = effectiveProjectName ?? effectiveProjectId;
-  const routeBindingLabel = route.runId
-    ? 'route run'
-    : route.projectId
-      ? 'route project'
-      : selectedProject
-        ? 'selected project'
-        : 'global';
 
-  const transcriptParts = useMemo(() => messages.map(messageToPart), [messages]);
   const shortcutPrompts = useMemo(() => [
     { id: 'help', label: '/help', onClick: () => runQuickCommand('help') },
     { id: 'projects', label: '/projects', onClick: () => runQuickCommand('projects') },
     { id: 'runs', label: '/runs', onClick: () => runQuickCommand('runs') },
     { id: 'clear', label: '/clear', onClick: () => runQuickCommand('clear') },
   ], [runQuickCommand]);
-  const contextSummary = (
-    <div className="azf-stack azf-gap-xs azf-copilot-dock__summary">
-      <span>Copilot dock for message-first operations. The facade agent chooses tools and surfaces gates when human review is required.</span>
-      <div className="azf-row azf-wrap azf-gap-s" aria-label="Console context">
-        <StatusIconText status={scopeTone(effectiveScope)}>{scopeLabel}</StatusIconText>
-        {effectiveProjectId && <StatusIconText status="brand">Project · {effectiveProjectBadgeLabel}</StatusIconText>}
-        {effectiveRunId && <StatusIconText status="info">Run · {effectiveRunId.slice(0, 12)}</StatusIconText>}
-        <StatusIconText status="neutral">{routeBindingLabel}</StatusIconText>
-        {conversationId && <StatusIconText status="success">Conversation · {conversationId}</StatusIconText>}
-        {busy && <StatusIconText status="info">Agentweaver is working</StatusIconText>}
-      </div>
-    </div>
-  );
-  const handleComposerKeyDownCapture = useCallback((event: KeyboardEvent<HTMLDivElement>) => {
-    if (event.key === 'Enter' && !event.shiftKey && event.target instanceof HTMLTextAreaElement) {
-      event.preventDefault();
-      void submit();
-    }
-  }, [submit]);
+
+  const styles = useConsoleStyles();
+  const isInitialState = messages.length === 1 && messages[0].id === 'welcome';
 
   return (
-    <div className="azf-stack azf-copilot-dock" style={CONSOLE_ROOT_STYLE} data-testid="browser-console">
-      <span className="azf-visually-hidden">Agentweaver Console</span>
-      <BladeHeader
-        size="compact"
-        className="azf-copilot-dock__hero"
-        title="Agentweaver Copilot"
-        resourceIcon={<SparkleRegular />}
-        menuLabel="Azure Fluent assistant dock"
-        subtitle={contextSummary}
-        loading={busy}
-      />
-      <div className="azf-row azf-wrap azf-copilot-dock__command-band" aria-label="Agentweaver Copilot command band">
-        <span className="azf-copilot-dock__command-label">Prompt ribbon</span>
-        <CopilotPromptRibbon label="Console shortcuts" prompts={shortcutPrompts} />
+    <div style={CONSOLE_ROOT_STYLE} data-testid="browser-console">
+      <span style={{ position: 'absolute', width: 1, height: 1, overflow: 'hidden', clip: 'rect(0,0,0,0)' }}>
+        Agentweaver Console
+      </span>
+
+      {/* Context header — scope + project + run identifiers */}
+      <div className={styles.contextHeader}>
+        <SparkleRegular aria-hidden="true" fontSize={14} />
+        <span className={styles.contextLabel}>Agentweaver</span>
+        <span className={styles.contextSep}>·</span>
+        <span className={styles.contextBadge}>{scopeLabel}</span>
+        {effectiveProjectId && (
+          <>
+            <span className={styles.contextSep}>·</span>
+            <span className={styles.contextBadge}>Project · {effectiveProjectBadgeLabel}</span>
+          </>
+        )}
+        {effectiveRunId && (
+          <>
+            <span className={styles.contextSep}>·</span>
+            <span className={styles.contextBadge}>Run · {effectiveRunId.slice(0, 12)}</span>
+          </>
+        )}
+        {conversationId && (
+          <>
+            <span className={styles.contextSep}>·</span>
+            <span className={styles.contextBadge}>Conversation · {conversationId}</span>
+          </>
+        )}
       </div>
 
+      {/* Chat feed */}
       <div
-        className="azf-stack azf-gap-m"
-        style={TRANSCRIPT_STYLE}
         ref={streamRef}
+        style={TRANSCRIPT_STYLE}
         role="log"
         aria-live="polite"
         aria-relevant="additions text"
         aria-label="Console responses"
         aria-busy={busy || undefined}
       >
-        <CopilotResponse parts={transcriptParts} loading={busy} />
+        {isInitialState ? (
+          <CopilotChat style={{ overflowY: 'visible', flex: '1 0 auto' }}>
+            <EmptyState
+              icon={<SparkleRegular />}
+              title="Ask Agentweaver"
+              description={WELCOME.text}
+            />
+          </CopilotChat>
+        ) : (
+          <CopilotChat style={{ overflowY: 'visible', flex: '1 0 auto' }}>
+            {messages.map((msg) =>
+              msg.role === 'user' ? (
+                <UserMessage key={msg.id} accessibleHeading={`You: ${msg.text}`}>
+                  <div style={MESSAGE_TEXT_STYLE}>{msg.text}</div>
+                </UserMessage>
+              ) : (
+                <CopilotMessage
+                  key={msg.id}
+                  name={messageName(msg)}
+                  loadingState="none"
+                >
+                  <MessageContent message={msg} />
+                </CopilotMessage>
+              )
+            )}
+            {busy && (
+              <CopilotMessage name="Agentweaver" loadingState="loading" />
+            )}
+          </CopilotChat>
+        )}
       </div>
 
-      <div className="azf-stack azf-gap-xs" style={COMPOSER_WRAP_STYLE} onKeyDownCapture={handleComposerKeyDownCapture}>
-        <div className="azf-row azf-copilot-dock__composer-label">
-          <SparkleRegular aria-hidden="true" />
-          <span>Command composer</span>
-        </div>
-        <CopilotComposer
-          className="azf-copilot-dock__composer"
+      {/* Shortcut strip */}
+      <div className={styles.shortcutStrip} aria-label="Console shortcuts">
+        {shortcutPrompts.map((s) => (
+          <button
+            key={s.id}
+            type="button"
+            className={styles.shortcutButton}
+            onClick={s.onClick}
+            disabled={busy}
+          >
+            {s.label}
+          </button>
+        ))}
+      </div>
+
+      {/* Composer */}
+      <div style={COMPOSER_WRAP_STYLE}>
+        <Composer
           value={input}
           onChange={setInput}
-          onSend={() => void submit()}
-          isRunning={busy}
-          disabled={busy}
+          onSubmit={() => void submit()}
+          onStop={() => { /* stop not yet wired to backend */ }}
+          isSending={busy}
           placeholder="Ask Agentweaver"
-          sendLabel="Send"
         />
-        <span className="azf-muted">Enter sends · Shift+Enter adds a line · slash commands are optional shortcuts, not the main workflow.</span>
+        <div className={styles.composerHint}>
+          Enter to send · Shift+Enter for new line · slash shortcuts optional
+        </div>
       </div>
     </div>
   );

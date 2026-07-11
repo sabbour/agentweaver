@@ -92,7 +92,7 @@ describe('DashboardPage', () => {
     expect(screen.getByText('Run creation count')).toBeDefined();
     expect(screen.getByText('Daily project run creations across the last 30 days.')).toBeDefined();
     expect(screen.getByText('Diagnostics and quality')).toBeDefined();
-    expect(screen.getByText('Model telemetry pending')).toBeDefined();
+    expect(screen.getByText('Model signals pending')).toBeDefined();
     expect(screen.getByText('Agent leaderboard')).toBeDefined();
     expect(screen.getByText('Ada')).toBeDefined();
     expect(screen.getByRole('link', { name: 'Ada' }).getAttribute('href'))

@@ -37,7 +37,7 @@ const useStyles = makeStyles({
     backgroundColor: tokens.colorNeutralBackground1,
     borderRadius: tokens.borderRadiusSmall,
   },
-  // Generic flex row helpers (replaces azf-row)
+  // Generic flex row helper
   rowS: {
     display: 'flex',
     alignItems: 'center',

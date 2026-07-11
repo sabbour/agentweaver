@@ -1,25 +1,29 @@
 import {
   apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
-import { Badge,
+import {
+  Badge,
   Button,
+  makeStyles,
   MessageBar,
   MessageBarActions,
   MessageBarBody,
-  Spinner,
-  Text,
-  } from '../copilot-fluent-system';
-import { costChipLabel } from '../components/CostChip';
-import { MetricCardHeader,
-  MetricEmptyState,
-  MetricSectionHeading } from '../components/MetricTypography';
-import { PageHeader } from '../components/PageHeader';
-import { RefreshCountdown } from '../hooks/useRefreshCountdown';
-import { makeStyles,
   mergeClasses,
   Select,
+  Spinner,
+  Text,
   tokens,
-} from '../copilot-fluent-system';
+} from '@fluentui/react-components';
+import { costChipLabel } from '../components/CostChip';
+import { MetricCardHeader, MetricEmptyState } from '../components/MetricTypography';
+import { RefreshCountdown } from '../hooks/useRefreshCountdown';
+import {
+  EmptyState,
+  PageContainer,
+  PageHeader,
+  PageSection,
+  TitleText,
+} from '../components/ui';
 import {
   AlertRegular,
   ArrowSyncRegular,
@@ -35,7 +39,7 @@ import {
   PlayRegular,
   Pulse24Regular,
   WarningRegular,
-} from '../copilot-fluent-system';
+} from '@fluentui/react-icons';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import type {
@@ -52,7 +56,8 @@ type ProjectStatus = 'active' | 'queued' | 'idle';
 
 interface ProjectRollup { project: Project; activeCount: number; queuedCount: number; lastActivityUtc: string | null; agentCount: number | null; runCount: number | null; issueCount: number | null }
 interface AttentionItem { key: string; severity: 'error' | 'warning'; title: string; subtitle: string; time?: string | null; action: string; to: string }
-const modelColors = ['#0f6cbd', '#107c10', '#ca5010', '#5c2e91', '#8a8886'];
+// Warm monochrome ramp (no blue) — model segments separate by lightness, not hue.
+const modelColors = ['#272320', '#635c57', '#8c837c', '#b8afa8', '#d8cfc8'];
 
 const useStyles = makeStyles({
   root: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXXL, '@media (max-width: 720px)': { gap: tokens.spacingVerticalXL } },
@@ -153,19 +158,19 @@ function projectSlug(project: Project): string {
 function statusFor(rollup: ProjectRollup): ProjectStatus { if (rollup.activeCount > 0) return 'active'; if (rollup.queuedCount > 0) return 'queued'; return 'idle'; }
 function isFailure(kind: string): boolean { return ['failed', 'merge_failed', 'declined', 'rai_flagged'].includes(kind); }
 function activityIcon(kind: string) { if (kind.includes('merge') || kind.includes('pr')) return <BranchRegular />; if (kind.includes('deploy')) return <PlayRegular />; if (isFailure(kind)) return <ErrorCircleRegular />; if (kind === 'completed') return <CheckmarkCircleRegular />; return <CodeRegular />; }
-function emptyState(title: string, styles: ReturnType<typeof useStyles>, body?: string) {
-  return <div className={styles.emptyBox} role="status"><InfoRegular /><div><Text weight="semibold">{title}</Text>{body ? <><br /><Text>{body}</Text></> : null}</div></div>;
+function emptyState(title: string, body?: string) {
+  return <EmptyState title={title} description={body} icon={<InfoRegular />} />;
 }
 function LoadingOverview() {
   const styles = useStyles();
   return <div className={styles.loadingShell} aria-label="Loading overview" role="status">
-    <section className={styles.commandStrip} aria-label="Overview command center loading">
+    <section className={styles.commandStrip} aria-label="Overview loading">
       <div className={styles.healthBlock}>
         <div>
-          <Text className={styles.healthTitle}>Preparing operations command center</Text>
-          <Text className={styles.healthCopy}>Loading live sessions, queued work, resource health, and recent telemetry.</Text>
+          <Text className={styles.healthTitle}>Preparing overview</Text>
+          <Text className={styles.healthCopy}>Loading live sessions, queued work, service health, and recent activity.</Text>
         </div>
-        <Badge appearance="tint" color="informative">Live portal view</Badge>
+        <Badge appearance="tint" color="subtle">Live</Badge>
       </div>
       <div className={styles.loadingTiles}>
         {['In flight', 'Queued work', 'Done today', 'Active projects'].map((label) => (
@@ -247,7 +252,7 @@ function UsageTiles({ metrics, previousMetrics, range, recentProjectId }: { metr
       <Link className={styles.link} to={detailsLink}>View details →</Link>
     </div>
     <div className={styles.usageTile}>
-      <MetricCardHeader title="Response duration" subtitle="Latency percentiles from telemetry." />
+      <MetricCardHeader title="Response duration" subtitle="Latency percentiles from recent runs." />
       {!response ? <MetricEmptyState><InfoRegular /> No data yet.</MetricEmptyState> : <div className={styles.percentileGrid}><div className={styles.percentile}><Text className={styles.percentileValue}>{formatMs(response.p50)}</Text><Text className={styles.muted}>P50</Text></div><div className={styles.percentile}><Text className={styles.percentileValue}>{formatMs(response.p95)}</Text><Text className={styles.muted}>P95</Text></div><div className={styles.percentile}><Text className={styles.percentileValue}>—</Text><Text className={styles.muted}>P99</Text></div></div>}
     </div>
     <div className={styles.usageTile}>
@@ -304,7 +309,7 @@ export function OverviewPage() {
   const groupedActivity = useMemo(() => { const today = new Date().toDateString(); const groups = new Map<string, RecentActivityDto[]>(); for (const item of overview?.recent_activity ?? []) { const label = new Date(item.timestamp_utc).toDateString() === today ? 'Today' : new Date(item.timestamp_utc).toLocaleDateString(); groups.set(label, [...(groups.get(label) ?? []), item]); } return [...groups.entries()]; }, [overview]);
   const focusRollup = rollups[0];
   const health = overview?.at_a_glance.health === 'healthy' ? 'healthy' : 'degraded';
-  return <div className={['azf-stack azf-page azf-pattern-shell', styles.root].filter(Boolean).join(' ')}>
+  return <PageContainer className={styles.root}>
     <PageHeader title="Overview" actions={<div className={styles.headerActions}>{lastUpdated && <RefreshCountdown className={styles.generated} intervalMs={REFRESH_MS} lastRefreshedAt={new Date(lastUpdated)} refreshing={refreshing} />}{refreshing && overview && <Spinner size="extra-tiny" aria-label="Refreshing overview" />}<Button appearance="subtle" icon={<ArrowSyncRegular />} disabled={loading} onClick={() => { setLoading(true); void load({ cancelled: false }); }}>Refresh</Button></div>} />
     {error && <MessageBar intent="error"><MessageBarBody>{error}</MessageBarBody><MessageBarActions><Button appearance="transparent" onClick={() => { setLoading(true); void load({ cancelled: false }); }}>Try again</Button></MessageBarActions></MessageBar>}
     {loading && !overview && <LoadingOverview />}
@@ -318,9 +323,8 @@ export function OverviewPage() {
         </div>
         <div className={styles.glanceGrid}><GlanceItem label="In flight" value={overview.at_a_glance.in_flight} styles={styles} /><GlanceItem label="Queued work" value={overview.at_a_glance.queued_work} styles={styles} /><GlanceItem label="Done today" value={overview.at_a_glance.done_today} styles={styles} /><GlanceItem label="Active projects" value={overview.at_a_glance.active_projects} styles={styles} /></div>
       </section>
-      <section className={styles.section}>
-        <div className={styles.sectionHeader}><MetricSectionHeading title="Recent Projects" subtitle="Most recently active repositories with operational counts and queue pressure." /><Link className={styles.link} to="/projects">View all projects →</Link></div>
-        {rollups.length === 0 ? emptyState(projects.length === 0 ? 'No projects yet.' : 'No recent projects to show.', styles, projects.length === 0 ? 'Create a project to start running agents in an isolated worktree.' : 'Recent project telemetry will appear after an agent run starts.') : <div className={styles.projectGrid}>
+      <PageSection title="Recent projects" description="Most recently active repositories with operational counts and queue pressure." actions={<Link className={styles.link} to="/projects">View all projects →</Link>}>
+        {rollups.length === 0 ? emptyState(projects.length === 0 ? 'No projects yet.' : 'No recent projects to show.', projects.length === 0 ? 'Create a project to start running agents in an isolated worktree.' : 'Recent project activity will appear after an agent run starts.') : <div className={styles.projectGrid}>
           <div className={styles.focusProject}><MetricCardHeader title="Current focus" subtitle={focusRollup ? 'Most recently active project' : 'No project selected'} />{focusRollup ? <div className={styles.lastActivity}><Text className={styles.projectName}>{focusRollup.project.name}</Text><Text className={styles.healthCopy}>{focusRollup.activeCount > 0 ? `${focusRollup.activeCount} active run${focusRollup.activeCount === 1 ? '' : 's'} need monitoring.` : focusRollup.queuedCount > 0 ? `${focusRollup.queuedCount} queued item${focusRollup.queuedCount === 1 ? '' : 's'} waiting for capacity.` : 'No active work; ready for the next orchestration.'}</Text><Link className={styles.link} to={`/projects/${focusRollup.project.project_id}`}>Open focus project →</Link></div> : null}</div>
           <div className={styles.projectList}>{rollups.map((rollup) => {
           const status = statusFor(rollup);
@@ -335,19 +339,18 @@ export function OverviewPage() {
             </div>
           </Link>;
         })}</div></div>}
-      </section>
-      <section className={styles.section}>
-        <div className={styles.sectionHeader}><MetricSectionHeading title="AI Usage & Performance" subtitle="Aggregated from existing project observability metrics for the recent projects shown above." /><div className={styles.sectionActions}><Text>Range</Text><Select value={range} onChange={(_e, data) => setRange(data.value as TimeRange)} aria-label="AI usage time range" size="small" style={{ width: '120px' }}><option value="7d">Last 7 days</option><option value="30d">Last 30 days</option><option value="90d">Last 90 days</option></Select></div></div>
+      </PageSection>
+      <PageSection title="AI usage & performance" description="Aggregated from existing project observability metrics for the recent projects shown above." actions={<div className={styles.sectionActions}><Text>Range</Text><Select value={range} onChange={(_e, data) => setRange(data.value as TimeRange)} aria-label="AI usage time range" size="small" style={{ width: '120px' }}><option value="7d">Last 7 days</option><option value="30d">Last 30 days</option><option value="90d">Last 90 days</option></Select></div>}>
         <UsageTiles metrics={metrics} previousMetrics={previousMetrics} range={range} recentProjectId={rollups[0]?.project.project_id} />
-      </section>
+      </PageSection>
       <div className={styles.mainGrid}>
-        <section className={`${styles.section} ${styles.panel}`}><div className={styles.sectionHeader}><MetricSectionHeading title="Activity Feed" /></div>
-          {groupedActivity.length === 0 ? emptyState('No recent activity.', styles, 'New agent starts, completions, failures, and merge events will appear here.') : <div className={styles.timeline}>{groupedActivity.map(([day, entries]) => <div key={day} className={styles.list}><Text className={styles.dayLabel}>{day}</Text>{entries.map((entry, index) => <div key={`${entry.project_id}-${entry.timestamp_utc}-${index}`} className={styles.timelineItem}><span className={styles.timelineIcon}>{activityIcon(entry.kind)}</span><div><Text className={styles.timelineTitle}>{entry.project_name}</Text><Text> {entry.label}</Text><div className={styles.timelineBadges}><Badge appearance="tint" color={isFailure(entry.kind) ? 'danger' : entry.kind === 'completed' ? 'success' : 'informative'}>{humanizeKind(entry.kind)}</Badge></div></div><Text className={styles.muted}>{timeAgo(entry.timestamp_utc)}</Text></div>)}</div>)}</div>}
+        <section className={`${styles.section} ${styles.panel}`}><div className={styles.sectionHeader}><TitleText>Activity feed</TitleText></div>
+          {groupedActivity.length === 0 ? emptyState('No recent activity.', 'New agent starts, completions, failures, and merge events will appear here.') : <div className={styles.timeline}>{groupedActivity.map(([day, entries]) => <div key={day} className={styles.list}><Text className={styles.dayLabel}>{day}</Text>{entries.map((entry, index) => <div key={`${entry.project_id}-${entry.timestamp_utc}-${index}`} className={styles.timelineItem}><span className={styles.timelineIcon}>{activityIcon(entry.kind)}</span><div><Text className={styles.timelineTitle}>{entry.project_name}</Text><Text> {entry.label}</Text><div className={styles.timelineBadges}><Badge appearance="tint" color={isFailure(entry.kind) ? 'danger' : entry.kind === 'completed' ? 'success' : 'subtle'}>{humanizeKind(entry.kind)}</Badge></div></div><Text className={styles.muted}>{timeAgo(entry.timestamp_utc)}</Text></div>)}</div>)}</div>}
         </section>
-        <section className={`${styles.section} ${styles.panel}`}><div className={styles.sectionHeader}><MetricSectionHeading title="Needs Attention" subtitle="Failures, degraded health, and queue pressure that deserve the next click." /></div>
-          {attention.length === 0 ? emptyState('Nothing needs attention.', styles, 'No failures or queues need action right now. Keep the overview open while agents run.') : <div className={styles.attentionList}>{attention.map((item) => <div key={item.key} className={`${styles.alertCard} ${item.severity === 'error' ? styles.alertError : styles.alertWarning}`}>{item.severity === 'error' ? <ErrorCircleRegular className={styles.alertErrorIcon} /> : <WarningRegular className={styles.alertWarningIcon} />}<div><Text weight="semibold">{item.title}</Text><br /><Text className={styles.muted}>{item.subtitle}{item.time ? ` · ${timeAgo(item.time)}` : ''}</Text></div><Button as="a" href={item.to} appearance="secondary" size="small" icon={<OpenRegular />}>{item.action}</Button></div>)}</div>}
+        <section className={`${styles.section} ${styles.panel}`}><div className={styles.sectionHeader}><TitleText>Needs attention</TitleText></div>
+          {attention.length === 0 ? emptyState('Nothing needs attention.', 'No failures or queues need action right now. Keep the overview open while agents run.') : <div className={styles.attentionList}>{attention.map((item) => <div key={item.key} className={`${styles.alertCard} ${item.severity === 'error' ? styles.alertError : styles.alertWarning}`}>{item.severity === 'error' ? <ErrorCircleRegular className={styles.alertErrorIcon} /> : <WarningRegular className={styles.alertWarningIcon} />}<div><Text weight="semibold">{item.title}</Text><br /><Text className={styles.muted}>{item.subtitle}{item.time ? ` · ${timeAgo(item.time)}` : ''}</Text></div><Button as="a" href={item.to} appearance="secondary" size="small" icon={<OpenRegular />}>{item.action}</Button></div>)}</div>}
         </section>
       </div>
     </> : null}
-  </div>;
+  </PageContainer>;
 }

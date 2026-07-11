@@ -1,5 +1,5 @@
 import { apiClient } from '../../api/apiClient';
-import { AzureFluentProvider } from '../../copilot-fluent-system';
+import { FluentProvider, webLightTheme } from '@fluentui/react-components';
 import { BrowserConsole } from '../BrowserConsole';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, useNavigate } from 'react-router-dom';
@@ -56,9 +56,9 @@ function makeProject(id: string, name: string): Project {
 
 function Wrapper({ children, initialPath = '/overview' }: { children: ReactNode; initialPath?: string }) {
   return (
-    <AzureFluentProvider density="compact">
+    <FluentProvider theme={webLightTheme}>
       <MemoryRouter initialEntries={[initialPath]}>{children}</MemoryRouter>
-    </AzureFluentProvider>
+    </FluentProvider>
   );
 }
 

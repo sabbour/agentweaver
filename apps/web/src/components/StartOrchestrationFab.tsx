@@ -1,8 +1,9 @@
 import {
   apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
-import { AzureEmptyState,
+import {
   Button,
+  Combobox,
   Dialog,
   DialogActions,
   DialogBody,
@@ -11,23 +12,23 @@ import { AzureEmptyState,
   DialogTitle,
   Field,
   Link,
+  makeStyles,
   MessageBar,
   MessageBarBody,
   Option,
+  Select,
   Spinner,
   Text,
   Textarea,
+  tokens,
   Tooltip,
-  } from '../copilot-fluent-system';
-import { Combobox,
-  makeStyles,
-  Select,
-} from '../copilot-fluent-system';
-import { FlowRegular } from '../copilot-fluent-system';
+} from '@fluentui/react-components';
+import { FlowRegular } from '@fluentui/react-icons';
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { Project, StartOrchestrationMode, WorkflowSummaryDto } from '../api/types';
-// Inline top-bar action to start an orchestration, with a project selector so the
+import { EmptyState } from './ui';
+// Inline action to start an orchestration, with a project selector so the
 // user can choose the target project regardless of the current route context.
 // Mirrors StartOrchestrationDialog's goal field + submit semantics; adds the
 // project picker (ProjectSwitcher's listProjects pattern).
@@ -35,6 +36,11 @@ import type { Project, StartOrchestrationMode, WorkflowSummaryDto } from '../api
 const useStyles = makeStyles({
   startButton: {
     flexShrink: 0,
+  },
+  stack: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalM,
   },
 });
 
@@ -166,7 +172,7 @@ export function StartOrchestrationFab({ currentProjectId }: StartOrchestrationFa
         <DialogBody>
           <DialogTitle>Start a task</DialogTitle>
           <DialogContent>
-            <div className="azf-stack azf-gap-m">
+            <div className={styles.stack}>
               <Text>
                 Choose a project and describe a goal in plain language. Direct starts faster from
                 your prompt. Define Outcome drafts structured acceptance criteria and expected
@@ -179,10 +185,9 @@ export function StartOrchestrationFab({ currentProjectId }: StartOrchestrationFa
                 </MessageBar>
               )}
               {noProjects ? (
-                <AzureEmptyState
-                  compact
+                <EmptyState
                   title="Create a project first."
-                  body={(
+                  description={(
                     <>
                     Open the{' '}
                     <Link

@@ -1,22 +1,68 @@
-import { Badge, Button, PortalTopNav, Tooltip } from '../../copilot-fluent-system';
+import {
+  Badge,
+  Button,
+  makeStyles,
+  Text,
+  tokens,
+  Tooltip,
+} from '@fluentui/react-components';
+import { Chat20Regular } from '@fluentui/react-icons';
 import { useAppVersion } from '../../hooks/useAppVersion';
 import { GitHubSignIn } from '../GitHubSignIn';
 import { StartOrchestrationFab } from '../StartOrchestrationFab';
 import { useConsolePanel } from './ConsolePanelContext';
 import { ProjectSwitcher } from './ProjectSwitcher';
 import { StatusDot } from './StatusDot';
-import { Chat20Regular } from '../../copilot-fluent-system';
-// Spec 011 — top bar (FR-011..FR-015). Carries the switch-only project switcher,
-// the API-reachability status dot, and the existing GitHub sign-in. The brand
-// mark lives in the left nav rail header (top-left). Docs / Inbox / Consult are
-// intentionally absent (FR-015).
+// Top bar. Carries the project switcher, the API-reachability status dot,
+// and the GitHub sign-in. The brand mark lives in the left nav rail header.
+
+const useStyles = makeStyles({
+  topBar: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: tokens.spacingHorizontalM,
+    height: '48px',
+    paddingLeft: tokens.spacingHorizontalL,
+    paddingRight: tokens.spacingHorizontalL,
+    backgroundColor: tokens.colorNeutralBackgroundInverted,
+    flexShrink: 0,
+  },
+  start: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalS,
+    minWidth: 0,
+  },
+  brand: {
+    display: 'flex',
+    flexDirection: 'column',
+    marginRight: tokens.spacingHorizontalM,
+  },
+  product: {
+    fontWeight: tokens.fontWeightSemibold,
+    fontSize: tokens.fontSizeBase300,
+    lineHeight: tokens.lineHeightBase300,
+    color: tokens.colorNeutralForegroundOnBrand,
+  },
+  area: {
+    fontSize: tokens.fontSizeBase100,
+    lineHeight: tokens.lineHeightBase100,
+    color: tokens.colorNeutralForegroundOnBrand,
+    opacity: 0.7,
+  },
+  end: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXS,
+    flexShrink: 0,
+  },
+});
 
 export interface TopBarProps {
   projectId: string | undefined;
   pathname: string;
-  // True when projectId is a persisted fallback (route carries no :projectId).
   isFallbackProject?: boolean;
-  // Called when the persisted fallback project no longer exists in the project list.
   onFallbackProjectMissing?: () => void;
 }
 
@@ -26,47 +72,45 @@ export function TopBar({
   isFallbackProject,
   onFallbackProjectMissing,
 }: TopBarProps) {
+  const styles = useStyles();
   const version = useAppVersion();
   const { open: consoleOpen, openConsole } = useConsolePanel();
   const pageHasStartTaskAction = /^\/projects\/[^/]+(?:\/board)?\/?$/.test(pathname);
   return (
-    <PortalTopNav
-      variant="brand"
-      ariaLabel="Application toolbar"
-      brand={{ product: 'Agentweaver', area: 'Copilot work orchestration' }}
-      startContent={
-        <>
-          <Badge appearance="outline" color="warning" title="Agentweaver is alpha software under active development.">
-            Alpha{version ? ` v${version}` : ''}
-          </Badge>
-          <ProjectSwitcher
-            projectId={projectId}
-            pathname={pathname}
-            isFallbackProject={isFallbackProject}
-            onFallbackProjectMissing={onFallbackProjectMissing}
-          />
-        </>
-      }
-      endContent={
-        <>
-          {!pageHasStartTaskAction && <StartOrchestrationFab currentProjectId={projectId} />}
-          <Tooltip content="Open Agentweaver operator dock" relationship="label">
-            <Button
-              appearance="subtle"
-              icon={<Chat20Regular />}
-              aria-label="Open Agentweaver operator dock"
-              aria-expanded={consoleOpen}
-              aria-controls="app-console-panel"
-              data-testid="open-console-panel"
-              onClick={openConsole}
-            >
-              Operator dock
-            </Button>
-          </Tooltip>
-          <StatusDot />
-          <GitHubSignIn />
-        </>
-      }
-    />
+    <header className={styles.topBar} aria-label="Application toolbar">
+      <div className={styles.start}>
+        <div className={styles.brand}>
+          <Text className={styles.product}>Agentweaver</Text>
+          <Text className={styles.area}>Copilot work orchestration</Text>
+        </div>
+        <Badge appearance="outline" color="warning" title="Agentweaver is alpha software under active development.">
+          Alpha{version ? ` v${version}` : ''}
+        </Badge>
+        <ProjectSwitcher
+          projectId={projectId}
+          pathname={pathname}
+          isFallbackProject={isFallbackProject}
+          onFallbackProjectMissing={onFallbackProjectMissing}
+        />
+      </div>
+      <div className={styles.end}>
+        {!pageHasStartTaskAction && <StartOrchestrationFab currentProjectId={projectId} />}
+        <Tooltip content="Open agent console" relationship="label">
+          <Button
+            appearance="subtle"
+            icon={<Chat20Regular />}
+            aria-label="Open agent console"
+            aria-expanded={consoleOpen}
+            aria-controls="app-console-panel"
+            data-testid="open-console-panel"
+            onClick={openConsole}
+          >
+            Agent console
+          </Button>
+        </Tooltip>
+        <StatusDot />
+        <GitHubSignIn />
+      </div>
+    </header>
   );
 }

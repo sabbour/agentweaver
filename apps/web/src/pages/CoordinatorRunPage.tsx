@@ -4,14 +4,7 @@ import { ApiError } from '../api/client';
 import { formatApiError, formatApiErrorMessage } from '../api/errors';
 import { useRunStream } from '../api/sse';
 import {
-  AgenticApprovalPattern,
-  AzureEmptyState,
-  AzureTabList,
-  AzureToolbar,
   Button,
-  ChainOfThought,
-  CoordinatorRunPattern,
-  CopilotResponse,
   Dialog,
   DialogActions,
   DialogBody,
@@ -24,16 +17,23 @@ import {
   MessageBarActions,
   MessageBarBody,
   Spinner,
-  StatusIconText,
+  Tab,
+  TabList,
   Text,
   Tooltip,
+  Tree,
+  TreeItem,
+  TreeItemLayout,
   makeStyles,
+  mergeClasses,
   Popover,
   PopoverSurface,
   PopoverTrigger,
-  Title2,
   tokens,
-} from '../copilot-fluent-system';
+} from '@fluentui/react-components';
+import { Display, EmptyState, TitleText } from '../components/ui';
+import { AgentStepList } from '../components/ui/agentic';
+import type { AgentArtifact, AgentStep, AgentStepStatus } from '../components/ui/agentic';
 import { AgentAvatar } from '../components/AgentAvatar';
 import { AgentSessionPanel } from '../components/AgentSessionPanel';
 import { AUTOMATION_HELP } from '../components/automationHelp';
@@ -77,8 +77,7 @@ import {
   FlowchartRegular,
   FolderRegular,
   OpenRegular,
-  SparkleRegular,
-} from '../copilot-fluent-system';
+} from '@fluentui/react-icons';
 import { Handle, MiniMap, Position, ReactFlow } from '@xyflow/react';
 import {
   createContext,
@@ -89,6 +88,7 @@ import {
   useRef,
   useState,
 } from 'react';
+import type { ReactNode } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import type { FormattedApiError } from '../api/errors';
 import type { RunStreamEvent } from '../api/sse';
@@ -99,13 +99,12 @@ import type {
   RunStatus,
   WorkPlanResponse,
 } from '../api/types';
-import type { AzfAction, AzfAgentStep, AzfArtifact, AzfResponsePart, AzfTone } from '../copilot-fluent-system';
 import type { RunSessionTree } from '../components/AgentSessionPanel';
 import type { ExecutorDef, ExecutorState, StepStatus, WorkflowNodeData } from '../components/WorkflowGraphPanel';
 import type { ArtifactBrowserAdapter } from '../hooks/useArtifactBrowser';
 import type { CoordinatorTopologyState, TopologyNodeState } from '../state/topologyReducer';
 import type { NodeSizeHint } from '../utils/dagLayout';
-import type { FluentIcon } from '../copilot-fluent-system';
+import type { FluentIcon } from '@fluentui/react-icons';
 import type { Edge, Node, NodeProps } from '@xyflow/react';
 // ---------------------------------------------------------------------------
 // Subtask pipeline expansion is controlled at the page level so the graph container height can grow
@@ -966,63 +965,223 @@ const useStyles = makeStyles({
     flexDirection: 'column',
     gap: tokens.spacingVerticalL,
     width: '100%',
-    minHeight: '100%',
+    minWidth: 0,
   },
   breadcrumb: {
     display: 'flex',
-    gap: tokens.spacingHorizontalS,
     alignItems: 'center',
-    fontSize: tokens.fontSizeBase300,
-    color: tokens.colorNeutralForeground2,
-  },
-  breadcrumbLink: {
-    color: tokens.colorBrandForeground1,
-    textDecoration: 'none',
-  },
-  headerRow: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: tokens.spacingHorizontalM,
+    gap: tokens.spacingHorizontalXS,
     flexWrap: 'wrap',
-  },
-  runIdLabel: {
-    fontFamily: tokens.fontFamilyMonospace,
     fontSize: tokens.fontSizeBase200,
     color: tokens.colorNeutralForeground3,
   },
-  goal: {
-    fontSize: tokens.fontSizeBase300,
+  breadcrumbLink: {
     color: tokens.colorNeutralForeground2,
+    textDecorationLine: 'none',
+    ':hover': { textDecorationLine: 'underline' },
   },
-  // Graph band — full-width horizontal pipeline above the two columns.
-  graphBand: {
+  statusBannerStack: {
     display: 'flex',
     flexDirection: 'column',
     gap: tokens.spacingVerticalS,
   },
-  // Single-column coordinator session layout. The Outcome plan lives in the session pane.
-  sessionOnly: {
-    display: 'flex',
-    flexDirection: 'column',
-    minWidth: 0,
-  },
-  centerCol: {
+  console: {
     display: 'flex',
     flexDirection: 'column',
     gap: tokens.spacingVerticalL,
     minWidth: 0,
   },
-  observabilityGrid: {
+  // ---- Run header (identity / actions grid) --------------------------------
+  runHeader: {
     display: 'grid',
-    gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))',
-    gap: tokens.spacingHorizontalL,
-    alignItems: 'start',
+    gridTemplateColumns: '1fr',
+    gridTemplateAreas: '"identity" "actions"',
+    gap: tokens.spacingVerticalM,
+    padding: tokens.spacingVerticalL,
+    borderRadius: tokens.borderRadiusLarge,
+    backgroundColor: tokens.colorNeutralBackground1,
+    border: `${tokens.strokeWidthThin} solid ${tokens.colorNeutralStroke2}`,
+    minWidth: 0,
   },
-  sectionTitleRow: {
+  identityArea: {
+    gridArea: 'identity',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalS,
+    minWidth: 0,
+  },
+  actionsArea: {
+    gridArea: 'actions',
+    paddingTop: tokens.spacingVerticalM,
+    borderTopWidth: tokens.strokeWidthThin,
+    borderTopStyle: 'solid',
+    borderTopColor: tokens.colorNeutralStroke2,
+    minWidth: 0,
+  },
+  topTitleRow: {
+    display: 'flex',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: tokens.spacingHorizontalM,
+    flexWrap: 'wrap',
+    minWidth: 0,
+  },
+  identityLead: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalS,
+    minWidth: 0,
+    flex: '1 1 auto',
+  },
+  titleText: {
+    fontSize: tokens.fontSizeHero700,
+    lineHeight: tokens.lineHeightHero700,
+    fontWeight: tokens.fontWeightSemibold,
+    color: tokens.colorNeutralForeground1,
+    margin: 0,
+    maxWidth: '100%',
+    minWidth: 0,
+  },
+  liveDot: {
+    display: 'inline-flex',
+    alignItems: 'center',
+  },
+  statusChip: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXXS,
+    paddingLeft: tokens.spacingHorizontalS,
+    paddingRight: tokens.spacingHorizontalS,
+    paddingTop: tokens.spacingVerticalXXS,
+    paddingBottom: tokens.spacingVerticalXXS,
+    borderRadius: tokens.borderRadiusMedium,
+    backgroundColor: tokens.colorNeutralBackground3,
+    color: tokens.colorNeutralForeground2,
+    fontSize: tokens.fontSizeBase200,
+    whiteSpace: 'nowrap',
+  },
+  statusChipStrong: {
+    fontWeight: tokens.fontWeightSemibold,
+    color: tokens.colorNeutralForeground1,
+  },
+  statsStrip: {
     display: 'flex',
     alignItems: 'center',
     gap: tokens.spacingHorizontalS,
     flexWrap: 'wrap',
+    minWidth: 0,
+  },
+  compactChromeActions: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalS,
+    flexShrink: 0,
+  },
+  metaRail: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXS,
+    flexWrap: 'wrap',
+    fontSize: tokens.fontSizeBase200,
+    color: tokens.colorNeutralForeground3,
+  },
+  metaItem: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXXS,
+    minWidth: 0,
+  },
+  metaItemStrong: {
+    fontWeight: tokens.fontWeightSemibold,
+    color: tokens.colorNeutralForeground2,
+  },
+  metaValue: {
+    color: tokens.colorNeutralForeground3,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+    maxWidth: '240px',
+  },
+  metaSeparator: {
+    color: tokens.colorNeutralForeground4,
+  },
+  executionContext: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalS,
+    flexWrap: 'wrap',
+    padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalS}`,
+    borderRadius: tokens.borderRadiusMedium,
+    backgroundColor: tokens.colorNeutralBackground2,
+    fontSize: tokens.fontSizeBase200,
+    color: tokens.colorNeutralForeground2,
+  },
+  executionKicker: {
+    fontWeight: tokens.fontWeightSemibold,
+    color: tokens.colorNeutralForeground1,
+  },
+  executionValue: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXXS,
+    minWidth: 0,
+    maxWidth: '100%',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  },
+  executionReason: {
+    color: tokens.colorNeutralForeground3,
+    minWidth: 0,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  },
+  statusDetails: {
+    fontSize: tokens.fontSizeBase200,
+    color: tokens.colorNeutralForeground2,
+  },
+  statusDetailsSummary: {
+    cursor: 'pointer',
+    color: tokens.colorNeutralForeground2,
+    fontWeight: tokens.fontWeightMedium,
+  },
+  statusDetailsBody: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalXXS,
+    paddingTop: tokens.spacingVerticalXS,
+  },
+  // ---- Run actions toolbar --------------------------------------------------
+  runToolbar: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalM,
+    rowGap: tokens.spacingVerticalS,
+    minWidth: 0,
+  },
+  toolbarSection: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalS,
+    minWidth: 0,
+  },
+  toolbarLabel: {
+    fontSize: tokens.fontSizeBase200,
+    color: tokens.colorNeutralForeground3,
+    fontWeight: tokens.fontWeightMedium,
+  },
+  riskToggleRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalM,
+    flexWrap: 'wrap',
+  },
+  toolbarDivider: {
+    width: tokens.strokeWidthThin,
+    alignSelf: 'stretch',
+    minHeight: '20px',
+    backgroundColor: tokens.colorNeutralStroke2,
   },
   hint: {
     fontSize: tokens.fontSizeBase200,
@@ -1031,70 +1190,205 @@ const useStyles = makeStyles({
   phaseSource: {
     fontSize: tokens.fontSizeBase200,
     color: tokens.colorNeutralForeground3,
-    lineHeight: tokens.lineHeightBase200,
-    overflowWrap: 'break-word',
   },
   stateReason: {
+    fontSize: tokens.fontSizeBase200,
     color: tokens.colorNeutralForeground2,
-    overflowWrap: 'anywhere',
   },
-  statusBannerStack: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalS,
+  creditsSurface: {
+    width: '360px',
+    maxHeight: '420px',
+    overflowY: 'auto',
+    padding: tokens.spacingVerticalM,
   },
+  // ---- Error / not-found ----------------------------------------------------
   pageError: {
     display: 'flex',
     flexDirection: 'column',
-    gap: tokens.spacingVerticalM,
-    maxWidth: '760px',
-    padding: tokens.spacingVerticalXL,
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    gap: tokens.spacingVerticalS,
+    padding: tokens.spacingVerticalXXL,
     borderRadius: tokens.borderRadiusLarge,
     backgroundColor: tokens.colorNeutralBackground1,
+    border: `${tokens.strokeWidthThin} solid ${tokens.colorNeutralStroke2}`,
   },
   pageErrorActions: {
     display: 'flex',
     gap: tokens.spacingHorizontalS,
     flexWrap: 'wrap',
+    paddingTop: tokens.spacingVerticalS,
   },
-  conflictFiles: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalXXS,
+  // ---- Body: tree | center --------------------------------------------------
+  bodyGrid: {
+    display: 'grid',
+    gridTemplateColumns: 'minmax(220px, 300px) minmax(0, 1fr)',
+    gap: tokens.spacingHorizontalL,
+    alignItems: 'stretch',
+    minWidth: 0,
+    '@media (max-width: 960px)': {
+      gridTemplateColumns: '1fr',
+    },
   },
-  conflictList: {
-    margin: 0,
-    paddingLeft: tokens.spacingHorizontalL,
-    fontSize: tokens.fontSizeBase200,
-    color: tokens.colorNeutralForeground2,
-  },
-  blockedSubtasks: {
+  treeRail: {
     display: 'flex',
     flexDirection: 'column',
     gap: tokens.spacingVerticalS,
+    minWidth: 0,
+    minHeight: 0,
+    padding: tokens.spacingVerticalM,
+    borderRadius: tokens.borderRadiusLarge,
+    backgroundColor: tokens.colorNeutralBackground2,
+    border: `${tokens.strokeWidthThin} solid ${tokens.colorNeutralStroke2}`,
+    '@media (max-width: 960px)': {
+      maxHeight: '320px',
+    },
   },
-  blockedSubtaskRow: {
+  treeRailHeader: {
+    display: 'flex',
+    alignItems: 'baseline',
+    justifyContent: 'space-between',
+    gap: tokens.spacingHorizontalS,
+  },
+  treeScroll: {
+    minHeight: 0,
+    overflowY: 'auto',
+    overflowX: 'hidden',
+  },
+  treeEmpty: {
+    padding: tokens.spacingVerticalS,
+  },
+  runTreeItem: {
+    minWidth: 0,
+  },
+  runTreeItemSelected: {
+    backgroundColor: tokens.colorNeutralBackground1Selected,
+    borderRadius: tokens.borderRadiusMedium,
+  },
+  runTreeStatusIcon: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '18px',
+    height: '18px',
+    flexShrink: 0,
+  },
+  runTreeStatusRunning: { color: tokens.colorBrandForeground1 },
+  runTreeStatusSuccess: { color: tokens.colorStatusSuccessForeground1 },
+  runTreeStatusDanger: { color: tokens.colorStatusDangerForeground1 },
+  runTreeStatusInput: { color: tokens.colorStatusWarningForeground1 },
+  runTreeStatusQueued: { color: tokens.colorNeutralForeground3 },
+  treeText: {
+    display: 'flex',
+    flexDirection: 'column',
+    minWidth: 0,
+  },
+  treePrimary: {
+    fontSize: tokens.fontSizeBase300,
+    color: tokens.colorNeutralForeground1,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  },
+  treeSecondary: {
+    fontSize: tokens.fontSizeBase200,
+    color: tokens.colorNeutralForeground3,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  },
+  stateTextRunning: { color: tokens.colorBrandForeground1 },
+  stateTextSuccess: { color: tokens.colorStatusSuccessForeground1 },
+  stateTextDanger: { color: tokens.colorStatusDangerForeground1 },
+  stateTextInput: { color: tokens.colorStatusWarningForeground1 },
+  stateTextQueued: { color: tokens.colorNeutralForeground3 },
+  // ---- Center: tabs + minimap ----------------------------------------------
+  centerZone: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalM,
+    minWidth: 0,
+    minHeight: 0,
+  },
+  centerHeader: {
+    display: 'flex',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: tokens.spacingHorizontalM,
+    flexWrap: 'wrap',
+    minWidth: 0,
+  },
+  centerHeaderTitles: {
     display: 'flex',
     flexDirection: 'column',
     gap: tokens.spacingVerticalXXS,
-    padding: tokens.spacingVerticalS,
-    borderRadius: tokens.borderRadiusMedium,
-    backgroundColor: tokens.colorNeutralBackground2,
+    minWidth: 0,
   },
-  blockedSubtaskHead: {
+  centerTabRow: {
     display: 'flex',
     alignItems: 'center',
-    gap: tokens.spacingHorizontalS,
+    gap: tokens.spacingHorizontalM,
     flexWrap: 'wrap',
   },
-  blockedSubtaskTitle: {
-    fontWeight: tokens.fontWeightSemibold,
+  minimapButton: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalXXS,
+    padding: tokens.spacingHorizontalXS,
+    borderRadius: tokens.borderRadiusMedium,
+    border: `${tokens.strokeWidthThin} solid ${tokens.colorNeutralStroke2}`,
+    backgroundColor: tokens.colorNeutralBackground1,
+    cursor: 'pointer',
+    flexShrink: 0,
+    ':hover': { backgroundColor: tokens.colorNeutralBackground1Hover },
   },
-  blockedSubtaskAgent: {
+  minimapCanvas: {
+    position: 'relative',
+    width: '168px',
+    height: '96px',
+    overflow: 'hidden',
+    borderRadius: tokens.borderRadiusSmall,
+    backgroundColor: tokens.colorNeutralBackground2,
+    pointerEvents: 'none',
+  },
+  minimapCaption: {
+    fontSize: tokens.fontSizeBase100,
+    color: tokens.colorNeutralForeground3,
+    textAlign: 'center',
+  },
+  centerTabBody: {
+    display: 'flex',
+    flexDirection: 'column',
+    minWidth: 0,
+    minHeight: 0,
+  },
+  readoutBody: {
+    display: 'flex',
+    flexDirection: 'column',
+    minHeight: '520px',
+    minWidth: 0,
+    borderRadius: tokens.borderRadiusLarge,
+    backgroundColor: tokens.colorNeutralBackground2,
+    border: `${tokens.strokeWidthThin} solid ${tokens.colorNeutralStroke2}`,
+    overflow: 'hidden',
+  },
+  tabPanelCard: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalM,
+    minHeight: '520px',
+    minWidth: 0,
+    padding: tokens.spacingVerticalL,
+    borderRadius: tokens.borderRadiusLarge,
+    backgroundColor: tokens.colorNeutralBackground2,
+    border: `${tokens.strokeWidthThin} solid ${tokens.colorNeutralStroke2}`,
+  },
+  approvalGateWrap: {
+    minWidth: 0,
+  },
+  scopeHint: {
     fontSize: tokens.fontSizeBase200,
     color: tokens.colorNeutralForeground3,
   },
+  // ---- Topology (preserved graph plumbing) ---------------------------------
   dagContainer: {
     minHeight: '200px',
     width: '100%',
@@ -1115,608 +1409,6 @@ const useStyles = makeStyles({
       transform: 'scale(1)',
       pointerEvents: 'auto',
     },
-  },
-  graphColumnLabels: {
-    display: 'grid',
-    gap: tokens.spacingHorizontalS,
-    alignItems: 'center',
-    padding: `0 ${tokens.spacingHorizontalS}`,
-  },
-  graphColumnLabel: {
-    fontSize: tokens.fontSizeBase100,
-    color: tokens.colorNeutralForeground3,
-    textAlign: 'center',
-    whiteSpace: 'nowrap',
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
-  },
-  coordControls: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: tokens.spacingHorizontalS,
-    flexWrap: 'wrap',
-  },
-  coordCardLinks: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: tokens.spacingHorizontalS,
-    marginBottom: tokens.spacingVerticalXS,
-  },
-  steerLabel: {
-    fontSize: tokens.fontSizeBase200,
-    color: tokens.colorNeutralForeground2,
-  },
-  panel: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalS,
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: tokens.borderRadiusMedium,
-    backgroundColor: tokens.colorNeutralBackground1,
-    padding: tokens.spacingVerticalM,
-  },
-  actionRequired: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalXS,
-    marginBottom: tokens.spacingVerticalS,
-  },
-  toggleGroup: {
-    display: 'flex',
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    alignItems: 'center',
-    gap: tokens.spacingHorizontalL,
-    rowGap: tokens.spacingVerticalXS,
-  },
-  sessionToolbar: {
-    display: 'flex',
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    alignItems: 'center',
-    gap: tokens.spacingHorizontalM,
-    padding: `${tokens.spacingVerticalXS} 0`,
-  },
-  actionSource: {
-    fontSize: tokens.fontSizeBase200,
-    fontWeight: tokens.fontWeightSemibold,
-    color: tokens.colorNeutralForeground2,
-  },
-  reviewActions: {
-    display: 'flex',
-    gap: tokens.spacingHorizontalS,
-    flexWrap: 'wrap',
-  },
-  diffBox: {
-    fontFamily: tokens.fontFamilyMonospace,
-    fontSize: tokens.fontSizeBase200,
-    whiteSpace: 'pre-wrap',
-    wordBreak: 'break-word',
-    maxHeight: '220px',
-    overflowY: 'auto',
-    backgroundColor: tokens.colorNeutralBackground2,
-    borderRadius: tokens.borderRadiusSmall,
-    padding: tokens.spacingVerticalS,
-  },
-  console: {
-    display: 'grid',
-    gridTemplateRows: 'auto minmax(0, 1fr)',
-    height: 'calc(100vh - 132px)',
-    minHeight: '680px',
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: tokens.borderRadiusXLarge,
-    overflow: 'hidden',
-    backgroundColor: tokens.colorNeutralBackground2,
-    boxShadow: tokens.shadow8,
-    '@media (max-width: 640px)': {
-      height: 'auto',
-      minHeight: 'auto',
-      overflow: 'visible',
-    },
-  },
-  topZone: {
-    display: 'grid',
-    gridTemplateColumns: 'minmax(0, 1fr)',
-    gridTemplateAreas: '"identity" "actions"',
-    gap: tokens.spacingHorizontalM,
-    rowGap: tokens.spacingVerticalS,
-    alignItems: 'stretch',
-    maxWidth: '100%',
-    padding: `${tokens.spacingVerticalM} ${tokens.spacingHorizontalL}`,
-    borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
-    backgroundColor: tokens.colorNeutralBackground1,
-    backgroundImage: `linear-gradient(90deg, ${tokens.colorBrandBackground2} 0, ${tokens.colorNeutralBackground1} 34%, ${tokens.colorNeutralBackground1} 100%)`,
-    boxShadow: `inset 4px 0 0 ${tokens.colorBrandStroke1}`,
-  },
-  bladeEyebrow: {
-    display: 'inline-flex',
-    alignItems: 'center',
-    gap: tokens.spacingHorizontalXXS,
-    width: 'fit-content',
-    padding: `1px ${tokens.spacingHorizontalXS}`,
-    border: `1px solid ${tokens.colorBrandStroke1}`,
-    borderRadius: tokens.borderRadiusCircular,
-    backgroundColor: tokens.colorBrandBackground2,
-    color: tokens.colorBrandForeground1,
-    fontSize: tokens.fontSizeBase100,
-    lineHeight: tokens.lineHeightBase100,
-    fontWeight: tokens.fontWeightSemibold,
-    letterSpacing: '.02em',
-    textTransform: 'uppercase',
-  },
-  titleStack: {
-    gridArea: 'identity',
-    display: 'grid',
-    gap: tokens.spacingVerticalXS,
-    minWidth: 0,
-    maxWidth: '100%',
-  },
-  titleText: {
-    minWidth: 0,
-    maxWidth: '100%',
-    whiteSpace: 'nowrap',
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
-    fontSize: tokens.fontSizeBase500,
-    lineHeight: tokens.lineHeightBase500,
-  },
-  topTitleRow: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: tokens.spacingHorizontalS,
-    minWidth: 0,
-    flexWrap: 'wrap',
-    maxWidth: '100%',
-  },
-  identityLead: {
-    display: 'inline-flex',
-    alignItems: 'center',
-    gap: tokens.spacingHorizontalS,
-    minWidth: 0,
-    maxWidth: '100%',
-    flex: '1 1 18rem',
-  },
-  metaRail: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: tokens.spacingHorizontalXS,
-    flexWrap: 'wrap',
-    maxWidth: '100%',
-    color: tokens.colorNeutralForeground3,
-  },
-  executionContext: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: tokens.spacingHorizontalS,
-    rowGap: tokens.spacingVerticalXXS,
-    flexWrap: 'wrap',
-    maxWidth: '100%',
-    padding: `${tokens.spacingVerticalXXS} ${tokens.spacingHorizontalS}`,
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: tokens.borderRadiusMedium,
-    backgroundColor: tokens.colorNeutralBackground2,
-    color: tokens.colorNeutralForeground2,
-    fontSize: tokens.fontSizeBase200,
-    lineHeight: tokens.lineHeightBase200,
-  },
-  runStatusBand: {
-    display: 'grid',
-    gridTemplateColumns: 'repeat(4, minmax(0, 1fr))',
-    gap: tokens.spacingHorizontalS,
-    maxWidth: '100%',
-    '@media (max-width: 900px)': {
-      gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
-    },
-    '@media (max-width: 520px)': {
-      gridTemplateColumns: '1fr',
-    },
-  },
-  runStatusBandItem: {
-    minWidth: 0,
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalXXS,
-    padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM}`,
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: tokens.borderRadiusLarge,
-    backgroundColor: tokens.colorNeutralBackground1,
-    boxShadow: tokens.shadow2,
-  },
-  runStatusBandPrimary: {
-    borderTopColor: tokens.colorBrandStroke1,
-    borderRightColor: tokens.colorBrandStroke1,
-    borderBottomColor: tokens.colorBrandStroke1,
-    borderLeftColor: tokens.colorBrandStroke1,
-    backgroundColor: tokens.colorBrandBackground2,
-  },
-  runStatusBandLabel: {
-    fontSize: tokens.fontSizeBase100,
-    lineHeight: tokens.lineHeightBase100,
-    color: tokens.colorNeutralForeground3,
-    fontWeight: tokens.fontWeightSemibold,
-    textTransform: 'uppercase',
-    letterSpacing: '.04em',
-  },
-  runStatusBandValue: {
-    minWidth: 0,
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
-    whiteSpace: 'nowrap',
-    fontSize: tokens.fontSizeBase300,
-    lineHeight: tokens.lineHeightBase300,
-    color: tokens.colorNeutralForeground1,
-    fontWeight: tokens.fontWeightSemibold,
-  },
-  executionKicker: {
-    fontWeight: tokens.fontWeightSemibold,
-    color: tokens.colorBrandForeground1,
-    whiteSpace: 'nowrap',
-  },
-  executionValue: {
-    display: 'inline-flex',
-    alignItems: 'center',
-    gap: tokens.spacingHorizontalXXS,
-    minWidth: 0,
-    maxWidth: 'min(100%, 42ch)',
-    whiteSpace: 'nowrap',
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
-  },
-  executionReason: {
-    minWidth: 0,
-    maxWidth: 'min(100%, 64ch)',
-    whiteSpace: 'nowrap',
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
-    color: tokens.colorNeutralForeground3,
-  },
-  metaItem: {
-    display: 'inline-flex',
-    alignItems: 'center',
-    gap: tokens.spacingHorizontalXXS,
-    minHeight: '22px',
-    maxWidth: 'min(100%, 56ch)',
-    whiteSpace: 'nowrap',
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
-    fontSize: tokens.fontSizeBase200,
-    lineHeight: tokens.lineHeightBase200,
-  },
-  metaItemStrong: {
-    color: tokens.colorNeutralForeground2,
-    fontWeight: tokens.fontWeightSemibold,
-  },
-  metaValue: {
-    minWidth: 0,
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
-  },
-  metaSeparator: {
-    color: tokens.colorNeutralForeground4,
-    '@media (max-width: 640px)': {
-      display: 'none',
-    },
-  },
-  statsStrip: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: tokens.spacingHorizontalXS,
-    flexWrap: 'wrap',
-    color: tokens.colorNeutralForeground2,
-    maxWidth: '100%',
-  },
-  compactChromeActions: {
-    display: 'inline-flex',
-    alignItems: 'center',
-    gap: tokens.spacingHorizontalXS,
-    marginLeft: 'auto',
-    flexShrink: 0,
-  },
-  statusChip: {
-    display: 'inline-flex',
-    alignItems: 'center',
-    gap: tokens.spacingHorizontalXXS,
-    whiteSpace: 'nowrap',
-    minHeight: '22px',
-    padding: `1px ${tokens.spacingHorizontalXS}`,
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: tokens.borderRadiusMedium,
-    backgroundColor: tokens.colorNeutralBackground2,
-    color: tokens.colorNeutralForeground2,
-    fontSize: tokens.fontSizeBase200,
-    lineHeight: tokens.lineHeightBase200,
-    fontVariantNumeric: 'tabular-nums',
-  },
-  statusChipValue: {
-    color: 'inherit',
-    fontWeight: tokens.fontWeightSemibold,
-  },
-  statSeparator: {
-    color: tokens.colorNeutralForeground4,
-  },
-  topControls: {
-    gridArea: 'actions',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'flex-start',
-    minWidth: 0,
-    width: '100%',
-    maxWidth: '100%',
-    paddingTop: tokens.spacingVerticalXS,
-    borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
-    '@media (max-width: 640px)': {
-      justifyContent: 'stretch',
-      alignItems: 'stretch',
-    },
-  },
-  operatorToolbar: {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'flex-start',
-    flexWrap: 'wrap',
-    gap: tokens.spacingHorizontalXS,
-    rowGap: tokens.spacingVerticalXXS,
-    width: '100%',
-    maxWidth: '100%',
-    padding: 0,
-    borderTopStyle: 'none',
-    borderRightStyle: 'none',
-    borderBottomStyle: 'none',
-    borderLeftStyle: 'none',
-    borderTopWidth: '0',
-    borderRightWidth: '0',
-    borderBottomWidth: '0',
-    borderLeftWidth: '0',
-    backgroundColor: 'transparent',
-    '@media (max-width: 640px)': {
-      width: '100%',
-      justifyContent: 'flex-start',
-    },
-  },
-  toolbarSection: {
-    minHeight: '28px',
-    display: 'inline-flex',
-    alignItems: 'center',
-    gap: tokens.spacingHorizontalXXS,
-    flexWrap: 'wrap',
-    minWidth: 0,
-    maxWidth: '100%',
-  },
-  toolbarPrimarySection: {
-    flex: '0 0 auto',
-  },
-  riskToolbarSection: {
-    flex: '0 1 auto',
-    minWidth: 0,
-    padding: 0,
-    borderRadius: 0,
-    backgroundColor: 'transparent',
-    boxShadow: 'none',
-    '@media (max-width: 640px)': {
-      flexBasis: '100%',
-    },
-  },
-  panelToolbarSection: {
-    marginLeft: 'auto',
-    '@media (max-width: 640px)': {
-      marginLeft: 0,
-    },
-  },
-  toolbarLabel: {
-    fontSize: tokens.fontSizeBase100,
-    lineHeight: tokens.lineHeightBase100,
-    fontWeight: tokens.fontWeightSemibold,
-    color: tokens.colorNeutralForeground3,
-  },
-  toolbarDivider: {
-    width: '1px',
-    height: '24px',
-    backgroundColor: tokens.colorNeutralStroke2,
-    '@media (max-width: 640px)': {
-      display: 'none',
-    },
-  },
-  riskToggleRow: {
-    display: 'inline-flex',
-    alignItems: 'center',
-    gap: tokens.spacingHorizontalS,
-    flexWrap: 'wrap',
-    minWidth: 0,
-  },
-  toolbarHint: {
-    fontSize: tokens.fontSizeBase100,
-    lineHeight: tokens.lineHeightBase100,
-    color: tokens.colorNeutralForeground3,
-    whiteSpace: 'nowrap',
-    '@media (max-width: 640px)': {
-      whiteSpace: 'normal',
-    },
-  },
-  statusDetails: {
-    color: tokens.colorNeutralForeground3,
-    fontSize: tokens.fontSizeBase200,
-    lineHeight: tokens.lineHeightBase200,
-  },
-  statusDetailsSummary: {
-    cursor: 'pointer',
-    display: 'inline-flex',
-    alignItems: 'center',
-    gap: tokens.spacingHorizontalXXS,
-    color: tokens.colorNeutralForeground3,
-    ':hover': {
-      color: tokens.colorNeutralForeground2,
-    },
-  },
-  statusDetailsBody: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalXXS,
-    paddingTop: tokens.spacingVerticalXXS,
-    maxWidth: '75ch',
-  },
-  stopRunButton: {
-    color: tokens.colorStatusDangerForeground1,
-    borderTopColor: tokens.colorStatusDangerBorder1,
-    borderRightColor: tokens.colorStatusDangerBorder1,
-    borderBottomColor: tokens.colorStatusDangerBorder1,
-    borderLeftColor: tokens.colorStatusDangerBorder1,
-    ':hover': {
-      color: tokens.colorStatusDangerForeground1,
-      backgroundColor: tokens.colorStatusDangerBackground1,
-      borderTopColor: tokens.colorStatusDangerBorder1,
-      borderRightColor: tokens.colorStatusDangerBorder1,
-      borderBottomColor: tokens.colorStatusDangerBorder1,
-      borderLeftColor: tokens.colorStatusDangerBorder1,
-    },
-  },
-  bodyGrid: {
-    minHeight: 0,
-    display: 'grid',
-    gridTemplateColumns: 'clamp(260px, 20vw, 340px) minmax(420px, 1fr) clamp(300px, 24vw, 400px)',
-    gridTemplateAreas: '"tree details copilot"',
-    '@media (max-width: 1240px)': {
-      gridTemplateColumns: 'clamp(260px, 28vw, 340px) minmax(0, 1fr)',
-      gridTemplateRows: 'minmax(440px, 1fr) minmax(320px, .72fr)',
-      gridTemplateAreas: '"tree details" "tree copilot"',
-    },
-    '@media (max-width: 960px)': {
-      gridTemplateColumns: '1fr',
-      gridTemplateRows: 'minmax(240px, 32vh) minmax(520px, 1fr) minmax(360px, auto)',
-      gridTemplateAreas: '"tree" "details" "copilot"',
-    },
-    '@media (max-width: 640px)': {
-      gridTemplateColumns: '1fr',
-      gridTemplateRows: 'minmax(220px, 34vh) minmax(420px, 1fr) minmax(340px, auto)',
-    },
-  },
-  leftZone: {
-    gridArea: 'tree',
-    minHeight: 0,
-    borderRight: `1px solid ${tokens.colorNeutralStroke2}`,
-    backgroundColor: tokens.colorNeutralBackground2,
-    display: 'flex',
-    flexDirection: 'column',
-    '@media (max-width: 960px)': {
-      borderRight: 'none',
-      borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
-    },
-  },
-  zoneHeader: {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM}`,
-    borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
-    fontWeight: tokens.fontWeightSemibold,
-    backgroundColor: tokens.colorNeutralBackground1,
-  },
-  zoneHeaderStack: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalXXS,
-    minWidth: 0,
-  },
-  zoneKicker: {
-    fontSize: tokens.fontSizeBase100,
-    lineHeight: tokens.lineHeightBase100,
-    color: tokens.colorBrandForeground1,
-    fontWeight: tokens.fontWeightSemibold,
-    textTransform: 'uppercase',
-    letterSpacing: '.04em',
-  },
-  treeList: {
-    flex: 1,
-    minHeight: 0,
-    overflowY: 'auto',
-    display: 'flex',
-    flexDirection: 'column',
-    gap: '2px',
-    padding: tokens.spacingHorizontalXS,
-  },
-  runTreeRow: {
-    width: '100%',
-    display: 'grid',
-    gridTemplateColumns: '20px 28px minmax(0, 1fr)',
-    alignItems: 'center',
-    gap: tokens.spacingHorizontalS,
-    padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalS}`,
-    border: 'none',
-    borderRadius: tokens.borderRadiusMedium,
-    backgroundColor: 'transparent',
-    color: tokens.colorNeutralForeground1,
-    textAlign: 'left',
-    cursor: 'pointer',
-    ':hover': { backgroundColor: tokens.colorNeutralBackground1Hover },
-  },
-  runTreeRowSelected: {
-    backgroundColor: tokens.colorBrandBackground2,
-    boxShadow: `inset 0 0 0 1px ${tokens.colorBrandStroke1}`,
-  },
-  runTreeStatusIcon: {
-    width: '20px',
-    height: '20px',
-    display: 'inline-flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    border: 'none',
-    borderRadius: 0,
-    backgroundColor: 'transparent',
-    color: tokens.colorNeutralForeground3,
-    flexShrink: 0,
-  },
-  runTreeStatusRunning: {
-    color: tokens.colorBrandForeground1,
-  },
-  runTreeStatusSuccess: {
-    color: tokens.colorPaletteGreenForeground1,
-  },
-  runTreeStatusDanger: {
-    color: tokens.colorPaletteRedForeground1,
-  },
-  runTreeStatusInput: {
-    color: tokens.colorPaletteMarigoldForeground2,
-  },
-  runTreeStatusQueued: {
-    color: tokens.colorNeutralForeground3,
-  },
-  treeText: {
-    display: 'flex',
-    flexDirection: 'column',
-    minWidth: 0,
-    gap: '1px',
-  },
-  treePrimary: {
-    fontWeight: tokens.fontWeightSemibold,
-    whiteSpace: 'nowrap',
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
-  },
-  treeSecondary: {
-    fontSize: tokens.fontSizeBase200,
-    color: tokens.colorNeutralForeground3,
-    whiteSpace: 'nowrap',
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
-  },
-  stateTextRunning: {
-    color: tokens.colorBrandForeground1,
-    fontWeight: tokens.fontWeightSemibold,
-  },
-  stateTextSuccess: {
-    color: tokens.colorPaletteGreenForeground1,
-    fontWeight: tokens.fontWeightSemibold,
-  },
-  stateTextDanger: {
-    color: tokens.colorPaletteRedForeground1,
-    fontWeight: tokens.fontWeightSemibold,
-  },
-  stateTextInput: {
-    color: tokens.colorPaletteMarigoldForeground2,
-    fontWeight: tokens.fontWeightSemibold,
-  },
-  stateTextQueued: {
-    color: tokens.colorNeutralForeground3,
-    fontWeight: tokens.fontWeightSemibold,
   },
   topologyDag: {
     flex: 1,
@@ -1740,182 +1432,8 @@ const useStyles = makeStyles({
   },
   topologyInspectorSummary: {
     display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: tokens.spacingHorizontalM,
-    flexWrap: 'wrap',
-  },
-  creditsSurface: {
-    width: '360px',
-    maxHeight: '420px',
-    overflowY: 'auto',
-    padding: tokens.spacingVerticalM,
-  },
-  readoutZone: {
-    gridArea: 'details',
-    minWidth: 0,
-    minHeight: 0,
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalS,
-    padding: tokens.spacingVerticalM,
-    backgroundColor: tokens.colorNeutralBackground2,
-    '@media (max-width: 960px)': {
-      minHeight: '520px',
-      borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
-    },
-    '@media (max-width: 640px)': {
-      minHeight: '420px',
-    },
-  },
-  readoutBody: {
-    flex: 1,
-    minHeight: 0,
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: tokens.borderRadiusLarge,
-    overflow: 'hidden',
-    backgroundColor: tokens.colorNeutralBackground1,
-    boxShadow: tokens.shadow2,
-  },
-  systemPanel: {
-    flexShrink: 0,
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalS,
-    padding: tokens.spacingVerticalM,
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: tokens.borderRadiusLarge,
-    backgroundColor: tokens.colorNeutralBackground1,
-    boxShadow: tokens.shadow2,
-  },
-  systemPanelHeader: {
-    display: 'flex',
-    alignItems: 'flex-start',
-    justifyContent: 'space-between',
-    gap: tokens.spacingHorizontalM,
-  },
-  systemPanelTitle: {
-    display: 'flex',
     flexDirection: 'column',
     gap: tokens.spacingVerticalXXS,
-    minWidth: 0,
-  },
-  systemPanelActions: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: tokens.spacingHorizontalXS,
-    flexWrap: 'wrap',
-    justifyContent: 'flex-end',
-  },
-  topologyContainment: {
-    display: 'grid',
-    gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
-    gap: tokens.spacingHorizontalS,
-    '@media (max-width: 700px)': {
-      gridTemplateColumns: '1fr',
-    },
-  },
-  topologyTile: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalXXS,
-    padding: tokens.spacingVerticalS,
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: tokens.borderRadiusMedium,
-    backgroundColor: tokens.colorNeutralBackground2,
-  },
-  workspaceRegionStrip: {
-    flexShrink: 0,
-    display: 'grid',
-    gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
-    gap: tokens.spacingHorizontalS,
-    '@media (max-width: 700px)': {
-      gridTemplateColumns: '1fr',
-    },
-  },
-  workspaceRegionCard: {
-    minWidth: 0,
-    display: 'flex',
-    alignItems: 'center',
-    gap: tokens.spacingHorizontalS,
-    padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM}`,
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: tokens.borderRadiusLarge,
-    backgroundColor: tokens.colorNeutralBackground1,
-    boxShadow: tokens.shadow2,
-  },
-  workspaceRegionIcon: {
-    width: '30px',
-    height: '30px',
-    borderRadius: tokens.borderRadiusMedium,
-    display: 'inline-flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    flexShrink: 0,
-    color: tokens.colorBrandForeground1,
-    backgroundColor: tokens.colorBrandBackground2,
-  },
-  workspaceRegionText: {
-    minWidth: 0,
-    display: 'flex',
-    flexDirection: 'column',
-    gap: '1px',
-  },
-  copilotZone: {
-    gridArea: 'copilot',
-    minWidth: 0,
-    minHeight: 0,
-    display: 'flex',
-    flexDirection: 'column',
-    borderLeft: `1px solid ${tokens.colorNeutralStroke2}`,
-    backgroundColor: tokens.colorNeutralBackground1,
-    '@media (max-width: 1240px)': {
-      borderLeft: 'none',
-      borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
-    },
-  },
-  copilotScroll: {
-    flex: 1,
-    minHeight: 0,
-    overflowY: 'auto',
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalM,
-    padding: tokens.spacingVerticalM,
-  },
-  copilotCard: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalS,
-    padding: tokens.spacingVerticalM,
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: tokens.borderRadiusLarge,
-    backgroundColor: tokens.colorNeutralBackground1,
-    boxShadow: tokens.shadow2,
-  },
-  copilotCardBrand: {
-    borderTopColor: tokens.colorBrandStroke1,
-    borderRightColor: tokens.colorBrandStroke1,
-    borderBottomColor: tokens.colorBrandStroke1,
-    borderLeftColor: tokens.colorBrandStroke1,
-    backgroundColor: tokens.colorBrandBackground2,
-  },
-  copilotSticky: {
-    position: 'sticky',
-    bottom: 0,
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalS,
-    padding: tokens.spacingVerticalM,
-    borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
-    backgroundColor: tokens.colorNeutralBackground1,
-    boxShadow: `0 -4px 14px rgba(0, 0, 0, 0.08)`,
-  },
-  copilotActionRow: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: tokens.spacingHorizontalS,
-    flexWrap: 'wrap',
   },
 });
 
@@ -1944,16 +1462,6 @@ function runTreeStatusIcon(status: string) {
 }
 
 type SemanticStateColor = 'running' | 'success' | 'danger' | 'input' | 'queued';
-
-function semanticStateColorToTone(color: SemanticStateColor): AzfTone {
-  switch (color) {
-    case 'running': return 'brand';
-    case 'success': return 'success';
-    case 'danger': return 'danger';
-    case 'input': return 'warning';
-    default: return 'neutral';
-  }
-}
 
 function semanticStateColorForStatus(status: string | undefined): SemanticStateColor {
   switch (status) {
@@ -1995,11 +1503,11 @@ function semanticStateColorForStatus(status: string | undefined): SemanticStateC
   }
 }
 
-function semanticStateColorToAgentStatus(color: SemanticStateColor): AzfAgentStep['status'] {
+function semanticStateColorToAgentStatus(color: SemanticStateColor): AgentStepStatus {
   switch (color) {
     case 'running': return 'running';
     case 'success': return 'complete';
-    case 'danger': return 'error';
+    case 'danger': return 'blocked';
     case 'input': return 'warning';
     default: return 'pending';
   }
@@ -3095,8 +2603,7 @@ export function CoordinatorRunPage() {
   // Steering chat side panel (#163) — a slide-in chat replaces the old inline steer bar.
   // ---------------------------------------------------------------------------
 
-  const [specPanelOpen, setSpecPanelOpen] = useState(false);
-  const [artifactsPanelOpen, setArtifactsPanelOpen] = useState(false);
+  const [centerTab, setCenterTab] = useState<'chat' | 'plan' | 'artifacts'>('chat');
   const [topologyPanelOpen, setTopologyPanelOpen] = useState(false);
   const [topologyView, setTopologyView] = useState<'topology' | 'progress'>('topology');
   const [sessionPanelOpen, setSessionPanelOpen] = useState(true);
@@ -3108,6 +2615,7 @@ export function CoordinatorRunPage() {
   const openPanelForNode = useCallback((nodeId: string) => {
     setPanelNodeId(nodeId);
     setSessionPanelOpen(true);
+    setCenterTab('chat');
   }, []);
 
   const focusOutcomePlanComposer = useCallback(() => {
@@ -3115,13 +2623,14 @@ export function CoordinatorRunPage() {
     setPanelNodeId('outcome-plan');
     setSessionPanelOpen(true);
     setComposerFocusSignal((value) => value + 1);
-    setSpecPanelOpen(false);
+    setCenterTab('chat');
   }, []);
 
   const focusSelectedComposer = useCallback(() => {
     if (!panelNodeId && defaultSessionNodeId) setPanelNodeId(defaultSessionNodeId);
     setSessionPanelOpen(true);
     setComposerFocusSignal((value) => value + 1);
+    setCenterTab('chat');
   }, [defaultSessionNodeId, panelNodeId]);
 
   useEffect(() => {
@@ -3221,7 +2730,7 @@ export function CoordinatorRunPage() {
   // the Approve / Request changes / Decline actions live.
   const viewAssemblyExecution = useCallback((id: string) => {
     if (id.endsWith('-rai') || id.endsWith('-scribe')) openPanelForNode(id);
-    else setArtifactsPanelOpen(true);
+    else setCenterTab('artifacts');
   }, [openPanelForNode]);
 
   // Option toggles — optimistic update, revert on error. Both cascade to children server-side.
@@ -3439,7 +2948,7 @@ export function CoordinatorRunPage() {
         label: 'Review changes',
         icon: <DocumentRegular />,
         disabled: false,
-        onClick: () => setArtifactsPanelOpen(true),
+        onClick: () => setCenterTab('artifacts'),
         testId: 'coordinator-review-changes',
       }
     : latestOutcomePlanEvent && !specConfirmed
@@ -3447,7 +2956,7 @@ export function CoordinatorRunPage() {
           label: 'Review outcome plan',
           icon: <DocumentRegular />,
           disabled: false,
-          onClick: () => setSpecPanelOpen(true),
+          onClick: () => setCenterTab('plan'),
           testId: 'coordinator-review-outcome-plan',
         }
       : {
@@ -3469,37 +2978,30 @@ export function CoordinatorRunPage() {
     }
   }, [reconnectStream, runId]);
 
-  const runArtifacts = useMemo<AzfArtifact[]>(() => {
-    const items: AzfArtifact[] = [
+  // Assembly review artifacts surfaced inside the approval gate (open the matching center tab).
+  const assemblyArtifacts = useMemo<AgentArtifact[]>(() => {
+    if (isChildRun) return [];
+    return [
       {
-        id: 'topology',
-        title: 'Topology',
-        type: 'Run graph',
-        icon: <FlowchartRegular />,
-        onOpen: () => setTopologyPanelOpen(true),
-      },
-    ];
-    if (!isChildRun) {
-      items.push({
         id: 'outcome-plan',
         title: 'Outcome plan',
         type: latestOutcomePlanEvent || specConfirmed ? 'Review artifact' : 'Pending artifact',
         icon: <DocumentRegular />,
-        onOpen: () => setSpecPanelOpen(true),
-      });
-      items.push({
+        onOpen: () => setCenterTab('plan'),
+      },
+      {
         id: 'assembly-artifacts',
         title: 'Assembly artifacts',
         type: reviewActionable ? 'Review gate' : 'Files',
         icon: <FolderRegular />,
-        onOpen: () => setArtifactsPanelOpen(true),
-      });
-    }
-    return items;
+        onOpen: () => setCenterTab('artifacts'),
+      },
+    ];
   }, [isChildRun, latestOutcomePlanEvent, reviewActionable, specConfirmed]);
 
-  const coordinatorReasoning = useMemo(() => {
-    const steps: AzfAgentStep[] = flatSessionTree.length > 0
+  // Nested agentic progress tree: coordinator/agents and their tasks with live status.
+  const coordinatorProgressSteps = useMemo<AgentStep[]>(() => (
+    flatSessionTree.length > 0
       ? flatSessionTree.slice(0, 12).map((item) => {
           const color = semanticStateColorForStatus(item.status);
           const statusLabel = runTreeStatusLabel(item.status, item.nodeId === 'outcome-plan' ? outcomePlanConfirmedBy : undefined);
@@ -3508,15 +3010,14 @@ export function CoordinatorRunPage() {
             : item.agentRole
               ? `Coordinator (${item.agentRole})`
               : 'Coordinator';
-          return {
+          const step: AgentStep = {
             id: item.nodeId,
             title: item.label,
-            body: `${statusLabel} · ${owner}`,
+            body: `${statusLabel} \u00b7 ${owner}`,
             status: semanticStateColorToAgentStatus(color),
             defaultOpen: item.nodeId === selectedSessionItem?.nodeId || color === 'running' || color === 'input',
             needsInput: color === 'input',
             riskText: color === 'input' ? 'This step is waiting on an operator decision or a blocked dependency.' : undefined,
-            badge: item.nodeId === selectedSessionItem?.nodeId ? { label: 'Selected', tone: 'info' as const } : undefined,
             artifacts: item.childRunId
               ? [{
                   id: `${item.nodeId}-session`,
@@ -3527,6 +3028,7 @@ export function CoordinatorRunPage() {
                 }]
               : undefined,
           };
+          return step;
         })
       : [{
           id: 'waiting-for-plan',
@@ -3534,18 +3036,8 @@ export function CoordinatorRunPage() {
           body: graphEmptyCopy(isConnecting, noWorkPlan, graphError, viewState).body,
           status: isConnecting || isStreaming ? 'running' : 'pending',
           defaultOpen: true,
-        }];
-
-    return {
-      title: 'Run activity',
-      subtitle: `${taskRows.length} tasks · ${taskStatusSummary.pending} pending · ${taskStatusSummary.waiting} waiting`,
-      steps,
-      artifacts: runArtifacts,
-      defaultTab: 'activity' as const,
-      onApprove: () => setArtifactsPanelOpen(true),
-      onDeny: () => setArtifactsPanelOpen(true),
-    };
-  }, [
+        }]
+  ), [
     flatSessionTree,
     graphError,
     isConnecting,
@@ -3553,121 +3045,11 @@ export function CoordinatorRunPage() {
     noWorkPlan,
     openPanelForNode,
     outcomePlanConfirmedBy,
-    runArtifacts,
     selectedSessionItem?.nodeId,
-    taskRows.length,
-    taskStatusSummary.pending,
-    taskStatusSummary.waiting,
     viewState,
   ]);
 
-  const coordinatorResponseParts = useMemo<AzfResponsePart[]>(() => {
-    const parts: AzfResponsePart[] = [
-      {
-        id: 'run-summary',
-        type: 'text',
-        title: 'Coordinator',
-        badge: null,
-        content: (
-          <div className="azf-stack azf-gap-xs">
-            <StatusIconText status={semanticStateColorToTone(runStatusColor)}>{runStatusText}</StatusIconText>
-            <Text className={styles.phaseSource}>{viewState.sourceLabel}</Text>
-            {viewState.reason && <Text className={styles.stateReason}>{viewState.reason}</Text>}
-          </div>
-        ),
-        supportingText: `${taskCountsLabel} · ${elapsedLabel} elapsed · ${aiCreditsLabel}`,
-      },
-    ];
-    if (streamError || streamStatus === 'error' || droppedEventCount > 0) {
-      parts.push({
-        id: 'stream-health',
-        type: 'text',
-        title: 'Stream health',
-        badge: null,
-        content: streamError
-          ? `Live stream issue: ${streamError}`
-          : streamStatus === 'error'
-            ? 'Live stream disconnected.'
-            : `${droppedEventCount} event${droppedEventCount === 1 ? '' : 's'} dropped from the in-memory buffer.`,
-        footerActions: [{ id: 'reconnect-stream', label: 'Reconnect', onClick: reconnectStream }],
-      });
-    }
-    if (reviewActionable) {
-      parts.push({
-        id: 'review-gate',
-        type: 'text',
-        title: 'Approval gate',
-        badge: null,
-        content: 'Assembly is waiting for human review before merge and scribe continue.',
-        footerActions: [{ id: 'open-review', label: 'Review changes', appearance: 'primary', icon: <DocumentRegular />, onClick: () => setArtifactsPanelOpen(true) }],
-      });
-    }
-    return parts;
-  }, [
-    aiCreditsLabel,
-    droppedEventCount,
-    elapsedLabel,
-    reconnectStream,
-    reviewActionable,
-    runStatusColor,
-    runStatusText,
-    streamError,
-    streamStatus,
-    styles.phaseSource,
-    styles.stateReason,
-    taskCountsLabel,
-    viewState.reason,
-    viewState.sourceLabel,
-  ]);
-
-  const coordinatorComposer = useMemo(() => ({
-    value: '',
-    onChange: () => undefined,
-    onSend: focusSelectedComposer,
-    disabled: !coordActive,
-    placeholder: selectedSessionItem ? `Message ${selectedSessionItem.label}` : 'Message coordinator',
-    sendLabel: 'Open coordinator composer',
-    validationMessage: coordActive ? undefined : 'This run is no longer accepting steering input.',
-    attachments: selectedSessionItem ? [{ id: 'selected-context', name: `Context: ${selectedSessionItem.label}` }] : [],
-  }), [coordActive, focusSelectedComposer, selectedSessionItem]);
-
-  const runPatternActions = useMemo<AzfAction[]>(() => [
-    {
-      id: 'primary',
-      label: primaryAction.label,
-      icon: primaryAction.icon,
-      appearance: 'primary',
-      disabled: primaryAction.disabled,
-      onClick: primaryAction.onClick,
-    },
-    {
-      id: 'retry',
-      label: 'Retry failed',
-      icon: <ArrowRepeatAllRegular />,
-      disabled: !isRetryable || retrying,
-      onClick: () => void handleRetry(),
-    },
-    {
-      id: 'stop',
-      label: 'Stop run',
-      icon: stopping ? <Spinner size="extra-tiny" /> : <DismissRegular />,
-      disabled: !viewState.canStop || stopping,
-      destructive: true,
-      onClick: () => void handleStopRun(),
-    },
-  ], [handleRetry, handleStopRun, isRetryable, primaryAction.disabled, primaryAction.icon, primaryAction.label, primaryAction.onClick, retrying, stopping, viewState.canStop]);
-
-  const copilotActions = useMemo<AzfAction[]>(() => [
-    {
-      id: 'message-coordinator',
-      label: 'Message',
-      icon: <SparkleRegular />,
-      disabled: !coordActive,
-      onClick: focusSelectedComposer,
-    },
-  ], [coordActive, focusSelectedComposer]);
-
-  const approvalSteps = useMemo<AzfAgentStep[]>(() => reviewActionable
+  const approvalSteps = useMemo<AgentStep[]>(() => reviewActionable
     ? [{
         id: 'assembly-review',
         title: 'Assembly review gate',
@@ -3675,11 +3057,13 @@ export function CoordinatorRunPage() {
         status: 'warning',
         needsInput: true,
         riskText: 'Approve to continue merge and scribe, or deny to decline the assembly.',
-        disclaimer: 'Request changes remains available from the full Artifacts review panel.',
-        artifacts: runArtifacts.filter((artifact) => artifact.id !== 'topology'),
+        disclaimer: 'Request changes remains available from the Artifacts tab.',
+        approveLabel: 'Approve assembly',
+        denyLabel: 'Decline assembly',
+        artifacts: assemblyArtifacts,
         defaultOpen: true,
       }]
-    : [], [reviewActionable, runArtifacts]);
+    : [], [reviewActionable, assemblyArtifacts]);
 
   const graphEmptyState = graphEmptyCopy(isConnecting, noWorkPlan, graphError, viewState);
   const topologySelectionCopy = selectedSessionItem
@@ -3693,15 +3077,15 @@ export function CoordinatorRunPage() {
         <Text className={styles.hint}>{topologySelectionCopy}</Text>
         <Text className={styles.hint}>Select a node to focus its run messages, changes, and files.</Text>
       </div>
-      <AzureTabList
-        tabs={[
-          { id: 'topology', label: 'Topology', icon: <FlowchartRegular /> },
-          { id: 'progress', label: 'Progress', icon: <BotRegular /> },
-        ]}
+      <TabList
         selectedValue={topologyView}
-        onTabSelect={(value) => setTopologyView(value === 'progress' ? 'progress' : 'topology')}
-        ariaLabel="Topology inspector views"
-      />
+        onTabSelect={(_, data) => setTopologyView(data.value === 'progress' ? 'progress' : 'topology')}
+        aria-label="Topology inspector views"
+        size="small"
+      >
+        <Tab value="topology" icon={<FlowchartRegular />}>Topology</Tab>
+        <Tab value="progress" icon={<BotRegular />}>Progress</Tab>
+      </TabList>
       {topologyView === 'topology' ? hasGraph ? (
         <ExecutionModalContext.Provider value={viewAssemblyExecution}>
         <BrowseFilesContext.Provider value={browseAssemblyFiles}>
@@ -3751,9 +3135,9 @@ export function CoordinatorRunPage() {
                   nodeBorderRadius={3}
                   zoomable
                   pannable
-                  bgColor="#ffffff"
-                  maskColor="rgba(15, 108, 189, 0.06)"
-                  maskStrokeColor="var(--colorBrandStroke1)"
+                  bgColor="var(--colorNeutralBackground2)"
+                  maskColor="rgba(0, 0, 0, 0.06)"
+                  maskStrokeColor="var(--colorNeutralStroke1)"
                   maskStrokeWidth={2}
                   style={{
                     bottom: 8,
@@ -3767,10 +3151,10 @@ export function CoordinatorRunPage() {
                   nodeColor={(n) => {
                     const s = (n.data as SubtaskNodeData | undefined)?.topoStatus as string | undefined;
                     if (s === 'completed' || s === 'assemble_ready') return '#107c41';
-                    if (s === 'running' || s === 'dispatching' || s === 'awaiting_assembly' || s === 'assembling') return '#0f6cbd';
+                    if (s === 'running' || s === 'dispatching' || s === 'awaiting_assembly' || s === 'assembling') return '#8c837c';
                     if (s === 'waiting') return '#d47c00';
                     if (s === 'failed' || s === 'declined') return '#c50f1f';
-                    return '#c8c6c4';
+                    return '#b8afa8';
                   }}
                 />
               </ReactFlow>
@@ -3784,9 +3168,9 @@ export function CoordinatorRunPage() {
         </BrowseFilesContext.Provider>
         </ExecutionModalContext.Provider>
       ) : (
-        <AzureEmptyState compact title={graphEmptyState.title} body={graphEmptyState.body} />
+        <EmptyState title={graphEmptyState.title} description={graphEmptyState.body} />
       ) : (
-        <ChainOfThought {...coordinatorReasoning} />
+        <AgentStepList steps={coordinatorProgressSteps} aria-label="Coordinator progress" />
       )}
     </div>
   );
@@ -3808,11 +3192,74 @@ export function CoordinatorRunPage() {
       default: return styles.stateTextQueued;
     }
   };
-  const automationScopeHint = viewState.canToggleAutomation ? 'Run + children' : `Locked: ${viewState.label}`;
+  const treeBranchIds = useMemo(() => {
+    const ids: string[] = [];
+    const walk = (nodes: RunSessionTree[]) => nodes.forEach((n) => {
+      if (n.children.length > 0) { ids.push(n.nodeId); walk(n.children); }
+    });
+    walk(sessionTree);
+    return ids;
+  }, [sessionTree]);
+  const renderTreeItems = (nodes: RunSessionTree[]): ReactNode => nodes.map((item) => {
+    const color = semanticStateColorForStatus(item.status);
+    const statusLabel = runTreeStatusLabel(item.status, item.nodeId === 'outcome-plan' ? outcomePlanConfirmedBy : undefined);
+    const selected = item.nodeId === activePanelNodeId;
+    const owner = item.agentName
+      ? `${item.agentName}${item.agentRole ? ` (${item.agentRole})` : ''}`
+      : item.agentRole ? `Coordinator (${item.agentRole})` : 'Coordinator';
+    const layout = (
+      <TreeItemLayout
+        iconBefore={(
+          <span
+            className={mergeClasses(styles.runTreeStatusIcon, stateIconClass(color))}
+            data-testid="run-tree-status-icon"
+            data-state-color={color}
+            style={{ backgroundColor: 'transparent', borderTopStyle: 'none' }}
+            aria-hidden="true"
+          >
+            {runTreeStatusIcon(item.status)}
+          </span>
+        )}
+      >
+        <span className={styles.treeText}>
+          <span className={styles.treePrimary}>{item.label}</span>
+          <span className={styles.treeSecondary}>
+            <span className={stateTextClass(color)} data-state-color={color}>{statusLabel}</span>
+            {' \u00b7 '}{owner}
+          </span>
+        </span>
+      </TreeItemLayout>
+    );
+    return item.children.length > 0 ? (
+      <TreeItem
+        key={item.nodeId}
+        itemType="branch"
+        value={item.nodeId}
+        aria-label={`Select ${item.label}: ${statusLabel}`}
+        className={selected ? styles.runTreeItemSelected : undefined}
+        onClick={() => openPanelForNode(item.nodeId)}
+      >
+        {layout}
+        <Tree>{renderTreeItems(item.children)}</Tree>
+      </TreeItem>
+    ) : (
+      <TreeItem
+        key={item.nodeId}
+        itemType="leaf"
+        value={item.nodeId}
+        aria-label={`Select ${item.label}: ${statusLabel}`}
+        className={selected ? styles.runTreeItemSelected : undefined}
+        onClick={() => openPanelForNode(item.nodeId)}
+      >
+        {layout}
+      </TreeItem>
+    );
+  });
   const retryHint = isRetryable ? 'Retry resumes failed work' : 'Retry after failure';
   const stopHint = viewState.canStop ? 'Stop cancels run' : 'Stop while running';
   const retryAriaLabel = isRetryable ? 'Retry failed run' : `Retry failed unavailable: ${retryHint}`;
   const stopAriaLabel = viewState.canStop ? 'Stop run' : `Stop run unavailable: ${stopHint}`;
+  const effectiveCenterTab: 'chat' | 'plan' | 'artifacts' = isChildRun ? 'chat' : centerTab;
 
   if (!projectId || !runId) {
     return <Text>Invalid route parameters.</Text>;
@@ -3829,7 +3276,7 @@ export function CoordinatorRunPage() {
           <span>Orchestration {shortId}</span>
         </nav>
         <section className={styles.pageError} aria-live="polite">
-          <Title2>{viewState.label}</Title2>
+          <Display>{viewState.label}</Display>
           <Text className={styles.stateReason}>{runLoadError.message}</Text>
           {runLoadError.detail && <Text className={styles.stateReason}>{runLoadError.detail}</Text>}
           <Text className={styles.phaseSource}>{viewState.sourceLabel}</Text>
@@ -3900,58 +3347,49 @@ export function CoordinatorRunPage() {
         </div>
       )}
 
-      <CoordinatorRunPattern
-        title="Orchestration"
-        subtitle={`${runStatusText} · ${viewState.sourceLabel}`}
-        runActions={runPatternActions}
-        copilotActions={copilotActions}
-        reasoning={coordinatorReasoning}
-        response={{ parts: coordinatorResponseParts }}
-        composer={coordinatorComposer}
-        className={styles.console}
-        testId="run-operator-console"
-        header={(
-        <div className={styles.topZone} data-testid="run-header">
-          <div className={styles.titleStack} data-testid="run-summary">
-            <span className={styles.bladeEyebrow}>
-              <SparkleRegular aria-hidden="true" />
-              Azure Copilot operator workspace
-            </span>
+      <div className={styles.console} data-testid="run-operator-console">
+        <div className={styles.runHeader} data-testid="run-header">
+          <div className={styles.identityArea} data-testid="run-summary">
             <div className={styles.topTitleRow}>
               <div className={styles.identityLead}>
-                <Title2 className={styles.titleText} title={`Orchestration run ${runId}`} data-testid="run-title">
+                <h1
+                  className={styles.titleText}
+                  style={{ whiteSpace: 'nowrap', textOverflow: 'ellipsis', overflow: 'hidden' }}
+                  title={`Orchestration run ${runId}`}
+                  data-testid="run-title"
+                >
                   Orchestration
-                </Title2>
+                </h1>
                 {(isConnecting || isStreaming) && <Spinner size="extra-tiny" aria-label="Live" />}
-                <span className={styles.statusChip} data-testid="run-status-chip" data-state-color={runStatusColor}>
-                  <StatusIconText status={semanticStateColorToTone(runStatusColor)}>{runStatusText}</StatusIconText>
+                <span
+                  className={mergeClasses(styles.statusChip, styles.statusChipStrong, stateTextClass(runStatusColor))}
+                  data-testid="run-status-chip"
+                  data-state-color={runStatusColor}
+                >
+                  {runStatusText}
                 </span>
               </div>
               <div className={styles.statsStrip} aria-label="Run progress" data-testid="run-progress-chips">
-              <span className={styles.statusChip}>
-                {taskCountsLabel}
-              </span>
-              {taskStatusSummary.blocked > 0 && (
-                <span className={styles.statusChip} data-state-color="input">
-                  <StatusIconText status="warning"><span className={styles.statusChipValue}>{taskStatusSummary.blocked}</span> blocked</StatusIconText>
-                </span>
-              )}
-              {taskStatusSummary.failed > 0 && (
-                <span className={styles.statusChip} data-state-color="danger">
-                  <StatusIconText status="danger"><span className={styles.statusChipValue}>{taskStatusSummary.failed}</span> failed</StatusIconText>
-                </span>
-              )}
-              <span className={styles.statusChip}>
-                <span className={styles.statusChipValue}>{elapsedLabel}</span> elapsed
-              </span>
-              <Popover positioning="below-start">
-                <PopoverTrigger disableButtonEnhancement>
-                  <Button appearance="secondary" size="small" className={styles.statusChip}>{aiCreditsLabel}</Button>
-                </PopoverTrigger>
-                <PopoverSurface className={styles.creditsSurface}>
-                  <AgentTokenBreakdown data={tokenBreakdown} roleByAgent={roleByAgent} />
-                </PopoverSurface>
-              </Popover>
+                <span className={styles.statusChip}>{taskCountsLabel}</span>
+                {taskStatusSummary.blocked > 0 && (
+                  <span className={mergeClasses(styles.statusChip, styles.stateTextInput)} data-state-color="input">
+                    {taskStatusSummary.blocked} blocked
+                  </span>
+                )}
+                {taskStatusSummary.failed > 0 && (
+                  <span className={mergeClasses(styles.statusChip, styles.stateTextDanger)} data-state-color="danger">
+                    {taskStatusSummary.failed} failed
+                  </span>
+                )}
+                <span className={styles.statusChip}>{elapsedLabel} elapsed</span>
+                <Popover positioning="below-start">
+                  <PopoverTrigger disableButtonEnhancement>
+                    <Button appearance="secondary" size="small" className={styles.statusChip}>{aiCreditsLabel}</Button>
+                  </PopoverTrigger>
+                  <PopoverSurface className={styles.creditsSurface}>
+                    <AgentTokenBreakdown data={tokenBreakdown} roleByAgent={roleByAgent} />
+                  </PopoverSurface>
+                </Popover>
               </div>
               <div className={styles.compactChromeActions}>
                 {!runChromeExpanded && (
@@ -3976,6 +3414,22 @@ export function CoordinatorRunPage() {
                   {runChromeExpanded ? 'Collapse controls' : 'Show controls'}
                 </Button>
               </div>
+            </div>
+            <div className={styles.executionContext} data-testid="coordinator-execution-indicator" aria-label={`${executionKickerLabel} workflow ${executionWorkflowName}. ${executionTaskPrefix} ${executionTaskLabel}. ${executionReasonPrefix}: ${executionContextReason}`}>
+              <span className={styles.executionKicker}>{executionKickerLabel}</span>
+              <span className={styles.executionValue} title={executionWorkflowName}>
+                <FlowchartRegular aria-hidden="true" />
+                <span>Workflow: {executionWorkflowName}</span>
+              </span>
+              <span className={`${styles.executionValue} ${stateTextClass(executionDisplayStateColor)}`} title={executionTaskLabel} data-state-color={executionDisplayStateColor}>
+                {executionTaskPrefix}: {executionTaskLabel}
+              </span>
+              {executingActor && (
+                <span className={styles.executionValue} title={executingActor}>
+                  Owner: {executingActor}
+                </span>
+              )}
+              <span className={styles.executionReason} title={executionContextReason}>{executionReasonPrefix}: {executionContextReason}</span>
             </div>
             {runChromeExpanded && <div className={styles.metaRail} aria-label="Run metadata" data-testid="run-metadata">
               <span className={styles.metaItem} title={runId}>
@@ -4031,44 +3485,6 @@ export function CoordinatorRunPage() {
               <span className={styles.metaSeparator} aria-hidden="true">·</span>
               <span className={styles.metaItem}>{formatPhaseUpdated(orch.updatedAt)}</span>
             </div>}
-            <div className={styles.executionContext} data-testid="coordinator-execution-indicator" aria-label={`${executionKickerLabel} workflow ${executionWorkflowName}. ${executionTaskPrefix} ${executionTaskLabel}. ${executionReasonPrefix}: ${executionContextReason}`}>
-              <span className={styles.executionKicker}>{executionKickerLabel}</span>
-              <span className={styles.executionValue} title={executionWorkflowName}>
-                <FlowchartRegular aria-hidden="true" />
-                <span>Workflow: {executionWorkflowName}</span>
-              </span>
-              <span className={`${styles.executionValue} ${stateTextClass(executionDisplayStateColor)}`} title={executionTaskLabel} data-state-color={executionDisplayStateColor}>
-                {executionTaskPrefix}: {executionTaskLabel}
-              </span>
-              {executingActor && (
-                <span className={styles.executionValue} title={executingActor}>
-                  Owner: {executingActor}
-                </span>
-              )}
-              <span className={styles.executionReason} title={executionContextReason}>{executionReasonPrefix}: {executionContextReason}</span>
-            </div>
-            <div className={styles.runStatusBand} aria-label="Azure run status band">
-              <div className={`${styles.runStatusBandItem} ${styles.runStatusBandPrimary}`}>
-                <span className={styles.runStatusBandLabel}>Run status</span>
-                <span className={styles.runStatusBandValue}>{runStatusText}</span>
-                <Text className={styles.hint}>{viewState.sourceLabel}</Text>
-              </div>
-              <div className={styles.runStatusBandItem}>
-                <span className={styles.runStatusBandLabel}>Selected task</span>
-                <span className={styles.runStatusBandValue}>{selectedSessionItem?.label ?? 'Coordinator'}</span>
-                <Text className={styles.hint}>{selectedSessionItem?.agentName ?? executingActor ?? 'Operator routed'}</Text>
-              </div>
-              <div className={styles.runStatusBandItem}>
-                <span className={styles.runStatusBandLabel}>Live stream</span>
-                <span className={styles.runStatusBandValue}>{isStreaming ? 'Streaming' : isConnecting ? 'Connecting' : streamStatus}</span>
-                <Text className={styles.hint}>{droppedEventCount > 0 ? `${droppedEventCount} dropped events` : 'SSE + seeded history preserved'}</Text>
-              </div>
-              <div className={styles.runStatusBandItem}>
-                <span className={styles.runStatusBandLabel}>Steering</span>
-                <span className={styles.runStatusBandValue}>{coordActive ? 'Ready' : 'Locked'}</span>
-                <Text className={styles.hint}>{autopilot ? 'Autopilot on' : 'Human-guided controls'}</Text>
-              </div>
-            </div>
             {runChromeExpanded && (
               <details className={styles.statusDetails} data-testid="run-status-details">
                 <summary className={styles.statusDetailsSummary}>Status details</summary>
@@ -4085,297 +3501,243 @@ export function CoordinatorRunPage() {
           </div>
 
           {runChromeExpanded && (
-          <div className={styles.topControls} data-testid="run-actions-row">
-            <div data-testid="run-actions-toolbar">
-            <AzureToolbar actions={[]} className={styles.operatorToolbar} ariaLabel="Run actions">
-              <div className={`${styles.toolbarSection} ${styles.toolbarPrimarySection}`} role="group" aria-label="Primary next action">
-                <span className={styles.toolbarLabel}>Next</span>
-                <Button
-                  appearance="primary"
-                  size="small"
-                  icon={primaryAction.icon}
-                  disabled={primaryAction.disabled}
-                  onClick={primaryAction.onClick}
-                  data-testid={primaryAction.testId}
-                >
-                  {primaryAction.label}
-                </Button>
-              </div>
-              <div className={`${styles.toolbarSection} ${styles.riskToolbarSection}`} role="group" aria-label={`Scoped risk controls: ${automationScopeHint}`}>
-                <span className={styles.toolbarLabel}>Risk</span>
-                <div className={styles.riskToggleRow}>
-                  <AutomationToggle
-                    label="Autopilot"
-                    info={AUTOMATION_HELP.autopilotOrchestration}
-                    checked={autopilot}
-                    disabled={autopilotBusy || !viewState.canToggleAutomation}
-                    onChange={(checked) => toggleAutopilot(checked)}
-                  />
-                  <AutomationToggle
-                    label="Auto-approve safe tools"
-                    info={AUTOMATION_HELP.autoApproveOrchestration}
-                    checked={autoApprove}
-                    disabled={autoApproveBusy || !viewState.canToggleAutomation}
-                    onChange={(checked) => toggleAutoApprove(checked)}
-                  />
+            <div className={styles.actionsArea} data-testid="run-actions-row">
+              <div
+                role="toolbar"
+                aria-label="Run actions"
+                className={styles.runToolbar}
+                style={{ display: 'flex', flexWrap: 'wrap', width: '100%', maxWidth: '100%', borderTopStyle: 'none' }}
+              >
+                <div className={styles.toolbarSection} role="group" aria-label="Primary next action">
+                  <span className={styles.toolbarLabel}>Next</span>
+                  <Button
+                    appearance="primary"
+                    size="small"
+                    icon={primaryAction.icon}
+                    disabled={primaryAction.disabled}
+                    onClick={primaryAction.onClick}
+                    data-testid={primaryAction.testId}
+                  >
+                    {primaryAction.label}
+                  </Button>
+                </div>
+                <div className={styles.toolbarSection} role="group" aria-label="Risk controls">
+                  <span className={styles.toolbarLabel}>Risk</span>
+                  <div className={styles.riskToggleRow}>
+                    <AutomationToggle
+                      label="Autopilot"
+                      info={AUTOMATION_HELP.autopilotOrchestration}
+                      checked={autopilot}
+                      disabled={autopilotBusy || !viewState.canToggleAutomation}
+                      onChange={(checked) => toggleAutopilot(checked)}
+                    />
+                    <AutomationToggle
+                      label="Auto-approve safe tools"
+                      info={AUTOMATION_HELP.autoApproveOrchestration}
+                      checked={autoApprove}
+                      disabled={autoApproveBusy || !viewState.canToggleAutomation}
+                      onChange={(checked) => toggleAutoApprove(checked)}
+                    />
+                  </div>
+                </div>
+                <span className={styles.toolbarDivider} aria-hidden="true" />
+                <div className={styles.toolbarSection} role="group" aria-label="Run safety controls">
+                  <span className={styles.toolbarLabel}>Safety</span>
+                  <Button
+                    appearance={isRetryable ? 'secondary' : 'subtle'}
+                    size="small"
+                    icon={<ArrowRepeatAllRegular />}
+                    disabled={!isRetryable || retrying}
+                    onClick={() => void handleRetry()}
+                    data-testid="coordinator-retry-button"
+                    aria-label={retryAriaLabel}
+                    title={retryHint}
+                  >
+                    Retry failed
+                  </Button>
+                  <Button
+                    appearance={viewState.canStop ? 'secondary' : 'subtle'}
+                    size="small"
+                    icon={stopping ? <Spinner size="extra-tiny" /> : <DismissRegular />}
+                    disabled={!viewState.canStop || stopping}
+                    onClick={() => void handleStopRun()}
+                    aria-label={stopAriaLabel}
+                    title={stopHint}
+                  >
+                    Stop run
+                  </Button>
+                </div>
+                <span className={styles.toolbarDivider} aria-hidden="true" />
+                <div className={styles.toolbarSection} role="group" aria-label="Views">
+                  <span className={styles.toolbarLabel}>Views</span>
+                  <Button appearance="transparent" size="small" icon={<FlowchartRegular />} onClick={() => setTopologyPanelOpen(true)} data-testid="open-topology-panel">
+                    Topology
+                  </Button>
+                  {!isChildRun && (
+                    <Button appearance="transparent" size="small" icon={<DocumentRegular />} onClick={() => setCenterTab('plan')} data-testid="open-plan-panel">
+                      Plan
+                    </Button>
+                  )}
+                  {!isChildRun && (
+                    <Button appearance="transparent" size="small" icon={<FolderRegular />} onClick={() => setCenterTab('artifacts')} data-testid="open-artifacts-panel">
+                      Artifacts
+                    </Button>
+                  )}
+                  {isKubernetesSandbox && (
+                    <Button appearance="transparent" size="small" icon={<OpenRegular />} onClick={() => { setPreviewDialogOpen(true); setPreviewError(undefined); }}>
+                      Preview Sandbox
+                    </Button>
+                  )}
                 </div>
               </div>
-              <span className={styles.toolbarDivider} aria-hidden="true" />
-              <div className={styles.toolbarSection} role="group" aria-label="Run safety controls">
-                <span className={styles.toolbarLabel}>Safety</span>
-                <Button
-                  appearance={isRetryable ? 'secondary' : 'subtle'}
-                  size="small"
-                  icon={<ArrowRepeatAllRegular />}
-                  disabled={!isRetryable || retrying}
-                  onClick={() => void handleRetry()}
-                  data-testid="coordinator-retry-button"
-                  aria-label={retryAriaLabel}
-                  title={retryHint}
-                >
-                  Retry failed
-                </Button>
-                <Button
-                  appearance={viewState.canStop ? 'secondary' : 'subtle'}
-                  className={viewState.canStop ? styles.stopRunButton : undefined}
-                  size="small"
-                  icon={stopping ? <Spinner size="extra-tiny" /> : <DismissRegular />}
-                  disabled={!viewState.canStop || stopping}
-                  onClick={() => void handleStopRun()}
-                  aria-label={stopAriaLabel}
-                  title={stopHint}
-                >
-                  Stop run
-                </Button>
-              </div>
-              <span className={styles.toolbarDivider} aria-hidden="true" />
-              <div className={`${styles.toolbarSection} ${styles.panelToolbarSection}`} role="group" aria-label="Secondary panels">
-                <span className={styles.toolbarLabel}>Panels</span>
-                <Button appearance="transparent" size="small" icon={<FlowchartRegular />} onClick={() => setTopologyPanelOpen(true)} data-testid="open-topology-panel">
-                  Topology
-                </Button>
-                {!isChildRun && (
-                  <Button appearance="transparent" size="small" icon={<DocumentRegular />} onClick={() => setSpecPanelOpen(true)} data-testid="open-plan-panel">
-                    Plan
-                  </Button>
-                )}
-                {!isChildRun && (
-                  <Button appearance="transparent" size="small" icon={<FolderRegular />} onClick={() => setArtifactsPanelOpen(true)} data-testid="open-artifacts-panel">
-                    Artifacts
-                  </Button>
-                )}
-                {isKubernetesSandbox && (
-                  <Button appearance="transparent" size="small" icon={<OpenRegular />} onClick={() => { setPreviewDialogOpen(true); setPreviewError(undefined); }}>
-                    Preview Sandbox
-                  </Button>
-                )}
-              </div>
-            </AzureToolbar>
             </div>
-          </div>
           )}
         </div>
-        )}
-      >
 
         <div className={styles.bodyGrid}>
-          <aside className={styles.leftZone} aria-label="Run tree">
-            <div className={styles.zoneHeader}>
-              <div className={styles.zoneHeaderStack}>
-                <span className={styles.zoneKicker}>Left blade</span>
-                <span>Run tree</span>
-              </div>
+          <aside className={styles.treeRail} aria-label="Run tree">
+            <div className={styles.treeRailHeader}>
+              <TitleText>Run tree</TitleText>
               <Text className={styles.hint}>{flatSessionTree.length} nodes</Text>
             </div>
-            <div className={styles.treeList}>
-              {flatSessionTree.length === 0 ? (
-                <AzureEmptyState
-                  compact
+            {flatSessionTree.length === 0 ? (
+              <div className={styles.treeEmpty}>
+                <EmptyState
                   title="Coordinator is still shaping the run"
-                  body="The task tree appears after the outcome plan or saved work plan arrives. Keep the stream open; if it remains empty, use the selected task panel to message the coordinator or retry a failed run."
+                  description="The task tree appears after the outcome plan or saved work plan arrives. Keep the stream open; if it stays empty, message the coordinator from Chat or retry a failed run."
                 />
-              ) : flatSessionTree.map((item) => {
-                const selected = item.nodeId === activePanelNodeId;
-                const indent = Math.max(0, item.depth) * 14;
-                const itemStateColor = semanticStateColorForStatus(item.status);
-                const itemStatusLabel = runTreeStatusLabel(item.status, item.nodeId === 'outcome-plan' ? outcomePlanConfirmedBy : undefined);
-                return (
-                  <button
-                    key={item.nodeId}
-                    className={`${styles.runTreeRow} ${selected ? styles.runTreeRowSelected : ''}`}
-                    style={{ paddingLeft: `${8 + indent}px` }}
-                    onClick={() => openPanelForNode(item.nodeId)}
-                    title={`${item.label}${item.agentName ? ` · ${item.agentName}` : ''}`}
-                    aria-current={selected ? 'true' : undefined}
-                    aria-label={`Select ${item.label}: ${itemStatusLabel}`}
-                  >
-                    <span
-                      className={`${styles.runTreeStatusIcon} ${stateIconClass(itemStateColor)}`}
-                      data-testid="run-tree-status-icon"
-                      data-state-color={itemStateColor}
-                      aria-hidden="true"
-                    >
-                      {runTreeStatusIcon(item.status)}
-                    </span>
-                    <AgentAvatar name={item.agentName ?? item.label} size={24} circle />
-                    <span className={styles.treeText}>
-                      <Text className={styles.treePrimary}>{item.label}</Text>
-                      <Text className={styles.treeSecondary}>
-                        <span className={stateTextClass(itemStateColor)} data-state-color={itemStateColor}>{itemStatusLabel}</span>
-                        {' · '}
-                        {item.agentName
-                          ? `${item.agentName}${item.agentRole ? ` (${item.agentRole})` : ''}`
-                          : item.agentRole
-                            ? `Coordinator (${item.agentRole})`
-                            : 'Coordinator'}
-                      </Text>
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
+              </div>
+            ) : (
+              <div className={styles.treeScroll}>
+                <Tree aria-label="Run tree" size="small" openItems={treeBranchIds}>
+                  {renderTreeItems(sessionTree)}
+                </Tree>
+              </div>
+            )}
           </aside>
 
-          <section className={styles.readoutZone} aria-label="Selected task details">
-            <section className={styles.systemPanel} aria-label="System topology panel">
-              <div className={styles.systemPanelHeader}>
-                <div className={styles.systemPanelTitle}>
-                  <span className={styles.zoneKicker}>Center workspace</span>
-                  <Text weight="semibold">Topology and task details</Text>
-                  <Text className={styles.hint}>Topology is contained in this system panel; open the blade for the full ReactFlow canvas.</Text>
-                </div>
-                <div className={styles.systemPanelActions}>
-                  <AzureTabList
-                    tabs={[
-                      { id: 'topology', label: 'Topology', icon: <FlowchartRegular /> },
-                      { id: 'progress', label: 'Progress', icon: <BotRegular /> },
-                    ]}
-                    selectedValue={topologyView}
-                    onTabSelect={(value) => setTopologyView(value === 'progress' ? 'progress' : 'topology')}
-                    ariaLabel="System panel mode"
-                  />
-                  <Button appearance="secondary" size="small" icon={<FlowchartRegular />} onClick={() => setTopologyPanelOpen(true)} data-testid="open-topology-panel-inline">
-                    Open topology
-                  </Button>
-                </div>
-              </div>
-              <div className={styles.topologyContainment}>
-                <div className={styles.topologyTile}>
-                  <span className={styles.runStatusBandLabel}>Graph state</span>
-                  <Text weight="semibold">{hasGraph ? 'Available' : graphEmptyState.title}</Text>
-                  <Text className={styles.hint}>{hasGraph ? `${displayNodes.length} nodes · ${displayEdges2.length} links` : 'Waiting on persisted graph or stream topology.'}</Text>
-                </div>
-                <div className={styles.topologyTile}>
-                  <span className={styles.runStatusBandLabel}>Active phase</span>
-                  <Text weight="semibold">{orchPhaseLabel(orch.phase)}</Text>
-                  <Text className={styles.hint}>{formatPhaseUpdated(orch.updatedAt)}</Text>
-                </div>
-                <div className={styles.topologyTile}>
-                  <span className={styles.runStatusBandLabel}>Operator focus</span>
-                  <Text weight="semibold">{selectedSessionItem?.label ?? 'Coordinator'}</Text>
-                  <Text className={styles.hint}>Messages, changes, and files stay scoped below.</Text>
-                </div>
-              </div>
-            </section>
-            <div className={styles.workspaceRegionStrip} aria-label="Selected task regions">
-              <div className={styles.workspaceRegionCard}>
-                <span className={styles.workspaceRegionIcon}><ChatRegular aria-hidden="true" /></span>
-                <span className={styles.workspaceRegionText}>
-                  <Text weight="semibold">Messages</Text>
-                  <Text className={styles.hint}>Run stream and agent responses</Text>
-                </span>
-              </div>
-              <div className={styles.workspaceRegionCard}>
-                <span className={styles.workspaceRegionIcon}><DocumentRegular aria-hidden="true" /></span>
-                <span className={styles.workspaceRegionText}>
-                  <Text weight="semibold">Changes</Text>
-                  <Text className={styles.hint}>Diff-only review surface</Text>
-                </span>
-              </div>
-              <div className={styles.workspaceRegionCard}>
-                <span className={styles.workspaceRegionIcon}><FolderRegular aria-hidden="true" /></span>
-                <span className={styles.workspaceRegionText}>
-                  <Text weight="semibold">Files</Text>
-                  <Text className={styles.hint}>Workspace browser and references</Text>
-                </span>
-              </div>
-            </div>
-            <div className={styles.zoneHeader}>
-              <div className={styles.zoneHeaderStack}>
-                <span className={styles.zoneKicker}>Center details</span>
-                <span>Selected task</span>
-              </div>
-              <span className={styles.hint}>
-                {selectedSessionItem ? `${selectedSessionItem.label} · Messages · Changes · Files` : 'Messages · Changes · Files'}
-              </span>
-            </div>
-            <div className={styles.readoutBody}>
-              <AgentSessionPanel
-                variant="docked"
-                open={sessionPanelOpen && Boolean(activePanelNodeId)}
-                selectedNodeId={activePanelNodeId}
-                coordinatorRunId={runId ?? ''}
-                projectId={projectId ?? ''}
-                tree={sessionTree}
-                onClose={() => setSessionPanelOpen(false)}
-                onSelectNode={openPanelForNode}
-                onCoordinatorFollowUp={reconnectStream}
-                coordinatorActive={coordActive}
-                composerFocusSignal={composerFocusSignal}
-                onOutcomePlanClarify={() => setOutcomePlanClarifying(true)}
-                artifactAdapter={coordAdapter}
-              />
-            </div>
-          </section>
-          <aside className={styles.copilotZone} aria-label="Copilot activity and steering">
-            <div className={styles.zoneHeader}>
-              <div className={styles.zoneHeaderStack}>
-                <span className={styles.zoneKicker}>Right blade</span>
-                <span>Copilot activity / steering</span>
-              </div>
-              <SparkleRegular aria-hidden="true" />
-            </div>
-            <div className={styles.copilotScroll}>
-              <div className={`${styles.copilotCard} ${styles.copilotCardBrand}`}>
-                <Text weight="semibold">Coordinator response cards</Text>
-                <CopilotResponse parts={coordinatorResponseParts} />
-              </div>
-              {approvalSteps.length > 0 && (
-                <AgenticApprovalPattern
-                  title="Approvals and gates"
-                  summary="Human-in-the-loop checkpoint for collective assembly before merge/scribe continue."
-                  steps={approvalSteps}
-                  defaultOpenItems={['assembly-review']}
-                  onApprove={() => void handleAssemblyApproval('approve')}
-                  onDeny={() => void handleAssemblyApproval('decline')}
-                />
-              )}
-              <div className={styles.copilotCard}>
-                <Text weight="semibold">Agentic progress</Text>
-                <ChainOfThought {...coordinatorReasoning} />
-              </div>
-            </div>
-            <div className={styles.copilotSticky} aria-label="Sticky steering surface">
-              <div className={styles.zoneHeaderStack}>
-                <Text weight="semibold">Steer selected work</Text>
-                <Text className={styles.hint}>
-                  {selectedSessionItem
-                    ? `Context: ${selectedSessionItem.label}. Messages send through the coordinator steering API.`
-                    : 'Select a task or message the coordinator directly.'}
+          <section className={styles.centerZone} aria-label="Selected task">
+            <div className={styles.centerHeader}>
+              <div className={styles.centerHeaderTitles}>
+                <TitleText>Selected task</TitleText>
+                <Text className={styles.scopeHint}>
+                  {selectedSessionItem ? `Scope: ${selectedSessionItem.label}` : 'Chat with the Coordinator'}
                 </Text>
               </div>
-              <div className={styles.copilotActionRow}>
-                <Button appearance="primary" icon={<ChatRegular />} disabled={!coordActive} onClick={focusSelectedComposer}>
-                  Focus composer
-                </Button>
-                <Button appearance="secondary" icon={<FolderRegular />} onClick={() => setArtifactsPanelOpen(true)} disabled={isChildRun}>
-                  Review artifacts
-                </Button>
+              <div className={styles.centerTabRow}>
+                <TabList
+                  selectedValue={effectiveCenterTab}
+                  onTabSelect={(_, data) => setCenterTab(data.value === 'plan' ? 'plan' : data.value === 'artifacts' ? 'artifacts' : 'chat')}
+                  aria-label="Selected task views"
+                  size="small"
+                >
+                  <Tab value="chat" icon={<ChatRegular />}>Chat</Tab>
+                  {!isChildRun && <Tab value="plan" icon={<DocumentRegular />}>Plan</Tab>}
+                  {!isChildRun && <Tab value="artifacts" icon={<FolderRegular />}>Artifacts</Tab>}
+                </TabList>
+                {hasGraph && (
+                  <div
+                    role="button"
+                    tabIndex={0}
+                    className={styles.minimapButton}
+                    aria-label="Open full topology graph"
+                    onClick={() => setTopologyPanelOpen(true)}
+                    onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setTopologyPanelOpen(true); } }}
+                    data-testid="open-topology-minimap"
+                  >
+                    <div className={styles.minimapCanvas} aria-hidden="true">
+                      <ExecutionModalContext.Provider value={viewAssemblyExecution}>
+                      <BrowseFilesContext.Provider value={browseAssemblyFiles}>
+                      <ActiveEdgeContext.Provider value={activeLoopbackId}>
+                      <CoordinatorSessionContext.Provider value={() => openPanelForNode('coordinator')}>
+                      <CoordExpandContext.Provider value={expandValue}>
+                      <CoordPanelContext.Provider value={openPanelForNode}>
+                        <ReactFlow
+                          nodes={linkedDisplayNodes}
+                          edges={displayEdges2}
+                          nodeTypes={coordinatorNodeTypes}
+                          edgeTypes={workflowEdgeTypes}
+                          fitView
+                          fitViewOptions={{ padding: 0.12 }}
+                          nodesDraggable={false}
+                          nodesConnectable={false}
+                          nodesFocusable={false}
+                          edgesFocusable={false}
+                          elementsSelectable={false}
+                          panOnDrag={false}
+                          panOnScroll={false}
+                          zoomOnScroll={false}
+                          zoomOnPinch={false}
+                          zoomOnDoubleClick={false}
+                          preventScrolling={false}
+                          proOptions={{ hideAttribution: true }}
+                          style={{ width: '100%', height: '100%' }}
+                        />
+                      </CoordPanelContext.Provider>
+                      </CoordExpandContext.Provider>
+                      </CoordinatorSessionContext.Provider>
+                      </ActiveEdgeContext.Provider>
+                      </BrowseFilesContext.Provider>
+                      </ExecutionModalContext.Provider>
+                    </div>
+                    <span className={styles.minimapCaption}>Topology · {displayNodes.length} nodes</span>
+                  </div>
+                )}
               </div>
             </div>
-          </aside>
+
+            {reviewActionable && approvalSteps.length > 0 && (
+              <div className={styles.approvalGateWrap}>
+                <AgentStepList
+                  steps={approvalSteps}
+                  onApprove={() => void handleAssemblyApproval('approve')}
+                  onDeny={() => void handleAssemblyApproval('decline')}
+                  aria-label="Approvals and gates"
+                />
+              </div>
+            )}
+
+            <div className={styles.centerTabBody}>
+              <div hidden={effectiveCenterTab !== 'chat'} className={styles.readoutBody}>
+                <AgentSessionPanel
+                  variant="docked"
+                  open={sessionPanelOpen && Boolean(activePanelNodeId)}
+                  selectedNodeId={activePanelNodeId}
+                  coordinatorRunId={runId ?? ''}
+                  projectId={projectId ?? ''}
+                  tree={sessionTree}
+                  onClose={() => setSessionPanelOpen(false)}
+                  onSelectNode={openPanelForNode}
+                  onCoordinatorFollowUp={reconnectStream}
+                  coordinatorActive={coordActive}
+                  composerFocusSignal={composerFocusSignal}
+                  onOutcomePlanClarify={() => setOutcomePlanClarifying(true)}
+                  artifactAdapter={coordAdapter}
+                />
+              </div>
+              {!isChildRun && effectiveCenterTab === 'plan' && (
+                <div className={styles.tabPanelCard}>
+                  <OutcomePlanPanel
+                    runId={runId}
+                    projectId={projectId ?? undefined}
+                    events={events}
+                    streamStatus={streamStatus}
+                    runStatus={runLevelStatus}
+                    onCollapse={() => setCenterTab('chat')}
+                    onReconnect={reconnectStream}
+                    onClarifyPlan={focusOutcomePlanComposer}
+                  />
+                </div>
+              )}
+              {!isChildRun && effectiveCenterTab === 'artifacts' && runId && (
+                <div className={styles.tabPanelCard}>
+                  <CoordinatorArtifactsPanel runId={runId} runStatus={coordRunStatus} adapter={coordAdapter} />
+                </div>
+              )}
+            </div>
+          </section>
         </div>
-      </CoordinatorRunPattern>
+      </div>
 
       <SlidePanel
         open={topologyPanelOpen}
@@ -4385,37 +3747,6 @@ export function CoordinatorRunPage() {
         bodyClassName={styles.topologyPanelBody}
       >
         {topologyInspectorContent}
-      </SlidePanel>
-
-      {/* Outcome plan side panel (#164) */}
-      <SlidePanel
-        open={specPanelOpen}
-        onClose={() => setSpecPanelOpen(false)}
-        title="Outcome plan"
-        width="min(560px, 94vw)"
-      >
-        <OutcomePlanPanel
-          runId={runId}
-          projectId={projectId ?? undefined}
-          events={events}
-          streamStatus={streamStatus}
-          runStatus={runLevelStatus}
-          onCollapse={() => setSpecPanelOpen(false)}
-          onReconnect={reconnectStream}
-          onClarifyPlan={focusOutcomePlanComposer}
-        />
-      </SlidePanel>
-
-      {/* Workspace file browser side panel (#165) */}
-      <SlidePanel
-        open={artifactsPanelOpen}
-        onClose={() => setArtifactsPanelOpen(false)}
-        title="Artifacts"
-        width="min(760px, 96vw)"
-      >
-        {artifactsPanelOpen && runId && (
-          <CoordinatorArtifactsPanel runId={runId} runStatus={coordRunStatus} adapter={coordAdapter} />
-        )}
       </SlidePanel>
 
       {/* Sandbox preview port-forward dialog */}

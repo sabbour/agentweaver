@@ -1,10 +1,10 @@
-import { AzureFluentProvider } from '../copilot-fluent-system';
+import { FluentProvider, webLightTheme } from '@fluentui/react-components';
 import { PageHeader } from '../components/PageHeader';
 import { cleanup, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { ReactNode } from 'react';
 function Wrapper({ children }: { children: ReactNode }) {
-  return <AzureFluentProvider density="compact">{children}</AzureFluentProvider>;
+  return <FluentProvider theme={webLightTheme}>{children}</FluentProvider>;
 }
 
 afterEach(() => cleanup());
@@ -32,9 +32,10 @@ describe('PageHeader', () => {
   it('renders the breadcrumb slot above the title', () => {
     render(
       <Wrapper>
-        <PageHeader title="Flow" breadcrumb={<nav aria-label="Breadcrumb">Projects / Flow</nav>} />
+        <PageHeader title="Flow" breadcrumb={<span>Projects / Flow</span>} />
       </Wrapper>,
     );
+    // The kit PageHeader wraps breadcrumbs content in <nav aria-label="Breadcrumb">
     expect(screen.getByLabelText('Breadcrumb')).toBeDefined();
     expect(screen.getByText('Flow')).toBeDefined();
   });

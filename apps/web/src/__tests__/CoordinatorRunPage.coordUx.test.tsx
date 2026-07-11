@@ -236,7 +236,7 @@ describe('CoordinatorRunPage operator console redesign', () => {
     render(<Wrapper><CoordinatorRunPage /></Wrapper>);
 
     await waitFor(() => expect(document.body.textContent).toContain('Subtask 1'), { timeout: 4000 });
-    fireEvent.click(screen.getByRole('button', { name: /Subtask 1/i }));
+    fireEvent.click(screen.getByRole('treeitem', { name: /Subtask 1/i }));
 
     await waitFor(() => expect(document.body.textContent).toContain('Context: Subtask 1'), { timeout: 4000 });
     expect(document.body.textContent).toContain('Neo');
@@ -353,7 +353,7 @@ describe('CoordinatorRunPage operator console redesign', () => {
     await waitFor(() => expect(indicator.textContent).toContain('Workflow: Restored workflow'), { timeout: 4000 });
     expect(indicator.textContent).toContain('Task: Restored task (Running)');
     expect(indicator.textContent).toContain('Why: Loaded from persisted event history.');
-    const restoredRow = await screen.findByRole('button', { name: /Select Restored task: Running/ }, { timeout: 4000 });
+    const restoredRow = await screen.findByRole('treeitem', { name: /Select Restored task: Running/ }, { timeout: 4000 });
     expect(within(restoredRow).getByTestId('run-tree-status-icon').getAttribute('data-state-color')).toBe('running');
   });
 
@@ -432,8 +432,8 @@ describe('CoordinatorRunPage operator console redesign', () => {
 
     render(<Wrapper><CoordinatorRunPage /></Wrapper>);
 
-    const runningRow = await screen.findByRole('button', { name: /Select Hydrated running task: Running/ }, { timeout: 4000 });
-    const assemblyRow = await screen.findByRole('button', { name: /Select Hydrated assembly task: Ready for assembly/ }, { timeout: 4000 });
+    const runningRow = await screen.findByRole('treeitem', { name: /Select Hydrated running task: Running/ }, { timeout: 4000 });
+    const assemblyRow = await screen.findByRole('treeitem', { name: /Select Hydrated assembly task: Ready for assembly/ }, { timeout: 4000 });
     expect(within(runningRow).getByTestId('run-tree-status-icon').getAttribute('data-state-color')).toBe('running');
     expect(within(assemblyRow).getByTestId('run-tree-status-icon').getAttribute('data-state-color')).toBe('success');
     expect(runningRow.textContent).not.toMatch(/\bQueued\b/);
@@ -538,14 +538,14 @@ describe('CoordinatorRunPage operator console redesign', () => {
     render(<Wrapper><CoordinatorRunPage /></Wrapper>);
 
     const statusColorFor = async (label: string) => {
-      const row = await screen.findByRole('button', { name: new RegExp(`Select ${label}:`) }, { timeout: 4000 });
+      const row = await screen.findByRole('treeitem', { name: new RegExp(`Select ${label}:`) }, { timeout: 4000 });
       return within(row).getByTestId('run-tree-status-icon').getAttribute('data-state-color');
     };
     const statusIconFor = async (label: string) => {
-      const row = await screen.findByRole('button', { name: new RegExp(`Select ${label}:`) }, { timeout: 4000 });
+      const row = await screen.findByRole('treeitem', { name: new RegExp(`Select ${label}:`) }, { timeout: 4000 });
       return within(row).getByTestId('run-tree-status-icon');
     };
-    const rowFor = (label: string) => screen.getByRole('button', { name: new RegExp(`Select ${label}:`) });
+    const rowFor = (label: string) => screen.getByRole('treeitem', { name: new RegExp(`Select ${label}:`) });
 
     expect((await screen.findByTestId('run-status-chip', undefined, { timeout: 4000 })).getAttribute('data-state-color')).toBe('running');
     expect(await statusColorFor('Running task')).toBe('running');
@@ -601,7 +601,7 @@ describe('CoordinatorRunPage operator console redesign', () => {
     render(<Wrapper><CoordinatorRunPage /></Wrapper>);
 
     await waitFor(() => expect(screen.getByTestId('run-operator-console')).toBeTruthy(), { timeout: 4000 });
-    fireEvent.click(screen.getByRole('button', { name: /Select Subtask 1/i }));
+    fireEvent.click(screen.getByRole('treeitem', { name: /Select Subtask 1/i }));
 
     await waitFor(
       () => expect(screen.getByTestId('session-tab-files').textContent).toContain('Files (1)'),
@@ -617,7 +617,7 @@ describe('CoordinatorRunPage operator console redesign', () => {
     render(<Wrapper><CoordinatorRunPage /></Wrapper>);
 
     await waitFor(() => expect(document.body.textContent).toContain('Subtask 1'), { timeout: 4000 });
-    fireEvent.click(screen.getByRole('button', { name: /Subtask 1/i }));
+    fireEvent.click(screen.getByRole('treeitem', { name: /Subtask 1/i }));
     const input = screen.getByPlaceholderText('Message coordinator...');
     fireEvent.change(input, { target: { value: 'Use the cached source' } });
     fireEvent.click(screen.getByRole('button', { name: 'Send message' }));

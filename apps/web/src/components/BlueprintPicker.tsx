@@ -14,7 +14,7 @@ import {
   makeStyles,
   mergeClasses,
   tokens,
-} from '../copilot-fluent-system';
+} from '@fluentui/react-components';
 import {
   BotRegular,
   CheckmarkRegular,
@@ -25,7 +25,7 @@ import {
   InfoRegular,
   PeopleTeamRegular,
   SparkleRegular,
-} from '../copilot-fluent-system';
+} from '@fluentui/react-icons';
 import { useEffect, useState } from 'react';
 import type { Blueprint, SuggestBlueprintResponse } from '../api/types';
 import type { ReactElement } from 'react';
@@ -42,10 +42,10 @@ const useStyles = makeStyles({
   root: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minHeight: 0 },
   panel: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minHeight: 0, height: '100%' },
   panelHeader: { display: 'flex', alignItems: 'flex-start', gap: tokens.spacingHorizontalM },
-  panelIcon: { width: '36px', height: '36px', borderRadius: tokens.borderRadiusMedium, backgroundColor: tokens.colorBrandBackground2, color: tokens.colorBrandForeground1, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
+  panelIcon: { width: '36px', height: '36px', borderRadius: tokens.borderRadiusMedium, backgroundColor: tokens.colorNeutralBackground3, color: tokens.colorNeutralForeground2, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
   tabStrip: { display: 'flex', width: '100%', borderBottom: `1px solid ${tokens.colorNeutralStroke2}`, gap: tokens.spacingHorizontalL },
   tabButton: { appearance: 'none', border: 0, borderBottom: '2px solid transparent', backgroundColor: 'transparent', color: tokens.colorNeutralForeground3, cursor: 'pointer', padding: `${tokens.spacingVerticalS} 0`, marginBottom: '-1px', fontWeight: tokens.fontWeightSemibold, display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalXXS },
-  tabButtonActive: { color: tokens.colorBrandForeground1, borderBottomColor: tokens.colorBrandStroke1 },
+  tabButtonActive: { color: tokens.colorNeutralForeground1, borderBottomColor: tokens.colorNeutralStroke1 },
   panelBody: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL, minHeight: 0, overflowY: 'auto', paddingRight: tokens.spacingHorizontalXS },
   sectionHeader: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: tokens.spacingHorizontalM },
   subtle: { color: tokens.colorNeutralForeground3 },
@@ -79,15 +79,15 @@ const useStyles = makeStyles({
   // "No blueprint" control: an inner brand ring (via box-shadow, so the row does
   // not reflow) plus a brand-colored border and a subtle brand tint.
   templateRowSelected: {
-    backgroundColor: tokens.colorBrandBackground2,
-    borderTopColor: tokens.colorBrandStroke1,
-    borderRightColor: tokens.colorBrandStroke1,
-    borderBottomColor: tokens.colorBrandStroke1,
-    borderLeftColor: tokens.colorBrandStroke1,
-    boxShadow: `inset 0 0 0 1px ${tokens.colorBrandStroke1}`,
-    ':hover': { backgroundColor: tokens.colorBrandBackground2 },
+    backgroundColor: tokens.colorNeutralBackground3,
+    borderTopColor: tokens.colorNeutralStroke1,
+    borderRightColor: tokens.colorNeutralStroke1,
+    borderBottomColor: tokens.colorNeutralStroke1,
+    borderLeftColor: tokens.colorNeutralStroke1,
+    boxShadow: `inset 0 0 0 1px ${tokens.colorNeutralStroke1}`,
+    ':hover': { backgroundColor: tokens.colorNeutralBackground3 },
   },
-  rowIcon: { width: '28px', height: '28px', borderRadius: tokens.borderRadiusMedium, backgroundColor: tokens.colorBrandBackground2, color: tokens.colorBrandForeground1, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
+  rowIcon: { width: '28px', height: '28px', borderRadius: tokens.borderRadiusMedium, backgroundColor: tokens.colorNeutralBackground3, color: tokens.colorNeutralForeground2, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
   rowMain: { display: 'flex', flexDirection: 'column', minWidth: 0, flexGrow: 1 },
   rowTitle: { fontWeight: tokens.fontWeightSemibold, fontSize: tokens.fontSizeBase300, color: tokens.colorNeutralForeground1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
   // colorNeutralForeground2 keeps the muted look while staying >= 4.5:1 on the
@@ -118,7 +118,7 @@ const useStyles = makeStyles({
   // Working state shown while a blueprint is being generated — a purposeful
   // "at work" surface, not a static spinner.
   workingCard: { display: 'flex', flexDirection: 'column', alignItems: 'center', gap: tokens.spacingVerticalS, padding: tokens.spacingVerticalXL, textAlign: 'center', backgroundColor: tokens.colorNeutralBackground1, border: `1px solid ${tokens.colorNeutralStroke2}`, minHeight: '140px', justifyContent: 'center' },
-  workingBubble: { width: '48px', height: '48px', borderRadius: tokens.borderRadiusCircular, backgroundColor: tokens.colorBrandBackground2, color: tokens.colorBrandForeground1, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
+  workingBubble: { width: '48px', height: '48px', borderRadius: tokens.borderRadiusCircular, backgroundColor: tokens.colorNeutralBackground3, color: tokens.colorNeutralForeground2, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
   // Gentle breathe on the sparkle bubble. Motion conveys "working"; disabled
   // under reduced-motion where the bubble simply sits static.
   sparklePulse: {
@@ -251,7 +251,7 @@ export function BlueprintRosterChips({ roster, limit }: { roster: string[]; limi
   if (roster.length === 0) return null;
   return (
     <div className={styles.chips}>
-      {visible.map((role) => <Badge key={role} appearance="tint" color="brand" size="small">{role}</Badge>)}
+      {visible.map((role) => <Badge key={role} appearance="outline" size="small">{role}</Badge>)}
       {remaining > 0 && <Badge appearance="outline" size="small">+{remaining}</Badge>}
     </div>
   );
