@@ -2,22 +2,44 @@ import {
   apiClient } from '../api/apiClient';
 import { ApiError,
   RetriableReviewError } from '../api/client';
-import { AzureToolbar,
-  BladeHeader,
+import {
+  Button,
+  makeStyles,
   MessageBar,
   MessageBarBody,
-  StatusIconText,
+  Spinner,
   Text,
-  } from '../copilot-fluent-system';
-import { makeStyles,
-  mergeClasses,
   tokens,
-} from '../copilot-fluent-system';
+} from '@fluentui/react-components';
+import {
+  CheckmarkCircleRegular,
+  DismissCircleRegular,
+  WarningRegular,
+} from '@fluentui/react-icons';
 import { useState } from 'react';
 import type { ReviewResponse } from '../api/types';
 const useStyles = makeStyles({
   root: {
     padding: tokens.spacingVerticalM,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalM,
+    backgroundColor: tokens.colorNeutralBackground1,
+    borderRadius: tokens.borderRadiusMedium,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+  },
+  header: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalXS,
+  },
+  title: {
+    fontWeight: tokens.fontWeightSemibold,
+    fontSize: tokens.fontSizeBase400,
+  },
+  subtitle: {
+    fontSize: tokens.fontSizeBase300,
+    color: tokens.colorNeutralForeground2,
   },
   meta: {
     fontFamily: tokens.fontFamilyMonospace,
@@ -25,13 +47,27 @@ const useStyles = makeStyles({
     color: tokens.colorNeutralForeground3,
   },
   actions: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalS,
     minWidth: 0,
   },
   error: {
     color: tokens.colorPaletteRedForeground1,
   },
   resultRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalS,
   },
+  statusRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXS,
+  },
+  statusIconSuccess: { color: tokens.colorPaletteGreenForeground1 },
+  statusIconWarning: { color: tokens.colorPaletteMarigoldForeground2 },
+  statusIconDanger: { color: tokens.colorPaletteRedForeground1 },
   mergeResult: {
     fontFamily: tokens.fontFamilyMonospace,
     fontSize: tokens.fontSizeBase200,
@@ -80,22 +116,33 @@ export function ReviewPanel({ runId, treeHash, onReviewComplete }: ReviewPanelPr
   if (result) {
     if (result.status === 'merge_failed') {
       return (
-        <div className={mergeClasses('azf-surface azf-stack azf-gap-m', styles.root)}>
-          <BladeHeader size="compact" title="Merge failed" subtitle="The worktree has been preserved for manual resolution." />
+        <div className={styles.root}>
+          <div className={styles.header}>
+            <Text className={styles.title}>Merge failed</Text>
+            <Text className={styles.subtitle}>The changes have been preserved for manual resolution.</Text>
+          </div>
           {result.merge_result && (
             <Text className={styles.mergeResult}>{result.merge_result}</Text>
           )}
         </div>
       );
     }
+    const statusIcon = result.status === 'merged'
+      ? <CheckmarkCircleRegular className={styles.statusIconSuccess} aria-hidden="true" />
+      : result.status === 'declined'
+        ? <DismissCircleRegular aria-hidden="true" />
+        : <DismissCircleRegular className={styles.statusIconDanger} aria-hidden="true" />;
     return (
-      <div className={mergeClasses('azf-surface azf-stack azf-gap-m', styles.root)}>
-        <BladeHeader size="compact" title="Review submitted" />
-        <div className={mergeClasses('azf-row azf-gap-s', styles.resultRow)}>
+      <div className={styles.root}>
+        <div className={styles.header}>
+          <Text className={styles.title}>Review submitted</Text>
+        </div>
+        <div className={styles.resultRow}>
           <Text>Status:</Text>
-          <StatusIconText status={result.status === 'merged' ? 'success' : result.status === 'declined' ? 'neutral' : 'danger'}>
-            {result.status}
-          </StatusIconText>
+          <span className={styles.statusRow}>
+            {statusIcon}
+            <Text>{result.status}</Text>
+          </span>
         </div>
         {result.merge_result && (
           <Text className={styles.mergeResult}>{result.merge_result}</Text>
@@ -105,37 +152,39 @@ export function ReviewPanel({ runId, treeHash, onReviewComplete }: ReviewPanelPr
   }
 
   return (
-    <div className={mergeClasses('azf-surface azf-stack azf-gap-m', styles.root)}>
-      <BladeHeader size="compact" title="Review required" subtitle="Review the diff above and approve or decline the merge." />
+    <div className={styles.root}>
+      <div className={styles.header}>
+        <Text className={styles.title}>Review required</Text>
+        <Text className={styles.subtitle}>Review the diff above and approve or decline the merge.</Text>
+      </div>
       {treeHash && <Text className={styles.meta}>Tree: {treeHash}</Text>}
-      <StatusIconText status="warning">Waiting for review</StatusIconText>
+      <span className={styles.statusRow}>
+        <WarningRegular className={styles.statusIconWarning} aria-hidden="true" />
+        <Text>Waiting for review</Text>
+      </span>
       {retriableMessage && (
         <MessageBar intent="warning">
           <MessageBarBody>{retriableMessage}</MessageBarBody>
         </MessageBar>
       )}
       {error && <Text className={styles.error}>{error}</Text>}
-      <AzureToolbar
-        className={styles.actions}
-        ariaLabel="Review actions"
-        actions={[
-          {
-            id: 'approve',
-            label: 'Approve',
-            appearance: 'primary',
-            disabled: pending,
-            loading: pending,
-            onClick: () => void submit(true),
-          },
-          {
-            id: 'decline',
-            label: 'Decline',
-            appearance: 'secondary',
-            disabled: pending,
-            onClick: () => void submit(false),
-          },
-        ]}
-      />
+      <div className={styles.actions} role="group" aria-label="Review actions">
+        <Button
+          appearance="primary"
+          icon={pending ? <Spinner size="tiny" /> : undefined}
+          disabled={pending}
+          onClick={() => void submit(true)}
+        >
+          Approve
+        </Button>
+        <Button
+          appearance="secondary"
+          disabled={pending}
+          onClick={() => void submit(false)}
+        >
+          Decline
+        </Button>
+      </div>
     </div>
   );
 }

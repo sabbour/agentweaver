@@ -5,30 +5,19 @@ import { apiClient } from '../api/apiClient';
 import { formatApiErrorMessage } from '../api/errors';
 import { useRunStream } from '../api/sse';
 import {
-  ArtifactPill,
-  AzureEmptyState,
-  AzureTabList,
-  AzureToolbar,
   Button,
   Input,
   MessageBar,
   MessageBarBody,
   Spinner,
-  StatusIconText,
   Switch,
+  Tab,
+  TabList,
   Text,
   makeStyles,
   mergeClasses,
   tokens,
-} from '../copilot-fluent-system';
-import { useArtifactBrowser } from '../hooks/useArtifactBrowser';
-import { mergeRunEvents as sharedMergeRunEvents, SEED_STATUSES } from '../timeline/mergeRunEvents';
-import { deriveHumanTitle } from '../timeline/reducer';
-import { AgentAvatar } from './AgentAvatar';
-import { CompactChangesList, FilesTabPanel } from './ArtifactBrowser';
-import { FileViewerModal } from './FileViewerModal';
-import { LifecycleEventCard } from './LifecycleEventCard';
-import { OutcomePlanPanel } from './OutcomePlanPanel';
+} from '@fluentui/react-components';
 import {
   CheckmarkCircleFilled,
   ChevronDownRegular,
@@ -45,7 +34,17 @@ import {
   GlobeRegular,
   SendRegular,
   WindowConsoleRegular,
-} from '../copilot-fluent-system';
+} from '@fluentui/react-icons';
+import { ArtifactChip } from './ui/agentic';
+import { EmptyState } from './ui';
+import { useArtifactBrowser } from '../hooks/useArtifactBrowser';
+import { mergeRunEvents as sharedMergeRunEvents, SEED_STATUSES } from '../timeline/mergeRunEvents';
+import { deriveHumanTitle } from '../timeline/reducer';
+import { AgentAvatar } from './AgentAvatar';
+import { CompactChangesList, FilesTabPanel } from './ArtifactBrowser';
+import { FileViewerModal } from './FileViewerModal';
+import { LifecycleEventCard } from './LifecycleEventCard';
+import { OutcomePlanPanel } from './OutcomePlanPanel';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { EventType, RunStreamEvent } from '../api/sse';
 import type { WorkspaceFileEntry, WorkspaceNode } from '../api/types';
@@ -157,7 +156,8 @@ const useStyles = makeStyles({
     },
   },
   treeItemSelected: {
-    backgroundColor: tokens.colorBrandBackground2,
+    backgroundColor: tokens.colorNeutralBackground1Hover,
+    fontWeight: tokens.fontWeightSemibold,
   },
   guides: {
     display: 'flex',
@@ -215,7 +215,7 @@ const useStyles = makeStyles({
   statusGlyphSuccess: { color: tokens.colorPaletteGreenForeground1 },
   statusGlyphDanger: { color: tokens.colorPaletteRedForeground1 },
   statusGlyphWarning: { color: tokens.colorPaletteMarigoldForeground1 },
-  statusGlyphRunning: { color: tokens.colorBrandForeground1 },
+  statusGlyphRunning: { color: tokens.colorNeutralForeground2 },
   statusGlyphPending: { color: tokens.colorNeutralForeground4 },
   treeLabelCol: {
     display: 'flex',
@@ -357,9 +357,26 @@ const useStyles = makeStyles({
     padding: tokens.spacingVerticalXL,
     color: tokens.colorNeutralForeground3,
   },
+  statusChip: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: '4px',
+    fontSize: tokens.fontSizeBase200,
+    padding: '2px 8px',
+    borderRadius: tokens.borderRadiusCircular,
+    backgroundColor: tokens.colorNeutralBackground3,
+    color: tokens.colorNeutralForeground2,
+    whiteSpace: 'nowrap',
+  },
   conversationTurn: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalXS,
   },
   messageRow: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalXS,
   },
   messageCard: {
     display: 'grid',
@@ -369,11 +386,15 @@ const useStyles = makeStyles({
     backgroundColor: 'transparent',
   },
   messageMeta: {
+    display: 'flex',
+    alignItems: 'center',
     justifyContent: 'space-between',
     gap: tokens.spacingHorizontalS,
   },
   authorBlock: {
+    display: 'flex',
     alignItems: 'baseline',
+    gap: tokens.spacingHorizontalXS,
     minWidth: 0,
   },
   authorName: {
@@ -473,7 +494,8 @@ const useStyles = makeStyles({
     padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM}`,
   },
   bubbleUser: {
-    backgroundColor: tokens.colorBrandBackground2,
+    backgroundColor: tokens.colorNeutralBackground2,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
     padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM}`,
   },
   bubbleAgent: {
@@ -501,10 +523,16 @@ const useStyles = makeStyles({
     overflowWrap: 'anywhere',
   },
   toolsBox: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalXS,
     marginLeft: '32px',
     padding: `${tokens.spacingVerticalXS} 0`,
   },
   toolsButton: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXS,
     backgroundColor: 'transparent',
     border: 'none',
     padding: 0,
@@ -532,6 +560,9 @@ const useStyles = makeStyles({
     },
   },
   toolsList: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalXS,
     paddingTop: tokens.spacingVerticalXS,
   },
   toolRow: {
@@ -560,6 +591,9 @@ const useStyles = makeStyles({
     color: tokens.colorPaletteGreenForeground1,
   },
   fileRows: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalXS,
     marginLeft: '32px',
   },
   fileRow: {
@@ -1097,14 +1131,6 @@ function statusKind(status: string): StatusKind {
     default:
       return 'pending';
   }
-}
-
-function statusTone(kind: StatusKind): 'success' | 'danger' | 'warning' | 'info' | 'neutral' {
-  if (kind === 'success') return 'success';
-  if (kind === 'danger') return 'danger';
-  if (kind === 'awaiting') return 'warning';
-  if (kind === 'running') return 'info';
-  return 'neutral';
 }
 
 function StatusGlyph({ status, className }: { status: string; className?: string }) {
@@ -1860,11 +1886,9 @@ export function AgentSessionPanel({
                         })}
                       </span>
                     )}
-                    <StatusIconText
-                      status={statusTone(kind)}
-                      icon={<StatusGlyph status={item.status} />}
-                      className={glyphClass}
-                    />
+                    <span className={glyphClass} aria-hidden="true">
+                      <StatusGlyph status={item.status} className={glyphClass} />
+                    </span>
                     <span className={styles.treeLabelCol}>
                       <Text className={mergeClasses(styles.treeLinePrimary, selected && styles.treeLinePrimarySelected)}>
                         {item.label}
@@ -1890,9 +1914,10 @@ export function AgentSessionPanel({
             <div className={styles.mainHeader}>
               <div className={styles.mainHeaderInfo}>
                 <div className={styles.badgeRow}>
-                  <StatusIconText status={statusTone(statusKind(selectedItem.status))}>
+                  <span className={styles.statusChip}>
+                    <StatusGlyph status={selectedItem.status} />
                     {statusLabel(selectedItem.status)}
-                  </StatusIconText>
+                  </span>
                 </div>
                 <div className={styles.identityRow}>
                   <AgentAvatar name={selectedIdentity.avatarName} size={28} circle />
@@ -1911,16 +1936,15 @@ export function AgentSessionPanel({
               </div>
             </div>
 
-            <AzureTabList
+            <TabList
               className={styles.tabList}
               selectedValue={activeTab}
-              onTabSelect={(value) => setActiveTab(value as 'messages' | 'changes' | 'files')}
-              tabs={[
-                { id: 'messages', label: 'Messages', testId: 'session-tab-messages' },
-                { id: 'changes', label: `Changes (${files.length})`, testId: 'session-tab-changes' },
-                { id: 'files', label: `Files (${filesTabCount})`, testId: 'session-tab-files' },
-              ]}
-            />
+              onTabSelect={(_, data) => setActiveTab(data.value as 'messages' | 'changes' | 'files')}
+            >
+              <Tab value="messages" data-testid="session-tab-messages">Messages</Tab>
+              <Tab value="changes" data-testid="session-tab-changes">Changes ({files.length})</Tab>
+              <Tab value="files" data-testid="session-tab-files">Files ({filesTabCount})</Tab>
+            </TabList>
 
             <div className={styles.content}>
               {activeTab === 'messages' && (
@@ -1943,11 +1967,7 @@ export function AgentSessionPanel({
                       </MessageBar>
                     )}
                     {selectedItem.nodeId !== 'outcome-plan' && !runDetailLoading && turns.length > 0 && (
-                      <AzureToolbar
-                        actions={[]}
-                        ariaLabel="Session narrative actions"
-                        className={styles.narrativeToolbar}
-                      >
+                      <div className={styles.narrativeToolbar} role="toolbar" aria-label="Session narrative actions">
                         <Switch
                           checked={showTechnical}
                           onChange={(_, data) => setShowTechnical(data.checked)}
@@ -1964,12 +1984,13 @@ export function AgentSessionPanel({
                         >
                           {activityDetailsExpanded ? 'Collapse activity details' : 'Expand activity details'}
                         </Button>
-                      </AzureToolbar>
+                      </div>
                     )}
                     {runDetailLoading && (
-                      <StatusIconText status="info" icon={<Spinner size="tiny" />} className={styles.loadingWrap}>
-                        Loading session details...
-                      </StatusIconText>
+                      <div className={styles.loadingWrap} style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS }}>
+                        <Spinner size="tiny" />
+                        <Text>Loading session details...</Text>
+                      </div>
                     )}
                     {selectedItem.nodeId === 'outcome-plan' ? (
                       <OutcomePlanPanel
@@ -1983,11 +2004,10 @@ export function AgentSessionPanel({
                         clarificationSent={selectedItem.status === 'needs_clarification'}
                       />
                     ) : !runDetailLoading && turns.length === 0 && (
-                      <AzureEmptyState
-                        compact
+                      <EmptyState
                         className={styles.emptyState}
-                        title="No streamed messages yet for this session."
-                        body="Messages will appear here as the run emits activity."
+                        title="No messages yet."
+                        description="Messages will appear here as the run emits activity."
                       />
                     )}
                     {selectedItem.nodeId !== 'outcome-plan' &&
@@ -2083,19 +2103,19 @@ export function AgentSessionPanel({
                       <MessageBarBody>{selectedRunUnavailableReason}</MessageBarBody>
                     </MessageBar>
                   ) : filesLoading ? (
-                    <StatusIconText status="info" icon={<Spinner size="tiny" />} className={styles.loadingWrap}>
-                      Loading changes...
-                    </StatusIconText>
+                    <div className={styles.loadingWrap} style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS }}>
+                      <Spinner size="tiny" />
+                      <Text>Loading changes...</Text>
+                    </div>
                   ) : filesError ? (
                     <MessageBar intent="warning">
                       <MessageBarBody>{filesError}</MessageBarBody>
                     </MessageBar>
                   ) : files.length === 0 ? (
-                    <AzureEmptyState
-                      compact
+                    <EmptyState
                       className={styles.emptyState}
-                      title="No diff artifacts available for this session yet."
-                      body="Changed files will appear after the agent writes artifacts."
+                      title="No diff artifacts available."
+                      description="Changed files will appear after the agent writes artifacts."
                     />
                   ) : (
                     <CompactChangesList
@@ -2186,7 +2206,7 @@ function ConversationTurnBlock({
   };
 
   return (
-    <div className={mergeClasses('azf-stack azf-gap-xs', styles.conversationTurn)}>
+    <div className={styles.conversationTurn}>
       {visibleRows.map((row) => {
         const author = authorForRole(row.role, participant);
         if (row.role === 'activity') {
@@ -2204,9 +2224,9 @@ function ConversationTurnBlock({
         return (
           <div key={row.key} className={styles.messageCard} data-testid="session-message-row">
             <AgentAvatar name={author.avatarName} size={24} circle />
-            <div className={mergeClasses('azf-stack azf-gap-xs', styles.messageRow)}>
-              <div className={mergeClasses('azf-row', styles.messageMeta)}>
-                <div className={mergeClasses('azf-row azf-gap-xs', styles.authorBlock)}>
+            <div className={styles.messageRow}>
+              <div className={styles.messageMeta}>
+                <div className={styles.authorBlock}>
                   <Text className={styles.authorName}>{author.displayName}</Text>
                   <Text className={styles.messageRole}>{author.roleLabel}</Text>
                 </div>
@@ -2247,13 +2267,13 @@ function ConversationTurnBlock({
       )}
 
       {showTechnical && activityDetailsExpanded && turn.toolCalls.length > 0 && (
-        <div className={mergeClasses('azf-stack azf-gap-xs', styles.toolsBox)}>
-          <button className={mergeClasses('azf-row azf-gap-xs', styles.toolsButton)} onClick={() => setToolsOpen((value) => !value)} aria-expanded={toolsOpen}>
+        <div className={styles.toolsBox}>
+          <button className={styles.toolsButton} onClick={() => setToolsOpen((value) => !value)} aria-expanded={toolsOpen}>
             {toolsOpen ? <ChevronDownRegular /> : <ChevronRightRegular />}
             <Text>Tool calls · {completedTools}/{turn.toolCalls.length} completed</Text>
           </button>
           {toolsOpen && (
-            <div className={mergeClasses('azf-stack azf-gap-xs', styles.toolsList)}>
+            <div className={styles.toolsList}>
               {turn.toolCalls.map((tool) => {
                 const friendly = friendlyToolLabel(tool, runId);
                 return (
@@ -2280,12 +2300,12 @@ function ConversationTurnBlock({
       ))}
 
       {showTechnical && activityDetailsExpanded && turn.filePaths.length > 0 && (
-        <div className={mergeClasses('azf-stack azf-gap-xs', styles.fileRows)}>
+        <div className={styles.fileRows}>
           {turn.filePaths.map((path) => {
             const relPath = normalizeWorkspacePath(path, runId);
             return (
               <div key={path} className={styles.fileRow} data-testid="session-file-row">
-                <ArtifactPill
+                <ArtifactChip
                   artifact={{
                     id: relPath,
                     title: fileName(relPath),

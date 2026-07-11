@@ -1,8 +1,16 @@
-import { InfoLabel, Switch } from '../copilot-fluent-system';
+import { InfoLabel, makeStyles, mergeClasses, Switch, tokens } from '@fluentui/react-components';
 import { useId } from 'react';
 // A Switch paired with a visible InfoLabel (i) info affordance, so the meaning of
 // automation toggles (Autopilot / Auto-approve tools) is discoverable on the UI
 // rather than hidden behind a hover-only tooltip.
+
+const useStyles = makeStyles({
+  row: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXS,
+  },
+});
 
 export interface AutomationToggleProps {
   label: string;
@@ -23,6 +31,7 @@ export function AutomationToggle({
   labelPosition = 'after',
 }: AutomationToggleProps) {
   const id = useId();
+  const styles = useStyles();
 
   const switchEl = (
     <Switch
@@ -40,7 +49,7 @@ export function AutomationToggle({
   );
 
   return (
-    <div className="azf-row azf-gap-xs">
+    <div className={mergeClasses(styles.row)}>
       {labelPosition === 'before' ? (
         <>
           {labelEl}

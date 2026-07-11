@@ -3,17 +3,17 @@ import {
 import { ApiError } from '../api/client';
 import { Button,
   Field,
+  makeStyles,
+  mergeClasses,
   MessageBar,
   MessageBarBody,
   Spinner,
-  StatusIconText,
+  Text,
   Textarea,
-  } from '../copilot-fluent-system';
-import { SteeringLegend } from './SteeringLegend';
-import { makeStyles,
   tokens,
-} from '../copilot-fluent-system';
-import { ArrowRoutingRegular, EditRegular, SendRegular, StopRegular } from '../copilot-fluent-system';
+  } from '@fluentui/react-components';
+import { ArrowRoutingRegular, EditRegular, SendRegular, StopRegular, WarningRegular } from '@fluentui/react-icons';
+import { SteeringLegend } from './SteeringLegend';
 import { useState } from 'react';
 import type { SteerCoordinatorRequest, SteerKind } from '../api/types';
 // ---------------------------------------------------------------------------
@@ -81,6 +81,25 @@ const useStyles = makeStyles({
     color: tokens.colorNeutralForeground3,
     fontStyle: 'italic',
   },
+  permissionRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXS,
+  },
+  permissionIcon: {
+    color: tokens.colorPaletteMarigoldForeground2,
+  },
+  stack: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalS,
+  },
+  actionRow: {
+    display: 'flex',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: tokens.spacingHorizontalS,
+  },
 });
 
 export interface SteerPanelProps {
@@ -141,16 +160,19 @@ export function SteerPanel({ runId, blockReason, targetChildRunId, canSteer = tr
 
   if (!canSteer) {
     return (
-      <div className="azf-stack azf-gap-s" data-testid="steer-panel">
+      <div className={styles.stack} data-testid="steer-panel">
         <div className={styles.noPermission} data-testid="steer-panel-no-permission">
-          <StatusIconText status="warning">Only the run owner can steer the coordinator.</StatusIconText>
+          <span className={mergeClasses(styles.permissionRow, styles.noPermission)}>
+            <WarningRegular className={styles.permissionIcon} aria-hidden="true" />
+            <Text>Only the run owner can steer the coordinator.</Text>
+          </span>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="azf-stack azf-gap-s" data-testid="steer-panel">
+    <div className={styles.stack} data-testid="steer-panel">
       <Field
         label="Tell the coordinator how to resolve this (optional)"
         hint="Leave blank to use the suggested default action."
@@ -180,7 +202,7 @@ export function SteerPanel({ runId, blockReason, targetChildRunId, canSteer = tr
 
       <SteeringLegend />
 
-      <div className="azf-row azf-gap-s azf-wrap">
+      <div className={styles.actionRow}>
         <Button
           appearance="primary"
           icon={isPending ? <Spinner size="tiny" /> : <SendRegular />}

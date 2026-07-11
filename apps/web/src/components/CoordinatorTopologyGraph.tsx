@@ -9,13 +9,15 @@ import { Button,
   DialogSurface,
   DialogTitle,
   Field,
+  makeStyles,
   MessageBar,
   MessageBarBody,
   Spinner,
   Text,
   Textarea,
   Tooltip,
-  } from '../copilot-fluent-system';
+  tokens,
+  } from '@fluentui/react-components';
 import { DAG_NODE_SEP,
   layoutDag,
   NODE_W,
@@ -23,10 +25,6 @@ import { DAG_NODE_SEP,
 import { AgentAvatar } from './AgentAvatar';
 import { PodIndicator } from './PodIndicator';
 import { STEERING_HELP } from './steeringHelp';
-import { makeStyles,
-  shorthands,
-  tokens,
-} from '../copilot-fluent-system';
 import '@xyflow/react/dist/style.css';
 import {
   AlertRegular,
@@ -47,7 +45,8 @@ import {
   StopRegular,
   ZoomInRegular,
   ZoomOutRegular,
-} from '../copilot-fluent-system';
+} from '@fluentui/react-icons';
+import type { FluentIcon } from '@fluentui/react-icons';
 import {
   Handle,
   MarkerType,
@@ -60,7 +59,6 @@ import {
 import { createContext, useCallback, useContext, useMemo, useState } from 'react';
 import type { SteerKind, TopologyEdge } from '../api/types';
 import type { TopologyNodeState } from '../state/topologyReducer';
-import type { FluentIcon } from '../copilot-fluent-system';
 import type { Edge, Node, NodeProps } from '@xyflow/react';
 // ---------------------------------------------------------------------------
 // Steering context — lets a custom node trigger a steering action without
@@ -92,17 +90,17 @@ const useStyles = makeStyles({
     cursor: 'default',
   },
   cardCoordinator: {
-    borderTopColor: tokens.colorBrandStroke1,
-    borderRightColor: tokens.colorBrandStroke1,
-    borderBottomColor: tokens.colorBrandStroke1,
-    borderLeftColor: tokens.colorBrandStroke1,
-    backgroundColor: tokens.colorBrandBackground2,
+    borderTopColor: tokens.colorNeutralStroke1,
+    borderRightColor: tokens.colorNeutralStroke1,
+    borderBottomColor: tokens.colorNeutralStroke1,
+    borderLeftColor: tokens.colorNeutralStroke1,
+    backgroundColor: tokens.colorNeutralBackground2,
   },
   cardActive: {
-    borderTopColor: tokens.colorBrandStroke1,
-    borderRightColor: tokens.colorBrandStroke1,
-    borderBottomColor: tokens.colorBrandStroke1,
-    borderLeftColor: tokens.colorBrandStroke1,
+    borderTopColor: tokens.colorNeutralStroke1,
+    borderRightColor: tokens.colorNeutralStroke1,
+    borderBottomColor: tokens.colorNeutralStroke1,
+    borderLeftColor: tokens.colorNeutralStroke1,
   },
   cardFlagged: {
     border: `2px solid ${tokens.colorPaletteMarigoldBorderActive}`,
@@ -125,7 +123,7 @@ const useStyles = makeStyles({
   },
   badgePending: { backgroundColor: tokens.colorNeutralBackground4, color: tokens.colorNeutralForeground3 },
   badgeDispatched: { backgroundColor: tokens.colorPaletteLightTealBackground2, color: tokens.colorPaletteLightTealForeground2 },
-  badgeRunning: { backgroundColor: tokens.colorBrandBackground2, color: tokens.colorBrandForeground1 },
+  badgeRunning: { backgroundColor: tokens.colorNeutralBackground3, color: tokens.colorNeutralForeground2 },
   badgeAssemble: { backgroundColor: tokens.colorPaletteLavenderBackground2, color: tokens.colorPaletteLavenderForeground2 },
   badgeFlagged: { backgroundColor: tokens.colorPaletteMarigoldBorderActive, color: tokens.colorNeutralForegroundInverted },
   badgePendingCapacity: { backgroundColor: tokens.colorPaletteMarigoldBackground2, color: tokens.colorPaletteMarigoldForeground2 },
@@ -202,7 +200,7 @@ const useStyles = makeStyles({
   zoomCluster: {
     display: 'flex',
     flexDirection: 'column',
-    ...shorthands.gap('2px'),
+    gap: '2px',
     padding: '4px',
     backgroundColor: tokens.colorNeutralBackground1,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
