@@ -56,9 +56,56 @@ KEYVAULT_ID=$(az keyvault show --name "${KEYVAULT_NAME}" --query id -o tsv)
 echo "  Key Vault ID: ${KEYVAULT_ID}"
 
 echo ""
+echo "=== Step 2b: Grant provisioning caller data-plane secret access ==="
+# The vault is created with --enable-rbac-authorization, so control-plane
+# Contributor/Owner does NOT grant setSecret. Grant the interactive caller running
+# this script 'Key Vault Secrets Officer' at the vault scope so Step 3 can write
+# secrets on a freshly-created vault regardless of ambient group membership.
+# Idempotent. See issue #234.
+CALLER_OID="$(az ad signed-in-user show --query id -o tsv 2>/dev/null || true)"
+CALLER_PTYPE="User"
+if [[ -z "${CALLER_OID}" ]]; then
+  # Service-principal / managed-identity login: resolve from the account context.
+  CALLER_APPID="$(az account show --query user.name -o tsv 2>/dev/null || true)"
+  if [[ -n "${CALLER_APPID}" ]]; then
+    CALLER_OID="$(az ad sp show --id "${CALLER_APPID}" --query id -o tsv 2>/dev/null || true)"
+    CALLER_PTYPE="ServicePrincipal"
+  fi
+fi
+if [[ -n "${CALLER_OID}" ]]; then
+  echo "  Granting 'Key Vault Secrets Officer' to caller ${CALLER_OID} (${CALLER_PTYPE})..."
+  az role assignment create \
+    --role "Key Vault Secrets Officer" \
+    --assignee-object-id "${CALLER_OID}" \
+    --assignee-principal-type "${CALLER_PTYPE}" \
+    --scope "${KEYVAULT_ID}" \
+    2>&1 | grep -v "already exists" || true
+else
+  echo "  [WARN] Could not resolve caller object ID; relying on ambient Key Vault permissions."
+fi
+
+echo ""
 echo "=== Step 3: Store required secrets in Key Vault ==="
-az keyvault secret set --vault-name "${KEYVAULT_NAME}" --name github-client-id --value "${GITHUB_CLIENT_ID}" --output none
-az keyvault secret set --vault-name "${KEYVAULT_NAME}" --name github-client-secret --value "${GITHUB_CLIENT_SECRET}" --output none
+# Bounded retry: tolerate Forbidden/ForbiddenByRbac while the Step 2b role
+# assignment propagates (RBAC data-plane is eventually consistent, ~30-120s).
+set_secret_with_retry() {
+  local name="$1" value="$2" attempt=1 max=12
+  while true; do
+    if az keyvault secret set --vault-name "${KEYVAULT_NAME}" --name "${name}" --value "${value}" --output none 2>/tmp/kv-set-err; then
+      return 0
+    fi
+    if grep -qiE "Forbidden|ForbiddenByRbac|not authorized" /tmp/kv-set-err && [[ ${attempt} -lt ${max} ]]; then
+      echo "  [retry ${attempt}/${max}] RBAC role for '${name}' still propagating; waiting 15s..."
+      sleep 15
+      attempt=$((attempt + 1))
+      continue
+    fi
+    cat /tmp/kv-set-err >&2
+    return 1
+  done
+}
+set_secret_with_retry github-client-id "${GITHUB_CLIENT_ID}"
+set_secret_with_retry github-client-secret "${GITHUB_CLIENT_SECRET}"
 
 echo ""
 echo "=== Step 4: Grant Key Vault roles to managed identity ==="
