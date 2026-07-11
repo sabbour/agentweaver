@@ -1915,7 +1915,10 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
                 .ConfigureAwait(false);
         }
 
-        var decision = await decider.DecideAsync(view.Id, autopilotOn: false, ct: ct).ConfigureAwait(false);
+        var decision = await decider.DecideAsync(
+            view.Id, autopilotOn: false,
+            resumabilityProbe: new PodPerRunResumabilityProbe(_sandboxRuntime.IsPodPerRun && _sandboxRuntime.ReleasePodOnSuspend),
+            ct: ct).ConfigureAwait(false);
         var direction = decision?.Direction ?? SteeringDirection.Proceed;
         var attempt = decision?.Attempt ?? 0;
 

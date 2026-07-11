@@ -689,3 +689,56 @@ public sealed class DefaultResumabilityProbe : ISteeringResumabilityProbe
         return Task.FromResult(resumable);
     }
 }
+
+/// <summary>
+/// Pod-per-run resumability probe (issue #220). Reuses the <see cref="DefaultResumabilityProbe"/>
+/// predicate but, when <c>podReleasedOnSuspend</c>, EXCLUDES subtasks that have reached a successful
+/// terminal (<see cref="SubtaskStatus.AssembleReady"/> / <see cref="SubtaskStatus.Completed"/>).
+/// <c>podReleasedOnSuspend</c> means the AgentHost pod IS actually reaped when the subtask suspends —
+/// i.e. <c>SandboxRuntimeOptions.IsPodPerRun &amp;&amp; SandboxRuntimeOptions.ReleasePodOnSuspend</c>,
+/// exactly matching the real release guard in
+/// <c>RunWatchLoopService.ReleasePodOnSuspendSafeAsync</c> (`apps/Agentweaver.Api/Runs/RunWatchLoopService.cs:395`).
+/// When that holds, a terminal subtask's SandboxClaim was deleted on suspend, so its session cannot be
+/// resumed in place even though <c>ChildRunId</c> still points at the reaped run. Without this exclusion
+/// the default probe reports the target "resumable" from durable DB state alone, the decider picks
+/// in-place-steer, the resume 404s the dead pod, and at the assembly gate (where ALL children are
+/// assemble_ready → ALL pods gone) the failure cascades into a full-plan replan loop that discards
+/// completed work. Excluding pod-released subtasks makes the decider consciously pick DispatchFresh
+/// (a fresh pod on the committed worktree branch + accumulated feedback) instead. When the pod is NOT
+/// released on suspend (in-api, or the warm-pool <c>ReleasePodOnSuspend=false</c> config), the pod is
+/// still alive and in-place resumable, so this probe matches <see cref="DefaultResumabilityProbe"/>.
+/// </summary>
+public sealed class PodPerRunResumabilityProbe : ISteeringResumabilityProbe
+{
+    private readonly bool _podReleasedOnSuspend;
+
+    public PodPerRunResumabilityProbe(bool podReleasedOnSuspend) => _podReleasedOnSuspend = podReleasedOnSuspend;
+
+    public Task<bool> IsResumableAsync(
+        MemoryDbContext db, SteeringDirective directive, IReadOnlyList<Subtask> subtasks, CancellationToken ct)
+    {
+        // resumable = target has a live resumable session. When the pod IS released on suspend a subtask
+        // that has already reached a SUCCESSFUL TERMINAL (AssembleReady/Completed) has had its AgentHost pod
+        // RELEASED, so its session cannot be resumed in place — force the decider to DispatchFresh (fresh pod
+        // on the committed worktree branch) instead of resuming a reaped pod (issue #220).
+        static bool PodReleased(Subtask s) =>
+            s.Status is SubtaskStatus.AssembleReady or SubtaskStatus.Completed;
+
+        if (!string.IsNullOrEmpty(directive.TargetChildRunId))
+        {
+            // Directive explicitly targets a live child run (a mid-flight subtask steer). The assembly gate
+            // scopes ForSubtasks(...) so TargetChildRunId is NULL there and this branch does NOT fire — the
+            // gate always falls through to the predicate below. Defensively, when the pod is released on
+            // suspend and every provided target subtask is pod-released, the referenced pod is gone →
+            // unresumable; otherwise (including when no target subtasks are supplied) preserve the default
+            // early-return semantics.
+            if (_podReleasedOnSuspend && subtasks.Count > 0 && subtasks.All(PodReleased))
+                return Task.FromResult(false);
+            return Task.FromResult(true);
+        }
+        var resumable = subtasks.Any(s => !string.IsNullOrEmpty(s.ChildRunId)
+            && (s.SteeringRetentionUntil is null || s.SteeringRetentionUntil > DateTimeOffset.UtcNow)
+            && !(_podReleasedOnSuspend && PodReleased(s)));
+        return Task.FromResult(resumable);
+    }
+}

@@ -38,6 +38,8 @@ The separate Assembly Gate route was removed; correction feedback uses unified s
 | `proceed` | C: proceed or terminal | Continue to review or record a terminal/blocked result. |
 | `advisory` | D: no-op | Surface the signal and take no corrective action. |
 
+The `in_place_steer` vs `dispatch_fresh` choice hinges on a resumability probe. The in-api default (`DefaultResumabilityProbe`) treats a target as resumable when a target subtask still references a `ChildRunId` inside its retention window. At the assembly gate under **pod-per-run**, `PodPerRunResumabilityProbe` additionally treats subtasks that reached `assemble_ready` / `completed` as **non-resumable** (their AgentHost pod was released on suspend), so the decision resolves to `dispatch_fresh` — a fresh pod on the committed worktree branch — instead of resuming a reaped pod (`apps/Agentweaver.Api/Coordinator/CoordinatorSteeringDecider.cs:706`, issue #220). In pod-per-run + single-agent squads with no eligible rotation author, the first rejection therefore routes straight to human review rather than looping full-plan replans.
+
 ## Events
 
 | Event | When it fires | Payload |

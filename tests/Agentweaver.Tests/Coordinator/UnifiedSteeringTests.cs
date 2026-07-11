@@ -234,6 +234,104 @@ public sealed class UnifiedSteeringTests : IDisposable
             .Should().Be(1, "a re-decided directive must NOT double-increment the budget (exactly-once)");
     }
 
+    // ── issue #220: pod-per-run terminal-state resumability exclusion ───────────────────────────
+    // When the AgentHost pod IS released on suspend (IsPodPerRun && ReleasePodOnSuspend), a subtask that
+    // reached a SUCCESSFUL TERMINAL (assemble_ready/completed) has had its pod RELEASED, so its session
+    // cannot be resumed in place — the probe must report it unresumable so the decider picks DispatchFresh
+    // (fresh pod on the committed worktree branch) instead of resuming a reaped pod and cascading into a
+    // full-plan replan loop. The probe flag = IsPodPerRun && ReleasePodOnSuspend (the real release guard).
+
+    [Fact]
+    public async Task PodPerRunProbe_PodReleased_AssembleReady_IsNotResumable()
+    {
+        await using var scope = _provider.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var subtasks = new[] { Sub220(SubtaskStatus.AssembleReady, childRunId: "child-1", retentionFuture: true) };
+
+        var resumable = await new PodPerRunResumabilityProbe(podReleasedOnSuspend: true)
+            .IsResumableAsync(db, GateDirective220(), subtasks, default);
+
+        resumable.Should().BeFalse(
+            "a pod-released assemble_ready subtask cannot resume in place → decider must DispatchFresh (issue #220)");
+    }
+
+    [Fact]
+    public async Task PodPerRunProbe_PodReleased_Running_IsResumable()
+    {
+        await using var scope = _provider.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var subtasks = new[] { Sub220(SubtaskStatus.Running, childRunId: "child-1", retentionFuture: true) };
+
+        var resumable = await new PodPerRunResumabilityProbe(podReleasedOnSuspend: true)
+            .IsResumableAsync(db, GateDirective220(), subtasks, default);
+
+        resumable.Should().BeTrue("a still-running subtask keeps its live pod/session and IS resumable");
+    }
+
+    [Fact]
+    public async Task PodPerRunProbe_InApi_AssembleReady_IsResumable_MatchesDefault()
+    {
+        await using var scope = _provider.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var subtasks = new[] { Sub220(SubtaskStatus.AssembleReady, childRunId: "child-1", retentionFuture: true) };
+
+        var resumable = await new PodPerRunResumabilityProbe(podReleasedOnSuspend: false)
+            .IsResumableAsync(db, GateDirective220(), subtasks, default);
+
+        resumable.Should().BeTrue("in-api mode never releases the pod → assemble_ready stays resumable (unchanged)");
+        (await DefaultResumabilityProbe.Instance.IsResumableAsync(db, GateDirective220(), subtasks, default))
+            .Should().Be(resumable, "in-api PodPerRunResumabilityProbe must match DefaultResumabilityProbe");
+    }
+
+    [Fact]
+    public async Task PodPerRunProbe_WarmPool_ReleasePodOnSuspendOff_AssembleReady_IsResumable()
+    {
+        // Pod-per-run with the supported non-default ReleasePodOnSuspend=false (warm-pool): the pod is NOT
+        // reaped on suspend, so an assemble_ready subtask's session stays alive and in-place resumable. The
+        // probe (constructed with podReleasedOnSuspend=false) must match DefaultResumabilityProbe — no needless
+        // DispatchFresh rotation (closes the code-review gap: gate the exclusion on IsPodPerRun && ReleasePodOnSuspend).
+        await using var scope = _provider.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var subtasks = new[] { Sub220(SubtaskStatus.AssembleReady, childRunId: "child-1", retentionFuture: true) };
+
+        var resumable = await new PodPerRunResumabilityProbe(podReleasedOnSuspend: false)
+            .IsResumableAsync(db, GateDirective220(), subtasks, default);
+
+        resumable.Should().BeTrue("warm-pool (ReleasePodOnSuspend=false) keeps the pod alive → in-place resumable");
+        (await DefaultResumabilityProbe.Instance.IsResumableAsync(db, GateDirective220(), subtasks, default))
+            .Should().Be(resumable, "warm-pool PodPerRunResumabilityProbe must match DefaultResumabilityProbe");
+    }
+
+    [Fact]
+    public async Task Decider_PodReleased_AssemblyGate_AssembleReady_YieldsDispatchFresh()
+    {
+        _streamStore.Create("coord-220-ppr", "alice");
+        // SeedPlanWithSubtaskAsync sets Status=AssembleReady when childRunId is non-null (a subtask that
+        // reached the assembly gate → pod released when IsPodPerRun && ReleasePodOnSuspend).
+        var (_, subtaskId) = await SeedPlanWithSubtaskAsync("coord-220-ppr", childRunId: "child-1", recoveryAttempts: 0);
+        var directiveId = await SubmitAndClaimAsync("coord-220-ppr", SteeringSeverity.RequestChanges, subtaskId);
+
+        var decision = await _decider.DecideAsync(directiveId, autopilotOn: false,
+            resumabilityProbe: new PodPerRunResumabilityProbe(podReleasedOnSuspend: true));
+
+        decision!.Direction.Should().Be(SteeringDirection.DispatchFresh,
+            "pod-released + assemble_ready target ⇒ DispatchFresh, NOT InPlaceSteer (issue #220)");
+    }
+
+    [Fact]
+    public async Task Decider_InApi_AssemblyGate_AssembleReady_YieldsInPlaceSteer()
+    {
+        _streamStore.Create("coord-220-inapi", "alice");
+        var (_, subtaskId) = await SeedPlanWithSubtaskAsync("coord-220-inapi", childRunId: "child-1", recoveryAttempts: 0);
+        var directiveId = await SubmitAndClaimAsync("coord-220-inapi", SteeringSeverity.RequestChanges, subtaskId);
+
+        var decision = await _decider.DecideAsync(directiveId, autopilotOn: false,
+            resumabilityProbe: new PodPerRunResumabilityProbe(podReleasedOnSuspend: false));
+
+        decision!.Direction.Should().Be(SteeringDirection.InPlaceSteer,
+            "pod-not-released keeps the resumable-in-place behavior (in-api or warm-pool)");
+    }
+
     // ── §3d two-phase attempt-specific marker + recovery probe ─────────────────────────────────
 
     [Fact]
@@ -623,6 +721,31 @@ public sealed class UnifiedSteeringTests : IDisposable
             planIterations, CoordinatorSteeringDecider.DefaultMaxPlanSteeringIterations, stale);
 
     private static ISteeringResumabilityProbe Resumable(bool value) => new StubProbe(value);
+
+    // ── issue #220 probe-test fixtures ─────────────────────────────────────────────────────────
+    // A collective-assembly-gate directive is subtask-scoped (SteeringTargetScope.ForSubtasks) so its
+    // TargetChildRunId is null — the probe evaluates the target subtasks, not a single child pointer.
+    private static SteeringDirective GateDirective220() => new()
+    {
+        CoordinatorRunId = "coord-220",
+        Kind = SteeringKind.Redirect,
+        Instruction = "fix it",
+        Status = SteeringStatus.Relayed,
+        CreatedBy = "gate:rubberduck",
+        CreatedAt = DateTimeOffset.UtcNow,
+        Source = SteeringSource.Rubberduck,
+        Severity = SteeringSeverity.RequestChanges,
+        TargetChildRunId = null,
+    };
+
+    private static Subtask Sub220(string status, string? childRunId, bool retentionFuture) => new()
+    {
+        WorkPlanId = 1, Title = "t", Scope = "s", AssignedAgent = "morpheus",
+        SelectedModelId = "gpt", Phase = "execution", IsolationStrategy = "worktree",
+        Status = status, ChildRunId = childRunId,
+        SteeringRetentionUntil = retentionFuture ? DateTimeOffset.UtcNow.AddMinutes(30) : null,
+        CreatedAt = DateTimeOffset.UtcNow, UpdatedAt = DateTimeOffset.UtcNow,
+    };
 
     private sealed class StubProbe(bool value) : ISteeringResumabilityProbe
     {
