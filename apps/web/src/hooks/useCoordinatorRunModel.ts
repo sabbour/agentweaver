@@ -1,12 +1,11 @@
-import { useCallback, useMemo } from 'react';
 import { apiClient } from '../api/apiClient';
-import type { RunStreamEvent, StreamStatus } from '../api/sse';
-import type { TimelineItem, TurnGroupItem } from '../timeline/types';
+import { deriveRunStatusFromEvents } from '../timeline/deriveRunStatus';
 import { useTimelineItems } from '../timeline/useTimelineItems';
 import { useSeededRunStream } from './useSeededRunStream';
-import { deriveRunStatusFromEvents } from '../timeline/deriveRunStatus';
+import { useCallback, useMemo } from 'react';
+import type { RunStreamEvent, StreamStatus } from '../api/sse';
 import type { AssemblyReviewDecision, SteerCoordinatorRequest } from '../api/types';
-
+import type { TimelineItem, TurnGroupItem } from '../timeline/types';
 /**
  * Aggregate HITL gate state derived from the timeline/events, so a consumer can
  * surface the FULL gate set without re-scanning (BLOCKING #1 gate integrity).

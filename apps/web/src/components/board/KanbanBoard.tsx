@@ -1,7 +1,11 @@
-import { useCallback, useMemo, useState } from 'react';
 import {
+  apiClient } from '../../api/apiClient';
+import { useBoard } from '../../api/board';
+import { ApiError } from '../../api/client';
+import { AzureEmptyState,
+  AzureToolbar,
+  BladeHeader,
   Button,
-  Caption1,
   Dialog,
   DialogActions,
   DialogBody,
@@ -11,41 +15,30 @@ import {
   MessageBar,
   MessageBarBody,
   Spinner,
-  Text,
-  makeStyles,
+  } from '../../copilot-fluent-system';
+import { DecomposePreviewDialog } from '../DecomposePreviewDialog';
+import { WorkspaceFilePicker } from '../WorkspaceFilePicker';
+import { CaptureTaskForm } from './CaptureTaskForm';
+import { columnAccentColor,
+  fixedBoardColumns } from './columnMeta';
+import { KanbanColumn } from './KanbanColumn';
+import { PickupSettings } from './PickupSettings';
+import { useCtrlScrollZoom,
+  ZoomControls } from './useCtrlScrollZoom';
+import { makeStyles,
   mergeClasses,
   tokens,
-} from '@fluentui/react-components';
-import { ArrowImportRegular } from '@fluentui/react-icons';
-import { useCtrlScrollZoom, ZoomControls } from './useCtrlScrollZoom';
-import { useBoard } from '../../api/board';
-import { apiClient } from '../../api/apiClient';
-import { ApiError } from '../../api/client';
-import { KanbanColumn } from './KanbanColumn';
-import { columnAccentColor, fixedBoardColumns } from './columnMeta';
-import { CaptureTaskForm } from './CaptureTaskForm';
-import { PickupSettings } from './PickupSettings';
-import { WorkspaceFilePicker } from '../WorkspaceFilePicker';
-import { DecomposePreviewDialog } from '../DecomposePreviewDialog';
+} from '../../copilot-fluent-system';
+import { ArrowImportRegular } from '../../copilot-fluent-system';
+import { useCallback, useMemo, useState } from 'react';
 import type { ProposedBacklogItem } from '../../api/types';
-
 const useStyles = makeStyles({
-  root: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalXL,
-  },
   intakeSection: {
     display: 'grid',
     gridTemplateColumns: 'minmax(0, 1fr) auto',
     alignItems: 'stretch',
     justifyContent: 'space-between',
     gap: tokens.spacingHorizontalM,
-    padding: tokens.spacingVerticalL,
-    backgroundColor: tokens.colorNeutralBackground1,
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: tokens.borderRadiusXLarge,
-    boxShadow: tokens.shadow4,
     '@media (max-width: 900px)': {
       gridTemplateColumns: '1fr',
     },
@@ -60,67 +53,25 @@ const useStyles = makeStyles({
     },
   },
   intakeCopy: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalXXS,
     paddingTop: tokens.spacingVerticalXS,
-  },
-  intakeTitle: {
-    fontWeight: tokens.fontWeightSemibold,
-    fontSize: tokens.fontSizeBase400,
-    lineHeight: tokens.lineHeightBase400,
-  },
-  intakeHelp: {
-    color: tokens.colorNeutralForeground2,
-    lineHeight: tokens.lineHeightBase300,
-    maxWidth: '42ch',
   },
   capture: {
     minWidth: '280px',
   },
   toolbarActions: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: tokens.spacingHorizontalS,
     flexWrap: 'wrap',
     justifyContent: 'flex-end',
   },
   workflowSection: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalS,
   },
   sectionHeader: {
-    display: 'flex',
-    alignItems: 'center',
     justifyContent: 'space-between',
-    gap: tokens.spacingHorizontalM,
-    flexWrap: 'wrap',
   },
-  sectionTitleGroup: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalXXS,
-    minWidth: 0,
-  },
-  sectionTitle: {
-    fontWeight: tokens.fontWeightSemibold,
-    fontSize: tokens.fontSizeBase500,
-    lineHeight: tokens.lineHeightBase500,
-    overflowWrap: 'anywhere',
-  },
-  sectionDescription: {
-    color: tokens.colorNeutralForeground2,
-    fontSize: tokens.fontSizeBase300,
-    lineHeight: tokens.lineHeightBase300,
-    maxWidth: '70ch',
-    overflowWrap: 'anywhere',
+  embeddedHeader: {
+    flex: '1 1 auto',
+    padding: 0,
   },
   summaryStrip: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: tokens.spacingHorizontalXS,
-    flexWrap: 'wrap',
   },
   summaryButton: {
     minWidth: 'unset',
@@ -167,20 +118,9 @@ const useStyles = makeStyles({
   },
   boardEmpty: {
     marginTop: tokens.spacingVerticalM,
-    padding: tokens.spacingVerticalM,
-    border: `1px dashed ${tokens.colorNeutralStroke2}`,
-    borderRadius: tokens.borderRadiusMedium,
-    color: tokens.colorNeutralForeground2,
-    backgroundColor: tokens.colorNeutralBackground1,
-    lineHeight: tokens.lineHeightBase300,
     maxWidth: '72ch',
   },
   boardSurface: {
-    padding: tokens.spacingVerticalL,
-    backgroundColor: tokens.colorNeutralBackground1,
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: tokens.borderRadiusXLarge,
-    boxShadow: tokens.shadow2,
   },
   columnsViewport: {
     overflowX: 'auto',
@@ -199,21 +139,6 @@ const useStyles = makeStyles({
     minWidth: 0,
   },
   problemsSection: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalS,
-    padding: tokens.spacingVerticalM,
-    backgroundColor: tokens.colorNeutralBackground1,
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: tokens.borderRadiusXLarge,
-    boxShadow: tokens.shadow2,
-  },
-  problemsSectionTitle: {
-    color: tokens.colorNeutralForeground1,
-    fontSize: tokens.fontSizeBase400,
-    lineHeight: tokens.lineHeightBase400,
-    fontWeight: tokens.fontWeightSemibold,
-    overflowWrap: 'anywhere',
   },
   problemsColumns: {
     display: 'grid',
@@ -374,18 +299,25 @@ export function KanbanBoard({ projectId, pollIntervalMs }: KanbanBoardProps) {
   };
 
   return (
-    <div className={styles.root}>
-      <section className={styles.intakeSection} aria-labelledby="board-intake-title">
+    <div className="azf-stack azf-gap-m">
+      <section
+        className={mergeClasses('azf-surface azf-surface--raised azf-surface--padding-comfortable', styles.intakeSection)}
+        aria-labelledby="board-intake-title"
+      >
         <div className={styles.intakeMain}>
-          <div className={styles.intakeCopy}>
-            <Text id="board-intake-title" className={styles.intakeTitle}>Intake</Text>
-            <Caption1 className={styles.intakeHelp}>Capture agent-executable work, import tasks from a spec, or tune automatic pickup.</Caption1>
+          <div className={mergeClasses('azf-stack azf-gap-xs', styles.intakeCopy)}>
+            <BladeHeader
+              size="compact"
+              className={styles.embeddedHeader}
+              title={<span id="board-intake-title">Intake</span>}
+              subtitle="Capture agent-executable work, import tasks from a spec, or tune automatic pickup."
+            />
           </div>
           <div className={styles.capture}>
             <CaptureTaskForm projectId={projectId} onCaptured={refetch} />
           </div>
         </div>
-        <div className={styles.toolbarActions}>
+        <AzureToolbar actions={[]} ariaLabel="Intake commands" className={styles.toolbarActions}>
           <Button
             appearance="secondary"
             icon={<ArrowImportRegular />}
@@ -394,7 +326,7 @@ export function KanbanBoard({ projectId, pollIntervalMs }: KanbanBoardProps) {
             Import from workspace
           </Button>
           <PickupSettings projectId={projectId} />
-        </div>
+        </AzureToolbar>
       </section>
 
       {importSuccess && (
@@ -432,12 +364,16 @@ export function KanbanBoard({ projectId, pollIntervalMs }: KanbanBoardProps) {
       )}
 
       {board && (
-        <section className={styles.workflowSection} aria-labelledby="board-workflow-title">
-          <div className={styles.sectionHeader}>
-            <div className={styles.sectionTitleGroup}>
-              <Text id="board-workflow-title" className={styles.sectionTitle}>Agent task board</Text>
-              <Caption1 className={styles.sectionDescription}>Fixed Kanban states show the autonomous orchestration flow from intake through completion.</Caption1>
-              <div className={styles.summaryStrip} aria-label="Board execution summary">
+        <section className={mergeClasses('azf-stack azf-gap-s', styles.workflowSection)} aria-labelledby="board-workflow-title">
+          <div className={mergeClasses('azf-row azf-gap-m azf-wrap', styles.sectionHeader)}>
+            <div className="azf-stack azf-gap-xs">
+              <BladeHeader
+                size="compact"
+                className={styles.embeddedHeader}
+                title={<span id="board-workflow-title">Agent task board</span>}
+                subtitle="Fixed Kanban states show the autonomous orchestration flow from intake through completion."
+              />
+              <div className={mergeClasses('azf-row azf-gap-xs azf-wrap', styles.summaryStrip)} aria-label="Board execution summary">
                 <Button
                   appearance="secondary"
                   size="small"
@@ -478,7 +414,7 @@ export function KanbanBoard({ projectId, pollIntervalMs }: KanbanBoardProps) {
             </div>
             <ZoomControls zoom={zoom} onZoomIn={zoomIn} onZoomOut={zoomOut} />
           </div>
-          <div className={styles.boardSurface}>
+          <div className={mergeClasses('azf-surface azf-surface--panel azf-surface--padding-comfortable', styles.boardSurface)}>
             <div className={styles.columnsViewport} ref={viewportRef}>
               <div className={styles.columns} style={{ zoom }}>
                 {mainColumns.map(({ col: column, accent }) => (
@@ -502,16 +438,28 @@ export function KanbanBoard({ projectId, pollIntervalMs }: KanbanBoardProps) {
               </div>
             </div>
             {boardSummary.total === 0 && (
-              <Text className={styles.boardEmpty}>No orchestration tasks yet. Capture a task or import a spec to seed Backlog, then move committed work to Ready for agent pickup.</Text>
+              <AzureEmptyState
+                compact
+                className={styles.boardEmpty}
+                title="No orchestration tasks yet."
+                body="Capture a task or import a spec to seed Backlog, then move committed work to Ready for agent pickup."
+              />
             )}
           </div>
 
           {attentionColumns.length > 0 && (
-            <section id="board-attention-section" tabIndex={-1} className={styles.problemsSection} aria-labelledby="board-attention-title">
-              <div className={styles.sectionTitleGroup}>
-                <Text id="board-attention-title" className={styles.problemsSectionTitle}>Needs attention / review</Text>
-                <Caption1 className={styles.sectionDescription}>Human review, failed, or blocked runs are separated from the autonomous flow so operators can intervene quickly.</Caption1>
-              </div>
+            <section
+              id="board-attention-section"
+              tabIndex={-1}
+              className={mergeClasses('azf-surface azf-surface--panel azf-surface--padding-compact azf-stack azf-gap-s', styles.problemsSection)}
+              aria-labelledby="board-attention-title"
+            >
+              <BladeHeader
+                size="compact"
+                className={styles.embeddedHeader}
+                title={<span id="board-attention-title">Needs attention / review</span>}
+                subtitle="Human review, failed, or blocked runs are separated from the autonomous flow so operators can intervene quickly."
+              />
               <div className={styles.problemsColumns}>
                 {attentionColumns.map(({ col: column, accent }) => (
                   <KanbanColumn
@@ -536,7 +484,9 @@ export function KanbanBoard({ projectId, pollIntervalMs }: KanbanBoardProps) {
           )}
         </section>
       )}
-      {board && columnsWithAccent.length === 0 && <Text>No board states are available yet.</Text>}
+      {board && columnsWithAccent.length === 0 && (
+        <AzureEmptyState compact title="No board states are available yet." />
+      )}
 
       {/* Workspace file picker dialog */}
       <Dialog open={importPickerOpen} onOpenChange={(_, d) => { if (!d.open) setImportPickerOpen(false); }}>

@@ -1,16 +1,10 @@
-import { type ReactElement, type ReactNode, useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
 import {
-  Badge,
+  apiClient } from '../api/apiClient';
+import { ApiError } from '../api/client';
+import { Badge,
   Button,
   Card,
   CardHeader,
-  Combobox,
-  Dialog,
-  DialogActions,
-  DialogBody,
-  DialogContent,
-  DialogSurface,
   DialogTitle,
   DialogTrigger,
   Field,
@@ -23,40 +17,40 @@ import {
   Text,
   Textarea,
   Toast,
-  ToastBody,
-  ToastTitle,
   Toaster,
-  useId,
+  ToastTitle,
   useToastController,
+  } from '../copilot-fluent-system';
+import { AppDialog } from '../components/ui/AppDialog';
+import { applyBlueprintToRequest,
+  BlueprintPanel,
+  NO_BLUEPRINT,
+  useBlueprintGeneration } from '../components/BlueprintPicker';
+import { GitHubIcon } from '../components/GitHubIcon';
+import { PageHeader } from '../components/PageHeader';
+import { GITHUB_AUTHORIZE_URL } from '../config';
+import { useProjectList } from '../hooks/useProjectList';
+import { Combobox,
   makeStyles,
   mergeClasses,
+  ToastBody,
   tokens,
-} from '@fluentui/react-components';
+  useId,
+} from '../copilot-fluent-system';
 import {
+  AddRegular,
+  CheckmarkCircleRegular,
   ChevronDownRegular,
   ChevronRightRegular,
   ChevronUpRegular,
-  CheckmarkCircleRegular,
   DismissCircleRegular,
-  DismissRegular,
   SparkleRegular,
-} from '@fluentui/react-icons';
-import { apiClient } from '../api/apiClient';
-import { GITHUB_AUTHORIZE_URL } from '../config';
-import { ApiError } from '../api/client';
+} from '../copilot-fluent-system';
+import { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import type { CreateProjectRequest, GitHubAccount, GitHubRepo, Project } from '../api/types';
-import { PageHeader } from '../components/PageHeader';
-import { AzurePage } from '../components/azure/AzureLayout';
-import {
-  BlueprintPanel,
-  applyBlueprintToRequest,
-  NO_BLUEPRINT,
-  useBlueprintGeneration,
-  type BlueprintSelection,
-} from '../components/BlueprintPicker';
-import { useProjectList } from '../hooks/useProjectList';
-import { GitHubIcon } from '../components/GitHubIcon';
-
+import type { BlueprintSelection } from '../components/BlueprintPicker';
+import type { ReactElement, ReactNode } from 'react';
 /** Normalizes an owner/repo string or existing https URL to a full GitHub HTTPS URL. */
 function toGitHubUrl(val: string): string {
   const v = val.trim();
@@ -72,14 +66,28 @@ const useStyles = makeStyles({
     gap: tokens.spacingVerticalL,
   },
   grid: {
-    display: 'grid',
-    gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))',
-    gap: tokens.spacingVerticalM,
-  },
-  card: {
     display: 'flex',
     flexDirection: 'column',
+    gap: 0,
+    overflow: 'hidden',
+    border: `1px solid ${tokens.colorBrandStroke2}`,
+    borderRadius: tokens.borderRadiusLarge,
+    backgroundColor: tokens.colorNeutralBackground1,
+    boxShadow: tokens.shadow8,
+  },
+  card: {
+    display: 'grid',
+    gridTemplateColumns: 'minmax(0, 1.4fr) minmax(220px, .8fr) auto',
+    alignItems: 'center',
     gap: tokens.spacingVerticalS,
+    padding: `${tokens.spacingVerticalM} ${tokens.spacingHorizontalL}`,
+    borderBottom: `1px solid ${tokens.colorNeutralStroke3}`,
+    borderRadius: 0,
+    boxShadow: 'none',
+    '@media (max-width: 760px)': {
+      gridTemplateColumns: '1fr',
+      alignItems: 'stretch',
+    },
   },
   // One-time entrance for a freshly-created project card: a brand ring that
   // fades out with a slight rise. Purely a "this is the new one" cue.
@@ -128,15 +136,20 @@ const useStyles = makeStyles({
   cardActions: {
     display: 'flex',
     gap: tokens.spacingHorizontalS,
-    marginTop: tokens.spacingVerticalS,
+    justifyContent: 'flex-end',
   },
   emptyState: {
-    display: 'flex',
-    flexDirection: 'column',
+    display: 'grid',
+    gridTemplateColumns: 'minmax(0, 1fr) auto',
     gap: tokens.spacingVerticalS,
-    alignItems: 'flex-start',
-    padding: `${tokens.spacingVerticalXXL} 0`,
-    maxWidth: '640px',
+    alignItems: 'center',
+    padding: tokens.spacingVerticalXXL,
+    border: `1px solid ${tokens.colorBrandStroke2}`,
+    borderTop: `3px solid ${tokens.colorBrandStroke1}`,
+    borderRadius: tokens.borderRadiusLarge,
+    backgroundImage: `linear-gradient(120deg, ${tokens.colorBrandBackground2} 0%, ${tokens.colorNeutralBackground1} 46%, ${tokens.colorNeutralBackground2} 100%)`,
+    boxShadow: tokens.shadow8,
+    '@media (max-width: 760px)': { gridTemplateColumns: '1fr' },
   },
   emptyBody: {
     color: tokens.colorNeutralForeground3,
@@ -147,6 +160,85 @@ const useStyles = makeStyles({
     flexWrap: 'wrap',
     marginTop: tokens.spacingVerticalS,
   },
+  commandBand: {
+    display: 'grid',
+    gridTemplateColumns: 'minmax(260px, 1fr) repeat(2, minmax(180px, .45fr))',
+    gap: tokens.spacingHorizontalM,
+    padding: tokens.spacingVerticalL,
+    border: `1px solid ${tokens.colorBrandStroke2}`,
+    borderTop: `3px solid ${tokens.colorBrandBackground}`,
+    borderRadius: tokens.borderRadiusLarge,
+    backgroundImage: `linear-gradient(110deg, ${tokens.colorBrandBackground2} 0%, ${tokens.colorNeutralBackground1} 48%, ${tokens.colorNeutralBackground2} 100%)`,
+    boxShadow: tokens.shadow8,
+    '@media (max-width: 860px)': { gridTemplateColumns: '1fr' },
+  },
+  commandIntro: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, minWidth: 0 },
+  commandTile: {
+    display: 'flex',
+    flexDirection: 'column',
+    justifyContent: 'space-between',
+    gap: tokens.spacingVerticalM,
+    minHeight: '112px',
+    padding: tokens.spacingVerticalM,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusLarge,
+    backgroundColor: tokens.colorNeutralBackground1,
+    boxShadow: tokens.shadow2,
+  },
+  pendingAction: {
+    alignSelf: 'flex-start',
+    minHeight: '32px',
+    display: 'inline-flex',
+    alignItems: 'center',
+    padding: `0 ${tokens.spacingHorizontalM}`,
+    border: `1px solid ${tokens.colorBrandStroke1}`,
+    borderRadius: tokens.borderRadiusMedium,
+    color: tokens.colorBrandForeground1,
+    fontWeight: tokens.fontWeightSemibold,
+    backgroundColor: tokens.colorBrandBackground2,
+  },
+  galleryLoading: { display: 'grid', gap: tokens.spacingVerticalL },
+  listShell: {
+    overflow: 'hidden',
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusLarge,
+    backgroundColor: tokens.colorNeutralBackground1,
+    boxShadow: tokens.shadow4,
+  },
+  listShellHeader: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalM,
+    padding: `${tokens.spacingVerticalM} ${tokens.spacingHorizontalL}`,
+    borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
+    backgroundColor: tokens.colorNeutralBackground2,
+  },
+  skeletonRow: {
+    display: 'grid',
+    gridTemplateColumns: 'minmax(0, 1.4fr) minmax(180px, .8fr) 96px',
+    gap: tokens.spacingHorizontalL,
+    alignItems: 'center',
+    minHeight: '78px',
+    padding: `${tokens.spacingVerticalM} ${tokens.spacingHorizontalL}`,
+    borderBottom: `1px solid ${tokens.colorNeutralStroke3}`,
+    '@media (max-width: 760px)': { gridTemplateColumns: '1fr' },
+  },
+  skeletonPulse: {
+    height: '16px',
+    borderRadius: tokens.borderRadiusMedium,
+    border: `1px solid ${tokens.colorBrandStroke2}`,
+    backgroundImage: `linear-gradient(90deg, ${tokens.colorBrandBackground2}, ${tokens.colorNeutralBackground1}, ${tokens.colorBrandBackground2})`,
+    backgroundSize: '220% 100%',
+    animationName: { '0%': { backgroundPositionX: '100%' }, '100%': { backgroundPositionX: '-100%' } },
+    animationDuration: '1400ms',
+    animationIterationCount: 'infinite',
+    animationTimingFunction: tokens.curveDecelerateMid,
+    '@media (prefers-reduced-motion: reduce)': { animationName: 'none' },
+  },
+  skeletonWide: { width: '72%' },
+  skeletonMedium: { width: '48%' },
+  skeletonButton: { width: '88px', height: '28px' },
   dialogFields: {
     display: 'flex',
     flexDirection: 'column',
@@ -425,62 +517,56 @@ function CreateProjectDialogShell({
 }) {
   const styles = useStyles();
   return (
-    <Dialog open={open} onOpenChange={(_, state) => onOpenChange(state.open)}>
-      <DialogTrigger disableButtonEnhancement>{trigger}</DialogTrigger>
-      <DialogSurface
-        className={styles.dialogSurface}
-        backdrop={{ appearance: 'dimmed', className: styles.dialogBackdrop }}
-      >
-        <DialogTrigger disableButtonEnhancement>
-          <Button className={styles.closeButton} appearance="transparent" icon={<DismissRegular />} aria-label="Close" />
-        </DialogTrigger>
-        <DialogBody>
-          <div className={styles.dialogHeader}>
-            <div className={styles.titleBlock}>
-              <span className={styles.headerIcon}>{icon}</span>
-              <div>
-                <DialogTitle>{title}</DialogTitle>
-                <Text className={styles.subtitle}>{subtitle}</Text>
-              </div>
-            </div>
+    <AppDialog
+      open={open}
+      onOpenChange={onOpenChange}
+      trigger={trigger}
+      maxWidth="1180px"
+    >
+      <div className={styles.dialogHeader}>
+        <div className={styles.titleBlock}>
+          <span className={styles.headerIcon}>{icon}</span>
+          <div>
+            <DialogTitle>{title}</DialogTitle>
+            <Text className={styles.subtitle}>{subtitle}</Text>
           </div>
-          <DialogContent className={styles.dialogContent}>
-            <div className={styles.dialogTwoCol}>
-              <div className={styles.dialogLeftCol}>{left}</div>
-              <div className={styles.dialogRightCol}>{right}</div>
-            </div>
-          </DialogContent>
-          <DialogActions className={styles.dialogActions}>
-            <div className={styles.footerSplit}>
-              <div className={styles.footerLeft}>
-                <Button
-                  appearance="outline"
-                  className={noBlueprintSelected ? styles.noBlueprintActive : undefined}
-                  aria-label="No blueprint"
-                  aria-pressed={noBlueprintSelected}
-                  icon={noBlueprintSelected ? <CheckmarkCircleRegular /> : <DismissCircleRegular />}
-                  onClick={onNoBlueprint}
-                >
-                  No blueprint
-                </Button>
-                <Text className={styles.tipLine}>
-                  {noBlueprintSelected
-                    ? 'Selected. Your project starts empty; add agents later.'
-                    : 'Start with an empty project and add agents later.'}
-                </Text>
-              </div>
-              <div className={styles.footerActions}>
-                <DialogTrigger disableButtonEnhancement><Button appearance="transparent" disabled={saving}>Cancel</Button></DialogTrigger>
-                <Button aria-label="Create" appearance="primary" disabled={!canCreate} onClick={onCreate}>
-                  {saving ? 'Creating' : 'Create project'}
-                </Button>
-                {saving && <Spinner size="extra-tiny" aria-hidden="true" />}
-              </div>
-            </div>
-          </DialogActions>
-        </DialogBody>
-      </DialogSurface>
-    </Dialog>
+        </div>
+      </div>
+      <div className={styles.dialogContent}>
+        <div className={styles.dialogTwoCol}>
+          <div className={styles.dialogLeftCol}>{left}</div>
+          <div className={styles.dialogRightCol}>{right}</div>
+        </div>
+      </div>
+      <div className={styles.dialogActions}>
+        <div className={styles.footerSplit}>
+          <div className={styles.footerLeft}>
+            <Button
+              appearance="outline"
+              className={noBlueprintSelected ? styles.noBlueprintActive : undefined}
+              aria-label="No blueprint"
+              aria-pressed={noBlueprintSelected}
+              icon={noBlueprintSelected ? <CheckmarkCircleRegular /> : <DismissCircleRegular />}
+              onClick={onNoBlueprint}
+            >
+              No blueprint
+            </Button>
+            <Text className={styles.tipLine}>
+              {noBlueprintSelected
+                ? 'Selected. Your project starts empty; add agents later.'
+                : 'Start with an empty project and add agents later.'}
+            </Text>
+          </div>
+          <div className={styles.footerActions}>
+            <DialogTrigger disableButtonEnhancement><Button appearance="transparent" disabled={saving}>Cancel</Button></DialogTrigger>
+            <Button aria-label="Create" appearance="primary" disabled={!canCreate} onClick={onCreate}>
+              {saving ? 'Creating' : 'Create project'}
+            </Button>
+            {saving && <Spinner size="extra-tiny" aria-hidden="true" />}
+          </div>
+        </div>
+      </div>
+    </AppDialog>
   );
 }
 
@@ -548,7 +634,7 @@ function CreateBlankDialog({ onCreated, dataDir, workspaceAutoAssigned }: { onCr
     <CreateProjectDialogShell
       open={d.open}
       onOpenChange={(open) => { d.setOpen(open); if (!open) resetLocal(); }}
-      trigger={<Button appearance="primary">Create blank project</Button>}
+      trigger={<Button appearance="primary" icon={<AddRegular />}>Create blank project</Button>}
       icon={<SparkleRegular />}
       title="Create blank project"
       subtitle="Start from scratch and let Agentweaver design the right squad and workflow for you."
@@ -832,7 +918,7 @@ function CreateFromGitHubDialog({ onCreated, dataDir, workspaceAutoAssigned }: {
     <CreateProjectDialogShell
       open={d.open}
       onOpenChange={(open) => { d.setOpen(open); if (!open) resetLocal(); }}
-      trigger={<Button appearance="secondary">Create from GitHub</Button>}
+      trigger={<Button appearance="subtle" icon={<GitHubIcon size={16} />}>Create from GitHub</Button>}
       icon="GH"
       title="Create project from GitHub"
       subtitle="Import an existing repository and configure a project with Agentweaver."
@@ -893,6 +979,55 @@ function ProjectCard({ project, onOpen, highlight }: { project: Project; onOpen:
   );
 }
 
+function ProjectLoadingShell() {
+  const styles = useStyles();
+  return (
+    <div className={styles.galleryLoading} role="status" aria-label="Loading projects">
+      <section className={styles.commandBand} aria-label="Project gallery command band">
+        <div className={styles.commandIntro}>
+          <Text weight="semibold" size={500}>Azure resource gallery is loading</Text>
+          <Text className={styles.emptyBody}>
+            Resolving project resources, GitHub connections, worktree availability, and blueprint creation options.
+          </Text>
+          <span>
+            <Spinner size="tiny" label="Loading projects…" />
+          </span>
+        </div>
+        <div className={styles.commandTile}>
+          <div>
+            <Text weight="semibold">Create a resource</Text><br />
+            <Text className={styles.emptyBody}>Start a blank Agentweaver project and attach a squad later.</Text>
+          </div>
+          <span className={styles.pendingAction} aria-hidden="true">Create blank project</span>
+        </div>
+        <div className={styles.commandTile}>
+          <div>
+            <Text weight="semibold">Import from GitHub</Text><br />
+            <Text className={styles.emptyBody}>Connect an existing repository and generate a blueprint.</Text>
+          </div>
+          <span className={styles.pendingAction} aria-hidden="true">Create from GitHub</span>
+        </div>
+      </section>
+      <section className={styles.listShell} aria-label="Project resources loading">
+        <div className={styles.listShellHeader}>
+          <Text weight="semibold">Project resources</Text>
+          <Badge appearance="tint" color="informative">Loading</Badge>
+        </div>
+        {[0, 1, 2, 3].map((row) => (
+          <div className={styles.skeletonRow} key={row}>
+            <div>
+              <div className={`${styles.skeletonPulse} ${styles.skeletonWide}`} />
+              <div className={`${styles.skeletonPulse} ${styles.skeletonMedium}`} style={{ marginTop: 8 }} />
+            </div>
+            <div className={`${styles.skeletonPulse} ${styles.skeletonMedium}`} />
+            <div className={`${styles.skeletonPulse} ${styles.skeletonButton}`} />
+          </div>
+        ))}
+      </section>
+    </div>
+  );
+}
+
 export function ProjectGalleryPage() {
   const styles = useStyles();
   const navigate = useNavigate();
@@ -941,7 +1076,7 @@ export function ProjectGalleryPage() {
   const showGalleryActions = !loading && !authError && projects.length > 0;
 
   return (
-    <AzurePage className={styles.root}>
+    <div className={['azf-stack azf-page azf-pattern-shell', styles.root].filter(Boolean).join(' ')}>
       <Toaster toasterId={toasterId} position="bottom-end" />
       <PageHeader
         title="Projects"
@@ -954,7 +1089,9 @@ export function ProjectGalleryPage() {
         ) : undefined}
       />
 
-      {loading && <Spinner label="Loading projects…" />}
+      {loading && (
+        <ProjectLoadingShell />
+      )}
 
       {!loading && authError && (
         <MessageBar intent="warning">
@@ -983,11 +1120,13 @@ export function ProjectGalleryPage() {
 
       {!loading && !loadError && !authError && projects.length === 0 && (
         <div className={styles.emptyState}>
-          <Text weight="semibold" size={500}>No projects yet. Create one to get started.</Text>
-          <Text className={styles.emptyBody}>
-            A project pairs a working directory with a squad and workflow so agents can start real work right away.
-            Import an existing GitHub repository, or start blank and describe a goal for a tailored blueprint.
-          </Text>
+          <div>
+            <Text weight="semibold" size={500}>No projects yet. Create one to get started.</Text>
+            <Text className={styles.emptyBody}>
+              A project pairs a working directory with a squad and workflow so agents can start real work right away.
+              Import an existing GitHub repository, or start blank and describe a goal for a tailored blueprint.
+            </Text>
+          </div>
           <div className={styles.emptyActions}>
             <CreateBlankDialog onCreated={handleCreated} dataDir={dataDir} workspaceAutoAssigned={workspaceAutoAssigned} />
             <CreateFromGitHubDialog onCreated={handleCreated} dataDir={dataDir} workspaceAutoAssigned={workspaceAutoAssigned} />
@@ -1007,6 +1146,6 @@ export function ProjectGalleryPage() {
           ))}
         </div>
       )}
-    </AzurePage>
+    </div>
   );
 }

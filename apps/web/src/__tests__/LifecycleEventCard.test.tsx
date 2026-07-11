@@ -1,13 +1,12 @@
-import { describe, it, expect, vi, afterEach } from 'vitest';
-import { render, screen, cleanup, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { FluentProvider, webLightTheme } from '@fluentui/react-components';
-import { type ReactNode } from 'react';
+import { AzureFluentProvider } from '../copilot-fluent-system';
 import { LifecycleEventCard } from '../components/LifecycleEventCard';
+import { act, cleanup, render, screen } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { RunStreamEvent } from '../api/sse';
-
+import type { ReactNode } from 'react';
 function Wrapper({ children }: { children: ReactNode }) {
-  return <FluentProvider theme={webLightTheme}>{children}</FluentProvider>;
+  return <AzureFluentProvider density="compact">{children}</AzureFluentProvider>;
 }
 
 afterEach(() => {

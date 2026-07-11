@@ -1,27 +1,23 @@
-import { useState } from 'react';
 import {
-  Badge,
-  Button,
+  apiClient } from '../api/apiClient';
+import { ApiError,
+  RetriableReviewError } from '../api/client';
+import { AzureToolbar,
+  BladeHeader,
   MessageBar,
   MessageBarBody,
-  Spinner,
+  StatusIconText,
   Text,
-  makeStyles,
+  } from '../copilot-fluent-system';
+import { makeStyles,
+  mergeClasses,
   tokens,
-} from '@fluentui/react-components';
-import { apiClient } from '../api/apiClient';
-import { ApiError, RetriableReviewError } from '../api/client';
+} from '../copilot-fluent-system';
+import { useState } from 'react';
 import type { ReviewResponse } from '../api/types';
-
 const useStyles = makeStyles({
   root: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalM,
     padding: tokens.spacingVerticalM,
-    borderRadius: tokens.borderRadiusMedium,
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
-    backgroundColor: tokens.colorNeutralBackground1,
   },
   meta: {
     fontFamily: tokens.fontFamilyMonospace,
@@ -29,17 +25,12 @@ const useStyles = makeStyles({
     color: tokens.colorNeutralForeground3,
   },
   actions: {
-    display: 'flex',
-    gap: tokens.spacingHorizontalM,
-    alignItems: 'center',
+    minWidth: 0,
   },
   error: {
     color: tokens.colorPaletteRedForeground1,
   },
   resultRow: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: tokens.spacingHorizontalS,
   },
   mergeResult: {
     fontFamily: tokens.fontFamilyMonospace,
@@ -52,14 +43,6 @@ interface ReviewPanelProps {
   runId: string;
   treeHash?: string | null;
   onReviewComplete?: (response: ReviewResponse) => void;
-}
-
-function statusBadgeColor(
-  status: string,
-): 'success' | 'subtle' | 'danger' | 'warning' | 'informative' {
-  if (status === 'merged') return 'success';
-  if (status === 'declined') return 'subtle';
-  return 'danger';
 }
 
 export function ReviewPanel({ runId, treeHash, onReviewComplete }: ReviewPanelProps) {
@@ -97,21 +80,22 @@ export function ReviewPanel({ runId, treeHash, onReviewComplete }: ReviewPanelPr
   if (result) {
     if (result.status === 'merge_failed') {
       return (
-        <div className={styles.root}>
-          <Text weight="semibold">Merge failed</Text>
+        <div className={mergeClasses('azf-surface azf-stack azf-gap-m', styles.root)}>
+          <BladeHeader size="compact" title="Merge failed" subtitle="The worktree has been preserved for manual resolution." />
           {result.merge_result && (
             <Text className={styles.mergeResult}>{result.merge_result}</Text>
           )}
-          <Text>The worktree has been preserved for manual resolution.</Text>
         </div>
       );
     }
     return (
-      <div className={styles.root}>
-        <Text weight="semibold">Review submitted</Text>
-        <div className={styles.resultRow}>
+      <div className={mergeClasses('azf-surface azf-stack azf-gap-m', styles.root)}>
+        <BladeHeader size="compact" title="Review submitted" />
+        <div className={mergeClasses('azf-row azf-gap-s', styles.resultRow)}>
           <Text>Status:</Text>
-          <Badge color={statusBadgeColor(result.status)}>{result.status}</Badge>
+          <StatusIconText status={result.status === 'merged' ? 'success' : result.status === 'declined' ? 'neutral' : 'danger'}>
+            {result.status}
+          </StatusIconText>
         </div>
         {result.merge_result && (
           <Text className={styles.mergeResult}>{result.merge_result}</Text>
@@ -121,25 +105,37 @@ export function ReviewPanel({ runId, treeHash, onReviewComplete }: ReviewPanelPr
   }
 
   return (
-    <div className={styles.root}>
-      <Text weight="semibold">Review required</Text>
+    <div className={mergeClasses('azf-surface azf-stack azf-gap-m', styles.root)}>
+      <BladeHeader size="compact" title="Review required" subtitle="Review the diff above and approve or decline the merge." />
       {treeHash && <Text className={styles.meta}>Tree: {treeHash}</Text>}
-      <Text>Review the diff above and approve or decline the merge.</Text>
+      <StatusIconText status="warning">Waiting for review</StatusIconText>
       {retriableMessage && (
         <MessageBar intent="warning">
           <MessageBarBody>{retriableMessage}</MessageBarBody>
         </MessageBar>
       )}
       {error && <Text className={styles.error}>{error}</Text>}
-      <div className={styles.actions}>
-        <Button appearance="primary" disabled={pending} onClick={() => void submit(true)}>
-          Approve
-        </Button>
-        <Button appearance="secondary" disabled={pending} onClick={() => void submit(false)}>
-          Decline
-        </Button>
-        {pending && <Spinner size="tiny" />}
-      </div>
+      <AzureToolbar
+        className={styles.actions}
+        ariaLabel="Review actions"
+        actions={[
+          {
+            id: 'approve',
+            label: 'Approve',
+            appearance: 'primary',
+            disabled: pending,
+            loading: pending,
+            onClick: () => void submit(true),
+          },
+          {
+            id: 'decline',
+            label: 'Decline',
+            appearance: 'secondary',
+            disabled: pending,
+            onClick: () => void submit(false),
+          },
+        ]}
+      />
     </div>
   );
 }

@@ -1,10 +1,6 @@
-import { describe, it, expect } from 'vitest';
-import {
-  collectFilesFromEntry,
-  isUploadableSkillFile,
-  type FsEntry,
-} from '../utils/skillDrop';
-
+import { collectFilesFromEntry, isUploadableSkillFile } from '../utils/skillDrop';
+import { describe, expect, it } from 'vitest';
+import type { FsEntry } from '../utils/skillDrop';
 function fileEntry(name: string, content = 'x'): FsEntry {
   const file = new File([content], name, { type: 'text/markdown' });
   return {

@@ -1,8 +1,9 @@
-import { useEffect, useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
 import {
-  Badge,
+  apiClient } from '../api/apiClient';
+import { ApiError } from '../api/client';
+import { Badge,
   Button,
+  CommandBar,
   Dialog,
   DialogActions,
   DialogBody,
@@ -12,20 +13,20 @@ import {
   MessageBar,
   MessageBarBody,
   Spinner,
+  StatusIconText,
   Text,
-  Title3,
   Tooltip,
-  makeStyles,
-  tokens,
-} from '@fluentui/react-components';
-import { ArrowSyncRegular, DeleteRegular, DismissCircleRegular } from '@fluentui/react-icons';
-import { apiClient } from '../api/apiClient';
-import { ApiError } from '../api/client';
-import { isCoordinatorRun } from '../utils/runKind';
-import type { Project, WorkflowRunDto } from '../api/types';
+  } from '../copilot-fluent-system';
 import { PageHeader } from '../components/PageHeader';
-import { AzurePage } from '../components/azure/AzureLayout';
-
+import { isCoordinatorRun } from '../utils/runKind';
+import { makeStyles,
+  Title3,
+  tokens,
+} from '../copilot-fluent-system';
+import { ArrowSyncRegular, DeleteRegular, DismissCircleRegular } from '../copilot-fluent-system';
+import { useEffect, useState } from 'react';
+import { Link, useParams } from 'react-router-dom';
+import type { Project, WorkflowRunDto } from '../api/types';
 // Orchestrations — a project-level list of coordinator orchestration runs. Each
 // row opens the existing coordinator topology view. Data comes from the project's
 // runs API (real data); coordinator runs are detected via isCoordinatorRun.
@@ -60,6 +61,11 @@ function badgeColor(label: string | undefined): 'success' | 'danger' | 'warning'
   return 'informative';
 }
 
+function statusTone(label: string | undefined): 'success' | 'danger' | 'warning' | 'info' {
+  const color = badgeColor(label);
+  return color === 'informative' ? 'info' : color;
+}
+
 const useStyles = makeStyles({
   root: {
     display: 'flex',
@@ -78,18 +84,14 @@ const useStyles = makeStyles({
     textDecoration: 'none',
   },
   statusSurface: {
-    display: 'grid',
-    gridTemplateColumns: 'minmax(220px, 0.85fr) minmax(0, 1.15fr)',
-    gap: tokens.spacingHorizontalL,
-    alignItems: 'center',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalM,
     padding: tokens.spacingVerticalM,
     backgroundColor: tokens.colorNeutralBackground1,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     borderRadius: tokens.borderRadiusLarge,
     boxShadow: tokens.shadow2,
-    '@media (max-width: 900px)': {
-      gridTemplateColumns: '1fr',
-    },
   },
   statusCopy: {
     display: 'flex',
@@ -129,6 +131,29 @@ const useStyles = makeStyles({
   statusPillValue: {
     color: tokens.colorNeutralForeground1,
     fontWeight: tokens.fontWeightSemibold,
+  },
+  resourceGrid: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+    gap: tokens.spacingHorizontalM,
+  },
+  resourceCard: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalXXS,
+    minHeight: '88px',
+  },
+  resourceLabel: {
+    color: tokens.colorNeutralForeground3,
+    fontSize: tokens.fontSizeBase200,
+    textTransform: 'uppercase',
+    letterSpacing: '0.04em',
+  },
+  resourceValue: {
+    fontSize: tokens.fontSizeBase600,
+    lineHeight: tokens.lineHeightBase600,
+    fontWeight: tokens.fontWeightSemibold,
+    fontVariantNumeric: 'tabular-nums',
   },
   section: {
     display: 'flex',
@@ -326,7 +351,7 @@ export function OrchestrationsPage() {
   if (!projectId) return null;
 
   return (
-    <AzurePage className={styles.root}>
+    <div className={['azf-stack azf-page azf-pattern-shell', styles.root].filter(Boolean).join(' ')}>
       <PageHeader
         title="Orchestrations"
         subtitle="Coordinator runs across this project."
@@ -361,20 +386,40 @@ export function OrchestrationsPage() {
 
       {runs.length > 0 && (
         <div className={styles.statusSurface} aria-label="Orchestration status summary">
-          <div className={styles.statusCopy}>
-            <Text className={styles.statusTitle}>Coordinator runs</Text>
-            <Text className={styles.statusHelp}>
-              Active work stays at the top; finished runs remain available for review, retry, or cleanup.
-            </Text>
-          </div>
-          <div className={styles.statusPills}>
-            <span className={styles.statusPill}><span className={styles.statusPillValue}>{activeRuns.length}</span> active</span>
-            <span className={styles.statusPill}><span className={styles.statusPillValue}>{recentRuns.length}</span> recent</span>
-            {Object.entries(statusCounts).map(([label, count]) => (
-              <span key={label} className={styles.statusPill}>
-                <span className={styles.statusPillValue}>{count}</span> {label}
-              </span>
-            ))}
+          <CommandBar
+            title="Coordinator command surface"
+            description="Azure run blade for live orchestration, terminal history, and operator actions."
+          >
+            <div className={styles.statusPills}>
+              <StatusIconText className={styles.statusPill} status={activeRuns.length > 0 ? 'warning' : 'neutral'}>
+                <span className={styles.statusPillValue}>{activeRuns.length}</span> active
+              </StatusIconText>
+              <StatusIconText className={styles.statusPill} status="info">
+                <span className={styles.statusPillValue}>{recentRuns.length}</span> recent
+              </StatusIconText>
+              {Object.entries(statusCounts).map(([label, count]) => (
+                <StatusIconText key={label} className={styles.statusPill} status={statusTone(label)}>
+                  <span className={styles.statusPillValue}>{count}</span> {label}
+                </StatusIconText>
+              ))}
+            </div>
+          </CommandBar>
+          <div className={styles.resourceGrid}>
+            <div className={['azf-surface azf-surface--subtle azf-surface--padding-compact', styles.resourceCard].filter(Boolean).join(' ')}>
+              <Text className={styles.resourceLabel}>Hierarchy</Text>
+              <Text className={styles.resourceValue}>{project?.name ?? projectId}</Text>
+              <Text className={styles.statusHelp}>Project resource scope</Text>
+            </div>
+            <div className={['azf-surface azf-surface--subtle azf-surface--padding-compact', styles.resourceCard].filter(Boolean).join(' ')}>
+              <Text className={styles.resourceLabel}>Live runs</Text>
+              <Text className={styles.resourceValue}>{activeRuns.length}</Text>
+              <Text className={styles.statusHelp}>Stop-enabled orchestration work</Text>
+            </div>
+            <div className={['azf-surface azf-surface--subtle azf-surface--padding-compact', styles.resourceCard].filter(Boolean).join(' ')}>
+              <Text className={styles.resourceLabel}>Retained runs</Text>
+              <Text className={styles.resourceValue}>{recentRuns.length}</Text>
+              <Text className={styles.statusHelp}>Inspectable terminal history</Text>
+            </div>
           </div>
         </div>
       )}
@@ -487,6 +532,6 @@ export function OrchestrationsPage() {
           </DialogBody>
         </DialogSurface>
       </Dialog>
-    </AzurePage>
+    </div>
   );
 }

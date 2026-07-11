@@ -1,3 +1,13 @@
+import type { RunStreamEvent } from '../api/sse';
+import type {
+  AgentMessageItem,
+  ApprovalRequestItem,
+  QuestionRequestItem,
+  TimelineReducerState,
+  ToolCallItem,
+  TurnGroupItem,
+  TurnStep,
+} from './types';
 /**
  * Pure grouping reducer for the run timeline.
  *
@@ -6,17 +16,6 @@
  * No HTML interpretation, markdown rendering, or dangerouslySetInnerHTML is
  * used anywhere in the timeline rendering pipeline.
  */
-import type { RunStreamEvent } from '../api/sse';
-import type {
-  TimelineReducerState,
-  TurnGroupItem,
-  TurnStep,
-  AgentMessageItem,
-  ToolCallItem,
-  ApprovalRequestItem,
-} from './types';
-import type { QuestionRequestItem } from './types';
-
 /** Maximum characters stored per content field (Y-1: prevent unbounded DOM growth). */
 export const CONTENT_MAX_CHARS = 50_000;
 
@@ -531,9 +530,10 @@ function processEvent(
       return { ...state, runOutcome: { achieved, reason } };
     }
 
-    case 'tool.approval_required':
     // A coordinator bubbles a child subtask's tool approval as this type; its payload carries the
     // owning child run id so approve/deny can target it (issue #196). Handled identically here.
+    case 'tool.approval_required':
+    // falls through
     case 'coordinator.child_approval_required': {
       // Server emits camelCase (requestId, toolName); accept both for resilience.
       const requestId = String(event.payload['request_id'] ?? event.payload['requestId'] ?? '');
@@ -561,8 +561,9 @@ function processEvent(
       return { ...state, items: [...state.items, { kind: 'lifecycle', event }] };
     }
 
-    case 'tool.approval_resolved':
     // Coordinator mirror of tool.approval_resolved for a bubbled child approval (issue #196).
+    case 'tool.approval_resolved':
+    // falls through
     case 'coordinator.child_approval_resolved': {
       // Server notifies that a HITL gate closed (operator action or timeout). Find the pending
       // approval by requestId and mark it resolved so the card disables immediately.

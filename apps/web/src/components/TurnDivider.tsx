@@ -1,28 +1,21 @@
+import {
+  Divider,
+  Spinner,
+  StatusIconText } from '../copilot-fluent-system';
+import { makeStyles,
+  mergeClasses,
+  tokens,
+} from '../copilot-fluent-system';
+import { CheckmarkCircleFilled } from '../copilot-fluent-system';
 import { memo } from 'react';
-import { Divider, Spinner, Text, makeStyles, tokens } from '@fluentui/react-components';
-import { RecordRegular, CheckmarkCircleFilled } from '@fluentui/react-icons';
-
 const useStyles = makeStyles({
   root: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: tokens.spacingHorizontalS,
     paddingTop: tokens.spacingVerticalXXS,
     paddingBottom: tokens.spacingVerticalXXS,
   },
   label: {
-    color: tokens.colorNeutralForeground3,
     fontSize: tokens.fontSizeBase200,
     flexShrink: 0,
-    display: 'flex',
-    alignItems: 'center',
-    gap: tokens.spacingHorizontalXS,
-  },
-  completedIcon: {
-    color: tokens.colorPaletteGreenForeground1,
-  },
-  activeIcon: {
-    color: tokens.colorBrandForeground1,
   },
 });
 
@@ -36,20 +29,16 @@ export const TurnDivider = memo(function TurnDivider({ turnIndex, stepCount, act
   const styles = useStyles();
   const stepWord = stepCount === 1 ? 'step' : 'steps';
   return (
-    <div className={styles.root}>
+    <div className={mergeClasses('azf-row azf-gap-s', styles.root)}>
       <Divider style={{ flexGrow: 1 }} />
-      <Text as="span" className={styles.label}>
-        {active ? (
-          <>
-            <RecordRegular className={styles.activeIcon} aria-hidden="true" />
-            <Spinner size="extra-tiny" aria-hidden="true" />
-          </>
-        ) : (
-          <CheckmarkCircleFilled className={styles.completedIcon} aria-hidden="true" />
-        )}
+      <StatusIconText
+        className={styles.label}
+        status={active ? 'info' : 'success'}
+        icon={active ? <Spinner size="extra-tiny" aria-hidden="true" /> : <CheckmarkCircleFilled aria-hidden="true" />}
+      >
         Turn {turnIndex}
         {stepCount > 0 && ` \u00b7 ${stepCount} ${stepWord}`}
-      </Text>
+      </StatusIconText>
       <Divider style={{ flexGrow: 1 }} />
     </div>
   );

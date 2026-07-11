@@ -1,5 +1,4 @@
 import type { RunStreamEvent } from '../api/sse';
-
 /**
  * Shared run-history seeding helpers (BLOCKING #3 — de-duplication).
  *

@@ -1,14 +1,17 @@
-import { useState } from 'react';
-import { Button, Text, Textarea, makeStyles, tokens } from '@fluentui/react-components';
-import { AddRegular } from '@fluentui/react-icons';
-import { apiClient } from '../../api/apiClient';
+import {
+  apiClient } from '../../api/apiClient';
 import { ApiError } from '../../api/client';
-
+import { Button,
+  Text,
+  Textarea } from '../../copilot-fluent-system';
+import { makeStyles,
+  mergeClasses,
+  tokens,
+} from '../../copilot-fluent-system';
+import { AddRegular } from '../../copilot-fluent-system';
+import { useState } from 'react';
 const useStyles = makeStyles({
   root: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalXS,
   },
   textarea: {
     width: '100%',
@@ -16,7 +19,6 @@ const useStyles = makeStyles({
     resize: 'none',
   },
   actions: {
-    display: 'flex',
     justifyContent: 'flex-end',
   },
   error: {
@@ -57,7 +59,7 @@ export function CaptureTaskForm({ projectId, onCaptured }: CaptureTaskFormProps)
   };
 
   return (
-    <div className={styles.root}>
+    <div className={mergeClasses('azf-stack azf-gap-xs', styles.root)}>
       <Textarea
         className={styles.textarea}
         value={title}
@@ -70,7 +72,7 @@ export function CaptureTaskForm({ projectId, onCaptured }: CaptureTaskFormProps)
         onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void submit(); } }}
       />
       {error && <Text className={styles.error}>{error}</Text>}
-      <div className={styles.actions}>
+      <div className={mergeClasses('azf-row', styles.actions)}>
         <Button appearance="primary" icon={<AddRegular />} disabled={busy || !title.trim()} onClick={() => void submit()}>
           Add
         </Button>

@@ -1,0 +1,459 @@
+/* ==========================================================================
+   Agentweaver Native App Shell
+   Token-driven layout + visual language using var(--color*), var(--spacing*),
+   var(--borderRadius*), var(--shadow*), var(--fontSize*) from the native Fluent
+   theme (agentweaverLightTheme). No hex color values — theme tokens only.
+   ========================================================================== */
+
+/* --------------------------------------------------------------------------
+   App shell: full-height flex row  [left rail | main canvas]
+   -------------------------------------------------------------------------- */
+.aw-app-shell {
+  display: flex;
+  flex-direction: row;
+  height: 100vh;
+  overflow: hidden;
+}
+
+/* --------------------------------------------------------------------------
+   Left navigation rail
+   -------------------------------------------------------------------------- */
+.aw-left-nav {
+  display: flex;
+  flex-direction: column;
+  width: 260px;
+  min-width: 260px;
+  max-width: 260px;
+  height: 100%;
+  background-color: var(--colorNeutralBackground2);
+  flex-shrink: 0;
+  overflow: hidden;
+  transition: width 150ms ease-out, min-width 150ms ease-out, max-width 150ms ease-out;
+}
+
+.aw-left-nav--collapsed {
+  width: 64px;
+  min-width: 64px;
+  max-width: 64px;
+}
+
+/* Chrome row: logo + collapse toggle */
+.aw-rail-chrome {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--spacingVerticalS) var(--spacingHorizontalS);
+  flex-shrink: 0;
+  min-width: 0;
+}
+
+/* Brand link */
+.aw-rail-brand {
+  display: flex;
+  align-items: center;
+  gap: var(--spacingHorizontalS);
+  text-decoration: none;
+  color: var(--colorNeutralForeground1);
+  min-width: 0;
+  flex: 1;
+  border-radius: var(--borderRadiusMedium);
+  padding: 4px 0;
+}
+
+.aw-rail-brand:hover {
+  text-decoration: none;
+  color: var(--colorNeutralForeground1);
+  background-color: var(--colorSubtleBackgroundHover);
+}
+
+.aw-rail-brand:focus-visible {
+  outline: 2px solid var(--colorStrokeFocus2);
+  outline-offset: 2px;
+}
+
+.aw-rail-brand__icon {
+  width: 26px;
+  height: 26px;
+  flex-shrink: 0;
+  border-radius: var(--borderRadiusMedium);
+  display: block;
+}
+
+.aw-rail-brand__label {
+  font-size: var(--fontSizeBase300);
+  font-weight: var(--fontWeightSemibold);
+  line-height: var(--lineHeightBase300);
+  color: var(--colorNeutralForeground1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+
+/* Collapse toggle button — flush align right */
+.aw-rail-collapse-btn {
+  flex-shrink: 0;
+}
+
+/* --------------------------------------------------------------------------
+   Rail header slot: project switcher + primary actions (hidden when collapsed)
+   -------------------------------------------------------------------------- */
+.aw-rail-header {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacingVerticalXXS);
+  padding: 0 var(--spacingHorizontalS) var(--spacingVerticalS);
+  flex-shrink: 0;
+  min-width: 0;
+}
+
+.aw-rail-header > *,
+.aw-rail-header .fui-Button,
+.aw-rail-header .fui-Combobox,
+.aw-rail-header .fui-Dropdown {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.aw-rail-header__actions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacingVerticalXXS);
+  min-width: 0;
+}
+
+.aw-rail-header__actions .fui-Button {
+  justify-content: flex-start;
+  width: 100%;
+}
+
+/* --------------------------------------------------------------------------
+   Scrollable nav area
+   -------------------------------------------------------------------------- */
+.aw-rail-scroll {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: var(--spacingVerticalXXS) var(--spacingHorizontalS);
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  min-height: 0;
+}
+
+.aw-rail-scroll[data-scrollbar-mode="hover"] {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+
+.aw-rail-scroll[data-scrollbar-mode="hover"]:hover {
+  scrollbar-color: var(--colorNeutralStroke1) transparent;
+}
+
+.aw-rail-scroll[data-scrollbar-mode="hover"]::-webkit-scrollbar {
+  width: 4px;
+}
+
+.aw-rail-scroll[data-scrollbar-mode="hover"]::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.aw-rail-scroll[data-scrollbar-mode="hover"]::-webkit-scrollbar-thumb {
+  background: transparent;
+  border-radius: var(--borderRadiusCircular);
+}
+
+.aw-rail-scroll[data-scrollbar-mode="hover"]:hover::-webkit-scrollbar-thumb {
+  background: var(--colorNeutralStroke1);
+}
+
+.aw-rail-scroll[data-scrollbar-mode="hidden"] {
+  scrollbar-width: none;
+}
+
+.aw-rail-scroll[data-scrollbar-mode="hidden"]::-webkit-scrollbar {
+  display: none;
+}
+
+/* --------------------------------------------------------------------------
+   Nav sections
+   -------------------------------------------------------------------------- */
+.aw-nav-section {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: var(--spacingVerticalXXS);
+}
+
+.aw-nav-section--bottom {
+  margin-top: 0; /* bottom-anchoring is owned by .aw-nav-divider--bottom-anchor */
+  margin-bottom: 0;
+}
+
+/* Thin horizontal rule separating nav groups — replaces uppercase eyebrow labels */
+.aw-nav-divider {
+  border: none;
+  border-top: 1px solid var(--colorNeutralStroke2);
+  margin: 8px var(--spacingHorizontalS);
+  padding: 0;
+  height: 0;
+  flex-shrink: 0;
+}
+
+/* The first divider before a bottom-anchored section absorbs all remaining space,
+   keeping the divider + section visually pinned to the bottom of the scroll area */
+.aw-nav-divider--bottom-anchor {
+  margin-top: auto;
+}
+
+.aw-left-nav--collapsed .aw-nav-divider {
+  margin-left: 4px;
+  margin-right: 4px;
+}
+
+/* --------------------------------------------------------------------------
+   Nav items (row: icon + label, with rounded selected pill)
+   -------------------------------------------------------------------------- */
+.aw-nav-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px var(--spacingHorizontalS);
+  border-radius: var(--borderRadiusLarge);
+  text-decoration: none;
+  color: var(--colorNeutralForeground2);
+  font-size: var(--fontSizeBase400);
+  font-weight: var(--fontWeightMedium);
+  line-height: var(--lineHeightBase400);
+  min-height: 40px;
+  width: 100%;
+  box-sizing: border-box;
+  transition: background-color 150ms ease-out, color 150ms ease-out;
+}
+
+.aw-nav-item:hover {
+  background-color: var(--colorSubtleBackgroundHover);
+  color: var(--colorNeutralForeground1);
+  text-decoration: none;
+}
+
+.aw-nav-item:active {
+  background-color: var(--colorNeutralBackground4);
+  color: var(--colorNeutralForeground1);
+  transform: translateY(1px);
+  text-decoration: none;
+}
+
+/* Selected pill: warm-neutral fill — same tone as hover */
+.aw-nav-item--selected {
+  background-color: var(--colorNeutralBackground3);
+  color: var(--colorNeutralForeground1);
+  font-weight: var(--fontWeightSemibold);
+}
+
+.aw-nav-item--selected:hover {
+  background-color: var(--colorNeutralBackground3);
+  color: var(--colorNeutralForeground1);
+}
+
+.aw-nav-item--selected:active {
+  background-color: var(--colorNeutralBackground4);
+}
+
+/* Icon wrapper — muted at rest, ink when active/selected */
+.aw-nav-item__icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  font-size: 20px;
+  flex-shrink: 0;
+  color: var(--colorNeutralForeground3);
+}
+
+.aw-nav-item:hover .aw-nav-item__icon,
+.aw-nav-item--selected .aw-nav-item__icon {
+  color: var(--colorNeutralForeground1);
+}
+
+/* Label */
+.aw-nav-item__label {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Collapsed: center icon, no label text */
+.aw-left-nav--collapsed .aw-nav-item {
+  justify-content: center;
+  gap: 0;
+  padding: var(--spacingVerticalS) 0;
+  width: 100%;
+}
+
+.aw-left-nav--collapsed .aw-rail-chrome {
+  justify-content: center;
+  padding: var(--spacingVerticalS) var(--spacingHorizontalXS);
+}
+
+.aw-left-nav--collapsed .aw-rail-brand {
+  display: none;
+}
+
+/* --------------------------------------------------------------------------
+   Rail footer: persona + meta (always visible)
+   -------------------------------------------------------------------------- */
+.aw-rail-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacingHorizontalS);
+  padding: var(--spacingVerticalS) var(--spacingHorizontalS);
+  flex-shrink: 0;
+  min-width: 0;
+  border-top: 1px solid var(--colorNeutralStroke2);
+}
+
+.aw-rail-footer > .fui-Button,
+.aw-rail-footer .fui-Menu {
+  min-width: 0;
+}
+
+.aw-rail-footer__meta {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacingHorizontalXS);
+  flex-shrink: 0;
+}
+
+/* --------------------------------------------------------------------------
+   Main canvas area (right of the rail)
+   -------------------------------------------------------------------------- */
+.aw-shell-canvas {
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+  background-color: var(--colorNeutralBackground2);
+  /* 6px inset on all four sides so the warm-canvas gap is visible between the rail and the panel,
+     exposing all four rounded corners of .aw-shell-content. */
+  padding: 6px;
+}
+
+/* Floating content panel: off-white, 12px-radius clip layer.
+   overflow:hidden clips all four corners; scrolling lives on .aw-shell-scroll. */
+.aw-shell-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background-color: var(--colorNeutralBackground1);
+  border-radius: var(--borderRadiusLarge);
+  position: relative;
+}
+
+/* Inner scroll container — sits inside the rounded clip layer.
+   Transparent track + inset thumb makes the scrollbar float inside the panel
+   without painting over the rounded corners (copilot-style overlay scrollbar). */
+.aw-shell-scroll {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: var(--colorNeutralStroke1) transparent;
+  min-height: 0;
+  padding: var(--spacingVerticalXXL) var(--spacingHorizontalXXXL);
+}
+
+.aw-shell-scroll::-webkit-scrollbar {
+  width: 10px;
+}
+
+.aw-shell-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.aw-shell-scroll::-webkit-scrollbar-thumb {
+  background: var(--colorNeutralStroke1);
+  border-radius: 9999px;
+  border: 3px solid transparent;
+  background-clip: padding-box;
+}
+
+.aw-shell-scroll::-webkit-scrollbar-thumb:hover {
+  background: var(--colorNeutralStrokeAccessible);
+  background-clip: padding-box;
+}
+
+/* --------------------------------------------------------------------------
+   Floating "Start task" pill (top-right of content panel)
+   Absolutely positioned so it stays above .aw-shell-scroll without scrolling.
+   pointer-events:none on the container so the invisible area doesn't trap clicks.
+   -------------------------------------------------------------------------- */
+.aw-floating-actions {
+  position: absolute;
+  top: var(--spacingVerticalL);
+  right: var(--spacingHorizontalL);
+  z-index: 5;
+  pointer-events: none;
+}
+
+.aw-floating-actions > * {
+  pointer-events: auto;
+}
+
+.aw-floating-actions .fui-Button {
+  height: 40px;
+  min-height: 40px;
+  padding: 8px 12px;
+  border-radius: var(--borderRadiusLarge); /* 12px */
+  background-color: rgba(255, 255, 255, 0.7);
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+  color: var(--colorNeutralForeground1);
+  border: none;
+  box-shadow: var(--shadow4);
+  font-size: var(--fontSizeBase300); /* 14px */
+  font-weight: var(--fontWeightRegular); /* 400 */
+  line-height: var(--lineHeightBase300); /* 20px */
+}
+
+.aw-floating-actions .fui-Button:hover {
+  background-color: rgba(255, 255, 255, 0.88);
+  color: var(--colorNeutralForeground1);
+  box-shadow: var(--shadow8);
+}
+
+.aw-floating-actions .fui-Button:active {
+  background-color: rgba(255, 255, 255, 0.96);
+  transform: translateY(1px);
+}
+
+/* Primary / secondary buttons in the content canvas: active micro-nudge (M design model).
+   Scoped to .aw-shell-canvas so it doesn't affect nav items (which have their own rule)
+   or Operator-dock / overlay buttons outside the main panel. */
+.aw-shell-canvas .fui-Button:not(:disabled):not([aria-disabled="true"]):active {
+  transform: translateY(1px);
+}
+
+/* --------------------------------------------------------------------------
+   Reduced-motion overrides
+   -------------------------------------------------------------------------- */
+@media (prefers-reduced-motion: reduce) {
+  .aw-left-nav {
+    transition: none;
+  }
+
+  .aw-nav-item {
+    transition: none;
+  }
+
+  .aw-nav-item:active,
+  .aw-floating-actions .fui-Button:active,
+  .aw-shell-canvas .fui-Button:active {
+    transform: none;
+  }
+}

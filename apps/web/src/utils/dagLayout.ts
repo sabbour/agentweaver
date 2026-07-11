@@ -1,6 +1,5 @@
 import Dagre from 'dagre';
 import type { Edge, Node } from '@xyflow/react';
-
 export const NODE_W = 200;
 export const NODE_H = 145;
 export const DAG_NODE_SEP = 96;

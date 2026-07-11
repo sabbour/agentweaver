@@ -1,5 +1,9 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  apiClient } from '../api/apiClient';
+import { ApiError } from '../api/client';
+import { AzureEmptyState,
+  AzureToolbar,
+  BladeHeader,
   Button,
   Dropdown,
   Field,
@@ -12,59 +16,29 @@ import {
   MessageBar,
   MessageBarBody,
   Option,
-  Spinner,
+  StatusIconText,
   Text,
   Textarea,
-  makeStyles,
-  tokens,
-} from '@fluentui/react-components';
-import {
-  AddRegular,
-  BeakerRegular,
-  CodeRegular,
-  DeleteRegular,
-  DismissRegular,
-  EyeRegular,
-  PersonFeedbackRegular,
-  PersonRegular,
-  ShieldCheckmarkRegular,
-} from '@fluentui/react-icons';
-import {
-  Background,
-  Controls,
-  ReactFlow,
-  applyNodeChanges,
-  type Connection,
-  type Edge,
-  type Node,
-  type NodeChange,
-  type OnSelectionChangeParams,
-} from '@xyflow/react';
-import '@xyflow/react/dist/style.css';
-import { apiClient } from '../api/apiClient';
-import { ApiError } from '../api/client';
-import type { GraphNodeType, WorkflowDetailDto } from '../api/types';
-import { DAG_NODE_SEP, layoutDag, workflowNodeSizeHint } from '../utils/dagLayout';
-import {
-  NODE_TYPE_LABELS,
-  AUTHORABLE_WORKFLOW_NODE_TYPES,
-  addEdge,
+  } from '../copilot-fluent-system';
+import { DAG_NODE_SEP,
+  layoutDag,
+  workflowNodeSizeHint } from '../utils/dagLayout';
+import { addEdge,
   addNode,
+  AUTHORABLE_WORKFLOW_NODE_TYPES,
+  NODE_TYPE_LABELS,
   parseWorkflowYaml,
   readWorkflowId,
   removeEdgeAt,
   removeNode,
   renameNode,
+  setBranchTarget,
   setEdgeFieldAt,
   setHeaderField,
-  setBranchTarget,
   setNodeField,
   setNodeStringArrayField,
-  type WfModel,
-  type WfNode,
-} from '../utils/workflowYaml';
-import {
-  ActiveEdgeContext,
+  } from '../utils/workflowYaml';
+import { ActiveEdgeContext,
   ExecutionModalContext,
   forwardEdge,
   iconForRole,
@@ -72,9 +46,33 @@ import {
   roleDescForRole,
   workflowEdgeTypes,
   workflowNodeTypes,
-  type WorkflowNodeData,
-} from './WorkflowGraphPanel';
-
+  } from './WorkflowGraphPanel';
+import { makeStyles,
+  mergeClasses,
+  tokens,
+} from '../copilot-fluent-system';
+import '@xyflow/react/dist/style.css';
+import {
+  AddRegular,
+  BeakerRegular,
+  CodeRegular,
+  DeleteRegular,
+  EyeRegular,
+  PersonFeedbackRegular,
+  PersonRegular,
+  ShieldCheckmarkRegular,
+} from '../copilot-fluent-system';
+import {
+  applyNodeChanges,
+  Background,
+  Controls,
+  ReactFlow,
+} from '@xyflow/react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { GraphNodeType, WorkflowDetailDto } from '../api/types';
+import type { WfModel, WfNode } from '../utils/workflowYaml';
+import type { WorkflowNodeData } from './WorkflowGraphPanel';
+import type { Connection, Edge, Node, NodeChange, OnSelectionChangeParams } from '@xyflow/react';
 // US8 — visual execution-graph workflow editor. Extends the read-only ReactFlow
 // render (US6) into a writeable canvas. The on-disk YAML remains the single source
 // of truth: graph edits serialize back onto the YAML document (preserving unknown
@@ -176,21 +174,6 @@ function gateKey(node: WfNode): string | null {
 }
 
 const useStyles = makeStyles({
-  root: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalM,
-    backgroundColor: tokens.colorNeutralBackground1,
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: tokens.borderRadiusMedium,
-    padding: tokens.spacingVerticalL,
-  },
-  header: {
-    display: 'flex',
-    alignItems: 'flex-start',
-    justifyContent: 'space-between',
-    gap: tokens.spacingHorizontalM,
-  },
   identityGrid: {
     display: 'grid',
     gridTemplateColumns: '1fr 1fr',
@@ -206,36 +189,22 @@ const useStyles = makeStyles({
   canvasPane: {
     flexBasis: '60%',
     flexGrow: 1,
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: tokens.borderRadiusMedium,
-    backgroundColor: tokens.colorNeutralBackground2,
     overflow: 'hidden',
     position: 'relative',
   },
   sidePane: {
     flexBasis: '40%',
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalM,
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: tokens.borderRadiusMedium,
-    padding: tokens.spacingVerticalM,
     overflowY: 'auto',
     maxHeight: '560px',
   },
   paneHeader: {
-    display: 'flex',
-    alignItems: 'center',
     justifyContent: 'space-between',
-    gap: tokens.spacingHorizontalS,
   },
   canvasToolbar: {
     position: 'absolute',
     top: tokens.spacingVerticalS,
     left: tokens.spacingHorizontalS,
     zIndex: 5,
-    display: 'flex',
-    gap: tokens.spacingHorizontalXS,
   },
   yamlArea: {
     flexGrow: 1,
@@ -254,9 +223,7 @@ const useStyles = makeStyles({
     boxSizing: 'border-box',
   },
   footer: {
-    display: 'flex',
-    gap: tokens.spacingHorizontalS,
-    alignItems: 'center',
+    justifyContent: 'space-between',
   },
   hintText: {
     color: tokens.colorNeutralForeground3,
@@ -530,34 +497,37 @@ export function VisualWorkflowEditor({
   }, [onClose]);
 
   return (
-    <div className={styles.root}>
-      <div className={styles.header}>
-        <div className={styles.identityGrid}>
-          <Field label="Workflow id">
-            <Input
-              value={model?.id ?? ''}
-              onChange={(_, d) => setYamlText((t) => setHeaderField(t, 'id', d.value))}
-            />
-          </Field>
-          <Field label="Name">
-            <Input
-              value={model?.name ?? ''}
-              onChange={(_, d) => setYamlText((t) => setHeaderField(t, 'name', d.value))}
-            />
-          </Field>
-          <Field
-            label="Description"
-            hint="The coordinator reads this to decide when to select this workflow."
-            className={styles.identityWide}
-          >
-            <Textarea
-              value={model?.description ?? ''}
-              onChange={(_, d) => setYamlText((t) => setHeaderField(t, 'description', d.value))}
-              rows={2}
-            />
-          </Field>
-        </div>
-        <Button appearance="subtle" icon={<DismissRegular />} onClick={handleClose}>Close</Button>
+    <div className="azf-stack azf-gap-m azf-surface azf-surface--padding-comfortable">
+      <BladeHeader
+        size="compact"
+        title={model?.name || workflowId}
+        subtitle={model?.id ?? workflowId}
+        onDismiss={handleClose}
+      />
+      <div className={styles.identityGrid}>
+        <Field label="Workflow id">
+          <Input
+            value={model?.id ?? ''}
+            onChange={(_, d) => setYamlText((t) => setHeaderField(t, 'id', d.value))}
+          />
+        </Field>
+        <Field label="Name">
+          <Input
+            value={model?.name ?? ''}
+            onChange={(_, d) => setYamlText((t) => setHeaderField(t, 'name', d.value))}
+          />
+        </Field>
+        <Field
+          label="Description"
+          hint="The coordinator reads this to decide when to select this workflow."
+          className={styles.identityWide}
+        >
+          <Textarea
+            value={model?.description ?? ''}
+            onChange={(_, d) => setYamlText((t) => setHeaderField(t, 'description', d.value))}
+            rows={2}
+          />
+        </Field>
       </div>
 
       {parseError && (
@@ -583,8 +553,8 @@ export function VisualWorkflowEditor({
       )}
 
       <div className={styles.split}>
-        <div className={styles.canvasPane}>
-          <div className={styles.canvasToolbar}>
+        <div className={mergeClasses('azf-surface azf-surface--subtle', styles.canvasPane)}>
+          <AzureToolbar actions={[]} ariaLabel="Workflow canvas actions" className={styles.canvasToolbar}>
             <Menu>
               <MenuTrigger disableButtonEnhancement>
                 <Button appearance="primary" size="small" icon={<AddRegular />}>Add node</Button>
@@ -604,7 +574,7 @@ export function VisualWorkflowEditor({
                 </MenuList>
               </MenuPopover>
             </Menu>
-          </div>
+          </AzureToolbar>
           <ExecutionModalContext.Provider value={undefined}>
             <ActiveEdgeContext.Provider value={undefined}>
               <ReactFlow
@@ -630,8 +600,8 @@ export function VisualWorkflowEditor({
           </ExecutionModalContext.Provider>
         </div>
 
-        <div className={styles.sidePane}>
-          <div className={styles.paneHeader}>
+        <div className={mergeClasses('azf-stack azf-gap-m azf-surface azf-surface--padding-comfortable', styles.sidePane)}>
+          <div className={mergeClasses('azf-row azf-gap-s', styles.paneHeader)}>
             <Text weight="semibold">
               {rightMode === 'yaml' ? 'YAML' : 'Inspector'}
             </Text>
@@ -742,7 +712,7 @@ export function VisualWorkflowEditor({
                     ? 'Build & Test uses fixed verdicts and no prompt field.'
                     : 'Each declared branch should route to a target node.'}
                 >
-                  <div style={{ display: 'grid', gap: tokens.spacingVerticalS }}>
+                  <div className="azf-stack azf-gap-s">
                     {selectedNode.type === 'check' && (
                       <Input
                         value={selectedGateBranches.join(', ')}
@@ -804,26 +774,33 @@ export function VisualWorkflowEditor({
           )}
 
           {rightMode === 'inspector' && !selectedNode && !selectedEdge && (
-            <Text className={styles.hintText}>
-              Select a node or edge to edit it, drag from a node handle to connect, or use “Add node”.
-            </Text>
+            <AzureEmptyState
+              compact
+              title="Select a node or edge"
+              body="Edit its properties, drag from a node handle to connect, or use Add node."
+            />
           )}
         </div>
       </div>
 
-      <div className={styles.footer}>
-        <Button
-          appearance="primary"
-          disabled={saving}
-          icon={saving ? <Spinner size="extra-tiny" aria-hidden="true" /> : undefined}
-          onClick={() => { void handleSave(); }}
-        >
-          {saving ? 'Saving' : 'Save'}
-        </Button>
+      <AzureToolbar
+        actions={[
+          {
+            id: 'save',
+            label: saving ? 'Saving' : 'Save',
+            appearance: 'primary',
+            loading: saving,
+            disabled: saving,
+            onClick: () => { void handleSave(); },
+          },
+        ]}
+        ariaLabel="Visual workflow editor actions"
+        className={styles.footer}
+      >
         {isDirty && (
-          <Text size={200} style={{ color: tokens.colorNeutralForeground3 }}>Unsaved changes</Text>
+          <StatusIconText status="warning">Unsaved changes</StatusIconText>
         )}
-      </div>
+      </AzureToolbar>
     </div>
   );
 }

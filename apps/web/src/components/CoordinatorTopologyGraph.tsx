@@ -1,6 +1,7 @@
-import { createContext, useCallback, useContext, useMemo, useState } from 'react';
 import {
-  Button,
+  apiClient } from '../api/apiClient';
+import { ApiError } from '../api/client';
+import { Button,
   Dialog,
   DialogActions,
   DialogBody,
@@ -14,11 +15,19 @@ import {
   Text,
   Textarea,
   Tooltip,
-  makeStyles,
+  } from '../copilot-fluent-system';
+import { DAG_NODE_SEP,
+  layoutDag,
+  NODE_W,
+  RENDERED_TOPOLOGY_NODE_H } from '../utils/dagLayout';
+import { AgentAvatar } from './AgentAvatar';
+import { PodIndicator } from './PodIndicator';
+import { STEERING_HELP } from './steeringHelp';
+import { makeStyles,
   shorthands,
   tokens,
-} from '@fluentui/react-components';
-import type { FluentIcon } from '@fluentui/react-icons';
+} from '../copilot-fluent-system';
+import '@xyflow/react/dist/style.css';
 import {
   AlertRegular,
   ArrowMaximizeRegular,
@@ -38,29 +47,21 @@ import {
   StopRegular,
   ZoomInRegular,
   ZoomOutRegular,
-} from '@fluentui/react-icons';
+} from '../copilot-fluent-system';
 import {
-  ReactFlow,
+  Handle,
   MarkerType,
   Panel,
   Position,
-  Handle,
+  ReactFlow,
   useReactFlow,
   useStore,
-  type Node,
-  type Edge,
-  type NodeProps,
 } from '@xyflow/react';
-import '@xyflow/react/dist/style.css';
-import { apiClient } from '../api/apiClient';
-import { ApiError } from '../api/client';
+import { createContext, useCallback, useContext, useMemo, useState } from 'react';
 import type { SteerKind, TopologyEdge } from '../api/types';
 import type { TopologyNodeState } from '../state/topologyReducer';
-import { DAG_NODE_SEP, layoutDag, NODE_W, RENDERED_TOPOLOGY_NODE_H } from '../utils/dagLayout';
-import { AgentAvatar } from './AgentAvatar';
-import { PodIndicator } from './PodIndicator';
-import { STEERING_HELP } from './steeringHelp';
-
+import type { FluentIcon } from '../copilot-fluent-system';
+import type { Edge, Node, NodeProps } from '@xyflow/react';
 // ---------------------------------------------------------------------------
 // Steering context — lets a custom node trigger a steering action without
 // threading callbacks through React Flow node data.

@@ -1,12 +1,20 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor, cleanup } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { FluentProvider, webLightTheme } from '@fluentui/react-components';
-import { type ReactNode } from 'react';
+import { apiClient } from '../api/apiClient';
+import { AzureFluentProvider } from '../copilot-fluent-system';
 import { ArtifactBrowser, FilesTabPanel } from '../components/ArtifactBrowser';
-import { useArtifactBrowser, type ArtifactBrowserAdapter } from '../hooks/useArtifactBrowser';
-import type { WorkspaceFileEntry, WorkspaceFileDiff, WorkspaceNode } from '../api/types';
-
+import { useArtifactBrowser } from '../hooks/useArtifactBrowser';
+import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from 'vitest';
+import type { WorkspaceFileDiff, WorkspaceFileEntry, WorkspaceNode } from '../api/types';
+import type { ArtifactBrowserAdapter } from '../hooks/useArtifactBrowser';
+import type { ReactNode } from 'react';
 // Mock apiClient so no real HTTP calls are made.
 // getRunFiles and getRunFileDiff correspond to the methods Tank added to
 // AgentweaverApiClient for the artifact-browser feature.
@@ -20,14 +28,12 @@ vi.mock('../api/apiClient', () => ({
   },
 }));
 
-import { apiClient } from '../api/apiClient';
-
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
 function Wrapper({ children }: { children: ReactNode }) {
-  return <FluentProvider theme={webLightTheme}>{children}</FluentProvider>;
+  return <AzureFluentProvider density="compact">{children}</AzureFluentProvider>;
 }
 
 function makeEntry(overrides: Partial<WorkspaceFileEntry> = {}): WorkspaceFileEntry {

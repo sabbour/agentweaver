@@ -1,39 +1,39 @@
-import { useEffect, useState } from 'react';
-import { BrowserRouter, Route, Routes } from 'react-router-dom';
+import { apiClient } from './api/apiClient';
+import { FluentProvider, Spinner } from '@fluentui/react-components';
+import { agentweaverLightTheme } from './theme';
+import { AppShell } from './components/shell/AppShell';
+import { ConsoleRouteRedirect } from './components/shell/ConsoleRouteRedirect';
 import {
-  FluentProvider,
-  Spinner,
-  makeStyles,
-  tokens,
-  webLightTheme,
-} from '@fluentui/react-components';
-import { ProjectGalleryPage } from './pages/ProjectGalleryPage';
-import { ProjectPage } from './pages/ProjectPage';
-import { ProjectSettingsPage } from './pages/ProjectSettingsPage';
-import { CoordinatorRunRoute } from './routes/CoordinatorRunRoute';
-import { TeamPage } from './pages/TeamPage';
+  bindSessionLogin,
+  captureSessionAuthFromUrl,
+  clearSessionAuth,
+  getSessionLogin,
+  getSessionToken,
+} from './config';
 import { CastingWizardPage } from './pages/CastingWizardPage';
-import { MemoriesPage } from './pages/MemoriesPage';
-import { SkillsPage } from './pages/SkillsPage';
-import { WorkflowsPage } from './pages/WorkflowsPage';
-import { SignInPage } from './pages/SignInPage';
-import { DiagnosticsPage } from './pages/DiagnosticsPage';
-import { HeartbeatPage } from './pages/HeartbeatPage';
 import { ClusterPage } from './pages/ClusterPage';
 import { DashboardPage } from './pages/DashboardPage';
+import { DiagnosticsPage } from './pages/DiagnosticsPage';
 import { FlowPage } from './pages/FlowPage';
-import { OrchestrationsPage } from './pages/OrchestrationsPage';
-import { WorkspacePage } from './pages/WorkspacePage';
-import { OverviewPage } from './pages/OverviewPage';
+import { HeartbeatPage } from './pages/HeartbeatPage';
+import { MemoriesPage } from './pages/MemoriesPage';
 import { ObservabilityAgentsPage } from './pages/observability/ObservabilityAgentsPage';
 import { ObservabilityOverviewPage } from './pages/observability/ObservabilityOverviewPage';
 import { ObservabilityRedirectPage } from './pages/observability/ObservabilityRedirectPage';
 import { ObservabilityTracesPage } from './pages/observability/ObservabilityTracesPage';
-import { AppShell } from './components/shell/AppShell';
-import { ConsoleRouteRedirect } from './components/shell/ConsoleRouteRedirect';
-import { apiClient } from './api/apiClient';
-import { bindSessionLogin, captureSessionAuthFromUrl, clearSessionAuth, getSessionLogin, getSessionToken } from './config';
-
+import { OrchestrationsPage } from './pages/OrchestrationsPage';
+import { OverviewPage } from './pages/OverviewPage';
+import { ProjectGalleryPage } from './pages/ProjectGalleryPage';
+import { ProjectPage } from './pages/ProjectPage';
+import { ProjectSettingsPage } from './pages/ProjectSettingsPage';
+import { SignInPage } from './pages/SignInPage';
+import { SkillsPage } from './pages/SkillsPage';
+import { TeamPage } from './pages/TeamPage';
+import { WorkflowsPage } from './pages/WorkflowsPage';
+import { WorkspacePage } from './pages/WorkspacePage';
+import { CoordinatorRunRoute } from './routes/CoordinatorRunRoute';
+import { useEffect, useState } from 'react';
+import { BrowserRouter, Route, Routes } from 'react-router-dom';
 function Shell() {
   return (
     <AppShell>
@@ -71,18 +71,7 @@ function Shell() {
   );
 }
 
-const useAppStyles = makeStyles({
-  loadingScreen: {
-    minHeight: '100vh',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: tokens.colorNeutralBackground2,
-  },
-});
-
 function AuthGate() {
-  const styles = useAppStyles();
   const [authChecked, setAuthChecked] = useState(false);
   const [signedIn, setSignedIn] = useState(false);
 
@@ -119,7 +108,7 @@ function AuthGate() {
 
   if (!authChecked) {
     return (
-      <div className={styles.loadingScreen}>
+      <div className="azf-app-loading-screen">
         <Spinner size="large" />
       </div>
     );
@@ -134,7 +123,7 @@ function AuthGate() {
 
 function App() {
   return (
-    <FluentProvider theme={webLightTheme}>
+    <FluentProvider theme={agentweaverLightTheme}>
       <BrowserRouter>
         <AuthGate />
       </BrowserRouter>

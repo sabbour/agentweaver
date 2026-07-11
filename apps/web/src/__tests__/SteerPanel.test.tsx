@@ -1,24 +1,29 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor, cleanup, fireEvent } from '@testing-library/react';
-import { FluentProvider, webLightTheme } from '@fluentui/react-components';
-import { MemoryRouter } from 'react-router-dom';
-import { type ReactNode } from 'react';
-import { SteerPanel } from '../components/SteerPanel';
+import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
-
+import { AzureFluentProvider } from '../copilot-fluent-system';
+import { SteerPanel } from '../components/SteerPanel';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from 'vitest';
+import type { ReactNode } from 'react';
 vi.mock('../api/apiClient', () => ({
   apiClient: {
     steerCoordinator: vi.fn(),
   },
 }));
 
-import { apiClient } from '../api/apiClient';
-
 function Wrapper({ children }: { children: ReactNode }) {
   return (
-    <FluentProvider theme={webLightTheme}>
+    <AzureFluentProvider density="compact">
       <MemoryRouter>{children}</MemoryRouter>
-    </FluentProvider>
+    </AzureFluentProvider>
   );
 }
 

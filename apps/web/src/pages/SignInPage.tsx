@@ -1,50 +1,69 @@
-import {
-  Button,
-  Text,
-  Title1,
-  makeStyles,
-  tokens,
-} from '@fluentui/react-components';
+import { Button, Text, makeStyles, tokens } from '../copilot-fluent-system';
 import { GITHUB_AUTHORIZE_URL } from '../config';
 import { GitHubIcon } from '../components/GitHubIcon';
-import { AzureSurface } from '../components/azure/AzureLayout';
 
+// Azure/Microsoft pre-portal sign-in: a single flat, centered identity card on a
+// plain neutral background. No marketing copy, no gradients, no decorative
+// badges. Functionality preserved: surface an OAuth error from the URL and start
+// the GitHub authorize redirect.
 const useStyles = makeStyles({
   page: {
     minHeight: '100vh',
     display: 'flex',
-    flexDirection: 'column',
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: tokens.colorNeutralBackground2,
-    gap: tokens.spacingVerticalM,
+    backgroundColor: tokens.colorNeutralBackground3,
     padding: tokens.spacingVerticalXXL,
   },
   card: {
-    width: 'min(420px, 100%)',
+    width: 'min(440px, 100%)',
     display: 'flex',
     flexDirection: 'column',
-    alignItems: 'center',
     gap: tokens.spacingVerticalL,
+    padding: `${tokens.spacingVerticalXXL} ${tokens.spacingHorizontalXXL}`,
+    backgroundColor: tokens.colorNeutralBackground1,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    boxShadow: tokens.shadow16,
   },
-  branding: {
+  brand: {
     display: 'flex',
-    flexDirection: 'column',
     alignItems: 'center',
-    gap: tokens.spacingVerticalXS,
+    gap: tokens.spacingHorizontalS,
   },
   logo: {
-    width: '160px',
-    height: '160px',
+    width: '24px',
+    height: '24px',
     objectFit: 'contain',
   },
-  tagline: {
+  wordmark: {
+    fontSize: tokens.fontSizeBase400,
+    fontWeight: tokens.fontWeightSemibold,
+    color: tokens.colorNeutralForeground1,
+  },
+  heading: {
+    display: 'block',
+    marginTop: tokens.spacingVerticalM,
+    fontSize: tokens.fontSizeBase600,
+    lineHeight: tokens.lineHeightBase600,
+    fontWeight: tokens.fontWeightSemibold,
+    color: tokens.colorNeutralForeground1,
+  },
+  subheading: {
+    display: 'block',
     color: tokens.colorNeutralForeground2,
     fontSize: tokens.fontSizeBase300,
+    lineHeight: tokens.lineHeightBase300,
   },
-  errorText: {
-    fontSize: tokens.fontSizeBase200,
+  actions: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalS,
+    marginTop: tokens.spacingVerticalXS,
+  },
+  error: {
     color: tokens.colorPaletteRedForeground1,
+    fontSize: tokens.fontSizeBase200,
+    lineHeight: tokens.lineHeightBase200,
   },
 });
 
@@ -56,24 +75,30 @@ export function SignInPage() {
 
   return (
     <div className={styles.page}>
-      <AzureSurface className={styles.card} density="spacious" tone="raised">
-        <div className={styles.branding}>
-          <img src="/agentweaver.png" alt="Agentweaver" className={styles.logo} />
-          <Title1>Agentweaver</Title1>
-          <Text className={styles.tagline}>Build workflows from specialized agents</Text>
+      <div className={styles.card}>
+        <div className={styles.brand}>
+          <img src="/agentweaver.png" alt="" className={styles.logo} />
+          <Text className={styles.wordmark}>Agentweaver</Text>
         </div>
 
-        <Button
-          appearance="primary"
-          size="large"
-          icon={<GitHubIcon size={20} />}
-          onClick={() => { window.location.href = GITHUB_AUTHORIZE_URL; }}
-        >
-          Sign in with GitHub
-        </Button>
+        <div>
+          <Text as="h1" className={styles.heading}>Sign in</Text>
+          <Text as="p" className={styles.subheading}>Sign in to continue to Agentweaver.</Text>
+        </div>
 
-        {authError && <Text className={styles.errorText}>{authError}</Text>}
-      </AzureSurface>
+        <div className={styles.actions}>
+          <Button
+            appearance="primary"
+            icon={<GitHubIcon size={20} />}
+            onClick={() => { window.location.href = GITHUB_AUTHORIZE_URL; }}
+          >
+            Sign in with GitHub
+          </Button>
+          {authError && (
+            <Text role="alert" className={styles.error}>{authError}</Text>
+          )}
+        </div>
+      </div>
     </div>
   );
 }

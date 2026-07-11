@@ -1,16 +1,51 @@
+import {
+  apiClient } from '../api/apiClient';
+import { ApiError } from '../api/client';
+import { Badge,
+  Button,
+  MessageBar,
+  MessageBarActions,
+  MessageBarBody,
+  Spinner,
+  Text,
+  } from '../copilot-fluent-system';
+import { costChipLabel } from '../components/CostChip';
+import { MetricCardHeader,
+  MetricEmptyState,
+  MetricSectionHeading } from '../components/MetricTypography';
+import { PageHeader } from '../components/PageHeader';
+import { RefreshCountdown } from '../hooks/useRefreshCountdown';
+import { makeStyles,
+  mergeClasses,
+  Select,
+  tokens,
+} from '../copilot-fluent-system';
+import {
+  AlertRegular,
+  ArrowSyncRegular,
+  BotRegular,
+  BranchRegular,
+  CheckmarkCircleRegular,
+  ClockRegular,
+  CodeRegular,
+  ErrorCircleRegular,
+  FolderRegular,
+  InfoRegular,
+  OpenRegular,
+  PlayRegular,
+  Pulse24Regular,
+  WarningRegular,
+} from '../copilot-fluent-system';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Badge, Button, MessageBar, MessageBarActions, MessageBarBody, Select, Spinner, Text, makeStyles, mergeClasses, tokens } from '@fluentui/react-components';
-import { AlertRegular, ArrowSyncRegular, BotRegular, BranchRegular, CheckmarkCircleRegular, ClockRegular, CodeRegular, ErrorCircleRegular, FolderRegular, InfoRegular, OpenRegular, PlayRegular, WarningRegular } from '@fluentui/react-icons';
-import { apiClient } from '../api/apiClient';
-import { ApiError } from '../api/client';
-import type { BoardDto, ModelUsageBreakdownDto, OverviewDto, Project, ProjectMetricsDto, RecentActivityDto } from '../api/types';
-import { costChipLabel } from '../components/CostChip';
-import { MetricCardHeader, MetricEmptyState, MetricSectionHeading } from '../components/MetricTypography';
-import { PageHeader } from '../components/PageHeader';
-import { AzurePage } from '../components/azure/AzureLayout';
-import { RefreshCountdown } from '../hooks/useRefreshCountdown';
-
+import type {
+  BoardDto,
+  ModelUsageBreakdownDto,
+  OverviewDto,
+  Project,
+  ProjectMetricsDto,
+  RecentActivityDto,
+} from '../api/types';
 const REFRESH_MS = 10000;
 type TimeRange = '7d' | '30d' | '90d';
 type ProjectStatus = 'active' | 'queued' | 'idle';
@@ -23,20 +58,25 @@ const useStyles = makeStyles({
   root: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXXL, '@media (max-width: 720px)': { gap: tokens.spacingVerticalXL } },
   generated: { fontSize: tokens.fontSizeBase200, color: tokens.colorNeutralForeground3 },
   headerActions: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM, flexWrap: 'wrap', justifyContent: 'flex-end' },
-  commandStrip: { display: 'grid', gridTemplateColumns: 'minmax(220px, .95fr) minmax(0, 2fr) auto', gap: tokens.spacingHorizontalL, alignItems: 'stretch', padding: tokens.spacingVerticalL, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusXLarge, backgroundColor: tokens.colorNeutralBackground1, boxShadow: tokens.shadow4, '@media (max-width: 980px)': { gridTemplateColumns: '1fr' }, '@media (max-width: 720px)': { gap: tokens.spacingVerticalM, padding: tokens.spacingVerticalM } },
+  commandStrip: { display: 'grid', gridTemplateColumns: 'minmax(220px, .95fr) minmax(0, 2fr) auto', gap: tokens.spacingHorizontalL, alignItems: 'stretch', padding: tokens.spacingVerticalL, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium, backgroundColor: tokens.colorNeutralBackground1, '@media (max-width: 980px)': { gridTemplateColumns: '1fr' }, '@media (max-width: 720px)': { gap: tokens.spacingVerticalM, padding: tokens.spacingVerticalM } },
+  opsCard: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, padding: tokens.spacingVerticalL, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium, backgroundColor: tokens.colorNeutralBackground1, minWidth: 0 },
+  cardHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, minWidth: 0 },
+  cardHeadIcon: { display: 'inline-flex', alignItems: 'center', justifyContent: 'center', color: tokens.colorNeutralForeground2, fontSize: '20px' },
+  cardHeadTitle: { fontSize: tokens.fontSizeBase400, lineHeight: tokens.lineHeightBase400, fontWeight: tokens.fontWeightSemibold, color: tokens.colorNeutralForeground1 },
+  cardHeadMeta: { display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, marginLeft: 'auto', color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200, whiteSpace: 'nowrap' },
   healthBlock: { display: 'flex', flexDirection: 'column', justifyContent: 'space-between', gap: tokens.spacingVerticalM, minWidth: 0 },
   healthTitle: { display: 'block', fontSize: tokens.fontSizeBase500, lineHeight: tokens.lineHeightBase500, fontWeight: tokens.fontWeightSemibold, color: tokens.colorNeutralForeground1, overflowWrap: 'anywhere' },
   healthCopy: { display: 'block', color: tokens.colorNeutralForeground2, fontSize: tokens.fontSizeBase300, lineHeight: tokens.lineHeightBase300, maxWidth: '56ch' },
   glanceGrid: { display: 'grid', gridTemplateColumns: 'repeat(4, minmax(96px, 1fr))', gap: tokens.spacingHorizontalM, minWidth: 0, '@media (max-width: 720px)': { gridTemplateColumns: '1fr', gap: tokens.spacingVerticalXS } },
-  glanceItem: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS, minWidth: 0, padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM}`, borderRadius: tokens.borderRadiusLarge, backgroundColor: tokens.colorNeutralBackground2, border: `1px solid ${tokens.colorNeutralStroke3}`, '@media (max-width: 720px)': { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: tokens.spacingHorizontalM, padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalM}` } },
-  glanceValue: { display: 'block', fontSize: tokens.fontSizeHero700, lineHeight: tokens.lineHeightHero700, fontWeight: tokens.fontWeightSemibold, fontVariantNumeric: 'tabular-nums', '@media (max-width: 720px)': { fontSize: tokens.fontSizeBase600, lineHeight: tokens.lineHeightBase600 } },
+  glanceItem: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS, minWidth: 0, padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM}`, borderRadius: tokens.borderRadiusSmall, backgroundColor: tokens.colorNeutralBackground2, border: `1px solid ${tokens.colorNeutralStroke3}`, '@media (max-width: 720px)': { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: tokens.spacingHorizontalM, padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalM}` } },
+  glanceValue: { display: 'block', fontSize: tokens.fontSizeBase600, lineHeight: tokens.lineHeightBase600, fontWeight: tokens.fontWeightSemibold, fontVariantNumeric: 'tabular-nums', '@media (max-width: 720px)': { fontSize: tokens.fontSizeBase600, lineHeight: tokens.lineHeightBase600 } },
   glanceLabel: { display: 'block', color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200, lineHeight: tokens.lineHeightBase200, whiteSpace: 'nowrap' },
   liveBlock: { display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: tokens.spacingHorizontalS, color: tokens.colorNeutralForeground2, '@media (max-width: 980px)': { justifyContent: 'flex-start' } },
   section: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM },
   sectionHeader: { display: 'flex', justifyContent: 'space-between', gap: tokens.spacingHorizontalM, alignItems: 'flex-end', flexWrap: 'wrap' },
   sectionActions: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
   link: { color: tokens.colorBrandForeground1, textDecorationLine: 'none', fontWeight: tokens.fontWeightSemibold, minHeight: '32px', display: 'inline-flex', alignItems: 'center', ':hover': { textDecorationLine: 'underline' }, ':focus-visible': { outline: `2px solid ${tokens.colorStrokeFocus2}`, outlineOffset: '2px' } },
-  projectGrid: { display: 'grid', gridTemplateColumns: 'minmax(280px, 1.1fr) minmax(320px, 1.9fr)', gap: 0, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusXLarge, backgroundColor: tokens.colorNeutralBackground1, overflow: 'hidden', boxShadow: tokens.shadow4, '@media (max-width: 900px)': { gridTemplateColumns: '1fr' } },
+  projectGrid: { display: 'grid', gridTemplateColumns: 'minmax(280px, 1.1fr) minmax(320px, 1.9fr)', gap: 0, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium, backgroundColor: tokens.colorNeutralBackground1, overflow: 'hidden', '@media (max-width: 900px)': { gridTemplateColumns: '1fr' } },
   focusProject: { display: 'flex', flexDirection: 'column', justifyContent: 'space-between', gap: tokens.spacingVerticalL, padding: tokens.spacingVerticalXL, backgroundColor: tokens.colorNeutralBackground2, minWidth: 0 },
   projectList: { display: 'flex', flexDirection: 'column', minWidth: 0 },
   projectCard: { minHeight: '72px', display: 'grid', gridTemplateColumns: 'minmax(220px, 1fr) max-content minmax(320px, .95fr)', alignItems: 'center', columnGap: tokens.spacingHorizontalXL, rowGap: tokens.spacingVerticalS, padding: `${tokens.spacingVerticalM} ${tokens.spacingHorizontalL}`, backgroundColor: tokens.colorNeutralBackground1, borderBottom: `1px solid ${tokens.colorNeutralStroke3}`, color: tokens.colorNeutralForeground1, textDecorationLine: 'none', ':hover': { backgroundColor: tokens.colorNeutralBackground1Hover }, ':focus-visible': { outline: `2px solid ${tokens.colorStrokeFocus2}`, outlineOffset: '-2px' }, '@media (max-width: 1180px)': { gridTemplateColumns: 'minmax(0, 1fr) max-content' }, '@media (max-width: 720px)': { gridTemplateColumns: '1fr', alignItems: 'start', padding: tokens.spacingVerticalM } },
@@ -57,7 +97,7 @@ const useStyles = makeStyles({
   projectStats: { display: 'grid', gridTemplateColumns: 'repeat(4, minmax(72px, max-content))', justifyContent: 'end', gap: tokens.spacingHorizontalM, minWidth: 0, '@media (max-width: 1180px)': { gridColumn: '1 / -1', justifyContent: 'start', paddingLeft: '40px' }, '@media (max-width: 720px)': { gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', paddingLeft: 0, width: '100%' } },
   stat: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, color: tokens.colorNeutralForeground2, fontSize: tokens.fontSizeBase200, minWidth: 0, whiteSpace: 'nowrap' }, statDanger: { color: tokens.colorPaletteRedForeground1 },
   usageGrid: { display: 'grid', gridTemplateColumns: 'minmax(320px, 1.35fr) repeat(2, minmax(220px, .65fr))', gap: tokens.spacingHorizontalM, '@media (max-width: 1100px)': { gridTemplateColumns: 'repeat(2, minmax(260px, 1fr))' }, '@media (max-width: 720px)': { gridTemplateColumns: '1fr' } },
-  usageTile: { minHeight: '190px', display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, padding: tokens.spacingVerticalL, backgroundColor: tokens.colorNeutralBackground1, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge, minWidth: 0 },
+  usageTile: { minHeight: '190px', display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, padding: tokens.spacingVerticalL, backgroundColor: tokens.colorNeutralBackground1, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium, minWidth: 0 },
   usagePrimary: { gridRow: 'span 2', '@media (max-width: 1100px)': { gridRow: 'auto', gridColumn: '1 / -1' }, '@media (max-width: 720px)': { gridColumn: 'auto' } },
   list: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS },
   modelRow: { display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto', gap: tokens.spacingHorizontalS, alignItems: 'center' }, modelName: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
@@ -67,13 +107,17 @@ const useStyles = makeStyles({
   percentileGrid: { display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: tokens.spacingHorizontalS }, percentile: { padding: tokens.spacingVerticalS, borderRadius: tokens.borderRadiusMedium, backgroundColor: tokens.colorNeutralBackground2, textAlign: 'center' }, percentileValue: { display: 'block', fontWeight: tokens.fontWeightSemibold, fontSize: tokens.fontSizeBase400 },
   bigNumber: { display: 'block', fontSize: tokens.fontSizeHero800, lineHeight: tokens.lineHeightHero800, fontWeight: tokens.fontWeightSemibold },
   mainGrid: { display: 'grid', gridTemplateColumns: 'minmax(0, 1.35fr) minmax(320px, .85fr)', gap: tokens.spacingHorizontalL, alignItems: 'start', '@media (max-width: 980px)': { gridTemplateColumns: '1fr' } },
-  panel: { padding: tokens.spacingVerticalL, backgroundColor: tokens.colorNeutralBackground1, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusXLarge, minWidth: 0 },
+  panel: { padding: tokens.spacingVerticalL, backgroundColor: tokens.colorNeutralBackground1, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium, minWidth: 0 },
   timeline: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, margin: 0, padding: 0, listStyle: 'none' }, dayLabel: { fontWeight: tokens.fontWeightSemibold, color: tokens.colorNeutralForeground2 },
   timelineItem: { display: 'grid', gridTemplateColumns: '32px minmax(0, 1fr) auto', gap: tokens.spacingHorizontalM, alignItems: 'start', minWidth: 0, '@media (max-width: 560px)': { gridTemplateColumns: '32px minmax(0, 1fr)' } }, timelineIcon: { width: '32px', height: '32px', borderRadius: tokens.borderRadiusCircular, backgroundColor: tokens.colorNeutralBackground3, color: tokens.colorBrandForeground1, display: 'grid', placeItems: 'center' }, timelineTitle: { fontWeight: tokens.fontWeightSemibold, overflowWrap: 'anywhere' }, timelineBadges: { display: 'flex', gap: tokens.spacingHorizontalXS, flexWrap: 'wrap', marginTop: tokens.spacingVerticalXXS },
   attentionList: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS }, alertCard: { display: 'grid', gridTemplateColumns: '28px minmax(0, 1fr) auto', gap: tokens.spacingHorizontalS, alignItems: 'center', padding: tokens.spacingVerticalM, borderRadius: tokens.borderRadiusMedium, border: `1px solid ${tokens.colorNeutralStroke2}`, backgroundColor: tokens.colorNeutralBackground1, minWidth: 0, '@media (max-width: 560px)': { gridTemplateColumns: '28px minmax(0, 1fr)' } }, alertError: { border: `1px solid ${tokens.colorStatusDangerBorder1}`, backgroundColor: tokens.colorStatusDangerBackground1 }, alertWarning: { border: `1px solid ${tokens.colorStatusWarningBorder1}`, backgroundColor: tokens.colorStatusWarningBackground1 }, alertErrorIcon: { color: tokens.colorStatusDangerForeground1, fontSize: '22px' }, alertWarningIcon: { color: tokens.colorStatusWarningForeground1, fontSize: '22px' },
   emptyBox: { display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: tokens.spacingVerticalS, color: tokens.colorNeutralForeground2, padding: tokens.spacingVerticalL, backgroundColor: tokens.colorNeutralBackground1, border: `1px dashed ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge, maxWidth: '72ch' },
+  loadingShell: { display: 'grid', gap: tokens.spacingVerticalL },
+  loadingTiles: { display: 'grid', gridTemplateColumns: 'repeat(4, minmax(120px, 1fr))', gap: tokens.spacingHorizontalM, '@media (max-width: 720px)': { gridTemplateColumns: '1fr' } },
+  loadingTile: { minHeight: '96px', padding: tokens.spacingVerticalL, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium, backgroundColor: tokens.colorNeutralBackground1 },
   skeletonStack: { display: 'grid', gap: tokens.spacingVerticalM },
-  skeleton: { height: '88px', borderRadius: tokens.borderRadiusLarge, backgroundImage: `linear-gradient(90deg, ${tokens.colorNeutralBackground3}, ${tokens.colorNeutralBackground1}, ${tokens.colorNeutralBackground3})`, backgroundSize: '220% 100%', animationName: { '0%': { backgroundPositionX: '100%' }, '100%': { backgroundPositionX: '-100%' } }, animationDuration: '1400ms', animationIterationCount: 'infinite', animationTimingFunction: 'cubic-bezier(0.22, 1, 0.36, 1)', '@media (prefers-reduced-motion: reduce)': { animationName: 'none' } },
+  skeleton: { height: '88px', borderRadius: tokens.borderRadiusMedium, border: `1px solid ${tokens.colorNeutralStroke2}`, backgroundImage: `linear-gradient(90deg, ${tokens.colorNeutralBackground3}, ${tokens.colorNeutralBackground1}, ${tokens.colorNeutralBackground3})`, backgroundSize: '220% 100%', animationName: { '0%': { backgroundPositionX: '100%' }, '100%': { backgroundPositionX: '-100%' } }, animationDuration: '1400ms', animationIterationCount: 'infinite', animationTimingFunction: 'cubic-bezier(0.22, 1, 0.36, 1)', '@media (prefers-reduced-motion: reduce)': { animationName: 'none' } },
+  skeletonSmall: { height: '16px', maxWidth: '70%', marginTop: tokens.spacingVerticalS },
   wideSkeleton: { height: '180px' },
 });
 function timeAgo(iso?: string | null): string {
@@ -114,7 +158,34 @@ function emptyState(title: string, styles: ReturnType<typeof useStyles>, body?: 
 }
 function LoadingOverview() {
   const styles = useStyles();
-  return <div className={styles.skeletonStack} aria-label="Loading overview" role="status"><div className={styles.skeleton} /><div className={mergeClasses(styles.skeleton, styles.wideSkeleton)} /><div className={styles.skeleton} /></div>;
+  return <div className={styles.loadingShell} aria-label="Loading overview" role="status">
+    <section className={styles.commandStrip} aria-label="Overview command center loading">
+      <div className={styles.healthBlock}>
+        <div>
+          <Text className={styles.healthTitle}>Preparing operations command center</Text>
+          <Text className={styles.healthCopy}>Loading live sessions, queued work, resource health, and recent telemetry.</Text>
+        </div>
+        <Badge appearance="tint" color="informative">Live portal view</Badge>
+      </div>
+      <div className={styles.loadingTiles}>
+        {['In flight', 'Queued work', 'Done today', 'Active projects'].map((label) => (
+          <div className={styles.loadingTile} key={label}>
+            <Text className={styles.glanceLabel}>{label}</Text>
+            <div className={mergeClasses(styles.skeleton, styles.skeletonSmall)} />
+          </div>
+        ))}
+      </div>
+      <div className={styles.liveBlock}><ClockRegular /><Text className={styles.muted}>Refreshing signals…</Text></div>
+    </section>
+    <div className={styles.skeletonStack}>
+      <div className={mergeClasses(styles.skeleton, styles.wideSkeleton)} />
+      <div className={styles.usageGrid}>
+        <div className={mergeClasses(styles.skeleton, styles.wideSkeleton)} />
+        <div className={styles.skeleton} />
+        <div className={styles.skeleton} />
+      </div>
+    </div>
+  </div>;
 }
 function GlanceItem({ label, value, styles }: { label: string; value: number; styles: ReturnType<typeof useStyles> }) {
   return <div className={styles.glanceItem}><Text className={styles.glanceValue}>{value}</Text><Text className={styles.glanceLabel}>{label}</Text></div>;
@@ -233,15 +304,19 @@ export function OverviewPage() {
   const groupedActivity = useMemo(() => { const today = new Date().toDateString(); const groups = new Map<string, RecentActivityDto[]>(); for (const item of overview?.recent_activity ?? []) { const label = new Date(item.timestamp_utc).toDateString() === today ? 'Today' : new Date(item.timestamp_utc).toLocaleDateString(); groups.set(label, [...(groups.get(label) ?? []), item]); } return [...groups.entries()]; }, [overview]);
   const focusRollup = rollups[0];
   const health = overview?.at_a_glance.health === 'healthy' ? 'healthy' : 'degraded';
-  return <AzurePage className={styles.root}>
-    <PageHeader title="Overview" subtitle="A live command center for projects, AI performance, activity, and work that needs attention." actions={<div className={styles.headerActions}>{lastUpdated && <RefreshCountdown className={styles.generated} intervalMs={REFRESH_MS} lastRefreshedAt={new Date(lastUpdated)} refreshing={refreshing} />}{refreshing && overview && <Spinner size="extra-tiny" aria-label="Refreshing overview" />}<Button appearance="secondary" icon={<ArrowSyncRegular />} disabled={loading} onClick={() => { setLoading(true); void load({ cancelled: false }); }}>Refresh</Button></div>} />
+  return <div className={['azf-stack azf-page azf-pattern-shell', styles.root].filter(Boolean).join(' ')}>
+    <PageHeader title="Overview" actions={<div className={styles.headerActions}>{lastUpdated && <RefreshCountdown className={styles.generated} intervalMs={REFRESH_MS} lastRefreshedAt={new Date(lastUpdated)} refreshing={refreshing} />}{refreshing && overview && <Spinner size="extra-tiny" aria-label="Refreshing overview" />}<Button appearance="subtle" icon={<ArrowSyncRegular />} disabled={loading} onClick={() => { setLoading(true); void load({ cancelled: false }); }}>Refresh</Button></div>} />
     {error && <MessageBar intent="error"><MessageBarBody>{error}</MessageBarBody><MessageBarActions><Button appearance="transparent" onClick={() => { setLoading(true); void load({ cancelled: false }); }}>Try again</Button></MessageBarActions></MessageBar>}
     {loading && !overview && <LoadingOverview />}
     {overview ? <>
-      <section className={styles.commandStrip} aria-labelledby="overview-command-center">
-        <div className={styles.healthBlock}><div><Text as="h2" id="overview-command-center" className={styles.healthTitle}>Operations are {health}</Text><Text className={styles.healthCopy}>Live signals from active sessions, queued work, completed runs, and recent project telemetry.</Text></div><Badge appearance="tint" color={health === 'healthy' ? 'success' : 'danger'}><span className={styles.statusPill}><span className={`${styles.dot} ${health === 'healthy' ? styles.dotActive : styles.dotError}`} />{health === 'healthy' ? 'Healthy' : 'Needs review'}</span></Badge></div>
+      <section className={styles.opsCard} aria-labelledby="overview-operations">
+        <div className={styles.cardHead}>
+          <span className={styles.cardHeadIcon}><Pulse24Regular /></span>
+          <Text as="h2" id="overview-operations" className={styles.cardHeadTitle}>Operations</Text>
+          <Badge appearance="tint" color={health === 'healthy' ? 'success' : 'danger'}><span className={styles.statusPill}><span className={`${styles.dot} ${health === 'healthy' ? styles.dotActive : styles.dotError}`} />{health === 'healthy' ? 'Healthy' : 'Needs review'}</span></Badge>
+          <span className={styles.cardHeadMeta}><ClockRegular /> Generated {timeAgo(overview.generated_utc)}</span>
+        </div>
         <div className={styles.glanceGrid}><GlanceItem label="In flight" value={overview.at_a_glance.in_flight} styles={styles} /><GlanceItem label="Queued work" value={overview.at_a_glance.queued_work} styles={styles} /><GlanceItem label="Done today" value={overview.at_a_glance.done_today} styles={styles} /><GlanceItem label="Active projects" value={overview.at_a_glance.active_projects} styles={styles} /></div>
-        <div className={styles.liveBlock}><ClockRegular /><Text className={styles.muted}>Generated {timeAgo(overview.generated_utc)}</Text></div>
       </section>
       <section className={styles.section}>
         <div className={styles.sectionHeader}><MetricSectionHeading title="Recent Projects" subtitle="Most recently active repositories with operational counts and queue pressure." /><Link className={styles.link} to="/projects">View all projects →</Link></div>
@@ -266,7 +341,7 @@ export function OverviewPage() {
         <UsageTiles metrics={metrics} previousMetrics={previousMetrics} range={range} recentProjectId={rollups[0]?.project.project_id} />
       </section>
       <div className={styles.mainGrid}>
-        <section className={`${styles.section} ${styles.panel}`}><div className={styles.sectionHeader}><MetricSectionHeading title="Activity Feed" /><Select aria-label="Activity filter" defaultValue="all" size="small" style={{ width: '132px' }}><option value="all">All activity</option></Select></div>
+        <section className={`${styles.section} ${styles.panel}`}><div className={styles.sectionHeader}><MetricSectionHeading title="Activity Feed" /></div>
           {groupedActivity.length === 0 ? emptyState('No recent activity.', styles, 'New agent starts, completions, failures, and merge events will appear here.') : <div className={styles.timeline}>{groupedActivity.map(([day, entries]) => <div key={day} className={styles.list}><Text className={styles.dayLabel}>{day}</Text>{entries.map((entry, index) => <div key={`${entry.project_id}-${entry.timestamp_utc}-${index}`} className={styles.timelineItem}><span className={styles.timelineIcon}>{activityIcon(entry.kind)}</span><div><Text className={styles.timelineTitle}>{entry.project_name}</Text><Text> {entry.label}</Text><div className={styles.timelineBadges}><Badge appearance="tint" color={isFailure(entry.kind) ? 'danger' : entry.kind === 'completed' ? 'success' : 'informative'}>{humanizeKind(entry.kind)}</Badge></div></div><Text className={styles.muted}>{timeAgo(entry.timestamp_utc)}</Text></div>)}</div>)}</div>}
         </section>
         <section className={`${styles.section} ${styles.panel}`}><div className={styles.sectionHeader}><MetricSectionHeading title="Needs Attention" subtitle="Failures, degraded health, and queue pressure that deserve the next click." /></div>
@@ -274,5 +349,5 @@ export function OverviewPage() {
         </section>
       </div>
     </> : null}
-  </AzurePage>;
+  </div>;
 }

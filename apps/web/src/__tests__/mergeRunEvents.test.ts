@@ -1,7 +1,6 @@
+import { mergeRunEvents } from '../timeline/mergeRunEvents';
 import { describe, expect, it } from 'vitest';
 import type { RunStreamEvent } from '../api/sse';
-import { mergeRunEvents } from '../timeline/mergeRunEvents';
-
 function evt(type: RunStreamEvent['type'], sequence = 0, payload: Record<string, unknown> = {}): RunStreamEvent {
   return { type, sequence, payload };
 }

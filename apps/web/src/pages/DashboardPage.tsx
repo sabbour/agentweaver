@@ -1,12 +1,22 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
 import {
-  Badge,
+  apiClient } from '../api/apiClient';
+import { ApiError } from '../api/client';
+import { Badge,
   Button,
   MessageBar,
   MessageBarBody,
-  Select,
   Spinner,
+  Text,
+  } from '../copilot-fluent-system';
+import { formatAic } from '../components/CostChip';
+import { AgentInvocationChart } from '../components/dashboard/AgentInvocationChart';
+import { ModelPerformancePanels } from '../components/dashboard/ModelPerformancePanels';
+import { MetricEmptyState,
+  MetricSectionHeading } from '../components/MetricTypography';
+import { PageHeader } from '../components/PageHeader';
+import { RefreshCountdown } from '../hooks/useRefreshCountdown';
+import { makeStyles,
+  Select,
   Table,
   TableBody,
   TableCell,
@@ -14,10 +24,8 @@ import {
   TableHeader,
   TableHeaderCell,
   TableRow,
-  Text,
-  makeStyles,
   tokens,
-} from '@fluentui/react-components';
+} from '../copilot-fluent-system';
 import {
   ArrowSyncRegular,
   BotRegular,
@@ -25,18 +33,10 @@ import {
   ClockRegular,
   FlowRegular,
   WarningRegular,
-} from '@fluentui/react-icons';
-import { apiClient } from '../api/apiClient';
-import { ApiError } from '../api/client';
+} from '../copilot-fluent-system';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Link, useParams } from 'react-router-dom';
 import type { AgentLeaderboardEntryDto, ProjectDashboardDto, ProjectMetricsDto, ThroughputPointDto } from '../api/types';
-import { AgentInvocationChart } from '../components/dashboard/AgentInvocationChart';
-import { ModelPerformancePanels } from '../components/dashboard/ModelPerformancePanels';
-import { MetricEmptyState, MetricSectionHeading } from '../components/MetricTypography';
-import { PageHeader } from '../components/PageHeader';
-import { AzurePage } from '../components/azure/AzureLayout';
-import { formatAic } from '../components/CostChip';
-import { RefreshCountdown } from '../hooks/useRefreshCountdown';
-
 // Dashboard — the project HOME (/projects/:projectId). Consumes the live
 // GET /api/projects/{id}/dashboard endpoint (real data only; no cost). Renders
 // overview counters, a 30-day throughput chart, and an agent leaderboard.
@@ -112,9 +112,9 @@ const useStyles = makeStyles({
     alignItems: 'stretch',
     padding: tokens.spacingVerticalL,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: tokens.borderRadiusXLarge,
+    borderRadius: tokens.borderRadiusMedium,
     backgroundColor: tokens.colorNeutralBackground1,
-    boxShadow: tokens.shadow4,
+    boxShadow: tokens.shadow2,
     '@media (max-width: 1120px)': { gridTemplateColumns: '1fr 1fr' },
     '@media (max-width: 760px)': { gridTemplateColumns: '1fr', padding: tokens.spacingVerticalM },
   },
@@ -187,7 +187,7 @@ const useStyles = makeStyles({
     minHeight: '112px',
     minWidth: 0,
     padding: `${tokens.spacingVerticalM} ${tokens.spacingHorizontalM}`,
-    borderRadius: tokens.borderRadiusLarge,
+    borderRadius: tokens.borderRadiusSmall,
     backgroundColor: tokens.colorNeutralBackground2,
     border: `1px solid ${tokens.colorNeutralStroke3}`,
   },
@@ -280,7 +280,8 @@ const useStyles = makeStyles({
     padding: tokens.spacingVerticalL,
     backgroundColor: tokens.colorNeutralBackground1,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: tokens.borderRadiusXLarge,
+    borderRadius: tokens.borderRadiusMedium,
+    boxShadow: tokens.shadow2,
     minWidth: 0,
   },
   panelHeader: {
@@ -339,7 +340,8 @@ const useStyles = makeStyles({
     padding: tokens.spacingVerticalM,
     backgroundColor: tokens.colorNeutralBackground1,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: tokens.borderRadiusXLarge,
+    borderRadius: tokens.borderRadiusMedium,
+    boxShadow: tokens.shadow2,
     overflowX: 'auto',
     minWidth: 0,
   },
@@ -357,7 +359,8 @@ const useStyles = makeStyles({
     padding: tokens.spacingVerticalL,
     backgroundColor: tokens.colorNeutralBackground1,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: tokens.borderRadiusXLarge,
+    borderRadius: tokens.borderRadiusMedium,
+    boxShadow: tokens.shadow2,
     minWidth: 0,
   },
   diagnosticsHeader: {
@@ -821,7 +824,7 @@ export function DashboardPage() {
   if (!projectId) return null;
 
   return (
-    <AzurePage className={styles.root}>
+    <div className={['azf-stack azf-page azf-pattern-shell', styles.root].filter(Boolean).join(' ')}>
       <PageHeader
         title="Dashboard"
         subtitle="Project command center for live work, agent output, and throughput quality."
@@ -1169,6 +1172,6 @@ export function DashboardPage() {
           </section>
         </>
       )}
-    </AzurePage>
+    </div>
   );
 }

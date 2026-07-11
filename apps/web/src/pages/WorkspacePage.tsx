@@ -1,25 +1,27 @@
-import { useEffect, useMemo, useState } from 'react';
-import { Link, useParams, useSearchParams } from 'react-router-dom';
 import {
-  Badge,
+  apiClient } from '../api/apiClient';
+import { ApiError } from '../api/client';
+import { Badge,
+  BladeHeader,
   Button,
+  CommandBar,
   Dropdown,
   Option,
   Spinner,
+  StatusIconText,
   Text,
-  makeStyles,
-  tokens,
-} from '@fluentui/react-components';
-import { BranchRegular, TasksAppRegular } from '@fluentui/react-icons';
-import { apiClient } from '../api/apiClient';
-import { ApiError } from '../api/client';
-import type { Project, ProposedBacklogItem, WorkspaceNode, WorkspaceRef } from '../api/types';
-import { PageHeader } from '../components/PageHeader';
-import { AzurePage } from '../components/azure/AzureLayout';
+  } from '../copilot-fluent-system';
 import { FilesTabPanel } from '../components/ArtifactBrowser';
-import { FileViewer } from '../components/FileViewer';
 import { DecomposePreviewDialog } from '../components/DecomposePreviewDialog';
-
+import { FileViewer } from '../components/FileViewer';
+import { PageHeader } from '../components/PageHeader';
+import { makeStyles,
+  tokens,
+} from '../copilot-fluent-system';
+import { BranchRegular, TasksAppRegular } from '../copilot-fluent-system';
+import { useEffect, useMemo, useState } from 'react';
+import { Link, useParams, useSearchParams } from 'react-router-dom';
+import type { Project, ProposedBacklogItem, WorkspaceNode, WorkspaceRef } from '../api/types';
 // Project-scoped, read-only Workspace browser (WORK section). Browses the project
 // repo at its current branch and lets the user switch to active run worktrees or
 // coordinator assembly branches
@@ -70,6 +72,28 @@ const useStyles = makeStyles({
     alignItems: 'center',
     gap: tokens.spacingHorizontalS,
   },
+  commandSurface: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalM,
+    flexShrink: 0,
+  },
+  statusPills: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalS,
+    flexWrap: 'wrap',
+  },
+  statusPill: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    minHeight: '28px',
+    padding: `${tokens.spacingVerticalXXS} ${tokens.spacingHorizontalS}`,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusMedium,
+    backgroundColor: tokens.colorNeutralBackground2,
+    fontSize: tokens.fontSizeBase200,
+  },
   panels: {
     display: 'flex',
     flexDirection: 'row',
@@ -93,6 +117,12 @@ const useStyles = makeStyles({
     flex: 1,
     minHeight: 0,
     overflowY: 'auto',
+  },
+  panelHeader: {
+    flexShrink: 0,
+    padding: `${tokens.spacingVerticalM} ${tokens.spacingHorizontalM}`,
+    borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
+    backgroundColor: tokens.colorNeutralBackground2,
   },
   rightPanel: {
     flex: 1,
@@ -274,6 +304,14 @@ export function WorkspacePage() {
   const dropdownValue = selectedRefObj
     ? selectedRefObj.label
     : selectedRef ?? '';
+  const worktreeCount = refs.filter((ref) => ref.kind !== 'base').length;
+  const selectedKindLabel = selectedRefObj?.kind === 'base'
+    ? 'Base branch'
+    : selectedRefObj?.kind === 'assembly'
+      ? 'Assembly branch'
+      : selectedRefObj?.kind === 'worktree'
+        ? 'Run worktree'
+        : 'Workspace ref';
 
   const getContent = useMemo(
     () => (_id: string, path: string) =>
@@ -284,7 +322,7 @@ export function WorkspacePage() {
   if (!projectId) return null;
 
   return (
-    <AzurePage className={styles.root} fullHeight>
+    <div className={['azf-stack azf-page azf-pattern-shell azf-page--full-height', styles.root].filter(Boolean).join(' ')}>
       <PageHeader
         title="Workspace"
         subtitle="Browse the project repository and active run worktrees, read-only."
@@ -331,8 +369,24 @@ export function WorkspacePage() {
         }
       />
 
+      <section className={['azf-surface azf-surface--raised azf-surface--padding-comfortable', styles.commandSurface].filter(Boolean).join(' ')} aria-label="Workspace command surface">
+        <CommandBar
+          title="Workspace command surface"
+          description="Azure/Copilot workbench for browsing the base repository, run worktrees, and assembly branches."
+        >
+          <div className={styles.statusPills}>
+            <StatusIconText className={styles.statusPill} status="info">{selectedKindLabel}</StatusIconText>
+            <StatusIconText className={styles.statusPill} status={nodesError ? 'danger' : 'success'}>{nodes.length} nodes</StatusIconText>
+            <StatusIconText className={styles.statusPill} status={worktreeCount > 0 ? 'warning' : 'neutral'}>{worktreeCount} active refs</StatusIconText>
+          </div>
+        </CommandBar>
+      </section>
+
       <div className={styles.panels}>
         <div className={styles.leftPanel}>
+          <div className={styles.panelHeader}>
+            <BladeHeader size="compact" title="Resource tree" subtitle={selectedRef ? `Browsing ${selectedRef}` : 'Select a branch or worktree'} />
+          </div>
           {nodesLoading ? (
             <div className={styles.spinnerWrapper}>
               <Spinner size="tiny" />
@@ -350,6 +404,9 @@ export function WorkspacePage() {
           )}
         </div>
         <div className={styles.rightPanel}>
+          <div className={styles.panelHeader}>
+            <BladeHeader size="compact" title="File workspace" subtitle={selectedPath ?? 'No file selected'} />
+          </div>
           {selectedPath !== null ? (
             <div className={styles.fileViewerWrapper}>
               {selectedPath.endsWith('.md') && (
@@ -392,6 +449,6 @@ export function WorkspacePage() {
         isLoading={decomposeLoading}
         error={decomposeError}
       />
-    </AzurePage>
+    </div>
   );
 }

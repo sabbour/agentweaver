@@ -1,19 +1,9 @@
-import { makeStyles, tokens } from '@fluentui/react-components';
+import {
+  AzureEmptyState,
+  BladeHeader } from '../../copilot-fluent-system';
+import { tokens,
+} from '../../copilot-fluent-system';
 import type { DailyInvocationPointDto } from '../../api/types';
-import { MetricCardHeader, MetricEmptyState } from '../MetricTypography';
-
-const useStyles = makeStyles({
-  panel: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalM,
-    padding: tokens.spacingVerticalL,
-    backgroundColor: tokens.colorNeutralBackground1,
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: tokens.borderRadiusMedium,
-  },
-});
-
 function LineChart({ points, label }: { points: DailyInvocationPointDto[]; label: string }) {
   const width = 720;
   const height = 180;
@@ -63,14 +53,13 @@ export function AgentInvocationChart({
   subtitle?: string;
   emptyLabel?: string;
 }) {
-  const styles = useStyles();
   const series = points ?? [];
 
   return (
-    <div className={styles.panel}>
-      <MetricCardHeader title={title} subtitle={subtitle} />
+    <div className="azf-surface azf-surface--panel azf-surface--padding-comfortable azf-stack azf-gap-m">
+      <BladeHeader size="compact" title={title} subtitle={subtitle} />
       {series.length === 0 ? (
-        <MetricEmptyState>{emptyLabel}</MetricEmptyState>
+        <AzureEmptyState compact title={emptyLabel} />
       ) : (
         <LineChart points={series} label={title} />
       )}

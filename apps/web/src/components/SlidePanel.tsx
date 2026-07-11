@@ -1,18 +1,24 @@
-import { useCallback, useEffect, useRef, type ReactNode } from 'react';
-import { Button, Title3, makeStyles, mergeClasses, tokens } from '@fluentui/react-components';
-import { DismissRegular } from '@fluentui/react-icons';
-
+import {
+  Button } from '../copilot-fluent-system';
+import { makeStyles,
+  mergeClasses,
+  Title3,
+  tokens,
+} from '../copilot-fluent-system';
+import { DismissRegular } from '../copilot-fluent-system';
+import { useCallback, useEffect, useRef } from 'react';
+import type { ReactNode } from 'react';
 // A reusable right-side slide-in overlay panel. Clicking the backdrop or the close button dismisses
 // it. Kept intentionally simple (alpha): a fixed overlay + a sliding panel with a CSS transition.
 const useStyles = makeStyles({
   backdrop: {
     position: 'fixed',
     inset: 0,
-    backgroundColor: 'rgba(0, 0, 0, 0.32)',
+    backgroundColor: 'rgba(7, 26, 46, 0.46)',
     zIndex: 1000,
     opacity: 0,
     pointerEvents: 'none',
-    transition: 'opacity 180ms ease',
+    transition: 'opacity 180ms cubic-bezier(0.22, 1, 0.36, 1)',
   },
   backdropOpen: {
     opacity: 1,
@@ -33,7 +39,18 @@ const useStyles = makeStyles({
     transform: 'translateX(100%)',
     visibility: 'hidden',
     pointerEvents: 'none',
-    transition: 'transform 220ms ease',
+    transition: 'transform 220ms cubic-bezier(0.22, 1, 0.36, 1)',
+  },
+  copilotPanel: {
+    top: 'var(--azf-portal-topbar-height, 40px)',
+    bottom: tokens.spacingVerticalM,
+    borderLeft: '1px solid var(--azf-shell-line)',
+    borderTop: '1px solid var(--azf-shell-line)',
+    borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderTopLeftRadius: tokens.borderRadiusXLarge,
+    borderBottomLeftRadius: tokens.borderRadiusXLarge,
+    backgroundColor: tokens.colorNeutralBackground2,
+    boxShadow: '0 28px 80px rgba(7, 26, 46, 0.34), 0 8px 24px rgba(0, 0, 0, 0.16)',
   },
   panelOpen: {
     transform: 'translateX(0)',
@@ -48,6 +65,20 @@ const useStyles = makeStyles({
     padding: `${tokens.spacingVerticalM} ${tokens.spacingHorizontalL}`,
     borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
     flexShrink: 0,
+  },
+  copilotHeader: {
+    minHeight: '52px',
+    color: tokens.colorNeutralForegroundOnBrand,
+    background: 'linear-gradient(135deg, var(--azf-shell-ink) 0%, var(--azf-shell-ink-2) 100%)',
+    borderBottom: '1px solid rgba(255, 255, 255, 0.12)',
+    boxShadow: 'inset 0 -1px 0 rgba(255, 255, 255, 0.12)',
+    '& .fui-Button': {
+      color: tokens.colorNeutralForegroundOnBrand,
+    },
+    '& .fui-Title3': {
+      color: tokens.colorNeutralForegroundOnBrand,
+      letterSpacing: '-0.01em',
+    },
   },
   body: {
     flex: 1,
@@ -96,6 +127,7 @@ function restoreFocus(element: HTMLElement | null) {
 export interface SlidePanelProps {
   open: boolean;
   id?: string;
+  ariaLabel?: string;
   onClose: () => void;
   title: ReactNode;
   /** Optional widths override for wider content (e.g. file browsers). */
@@ -105,22 +137,25 @@ export interface SlidePanelProps {
   /** Remove default body padding for full-bleed panel content. */
   flushBody?: boolean;
   bodyClassName?: string;
+  variant?: 'default' | 'copilotDock';
   children: ReactNode;
 }
 
 export function SlidePanel({
   open,
   id,
+  ariaLabel: ariaLabelProp,
   onClose,
   title,
   width,
   keepMounted = false,
   flushBody = false,
   bodyClassName,
+  variant = 'default',
   children,
 }: SlidePanelProps) {
   const styles = useStyles();
-  const ariaLabel = typeof title === 'string' ? title : undefined;
+  const ariaLabel = ariaLabelProp ?? (typeof title === 'string' ? title : undefined);
   const panelRef = useRef<HTMLDivElement | null>(null);
   const closeButtonRef = useRef<HTMLButtonElement | null>(null);
   const openerRef = useRef<HTMLElement | null>(null);
@@ -204,7 +239,7 @@ export function SlidePanel({
       <div
         ref={panelRef}
         id={id}
-        className={mergeClasses(styles.panel, open && styles.panelOpen)}
+        className={mergeClasses(styles.panel, variant === 'copilotDock' && styles.copilotPanel, open && styles.panelOpen)}
         role="dialog"
         aria-modal={open ? 'true' : undefined}
         aria-label={ariaLabel}
@@ -212,7 +247,7 @@ export function SlidePanel({
         tabIndex={open ? -1 : undefined}
         style={width ? { width } : undefined}
       >
-        <div className={styles.header}>
+        <div className={mergeClasses(styles.header, variant === 'copilotDock' && styles.copilotHeader)}>
           <Title3>{title}</Title3>
           <Button
             ref={closeButtonRef}

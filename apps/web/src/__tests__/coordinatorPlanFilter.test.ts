@@ -1,7 +1,6 @@
-import { describe, it, expect } from 'vitest';
 import { isSerializedWorkPlan, stripSerializedWorkPlanMessages } from '../timeline/coordinatorPlanFilter';
+import { describe, expect, it } from 'vitest';
 import type { TimelineItem } from '../timeline/types';
-
 describe('isSerializedWorkPlan', () => {
   it('recognizes a raw work-plan JSON array (title + scope on every element)', () => {
     const plan = JSON.stringify([

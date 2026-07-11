@@ -1,10 +1,9 @@
-import { useEffect, useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
-  Accordion,
-  AccordionHeader,
-  AccordionItem,
-  AccordionPanel,
+  apiClient } from '../api/apiClient';
+import { ApiError } from '../api/client';
+import { AzureStepList,
+  AzureTabList,
+  BladeHeader,
   Button,
   Checkbox,
   Field,
@@ -12,40 +11,37 @@ import {
   MessageBarBody,
   Radio,
   RadioGroup,
-  Select,
   SpinButton,
   Spinner,
-  Tab,
-  TabList,
   Text,
   Textarea,
-  Title3,
-  makeStyles,
-  tokens,
-} from '@fluentui/react-components';
-import {
-  SparkleRegular,
-  DocumentBulletListRegular,
-  SearchRegular,
-} from '@fluentui/react-icons';
-import { apiClient } from '../api/apiClient';
-import { ApiError } from '../api/client';
+  } from '../copilot-fluent-system';
 import { PageHeader } from '../components/PageHeader';
-import { AzurePage, AzureSectionHeader, AzureSurface } from '../components/azure/AzureLayout';
+import { Accordion,
+  AccordionHeader,
+  AccordionItem,
+  AccordionPanel,
+  makeStyles,
+  Select,
+  Title3,
+  tokens,
+} from '../copilot-fluent-system';
+import { DocumentBulletListRegular, People24Regular, SearchRegular, SparkleRegular } from '../copilot-fluent-system';
+import { useEffect, useState } from 'react';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import type {
-  TeamTemplateDto,
   CastProposalDto,
-  ProposedMemberDto,
-  CreateProposalRequest,
   ConfirmProposalRequest,
+  CreateProposalRequest,
+  ProposedMemberDto,
+  TeamTemplateDto,
 } from '../api/types';
-
 const useStyles = makeStyles({
   root: {
     display: 'flex',
     flexDirection: 'column',
     gap: tokens.spacingVerticalXL,
-    maxWidth: '760px',
+    maxWidth: '1040px',
   },
   breadcrumb: {
     display: 'flex',
@@ -62,6 +58,27 @@ const useStyles = makeStyles({
     display: 'flex',
     flexDirection: 'column',
     gap: tokens.spacingVerticalM,
+  },
+  wizardShell: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalL,
+  },
+  wizardLayout: {
+    display: 'grid',
+    gridTemplateColumns: '240px minmax(0, 1fr)',
+    gap: tokens.spacingHorizontalXL,
+    alignItems: 'start',
+  },
+  stepRail: {
+    position: 'sticky',
+    top: tokens.spacingVerticalL,
+  },
+  wizardPane: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalL,
+    minWidth: 0,
   },
   stepIndicator: {
     display: 'flex',
@@ -493,12 +510,14 @@ export function CastingWizardPage() {
     activePanel === 'analyze' ? analyzeProposal : null,
     selectedTemplate,
   );
+  const currentStepIndex = STEPS.indexOf(step);
 
   return (
-    <AzurePage className={styles.root}>
+    <div className={['azf-stack azf-page azf-pattern-shell', styles.root].filter(Boolean).join(' ')}>
       <PageHeader
         title="Cast a team"
         subtitle="Choose roles from a template, project analysis, or a plain-language team brief."
+        resourceIcon={<People24Regular />}
         breadcrumb={
           <nav className={styles.breadcrumb} aria-label="Breadcrumb">
             <Link to="/" className={styles.breadcrumbLink}>Projects</Link>
@@ -510,27 +529,42 @@ export function CastingWizardPage() {
         }
       />
 
-      <div className={styles.stepIndicator}>
-        {STEPS.map((s, i) => (
-          <span key={s} className={s === step ? styles.stepActive : undefined}>
-            {i + 1}. {STEP_LABELS[s]}
-          </span>
-        ))}
-      </div>
+      <div className={['azf-surface azf-surface--panel azf-surface--padding-comfortable', styles.wizardShell].filter(Boolean).join(' ')}>
+        <BladeHeader
+          size="compact"
+          title="Team casting blade"
+          subtitle="Progress through cast, review, and confirm steps before writing the team resource."
+        />
+        <div className={styles.wizardLayout}>
+          <AzureStepList
+            className={styles.stepRail}
+            orientation="vertical"
+            ariaLabel="Casting progress"
+            selectedValue={step}
+            steps={STEPS.map((s, index) => ({
+              id: s,
+              label: STEP_LABELS[s],
+              description: index === currentStepIndex ? 'Current step' : undefined,
+              status: index < currentStepIndex ? 'complete' : 'default',
+            }))}
+          />
+          <div className={styles.wizardPane}>
 
       {/* Step 1: Cast */}
       {step === 'cast' && (
         <>
-          <TabList
+          <AzureTabList
+            ariaLabel="Casting source"
             selectedValue={activePanel}
-            onTabSelect={(_, data) => setActivePanel(data.value as ActivePanel)}
-          >
-            <Tab icon={<SparkleRegular />} value="formulate">Formulate</Tab>
-            <Tab icon={<DocumentBulletListRegular />} value="template">Template</Tab>
-            <Tab icon={<SearchRegular />} value="analyze">Analyze</Tab>
-          </TabList>
+            onTabSelect={(value) => setActivePanel(value as ActivePanel)}
+            tabs={[
+              { id: 'formulate', label: 'Formulate', icon: <SparkleRegular /> },
+              { id: 'template', label: 'Template', icon: <DocumentBulletListRegular /> },
+              { id: 'analyze', label: 'Analyze', icon: <SearchRegular /> },
+            ]}
+          />
 
-          <AzureSurface className={styles.tabContent}>
+          <div className={['azf-surface azf-surface--panel azf-surface--padding-comfortable', styles.tabContent].filter(Boolean).join(' ')}>
             {activePanel === 'formulate' && (
               <>
                 <Text className={styles.panelDesc}>
@@ -647,18 +681,18 @@ export function CastingWizardPage() {
               </>
             )}
 
-          </AzureSurface>
+          </div>
 
           {castRationale && (
-            <AzureSurface className={styles.rationaleBox} tone="subtle" density="compact">
+            <div className={['azf-surface azf-surface--subtle azf-surface--padding-compact', styles.rationaleBox].filter(Boolean).join(' ')}>
               <Text className={styles.rationaleLabel}>Why this team</Text>
               <Text>{castRationale}</Text>
-            </AzureSurface>
+            </div>
           )}
 
           {/* Roles section */}
-          <AzureSurface className={styles.rolesSection}>
-            <AzureSectionHeader title="Roles" description="Tune the role mix before reviewing the proposal." />
+          <div className={['azf-surface azf-surface--panel azf-surface--padding-comfortable', styles.rolesSection].filter(Boolean).join(' ')}>
+            <BladeHeader size="compact" title="Roles" subtitle="Tune the role mix before reviewing the proposal." />
             {templatesLoading && <Spinner size="extra-tiny" />}
             {!templatesLoading && (
               <div className={styles.rolesGrid}>
@@ -678,7 +712,7 @@ export function CastingWizardPage() {
                 ))}
               </div>
             )}
-          </AzureSurface>
+          </div>
 
           <Accordion collapsible>
             <AccordionItem value="universe">
@@ -725,7 +759,7 @@ export function CastingWizardPage() {
 
       {/* Step 2: Review proposal */}
       {step === 'review' && proposal && (
-        <AzureSurface className={styles.card}>
+        <div className={['azf-surface azf-surface--panel azf-surface--padding-comfortable', styles.card].filter(Boolean).join(' ')}>
           <Title3>Review proposal</Title3>
 
           {proposal.warnings.length > 0 && proposal.warnings.map((w, i) => (
@@ -800,12 +834,12 @@ export function CastingWizardPage() {
               Confirm
             </Button>
           </div>
-        </AzureSurface>
+        </div>
       )}
 
       {/* Step 3: Confirm */}
       {step === 'confirm' && proposal && (
-        <AzureSurface className={styles.card}>
+        <div className={['azf-surface azf-surface--panel azf-surface--padding-comfortable', styles.card].filter(Boolean).join(' ')}>
           <Title3>Cast team</Title3>
           <Text>
             You are about to create a team with {proposal.members.length} member{proposal.members.length !== 1 ? 's' : ''}.
@@ -831,8 +865,11 @@ export function CastingWizardPage() {
             </Button>
             {confirming && <Spinner size="extra-tiny" aria-hidden="true" />}
           </div>
-        </AzureSurface>
+        </div>
       )}
-    </AzurePage>
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }

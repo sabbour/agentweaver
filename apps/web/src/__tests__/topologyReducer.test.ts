@@ -1,7 +1,6 @@
-import { describe, it, expect } from 'vitest';
 import { buildTopologyState } from '../state/topologyReducer';
+import { describe, expect, it } from 'vitest';
 import type { RunStreamEvent } from '../api/sse';
-
 function makeEvent(
   type: RunStreamEvent['type'],
   payload: Record<string, unknown>,

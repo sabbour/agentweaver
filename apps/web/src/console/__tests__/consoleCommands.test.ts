@@ -1,6 +1,5 @@
-import { describe, it, expect } from 'vitest';
-import { parseInput, SLASH_COMMANDS, DEFERRED_COMMANDS } from '../consoleCommands';
-
+import { DEFERRED_COMMANDS, parseInput, SLASH_COMMANDS } from '../consoleCommands';
+import { describe, expect, it } from 'vitest';
 describe('parseInput (console tokenizer)', () => {
   it('treats a leading slash as the explicit command channel', () => {
     const p = parseInput('/orchestrate ship the feature');

@@ -8,7 +8,7 @@ source: "team-decision"
 
 # Azure Fluent System sync
 
-Use this skill when work touches the checked-in Azure Fluent System library under `apps/web/src/azure-fluent-system/` and the request depends on Azure UI Kit / Fluent 2 Figma extraction, component inventory updates, node-level extraction, showcase coverage, or portable traceability docs.
+Use this skill when work touches the checked-in Azure Fluent System library under `apps/web/src/copilot-fluent-system/` and the request depends on Azure UI Kit / Fluent 2 Figma extraction, component inventory updates, node-level extraction, showcase coverage, or portable traceability docs.
 
 The goal is a **checked-in, portable deliverable**. Future consumers should be able to use the library, docs, examples, and the three checked-in catalog files **without** reopening Figma or recovering transient runtime artifacts.
 
@@ -28,15 +28,15 @@ Invoke this skill whenever the user asks to:
 
 | Item | Value |
 | --- | --- |
-| Library root | `apps/web/src/azure-fluent-system/` |
+| Library root | `apps/web/src/copilot-fluent-system/` |
 | Azure UI Kit / Fluent 2 file key | `q2TdO4dVcMhNWYp0N6Bc05` |
-| Component catalog | `apps/web/src/azure-fluent-system/catalog/COMPONENTS.md` |
-| Pattern catalog | `apps/web/src/azure-fluent-system/catalog/PATTERNS.md` |
-| Icon catalog | `apps/web/src/azure-fluent-system/catalog/ICONS.md` |
+| Component catalog | `apps/web/src/copilot-fluent-system/catalog/COMPONENTS.md` |
+| Pattern catalog | `apps/web/src/copilot-fluent-system/catalog/PATTERNS.md` |
+| Icon catalog | `apps/web/src/copilot-fluent-system/catalog/ICONS.md` |
 
-| Library README | `apps/web/src/azure-fluent-system/README.md` |
-| Durable doctrine | `apps/web/src/azure-fluent-system/DESIGN.md` and repo `DESIGN.md` |
-| Showcase app | `apps/web/src/azure-fluent-system/showcase/AzureFluentShowcaseApp.tsx` |
+| Library README | `apps/web/src/copilot-fluent-system/README.md` |
+| Durable doctrine | `apps/web/src/copilot-fluent-system/DESIGN.md` and repo `DESIGN.md` |
+| Showcase app | `apps/web/src/copilot-fluent-system/showcase/AzureFluentShowcaseApp.tsx` |
 | Focused test | `apps/web/src/__tests__/azureFluentSystem.test.tsx` |
 
 ## Durable outcome rule
@@ -57,15 +57,15 @@ Downstream agents must not need Figma MCP for ordinary consumption.
 
 | Need | File |
 | --- | --- |
-| Public component/pattern code | `apps/web/src/azure-fluent-system/components.tsx`, `patterns.tsx`, `types.ts`, `tokens.css` |
-| Public icon code and assets | `apps/web/src/azure-fluent-system/icons.tsx`, `assets/icons/azure/` |
-| Component catalog | `apps/web/src/azure-fluent-system/catalog/COMPONENTS.md` |
-| Pattern catalog | `apps/web/src/azure-fluent-system/catalog/PATTERNS.md` |
-| Icon catalog | `apps/web/src/azure-fluent-system/catalog/ICONS.md` |
-| Portable usage and summary | `apps/web/src/azure-fluent-system/README.md` |
-| Durable doctrine / anti-rules | `apps/web/src/azure-fluent-system/DESIGN.md` |
-| Showcase presence | `apps/web/src/azure-fluent-system/showcase/AzureFluentShowcaseApp.tsx` |
-| Example coverage | `apps/web/src/azure-fluent-system/examples/` |
+| Public component/pattern code | `apps/web/src/copilot-fluent-system/components.tsx`, `patterns.tsx`, `types.ts`, `tokens.css` |
+| Public icon code and assets | `apps/web/src/copilot-fluent-system/icons.tsx`, `assets/icons/azure/` |
+| Component catalog | `apps/web/src/copilot-fluent-system/catalog/COMPONENTS.md` |
+| Pattern catalog | `apps/web/src/copilot-fluent-system/catalog/PATTERNS.md` |
+| Icon catalog | `apps/web/src/copilot-fluent-system/catalog/ICONS.md` |
+| Portable usage and summary | `apps/web/src/copilot-fluent-system/README.md` |
+| Durable doctrine / anti-rules | `apps/web/src/copilot-fluent-system/DESIGN.md` |
+| Showcase presence | `apps/web/src/copilot-fluent-system/showcase/AzureFluentShowcaseApp.tsx` |
+| Example coverage | `apps/web/src/copilot-fluent-system/examples/` |
 | Focused regression coverage | `apps/web/src/__tests__/azureFluentSystem.test.tsx` |
 
 ## Workflow
@@ -78,16 +78,16 @@ Use `figma-list_file_components_for_code_connect` with the Azure UI Kit file key
 
 Treat the result as the **inventory source of truth** for:
 
-- `apps/web/src/azure-fluent-system/catalog/COMPONENTS.md`
-- any cross-links in `apps/web/src/azure-fluent-system/README.md`
+- `apps/web/src/copilot-fluent-system/catalog/COMPONENTS.md`
+- any cross-links in `apps/web/src/copilot-fluent-system/README.md`
 
 When pattern-family inventory or guidance changes, keep the pattern-side checked-in artifacts synchronized too:
 
-- `apps/web/src/azure-fluent-system/catalog/PATTERNS.md`
+- `apps/web/src/copilot-fluent-system/catalog/PATTERNS.md`
 
 When icon assets, aliases, or import strategy change, keep the icon-side artifact synchronized too:
 
-- `apps/web/src/azure-fluent-system/catalog/ICONS.md`
+- `apps/web/src/copilot-fluent-system/catalog/ICONS.md`
 
 Required handling:
 
@@ -137,16 +137,16 @@ Tool constraints:
 
 When a node is added or refreshed, update the checked-in library, not just the inventory records:
 
-- `apps/web/src/azure-fluent-system/components.tsx`
-- `apps/web/src/azure-fluent-system/types.ts`
-- `apps/web/src/azure-fluent-system/tokens.css`
-- `apps/web/src/azure-fluent-system/icons.tsx`
-- `apps/web/src/azure-fluent-system/assets/icons/azure/`
-- `apps/web/src/azure-fluent-system/examples/*.example.tsx`
-- `apps/web/src/azure-fluent-system/catalog/COMPONENTS.md`
-- `apps/web/src/azure-fluent-system/catalog/PATTERNS.md`
-- `apps/web/src/azure-fluent-system/catalog/ICONS.md`
-- `apps/web/src/azure-fluent-system/showcase/AzureFluentShowcaseApp.tsx`
+- `apps/web/src/copilot-fluent-system/components.tsx`
+- `apps/web/src/copilot-fluent-system/types.ts`
+- `apps/web/src/copilot-fluent-system/tokens.css`
+- `apps/web/src/copilot-fluent-system/icons.tsx`
+- `apps/web/src/copilot-fluent-system/assets/icons/azure/`
+- `apps/web/src/copilot-fluent-system/examples/*.example.tsx`
+- `apps/web/src/copilot-fluent-system/catalog/COMPONENTS.md`
+- `apps/web/src/copilot-fluent-system/catalog/PATTERNS.md`
+- `apps/web/src/copilot-fluent-system/catalog/ICONS.md`
+- `apps/web/src/copilot-fluent-system/showcase/AzureFluentShowcaseApp.tsx`
 - `apps/web/src/__tests__/azureFluentSystem.test.tsx`
 
 Mapping rules:
@@ -210,13 +210,13 @@ Run the smallest set of existing checks that proves the changed layer, but do no
 Required baseline validation for Azure Fluent System work:
 
 ```powershell
-npm --prefix apps/web/src/azure-fluent-system run showcase:validate-doctrine
+npm --prefix apps/web/src/copilot-fluent-system run showcase:validate-doctrine
 ```
 
 When TypeScript, React, CSS, examples, catalog shape, or showcase behavior changed, also run:
 
 ```powershell
-npm --prefix apps/web/src/azure-fluent-system run showcase:build
+npm --prefix apps/web/src/copilot-fluent-system run showcase:build
 npm --prefix apps/web run build
 npm --prefix apps/web run test -- --run src/__tests__/azureFluentSystem.test.tsx
 ```
@@ -236,8 +236,8 @@ Also run a targeted consistency check for the durable mapping outputs:
 Run a forbidden-path / coupling search and scoped diff check:
 
 ```powershell
-rg -n "transient-output markers|machine-local path markers" apps/web/src/azure-fluent-system .copilot/skills/azure-fluent-system-sync
-git --no-pager diff --check -- apps/web/src/azure-fluent-system .copilot/skills/azure-fluent-system-sync
+rg -n "transient-output markers|machine-local path markers" apps/web/src/copilot-fluent-system .copilot/skills/azure-fluent-system-sync
+git --no-pager diff --check -- apps/web/src/copilot-fluent-system .copilot/skills/azure-fluent-system-sync
 ```
 
 If validation fails:

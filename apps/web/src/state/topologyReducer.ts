@@ -1,12 +1,3 @@
-/**
- * Pure reducer for the coordinator dynamic topology view (Feature 008 Phase 2).
- *
- * Principle III (thin client): this reducer performs NO topology computation.
- * It applies server-authored `coordinator.topology` SNAPSHOTs, then
- * merges `coordinator.topology` DELTAS, `subtask.*` updates, `coordinator.work_plan`
- * and `coordinator.steering` directives — all keyed by node id. Components render
- * purely from the accumulated state; they never derive dependencies or status.
- */
 import type { RunStreamEvent } from '../api/sse';
 import type {
   CoordinatorChildResponse,
@@ -16,7 +7,15 @@ import type {
   TopologyNode,
   WorkPlanResponse,
 } from '../api/types';
-
+/**
+ * Pure reducer for the coordinator dynamic topology view (Feature 008 Phase 2).
+ *
+ * Principle III (thin client): this reducer performs NO topology computation.
+ * It applies server-authored `coordinator.topology` SNAPSHOTs, then
+ * merges `coordinator.topology` DELTAS, `subtask.*` updates, `coordinator.work_plan`
+ * and `coordinator.steering` directives — all keyed by node id. Components render
+ * purely from the accumulated state; they never derive dependencies or status.
+ */
 export interface NodeSteering {
   directiveId: string;
   kind: SteerKind;

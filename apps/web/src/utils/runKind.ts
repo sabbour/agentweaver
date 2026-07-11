@@ -1,5 +1,4 @@
 import type { WorkflowRunDto } from '../api/types';
-
 // The runs list (GET /api/projects/{id}/runs) does not carry a dedicated kind discriminator,
 // but a coordinator run is stored with AgentName == "Coordinator" (CoordinatorRunService.cs).
 // Detect it from agent_name so coordinator runs route to the topology view. Tolerant of an

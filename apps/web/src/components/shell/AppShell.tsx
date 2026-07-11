@@ -1,65 +1,26 @@
-import { type ReactNode, useCallback, useEffect, useMemo, useState } from 'react';
-import { useLocation } from 'react-router-dom';
-import { makeStyles, tokens } from '@fluentui/react-components';
-import { LeftNav } from './LeftNav';
-import { TopBar } from './TopBar';
-import { resolveActiveKey } from './navConfig';
+import './shell.css';
 import { BrowserConsole } from '../../console/BrowserConsole';
-import { SlidePanel } from '../SlidePanel';
-import {
-  clearLastActiveProjectId,
-  getLastActiveProjectId,
-  setLastActiveProjectId,
-} from './projectContext';
 import { ProjectListProvider } from '../../hooks/useProjectList';
+import { SlidePanel } from '../SlidePanel';
+import { StartOrchestrationFab } from '../StartOrchestrationFab';
 import { ConsolePanelProvider } from './ConsolePanelContext';
-
-// Spec 011 — the persistent navigation shell (FR-001). Left nav + top bar frame
-// the main content area and remain visible on every page, including project
-// sub-resource pages. The active project is derived from
-// the route so the shell renders correctly on direct deep links.
-
-const useStyles = makeStyles({
-  root: {
-    display: 'flex',
-    height: '100vh',
-    minHeight: 0,
-    backgroundColor: tokens.colorNeutralBackground2,
-    color: tokens.colorNeutralForeground1,
-  },
-  body: {
-    flex: 1,
-    minWidth: 0,
-    minHeight: 0,
-    display: 'flex',
-    flexDirection: 'column',
-    overflow: 'hidden',
-  },
-  main: {
-    flex: 1,
-    minHeight: 0,
-    overflow: 'auto',
-    padding: `${tokens.spacingVerticalXXL} ${tokens.spacingHorizontalXXXL}`,
-    backgroundColor: tokens.colorNeutralBackground2,
-    '@media (max-width: 720px)': {
-      padding: tokens.spacingVerticalL,
-    },
-  },
-});
-
-// Extract the active project id from the route (the shell sits above <Routes>,
-// so route params are not available via useParams here).
-export function projectIdFromPath(pathname: string): string | undefined {
-  const match = /^\/projects\/([^/]+)/.exec(pathname);
-  return match?.[1];
-}
+import { LeftNav } from './LeftNav';
+import { resolveActiveKey } from './navConfig';
+import { projectIdFromPath } from './projectIdFromPath';
+import { clearLastActiveProjectId, getLastActiveProjectId, setLastActiveProjectId } from './projectContext';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useLocation } from 'react-router-dom';
+import type { ReactNode } from 'react';
+// Spec 011 — the persistent navigation shell (FR-001). Native FluentUI rebuild:
+// a full-height flex row [left rail | main canvas]. The canvas hosts a lighter
+// rounded floating panel (Copilot "content floats on the sidebar" look). No
+// copilot-fluent-system kit imports — theme tokens carry all visual styling.
 
 export interface AppShellProps {
   children: ReactNode;
 }
 
 export function AppShell({ children }: AppShellProps) {
-  const styles = useStyles();
   const location = useLocation();
   const [consoleOpen, setConsoleOpen] = useState(false);
 
@@ -77,10 +38,14 @@ export function AppShell({ children }: AppShellProps) {
   );
 
   useEffect(() => {
+    let cancelled = false;
     if (routeProjectId) {
       setLastActiveProjectId(routeProjectId);
-      setLastActiveState(routeProjectId);
+      queueMicrotask(() => {
+        if (!cancelled) setLastActiveState(routeProjectId);
+      });
     }
+    return () => { cancelled = true; };
   }, [routeProjectId]);
 
   const clearFallbackProject = useCallback(() => {
@@ -110,33 +75,49 @@ export function AppShell({ children }: AppShellProps) {
   return (
     <ProjectListProvider>
       <ConsolePanelProvider value={consoleContext}>
-        <div className={styles.root}>
-          <LeftNav projectId={effectiveProjectId} activeKey={activeKey} />
-          <div className={styles.body}>
-            <TopBar
+        <>
+          <div className="aw-app-shell">
+            <LeftNav
               projectId={effectiveProjectId}
+              activeKey={activeKey}
               pathname={location.pathname}
               isFallbackProject={isFallbackProject}
               onFallbackProjectMissing={clearFallbackProject}
             />
-            {/* Remount the routed page when the active project changes so it re-fetches
-                cleanly for the new project (key is projectId only — switching sub-resource
-                ids within the same project keeps the page mounted, and the nav/top bar
-                never remount). Global pages share a stable key. */}
-            <main className={styles.main} key={routeProjectId ?? '__global__'}>{children}</main>
+            <div className="aw-shell-canvas">
+              {/* key remounts the content area when the active project changes,
+                  clearing stale page state the same way the old bodyKey did. */}
+              <main
+                key={routeProjectId ?? '__global__'}
+                className="aw-shell-content"
+                aria-label="Main content"
+              >
+                <div className="aw-floating-actions">
+                  <StartOrchestrationFab currentProjectId={effectiveProjectId} />
+                </div>
+                <div className="aw-shell-scroll">
+                  {children}
+                </div>
+              </main>
+            </div>
           </div>
+          {/* Console panel — NOT migrated this slice; SlidePanel + BrowserConsole
+              stay untouched and mount outside the shell grid so they overlay the
+              full viewport correctly. */}
           <SlidePanel
             id="app-console-panel"
             open={consoleOpen}
+            ariaLabel="Agentweaver Copilot dock"
             onClose={closeConsole}
-            title="Control console"
+            title="Operator dock"
             width="min(920px, calc(100vw - 24px))"
             keepMounted
             flushBody
+            variant="copilotDock"
           >
             <BrowserConsole />
           </SlidePanel>
-        </div>
+        </>
       </ConsolePanelProvider>
     </ProjectListProvider>
   );

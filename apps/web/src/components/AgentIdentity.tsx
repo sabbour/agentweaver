@@ -1,5 +1,10 @@
-import { makeStyles, mergeClasses, tokens } from '@fluentui/react-components';
-import type { FluentIcon } from '@fluentui/react-icons';
+import {
+  resolveAgentIdentity } from '../utils/agentIdentity';
+import { AgentAvatar } from './AgentAvatar';
+import { makeStyles,
+  mergeClasses,
+  tokens,
+} from '../copilot-fluent-system';
 import {
   BotRegular,
   CheckmarkCircleRegular,
@@ -8,9 +13,19 @@ import {
   NotebookRegular,
   PersonRegular,
   ShieldRegular,
-} from '@fluentui/react-icons';
-import { AgentAvatar } from './AgentAvatar';
-import { resolveAgentIdentity, type ResolvedAgentIdentity } from '../utils/agentIdentity';
+} from '../copilot-fluent-system';
+import type { ResolvedAgentIdentity } from '../utils/agentIdentity';
+import type { FluentIcon } from '../copilot-fluent-system';
+
+const ROLE_ICON_BY_KEY: Readonly<Record<string, FluentIcon>> = {
+  agent: BotRegular,
+  rai: ShieldRegular,
+  review: PersonRegular,
+  merge: MergeRegular,
+  scribe: NotebookRegular,
+  coordinator: BotRegular,
+  assembly: CheckmarkCircleRegular,
+};
 
 const useStyles = makeStyles({
   root: {
@@ -55,16 +70,27 @@ const useStyles = makeStyles({
 });
 
 function iconForRoleKey(roleKey: string): FluentIcon {
-  const map: Record<string, FluentIcon> = {
-    agent: BotRegular,
-    rai: ShieldRegular,
-    review: PersonRegular,
-    merge: MergeRegular,
-    scribe: NotebookRegular,
-    coordinator: BotRegular,
-    assembly: CheckmarkCircleRegular,
-  };
-  return map[roleKey] ?? CircleRegular;
+  return ROLE_ICON_BY_KEY[roleKey] ?? CircleRegular;
+}
+
+function renderRoleIcon(roleKey: string, fontSize: number) {
+  switch (roleKey) {
+    case 'agent':
+    case 'coordinator':
+      return <BotRegular fontSize={fontSize} />;
+    case 'rai':
+      return <ShieldRegular fontSize={fontSize} />;
+    case 'review':
+      return <PersonRegular fontSize={fontSize} />;
+    case 'merge':
+      return <MergeRegular fontSize={fontSize} />;
+    case 'scribe':
+      return <NotebookRegular fontSize={fontSize} />;
+    case 'assembly':
+      return <CheckmarkCircleRegular fontSize={fontSize} />;
+    default:
+      return <CircleRegular fontSize={fontSize} />;
+  }
 }
 
 function renderAvatar(identity: ResolvedAgentIdentity, avatarSize: number) {
@@ -96,14 +122,13 @@ export function AgentIdentity({
 }) {
   const styles = useStyles();
   const identity = resolveAgentIdentity(label, roleByAgent);
-  const Icon = iconForRoleKey(identity.roleKey);
   const avatar = renderAvatar(identity, avatarSize);
 
   return (
     <div className={mergeClasses(styles.root, className)} title={`${identity.displayName} — ${identity.roleTitle}`}>
       {avatar ?? (
         <span className={styles.iconAvatar} aria-hidden="true">
-          <Icon fontSize={16} />
+          {renderRoleIcon(identity.roleKey, 16)}
         </span>
       )}
       <div className={styles.meta}>

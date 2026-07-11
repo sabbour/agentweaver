@@ -1,29 +1,26 @@
-import { useCallback, useEffect, useState } from 'react';
 import {
-  Badge,
+  apiClient } from '../api/apiClient';
+import { ApiError } from '../api/client';
+import { AzureDataGrid,
+  BladeHeader,
   Button,
+  CommandBar,
+  EmptyState,
   MessageBar,
   MessageBarBody,
   Spinner,
+  StatusIconText,
   Switch,
-  Table,
-  TableBody,
-  TableCell,
-  TableHeader,
-  TableHeaderCell,
-  TableRow,
   Text,
-  makeStyles,
-  tokens,
-} from '@fluentui/react-components';
-import { ArrowClockwiseRegular } from '@fluentui/react-icons';
-import { apiClient } from '../api/apiClient';
-import { ApiError } from '../api/client';
-import type { HeartbeatAutomationDto, HeartbeatStatusDto } from '../api/types';
+  } from '../copilot-fluent-system';
 import { PageHeader } from '../components/PageHeader';
-import { AzureEmptyState, AzurePage, AzureSectionHeader, AzureSurface } from '../components/azure/AzureLayout';
 import { RefreshCountdown } from '../hooks/useRefreshCountdown';
-
+import { makeStyles,
+  tokens,
+} from '../copilot-fluent-system';
+import { ArrowClockwiseRegular } from '../copilot-fluent-system';
+import { useCallback, useEffect, useState } from 'react';
+import type { HeartbeatAutomationDto, HeartbeatStatusDto, HeartbeatTickDto } from '../api/types';
 // Heartbeat (Spec 011, FR-017) — service status, last error, the real automations
 // catalog (exactly two: Coordinator Heartbeat + Checkpoint GC), and the recent
 // tick activity timeline (acted/errors/duration). Real data only — no invented rows.
@@ -41,6 +38,33 @@ const useStyles = makeStyles({
     alignItems: 'center',
     gap: tokens.spacingHorizontalM,
     flexWrap: 'wrap',
+  },
+  commandSurface: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalM,
+  },
+  summaryGrid: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+    gap: tokens.spacingHorizontalM,
+  },
+  summaryCard: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalXXS,
+  },
+  summaryLabel: {
+    color: tokens.colorNeutralForeground3,
+    fontSize: tokens.fontSizeBase200,
+    textTransform: 'uppercase',
+    letterSpacing: '0.04em',
+  },
+  summaryValue: {
+    fontSize: tokens.fontSizeBase600,
+    lineHeight: tokens.lineHeightBase600,
+    fontWeight: tokens.fontWeightSemibold,
+    fontVariantNumeric: 'tabular-nums',
   },
   section: {
     display: 'flex',
@@ -81,17 +105,10 @@ function relativeTime(iso: string): string {
   return `${Math.floor(hours / 24)}d ago`;
 }
 
-function serviceBadgeColor(status: string): 'success' | 'warning' | 'danger' | 'subtle' {
-  if (status === 'running') return 'success';
-  if (status === 'waiting_first_tick') return 'warning';
-  if (status === 'disabled') return 'subtle';
-  return 'danger';
-}
-
-function automationBadgeColor(status: string): 'success' | 'warning' | 'danger' | 'subtle' {
+function heartbeatTone(status: string): 'success' | 'warning' | 'danger' | 'neutral' {
   if (status === 'running' || status === 'idle') return 'success';
   if (status === 'waiting_first_tick') return 'warning';
-  if (status === 'disabled') return 'subtle';
+  if (status === 'disabled') return 'neutral';
   return 'danger';
 }
 
@@ -103,10 +120,10 @@ function AutomationCard({
   styles: ReturnType<typeof useStyles>;
 }) {
   return (
-    <AzureSurface className={styles.automationCard} density="compact">
+    <div className={['azf-surface azf-surface--panel azf-surface--padding-compact', styles.automationCard].filter(Boolean).join(' ')}>
       <div className={styles.automationHeader}>
         <Text className={styles.automationName}>{automation.name}</Text>
-        <Badge appearance="tint" color={automationBadgeColor(automation.status)}>{automation.status}</Badge>
+        <StatusIconText status={heartbeatTone(automation.status)}>{automation.status}</StatusIconText>
       </div>
       <Text className={styles.automationDesc}>{automation.description}</Text>
       <Text className={styles.meta}>Cadence: every {Math.round(automation.cadence_seconds)}s</Text>
@@ -114,7 +131,7 @@ function AutomationCard({
         Last run: {automation.last_run_utc ? relativeTime(automation.last_run_utc) : '—'}
         {automation.last_acted_count != null && ` · acted ${automation.last_acted_count}`}
       </Text>
-    </AzureSurface>
+    </div>
   );
 }
 
@@ -156,7 +173,7 @@ export function HeartbeatPage() {
   }, [load, autoRefresh]);
 
   return (
-    <AzurePage className={styles.root}>
+    <div className={['azf-stack azf-page azf-pattern-shell', styles.root].filter(Boolean).join(' ')}>
       <PageHeader
         title="Heartbeat"
         subtitle="Background automation status and recent ticks."
@@ -192,17 +209,39 @@ export function HeartbeatPage() {
 
       {data && (
         <>
-          <AzureSurface className={styles.statusRow} density="compact">
-            <Badge appearance="filled" color={serviceBadgeColor(data.service_status)}>
-              {data.service_status}
-            </Badge>
-            <Text className={styles.meta}>
-              {data.enabled ? 'Enabled' : 'Disabled'} · interval {Math.round(data.interval_seconds)}s
-            </Text>
-            <Text className={styles.meta}>
-              Last tick: {data.last_tick_utc ? relativeTime(data.last_tick_utc) : '—'}
-            </Text>
-          </AzureSurface>
+          <section className={['azf-surface azf-surface--raised azf-surface--padding-comfortable', styles.commandSurface].filter(Boolean).join(' ')} aria-label="Heartbeat service resource summary">
+            <CommandBar
+              title="Automation command surface"
+              description="Azure resource monitor for background coordinator and checkpoint automations."
+            >
+              <div className={styles.statusRow}>
+                <StatusIconText status={heartbeatTone(data.service_status)}>{data.service_status}</StatusIconText>
+                <Text className={styles.meta}>
+                  {data.enabled ? 'Enabled' : 'Disabled'} · interval {Math.round(data.interval_seconds)}s
+                </Text>
+                <Text className={styles.meta}>
+                  Last tick: {data.last_tick_utc ? relativeTime(data.last_tick_utc) : '—'}
+                </Text>
+              </div>
+            </CommandBar>
+            <div className={styles.summaryGrid}>
+              <div className={['azf-surface azf-surface--subtle azf-surface--padding-compact', styles.summaryCard].filter(Boolean).join(' ')}>
+                <Text className={styles.summaryLabel}>Service state</Text>
+                <Text className={styles.summaryValue}>{data.enabled ? 'Enabled' : 'Disabled'}</Text>
+                <Text className={styles.automationDesc}>{data.enabled ? 'Background processing enabled' : 'Background processing disabled'}</Text>
+              </div>
+              <div className={['azf-surface azf-surface--subtle azf-surface--padding-compact', styles.summaryCard].filter(Boolean).join(' ')}>
+                <Text className={styles.summaryLabel}>Cadence</Text>
+                <Text className={styles.summaryValue}>{Math.round(data.interval_seconds)}s</Text>
+                <Text className={styles.automationDesc}>Coordinator heartbeat interval</Text>
+              </div>
+              <div className={['azf-surface azf-surface--subtle azf-surface--padding-compact', styles.summaryCard].filter(Boolean).join(' ')}>
+                <Text className={styles.summaryLabel}>Automations</Text>
+                <Text className={styles.summaryValue}>{data.automations.length}</Text>
+                <Text className={styles.automationDesc}>Catalogued background jobs</Text>
+              </div>
+            </div>
+          </section>
 
           {data.last_error && (
             <MessageBar intent="error">
@@ -210,54 +249,47 @@ export function HeartbeatPage() {
             </MessageBar>
           )}
 
-          <AzureSurface className={styles.section}>
-            <AzureSectionHeader title="Automations" />
+          <div className={['azf-surface azf-surface--panel azf-surface--padding-comfortable', styles.section].filter(Boolean).join(' ')}>
+            <BladeHeader size="compact" title="Automations" />
             <div className={styles.automations}>
               {data.automations.map((a) => (
                 <AutomationCard key={a.name} automation={a} styles={styles} />
               ))}
             </div>
-          </AzureSurface>
+          </div>
 
-          <AzureSurface className={styles.section}>
-            <AzureSectionHeader title="Recent activity" />
+          <div className={['azf-surface azf-surface--panel azf-surface--padding-comfortable', styles.section].filter(Boolean).join(' ')}>
+            <BladeHeader size="compact" title="Recent activity" />
             {data.recent_activity.length === 0 ? (
-              <AzureEmptyState title="No ticks recorded yet" body="Recent heartbeat activity will appear after the next automation cycle." />
+              <EmptyState title="No ticks recorded yet" body="Recent heartbeat activity will appear after the next automation cycle." />
             ) : (
-              <Table aria-label="Recent heartbeat ticks" size="small">
-                <TableHeader>
-                  <TableRow>
-                    <TableHeaderCell>Automation</TableHeaderCell>
-                    <TableHeaderCell>When</TableHeaderCell>
-                    <TableHeaderCell>Acted</TableHeaderCell>
-                    <TableHeaderCell>Errors</TableHeaderCell>
-                    <TableHeaderCell>Duration</TableHeaderCell>
-                    <TableHeaderCell>Error</TableHeaderCell>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {data.recent_activity.map((t, i) => (
-                    <TableRow key={`${t.timestamp_utc}-${i}`}>
-                      <TableCell>{t.automation_name}</TableCell>
-                      <TableCell>{relativeTime(t.timestamp_utc)}</TableCell>
-                      <TableCell>{t.acted_count}</TableCell>
-                      <TableCell>
-                        {t.error_count > 0 ? (
-                          <Badge appearance="tint" color="danger">{t.error_count}</Badge>
-                        ) : (
-                          t.error_count
-                        )}
-                      </TableCell>
-                      <TableCell>{Math.round(t.duration_ms)} ms</TableCell>
-                      <TableCell>{t.error ?? '—'}</TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+              <AzureDataGrid<HeartbeatTickDto>
+                ariaLabel="Recent heartbeat ticks"
+                items={data.recent_activity}
+                getRowId={(tick, index) => `${tick.timestamp_utc}-${index}`}
+                columns={[
+                  { columnId: 'automation', header: 'Automation', renderCell: (tick) => tick.automation_name, sortable: true, sortValue: (tick) => tick.automation_name },
+                  { columnId: 'when', header: 'When', renderCell: (tick) => relativeTime(tick.timestamp_utc), sortable: true, sortValue: (tick) => tick.timestamp_utc },
+                  { columnId: 'acted', header: 'Acted', renderCell: (tick) => tick.acted_count, sortable: true, sortValue: (tick) => tick.acted_count },
+                  {
+                    columnId: 'errors',
+                    header: 'Errors',
+                    renderCell: (tick) => (
+                      tick.error_count > 0
+                        ? <StatusIconText status="danger">{tick.error_count}</StatusIconText>
+                        : tick.error_count
+                    ),
+                    sortable: true,
+                    sortValue: (tick) => tick.error_count,
+                  },
+                  { columnId: 'duration', header: 'Duration', renderCell: (tick) => `${Math.round(tick.duration_ms)} ms`, sortable: true, sortValue: (tick) => tick.duration_ms },
+                  { columnId: 'error', header: 'Error', renderCell: (tick) => tick.error ?? '—' },
+                ]}
+              />
             )}
-          </AzureSurface>
+          </div>
         </>
       )}
-    </AzurePage>
+    </div>
   );
 }

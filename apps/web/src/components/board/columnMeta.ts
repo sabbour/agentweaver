@@ -1,6 +1,7 @@
-import { tokens } from '@fluentui/react-components';
+import {
+  tokens,
+} from '../../copilot-fluent-system';
 import type { BoardCardDto, BoardColumnDto, RunCardDto } from '../../api/types';
-
 // Deterministic accent palette + stage copy for the Kanban board columns. Kept in a
 // standalone module (not the component file) so React Fast Refresh stays happy and so
 // the mapping is unit-testable in isolation.

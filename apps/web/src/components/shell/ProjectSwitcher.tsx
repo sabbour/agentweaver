@@ -1,18 +1,18 @@
-import { useEffect, useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
 import {
-  Combobox,
   Option,
   OptionGroup,
-  Tooltip,
-  makeStyles,
-  tokens,
-} from '@fluentui/react-components';
-import type { Project } from '../../api/types';
+  Tooltip } from '../../copilot-fluent-system';
 import { GITHUB_AUTHORIZE_URL } from '../../config';
 import { useProjectList } from '../../hooks/useProjectList';
-import { NAV_ITEMS, type NavItemDef } from './navConfig';
-
+import { NAV_ITEMS } from './navConfig';
+import { Combobox,
+  makeStyles,
+  tokens,
+} from '../../copilot-fluent-system';
+import { useEffect, useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import type { Project } from '../../api/types';
+import type { NavItemDef } from './navConfig';
 // Spec 011, FR-011/FR-012/FR-014 — switch-only project switcher. Lists existing
 // projects from the real projects API and navigates to the selected one. It does
 // NOT offer inline create/add (clarification C5); creation stays on the gallery.

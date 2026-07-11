@@ -1,36 +1,28 @@
-import { useCallback, useEffect, useState } from 'react';
-import { useParams } from 'react-router-dom';
 import {
+  apiClient } from '../api/apiClient';
+import { ApiError } from '../api/client';
+import { AzureTabList,
   Badge,
+  BladeHeader,
   Button,
+  CommandBar,
   MessageBar,
   MessageBarBody,
   Spinner,
+  StatusIconText,
   Switch,
-  Tab,
-  TabList,
   Text,
-  mergeClasses,
-  makeStyles,
-  tokens,
-} from '@fluentui/react-components';
-import {
-  ArrowClockwiseRegular,
-  CheckmarkCircleRegular,
-  DismissCircleRegular,
-  WarningRegular,
-} from '@fluentui/react-icons';
-import { apiClient } from '../api/apiClient';
-import { ApiError } from '../api/client';
+  } from '../copilot-fluent-system';
 import { PageHeader } from '../components/PageHeader';
-import { AzurePage, AzureSectionHeader, AzureSurface } from '../components/azure/AzureLayout';
 import { RefreshCountdown } from '../hooks/useRefreshCountdown';
-import type {
-  DiagnosticsCheckDto,
-  ProjectDiagnosticsDto,
-  SystemDiagnosticsDto,
-} from '../api/types';
-
+import { makeStyles,
+  mergeClasses,
+  tokens,
+} from '../copilot-fluent-system';
+import { ArrowClockwiseRegular, CheckmarkCircleRegular, DismissCircleRegular, WarningRegular } from '../copilot-fluent-system';
+import { useCallback, useEffect, useState } from 'react';
+import { useParams } from 'react-router-dom';
+import type { DiagnosticsCheckDto, ProjectDiagnosticsDto, SystemDiagnosticsDto } from '../api/types';
 // Diagnostics (Spec 011, FR-016) — renders the backend's real executed checks as
 // pass/warn/fail cards with per-check duration. A Global vs This-project tab
 // switches between GET /api/diagnostics and GET /api/projects/{id}/diagnostics.
@@ -47,6 +39,28 @@ const useStyles = makeStyles({
     display: 'grid',
     gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))',
     gap: tokens.spacingHorizontalM,
+  },
+  commandSurface: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalM,
+  },
+  statusPills: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalS,
+    flexWrap: 'wrap',
+  },
+  statusPill: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    minHeight: '28px',
+    padding: `${tokens.spacingVerticalXXS} ${tokens.spacingHorizontalS}`,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusMedium,
+    backgroundColor: tokens.colorNeutralBackground2,
+    fontSize: tokens.fontSizeBase200,
+    fontVariantNumeric: 'tabular-nums',
   },
   summaryCard: {
     display: 'flex',
@@ -133,7 +147,7 @@ function CheckCard({ check, styles }: { check: DiagnosticsCheckDto; styles: Retu
       <DismissCircleRegular className={styles.iconFail} aria-hidden="true" />
     );
   return (
-    <AzureSurface className={mergeClasses(styles.checkCard, accent)} role="listitem" density="compact">
+    <div role="listitem" className={['azf-surface azf-surface--panel azf-surface--padding-compact', mergeClasses(styles.checkCard, accent)].filter(Boolean).join(' ')}>
       {icon}
       <div className={styles.checkBody}>
         <div className={styles.checkHeader}>
@@ -145,7 +159,7 @@ function CheckCard({ check, styles }: { check: DiagnosticsCheckDto; styles: Retu
         </div>
         <Text className={styles.checkDetail}>{check.detail}</Text>
       </div>
-    </AzureSurface>
+    </div>
   );
 }
 
@@ -196,9 +210,12 @@ export function DiagnosticsPage() {
 
   const active = scope === 'project' ? project : global;
   const checks = active?.checks ?? [];
+  const passCount = checks.filter((check) => check.status === 'pass').length;
+  const warnCount = checks.filter((check) => check.status === 'warn').length;
+  const failCount = checks.filter((check) => check.status === 'fail').length;
 
   return (
-    <AzurePage className={styles.root}>
+    <div className={['azf-stack azf-page azf-pattern-shell', styles.root].filter(Boolean).join(' ')}>
       <PageHeader
         title="Diagnostics"
         subtitle="System and project health checks."
@@ -233,14 +250,15 @@ export function DiagnosticsPage() {
         }
       />
 
-      <TabList
+      <AzureTabList
+        ariaLabel="Diagnostics scope"
         selectedValue={scope}
-        onTabSelect={(_, d) => setScope(d.value as Scope)}
-        aria-label="Diagnostics scope"
-      >
-        <Tab value="global">Global</Tab>
-        <Tab value="project" disabled={!projectId}>This project</Tab>
-      </TabList>
+        onTabSelect={(value) => setScope(value as Scope)}
+        tabs={[
+          { id: 'global', label: 'Global' },
+          { id: 'project', label: 'This project', disabled: !projectId },
+        ]}
+      />
 
       {error && (
         <MessageBar intent="error">
@@ -250,47 +268,79 @@ export function DiagnosticsPage() {
 
       {loading && !active && <Spinner label="Loading diagnostics" />}
 
+      {active && (
+        <section className={['azf-surface azf-surface--raised azf-surface--padding-comfortable', styles.commandSurface].filter(Boolean).join(' ')} aria-label="Diagnostics resource command surface">
+          <CommandBar
+            title={scope === 'project' ? 'Project diagnostics blade' : 'Global diagnostics blade'}
+            description="Azure health surface for dependency checks, duration, and remediation status."
+          >
+            <div className={styles.statusPills}>
+              <StatusIconText className={styles.statusPill} status={failCount > 0 ? 'danger' : warnCount > 0 ? 'warning' : 'success'}>
+                {checks.length} checks
+              </StatusIconText>
+              <StatusIconText className={styles.statusPill} status="success">{passCount} pass</StatusIconText>
+              <StatusIconText className={styles.statusPill} status="warning">{warnCount} warn</StatusIconText>
+              <StatusIconText className={styles.statusPill} status="danger">{failCount} fail</StatusIconText>
+            </div>
+          </CommandBar>
+          <div className={styles.summaryCards}>
+            <div className={['azf-surface azf-surface--subtle azf-surface--padding-compact', styles.summaryCard].filter(Boolean).join(' ')}>
+              <Text className={styles.summaryLabel}>Scope</Text>
+              <Text className={styles.summaryValue}>{scope === 'project' ? 'Project' : 'Global'}</Text>
+            </div>
+            <div className={['azf-surface azf-surface--subtle azf-surface--padding-compact', styles.summaryCard].filter(Boolean).join(' ')}>
+              <Text className={styles.summaryLabel}>Total duration</Text>
+              <Text className={styles.summaryValue}>{Math.round(active.total_duration_ms)} ms</Text>
+            </div>
+            <div className={['azf-surface azf-surface--subtle azf-surface--padding-compact', styles.summaryCard].filter(Boolean).join(' ')}>
+              <Text className={styles.summaryLabel}>Generated</Text>
+              <Text className={styles.summaryValue}>{new Date(active.generated_utc).toLocaleTimeString()}</Text>
+            </div>
+          </div>
+        </section>
+      )}
+
       {scope === 'global' && global && (
         <div className={styles.summaryCards}>
-          <AzureSurface className={styles.summaryCard} density="compact">
+          <div className={['azf-surface azf-surface--panel azf-surface--padding-compact', styles.summaryCard].filter(Boolean).join(' ')}>
             <Text className={styles.summaryLabel}>API version</Text>
             <Text className={styles.summaryValue}>{global.api_version}</Text>
-          </AzureSurface>
-          <AzureSurface className={styles.summaryCard} density="compact">
+          </div>
+          <div className={['azf-surface azf-surface--panel azf-surface--padding-compact', styles.summaryCard].filter(Boolean).join(' ')}>
             <Text className={styles.summaryLabel}>Uptime</Text>
             <Text className={styles.summaryValue}>{humanizeUptime(global.uptime_seconds)}</Text>
-          </AzureSurface>
-          <AzureSurface className={styles.summaryCard} density="compact">
+          </div>
+          <div className={['azf-surface azf-surface--panel azf-surface--padding-compact', styles.summaryCard].filter(Boolean).join(' ')}>
             <Text className={styles.summaryLabel}>Total projects</Text>
             <Text className={styles.summaryValue}>{global.total_projects}</Text>
-          </AzureSurface>
-          <AzureSurface className={styles.summaryCard} density="compact">
+          </div>
+          <div className={['azf-surface azf-surface--panel azf-surface--padding-compact', styles.summaryCard].filter(Boolean).join(' ')}>
             <Text className={styles.summaryLabel}>Total runs</Text>
             <Text className={styles.summaryValue}>{global.total_runs}</Text>
-          </AzureSurface>
-          <AzureSurface className={styles.summaryCard} density="compact">
+          </div>
+          <div className={['azf-surface azf-surface--panel azf-surface--padding-compact', styles.summaryCard].filter(Boolean).join(' ')}>
             <Text className={styles.summaryLabel}>Active runs</Text>
             <Text className={styles.summaryValue}>{global.active_runs}</Text>
-          </AzureSurface>
+          </div>
         </div>
       )}
 
       {scope === 'project' && project && (
         <div className={styles.summaryCards}>
-          <AzureSurface className={styles.summaryCard} density="compact">
+          <div className={['azf-surface azf-surface--panel azf-surface--padding-compact', styles.summaryCard].filter(Boolean).join(' ')}>
             <Text className={styles.summaryLabel}>Project</Text>
             <Text className={styles.summaryValue}>{project.project_name}</Text>
-          </AzureSurface>
-          <AzureSurface className={styles.summaryCard} density="compact">
+          </div>
+          <div className={['azf-surface azf-surface--panel azf-surface--padding-compact', styles.summaryCard].filter(Boolean).join(' ')}>
             <Text className={styles.summaryLabel}>Checks</Text>
             <Text className={styles.summaryValue}>{project.checks.length}</Text>
-          </AzureSurface>
+          </div>
         </div>
       )}
 
       {active && (
-        <AzureSurface>
-          <AzureSectionHeader title={`Checks (${checks.length}) · ${Math.round(active.total_duration_ms)} ms`} />
+        <div className="azf-surface azf-surface--panel azf-surface--padding-comfortable">
+          <BladeHeader size="compact" title={`Checks (${checks.length}) · ${Math.round(active.total_duration_ms)} ms`} />
           <div
             className={styles.checks}
             role="list"
@@ -303,8 +353,8 @@ export function DiagnosticsPage() {
               checks.map((c) => <CheckCard key={c.name} check={c} styles={styles} />)
             )}
           </div>
-        </AzureSurface>
+        </div>
       )}
-    </AzurePage>
+    </div>
   );
 }

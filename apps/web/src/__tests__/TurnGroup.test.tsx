@@ -1,14 +1,13 @@
-import { describe, it, expect, afterEach } from 'vitest';
-import { render, screen, fireEvent, cleanup } from '@testing-library/react';
-import { FluentProvider, webLightTheme } from '@fluentui/react-components';
-import { type ReactNode } from 'react';
+import { AzureFluentProvider } from '../copilot-fluent-system';
 import { TurnGroup } from '../components/TurnGroup';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { afterEach, describe, expect, it } from 'vitest';
 import type { TurnGroupItem, TurnStep } from '../timeline/types';
-
+import type { ReactNode } from 'react';
 afterEach(() => cleanup());
 
 function Wrapper({ children }: { children: ReactNode }) {
-  return <FluentProvider theme={webLightTheme}>{children}</FluentProvider>;
+  return <AzureFluentProvider density="compact">{children}</AzureFluentProvider>;
 }
 
 function makeTurnGroup(overrides: Partial<TurnGroupItem> = {}): TurnGroupItem {

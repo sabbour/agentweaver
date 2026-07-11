@@ -1,9 +1,17 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor, cleanup, fireEvent } from '@testing-library/react';
-import { FluentProvider, webLightTheme } from '@fluentui/react-components';
-import { type ReactNode } from 'react';
+import { apiClient } from '../api/apiClient';
+import { AzureFluentProvider } from '../copilot-fluent-system';
+import { TaskCard } from '../components/board/TaskCard';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from 'vitest';
 import type { TaskCardDto, WorkflowListResponse } from '../api/types';
-
+import type { ReactNode } from 'react';
 vi.mock('../api/apiClient', () => ({
   apiClient: {
     listWorkflows: vi.fn(),
@@ -14,11 +22,8 @@ vi.mock('../api/apiClient', () => ({
   },
 }));
 
-import { apiClient } from '../api/apiClient';
-import { TaskCard } from '../components/board/TaskCard';
-
 function Wrapper({ children }: { children: ReactNode }) {
-  return <FluentProvider theme={webLightTheme}>{children}</FluentProvider>;
+  return <AzureFluentProvider density="compact">{children}</AzureFluentProvider>;
 }
 
 const card: TaskCardDto = {

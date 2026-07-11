@@ -1,7 +1,17 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import '@xyflow/react/dist/style.css';
+import { apiClient } from '../api/apiClient';
+import { ApiError } from '../api/client';
+import { formatApiError, formatApiErrorMessage } from '../api/errors';
+import { useRunStream } from '../api/sse';
 import {
+  AgenticApprovalPattern,
+  AzureEmptyState,
+  AzureTabList,
+  AzureToolbar,
   Button,
+  ChainOfThought,
+  CoordinatorRunPattern,
+  CopilotResponse,
   Dialog,
   DialogActions,
   DialogBody,
@@ -13,16 +23,48 @@ import {
   MessageBar,
   MessageBarActions,
   MessageBarBody,
+  Spinner,
+  StatusIconText,
+  Text,
+  Tooltip,
+  makeStyles,
   Popover,
   PopoverSurface,
   PopoverTrigger,
-  Spinner,
-  Text,
   Title2,
-  Tooltip,
-  makeStyles,
   tokens,
-} from '@fluentui/react-components';
+} from '../copilot-fluent-system';
+import { AgentAvatar } from '../components/AgentAvatar';
+import { AgentSessionPanel } from '../components/AgentSessionPanel';
+import { AUTOMATION_HELP } from '../components/automationHelp';
+import { AutomationToggle } from '../components/AutomationToggle';
+import { useCtrlScrollZoom, ZoomControls } from '../components/board/useCtrlScrollZoom';
+import { CoordinatorArtifactsPanel } from '../components/CoordinatorArtifactsPanel';
+import { CostChip, formatAic } from '../components/CostChip';
+import { OutcomePlanPanel } from '../components/OutcomePlanPanel';
+import { AgentTokenBreakdown } from '../components/runs/AgentTokenBreakdown';
+import { SlidePanel } from '../components/SlidePanel';
+import {
+  accentClass,
+  ActiveEdgeContext,
+  BrowseFilesContext,
+  coordinatorLoopbackLabel,
+  CoordinatorSessionContext,
+  ElapsedTimer,
+  ExecutionModalContext,
+  forwardEdge,
+  iconForRole,
+  loopbackEdge,
+  roleDescForRole,
+  StatusBadge,
+  useNodeStyles,
+  workflowEdgeTypes,
+  workflowNodeTypes,
+} from '../components/WorkflowGraphPanel';
+import { useSeededRunStream } from '../hooks/useSeededRunStream';
+import { buildTopologyState, initialTopologyState, seedTopologyFromWorkPlan } from '../state/topologyReducer';
+import { formatModelLabel } from '../utils/agentIdentity';
+import { layoutDagColumns, NODE_H, NODE_TYPE_H, NODE_TYPE_W, NODE_W } from '../utils/dagLayout';
 import {
   ArrowRepeatAllRegular,
   BotRegular,
@@ -35,67 +77,36 @@ import {
   FlowchartRegular,
   FolderRegular,
   OpenRegular,
-} from '@fluentui/react-icons';
-import type { FluentIcon } from '@fluentui/react-icons';
+  SparkleRegular,
+} from '../copilot-fluent-system';
+import { Handle, MiniMap, Position, ReactFlow } from '@xyflow/react';
 import {
-  ReactFlow,
-  Handle,
-  MiniMap,
-  Position,
-  type Node,
-  type Edge,
-  type NodeProps,
-} from '@xyflow/react';
-import '@xyflow/react/dist/style.css';
-import { useRunStream, type RunStreamEvent } from '../api/sse';
-import { apiClient } from '../api/apiClient';
-import { ApiError } from '../api/client';
-import { formatApiError, formatApiErrorMessage, type FormattedApiError } from '../api/errors';
-import type { GraphDescriptor, RunStatus, WorkPlanResponse, PortForwardSessionDto, RunAgentTokenBreakdownDto } from '../api/types';
-import { layoutDagColumns, NODE_W, NODE_H, NODE_TYPE_W, NODE_TYPE_H } from '../utils/dagLayout';
-import type { NodeSizeHint } from '../utils/dagLayout';
-import { OutcomePlanPanel } from '../components/OutcomePlanPanel';
-import { AgentAvatar } from '../components/AgentAvatar';
-import { CostChip, formatAic } from '../components/CostChip';
-import { AgentTokenBreakdown } from '../components/runs/AgentTokenBreakdown';
-import { AgentSessionPanel, type RunSessionTree } from '../components/AgentSessionPanel';
-import { SlidePanel } from '../components/SlidePanel';
-import { CoordinatorArtifactsPanel } from '../components/CoordinatorArtifactsPanel';
-import { AutomationToggle } from '../components/AutomationToggle';
-import { AUTOMATION_HELP } from '../components/automationHelp';
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
+import { Link, useNavigate, useParams } from 'react-router-dom';
+import type { FormattedApiError } from '../api/errors';
+import type { RunStreamEvent } from '../api/sse';
+import type {
+  GraphDescriptor,
+  PortForwardSessionDto,
+  RunAgentTokenBreakdownDto,
+  RunStatus,
+  WorkPlanResponse,
+} from '../api/types';
+import type { AzfAction, AzfAgentStep, AzfArtifact, AzfResponsePart, AzfTone } from '../copilot-fluent-system';
+import type { RunSessionTree } from '../components/AgentSessionPanel';
+import type { ExecutorDef, ExecutorState, StepStatus, WorkflowNodeData } from '../components/WorkflowGraphPanel';
 import type { ArtifactBrowserAdapter } from '../hooks/useArtifactBrowser';
-import {
-  workflowNodeTypes,
-  forwardEdge,
-  loopbackEdge,
-  workflowEdgeTypes,
-  coordinatorLoopbackLabel,
-  roleDescForRole,
-  iconForRole,
-  useNodeStyles,
-  StatusBadge,
-  accentClass,
-  ElapsedTimer,
-  CoordinatorSessionContext,
-  ExecutionModalContext,
-  BrowseFilesContext,
-  ActiveEdgeContext,
-  type ExecutorDef,
-  type ExecutorState,
-  type StepStatus,
-  type WorkflowNodeData,
-} from '../components/WorkflowGraphPanel';
-import {
-  buildTopologyState,
-  initialTopologyState,
-  seedTopologyFromWorkPlan,
-  type CoordinatorTopologyState,
-  type TopologyNodeState,
-} from '../state/topologyReducer';
-import { useCtrlScrollZoom, ZoomControls } from '../components/board/useCtrlScrollZoom';
-import { formatModelLabel } from '../utils/agentIdentity';
-import { useSeededRunStream } from '../hooks/useSeededRunStream';
-
+import type { CoordinatorTopologyState, TopologyNodeState } from '../state/topologyReducer';
+import type { NodeSizeHint } from '../utils/dagLayout';
+import type { FluentIcon } from '../copilot-fluent-system';
+import type { Edge, Node, NodeProps } from '@xyflow/react';
 // ---------------------------------------------------------------------------
 // Subtask pipeline expansion is controlled at the page level so the graph container height can grow
 // to fit expanded child pipelines (instead of clipping them inside the fixed-height canvas).
@@ -626,14 +637,19 @@ function fmtTotal(ms: number): string {
 
 // Parent subtask elapsed = sum of the child pipeline steps' durations (issue 2).
 // Ticks live while any child step is still running.
-function AggregateElapsed({ states }: { states: Record<string, ExecutorState> }) {
-  const hasRunning = Object.values(states).some((st) => st.startedAt !== undefined && st.completedAt === undefined);
+function useTickingNow(active: boolean): number {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
-    if (!hasRunning) return;
+    if (!active) return;
     const id = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(id);
-  }, [hasRunning]);
+  }, [active]);
+  return now;
+}
+
+function AggregateElapsed({ states }: { states: Record<string, ExecutorState> }) {
+  const hasRunning = Object.values(states).some((st) => st.startedAt !== undefined && st.completedAt === undefined);
+  const now = useTickingNow(hasRunning);
   let total = 0;
   for (const st of Object.values(states)) {
     if (st.startedAt === undefined) continue;
@@ -748,11 +764,11 @@ function SubtaskNode({ id, data, selected }: NodeProps) {
   // Fetch the child run's graph descriptor only when expanded.
   useEffect(() => {
     if (!expanded || !d.childRunId) {
-      setChildDescriptorError(null);
+      queueMicrotask(() => setChildDescriptorError(null));
       return;
     }
     let cancelled = false;
-    setChildDescriptorError(null);
+    queueMicrotask(() => setChildDescriptorError(null));
     apiClient.getRunGraph(d.childRunId as string)
       .then((desc) => {
         if (!cancelled) {
@@ -769,6 +785,8 @@ function SubtaskNode({ id, data, selected }: NodeProps) {
   // Subscribe to the child run's live SSE events only while expanded; tear down on collapse.
   const childStreamRunId = expanded && d.childRunId ? (d.childRunId as string) : '';
   const { events: childEvents } = useRunStream(childStreamRunId);
+
+  const childFallbackNow = useTickingNow(childEvents.some((evt) => evt.type === 'workflow.step' && String(evt.payload['status'] ?? 'started') === 'started'));
 
   // Map workflow.step events from the child run to executor states.
   const childStepStates = useMemo<Record<string, ExecutorState>>(() => {
@@ -791,11 +809,11 @@ function SubtaskNode({ id, data, selected }: NodeProps) {
       } else if (evt.type === 'run.assemble_ready' || evt.type === 'subtask.assemble_ready') {
         const tsStr = evt.payload['timestamp_utc'] != null ? String(evt.payload['timestamp_utc']) : undefined;
         const tsMs  = tsStr ? new Date(tsStr).getTime() : NaN;
-        map['assemble-ready'] = { status: 'completed', completedAt: !isNaN(tsMs) ? tsMs : Date.now() };
+        map['assemble-ready'] = { status: 'completed', completedAt: !isNaN(tsMs) ? tsMs : childFallbackNow };
       }
     }
     return map;
-  }, [childEvents]);
+  }, [childEvents, childFallbackNow]);
 
   // Build the ordered list of child pipeline nodes from the descriptor when available. Avoid
   // painting a fake success pipeline when the child graph fetch fails.
@@ -946,8 +964,9 @@ const useStyles = makeStyles({
   root: {
     display: 'flex',
     flexDirection: 'column',
-    gap: tokens.spacingVerticalXL,
+    gap: tokens.spacingVerticalL,
     width: '100%',
+    minHeight: '100%',
   },
   breadcrumb: {
     display: 'flex',
@@ -1185,9 +1204,10 @@ const useStyles = makeStyles({
     height: 'calc(100vh - 132px)',
     minHeight: '680px',
     border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: tokens.borderRadiusLarge,
+    borderRadius: tokens.borderRadiusXLarge,
     overflow: 'hidden',
-    backgroundColor: tokens.colorNeutralBackground1,
+    backgroundColor: tokens.colorNeutralBackground2,
+    boxShadow: tokens.shadow8,
     '@media (max-width: 640px)': {
       height: 'auto',
       minHeight: 'auto',
@@ -1202,9 +1222,27 @@ const useStyles = makeStyles({
     rowGap: tokens.spacingVerticalS,
     alignItems: 'stretch',
     maxWidth: '100%',
-    padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM}`,
+    padding: `${tokens.spacingVerticalM} ${tokens.spacingHorizontalL}`,
     borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground1,
+    backgroundImage: `linear-gradient(90deg, ${tokens.colorBrandBackground2} 0, ${tokens.colorNeutralBackground1} 34%, ${tokens.colorNeutralBackground1} 100%)`,
+    boxShadow: `inset 4px 0 0 ${tokens.colorBrandStroke1}`,
+  },
+  bladeEyebrow: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXXS,
+    width: 'fit-content',
+    padding: `1px ${tokens.spacingHorizontalXS}`,
+    border: `1px solid ${tokens.colorBrandStroke1}`,
+    borderRadius: tokens.borderRadiusCircular,
+    backgroundColor: tokens.colorBrandBackground2,
+    color: tokens.colorBrandForeground1,
+    fontSize: tokens.fontSizeBase100,
+    lineHeight: tokens.lineHeightBase100,
+    fontWeight: tokens.fontWeightSemibold,
+    letterSpacing: '.02em',
+    textTransform: 'uppercase',
   },
   titleStack: {
     gridArea: 'identity',
@@ -1260,6 +1298,54 @@ const useStyles = makeStyles({
     color: tokens.colorNeutralForeground2,
     fontSize: tokens.fontSizeBase200,
     lineHeight: tokens.lineHeightBase200,
+  },
+  runStatusBand: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(4, minmax(0, 1fr))',
+    gap: tokens.spacingHorizontalS,
+    maxWidth: '100%',
+    '@media (max-width: 900px)': {
+      gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+    },
+    '@media (max-width: 520px)': {
+      gridTemplateColumns: '1fr',
+    },
+  },
+  runStatusBandItem: {
+    minWidth: 0,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalXXS,
+    padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM}`,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusLarge,
+    backgroundColor: tokens.colorNeutralBackground1,
+    boxShadow: tokens.shadow2,
+  },
+  runStatusBandPrimary: {
+    borderTopColor: tokens.colorBrandStroke1,
+    borderRightColor: tokens.colorBrandStroke1,
+    borderBottomColor: tokens.colorBrandStroke1,
+    borderLeftColor: tokens.colorBrandStroke1,
+    backgroundColor: tokens.colorBrandBackground2,
+  },
+  runStatusBandLabel: {
+    fontSize: tokens.fontSizeBase100,
+    lineHeight: tokens.lineHeightBase100,
+    color: tokens.colorNeutralForeground3,
+    fontWeight: tokens.fontWeightSemibold,
+    textTransform: 'uppercase',
+    letterSpacing: '.04em',
+  },
+  runStatusBandValue: {
+    minWidth: 0,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+    fontSize: tokens.fontSizeBase300,
+    lineHeight: tokens.lineHeightBase300,
+    color: tokens.colorNeutralForeground1,
+    fontWeight: tokens.fontWeightSemibold,
   },
   executionKicker: {
     fontWeight: tokens.fontWeightSemibold,
@@ -1340,40 +1426,6 @@ const useStyles = makeStyles({
     fontSize: tokens.fontSizeBase200,
     lineHeight: tokens.lineHeightBase200,
     fontVariantNumeric: 'tabular-nums',
-  },
-  statusChipStrong: {
-    borderTopColor: tokens.colorBrandStroke2,
-    borderRightColor: tokens.colorBrandStroke2,
-    borderBottomColor: tokens.colorBrandStroke2,
-    borderLeftColor: tokens.colorBrandStroke2,
-    backgroundColor: tokens.colorBrandBackground2,
-    color: tokens.colorBrandForeground1,
-    fontWeight: tokens.fontWeightSemibold,
-  },
-  statusChipSuccess: {
-    borderTopColor: tokens.colorPaletteGreenBorderActive,
-    borderRightColor: tokens.colorPaletteGreenBorderActive,
-    borderBottomColor: tokens.colorPaletteGreenBorderActive,
-    borderLeftColor: tokens.colorPaletteGreenBorderActive,
-    backgroundColor: tokens.colorPaletteGreenBackground2,
-    color: tokens.colorPaletteGreenForeground1,
-    fontWeight: tokens.fontWeightSemibold,
-  },
-  statusChipDanger: {
-    borderTopColor: tokens.colorStatusDangerBorder1,
-    borderRightColor: tokens.colorStatusDangerBorder1,
-    borderBottomColor: tokens.colorStatusDangerBorder1,
-    borderLeftColor: tokens.colorStatusDangerBorder1,
-    backgroundColor: tokens.colorStatusDangerBackground1,
-    color: tokens.colorStatusDangerForeground1,
-  },
-  statusChipInput: {
-    borderTopColor: tokens.colorStatusWarningBorder1,
-    borderRightColor: tokens.colorStatusWarningBorder1,
-    borderBottomColor: tokens.colorStatusWarningBorder1,
-    borderLeftColor: tokens.colorStatusWarningBorder1,
-    backgroundColor: tokens.colorStatusWarningBackground1,
-    color: tokens.colorStatusWarningForeground1,
   },
   statusChipValue: {
     color: 'inherit',
@@ -1520,16 +1572,21 @@ const useStyles = makeStyles({
   bodyGrid: {
     minHeight: 0,
     display: 'grid',
-    gridTemplateColumns: 'clamp(300px, 27vw, 380px) minmax(0, 1fr)',
-    gridTemplateAreas: '"tree details"',
+    gridTemplateColumns: 'clamp(260px, 20vw, 340px) minmax(420px, 1fr) clamp(300px, 24vw, 400px)',
+    gridTemplateAreas: '"tree details copilot"',
+    '@media (max-width: 1240px)': {
+      gridTemplateColumns: 'clamp(260px, 28vw, 340px) minmax(0, 1fr)',
+      gridTemplateRows: 'minmax(440px, 1fr) minmax(320px, .72fr)',
+      gridTemplateAreas: '"tree details" "tree copilot"',
+    },
     '@media (max-width: 960px)': {
       gridTemplateColumns: '1fr',
-      gridTemplateRows: 'minmax(240px, 36vh) minmax(520px, 1fr)',
-      gridTemplateAreas: '"tree" "details"',
+      gridTemplateRows: 'minmax(240px, 32vh) minmax(520px, 1fr) minmax(360px, auto)',
+      gridTemplateAreas: '"tree" "details" "copilot"',
     },
     '@media (max-width: 640px)': {
       gridTemplateColumns: '1fr',
-      gridTemplateRows: 'minmax(220px, 34vh) minmax(420px, 1fr)',
+      gridTemplateRows: 'minmax(220px, 34vh) minmax(420px, 1fr) minmax(340px, auto)',
     },
   },
   leftZone: {
@@ -1551,6 +1608,21 @@ const useStyles = makeStyles({
     padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM}`,
     borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
     fontWeight: tokens.fontWeightSemibold,
+    backgroundColor: tokens.colorNeutralBackground1,
+  },
+  zoneHeaderStack: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalXXS,
+    minWidth: 0,
+  },
+  zoneKicker: {
+    fontSize: tokens.fontSizeBase100,
+    lineHeight: tokens.lineHeightBase100,
+    color: tokens.colorBrandForeground1,
+    fontWeight: tokens.fontWeightSemibold,
+    textTransform: 'uppercase',
+    letterSpacing: '.04em',
   },
   treeList: {
     flex: 1,
@@ -1685,7 +1757,9 @@ const useStyles = makeStyles({
     minHeight: 0,
     display: 'flex',
     flexDirection: 'column',
-    backgroundColor: tokens.colorNeutralBackground1,
+    gap: tokens.spacingVerticalS,
+    padding: tokens.spacingVerticalM,
+    backgroundColor: tokens.colorNeutralBackground2,
     '@media (max-width: 960px)': {
       minHeight: '520px',
       borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
@@ -1697,23 +1771,151 @@ const useStyles = makeStyles({
   readoutBody: {
     flex: 1,
     minHeight: 0,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusLarge,
+    overflow: 'hidden',
+    backgroundColor: tokens.colorNeutralBackground1,
+    boxShadow: tokens.shadow2,
   },
-  emptyState: {
+  systemPanel: {
+    flexShrink: 0,
     display: 'flex',
     flexDirection: 'column',
-    gap: tokens.spacingVerticalXS,
+    gap: tokens.spacingVerticalS,
     padding: tokens.spacingVerticalM,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusLarge,
+    backgroundColor: tokens.colorNeutralBackground1,
+    boxShadow: tokens.shadow2,
+  },
+  systemPanelHeader: {
+    display: 'flex',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: tokens.spacingHorizontalM,
+  },
+  systemPanelTitle: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalXXS,
+    minWidth: 0,
+  },
+  systemPanelActions: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXS,
+    flexWrap: 'wrap',
+    justifyContent: 'flex-end',
+  },
+  topologyContainment: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
+    gap: tokens.spacingHorizontalS,
+    '@media (max-width: 700px)': {
+      gridTemplateColumns: '1fr',
+    },
+  },
+  topologyTile: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalXXS,
+    padding: tokens.spacingVerticalS,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     borderRadius: tokens.borderRadiusMedium,
     backgroundColor: tokens.colorNeutralBackground2,
   },
-  emptyStateTitle: {
-    fontWeight: tokens.fontWeightSemibold,
-    color: tokens.colorNeutralForeground1,
+  workspaceRegionStrip: {
+    flexShrink: 0,
+    display: 'grid',
+    gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
+    gap: tokens.spacingHorizontalS,
+    '@media (max-width: 700px)': {
+      gridTemplateColumns: '1fr',
+    },
   },
-  emptyStateBody: {
-    color: tokens.colorNeutralForeground2,
-    lineHeight: tokens.lineHeightBase300,
+  workspaceRegionCard: {
+    minWidth: 0,
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalS,
+    padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM}`,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusLarge,
+    backgroundColor: tokens.colorNeutralBackground1,
+    boxShadow: tokens.shadow2,
+  },
+  workspaceRegionIcon: {
+    width: '30px',
+    height: '30px',
+    borderRadius: tokens.borderRadiusMedium,
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+    color: tokens.colorBrandForeground1,
+    backgroundColor: tokens.colorBrandBackground2,
+  },
+  workspaceRegionText: {
+    minWidth: 0,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '1px',
+  },
+  copilotZone: {
+    gridArea: 'copilot',
+    minWidth: 0,
+    minHeight: 0,
+    display: 'flex',
+    flexDirection: 'column',
+    borderLeft: `1px solid ${tokens.colorNeutralStroke2}`,
+    backgroundColor: tokens.colorNeutralBackground1,
+    '@media (max-width: 1240px)': {
+      borderLeft: 'none',
+      borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
+    },
+  },
+  copilotScroll: {
+    flex: 1,
+    minHeight: 0,
+    overflowY: 'auto',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalM,
+    padding: tokens.spacingVerticalM,
+  },
+  copilotCard: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalS,
+    padding: tokens.spacingVerticalM,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusLarge,
+    backgroundColor: tokens.colorNeutralBackground1,
+    boxShadow: tokens.shadow2,
+  },
+  copilotCardBrand: {
+    borderTopColor: tokens.colorBrandStroke1,
+    borderRightColor: tokens.colorBrandStroke1,
+    borderBottomColor: tokens.colorBrandStroke1,
+    borderLeftColor: tokens.colorBrandStroke1,
+    backgroundColor: tokens.colorBrandBackground2,
+  },
+  copilotSticky: {
+    position: 'sticky',
+    bottom: 0,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalS,
+    padding: tokens.spacingVerticalM,
+    borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
+    backgroundColor: tokens.colorNeutralBackground1,
+    boxShadow: `0 -4px 14px rgba(0, 0, 0, 0.08)`,
+  },
+  copilotActionRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalS,
+    flexWrap: 'wrap',
   },
 });
 
@@ -1742,6 +1944,16 @@ function runTreeStatusIcon(status: string) {
 }
 
 type SemanticStateColor = 'running' | 'success' | 'danger' | 'input' | 'queued';
+
+function semanticStateColorToTone(color: SemanticStateColor): AzfTone {
+  switch (color) {
+    case 'running': return 'brand';
+    case 'success': return 'success';
+    case 'danger': return 'danger';
+    case 'input': return 'warning';
+    default: return 'neutral';
+  }
+}
 
 function semanticStateColorForStatus(status: string | undefined): SemanticStateColor {
   switch (status) {
@@ -1780,6 +1992,16 @@ function semanticStateColorForStatus(status: string | undefined): SemanticStateC
       return 'input';
     default:
       return 'queued';
+  }
+}
+
+function semanticStateColorToAgentStatus(color: SemanticStateColor): AzfAgentStep['status'] {
+  switch (color) {
+    case 'running': return 'running';
+    case 'success': return 'complete';
+    case 'danger': return 'error';
+    case 'input': return 'warning';
+    default: return 'pending';
   }
 }
 
@@ -1925,13 +2147,55 @@ export function CoordinatorRunPage() {
   const [roleByAgent, setRoleByAgent] = useState<Record<string, string>>({});
   const [projectName, setProjectName] = useState('Project');
 
+  // ---------------------------------------------------------------------------
+  // Orchestration lifecycle poll (issues 3 & 4). Reads the coordinator_status field
+  // (added by the backend concurrently — optional) plus the work-plan status, both
+  // tolerated as absent. Polls until the orchestration reaches a terminal phase.
+  // ---------------------------------------------------------------------------
+  const [coordStatusField, setCoordStatusField] = useState<string | undefined>(undefined);
+  const [coordStatusReason, setCoordStatusReason] = useState<string | undefined>(undefined);
+  const [workPlanStatus, setWorkPlanStatus] = useState<string | undefined>(undefined);
+  const [retriedFrom, setRetriedFrom] = useState<string | null>(null);
+  // Per-run work-plan snapshot.
+  const [workPlanData, setWorkPlanData] = useState<WorkPlanResponse | null>(null);
+
+  // Sandbox preview port-forward state.
+  const [previewDialogOpen, setPreviewDialogOpen] = useState(false);
+  const [previewTargetPort, setPreviewTargetPort] = useState('3000');
+  const [previewSession,    setPreviewSession]    = useState<PortForwardSessionDto | undefined>(undefined);
+  const [previewBusy,       setPreviewBusy]       = useState(false);
+  const [previewError,      setPreviewError]      = useState<string | undefined>(undefined);
+
+  // True once the work-plan endpoint has confirmed a 404 (run has no plan yet / is stuck).
+  // Used to render a graceful empty state and to back off the lifecycle poll so the page
+  // doesn't hammer the 404 endpoint on a tight loop.
+  const [noWorkPlan, setNoWorkPlan] = useState(false);
+  // True when the run detail confirms this is a child run (parent_run_id non-null). Child runs
+  // never have a work-plan or outcome-plan; skip coordinator-only artifact fetches entirely.
+  const [isChildRun, setIsChildRun] = useState(false);
+  // Retry state for the header button.
+  const [retrying, setRetrying] = useState(false);
+  const [retryError, setRetryError] = useState<string | null>(null);
+  const [stopping, setStopping] = useState(false);
+  const [stopError, setStopError] = useState<string | null>(null);
+  // Per-run option toggles (autopilot + auto-approve-tools). Seeded once from the run detail,
+  // then driven by user toggles (optimistic). Both cascade to the coordinator's children.
+  const [autopilot, setAutopilot] = useState(false);
+  const [autoApprove, setAutoApprove] = useState(false);
+  const [autopilotBusy, setAutopilotBusy] = useState(false);
+  const [autoApproveBusy, setAutoApproveBusy] = useState(false);
+  const [automationError, setAutomationError] = useState<string | null>(null);
+  const [tokenBreakdown, setTokenBreakdown] = useState<RunAgentTokenBreakdownDto | null>(null);
+  const seededToggles = useRef(false);
+
+
   useEffect(() => {
     if (!projectId) {
-      setProjectName('Project');
+      queueMicrotask(() => setProjectName('Project'));
       return;
     }
     let cancelled = false;
-    setProjectName('Project');
+    queueMicrotask(() => setProjectName('Project'));
     apiClient.getProject(projectId)
       .then((project) => {
         if (!cancelled) setProjectName(project.name?.trim() || 'Project');
@@ -1945,8 +2209,10 @@ export function CoordinatorRunPage() {
     let cancelled = false;
 
     // Fetch graph descriptor for REST seed (so finished coordinator runs still render).
-    setRestDescriptor(null);
-    setGraphError(null);
+    queueMicrotask(() => {
+      setRestDescriptor(null);
+      setGraphError(null);
+    });
     apiClient.getRunGraph(runId)
       .then((desc) => {
         if (cancelled) return;
@@ -1996,7 +2262,6 @@ export function CoordinatorRunPage() {
     if (!runId) return;
     let cancelled = false;
     let consecutiveFailures = 0;
-    let handle: ReturnType<typeof setInterval> | undefined;
     const loadBreakdown = async () => {
       try {
         const next = await apiClient.getRunTokenBreakdown(runId);
@@ -2008,17 +2273,17 @@ export function CoordinatorRunPage() {
         if (!cancelled) {
           consecutiveFailures += 1;
           setTokenBreakdown(null);
-          if (consecutiveFailures >= 3 && handle !== undefined) {
+          if (consecutiveFailures >= 3) {
             clearInterval(handle);
           }
         }
       }
     };
+    const handle: ReturnType<typeof setInterval> = setInterval(() => { void loadBreakdown(); }, 30000);
     void loadBreakdown();
-    handle = setInterval(() => { void loadBreakdown(); }, 30000);
     return () => {
       cancelled = true;
-      if (handle !== undefined) clearInterval(handle);
+      clearInterval(handle);
     };
   }, [runId]);
 
@@ -2041,63 +2306,24 @@ export function CoordinatorRunPage() {
   }, [projectId]);
 
 
-  // ---------------------------------------------------------------------------
-  // Orchestration lifecycle poll (issues 3 & 4). Reads the coordinator_status field
-  // (added by the backend concurrently — optional) plus the work-plan status, both
-  // tolerated as absent. Polls until the orchestration reaches a terminal phase.
-  // ---------------------------------------------------------------------------
-  const [coordStatusField, setCoordStatusField] = useState<string | undefined>(undefined);
-  const [coordStatusReason, setCoordStatusReason] = useState<string | undefined>(undefined);
-  const [workPlanStatus, setWorkPlanStatus] = useState<string | undefined>(undefined);
-  const [retriedFrom, setRetriedFrom] = useState<string | null>(null);
-  // Per-run work-plan snapshot.
-  const [workPlanData, setWorkPlanData] = useState<WorkPlanResponse | null>(null);
-
-  // Sandbox preview port-forward state.
-  const [sandboxBackend,    setSandboxBackend]    = useState<string | undefined>(undefined);
-  const [previewDialogOpen, setPreviewDialogOpen] = useState(false);
-  const [previewTargetPort, setPreviewTargetPort] = useState('3000');
-  const [previewSession,    setPreviewSession]    = useState<PortForwardSessionDto | undefined>(undefined);
-  const [previewBusy,       setPreviewBusy]       = useState(false);
-  const [previewError,      setPreviewError]      = useState<string | undefined>(undefined);
-
-  // True once the work-plan endpoint has confirmed a 404 (run has no plan yet / is stuck).
-  // Used to render a graceful empty state and to back off the lifecycle poll so the page
-  // doesn't hammer the 404 endpoint on a tight loop.
-  const [noWorkPlan, setNoWorkPlan] = useState(false);
-  // True when the run detail confirms this is a child run (parent_run_id non-null). Child runs
-  // never have a work-plan or outcome-plan; skip coordinator-only artifact fetches entirely.
-  const [isChildRun, setIsChildRun] = useState(false);
-  // Retry state for the header button.
-  const [retrying, setRetrying] = useState(false);
-  const [retryError, setRetryError] = useState<string | null>(null);
-  const [stopping, setStopping] = useState(false);
-  const [stopError, setStopError] = useState<string | null>(null);
-  // Per-run option toggles (autopilot + auto-approve-tools). Seeded once from the run detail,
-  // then driven by user toggles (optimistic). Both cascade to the coordinator's children.
-  const [autopilot, setAutopilot] = useState(false);
-  const [autoApprove, setAutoApprove] = useState(false);
-  const [autopilotBusy, setAutopilotBusy] = useState(false);
-  const [autoApproveBusy, setAutoApproveBusy] = useState(false);
-  const [automationError, setAutomationError] = useState<string | null>(null);
-  const [tokenBreakdown, setTokenBreakdown] = useState<RunAgentTokenBreakdownDto | null>(null);
-  const seededToggles = useRef(false);
 
   useEffect(() => {
     if (!runId) return;
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const TERMINAL = new Set<OrchPhase>(['complete', 'failed', 'blocked', 'declined']);
-    setRunLoadError(null);
-    setWorkPlanError(null);
-    setNoWorkPlan(false);
-    setRunLevelStatus(undefined);
-    setCoordStatusField(undefined);
-    setCoordStatusReason(undefined);
-    setWorkPlanStatus(undefined);
-    setWorkPlanData(null);
-    setIsChildRun(false);
-    seededToggles.current = false;
+    queueMicrotask(() => {
+      setRunLoadError(null);
+      setWorkPlanError(null);
+      setNoWorkPlan(false);
+      setRunLevelStatus(undefined);
+      setCoordStatusField(undefined);
+      setCoordStatusReason(undefined);
+      setWorkPlanStatus(undefined);
+      setWorkPlanData(null);
+      setIsChildRun(false);
+      seededToggles.current = false;
+    });
 
     const tick = async () => {
       let detail: Awaited<ReturnType<typeof apiClient.getRun>>;
@@ -2168,7 +2394,7 @@ export function CoordinatorRunPage() {
 
     void tick();
     return () => { cancelled = true; if (timer) clearTimeout(timer); };
-  }, [runId]);
+  }, [runId, setRunLevelStatus]);
 
   // Goal is carried by the coordinator.started event.
   const goal = useMemo<string | undefined>(() => {
@@ -2325,13 +2551,14 @@ export function CoordinatorRunPage() {
     [runLevelStatus, orch, runLoadError],
   );
   // Derive sandbox backend from sandbox.selected events for the Preview Sandbox button.
-  useEffect(() => {
+  const sandboxBackend = useMemo<string | undefined>(() => {
     for (const evt of events) {
       if (evt.type === 'sandbox.selected') {
         const backend = evt.payload['backend'] ?? evt.payload['Backend'];
-        if (backend) { setSandboxBackend(String(backend)); break; }
+        if (backend) return String(backend);
       }
     }
+    return undefined;
   }, [events]);
 
   // Coordinator graph node status override so it never shows a stale "Pending".
@@ -2649,7 +2876,7 @@ export function CoordinatorRunPage() {
       rfNodes:      laidOutNodes,
       displayEdges: routeGridEdges(allEdges, laidOutNodes),
     };
-  }, [planningDescriptor, topology, projectId, runId, coordNodeStatusOverride, orch.phase, subtaskTiming, assemblyTiming, roleByAgent, expandedKeys, latestOutcomePlanDraftingEvent, latestOutcomePlanEvent, specConfirmed, workPlanSeen, coordStatusField, dagContainerSize.width, dagContainerSize.height]);
+  }, [planningDescriptor, topology, projectId, runId, coordNodeStatusOverride, orch.phase, subtaskTiming, assemblyTiming, roleByAgent, expandedKeys, latestOutcomePlanDraftingEvent, latestOutcomePlanEvent, specConfirmed, workPlanSeen, coordStatusField]);
 
   const hasSubtaskNodes = useMemo(
     () => (planningDescriptor?.nodes ?? []).some((n) => n.node_type === 'subtask'),
@@ -2690,7 +2917,7 @@ export function CoordinatorRunPage() {
   const [outcomePlanClarifying, setOutcomePlanClarifying] = useState(false);
 
   useEffect(() => {
-    if (latestOutcomePlanEvent) setOutcomePlanClarifying(false);
+    if (latestOutcomePlanEvent) queueMicrotask(() => setOutcomePlanClarifying(false));
   }, [latestOutcomePlanEvent]);
 
   const { sessionTree, sessionNodeIds, defaultSessionNodeId } = useMemo<{
@@ -2853,11 +3080,13 @@ export function CoordinatorRunPage() {
     },
     { pending: 0, waiting: 0, blocked: 0, failed: 0 },
   );
+  const hasRunningSessionItem = flatSessionTree.some((node) => node.startedAt !== undefined && node.completedAt === undefined);
+  const elapsedNow = useTickingNow(hasRunningSessionItem);
   const earliestStart = flatSessionTree.reduce<number | undefined>(
     (min, node) => (node.startedAt == null ? min : min == null ? node.startedAt : Math.min(min, node.startedAt)),
     undefined,
   );
-  const elapsedLabel = earliestStart ? fmtTotal(Date.now() - earliestStart) : '0s';
+  const elapsedLabel = earliestStart ? fmtTotal(elapsedNow - earliestStart) : '0s';
   const runStatusText = viewState.label;
   const aiCreditsLabel = `${formatAic(tokenBreakdown?.totalNanoAiu ?? null)} AI credits`;
   const taskCountsLabel = `${taskRows.length} tasks · ${taskStatusSummary.pending} pending · ${taskStatusSummary.waiting} waiting`;
@@ -2869,6 +3098,7 @@ export function CoordinatorRunPage() {
   const [specPanelOpen, setSpecPanelOpen] = useState(false);
   const [artifactsPanelOpen, setArtifactsPanelOpen] = useState(false);
   const [topologyPanelOpen, setTopologyPanelOpen] = useState(false);
+  const [topologyView, setTopologyView] = useState<'topology' | 'progress'>('topology');
   const [sessionPanelOpen, setSessionPanelOpen] = useState(true);
   const [panelNodeId, setPanelNodeId] = useState<string | null>(null);
   const [composerFocusSignal, setComposerFocusSignal] = useState(0);
@@ -2895,27 +3125,17 @@ export function CoordinatorRunPage() {
   }, [defaultSessionNodeId, panelNodeId]);
 
   useEffect(() => {
-    if (!panelNodeId && defaultSessionNodeId) setPanelNodeId(defaultSessionNodeId);
-  }, [defaultSessionNodeId, panelNodeId]);
-
-  useEffect(() => {
     if (!latestOutcomePlanEvent || isChildRun) return;
     if (lastSelectedOutcomePlanSeqRef.current === latestOutcomePlanEvent.sequence) return;
     lastSelectedOutcomePlanSeqRef.current = latestOutcomePlanEvent.sequence;
-    setPanelNodeId('outcome-plan');
-    setSessionPanelOpen(true);
+    queueMicrotask(() => {
+      setPanelNodeId('outcome-plan');
+      setSessionPanelOpen(true);
+    });
   }, [isChildRun, latestOutcomePlanEvent]);
 
-  useEffect(() => {
-    if (panelNodeId && !sessionNodeIds.has(panelNodeId)) {
-      setPanelNodeId(defaultSessionNodeId);
-    }
-    if (!defaultSessionNodeId) {
-      setSessionPanelOpen(false);
-    }
-  }, [defaultSessionNodeId, panelNodeId, sessionNodeIds]);
-
-  const selectedSessionItem = flatSessionTree.find((node) => node.nodeId === (panelNodeId ?? defaultSessionNodeId)) ?? flatSessionTree[0] ?? null;
+  const activePanelNodeId = panelNodeId && sessionNodeIds.has(panelNodeId) ? panelNodeId : defaultSessionNodeId;
+  const selectedSessionItem = flatSessionTree.find((node) => node.nodeId === activePanelNodeId) ?? flatSessionTree[0] ?? null;
   const executingSessionItem = useMemo(() => {
     const nonRoot = flatSessionTree.filter((node) => node.nodeId !== defaultSessionNodeId);
     if (viewState.terminal) {
@@ -3098,11 +3318,7 @@ export function CoordinatorRunPage() {
     return () => clearInterval(id);
   }, [keepaliveUrl]);
 
-  if (!projectId || !runId) {
-    return <Text>Invalid route parameters.</Text>;
-  }
-
-  const shortId         = runId.length > 8 ? runId.slice(0, 8) : runId;
+  const shortId         = runId && runId.length > 8 ? runId.slice(0, 8) : (runId ?? '');
   const isConnecting    = streamStatus === 'connecting';
   const isStreaming     = streamStatus === 'streaming';
   const hasGraph        = rfNodes.length > 0;
@@ -3241,6 +3457,230 @@ export function CoordinatorRunPage() {
           onClick: focusSelectedComposer,
           testId: 'open-steer-panel',
         };
+
+  const handleAssemblyApproval = useCallback(async (decision: 'approve' | 'decline') => {
+    if (!runId) return;
+    setAutomationError(null);
+    try {
+      await apiClient.reviewAssembly(runId, decision);
+      reconnectStream();
+    } catch (err) {
+      setAutomationError(`Assembly review failed: ${formatApiErrorMessage(err, 'Could not update assembly review.')}`);
+    }
+  }, [reconnectStream, runId]);
+
+  const runArtifacts = useMemo<AzfArtifact[]>(() => {
+    const items: AzfArtifact[] = [
+      {
+        id: 'topology',
+        title: 'Topology',
+        type: 'Run graph',
+        icon: <FlowchartRegular />,
+        onOpen: () => setTopologyPanelOpen(true),
+      },
+    ];
+    if (!isChildRun) {
+      items.push({
+        id: 'outcome-plan',
+        title: 'Outcome plan',
+        type: latestOutcomePlanEvent || specConfirmed ? 'Review artifact' : 'Pending artifact',
+        icon: <DocumentRegular />,
+        onOpen: () => setSpecPanelOpen(true),
+      });
+      items.push({
+        id: 'assembly-artifacts',
+        title: 'Assembly artifacts',
+        type: reviewActionable ? 'Review gate' : 'Files',
+        icon: <FolderRegular />,
+        onOpen: () => setArtifactsPanelOpen(true),
+      });
+    }
+    return items;
+  }, [isChildRun, latestOutcomePlanEvent, reviewActionable, specConfirmed]);
+
+  const coordinatorReasoning = useMemo(() => {
+    const steps: AzfAgentStep[] = flatSessionTree.length > 0
+      ? flatSessionTree.slice(0, 12).map((item) => {
+          const color = semanticStateColorForStatus(item.status);
+          const statusLabel = runTreeStatusLabel(item.status, item.nodeId === 'outcome-plan' ? outcomePlanConfirmedBy : undefined);
+          const owner = item.agentName
+            ? `${item.agentName}${item.agentRole ? ` (${item.agentRole})` : ''}`
+            : item.agentRole
+              ? `Coordinator (${item.agentRole})`
+              : 'Coordinator';
+          return {
+            id: item.nodeId,
+            title: item.label,
+            body: `${statusLabel} · ${owner}`,
+            status: semanticStateColorToAgentStatus(color),
+            defaultOpen: item.nodeId === selectedSessionItem?.nodeId || color === 'running' || color === 'input',
+            needsInput: color === 'input',
+            riskText: color === 'input' ? 'This step is waiting on an operator decision or a blocked dependency.' : undefined,
+            badge: item.nodeId === selectedSessionItem?.nodeId ? { label: 'Selected', tone: 'info' as const } : undefined,
+            artifacts: item.childRunId
+              ? [{
+                  id: `${item.nodeId}-session`,
+                  title: item.childRunId,
+                  type: 'Child run',
+                  icon: <OpenRegular />,
+                  onOpen: () => openPanelForNode(item.nodeId),
+                }]
+              : undefined,
+          };
+        })
+      : [{
+          id: 'waiting-for-plan',
+          title: 'Waiting for coordinator plan',
+          body: graphEmptyCopy(isConnecting, noWorkPlan, graphError, viewState).body,
+          status: isConnecting || isStreaming ? 'running' : 'pending',
+          defaultOpen: true,
+        }];
+
+    return {
+      title: 'Run activity',
+      subtitle: `${taskRows.length} tasks · ${taskStatusSummary.pending} pending · ${taskStatusSummary.waiting} waiting`,
+      steps,
+      artifacts: runArtifacts,
+      defaultTab: 'activity' as const,
+      onApprove: () => setArtifactsPanelOpen(true),
+      onDeny: () => setArtifactsPanelOpen(true),
+    };
+  }, [
+    flatSessionTree,
+    graphError,
+    isConnecting,
+    isStreaming,
+    noWorkPlan,
+    openPanelForNode,
+    outcomePlanConfirmedBy,
+    runArtifacts,
+    selectedSessionItem?.nodeId,
+    taskRows.length,
+    taskStatusSummary.pending,
+    taskStatusSummary.waiting,
+    viewState,
+  ]);
+
+  const coordinatorResponseParts = useMemo<AzfResponsePart[]>(() => {
+    const parts: AzfResponsePart[] = [
+      {
+        id: 'run-summary',
+        type: 'text',
+        title: 'Coordinator',
+        badge: null,
+        content: (
+          <div className="azf-stack azf-gap-xs">
+            <StatusIconText status={semanticStateColorToTone(runStatusColor)}>{runStatusText}</StatusIconText>
+            <Text className={styles.phaseSource}>{viewState.sourceLabel}</Text>
+            {viewState.reason && <Text className={styles.stateReason}>{viewState.reason}</Text>}
+          </div>
+        ),
+        supportingText: `${taskCountsLabel} · ${elapsedLabel} elapsed · ${aiCreditsLabel}`,
+      },
+    ];
+    if (streamError || streamStatus === 'error' || droppedEventCount > 0) {
+      parts.push({
+        id: 'stream-health',
+        type: 'text',
+        title: 'Stream health',
+        badge: null,
+        content: streamError
+          ? `Live stream issue: ${streamError}`
+          : streamStatus === 'error'
+            ? 'Live stream disconnected.'
+            : `${droppedEventCount} event${droppedEventCount === 1 ? '' : 's'} dropped from the in-memory buffer.`,
+        footerActions: [{ id: 'reconnect-stream', label: 'Reconnect', onClick: reconnectStream }],
+      });
+    }
+    if (reviewActionable) {
+      parts.push({
+        id: 'review-gate',
+        type: 'text',
+        title: 'Approval gate',
+        badge: null,
+        content: 'Assembly is waiting for human review before merge and scribe continue.',
+        footerActions: [{ id: 'open-review', label: 'Review changes', appearance: 'primary', icon: <DocumentRegular />, onClick: () => setArtifactsPanelOpen(true) }],
+      });
+    }
+    return parts;
+  }, [
+    aiCreditsLabel,
+    droppedEventCount,
+    elapsedLabel,
+    reconnectStream,
+    reviewActionable,
+    runStatusColor,
+    runStatusText,
+    streamError,
+    streamStatus,
+    styles.phaseSource,
+    styles.stateReason,
+    taskCountsLabel,
+    viewState.reason,
+    viewState.sourceLabel,
+  ]);
+
+  const coordinatorComposer = useMemo(() => ({
+    value: '',
+    onChange: () => undefined,
+    onSend: focusSelectedComposer,
+    disabled: !coordActive,
+    placeholder: selectedSessionItem ? `Message ${selectedSessionItem.label}` : 'Message coordinator',
+    sendLabel: 'Open coordinator composer',
+    validationMessage: coordActive ? undefined : 'This run is no longer accepting steering input.',
+    attachments: selectedSessionItem ? [{ id: 'selected-context', name: `Context: ${selectedSessionItem.label}` }] : [],
+  }), [coordActive, focusSelectedComposer, selectedSessionItem]);
+
+  const runPatternActions = useMemo<AzfAction[]>(() => [
+    {
+      id: 'primary',
+      label: primaryAction.label,
+      icon: primaryAction.icon,
+      appearance: 'primary',
+      disabled: primaryAction.disabled,
+      onClick: primaryAction.onClick,
+    },
+    {
+      id: 'retry',
+      label: 'Retry failed',
+      icon: <ArrowRepeatAllRegular />,
+      disabled: !isRetryable || retrying,
+      onClick: () => void handleRetry(),
+    },
+    {
+      id: 'stop',
+      label: 'Stop run',
+      icon: stopping ? <Spinner size="extra-tiny" /> : <DismissRegular />,
+      disabled: !viewState.canStop || stopping,
+      destructive: true,
+      onClick: () => void handleStopRun(),
+    },
+  ], [handleRetry, handleStopRun, isRetryable, primaryAction.disabled, primaryAction.icon, primaryAction.label, primaryAction.onClick, retrying, stopping, viewState.canStop]);
+
+  const copilotActions = useMemo<AzfAction[]>(() => [
+    {
+      id: 'message-coordinator',
+      label: 'Message',
+      icon: <SparkleRegular />,
+      disabled: !coordActive,
+      onClick: focusSelectedComposer,
+    },
+  ], [coordActive, focusSelectedComposer]);
+
+  const approvalSteps = useMemo<AzfAgentStep[]>(() => reviewActionable
+    ? [{
+        id: 'assembly-review',
+        title: 'Assembly review gate',
+        body: 'Review the integration diff and decide whether the coordinator may continue.',
+        status: 'warning',
+        needsInput: true,
+        riskText: 'Approve to continue merge and scribe, or deny to decline the assembly.',
+        disclaimer: 'Request changes remains available from the full Artifacts review panel.',
+        artifacts: runArtifacts.filter((artifact) => artifact.id !== 'topology'),
+        defaultOpen: true,
+      }]
+    : [], [reviewActionable, runArtifacts]);
+
   const graphEmptyState = graphEmptyCopy(isConnecting, noWorkPlan, graphError, viewState);
   const topologySelectionCopy = selectedSessionItem
     ? `Selected: ${selectedSessionItem.label}`
@@ -3253,7 +3693,16 @@ export function CoordinatorRunPage() {
         <Text className={styles.hint}>{topologySelectionCopy}</Text>
         <Text className={styles.hint}>Select a node to focus its run messages, changes, and files.</Text>
       </div>
-      {hasGraph ? (
+      <AzureTabList
+        tabs={[
+          { id: 'topology', label: 'Topology', icon: <FlowchartRegular /> },
+          { id: 'progress', label: 'Progress', icon: <BotRegular /> },
+        ]}
+        selectedValue={topologyView}
+        onTabSelect={(value) => setTopologyView(value === 'progress' ? 'progress' : 'topology')}
+        ariaLabel="Topology inspector views"
+      />
+      {topologyView === 'topology' ? hasGraph ? (
         <ExecutionModalContext.Provider value={viewAssemblyExecution}>
         <BrowseFilesContext.Provider value={browseAssemblyFiles}>
         <ActiveEdgeContext.Provider value={activeLoopbackId}>
@@ -3335,10 +3784,9 @@ export function CoordinatorRunPage() {
         </BrowseFilesContext.Provider>
         </ExecutionModalContext.Provider>
       ) : (
-        <div className={styles.emptyState}>
-          <Text className={styles.emptyStateTitle}>{graphEmptyState.title}</Text>
-          <Text className={styles.emptyStateBody}>{graphEmptyState.body}</Text>
-        </div>
+        <AzureEmptyState compact title={graphEmptyState.title} body={graphEmptyState.body} />
+      ) : (
+        <ChainOfThought {...coordinatorReasoning} />
       )}
     </div>
   );
@@ -3360,21 +3808,15 @@ export function CoordinatorRunPage() {
       default: return styles.stateTextQueued;
     }
   };
-  const statusChipSemanticClass = (color: SemanticStateColor) => {
-    switch (color) {
-      case 'running': return styles.statusChipStrong;
-      case 'success': return styles.statusChipSuccess;
-      case 'danger': return styles.statusChipDanger;
-      case 'input': return styles.statusChipInput;
-      default: return '';
-    }
-  };
-  const statusChipClass = `${styles.statusChip} ${statusChipSemanticClass(runStatusColor)}`;
   const automationScopeHint = viewState.canToggleAutomation ? 'Run + children' : `Locked: ${viewState.label}`;
   const retryHint = isRetryable ? 'Retry resumes failed work' : 'Retry after failure';
   const stopHint = viewState.canStop ? 'Stop cancels run' : 'Stop while running';
   const retryAriaLabel = isRetryable ? 'Retry failed run' : `Retry failed unavailable: ${retryHint}`;
   const stopAriaLabel = viewState.canStop ? 'Stop run' : `Stop run unavailable: ${stopHint}`;
+
+  if (!projectId || !runId) {
+    return <Text>Invalid route parameters.</Text>;
+  }
 
   if (runLoadError && !restDescriptor && events.length === 0) {
     return (
@@ -3458,29 +3900,45 @@ export function CoordinatorRunPage() {
         </div>
       )}
 
-      <div className={styles.console} data-testid="run-operator-console">
+      <CoordinatorRunPattern
+        title="Orchestration"
+        subtitle={`${runStatusText} · ${viewState.sourceLabel}`}
+        runActions={runPatternActions}
+        copilotActions={copilotActions}
+        reasoning={coordinatorReasoning}
+        response={{ parts: coordinatorResponseParts }}
+        composer={coordinatorComposer}
+        className={styles.console}
+        testId="run-operator-console"
+        header={(
         <div className={styles.topZone} data-testid="run-header">
           <div className={styles.titleStack} data-testid="run-summary">
+            <span className={styles.bladeEyebrow}>
+              <SparkleRegular aria-hidden="true" />
+              Azure Copilot operator workspace
+            </span>
             <div className={styles.topTitleRow}>
               <div className={styles.identityLead}>
                 <Title2 className={styles.titleText} title={`Orchestration run ${runId}`} data-testid="run-title">
                   Orchestration
                 </Title2>
                 {(isConnecting || isStreaming) && <Spinner size="extra-tiny" aria-label="Live" />}
-                <span className={statusChipClass} data-testid="run-status-chip" data-state-color={runStatusColor}>{runStatusText}</span>
+                <span className={styles.statusChip} data-testid="run-status-chip" data-state-color={runStatusColor}>
+                  <StatusIconText status={semanticStateColorToTone(runStatusColor)}>{runStatusText}</StatusIconText>
+                </span>
               </div>
               <div className={styles.statsStrip} aria-label="Run progress" data-testid="run-progress-chips">
               <span className={styles.statusChip}>
                 {taskCountsLabel}
               </span>
               {taskStatusSummary.blocked > 0 && (
-                <span className={`${styles.statusChip} ${styles.statusChipInput}`} data-state-color="input">
-                  <span className={styles.statusChipValue}>{taskStatusSummary.blocked}</span> blocked
+                <span className={styles.statusChip} data-state-color="input">
+                  <StatusIconText status="warning"><span className={styles.statusChipValue}>{taskStatusSummary.blocked}</span> blocked</StatusIconText>
                 </span>
               )}
               {taskStatusSummary.failed > 0 && (
-                <span className={`${styles.statusChip} ${styles.statusChipDanger}`} data-state-color="danger">
-                  <span className={styles.statusChipValue}>{taskStatusSummary.failed}</span> failed
+                <span className={styles.statusChip} data-state-color="danger">
+                  <StatusIconText status="danger"><span className={styles.statusChipValue}>{taskStatusSummary.failed}</span> failed</StatusIconText>
                 </span>
               )}
               <span className={styles.statusChip}>
@@ -3589,6 +4047,28 @@ export function CoordinatorRunPage() {
               )}
               <span className={styles.executionReason} title={executionContextReason}>{executionReasonPrefix}: {executionContextReason}</span>
             </div>
+            <div className={styles.runStatusBand} aria-label="Azure run status band">
+              <div className={`${styles.runStatusBandItem} ${styles.runStatusBandPrimary}`}>
+                <span className={styles.runStatusBandLabel}>Run status</span>
+                <span className={styles.runStatusBandValue}>{runStatusText}</span>
+                <Text className={styles.hint}>{viewState.sourceLabel}</Text>
+              </div>
+              <div className={styles.runStatusBandItem}>
+                <span className={styles.runStatusBandLabel}>Selected task</span>
+                <span className={styles.runStatusBandValue}>{selectedSessionItem?.label ?? 'Coordinator'}</span>
+                <Text className={styles.hint}>{selectedSessionItem?.agentName ?? executingActor ?? 'Operator routed'}</Text>
+              </div>
+              <div className={styles.runStatusBandItem}>
+                <span className={styles.runStatusBandLabel}>Live stream</span>
+                <span className={styles.runStatusBandValue}>{isStreaming ? 'Streaming' : isConnecting ? 'Connecting' : streamStatus}</span>
+                <Text className={styles.hint}>{droppedEventCount > 0 ? `${droppedEventCount} dropped events` : 'SSE + seeded history preserved'}</Text>
+              </div>
+              <div className={styles.runStatusBandItem}>
+                <span className={styles.runStatusBandLabel}>Steering</span>
+                <span className={styles.runStatusBandValue}>{coordActive ? 'Ready' : 'Locked'}</span>
+                <Text className={styles.hint}>{autopilot ? 'Autopilot on' : 'Human-guided controls'}</Text>
+              </div>
+            </div>
             {runChromeExpanded && (
               <details className={styles.statusDetails} data-testid="run-status-details">
                 <summary className={styles.statusDetailsSummary}>Status details</summary>
@@ -3606,7 +4086,8 @@ export function CoordinatorRunPage() {
 
           {runChromeExpanded && (
           <div className={styles.topControls} data-testid="run-actions-row">
-            <div className={styles.operatorToolbar} role="toolbar" aria-label="Run actions" data-testid="run-actions-toolbar">
+            <div data-testid="run-actions-toolbar">
+            <AzureToolbar actions={[]} className={styles.operatorToolbar} ariaLabel="Run actions">
               <div className={`${styles.toolbarSection} ${styles.toolbarPrimarySection}`} role="group" aria-label="Primary next action">
                 <span className={styles.toolbarLabel}>Next</span>
                 <Button
@@ -3689,24 +4170,32 @@ export function CoordinatorRunPage() {
                   </Button>
                 )}
               </div>
+            </AzureToolbar>
             </div>
           </div>
           )}
         </div>
+        )}
+      >
 
         <div className={styles.bodyGrid}>
           <aside className={styles.leftZone} aria-label="Run tree">
-            <div className={styles.zoneHeader}>Run tree</div>
+            <div className={styles.zoneHeader}>
+              <div className={styles.zoneHeaderStack}>
+                <span className={styles.zoneKicker}>Left blade</span>
+                <span>Run tree</span>
+              </div>
+              <Text className={styles.hint}>{flatSessionTree.length} nodes</Text>
+            </div>
             <div className={styles.treeList}>
               {flatSessionTree.length === 0 ? (
-                <div className={styles.emptyState}>
-                  <Text className={styles.emptyStateTitle}>Coordinator is still shaping the run</Text>
-                  <Text className={styles.emptyStateBody}>
-                    The task tree appears after the outcome plan or saved work plan arrives. Keep the stream open; if it remains empty, use the selected task panel to message the coordinator or retry a failed run.
-                  </Text>
-                </div>
+                <AzureEmptyState
+                  compact
+                  title="Coordinator is still shaping the run"
+                  body="The task tree appears after the outcome plan or saved work plan arrives. Keep the stream open; if it remains empty, use the selected task panel to message the coordinator or retry a failed run."
+                />
               ) : flatSessionTree.map((item) => {
-                const selected = item.nodeId === (panelNodeId ?? defaultSessionNodeId);
+                const selected = item.nodeId === activePanelNodeId;
                 const indent = Math.max(0, item.depth) * 14;
                 const itemStateColor = semanticStateColorForStatus(item.status);
                 const itemStatusLabel = runTreeStatusLabel(item.status, item.nodeId === 'outcome-plan' ? outcomePlanConfirmedBy : undefined);
@@ -3748,8 +4237,74 @@ export function CoordinatorRunPage() {
           </aside>
 
           <section className={styles.readoutZone} aria-label="Selected task details">
+            <section className={styles.systemPanel} aria-label="System topology panel">
+              <div className={styles.systemPanelHeader}>
+                <div className={styles.systemPanelTitle}>
+                  <span className={styles.zoneKicker}>Center workspace</span>
+                  <Text weight="semibold">Topology and task details</Text>
+                  <Text className={styles.hint}>Topology is contained in this system panel; open the blade for the full ReactFlow canvas.</Text>
+                </div>
+                <div className={styles.systemPanelActions}>
+                  <AzureTabList
+                    tabs={[
+                      { id: 'topology', label: 'Topology', icon: <FlowchartRegular /> },
+                      { id: 'progress', label: 'Progress', icon: <BotRegular /> },
+                    ]}
+                    selectedValue={topologyView}
+                    onTabSelect={(value) => setTopologyView(value === 'progress' ? 'progress' : 'topology')}
+                    ariaLabel="System panel mode"
+                  />
+                  <Button appearance="secondary" size="small" icon={<FlowchartRegular />} onClick={() => setTopologyPanelOpen(true)} data-testid="open-topology-panel-inline">
+                    Open topology
+                  </Button>
+                </div>
+              </div>
+              <div className={styles.topologyContainment}>
+                <div className={styles.topologyTile}>
+                  <span className={styles.runStatusBandLabel}>Graph state</span>
+                  <Text weight="semibold">{hasGraph ? 'Available' : graphEmptyState.title}</Text>
+                  <Text className={styles.hint}>{hasGraph ? `${displayNodes.length} nodes · ${displayEdges2.length} links` : 'Waiting on persisted graph or stream topology.'}</Text>
+                </div>
+                <div className={styles.topologyTile}>
+                  <span className={styles.runStatusBandLabel}>Active phase</span>
+                  <Text weight="semibold">{orchPhaseLabel(orch.phase)}</Text>
+                  <Text className={styles.hint}>{formatPhaseUpdated(orch.updatedAt)}</Text>
+                </div>
+                <div className={styles.topologyTile}>
+                  <span className={styles.runStatusBandLabel}>Operator focus</span>
+                  <Text weight="semibold">{selectedSessionItem?.label ?? 'Coordinator'}</Text>
+                  <Text className={styles.hint}>Messages, changes, and files stay scoped below.</Text>
+                </div>
+              </div>
+            </section>
+            <div className={styles.workspaceRegionStrip} aria-label="Selected task regions">
+              <div className={styles.workspaceRegionCard}>
+                <span className={styles.workspaceRegionIcon}><ChatRegular aria-hidden="true" /></span>
+                <span className={styles.workspaceRegionText}>
+                  <Text weight="semibold">Messages</Text>
+                  <Text className={styles.hint}>Run stream and agent responses</Text>
+                </span>
+              </div>
+              <div className={styles.workspaceRegionCard}>
+                <span className={styles.workspaceRegionIcon}><DocumentRegular aria-hidden="true" /></span>
+                <span className={styles.workspaceRegionText}>
+                  <Text weight="semibold">Changes</Text>
+                  <Text className={styles.hint}>Diff-only review surface</Text>
+                </span>
+              </div>
+              <div className={styles.workspaceRegionCard}>
+                <span className={styles.workspaceRegionIcon}><FolderRegular aria-hidden="true" /></span>
+                <span className={styles.workspaceRegionText}>
+                  <Text weight="semibold">Files</Text>
+                  <Text className={styles.hint}>Workspace browser and references</Text>
+                </span>
+              </div>
+            </div>
             <div className={styles.zoneHeader}>
-              <span>Selected task</span>
+              <div className={styles.zoneHeaderStack}>
+                <span className={styles.zoneKicker}>Center details</span>
+                <span>Selected task</span>
+              </div>
               <span className={styles.hint}>
                 {selectedSessionItem ? `${selectedSessionItem.label} · Messages · Changes · Files` : 'Messages · Changes · Files'}
               </span>
@@ -3757,8 +4312,8 @@ export function CoordinatorRunPage() {
             <div className={styles.readoutBody}>
               <AgentSessionPanel
                 variant="docked"
-                open={sessionPanelOpen}
-                selectedNodeId={panelNodeId ?? defaultSessionNodeId}
+                open={sessionPanelOpen && Boolean(activePanelNodeId)}
+                selectedNodeId={activePanelNodeId}
                 coordinatorRunId={runId ?? ''}
                 projectId={projectId ?? ''}
                 tree={sessionTree}
@@ -3772,8 +4327,55 @@ export function CoordinatorRunPage() {
               />
             </div>
           </section>
+          <aside className={styles.copilotZone} aria-label="Copilot activity and steering">
+            <div className={styles.zoneHeader}>
+              <div className={styles.zoneHeaderStack}>
+                <span className={styles.zoneKicker}>Right blade</span>
+                <span>Copilot activity / steering</span>
+              </div>
+              <SparkleRegular aria-hidden="true" />
+            </div>
+            <div className={styles.copilotScroll}>
+              <div className={`${styles.copilotCard} ${styles.copilotCardBrand}`}>
+                <Text weight="semibold">Coordinator response cards</Text>
+                <CopilotResponse parts={coordinatorResponseParts} />
+              </div>
+              {approvalSteps.length > 0 && (
+                <AgenticApprovalPattern
+                  title="Approvals and gates"
+                  summary="Human-in-the-loop checkpoint for collective assembly before merge/scribe continue."
+                  steps={approvalSteps}
+                  defaultOpenItems={['assembly-review']}
+                  onApprove={() => void handleAssemblyApproval('approve')}
+                  onDeny={() => void handleAssemblyApproval('decline')}
+                />
+              )}
+              <div className={styles.copilotCard}>
+                <Text weight="semibold">Agentic progress</Text>
+                <ChainOfThought {...coordinatorReasoning} />
+              </div>
+            </div>
+            <div className={styles.copilotSticky} aria-label="Sticky steering surface">
+              <div className={styles.zoneHeaderStack}>
+                <Text weight="semibold">Steer selected work</Text>
+                <Text className={styles.hint}>
+                  {selectedSessionItem
+                    ? `Context: ${selectedSessionItem.label}. Messages send through the coordinator steering API.`
+                    : 'Select a task or message the coordinator directly.'}
+                </Text>
+              </div>
+              <div className={styles.copilotActionRow}>
+                <Button appearance="primary" icon={<ChatRegular />} disabled={!coordActive} onClick={focusSelectedComposer}>
+                  Focus composer
+                </Button>
+                <Button appearance="secondary" icon={<FolderRegular />} onClick={() => setArtifactsPanelOpen(true)} disabled={isChildRun}>
+                  Review artifacts
+                </Button>
+              </div>
+            </div>
+          </aside>
         </div>
-      </div>
+      </CoordinatorRunPattern>
 
       <SlidePanel
         open={topologyPanelOpen}

@@ -1,9 +1,20 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, cleanup, waitFor, fireEvent } from '@testing-library/react';
-import { FluentProvider, webLightTheme } from '@fluentui/react-components';
+import { apiClient } from '../api/apiClient';
+import { ApiError } from '../api/client';
+import { AzureFluentProvider } from '../copilot-fluent-system';
+import { ProjectListProvider } from '../hooks/useProjectList';
+import { ProjectGalleryPage } from '../pages/ProjectGalleryPage';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
-import { type ReactNode } from 'react';
-
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from 'vitest';
+import type { GitHubAccount, GitHubRepo, Project } from '../api/types';
+import type { ReactNode } from 'react';
 vi.mock('../api/apiClient', () => ({
   apiClient: {
     getServerInfo: vi.fn(),
@@ -16,12 +27,6 @@ vi.mock('../api/apiClient', () => ({
     listGitHubRepos: vi.fn(),
   },
 }));
-
-import { apiClient } from '../api/apiClient';
-import { ApiError } from '../api/client';
-import { ProjectGalleryPage } from '../pages/ProjectGalleryPage';
-import { ProjectListProvider } from '../hooks/useProjectList';
-import type { GitHubAccount, GitHubRepo, Project } from '../api/types';
 
 function makeProject(id: string, name: string): Project {
   return {
@@ -52,13 +57,13 @@ const REPO_C: GitHubRepo = { fullName: 'octocat/zebra', defaultBranch: 'main', p
 
 function Wrapper({ children }: { children: ReactNode }) {
   return (
-    <FluentProvider theme={webLightTheme}>
+    <AzureFluentProvider density="compact">
       <MemoryRouter>
         <ProjectListProvider>
           {children}
         </ProjectListProvider>
       </MemoryRouter>
-    </FluentProvider>
+    </AzureFluentProvider>
   );
 }
 

@@ -1,26 +1,29 @@
-import { useEffect, useMemo, useState } from 'react';
-import { Link, useParams, useSearchParams } from 'react-router-dom';
 import {
-  Badge,
+  fromDto } from '../api/agentQueues';
+import { apiClient } from '../api/apiClient';
+import { ApiError } from '../api/client';
+import { Badge,
+  BladeHeader,
   Button,
+  CommandBar,
+  EmptyState,
   MessageBar,
   MessageBarBody,
   Spinner,
+  StatusIconText,
   Text,
-  makeStyles,
-  tokens,
-} from '@fluentui/react-components';
-import { ArrowSyncRegular } from '@fluentui/react-icons';
-import { apiClient } from '../api/apiClient';
-import { ApiError } from '../api/client';
+  } from '../copilot-fluent-system';
 import { AgentAvatar } from '../components/AgentAvatar';
 import { PageHeader } from '../components/PageHeader';
-import { AzureEmptyState, AzurePage, AzureSectionHeader, AzureSurface } from '../components/azure/AzureLayout';
 import { RefreshCountdown } from '../hooks/useRefreshCountdown';
-import { fromDto } from '../api/agentQueues';
+import { makeStyles,
+  tokens,
+} from '../copilot-fluent-system';
+import { ArrowSyncRegular } from '../copilot-fluent-system';
+import { useEffect, useMemo, useState } from 'react';
+import { Link, useParams, useSearchParams } from 'react-router-dom';
 import type { AgentQueueItem } from '../api/agentQueues';
 import type { Project, WorkflowRunDto } from '../api/types';
-
 // Flow — the live "what each agent is working on" view for a project. This is the
 // home of live agent activity (moved out of the per-run coordinator page, which
 // keeps only a compact per-run presence rail). Data comes from the project board's
@@ -124,6 +127,49 @@ const useStyles = makeStyles({
     flexWrap: 'wrap',
     color: tokens.colorNeutralForeground2,
   },
+  workbenchSurface: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalM,
+  },
+  statusPills: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalS,
+    flexWrap: 'wrap',
+  },
+  statusPill: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    minHeight: '28px',
+    padding: `${tokens.spacingVerticalXXS} ${tokens.spacingHorizontalS}`,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusMedium,
+    backgroundColor: tokens.colorNeutralBackground2,
+    fontSize: tokens.fontSizeBase200,
+  },
+  summaryGrid: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
+    gap: tokens.spacingHorizontalM,
+  },
+  summaryCard: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalXXS,
+  },
+  summaryLabel: {
+    color: tokens.colorNeutralForeground3,
+    fontSize: tokens.fontSizeBase200,
+    textTransform: 'uppercase',
+    letterSpacing: '0.04em',
+  },
+  summaryValue: {
+    fontSize: tokens.fontSizeBase600,
+    lineHeight: tokens.lineHeightBase600,
+    fontWeight: tokens.fontWeightSemibold,
+    fontVariantNumeric: 'tabular-nums',
+  },
   archivePanel: {
     display: 'flex',
     flexDirection: 'column',
@@ -177,7 +223,7 @@ function AgentCard({ agent, projectId }: { agent: AgentQueueItem; projectId: str
   const styles = useStyles();
   const hasGroups = agent.orchestrations && agent.orchestrations.length > 0;
   return (
-    <AzureSurface className={styles.card}>
+    <div className={['azf-surface azf-surface--panel azf-surface--padding-comfortable', styles.card].filter(Boolean).join(' ')}>
       <div className={styles.cardHeader}>
         <AgentAvatar name={agent.agentName} size={24} />
         <span className={styles.agentName}>{agent.agentName}</span>
@@ -247,7 +293,7 @@ function AgentCard({ agent, projectId }: { agent: AgentQueueItem; projectId: str
           )}
         </>
       )}
-    </AzureSurface>
+    </div>
   );
 }
 
@@ -353,11 +399,20 @@ export function FlowPage() {
         : sorted,
     [selectedAgent, sorted],
   );
+  const totals = visibleAgents.reduce(
+    (acc, agent) => ({
+      active: acc.active + agent.active,
+      queued: acc.queued + agent.queued,
+      blocked: acc.blocked + agent.blocked,
+      done: acc.done + agent.done,
+    }),
+    { active: 0, queued: 0, blocked: 0, done: 0 },
+  );
 
   if (!projectId) return null;
 
   return (
-    <AzurePage className={styles.root}>
+    <div className={['azf-stack azf-page azf-pattern-shell', styles.root].filter(Boolean).join(' ')}>
       <PageHeader
         title="Flow"
         subtitle={selectedAgent
@@ -412,7 +467,7 @@ export function FlowPage() {
       )}
 
       {!loading && !error && visibleAgents.length === 0 && (
-        <AzureEmptyState
+        <EmptyState
           title={selectedAgent ? `No active work for ${selectedAgent}` : 'No active agents'}
           body={
             selectedAgent
@@ -423,19 +478,47 @@ export function FlowPage() {
       )}
 
       {visibleAgents.length > 0 && (
-        <div className={styles.list}>
-          {visibleAgents.map((agent) => (
-            <AgentCard key={agent.agentName} agent={agent} projectId={projectId} />
-          ))}
-        </div>
+        <section className={['azf-surface azf-surface--raised azf-surface--padding-comfortable', styles.workbenchSurface].filter(Boolean).join(' ')} aria-label="Agent flow workbench">
+          <BladeHeader
+            size="compact"
+            title={selectedAgent ? `${selectedAgent} workbench` : 'Live agent workbench'}
+            subtitle="Azure/Copilot panel for active queues, orchestration groups, and agent workload signals."
+          />
+          <CommandBar
+            title="Flow command surface"
+            description={selectedAgent ? 'Filtered to one agent resource.' : 'All active agent resources in this project.'}
+          >
+            <div className={styles.statusPills}>
+              <StatusIconText className={styles.statusPill} status={totals.active > 0 ? 'info' : 'neutral'}>Active total: {totals.active}</StatusIconText>
+              <StatusIconText className={styles.statusPill} status={totals.queued > 0 ? 'warning' : 'neutral'}>Queued total: {totals.queued}</StatusIconText>
+              <StatusIconText className={styles.statusPill} status={totals.blocked > 0 ? 'danger' : 'success'}>Blocked total: {totals.blocked}</StatusIconText>
+            </div>
+          </CommandBar>
+          <div className={styles.summaryGrid}>
+            <div className={['azf-surface azf-surface--subtle azf-surface--padding-compact', styles.summaryCard].filter(Boolean).join(' ')}>
+              <Text className={styles.summaryLabel}>Agents</Text>
+              <Text className={styles.summaryValue}>{visibleAgents.length}</Text>
+            </div>
+            <div className={['azf-surface azf-surface--subtle azf-surface--padding-compact', styles.summaryCard].filter(Boolean).join(' ')}>
+              <Text className={styles.summaryLabel}>Active</Text>
+              <Text className={styles.summaryValue}>{totals.active}</Text>
+            </div>
+            <div className={['azf-surface azf-surface--subtle azf-surface--padding-compact', styles.summaryCard].filter(Boolean).join(' ')}>
+              <Text className={styles.summaryLabel}>Done</Text>
+              <Text className={styles.summaryValue}>{totals.done}</Text>
+            </div>
+          </div>
+          <div className={styles.list}>
+            {visibleAgents.map((agent) => (
+              <AgentCard key={agent.agentName} agent={agent} projectId={projectId} />
+            ))}
+          </div>
+        </section>
       )}
 
       {selectedAgent && (
-        <AzureSurface className={styles.archivePanel} aria-label="Previous work archive">
-          <AzureSectionHeader
-            title="Previous work archive"
-            description={`Terminal runs for ${selectedAgent}: completed, merged, assemble-ready, declined, failed, and merge-failed work.`}
-          />
+        <div aria-label="Previous work archive" className={['azf-surface azf-surface--panel azf-surface--padding-comfortable', styles.archivePanel].filter(Boolean).join(' ')}>
+          <BladeHeader size="compact" title="Previous work archive" subtitle={`Terminal runs for ${selectedAgent}: completed, merged, assemble-ready, declined, failed, and merge-failed work.`} />
           {historyLoading && <Spinner size="tiny" label="Loading previous work" />}
           {historyError && (
             <MessageBar intent="error">
@@ -459,8 +542,8 @@ export function FlowPage() {
               ))}
             </div>
           )}
-        </AzureSurface>
+        </div>
       )}
-    </AzurePage>
+    </div>
   );
 }

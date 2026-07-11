@@ -1,18 +1,30 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor, cleanup, within, fireEvent } from '@testing-library/react';
-import { FluentProvider, webLightTheme } from '@fluentui/react-components';
+import { apiClient } from '../api/apiClient';
+import { AzureFluentProvider } from '../copilot-fluent-system';
+import { DashboardPage } from '../pages/DashboardPage';
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from 'vitest';
 import type { ProjectDashboardDto, ProjectMetricsDto } from '../api/types';
-
 vi.mock('../api/apiClient', () => ({
   apiClient: {
     getProjectDashboard: vi.fn(),
     getProjectMetrics: vi.fn(),
   },
 }));
-
-import { apiClient } from '../api/apiClient';
-import { DashboardPage } from '../pages/DashboardPage';
 
 const dto: ProjectDashboardDto = {
   project_id: 'p1',
@@ -47,13 +59,13 @@ const metricsDto: ProjectMetricsDto = {
 
 function renderPage() {
   return render(
-    <FluentProvider theme={webLightTheme}>
+    <AzureFluentProvider density="compact">
       <MemoryRouter initialEntries={['/projects/p1']}>
         <Routes>
           <Route path="/projects/:projectId" element={<DashboardPage />} />
         </Routes>
       </MemoryRouter>
-    </FluentProvider>,
+    </AzureFluentProvider>,
   );
 }
 

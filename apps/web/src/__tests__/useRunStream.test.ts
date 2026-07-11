@@ -1,7 +1,6 @@
-import { describe, it, expect, vi, afterEach } from 'vitest';
-import { renderHook, act, waitFor } from '@testing-library/react';
 import { useRunStream } from '../api/sse';
-
+import { act, renderHook, waitFor } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 describe('useRunStream — AbortController lifecycle', () => {
   afterEach(() => {
     vi.restoreAllMocks();

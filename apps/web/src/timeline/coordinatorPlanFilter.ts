@@ -1,5 +1,4 @@
 import type { AgentMessageItem, TimelineItem, TurnGroupItem } from './types';
-
 /**
  * The coordinator decomposition turn streams the planning agent's final assistant message onto the
  * coordinator run stream (CoordinatorOrchestratorExecutor.DecomposeWithModelAsync). That message is

@@ -1,11 +1,25 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor, within, cleanup, fireEvent } from '@testing-library/react';
-import { FluentProvider, webLightTheme } from '@fluentui/react-components';
-import { MemoryRouter } from 'react-router-dom';
-import { type ReactNode } from 'react';
+import { apiClient } from '../api/apiClient';
+import { AzureFluentProvider } from '../copilot-fluent-system';
 import { KanbanBoard } from '../components/board/KanbanBoard';
 import { makeBoard, makeBoardWithArchivedItems, makeBoardWorkflowUnavailable } from './fixtures/board';
-
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from 'vitest';
+import type { ReactNode } from 'react';
 vi.mock('../api/apiClient', () => ({
   apiClient: {
     getBoard: vi.fn(),
@@ -23,8 +37,6 @@ vi.mock('../api/apiClient', () => ({
   },
 }));
 
-import { apiClient } from '../api/apiClient';
-
 const mockNavigate = vi.fn();
 vi.mock('react-router-dom', async (importOriginal) => {
   const actual = await importOriginal<typeof import('react-router-dom')>();
@@ -35,9 +47,9 @@ const getBoardMock = () => vi.mocked(apiClient.getBoard);
 
 function Wrapper({ children }: { children: ReactNode }) {
   return (
-    <FluentProvider theme={webLightTheme}>
+    <AzureFluentProvider density="compact">
       <MemoryRouter>{children}</MemoryRouter>
-    </FluentProvider>
+    </AzureFluentProvider>
   );
 }
 

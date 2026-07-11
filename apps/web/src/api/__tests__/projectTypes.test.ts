@@ -1,19 +1,18 @@
-import { describe, it, expect } from 'vitest';
+import { AgentweaverApiClient } from '../client';
+import { describe, expect, it } from 'vitest';
 import type {
-  Project,
   CreateProjectRequest,
-  UpdateProjectProviderSettingsRequest,
   CreateProjectRunRequest,
-  ProjectRunSummary,
+  GitHubAuthStatus,
+  GitHubAuthStatusResponse,
   GitHubDeviceFlow,
   GitHubPollResult,
-  GitHubAuthStatusResponse,
-  GitHubAuthStatus,
+  Project,
   ProjectOrigin,
+  ProjectRunSummary,
   ProjectState,
+  UpdateProjectProviderSettingsRequest,
 } from '../types';
-import { AgentweaverApiClient } from '../client';
-
 // =============================================================================
 // Type shape tests: verify that the TypeScript types are correctly defined
 // and that the ApiClient exposes all expected project and GitHub auth methods.

@@ -1,11 +1,10 @@
-import { describe, it, expect, afterEach } from 'vitest';
-import { render, screen, cleanup } from '@testing-library/react';
-import { FluentProvider, webLightTheme } from '@fluentui/react-components';
-import { type ReactNode } from 'react';
+import { AzureFluentProvider } from '../copilot-fluent-system';
 import { PageHeader } from '../components/PageHeader';
-
+import { cleanup, render, screen } from '@testing-library/react';
+import { afterEach, describe, expect, it } from 'vitest';
+import type { ReactNode } from 'react';
 function Wrapper({ children }: { children: ReactNode }) {
-  return <FluentProvider theme={webLightTheme}>{children}</FluentProvider>;
+  return <AzureFluentProvider density="compact">{children}</AzureFluentProvider>;
 }
 
 afterEach(() => cleanup());

@@ -1,12 +1,11 @@
-import type { ReactNode } from 'react';
-import { afterEach, describe, it, expect } from 'vitest';
-import { cleanup, render, screen } from '@testing-library/react';
-import { FluentProvider, webLightTheme } from '@fluentui/react-components';
-import { SteeringLegend } from '../components/SteeringLegend';
+import { AzureFluentProvider } from '../copilot-fluent-system';
 import { STEERING_HELP } from '../components/steeringHelp';
-
+import { SteeringLegend } from '../components/SteeringLegend';
+import { cleanup, render, screen } from '@testing-library/react';
+import { afterEach, describe, expect, it } from 'vitest';
+import type { ReactNode } from 'react';
 function Wrapper({ children }: { children: ReactNode }) {
-  return <FluentProvider theme={webLightTheme}>{children}</FluentProvider>;
+  return <AzureFluentProvider density="compact">{children}</AzureFluentProvider>;
 }
 
 afterEach(cleanup);

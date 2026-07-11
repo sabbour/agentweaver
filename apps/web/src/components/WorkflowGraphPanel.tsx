@@ -1,24 +1,28 @@
-/**
- * WorkflowGraphPanel — shared generic workflow graph renderer.
- *
- * Provides the reusable WorkflowNode card, LoopbackEdge, edge helpers, styles, and
- * contexts consumed by operator graph surfaces, including CoordinatorRunPage
- * (unified coordinator + subtask + planned-assembly view).
- *
- * Reuse rule: import from here; do NOT copy these definitions into page files.
- */
-import { createContext, useContext, useEffect, useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { apiClient } from '../api/apiClient';
 import {
   Button,
-  makeStyles,
   MessageBar,
   MessageBarBody,
   Spinner,
+  StatusIconText,
   Text,
+  makeStyles,
+  mergeClasses,
   tokens,
-} from '@fluentui/react-components';
-import type { FluentIcon } from '@fluentui/react-icons';
+} from '../copilot-fluent-system';
+import { formatModelLabel } from '../utils/agentIdentity';
+import {
+  buildSteppedConnectorRoute,
+  DAG_NODE_SEP,
+  layoutDag,
+  NODE_TYPE_W,
+  NODE_W,
+  roundedOrthogonalPath,
+  workflowNodeSizeHint,
+} from '../utils/dagLayout';
+import { AgentAvatar } from './AgentAvatar';
+import { CostChip } from './CostChip';
+import { PodIndicator } from './PodIndicator';
 import {
   AlertRegular,
   ArrowSyncRegular,
@@ -31,31 +35,36 @@ import {
   NotebookRegular,
   PersonClockRegular,
   PersonRegular,
-  ShieldRegular,
   ShieldKeyholeRegular,
+  ShieldRegular,
   SubtractCircleRegular,
-} from '@fluentui/react-icons';
+} from '../copilot-fluent-system';
+import { createContext, useContext, useEffect, useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
 import {
+  EdgeLabelRenderer,
   Handle,
   Panel,
   Position,
   ReactFlow,
   useEdges,
   useNodes,
-  EdgeLabelRenderer,
   type Edge,
   type EdgeProps,
   type Node,
   type NodeProps,
 } from '@xyflow/react';
-import { apiClient } from '../api/apiClient';
-import { AgentAvatar } from './AgentAvatar';
-import { PodIndicator } from './PodIndicator';
-import { CostChip } from './CostChip';
 import type { GraphNodeType, WorkflowGraphDto } from '../api/types';
-import { DAG_NODE_SEP, NODE_W, NODE_TYPE_W, buildSteppedConnectorRoute, layoutDag, roundedOrthogonalPath, workflowNodeSizeHint } from '../utils/dagLayout';
-import { formatModelLabel } from '../utils/agentIdentity';
-
+import type { FluentIcon } from '../copilot-fluent-system';
+/**
+ * WorkflowGraphPanel — shared generic workflow graph renderer.
+ *
+ * Provides the reusable WorkflowNode card, LoopbackEdge, edge helpers, styles, and
+ * contexts consumed by operator graph surfaces, including CoordinatorRunPage
+ * (unified coordinator + subtask + planned-assembly view).
+ *
+ * Reuse rule: import from here; do NOT copy these definitions into page files.
+ */
 // ---------------------------------------------------------------------------
 // Public types
 // ---------------------------------------------------------------------------
@@ -598,14 +607,15 @@ export function WorkflowNode({ data, selected }: NodeProps) {
     : nodeType === 'subtask'  ? s.cardSubtask
     :                           s.cardDefault;
 
-  const cardClass = [
+  const cardClass = mergeClasses(
+    'azf-surface',
     s.card,
     widthClass,
-    isActive        ? s.cardActive         : '',
-    isHumanWaiting  ? s.cardActionRequired : '',
-    isPlanned       ? s.cardPlanned        : '',
-    selected        ? s.cardSelected       : '',
-  ].filter(Boolean).join(' ');
+    isActive        ? s.cardActive         : undefined,
+    isHumanWaiting  ? s.cardActionRequired : undefined,
+    isPlanned       ? s.cardPlanned        : undefined,
+    selected        ? s.cardSelected       : undefined,
+  );
 
   const handleStyle: React.CSSProperties = { opacity: 0, pointerEvents: 'none' };
   const dir = (data as WorkflowNodeData).dir;
@@ -671,7 +681,7 @@ export function WorkflowNode({ data, selected }: NodeProps) {
         </div>
       )}
 
-      <div className={s.cardHeader}>
+      <div className={mergeClasses('azf-row azf-gap-xs', s.cardHeader)}>
         <StatusBadge
           status={effectiveStatus}
           isAwaiting={isHumanWaiting}
@@ -681,7 +691,7 @@ export function WorkflowNode({ data, selected }: NodeProps) {
         <CostChip totalNanoAiu={totalNanoAiu as number | null | undefined} totalTokens={totalTokens as number | null | undefined} />
       </div>
 
-      <div className={s.cardMain}>
+      <div className={mergeClasses('azf-row azf-gap-s', s.cardMain)}>
         <span className={s.cardIcon} aria-hidden="true">
           {key === 'agent' && agentName
             ? <AgentAvatar name={agentName as string} size={28} circle badgeIcon={Icon} badgeTitle={roleText} />
@@ -698,7 +708,7 @@ export function WorkflowNode({ data, selected }: NodeProps) {
 
       {key === 'coordinator' && !isPlanned && openSession && (
         <div
-          className={`${s.cardActions} nopan nodrag`}
+          className={mergeClasses('azf-stack azf-gap-xs', s.cardActions, 'nopan', 'nodrag')}
           style={{ fontSize: 'var(--fontSizeBase100)', color: 'var(--colorNeutralForeground3)', cursor: 'pointer' }}
           role="button"
           tabIndex={0}
@@ -719,21 +729,21 @@ export function WorkflowNode({ data, selected }: NodeProps) {
         </div>
       )}
       {key === 'agent' && !isPlanned && (
-        <div className={`${s.cardActions} nopan nodrag`}>
+        <div className={mergeClasses('azf-stack azf-gap-xs', s.cardActions, 'nopan', 'nodrag')}>
           <Button appearance="outline" size="small" onClick={() => openModal?.(executionId as string)}>
             View execution
           </Button>
         </div>
       )}
       {key === 'rai' && !isPlanned && (status === 'started' || status === 'completed' || status === 'failed' || status === 'revise') && (
-        <div className={`${s.cardActions} nopan nodrag`}>
+        <div className={mergeClasses('azf-stack azf-gap-xs', s.cardActions, 'nopan', 'nodrag')}>
           <Button appearance="outline" size="small" onClick={() => openModal?.(`${executionId as string}-rai`)}>
             View execution
           </Button>
         </div>
       )}
       {key === 'scribe' && !isPlanned && (
-        <div className={`${s.cardActions} nopan nodrag`}>
+        <div className={mergeClasses('azf-stack azf-gap-xs', s.cardActions, 'nopan', 'nodrag')}>
           {(status === 'started' || status === 'completed' || status === 'failed') && startedAt !== undefined && (
             <Button appearance="outline" size="small" onClick={() => openModal?.(`${executionId as string}-scribe`)}>
               View execution
@@ -745,21 +755,21 @@ export function WorkflowNode({ data, selected }: NodeProps) {
         </div>
       )}
       {key === 'merge' && !isPlanned && status === 'completed' && (
-        <div className={`${s.cardActions} nopan nodrag`}>
+        <div className={mergeClasses('azf-stack azf-gap-xs', s.cardActions, 'nopan', 'nodrag')}>
           <Button appearance="outline" size="small" icon={<FolderRegular />} onClick={() => (browseFiles ?? openModal)?.(executionId as string)}>
             Browse files
           </Button>
         </div>
       )}
       {key === 'review' && !isPlanned && status === 'started' && (
-        <div className={`${s.cardActions} nopan nodrag`}>
+        <div className={mergeClasses('azf-stack azf-gap-xs', s.cardActions, 'nopan', 'nodrag')}>
           <Button appearance="primary" size="small" onClick={() => openModal?.(executionId as string)}>
             Review now
           </Button>
         </div>
       )}
       {key === 'review' && !isPlanned && (status === 'completed' || status === 'revise') && reviewedBy && (
-        <div className={`${s.reviewerRow} nopan nodrag`}>
+        <div className={mergeClasses('azf-row azf-gap-s', s.reviewerRow, 'nopan', 'nodrag')}>
           <img
             src={`https://github.com/${reviewedBy as string}.png?size=28`}
             style={{ width: 28, height: 28, borderRadius: '50%', border: `2px solid ${tokens.colorBrandForeground1}` }}
@@ -1110,7 +1120,7 @@ export function WorkflowDefinitionInlinePanel({
   return (
     <ExecutionModalContext.Provider value={undefined}>
       <ActiveEdgeContext.Provider value={undefined}>
-        <div className={s.container}>
+        <div className={mergeClasses('azf-surface azf-surface--subtle', s.container)}>
           <ReactFlow
             nodes={rfNodes}
             edges={rfEdges}
@@ -1131,9 +1141,7 @@ export function WorkflowDefinitionInlinePanel({
             proOptions={{ hideAttribution: true }}
           >
             <Panel position="bottom-right">
-              <span style={{ fontSize: '11px', color: 'var(--colorNeutralForeground3)', padding: '2px 6px', background: 'var(--colorNeutralBackground1)', borderRadius: '4px', border: '1px solid var(--colorNeutralStroke2)' }}>
-                Read-only
-              </span>
+              <StatusIconText status="neutral">Read-only</StatusIconText>
             </Panel>
           </ReactFlow>
         </div>

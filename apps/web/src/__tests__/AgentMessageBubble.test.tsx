@@ -1,13 +1,11 @@
-import { describe, it, expect } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { AzureFluentProvider } from '../copilot-fluent-system';
 import { AgentMessageBubble } from '../components/AgentMessageBubble';
-
+import { render, screen } from '@testing-library/react';
+import { describe, expect, it } from 'vitest';
+import type { ReactNode } from 'react';
 // Wrap in FluentProvider to satisfy Fluent style context
-import { FluentProvider, webLightTheme } from '@fluentui/react-components';
-import { type ReactNode } from 'react';
-
 function Wrapper({ children }: { children: ReactNode }) {
-  return <FluentProvider theme={webLightTheme}>{children}</FluentProvider>;
+  return <AzureFluentProvider density="compact">{children}</AzureFluentProvider>;
 }
 
 describe('AgentMessageBubble', () => {

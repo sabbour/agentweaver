@@ -1,9 +1,18 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, cleanup, waitFor, fireEvent } from '@testing-library/react';
-import { FluentProvider, webLightTheme } from '@fluentui/react-components';
+import { apiClient } from '../../api/apiClient';
+import { AzureFluentProvider } from '../../copilot-fluent-system';
+import { BrowserConsole } from '../BrowserConsole';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, useNavigate } from 'react-router-dom';
-import { type ReactNode } from 'react';
-
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from 'vitest';
+import type { AgentweaverConsoleResponse, Project } from '../../api/types';
+import type { ReactNode } from 'react';
 vi.mock('../../api/apiClient', () => ({
   apiClient: {
     listProjects: vi.fn(),
@@ -22,10 +31,6 @@ vi.mock('../../api/apiClient', () => ({
     sendConsoleMessage: vi.fn(),
   },
 }));
-
-import { apiClient } from '../../api/apiClient';
-import { BrowserConsole } from '../BrowserConsole';
-import type { AgentweaverConsoleResponse, Project } from '../../api/types';
 
 function makeProject(id: string, name: string): Project {
   return {
@@ -51,9 +56,9 @@ function makeProject(id: string, name: string): Project {
 
 function Wrapper({ children, initialPath = '/overview' }: { children: ReactNode; initialPath?: string }) {
   return (
-    <FluentProvider theme={webLightTheme}>
+    <AzureFluentProvider density="compact">
       <MemoryRouter initialEntries={[initialPath]}>{children}</MemoryRouter>
-    </FluentProvider>
+    </AzureFluentProvider>
   );
 }
 
@@ -145,6 +150,26 @@ describe('BrowserConsole operator dock', () => {
         run_id: 'run-77',
         route: '/projects/p1/orchestrations/run-77',
       }),
+    })));
+  });
+
+  it('preserves log semantics and Enter versus Shift+Enter composer behavior', async () => {
+    vi.mocked(apiClient.sendConsoleMessage).mockResolvedValue(response({ message: 'Keyboard request received.' }));
+
+    render(<Wrapper><BrowserConsole /></Wrapper>);
+    expect(screen.getByRole('log', { name: 'Console responses' })).toBeDefined();
+
+    const textbox = screen.getByRole('textbox', { name: 'Ask Agentweaver' });
+    fireEvent.change(textbox, { target: { value: 'line one' } });
+    fireEvent.keyDown(textbox, { key: 'Enter', code: 'Enter', shiftKey: true });
+    expect(apiClient.sendConsoleMessage).not.toHaveBeenCalled();
+
+    fireEvent.change(textbox, { target: { value: 'line one\nline two' } });
+    fireEvent.keyDown(textbox, { key: 'Enter', code: 'Enter' });
+
+    await waitFor(() => expect(apiClient.sendConsoleMessage).toHaveBeenCalledWith(expect.objectContaining({
+      message: 'line one\nline two',
+      text: 'line one\nline two',
     })));
   });
 

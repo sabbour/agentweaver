@@ -1,13 +1,10 @@
-import { useEffect, useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
-  Accordion,
-  AccordionHeader,
-  AccordionItem,
-  AccordionPanel,
-  Badge,
+  apiClient } from '../api/apiClient';
+import { ApiError } from '../api/client';
+import { Badge,
+  BladeHeader,
   Button,
-  Caption1,
+  CommandBar,
   Dialog,
   DialogActions,
   DialogBody,
@@ -18,26 +15,31 @@ import {
   MessageBar,
   MessageBarBody,
   Spinner,
+  StatusIconText,
+  Text,
+  } from '../copilot-fluent-system';
+import { KanbanBoard } from '../components/board/KanbanBoard';
+import { PageHeader } from '../components/PageHeader';
+import { StartOrchestrationDialog } from '../components/StartOrchestrationDialog';
+import { isCoordinatorRun } from '../utils/runKind';
+import { Accordion,
+  AccordionHeader,
+  AccordionItem,
+  AccordionPanel,
+  Caption1,
+  makeStyles,
   Table,
   TableBody,
   TableCell,
   TableHeader,
   TableHeaderCell,
   TableRow,
-  Text,
-  makeStyles,
   tokens,
-} from '@fluentui/react-components';
-import { DeleteRegular, DismissCircleRegular } from '@fluentui/react-icons';
-import { apiClient } from '../api/apiClient';
-import { ApiError } from '../api/client';
-import { StartOrchestrationDialog } from '../components/StartOrchestrationDialog';
-import { PageHeader } from '../components/PageHeader';
-import { AzurePage } from '../components/azure/AzureLayout';
-import { KanbanBoard } from '../components/board/KanbanBoard';
-import { isCoordinatorRun } from '../utils/runKind';
+} from '../copilot-fluent-system';
+import { DeleteRegular, DismissCircleRegular } from '../copilot-fluent-system';
+import { useEffect, useState } from 'react';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import type { Project, WorkflowRunDto } from '../api/types';
-
 // Map a coordinator orchestration status (Feature 008) to a human label. Optional —
 // the backend adds coordinator_status concurrently, so callers fall back to the bare
 // RunStatus when it is absent.
@@ -72,6 +74,51 @@ const useStyles = makeStyles({
   breadcrumbLink: {
     color: tokens.colorBrandForeground1,
     textDecoration: 'none',
+  },
+  commandSurface: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalM,
+  },
+  summaryGrid: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+    gap: tokens.spacingHorizontalM,
+  },
+  summaryCard: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalXXS,
+    minHeight: '96px',
+  },
+  summaryLabel: {
+    color: tokens.colorNeutralForeground3,
+    fontSize: tokens.fontSizeBase200,
+    textTransform: 'uppercase',
+    letterSpacing: '0.04em',
+  },
+  summaryValue: {
+    fontSize: tokens.fontSizeBase600,
+    lineHeight: tokens.lineHeightBase600,
+    fontWeight: tokens.fontWeightSemibold,
+    fontVariantNumeric: 'tabular-nums',
+  },
+  summaryDescription: {
+    color: tokens.colorNeutralForeground2,
+    fontSize: tokens.fontSizeBase200,
+    lineHeight: tokens.lineHeightBase200,
+  },
+  boardSurface: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalM,
+  },
+  resourceMeta: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalS,
+    flexWrap: 'wrap',
+    color: tokens.colorNeutralForeground2,
   },
   runList: {
     maxHeight: '360px',
@@ -375,9 +422,11 @@ export function ProjectPage() {
   }, [projectId]);
 
   if (!projectId) return null;
+  const liveRuns = runs.filter((run) => !['completed', 'merged', 'failed', 'merge_failed', 'declined'].includes(run.status));
+  const completedRuns = runs.length - liveRuns.length;
 
   return (
-    <AzurePage className={styles.root}>
+    <div className={['azf-stack azf-page azf-pattern-shell', styles.root].filter(Boolean).join(' ')}>
       {loading && <Spinner label="Loading project board" />}
 
       {error && (
@@ -416,7 +465,46 @@ export function ProjectPage() {
             }
           />
 
-          <KanbanBoard projectId={projectId} />
+          <section className={['azf-surface azf-surface--raised azf-surface--padding-comfortable', styles.commandSurface].filter(Boolean).join(' ')} aria-label="Project resource command surface">
+            <CommandBar
+              title="Workbench command band"
+              description="Azure resource board for intake, execution, review, and recovery."
+            >
+              <div className={styles.resourceMeta}>
+                <StatusIconText status={project.available ? 'success' : 'warning'}>
+                  {project.available ? 'Available' : 'Unavailable'}
+                </StatusIconText>
+                <Badge appearance="outline">{project.origin ?? 'project'}</Badge>
+                <Badge appearance="outline">{project.default_branch ?? 'default branch'}</Badge>
+              </div>
+            </CommandBar>
+            <div className={styles.summaryGrid} aria-label="Project resource summary">
+              <div className={['azf-surface azf-surface--subtle azf-surface--padding-compact', styles.summaryCard].filter(Boolean).join(' ')}>
+                <Text className={styles.summaryLabel}>Board state</Text>
+                <Text className={styles.summaryValue}>Live</Text>
+                <Text className={styles.summaryDescription}>Kanban lanes remain the primary recovery surface.</Text>
+              </div>
+              <div className={['azf-surface azf-surface--subtle azf-surface--padding-compact', styles.summaryCard].filter(Boolean).join(' ')}>
+                <Text className={styles.summaryLabel}>Active runs</Text>
+                <Text className={styles.summaryValue}>{liveRuns.length}</Text>
+                <Text className={styles.summaryDescription}>In-flight work tracked by the audit trail.</Text>
+              </div>
+              <div className={['azf-surface azf-surface--subtle azf-surface--padding-compact', styles.summaryCard].filter(Boolean).join(' ')}>
+                <Text className={styles.summaryLabel}>Historical runs</Text>
+                <Text className={styles.summaryValue}>{completedRuns}</Text>
+                <Text className={styles.summaryDescription}>Terminal runs retained for inspection.</Text>
+              </div>
+            </div>
+          </section>
+
+          <section className={['azf-surface azf-surface--panel azf-surface--padding-comfortable', styles.boardSurface].filter(Boolean).join(' ')} aria-label="Project work board">
+            <BladeHeader
+              size="compact"
+              title="Work board"
+              subtitle="Layered Azure work surface for backlog, ready, running, review, and done lanes."
+            />
+            <KanbanBoard projectId={projectId} />
+          </section>
 
           <section className={styles.runSection} aria-labelledby="project-runs-title">
             <Accordion className={styles.runAccordion} collapsible>
@@ -461,6 +549,6 @@ export function ProjectPage() {
           </section>
         </>
       )}
-    </AzurePage>
+    </div>
   );
 }

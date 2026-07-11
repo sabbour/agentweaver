@@ -1,24 +1,18 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Link as RouterLink, useLocation } from 'react-router-dom';
-import {
-  Badge,
-  Button,
-  Spinner,
-  Text,
-  Textarea,
-  makeStyles,
-  mergeClasses,
-  shorthands,
-  tokens,
-} from '@fluentui/react-components';
-import {
-  CheckmarkCircle16Regular,
-  Open16Regular,
-  Send16Regular,
-  Warning16Regular,
-} from '@fluentui/react-icons';
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
+import {
+  AgenticProgress,
+  BladeHeader,
+  CopilotComposer,
+  CopilotPromptRibbon,
+  CopilotResponse,
+  SparkleRegular,
+  StatusIconText,
+} from '../copilot-fluent-system';
+import { DEFERRED_COMMANDS, parseInput, SLASH_COMMANDS } from './consoleCommands';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { KeyboardEvent } from 'react';
+import { Link as RouterLink, useLocation } from 'react-router-dom';
 import type {
   AgentweaverConsoleResponse,
   AgentweaverConsoleToolCall,
@@ -26,244 +20,38 @@ import type {
   Project,
   TaskCardDto,
 } from '../api/types';
-import {
-  DEFERRED_COMMANDS,
-  SLASH_COMMANDS,
-  parseInput,
-  type SlashCommandName,
-} from './consoleCommands';
-
+import type { AzfAgentStep, AzfResponsePart } from '../copilot-fluent-system';
+import type { SlashCommandName } from './consoleCommands';
+import type { CSSProperties, ReactNode } from 'react';
 // Smart operator dock for the singleton browser console. Natural language goes to
 // the backend Agentweaver facade; slash commands remain secondary shortcuts over
 // the same typed API client surface.
 
-const useStyles = makeStyles({
-  root: {
-    display: 'flex',
-    flexDirection: 'column',
-    height: '100%',
-    minHeight: 0,
-    backgroundColor: tokens.colorNeutralBackground1,
-    color: tokens.colorNeutralForeground1,
-    overflow: 'hidden',
-  },
-  header: {
-    flexShrink: 0,
-    display: 'grid',
-    gridTemplateColumns: 'minmax(0, 1fr) auto',
-    gap: tokens.spacingHorizontalM,
-    alignItems: 'center',
-    ...shorthands.padding(tokens.spacingVerticalS, tokens.spacingHorizontalL),
-    ...shorthands.borderBottom('1px', 'solid', tokens.colorNeutralStroke2),
-    backgroundColor: tokens.colorNeutralBackground2,
-    '@media (max-width: 720px)': { gridTemplateColumns: '1fr' },
-  },
-  titleStack: {
-    minWidth: 0,
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalXXS,
-  },
-  titleRow: {
-    display: 'flex',
-    alignItems: 'center',
-    flexWrap: 'wrap',
-    gap: tokens.spacingHorizontalS,
-    minWidth: 0,
-  },
-  title: {
-    fontWeight: tokens.fontWeightSemibold,
-    fontSize: tokens.fontSizeBase400,
-    lineHeight: tokens.lineHeightBase400,
-  },
-  subtitle: {
-    color: tokens.colorNeutralForeground3,
-    fontSize: tokens.fontSizeBase200,
-    lineHeight: tokens.lineHeightBase200,
-  },
-  contextRail: {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'flex-end',
-    flexWrap: 'wrap',
-    gap: tokens.spacingHorizontalXS,
-  },
-  quickRow: {
-    flexShrink: 0,
-    display: 'flex',
-    alignItems: 'center',
-    gap: tokens.spacingHorizontalXS,
-    flexWrap: 'wrap',
-    ...shorthands.padding(tokens.spacingVerticalXS, tokens.spacingHorizontalL),
-    ...shorthands.borderBottom('1px', 'solid', tokens.colorNeutralStroke2),
-    backgroundColor: tokens.colorNeutralBackground1,
-  },
-  quickLabel: {
-    color: tokens.colorNeutralForeground3,
-    fontSize: tokens.fontSizeBase100,
-    fontWeight: tokens.fontWeightSemibold,
-  },
-  stream: {
-    flex: 1,
-    minHeight: 0,
-    overflowY: 'auto',
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalM,
-    ...shorthands.padding(tokens.spacingVerticalM, tokens.spacingHorizontalL),
-  },
-  turn: {
-    display: 'grid',
-    gridTemplateColumns: '28px minmax(0, 1fr)',
-    gap: tokens.spacingHorizontalS,
-    alignItems: 'start',
-  },
-  avatar: {
-    width: '28px',
-    height: '28px',
-    borderRadius: tokens.borderRadiusCircular,
-    display: 'grid',
-    placeItems: 'center',
-    fontSize: tokens.fontSizeBase100,
-    fontWeight: tokens.fontWeightSemibold,
-    backgroundColor: tokens.colorNeutralBackground3,
-    color: tokens.colorNeutralForeground2,
-    ...shorthands.border('1px', 'solid', tokens.colorNeutralStroke2),
-  },
-  userAvatar: {
-    backgroundColor: tokens.colorBrandBackground2,
-    color: tokens.colorBrandForeground1,
-    borderTopColor: tokens.colorBrandStroke2,
-    borderRightColor: tokens.colorBrandStroke2,
-    borderBottomColor: tokens.colorBrandStroke2,
-    borderLeftColor: tokens.colorBrandStroke2,
-  },
-  message: {
-    minWidth: 0,
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalXS,
-  },
-  messageMeta: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: tokens.spacingHorizontalXS,
-    flexWrap: 'wrap',
-  },
-  author: {
-    fontSize: tokens.fontSizeBase200,
-    fontWeight: tokens.fontWeightSemibold,
-  },
-  roleLabel: {
-    fontSize: tokens.fontSizeBase100,
-    color: tokens.colorNeutralForeground3,
-  },
-  bubble: {
-    maxWidth: '78ch',
-    whiteSpace: 'pre-wrap',
-    overflowWrap: 'anywhere',
-    lineHeight: tokens.lineHeightBase300,
-    fontSize: tokens.fontSizeBase300,
-  },
-  userBubble: {
-    color: tokens.colorNeutralForeground1,
-  },
-  stateBlock: {
-    maxWidth: '78ch',
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalXS,
-    ...shorthands.padding(tokens.spacingVerticalS, tokens.spacingHorizontalM),
-    ...shorthands.border('1px', 'solid', tokens.colorNeutralStroke2),
-    ...shorthands.borderRadius(tokens.borderRadiusMedium),
-    backgroundColor: tokens.colorNeutralBackground2,
-  },
-  clarificationBlock: {
-    borderTopColor: tokens.colorStatusWarningBorder1,
-    borderRightColor: tokens.colorStatusWarningBorder1,
-    borderBottomColor: tokens.colorStatusWarningBorder1,
-    borderLeftColor: tokens.colorStatusWarningBorder1,
-    backgroundColor: tokens.colorStatusWarningBackground1,
-  },
-  gateBlock: {
-    borderTopColor: tokens.colorPaletteMarigoldBorderActive,
-    borderRightColor: tokens.colorPaletteMarigoldBorderActive,
-    borderBottomColor: tokens.colorPaletteMarigoldBorderActive,
-    borderLeftColor: tokens.colorPaletteMarigoldBorderActive,
-    backgroundColor: tokens.colorPaletteMarigoldBackground2,
-  },
-  errorBlock: {
-    borderTopColor: tokens.colorStatusDangerBorder1,
-    borderRightColor: tokens.colorStatusDangerBorder1,
-    borderBottomColor: tokens.colorStatusDangerBorder1,
-    borderLeftColor: tokens.colorStatusDangerBorder1,
-    backgroundColor: tokens.colorStatusDangerBackground1,
-  },
-  stateTitle: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: tokens.spacingHorizontalXS,
-    fontWeight: tokens.fontWeightSemibold,
-  },
-  toolList: {
-    maxWidth: '78ch',
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalXXS,
-    marginTop: tokens.spacingVerticalXXS,
-  },
-  toolRow: {
-    display: 'grid',
-    gridTemplateColumns: 'auto minmax(0, 1fr)',
-    gap: tokens.spacingHorizontalS,
-    alignItems: 'baseline',
-    fontSize: tokens.fontSizeBase200,
-    color: tokens.colorNeutralForeground2,
-  },
-  links: {
-    display: 'flex',
-    flexWrap: 'wrap',
-    gap: tokens.spacingHorizontalXS,
-  },
-  link: {
-    display: 'inline-flex',
-    alignItems: 'center',
-    gap: tokens.spacingHorizontalXXS,
-    color: tokens.colorBrandForegroundLink,
-    textDecorationLine: 'none',
-    fontSize: tokens.fontSizeBase200,
-    minHeight: '24px',
-    ':hover': { textDecorationLine: 'underline' },
-    ':focus-visible': {
-      outlineStyle: 'solid',
-      outlineWidth: '2px',
-      outlineColor: tokens.colorStrokeFocus2,
-      outlineOffset: '2px',
-    },
-  },
-  composer: {
-    flexShrink: 0,
-    display: 'grid',
-    gridTemplateColumns: 'minmax(0, 1fr) auto',
-    gap: tokens.spacingHorizontalS,
-    alignItems: 'end',
-    ...shorthands.padding(tokens.spacingVerticalS, tokens.spacingHorizontalL),
-    ...shorthands.borderTop('1px', 'solid', tokens.colorNeutralStroke2),
-    backgroundColor: tokens.colorNeutralBackground1,
-  },
-  input: {
-    '& textarea': {
-      minHeight: '48px',
-      maxHeight: '140px',
-      lineHeight: tokens.lineHeightBase300,
-    },
-  },
-  composerHint: {
-    gridColumn: '1 / -1',
-    color: tokens.colorNeutralForeground3,
-    fontSize: tokens.fontSizeBase100,
-  },
-});
+const CONSOLE_ROOT_STYLE: CSSProperties = {
+  height: '100%',
+  minHeight: 0,
+  overflow: 'hidden',
+  background: 'var(--azf-copilot-dock-canvas, var(--azf-portal-canvas, var(--colorNeutralBackground2)))',
+};
+
+const TRANSCRIPT_STYLE: CSSProperties = {
+  flex: '1 1 auto',
+  minHeight: 0,
+  overflowY: 'auto',
+  padding: 'var(--spacingVerticalXL) var(--spacingHorizontalXXXL) var(--spacingVerticalL)',
+};
+
+const COMPOSER_WRAP_STYLE: CSSProperties = {
+  flex: '0 0 auto',
+  padding: 'var(--spacingVerticalL) var(--spacingHorizontalXXXL)',
+  borderTop: 'var(--strokeWidthThin) solid var(--colorBrandStroke2)',
+  background: 'var(--azf-copilot-dock-footer, var(--colorNeutralBackground1))',
+};
+
+const MESSAGE_TEXT_STYLE: CSSProperties = {
+  whiteSpace: 'pre-wrap',
+  overflowWrap: 'anywhere',
+};
 
 type ConsoleScope = 'global' | 'project' | 'run';
 type MessageKind = 'answer' | 'tool' | 'clarification' | 'gate' | 'error';
@@ -292,7 +80,7 @@ interface CommandResult {
 let seq = 0;
 const nextId = () => `console-${Date.now()}-${seq++}`;
 
-export function consoleRouteContext(pathname: string): { projectId?: string; runId?: string; scope: ConsoleScope } {
+function consoleRouteContext(pathname: string): { projectId?: string; runId?: string; scope: ConsoleScope } {
   const runMatch = /^\/projects\/([^/]+)\/orchestrations\/([^/]+)/.exec(pathname);
   if (runMatch) return { projectId: decodeURIComponent(runMatch[1]), runId: decodeURIComponent(runMatch[2]), scope: 'run' };
   const projectMatch = /^\/projects\/([^/]+)/.exec(pathname);
@@ -403,15 +191,112 @@ function linkFromProject(p: Project): ConsoleLink {
   return { label: `Open ${p.name}`, to: `/projects/${p.project_id}` };
 }
 
+function toolStepStatus(status: AgentweaverConsoleToolCall['status']): AzfAgentStep['status'] {
+  if (status === 'completed') return 'complete';
+  if (status === 'queued' || status === 'running') return 'running';
+  if (status === 'failed') return 'error';
+  return 'warning';
+}
+
+function toolSteps(tools?: AgentweaverConsoleToolCall[]): AzfAgentStep[] {
+  return (tools ?? []).map((tool, index) => ({
+    id: `${tool.name}-${index}`,
+    title: tool.name,
+    body: tool.summary,
+    status: toolStepStatus(tool.status),
+    defaultOpen: Boolean(tool.summary),
+  }));
+}
+
+function ConsoleLinks({ links }: { links?: ConsoleLink[] }) {
+  if (!links?.length) return null;
+  return (
+    <div className="azf-row azf-wrap azf-gap-xs" aria-label="Related links">
+      {links.map((link, index) => link.to ? (
+        <RouterLink key={`${link.label}-${index}`} className="azf-linkish" to={link.to}>
+          {link.label}
+        </RouterLink>
+      ) : link.href ? (
+        <a key={`${link.label}-${index}`} className="azf-linkish" href={link.href} target="_blank" rel="noreferrer">
+          {link.label}
+        </a>
+      ) : null)}
+    </div>
+  );
+}
+
+function messageTitle(message: ConsoleMessage): ReactNode {
+  if (message.role === 'user') return undefined;
+  if (message.kind === 'clarification') return 'Clarification needed';
+  if (message.kind === 'gate') return message.gateTitle ?? 'Confirmation required';
+  if (message.kind === 'error') return message.gateTitle ?? 'Console error';
+  if (message.kind === 'tool') return 'Action summary';
+  return 'Agentweaver';
+}
+
+function messageBadge(message: ConsoleMessage): ReactNode {
+  if (message.role === 'user') return undefined;
+  if (message.kind === 'gate') return 'Gate requires review';
+  if (message.kind === 'clarification') return 'Needs input';
+  if (message.kind === 'error') return 'Needs attention';
+  if (message.kind === 'tool') return 'Tool output';
+  return null;
+}
+
+function MessageContent({ message }: { message: ConsoleMessage }) {
+  const steps = toolSteps(message.tools);
+  return (
+    <div className="azf-stack azf-gap-s azf-console-message" data-kind={message.kind}>
+      {message.text && <div style={MESSAGE_TEXT_STYLE}>{message.text}</div>}
+      {message.kind === 'gate' && (
+        <StatusIconText status="warning">
+          Review or confirmation is still required in the gated surface before work proceeds.
+        </StatusIconText>
+      )}
+      {message.kind === 'clarification' && (
+        <StatusIconText status="warning">Answer the clarification before Agentweaver continues.</StatusIconText>
+      )}
+      {message.kind === 'error' && (
+        <StatusIconText status="danger">The request needs attention before it can continue.</StatusIconText>
+      )}
+      {steps.length > 0 && <AgenticProgress steps={steps} defaultOpenItems={steps.filter((step) => step.defaultOpen).map((step) => step.id)} />}
+      <ConsoleLinks links={message.links} />
+    </div>
+  );
+}
+
+function messageToPart(message: ConsoleMessage): AzfResponsePart {
+  if (message.role === 'user') {
+    return {
+      id: message.id,
+      type: 'text',
+      author: 'user',
+      content: <div style={MESSAGE_TEXT_STYLE}>{message.text}</div>,
+    };
+  }
+  return {
+    id: message.id,
+    type: 'text',
+    title: messageTitle(message),
+    badge: messageBadge(message),
+    content: <MessageContent message={message} />,
+  };
+}
+
+function scopeTone(scope: ConsoleScope): 'neutral' | 'brand' | 'info' {
+  if (scope === 'run') return 'info';
+  if (scope === 'project') return 'brand';
+  return 'neutral';
+}
+
 export function BrowserConsole() {
-  const styles = useStyles();
   const location = useLocation();
   const route = useMemo(() => consoleRouteContext(location.pathname), [location.pathname]);
   const [messages, setMessages] = useState<ConsoleMessage[]>([WELCOME]);
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
-  const [routeProject, setRouteProject] = useState<Project | null>(null);
+  const [routeProjectState, setRouteProjectState] = useState<{ projectId?: string; project: Project | null }>({ project: null });
   const [boundRunId, setBoundRunId] = useState('');
   const [conversationId, setConversationId] = useState<string | undefined>();
   const streamRef = useRef<HTMLDivElement>(null);
@@ -422,26 +307,28 @@ export function BrowserConsole() {
   }, [messages, busy]);
 
   useEffect(() => {
-    if (!route.projectId) {
-      setRouteProject(null);
-      return;
-    }
+    if (!route.projectId) return;
     let cancelled = false;
     apiClient.getProject(route.projectId)
-      .then((project) => { if (!cancelled) setRouteProject(project); })
-      .catch(() => { if (!cancelled) setRouteProject(null); });
+      .then((project) => {
+        if (!cancelled) setRouteProjectState({ projectId: route.projectId, project });
+      })
+      .catch(() => {
+        if (!cancelled) setRouteProjectState({ projectId: route.projectId, project: null });
+      });
     return () => { cancelled = true; };
   }, [route.projectId]);
 
   useEffect(() => {
-    if (route.runId) setBoundRunId(route.runId);
+    if (route.runId) queueMicrotask(() => setBoundRunId(route.runId ?? ''));
   }, [route.runId]);
 
+  const routeProject = routeProjectState.projectId === route.projectId ? routeProjectState.project : null;
   const effectiveProjectId = route.projectId ?? selectedProject?.project_id;
   const effectiveProjectName = route.projectId
     ? (routeProject?.name ?? route.projectId)
     : (selectedProject?.name ?? undefined);
-  const effectiveRunId = route.runId ?? (boundRunId ? boundRunId : undefined);
+  const effectiveRunId = route.runId ?? (boundRunId || undefined);
   const effectiveScope: ConsoleScope = effectiveRunId ? 'run' : effectiveProjectId ? 'project' : 'global';
 
   const append = useCallback((message: Omit<ConsoleMessage, 'id'>) => {
@@ -639,124 +526,79 @@ export function BrowserConsole() {
         ? 'selected project'
         : 'global';
 
-  const renderLinks = (links?: ConsoleLink[]) => links?.length ? (
-    <div className={styles.links}>
-      {links.map((link, index) => link.to ? (
-        <RouterLink key={`${link.label}-${index}`} className={styles.link} to={link.to}>
-          <Open16Regular aria-hidden="true" />{link.label}
-        </RouterLink>
-      ) : link.href ? (
-        <a key={`${link.label}-${index}`} className={styles.link} href={link.href} target="_blank" rel="noreferrer">
-          <Open16Regular aria-hidden="true" />{link.label}
-        </a>
-      ) : null)}
+  const transcriptParts = useMemo(() => messages.map(messageToPart), [messages]);
+  const shortcutPrompts = useMemo(() => [
+    { id: 'help', label: '/help', onClick: () => runQuickCommand('help') },
+    { id: 'projects', label: '/projects', onClick: () => runQuickCommand('projects') },
+    { id: 'runs', label: '/runs', onClick: () => runQuickCommand('runs') },
+    { id: 'clear', label: '/clear', onClick: () => runQuickCommand('clear') },
+  ], [runQuickCommand]);
+  const contextSummary = (
+    <div className="azf-stack azf-gap-xs azf-copilot-dock__summary">
+      <span>Copilot dock for message-first operations. The facade agent chooses tools and surfaces gates when human review is required.</span>
+      <div className="azf-row azf-wrap azf-gap-s" aria-label="Console context">
+        <StatusIconText status={scopeTone(effectiveScope)}>{scopeLabel}</StatusIconText>
+        {effectiveProjectId && <StatusIconText status="brand">Project · {effectiveProjectBadgeLabel}</StatusIconText>}
+        {effectiveRunId && <StatusIconText status="info">Run · {effectiveRunId.slice(0, 12)}</StatusIconText>}
+        <StatusIconText status="neutral">{routeBindingLabel}</StatusIconText>
+        {conversationId && <StatusIconText status="success">Conversation · {conversationId}</StatusIconText>}
+        {busy && <StatusIconText status="info">Agentweaver is working</StatusIconText>}
+      </div>
     </div>
-  ) : null;
-
-  const renderTools = (tools?: AgentweaverConsoleToolCall[]) => tools?.length ? (
-    <div className={styles.toolList} aria-label="Action summary">
-      {tools.map((tool, index) => (
-        <div key={`${tool.name}-${index}`} className={styles.toolRow}>
-          <Badge appearance="outline" color={tool.status === 'failed' ? 'danger' : tool.status === 'queued' ? 'warning' : 'success'}>{tool.status}</Badge>
-          <span>{tool.name}{tool.summary ? ` — ${tool.summary}` : ''}</span>
-        </div>
-      ))}
-    </div>
-  ) : null;
-
-  const stateBlockClass = (kind: MessageKind) => mergeClasses(
-    styles.stateBlock,
-    kind === 'clarification' && styles.clarificationBlock,
-    kind === 'gate' && styles.gateBlock,
-    kind === 'error' && styles.errorBlock,
   );
+  const handleComposerKeyDownCapture = useCallback((event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.key === 'Enter' && !event.shiftKey && event.target instanceof HTMLTextAreaElement) {
+      event.preventDefault();
+      void submit();
+    }
+  }, [submit]);
 
   return (
-    <div className={styles.root} data-testid="browser-console">
-      <div className={styles.header}>
-        <div className={styles.titleStack}>
-          <div className={styles.titleRow}>
-            <Text className={styles.title}>Agentweaver Console</Text>
-            {busy && <Spinner size="extra-tiny" label="Agentweaver is working" />}
-          </div>
-          <Text className={styles.subtitle}>Message-first operator dock. The facade agent chooses tools and surfaces gates when human review is required.</Text>
+    <div className="azf-stack azf-copilot-dock" style={CONSOLE_ROOT_STYLE} data-testid="browser-console">
+      <span className="azf-visually-hidden">Agentweaver Console</span>
+      <BladeHeader
+        size="compact"
+        className="azf-copilot-dock__hero"
+        title="Agentweaver Copilot"
+        resourceIcon={<SparkleRegular />}
+        menuLabel="Azure Fluent assistant dock"
+        subtitle={contextSummary}
+        loading={busy}
+      />
+      <div className="azf-row azf-wrap azf-copilot-dock__command-band" aria-label="Agentweaver Copilot command band">
+        <span className="azf-copilot-dock__command-label">Prompt ribbon</span>
+        <CopilotPromptRibbon label="Console shortcuts" prompts={shortcutPrompts} />
+      </div>
+
+      <div
+        className="azf-stack azf-gap-m"
+        style={TRANSCRIPT_STYLE}
+        ref={streamRef}
+        role="log"
+        aria-live="polite"
+        aria-relevant="additions text"
+        aria-label="Console responses"
+        aria-busy={busy || undefined}
+      >
+        <CopilotResponse parts={transcriptParts} loading={busy} />
+      </div>
+
+      <div className="azf-stack azf-gap-xs" style={COMPOSER_WRAP_STYLE} onKeyDownCapture={handleComposerKeyDownCapture}>
+        <div className="azf-row azf-copilot-dock__composer-label">
+          <SparkleRegular aria-hidden="true" />
+          <span>Command composer</span>
         </div>
-        <div className={styles.contextRail} aria-label="Console context">
-          <Badge appearance="filled" color={effectiveScope === 'global' ? 'subtle' : effectiveScope === 'project' ? 'brand' : 'informative'}>{scopeLabel}</Badge>
-          {effectiveProjectId && <Badge appearance="outline">Project · {effectiveProjectBadgeLabel}</Badge>}
-          {effectiveRunId && <Badge appearance="outline">Run · {effectiveRunId.slice(0, 12)}</Badge>}
-          <Badge appearance="tint" color="subtle">{routeBindingLabel}</Badge>
-        </div>
-      </div>
-
-      <div className={styles.quickRow} role="toolbar" aria-label="Console shortcuts">
-        <Text className={styles.quickLabel}>Shortcuts</Text>
-        <Button size="small" appearance="subtle" onClick={() => runQuickCommand('help')} disabled={busy}>/help</Button>
-        <Button size="small" appearance="subtle" onClick={() => runQuickCommand('projects')} disabled={busy}>/projects</Button>
-        <Button size="small" appearance="subtle" onClick={() => runQuickCommand('runs')} disabled={busy}>/runs</Button>
-        <Button size="small" appearance="subtle" onClick={() => runQuickCommand('clear')} disabled={busy}>/clear</Button>
-      </div>
-
-      <div className={styles.stream} ref={streamRef} role="log" aria-label="Console responses">
-        {messages.map((message) => {
-          const isUser = message.role === 'user';
-          const stateful = !isUser && (message.kind === 'clarification' || message.kind === 'gate' || message.kind === 'error');
-          return (
-            <div key={message.id} className={styles.turn}>
-              <div className={mergeClasses(styles.avatar, isUser && styles.userAvatar)} aria-hidden="true">{isUser ? 'You' : 'AW'}</div>
-              <div className={styles.message}>
-                <div className={styles.messageMeta}>
-                  <Text className={styles.author}>{isUser ? 'You' : 'Agentweaver'}</Text>
-                  <Text className={styles.roleLabel}>{isUser ? 'request' : message.kind === 'tool' ? 'action summary' : message.kind.replace('_', ' ')}</Text>
-                </div>
-                {stateful ? (
-                  <div className={stateBlockClass(message.kind)}>
-                    <div className={styles.stateTitle}>
-                      {message.kind === 'gate' ? <CheckmarkCircle16Regular aria-hidden="true" /> : <Warning16Regular aria-hidden="true" />}
-                      <span>{message.kind === 'clarification' ? 'Clarification needed' : message.kind === 'gate' ? (message.gateTitle ?? 'Confirmation required') : (message.gateTitle ?? 'Console error')}</span>
-                    </div>
-                    <Text className={styles.bubble}>{message.text}</Text>
-                  </div>
-                ) : (
-                  <Text className={mergeClasses(styles.bubble, isUser && styles.userBubble)}>{message.text}</Text>
-                )}
-                {renderTools(message.tools)}
-                {renderLinks(message.links)}
-              </div>
-            </div>
-          );
-        })}
-        {busy && (
-          <div className={styles.turn} aria-live="polite">
-            <div className={styles.avatar} aria-hidden="true">AW</div>
-            <div className={styles.message}>
-              <div className={styles.messageMeta}><Text className={styles.author}>Agentweaver</Text><Text className={styles.roleLabel}>working</Text></div>
-              <Text className={styles.bubble}>Thinking through the request and selecting tools…</Text>
-            </div>
-          </div>
-        )}
-      </div>
-
-      <div className={styles.composer}>
-        <Textarea
-          className={styles.input}
+        <CopilotComposer
+          className="azf-copilot-dock__composer"
           value={input}
-          placeholder="Ask Agentweaver…"
-          aria-label="Ask Agentweaver"
-          resize="vertical"
+          onChange={setInput}
+          onSend={() => void submit()}
+          isRunning={busy}
           disabled={busy}
-          onChange={(_, data) => setInput(data.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && !e.shiftKey) {
-              e.preventDefault();
-              void submit();
-            }
-          }}
+          placeholder="Ask Agentweaver"
+          sendLabel="Send"
         />
-        <Button appearance="primary" icon={busy ? <Spinner size="tiny" /> : <Send16Regular />} disabled={busy || !input.trim()} onClick={() => void submit()}>
-          Send
-        </Button>
-        <Text className={styles.composerHint}>Enter sends · Shift+Enter adds a line · slash commands are optional shortcuts, not the main workflow.</Text>
+        <span className="azf-muted">Enter sends · Shift+Enter adds a line · slash commands are optional shortcuts, not the main workflow.</span>
       </div>
     </div>
   );

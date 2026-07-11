@@ -1,11 +1,28 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, waitFor, cleanup, fireEvent, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter, Routes, Route } from 'react-router-dom';
-import { FluentProvider, webLightTheme } from '@fluentui/react-components';
-import { type ReactNode } from 'react';
+import { apiClient } from '../api/apiClient';
+import { ApiError } from '../api/client';
+import { AzureFluentProvider } from '../copilot-fluent-system';
+import { CoordinatorRunPage } from '../pages/CoordinatorRunPage';
+import { COORDINATOR_GRAPH_DESCRIPTOR } from './fixtures/graphDescriptor';
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react';
+import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from 'vitest';
 import type { RunStreamEvent } from '../api/sse';
-
+import type { ReactNode } from 'react';
 class ResizeObserverStub {
   observe() {}
   unobserve() {}
@@ -60,20 +77,15 @@ vi.mock('../components/OutcomePlanPanel', () => ({
   OutcomePlanPanel: () => null,
 }));
 
-import { apiClient } from '../api/apiClient';
-import { ApiError } from '../api/client';
-import { CoordinatorRunPage } from '../pages/CoordinatorRunPage';
-import { COORDINATOR_GRAPH_DESCRIPTOR } from './fixtures/graphDescriptor';
-
 function Wrapper({ children }: { children: ReactNode }) {
   return (
-    <FluentProvider theme={webLightTheme}>
+    <AzureFluentProvider density="compact">
       <MemoryRouter initialEntries={['/projects/p1/orchestrations/coord-run-1']}>
         <Routes>
           <Route path="/projects/:projectId/orchestrations/:runId" element={children} />
         </Routes>
       </MemoryRouter>
-    </FluentProvider>
+    </AzureFluentProvider>
   );
 }
 

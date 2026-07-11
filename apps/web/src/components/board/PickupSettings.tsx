@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react';
 import {
-  Button,
+  apiClient } from '../../api/apiClient';
+import { ApiError } from '../../api/client';
+import { Button,
   Dialog,
   DialogActions,
   DialogBody,
@@ -11,21 +12,18 @@ import {
   Field,
   SpinButton,
   Text,
-  makeStyles,
-  tokens,
-} from '@fluentui/react-components';
-import { SettingsRegular } from '@fluentui/react-icons';
-import { apiClient } from '../../api/apiClient';
-import { ApiError } from '../../api/client';
-import type { BacklogSettingsDto } from '../../api/types';
-import { AutomationToggle } from '../AutomationToggle';
+  } from '../../copilot-fluent-system';
 import { AUTOMATION_HELP } from '../automationHelp';
-
+import { AutomationToggle } from '../AutomationToggle';
+import { makeStyles,
+  mergeClasses,
+  tokens,
+} from '../../copilot-fluent-system';
+import { SettingsRegular } from '../../copilot-fluent-system';
+import { useEffect, useState } from 'react';
+import type { BacklogSettingsDto } from '../../api/types';
 const useStyles = makeStyles({
   fields: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalM,
   },
   error: {
     color: tokens.colorPaletteRedForeground1,
@@ -79,7 +77,7 @@ export function PickupSettings({ projectId }: PickupSettingsProps) {
         <DialogBody>
           <DialogTitle>Pickup settings</DialogTitle>
           <DialogContent>
-            <div className={styles.fields}>
+            <div className={mergeClasses('azf-stack azf-gap-m', styles.fields)}>
               <Field label="Max Ready items per heartbeat" hint="How many Ready tasks the coordinator may claim per tick (1-20).">
                 <SpinButton
                   min={1}

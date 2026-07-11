@@ -1,6 +1,8 @@
-import { makeStyles, tokens } from '@fluentui/react-components';
-import type { FluentIcon } from '@fluentui/react-icons';
-
+import {
+  makeStyles,
+  tokens,
+} from '../copilot-fluent-system';
+import type { FluentIcon } from '../copilot-fluent-system';
 const useStyles = makeStyles({
   root: {
     position: 'relative',

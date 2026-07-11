@@ -1,8 +1,13 @@
-import { describe, it, expect } from 'vitest';
-import { timelineReducer, initialTimelineState, deriveHumanTitle } from '../timeline/reducer';
-import type { TimelineReducerState, TurnGroupItem, AgentMessageItem, ToolCallItem, ApprovalRequestItem } from '../timeline/types';
+import { deriveHumanTitle, initialTimelineState, timelineReducer } from '../timeline/reducer';
+import { describe, expect, it } from 'vitest';
 import type { RunStreamEvent } from '../api/sse';
-
+import type {
+  AgentMessageItem,
+  ApprovalRequestItem,
+  TimelineReducerState,
+  ToolCallItem,
+  TurnGroupItem,
+} from '../timeline/types';
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------

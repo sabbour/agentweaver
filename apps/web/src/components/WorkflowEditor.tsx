@@ -1,17 +1,17 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  Button,
+  apiClient } from '../api/apiClient';
+import { ApiError } from '../api/client';
+import { AzureToolbar,
+  BladeHeader,
   MessageBar,
   MessageBarBody,
-  Spinner,
-  Text,
-  makeStyles,
+  StatusIconText } from '../copilot-fluent-system';
+import { makeStyles,
+  mergeClasses,
   tokens,
-} from '@fluentui/react-components';
-import { apiClient } from '../api/apiClient';
-import { ApiError } from '../api/client';
+} from '../copilot-fluent-system';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { WorkflowDetailDto } from '../api/types';
-
 // US7 — YAML workflow editor. Presents a workflow as an editable YAML document with:
 // - save (PUT /api/projects/{id}/workflows/{workflowId}) with server-side validation feedback
 // - discard (revert to last saved state)
@@ -54,34 +54,7 @@ export { BLANK_TEMPLATE };
 
 const useStyles = makeStyles({
   root: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalM,
-    backgroundColor: tokens.colorNeutralBackground1,
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: tokens.borderRadiusMedium,
-    padding: tokens.spacingVerticalL,
     minHeight: '480px',
-  },
-  header: {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: tokens.spacingHorizontalM,
-  },
-  headerTitle: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalXS,
-  },
-  titleName: {
-    fontWeight: tokens.fontWeightSemibold,
-    fontSize: tokens.fontSizeBase500,
-  },
-  titleId: {
-    fontFamily: tokens.fontFamilyMonospace,
-    fontSize: tokens.fontSizeBase200,
-    color: tokens.colorNeutralForeground3,
   },
   textarea: {
     flexGrow: 1,
@@ -100,9 +73,7 @@ const useStyles = makeStyles({
     boxSizing: 'border-box',
   },
   footer: {
-    display: 'flex',
-    gap: tokens.spacingHorizontalS,
-    alignItems: 'center',
+    justifyContent: 'space-between',
   },
 });
 
@@ -184,14 +155,8 @@ export function WorkflowEditor({ projectId, workflowId, initialYaml, onSave, onC
   const displayId = extractYamlScalar(yaml, 'id') ?? workflowId;
 
   return (
-    <div className={styles.root}>
-      <div className={styles.header}>
-        <div className={styles.headerTitle}>
-          <Text className={styles.titleName}>{displayName}</Text>
-          <span className={styles.titleId}>{displayId}</span>
-        </div>
-        <Button appearance="subtle" onClick={handleClose}>Close</Button>
-      </div>
+    <div className={mergeClasses('azf-stack azf-gap-m azf-surface azf-surface--padding-comfortable', styles.root)}>
+      <BladeHeader size="compact" title={displayName} subtitle={displayId} onDismiss={handleClose} />
 
       {saveError && (
         <MessageBar intent="error">
@@ -211,28 +176,30 @@ export function WorkflowEditor({ projectId, workflowId, initialYaml, onSave, onC
         aria-label="Workflow YAML"
       />
 
-      <div className={styles.footer}>
-        <Button
-          appearance="primary"
-          disabled={saving}
-          icon={saving ? <Spinner size="extra-tiny" aria-hidden="true" /> : undefined}
-          onClick={() => { void handleSave(); }}
-        >
-          {saving ? 'Saving' : 'Save'}
-        </Button>
-        <Button
-          appearance="secondary"
-          disabled={saving || !isDirty}
-          onClick={handleDiscard}
-        >
-          Discard changes
-        </Button>
+      <AzureToolbar
+        actions={[
+          {
+            id: 'save',
+            label: saving ? 'Saving' : 'Save',
+            appearance: 'primary',
+            loading: saving,
+            disabled: saving,
+            onClick: () => { void handleSave(); },
+          },
+          {
+            id: 'discard',
+            label: 'Discard changes',
+            disabled: saving || !isDirty,
+            onClick: handleDiscard,
+          },
+        ]}
+        ariaLabel="Workflow editor actions"
+        className={styles.footer}
+      >
         {isDirty && (
-          <Text size={200} style={{ color: tokens.colorNeutralForeground3 }}>
-            Unsaved changes
-          </Text>
+          <StatusIconText status="warning">Unsaved changes</StatusIconText>
         )}
-      </div>
+      </AzureToolbar>
     </div>
   );
 }

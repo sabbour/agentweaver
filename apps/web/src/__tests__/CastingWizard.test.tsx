@@ -1,12 +1,19 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor, cleanup } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { FluentProvider, webLightTheme } from '@fluentui/react-components';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
-import { type ReactNode } from 'react';
+import { apiClient } from '../api/apiClient';
+import { AzureFluentProvider } from '../copilot-fluent-system';
 import { CastingWizardPage } from '../pages/CastingWizardPage';
+import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from 'vitest';
 import type { TeamTemplateDto } from '../api/types';
-
+import type { ReactNode } from 'react';
 vi.mock('../api/apiClient', () => ({
   apiClient: {
     getTemplates: vi.fn(),
@@ -18,10 +25,8 @@ vi.mock('../api/apiClient', () => ({
   },
 }));
 
-import { apiClient } from '../api/apiClient';
-
 function Wrapper({ children }: { children: ReactNode }) {
-  return <FluentProvider theme={webLightTheme}>{children}</FluentProvider>;
+  return <AzureFluentProvider density="compact">{children}</AzureFluentProvider>;
 }
 
 function renderWithRouter(projectId: string) {
@@ -55,9 +60,9 @@ describe('CastingWizardPage', () => {
     renderWithRouter('proj-001');
 
     expect(screen.getByText('Cast a team')).toBeDefined();
-    expect(screen.getByText(/1\. Cast/)).toBeDefined();
-    expect(screen.getByText(/2\. Review proposal/)).toBeDefined();
-    expect(screen.getByText(/3\. Confirm/)).toBeDefined();
+    expect(screen.getByRole('tab', { name: /Step 1: Cast/ })).toBeDefined();
+    expect(screen.getByRole('tab', { name: /Step 2: Review proposal/ })).toBeDefined();
+    expect(screen.getByRole('tab', { name: /Step 3: Confirm/ })).toBeDefined();
     expect(screen.getByRole('tab', { name: /Formulate/ })).toBeDefined();
     expect(screen.getByRole('tab', { name: /Template/ })).toBeDefined();
     expect(screen.getByRole('tab', { name: /Analyze/ })).toBeDefined();

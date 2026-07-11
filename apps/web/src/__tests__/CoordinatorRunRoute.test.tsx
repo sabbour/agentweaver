@@ -1,7 +1,7 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react';
+import { CoordinatorRunRoute } from '../routes/CoordinatorRunRoute';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes, useNavigate } from 'react-router-dom';
-
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mockState = vi.hoisted(() => ({ mountCount: 0 }));
 
 vi.mock('../pages/CoordinatorRunPage', async () => {
@@ -20,8 +20,6 @@ vi.mock('../pages/CoordinatorRunPage', async () => {
     },
   };
 });
-
-import { CoordinatorRunRoute } from '../routes/CoordinatorRunRoute';
 
 function RouteHarness() {
   const navigate = useNavigate();

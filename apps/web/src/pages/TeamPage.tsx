@@ -1,8 +1,11 @@
-import { useEffect, useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
+  apiClient } from '../api/apiClient';
+import { ApiError } from '../api/client';
+import { AzureTabList,
+  BladeHeader,
   Badge,
   Button,
+  EssentialsGrid,
   Dialog,
   DialogActions,
   DialogBody,
@@ -11,44 +14,41 @@ import {
   DialogTitle,
   DialogTrigger,
   DrawerBody,
-  DrawerFooter,
   DrawerHeader,
-  DrawerHeaderTitle,
   Field,
   Input,
   MessageBar,
   MessageBarBody,
   OverlayDrawer,
-  Select,
   Spinner,
-  Tab,
-  TabList,
   Text,
   Textarea,
-  Title3,
-  makeStyles,
-  tokens,
-} from '@fluentui/react-components';
-import { Dismiss24Regular, PersonAddRegular, PuzzlePiece20Regular } from '@fluentui/react-icons';
-import { apiClient } from '../api/apiClient';
-import { ApiError } from '../api/client';
+  } from '../copilot-fluent-system';
 import { AgentAvatar } from '../components/AgentAvatar';
+import { PageHeader } from '../components/PageHeader';
+import { SyncPanel } from '../components/SyncPanel';
+import { DrawerFooter,
+  DrawerHeaderTitle,
+  makeStyles,
+  Select,
+  Title3,
+  tokens,
+} from '../copilot-fluent-system';
+import { Dismiss24Regular, People24Regular, PersonAddRegular, PuzzlePiece20Regular } from '../copilot-fluent-system';
+import { useEffect, useState } from 'react';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import type {
-  TeamDto,
-  TeamMemberDto,
   CharterDto,
   HistoryDto,
-  TeamTemplateDto,
-  RoleDto,
-  ReroleRequest,
   Project,
+  ReroleRequest,
+  RoleDto,
   SkillDto,
   SkillStatus,
+  TeamDto,
+  TeamMemberDto,
+  TeamTemplateDto,
 } from '../api/types';
-import { SyncPanel } from '../components/SyncPanel';
-import { PageHeader } from '../components/PageHeader';
-import { AzurePage } from '../components/azure/AzureLayout';
-
 type FilterTab = 'all' | 'active' | 'retired';
 type PanelTab = 'overview' | 'charter' | 'capabilities';
 
@@ -95,6 +95,11 @@ const useStyles = makeStyles({
     flexDirection: 'column',
     gap: tokens.spacingVerticalM,
   },
+  managementSurface: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalL,
+  },
   systemSectionHeader: {
     display: 'flex',
     alignItems: 'center',
@@ -123,6 +128,7 @@ const useStyles = makeStyles({
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     borderRadius: tokens.borderRadiusMedium,
     cursor: 'pointer',
+    boxShadow: tokens.shadow2,
     ':hover': {
       backgroundColor: tokens.colorNeutralBackground1Hover,
       border: `1px solid ${tokens.colorNeutralStroke1Hover}`,
@@ -686,14 +692,16 @@ function AgentDetailPanel({
       </DrawerHeader>
 
       <div className={styles.panelTabBar}>
-        <TabList
+        <AzureTabList
+          ariaLabel="Agent detail sections"
           selectedValue={panelTab}
-          onTabSelect={(_, d) => { setPanelTab(d.value as PanelTab); }}
-        >
-          <Tab value="overview">Overview</Tab>
-          <Tab value="charter">Charter</Tab>
-          <Tab value="capabilities">Capabilities</Tab>
-        </TabList>
+          onTabSelect={(value) => { setPanelTab(value as PanelTab); }}
+          tabs={[
+            { id: 'overview', label: 'Overview' },
+            { id: 'charter', label: 'Charter' },
+            { id: 'capabilities', label: 'Capabilities' },
+          ]}
+        />
       </div>
 
       <DrawerBody>
@@ -945,7 +953,7 @@ export function TeamPage() {
   const builtInMembers = filteredMembers.filter((m) => m.is_built_in);
 
   return (
-    <AzurePage className={styles.root}>
+    <div className={['azf-stack azf-page azf-pattern-shell', styles.root].filter(Boolean).join(' ')}>
       <div className={styles.breadcrumb}>
         <Link to="/" className={styles.breadcrumbLink}>Projects</Link>
         <span>/</span>
@@ -968,6 +976,7 @@ export function TeamPage() {
         <PageHeader
           title="Agents"
           subtitle="The cast working on this project."
+          resourceIcon={<People24Regular />}
           actions={
             <>
               {team && (
@@ -996,28 +1005,43 @@ export function TeamPage() {
       {showSync && <SyncPanel projectId={projectId} />}
 
       {!loading && !team && !error && (
-        <div className={styles.emptyState}>
-          <Title3>No team yet</Title3>
-          <Text>Cast a team to get started. The casting wizard will help you pick roles and generate agent charters.</Text>
-          <Button
-            appearance="primary"
-            onClick={() => { navigate(`/projects/${projectId}/team/cast`); }}
-          >
+        <div className={['azf-surface azf-surface--panel azf-surface--padding-comfortable', styles.emptyState].filter(Boolean).join(' ')}>
+          <BladeHeader size="compact" title="No team resource configured" subtitle="Cast a team to create project agents, charters, and capability assignments." />
+          <div>
+            <Title3>No team yet</Title3>
+            <Text>Cast a team to get started. The casting wizard will help you pick roles and generate agent charters.</Text>
+          </div>
+          <Button appearance="primary" onClick={() => { navigate(`/projects/${projectId}/team/cast`); }}>
             Cast team
           </Button>
         </div>
       )}
 
       {team && members.length > 0 && (
-        <>
-          <TabList
+        <div className={['azf-surface azf-surface--panel azf-surface--padding-comfortable', styles.managementSurface].filter(Boolean).join(' ')}>
+          <BladeHeader
+            size="compact"
+            title="Agent inventory"
+            subtitle="Manage project and system agents as an Azure-style resource collection."
+          />
+          <EssentialsGrid
+            properties={[
+              { id: 'project', label: 'Project', value: project?.name ?? team.project_name ?? projectId },
+              { id: 'total', label: 'Total agents', value: members.length },
+              { id: 'active', label: 'Active', value: activeCount, tags: activeCount > 0 ? ['Healthy'] : undefined },
+              { id: 'retired', label: 'Retired', value: retiredCount },
+            ]}
+          />
+          <AzureTabList
+            ariaLabel="Agent filters"
             selectedValue={filterTab}
-            onTabSelect={(_, d) => { setFilterTab(d.value as FilterTab); }}
-          >
-            <Tab value="all">All ({members.length})</Tab>
-            <Tab value="active">Active ({activeCount})</Tab>
-            <Tab value="retired">Retired ({retiredCount})</Tab>
-          </TabList>
+            onTabSelect={(value) => { setFilterTab(value as FilterTab); }}
+            tabs={[
+              { id: 'all', label: `All (${members.length})` },
+              { id: 'active', label: `Active (${activeCount})` },
+              { id: 'retired', label: `Retired (${retiredCount})` },
+            ]}
+          />
 
           {projectMembers.length > 0 && (
             <div className={styles.cardGrid}>
@@ -1050,7 +1074,7 @@ export function TeamPage() {
               </div>
             </div>
           )}
-        </>
+        </div>
       )}
 
       <OverlayDrawer
@@ -1074,6 +1098,6 @@ export function TeamPage() {
           />
         )}
       </OverlayDrawer>
-    </AzurePage>
+    </div>
   );
 }

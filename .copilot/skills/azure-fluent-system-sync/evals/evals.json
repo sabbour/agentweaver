@@ -17,7 +17,7 @@
     {
       "id": 2,
       "prompt": "IconCloud has the rest of the Azure Icons set now. Normalize those downloads and wire them into the Azure Fluent library so another app can use the glyphs as a drop-in, self-contained package.",
-      "expected_output": "The agent treats IconCloud as the approved Azure/resource icon source, normalizes SVG downloads, deduplicates duplicates, then vendors the final checked-in icon metadata and SVG assets into library-owned paths under apps/web/src/azure-fluent-system/assets/icons/azure/, updates catalog/ICONS.md, adds or documents a minimal showcase icon surface when feasible, and avoids hidden-API scraping.",
+      "expected_output": "The agent treats IconCloud as the approved Azure/resource icon source, normalizes SVG downloads, deduplicates duplicates, then vendors the final checked-in icon metadata and SVG assets into library-owned paths under apps/web/src/copilot-fluent-system/assets/icons/azure/, updates catalog/ICONS.md, adds or documents a minimal showcase icon surface when feasible, and avoids hidden-API scraping.",
       "files": [],
       "expectations": [
         "Uses IconCloud exports for Azure/resource glyphs and @fluentui/react-icons for system icons",

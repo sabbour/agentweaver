@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
 import {
-  Badge,
+  apiClient } from '../api/apiClient';
+import { ApiError } from '../api/client';
+import { Badge,
   Button,
   Dialog,
   DialogActions,
@@ -11,9 +11,6 @@ import {
   DialogTitle,
   Field,
   Menu,
-  MenuDivider,
-  MenuGroup,
-  MenuGroupHeader,
   MenuItem,
   MenuList,
   MenuPopover,
@@ -23,20 +20,32 @@ import {
   Spinner,
   Text,
   Textarea,
-  Title3,
-  makeStyles,
-  tokens,
-} from '@fluentui/react-components';
-import { AddRegular, ArrowSyncRegular, ChevronDownRegular, ChevronRightRegular, EditRegular, FlowRegular, NetworkCheckRegular, SparkleRegular } from '@fluentui/react-icons';
-import { apiClient } from '../api/apiClient';
-import { ApiError } from '../api/client';
-import type { Project, WorkflowDetailDto, WorkflowListResponse, WorkflowSummaryDto } from '../api/types';
+  } from '../copilot-fluent-system';
 import { PageHeader } from '../components/PageHeader';
-import { AzurePage } from '../components/azure/AzureLayout';
-import { WorkflowEditor, BLANK_TEMPLATE } from '../components/WorkflowEditor';
 import { VisualWorkflowEditor } from '../components/VisualWorkflowEditor';
+import { BLANK_TEMPLATE,
+  WorkflowEditor } from '../components/WorkflowEditor';
 import { WorkflowDefinitionInlinePanel } from '../components/WorkflowGraphPanel';
-
+import { makeStyles,
+  MenuDivider,
+  MenuGroup,
+  MenuGroupHeader,
+  Title3,
+  tokens,
+} from '../copilot-fluent-system';
+import {
+  AddRegular,
+  ArrowSyncRegular,
+  ChevronDownRegular,
+  ChevronRightRegular,
+  EditRegular,
+  FlowRegular,
+  NetworkCheckRegular,
+  SparkleRegular,
+} from '../copilot-fluent-system';
+import { useCallback, useEffect, useState } from 'react';
+import { Link, useParams } from 'react-router-dom';
+import type { Project, WorkflowDetailDto, WorkflowListResponse, WorkflowSummaryDto } from '../api/types';
 // Spec 010 (FR-039/041) — project Workflows management page. Lists the workflows
 // discovered from .agentweaver/workflows/ with their validation status, marks the
 // project default, and offers a Sync action that re-reads from disk. A "Set as
@@ -63,7 +72,11 @@ const useStyles = makeStyles({
   list: {
     display: 'flex',
     flexDirection: 'column',
-    gap: tokens.spacingVerticalM,
+    gap: 0,
+    overflow: 'hidden',
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusMedium,
+    backgroundColor: tokens.colorNeutralBackground1,
   },
   card: {
     display: 'flex',
@@ -71,8 +84,9 @@ const useStyles = makeStyles({
     gap: tokens.spacingVerticalS,
     padding: tokens.spacingVerticalL,
     backgroundColor: tokens.colorNeutralBackground1,
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: tokens.borderRadiusMedium,
+    border: 0,
+    borderBottom: `1px solid ${tokens.colorNeutralStroke3}`,
+    borderRadius: 0,
   },
   cardHeader: {
     display: 'flex',
@@ -111,6 +125,7 @@ const useStyles = makeStyles({
     backgroundColor: tokens.colorNeutralBackground1,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     borderRadius: tokens.borderRadiusMedium,
+    boxShadow: tokens.shadow2,
     textAlign: 'center',
   },
   menuItemContent: {
@@ -141,6 +156,11 @@ const useStyles = makeStyles({
     display: 'flex',
     flexDirection: 'column',
     gap: tokens.spacingVerticalM,
+    padding: tokens.spacingVerticalL,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusMedium,
+    backgroundColor: tokens.colorNeutralBackground1,
+    boxShadow: tokens.shadow2,
   },
   sectionHeader: {
     display: 'flex',
@@ -156,7 +176,7 @@ const useStyles = makeStyles({
     padding: tokens.spacingVerticalL,
     backgroundColor: tokens.colorBrandBackground2,
     border: `1.5px solid ${tokens.colorBrandStroke1}`,
-    borderRadius: tokens.borderRadiusMedium,
+    borderRadius: tokens.borderRadiusSmall,
   },
   invalidCard: {
     display: 'flex',
@@ -165,7 +185,7 @@ const useStyles = makeStyles({
     padding: tokens.spacingVerticalL,
     backgroundColor: tokens.colorNeutralBackground2,
     border: `1px solid ${tokens.colorNeutralStroke3}`,
-    borderRadius: tokens.borderRadiusMedium,
+    borderRadius: tokens.borderRadiusSmall,
   },
 });
 
@@ -444,7 +464,7 @@ export function WorkflowsPage() {
   };
 
   return (
-    <AzurePage className={styles.root}>
+    <div className={['azf-stack azf-page azf-pattern-shell', styles.root].filter(Boolean).join(' ')}>
       <PageHeader
         title="Workflows"
         subtitle="Reusable pipeline definitions."
@@ -654,6 +674,6 @@ export function WorkflowsPage() {
           )}
         </>
       )}
-    </AzurePage>
+    </div>
   );
 }

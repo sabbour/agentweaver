@@ -1,7 +1,7 @@
-import { describe, it, expect } from 'vitest';
+import { layoutDagBalancedGrid, layoutDagColumns, NODE_H, NODE_W } from '../utils/dagLayout';
+import { describe, expect, it } from 'vitest';
+import type { NodeSizeHint } from '../utils/dagLayout';
 import type { Edge, Node } from '@xyflow/react';
-import { layoutDagBalancedGrid, layoutDagColumns, NODE_H, NODE_W, type NodeSizeHint } from '../utils/dagLayout';
-
 function makeNode(id: string): Node {
   return { id, position: { x: 0, y: 0 }, data: {} };
 }

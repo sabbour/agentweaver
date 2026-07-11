@@ -1,8 +1,7 @@
+import { API_URL, getSessionToken } from '../config';
+import { AgentweaverApiClient } from './client';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { RunDetail } from './types';
-import { AgentweaverApiClient } from './client';
-import { API_URL, getSessionToken } from '../config';
-
 export type PollStatus = 'polling' | 'done' | 'error';
 
 interface PollState {

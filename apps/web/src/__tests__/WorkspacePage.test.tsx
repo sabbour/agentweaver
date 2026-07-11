@@ -1,9 +1,18 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, cleanup, waitFor, fireEvent } from '@testing-library/react';
-import { FluentProvider, webLightTheme } from '@fluentui/react-components';
-import { MemoryRouter, Routes, Route } from 'react-router-dom';
-import { type ReactNode } from 'react';
-
+import { apiClient } from '../api/apiClient';
+import { AzureFluentProvider } from '../copilot-fluent-system';
+import { WorkspacePage } from '../pages/WorkspacePage';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from 'vitest';
+import type { Project, WorkspaceFileContent, WorkspaceNode, WorkspaceRefsResponse } from '../api/types';
+import type { ReactNode } from 'react';
 vi.mock('../api/apiClient', () => ({
   apiClient: {
     getProject: vi.fn(),
@@ -15,19 +24,15 @@ vi.mock('../api/apiClient', () => ({
   },
 }));
 
-import { apiClient } from '../api/apiClient';
-import { WorkspacePage } from '../pages/WorkspacePage';
-import type { Project, WorkspaceNode, WorkspaceRefsResponse, WorkspaceFileContent } from '../api/types';
-
 function Wrapper({ children, initialEntry = '/projects/proj-1/workspace' }: { children: ReactNode; initialEntry?: string }) {
   return (
-    <FluentProvider theme={webLightTheme}>
+    <AzureFluentProvider density="compact">
       <MemoryRouter initialEntries={[initialEntry]}>
         <Routes>
           <Route path="/projects/:projectId/workspace" element={children} />
         </Routes>
       </MemoryRouter>
-    </FluentProvider>
+    </AzureFluentProvider>
   );
 }
 

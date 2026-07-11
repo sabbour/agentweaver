@@ -1,14 +1,20 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, cleanup, fireEvent } from '@testing-library/react';
-import { FluentProvider, webLightTheme } from '@fluentui/react-components';
-import { MemoryRouter } from 'react-router-dom';
-import { type ReactNode } from 'react';
+import { deriveAgentQueues, subtaskStatusToBucket } from '../api/agentQueues';
+import { AzureFluentProvider } from '../copilot-fluent-system';
 import { AgentRail } from '../components/AgentRail';
 import { RunCard } from '../components/board/RunCard';
-import { deriveAgentQueues, subtaskStatusToBucket } from '../api/agentQueues';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from 'vitest';
 import type { AgentQueueItem } from '../api/agentQueues';
-import type { RunCardDto, WorkPlanResponse, WorkPlanSubtaskResponse, CoordinatorChildResponse } from '../api/types';
-
+import type { CoordinatorChildResponse, RunCardDto, WorkPlanResponse, WorkPlanSubtaskResponse } from '../api/types';
+import type { ReactNode } from 'react';
 vi.mock('../api/apiClient', () => ({
   apiClient: {
     retryRun: vi.fn(),
@@ -22,11 +28,11 @@ vi.mock('react-router-dom', async (importOriginal) => {
 
 function Wrapper({ children }: { children: ReactNode }) {
   return (
-    <FluentProvider theme={webLightTheme}>
+    <AzureFluentProvider density="compact">
       <MemoryRouter>
         {children}
       </MemoryRouter>
-    </FluentProvider>
+    </AzureFluentProvider>
   );
 }
 

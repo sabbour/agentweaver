@@ -1,17 +1,27 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, within, cleanup } from '@testing-library/react';
-import { FluentProvider, webLightTheme, tokens } from '@fluentui/react-components';
-import { MemoryRouter } from 'react-router-dom';
-import { type ReactNode } from 'react';
+import {
+  AzureFluentProvider } from '../copilot-fluent-system';
+import { columnAccentColor,
+  STAGE_DESCRIPTIONS } from '../components/board/columnMeta';
 import { KanbanColumn } from '../components/board/KanbanColumn';
-import { columnAccentColor, STAGE_DESCRIPTIONS } from '../components/board/columnMeta';
+import { tokens,
+} from '../copilot-fluent-system';
+import { cleanup, render, screen, within } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from 'vitest';
 import type { BoardColumnDto, TaskCardDto } from '../api/types';
-
+import type { ReactNode } from 'react';
 function Wrapper({ children }: { children: ReactNode }) {
   return (
-    <FluentProvider theme={webLightTheme}>
+    <AzureFluentProvider density="compact">
       <MemoryRouter>{children}</MemoryRouter>
-    </FluentProvider>
+    </AzureFluentProvider>
   );
 }
 

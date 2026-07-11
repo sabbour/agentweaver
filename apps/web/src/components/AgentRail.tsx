@@ -1,7 +1,11 @@
-import { makeStyles, tokens, Badge, Text } from '@fluentui/react-components';
+import {
+  Badge,
+  Text } from '../copilot-fluent-system';
 import { AgentAvatar } from './AgentAvatar';
+import { makeStyles,
+  tokens,
+} from '../copilot-fluent-system';
 import type { AgentQueueItem } from '../api/agentQueues';
-
 // Re-export so consumers can use this one import for both type and component.
 export type { AgentQueueItem } from '../api/agentQueues';
 

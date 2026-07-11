@@ -1,5 +1,4 @@
 import type { RunTraceSpanDto } from '../../api/types';
-
 export type SpanType = 'invoke-agent' | 'llm' | 'tool';
 
 export interface TraceNode {

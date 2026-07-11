@@ -1,5 +1,4 @@
 import type { AgentQueueDto, CoordinatorChildResponse, WorkPlanResponse } from './types';
-
 // Per-orchestration breakdown of one agent's work (camelCase mirror of AgentOrchestrationQueueDto).
 export type AgentOrchestrationQueue = {
   runId: string;

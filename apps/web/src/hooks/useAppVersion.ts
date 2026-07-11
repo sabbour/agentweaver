@@ -1,5 +1,4 @@
-import { useState, useEffect } from 'react';
-
+import { useEffect, useState } from 'react';
 export function useAppVersion(): string {
   const [version, setVersion] = useState<string>('');
 

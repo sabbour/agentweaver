@@ -1,17 +1,20 @@
-import { useMemo, useState } from 'react';
 import {
+  AzureEmptyState,
+  AzureTabList,
   Badge,
   Button,
   MessageBar,
   Spinner,
-  Tab,
-  TabList,
+  StatusIconText,
   Text,
   Textarea,
-  makeStyles,
+  } from '../copilot-fluent-system';
+import { useArtifactBrowser } from '../hooks/useArtifactBrowser';
+import { DiffViewer } from './DiffViewer';
+import { makeStyles,
   mergeClasses,
   tokens,
-} from '@fluentui/react-components';
+} from '../copilot-fluent-system';
 import {
   BracesRegular,
   CheckmarkRegular,
@@ -31,15 +34,11 @@ import {
   FolderRegular,
   ImageRegular,
   LockClosedRegular,
-  type FluentIcon,
-} from '@fluentui/react-icons';
-import {
-  useArtifactBrowser,
-  type ArtifactBrowserState,
-} from '../hooks/useArtifactBrowser';
-import { DiffViewer } from './DiffViewer';
+} from '../copilot-fluent-system';
+import { useMemo, useState } from 'react';
 import type { WorkspaceFileEntry, WorkspaceNode } from '../api/types';
-
+import type { ArtifactBrowserState } from '../hooks/useArtifactBrowser';
+import type { FluentIcon } from '../copilot-fluent-system';
 // ---------------------------------------------------------------------------
 // Tree data model
 // ---------------------------------------------------------------------------
@@ -207,32 +206,18 @@ const useFileTreeStyles = makeStyles({
     backgroundColor: tokens.colorNeutralBackground1,
     padding: `0 ${tokens.spacingHorizontalXS}`,
   },
-  commitBar: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalXS,
-    padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalS}`,
-    borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
-    backgroundColor: tokens.colorNeutralBackground2,
-    flexShrink: 0,
-  },
   commitError: {
     color: tokens.colorPaletteRedForeground1,
     fontSize: tokens.fontSizeBase200,
   },
   reviewBar: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalXS,
     padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalS}`,
     borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground2,
     flexShrink: 0,
   },
-  reviewBarButtons: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalXS,
+  reviewBarSplitActions: {
+    '& button': { flex: 1, whiteSpace: 'nowrap' },
   },
   reviewBarDecline: {
     color: tokens.colorPaletteRedForeground1,
@@ -242,15 +227,9 @@ const useFileTreeStyles = makeStyles({
     fontSize: tokens.fontSizeBase200,
   },
   requestChangesBox: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalXS,
     marginTop: tokens.spacingVerticalXS,
   },
   commitMessageBox: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalXXS,
     padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalXS}`,
     backgroundColor: tokens.colorNeutralBackground3,
     borderRadius: tokens.borderRadiusMedium,
@@ -276,21 +255,11 @@ const useFileTreeStyles = makeStyles({
     fontSize: tokens.fontSizeBase200,
     color: tokens.colorNeutralForeground2,
   },
-  requestChangesActions: {
-    display: 'flex',
-    flexDirection: 'row',
-    gap: tokens.spacingHorizontalXS,
-    alignItems: 'center',
-  },
   requestChangesError: {
     color: tokens.colorPaletteRedForeground1,
     fontSize: tokens.fontSizeBase200,
   },
   reviewResultBar: {
-    display: 'flex',
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: tokens.spacingHorizontalS,
     padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalS}`,
     borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground2,
@@ -302,10 +271,6 @@ const useFileTreeStyles = makeStyles({
     minHeight: 0,
   },
   treeRow: {
-    display: 'flex',
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: tokens.spacingHorizontalXS,
     padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalS}`,
     cursor: 'pointer',
     ':hover': {
@@ -393,12 +358,8 @@ const useFileTreeStyles = makeStyles({
     padding: tokens.spacingVerticalL,
   },
   changeHeader: {
-    display: 'flex',
-    flexDirection: 'row',
-    alignItems: 'center',
     padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalS}`,
     borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
-    gap: tokens.spacingHorizontalXS,
     flexShrink: 0,
   },
   changeHeaderTitle: {
@@ -419,10 +380,6 @@ const useFileTreeStyles = makeStyles({
     flexShrink: 0,
   },
   flatRow: {
-    display: 'flex',
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: tokens.spacingHorizontalXS,
     paddingTop: tokens.spacingVerticalXS,
     paddingBottom: tokens.spacingVerticalXS,
     paddingLeft: tokens.spacingHorizontalS,
@@ -447,16 +404,6 @@ const useFileTreeStyles = makeStyles({
     whiteSpace: 'nowrap',
     flex: 1,
     minWidth: 0,
-  },
-  flatParentFolder: {
-    fontFamily: tokens.fontFamilyMonospace,
-    fontSize: tokens.fontSizeBase200,
-    color: tokens.colorNeutralForeground3,
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
-    whiteSpace: 'nowrap',
-    flex: 1,
-    flexShrink: 2,
   },
 });
 
@@ -493,36 +440,19 @@ const useDiffPanelStyles = makeStyles({
 
 // Legacy styles used by the combined ArtifactBrowser component.
 const useStyles = makeStyles({
-  root: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalS,
-  },
   panels: {
-    display: 'flex',
-    flexDirection: 'row',
-    gap: tokens.spacingHorizontalM,
+    alignItems: 'stretch',
     height: '600px',
     overflow: 'hidden',
   },
   leftPanel: {
     width: '280px',
     flexShrink: 0,
-    display: 'flex',
-    flexDirection: 'column',
     minHeight: 0,
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: tokens.borderRadiusMedium,
-    backgroundColor: tokens.colorNeutralBackground1,
     overflow: 'hidden',
   },
   rightPanel: {
     flex: 1,
-    display: 'flex',
-    flexDirection: 'column',
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: tokens.borderRadiusMedium,
-    backgroundColor: tokens.colorNeutralBackground1,
     overflow: 'hidden',
   },
 });
@@ -558,7 +488,7 @@ function renderTreeNodes({
       return (
         <div key={node.fullPath}>
           <div
-            className={styles.treeRow}
+            className={mergeClasses('azf-row azf-gap-xs', styles.treeRow)}
             style={{ paddingLeft: `${depth * 16 + 8}px` }}
             onClick={() => toggleFolder(node.fullPath)}
             role="button"
@@ -607,7 +537,7 @@ function renderTreeNodes({
     return (
       <div
         key={node.fullPath}
-        className={mergeClasses(styles.treeRow, isSelected ? styles.treeRowSelected : undefined)}
+        className={mergeClasses('azf-row azf-gap-xs', styles.treeRow, isSelected ? styles.treeRowSelected : undefined)}
         style={{ paddingLeft: `${depth * 16 + 8}px` }}
         onClick={() => onFileClick(node.fullPath, isChanged)}
         role="button"
@@ -673,7 +603,7 @@ function renderFlatChangesList({
     return (
       <div
         key={file.path}
-        className={mergeClasses(styles.flatRow, isSelected ? styles.flatRowSelected : undefined)}
+        className={mergeClasses('azf-row azf-gap-xs', styles.flatRow, isSelected ? styles.flatRowSelected : undefined)}
         onClick={() => onFileClick(file.path, true)}
         role="button"
         tabIndex={0}
@@ -723,7 +653,7 @@ export function CompactChangesList({
   return (
     <>
       {showHeader && (
-        <div className={styles.changeHeader}>
+        <div className={mergeClasses('azf-row azf-gap-xs', styles.changeHeader)}>
           <Text className={styles.changeHeaderTitle}>Branch Changes</Text>
           <Text className={styles.addedCount}>+{totalAdded}</Text>
           <Text className={styles.removedCount}>-{totalRemoved}</Text>
@@ -777,17 +707,13 @@ export function FilesTabPanel({
 
   if (workspaceError) {
     return (
-      <div className={styles.emptyState}>
-        <Text>{workspaceError}</Text>
-      </div>
+      <AzureEmptyState compact title="Unable to load files" body={workspaceError} className={styles.emptyState} />
     );
   }
 
   if (workspaceFiles.length === 0) {
     return (
-      <div className={styles.emptyState}>
-        <Text>No files</Text>
-      </div>
+      <AzureEmptyState compact title="No files" className={styles.emptyState} />
     );
   }
 
@@ -870,26 +796,28 @@ export function FileTreePanel({ state, onFileClick, noChangesProduced, noChangeS
   const showNoChangesExplanation = files.length === 0 && (noChangesProduced === true || atReviewGate);
   const totalAdded = files.reduce((acc, f) => acc + (f.added_lines ?? 0), 0);
   const totalRemoved = files.reduce((acc, f) => acc + (f.removed_lines ?? 0), 0);
+  const tabs = [
+    { id: 'changes', label: 'Changes' },
+    { id: 'files', label: 'Files' },
+  ];
 
   return (
-    <div className={styles.root}>
+    <div className={mergeClasses('azf-stack', styles.root)}>
       {/* Tab list */}
       <div className={styles.tabListWrapper}>
-        <TabList
+        <AzureTabList
+          tabs={tabs}
           selectedValue={activeTab}
-          onTabSelect={(_, data) => setActiveTab(data.value as 'changes' | 'files')}
-          size="small"
-        >
-          <Tab value="changes">Changes</Tab>
-          <Tab value="files">Files</Tab>
-        </TabList>
+          onTabSelect={(value) => setActiveTab(value as 'changes' | 'files')}
+          ariaLabel="Artifact browser tabs"
+        />
       </div>
 
       {/* Review bar — visible on both tabs when awaiting review */}
       {showReviewBar && (
-        <div className={styles.reviewBar}>
+        <div className={mergeClasses('azf-stack azf-gap-xs', styles.reviewBar)}>
           {commitMessage && (
-            <div className={styles.commitMessageBox}>
+            <div className={mergeClasses('azf-stack azf-gap-xs', styles.commitMessageBox)}>
               <Text className={styles.commitMessageLabel}>Commit message</Text>
               <Text className={styles.commitMessageText}>{commitMessage}</Text>
             </div>
@@ -897,7 +825,7 @@ export function FileTreePanel({ state, onFileClick, noChangesProduced, noChangeS
           {(commitPending || reviewPending || requestChangesPending) ? (
             <Spinner size="tiny" aria-label="Processing" />
           ) : (
-            <div className={styles.reviewBarButtons}>
+            <div className="azf-stack azf-gap-xs">
               <Button
                 appearance="primary"
                 size="small"
@@ -909,13 +837,12 @@ export function FileTreePanel({ state, onFileClick, noChangesProduced, noChangeS
               >
                 {approveLabel}
               </Button>
-              <div style={{ display: 'flex', gap: tokens.spacingHorizontalXS }}>
+              <div className={mergeClasses('azf-row azf-gap-xs', styles.reviewBarSplitActions)}>
                 <Button
                   appearance="secondary"
                   size="small"
                   icon={<CommentRegular />}
                   aria-label="Request change"
-                  style={{ flex: 1, whiteSpace: 'nowrap' }}
                   disabled={commitPending || reviewPending || requestChangesPending}
                   onClick={() => {
                     setRequestChangesOpen((open) => !open);
@@ -929,7 +856,6 @@ export function FileTreePanel({ state, onFileClick, noChangesProduced, noChangeS
                   size="small"
                   icon={<DismissRegular />}
                   aria-label="Decline run"
-                  style={{ flex: 1, whiteSpace: 'nowrap' }}
                   className={styles.reviewBarDecline}
                   disabled={commitPending || reviewPending || requestChangesPending}
                   onClick={() => void submitReview(false)}
@@ -939,10 +865,10 @@ export function FileTreePanel({ state, onFileClick, noChangesProduced, noChangeS
               </div>
             </div>
           )}
-          {commitError && <Text className={styles.commitError}>{commitError}</Text>}
-          {reviewError && <Text className={styles.reviewError}>{reviewError}</Text>}
+          {commitError && <StatusIconText status="danger" className={styles.commitError}>{commitError}</StatusIconText>}
+          {reviewError && <StatusIconText status="danger" className={styles.reviewError}>{reviewError}</StatusIconText>}
           {requestChangesOpen && !requestChangesPending && (
-            <div className={styles.requestChangesBox}>
+            <div className={mergeClasses('azf-stack azf-gap-xs', styles.requestChangesBox)}>
               <Text className={styles.requestChangesLabel}>
                 Describe what the agent should change
               </Text>
@@ -955,9 +881,9 @@ export function FileTreePanel({ state, onFileClick, noChangesProduced, noChangeS
                 aria-label="Changes requested comment"
               />
               {requestChangesError && (
-                <Text className={styles.requestChangesError}>{requestChangesError}</Text>
+                <StatusIconText status="danger" className={styles.requestChangesError}>{requestChangesError}</StatusIconText>
               )}
-              <div className={styles.requestChangesActions}>
+              <div className="azf-row azf-gap-xs">
                 <Button
                   appearance="primary"
                   size="small"
@@ -989,17 +915,17 @@ export function FileTreePanel({ state, onFileClick, noChangesProduced, noChangeS
         </div>
       )}
       {commitResult !== null && (
-        <div className={styles.reviewResultBar}>
+        <div className={mergeClasses('azf-row azf-gap-s', styles.reviewResultBar)}>
           <Badge color={reviewResultBadgeColor(commitResult.status)}>{formatReviewResultStatus(commitResult.status)}</Badge>
         </div>
       )}
       {requestChangesResult !== null && (
-        <div className={styles.reviewResultBar}>
+        <div className={mergeClasses('azf-row azf-gap-s', styles.reviewResultBar)}>
           <Badge color="informative">{formatReviewResultStatus(requestChangesResult.status)}</Badge>
         </div>
       )}
       {reviewResult !== null && (
-        <div className={styles.reviewResultBar}>
+        <div className={mergeClasses('azf-row azf-gap-s', styles.reviewResultBar)}>
           <Badge color={reviewResultBadgeColor(reviewResult.status)}>{formatReviewResultStatus(reviewResult.status)}</Badge>
         </div>
       )}
@@ -1011,28 +937,25 @@ export function FileTreePanel({ state, onFileClick, noChangesProduced, noChangeS
               <Spinner size="tiny" />
             </div>
           ) : filesError ? (
-            <div className={styles.emptyState}>
-              <Text>{filesError}</Text>
-            </div>
+            <AzureEmptyState compact title="Unable to load changes" body={filesError} className={styles.emptyState} />
           ) : files.length === 0 ? (
             <div className={styles.emptyState} data-testid="changes-empty-state">
-              {showNoChangesExplanation ? (
-                <>
-                  <Text block weight="semibold">This run produced no changes to review.</Text>
-                  <Text block>
+              <AzureEmptyState
+                compact
+                title={showNoChangesExplanation ? 'This run produced no changes to review.' : 'No changes'}
+                body={showNoChangesExplanation ? (
+                  <>
                     The agents may have written output outside the repository, or there was nothing to change.
-                  </Text>
-                  {noChangeSubtaskIds && noChangeSubtaskIds.length > 0 && (
-                    <Text block>Subtasks with no changes: {noChangeSubtaskIds.join(', ')}.</Text>
-                  )}
-                </>
-              ) : (
-                <Text>No changes</Text>
-              )}
+                    {noChangeSubtaskIds && noChangeSubtaskIds.length > 0 && (
+                      <> Subtasks with no changes: {noChangeSubtaskIds.join(', ')}.</>
+                    )}
+                  </>
+                ) : undefined}
+              />
             </div>
           ) : (
             <>
-              <div className={styles.changeHeader}>
+              <div className={mergeClasses('azf-row azf-gap-xs', styles.changeHeader)}>
                 <Text className={styles.changeHeaderTitle}>Branch Changes</Text>
                 <Text className={styles.addedCount}>+{totalAdded}</Text>
                 <Text className={styles.removedCount}>-{totalRemoved}</Text>
@@ -1076,24 +999,23 @@ export function DiffPanel({ state }: DiffPanelProps) {
   const { selectedPath, diff, diffLoading, diffError } = state;
 
   return (
-    <div className={styles.root}>
+    <div className={mergeClasses('azf-stack', styles.root)}>
       <div className={styles.content}>
         {!selectedPath ? (
-          <div className={styles.placeholder}>
-            <Text>Select a file to view its diff</Text>
-          </div>
+          <AzureEmptyState
+            compact
+            title="Select a file"
+            body="Choose a changed file to view its diff."
+            className={styles.placeholder}
+          />
         ) : diffLoading ? (
           <div className={styles.spinnerWrapper}>
             <Spinner size="tiny" />
           </div>
         ) : diffError ? (
-          <div className={styles.binaryNotice}>
-            <Text>{diffError}</Text>
-          </div>
+          <AzureEmptyState compact title="Unable to load diff" body={diffError} className={styles.binaryNotice} />
         ) : diff?.is_binary ? (
-          <div className={styles.binaryNotice}>
-            <Text>Binary file — diff not available</Text>
-          </div>
+          <AzureEmptyState compact title="Binary file — diff not available" className={styles.binaryNotice} />
         ) : (
           <DiffViewer diff={diff?.diff ?? null} filename={selectedPath ?? undefined} />
         )}
@@ -1122,17 +1044,17 @@ export function ArtifactBrowser({ runId, runStatus, onCommitSuccess, noChangesPr
   const state = useArtifactBrowser(runId, runStatus, undefined, onCommitSuccess);
 
   return (
-    <div className={styles.root}>
+    <div className="azf-stack azf-gap-s">
       {state.isHistorical && (
         <MessageBar intent="info">
           Showing the artifact state at run completion.
         </MessageBar>
       )}
-      <div className={styles.panels}>
-        <div className={styles.leftPanel}>
+      <div className={mergeClasses('azf-row azf-gap-m', styles.panels)}>
+        <div className={mergeClasses('azf-surface azf-stack', styles.leftPanel)}>
           <FileTreePanel state={state} noChangesProduced={noChangesProduced} noChangeSubtaskIds={noChangeSubtaskIds} />
         </div>
-        <div className={styles.rightPanel}>
+        <div className={mergeClasses('azf-surface azf-stack', styles.rightPanel)}>
           <DiffPanel state={state} />
         </div>
       </div>

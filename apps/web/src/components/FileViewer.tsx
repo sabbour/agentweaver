@@ -1,21 +1,20 @@
-import { useCallback, useEffect, useState } from 'react';
 import {
+  apiClient } from '../api/apiClient';
+import { AzureEmptyState,
+  AzureTabList,
   Spinner,
-  Tab,
-  TabList,
-  Text,
-  makeStyles,
+  Text } from '../copilot-fluent-system';
+import { DiffViewer } from './DiffViewer';
+import { makeStyles,
   tokens,
-} from '@fluentui/react-components';
+} from '../copilot-fluent-system';
+import ReactMarkdown from 'react-markdown';
+import rehypeSanitize from 'rehype-sanitize';
+import remarkGfm from 'remark-gfm';
+import { useCallback, useEffect, useState } from 'react';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneLight } from 'react-syntax-highlighter/dist/esm/styles/prism';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
-import rehypeSanitize from 'rehype-sanitize';
-import { DiffViewer } from './DiffViewer';
-import { apiClient } from '../api/apiClient';
-import type { WorkspaceFileDiff, WorkspaceFileContent } from '../api/types';
-
+import type { WorkspaceFileContent, WorkspaceFileDiff } from '../api/types';
 // ---------------------------------------------------------------------------
 // Styles
 // ---------------------------------------------------------------------------
@@ -212,33 +211,35 @@ export function FileViewer({
 
   if (filePath === null) {
     return (
-      <div className={styles.emptyState}>
-        <Text>Select a file to view its contents.</Text>
-      </div>
+      <AzureEmptyState
+        compact
+        title="Select a file"
+        body="Choose a file from the workbench to view its contents."
+        className={styles.emptyState}
+      />
     );
   }
+
+  const tabs = isChanged
+    ? [
+        { id: 'diff', label: 'Diff' },
+        { id: 'preview', label: 'Preview' },
+      ]
+    : [
+        { id: 'source', label: 'Source' },
+        { id: 'preview', label: 'Preview' },
+      ];
 
   return (
     <div className={styles.root} aria-label={filePath}>
       {isMarkdown && (
         <div className={styles.tabStrip}>
-          <TabList
+          <AzureTabList
+            tabs={tabs}
             selectedValue={viewMode}
-            onTabSelect={(_, d) => setViewMode(d.value as typeof viewMode)}
-            size="small"
-          >
-            {isChanged ? (
-              <>
-                <Tab value="diff">Diff</Tab>
-                <Tab value="preview">Preview</Tab>
-              </>
-            ) : (
-              <>
-                <Tab value="source">Source</Tab>
-                <Tab value="preview">Preview</Tab>
-              </>
-            )}
-          </TabList>
+            onTabSelect={(value) => setViewMode(value as typeof viewMode)}
+            ariaLabel={`${filePath} view mode`}
+          />
         </div>
       )}
       <div className={styles.content}>

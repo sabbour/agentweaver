@@ -1,10 +1,17 @@
-import { memo, type ComponentProps } from 'react';
-import { Text, makeStyles, mergeClasses, tokens } from '@fluentui/react-components';
-import { BotRegular } from '@fluentui/react-icons';
+import {
+  AzureIcon,
+  Text } from '../copilot-fluent-system';
+import { makeStyles,
+  mergeClasses,
+  tokens,
+} from '../copilot-fluent-system';
 import ReactMarkdown from 'react-markdown';
+import rehypeSanitize from 'rehype-sanitize';
 import remarkGfm from 'remark-gfm';
-import rehypeSanitize, { defaultSchema } from 'rehype-sanitize';
-
+import { BotRegular } from '../copilot-fluent-system';
+import { memo } from 'react';
+import { defaultSchema } from 'rehype-sanitize';
+import type { ComponentProps } from 'react';
 // SECURITY: sanitize with the default schema (no raw HTML passthrough).
 // rehype-raw is intentionally NOT included — raw HTML in agent text is neutralised.
 // This schema strips <script>, event-handler attributes, and any tag not on the allowlist.
@@ -12,8 +19,6 @@ const SANITIZE_SCHEMA = defaultSchema;
 
 const useStyles = makeStyles({
   wrapper: {
-    display: 'flex',
-    gap: tokens.spacingHorizontalS,
     alignItems: 'flex-start',
     paddingTop: tokens.spacingVerticalXS,
     paddingBottom: tokens.spacingVerticalXS,
@@ -24,9 +29,6 @@ const useStyles = makeStyles({
     marginTop: tokens.spacingVerticalXXS,
   },
   bubble: {
-    backgroundColor: tokens.colorNeutralBackground3,
-    borderRadius: tokens.borderRadiusLarge,
-    padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM}`,
     maxWidth: '80%',
     wordBreak: 'break-word',
     fontSize: tokens.fontSizeBase300,
@@ -132,8 +134,9 @@ const useStyles = makeStyles({
       },
     },
     '& blockquote': {
-      borderLeft: `3px solid ${tokens.colorNeutralStroke1}`,
-      paddingLeft: tokens.spacingHorizontalM,
+      border: `1px solid ${tokens.colorNeutralStroke1}`,
+      borderRadius: tokens.borderRadiusMedium,
+      padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM}`,
       marginLeft: '0',
       color: tokens.colorNeutralForeground3,
     },
@@ -196,8 +199,8 @@ export const AgentMessageBubble = memo(function AgentMessageBubble({
   const looksLikeSpecDraft = /^\s*\{/.test(content) && /"desired_outcome"\s*:/.test(content);
   if (looksLikeSpecDraft) {
     return (
-      <div className={styles.wrapper} aria-label="Agent message">
-        <BotRegular className={styles.icon} aria-hidden="true" />
+      <div className={mergeClasses('azf-row azf-gap-s', styles.wrapper)} aria-label="Agent message">
+        <AzureIcon icon={<BotRegular />} className={styles.icon} size={20} decorative />
         <Text as="span" style={{ color: tokens.colorNeutralForeground3, fontStyle: 'italic', paddingTop: tokens.spacingVerticalXXS }}>
           Drafted the outcome plan — see the Outcome plan panel.
         </Text>
@@ -210,10 +213,13 @@ export const AgentMessageBubble = memo(function AgentMessageBubble({
 
   return (
     // aria-label on wrapper; aria-live scoped to inner text only when streaming (§6.3, fix #6)
-    <div className={styles.wrapper} aria-label="Agent message">
+    <div className={mergeClasses('azf-row azf-gap-s', styles.wrapper)} aria-label="Agent message">
       {/* aria-hidden — icon is decorative, text is the accessible label (§6.4) */}
-      <BotRegular className={styles.icon} aria-hidden="true" />
-      <div className={mergeClasses(styles.bubble, showCursor && styles.cursorAfter, !renderMarkdown && styles.plainText)}>
+      <AzureIcon icon={<BotRegular />} className={styles.icon} size={20} decorative />
+      <div
+        className={mergeClasses('azf-chat-bubble', styles.bubble, showCursor && styles.cursorAfter, !renderMarkdown && styles.plainText)}
+        data-author="assistant"
+      >
         {renderMarkdown ? (
           // SECURITY: react-markdown builds a React element tree — no dangerouslySetInnerHTML.
           // rehype-sanitize (defaultSchema) strips <script>, onerror, and all non-allowlisted HTML.

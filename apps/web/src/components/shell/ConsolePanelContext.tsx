@@ -1,5 +1,4 @@
 import { createContext, useContext } from 'react';
-
 export interface ConsolePanelContextValue {
   open: boolean;
   openConsole: () => void;

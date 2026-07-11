@@ -1,8 +1,8 @@
-import { useState } from 'react';
 import {
-  Badge,
+  apiClient } from '../../api/apiClient';
+import { ApiError } from '../../api/client';
+import { Badge,
   Button,
-  Caption1,
   Field,
   Input,
   Menu,
@@ -10,26 +10,20 @@ import {
   MenuList,
   MenuPopover,
   MenuTrigger,
+  StatusIconText,
   Text,
   Textarea,
+  } from '../../copilot-fluent-system';
+import { Caption1,
   makeStyles,
+  mergeClasses,
   tokens,
-} from '@fluentui/react-components';
-import { ArchiveRegular, CheckmarkRegular, DismissRegular, EditRegular, FlowRegular } from '@fluentui/react-icons';
-import { apiClient } from '../../api/apiClient';
-import { ApiError } from '../../api/client';
+} from '../../copilot-fluent-system';
+import { ArchiveRegular, CheckmarkRegular, DismissRegular, EditRegular, FlowRegular } from '../../copilot-fluent-system';
+import { useState } from 'react';
 import type { TaskCardDto, WorkflowSummaryDto } from '../../api/types';
-
 const useStyles = makeStyles({
   card: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalXS,
-    padding: tokens.spacingVerticalM,
-    backgroundColor: tokens.colorNeutralBackground1,
-    borderRadius: tokens.borderRadiusLarge,
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
-    boxShadow: tokens.shadow2,
     cursor: 'grab',
     transitionProperty: 'border-color, box-shadow, background-color',
     transitionDuration: tokens.durationFast,
@@ -50,10 +44,8 @@ const useStyles = makeStyles({
     opacity: 0.5,
   },
   header: {
-    display: 'flex',
     alignItems: 'flex-start',
     justifyContent: 'space-between',
-    gap: tokens.spacingHorizontalXS,
   },
   title: {
     flex: '1 1 auto',
@@ -80,10 +72,6 @@ const useStyles = makeStyles({
     fontVariantNumeric: 'tabular-nums',
   },
   metadataRow: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: tokens.spacingHorizontalXS,
-    flexWrap: 'wrap',
   },
   metadataDivider: {
     color: tokens.colorNeutralForeground4,
@@ -91,8 +79,6 @@ const useStyles = makeStyles({
     lineHeight: tokens.lineHeightBase200,
   },
   cardActions: {
-    display: 'flex',
-    gap: tokens.spacingHorizontalXXS,
     flexShrink: 0,
   },
   workflowMenuItemTitle: {
@@ -101,13 +87,8 @@ const useStyles = makeStyles({
     gap: tokens.spacingHorizontalXS,
   },
   editFields: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalS,
   },
   editActions: {
-    display: 'flex',
-    gap: tokens.spacingHorizontalS,
     justifyContent: 'flex-end',
   },
   error: {
@@ -139,6 +120,7 @@ export function TaskCard({ card, columnId, projectId, onMutated, onDragStartTask
   const [notice, setNotice] = useState<string | null>(null);
   const queueLabel = card.state === 'ready' ? 'Ready for pickup' : 'Backlog intake';
   const capturedAt = new Date(card.created_at).toLocaleDateString();
+  const cardClassName = mergeClasses('azf-surface azf-surface--panel azf-surface--padding-compact azf-stack azf-gap-xs', styles.card);
 
   const reportError = (e: unknown) => {
     setError(e instanceof ApiError ? `API error ${e.status}: ${e.body}` : e instanceof Error ? e.message : String(e));
@@ -212,8 +194,8 @@ export function TaskCard({ card, columnId, projectId, onMutated, onDragStartTask
 
   if (editing) {
     return (
-      <div className={styles.card}>
-        <div className={styles.editFields}>
+      <div className={cardClassName}>
+        <div className={mergeClasses('azf-stack azf-gap-s', styles.editFields)}>
           <Field label="Title" required>
             <Input value={title} onChange={(_, v) => setTitle(v.value)} disabled={busy} />
           </Field>
@@ -221,7 +203,7 @@ export function TaskCard({ card, columnId, projectId, onMutated, onDragStartTask
             <Textarea value={description} onChange={(_, v) => setDescription(v.value)} disabled={busy} rows={3} />
           </Field>
           {error && <Text className={styles.error}>{error}</Text>}
-          <div className={styles.editActions}>
+          <div className={mergeClasses('azf-row azf-gap-s', styles.editActions)}>
             <Button
               appearance="secondary"
               size="small"
@@ -242,7 +224,7 @@ export function TaskCard({ card, columnId, projectId, onMutated, onDragStartTask
 
   return (
     <div
-      className={`${styles.card}${isDragging ? ` ${styles.dragging}` : ''}`}
+      className={mergeClasses(cardClassName, isDragging && styles.dragging)}
       draggable
       onDragStart={(e) => {
         e.dataTransfer.effectAllowed = 'move';
@@ -253,9 +235,9 @@ export function TaskCard({ card, columnId, projectId, onMutated, onDragStartTask
       onDragEnd={() => onDragEndTask()}
       data-testid={`task-card-${card.task_id}`}
     >
-      <div className={styles.header}>
+      <div className={mergeClasses('azf-row azf-gap-xs', styles.header)}>
         <Text className={styles.title}>{card.title}</Text>
-        <div className={styles.cardActions}>
+        <div className={mergeClasses('azf-row azf-gap-xs', styles.cardActions)}>
           <Menu onOpenChange={(_, d) => { if (d.open) void loadWorkflows(); }}>
             <MenuTrigger disableButtonEnhancement>
               <Button appearance="subtle" size="small" icon={<FlowRegular />} aria-label="Set workflow" disabled={busy} />
@@ -283,8 +265,8 @@ export function TaskCard({ card, columnId, projectId, onMutated, onDragStartTask
         </div>
       </div>
       {card.description && <Text className={styles.description}>{card.description}</Text>}
-      <div className={styles.metadataRow}>
-        <Badge appearance="tint" color={card.state === 'ready' ? 'informative' : 'subtle'} size="small">{queueLabel}</Badge>
+      <div className={mergeClasses('azf-row azf-gap-xs azf-wrap', styles.metadataRow)}>
+        <StatusIconText status={card.state === 'ready' ? 'info' : 'neutral'}>{queueLabel}</StatusIconText>
         <Caption1 className={styles.meta}>Captured by {card.captured_by}</Caption1>
         <Caption1 className={styles.metadataDivider}>·</Caption1>
         <Caption1 className={styles.meta}>{capturedAt}</Caption1>

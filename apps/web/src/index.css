@@ -12,16 +12,21 @@ body,
   font-family: "Segoe UI", "Segoe UI Web (West European)", -apple-system, BlinkMacSystemFont, Roboto, "Helvetica Neue", sans-serif;
 }
 
+html {
+  font-size: 15px;
+}
+
 #root {
   min-height: 100vh;
 }
 
 /* Fallback only — Fluent webLightTheme owns all background theming. */
 body {
-  background-color: var(--colorNeutralBackground2, #fafafa);
-  color: var(--colorNeutralForeground1, #242424);
+  background-color: var(--colorNeutralBackground2, #f8f4f1);
+  color: var(--colorNeutralForeground1, #272320);
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
+  line-height: 1.5;
 }
 
 /* Impeccable live-mode compatibility.

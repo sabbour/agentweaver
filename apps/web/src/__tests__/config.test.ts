@@ -1,6 +1,5 @@
-import { describe, it, expect, vi, afterEach } from 'vitest';
 import { AgentweaverApiClient, ApiError } from '../api/client';
-
+import { afterEach, describe, expect, it, vi } from 'vitest';
 // The `/api` base-path convention: API_URL is the ORIGIN ONLY (no `/api` suffix). The API
 // client owns the single `/api` prefix for XHR endpoints, while GitHub OAuth redirect
 // endpoints live at the origin root (`/auth/github/authorize`). These tests lock in that

@@ -1,17 +1,18 @@
-﻿import {
+import {
+  BladeHeader,
   Button,
   Dialog,
   DialogActions,
   DialogBody,
   DialogContent,
   DialogSurface,
-  makeStyles,
-  tokens,
-} from '@fluentui/react-components';
-import { DismissRegular } from '@fluentui/react-icons';
+  } from '../copilot-fluent-system';
 import { FileViewer } from './FileViewer';
-import type { WorkspaceFileDiff, WorkspaceFileContent } from '../api/types';
-
+import { makeStyles,
+  mergeClasses,
+  tokens,
+} from '../copilot-fluent-system';
+import type { WorkspaceFileContent, WorkspaceFileDiff } from '../api/types';
 // ---------------------------------------------------------------------------
 // Styles
 // ---------------------------------------------------------------------------
@@ -24,12 +25,6 @@ const useStyles = makeStyles({
     maxHeight: '900px',
     display: 'flex',
     flexDirection: 'column',
-  },
-  closeBtn: {
-    position: 'absolute',
-    top: tokens.spacingVerticalXS,
-    right: tokens.spacingHorizontalXS,
-    zIndex: 10,
   },
   body: {
     display: 'flex',
@@ -81,18 +76,17 @@ export function FileViewerModal({
 }: FileViewerModalProps) {
   const styles = useStyles();
   const isOpen = filePath !== null;
+  const fileName = filePath?.split('/').pop() ?? 'File viewer';
 
   return (
     <Dialog open={isOpen} onOpenChange={(_, data) => { if (!data.open) onClose(); }} modalType="modal">
-      <DialogSurface className={styles.surface} aria-label={filePath ?? 'File viewer'}>
+      <DialogSurface className={mergeClasses('azf-surface', styles.surface)} aria-label={filePath ?? 'File viewer'}>
         <DialogBody className={styles.body}>
-          <Button
-            appearance="subtle"
-            icon={<DismissRegular />}
-            size="small"
-            onClick={onClose}
-            aria-label="Close"
-            className={styles.closeBtn}
+          <BladeHeader
+            size="compact"
+            title={fileName}
+            subtitle={filePath ?? undefined}
+            onDismiss={onClose}
           />
           <DialogContent className={styles.content}>
             <FileViewer

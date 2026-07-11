@@ -49,7 +49,7 @@ export function formatModelLabel(model: string | null | undefined): string {
   const trimmed = model?.trim();
   if (!trimmed) return '—';
   return trimmed
-    .split(/[\/:_-]+/)
+    .split(/[/:_-]+/)
     .filter(Boolean)
     .map(titleizeToken)
     .join(' ');

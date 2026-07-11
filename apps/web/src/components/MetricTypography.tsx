@@ -1,6 +1,10 @@
+import {
+  Text } from '../copilot-fluent-system';
+import { makeStyles,
+  mergeClasses,
+  tokens,
+} from '../copilot-fluent-system';
 import type { ReactNode } from 'react';
-import { Text, makeStyles, mergeClasses, tokens } from '@fluentui/react-components';
-
 const useStyles = makeStyles({
   sectionHeader: {
     display: 'flex',

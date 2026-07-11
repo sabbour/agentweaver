@@ -1,8 +1,7 @@
-import { useCallback, useEffect, useState } from 'react';
-import type { BoardDto } from './types';
 import { apiClient } from './apiClient';
 import { ApiError } from './client';
-
+import { useCallback, useEffect, useState } from 'react';
+import type { BoardDto } from './types';
 export type BoardStatus = 'loading' | 'ready' | 'error';
 
 export interface UseBoardResult {

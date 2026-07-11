@@ -1,7 +1,3 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
-import { resolve } from 'node:path';
 import {
   AgenticProgress,
   AzureAccordion,
@@ -13,6 +9,7 @@ import {
   CopilotComposer,
   CopilotResponse,
   CopyButton,
+  createIconCloudRegistryFromManifest,
   CreateResourcePattern,
   FormFieldRow,
   InlineCopilot,
@@ -22,19 +19,21 @@ import {
   PortalTopNav,
   ResourceTagEditor,
   ServiceMenu,
-  createIconCloudRegistryFromManifest,
-} from '../azure-fluent-system';
-import type { AzureIconDefinition } from '../azure-fluent-system';
+} from '../copilot-fluent-system';
 import {
   AzureFluentShowcaseApp,
   publicShowcaseComponentInventoryEntries,
   showcaseComponentInventoryEntries,
   showcaseComponentInventoryNodeIds,
   showcaseComponentInventorySourceNodeIds,
-} from '../azure-fluent-system/showcase/AzureFluentShowcaseApp';
-import { componentCatalogData } from '../azure-fluent-system/showcase/catalogData';
+} from '../copilot-fluent-system/showcase/AzureFluentShowcaseApp';
+import { componentCatalogData } from '../copilot-fluent-system/showcase/catalogData';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { AzureIconDefinition } from '../copilot-fluent-system';
 import type { ReactNode } from 'react';
-
 function Wrapper({ children }: { children: ReactNode }) {
   return <AzureFluentProvider>{children}</AzureFluentProvider>;
 }
@@ -84,7 +83,7 @@ function foundationExportNames(source: string) {
 
 afterEach(() => cleanup());
 
-describe('azure-fluent-system hardened components', () => {
+describe('copilot-fluent-system hardened components', () => {
   it('renders BladeHeader with real actions and no fabricated defaults', () => {
     const onSave = vi.fn();
     render(
@@ -382,13 +381,13 @@ describe('azure-fluent-system hardened components', () => {
 
 
   it('exposes live Portal capture density tokens and flyout notification anatomy', () => {
-    const systemRoot = resolve(process.cwd(), 'src', 'azure-fluent-system');
+    const systemRoot = resolve(process.cwd(), 'src', 'copilot-fluent-system');
     const tokens = readFileSync(resolve(systemRoot, 'tokens.css'), 'utf8');
-    expect(tokens).toContain('--azf-portal-font-size: 13px');
+    expect(tokens).toContain('--azf-portal-font-size: 14px');
     expect(tokens).toContain('--azf-portal-topbar-height: 40px');
     expect(tokens).toContain('--azf-portal-control-height: 32px');
     expect(tokens).toContain('--azf-density-row-height: var(--azf-portal-row-height)');
-    expect(tokens).toContain('--azf-portal-brand: rgb(0 120 212)');
+    expect(tokens).toContain('--azf-portal-brand: rgb(36 36 36)');
 
     render(
       <Wrapper>
@@ -465,22 +464,22 @@ describe('azure-fluent-system hardened components', () => {
   });
 
   it('documents a local-first downstream workflow without requiring MCP', () => {
-    const portableDesign = readFileSync(resolve(process.cwd(), 'src', 'azure-fluent-system', 'DESIGN.md'), 'utf8');
-    const libraryReadme = readFileSync(resolve(process.cwd(), 'src', 'azure-fluent-system', 'README.md'), 'utf8');
-    const readme = readFileSync(resolve(process.cwd(), 'src', 'azure-fluent-system', 'showcase', 'README.md'), 'utf8');
-    const patternsCatalog = readFileSync(resolve(process.cwd(), 'src', 'azure-fluent-system', 'catalog', 'PATTERNS.md'), 'utf8');
+    const portableDesign = readFileSync(resolve(process.cwd(), 'src', 'copilot-fluent-system', 'DESIGN.md'), 'utf8');
+    const libraryReadme = readFileSync(resolve(process.cwd(), 'src', 'copilot-fluent-system', 'README.md'), 'utf8');
+    const readme = readFileSync(resolve(process.cwd(), 'src', 'copilot-fluent-system', 'showcase', 'README.md'), 'utf8');
+    const patternsCatalog = readFileSync(resolve(process.cwd(), 'src', 'copilot-fluent-system', 'catalog', 'PATTERNS.md'), 'utf8');
     const webPackage = JSON.parse(readFileSync(resolve(process.cwd(), 'package.json'), 'utf8')) as { scripts?: Record<string, string> };
-    const packagePackage = JSON.parse(readFileSync(resolve(process.cwd(), 'src', 'azure-fluent-system', 'package.json'), 'utf8')) as { scripts?: Record<string, string> };
+    const packagePackage = JSON.parse(readFileSync(resolve(process.cwd(), 'src', 'copilot-fluent-system', 'package.json'), 'utf8')) as { scripts?: Record<string, string> };
     const rootGitignore = readFileSync(resolve(process.cwd(), '..', '..', '.gitignore'), 'utf8');
     const removedScriptName = ['showcase', 'validate-readiness'].join(':');
     const removedValidatorFile = ['validate-showcase', 'readiness.mjs'].join('-');
     const removedSidecarDir = ['.impeccable'].join('');
     const removedSidecarFile = ['design', 'json'].join('.');
-    const removedSidecarPath = ['apps/web/src/azure-fluent-system', removedSidecarDir, removedSidecarFile].join('/');
-    expect(portableDesign).toContain('# Azure Fluent System — usage contract');
-    expect(portableDesign).toContain('Refresh a catalog row from Figma MCP only when');
-    expect(portableDesign).toContain('Public showcase rules');
-    expect(portableDesign).toContain('primary UI must not display status/readiness chrome');
+    const removedSidecarPath = ['apps/web/src/copilot-fluent-system', removedSidecarDir, removedSidecarFile].join('/');
+    expect(portableDesign).toContain('# Copilot Fluent System — usage contract');
+    expect(portableDesign).toContain('The Barrel-Only Rule');
+    expect(portableDesign).toContain('The No-Blue Rule');
+    expect(portableDesign).toContain('Traceability only; downstream');
     expect(portableDesign).not.toContain('Agentweaver');
     expect(libraryReadme).toContain('Local-first downstream workflow');
     expect(libraryReadme).toContain('Sanitized Portal capture note');
@@ -494,8 +493,8 @@ describe('azure-fluent-system hardened components', () => {
     expect(patternsCatalog).toContain('Use local artifacts for ordinary consumption.');
     expect(Object.keys(webPackage.scripts ?? {})).not.toContain(removedScriptName);
     expect(Object.keys(packagePackage.scripts ?? {})).not.toContain(removedScriptName);
-    expect(existsSync(resolve(process.cwd(), 'src', 'azure-fluent-system', 'showcase', removedValidatorFile))).toBe(false);
-    expect(existsSync(resolve(process.cwd(), 'src', 'azure-fluent-system', removedSidecarDir, removedSidecarFile))).toBe(false);
+    expect(existsSync(resolve(process.cwd(), 'src', 'copilot-fluent-system', 'showcase', removedValidatorFile))).toBe(false);
+    expect(existsSync(resolve(process.cwd(), 'src', 'copilot-fluent-system', removedSidecarDir, removedSidecarFile))).toBe(false);
     expect(rootGitignore).not.toContain(removedSidecarPath);
     expect(componentCatalogData.portability?.downstreamConsumptionDoesNotRequireFigmaMcp).toBe(true);
     expect(componentCatalogData.localConsumptionWorkflow?.length).toBeGreaterThan(2);
@@ -525,7 +524,7 @@ describe('azure-fluent-system hardened components', () => {
   });
 
   it('keeps public Azure Fluent components and approved Fluent foundations represented in the showcase browser', () => {
-    const systemRoot = resolve(process.cwd(), 'src', 'azure-fluent-system');
+    const systemRoot = resolve(process.cwd(), 'src', 'copilot-fluent-system');
     const showcaseSource = readFileSync(resolve(systemRoot, 'showcase', 'AzureFluentShowcaseApp.tsx'), 'utf8');
     const representedNames = new Set([
       ...Array.from(showcaseSource.matchAll(/exportName:\s*'([^']+)'/g), (match) => match[1]),
@@ -533,13 +532,19 @@ describe('azure-fluent-system hardened components', () => {
     ]);
 
     const helperOnly = new Set(['useAzureIconRegistry', 'createIconCloudRegistry', 'createIconCloudRegistryFromManifest', 'useToastController']);
+    const nonVisualFoundationUtilities = new Set(['makeStyles', 'mergeClasses', 'shorthands', 'tokens', 'useId']);
+    const foundationSource = readFileSync(resolve(systemRoot, 'foundations.tsx'), 'utf8');
+    const foundationNames = foundationExportNames(foundationSource);
+    expect(foundationNames.filter((name) => nonVisualFoundationUtilities.has(name))).toEqual(Array.from(nonVisualFoundationUtilities));
+    expect(foundationSource).toContain('Non-visual foundation utilities');
+
     const publicRuntimeComponents = [
       ...exportedRuntimeNames(readFileSync(resolve(systemRoot, 'components.tsx'), 'utf8')),
       ...exportedRuntimeNames(readFileSync(resolve(systemRoot, 'patterns.tsx'), 'utf8')),
       ...exportedRuntimeNames(readFileSync(resolve(systemRoot, 'provider.tsx'), 'utf8')),
       ...exportedRuntimeNames(readFileSync(resolve(systemRoot, 'icons.tsx'), 'utf8')),
-      ...foundationExportNames(readFileSync(resolve(systemRoot, 'foundations.tsx'), 'utf8')),
-    ].filter((name) => !helperOnly.has(name));
+      ...foundationNames,
+    ].filter((name) => !helperOnly.has(name) && !nonVisualFoundationUtilities.has(name));
 
     expect(publicRuntimeComponents.filter((name) => !representedNames.has(name))).toEqual([]);
     expect(readFileSync(resolve(systemRoot, 'icons.tsx'), 'utf8')).toContain('non-visual helper APIs');
@@ -547,7 +552,7 @@ describe('azure-fluent-system hardened components', () => {
   });
 
   it('blocks screenshot and arbitrary media artifacts from public showcase previews', () => {
-    const systemRoot = resolve(process.cwd(), 'src', 'azure-fluent-system');
+    const systemRoot = resolve(process.cwd(), 'src', 'copilot-fluent-system');
     const showcaseSource = readFileSync(resolve(systemRoot, 'showcase', 'AzureFluentShowcaseApp.tsx'), 'utf8');
     const examplesRoot = resolve(systemRoot, 'examples');
     const exampleSources = readdirSync(examplesRoot)
@@ -568,7 +573,7 @@ describe('azure-fluent-system hardened components', () => {
   });
 
   it('exposes primary showcase experiences with preview-first browsers', () => {
-    const showcaseSource = readFileSync(resolve(process.cwd(), 'src', 'azure-fluent-system', 'showcase', 'AzureFluentShowcaseApp.tsx'), 'utf8');
+    const showcaseSource = readFileSync(resolve(process.cwd(), 'src', 'copilot-fluent-system', 'showcase', 'AzureFluentShowcaseApp.tsx'), 'utf8');
     const { container } = render(<AzureFluentShowcaseApp />);
 
     expect(screen.getByRole('tab', { name: /^Components/i }).getAttribute('aria-selected')).toBe('true');
@@ -845,7 +850,7 @@ describe('azure-fluent-system hardened components', () => {
   });
 
   it('keeps the showcase inventory aligned with COMPONENTS.md coverage requirements', () => {
-    const catalogMarkdown = readFileSync(resolve(process.cwd(), 'src', 'azure-fluent-system', 'catalog', 'COMPONENTS.md'), 'utf8');
+    const catalogMarkdown = readFileSync(resolve(process.cwd(), 'src', 'copilot-fluent-system', 'catalog', 'COMPONENTS.md'), 'utf8');
     const parsedRows = parseComponentCatalogRows(catalogMarkdown);
     expect(parsedRows).toHaveLength(componentCatalogData.inventoryCoverage?.inventoryComponentCount ?? 0);
 
@@ -865,7 +870,7 @@ describe('azure-fluent-system hardened components', () => {
   });
 
   it('shows only rendered public component inventory in the browser', () => {
-    const catalogMarkdown = readFileSync(resolve(process.cwd(), 'src', 'azure-fluent-system', 'catalog', 'COMPONENTS.md'), 'utf8');
+    const catalogMarkdown = readFileSync(resolve(process.cwd(), 'src', 'copilot-fluent-system', 'catalog', 'COMPONENTS.md'), 'utf8');
     const parsedRows = parseComponentCatalogRows(catalogMarkdown);
     render(<AzureFluentShowcaseApp />);
 

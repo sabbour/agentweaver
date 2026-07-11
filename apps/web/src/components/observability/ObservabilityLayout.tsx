@@ -1,9 +1,11 @@
-import type { ReactNode } from 'react';
-import { Link } from 'react-router-dom';
-import { Button, makeStyles, tokens } from '@fluentui/react-components';
+import {
+  AzureTabList } from '../../copilot-fluent-system';
 import { PageHeader } from '../PageHeader';
-import { AzureCommandStrip, AzurePage } from '../azure/AzureLayout';
-
+import { makeStyles,
+  tokens,
+} from '../../copilot-fluent-system';
+import { Link, useNavigate } from 'react-router-dom';
+import type { ReactNode } from 'react';
 const useStyles = makeStyles({
   root: {
     display: 'flex',
@@ -46,6 +48,7 @@ export function ObservabilityLayout({
   children: ReactNode;
 }) {
   const styles = useStyles();
+  const navigate = useNavigate();
   const tabs = [
     { key: 'overview', label: 'Overview', href: `/projects/${projectId}/observability` },
     { key: 'traces', label: 'Traces', href: `/projects/${projectId}/observability/traces` },
@@ -53,7 +56,7 @@ export function ObservabilityLayout({
   ] as const;
 
   return (
-    <AzurePage className={styles.root}>
+    <div className={['azf-stack azf-page azf-pattern-shell', styles.root].filter(Boolean).join(' ')}>
       <PageHeader
         title={title}
         subtitle={subtitle}
@@ -70,14 +73,18 @@ export function ObservabilityLayout({
         )}
         actions={actions}
       />
-      <AzureCommandStrip className={styles.tabs}>
-        {tabs.map((tab) => (
-          <Link key={tab.key} to={tab.href} style={{ textDecoration: 'none' }}>
-            <Button appearance={activeTab === tab.key ? 'primary' : 'secondary'}>{tab.label}</Button>
-          </Link>
-        ))}
-      </AzureCommandStrip>
+      <div className={['azf-surface azf-surface--panel azf-surface--padding-compact', styles.tabs].filter(Boolean).join(' ')}>
+        <AzureTabList
+          ariaLabel="Observability sections"
+          selectedValue={activeTab}
+          onTabSelect={(value) => {
+            const selected = tabs.find((tab) => tab.key === value);
+            if (selected) navigate(selected.href);
+          }}
+          tabs={tabs.map((tab) => ({ id: tab.key, label: tab.label }))}
+        />
+      </div>
       {children}
-    </AzurePage>
+    </div>
   );
 }

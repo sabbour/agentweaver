@@ -1,5 +1,4 @@
 import type { RunStreamEvent } from '../api/sse';
-
 /** Discriminated union output of the grouping reducer. */
 export type TimelineItem = TurnGroupItem | LifecycleItem | WorkflowStepItem | QuestionRequestItem;
 

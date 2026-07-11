@@ -1,9 +1,16 @@
-import { useEffect, useState } from 'react';
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
 import { formatApiErrorMessage } from '../api/errors';
-import type { CommitResponse, RequestChangesResponse, ReviewResponse, WorkspaceFileContent, WorkspaceFileDiff, WorkspaceFileEntry, WorkspaceNode } from '../api/types';
-
+import { useEffect, useState } from 'react';
+import type {
+  CommitResponse,
+  RequestChangesResponse,
+  ReviewResponse,
+  WorkspaceFileContent,
+  WorkspaceFileDiff,
+  WorkspaceFileEntry,
+  WorkspaceNode,
+} from '../api/types';
 const POLL_INTERVAL_MS = 3000;
 
 export const FILTERS = [

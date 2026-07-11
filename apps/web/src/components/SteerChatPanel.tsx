@@ -1,18 +1,20 @@
-import { useEffect, useRef, useState } from 'react';
 import {
+  apiClient } from '../api/apiClient';
+import { ApiError } from '../api/client';
+import { AzureEmptyState,
   Button,
   MessageBar,
   MessageBarBody,
   Spinner,
   Text,
   Textarea,
-  makeStyles,
+  } from '../copilot-fluent-system';
+import { makeStyles,
+  mergeClasses,
   tokens,
-} from '@fluentui/react-components';
-import { SendRegular, StopRegular } from '@fluentui/react-icons';
-import { apiClient } from '../api/apiClient';
-import { ApiError } from '../api/client';
-
+} from '../copilot-fluent-system';
+import { SendRegular, StopRegular } from '../copilot-fluent-system';
+import { useEffect, useRef, useState } from 'react';
 // Maps a successful steer response status to a compact confirmation line.
 function steerStatusMessage(status: string): string {
   if (status === 'applied') return 'Applied — re-running the affected work with your guidance.';
@@ -29,9 +31,6 @@ interface ChatMessage {
 
 const useStyles = makeStyles({
   root: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalM,
     height: '100%',
     minHeight: 0,
   },
@@ -39,16 +38,8 @@ const useStyles = makeStyles({
     flex: 1,
     minHeight: '160px',
     overflowY: 'auto',
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalS,
-    padding: tokens.spacingVerticalS,
-    borderRadius: tokens.borderRadiusMedium,
-    backgroundColor: tokens.colorNeutralBackground2,
   },
   empty: {
-    fontSize: tokens.fontSizeBase200,
-    color: tokens.colorNeutralForeground3,
     margin: 'auto',
     textAlign: 'center',
   },
@@ -79,15 +70,10 @@ const useStyles = makeStyles({
     color: tokens.colorPaletteRedForeground1,
   },
   composer: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalXS,
     flexShrink: 0,
   },
   actions: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: tokens.spacingHorizontalS,
+    flexShrink: 0,
   },
   spacer: { flex: 1 },
   scopeNote: {
@@ -162,15 +148,19 @@ export function SteerChatPanel({ runId, canSteer = true, onSteered }: SteerChatP
   };
 
   return (
-    <div className={styles.root} data-testid="steer-chat-panel">
+    <div className={mergeClasses('azf-stack azf-gap-m', styles.root)} data-testid="steer-chat-panel">
       <Text className={styles.scopeNote}>
         Send a course-correction to the coordinator. It applies at the next step of the affected
         subtasks. Applies to all active subtasks.
       </Text>
 
-      <div className={styles.history} ref={historyRef} aria-label="Steering message history">
+      <div
+        className={mergeClasses('azf-surface azf-surface--subtle azf-surface--padding-compact azf-stack azf-gap-s', styles.history)}
+        ref={historyRef}
+        aria-label="Steering message history"
+      >
         {messages.length === 0 ? (
-          <Text className={styles.empty}>No steering messages yet.</Text>
+          <AzureEmptyState compact className={styles.empty} title="No steering messages yet." />
         ) : (
           messages.map((m) =>
             m.role === 'user' ? (
@@ -193,7 +183,7 @@ export function SteerChatPanel({ runId, canSteer = true, onSteered }: SteerChatP
         </MessageBar>
       )}
 
-      <div className={styles.composer}>
+      <div className={mergeClasses('azf-stack azf-gap-xs', styles.composer)}>
         <Textarea
           value={text}
           onChange={(_, v) => setText(v.value)}
@@ -209,7 +199,7 @@ export function SteerChatPanel({ runId, canSteer = true, onSteered }: SteerChatP
             }
           }}
         />
-        <div className={styles.actions}>
+        <div className={mergeClasses('azf-row azf-gap-s', styles.actions)}>
           <Button
             appearance="primary"
             size="small"

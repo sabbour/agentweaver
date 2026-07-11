@@ -1,5 +1,4 @@
 import { ApiError } from './client';
-
 export type ApiErrorKind =
   | 'not-found'
   | 'unauthorized'

@@ -1,6 +1,5 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AgentweaverApiClient, ApiError } from '../client';
-
+import { afterEach, describe, expect, it, vi } from 'vitest';
 describe('AgentweaverApiClient keepalive', () => {
   afterEach(() => {
     vi.unstubAllGlobals();

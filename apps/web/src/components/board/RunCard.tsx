@@ -1,22 +1,22 @@
+import {
+  apiClient } from '../../api/apiClient';
+import { ApiError } from '../../api/client';
+import { Badge,
+  Button,
+  StatusIconText,
+  Text } from '../../copilot-fluent-system';
+import { AgentAvatar } from '../AgentAvatar';
+import { Caption1,
+  makeStyles,
+  mergeClasses,
+  tokens,
+} from '../../copilot-fluent-system';
+import { ArchiveRegular, WarningRegular } from '../../copilot-fluent-system';
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Badge, Button, Caption1, Text, makeStyles, tokens } from '@fluentui/react-components';
-import { ArchiveRegular, WarningRegular } from '@fluentui/react-icons';
 import type { RunCardDto } from '../../api/types';
-import { apiClient } from '../../api/apiClient';
-import { ApiError } from '../../api/client';
-import { AgentAvatar } from '../AgentAvatar';
-
 const useStyles = makeStyles({
   card: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalXS,
-    padding: tokens.spacingVerticalM,
-    backgroundColor: tokens.colorNeutralBackground1,
-    borderRadius: tokens.borderRadiusLarge,
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
-    boxShadow: tokens.shadow2,
     textDecoration: 'none',
     color: tokens.colorNeutralForeground1,
     cursor: 'pointer',
@@ -36,11 +36,8 @@ const useStyles = makeStyles({
     },
   },
   header: {
-    display: 'flex',
     alignItems: 'flex-start',
     justifyContent: 'space-between',
-    gap: tokens.spacingHorizontalXS,
-    flexWrap: 'wrap',
   },
   task: {
     flex: '1 1 180px',
@@ -58,29 +55,14 @@ const useStyles = makeStyles({
     fontVariantNumeric: 'tabular-nums',
   },
   progressLine: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: tokens.spacingHorizontalXS,
-    flexWrap: 'wrap',
   },
   ownerLine: {
-    display: 'flex',
-    alignItems: 'center',
     justifyContent: 'space-between',
-    gap: tokens.spacingHorizontalS,
-    flexWrap: 'wrap',
   },
   agentChip: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: tokens.spacingHorizontalXS,
   },
   headerActions: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: tokens.spacingHorizontalXXS,
     flexShrink: 0,
-    flexWrap: 'wrap',
     justifyContent: 'flex-end',
   },
   error: {
@@ -106,6 +88,11 @@ function badgeColor(status: string): 'success' | 'danger' | 'warning' | 'informa
   if (s.includes('review') || s.includes('await')) return 'warning';
   if (s.includes('progress') || s.includes('dispatch') || s.includes('assembl')) return 'informative';
   return 'subtle';
+}
+
+function statusTone(status: string): 'success' | 'danger' | 'warning' | 'info' | 'neutral' {
+  const color = badgeColor(status);
+  return color === 'informative' ? 'info' : color === 'subtle' ? 'neutral' : color;
 }
 
 export interface RunCardProps {
@@ -174,22 +161,22 @@ export function RunCard({ card, projectId, onMutated }: RunCardProps) {
 
   return (
     <div
-      className={styles.card}
+      className={mergeClasses('azf-surface azf-surface--panel azf-surface--padding-compact azf-stack azf-gap-xs', styles.card)}
       data-testid={`run-card-${card.run_id}`}
       role="link"
       tabIndex={0}
       onClick={handleCardClick}
       onKeyDown={handleCardKeyDown}
     >
-      <div className={styles.header}>
+      <div className={mergeClasses('azf-row azf-gap-xs azf-wrap', styles.header)}>
         <Text className={styles.task}>{card.task || '(coordinator run)'}</Text>
-        <div className={styles.headerActions}>
+        <div className={mergeClasses('azf-row azf-gap-xs azf-wrap', styles.headerActions)}>
           {card.has_pending_approval && (
             <Badge appearance="tint" color="warning" icon={<WarningRegular />} size="small">
               Approval needed
             </Badge>
           )}
-          <Badge appearance="tint" color={badgeColor(card.status)} size="small">{humanize(card.status)}</Badge>
+          <StatusIconText status={statusTone(card.status)}>{humanize(card.status)}</StatusIconText>
           <Button
             appearance="subtle"
             size="small"
@@ -200,13 +187,13 @@ export function RunCard({ card, projectId, onMutated }: RunCardProps) {
           />
         </div>
       </div>
-      <div className={styles.progressLine}>
+      <div className={mergeClasses('azf-row azf-gap-xs azf-wrap', styles.progressLine)}>
         <Caption1 className={styles.meta}>Progress: {humanize(stage)}</Caption1>
         <Caption1 className={styles.meta}>Started {started}</Caption1>
       </div>
-      <div className={styles.ownerLine}>
+      <div className={mergeClasses('azf-row azf-gap-s azf-wrap', styles.ownerLine)}>
         {card.agent_name ? (
-          <div className={styles.agentChip} data-testid="run-card-agent">
+          <div className={mergeClasses('azf-row azf-gap-xs', styles.agentChip)} data-testid="run-card-agent">
             <AgentAvatar name={card.agent_name} size={16} />
             <Caption1 className={styles.meta}>Owner: {card.agent_name}</Caption1>
           </div>

@@ -1,11 +1,18 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor, cleanup, fireEvent } from '@testing-library/react';
-import { FluentProvider, webLightTheme } from '@fluentui/react-components';
-import { MemoryRouter, Routes, Route } from 'react-router-dom';
-import { type ReactNode } from 'react';
+import { apiClient } from '../api/apiClient';
+import { AzureFluentProvider } from '../copilot-fluent-system';
 import { RunCard } from '../components/board/RunCard';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from 'vitest';
 import type { RunCardDto } from '../api/types';
-
+import type { ReactNode } from 'react';
 vi.mock('../api/apiClient', () => ({
   apiClient: {
     retryRun: vi.fn(),
@@ -13,8 +20,6 @@ vi.mock('../api/apiClient', () => ({
     archiveRun: vi.fn(),
   },
 }));
-
-import { apiClient } from '../api/apiClient';
 
 const mockNavigate = vi.fn();
 vi.mock('react-router-dom', async (importOriginal) => {
@@ -24,14 +29,14 @@ vi.mock('react-router-dom', async (importOriginal) => {
 
 function Wrapper({ children }: { children: ReactNode }) {
   return (
-    <FluentProvider theme={webLightTheme}>
+    <AzureFluentProvider density="compact">
       <MemoryRouter initialEntries={['/projects/proj-1/board']}>
         <Routes>
           <Route path="/projects/:projectId/board" element={<>{children}</>} />
           <Route path="/projects/:projectId/orchestrations/:runId" element={<div>Run detail</div>} />
         </Routes>
       </MemoryRouter>
-    </FluentProvider>
+    </AzureFluentProvider>
   );
 }
 

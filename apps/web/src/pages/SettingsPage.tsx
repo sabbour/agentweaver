@@ -1,28 +1,29 @@
-import { useState } from 'react';
 import {
-  Button,
-  Field,
-  Input,
+  apiClient } from '../api/apiClient';
+import { ApiError } from '../api/client';
+import { BladeHeader,
+FormFieldRow,
+FormFooter,
+Input,
   MessageBar,
   MessageBarBody,
   Spinner,
   Switch,
   Text,
-  makeStyles,
-  tokens,
-} from '@fluentui/react-components';
-import { apiClient } from '../api/apiClient';
-import { ApiError } from '../api/client';
-import type { SandboxPolicy } from '../api/types';
+  } from '../copilot-fluent-system';
 import { PageHeader } from '../components/PageHeader';
-import { AzurePage, AzureSectionHeader, AzureSurface } from '../components/azure/AzureLayout';
-
+import { makeStyles,
+  tokens,
+} from '../copilot-fluent-system';
+import { Settings24Regular, Shield24Regular } from '../copilot-fluent-system';
+import { useState } from 'react';
+import type { SandboxPolicy } from '../api/types';
 const useStyles = makeStyles({
   root: {
     display: 'flex',
     flexDirection: 'column',
     gap: tokens.spacingVerticalL,
-    maxWidth: '640px',
+    maxWidth: '900px',
   },
   section: {
     display: 'flex',
@@ -53,6 +54,11 @@ const useStyles = makeStyles({
     display: 'flex',
     gap: tokens.spacingHorizontalM,
     alignItems: 'center',
+  },
+  formSurface: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalL,
   },
 });
 
@@ -113,37 +119,53 @@ export function SettingsPage() {
   };
 
   return (
-    <AzurePage className={styles.root}>
+    <div className={['azf-stack azf-page azf-pattern-shell', styles.root].filter(Boolean).join(' ')}>
       <PageHeader
         title="Settings"
         subtitle="System-level configuration for local repository policy."
+        resourceIcon={<Settings24Regular />}
       />
 
-      <AzureSurface className={styles.section}>
-        <AzureSectionHeader
+      <div className={['azf-surface azf-surface--panel azf-surface--padding-comfortable', styles.formSurface].filter(Boolean).join(' ')}>
+        <BladeHeader
+          size="compact"
           title="Sandbox policy"
-          description="View and update the sandbox policy for a repository. Enter the repository path to load its current policy."
+          subtitle="View and update the sandbox policy for a repository. Enter the repository path to load its current policy."
+          resourceIcon={<Shield24Regular />}
         />
 
-        <Field label="Repository path">
+        <FormFieldRow label="Repository path" htmlFor="settings-repository-path" hint="Use an absolute local path for the repository whose sandbox policy should be inspected.">
           <Input
+            id="settings-repository-path"
             value={repositoryPath}
             placeholder="C:/path/to/repo"
             onChange={(_, data) => setRepositoryPath(data.value)}
             onKeyDown={(e) => { if (e.key === 'Enter') void handleFetch(); }}
           />
-        </Field>
+        </FormFieldRow>
 
-        <div className={styles.actions}>
-          <Button
-            appearance="secondary"
-            disabled={!repositoryPath.trim() || loading}
-            onClick={() => void handleFetch()}
-          >
-            {loading ? 'Loading' : 'Load policy'}
-          </Button>
-          {loading && <Spinner size="extra-tiny" aria-hidden="true" />}
-        </div>
+        <FormFooter
+          primaryAction={{
+            id: 'load-policy',
+            label: loading ? 'Loading' : 'Load policy',
+            disabled: !repositoryPath.trim() || loading,
+            loading,
+            onClick: () => void handleFetch(),
+          }}
+          secondaryAction={{
+            id: 'clear-policy',
+            label: 'Clear',
+            disabled: loading && !repositoryPath,
+            onClick: () => {
+              setRepositoryPath('');
+              setPolicy(null);
+              setFetchError(null);
+              setSaveError(null);
+              setSaveSuccess(false);
+            },
+          }}
+          feedback={loading ? <Spinner size="extra-tiny" aria-hidden="true" /> : undefined}
+        />
 
         {fetchError && (
           <MessageBar intent="error">
@@ -152,8 +174,8 @@ export function SettingsPage() {
         )}
 
         {policy && (
-          <AzureSurface className={styles.section} tone="subtle">
-            <Field label="Shell execution">
+          <div className={['azf-surface azf-surface--subtle azf-surface--padding-comfortable', styles.section].filter(Boolean).join(' ')}>
+            <FormFieldRow label="Shell execution">
               <Switch
                 label={policy.shell_enabled ? 'Enabled' : 'Disabled'}
                 checked={policy.shell_enabled}
@@ -161,9 +183,9 @@ export function SettingsPage() {
                   setPolicy((prev) => prev ? { ...prev, shell_enabled: data.checked } : prev)
                 }
               />
-            </Field>
+            </FormFieldRow>
 
-            <Field
+            <FormFieldRow
               label="Sandbox enabled"
               hint="When off, commands run directly on the host with no isolation layer."
             >
@@ -174,9 +196,9 @@ export function SettingsPage() {
                   setPolicy((prev) => prev ? { ...prev, direct: !data.checked } : prev)
                 }
               />
-            </Field>
+            </FormFieldRow>
 
-            <Field
+            <FormFieldRow
               label="Outbound network"
               hint={policy.direct ? 'Only applies when the sandbox is enabled.' : undefined}
             >
@@ -188,9 +210,9 @@ export function SettingsPage() {
                   setPolicy((prev) => prev ? { ...prev, network_enabled: data.checked } : prev)
                 }
               />
-            </Field>
+            </FormFieldRow>
 
-            <Field label="Allowed repository roots">
+            <FormFieldRow label="Allowed repository roots">
               <div className={styles.listBox}>
                 {policy.allowed_repository_roots.length === 0 ? (
                   <Text className={styles.emptyNote}>None configured</Text>
@@ -201,9 +223,9 @@ export function SettingsPage() {
                   ))
                 )}
               </div>
-            </Field>
+            </FormFieldRow>
 
-            <Field label="Blocked command patterns">
+            <FormFieldRow label="Blocked command patterns">
               <div className={styles.listBox}>
                 {policy.destructive_command_patterns.length === 0 ? (
                   <Text className={styles.emptyNote}>None configured</Text>
@@ -214,18 +236,24 @@ export function SettingsPage() {
                   ))
                 )}
               </div>
-            </Field>
+            </FormFieldRow>
 
-            <div className={styles.actions}>
-              <Button
-                appearance="primary"
-                disabled={saving}
-                onClick={() => void handleSave()}
-              >
-                {saving ? 'Saving' : 'Save'}
-              </Button>
-              {saving && <Spinner size="extra-tiny" aria-hidden="true" />}
-            </div>
+            <FormFooter
+              primaryAction={{
+                id: 'save-policy',
+                label: saving ? 'Saving' : 'Save',
+                disabled: saving,
+                loading: saving,
+                onClick: () => void handleSave(),
+              }}
+              secondaryAction={{
+                id: 'discard-policy',
+                label: 'Discard changes',
+                disabled: saving || loading,
+                onClick: () => void handleFetch(),
+              }}
+              feedback={saving ? <Spinner size="extra-tiny" aria-hidden="true" /> : undefined}
+            />
 
             {saveError && (
               <MessageBar intent="error">
@@ -237,9 +265,9 @@ export function SettingsPage() {
                 <MessageBarBody>Policy saved.</MessageBarBody>
               </MessageBar>
             )}
-          </AzureSurface>
+          </div>
         )}
-      </AzureSurface>
-    </AzurePage>
+      </div>
+    </div>
   );
 }

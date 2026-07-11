@@ -1,13 +1,18 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { renderHook, waitFor, act } from '@testing-library/react';
+import { apiClient } from '../api/apiClient';
 import { useBoard } from '../api/board';
 import { makeBoard } from './fixtures/board';
-
+import { act, renderHook, waitFor } from '@testing-library/react';
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from 'vitest';
 vi.mock('../api/apiClient', () => ({
   apiClient: { getBoard: vi.fn() },
 }));
-
-import { apiClient } from '../api/apiClient';
 
 beforeEach(() => {
   vi.clearAllMocks();

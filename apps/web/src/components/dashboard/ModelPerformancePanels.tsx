@@ -1,8 +1,25 @@
-import { Badge, Text, makeStyles, tokens } from '@fluentui/react-components';
-import type { AiCreditUsagePointDto, DailyInvocationPointDto, MetricPercentilesDto, ModelUsageBreakdownDto, ProjectMetricsDto } from '../../api/types';
+import {
+  AzureDataGrid,
+  AzureEmptyState,
+  Badge,
+  BladeHeader,
+  ProgressBarWithLabel,
+  StatusIconText,
+  Text,
+  } from '../../copilot-fluent-system';
 import { costChipLabel } from '../CostChip';
-import { MetricCardHeader, MetricEmptyState } from '../MetricTypography';
-
+import { makeStyles,
+  mergeClasses,
+  tokens,
+} from '../../copilot-fluent-system';
+import type {
+  AiCreditUsagePointDto,
+  DailyInvocationPointDto,
+  MetricPercentilesDto,
+  ModelUsageBreakdownDto,
+  ProjectMetricsDto,
+} from '../../api/types';
+import type { AzfColumn } from '../../copilot-fluent-system';
 const useStyles = makeStyles({
   diagnostics: {
     display: 'grid',
@@ -12,13 +29,6 @@ const useStyles = makeStyles({
     '@media (max-width: 980px)': { gridTemplateColumns: '1fr' },
   },
   panel: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalM,
-    padding: tokens.spacingVerticalL,
-    backgroundColor: tokens.colorNeutralBackground1,
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: tokens.borderRadiusMedium,
     minWidth: 0,
   },
   trendPanel: {
@@ -57,21 +67,13 @@ const useStyles = makeStyles({
     minWidth: 0,
   },
   pendingPanel: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalM,
-    padding: tokens.spacingVerticalL,
-    borderRadius: tokens.borderRadiusMedium,
-    backgroundColor: tokens.colorNeutralBackground2,
-    border: `1px dashed ${tokens.colorNeutralStroke2}`,
+    borderTopStyle: 'dashed',
+    borderRightStyle: 'dashed',
+    borderBottomStyle: 'dashed',
+    borderLeftStyle: 'dashed',
   },
   emptyCopy: {
     maxWidth: '72ch',
-  },
-  list: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalS,
   },
   row: {
     display: 'grid',
@@ -91,23 +93,8 @@ const useStyles = makeStyles({
     gap: tokens.spacingHorizontalS,
     alignItems: 'center',
   },
-  barTrack: {
-    width: '100%',
-    height: '8px',
-    borderRadius: tokens.borderRadiusCircular,
-    backgroundColor: tokens.colorNeutralBackground3,
-    overflow: 'hidden',
-  },
-  bar: {
-    height: '100%',
-    borderRadius: tokens.borderRadiusCircular,
-    backgroundColor: tokens.colorBrandForeground1,
-  },
-  statGrid: {
-    display: 'grid',
-    gridTemplateColumns: 'minmax(0, 1fr) auto auto',
-    gap: tokens.spacingHorizontalM,
-    alignItems: 'center',
+  progress: {
+    maxWidth: 'none',
   },
 });
 
@@ -171,9 +158,10 @@ function BarList({
   const max = Math.max(1, ...rows.map(valueOf));
 
   return (
-    <div className={styles.list}>
+    <div className="azf-stack azf-gap-s">
       {rows.map((row) => {
         const value = valueOf(row);
+        const progress = value <= 0 ? 0 : Math.max(0.06, value / max);
         return (
           <div key={row.model} className={styles.row}>
             <div className={styles.rowMain}>
@@ -181,9 +169,7 @@ function BarList({
                 <Text>{row.model}</Text>
                 <Text>{valueLabel(row)}</Text>
               </div>
-              <div className={styles.barTrack}>
-                <div className={styles.bar} style={{ width: `${Math.max(6, (value / max) * 100)}%` }} />
-              </div>
+              <ProgressBarWithLabel className={styles.progress} value={progress} max={1} thickness="large" />
             </div>
             <Badge appearance="outline">{row.invocationCount} calls</Badge>
           </div>
@@ -194,22 +180,52 @@ function BarList({
 }
 
 function PercentilesTable({ rows, emptyLabel }: { rows: MetricPercentilesDto[]; emptyLabel: string }) {
-  const styles = useStyles();
+  const columns: AzfColumn<MetricPercentilesDto>[] = [
+    {
+      columnId: 'label',
+      header: 'Model',
+      renderCell: (row) => <Text>{row.label}</Text>,
+      sortable: true,
+      sortValue: (row) => row.label,
+    },
+    {
+      columnId: 'p50',
+      header: 'P50',
+      renderCell: (row) => (
+        <StatusIconText status={row.p50Ms != null ? 'info' : 'neutral'}>
+          {row.p50Ms != null ? `${Math.round(row.p50Ms)} ms` : '—'}
+        </StatusIconText>
+      ),
+      sortable: true,
+      sortValue: (row) => row.p50Ms ?? null,
+      width: '120px',
+    },
+    {
+      columnId: 'p95',
+      header: 'P95',
+      renderCell: (row) => (
+        <StatusIconText status={row.p95Ms != null ? 'warning' : 'neutral'}>
+          {row.p95Ms != null ? `${Math.round(row.p95Ms)} ms` : '—'}
+        </StatusIconText>
+      ),
+      sortable: true,
+      sortValue: (row) => row.p95Ms ?? null,
+      width: '120px',
+    },
+  ];
 
   if (rows.length === 0) {
-    return <MetricEmptyState>{emptyLabel}</MetricEmptyState>;
+    return <AzureEmptyState compact title={emptyLabel} />;
   }
 
   return (
-    <div className={styles.list}>
-      {rows.map((row) => (
-        <div key={row.label} className={styles.statGrid}>
-          <Text>{row.label}</Text>
-          <Badge appearance="tint">P50 {row.p50Ms != null ? `${Math.round(row.p50Ms)} ms` : '—'}</Badge>
-          <Badge appearance="outline">P95 {row.p95Ms != null ? `${Math.round(row.p95Ms)} ms` : '—'}</Badge>
-        </div>
-      ))}
-    </div>
+    <AzureDataGrid
+      items={rows}
+      columns={columns}
+      getRowId={(row) => row.label}
+      ariaLabel="Latency percentiles"
+      emptyState={<AzureEmptyState compact title={emptyLabel} />}
+    />
   );
 }
 
@@ -230,27 +246,30 @@ export function ModelPerformancePanels({ metrics }: { metrics: ProjectMetricsDto
 
   if (!hasAnyTelemetry) {
     return (
-      <div className={styles.pendingPanel}>
-        <MetricCardHeader
+      <div className={mergeClasses('azf-surface azf-surface--subtle azf-surface--padding-comfortable azf-stack azf-gap-m', styles.pendingPanel)}>
+        <BladeHeader
+          size="compact"
           title="Model telemetry pending"
           subtitle="No model usage, AI credit, or latency signals are available for this range yet."
         />
-        <MetricEmptyState className={styles.emptyCopy}>
-          Run or complete an agent task to populate model mix, AI credit usage, response duration, and first-token timing.
-        </MetricEmptyState>
+        <AzureEmptyState
+          compact
+          className={styles.emptyCopy}
+          title="Run or complete an agent task to populate model mix, AI credit usage, response duration, and first-token timing."
+        />
       </div>
     );
   }
 
   return (
     <div className={styles.diagnostics}>
-      <div className={`${styles.panel} ${styles.trendPanel}`}>
-        <MetricCardHeader title="Model signal trend" subtitle="Run creation is shown as activity context; AI credit movement is the model evidence used for optimization." />
+      <div className={mergeClasses('azf-surface azf-surface--panel azf-surface--padding-comfortable azf-stack azf-gap-m', styles.panel, styles.trendPanel)}>
+        <BladeHeader size="compact" title="Model signal trend" subtitle="Run creation is shown as activity context; AI credit movement is the model evidence used for optimization." />
         <div className={styles.chartStack}>
           <div className={styles.chartSlot}>
             <Text className={styles.slotTitle}>Runs created</Text>
             {invocationTrend.length === 0 || !hasInvocationTrend ? (
-              <MetricEmptyState>No run-creation data yet.</MetricEmptyState>
+              <AzureEmptyState compact title="No run-creation data yet." />
             ) : (
               <LineChart points={invocationTrend} valueOf={(point) => 'count' in point ? point.count : 0} label="Runs created over time" />
             )}
@@ -258,7 +277,7 @@ export function ModelPerformancePanels({ metrics }: { metrics: ProjectMetricsDto
           <div className={styles.chartSlot}>
             <Text className={styles.slotTitle}>AI credit usage</Text>
             {aiCreditUsageTrend.length === 0 || !hasAiCreditTrend ? (
-              <MetricEmptyState>No AI credit usage data yet.</MetricEmptyState>
+              <AzureEmptyState compact title="No AI credit usage data yet." />
             ) : (
               <LineChart
                 points={aiCreditUsageTrend}
@@ -271,12 +290,12 @@ export function ModelPerformancePanels({ metrics }: { metrics: ProjectMetricsDto
         </div>
       </div>
 
-      <div className={styles.panel}>
-        <MetricCardHeader title="Model mix" subtitle="Compare spend and invocation share for the models that have emitted usage events." />
+      <div className={mergeClasses('azf-surface azf-surface--panel azf-surface--padding-comfortable azf-stack azf-gap-m', styles.panel)}>
+        <BladeHeader size="compact" title="Model mix" subtitle="Compare spend and invocation share for the models that have emitted usage events." />
         <div className={styles.subsection}>
           <Text className={styles.slotTitle}>AI credit usage by model</Text>
           {modelUsage.length === 0 ? (
-            <MetricEmptyState>No AI credit usage data yet.</MetricEmptyState>
+            <AzureEmptyState compact title="No AI credit usage data yet." />
           ) : (
             <BarList
               rows={modelUsage}
@@ -288,7 +307,7 @@ export function ModelPerformancePanels({ metrics }: { metrics: ProjectMetricsDto
         <div className={styles.subsection}>
           <Text className={styles.slotTitle}>Invocation share</Text>
           {modelUsage.length === 0 ? (
-            <MetricEmptyState>No model invocation data yet.</MetricEmptyState>
+            <AzureEmptyState compact title="No model invocation data yet." />
           ) : (
             <BarList
               rows={modelUsage}
@@ -299,8 +318,8 @@ export function ModelPerformancePanels({ metrics }: { metrics: ProjectMetricsDto
         </div>
       </div>
 
-      <div className={`${styles.panel} ${styles.latencyPanel}`}>
-        <MetricCardHeader title="Latency checkpoints" subtitle="P50 and P95 duration/TTFT stay grouped so slow models are visible without another card row." />
+      <div className={mergeClasses('azf-surface azf-surface--panel azf-surface--padding-comfortable azf-stack azf-gap-m', styles.panel, styles.latencyPanel)}>
+        <BladeHeader size="compact" title="Latency checkpoints" subtitle="P50 and P95 duration/TTFT stay grouped so slow models are visible without another card row." />
         <div className={styles.latencyGrid}>
           <div className={styles.subsection}>
             <Text className={styles.slotTitle}>Response duration by model</Text>

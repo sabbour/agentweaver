@@ -1,20 +1,19 @@
-import { describe, it, expect, afterEach } from 'vitest';
-import { render, screen, cleanup, fireEvent } from '@testing-library/react';
-import { FluentProvider, webLightTheme } from '@fluentui/react-components';
+import { AzureFluentProvider } from '../copilot-fluent-system';
 import { useCtrlScrollZoom, ZoomControls } from '../components/board/useCtrlScrollZoom';
-
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { afterEach, describe, expect, it } from 'vitest';
 afterEach(() => cleanup());
 
 // Default harness (no options) — mirrors KanbanBoard behaviour: max = 100%.
 function ZoomHarness() {
   const { zoom, zoomIn, zoomOut, viewportRef, maxZoom } = useCtrlScrollZoom();
   return (
-    <FluentProvider theme={webLightTheme}>
+    <AzureFluentProvider density="compact">
       <ZoomControls zoom={zoom} onZoomIn={zoomIn} onZoomOut={zoomOut} maxZoom={maxZoom} />
       <div ref={viewportRef}>
         <div style={{ zoom }} data-testid="zoom-target" />
       </div>
-    </FluentProvider>
+    </AzureFluentProvider>
   );
 }
 
@@ -22,12 +21,12 @@ function ZoomHarness() {
 function ZoomHarnessWithMax({ maxZoom: max }: { maxZoom: number }) {
   const { zoom, zoomIn, zoomOut, viewportRef, maxZoom } = useCtrlScrollZoom({ maxZoom: max });
   return (
-    <FluentProvider theme={webLightTheme}>
+    <AzureFluentProvider density="compact">
       <ZoomControls zoom={zoom} onZoomIn={zoomIn} onZoomOut={zoomOut} maxZoom={maxZoom} />
       <div ref={viewportRef}>
         <div style={{ zoom }} data-testid="zoom-target" />
       </div>
-    </FluentProvider>
+    </AzureFluentProvider>
   );
 }
 
@@ -45,7 +44,7 @@ describe('useCtrlScrollZoom — shared Ctrl+Scroll zoom (workflow canvas + board
     function FitHarness() {
       const { zoom, zoomIn, zoomOut, resetZoom, maxZoom } = useCtrlScrollZoom({ maxZoom: 2 });
       return (
-        <FluentProvider theme={webLightTheme}>
+        <AzureFluentProvider density="compact">
           <ZoomControls
             zoom={zoom}
             onZoomIn={zoomIn}
@@ -53,7 +52,7 @@ describe('useCtrlScrollZoom — shared Ctrl+Scroll zoom (workflow canvas + board
             onFit={resetZoom}
             maxZoom={maxZoom}
           />
-        </FluentProvider>
+        </AzureFluentProvider>
       );
     }
     render(<FitHarness />);

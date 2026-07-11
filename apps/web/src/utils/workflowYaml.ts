@@ -1,3 +1,4 @@
+import { Document, isMap, isSeq, parseDocument } from 'yaml';
 /**
  * workflowYaml — client-side YAML ↔ execution-graph conversion for the visual
  * workflow editor (Feature 015, US8 / FR-050).
@@ -11,8 +12,6 @@
  * All authoritative validation/persistence remains server-side; this is only a
  * view-and-edit convenience layer over the canonical YAML text.
  */
-import { parseDocument, isSeq, isMap, type Document } from 'yaml';
-
 /** The canonical node `type` strings the runtime loader accepts (WorkflowDefinitionLoader.TryParseNodeType). */
 export const WORKFLOW_NODE_TYPES = [
   'prompt',

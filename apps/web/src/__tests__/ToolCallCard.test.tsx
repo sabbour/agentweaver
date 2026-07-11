@@ -1,13 +1,12 @@
-import { describe, it, expect } from 'vitest';
-import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { FluentProvider, webLightTheme } from '@fluentui/react-components';
-import { type ReactNode } from 'react';
+import { AzureFluentProvider } from '../copilot-fluent-system';
 import { ToolCallCard } from '../components/ToolCallCard';
+import { render, screen, within } from '@testing-library/react';
+import { describe, expect, it } from 'vitest';
 import type { ToolCallItem } from '../timeline/types';
-
+import type { ReactNode } from 'react';
 function Wrapper({ children }: { children: ReactNode }) {
-  return <FluentProvider theme={webLightTheme}>{children}</FluentProvider>;
+  return <AzureFluentProvider density="compact">{children}</AzureFluentProvider>;
 }
 
 function makeCall(overrides: Partial<ToolCallItem> = {}): ToolCallItem {

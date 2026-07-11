@@ -1,5 +1,4 @@
-import { Badge } from '@fluentui/react-components';
-
+import { Badge } from '../copilot-fluent-system';
 export function formatAic(nanoAiu: number | null | undefined, digits = 2): string {
   if (nanoAiu == null || !Number.isFinite(nanoAiu)) return '0';
   const value = nanoAiu / 1_000_000_000;
@@ -33,7 +32,7 @@ export function CostChip({
   const label = costChipLabel(totalNanoAiu, totalTokens);
   if (!label) return null;
   return (
-    <Badge appearance="tint" color="informative" size="small" aria-label={ariaLabel ?? `Cost ${label}`}>
+    <Badge className="azf-row azf-gap-xs" appearance="tint" color="informative" size="small" aria-label={ariaLabel ?? `Cost ${label}`}>
       {label}
     </Badge>
   );

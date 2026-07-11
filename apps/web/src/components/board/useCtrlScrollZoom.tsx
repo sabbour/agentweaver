@@ -1,3 +1,11 @@
+import {
+  Button } from '../../copilot-fluent-system';
+import { Caption1,
+  makeStyles,
+  tokens,
+} from '../../copilot-fluent-system';
+import { ArrowMaximizeRegular, ZoomInRegular, ZoomOutRegular } from '../../copilot-fluent-system';
+import { useCallback, useRef, useState } from 'react';
 /**
  * useCtrlScrollZoom — shared Ctrl+Scroll zoom behaviour and affordance.
  *
@@ -11,10 +19,6 @@
  * plain scroll-to-pan is left untouched). It is wired through a callback ref so
  * it attaches/detaches correctly regardless of conditional rendering.
  */
-import { useCallback, useRef, useState } from 'react';
-import { Button, Caption1, makeStyles, tokens } from '@fluentui/react-components';
-import { ArrowMaximizeRegular, ZoomInRegular, ZoomOutRegular } from '@fluentui/react-icons';
-
 export const MIN_ZOOM = 0.5;
 export const MAX_ZOOM = 1;
 export const ZOOM_STEP = 0.1;

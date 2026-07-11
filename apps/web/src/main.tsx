@@ -1,8 +1,8 @@
-import { Component, StrictMode, type ErrorInfo, type ReactNode } from 'react'
-import { createRoot } from 'react-dom/client'
-import './index.css'
-import App from './App.tsx'
-
+import './index.css';
+import App from './App.tsx';
+import { Component, StrictMode } from 'react';
+import { createRoot } from 'react-dom/client';
+import type { ErrorInfo, ReactNode } from 'react';
 if (import.meta.env.DEV) {
   const focusGuardModule = '/src/dev/impeccableLiveFocusGuard.ts';
   void import(/* @vite-ignore */ focusGuardModule).then((module: typeof import('./dev/impeccableLiveFocusGuard')) => {

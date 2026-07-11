@@ -1,32 +1,27 @@
-import { memo, useMemo } from 'react';
-import { Spinner, Text, makeStyles, tokens } from '@fluentui/react-components';
-import { TurnGroup } from './TurnGroup';
+import {
+  Spinner,
+  StatusIconText,
+  Text } from '../copilot-fluent-system';
 import { LifecycleEventCard } from './LifecycleEventCard';
-import { WorkflowStepCard } from './WorkflowStepCard';
 import { QuestionAnswerCard } from './QuestionAnswerCard';
-import type { TimelineItem } from '../timeline/types';
+import { TurnGroup } from './TurnGroup';
+import { WorkflowStepCard } from './WorkflowStepCard';
+import { makeStyles,
+  mergeClasses,
+  tokens,
+} from '../copilot-fluent-system';
+import { memo, useMemo } from 'react';
 import type { StreamStatus } from '../api/sse';
-
+import type { TimelineItem } from '../timeline/types';
 const useStyles = makeStyles({
   root: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalXS,
   },
   connecting: {
-    color: tokens.colorNeutralForeground3,
     fontSize: tokens.fontSizeBase200,
-    display: 'flex',
-    alignItems: 'center',
-    gap: tokens.spacingHorizontalS,
     paddingTop: tokens.spacingVerticalS,
   },
   skipped: {
-    color: tokens.colorNeutralForeground3,
     fontSize: tokens.fontSizeBase200,
-    padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalM}`,
-    backgroundColor: tokens.colorNeutralBackground2,
-    borderRadius: tokens.borderRadiusSmall,
   },
 });
 
@@ -65,13 +60,15 @@ export const Timeline = memo(function Timeline({ items, streamStatus, isLiveRun,
   return (
     // role="log" announces new items; aria-live="polite" only when live (fix #6)
     <div
-      className={styles.root}
+      className={mergeClasses('azf-stack azf-gap-xs', styles.root)}
       role="log"
       aria-label="Run timeline"
       aria-live={isLiveRun ? 'polite' : undefined}
     >
       {skippedEventCount > 0 && (
-        <Text className={styles.skipped}>{skippedEventCount} older events not shown.</Text>
+        <Text className={mergeClasses('azf-surface azf-surface--subtle azf-surface--padding-compact azf-muted', styles.skipped)}>
+          {skippedEventCount} older events not shown.
+        </Text>
       )}
       {items.map((item, i) => {
         if (item.kind === 'turn-group') {
@@ -129,10 +126,9 @@ export const Timeline = memo(function Timeline({ items, streamStatus, isLiveRun,
       })}
 
       {streamStatus === 'connecting' && (
-        <div className={styles.connecting}>
-          <Spinner size="extra-tiny" aria-hidden="true" />
-          <Text>Waiting for agent...</Text>
-        </div>
+        <StatusIconText status="info" icon={<Spinner size="extra-tiny" aria-hidden="true" />} className={styles.connecting}>
+          Waiting for agent...
+        </StatusIconText>
       )}
     </div>
   );

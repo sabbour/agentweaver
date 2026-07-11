@@ -1,3 +1,13 @@
+import { AzureFluentProvider } from '../copilot-fluent-system';
+import { ActiveEdgeContext, ExecutionModalContext, workflowNodeTypes } from '../components/WorkflowGraphPanel';
+import { buildSteppedConnectorRoute } from '../utils/dagLayout';
+import { BotRegular, CheckmarkCircleRegular, MergeRegular, ShieldRegular } from '../copilot-fluent-system';
+import { cleanup, render, waitFor } from '@testing-library/react';
+import { ReactFlow } from '@xyflow/react';
+import { MemoryRouter } from 'react-router-dom';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { WorkflowNodeData } from '../components/WorkflowGraphPanel';
+import type { Node } from '@xyflow/react';
 /**
  * Direct unit tests for WorkflowNode — verifies that node_type drives
  * data-node-type attribute and card width class.
@@ -6,13 +16,6 @@
  * through the full page loading chain, which avoids async
  * descriptor-fetch timing issues in happy-dom.
  */
-import { describe, it, expect, afterEach, vi } from 'vitest';
-import { render, waitFor, cleanup } from '@testing-library/react';
-import { ReactFlow } from '@xyflow/react';
-import { FluentProvider, webLightTheme } from '@fluentui/react-components';
-import { MemoryRouter } from 'react-router-dom';
-import { BotRegular, ShieldRegular, MergeRegular, CheckmarkCircleRegular } from '@fluentui/react-icons';
-
 // ResizeObserver is absent in happy-dom.
 class ResizeObserverStub {
   observe() {}
@@ -26,15 +29,6 @@ vi.mock('../api/apiClient', () => ({
     getSystemRuntime: vi.fn().mockResolvedValue({ kubernetes: false, podName: null }),
   },
 }));
-
-import {
-  workflowNodeTypes,
-  ExecutionModalContext,
-  ActiveEdgeContext,
-  type WorkflowNodeData,
-} from '../components/WorkflowGraphPanel';
-import { buildSteppedConnectorRoute } from '../utils/dagLayout';
-import type { Node } from '@xyflow/react';
 
 afterEach(cleanup);
 
@@ -58,7 +52,7 @@ function makeAgentNode(nodeType: WorkflowNodeData['nodeType']): Node[] {
 
 function Wrapper({ nodes }: { nodes: Node[] }) {
   return (
-    <FluentProvider theme={webLightTheme}>
+    <AzureFluentProvider density="compact">
       <MemoryRouter>
         <ExecutionModalContext.Provider value={undefined}>
           <ActiveEdgeContext.Provider value={undefined}>
@@ -72,7 +66,7 @@ function Wrapper({ nodes }: { nodes: Node[] }) {
           </ActiveEdgeContext.Provider>
         </ExecutionModalContext.Provider>
       </MemoryRouter>
-    </FluentProvider>
+    </AzureFluentProvider>
   );
 }
 

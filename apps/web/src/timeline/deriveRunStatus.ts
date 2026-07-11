@@ -1,5 +1,4 @@
 import type { RunStreamEvent } from '../api/sse';
-
 /**
  * Derive the current run status from the ordered list of SSE lifecycle events.
  * Scans events in arrival order; the last recognized lifecycle event wins.

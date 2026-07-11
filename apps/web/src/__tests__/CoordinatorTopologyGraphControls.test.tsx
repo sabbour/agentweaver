@@ -1,8 +1,8 @@
-import type { ReactNode } from 'react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { AzureFluentProvider } from '../copilot-fluent-system';
+import { GraphControls } from '../components/CoordinatorTopologyGraph';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
-import { FluentProvider, webLightTheme } from '@fluentui/react-components';
-
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { ReactNode } from 'react';
 // ResizeObserver is required by @xyflow/react and absent in happy-dom.
 class ResizeObserverStub {
   observe() {}
@@ -35,10 +35,8 @@ vi.mock('@xyflow/react', async (importActual) => {
   };
 });
 
-import { GraphControls } from '../components/CoordinatorTopologyGraph';
-
 function Wrapper({ children }: { children: ReactNode }) {
-  return <FluentProvider theme={webLightTheme}>{children}</FluentProvider>;
+  return <AzureFluentProvider density="compact">{children}</AzureFluentProvider>;
 }
 
 afterEach(() => {

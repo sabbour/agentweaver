@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useState } from 'react';
-import { useRunStream, type RunStreamEvent, type EventType, type StreamStatus } from '../api/sse';
 import { apiClient } from '../api/apiClient';
+import { useRunStream } from '../api/sse';
 import { mergeRunEvents, SEED_STATUSES } from '../timeline/mergeRunEvents';
-
+import { useEffect, useMemo, useState } from 'react';
+import type { EventType, RunStreamEvent, StreamStatus } from '../api/sse';
 export interface SeededRunStream {
   /** Persisted seed folded under the live SSE deltas — feed this to useTimelineItems. */
   events: RunStreamEvent[];

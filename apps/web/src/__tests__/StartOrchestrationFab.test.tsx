@@ -1,9 +1,18 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, cleanup, waitFor, fireEvent } from '@testing-library/react';
-import { FluentProvider, webLightTheme } from '@fluentui/react-components';
+import { apiClient } from '../api/apiClient';
+import { AzureFluentProvider } from '../copilot-fluent-system';
+import { StartOrchestrationFab } from '../components/StartOrchestrationFab';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
-import { type ReactNode } from 'react';
-
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from 'vitest';
+import type { Project } from '../api/types';
+import type { ReactNode } from 'react';
 const navigateMock = vi.fn();
 vi.mock('react-router-dom', async () => {
   const actual = await vi.importActual<typeof import('react-router-dom')>('react-router-dom');
@@ -17,10 +26,6 @@ vi.mock('../api/apiClient', () => ({
     listWorkflows: vi.fn(() => Promise.resolve({ default_workflow_id: 'default', workflows: [] })),
   },
 }));
-
-import { apiClient } from '../api/apiClient';
-import { StartOrchestrationFab } from '../components/StartOrchestrationFab';
-import type { Project } from '../api/types';
 
 function makeProject(id: string, name: string): Project {
   return {
@@ -46,9 +51,9 @@ function makeProject(id: string, name: string): Project {
 
 function Wrapper({ children }: { children: ReactNode }) {
   return (
-    <FluentProvider theme={webLightTheme}>
+    <AzureFluentProvider density="compact">
       <MemoryRouter>{children}</MemoryRouter>
-    </FluentProvider>
+    </AzureFluentProvider>
   );
 }
 

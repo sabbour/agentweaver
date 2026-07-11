@@ -1,12 +1,20 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, waitFor, cleanup, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { apiClient } from '../api/apiClient';
+import { AzureFluentProvider } from '../copilot-fluent-system';
+import { AgentSessionPanel } from '../components/AgentSessionPanel';
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
-import { FluentProvider, webLightTheme } from '@fluentui/react-components';
-import { type ReactNode } from 'react';
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from 'vitest';
 import type { RunStreamEvent } from '../api/sse';
-import { AgentSessionPanel, type RunSessionTree } from '../components/AgentSessionPanel';
-
+import type { RunSessionTree } from '../components/AgentSessionPanel';
+import type { ReactNode } from 'react';
 let currentEvents: RunStreamEvent[] = [];
 
 vi.mock('../api/apiClient', () => ({
@@ -33,15 +41,13 @@ vi.mock('../api/sse', () => ({
   useRunStream: () => ({ events: currentEvents, status: 'done', error: null, reconnect: vi.fn() }),
 }));
 
-import { apiClient } from '../api/apiClient';
-
 function Wrapper({ children }: { children: ReactNode }) {
   return (
-    <FluentProvider theme={webLightTheme}>
+    <AzureFluentProvider density="compact">
       <MemoryRouter>
         {children}
       </MemoryRouter>
-    </FluentProvider>
+    </AzureFluentProvider>
   );
 }
 

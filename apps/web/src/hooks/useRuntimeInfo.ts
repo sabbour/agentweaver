@@ -1,7 +1,6 @@
-import { useEffect, useState } from 'react';
 import { apiClient } from '../api/apiClient';
+import { useEffect, useState } from 'react';
 import type { RuntimeInfo } from '../api/types';
-
 interface RuntimeInfoState {
   podName: string | null;
   kubernetes: boolean;

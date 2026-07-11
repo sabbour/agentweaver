@@ -1,7 +1,6 @@
-import { describe, it, expect } from 'vitest';
 import { buildTraceTree } from '../components/runs/traceTree';
+import { describe, expect, it } from 'vitest';
 import type { RunTraceSpanDto } from '../api/types';
-
 function span(partial: Partial<RunTraceSpanDto> & { id: string }): RunTraceSpanDto {
   return {
     name: partial.id,

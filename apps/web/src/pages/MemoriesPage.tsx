@@ -1,27 +1,28 @@
-import { useEffect, useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
 import {
+  apiClient } from '../api/apiClient';
+import { ApiError } from '../api/client';
+import { AzureTabList,
+  Badge,
+  BladeHeader,
   Button,
+  CommandBar,
+  EmptyState,
   Field,
   Input,
   MessageBar,
   MessageBarBody,
   Spinner,
-  Tab,
-  TabList,
+  StatusIconText,
   Text,
-  Badge,
   Textarea,
-  makeStyles,
-  tokens,
-} from '@fluentui/react-components';
-import type { SelectTabData } from '@fluentui/react-components';
-import { apiClient } from '../api/apiClient';
-import { ApiError } from '../api/client';
-import type { DecisionDto, AgentMemoryDto, DecisionInboxEntryDto } from '../api/types';
+  } from '../copilot-fluent-system';
 import { PageHeader } from '../components/PageHeader';
-import { AzureEmptyState, AzurePage, AzureSectionHeader, AzureSurface } from '../components/azure/AzureLayout';
-
+import { makeStyles,
+  tokens,
+} from '../copilot-fluent-system';
+import { useEffect, useState } from 'react';
+import { Link, useParams } from 'react-router-dom';
+import type { AgentMemoryDto, DecisionDto, DecisionInboxEntryDto } from '../api/types';
 // ---------------------------------------------------------------------------
 // Styles
 // ---------------------------------------------------------------------------
@@ -42,6 +43,50 @@ const useStyles = makeStyles({
   breadcrumbLink: {
     color: tokens.colorBrandForeground1,
     textDecoration: 'none',
+  },
+  commandSurface: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalM,
+  },
+  statusPills: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalS,
+    flexWrap: 'wrap',
+  },
+  statusPill: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    minHeight: '28px',
+    padding: `${tokens.spacingVerticalXXS} ${tokens.spacingHorizontalS}`,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusMedium,
+    backgroundColor: tokens.colorNeutralBackground2,
+    fontSize: tokens.fontSizeBase200,
+    fontVariantNumeric: 'tabular-nums',
+  },
+  summaryGrid: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+    gap: tokens.spacingHorizontalM,
+  },
+  summaryCard: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalXXS,
+  },
+  summaryLabel: {
+    color: tokens.colorNeutralForeground3,
+    fontSize: tokens.fontSizeBase200,
+    textTransform: 'uppercase',
+    letterSpacing: '0.04em',
+  },
+  summaryValue: {
+    fontSize: tokens.fontSizeBase600,
+    lineHeight: tokens.lineHeightBase600,
+    fontWeight: tokens.fontWeightSemibold,
+    fontVariantNumeric: 'tabular-nums',
   },
   tabContent: {
     display: 'flex',
@@ -260,9 +305,11 @@ export function MemoriesPage() {
   const pending = (inbox ?? []).filter(e => e.status === 'pending');
   const hasActiveDecisions = decisions !== null && decisions.length > 0;
   const busy = busyAction !== null;
+  const decisionCount = decisions?.length ?? 0;
+  const memoryCount = memory?.length ?? 0;
 
   return (
-    <AzurePage className={styles.root}>
+    <div className={['azf-stack azf-page azf-pattern-shell', styles.root].filter(Boolean).join(' ')}>
       <PageHeader
         title="Team Memory"
         subtitle="Decisions and learnings the team has captured."
@@ -277,16 +324,55 @@ export function MemoriesPage() {
         }
       />
 
-      {/* Tabs */}
-      <TabList
-        selectedValue={selectedTab}
-        onTabSelect={(_e, d: SelectTabData) => setSelectedTab(d.value as 'decisions' | 'memory')}
-      >
-        <Tab value="decisions">Decisions</Tab>
-        <Tab value="memory">Agent Memory</Tab>
-      </TabList>
+      <section className={['azf-surface azf-surface--raised azf-surface--padding-comfortable', styles.commandSurface].filter(Boolean).join(' ')} aria-label="Team memory resource command surface">
+        <CommandBar
+          title="Memory command surface"
+          description="Azure resource blade for durable decisions, pending proposals, and agent learnings."
+        >
+          <div className={styles.statusPills}>
+            <StatusIconText className={styles.statusPill} status={pending.length > 0 ? 'warning' : 'success'}>
+              {pending.length} pending
+            </StatusIconText>
+            <StatusIconText className={styles.statusPill} status="info">
+              {decisionCount} decisions
+            </StatusIconText>
+            <StatusIconText className={styles.statusPill} status="neutral">
+              {memoryCount} memories
+            </StatusIconText>
+          </div>
+        </CommandBar>
+        <div className={styles.summaryGrid}>
+          <div className={['azf-surface azf-surface--subtle azf-surface--padding-compact', styles.summaryCard].filter(Boolean).join(' ')}>
+            <Text className={styles.summaryLabel}>Decision inbox</Text>
+            <Text className={styles.summaryValue}>{pending.length}</Text>
+            <Text className={styles.proposedCaption}>Coordinator-reviewed proposals awaiting action.</Text>
+          </div>
+          <div className={['azf-surface azf-surface--subtle azf-surface--padding-compact', styles.summaryCard].filter(Boolean).join(' ')}>
+            <Text className={styles.summaryLabel}>Accepted decisions</Text>
+            <Text className={styles.summaryValue}>{decisionCount}</Text>
+            <Text className={styles.proposedCaption}>Merged architectural and scope decisions.</Text>
+          </div>
+          <div className={['azf-surface azf-surface--subtle azf-surface--padding-compact', styles.summaryCard].filter(Boolean).join(' ')}>
+            <Text className={styles.summaryLabel}>Agent memory</Text>
+            <Text className={styles.summaryValue}>{memoryCount}</Text>
+            <Text className={styles.proposedCaption}>Durable learnings by agent and type.</Text>
+          </div>
+        </div>
+      </section>
 
-      <AzureSurface className={styles.tabContent}>
+      <div className="azf-surface azf-surface--panel azf-surface--padding-compact">
+        <AzureTabList
+          ariaLabel="Team memory sections"
+          selectedValue={selectedTab}
+          onTabSelect={(value) => setSelectedTab(value as 'decisions' | 'memory')}
+          tabs={[
+            { id: 'decisions', label: 'Decisions' },
+            { id: 'memory', label: 'Agent Memory' },
+          ]}
+        />
+      </div>
+
+      <div className={['azf-surface azf-surface--panel azf-surface--padding-comfortable', styles.tabContent].filter(Boolean).join(' ')}>
         {loading && <Spinner size="small" label="Loading…" />}
         {loadError && (
           <MessageBar intent="error">
@@ -302,13 +388,14 @@ export function MemoriesPage() {
 
         {!loading && !loadError && selectedTab === 'decisions' && (
           !hasActiveDecisions && pending.length === 0
-            ? <AzureEmptyState title="No decisions recorded yet." body="Accepted decisions and pending proposals will appear here." />
+            ? <EmptyState title="No decisions recorded yet." body="Accepted decisions and pending proposals will appear here." />
             : (
               <>
                 {hasActiveDecisions && (
                   <div className={styles.itemList}>
+                    <BladeHeader size="compact" title="Accepted decisions" subtitle="Resource history of merged team decisions and rationale." />
                     {decisions!.map(d => (
-                      <AzureSurface key={d.id} className={styles.item} tone="subtle" density="compact">
+                      <div key={d.id} className={['azf-surface azf-surface--subtle azf-surface--padding-compact', styles.item].filter(Boolean).join(' ')}>
                         <div className={styles.itemHeader}>
                           <span className={styles.itemTitle}>{d.title}</span>
                           <Badge appearance="tint" color="informative">{d.type}</Badge>
@@ -319,19 +406,16 @@ export function MemoriesPage() {
                         {d.rationale && (
                           <span className={styles.itemRationale}>Rationale: {d.rationale}</span>
                         )}
-                      </AzureSurface>
+                      </div>
                     ))}
                   </div>
                 )}
 
                 {pending.length > 0 && (
                   <section className={styles.proposedSection} aria-label="Proposed decisions awaiting Coordinator">
-                    <AzureSectionHeader
-                      title="Proposed — awaiting Coordinator"
-                      description="Review pending proposals and merge, promote, or reject them. Approving a proposal promotes these proposals into active Team Memory."
-                    />
+                    <BladeHeader size="compact" title="Proposed — awaiting Coordinator" subtitle="Review pending proposals and merge, promote, or reject them. Approving a proposal promotes these proposals into active Team Memory." />
                     {pending.map(e => (
-                      <AzureSurface key={e.id} className={styles.proposedItem} tone="flat" density="compact">
+                      <div key={e.id} className={['azf-surface azf-surface--flat azf-surface--padding-compact', styles.proposedItem].filter(Boolean).join(' ')}>
                         <div className={styles.itemHeader}>
                           <span className={styles.itemTitle}>{e.title}</span>
                           <Badge appearance="tint" color="warning">Proposed</Badge>
@@ -348,7 +432,7 @@ export function MemoriesPage() {
                           <Button size="small" disabled={busy} onClick={() => void runInboxAction(e.id, 'promote')}>Promote</Button>
                           <Button size="small" appearance="outline" disabled={busy} onClick={() => void runInboxAction(e.id, 'reject')}>Reject</Button>
                         </div>
-                      </AzureSurface>
+                      </div>
                     ))}
                   </section>
                 )}
@@ -359,7 +443,7 @@ export function MemoriesPage() {
         {!loading && !loadError && selectedTab === 'memory' && (
           <>
             <section className={styles.form} aria-label="Create memory entry">
-              <Text weight="semibold">Create memory entry</Text>
+              <BladeHeader size="compact" title="Agent memory entries" subtitle="Create or update durable operational learnings." />
               <div className={styles.inlineFields}>
                 <Field label="Agent name" required>
                   <Input value={newAgentName} onChange={(_, data) => setNewAgentName(data.value)} disabled={busy} />
@@ -376,11 +460,11 @@ export function MemoriesPage() {
               </Button>
             </section>
             {memory === null || memory.length === 0
-              ? <AzureEmptyState title="No agent memory recorded yet" body="Create a memory entry to capture durable team learnings." />
+              ? <EmptyState title="No agent memory recorded yet" body="Create a memory entry to capture durable team learnings." />
               : (
                 <div className={styles.itemList}>
                   {memory.map(m => (
-                    <AzureSurface key={m.id} className={styles.item} tone="subtle" density="compact">
+                    <div key={m.id} className={['azf-surface azf-surface--subtle azf-surface--padding-compact', styles.item].filter(Boolean).join(' ')}>
                       <div className={styles.itemHeader}>
                         <Badge appearance="outline">{m.agent_name}</Badge>
                         <Badge appearance="tint" color={
@@ -411,13 +495,13 @@ export function MemoriesPage() {
                           </div>
                         </>
                       )}
-                    </AzureSurface>
+                    </div>
                   ))}
                 </div>
               )}
           </>
         )}
-      </AzureSurface>
-    </AzurePage>
+      </div>
+    </div>
   );
 }

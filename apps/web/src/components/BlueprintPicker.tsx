@@ -1,4 +1,5 @@
-import { type ReactElement, useEffect, useState } from 'react';
+import { apiClient } from '../api/apiClient';
+import { normalizeBlueprintList } from '../api/client';
 import {
   Badge,
   Button,
@@ -13,7 +14,7 @@ import {
   makeStyles,
   mergeClasses,
   tokens,
-} from '@fluentui/react-components';
+} from '../copilot-fluent-system';
 import {
   BotRegular,
   CheckmarkRegular,
@@ -24,11 +25,10 @@ import {
   InfoRegular,
   PeopleTeamRegular,
   SparkleRegular,
-} from '@fluentui/react-icons';
-import { apiClient } from '../api/apiClient';
-import { normalizeBlueprintList } from '../api/client';
+} from '../copilot-fluent-system';
+import { useEffect, useState } from 'react';
 import type { Blueprint, SuggestBlueprintResponse } from '../api/types';
-
+import type { ReactElement } from 'react';
 export type BlueprintSelection =
   | { kind: 'none' }
   | { kind: 'predefined'; blueprint: Blueprint }

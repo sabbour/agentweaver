@@ -1,7 +1,6 @@
-import { describe, it, expect } from 'vitest';
 import { deriveRunStatusFromEvents } from '../timeline/deriveRunStatus';
+import { describe, expect, it } from 'vitest';
 import type { RunStreamEvent } from '../api/sse';
-
 function evt(type: RunStreamEvent['type'], seq = 0): RunStreamEvent {
   return { sequence: seq, type, payload: {} };
 }

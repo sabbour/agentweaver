@@ -1,6 +1,5 @@
-import { describe, it, expect } from 'vitest';
 import { AUTOMATION_HELP } from '../components/automationHelp';
-
+import { describe, expect, it } from 'vitest';
 // (c) Autopilot + Auto-approve UI clarification: the helper copy must explain each
 // toggle in the agreed wording. These assertions lock the explanation in so the
 // toggles never ship without their inline explanation again.

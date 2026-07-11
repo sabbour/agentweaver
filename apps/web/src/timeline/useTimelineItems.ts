@@ -1,8 +1,7 @@
+import { initialTimelineState, timelineReducer } from './reducer';
 import { useEffect, useReducer, useRef } from 'react';
 import type { RunStreamEvent } from '../api/sse';
-import { timelineReducer, initialTimelineState } from './reducer';
 import type { TimelineReducerState } from './types';
-
 /**
  * Incrementally feeds SSE events into the timeline reducer.
  *

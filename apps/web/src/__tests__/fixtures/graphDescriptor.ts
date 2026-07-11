@@ -1,9 +1,8 @@
+import type { GraphDescriptor } from '../../api/types';
 /**
  * Local fixtures for GraphDescriptor — used in tests before the backend endpoint ships.
  * These mirror the frozen contract in the task spec (snake_case JSON).
  */
-import type { GraphDescriptor } from '../../api/types';
-
 export const FULL_GRAPH_DESCRIPTOR: GraphDescriptor = {
   graph_id: 'full-graph-fixture',
   variant: 'full',

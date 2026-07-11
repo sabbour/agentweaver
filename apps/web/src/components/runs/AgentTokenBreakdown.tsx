@@ -1,33 +1,24 @@
-import { Text, makeStyles, tokens } from '@fluentui/react-components';
-import type { AgentUsageBreakdownDto, RunAgentTokenBreakdownDto } from '../../api/types';
-import { costChipLabel } from '../CostChip';
-import { MetricCardHeader, MetricEmptyState } from '../MetricTypography';
+import {
+  AzureEmptyState,
+  BladeHeader,
+  ProgressBarWithLabel,
+  StatusIconText,
+  Text } from '../../copilot-fluent-system';
 import { AgentIdentity } from '../AgentIdentity';
-
+import { costChipLabel } from '../CostChip';
+import { makeStyles,
+  mergeClasses,
+  tokens,
+} from '../../copilot-fluent-system';
+import type { AgentUsageBreakdownDto, RunAgentTokenBreakdownDto } from '../../api/types';
 const useStyles = makeStyles({
   panel: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalM,
-    padding: tokens.spacingVerticalL,
-    backgroundColor: tokens.colorNeutralBackground1,
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: tokens.borderRadiusMedium,
+    minWidth: 0,
   },
   note: {
     color: tokens.colorNeutralForeground3,
     fontSize: '14px',
     lineHeight: '20px',
-  },
-  list: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalS,
-  },
-  row: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalXXS,
   },
   rowHead: {
     display: 'flex',
@@ -42,16 +33,8 @@ const useStyles = makeStyles({
   metric: {
     whiteSpace: 'nowrap',
   },
-  track: {
-    height: '10px',
-    borderRadius: tokens.borderRadiusCircular,
-    backgroundColor: tokens.colorNeutralBackground3,
-    overflow: 'hidden',
-  },
-  bar: {
-    height: '100%',
-    borderRadius: tokens.borderRadiusCircular,
-    backgroundColor: tokens.colorBrandForeground1,
+  progress: {
+    maxWidth: 'none',
   },
 });
 
@@ -76,42 +59,43 @@ export function AgentTokenBreakdown({
   const hasFallbackTotal = !data?.hasAgentData && ((data?.totalTokens ?? 0) > 0 || (data?.totalNanoAiu ?? 0) > 0);
 
   return (
-    <div className={styles.panel}>
-      <MetricCardHeader title={title} subtitle={subtitle} />
+    <div className={mergeClasses('azf-surface azf-surface--panel azf-surface--padding-comfortable azf-stack azf-gap-m', styles.panel)}>
+      <BladeHeader size="compact" title={title} subtitle={subtitle} />
 
       {!data ? (
-        <MetricEmptyState>Loading usage…</MetricEmptyState>
+        <AzureEmptyState compact title="Loading usage…" />
       ) : rows.length === 0 && !hasFallbackTotal ? (
-        <MetricEmptyState>No agent usage data yet.</MetricEmptyState>
+        <AzureEmptyState compact title="No agent usage data yet." />
       ) : (
-        <div className={styles.list}>
+        <div className="azf-stack azf-gap-s">
           {rows.map((entry) => (
-            <div key={entry.agentName} className={styles.row}>
+            <div key={entry.agentName} className="azf-stack azf-gap-xs">
               <div className={styles.rowHead}>
                 <AgentIdentity label={entry.agentName} roleByAgent={roleByAgent} className={styles.identity} />
                 <Text className={styles.metric}>{costChipLabel(entry.totalNanoAiu, entry.totalTokens) ?? `${entry.invocationCount} turns`}</Text>
               </div>
-              <div className={styles.track}>
-                <div className={styles.bar} style={{ width: `${Math.max(8, (usageValue(entry) / max) * 100)}%` }} />
-              </div>
+              <ProgressBarWithLabel
+                className={styles.progress}
+                value={Math.max(0.08, usageValue(entry) / max)}
+                max={1}
+                thickness="large"
+              />
             </div>
           ))}
           {hasFallbackTotal && (
-            <div className={styles.row}>
+            <div className="azf-stack azf-gap-xs">
               <div className={styles.rowHead}>
                 <Text>Total run usage</Text>
                 <Text>{costChipLabel(data.totalNanoAiu, data.totalTokens) ?? '—'}</Text>
               </div>
-              <div className={styles.track}>
-                <div className={styles.bar} style={{ width: '100%' }} />
-              </div>
+              <ProgressBarWithLabel className={styles.progress} value={1} max={1} thickness="large" />
             </div>
           )}
         </div>
       )}
 
       {data?.source === 'events' && (
-        <Text className={styles.note}>Showing persisted turn-usage events because AppInsights agent dimensions are not available for this run yet.</Text>
+        <StatusIconText status="info" className={styles.note}>Showing persisted turn-usage events because AppInsights agent dimensions are not available for this run yet.</StatusIconText>
       )}
     </div>
   );

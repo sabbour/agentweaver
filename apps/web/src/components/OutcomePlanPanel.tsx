@@ -1,6 +1,9 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Badge,
+  apiClient } from '../api/apiClient';
+import { ApiError } from '../api/client';
+import { AgenticProgress,
+  AzureToolbar,
+  BladeHeader,
   Button,
   Dialog,
   DialogActions,
@@ -12,12 +15,15 @@ import {
   MessageBar,
   MessageBarBody,
   Spinner,
+  StatusIconText,
   Text,
   Textarea,
-  Title3,
-  makeStyles,
+  } from '../copilot-fluent-system';
+import { DecomposePreviewDialog } from './DecomposePreviewDialog';
+import { makeStyles,
+  mergeClasses,
   tokens,
-} from '@fluentui/react-components';
+} from '../copilot-fluent-system';
 import {
   AppsListDetailRegular,
   CheckmarkCircleRegular,
@@ -25,34 +31,16 @@ import {
   DismissCircleRegular,
   EditRegular,
   LockClosedRegular,
-} from '@fluentui/react-icons';
-import { apiClient } from '../api/apiClient';
-import { ApiError } from '../api/client';
+} from '../copilot-fluent-system';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { RunStreamEvent, StreamStatus } from '../api/sse';
 import type { OutcomeSpec, OutcomeSpecStatus, ProposedBacklogItem } from '../api/types';
-import { DecomposePreviewDialog } from './DecomposePreviewDialog';
-
 const useStyles = makeStyles({
   panel: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalL,
-    padding: tokens.spacingVerticalL,
-    backgroundColor: tokens.colorNeutralBackground1,
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: tokens.borderRadiusLarge,
+    minWidth: 0,
   },
-  headerRow: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: tokens.spacingHorizontalM,
-    flexWrap: 'wrap',
-  },
-  spacer: { flex: 1 },
   section: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalXS,
+    minWidth: 0,
   },
   sectionLabel: {
     fontSize: tokens.fontSizeBase200,
@@ -82,31 +70,18 @@ const useStyles = makeStyles({
     color: tokens.colorNeutralForeground3,
     fontStyle: 'italic',
   },
-  actions: {
-    display: 'flex',
-    gap: tokens.spacingHorizontalM,
-    alignItems: 'center',
-    flexWrap: 'wrap',
-  },
   drafting: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: tokens.spacingHorizontalS,
     color: tokens.colorNeutralForeground3,
   },
   reviseFields: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalM,
+    minWidth: 0,
   },
   reviseHint: {
     fontSize: tokens.fontSizeBase200,
     color: tokens.colorNeutralForeground3,
   },
   qaList: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalM,
+    minWidth: 0,
   },
 });
 
@@ -140,7 +115,7 @@ function SpecSection({ label, value }: { label: string; value?: string | string[
   const styles = useStyles();
   const lines = toLines(value);
   return (
-    <div className={styles.section}>
+    <div className={mergeClasses('azf-stack azf-gap-xs', styles.section)}>
       <Text className={styles.sectionLabel}>{label}</Text>
       {lines.length === 0 ? (
         <Text className={styles.empty}>Not specified yet.</Text>
@@ -161,11 +136,11 @@ const OUTCOME_SPEC_POLL_MS = 2_000;
 const RUN_TERMINAL_STATUSES = new Set(['completed', 'failed', 'declined', 'merged', 'merge_failed']);
 const RUN_FAILURE_STATUSES = new Set(['failed', 'declined', 'merge_failed']);
 
-const STATUS_META: Record<OutcomeSpecStatus, { label: string; color: 'informative' | 'warning' | 'success' | 'danger' }> = {
-  drafting: { label: 'Drafting', color: 'informative' },
-  awaiting_confirmation: { label: 'Awaiting confirmation', color: 'warning' },
-  confirmed: { label: 'Confirmed', color: 'success' },
-  declined: { label: 'Declined', color: 'danger' },
+const STATUS_META: Record<OutcomeSpecStatus, { label: string; tone: 'info' | 'warning' | 'success' | 'danger' }> = {
+  drafting: { label: 'Drafting', tone: 'info' },
+  awaiting_confirmation: { label: 'Awaiting confirmation', tone: 'warning' },
+  confirmed: { label: 'Confirmed', tone: 'success' },
+  declined: { label: 'Declined', tone: 'danger' },
 };
 
 function apiErrorCode(err: unknown): string | null {
@@ -490,22 +465,22 @@ export function OutcomePlanPanel({ runId, projectId, events, streamStatus, runSt
   };
 
   return (
-    <div className={styles.panel}>
-      <div className={styles.headerRow}>
-        <Title3>Outcome plan</Title3>
-        <Badge appearance="tint" color={statusMeta.color}>{statusMeta.label}</Badge>
-        <div className={styles.spacer} />
-        {streamStatus === 'connecting' && <Spinner size="extra-tiny" aria-label="Connecting" />}
-        {onCollapse && (
-          <Button
-            appearance="subtle"
-            size="small"
-            icon={<ChevronLeftRegular />}
-            aria-label="Collapse Outcome plan"
-            onClick={onCollapse}
-          />
-        )}
-      </div>
+    <div className={mergeClasses('azf-surface azf-surface--padding-comfortable azf-stack azf-gap-m', styles.panel)}>
+      <BladeHeader
+        size="compact"
+        title="Outcome plan"
+        subtitle="Review and confirm the coordinator's proposed goal, scope, assumptions, and questions."
+        loading={streamStatus === 'connecting'}
+        promptRibbon={<StatusIconText status={statusMeta.tone}>{statusMeta.label}</StatusIconText>}
+        actions={onCollapse
+          ? [{
+              id: 'collapse',
+              label: 'Collapse Outcome plan',
+              icon: <ChevronLeftRegular />,
+              onClick: onCollapse,
+            }]
+          : []}
+      />
 
       {/* Dispatch gate — make the safety property explicit (US1 / FR-008) */}
       {(status === 'drafting' || status === 'awaiting_confirmation') && (
@@ -536,10 +511,13 @@ export function OutcomePlanPanel({ runId, projectId, events, streamStatus, runSt
       )}
 
       {(revising || clarificationSent) && (
-        <div className={styles.drafting}>
-          {revising && <Spinner size="extra-tiny" aria-hidden="true" />}
-          <Text>Clarification sent — The coordinator is revising the Outcome plan.</Text>
-        </div>
+        <StatusIconText
+          status="info"
+          icon={revising ? <Spinner size="extra-tiny" aria-hidden="true" /> : undefined}
+          className={styles.drafting}
+        >
+          Clarification sent — The coordinator is revising the Outcome plan.
+        </StatusIconText>
       )}
 
       {failedBeforeDraft ? (
@@ -547,18 +525,21 @@ export function OutcomePlanPanel({ runId, projectId, events, streamStatus, runSt
           <MessageBarBody>The run failed before the Outcome plan could be drafted.</MessageBarBody>
         </MessageBar>
       ) : !hasContent && !revising ? (
-        <div className={styles.drafting}>
-          <Spinner size="extra-tiny" aria-label="Drafting Outcome plan" />
-          <Text>Drafting the Outcome plan...</Text>
-        </div>
+        <AgenticProgress
+          steps={[{
+            id: 'drafting-outcome-plan',
+            title: 'Drafting the Outcome plan...',
+            status: 'running',
+          }]}
+          defaultOpenItems={['drafting-outcome-plan']}
+        />
       ) : hasContent && status === 'confirmed' && !fullPlanOpen ? (
         <>
           <SpecSection label="Goal" value={spec?.goal} />
-          <div className={styles.actions}>
-            <Button appearance="secondary" onClick={() => setFullPlanOpen(true)}>
-              View full plan
-            </Button>
-          </div>
+          <AzureToolbar
+            actions={[{ id: 'view-full-plan', label: 'View full plan', appearance: 'secondary', onClick: () => setFullPlanOpen(true) }]}
+            ariaLabel="Outcome plan actions"
+          />
         </>
       ) : hasContent ? (
         <>
@@ -585,37 +566,41 @@ export function OutcomePlanPanel({ runId, projectId, events, streamStatus, runSt
       )}
 
       {awaiting && (
-        <div className={styles.actions}>
-          <Button
-            appearance="primary"
-            icon={<CheckmarkCircleRegular />}
-            disabled={acting || revising || runInterrupted}
-            onClick={() => void handleConfirm()}
-          >
-            {acting ? 'Confirming plan...' : 'Confirm plan'}
-          </Button>
-          <Button
-            appearance="secondary"
-            icon={<EditRegular />}
-            disabled={acting || revising || runInterrupted}
-            onClick={openRevise}
-          >
-            Clarify plan
-          </Button>
-          {acting && <Spinner size="extra-tiny" label="Confirming plan" />}
-        </div>
+        <AzureToolbar
+          actions={[
+            {
+              id: 'confirm-plan',
+              label: acting ? 'Confirming plan...' : 'Confirm plan',
+              appearance: 'primary',
+              icon: <CheckmarkCircleRegular />,
+              disabled: acting || revising || runInterrupted,
+              loading: acting,
+              onClick: () => void handleConfirm(),
+            },
+            {
+              id: 'clarify-plan',
+              label: 'Clarify plan',
+              appearance: 'secondary',
+              icon: <EditRegular />,
+              disabled: acting || revising || runInterrupted,
+              onClick: openRevise,
+            },
+          ]}
+          ariaLabel="Outcome plan confirmation actions"
+        />
       )}
 
       {status === 'confirmed' && projectId && (
-        <div className={styles.actions}>
-          <Button
-            appearance="secondary"
-            icon={<AppsListDetailRegular />}
-            onClick={() => void handleBreakIntoTasks()}
-          >
-            Break into tasks
-          </Button>
-        </div>
+        <AzureToolbar
+          actions={[{
+            id: 'break-into-tasks',
+            label: 'Break into tasks',
+            appearance: 'secondary',
+            icon: <AppsListDetailRegular />,
+            onClick: () => void handleBreakIntoTasks(),
+          }]}
+          ariaLabel="Outcome plan task actions"
+        />
       )}
 
       <Dialog open={reviseOpen} onOpenChange={(_, d) => { setReviseOpen(d.open); if (!d.open) { setAnswers([]); setExtraFeedback(''); } }}>
@@ -623,19 +608,19 @@ export function OutcomePlanPanel({ runId, projectId, events, streamStatus, runSt
           <DialogBody>
             <DialogTitle>Clarify plan</DialogTitle>
             <DialogContent>
-              <div className={styles.reviseFields}>
+              <div className={mergeClasses('azf-stack azf-gap-m', styles.reviseFields)}>
                 <Text>
                   Describe what to change. After you send, the coordinator re-drafts and
                   re-presents the plan for your confirmation; no subagent work is dispatched
                   until you confirm.
                 </Text>
                 {clarifying.length > 0 && (
-                  <div className={styles.section}>
+                  <div className={mergeClasses('azf-stack azf-gap-xs', styles.section)}>
                     <Text className={styles.sectionLabel}>Open questions</Text>
                     <Text className={styles.reviseHint}>
                       Answer any that apply — your answers refine the plan.
                     </Text>
-                    <div className={styles.qaList}>
+                    <div className={mergeClasses('azf-stack azf-gap-m', styles.qaList)}>
                       {clarifying.map((q, i) => (
                         <Field key={i} label={`${i + 1}. ${q}`}>
                           <Textarea

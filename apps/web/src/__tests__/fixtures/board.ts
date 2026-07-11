@@ -1,5 +1,4 @@
 import type { AgentQueueDto, BoardDto } from '../../api/types';
-
 // Minimal board fixture mirroring GET /api/projects/{id}/board.
 // Backlog + Ready intake columns first, then the canonical workflow buckets only.
 export function makeBoard(overrides?: Partial<BoardDto>): BoardDto {

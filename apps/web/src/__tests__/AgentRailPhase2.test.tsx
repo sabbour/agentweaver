@@ -1,13 +1,20 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor, cleanup } from '@testing-library/react';
-import { FluentProvider, webLightTheme } from '@fluentui/react-components';
-import { MemoryRouter } from 'react-router-dom';
-import { type ReactNode } from 'react';
-import { KanbanBoard } from '../components/board/KanbanBoard';
 import { fromDto } from '../api/agentQueues';
-import { makeBoard, makeAgentQueueDto } from './fixtures/board';
+import { apiClient } from '../api/apiClient';
+import { AzureFluentProvider } from '../copilot-fluent-system';
+import { KanbanBoard } from '../components/board/KanbanBoard';
+import { makeAgentQueueDto, makeBoard } from './fixtures/board';
+import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from 'vitest';
 import type { AgentQueueDto } from '../api/types';
-
+import type { ReactNode } from 'react';
 // ---- mocks ----
 vi.mock('../api/apiClient', () => ({
   apiClient: {
@@ -25,13 +32,11 @@ vi.mock('../api/apiClient', () => ({
   },
 }));
 
-import { apiClient } from '../api/apiClient';
-
 function Wrapper({ children }: { children: ReactNode }) {
   return (
-    <FluentProvider theme={webLightTheme}>
+    <AzureFluentProvider density="compact">
       <MemoryRouter>{children}</MemoryRouter>
-    </FluentProvider>
+    </AzureFluentProvider>
   );
 }
 

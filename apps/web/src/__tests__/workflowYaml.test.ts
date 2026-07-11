@@ -1,11 +1,5 @@
+import { addNode, AUTHORABLE_WORKFLOW_NODE_TYPES, parseWorkflowYaml, setBranchTarget } from '../utils/workflowYaml';
 import { describe, expect, it } from 'vitest';
-import {
-  AUTHORABLE_WORKFLOW_NODE_TYPES,
-  addNode,
-  parseWorkflowYaml,
-  setBranchTarget,
-} from '../utils/workflowYaml';
-
 const baseYaml = `
 id: sample
 name: Sample

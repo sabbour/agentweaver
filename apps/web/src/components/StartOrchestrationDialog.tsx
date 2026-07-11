@@ -1,6 +1,7 @@
-import { useState, useEffect } from 'react';
 import {
-  Button,
+  apiClient } from '../api/apiClient';
+import { ApiError } from '../api/client';
+import { Button,
   Dialog,
   DialogActions,
   DialogBody,
@@ -11,33 +12,21 @@ import {
   Field,
   MessageBar,
   MessageBarBody,
-  Select,
   Spinner,
   Text,
   Textarea,
-  makeStyles,
-  tokens,
-} from '@fluentui/react-components';
-import { FlowRegular } from '@fluentui/react-icons';
-import { apiClient } from '../api/apiClient';
-import { ApiError } from '../api/client';
+  } from '../copilot-fluent-system';
+import { Select,
+} from '../copilot-fluent-system';
+import { FlowRegular } from '../copilot-fluent-system';
+import { useEffect, useState } from 'react';
 import type { StartOrchestrationMode, WorkflowSummaryDto } from '../api/types';
-
-const useStyles = makeStyles({
-  fields: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalM,
-  },
-});
-
 interface StartOrchestrationDialogProps {
   projectId: string;
   onStarted: (runId: string) => void;
 }
 
 export function StartOrchestrationDialog({ projectId, onStarted }: StartOrchestrationDialogProps) {
-  const styles = useStyles();
   const [open, setOpen] = useState(false);
   const [goal, setGoal] = useState('');
   const [savingMode, setSavingMode] = useState<StartOrchestrationMode | null>(null);
@@ -98,7 +87,7 @@ export function StartOrchestrationDialog({ projectId, onStarted }: StartOrchestr
         <DialogBody>
           <DialogTitle>Start a task</DialogTitle>
           <DialogContent>
-            <div className={styles.fields}>
+            <div className="azf-stack azf-gap-m">
               <Text>
                 Describe a goal in plain language. Direct starts faster from your prompt. Define
                 Outcome drafts structured acceptance criteria and expected outputs before dispatch.

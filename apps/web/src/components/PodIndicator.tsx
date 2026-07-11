@@ -1,13 +1,15 @@
-import { makeStyles, tokens, Tooltip } from '@fluentui/react-components';
-import { ServerRegular } from '@fluentui/react-icons';
-
+import {
+  StatusIconText,
+  Tooltip } from '../copilot-fluent-system';
+import { makeStyles,
+  mergeClasses,
+  tokens,
+} from '../copilot-fluent-system';
+import { ServerRegular } from '../copilot-fluent-system';
 const useStyles = makeStyles({
   pill: {
-    display: 'inline-flex',
-    alignItems: 'center',
-    gap: '4px',
     padding: '2px 6px',
-    borderRadius: '999px',
+    borderRadius: tokens.borderRadiusCircular,
     fontSize: tokens.fontSizeBase100,
     fontFamily: tokens.fontFamilyMonospace,
     color: tokens.colorNeutralForeground3,
@@ -16,6 +18,11 @@ const useStyles = makeStyles({
     maxWidth: '180px',
     overflow: 'hidden',
     whiteSpace: 'nowrap',
+  },
+  statusText: {
+    minWidth: 0,
+    color: tokens.colorNeutralForeground3,
+    fontFamily: tokens.fontFamilyMonospace,
   },
   label: {
     overflow: 'hidden',
@@ -51,12 +58,13 @@ export function PodIndicator({ podName }: PodIndicatorProps) {
         withArrow
       >
         <span
-          className={s.pill}
+          className={mergeClasses('azf-row azf-gap-xs', s.pill)}
           aria-label={`Executing in pod ${podName}`}
           role="status"
         >
-          <ServerRegular fontSize={10} aria-hidden="true" />
-          <span className={s.label}>{podName}</span>
+          <StatusIconText status="info" icon={<ServerRegular />} className={s.statusText}>
+            <span className={s.label}>{podName}</span>
+          </StatusIconText>
         </span>
       </Tooltip>
     </div>

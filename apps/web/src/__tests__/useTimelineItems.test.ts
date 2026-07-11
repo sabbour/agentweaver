@@ -1,9 +1,8 @@
-import { describe, it, expect } from 'vitest';
-import { renderHook, act } from '@testing-library/react';
 import { useTimelineItems } from '../timeline/useTimelineItems';
+import { act, renderHook } from '@testing-library/react';
+import { describe, expect, it } from 'vitest';
 import type { RunStreamEvent } from '../api/sse';
-import type { TurnGroupItem, AgentMessageItem } from '../timeline/types';
-
+import type { AgentMessageItem, TurnGroupItem } from '../timeline/types';
 function makeEvent(
   type: RunStreamEvent['type'],
   payload: Record<string, unknown>,

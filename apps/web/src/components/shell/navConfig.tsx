@@ -1,23 +1,22 @@
-import type { ReactElement } from 'react';
 import {
   Apps24Regular,
-  DataPie24Regular,
-  Pulse24Regular,
-  Home24Regular,
   Board24Regular,
-  People24Regular,
-  Flow24Regular,
-  Code24Regular,
+  BookToolbox24Regular,
   Bot24Regular,
   Brain24Regular,
-  BookToolbox24Regular,
+  Code24Regular,
+  DataPie24Regular,
+  Flow24Regular,
   Flowchart24Regular,
-  Settings24Regular,
-  Server24Regular,
-  Stethoscope24Regular,
   Heart24Regular,
+  Home24Regular,
+  People24Regular,
+  Pulse24Regular,
+  Server24Regular,
+  Settings24Regular,
+  Stethoscope24Regular,
 } from '@fluentui/react-icons';
-
+import type { ReactElement } from 'react';
 // Web app shell information architecture (locked IA, 2026-06-22).
 // Project-scoped sections: WORK / SQUAD / OPERATIONS / SYSTEM. Above them sit
 // global (non-project) destinations: Overview ("Now") and the Projects gallery.

@@ -1,37 +1,38 @@
-import { useCallback, useEffect, useState } from 'react';
 import {
-  Badge,
+  apiClient } from '../api/apiClient';
+import { ApiError } from '../api/client';
+import { Badge,
+  BladeHeader,
   Button,
+  EssentialsGrid,
   MessageBar,
   MessageBarBody,
   Spinner,
   Switch,
+  Text,
+  } from '../copilot-fluent-system';
+import { PageHeader } from '../components/PageHeader';
+import { RefreshCountdown } from '../hooks/useRefreshCountdown';
+import { makeStyles,
   Table,
   TableBody,
   TableCell,
   TableHeader,
   TableHeaderCell,
   TableRow,
-  Text,
-  makeStyles,
   tokens,
-} from '@fluentui/react-components';
-import { ArrowClockwiseRegular } from '@fluentui/react-icons';
-import { apiClient } from '../api/apiClient';
-import { ApiError } from '../api/client';
+} from '../copilot-fluent-system';
+import { ArrowClockwiseRegular, Server24Regular } from '../copilot-fluent-system';
+import { useCallback, useEffect, useState } from 'react';
 import type {
   AgentPodInfoDto,
   ClusterDiagnosticsDto,
   DetailedHealthCheckDto,
   PendingCapacityRunDto,
-  WarmPoolStatusDto,
-  SandboxObjectDto,
   SandboxClaimObjectDto,
+  SandboxObjectDto,
+  WarmPoolStatusDto,
 } from '../api/types';
-import { PageHeader } from '../components/PageHeader';
-import { AzurePage, AzureSectionHeader, AzureSurface } from '../components/azure/AzureLayout';
-import { RefreshCountdown } from '../hooks/useRefreshCountdown';
-
 // Cluster (spec-018) — Kubernetes cluster health and capacity view.
 // Calls GET /api/diagnostics/cluster; shows a "Not available" placeholder until
 // the backend endpoint is deployed (404 response).
@@ -74,6 +75,11 @@ const useStyles = makeStyles({
     flexDirection: 'column',
     gap: tokens.spacingVerticalM,
   },
+  overviewSurface: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalM,
+  },
   generated: { fontSize: tokens.fontSizeBase200, color: tokens.colorNeutralForeground3 },
   emptyState: {
     fontSize: tokens.fontSizeBase300,
@@ -108,11 +114,11 @@ function podBadgeColor(status: string): 'success' | 'warning' | 'informative' {
 function KpiCard({ label, value, sub }: { label: string; value: number | string; sub?: string }) {
   const styles = useStyles();
   return (
-    <AzureSurface className={styles.kpiCard} density="compact">
+    <div className={['azf-surface azf-surface--panel azf-surface--padding-compact', styles.kpiCard].filter(Boolean).join(' ')}>
       <Text className={styles.kpiLabel}>{label}</Text>
       <Text className={styles.kpiValue}>{value}</Text>
       {sub && <Text className={styles.kpiSub}>{sub}</Text>}
-    </AzureSurface>
+    </div>
   );
 }
 
@@ -348,10 +354,11 @@ export function ClusterPage() {
   }, [load, autoRefresh]);
 
   return (
-    <AzurePage className={styles.root}>
+    <div className={['azf-stack azf-page azf-pattern-shell', styles.root].filter(Boolean).join(' ')}>
       <PageHeader
         title="Cluster"
         subtitle="Kubernetes cluster health and capacity."
+        resourceIcon={<Server24Regular />}
         actions={
           <>
             {autoRefresh && lastRefreshedAt != null && (
@@ -392,6 +399,22 @@ export function ClusterPage() {
 
       {data && (
         <>
+          <div className={['azf-surface azf-surface--panel azf-surface--padding-comfortable', styles.overviewSurface].filter(Boolean).join(' ')}>
+            <BladeHeader
+              size="compact"
+              title="Cluster resource overview"
+              subtitle="Live diagnostics, capacity queues, and Kubernetes sandbox resource state."
+            />
+            <EssentialsGrid
+              properties={[
+                { id: 'checks', label: 'Check summary', value: `${data.checks.filter(c => c.status === 'healthy').length} healthy / ${data.checks.length}` },
+                { id: 'claims', label: 'Sandbox claims', value: data.sandbox_claims?.length ?? 0 },
+                { id: 'pending', label: 'Capacity queue', value: data.pending_capacity_runs.length },
+                { id: 'generated', label: 'Generated UTC', value: data.generated_utc },
+              ]}
+            />
+          </div>
+
           {/* KPI row */}
           <div className={styles.kpiRow}>
             <KpiCard label="Orphaned" value={data.orphaned_agent_pods.length} />
@@ -409,48 +432,48 @@ export function ClusterPage() {
           </div>
 
           {/* Health checks */}
-          <AzureSurface className={styles.section}>
-            <AzureSectionHeader title="Health checks" />
+          <div className={['azf-surface azf-surface--panel azf-surface--padding-comfortable', styles.section].filter(Boolean).join(' ')}>
+            <BladeHeader size="compact" title="Health checks" />
             <HealthChecksTable rows={data.checks} />
-          </AzureSurface>
+          </div>
 
           {/* Sandbox claims — moved up: shows bound pods, making active-pods section redundant */}
-          <AzureSurface className={styles.section}>
-            <AzureSectionHeader title={`Sandbox claims (${data.sandbox_claims?.length ?? 0})`} />
+          <div className={['azf-surface azf-surface--panel azf-surface--padding-comfortable', styles.section].filter(Boolean).join(' ')}>
+            <BladeHeader size="compact" title={`Sandbox claims (${data.sandbox_claims?.length ?? 0})`} />
             <SandboxClaimsTable rows={data.sandbox_claims ?? []} />
-          </AzureSurface>
+          </div>
 
           {/* Active agent pods removed — already captured in Sandbox claims */}
 
           {/* Orphaned agent pods */}
           {data.orphaned_agent_pods.length > 0 && (
-            <AzureSurface className={styles.section}>
-              <AzureSectionHeader title={`Orphaned agent pods (${data.orphaned_agent_pods.length})`} />
+            <div className={['azf-surface azf-surface--panel azf-surface--padding-comfortable', styles.section].filter(Boolean).join(' ')}>
+              <BladeHeader size="compact" title={`Orphaned agent pods (${data.orphaned_agent_pods.length})`} />
               <AgentPodsTable pods={data.orphaned_agent_pods} label="Orphaned agent pods" />
-            </AzureSurface>
+            </div>
           )}
 
           {/* Pending capacity runs */}
-          <AzureSurface className={styles.section}>
-            <AzureSectionHeader title={`Pending capacity (${data.pending_capacity_runs.length})`} />
+          <div className={['azf-surface azf-surface--panel azf-surface--padding-comfortable', styles.section].filter(Boolean).join(' ')}>
+            <BladeHeader size="compact" title={`Pending capacity (${data.pending_capacity_runs.length})`} />
             <PendingCapacityTable rows={data.pending_capacity_runs} />
-          </AzureSurface>
+          </div>
 
           {/* Warm pools */}
-          <AzureSurface className={styles.section}>
-            <AzureSectionHeader title={`Warm pools (${data.warm_pools?.length ?? 0})`} />
+          <div className={['azf-surface azf-surface--panel azf-surface--padding-comfortable', styles.section].filter(Boolean).join(' ')}>
+            <BladeHeader size="compact" title={`Warm pools (${data.warm_pools?.length ?? 0})`} />
             <WarmPoolsTable rows={data.warm_pools ?? []} />
-          </AzureSurface>
+          </div>
 
           {/* Sandbox objects */}
-          <AzureSurface className={styles.section}>
-            <AzureSectionHeader title={`Sandbox objects (${data.sandbox_objects?.length ?? 0})`} />
+          <div className={['azf-surface azf-surface--panel azf-surface--padding-comfortable', styles.section].filter(Boolean).join(' ')}>
+            <BladeHeader size="compact" title={`Sandbox objects (${data.sandbox_objects?.length ?? 0})`} />
             <SandboxObjectsTable rows={data.sandbox_objects ?? []} />
-          </AzureSurface>
+          </div>
 
           <Text className={styles.generated}>Generated {data.generated_utc} · {data.total_duration_ms.toFixed(0)} ms</Text>
         </>
       )}
-    </AzurePage>
+    </div>
   );
 }

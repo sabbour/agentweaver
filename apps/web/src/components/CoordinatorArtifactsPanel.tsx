@@ -1,12 +1,15 @@
-import { makeStyles, tokens } from '@fluentui/react-components';
-import { useArtifactBrowser, type ArtifactBrowserAdapter } from '../hooks/useArtifactBrowser';
+import {
+  Text } from '../copilot-fluent-system';
+import { useArtifactBrowser } from '../hooks/useArtifactBrowser';
 import { FileTreePanel } from './ArtifactBrowser';
 import { FileViewerModal } from './FileViewerModal';
-
+import { makeStyles,
+  mergeClasses,
+  tokens,
+} from '../copilot-fluent-system';
+import type { ArtifactBrowserAdapter } from '../hooks/useArtifactBrowser';
 const useStyles = makeStyles({
   root: {
-    display: 'flex',
-    flexDirection: 'column',
     minHeight: 0,
     height: '100%',
   },
@@ -17,7 +20,6 @@ const useStyles = makeStyles({
   },
   hint: {
     fontSize: tokens.fontSizeBase200,
-    color: tokens.colorNeutralForeground3,
     marginBottom: tokens.spacingVerticalS,
   },
 });
@@ -38,8 +40,10 @@ export function CoordinatorArtifactsPanel({ runId, runStatus, adapter }: Coordin
   const state = useArtifactBrowser(runId, runStatus, undefined, undefined, undefined, undefined, adapter);
 
   return (
-    <div className={styles.root} data-testid="coord-artifacts-panel">
-      <div className={styles.hint}>Files produced across this run, shown as the collective integration diff.</div>
+    <div className={mergeClasses('azf-stack azf-gap-s', styles.root)} data-testid="coord-artifacts-panel">
+      <Text className={mergeClasses('azf-muted', styles.hint)}>
+        Files produced across this run, shown as the collective integration diff.
+      </Text>
       <div className={styles.tree}>
         <FileTreePanel state={state} onFileClick={(path, isChanged) => state.handleFileSelect(path, isChanged ?? true)} />
       </div>

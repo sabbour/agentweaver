@@ -1,9 +1,17 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor, cleanup } from '@testing-library/react';
-import { FluentProvider, webLightTheme } from '@fluentui/react-components';
+import { apiClient } from '../api/apiClient';
+import { AzureFluentProvider } from '../copilot-fluent-system';
+import { OverviewPage } from '../pages/OverviewPage';
+import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from 'vitest';
 import type { OverviewDto, Project, ProjectMetricsDto } from '../api/types';
-
 vi.mock('../api/apiClient', () => ({
   apiClient: {
     getOverview: vi.fn(),
@@ -14,9 +22,6 @@ vi.mock('../api/apiClient', () => ({
     getProjectMetrics: vi.fn(),
   },
 }));
-
-import { apiClient } from '../api/apiClient';
-import { OverviewPage } from '../pages/OverviewPage';
 
 const dto: OverviewDto = {
   generated_utc: new Date().toISOString(),
@@ -66,11 +71,11 @@ const metrics: ProjectMetricsDto = {
 };
 function renderPage() {
   return render(
-    <FluentProvider theme={webLightTheme}>
+    <AzureFluentProvider density="compact">
       <MemoryRouter initialEntries={['/overview']}>
         <OverviewPage />
       </MemoryRouter>
-    </FluentProvider>,
+    </AzureFluentProvider>,
   );
 }
 

@@ -1,8 +1,23 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor, cleanup, fireEvent, within } from '@testing-library/react';
-import { FluentProvider, webLightTheme } from '@fluentui/react-components';
+import { apiClient } from '../api/apiClient';
+import { AzureFluentProvider } from '../copilot-fluent-system';
+import { OrchestrationsPage } from '../pages/OrchestrationsPage';
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
-
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from 'vitest';
 vi.mock('../api/apiClient', () => ({
   apiClient: {
     listProjectRuns: vi.fn(),
@@ -12,18 +27,15 @@ vi.mock('../api/apiClient', () => ({
   },
 }));
 
-import { apiClient } from '../api/apiClient';
-import { OrchestrationsPage } from '../pages/OrchestrationsPage';
-
 function renderPage() {
   return render(
-    <FluentProvider theme={webLightTheme}>
+    <AzureFluentProvider density="compact">
       <MemoryRouter initialEntries={['/projects/p1/orchestrations']}>
         <Routes>
           <Route path="/projects/:projectId/orchestrations" element={<OrchestrationsPage />} />
         </Routes>
       </MemoryRouter>
-    </FluentProvider>,
+    </AzureFluentProvider>,
   );
 }
 

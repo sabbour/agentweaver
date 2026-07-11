@@ -1,8 +1,12 @@
+import {
+  AzureEmptyState } from '../copilot-fluent-system';
+import { makeStyles,
+  mergeClasses,
+  tokens,
+} from '../copilot-fluent-system';
 import React from 'react';
-import { Text, makeStyles, mergeClasses, tokens } from '@fluentui/react-components';
-import { Prism as SyntaxHighlighter, createElement as syntaxCreateElement } from 'react-syntax-highlighter';
+import { createElement as syntaxCreateElement, Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneLight } from 'react-syntax-highlighter/dist/esm/styles/prism';
-
 // Local type alias matching react-syntax-highlighter's ambient rendererNode/rendererProps
 interface RendererNode {
   type: 'element' | 'text';
@@ -57,18 +61,13 @@ function DiffTbody({ children }: { children?: React.ReactNode }) {
 
 const useStyles = makeStyles({
   root: {
-    display: 'flex',
-    flexDirection: 'column',
     height: '100%',
     overflow: 'hidden',
-    backgroundColor: tokens.colorNeutralBackground1,
     fontFamily: tokens.fontFamilyMonospace,
     fontSize: tokens.fontSizeBase200,
   },
   fileHeader: {
     flexShrink: 0,
-    display: 'flex',
-    alignItems: 'center',
     justifyContent: 'space-between',
     padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalM}`,
     borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
@@ -381,18 +380,17 @@ export function DiffViewer({ diff, filename }: DiffViewerProps) {
   const styles = useStyles();
   const lang = detectLanguage(filename);
   const useSyntax = lang !== 'text';
+  const rootClassName = mergeClasses('azf-stack azf-surface azf-surface--flat', styles.root);
 
   if (!diff) {
     return (
-      <div className={styles.root}>
+      <div className={rootClassName}>
         {filename && (
-          <div className={styles.fileHeader}>
+          <div className={mergeClasses('azf-row', styles.fileHeader)}>
             <span className={styles.filePath}>{filename}</span>
           </div>
         )}
-        <div className={styles.empty}>
-          <Text>No changes</Text>
-        </div>
+        <AzureEmptyState compact title="No changes" className={styles.empty} />
       </div>
     );
   }
@@ -401,9 +399,9 @@ export function DiffViewer({ diff, filename }: DiffViewerProps) {
   const { added, removed } = countChanges(lines);
 
   return (
-    <div className={styles.root}>
+    <div className={rootClassName}>
       {filename && (
-        <div className={styles.fileHeader}>
+        <div className={mergeClasses('azf-row', styles.fileHeader)}>
           <span className={styles.filePath}>
             {filename}
           </span>

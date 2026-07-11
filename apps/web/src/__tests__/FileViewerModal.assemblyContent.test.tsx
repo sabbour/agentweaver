@@ -1,10 +1,17 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, waitFor, cleanup } from '@testing-library/react';
-import { FluentProvider, webLightTheme } from '@fluentui/react-components';
-import { type ReactNode } from 'react';
+import { apiClient } from '../api/apiClient';
+import { AzureFluentProvider } from '../copilot-fluent-system';
 import { FileViewerModal } from '../components/FileViewerModal';
+import { cleanup, render, waitFor } from '@testing-library/react';
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from 'vitest';
 import type { WorkspaceFileContent } from '../api/types';
-
+import type { ReactNode } from 'react';
 // The worktree-backed apiClient.getRunFileContent is what 409s for coordinator runs (they own no
 // worktree). The coordinator assembly review supplies a getContent override that reads from the
 // integration branch instead — this test asserts the modal honours that override.
@@ -14,10 +21,8 @@ vi.mock('../api/apiClient', () => ({
   },
 }));
 
-import { apiClient } from '../api/apiClient';
-
 function Wrapper({ children }: { children: ReactNode }) {
-  return <FluentProvider theme={webLightTheme}>{children}</FluentProvider>;
+  return <AzureFluentProvider density="compact">{children}</AzureFluentProvider>;
 }
 
 describe('FileViewerModal — coordinator assembly content (Preview/Source, no worktree 409)', () => {

@@ -1,8 +1,8 @@
-import { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
 import {
+  apiClient } from '../api/apiClient';
+import { ApiError } from '../api/client';
+import { AzureEmptyState,
   Button,
-  Combobox,
   Dialog,
   DialogActions,
   DialogBody,
@@ -14,19 +14,19 @@ import {
   MessageBar,
   MessageBarBody,
   Option,
-  Select,
   Spinner,
   Text,
   Textarea,
   Tooltip,
+  } from '../copilot-fluent-system';
+import { Combobox,
   makeStyles,
-  tokens,
-} from '@fluentui/react-components';
-import { FlowRegular } from '@fluentui/react-icons';
-import { apiClient } from '../api/apiClient';
-import { ApiError } from '../api/client';
+  Select,
+} from '../copilot-fluent-system';
+import { FlowRegular } from '../copilot-fluent-system';
+import { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import type { Project, StartOrchestrationMode, WorkflowSummaryDto } from '../api/types';
-
 // Inline top-bar action to start an orchestration, with a project selector so the
 // user can choose the target project regardless of the current route context.
 // Mirrors StartOrchestrationDialog's goal field + submit semantics; adds the
@@ -35,11 +35,6 @@ import type { Project, StartOrchestrationMode, WorkflowSummaryDto } from '../api
 const useStyles = makeStyles({
   startButton: {
     flexShrink: 0,
-  },
-  fields: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalM,
   },
 });
 
@@ -171,7 +166,7 @@ export function StartOrchestrationFab({ currentProjectId }: StartOrchestrationFa
         <DialogBody>
           <DialogTitle>Start a task</DialogTitle>
           <DialogContent>
-            <div className={styles.fields}>
+            <div className="azf-stack azf-gap-m">
               <Text>
                 Choose a project and describe a goal in plain language. Direct starts faster from
                 your prompt. Define Outcome drafts structured acceptance criteria and expected
@@ -184,9 +179,12 @@ export function StartOrchestrationFab({ currentProjectId }: StartOrchestrationFa
                 </MessageBar>
               )}
               {noProjects ? (
-                <MessageBar intent="info">
-                  <MessageBarBody>
-                    Create a project first. Open the{' '}
+                <AzureEmptyState
+                  compact
+                  title="Create a project first."
+                  body={(
+                    <>
+                    Open the{' '}
                     <Link
                       onClick={() => {
                         setOpen(false);
@@ -196,8 +194,9 @@ export function StartOrchestrationFab({ currentProjectId }: StartOrchestrationFa
                       project gallery
                     </Link>{' '}
                     to add one.
-                  </MessageBarBody>
-                </MessageBar>
+                    </>
+                  )}
+                />
               ) : (
                 <Field label="Project" required>
                   <Combobox

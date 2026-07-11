@@ -1,35 +1,27 @@
-import { useEffect, useMemo, useState } from 'react';
-import { Badge, Text, makeStyles, tokens } from '@fluentui/react-components';
 import {
-  BotRegular,
-  ChevronDownRegular,
-  ChevronRightRegular,
-  SparkleRegular,
-  WrenchRegular,
-} from '@fluentui/react-icons';
-import type { RunTraceDto } from '../../api/types';
-import { apiClient } from '../../api/apiClient';
-import { MetricCardHeader, MetricEmptyState } from '../MetricTypography';
-import { AgentIdentity } from '../AgentIdentity';
+  apiClient } from '../../api/apiClient';
+import { AzureEmptyState,
+  Badge,
+  BladeHeader,
+  StatusIconText,
+  Text } from '../../copilot-fluent-system';
 import { formatModelLabel } from '../../utils/agentIdentity';
-import { buildTraceTree, collectExpandableKeys, findNode, type SpanType, type TraceNode } from './traceTree';
-
+import { AgentIdentity } from '../AgentIdentity';
+import { buildTraceTree,
+  collectExpandableKeys,
+  findNode } from './traceTree';
+import { makeStyles,
+  mergeClasses,
+  tokens,
+} from '../../copilot-fluent-system';
+import { BotRegular, ChevronDownRegular, ChevronRightRegular, SparkleRegular, WrenchRegular } from '../../copilot-fluent-system';
+import { useEffect, useMemo, useState } from 'react';
+import type { RunTraceDto } from '../../api/types';
+import type { SpanType, TraceNode } from './traceTree';
+import type { ReactNode } from 'react';
 const useStyles = makeStyles({
   panel: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalM,
-    padding: tokens.spacingVerticalL,
-    backgroundColor: tokens.colorNeutralBackground1,
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: tokens.borderRadiusMedium,
-  },
-  header: {
-    display: 'flex',
-    alignItems: 'flex-start',
-    justifyContent: 'space-between',
-    gap: tokens.spacingHorizontalM,
-    flexWrap: 'wrap',
+    minWidth: 0,
   },
   body: {
     display: 'grid',
@@ -40,15 +32,9 @@ const useStyles = makeStyles({
     },
   },
   tree: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: '2px',
     minWidth: 0,
   },
   row: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: tokens.spacingHorizontalXS,
     width: '100%',
     border: 'none',
     background: 'none',
@@ -95,12 +81,6 @@ const useStyles = makeStyles({
     fontFamily: tokens.fontFamilyMonospace,
   },
   detail: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalM,
-    padding: tokens.spacingVerticalM,
-    borderRadius: tokens.borderRadiusMedium,
-    backgroundColor: tokens.colorNeutralBackground2,
     minWidth: 0,
     height: 'fit-content',
   },
@@ -124,10 +104,6 @@ const useStyles = makeStyles({
   detailValue: {
     fontSize: tokens.fontSizeBase200,
     wordBreak: 'break-word',
-  },
-  detailEmpty: {
-    color: tokens.colorNeutralForeground3,
-    fontSize: tokens.fontSizeBase200,
   },
 });
 
@@ -202,7 +178,7 @@ function TraceRow({
     <>
       <button
         type="button"
-        className={`${styles.row} ${isSelected ? styles.rowSelected : ''}`}
+        className={mergeClasses('azf-row azf-gap-xs', styles.row, isSelected && styles.rowSelected)}
         style={{ paddingLeft: `${depth * 20 + 8}px` }}
         onClick={() => onSelect(node)}
         aria-expanded={hasChildren ? isExpanded : undefined}
@@ -254,7 +230,7 @@ function TraceRow({
   );
 }
 
-function DetailRow({ label, value, styles }: { label: string; value: string; styles: ReturnType<typeof useStyles> }) {
+function DetailRow({ label, value, styles }: { label: string; value: ReactNode; styles: ReturnType<typeof useStyles> }) {
   return (
     <>
       <Text className={styles.detailKey}>{label}</Text>
@@ -274,18 +250,27 @@ function TraceDetail({
 }) {
   const { span, type } = node;
   return (
-    <div className={styles.detail}>
-      <MetricCardHeader
+    <div className={mergeClasses('azf-surface azf-surface--subtle azf-surface--padding-compact azf-stack azf-gap-m', styles.detail)}>
+      <BladeHeader
+        size="compact"
         title={typeLabel(type)}
         subtitle={nodeName(node)}
-        aside={<Badge appearance="tint" color={typeBadgeColor(type)} size="small" icon={typeIcon(type)}>{typeLabel(type)}</Badge>}
+        menuLabel={<Badge appearance="tint" color={typeBadgeColor(type)} size="small" icon={typeIcon(type)}>{typeLabel(type)}</Badge>}
       />
       <div>
         <Text className={styles.detailSectionTitle}>Generative AI properties</Text>
         <div className={styles.detailGrid}>
           <DetailRow label="Event time" value={new Date(span.timestamp).toLocaleString()} styles={styles} />
           <DetailRow label="Duration" value={formatDurationMs(span.durationMs)} styles={styles} />
-          <DetailRow label="Status" value={span.success ? 'Success' : (span.resultCode?.trim() || 'Failed')} styles={styles} />
+          <DetailRow
+            label="Status"
+            value={(
+              <StatusIconText status={span.success ? 'success' : 'danger'}>
+                {span.success ? 'Success' : (span.resultCode?.trim() || 'Failed')}
+              </StatusIconText>
+            )}
+            styles={styles}
+          />
           {span.operationName && <DetailRow label="Operation" value={span.operationName} styles={styles} />}
         </div>
       </div>
@@ -358,18 +343,18 @@ export function TransactionTracePanel({
   }
 
   return (
-    <div className={styles.panel}>
-      <MetricCardHeader
-        className={styles.header}
+    <div className={mergeClasses('azf-surface azf-surface--panel azf-surface--padding-comfortable azf-stack azf-gap-m', styles.panel)}>
+      <BladeHeader
+        size="compact"
         title={title}
         subtitle={subtitle}
-        aside={<Badge appearance="outline" size="small">AppInsights</Badge>}
+        menuLabel={<Badge appearance="outline" size="small">AppInsights</Badge>}
       />
       {tree.length === 0 ? (
-        <MetricEmptyState>No AppInsights trace data available for this run yet.</MetricEmptyState>
+        <AzureEmptyState compact title="No AppInsights trace data available for this run yet." />
       ) : (
         <div className={styles.body}>
-          <div className={styles.tree}>
+          <div className={mergeClasses('azf-stack azf-gap-xs', styles.tree)}>
             {tree.map((node) => (
               <TraceRow
                 key={node.key}
@@ -387,8 +372,8 @@ export function TransactionTracePanel({
           {selectedNode ? (
             <TraceDetail node={selectedNode} roleByAgent={roleByAgent} styles={styles} />
           ) : (
-            <div className={styles.detail}>
-              <Text className={styles.detailEmpty}>Select a span to view its Generative AI properties.</Text>
+            <div className={mergeClasses('azf-surface azf-surface--subtle azf-surface--padding-compact', styles.detail)}>
+              <AzureEmptyState compact title="Select a span to view its Generative AI properties." />
             </div>
           )}
         </div>

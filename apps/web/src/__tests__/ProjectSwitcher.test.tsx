@@ -1,19 +1,24 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, cleanup, waitFor, fireEvent } from '@testing-library/react';
-import { FluentProvider, webLightTheme } from '@fluentui/react-components';
-import { MemoryRouter, Routes, Route, useLocation } from 'react-router-dom';
-
+import { apiClient } from '../api/apiClient';
+import { ApiError } from '../api/client';
+import { AzureFluentProvider } from '../copilot-fluent-system';
+import { ProjectSwitcher, projectSwitchTarget } from '../components/shell/ProjectSwitcher';
+import { ProjectListProvider } from '../hooks/useProjectList';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from 'vitest';
+import type { Project } from '../api/types';
 vi.mock('../api/apiClient', () => ({
   apiClient: {
     listProjects: vi.fn(),
   },
 }));
-
-import { apiClient } from '../api/apiClient';
-import { ApiError } from '../api/client';
-import { ProjectSwitcher, projectSwitchTarget } from '../components/shell/ProjectSwitcher';
-import { ProjectListProvider } from '../hooks/useProjectList';
-import type { Project } from '../api/types';
 
 function makeProject(id: string, name: string): Project {
   return {
@@ -82,7 +87,7 @@ function LocationProbe() {
 
 function renderSwitcherAt(pathname: string, projectId: string) {
   return render(
-    <FluentProvider theme={webLightTheme}>
+    <AzureFluentProvider density="compact">
       <MemoryRouter initialEntries={[pathname]}>
         <ProjectListProvider>
           <ProjectSwitcher projectId={projectId} pathname={pathname} />
@@ -91,7 +96,7 @@ function renderSwitcherAt(pathname: string, projectId: string) {
           </Routes>
         </ProjectListProvider>
       </MemoryRouter>
-    </FluentProvider>,
+    </AzureFluentProvider>,
   );
 }
 

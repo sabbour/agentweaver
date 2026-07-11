@@ -1,21 +1,21 @@
-import { useState } from 'react';
 import {
-  Button,
+  apiClient } from '../api/apiClient';
+import { ApiError } from '../api/client';
+import { Button,
   Field,
   MessageBar,
   MessageBarBody,
   Spinner,
-  Text,
+  StatusIconText,
   Textarea,
-  makeStyles,
-  tokens,
-} from '@fluentui/react-components';
-import { ArrowRoutingRegular, EditRegular, SendRegular, StopRegular } from '@fluentui/react-icons';
-import { apiClient } from '../api/apiClient';
-import { ApiError } from '../api/client';
-import type { SteerCoordinatorRequest, SteerKind } from '../api/types';
+  } from '../copilot-fluent-system';
 import { SteeringLegend } from './SteeringLegend';
-
+import { makeStyles,
+  tokens,
+} from '../copilot-fluent-system';
+import { ArrowRoutingRegular, EditRegular, SendRegular, StopRegular } from '../copilot-fluent-system';
+import { useState } from 'react';
+import type { SteerCoordinatorRequest, SteerKind } from '../api/types';
 // ---------------------------------------------------------------------------
 // Payload builder — contract confirmed by Morpheus 2026-06-22.
 // Update ONLY this function if the verb/body fields ever change.
@@ -76,17 +76,6 @@ function defaultInstruction(blockReason: string | undefined): string {
 }
 
 const useStyles = makeStyles({
-  root: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalS,
-  },
-  actions: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: tokens.spacingHorizontalS,
-    flexWrap: 'wrap',
-  },
   noPermission: {
     fontSize: tokens.fontSizeBase200,
     color: tokens.colorNeutralForeground3,
@@ -152,16 +141,16 @@ export function SteerPanel({ runId, blockReason, targetChildRunId, canSteer = tr
 
   if (!canSteer) {
     return (
-      <div className={styles.root} data-testid="steer-panel">
-        <Text className={styles.noPermission} data-testid="steer-panel-no-permission">
-          Only the run owner can steer the coordinator.
-        </Text>
+      <div className="azf-stack azf-gap-s" data-testid="steer-panel">
+        <div className={styles.noPermission} data-testid="steer-panel-no-permission">
+          <StatusIconText status="warning">Only the run owner can steer the coordinator.</StatusIconText>
+        </div>
       </div>
     );
   }
 
   return (
-    <div className={styles.root} data-testid="steer-panel">
+    <div className="azf-stack azf-gap-s" data-testid="steer-panel">
       <Field
         label="Tell the coordinator how to resolve this (optional)"
         hint="Leave blank to use the suggested default action."
@@ -191,7 +180,7 @@ export function SteerPanel({ runId, blockReason, targetChildRunId, canSteer = tr
 
       <SteeringLegend />
 
-      <div className={styles.actions}>
+      <div className="azf-row azf-gap-s azf-wrap">
         <Button
           appearance="primary"
           icon={isPending ? <Spinner size="tiny" /> : <SendRegular />}

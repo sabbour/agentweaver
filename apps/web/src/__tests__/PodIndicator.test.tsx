@@ -1,16 +1,21 @@
+import { apiClient } from '../api/apiClient';
+import { AzureFluentProvider } from '../copilot-fluent-system';
+import { PodIndicator } from '../components/PodIndicator';
+import { ActiveEdgeContext, ExecutionModalContext, workflowNodeTypes } from '../components/WorkflowGraphPanel';
+import { _resetRuntimeInfoCache } from '../hooks/useRuntimeInfo';
+import { BotRegular } from '../copilot-fluent-system';
+import { cleanup, render, waitFor } from '@testing-library/react';
+import { ReactFlow } from '@xyflow/react';
+import { MemoryRouter } from 'react-router-dom';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { WorkflowNodeData } from '../components/WorkflowGraphPanel';
+import type { Node } from '@xyflow/react';
 /**
  * Tests for PodIndicator component and useRuntimeInfo hook integration.
  *
  * Asserts: (a) indicator shows podName when kubernetes=true;
  *          (b) indicator NOT rendered when kubernetes=false or podName=null.
  */
-import { describe, it, expect, vi, afterEach } from 'vitest';
-import { render, waitFor, cleanup } from '@testing-library/react';
-import { ReactFlow } from '@xyflow/react';
-import { FluentProvider, webLightTheme } from '@fluentui/react-components';
-import { MemoryRouter } from 'react-router-dom';
-import { BotRegular } from '@fluentui/react-icons';
-
 // ResizeObserver stub required by @xyflow/react.
 class ResizeObserverStub {
   observe() {}
@@ -25,17 +30,6 @@ vi.mock('../api/apiClient', () => ({
   },
 }));
 
-import { apiClient } from '../api/apiClient';
-import {
-  workflowNodeTypes,
-  ExecutionModalContext,
-  ActiveEdgeContext,
-  type WorkflowNodeData,
-} from '../components/WorkflowGraphPanel';
-import { PodIndicator } from '../components/PodIndicator';
-import { _resetRuntimeInfoCache } from '../hooks/useRuntimeInfo';
-import type { Node } from '@xyflow/react';
-
 afterEach(() => {
   cleanup();
   _resetRuntimeInfoCache();
@@ -49,9 +43,9 @@ afterEach(() => {
 describe('PodIndicator', () => {
   it('renders nothing when podName is null', () => {
     const { container } = render(
-      <FluentProvider theme={webLightTheme}>
+      <AzureFluentProvider density="compact">
         <PodIndicator podName={null} />
-      </FluentProvider>,
+      </AzureFluentProvider>,
     );
     // FluentProvider renders a wrapper div; check no pill content is present
     expect(container.querySelector('[role="status"]')).toBeNull();
@@ -60,9 +54,9 @@ describe('PodIndicator', () => {
 
   it('renders nothing when podName is undefined', () => {
     const { container } = render(
-      <FluentProvider theme={webLightTheme}>
+      <AzureFluentProvider density="compact">
         <PodIndicator podName={undefined} />
-      </FluentProvider>,
+      </AzureFluentProvider>,
     );
     expect(container.querySelector('[role="status"]')).toBeNull();
     expect(container.textContent).toBe('');
@@ -70,18 +64,18 @@ describe('PodIndicator', () => {
 
   it('renders the pod name when podName is provided', () => {
     const { container } = render(
-      <FluentProvider theme={webLightTheme}>
+      <AzureFluentProvider density="compact">
         <PodIndicator podName="agentweaver-api-abc123" />
-      </FluentProvider>,
+      </AzureFluentProvider>,
     );
     expect(container.textContent).toContain('agentweaver-api-abc123');
   });
 
   it('has correct aria-label with pod name', () => {
     const { container } = render(
-      <FluentProvider theme={webLightTheme}>
+      <AzureFluentProvider density="compact">
         <PodIndicator podName="pod-xyz" />
-      </FluentProvider>,
+      </AzureFluentProvider>,
     );
     const pill = container.querySelector('[aria-label]');
     expect(pill?.getAttribute('aria-label')).toBe('Executing in pod pod-xyz');
@@ -109,7 +103,7 @@ function makeNode(overrides?: Partial<WorkflowNodeData>): Node[] {
 
 function Wrapper({ nodes }: { nodes: Node[] }) {
   return (
-    <FluentProvider theme={webLightTheme}>
+    <AzureFluentProvider density="compact">
       <MemoryRouter>
         <ExecutionModalContext.Provider value={undefined}>
           <ActiveEdgeContext.Provider value={undefined}>
@@ -119,7 +113,7 @@ function Wrapper({ nodes }: { nodes: Node[] }) {
           </ActiveEdgeContext.Provider>
         </ExecutionModalContext.Provider>
       </MemoryRouter>
-    </FluentProvider>
+    </AzureFluentProvider>
   );
 }
 

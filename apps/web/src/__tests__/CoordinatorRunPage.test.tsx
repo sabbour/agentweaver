@@ -1,9 +1,20 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, waitFor, cleanup, fireEvent, screen } from '@testing-library/react';
-import { MemoryRouter, Routes, Route } from 'react-router-dom';
-import { FluentProvider, webLightTheme } from '@fluentui/react-components';
-import { type ReactNode } from 'react';
-
+import { apiClient } from '../api/apiClient';
+import { ApiError } from '../api/client';
+import { AzureFluentProvider } from '../copilot-fluent-system';
+import { _resetRuntimeInfoCache } from '../hooks/useRuntimeInfo';
+import { CoordinatorRunPage } from '../pages/CoordinatorRunPage';
+import { COORDINATOR_GRAPH_DESCRIPTOR, COORDINATOR_GRAPH_DRAFTING_DESCRIPTOR } from './fixtures/graphDescriptor';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from 'vitest';
+import type { ReactNode } from 'react';
 // ResizeObserver is required by @xyflow/react and absent in happy-dom.
 class ResizeObserverStub {
   observe() {}
@@ -65,21 +76,15 @@ vi.mock('../components/OutcomePlanPanel', () => ({
   OutcomePlanPanel: () => null,
 }));
 
-import { apiClient } from '../api/apiClient';
-import { ApiError } from '../api/client';
-import { CoordinatorRunPage } from '../pages/CoordinatorRunPage';
-import { _resetRuntimeInfoCache } from '../hooks/useRuntimeInfo';
-import { COORDINATOR_GRAPH_DESCRIPTOR, COORDINATOR_GRAPH_DRAFTING_DESCRIPTOR } from './fixtures/graphDescriptor';
-
 function Wrapper({ children }: { children: ReactNode }) {
   return (
-    <FluentProvider theme={webLightTheme}>
+    <AzureFluentProvider density="compact">
       <MemoryRouter initialEntries={['/projects/p1/orchestrations/coord-run-1']}>
         <Routes>
           <Route path="/projects/:projectId/orchestrations/:runId" element={children} />
         </Routes>
       </MemoryRouter>
-    </FluentProvider>
+    </AzureFluentProvider>
   );
 }
 
