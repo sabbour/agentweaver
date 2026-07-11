@@ -4,6 +4,7 @@ export {
   ApprovalGate,
   AgentStepItem,
   AgentStepList,
+  AgentActivitySession,
   ToolCallRow,
 } from './components';
 export type {
@@ -11,5 +12,6 @@ export type {
   ApprovalGateProps,
   AgentStepProps,
   AgentStepListProps,
+  AgentActivitySessionProps,
   ToolCallRowProps,
 } from './components';

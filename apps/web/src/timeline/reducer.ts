@@ -52,7 +52,7 @@ function cap(text: string): string {
  * pendingToolCalls, so `settled` stayed false forever. Normalising the key on
  * BOTH the call and its completion guarantees they pair regardless of casing.
  */
-function extractCallId(payload: Record<string, unknown>): unknown {
+export function extractCallId(payload: Record<string, unknown>): unknown {
   const camel = payload['callId'];
   if (camel != null) return camel;
   return payload['call_id'];

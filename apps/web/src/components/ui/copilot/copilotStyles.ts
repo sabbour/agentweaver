@@ -391,15 +391,13 @@ export const useCopilotMessageStyles = makeStyles({
     animationDuration: "1.5s",
     animationIterationCount: "infinite",
     animationTimingFunction: "ease-in-out",
-  },
-  loadingBarShort: {
-    width: "60%",
-  },
-  "@media (prefers-reduced-motion: reduce)": {
-    loadingBar: {
+    "@media (prefers-reduced-motion: reduce)": {
       animationName: "none",
       opacity: "0.6",
     },
+  },
+  loadingBarShort: {
+    width: "60%",
   },
 });
 

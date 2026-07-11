@@ -2,7 +2,7 @@ import userEvent from '@testing-library/user-event';
 import { apiClient } from '../api/apiClient';
 import { AzureFluentProvider } from '../copilot-fluent-system';
 import { AgentSessionPanel } from '../components/AgentSessionPanel';
-import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import {
   afterEach,
@@ -272,18 +272,46 @@ describe('AgentSessionPanel', () => {
     expect(vi.mocked(apiClient.denyTool)).not.toHaveBeenCalledWith('coord-run-1', expect.anything());
   });
 
-  it('renders coordinator lifecycle, subtask, assembly, and child activity while collapsing repeated prompt scaffolding', async () => {
+  it('surfaces a direct coordinator tool approval and targets the coordinator run', async () => {
+    currentEvents = [
+      {
+        sequence: 1,
+        type: 'tool.approval_required',
+        payload: { requestId: 'req-direct-1', toolName: 'web_fetch', message: 'Fetch changelog' },
+      },
+    ];
+
+    render(
+      <Wrapper>
+        <AgentSessionPanel
+          open
+          onClose={vi.fn()}
+          tree={tree}
+          selectedNodeId="coordinator"
+          onSelectNode={vi.fn()}
+          coordinatorRunId="coord-run-1"
+          projectId="p1"
+        />
+      </Wrapper>,
+    );
+
+    // A coordinator-owned approval (no childRunId) must still surface as an actionable
+    // ApprovalGate in the coordinator view and resolve against the coordinator run.
+    await waitFor(() => expect(screen.getByText('Tool Approval Required')).toBeDefined(), { timeout: 4000 });
+    expect(screen.getByTestId('session-approval-gate')).toBeDefined();
+    await userEvent.click(screen.getByRole('button', { name: 'Allow once' }));
+
+    expect(vi.mocked(apiClient.approveTool)).toHaveBeenCalledWith('coord-run-1', 'req-direct-1', 'once');
+  });
+
+  it('surfaces a coordinator child approval inline and never dumps raw system-prompt scaffolding into the thread', async () => {
     currentEvents = [
       { sequence: 1, type: 'agent.turn.start', payload: { turnId: 't1' } },
       { sequence: 2, type: 'agent.system_prompt', payload: { prompt: 'Coordinator system prompt v1' } },
       { sequence: 3, type: 'agent.task', payload: { task: 'Coordinate the requested work' } },
       { sequence: 4, type: 'agent.turn.end', payload: {} },
-      { sequence: 5, type: 'agent.turn.start', payload: { turnId: 't2' } },
-      { sequence: 6, type: 'agent.system_prompt', payload: { prompt: 'Coordinator system prompt v2' } },
-      { sequence: 7, type: 'agent.task', payload: { task: 'Dispatch the same work again' } },
-      { sequence: 8, type: 'agent.turn.end', payload: {} },
       {
-        sequence: 9,
+        sequence: 5,
         type: 'coordinator.work_plan',
         payload: {
           subtasks: [
@@ -291,24 +319,9 @@ describe('AgentSessionPanel', () => {
           ],
         },
       },
+      { sequence: 6, type: 'subtask.dispatched', payload: { subtaskId: '1', childRunId: 'child-run-1', status: 'dispatched' } },
       {
-        sequence: 10,
-        type: 'subtask.dispatched',
-        payload: { subtaskId: '1', childRunId: 'child-run-1', status: 'dispatched' },
-      },
-      {
-        sequence: 11,
-        type: 'subtask.completed',
-        payload: { subtaskId: '1', childRunId: 'child-run-1', status: 'completed' },
-      },
-      { sequence: 12, type: 'coordinator.assembly_rai_started', payload: {} },
-      {
-        sequence: 13,
-        type: 'coordinator.child_question',
-        payload: { subtaskId: '1', childRunId: 'child-run-1', requestId: 'q-1', question: 'Which source should I use?' },
-      },
-      {
-        sequence: 14,
+        sequence: 7,
         type: 'coordinator.child_approval_required',
         payload: { subtaskId: '1', childRunId: 'child-run-1', requestId: 'approval-2', toolName: 'web_fetch', message: 'Fetch docs' },
       },
@@ -328,33 +341,53 @@ describe('AgentSessionPanel', () => {
       </Wrapper>,
     );
 
-    await waitFor(() => expect(screen.getByText('Coordinator created a work plan with 1 subtasks.')).toBeDefined(), { timeout: 4000 });
-    expect(screen.getByText('Dispatched subtask: Research multi-agent orchestration — Stark (Lead Researcher).')).toBeDefined();
-    expect(screen.getByText('Subtask completed: Research multi-agent orchestration — Stark (Lead Researcher).')).toBeDefined();
-    expect(screen.getByText('Collective assembly: RAI check started.')).toBeDefined();
-    expect(screen.getByText('Child question from Research multi-agent orchestration — Stark (Lead Researcher): Which source should I use?')).toBeDefined();
-    expect(screen.getByText('Tool approval required from Research multi-agent orchestration — Stark (Lead Researcher): web_fetch — Fetch docs')).toBeDefined();
+    // The pending child approval is surfaced inline and is actionable.
+    await waitFor(() => expect(screen.getByTestId('session-approval-gate')).toBeDefined(), { timeout: 4000 });
     expect(screen.getByText('Tool Approval Required')).toBeDefined();
-    expect(screen.getAllByTestId('session-activity-row').length).toBeGreaterThan(0);
-    expect(screen.getAllByTestId('session-activity-rail').length).toBeGreaterThan(0);
-    expect(getComputedStyle(screen.getAllByTestId('session-activity-row')[0] as HTMLElement).listStyleType).not.toBe('disc');
-    expect(screen.queryByText('Activity')).toBeNull();
-    // #122: system-prompt scaffolding is technical and hidden by default; the coordinator
-    // instruction is high-signal and stays visible inline so the stream reads like a narrative.
+
+    // The intent-driven Timeline is the conversation surface — the banned activity
+    // side-stripe and the old grouped-activity affordance never render.
+    expect(screen.getByTestId('run-timeline')).toBeDefined();
+    expect(screen.queryByTestId('session-activity-rail')).toBeNull();
+    expect(screen.queryByTestId('activity-details-summary')).toBeNull();
+
+    // Raw system-prompt scaffolding is technical and is never dumped as a visible bubble.
+    expect(screen.queryByText('Coordinator system prompt v1')).toBeNull();
     expect(screen.queryByText('System prompt')).toBeNull();
-    expect(screen.getByText('Coordinate the requested work')).toBeDefined();
-    // Revealing technical details brings system prompt scaffolding back while keeping activity
-    // collapsed behind an explicit control until the operator asks for it.
-    await userEvent.click(screen.getByRole('switch', { name: 'Technical details hidden' }));
-    await waitFor(() => expect(screen.getAllByTestId('activity-details-summary').length).toBeGreaterThan(0));
-    expect(screen.queryByText('Coordinator created a work plan with 1 subtasks.')).toBeNull();
-    await waitFor(() => expect(screen.getAllByText('System prompt')).toHaveLength(1));
-    await userEvent.click(screen.getByRole('button', { name: /Expand activity details/i }));
-    expect(screen.getByText('Coordinator created a work plan with 1 subtasks.')).toBeDefined();
-    expect(screen.getByText('Coordinate the requested work')).toBeDefined();
   });
 
-  it('defaults docked coordinator panels to technical details while folding long workspace context', async () => {
+  it('renders reported intents as ordered Timeline steps for a coordinator scope', async () => {
+    currentEvents = [
+      { sequence: 1, type: 'agent.intent', payload: { intent: 'Draft the outcome plan' } },
+      { sequence: 2, type: 'agent.intent', payload: { intent: 'Dispatch the work' } },
+      { sequence: 3, type: 'agent.turn.end', payload: {} },
+    ];
+
+    render(
+      <Wrapper>
+        <AgentSessionPanel
+          open
+          variant="docked"
+          onClose={vi.fn()}
+          tree={tree}
+          selectedNodeId="coordinator"
+          onSelectNode={vi.fn()}
+          coordinatorRunId="coord-run-1"
+          projectId="p1"
+        />
+      </Wrapper>,
+    );
+
+    // Each agent.intent becomes a top-level Timeline step — no wall of per-turn
+    // "Activity collapsed" affordances and no banned left side-stripe rail.
+    const timeline = await screen.findByTestId('run-timeline', undefined, { timeout: 4000 });
+    expect(within(timeline).getByText('Draft the outcome plan')).toBeDefined();
+    expect(within(timeline).getByText('Dispatch the work')).toBeDefined();
+    expect(screen.queryByTestId('session-activity-rail')).toBeNull();
+    expect(screen.queryByTestId('activity-details-summary')).toBeNull();
+  });
+
+  it('never dumps long workspace system-prompt context into the Messages thread', async () => {
     const longContext = [
       'workspace-sync coordinator context',
       'TEAM_ROOT: C:\\Users\\asabbour\\Git\\agentweaver\\.squad',
@@ -386,23 +419,16 @@ describe('AgentSessionPanel', () => {
       </Wrapper>,
     );
 
-    const technicalToggle = await screen.findByRole('switch', { name: 'Technical details shown' }, { timeout: 4000 });
-    expect((technicalToggle as HTMLInputElement).checked).toBe(true);
-    expect(screen.getByText('System prompt')).toBeDefined();
-    const contextDisclosure = screen.getByRole('button', { name: /Coordinator context/i });
-    expect(contextDisclosure.getAttribute('aria-expanded')).toBe('false');
-    expect(screen.queryByText('This verbose workspace sync prose should stay folded until the operator opens it.')).toBeNull();
-    await userEvent.click(technicalToggle);
-    const hiddenToggle = screen.getByRole('switch', { name: 'Technical details hidden' });
-    expect((hiddenToggle as HTMLInputElement).checked).toBe(false);
+    // The Messages surface is the intent-driven Timeline — system-prompt / workspace
+    // scaffolding is not part of the conversation and never leaks into it, and there
+    // is no legacy "Technical details" switch on this surface.
+    await screen.findByTestId('run-timeline', undefined, { timeout: 4000 });
+    expect(screen.queryByRole('switch', { name: /Technical details/i })).toBeNull();
     expect(screen.queryByText('System prompt')).toBeNull();
-
-    await userEvent.click(screen.getByRole('button', { name: /Coordinator context/i }));
-    expect(screen.getByRole('button', { name: /Coordinator context/i }).getAttribute('aria-expanded')).toBe('true');
-    expect(screen.getByText('This verbose workspace sync prose should stay folded until the operator opens it.')).toBeDefined();
+    expect(screen.queryByText('This verbose workspace sync prose should stay folded until the operator opens it.')).toBeNull();
   });
 
-  it('keeps docked tool activity and file artifacts collapsed until expanded', async () => {
+  it('nests a tool call under its reported intent step in the Timeline', async () => {
     currentEvents = [
       { sequence: 1, type: 'agent.turn.start', payload: { turnId: 'worker-turn' } },
       { sequence: 2, type: 'agent.message', payload: { content: 'Writing the design artifact.' } },
@@ -435,24 +461,18 @@ describe('AgentSessionPanel', () => {
       </Wrapper>,
     );
 
-    const summaries = await screen.findAllByTestId('activity-details-summary', undefined, { timeout: 4000 });
-    const summary = summaries.find((element) => element.textContent?.includes('1 artifact')) ?? summaries[0];
-    expect(summary.textContent).toContain('Activity collapsed');
-    expect(summary.textContent).toContain('1 update');
-    expect(summary.textContent).toContain('1 tool call');
-    expect(summary.textContent).toContain('1 artifact');
-    expect(screen.queryByTestId('session-activity-row')).toBeNull();
-    expect(screen.queryByTestId('session-file-row')).toBeNull();
+    const timeline = await screen.findByTestId('run-timeline', undefined, { timeout: 4000 });
+    // Steps are collapsed by default; expand the intent that ran the tool.
+    fireEvent.click(within(timeline).getByText('Writing hotel booking design doc'));
 
-    await userEvent.click(screen.getByTestId('toggle-activity-details'));
-    await waitFor(() => expect(screen.getByTestId('session-activity-row')).toBeDefined(), { timeout: 4000 });
-    const fileRow = screen.getByTestId('session-file-row');
-    expect(fileRow.textContent).toContain('hotel-booking-design.md');
-    expect(fileRow.textContent).toContain('Workspace file');
-    expect(getComputedStyle(fileRow).display).toBe('grid');
+    const group = await within(timeline).findByTestId('timeline-tool-group', undefined, { timeout: 4000 });
+    expect(group.textContent).toContain('Used 1 tool');
+    const rows = within(timeline).getAllByTestId('timeline-tool-row');
+    expect(rows).toHaveLength(1);
+    expect(rows[0].getAttribute('data-tool-status')).toBe('complete');
   });
 
-  it('projects workspace file references from messages into Files without inventing Changes', async () => {
+  it('renders scope tool activity and exposes Activity/Changes without a Files tab', async () => {
     currentEvents = [
       { sequence: 1, type: 'agent.turn.start', payload: { turnId: 'worker-turn' } },
       { sequence: 2, type: 'agent.message', payload: { content: 'Creating the booking page components.' } },
@@ -484,19 +504,21 @@ describe('AgentSessionPanel', () => {
       </Wrapper>,
     );
 
-    const changesTab = await screen.findByTestId('session-tab-changes', undefined, { timeout: 4000 });
-    expect(changesTab.textContent).toContain('Changes (0)');
-    const filesTab = screen.getByTestId('session-tab-files');
-    expect(filesTab.textContent).toContain('Files (1)');
+    // The surface uses a single Activity | Changes segmented control — the old Files tab is gone.
+    expect(await screen.findByTestId('session-tab-activity', undefined, { timeout: 4000 })).toBeDefined();
+    expect(screen.getByTestId('session-tab-changes')).toBeDefined();
+    expect(screen.queryByTestId('session-tab-files')).toBeNull();
 
-    await userEvent.click(filesTab);
-    await waitFor(() => expect(screen.getByText('HotelBooking.css')).toBeDefined(), { timeout: 4000 });
-    await userEvent.click(screen.getByText('HotelBooking.css'));
-
+    // The write_file tool surfaces as a Timeline activity row, not a run-tree/Files artifact.
+    const timeline = await screen.findByTestId('run-timeline', undefined, { timeout: 4000 });
+    // With no agent.intent, activity nests under the synthetic "Working" step; expand it.
+    fireEvent.click(within(timeline).getByText('Working'));
+    const rows = await within(timeline).findAllByTestId('timeline-tool-row', undefined, { timeout: 4000 });
+    expect(rows.length).toBeGreaterThan(0);
     expect(vi.mocked(apiClient.getRunFileDiff)).not.toHaveBeenCalled();
   });
 
-  it('keeps the normal agent-message conversation view for non-coordinator sessions', async () => {
+  it('renders a non-coordinator agent message as markdown inside its Timeline step', async () => {
     currentEvents = [
       { sequence: 1, type: 'agent.turn.start', payload: { turnId: 'worker-turn' } },
       { sequence: 2, type: 'agent.system_prompt', payload: { prompt: 'Worker system prompt' } },
@@ -519,15 +541,18 @@ describe('AgentSessionPanel', () => {
       </Wrapper>,
     );
 
-    await waitFor(() => expect(screen.getByText('I found the implementation details.')).toBeDefined(), { timeout: 4000 });
-    expect(screen.getAllByText('Worker (Researcher)').length).toBeGreaterThan(0);
-    expect(screen.getByText('response')).toBeDefined();
-    // #122: system prompt is technical and hidden by default; the user instruction stays inline.
+    // A message with no preceding intent opens a synthetic "Working" step; expand it
+    // to reveal the agent's actual output rendered as a message.
+    const timeline = await screen.findByTestId('run-timeline', undefined, { timeout: 4000 });
+    fireEvent.click(within(timeline).getByText('Working'));
+    await waitFor(
+      () => expect(within(timeline).getByTestId('timeline-message').textContent).toContain('I found the implementation details.'),
+      { timeout: 4000 },
+    );
+
+    // System-prompt scaffolding is never dumped into the conversation.
+    expect(screen.queryByText('Worker system prompt')).toBeNull();
     expect(screen.queryByText('System prompt')).toBeNull();
-    expect(screen.getByText('Do worker task')).toBeDefined();
-    await userEvent.click(screen.getByRole('switch', { name: 'Technical details hidden' }));
-    await waitFor(() => expect(screen.getByText('System prompt')).toBeDefined());
-    expect(screen.getByText('Do worker task')).toBeDefined();
   });
 
   it('uses a non-generic fallback instead of bare Agent for agent-authored rows', async () => {
@@ -571,13 +596,14 @@ describe('AgentSessionPanel', () => {
       </Wrapper>,
     );
 
-    await waitFor(() => expect(screen.getByText('I am working on it.')).toBeDefined(), { timeout: 4000 });
-    const messageRow = screen.getByText('I am working on it.').closest('[data-testid="session-message-row"]') as HTMLElement;
-    expect(within(messageRow).getByText('Assistant (Implementer)')).toBeDefined();
-    expect(within(messageRow).queryByText('Agent')).toBeNull();
+    await screen.findByTestId('run-timeline', undefined, { timeout: 4000 });
+    // The scope header names the agent by its role fallback, never the bare generic
+    // literal "Agent".
+    expect(screen.getAllByText('Assistant (Implementer)').length).toBeGreaterThan(0);
+    expect(screen.queryByText('Agent (Implementer)')).toBeNull();
   });
 
-  it('collapses low-signal technical tool plumbing by default and reveals it via the toggle (#122)', async () => {
+  it('nests tool calls and the agent message together under one Timeline step (#122)', async () => {
     currentEvents = [
       { sequence: 1, type: 'agent.turn.start', payload: { turnId: 'worker-turn' } },
       { sequence: 2, type: 'agent.message', payload: { content: 'Applying the requested fix.' } },
@@ -600,40 +626,27 @@ describe('AgentSessionPanel', () => {
       </Wrapper>,
     );
 
-    // The high-signal agent message reads as a clean narrative by default.
-    await waitFor(() => expect(screen.getByText('Applying the requested fix.')).toBeDefined(), { timeout: 4000 });
-    // Tool-call plumbing and file-write rows are hidden by default.
-    expect(screen.queryByText(/Tool calls/)).toBeNull();
-    expect(screen.queryByText('Workspace file')).toBeNull();
+    const timeline = await screen.findByTestId('run-timeline', undefined, { timeout: 4000 });
+    // Message + tool with no preceding intent group under a single synthetic step.
+    fireEvent.click(within(timeline).getByText('Working'));
 
-    // Toggling technical details on reveals the collapsed plumbing summary first.
-    await userEvent.click(screen.getByRole('switch', { name: 'Technical details hidden' }));
-    await waitFor(() => expect(screen.getAllByTestId('activity-details-summary').length).toBeGreaterThan(0));
-    expect(screen.queryByText(/Tool calls/)).toBeNull();
-    expect(screen.queryByText('Workspace file')).toBeNull();
-
-    // Expanding activity details reveals compact tool/artifact rows without turning them into cards.
-    await userEvent.click(screen.getByRole('button', { name: /Expand activity details/i }));
-    expect(screen.queryByText(/Tool calls/)).not.toBeNull();
-    expect(screen.getByText('Workspace file')).toBeDefined();
-    const fileRow = screen.getByTestId('session-file-row');
-    const fileRowStyle = getComputedStyle(fileRow);
-    expect(fileRowStyle.backgroundColor === 'transparent' || fileRowStyle.backgroundColor === 'rgba(0, 0, 0, 0)').toBe(true);
-    expect(fileRowStyle.display).toBe('grid');
-    expect(fileRowStyle.minHeight).toBe('24px');
-    // The narrative message remains visible alongside the revealed technical rows.
-    expect(screen.getByText('Applying the requested fix.')).toBeDefined();
+    const group = await within(timeline).findByTestId('timeline-tool-group', undefined, { timeout: 4000 });
+    expect(group.textContent).toContain('Used 1 tool');
+    const rows = within(timeline).getAllByTestId('timeline-tool-row');
+    expect(rows[0].getAttribute('data-tool-status')).toBe('complete');
+    // The agent's narrative message sits in the same step, not a separate loud bubble.
+    expect(within(timeline).getByTestId('timeline-message').textContent).toContain('Applying the requested fix.');
   });
 
-  it('streams only the event-level active turn — a completed turn never keeps the spinner', async () => {
+  it('derives a settled Timeline step to complete while an open step stays running', async () => {
     // Two turns: the first is closed (agent.turn.end), the second is still open
     // (agent.turn.start with no matching end). The run is live (getRun → in_progress).
     currentEvents = [
       { sequence: 1, type: 'agent.turn.start', payload: { turnId: 't1' } },
-      { sequence: 2, type: 'agent.message', payload: { content: 'First response is finished.' } },
+      { sequence: 2, type: 'agent.message', payload: { messageId: 'm1', content: 'First response is finished.' } },
       { sequence: 3, type: 'agent.turn.end', payload: {} },
       { sequence: 4, type: 'agent.turn.start', payload: { turnId: 't2' } },
-      { sequence: 5, type: 'agent.message', payload: { content: 'Second response still streaming.' } },
+      { sequence: 5, type: 'agent.message', payload: { messageId: 'm2', content: 'Second response still streaming.' } },
     ];
 
     render(
@@ -651,22 +664,19 @@ describe('AgentSessionPanel', () => {
       </Wrapper>,
     );
 
-    await waitFor(() => expect(screen.getByText('First response is finished.')).toBeDefined(), { timeout: 4000 });
-
-    const completed = screen.getByText('First response is finished.').closest('[role="article"]') as HTMLElement;
-    const active = screen.getByText('Second response still streaming.').closest('[role="article"]') as HTMLElement;
-
-    // The completed turn must NOT show a streaming ProgressBar; the open turn must.
-    expect(within(completed).queryByRole('progressbar')).toBeNull();
-    expect(within(active).queryByRole('progressbar')).not.toBeNull();
+    const timeline = await screen.findByTestId('run-timeline', undefined, { timeout: 4000 });
+    // The first message's step is closed by agent.turn.end → Complete status icon (no
+    // perpetual spinner). The still-open second step derives to Running.
+    await waitFor(() => expect(within(timeline).getAllByLabelText('Complete').length).toBeGreaterThan(0), { timeout: 4000 });
+    expect(within(timeline).getAllByLabelText('Running').length).toBeGreaterThan(0);
   });
 
-  it('marks a failed tool call with an error status, not a success check', async () => {
+  it('marks a failed tool call with an error status in the Timeline, not a success check', async () => {
     currentEvents = [
       { sequence: 1, type: 'agent.turn.start', payload: { turnId: 'worker-turn' } },
       { sequence: 2, type: 'agent.message', payload: { content: 'Trying a tool.' } },
       { sequence: 3, type: 'tool.call', payload: { callId: 'c1', toolName: 'web_fetch', arguments: { url: 'https://example.com' } } },
-      { sequence: 4, type: 'tool.error', payload: { callId: 'c1', error: 'boom' } },
+      { sequence: 4, type: 'tool.error', payload: { callId: 'c1', errorMessage: 'boom' } },
       { sequence: 5, type: 'agent.turn.end', payload: {} },
     ];
 
@@ -684,18 +694,12 @@ describe('AgentSessionPanel', () => {
       </Wrapper>,
     );
 
-    await waitFor(() => expect(screen.getByText('Trying a tool.')).toBeDefined(), { timeout: 4000 });
-    await userEvent.click(screen.getByRole('switch', { name: 'Technical details hidden' }));
-    await userEvent.click(screen.getByRole('button', { name: /Expand activity details/i }));
-    await userEvent.click(screen.getByRole('button', { name: /Tool calls/ }));
+    const timeline = await screen.findByTestId('run-timeline', undefined, { timeout: 4000 });
+    fireEvent.click(within(timeline).getByText('Working'));
 
-    const errorRow = await waitFor(() => {
-      const row = document.querySelector('[data-status="error"]');
-      if (!row) throw new Error('no errored tool row yet');
-      return row as HTMLElement;
-    });
-    expect(errorRow.getAttribute('data-status')).toBe('error');
-    expect(document.querySelector('[data-status="complete"]')).toBeNull();
+    const rows = await within(timeline).findAllByTestId('timeline-tool-row', undefined, { timeout: 4000 });
+    expect(rows[0].getAttribute('data-tool-status')).toBe('error');
+    expect(rows.some((r) => r.getAttribute('data-tool-status') === 'complete')).toBe(false);
   });
 
   it('shows coordinator messaging availability, success, and failure feedback', async () => {
@@ -813,8 +817,8 @@ describe('AgentSessionPanel', () => {
     );
 
     expect(screen.getByText(/has not been dispatched yet/i)).toBeDefined();
-    await userEvent.click(screen.getByTestId('session-tab-files'));
-    expect(screen.getByTestId('planned-node-file-guard')).toBeDefined();
+    await userEvent.click(screen.getByTestId('session-tab-changes'));
+    expect(screen.getByTestId('planned-node-artifact-guard')).toBeDefined();
     expect(vi.mocked(apiClient.getRun)).not.toHaveBeenCalled();
     expect(vi.mocked(apiClient.getRunFiles)).not.toHaveBeenCalled();
     expect(vi.mocked(apiClient.getRunWorkspace)).not.toHaveBeenCalled();

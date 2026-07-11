@@ -137,14 +137,11 @@ afterEach(() => {
 });
 
 async function expandRunControls(): Promise<void> {
-  if (screen.queryByTestId('run-actions-row')) return;
-  const toggle = await screen.findByTestId('run-chrome-toggle', undefined, { timeout: 4000 });
-  fireEvent.click(toggle);
-  await screen.findByTestId('run-actions-row', undefined, { timeout: 4000 });
+  // Run controls (topology / plan / artifacts / details) are always visible in the compact header now.
+  await screen.findByTestId('open-topology-panel', undefined, { timeout: 4000 });
 }
 
 async function openTopologyInspector(): Promise<HTMLElement> {
-  await expandRunControls();
   const button = await screen.findByTestId('open-topology-panel', undefined, { timeout: 4000 });
   fireEvent.click(button);
   return screen.findByTestId('topology-inspector', undefined, { timeout: 4000 });
@@ -175,7 +172,7 @@ describe('CoordinatorRunPage — unified coordinator graph view', () => {
       { timeout: 4000 },
     );
     await expandRunControls();
-    expect((screen.getByText('Stop run') as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole('button', { name: /Stop run/i }) as HTMLButtonElement).disabled).toBe(true);
   });
 
   it('surfaces stream errors and dropped events in a health banner', async () => {
@@ -337,21 +334,16 @@ describe('CoordinatorRunPage — unified coordinator graph view', () => {
     expect(document.body.querySelector('[aria-label^="Executing in pod agentweaver-api-pod-1"]')).toBeNull();
   });
 
-  it('shows a Message button that focuses the persistent coordinator composer', async () => {
+  it('renders the persistent coordinator composer inline in the Messages surface', async () => {
     const { container } = render(<Wrapper><CoordinatorRunPage /></Wrapper>);
 
-    const steerBtn = await waitFor(() => {
-      const btn = container.querySelector('[data-testid="compact-primary-run-action"]') as HTMLButtonElement | null;
-      expect(btn).not.toBeNull();
-      return btn as HTMLButtonElement;
-    }, { timeout: 4000 });
-    steerBtn.click();
-
+    // The composer IS the chat — it is always present inline, with no separate
+    // "Message coordinator" header button to reveal it.
     await waitFor(() => {
       const input = container.querySelector('textarea[placeholder="Message coordinator..."]') as HTMLTextAreaElement | null;
       expect(input).toBeTruthy();
-      expect(document.activeElement).toBe(input);
     }, { timeout: 4000 });
+    expect(container.querySelector('[data-testid="open-steer-panel"]')).toBeNull();
   });
 
   it('renders Ctrl+Scroll zoom controls on the orchestration graph', async () => {

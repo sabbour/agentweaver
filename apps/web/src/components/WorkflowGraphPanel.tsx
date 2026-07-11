@@ -104,6 +104,10 @@ export interface WorkflowNodeData extends Record<string, unknown> {
   runId?: string;
   executionId?: string;
   projectId?: string;
+  /** Child sub-run id for assembly/workflow stages that own a persisted sub-run stream. */
+  childRunId?: string;
+  /** Graph ref (e.g. "run:{id}") for the stage's sub-run, when present. */
+  childGraphRef?: string;
   reviewedBy?: string;
   runOutcome?: { achieved: boolean; reason: string };
   runDegraded?: { toolName: string; reason: string };

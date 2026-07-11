@@ -120,13 +120,16 @@ describe('CoordinatorRunPage operator console redesign', () => {
 
     const text = document.body.textContent ?? '';
     expect(text).toContain('Run tree');
-    expect(text).toContain('Selected task');
-    expect(text).toContain('Messages');
-    expect(text).toContain('Changes');
-    expect(text).toContain('Files');
-    expect(screen.getByTestId('compact-primary-run-action')).toBeTruthy();
+    // The center is a single Messages surface with an Activity | Changes segmented control.
+    expect(screen.getByTestId('session-tab-activity')).toBeTruthy();
+    expect(screen.getByTestId('session-tab-changes')).toBeTruthy();
+    expect(screen.queryByTestId('session-tab-files')).toBeNull();
+    // No legacy center tabs or "Run actions" toolbar remain.
     expect(screen.queryByTestId('run-actions-toolbar')).toBeNull();
-    fireEvent.click(screen.getByTestId('run-chrome-toggle'));
+    expect(screen.queryByRole('toolbar', { name: 'Run actions' })).toBeNull();
+    expect(screen.queryByTestId('center-tab-messages')).toBeNull();
+
+    // Topology opens on demand from a compact header button (always available, not behind a controls toggle).
     expect(screen.getByTestId('open-topology-panel')).toBeTruthy();
     expect(screen.queryByTestId('topology-inspector')).toBeNull();
     fireEvent.click(screen.getByTestId('open-topology-panel'));
@@ -136,15 +139,13 @@ describe('CoordinatorRunPage operator console redesign', () => {
     const topologyScroller = screen.getByTestId('topology-scroll-container');
     expect(topologyScroller.getAttribute('data-pan-enabled')).toBe('true');
     expect(topologyScroller.getAttribute('data-scroll-mode')).toBe('auto');
+
+    // The composer for steering the coordinator lives inline in the Messages surface and hosts the toggles.
     expect(screen.getByPlaceholderText('Message coordinator...')).toBeTruthy();
-    const expandedText = document.body.textContent ?? '';
-    expect(expandedText).toContain('Autopilot');
-    expect(expandedText).toContain('Auto-approve');
-    expect(expandedText).toContain('Retry failed');
-    expect(expandedText).toContain('Stop run');
-    const toolbar = screen.getByRole('toolbar', { name: 'Run actions' });
-    expect(toolbar.textContent).toContain('Risk');
-    expect(toolbar.textContent).not.toContain('Run + children');
+    const toggles = screen.getByTestId('composer-automation-toggles');
+    expect(toggles.textContent).toContain('Autopilot');
+    expect(toggles.textContent).toContain('Auto-approve');
+
     expect(text).not.toContain('Scoped risk mode');
     expect(text).not.toContain('Applies only to this orchestration and child runs.');
     expect(text).not.toContain('Transaction trace');
@@ -165,14 +166,14 @@ describe('CoordinatorRunPage operator console redesign', () => {
     const closeButton = within(dialog).getByRole('button', { name: 'Close panel' });
     await waitFor(() => expect(document.activeElement).toBe(closeButton), { timeout: 4000 });
 
-    const planButton = screen.getByTestId('open-plan-panel');
+    const outsideButton = screen.getByTestId('run-chrome-toggle');
     await user.tab();
     expect(dialog.contains(document.activeElement)).toBe(true);
-    expect(document.activeElement).not.toBe(planButton);
+    expect(document.activeElement).not.toBe(outsideButton);
 
     await user.tab({ shift: true });
     expect(dialog.contains(document.activeElement)).toBe(true);
-    expect(document.activeElement).not.toBe(planButton);
+    expect(document.activeElement).not.toBe(outsideButton);
 
     await user.keyboard('{Escape}');
     await waitFor(() => {
@@ -181,7 +182,7 @@ describe('CoordinatorRunPage operator console redesign', () => {
     }, { timeout: 4000 });
   });
 
-  it('keeps run identity in a compact protected header slot and lets actions wrap', async () => {
+  it('keeps run identity in a compact protected header slot with details on demand', async () => {
     render(<Wrapper><CoordinatorRunPage /></Wrapper>);
 
     const header = await screen.findByTestId('run-header', undefined, { timeout: 4000 });
@@ -191,45 +192,25 @@ describe('CoordinatorRunPage operator console redesign', () => {
 
     expect(summary.parentElement).toBe(header);
     expect(screen.queryByTestId('run-actions-row')).toBeNull();
+    expect(title.textContent).toBe('Orchestration');
+    expect(progress.textContent).toContain('tasks');
+
+    // Full run metadata + status details live behind a compact Details disclosure.
     expect(screen.queryByTestId('run-metadata')).toBeNull();
     expect(screen.queryByTestId('run-status-details')).toBeNull();
-    expect(screen.getByTestId('compact-primary-run-action')).toBeTruthy();
     fireEvent.click(screen.getByTestId('run-chrome-toggle'));
-    const actionsRow = screen.getByTestId('run-actions-row');
-    const toolbar = screen.getByRole('toolbar', { name: 'Run actions' });
     const metadata = screen.getByTestId('run-metadata');
-    expect(actionsRow.parentElement).toBe(header);
-    expect(Array.from(header.children).indexOf(summary)).toBeLessThan(Array.from(header.children).indexOf(actionsRow));
-    expect(title.textContent).toBe('Orchestration');
     expect(metadata.textContent).toContain('Run');
     expect(metadata.textContent).toContain('Status source:');
-    expect(progress.textContent).toContain('tasks');
     expect(screen.getByTestId('run-status-details')).toBeTruthy();
 
-    const toolbarStyle = getComputedStyle(toolbar);
-    expect(toolbarStyle.flexWrap).toBe('wrap');
-    expect(toolbarStyle.width).toBe('100%');
-    expect(toolbarStyle.maxWidth).toBe('100%');
-    expect(toolbarStyle.borderTopStyle).toBe('none');
     const titleStyle = getComputedStyle(title);
     expect(titleStyle.whiteSpace).toBe('nowrap');
     expect(titleStyle.textOverflow).toBe('ellipsis');
 
-    const cssText = Array.from(document.styleSheets)
-      .flatMap((sheet) => {
-        try {
-          return Array.from(sheet.cssRules).map((rule) => rule.cssText);
-        } catch {
-          return [];
-        }
-      })
-      .join('\n');
-    expect(cssText).toMatch(/grid-template-areas:\s*"identity"\s+"actions"/);
-    expect(cssText).toContain('grid-area: identity');
-    expect(cssText).toContain('grid-area: actions');
-    expect(cssText).toContain('border-top');
-    expect(toolbar.textContent).not.toContain('Run + children');
-    expect(toolbar.textContent).not.toContain('Retry after failure · Stop while running');
+    // No legacy run-actions toolbar copy leaks into the compact header.
+    expect(header.textContent).not.toContain('Run + children');
+    expect(header.textContent).not.toContain('Retry after failure · Stop while running');
   });
 
   it('uses the run tree as task-structured navigation and scopes the composer to the selected task', async () => {
@@ -243,25 +224,28 @@ describe('CoordinatorRunPage operator console redesign', () => {
     expect(document.body.textContent).toContain('Researcher');
   });
 
-  it('orders and dedupes stream events by sequence and groups message deltas into one assistant bubble', async () => {
+  it('orders out-of-order message deltas by sequence into one assistant message under its intent step', async () => {
     currentEvents = [
-      { sequence: 3, type: 'agent.message.delta', payload: { delta: 'world' } },
+      { sequence: 4, type: 'agent.message.delta', payload: { messageId: 'm1', delta: 'world' } },
       { sequence: 1, type: 'agent.turn.start', payload: { turnId: 't1' } },
-      { sequence: 2, type: 'agent.message.delta', payload: { delta: 'hello ' } },
-      { sequence: 3, type: 'agent.message.delta', payload: { delta: 'world' } },
-      { sequence: 4, type: 'agent.turn.end', payload: {} },
-      { sequence: 5, type: 'tool.call', payload: { callId: 'c1', toolName: 'read_file', arguments: { path: 'src/app.ts' } } },
+      { sequence: 2, type: 'agent.intent', payload: { intent: 'Greet the user' } },
+      { sequence: 3, type: 'agent.message.delta', payload: { messageId: 'm1', delta: 'hello ' } },
+      { sequence: 5, type: 'agent.turn.end', payload: {} },
     ];
 
     render(<Wrapper><CoordinatorRunPage /></Wrapper>);
 
-    await waitFor(() => expect(document.body.textContent).toContain('hello world'), { timeout: 4000 });
-    expect((document.body.textContent?.match(/hello world/g) ?? [])).toHaveLength(1);
-    // Docked coordinator panels default technical details on, with low-signal activity collapsed until requested.
-    await waitFor(() => expect(document.body.textContent).toContain('Activity collapsed'), { timeout: 4000 });
-    await userEvent.click(screen.getByTestId('toggle-activity-details'));
-    await waitFor(() => expect(document.body.textContent).toContain('Tool calls'), { timeout: 4000 });
-    expect((document.body.textContent?.match(/hello world/g) ?? [])).toHaveLength(1);
+    const timeline = await screen.findByTestId('run-timeline');
+    // The reported intent becomes the step; expanding it reveals the assembled message.
+    fireEvent.click(within(timeline).getByText('Greet the user'));
+
+    // Deltas arriving out of order assemble in sequence order into a single message
+    // ("hello " @seq3 then "world" @seq4), not two fragments and not duplicated.
+    await waitFor(
+      () => expect(within(timeline).getByTestId('timeline-message').textContent).toContain('hello world'),
+      { timeout: 4000 },
+    );
+    expect((timeline.textContent?.match(/hello world/g) ?? [])).toHaveLength(1);
   });
 
   it('shows the executing workflow, active task, and why in the run header', async () => {
@@ -569,19 +553,75 @@ describe('CoordinatorRunPage operator console redesign', () => {
     }
   });
 
-  it('keeps Changes and Files as the only artifact tabs beside Messages', async () => {
+  it('exposes a single Activity | Changes segmented control for the selected scope', async () => {
     render(<Wrapper><CoordinatorRunPage /></Wrapper>);
 
-    const changesTab = await screen.findByTestId('session-tab-changes', undefined, { timeout: 4000 });
-    expect(screen.getByTestId('session-tab-messages')).toBeTruthy();
-    expect(changesTab).toBeTruthy();
-    expect(screen.getByTestId('session-tab-files')).toBeTruthy();
-    expect(document.body.textContent).not.toContain('Tools');
+    await screen.findByTestId('session-tab-activity', undefined, { timeout: 4000 });
+    expect(screen.getByTestId('session-tab-changes')).toBeTruthy();
+    // The old tri-tab (Messages/Changes/Files) and center tabs are gone.
+    expect(screen.queryByTestId('session-tab-files')).toBeNull();
+    expect(screen.queryByTestId('center-tab-messages')).toBeNull();
+    expect(screen.queryByTestId('center-tab-plan')).toBeNull();
+    expect(screen.queryByTestId('center-tab-artifacts')).toBeNull();
   });
 
-  it('surfaces selected-task message file references in Files while Changes stays diff-only', async () => {
-    vi.mocked(apiClient.getRunFiles).mockResolvedValue([]);
-    vi.mocked(apiClient.getRunWorkspace).mockResolvedValue([]);
+  it('pins a run-wide Changes chip + Plan chip above the composer and opens their overlays', async () => {
+    // Real run-wide collective diff drives the single Changes chip's file count + diff summary.
+    vi.mocked(apiClient.getAssemblyFiles).mockResolvedValue([
+      { path: 'src/app.ts', status: 'modified', added_lines: 40, removed_lines: 0, scope: 'merged' },
+      { path: 'README.md', status: 'added', added_lines: 3, removed_lines: 1, scope: 'merged' },
+    ]);
+
+    render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    await waitFor(() => expect(screen.getByTestId('run-operator-console')).toBeTruthy(), { timeout: 4000 });
+
+    // The run-wide chip row is pinned above the composer for the coordinator scope.
+    const chipRow = await screen.findByTestId('run-summary-chips', undefined, { timeout: 4000 });
+    const changesChip = within(chipRow).getByTestId('run-summary-chip-changes');
+    const planChip = within(chipRow).getByTestId('run-summary-chip-plan');
+
+    // One Changes chip carries the file count AND the aggregate +added / -removed diff — no
+    // separate "Artifacts" chip that opens the same overlay with a misleading label.
+    expect(changesChip.textContent).toContain('Changes');
+    expect(changesChip.textContent).toContain('2 files');
+    expect(changesChip.textContent).toContain('+43');
+    expect(within(chipRow).queryByTestId('run-summary-chip-artifacts')).toBeNull();
+    expect(planChip.textContent).toContain('Plan');
+
+    // The header no longer hosts the run-wide Plan/Artifacts buttons — chips replace them.
+    expect(screen.queryByTestId('open-plan-panel')).toBeNull();
+    expect(screen.queryByTestId('open-artifacts-panel')).toBeNull();
+
+    // Tapping the Plan chip opens the outcome-plan overlay.
+    fireEvent.click(planChip);
+    await screen.findByRole('dialog', { name: 'Outcome plan' }, { timeout: 4000 });
+
+    // Tapping the Changes chip opens the collective-diff (Artifacts) overlay.
+    fireEvent.click(within(screen.getByTestId('run-summary-chips')).getByTestId('run-summary-chip-changes'));
+    await screen.findByRole('dialog', { name: 'Artifacts' }, { timeout: 4000 });
+  });
+
+  it('hides the run-wide chips for a child agent scope (per-scope changes use the segmented control)', async () => {
+    vi.mocked(apiClient.getAssemblyFiles).mockResolvedValue([
+      { path: 'src/app.ts', status: 'modified', added_lines: 5, removed_lines: 2, scope: 'merged' },
+    ]);
+
+    render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    await waitFor(() => expect(document.body.textContent).toContain('Subtask 1'), { timeout: 4000 });
+    // Coordinator scope shows the chips.
+    await screen.findByTestId('run-summary-chips', undefined, { timeout: 4000 });
+
+    // Selecting a child agent hides the run-wide chips — its changes live in Activity | Changes.
+    fireEvent.click(screen.getByRole('treeitem', { name: /Select Subtask 1/i }));
+    await waitFor(() => expect(screen.queryByTestId('run-summary-chips')).toBeNull(), { timeout: 4000 });
+  });
+
+  it('surfaces the selected child scope changes in the Changes segment', async () => {
+    vi.mocked(apiClient.getRunFiles).mockResolvedValue([
+      { path: 'HotelSearchForm.jsx', status: 'added', added_lines: 40, removed_lines: 0, scope: 'uncommitted' },
+    ]);
     currentEvents = [
       { sequence: 1, type: 'agent.turn.start', payload: { turnId: 'worker-turn' } },
       { sequence: 2, type: 'agent.message', payload: { content: 'Implementing hotel booking page React components.' } },
@@ -603,14 +643,105 @@ describe('CoordinatorRunPage operator console redesign', () => {
     await waitFor(() => expect(screen.getByTestId('run-operator-console')).toBeTruthy(), { timeout: 4000 });
     fireEvent.click(screen.getByRole('treeitem', { name: /Select Subtask 1/i }));
 
+    // Per-scope Changes count comes from the run diff, not invented workspace refs.
     await waitFor(
-      () => expect(screen.getByTestId('session-tab-files').textContent).toContain('Files (1)'),
+      () => expect(screen.getByTestId('session-tab-changes').textContent).toContain('Changes (1)'),
       { timeout: 4000 },
     );
-    expect(screen.getByTestId('session-tab-changes').textContent).toContain('Changes (0)');
+    expect(screen.queryByTestId('session-tab-files')).toBeNull();
 
-    fireEvent.click(screen.getByTestId('session-tab-files'));
+    fireEvent.click(screen.getByTestId('session-tab-changes'));
     await waitFor(() => expect(screen.getByText('HotelSearchForm.jsx')).toBeTruthy(), { timeout: 4000 });
+  });
+
+  it('renders the intent-driven Timeline as the default center content', async () => {
+    // A realistic scope stream: two reported intents, each with its own tool calls
+    // (one succeeds, one fails) and an agent message. The Timeline must group them.
+    currentEvents = [
+      { sequence: 1, type: 'agent.turn.start', payload: { turnId: 't1' } },
+      { sequence: 2, type: 'agent.intent', payload: { intent: 'Inspect the repository' } },
+      { sequence: 3, type: 'tool.call', payload: { callId: 'c1', toolName: 'read_file', arguments: { path: 'src/app.ts' } } },
+      { sequence: 4, type: 'tool.result', payload: { callId: 'c1', content: 'export const x = 1;' } },
+      { sequence: 5, type: 'agent.intent', payload: { intent: 'Run the build' } },
+      { sequence: 6, type: 'tool.call', payload: { callId: 'c2', toolName: 'run_command', arguments: { command: 'npm run build' } } },
+      { sequence: 7, type: 'tool.error', payload: { callId: 'c2', errorMessage: 'command failed with exit code 1' } },
+      { sequence: 8, type: 'agent.message', payload: { messageId: 'm1', content: 'The build failed on a type error.' } },
+      { sequence: 9, type: 'agent.turn.end', payload: {} },
+    ];
+
+    render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    await waitFor(() => expect(screen.getByTestId('run-operator-console')).toBeTruthy(), { timeout: 4000 });
+
+    // The primary center surface is the Timeline (renamed from Run activity), driven
+    // by the agent's reported intents — NOT the run tree.
+    expect(await screen.findByTestId('run-timeline')).toBeTruthy();
+    const timeline = screen.getByTestId('run-timeline');
+    // agent.intent events become the top-level steps.
+    expect(timeline.textContent).toContain('Inspect the repository');
+    expect(timeline.textContent).toContain('Run the build');
+
+    // Expand both intent steps to reveal their nested tool calls + messages.
+    fireEvent.click(screen.getByText('Inspect the repository'));
+    fireEvent.click(screen.getByText('Run the build'));
+
+    // Tool calls render as rows under their owning intent, with success/error state.
+    await waitFor(() => expect(within(timeline).getAllByTestId('timeline-tool-row').length).toBe(2), { timeout: 4000 });
+    const toolRows = within(timeline).getAllByTestId('timeline-tool-row');
+    expect(toolRows.some((r) => r.getAttribute('data-tool-status') === 'complete')).toBe(true);
+    expect(toolRows.some((r) => r.getAttribute('data-tool-status') === 'error')).toBe(true);
+    // Row anatomy: human primary title, muted secondary command, right-aligned result meta.
+    expect(timeline.textContent).toContain('View src/app.ts');
+    expect(timeline.textContent).toContain('1 line');
+    expect(timeline.textContent).toContain('Run command');
+    expect(timeline.textContent).toContain('npm run build');
+    // The agent message appears in the expanded step.
+    expect(timeline.textContent).toContain('The build failed on a type error.');
+
+    // The Messages surface (single Activity | Changes segmented control) is the default center;
+    // the composer for steering the coordinator lives inline (no separate Chat/center tabs).
+    expect(screen.getByTestId('session-tab-activity').getAttribute('aria-selected')).toBe('true');
+    expect(screen.queryByTestId('center-tab-messages')).toBeNull();
+    expect(screen.queryByRole('tab', { name: 'Chat' })).toBeNull();
+    expect(await screen.findByPlaceholderText('Message coordinator...')).toBeTruthy();
+  });
+
+  it('expands an edit tool row into a read-only diff card', async () => {
+    currentEvents = [
+      { sequence: 1, type: 'agent.turn.start', payload: { turnId: 't1' } },
+      { sequence: 2, type: 'agent.intent', payload: { intent: 'Apply the change' } },
+      {
+        sequence: 3,
+        type: 'tool.call',
+        payload: {
+          callId: 'e1',
+          toolName: 'str_replace_editor',
+          arguments: {
+            path: 'src/app.ts',
+            old_str: 'const a = 1;',
+            new_str: 'const a = 1;\nconst b = 2;',
+          },
+        },
+      },
+      { sequence: 4, type: 'tool.result', payload: { callId: 'e1', content: 'edited' } },
+      { sequence: 5, type: 'agent.turn.end', payload: {} },
+    ];
+
+    render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    const timeline = await screen.findByTestId('run-timeline');
+    fireEvent.click(screen.getByText('Apply the change'));
+
+    // The edit row is a button (expandable) with a diff delta as its result meta.
+    const editRow = await within(timeline).findByTestId('timeline-tool-row', undefined, { timeout: 4000 });
+    expect(editRow.tagName.toLowerCase()).toBe('button');
+    expect(editRow.textContent).toContain('Edit src/app.ts');
+    expect(editRow.textContent).toContain('+2');
+
+    // Expanding reveals the diff card with the added line.
+    fireEvent.click(editRow);
+    const diff = await within(timeline).findByTestId('timeline-tool-diff', undefined, { timeout: 4000 });
+    expect(diff.textContent).toContain('const b = 2;');
   });
 
   it('keeps the composer read-only when viewing a child agent and steers other agents through the Coordinator', async () => {

@@ -1,6 +1,3 @@
-import ReactMarkdown from 'react-markdown';
-import rehypeSanitize from 'rehype-sanitize';
-import remarkGfm from 'remark-gfm';
 import { apiClient } from '../api/apiClient';
 import { formatApiErrorMessage } from '../api/errors';
 import { useRunStream } from '../api/sse';
@@ -9,38 +6,39 @@ import {
   MessageBar,
   MessageBarBody,
   Spinner,
-  Switch,
-  Tab,
-  TabList,
   Text,
   makeStyles,
   mergeClasses,
   tokens,
 } from '@fluentui/react-components';
 import {
+  ArrowDownloadRegular,
   CheckmarkCircleFilled,
   ChevronDownRegular,
-  ChevronRightRegular,
   CircleRegular,
   ClockRegular,
   DismissCircleFilled,
   DismissRegular,
   DocumentRegular,
-  EyeRegular,
+  OpenRegular,
 } from '@fluentui/react-icons';
-import { ApprovalGate, ArtifactChip, ToolCallRow } from './ui/agentic';
-import { Composer, CopilotChat, CopilotMessage, OutputCard, UserMessage } from './ui/copilot';
+import { ApprovalGate } from './ui/agentic';
+import { Composer } from './ui/copilot';
 import { EmptyState } from './ui';
+import { AutomationToggle } from './AutomationToggle';
+import { AUTOMATION_HELP } from './automationHelp';
 import { useArtifactBrowser } from '../hooks/useArtifactBrowser';
 import { mergeRunEvents as sharedMergeRunEvents, SEED_STATUSES } from '../timeline/mergeRunEvents';
 import { deriveHumanTitle } from '../timeline/reducer';
 import { AgentAvatar } from './AgentAvatar';
-import { CompactChangesList, FilesTabPanel } from './ArtifactBrowser';
 import { FileViewerModal } from './FileViewerModal';
 import { OutcomePlanPanel } from './OutcomePlanPanel';
+import { RunTimeline } from './RunTimeline';
+import { buildRunTimeline } from '../timeline/runTimelineSteps';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { ReactNode } from 'react';
 import type { EventType, RunStreamEvent } from '../api/sse';
-import type { WorkspaceFileEntry, WorkspaceNode } from '../api/types';
+import type { WorkspaceFileContent, WorkspaceFileEntry } from '../api/types';
 import type { ArtifactBrowserAdapter } from '../hooks/useArtifactBrowser';
 const PANEL_TOP = '48px';
 const useStyles = makeStyles({
@@ -101,6 +99,7 @@ const useStyles = makeStyles({
     minHeight: 0,
     display: 'grid',
     gridTemplateColumns: '260px minmax(0, 1fr)',
+    gridTemplateRows: 'minmax(0, 1fr)',
   },
   sidebar: {
     display: 'flex',
@@ -310,6 +309,91 @@ const useStyles = makeStyles({
     paddingLeft: tokens.spacingHorizontalM,
     borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
   },
+  segmented: {
+    display: 'inline-flex',
+    alignSelf: 'flex-start',
+    gap: '2px',
+    margin: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalL}`,
+    padding: '2px',
+    borderRadius: tokens.borderRadiusMedium,
+    backgroundColor: tokens.colorNeutralBackground3,
+  },
+  segmentBtn: {
+    appearance: 'none',
+    border: 'none',
+    cursor: 'pointer',
+    padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalM}`,
+    borderRadius: tokens.borderRadiusSmall,
+    backgroundColor: 'transparent',
+    color: tokens.colorNeutralForeground2,
+    fontSize: tokens.fontSizeBase200,
+    fontWeight: tokens.fontWeightMedium,
+    fontFamily: tokens.fontFamilyBase,
+    ':hover': { color: tokens.colorNeutralForeground1 },
+  },
+  segmentBtnActive: {
+    backgroundColor: tokens.colorNeutralBackground1,
+    color: tokens.colorNeutralForeground1,
+    boxShadow: tokens.shadow2,
+  },
+  composerUtilityRow: {
+    display: 'flex',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: tokens.spacingHorizontalL,
+    paddingTop: tokens.spacingVerticalXS,
+  },
+  changesList: {
+    display: 'flex',
+    flexDirection: 'column',
+  },
+  changeRow: {
+    display: 'grid',
+    gridTemplateColumns: '20px 1fr auto',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalS,
+    paddingTop: tokens.spacingVerticalXS,
+    paddingBottom: tokens.spacingVerticalXS,
+    borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
+  },
+  changeIcon: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    color: tokens.colorNeutralForeground3,
+  },
+  changeNameBtn: {
+    appearance: 'none',
+    border: 'none',
+    background: 'transparent',
+    cursor: 'pointer',
+    textAlign: 'left',
+    display: 'flex',
+    flexDirection: 'column',
+    minWidth: 0,
+    padding: 0,
+  },
+  changeName: {
+    fontWeight: tokens.fontWeightSemibold,
+    fontSize: tokens.fontSizeBase300,
+    color: tokens.colorNeutralForeground1,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  },
+  changeMeta: {
+    fontSize: tokens.fontSizeBase200,
+    color: tokens.colorNeutralForeground3,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  },
+  changeActions: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXXS,
+    flexShrink: 0,
+  },
   content: {
     flex: 1,
     minHeight: 0,
@@ -365,6 +449,12 @@ const useStyles = makeStyles({
     display: 'flex',
     flexDirection: 'column',
     gap: tokens.spacingVerticalM,
+  },
+  timelineApprovals: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalS,
+    marginTop: tokens.spacingVerticalM,
   },
   conversationTurn: {
     display: 'flex',
@@ -501,23 +591,22 @@ const useStyles = makeStyles({
   },
   activityEventRow: {
     display: 'grid',
-    gridTemplateColumns: '1px minmax(0, 1fr) auto',
-    alignItems: 'start',
+    gridTemplateColumns: 'minmax(0, 1fr) auto',
+    alignItems: 'baseline',
     gap: tokens.spacingHorizontalS,
     padding: `${tokens.spacingVerticalXXS} 0 ${tokens.spacingVerticalXXS} 32px`,
     color: tokens.colorNeutralForeground3,
   },
-  activityRail: {
-    width: '1px',
-    minHeight: '18px',
-    alignSelf: 'stretch',
-    borderRadius: tokens.borderRadiusCircular,
-    backgroundColor: tokens.colorNeutralStroke2,
+  activityGroup: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalXXS,
+    padding: `${tokens.spacingVerticalXXS} 0`,
   },
   activityEventText: {
     fontSize: tokens.fontSizeBase200,
     lineHeight: tokens.lineHeightBase200,
-    color: tokens.colorNeutralForeground2,
+    color: tokens.colorNeutralForeground3,
     overflowWrap: 'anywhere',
   },
   toolsBox: {
@@ -678,6 +767,16 @@ const useStyles = makeStyles({
     borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground1,
   },
+  runChipsBar: {
+    flexShrink: 0,
+    display: 'flex',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXS,
+    padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalL}`,
+    borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
+    backgroundColor: tokens.colorNeutralBackground1,
+  },
   composerContext: {
     padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalL} 0`,
     fontSize: tokens.fontSizeBase200,
@@ -711,6 +810,16 @@ export interface AgentSessionPanelProps {
   projectId: string;
   onCoordinatorFollowUp?: () => void;
   coordinatorActive?: boolean;
+  /** Automation state + handlers, surfaced in the composer utility row (coordinator scope only). */
+  automation?: {
+    autopilot: boolean;
+    autoApprove: boolean;
+    autopilotBusy?: boolean;
+    autoApproveBusy?: boolean;
+    canToggle: boolean;
+    onToggleAutopilot: () => void;
+    onToggleAutoApprove: () => void;
+  };
   variant?: 'modal' | 'docked';
   composerFocusSignal?: number;
   onOutcomePlanClarify?: () => void;
@@ -718,6 +827,10 @@ export interface AgentSessionPanelProps {
    *  branch) when a coordinator-aggregate node is selected. Per-subtask runs use the standard
    *  per-run endpoints (no adapter). */
   artifactAdapter?: ArtifactBrowserAdapter;
+  /** Run-wide summary chips (Changes / Plan / …) pinned just above the composer for the
+   *  coordinator scope. Hidden for non-coordinator (child) scopes, whose per-scope changes
+   *  live in the Activity | Changes segmented control instead. */
+  runChips?: ReactNode;
 }
 
 interface ConversationRow {
@@ -745,17 +858,6 @@ interface ConversationTurn {
   // True only for the turn whose agent.turn.start has no matching agent.turn.end —
   // i.e. the single event-level active turn. Drives the streaming affordance.
   open?: boolean;
-}
-
-// #122: Distinguish high-signal narrative from low-signal technical plumbing so the
-// stream can read like a clean narrative by default. System-prompt scaffolding, tool
-// calls (shell start/stop, file view/edit, raw commands), and file-write rows are
-// technical; agent/coordinator messages, instructions, narrative activity lines, and
-// human-facing approvals are high-signal. Classified client-side from event shape only
-// (thin client) — nothing is deleted, only collapsed behind the technical details toggle.
-function turnHasSignalContent(turn: ConversationTurn): boolean {
-  if (turn.approvals.length > 0) return true;
-  return turn.rows.some((row) => row.role !== 'system');
 }
 
 interface FlatTreeNode extends RunSessionTree {
@@ -809,189 +911,10 @@ function formatStartedMeta(startedAt?: string | null, status?: string | null): s
   return `Started ${formatDurationMs(elapsed)} ago`;
 }
 
-function formatTimestamp(ms?: number): string {
-  if (!ms) return '';
-  return new Intl.DateTimeFormat(undefined, {
-    hour: 'numeric',
-    minute: '2-digit',
-  }).format(ms);
-}
-
-function normalizeWorkspacePath(value: string, runId?: string): string {
-  let path = value.trim().replace(/^file:\/\//i, '').replace(/\\/g, '/');
-  path = path.replace(/%2F/gi, '/').replace(/%5C/gi, '/');
-  const escapedRunId = runId?.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const runSpecific = escapedRunId
-    ? new RegExp(`(?:^|/|[A-Za-z]:/).*/worktrees/${escapedRunId}/(.+)$`, 'i')
-    : null;
-  const byRun = runSpecific?.exec(path);
-  if (byRun?.[1]) return byRun[1].replace(/^\/+/, '');
-
-  const anyRun = /(?:^|\/|[A-Za-z]:\/).*\/worktrees\/[0-9a-f]{8}-[0-9a-f-]{27}\/(.+)$/i.exec(path);
-  if (anyRun?.[1]) return anyRun[1].replace(/^\/+/, '');
-
-  const workspace = /(?:^|\/)workspace\/.+?\/worktrees\/[^/]+\/(.+)$/i.exec(path);
-  if (workspace?.[1]) return workspace[1].replace(/^\/+/, '');
-
-  return path.replace(/^\/+/, '');
-}
-
-function workspacePathKey(path: string): string {
-  return path.replace(/\\/g, '/').replace(/^\/+/, '').toLowerCase();
-}
-
-function workspaceFileCount(nodes: WorkspaceNode[]): number {
-  const paths = new Set<string>();
-  for (const node of nodes) {
-    if (!node.is_folder) paths.add(workspacePathKey(node.path));
-  }
-  return paths.size;
-}
-
-function collectReferencedWorkspaceFiles(
-  turns: ConversationTurn[],
-  runId: string,
-  changedFiles: WorkspaceFileEntry[],
-): WorkspaceNode[] {
-  const changedStatus = new Map<string, WorkspaceNode['status']>();
-  const byKey = new Map<string, WorkspaceNode>();
-  for (const file of changedFiles) {
-    const key = workspacePathKey(file.path);
-    changedStatus.set(key, file.status);
-    byKey.set(key, {
-      path: file.path,
-      is_folder: false,
-      status: file.status,
-    });
-  }
-
-  for (const turn of turns) {
-    for (const rawPath of turn.filePaths) {
-      const path = normalizeWorkspacePath(rawPath, runId);
-      if (!path) continue;
-      const key = workspacePathKey(path);
-      if (!byKey.has(key)) {
-        byKey.set(key, {
-          path,
-          is_folder: false,
-          status: changedStatus.get(key) ?? null,
-        });
-      }
-    }
-  }
-  return [...byKey.values()];
-}
-
-function mergeWorkspaceReferences(workspaceFiles: WorkspaceNode[], referencedFiles: WorkspaceNode[]): WorkspaceNode[] {
-  if (referencedFiles.length === 0) return workspaceFiles;
-  const refsByKey = new Map(referencedFiles.map((node) => [workspacePathKey(node.path), node]));
-  const seen = new Set(workspaceFiles.map((node) => workspacePathKey(node.path)));
-  const merged = workspaceFiles.map((node) => {
-    const ref = refsByKey.get(workspacePathKey(node.path));
-    if (!node.is_folder && node.status == null && ref?.status) {
-      return { ...node, status: ref.status };
-    }
-    return node;
-  });
-  for (const ref of referencedFiles) {
-    const key = workspacePathKey(ref.path);
-    if (seen.has(key)) continue;
-    seen.add(key);
-    merged.push(ref);
-  }
-  return merged;
-}
-
-function normalizeCommand(command: string, runId?: string): string {
-  let normalized = command.trim().replace(/\\/g, '/');
-  normalized = normalizeWorkspacePath(normalized, runId);
-  normalized = normalized
-    .replace(new RegExp(`(?:^|\\s)(?:cd|Set-Location)(?:\\s+-Path)?\\s+['"]?[^;&|]*?/worktrees/${runId ?? '[0-9a-f-]+'}['"]?\\s*(?:&&|;)?\\s*`, 'ig'), ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-  return normalized.length > 180 ? `${normalized.slice(0, 177)}...` : normalized;
-}
-
-function fileName(path: string): string {
-  const parts = path.replace(/\\/g, '/').split('/').filter(Boolean);
-  return parts[parts.length - 1] ?? path;
-}
-
-type ToolOpKind = 'read' | 'write' | 'edit' | 'command' | 'web' | 'other';
-
-interface FriendlyTool {
-  label: string;
-  muted: boolean;
-  kind: ToolOpKind;
-  // Full, untruncated detail for the hover title (e.g. the raw command).
-  detail?: string;
-}
-
 interface ParticipantIdentity {
   displayName: string;
   avatarName: string;
   role?: string;
-}
-
-const stripQuotes = (value: string): string => value.replace(/^['"]|['"]$/g, '');
-
-// Turn a raw shell command into a compact, classified operation. Reads/listings are surfaced
-// as reads with just the target path (dropping pipe/redirection noise); multi-statement or long
-// commands are summarised to the leading program with a "(+N more)" hint. The full command is
-// returned as `detail` for the row's hover title.
-function summarizeShellCommand(rawCommand: string, runId?: string): FriendlyTool {
-  const detail = normalizeCommand(rawCommand, runId);
-  const command = detail;
-
-  if (command.length === 0 || /^(pwd|cd\s+\.?|true)$/i.test(command)) {
-    return { label: 'Set working directory', muted: true, kind: 'command', detail };
-  }
-
-  // A file read via cat/head/tail/less/sed -n anywhere in the pipeline.
-  const readMatch = /(?:^|[|;&]\s*)(?:cat|head|tail|less|sed\s+-n\s+\S+)\s+([^\s|;&<>]+)/i.exec(command);
-  if (readMatch?.[1]) {
-    return { label: `Read ${normalizeWorkspacePath(stripQuotes(readMatch[1]), runId)}`, muted: false, kind: 'read', detail };
-  }
-  const listMatch = /^(?:ls|find)\s+([^\s|;&<>]+)/i.exec(command);
-  if (listMatch?.[1]) {
-    return { label: `List ${normalizeWorkspacePath(stripQuotes(listMatch[1]), runId)}`, muted: false, kind: 'read', detail };
-  }
-
-  // Otherwise summarise: show the first statement, hint how many more were chained.
-  const segments = command.split(/\s*(?:&&|\|\||;|\|)\s*/).filter(Boolean);
-  const first = (segments[0] ?? command).trim();
-  const shortFirst = first.length > 64 ? `${first.slice(0, 61)}...` : first;
-  const label = segments.length > 1 ? `${shortFirst} (+${segments.length - 1} more)` : shortFirst;
-  return { label, muted: false, kind: 'command', detail };
-}
-
-function friendlyToolLabel(tool: ConversationTool, runId?: string): FriendlyTool {
-  const lowerName = tool.toolName.toLowerCase();
-
-  // Web fetch — surface the host, not the full URL.
-  const rawUrl = tool.args['url'] ?? tool.args['uri'];
-  const urlStr = typeof rawUrl === 'string' ? rawUrl.trim() : '';
-  if (lowerName.includes('fetch') || lowerName.includes('web') || /^https?:\/\//i.test(urlStr)) {
-    let host = urlStr;
-    try { host = new URL(urlStr).host || urlStr; } catch { /* keep raw */ }
-    return { label: host ? `Fetch ${host}` : 'Web fetch', muted: false, kind: 'web', detail: urlStr || undefined };
-  }
-
-  const rawPath = tool.args['path'] ?? tool.args['file'] ?? tool.args['filePath'] ?? tool.args['filename'];
-  if (typeof rawPath === 'string' && rawPath.trim() !== '') {
-    const rel = normalizeWorkspacePath(rawPath, runId);
-    if (lowerName.includes('write') || lowerName.includes('create')) return { label: `Create ${rel}`, muted: false, kind: 'write', detail: rel };
-    if (lowerName.includes('edit') || lowerName.includes('patch') || lowerName.includes('apply')) return { label: `Edit ${rel}`, muted: false, kind: 'edit', detail: rel };
-    // Any other path-scoped tool (read_file, view, cat, open, …) is a harmless read.
-    return { label: `Read ${rel}`, muted: false, kind: 'read', detail: rel };
-  }
-
-  const rawCommand = tool.args['command'] ?? tool.args['cmd'] ?? tool.args['script'];
-  if (typeof rawCommand === 'string' && rawCommand.trim() !== '') {
-    return summarizeShellCommand(rawCommand, runId);
-  }
-
-  return { label: tool.title, muted: false, kind: 'other' };
 }
 
 // True for tools that PRODUCE or MODIFY a file — only these deserve a full preview card in the
@@ -1032,52 +955,6 @@ function participantIdentityForNode(item: RunSessionTree | null): ParticipantIde
     role,
     displayName: formatNameRole(avatarName, role),
   };
-}
-
-function authorForRole(role: ConversationRow['role'], participant: ParticipantIdentity): { displayName: string; avatarName: string; roleLabel: string; collapsedLabel?: string } {
-  if (role === 'system') return { displayName: 'System (Prompt)', avatarName: 'System', roleLabel: 'technical', collapsedLabel: 'System prompt' };
-  if (role === 'user') return { displayName: 'Coordinator (Instruction)', avatarName: 'Coordinator', roleLabel: 'context', collapsedLabel: 'Coordinator context' };
-  if (role === 'activity') return { displayName: 'Coordinator (Activity)', avatarName: 'Coordinator', roleLabel: 'event' };
-  return { displayName: participant.displayName, avatarName: participant.avatarName, roleLabel: 'response' };
-}
-
-const COORDINATOR_CONTEXT_PATTERNS = [
-  /workspace[-\s]?sync/i,
-  /\bTEAM_ROOT\b/i,
-  /\bWORKTREE_PATH\b/i,
-  /\bCURRENT_DATETIME\b/i,
-  /\bSTATE_BACKEND\b/i,
-  /\bRequested by:/i,
-  /\bYou are .*?(Coordinator|Frontend Engineer|Backend Engineer|Engineer)\b/i,
-];
-
-function isCoordinatorContextContent(content: string): boolean {
-  const hits = COORDINATOR_CONTEXT_PATTERNS.filter((pattern) => pattern.test(content)).length;
-  return hits >= 2 || (content.length > 900 && hits >= 1) || content.length > 1800;
-}
-
-function collapsedRowLabel(row: ConversationRow, fallback: string | undefined): string {
-  if (row.role === 'system') return fallback ?? 'System prompt';
-  if (row.role === 'user' && isCoordinatorContextContent(row.content)) return 'Coordinator context';
-  return fallback ?? 'Message details';
-}
-
-function MarkdownMessage({ content }: { content: string }) {
-  return (
-    <ReactMarkdown
-      remarkPlugins={[remarkGfm]}
-      rehypePlugins={[rehypeSanitize]}
-      components={{
-        a: ({ href, children, ...props }) => (
-          <a href={href} target="_blank" rel="noreferrer" {...props}>
-            {children}
-          </a>
-        ),
-      }}
-    >
-      {content}
-    </ReactMarkdown>
-  );
 }
 
 function statusLabel(status: string): string {
@@ -1477,6 +1354,16 @@ function coordinatorActivityLine(evt: RunStreamEvent, subtasks: Map<string, Subt
       const message = readString(p, ['message', 'url']);
       return `Tool approval required from ${subtaskDescription(p, subtasks)}: ${tool}${message ? ` — ${message}` : ''}`;
     }
+    case 'tool.approval_required': {
+      const tool = readString(p, ['toolName', 'tool_name']) ?? 'tool';
+      const message = readString(p, ['message', 'url', 'intention']);
+      return `Tool approval required: ${tool}${message ? ` — ${message}` : ''}`;
+    }
+    case 'shell.approval_required': {
+      const command = readString(p, ['command']) ?? 'command';
+      const intention = readString(p, ['intention', 'message']);
+      return `Command approval required: ${command}${intention ? ` — ${intention}` : ''}`;
+    }
     case 'coordinator.child_approval_resolved': {
       const outcome = Boolean(p['expired']) ? 'expired' : Boolean(p['approved']) ? 'approved' : 'denied';
       return `Child tool approval ${outcome} for ${subtaskDescription(p, subtasks)}.`;
@@ -1530,7 +1417,10 @@ function buildCoordinatorTurns(events: RunStreamEvent[]): ConversationTurn[] {
     if (!line) continue;
     const requestId = readString(evt.payload, ['requestId', 'request_id']) ?? '';
     const resolvedScope = requestId ? (resolvedApprovals.get(requestId) ?? null) : null;
-    const approvals = evt.type === 'coordinator.child_approval_required'
+    const isApprovalRequest = evt.type === 'coordinator.child_approval_required'
+      || evt.type === 'tool.approval_required'
+      || evt.type === 'shell.approval_required';
+    const approvals = isApprovalRequest
       ? [{ event: evt, isResolved: resolvedScope !== null, resolvedScope }]
       : [];
     turns.push({
@@ -1573,10 +1463,12 @@ export function AgentSessionPanel({
   projectId,
   onCoordinatorFollowUp,
   coordinatorActive = false,
+  automation,
   variant = 'modal',
   composerFocusSignal = 0,
   onOutcomePlanClarify,
   artifactAdapter,
+  runChips,
 }: AgentSessionPanelProps) {
   const styles = useStyles();
   const composerRef = useRef<HTMLDivElement>(null);
@@ -1586,12 +1478,8 @@ export function AgentSessionPanel({
   const messagesScrollRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const docked = variant === 'docked';
-  const defaultShowTechnical = docked;
   const [isVisible, setIsVisible] = useState(open);
-  const [activeTab, setActiveTab] = useState<'messages' | 'changes' | 'files'>('messages');
-  // Docked coordinator panels are operator consoles, so technical rows start visible there.
-  const [showTechnical, setShowTechnical] = useState(defaultShowTechnical);
-  const [activityDetailsExpanded, setActivityDetailsExpanded] = useState(false);
+  const [activeTab, setActiveTab] = useState<'activity' | 'changes'>('activity');
   const [seedEvents, setSeedEvents] = useState<RunStreamEvent[]>([]);
   const [runDetailLoading, setRunDetailLoading] = useState(false);
   const [runDetailError, setRunDetailError] = useState<string | null>(null);
@@ -1646,9 +1534,6 @@ export function AgentSessionPanel({
     files,
     filesLoading,
     filesError,
-    workspaceFiles,
-    workspaceLoading,
-    workspaceError,
     selectedPath,
     diff: selectedDiff,
     diffLoading: selectedDiffLoading,
@@ -1664,15 +1549,14 @@ export function AgentSessionPanel({
     () => selectedItem?.isCoordinator || selectedItem?.nodeId === 'work-plan' ? buildCoordinatorTurns(events) : buildTurns(events),
     [events, selectedItem?.isCoordinator, selectedItem?.nodeId],
   );
-  const referencedWorkspaceFiles = useMemo(
-    () => collectReferencedWorkspaceFiles(turns, selectedRunId, files),
-    [turns, selectedRunId, files],
+  // The Messages surface renders the intent-driven Timeline (ChainOfThought steps) from
+  // the same scope-aware event stream. `turns` is still used for approvals, file
+  // references and the needs-input counters.
+  const timelineModel = useMemo(() => buildRunTimeline(events), [events]);
+  const timelineApprovals = useMemo(
+    () => turns.flatMap((turn) => turn.approvals),
+    [turns],
   );
-  const displayWorkspaceFiles = useMemo(
-    () => mergeWorkspaceReferences(workspaceFiles, referencedWorkspaceFiles),
-    [workspaceFiles, referencedWorkspaceFiles],
-  );
-  const filesTabCount = useMemo(() => workspaceFileCount(displayWorkspaceFiles), [displayWorkspaceFiles]);
   const selectedIdentity = useMemo(() => participantIdentityForNode(selectedItem), [selectedItem]);
 
   useEffect(() => {
@@ -1698,21 +1582,19 @@ export function AgentSessionPanel({
   }, [open, onClose]);
 
   useEffect(() => {
-    setActiveTab('messages');
+    setActiveTab('activity');
     setSeedEvents([]);
     setFollowUpError(null);
     setFollowUpNotice(null);
-    setShowTechnical(defaultShowTechnical);
-    setActivityDetailsExpanded(false);
-  }, [selectedRunId, defaultShowTechnical]);
+  }, [selectedRunId]);
 
-  // Keep the shared artifact hook's internal tab in sync with the panel tab so the workspace
-  // FOLDER TREE is fetched when the user opens the Files tab. The hook's setActiveTab identity
-  // changes every render, so key the effect on the panel tab only.
+  // Keep the shared artifact hook pointed at the changed-files view. The Changes segment
+  // lists the selected scope's created/changed files; the run-wide workspace tree lives in
+  // the page-level Artifacts overlay, not here.
   useEffect(() => {
-    artifactState.setActiveTab(activeTab === 'files' ? 'files' : 'changes');
+    artifactState.setActiveTab('changes');
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTab]);
+  }, [selectedRunId]);
 
   useEffect(() => {
     if (composerFocusSignal > 0) {
@@ -1725,7 +1607,7 @@ export function AgentSessionPanel({
 
   const focusOutcomePlanClarification = useCallback(() => {
     setFollowUp((value) => value.trim() ? value : 'Clarify the outcome plan: ');
-    setActiveTab('messages');
+    setActiveTab('activity');
     onOutcomePlanClarify?.();
     window.setTimeout(() => focusComposer(), 0);
   }, [onOutcomePlanClarify, focusComposer]);
@@ -1781,11 +1663,6 @@ export function AgentSessionPanel({
   // (see artifactState above), so the previous bespoke getRunFiles/getRunFileContent/getRunFileDiff
   // effects and their state have been removed. Opening a file selects it in the shared hook, which
   // drives the FileViewerModal below.
-  const openPreview = useCallback((path: string) => {
-    const relPath = normalizeWorkspacePath(path, selectedRunId);
-    handleFileSelect(relPath, true);
-  }, [handleFileSelect, selectedRunId]);
-
   const handleSendFollowUp = useCallback(async () => {
     const instruction = followUp.trim();
     if (!instruction || followUpBusy) return;
@@ -1821,10 +1698,6 @@ export function AgentSessionPanel({
   ).length;
   // A turn "streams" while its run is still live — the coordinator scope tracks coordinatorActive,
   // a dispatched child tracks its own run status.
-  const LIVE_RUN_STATUSES = new Set(['running', 'in_progress', 'active', 'dispatching', 'awaiting_assembly', 'assembling']);
-  const runIsLive = (selectedItem.isCoordinator || selectedItem.nodeId === 'work-plan')
-    ? coordinatorActive
-    : LIVE_RUN_STATUSES.has((runDetail?.status ?? '').toLowerCase());
   const composerContext = selectedItem.nodeId === 'outcome-plan'
     ? 'Context: Outcome plan'
     : selectedItem.isCoordinator
@@ -1961,18 +1834,31 @@ export function AgentSessionPanel({
               </div>
             </div>
 
-            <TabList
-              className={styles.tabList}
-              selectedValue={activeTab}
-              onTabSelect={(_, data) => setActiveTab(data.value as 'messages' | 'changes' | 'files')}
-            >
-              <Tab value="messages" data-testid="session-tab-messages">Messages</Tab>
-              <Tab value="changes" data-testid="session-tab-changes">Changes ({files.length})</Tab>
-              <Tab value="files" data-testid="session-tab-files">Files ({filesTabCount})</Tab>
-            </TabList>
+            <div className={styles.segmented} role="tablist" aria-label="Selected scope views">
+              <button
+                type="button"
+                role="tab"
+                aria-selected={activeTab === 'activity'}
+                className={mergeClasses(styles.segmentBtn, activeTab === 'activity' && styles.segmentBtnActive)}
+                onClick={() => setActiveTab('activity')}
+                data-testid="session-tab-activity"
+              >
+                Activity
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={activeTab === 'changes'}
+                className={mergeClasses(styles.segmentBtn, activeTab === 'changes' && styles.segmentBtnActive)}
+                onClick={() => setActiveTab('changes')}
+                data-testid="session-tab-changes"
+              >
+                Changes{files.length > 0 ? ` (${files.length})` : ''}
+              </button>
+            </div>
 
             <div className={styles.content}>
-              {activeTab === 'messages' && (
+              {activeTab === 'activity' && (
                 <>
                   <div
                     className={styles.tabBody}
@@ -1991,26 +1877,6 @@ export function AgentSessionPanel({
                         <MessageBarBody>{runDetailError}</MessageBarBody>
                       </MessageBar>
                     )}
-                    {selectedItem.nodeId !== 'outcome-plan' && !runDetailLoading && turns.length > 0 && (
-                      <div className={styles.narrativeToolbar} role="toolbar" aria-label="Session narrative actions">
-                        <Switch
-                          checked={showTechnical}
-                          onChange={(_, data) => setShowTechnical(data.checked)}
-                          label={showTechnical ? 'Technical details shown' : 'Technical details hidden'}
-                          data-testid="toggle-technical-details"
-                        />
-                        <Button
-                          appearance="subtle"
-                          size="small"
-                          disabled={!showTechnical}
-                          onClick={() => setActivityDetailsExpanded((value) => !value)}
-                          aria-expanded={activityDetailsExpanded}
-                          data-testid="toggle-activity-details"
-                        >
-                          {activityDetailsExpanded ? 'Collapse activity details' : 'Expand activity details'}
-                        </Button>
-                      </div>
-                    )}
                     {runDetailLoading && (
                       <div className={styles.loadingWrap} style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS }}>
                         <Spinner size="tiny" />
@@ -2028,33 +1894,29 @@ export function AgentSessionPanel({
                         onClarifyPlan={focusOutcomePlanClarification}
                         clarificationSent={selectedItem.status === 'needs_clarification'}
                       />
-                    ) : !runDetailLoading && turns.length === 0 && (
-                      <EmptyState
-                        className={styles.emptyState}
-                        title="No messages yet."
-                        description="Messages will appear here as the run emits activity."
-                      />
+                    ) : (
+                      <>
+                        <RunTimeline
+                          embedded
+                          steps={timelineModel.steps}
+                          running={timelineModel.running}
+                          emptyHint="Messages, tool calls, and activity will appear here as the run emits events."
+                        />
+                        {timelineApprovals.length > 0 && (
+                          <div className={styles.timelineApprovals}>
+                            {timelineApprovals.map((approval) => (
+                              <InThreadApprovalGate
+                                key={`approval-${approval.event.sequence}`}
+                                event={approval.event}
+                                runId={selectedRunId}
+                                isResolved={approval.isResolved}
+                                resolvedScope={approval.resolvedScope}
+                              />
+                            ))}
+                          </div>
+                        )}
+                      </>
                     )}
-                    {selectedItem.nodeId !== 'outcome-plan' && (() => {
-                      const visibleTurns = showTechnical ? turns : turns.filter(turnHasSignalContent);
-                      return (
-                        <CopilotChat className={styles.chatFeed} label="Session conversation">
-                          {visibleTurns.map((turn) => (
-                            <ConversationTurnBlock
-                              key={turn.key}
-                              turn={turn}
-                              runId={selectedRunId}
-                              onPreviewFile={openPreview}
-                              showTechnical={showTechnical}
-                              activityDetailsExpanded={activityDetailsExpanded}
-                              onExpandActivityDetails={() => setActivityDetailsExpanded(true)}
-                              participant={selectedIdentity}
-                              streaming={Boolean(turn.open) && runIsLive && turn.approvals.every((a) => a.isResolved)}
-                            />
-                          ))}
-                        </CopilotChat>
-                      );
-                    })()}
                     <div ref={messagesEndRef} data-testid="session-message-end" />
                     {selectedItem.nodeId !== 'outcome-plan' && turns.length > 0 && (
                       <div className={styles.jumpToLatestBar}>
@@ -2070,58 +1932,6 @@ export function AgentSessionPanel({
                       </div>
                     )}
                   </div>
-                  <>
-                    <div className={styles.composerStack}>
-                      {(pendingApprovalCount > 0 || pendingQuestionCount > 0) && (
-                        <MessageBar intent="warning" className={styles.stickyNeedInput}>
-                          <MessageBarBody>
-                            Needs input: {pendingApprovalCount} approval{pendingApprovalCount === 1 ? '' : 's'}
-                            {pendingQuestionCount > 0 ? `, ${pendingQuestionCount} question${pendingQuestionCount === 1 ? '' : 's'}` : ''}.
-                          </MessageBarBody>
-                        </MessageBar>
-                      )}
-                      {followUpError && (
-                        <MessageBar intent="error" className={styles.stickyNeedInput}>
-                          <MessageBarBody>{followUpError}</MessageBarBody>
-                        </MessageBar>
-                      )}
-                      <Text className={styles.composerContext}>{composerContext}</Text>
-                      <div className={styles.stickyComposer} ref={composerRef}>
-                        <Composer
-                          value={followUp}
-                          placeholder="Message coordinator..."
-                          readOnly={isNonCoordinatorAgentScope}
-                          readOnlyNote={readOnlyComposerNote}
-                          onChange={(value) => {
-                            setFollowUp(value);
-                            setFollowUpError(null);
-                            setFollowUpNotice(null);
-                          }}
-                          onSubmit={(_, data) => {
-                            if (data.value.trim()) void handleSendFollowUp();
-                          }}
-                          disabled={!coordinatorActive || followUpBusy}
-                          disableSend={!coordinatorActive || followUpBusy || !followUp.trim()}
-                          contentBefore={null}
-                        />
-                      </div>
-                      <div id="coordinator-message-status" aria-live="polite">
-                        {composerAvailabilityMessage && (
-                          <Text className={styles.composerStatus}>{composerAvailabilityMessage}</Text>
-                        )}
-                        {!composerAvailabilityMessage && !followUpError && !followUpNotice && (
-                          <Text className={styles.composerStatus}>
-                            Sends through the coordinator steering API; replies appear when the run stream updates.
-                          </Text>
-                        )}
-                        {followUpNotice && (
-                          <Text className={mergeClasses(styles.composerStatus, styles.composerStatusSuccess)}>
-                            {followUpNotice}
-                          </Text>
-                        )}
-                      </div>
-                    </div>
-                  </>
                 </>
               )}
 
@@ -2143,36 +1953,92 @@ export function AgentSessionPanel({
                   ) : files.length === 0 ? (
                     <EmptyState
                       className={styles.emptyState}
-                      title="No diff artifacts available."
-                      description="Changed files will appear after the agent writes artifacts."
+                      title="No changes yet"
+                      description="Created and changed files will appear here as the agent writes them."
                     />
                   ) : (
-                    <CompactChangesList
+                    <ScopeChangesList
                       files={files}
-                      selectedPath={selectedPath}
-                      onFileClick={(path) => handleFileSelect(path, true)}
+                      runId={selectedRunId}
+                      onOpen={(path) => handleFileSelect(path, true)}
+                      getContent={effectiveAdapter?.getContent}
                     />
                   )}
                 </div>
               )}
-
-              {activeTab === 'files' && (
-                <div className={styles.tabBody}>
-                  {selectedRunUnavailableReason ? (
-                    <MessageBar intent="info" data-testid="planned-node-file-guard">
-                      <MessageBarBody>{selectedRunUnavailableReason}</MessageBarBody>
-                    </MessageBar>
-                  ) : (
-                    <FilesTabPanel
-                      workspaceFiles={displayWorkspaceFiles}
-                      workspaceLoading={workspaceLoading}
-                      workspaceError={workspaceError}
-                      selectedPath={selectedPath}
-                      onFileClick={(path, isChanged) => handleFileSelect(path, isChanged)}
-                    />
-                  )}
+            </div>
+            {runChips && !isNonCoordinatorAgentScope && (
+              <div className={styles.runChipsBar} data-testid="run-summary-chips">
+                {runChips}
+              </div>
+            )}
+            <div className={styles.composerStack}>
+              {(pendingApprovalCount > 0 || pendingQuestionCount > 0) && (
+                <MessageBar intent="warning" className={styles.stickyNeedInput}>
+                  <MessageBarBody>
+                    Needs input: {pendingApprovalCount} approval{pendingApprovalCount === 1 ? '' : 's'}
+                    {pendingQuestionCount > 0 ? `, ${pendingQuestionCount} question${pendingQuestionCount === 1 ? '' : 's'}` : ''}.
+                  </MessageBarBody>
+                </MessageBar>
+              )}
+              {followUpError && (
+                <MessageBar intent="error" className={styles.stickyNeedInput}>
+                  <MessageBarBody>{followUpError}</MessageBarBody>
+                </MessageBar>
+              )}
+              <Text className={styles.composerContext}>{composerContext}</Text>
+              <div className={styles.stickyComposer} ref={composerRef}>
+                <Composer
+                  value={followUp}
+                  placeholder="Message coordinator..."
+                  readOnly={isNonCoordinatorAgentScope}
+                  readOnlyNote={readOnlyComposerNote}
+                  onChange={(value) => {
+                    setFollowUp(value);
+                    setFollowUpError(null);
+                    setFollowUpNotice(null);
+                  }}
+                  onSubmit={(_, data) => {
+                    if (data.value.trim()) void handleSendFollowUp();
+                  }}
+                  disabled={!coordinatorActive || followUpBusy}
+                  disableSend={!coordinatorActive || followUpBusy || !followUp.trim()}
+                  contentBefore={null}
+                />
+              </div>
+              {automation && !isNonCoordinatorAgentScope && (
+                <div className={styles.composerUtilityRow} data-testid="composer-automation-toggles">
+                  <AutomationToggle
+                    label="Autopilot"
+                    info={AUTOMATION_HELP.autopilotOrchestration}
+                    checked={automation.autopilot}
+                    disabled={!automation.canToggle || automation.autopilotBusy}
+                    onChange={() => automation.onToggleAutopilot()}
+                  />
+                  <AutomationToggle
+                    label="Auto-approve safe tools"
+                    info={AUTOMATION_HELP.autoApproveOrchestration}
+                    checked={automation.autoApprove}
+                    disabled={!automation.canToggle || automation.autoApproveBusy}
+                    onChange={() => automation.onToggleAutoApprove()}
+                  />
                 </div>
               )}
+              <div id="coordinator-message-status" aria-live="polite">
+                {composerAvailabilityMessage && (
+                  <Text className={styles.composerStatus}>{composerAvailabilityMessage}</Text>
+                )}
+                {!composerAvailabilityMessage && !followUpError && !followUpNotice && (
+                  <Text className={styles.composerStatus}>
+                    Sends through the coordinator steering API; replies appear when the run stream updates.
+                  </Text>
+                )}
+                {followUpNotice && (
+                  <Text className={mergeClasses(styles.composerStatus, styles.composerStatusSuccess)}>
+                    {followUpNotice}
+                  </Text>
+                )}
+              </div>
             </div>
           </section>
         </div>
@@ -2189,6 +2055,84 @@ export function AgentSessionPanel({
         getContent={effectiveAdapter?.getContent}
       />
     </>
+  );
+}
+
+// ScopeChangesList — a clean, card-free list of the selected scope's created/changed files.
+// Each row: file-type icon + filename (semibold) + "{ext} file · +A −R" (muted) + right-aligned
+// download + open-in-new actions. Dividers only, no cards, no side-stripes.
+function ScopeChangesList({
+  files,
+  runId,
+  onOpen,
+  getContent,
+}: {
+  files: WorkspaceFileEntry[];
+  runId: string;
+  onOpen: (path: string) => void;
+  getContent?: (runId: string, path: string) => Promise<WorkspaceFileContent>;
+}) {
+  const styles = useStyles();
+  const [downloading, setDownloading] = useState<string | null>(null);
+
+  const handleDownload = async (path: string) => {
+    if (downloading) return;
+    setDownloading(path);
+    try {
+      const fetcher = getContent ?? apiClient.getRunFileContent.bind(apiClient);
+      const file = await fetcher(runId, path);
+      const blob = new Blob([file.content ?? ''], { type: 'text/plain;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = path.split(/[\\/]/).pop() ?? path;
+      document.body.appendChild(anchor);
+      anchor.click();
+      document.body.removeChild(anchor);
+      URL.revokeObjectURL(url);
+    } catch {
+      // Download is best-effort; the open-in-new action remains available on failure.
+    } finally {
+      setDownloading(null);
+    }
+  };
+
+  return (
+    <div className={styles.changesList} data-testid="scope-changes-list">
+      {files.map((file) => {
+        const name = file.path.split(/[\\/]/).pop() ?? file.path;
+        const dot = name.lastIndexOf('.');
+        const ext = dot > 0 ? name.slice(dot + 1) : '';
+        const typeLabel = ext ? `${ext} file` : 'file';
+        const meta = `${typeLabel} · +${file.added_lines} \u2212${file.removed_lines}`;
+        return (
+          <div key={file.path} className={styles.changeRow} data-testid="scope-change-row" title={file.path}>
+            <span className={styles.changeIcon} aria-hidden><DocumentRegular /></span>
+            <button type="button" className={styles.changeNameBtn} onClick={() => onOpen(file.path)}>
+              <span className={styles.changeName}>{name}</span>
+              <span className={styles.changeMeta}>{meta}</span>
+            </button>
+            <span className={styles.changeActions}>
+              <Button
+                appearance="subtle"
+                size="small"
+                icon={<ArrowDownloadRegular />}
+                aria-label={`Download ${name}`}
+                disabled={downloading === file.path}
+                onClick={() => void handleDownload(file.path)}
+              />
+              <Button
+                appearance="subtle"
+                size="small"
+                icon={<OpenRegular />}
+                aria-label={`Open ${name}`}
+                onClick={() => onOpen(file.path)}
+              />
+            </span>
+          </div>
+        );
+      })}
+    </div>
   );
 }
 
@@ -2294,211 +2238,6 @@ function InThreadApprovalGate({
       />
       {actionError && (
         <Text className={styles.composerStatus} role="alert">Approval failed: {actionError}</Text>
-      )}
-    </div>
-  );
-}
-
-function ConversationTurnBlock({
-  turn,
-  runId,
-  onPreviewFile,
-  showTechnical = true,
-  activityDetailsExpanded = false,
-  onExpandActivityDetails,
-  participant,
-  streaming = false,
-}: {
-  turn: ConversationTurn;
-  runId: string;
-  onPreviewFile: (path: string) => void;
-  showTechnical?: boolean;
-  activityDetailsExpanded?: boolean;
-  onExpandActivityDetails?: () => void;
-  participant: ParticipantIdentity;
-  streaming?: boolean;
-}) {
-  const styles = useStyles();
-  const [toolsOpen, setToolsOpen] = useState(false);
-  const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
-  const completedTools = turn.toolCalls.filter((tool) => tool.settled).length;
-  const activityCount = turn.rows.filter((row) => row.role === 'activity').length;
-  const collapsedDetailCount = activityCount + turn.toolCalls.length + turn.filePaths.length;
-  // #122: with technical details hidden, drop system-prompt scaffolding rows so the
-  // narrative reads cleanly; the rows are revealed (not deleted) when the toggle is on.
-  const visibleRows = showTechnical
-    ? (activityDetailsExpanded ? turn.rows : turn.rows.filter((row) => row.role !== 'activity'))
-    : turn.rows.filter((row) => row.role !== 'system');
-  const collapsedSummary = [
-    activityCount ? `${activityCount} update${activityCount === 1 ? '' : 's'}` : null,
-    turn.toolCalls.length ? `${turn.toolCalls.length} tool call${turn.toolCalls.length === 1 ? '' : 's'}` : null,
-    turn.filePaths.length ? `${turn.filePaths.length} artifact${turn.filePaths.length === 1 ? '' : 's'}` : null,
-  ].filter(Boolean).join(' · ');
-  const toggleRow = (key: string) => {
-    setExpandedRows((prev) => {
-      const next = new Set(prev);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
-      return next;
-    });
-  };
-
-  const lastAgentRowKey = [...visibleRows].reverse().find((row) => row.role === 'agent')?.key;
-
-  return (
-    <div className={styles.conversationTurn}>
-      {visibleRows.map((row) => {
-        const author = authorForRole(row.role, participant);
-        if (row.role === 'activity') {
-          return (
-            <div key={row.key} className={styles.activityEventRow} data-testid="session-activity-row">
-              <span className={styles.activityRail} data-testid="session-activity-rail" aria-hidden="true" />
-              <Text className={styles.activityEventText}>{row.content}</Text>
-              <Text className={styles.fileMeta}>{formatTimestamp(row.timestamp)}</Text>
-            </div>
-          );
-        }
-        const collapsible = row.role === 'system' || (row.role === 'user' && isCoordinatorContextContent(row.content));
-        const expanded = !collapsible || expandedRows.has(row.key);
-        const disclosureLabel = collapsedRowLabel(row, author.collapsedLabel);
-
-        // Collapsible scaffolding (system prompt / coordinator context) keeps the
-        // quiet disclosure affordance instead of a loud chat bubble.
-        if (collapsible) {
-          return (
-            <div key={row.key} className={styles.messageCard} data-testid="session-message-row">
-              <AgentAvatar name={author.avatarName} size={24} circle />
-              <div className={styles.messageRow}>
-                <div className={styles.messageMeta}>
-                  <div className={styles.authorBlock}>
-                    <Text className={styles.authorName}>{author.displayName}</Text>
-                    <Text className={styles.messageRole}>{author.roleLabel}</Text>
-                  </div>
-                  <Text className={styles.fileMeta}>{formatTimestamp(row.timestamp)}</Text>
-                </div>
-                <button className={styles.disclosure} onClick={() => toggleRow(row.key)} aria-expanded={expanded}>
-                  {expanded ? <ChevronDownRegular /> : <ChevronRightRegular />}
-                  <Text>{disclosureLabel}</Text>
-                </button>
-                {expanded && (
-                  <div className={mergeClasses(styles.messageBubble, styles.markdownBody, row.role === 'system' ? styles.bubbleSystem : styles.bubbleUser)}>
-                    <MarkdownMessage content={row.content} />
-                  </div>
-                )}
-              </div>
-            </div>
-          );
-        }
-
-        // User instructions render as the native UserMessage bubble.
-        if (row.role === 'user') {
-          return (
-            <div key={row.key} data-testid="session-message-row">
-              <UserMessage
-                accessibleHeading={author.displayName}
-                timestamp={formatTimestamp(row.timestamp)}
-              >
-                <div className={styles.markdownBody}>
-                  <MarkdownMessage content={row.content} />
-                </div>
-              </UserMessage>
-            </div>
-          );
-        }
-
-        // Agent responses render as the native CopilotMessage.
-        return (
-          <div key={row.key} data-testid="session-message-row">
-            <CopilotMessage
-              name={author.displayName}
-              avatar={<AgentAvatar name={author.avatarName} size={24} circle />}
-              disclaimer={author.roleLabel}
-              loadingState={row.key === lastAgentRowKey && streaming ? 'streaming' : 'none'}
-              content={
-                <div className={styles.markdownBody}>
-                  <MarkdownMessage content={row.content} />
-                </div>
-              }
-              footnote={<Text className={styles.fileMeta}>{formatTimestamp(row.timestamp)}</Text>}
-            />
-          </div>
-        );
-      })}
-
-      {showTechnical && !activityDetailsExpanded && collapsedDetailCount > 0 && (
-        <button
-          type="button"
-          className={styles.activitySummaryButton}
-          onClick={onExpandActivityDetails}
-          data-testid="activity-details-summary"
-        >
-          <ChevronRightRegular aria-hidden="true" />
-          <span>Activity collapsed · {collapsedSummary}</span>
-        </button>
-      )}
-
-      {showTechnical && activityDetailsExpanded && turn.toolCalls.length > 0 && (
-        <div className={styles.toolsBox}>
-          <button className={styles.toolsButton} onClick={() => setToolsOpen((value) => !value)} aria-expanded={toolsOpen}>
-            {toolsOpen ? <ChevronDownRegular /> : <ChevronRightRegular />}
-            <Text>Tool calls · {completedTools}/{turn.toolCalls.length} completed</Text>
-          </button>
-          {toolsOpen && (
-            <div className={styles.toolsList}>
-              {turn.toolCalls.map((tool) => {
-                const friendly = friendlyToolLabel(tool, runId);
-                return (
-                  <ToolCallRow
-                    key={tool.callId}
-                    toolCall={{
-                      id: tool.callId,
-                      name: friendly.label,
-                      inputSummary: friendly.detail ?? undefined,
-                      status: tool.errored ? 'error' : tool.settled ? 'complete' : 'running',
-                    }}
-                  />
-                );
-              })}
-            </div>
-          )}
-        </div>
-      )}
-
-      {turn.approvals.map((approval) => (
-        <InThreadApprovalGate
-          key={`approval-${approval.event.sequence}`}
-          event={approval.event}
-          runId={runId}
-          isResolved={approval.isResolved}
-          resolvedScope={approval.resolvedScope}
-        />
-      ))}
-
-      {showTechnical && activityDetailsExpanded && turn.filePaths.length > 0 && (
-        <OutputCard mode="sidecar" isLoading={Boolean(streaming)}>
-          <div className={styles.fileRows}>
-            {turn.filePaths.map((path) => {
-              const relPath = normalizeWorkspacePath(path, runId);
-              return (
-                <div key={path} className={styles.fileRow} data-testid="session-file-row">
-                  <ArtifactChip
-                    artifact={{
-                      id: relPath,
-                      title: fileName(relPath),
-                      type: 'Workspace file',
-                      icon: <DocumentRegular />,
-                      onOpen: () => onPreviewFile(relPath),
-                    }}
-                  />
-                  <Text className={styles.fileMeta}>{relPath}</Text>
-                  <Button appearance="subtle" size="small" icon={<EyeRegular />} onClick={() => onPreviewFile(relPath)}>
-                    Preview
-                  </Button>
-                </div>
-              );
-            })}
-          </div>
-        </OutputCard>
       )}
     </div>
   );

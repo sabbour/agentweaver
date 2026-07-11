@@ -36,8 +36,6 @@ import { AgentStepList } from '../components/ui/agentic';
 import type { AgentArtifact, AgentStep, AgentStepStatus } from '../components/ui/agentic';
 import { AgentAvatar } from '../components/AgentAvatar';
 import { AgentSessionPanel } from '../components/AgentSessionPanel';
-import { AUTOMATION_HELP } from '../components/automationHelp';
-import { AutomationToggle } from '../components/AutomationToggle';
 import { useCtrlScrollZoom, ZoomControls } from '../components/board/useCtrlScrollZoom';
 import { CoordinatorArtifactsPanel } from '../components/CoordinatorArtifactsPanel';
 import { CostChip, formatAic } from '../components/CostChip';
@@ -68,7 +66,6 @@ import { layoutDagColumns, NODE_H, NODE_TYPE_H, NODE_TYPE_W, NODE_W } from '../u
 import {
   ArrowRepeatAllRegular,
   BotRegular,
-  ChatRegular,
   CheckmarkRegular,
   CircleRegular,
   ClockRegular,
@@ -966,6 +963,9 @@ const useStyles = makeStyles({
     gap: tokens.spacingVerticalL,
     width: '100%',
     minWidth: 0,
+    height: '100%',
+    minHeight: 0,
+    overflow: 'hidden',
   },
   breadcrumb: {
     display: 'flex',
@@ -990,6 +990,8 @@ const useStyles = makeStyles({
     flexDirection: 'column',
     gap: tokens.spacingVerticalL,
     minWidth: 0,
+    flex: 1,
+    minHeight: 0,
   },
   // ---- Run header (identity / actions grid) --------------------------------
   runHeader: {
@@ -1222,11 +1224,15 @@ const useStyles = makeStyles({
   bodyGrid: {
     display: 'grid',
     gridTemplateColumns: 'minmax(220px, 300px) minmax(0, 1fr)',
+    gridTemplateRows: 'minmax(0, 1fr)',
     gap: tokens.spacingHorizontalL,
     alignItems: 'stretch',
     minWidth: 0,
+    flex: 1,
+    minHeight: 0,
     '@media (max-width: 960px)': {
       gridTemplateColumns: '1fr',
+      gridTemplateRows: 'auto minmax(0, 1fr)',
     },
   },
   treeRail: {
@@ -1289,45 +1295,31 @@ const useStyles = makeStyles({
     gap: tokens.spacingHorizontalSNudge,
     minWidth: 0,
   },
-  treeAgentRow: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: tokens.spacingHorizontalXS,
-    minWidth: 0,
-  },
-  treeAgentName: {
+  // Task-first tree row: bold PRIMARY = task title (full width, ellipsis); one muted
+  // SECONDARY line = [dot] statusLabel · agentName (role). No pills, no side-stripes.
+  treePrimary: {
     fontSize: tokens.fontSizeBase300,
     fontWeight: tokens.fontWeightSemibold,
     color: tokens.colorNeutralForeground1,
     overflow: 'hidden',
     textOverflow: 'ellipsis',
     whiteSpace: 'nowrap',
-  },
-  treeRolePill: {
-    fontSize: tokens.fontSizeBase100,
-    color: tokens.colorNeutralForeground3,
-    backgroundColor: tokens.colorNeutralBackground3,
-    padding: `0 ${tokens.spacingHorizontalXS}`,
-    borderRadius: tokens.borderRadiusSmall,
-    whiteSpace: 'nowrap',
-    flexShrink: 0,
+    minWidth: 0,
   },
   treeMetaRow: {
     display: 'flex',
     alignItems: 'center',
-    gap: tokens.spacingHorizontalXS,
+    gap: tokens.spacingHorizontalXXS,
     minWidth: 0,
+    overflow: 'hidden',
+    whiteSpace: 'nowrap',
   },
-  treeStatusPill: {
+  treeStatusText: {
     display: 'inline-flex',
     alignItems: 'center',
     gap: tokens.spacingHorizontalXXS,
-    fontSize: tokens.fontSizeBase100,
-    fontWeight: tokens.fontWeightSemibold,
-    padding: `1px ${tokens.spacingHorizontalXS}`,
-    borderRadius: tokens.borderRadiusSmall,
-    backgroundColor: tokens.colorNeutralBackground3,
-    whiteSpace: 'nowrap',
+    fontSize: tokens.fontSizeBase200,
+    fontWeight: tokens.fontWeightMedium,
     flexShrink: 0,
   },
   treeStatusDot: {
@@ -1337,27 +1329,13 @@ const useStyles = makeStyles({
     backgroundColor: 'currentColor',
     flexShrink: 0,
   },
-  treeTaskLabel: {
-    fontSize: tokens.fontSizeBase200,
-    color: tokens.colorNeutralForeground2,
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
-    whiteSpace: 'nowrap',
-    minWidth: 0,
-  },
-  treePrimary: {
-    fontSize: tokens.fontSizeBase300,
-    color: tokens.colorNeutralForeground1,
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
-    whiteSpace: 'nowrap',
-  },
-  treeSecondary: {
+  treeIdentity: {
     fontSize: tokens.fontSizeBase200,
     color: tokens.colorNeutralForeground3,
     overflow: 'hidden',
     textOverflow: 'ellipsis',
     whiteSpace: 'nowrap',
+    minWidth: 0,
   },
   stateTextRunning: { color: tokens.colorBrandForeground1 },
   stateTextSuccess: { color: tokens.colorStatusSuccessForeground1 },
@@ -1437,11 +1415,13 @@ const useStyles = makeStyles({
     flexDirection: 'column',
     minWidth: 0,
     minHeight: 0,
+    flex: 1,
   },
   readoutBody: {
     display: 'flex',
     flexDirection: 'column',
-    minHeight: '520px',
+    flex: 1,
+    minHeight: 0,
     minWidth: 0,
     borderRadius: tokens.borderRadiusLarge,
     backgroundColor: tokens.colorNeutralBackground2,
@@ -1461,6 +1441,36 @@ const useStyles = makeStyles({
   },
   approvalGateWrap: {
     minWidth: 0,
+  },
+  runChip: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXS,
+    padding: `2px ${tokens.spacingHorizontalS}`,
+    borderRadius: tokens.borderRadiusCircular,
+    border: `${tokens.strokeWidthThin} solid ${tokens.colorNeutralStroke2}`,
+    backgroundColor: tokens.colorNeutralBackground1,
+    color: tokens.colorNeutralForeground2,
+    cursor: 'pointer',
+    fontSize: tokens.fontSizeBase200,
+    lineHeight: tokens.lineHeightBase200,
+    ':hover': { backgroundColor: tokens.colorNeutralBackground1Hover },
+  },
+  runChipLabel: {
+    fontWeight: tokens.fontWeightSemibold,
+    color: tokens.colorNeutralForeground1,
+  },
+  runChipCount: {
+    fontVariantNumeric: 'tabular-nums',
+    color: tokens.colorNeutralForeground3,
+  },
+  runChipAdded: {
+    fontVariantNumeric: 'tabular-nums',
+    color: tokens.colorPaletteGreenForeground1,
+  },
+  runChipRemoved: {
+    fontVariantNumeric: 'tabular-nums',
+    color: tokens.colorPaletteRedForeground1,
   },
   scopeHint: {
     fontSize: tokens.fontSizeBase200,
@@ -2442,6 +2452,11 @@ export function CoordinatorRunPage() {
           runId:     runId      ?? '',
           executionId: runId    ?? '',
           projectId:   projectId ?? '',
+          // Assembly/workflow stages (RAI / Human Review / Merge / Scribe) have their own
+          // persisted sub-run streams — carry the child run id so selecting the node in the
+          // session tree scopes Activity to that sub-run instead of an empty stream.
+          childRunId:    readChildRunId(node),
+          childGraphRef: node.child_graph_ref,
           dir:         'GRID',
         } as WorkflowNodeData,
         position: { x: 0, y: 0 },
@@ -2589,16 +2604,24 @@ export function CoordinatorRunPage() {
                   : data.state.status === 'failed' ? 'failed'
                     : data.state.status === 'revise' ? 'rai_flagged'
                       : 'pending';
+        // Only the real coordinator/root node defaults its agent name to "Coordinator".
+        // Child workflow/assembly stages leave agentName undefined unless they carry a
+        // genuine assignment, so the render-level fallback labels them correctly instead
+        // of mislabeling every pipeline stage as the Coordinator.
+        const isCoordinatorNode = node.id === 'coordinator' || data.def.key === 'coordinator';
         sessionMeta.set(node.id, {
           nodeId: node.id,
           label: data.def.label,
-          agentName: data.agentName ?? 'Coordinator',
+          agentName: data.agentName ?? (isCoordinatorNode ? 'Coordinator' : undefined),
           agentRole: data.agentRoleTitle ?? data.def.roleDescription,
           status,
+          // Assembly/workflow stages carry their own sub-run id so selecting RAI / Human Review /
+          // Scribe streams the real sub-run instead of falling through to an empty scope.
+          childRunId: isCoordinatorNode ? undefined : data.childRunId,
           depth,
           x,
           y,
-          isCoordinator: true,
+          isCoordinator: isCoordinatorNode,
         });
       }
     }
@@ -2681,19 +2704,21 @@ export function CoordinatorRunPage() {
   // Steering chat side panel (#163) — a slide-in chat replaces the old inline steer bar.
   // ---------------------------------------------------------------------------
 
-  const [centerTab, setCenterTab] = useState<'chat' | 'plan' | 'artifacts'>('chat');
+  const [planPanelOpen, setPlanPanelOpen] = useState(false);
+  const [artifactsPanelOpen, setArtifactsPanelOpen] = useState(false);
+  // Run-wide (coordinator-level) collective-diff summary for the Changes chip above the composer.
+  const [runChangesSummary, setRunChangesSummary] = useState<{ files: number; added: number; removed: number } | null>(null);
   const [topologyPanelOpen, setTopologyPanelOpen] = useState(false);
   const [topologyView, setTopologyView] = useState<'topology' | 'progress'>('topology');
   const [sessionPanelOpen, setSessionPanelOpen] = useState(true);
   const [panelNodeId, setPanelNodeId] = useState<string | null>(null);
   const [composerFocusSignal, setComposerFocusSignal] = useState(0);
-  const [runChromeExpanded, setRunChromeExpanded] = useState(false);
+  const [runDetailsOpen, setRunDetailsOpen] = useState(false);
   const lastSelectedOutcomePlanSeqRef = useRef<number | null>(null);
 
   const openPanelForNode = useCallback((nodeId: string) => {
     setPanelNodeId(nodeId);
     setSessionPanelOpen(true);
-    setCenterTab('chat');
   }, []);
 
   const focusOutcomePlanComposer = useCallback(() => {
@@ -2701,15 +2726,7 @@ export function CoordinatorRunPage() {
     setPanelNodeId('outcome-plan');
     setSessionPanelOpen(true);
     setComposerFocusSignal((value) => value + 1);
-    setCenterTab('chat');
   }, []);
-
-  const focusSelectedComposer = useCallback(() => {
-    if (!panelNodeId && defaultSessionNodeId) setPanelNodeId(defaultSessionNodeId);
-    setSessionPanelOpen(true);
-    setComposerFocusSignal((value) => value + 1);
-    setCenterTab('chat');
-  }, [defaultSessionNodeId, panelNodeId]);
 
   useEffect(() => {
     if (!latestOutcomePlanEvent || isChildRun) return;
@@ -2805,7 +2822,7 @@ export function CoordinatorRunPage() {
   // the Approve / Request changes / Decline actions live.
   const viewAssemblyExecution = useCallback((id: string) => {
     if (id.endsWith('-rai') || id.endsWith('-scribe')) openPanelForNode(id);
-    else setCenterTab('artifacts');
+    else setArtifactsPanelOpen(true);
   }, [openPanelForNode]);
 
   // Option toggles — optimistic update, revert on error. Both cascade to children server-side.
@@ -3011,19 +3028,98 @@ export function CoordinatorRunPage() {
     getWorkspace: (rid) => apiClient.getAssemblyWorkspace(rid),
     getContent: (rid, path) => apiClient.getAssemblyFileContent(rid, path),
     approve: (rid) => apiClient.reviewAssembly(rid, 'approve'),
-    approveLabel: 'Approve assembly',
-    approveAriaLabel: 'Approve assembly review and continue merge',
+    approveLabel: 'Approve & merge',
+    approveAriaLabel: 'Approve human review and continue to merge',
     approveAcceptedStatus: 'review_accepted',
     requestChanges: (rid, comment) => apiClient.reviewAssembly(rid, 'request_changes', comment),
     decline: (rid) => apiClient.reviewAssembly(rid, 'decline'),
   }), []);
+
+  // Run-wide changes summary: the coordinator's collective integration diff (assembly files).
+  // getAssemblyFiles returns [] before assembly runs, so this stays null until real changes exist.
+  // Refetch as the run advances/settles (coordRunStatus) so the Changes chip diff stays live.
+  useEffect(() => {
+    if (isChildRun || !runId) {
+      setRunChangesSummary(null);
+      return;
+    }
+    // Clear stale chips from the previous run immediately so a new runId never briefly shows
+    // the prior run's counts while the new getAssemblyFiles is in flight.
+    setRunChangesSummary(null);
+    let cancelled = false;
+    apiClient.getAssemblyFiles(runId)
+      .then((entries) => {
+        if (cancelled) return;
+        if (!entries || entries.length === 0) {
+          setRunChangesSummary(null);
+          return;
+        }
+        const added = entries.reduce((sum, e) => sum + (e.added_lines ?? 0), 0);
+        const removed = entries.reduce((sum, e) => sum + (e.removed_lines ?? 0), 0);
+        setRunChangesSummary({ files: entries.length, added, removed });
+      })
+      .catch(() => { if (!cancelled) setRunChangesSummary(null); });
+    return () => { cancelled = true; };
+  }, [isChildRun, runId, coordRunStatus]);
+
+  // Plan chip count = number of planned subtasks in the work plan (real, from the graph descriptor).
+  const planItemCount = useMemo(
+    () => displayNodes.filter((n) => n.type === 'subtask').length,
+    [displayNodes],
+  );
+
+  // Run-wide summary chips pinned just above the composer (coordinator scope only). Each chip is
+  // shown only when its data exists, and opens the matching run-level SlidePanel overlay. Per-subtask
+  // changes remain reachable via the Activity | Changes segmented control (not these chips).
+  const runSummaryChips = useMemo<ReactNode>(() => {
+    if (isChildRun) return null;
+    const chips: ReactNode[] = [];
+    if (runChangesSummary) {
+      // One "Changes" chip — the run's collective integration diff. Files count + the +A −R delta
+      // both derive from the same assembly diff, so we don't split into a duplicate "Artifacts" chip
+      // that opens the same panel with a misleading label.
+      chips.push(
+        <button
+          key="changes"
+          type="button"
+          className={styles.runChip}
+          onClick={() => setArtifactsPanelOpen(true)}
+          data-testid="run-summary-chip-changes"
+          title="Review the collective integration diff for this run"
+        >
+          <span className={styles.runChipLabel}>Changes</span>
+          <span className={styles.runChipCount}>
+            {`${runChangesSummary.files.toLocaleString()} ${runChangesSummary.files === 1 ? 'file' : 'files'}`}
+          </span>
+          <span className={styles.runChipAdded}>+{runChangesSummary.added.toLocaleString()}</span>
+          <span className={styles.runChipRemoved}>&minus;{runChangesSummary.removed.toLocaleString()}</span>
+        </button>,
+      );
+    }
+    if (planItemCount > 0) {
+      chips.push(
+        <button
+          key="plan"
+          type="button"
+          className={styles.runChip}
+          onClick={() => setPlanPanelOpen(true)}
+          data-testid="run-summary-chip-plan"
+          title="Open the outcome plan"
+        >
+          <span className={styles.runChipLabel}>Plan</span>
+          <span className={styles.runChipCount}>{planItemCount}</span>
+        </button>,
+      );
+    }
+    return chips.length > 0 ? <>{chips}</> : null;
+  }, [isChildRun, runChangesSummary, planItemCount, styles]);
 
   const primaryAction = reviewActionable
     ? {
         label: 'Review changes',
         icon: <DocumentRegular />,
         disabled: false,
-        onClick: () => setCenterTab('artifacts'),
+        onClick: () => setArtifactsPanelOpen(true),
         testId: 'coordinator-review-changes',
       }
     : latestOutcomePlanEvent && !specConfirmed
@@ -3031,16 +3127,10 @@ export function CoordinatorRunPage() {
           label: 'Review outcome plan',
           icon: <DocumentRegular />,
           disabled: false,
-          onClick: () => setCenterTab('plan'),
+          onClick: () => setPlanPanelOpen(true),
           testId: 'coordinator-review-outcome-plan',
         }
-      : {
-          label: 'Message coordinator',
-          icon: <ChatRegular />,
-          disabled: !coordActive,
-          onClick: focusSelectedComposer,
-          testId: 'open-steer-panel',
-        };
+      : null;
 
   const handleAssemblyApproval = useCallback(async (decision: 'approve' | 'decline') => {
     if (!runId) return;
@@ -3062,14 +3152,14 @@ export function CoordinatorRunPage() {
         title: 'Outcome plan',
         type: latestOutcomePlanEvent || specConfirmed ? 'Review artifact' : 'Pending artifact',
         icon: <DocumentRegular />,
-        onOpen: () => setCenterTab('plan'),
+        onOpen: () => setPlanPanelOpen(true),
       },
       {
         id: 'assembly-artifacts',
         title: 'Assembly artifacts',
         type: reviewActionable ? 'Review gate' : 'Files',
         icon: <FolderRegular />,
-        onOpen: () => setCenterTab('artifacts'),
+        onOpen: () => setArtifactsPanelOpen(true),
       },
     ];
   }, [isChildRun, latestOutcomePlanEvent, reviewActionable, specConfirmed]);
@@ -3127,18 +3217,26 @@ export function CoordinatorRunPage() {
   const approvalSteps = useMemo<AgentStep[]>(() => reviewActionable
     ? [{
         id: 'assembly-review',
-        title: 'Assembly review gate',
-        body: 'Review the integration diff and decide whether the coordinator may continue.',
+        title: 'Human review',
+        statusBadge: 'Run-level',
+        body: 'Review the assembled result and the integration diff, then decide whether to merge and finalize this run.',
         status: 'warning',
         needsInput: true,
-        riskText: 'Approve to continue merge and scribe, or deny to decline the assembly.',
-        disclaimer: 'Request changes remains available from the Artifacts tab.',
-        approveLabel: 'Approve assembly',
-        denyLabel: 'Decline assembly',
+        riskText: 'Approve to merge and finalize (Merge \u2192 Scribe), or decline to send it back.',
+        disclaimer: 'You can request changes from the Artifacts tab.',
+        approveLabel: 'Approve & merge',
+        denyLabel: 'Decline',
         artifacts: assemblyArtifacts,
         defaultOpen: true,
       }]
     : [], [reviewActionable, assemblyArtifacts]);
+
+  // ---------------------------------------------------------------------------
+  // Messages — the intent-grouped Timeline now lives inside AgentSessionPanel,
+  // which owns the scope-aware event stream (coordinator root vs. selected child),
+  // the composer/steering, approvals and Changes/Files. The page no longer builds
+  // its own timeline model.
+  // ---------------------------------------------------------------------------
 
   const graphEmptyState = graphEmptyCopy(isConnecting, noWorkPlan, graphError, viewState);
   const topologySelectionCopy = selectedSessionItem
@@ -3279,13 +3377,17 @@ export function CoordinatorRunPage() {
     const color = semanticStateColorForStatus(item.status);
     const statusLabel = runTreeStatusLabel(item.status, item.nodeId === 'outcome-plan' ? outcomePlanConfirmedBy : undefined);
     const selected = item.nodeId === activePanelNodeId;
-    // Root-aware fallback: the coordinator/root node is "Coordinator"; a child without an
-    // agentName is an unassigned agent (or falls back to its task label), never "Coordinator".
+    // Task-first layout: PRIMARY = task title (root/coordinator = "Coordinator").
+    // SECONDARY = "{statusLabel} · {agentName} ({role})". Agent identity lives only
+    // in the secondary line — no role pill, no "Unassigned agent" bold fallback.
     const isRootNode = item.nodeId === defaultSessionNodeId;
-    const agentDisplay = isRootNode
-      ? 'Coordinator'
-      : (item.agentName ?? (item.agentRole ? 'Unassigned agent' : item.label));
-    const roleText = item.agentRole;
+    const primaryText = isRootNode ? 'Coordinator' : item.label;
+    const identityName = isRootNode ? 'Coordinator' : item.agentName;
+    const identityRole = isRootNode ? (item.agentRole ?? 'Coordinator') : item.agentRole;
+    const identityText = identityName
+      ? (identityRole ? `${identityName} (${identityRole})` : identityName)
+      : (identityRole ?? '');
+    const avatarName = identityName ?? item.agentRole ?? item.label;
     const layout = (
       <TreeItemLayout
         iconBefore={(
@@ -3301,21 +3403,20 @@ export function CoordinatorRunPage() {
         )}
       >
         <span className={styles.treeNode}>
-          <AgentAvatar name={agentDisplay} size={22} circle />
+          <AgentAvatar name={avatarName} size={22} circle />
           <span className={styles.treeText}>
-            <span className={styles.treeAgentRow}>
-              <span className={styles.treeAgentName}>{agentDisplay}</span>
-              {roleText ? <span className={styles.treeRolePill}>{roleText}</span> : null}
-            </span>
+            <span className={styles.treePrimary} title={primaryText}>{primaryText}</span>
             <span className={styles.treeMetaRow}>
               <span
-                className={mergeClasses(styles.treeStatusPill, stateTextClass(color))}
+                className={mergeClasses(styles.treeStatusText, stateTextClass(color))}
                 data-state-color={color}
               >
                 <span className={styles.treeStatusDot} aria-hidden="true" />
                 {statusLabel}
               </span>
-              <span className={styles.treeTaskLabel} title={item.label}>{item.label}</span>
+              {identityText ? (
+                <span className={styles.treeIdentity} title={identityText}>{`\u00b7 ${identityText}`}</span>
+              ) : null}
             </span>
           </span>
         </span>
@@ -3350,7 +3451,6 @@ export function CoordinatorRunPage() {
   const stopHint = viewState.canStop ? 'Stop cancels run' : 'Stop while running';
   const retryAriaLabel = isRetryable ? 'Retry failed run' : `Retry failed unavailable: ${retryHint}`;
   const stopAriaLabel = viewState.canStop ? 'Stop run' : `Stop run unavailable: ${stopHint}`;
-  const effectiveCenterTab: 'chat' | 'plan' | 'artifacts' = isChildRun ? 'chat' : centerTab;
 
   if (!projectId || !runId) {
     return <Text>Invalid route parameters.</Text>;
@@ -3483,7 +3583,7 @@ export function CoordinatorRunPage() {
                 </Popover>
               </div>
               <div className={styles.compactChromeActions}>
-                {!runChromeExpanded && (
+                {primaryAction && (
                   <Button
                     appearance="primary"
                     size="small"
@@ -3496,13 +3596,52 @@ export function CoordinatorRunPage() {
                   </Button>
                 )}
                 <Button
+                  appearance={isRetryable ? 'secondary' : 'subtle'}
+                  size="small"
+                  icon={<ArrowRepeatAllRegular />}
+                  disabled={!isRetryable || retrying}
+                  onClick={() => void handleRetry()}
+                  data-testid="coordinator-retry-button"
+                  aria-label={retryAriaLabel}
+                  title={retryHint}
+                />
+                <Button
+                  appearance={viewState.canStop ? 'secondary' : 'subtle'}
+                  size="small"
+                  icon={stopping ? <Spinner size="extra-tiny" /> : <DismissRegular />}
+                  disabled={!viewState.canStop || stopping}
+                  onClick={() => void handleStopRun()}
+                  data-testid="coordinator-stop-button"
+                  aria-label={stopAriaLabel}
+                  title={stopHint}
+                />
+                <Button
+                  appearance="transparent"
+                  size="small"
+                  icon={<FlowchartRegular />}
+                  onClick={() => setTopologyPanelOpen(true)}
+                  data-testid="open-topology-panel"
+                  aria-label="Topology"
+                  title="Topology"
+                />
+                {isKubernetesSandbox && (
+                  <Button
+                    appearance="transparent"
+                    size="small"
+                    icon={<OpenRegular />}
+                    onClick={() => { setPreviewDialogOpen(true); setPreviewError(undefined); }}
+                    aria-label="Preview Sandbox"
+                    title="Preview Sandbox"
+                  />
+                )}
+                <Button
                   appearance="subtle"
                   size="small"
-                  aria-expanded={runChromeExpanded}
-                  onClick={() => setRunChromeExpanded((value) => !value)}
+                  aria-expanded={runDetailsOpen}
+                  onClick={() => setRunDetailsOpen((value) => !value)}
                   data-testid="run-chrome-toggle"
                 >
-                  {runChromeExpanded ? 'Collapse controls' : 'Show controls'}
+                  Details
                 </Button>
               </div>
             </div>
@@ -3520,7 +3659,7 @@ export function CoordinatorRunPage() {
               <span className={styles.executionSeparator} aria-hidden="true">·</span>
               <span className={styles.executionReason} title={executionContextReason}>{executionReasonPrefix}: {executionContextReason}</span>
             </div>
-            {runChromeExpanded && <div className={styles.metaRail} aria-label="Run metadata" data-testid="run-metadata">
+            {runDetailsOpen && <div className={styles.metaRail} aria-label="Run metadata" data-testid="run-metadata">
               <span className={styles.metaItem} title={runId}>
                 <span className={styles.metaItemStrong}>Run</span>
                 <span className={styles.metaValue}>{shortId}</span>
@@ -3574,7 +3713,7 @@ export function CoordinatorRunPage() {
               <span className={styles.metaSeparator} aria-hidden="true">·</span>
               <span className={styles.metaItem}>{formatPhaseUpdated(orch.updatedAt)}</span>
             </div>}
-            {runChromeExpanded && (
+            {runDetailsOpen && (
               <details className={styles.statusDetails} data-testid="run-status-details">
                 <summary className={styles.statusDetailsSummary}>Status details</summary>
                 <div className={styles.statusDetailsBody}>
@@ -3588,99 +3727,6 @@ export function CoordinatorRunPage() {
               </details>
             )}
           </div>
-
-          {runChromeExpanded && (
-            <div className={styles.actionsArea} data-testid="run-actions-row">
-              <div
-                role="toolbar"
-                aria-label="Run actions"
-                className={styles.runToolbar}
-                style={{ display: 'flex', flexWrap: 'wrap', width: '100%', maxWidth: '100%', borderTopStyle: 'none' }}
-              >
-                <div className={styles.toolbarSection} role="group" aria-label="Primary next action">
-                  <span className={styles.toolbarLabel}>Next</span>
-                  <Button
-                    appearance="primary"
-                    size="small"
-                    icon={primaryAction.icon}
-                    disabled={primaryAction.disabled}
-                    onClick={primaryAction.onClick}
-                    data-testid={primaryAction.testId}
-                  >
-                    {primaryAction.label}
-                  </Button>
-                </div>
-                <div className={styles.toolbarSection} role="group" aria-label="Risk controls">
-                  <span className={styles.toolbarLabel}>Risk</span>
-                  <div className={styles.riskToggleRow}>
-                    <AutomationToggle
-                      label="Autopilot"
-                      info={AUTOMATION_HELP.autopilotOrchestration}
-                      checked={autopilot}
-                      disabled={autopilotBusy || !viewState.canToggleAutomation}
-                      onChange={(checked) => toggleAutopilot(checked)}
-                    />
-                    <AutomationToggle
-                      label="Auto-approve safe tools"
-                      info={AUTOMATION_HELP.autoApproveOrchestration}
-                      checked={autoApprove}
-                      disabled={autoApproveBusy || !viewState.canToggleAutomation}
-                      onChange={(checked) => toggleAutoApprove(checked)}
-                    />
-                  </div>
-                </div>
-                <span className={styles.toolbarDivider} aria-hidden="true" />
-                <div className={styles.toolbarSection} role="group" aria-label="Run safety controls">
-                  <span className={styles.toolbarLabel}>Safety</span>
-                  <Button
-                    appearance={isRetryable ? 'secondary' : 'subtle'}
-                    size="small"
-                    icon={<ArrowRepeatAllRegular />}
-                    disabled={!isRetryable || retrying}
-                    onClick={() => void handleRetry()}
-                    data-testid="coordinator-retry-button"
-                    aria-label={retryAriaLabel}
-                    title={retryHint}
-                  >
-                    Retry failed
-                  </Button>
-                  <Button
-                    appearance={viewState.canStop ? 'secondary' : 'subtle'}
-                    size="small"
-                    icon={stopping ? <Spinner size="extra-tiny" /> : <DismissRegular />}
-                    disabled={!viewState.canStop || stopping}
-                    onClick={() => void handleStopRun()}
-                    aria-label={stopAriaLabel}
-                    title={stopHint}
-                  >
-                    Stop run
-                  </Button>
-                </div>
-                <span className={styles.toolbarDivider} aria-hidden="true" />
-                <div className={styles.toolbarSection} role="group" aria-label="Views">
-                  <span className={styles.toolbarLabel}>Views</span>
-                  <Button appearance="transparent" size="small" icon={<FlowchartRegular />} onClick={() => setTopologyPanelOpen(true)} data-testid="open-topology-panel">
-                    Topology
-                  </Button>
-                  {!isChildRun && (
-                    <Button appearance="transparent" size="small" icon={<DocumentRegular />} onClick={() => setCenterTab('plan')} data-testid="open-plan-panel">
-                      Plan
-                    </Button>
-                  )}
-                  {!isChildRun && (
-                    <Button appearance="transparent" size="small" icon={<FolderRegular />} onClick={() => setCenterTab('artifacts')} data-testid="open-artifacts-panel">
-                      Artifacts
-                    </Button>
-                  )}
-                  {isKubernetesSandbox && (
-                    <Button appearance="transparent" size="small" icon={<OpenRegular />} onClick={() => { setPreviewDialogOpen(true); setPreviewError(undefined); }}>
-                      Preview Sandbox
-                    </Button>
-                  )}
-                </div>
-              </div>
-            </div>
-          )}
         </div>
 
         <div className={styles.bodyGrid}>
@@ -3707,23 +3753,7 @@ export function CoordinatorRunPage() {
 
           <section className={styles.centerZone} aria-label="Selected task">
             <div className={styles.centerHeader}>
-              <div className={styles.centerHeaderTitles}>
-                <TitleText>Selected task</TitleText>
-                <Text className={styles.scopeHint}>
-                  {selectedSessionItem ? `Scope: ${selectedSessionItem.label}` : 'Chat with the Coordinator'}
-                </Text>
-              </div>
               <div className={styles.centerTabRow}>
-                <TabList
-                  selectedValue={effectiveCenterTab}
-                  onTabSelect={(_, data) => setCenterTab(data.value === 'plan' ? 'plan' : data.value === 'artifacts' ? 'artifacts' : 'chat')}
-                  aria-label="Selected task views"
-                  size="small"
-                >
-                  <Tab value="chat" icon={<ChatRegular />}>Chat</Tab>
-                  {!isChildRun && <Tab value="plan" icon={<DocumentRegular />}>Plan</Tab>}
-                  {!isChildRun && <Tab value="artifacts" icon={<FolderRegular />}>Artifacts</Tab>}
-                </TabList>
                 {hasGraph && (
                   <div
                     role="button"
@@ -3803,7 +3833,10 @@ export function CoordinatorRunPage() {
             )}
 
             <div className={styles.centerTabBody}>
-              <div hidden={effectiveCenterTab !== 'chat'} className={styles.readoutBody}>
+              {/* Messages — the single conversation surface. AgentSessionPanel renders the
+                  intent-driven Timeline (ChainOfThought steps), the composer/steering with
+                  Autopilot/Auto-approve toggles, in-thread approvals and per-scope Changes. */}
+              <div className={styles.readoutBody}>
                 <AgentSessionPanel
                   variant="docked"
                   open={sessionPanelOpen && Boolean(activePanelNodeId)}
@@ -3818,27 +3851,18 @@ export function CoordinatorRunPage() {
                   composerFocusSignal={composerFocusSignal}
                   onOutcomePlanClarify={() => setOutcomePlanClarifying(true)}
                   artifactAdapter={coordAdapter}
+                  runChips={runSummaryChips}
+                  automation={{
+                    autopilot,
+                    autoApprove,
+                    autopilotBusy,
+                    autoApproveBusy,
+                    canToggle: viewState.canToggleAutomation,
+                    onToggleAutopilot: () => toggleAutopilot(!autopilot),
+                    onToggleAutoApprove: () => toggleAutoApprove(!autoApprove),
+                  }}
                 />
               </div>
-              {!isChildRun && effectiveCenterTab === 'plan' && (
-                <div className={styles.tabPanelCard}>
-                  <OutcomePlanPanel
-                    runId={runId}
-                    projectId={projectId ?? undefined}
-                    events={events}
-                    streamStatus={streamStatus}
-                    runStatus={runLevelStatus}
-                    onCollapse={() => setCenterTab('chat')}
-                    onReconnect={reconnectStream}
-                    onClarifyPlan={focusOutcomePlanComposer}
-                  />
-                </div>
-              )}
-              {!isChildRun && effectiveCenterTab === 'artifacts' && runId && (
-                <div className={styles.tabPanelCard}>
-                  <CoordinatorArtifactsPanel runId={runId} runStatus={coordRunStatus} adapter={coordAdapter} />
-                </div>
-              )}
             </div>
           </section>
         </div>
@@ -3853,6 +3877,37 @@ export function CoordinatorRunPage() {
       >
         {topologyInspectorContent}
       </SlidePanel>
+
+      {!isChildRun && (
+        <SlidePanel
+          open={planPanelOpen}
+          onClose={() => setPlanPanelOpen(false)}
+          title="Outcome plan"
+          width="min(880px, 96vw)"
+        >
+          <OutcomePlanPanel
+            runId={runId}
+            projectId={projectId ?? undefined}
+            events={events}
+            streamStatus={streamStatus}
+            runStatus={runLevelStatus}
+            onCollapse={() => setPlanPanelOpen(false)}
+            onReconnect={reconnectStream}
+            onClarifyPlan={() => { setPlanPanelOpen(false); focusOutcomePlanComposer(); }}
+          />
+        </SlidePanel>
+      )}
+
+      {!isChildRun && runId && (
+        <SlidePanel
+          open={artifactsPanelOpen}
+          onClose={() => setArtifactsPanelOpen(false)}
+          title="Artifacts"
+          width="min(960px, 96vw)"
+        >
+          <CoordinatorArtifactsPanel runId={runId} runStatus={coordRunStatus} adapter={coordAdapter} />
+        </SlidePanel>
+      )}
 
       {/* Sandbox preview port-forward dialog */}
       <Dialog open={previewDialogOpen} onOpenChange={(_, d) => { if (!d.open) setPreviewDialogOpen(false); }}>

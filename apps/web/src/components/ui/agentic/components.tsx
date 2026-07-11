@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 import { useState } from 'react';
 import {
   Button,
+  Spinner,
   Text,
   mergeClasses,
 } from '@fluentui/react-components';
@@ -106,7 +107,7 @@ function StatusIcon({ step, styles }: { step: AgentStep; styles: ReturnType<type
     return <ErrorCircleRegular className={styles.statusDanger} aria-label="Blocked" />;
   }
   if (step.status === 'running') {
-    return <span className={styles.runningDot} aria-label="Running" />;
+    return <Spinner size="extra-tiny" aria-label="Running" />;
   }
   return <CircleRegular className={styles.statusPending} aria-label="Pending" />;
 }
@@ -124,15 +125,18 @@ export interface AgentStepProps {
   step: AgentStep;
   onApprove?: (stepId: string) => void;
   onDeny?: (stepId: string) => void;
+  /** When true, forces the step (and its descendants) open regardless of local toggle state. */
+  forceOpen?: boolean;
 }
 
-export function AgentStepItem({ step, onApprove, onDeny }: AgentStepProps) {
+export function AgentStepItem({ step, onApprove, onDeny, forceOpen = false }: AgentStepProps) {
   const styles = useAgenticStyles();
   const autoOpen =
     step.defaultOpen !== undefined
       ? step.defaultOpen
       : step.needsInput === true || step.status === 'running';
   const [open, setOpen] = useState(autoOpen);
+  const isOpen = forceOpen || open;
   const hasChildren = Boolean(step.children && step.children.length > 0);
   const hasContent = Boolean(step.body || step.needsInput || (step.artifacts && step.artifacts.length > 0) || hasChildren);
   const headerId = `agent-step-header-${step.id}`;
@@ -148,7 +152,7 @@ export function AgentStepItem({ step, onApprove, onDeny }: AgentStepProps) {
         id={headerId}
         role={hasContent ? 'button' : undefined}
         tabIndex={hasContent ? 0 : undefined}
-        aria-expanded={hasContent ? open : undefined}
+        aria-expanded={hasContent ? isOpen : undefined}
         aria-controls={hasContent ? panelId : undefined}
         onClick={() => hasContent && setOpen((v) => !v)}
         onKeyDown={(e) => {
@@ -158,19 +162,24 @@ export function AgentStepItem({ step, onApprove, onDeny }: AgentStepProps) {
           }
         }}
       >
-        <Text className={styles.stepTitle}>{step.title}</Text>
+        <span className={styles.stepTitleWrap}>
+          <Text className={styles.stepTitle}>{step.title}</Text>
+          {step.statusBadge && (
+            <span className={styles.stepBadge}>{step.statusBadge}</span>
+          )}
+        </span>
         <Text className={styles.stepStatusLabel} aria-live="polite">
           {statusLabel(step)}
         </Text>
         {hasContent && (
           <ChevronRightRegular
-            className={mergeClasses(styles.stepChevron, open && styles.stepChevronOpen)}
+            className={mergeClasses(styles.stepChevron, isOpen && styles.stepChevronOpen)}
             aria-hidden="true"
           />
         )}
       </div>
 
-      {hasContent && open && (
+      {hasContent && isOpen && (
         <div id={panelId} className={styles.stepPanel} role="region" aria-labelledby={headerId}>
           {step.body && !step.needsInput && (
             <Text className={styles.stepBody}>{step.body}</Text>
@@ -203,6 +212,7 @@ export function AgentStepItem({ step, onApprove, onDeny }: AgentStepProps) {
                   step={child}
                   onApprove={onApprove}
                   onDeny={onDeny}
+                  forceOpen={forceOpen}
                 />
               ))}
             </ol>
@@ -220,10 +230,11 @@ export interface AgentStepListProps {
   onApprove?: (stepId: string) => void;
   onDeny?: (stepId: string) => void;
   className?: string;
+  forceOpen?: boolean;
   'aria-label'?: string;
 }
 
-export function AgentStepList({ steps, onApprove, onDeny, className, 'aria-label': ariaLabel }: AgentStepListProps) {
+export function AgentStepList({ steps, onApprove, onDeny, className, forceOpen = false, 'aria-label': ariaLabel }: AgentStepListProps) {
   const styles = useAgenticStyles();
   return (
     <ol
@@ -236,9 +247,103 @@ export function AgentStepList({ steps, onApprove, onDeny, className, 'aria-label
           step={step}
           onApprove={onApprove}
           onDeny={onDeny}
+          forceOpen={forceOpen}
         />
       ))}
     </ol>
+  );
+}
+
+// ─── AgentActivitySession ─────────────────────────────────────────────────────
+// A "Run activity" panel: a titled, collapsible session header + an
+// "{N} actions completed · Show all" summary line above a nested AgentStepList.
+
+function countCompleted(steps: AgentStep[]): number {
+  let total = 0;
+  for (const step of steps) {
+    if (step.status === 'complete') total += 1;
+    if (step.children && step.children.length > 0) total += countCompleted(step.children);
+  }
+  return total;
+}
+
+export interface AgentActivitySessionProps {
+  steps: AgentStep[];
+  title?: ReactNode;
+  /** Muted subline, e.g. "42 updates captured". */
+  updatesLabel?: ReactNode;
+  /** Overrides the auto-derived completed-actions count in the summary line. */
+  completedCount?: number;
+  onApprove?: (stepId: string) => void;
+  onDeny?: (stepId: string) => void;
+  defaultCollapsed?: boolean;
+  className?: string;
+  'aria-label'?: string;
+}
+
+export function AgentActivitySession({
+  steps,
+  title = 'Run activity',
+  updatesLabel,
+  completedCount,
+  onApprove,
+  onDeny,
+  defaultCollapsed = false,
+  className,
+  'aria-label': ariaLabel,
+}: AgentActivitySessionProps) {
+  const styles = useAgenticStyles();
+  const [collapsed, setCollapsed] = useState(defaultCollapsed);
+  const [showAll, setShowAll] = useState(false);
+  const completed = completedCount ?? countCompleted(steps);
+
+  return (
+    <section className={mergeClasses(styles.activitySession, className)} aria-label={ariaLabel ?? 'Run activity'}>
+      <header className={styles.activityHeader}>
+        <div className={styles.activityHeaderTitles}>
+          <Text className={styles.activityTitle}>{title}</Text>
+          {updatesLabel && <Text className={styles.activitySubline}>{updatesLabel}</Text>}
+        </div>
+        <Button
+          appearance="subtle"
+          size="small"
+          onClick={() => setCollapsed((v) => !v)}
+          aria-expanded={!collapsed}
+        >
+          {collapsed ? 'Show activity' : 'Hide activity'}
+        </Button>
+      </header>
+
+      {!collapsed && (
+        <>
+          <button
+            type="button"
+            className={styles.activitySummary}
+            onClick={() => setShowAll((v) => !v)}
+            aria-expanded={showAll}
+          >
+            <Text className={styles.activitySummaryText}>
+              {completed} action{completed === 1 ? '' : 's'} completed
+            </Text>
+            <span className={styles.activitySummaryDivider} aria-hidden="true">·</span>
+            <span className={styles.activitySummaryAction}>
+              {showAll ? 'Collapse all' : 'Show all'}
+            </span>
+            <ChevronRightRegular
+              className={mergeClasses(styles.stepChevron, showAll && styles.stepChevronOpen)}
+              aria-hidden="true"
+            />
+          </button>
+          <AgentStepList
+            steps={steps}
+            onApprove={onApprove}
+            onDeny={onDeny}
+            forceOpen={showAll}
+            aria-label={ariaLabel ?? 'Run activity steps'}
+          />
+        </>
+      )}
+    </section>
   );
 }
 

@@ -432,8 +432,8 @@ describe('ArtifactBrowser', () => {
     const adapter: ArtifactBrowserAdapter = {
       getFiles: vi.fn().mockResolvedValue([]),
       approve,
-      approveLabel: 'Approve assembly',
-      approveAriaLabel: 'Approve assembly review and continue merge',
+      approveLabel: 'Approve & merge',
+      approveAriaLabel: 'Approve human review and continue to merge',
       approveAcceptedStatus: 'review_accepted',
     };
 
@@ -449,7 +449,7 @@ describe('ArtifactBrowser', () => {
 
     render(<Wrapper><Harness /></Wrapper>);
 
-    await userEvent.click(screen.getByText('Approve assembly'));
+    await userEvent.click(screen.getByText('Approve & merge'));
 
     await waitFor(() => {
       expect(approve).toHaveBeenCalledWith('coord-run-1');

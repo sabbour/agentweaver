@@ -18,6 +18,11 @@ export interface AgentStep {
   title: ReactNode;
   body?: ReactNode;
   status?: AgentStepStatus;
+  /**
+   * Small muted pill rendered next to the title — e.g. an agent name/role
+   * ("Neo · Researcher") or a resolution note ("Approved by user").
+   */
+  statusBadge?: ReactNode;
   /** When true, renders an inline ApprovalGate showing riskText + Approve / Deny. */
   needsInput?: boolean;
   /** Plain-language description of what will happen if approved. */

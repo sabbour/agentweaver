@@ -128,6 +128,26 @@ export const useAgenticStyles = makeStyles({
     lineHeight: tokens.lineHeightBase300,
     color: tokens.colorNeutralForeground1,
   },
+  stepTitleWrap: {
+    flex: 1,
+    minWidth: 0,
+    display: 'flex',
+    alignItems: 'baseline',
+    flexWrap: 'wrap',
+    gap: tokens.spacingHorizontalXS,
+  },
+  stepBadge: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    padding: `0 ${tokens.spacingHorizontalXS}`,
+    height: '18px',
+    borderRadius: tokens.borderRadiusSmall,
+    backgroundColor: tokens.colorNeutralBackground3,
+    color: tokens.colorNeutralForeground3,
+    fontSize: tokens.fontSizeBase100,
+    lineHeight: tokens.lineHeightBase100,
+    whiteSpace: 'nowrap',
+  },
   stepStatusLabel: {
     fontSize: tokens.fontSizeBase100,
     color: tokens.colorNeutralForeground3,
@@ -212,8 +232,7 @@ export const useAgenticStyles = makeStyles({
   },
 
   // ToolCallRow
-  toolCallRow: {
-    display: 'flex',
+  toolCallRow: {    display: 'flex',
     flexDirection: 'column',
     gap: tokens.spacingVerticalXS,
     padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalS}`,
@@ -247,5 +266,58 @@ export const useAgenticStyles = makeStyles({
     flexWrap: 'wrap',
     gap: tokens.spacingHorizontalXS,
     paddingLeft: tokens.spacingHorizontalXL,
+  },
+
+  // AgentActivitySession — "Run activity" panel
+  activitySession: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalS,
+  },
+  activityHeader: {
+    display: 'flex',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: tokens.spacingHorizontalM,
+  },
+  activityHeaderTitles: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalXXS,
+    minWidth: 0,
+  },
+  activityTitle: {
+    fontSize: tokens.fontSizeBase400,
+    fontWeight: tokens.fontWeightSemibold,
+    lineHeight: tokens.lineHeightBase400,
+    color: tokens.colorNeutralForeground1,
+  },
+  activitySubline: {
+    fontSize: tokens.fontSizeBase200,
+    color: tokens.colorNeutralForeground3,
+  },
+  activitySummary: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    gap: tokens.spacingHorizontalXS,
+    border: 'none',
+    backgroundColor: 'transparent',
+    padding: `${tokens.spacingVerticalXXS} 0`,
+    cursor: 'pointer',
+    color: tokens.colorNeutralForeground2,
+    fontFamily: tokens.fontFamilyBase,
+  },
+  activitySummaryText: {
+    fontSize: tokens.fontSizeBase200,
+    fontWeight: tokens.fontWeightSemibold,
+    color: tokens.colorNeutralForeground2,
+  },
+  activitySummaryDivider: {
+    color: tokens.colorNeutralForeground4,
+  },
+  activitySummaryAction: {
+    fontSize: tokens.fontSizeBase200,
+    color: tokens.colorNeutralForeground3,
   },
 });
