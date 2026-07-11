@@ -1,29 +1,30 @@
 import {
   apiClient } from '../../api/apiClient';
 import { ApiError } from '../../api/client';
-import { Badge,
-  Button,
-  Field,
-  Input,
-  Menu,
-  MenuItem,
-  MenuList,
-  MenuPopover,
-  MenuTrigger,
-  StatusIconText,
-  Text,
-  Textarea,
-  } from '../../copilot-fluent-system';
-import { Caption1,
-  makeStyles,
-  mergeClasses,
-  tokens,
-} from '../../copilot-fluent-system';
-import { ArchiveRegular, CheckmarkRegular, DismissRegular, EditRegular, FlowRegular } from '../../copilot-fluent-system';
+import { Badge, Button, Caption1, Field, Input, makeStyles, Menu, MenuItem, MenuList, MenuPopover, MenuTrigger, mergeClasses, Text, Textarea, tokens } from '@fluentui/react-components';
+import { ArchiveRegular, CheckmarkRegular, DismissRegular, EditRegular, FlowRegular } from '@fluentui/react-icons';
 import { useState } from 'react';
 import type { TaskCardDto, WorkflowSummaryDto } from '../../api/types';
 const useStyles = makeStyles({
   card: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalXS,
+    backgroundColor: tokens.colorNeutralBackground1,
+    borderRadius: tokens.borderRadiusMedium,
+    borderTopWidth: '1px',
+    borderRightWidth: '1px',
+    borderBottomWidth: '1px',
+    borderLeftWidth: '1px',
+    borderTopStyle: 'solid',
+    borderRightStyle: 'solid',
+    borderBottomStyle: 'solid',
+    borderLeftStyle: 'solid',
+    borderTopColor: tokens.colorNeutralStroke2,
+    borderRightColor: tokens.colorNeutralStroke2,
+    borderBottomColor: tokens.colorNeutralStroke2,
+    borderLeftColor: tokens.colorNeutralStroke2,
+    padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM}`,
     cursor: 'grab',
     transitionProperty: 'border-color, box-shadow, background-color',
     transitionDuration: tokens.durationFast,
@@ -44,7 +45,10 @@ const useStyles = makeStyles({
     opacity: 0.5,
   },
   header: {
+    display: 'flex',
+    flexDirection: 'row',
     alignItems: 'flex-start',
+    gap: tokens.spacingHorizontalXS,
     justifyContent: 'space-between',
   },
   title: {
@@ -72,6 +76,11 @@ const useStyles = makeStyles({
     fontVariantNumeric: 'tabular-nums',
   },
   metadataRow: {
+    display: 'flex',
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXS,
   },
   metadataDivider: {
     color: tokens.colorNeutralForeground4,
@@ -80,6 +89,10 @@ const useStyles = makeStyles({
   },
   cardActions: {
     flexShrink: 0,
+    display: 'flex',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXS,
   },
   workflowMenuItemTitle: {
     display: 'inline-flex',
@@ -87,9 +100,16 @@ const useStyles = makeStyles({
     gap: tokens.spacingHorizontalXS,
   },
   editFields: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalS,
   },
   editActions: {
+    display: 'flex',
+    flexDirection: 'row',
+    alignItems: 'center',
     justifyContent: 'flex-end',
+    gap: tokens.spacingHorizontalS,
   },
   error: {
     color: tokens.colorPaletteRedForeground1,
@@ -120,7 +140,7 @@ export function TaskCard({ card, columnId, projectId, onMutated, onDragStartTask
   const [notice, setNotice] = useState<string | null>(null);
   const queueLabel = card.state === 'ready' ? 'Ready for pickup' : 'Backlog intake';
   const capturedAt = new Date(card.created_at).toLocaleDateString();
-  const cardClassName = mergeClasses('azf-surface azf-surface--panel azf-surface--padding-compact azf-stack azf-gap-xs', styles.card);
+  const cardClassName = styles.card;
 
   const reportError = (e: unknown) => {
     setError(e instanceof ApiError ? `API error ${e.status}: ${e.body}` : e instanceof Error ? e.message : String(e));
@@ -195,7 +215,7 @@ export function TaskCard({ card, columnId, projectId, onMutated, onDragStartTask
   if (editing) {
     return (
       <div className={cardClassName}>
-        <div className={mergeClasses('azf-stack azf-gap-s', styles.editFields)}>
+        <div className={styles.editFields}>
           <Field label="Title" required>
             <Input value={title} onChange={(_, v) => setTitle(v.value)} disabled={busy} />
           </Field>
@@ -203,7 +223,7 @@ export function TaskCard({ card, columnId, projectId, onMutated, onDragStartTask
             <Textarea value={description} onChange={(_, v) => setDescription(v.value)} disabled={busy} rows={3} />
           </Field>
           {error && <Text className={styles.error}>{error}</Text>}
-          <div className={mergeClasses('azf-row azf-gap-s', styles.editActions)}>
+          <div className={styles.editActions}>
             <Button
               appearance="secondary"
               size="small"
@@ -235,9 +255,9 @@ export function TaskCard({ card, columnId, projectId, onMutated, onDragStartTask
       onDragEnd={() => onDragEndTask()}
       data-testid={`task-card-${card.task_id}`}
     >
-      <div className={mergeClasses('azf-row azf-gap-xs', styles.header)}>
+      <div className={styles.header}>
         <Text className={styles.title}>{card.title}</Text>
-        <div className={mergeClasses('azf-row azf-gap-xs', styles.cardActions)}>
+        <div className={styles.cardActions}>
           <Menu onOpenChange={(_, d) => { if (d.open) void loadWorkflows(); }}>
             <MenuTrigger disableButtonEnhancement>
               <Button appearance="subtle" size="small" icon={<FlowRegular />} aria-label="Set workflow" disabled={busy} />
@@ -249,7 +269,7 @@ export function TaskCard({ card, columnId, projectId, onMutated, onDragStartTask
                   <MenuItem key={wf.id} onClick={() => void handleSetOverride(wf.id)}>
                     <span className={styles.workflowMenuItemTitle}>
                       <span>{wf.name ?? wf.id}</span>
-                      {wf.is_default && <Badge appearance="filled" color="brand">Active</Badge>}
+                      {wf.is_default && <Badge appearance="tint" color="subtle">Active</Badge>}
                     </span>
                   </MenuItem>
                 ))}
@@ -265,8 +285,8 @@ export function TaskCard({ card, columnId, projectId, onMutated, onDragStartTask
         </div>
       </div>
       {card.description && <Text className={styles.description}>{card.description}</Text>}
-      <div className={mergeClasses('azf-row azf-gap-xs azf-wrap', styles.metadataRow)}>
-        <StatusIconText status={card.state === 'ready' ? 'info' : 'neutral'}>{queueLabel}</StatusIconText>
+      <div className={styles.metadataRow}>
+        <Text className={styles.meta}>{queueLabel}</Text>
         <Caption1 className={styles.meta}>Captured by {card.captured_by}</Caption1>
         <Caption1 className={styles.metadataDivider}>·</Caption1>
         <Caption1 className={styles.meta}>{capturedAt}</Caption1>

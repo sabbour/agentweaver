@@ -2,20 +2,9 @@ import {
   apiClient } from '../../api/apiClient';
 import { useBoard } from '../../api/board';
 import { ApiError } from '../../api/client';
-import { AzureEmptyState,
-  AzureToolbar,
-  BladeHeader,
-  Button,
-  Dialog,
-  DialogActions,
-  DialogBody,
-  DialogContent,
-  DialogSurface,
-  DialogTitle,
-  MessageBar,
-  MessageBarBody,
-  Spinner,
-  } from '../../copilot-fluent-system';
+import { Button, Dialog, DialogActions, DialogBody, DialogContent, DialogSurface, DialogTitle, makeStyles, mergeClasses, MessageBar, MessageBarBody, Spinner, Text, tokens } from '@fluentui/react-components';
+import { ArrowImportRegular } from '@fluentui/react-icons';
+import { EmptyState } from '../ui';
 import { DecomposePreviewDialog } from '../DecomposePreviewDialog';
 import { WorkspaceFilePicker } from '../WorkspaceFilePicker';
 import { CaptureTaskForm } from './CaptureTaskForm';
@@ -25,20 +14,36 @@ import { KanbanColumn } from './KanbanColumn';
 import { PickupSettings } from './PickupSettings';
 import { useCtrlScrollZoom,
   ZoomControls } from './useCtrlScrollZoom';
-import { makeStyles,
-  mergeClasses,
-  tokens,
-} from '../../copilot-fluent-system';
-import { ArrowImportRegular } from '../../copilot-fluent-system';
 import { useCallback, useMemo, useState } from 'react';
 import type { ProposedBacklogItem } from '../../api/types';
 const useStyles = makeStyles({
+  boardRoot: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalM,
+  },
   intakeSection: {
     display: 'grid',
     gridTemplateColumns: 'minmax(0, 1fr) auto',
     alignItems: 'stretch',
     justifyContent: 'space-between',
     gap: tokens.spacingHorizontalM,
+    backgroundColor: tokens.colorNeutralBackground1,
+    borderRadius: tokens.borderRadiusMedium,
+    borderTopWidth: '1px',
+    borderRightWidth: '1px',
+    borderBottomWidth: '1px',
+    borderLeftWidth: '1px',
+    borderTopStyle: 'solid',
+    borderRightStyle: 'solid',
+    borderBottomStyle: 'solid',
+    borderLeftStyle: 'solid',
+    borderTopColor: tokens.colorNeutralStroke2,
+    borderRightColor: tokens.colorNeutralStroke2,
+    borderBottomColor: tokens.colorNeutralStroke2,
+    borderLeftColor: tokens.colorNeutralStroke2,
+    padding: `${tokens.spacingVerticalL} ${tokens.spacingHorizontalL}`,
+    boxShadow: tokens.shadow4,
     '@media (max-width: 900px)': {
       gridTemplateColumns: '1fr',
     },
@@ -53,25 +58,65 @@ const useStyles = makeStyles({
     },
   },
   intakeCopy: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalXS,
     paddingTop: tokens.spacingVerticalXS,
   },
   capture: {
     minWidth: '280px',
   },
   toolbarActions: {
+    display: 'flex',
+    flexDirection: 'row',
     flexWrap: 'wrap',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalS,
     justifyContent: 'flex-end',
   },
   workflowSection: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalS,
   },
   sectionHeader: {
+    display: 'flex',
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalM,
     justifyContent: 'space-between',
   },
   embeddedHeader: {
     flex: '1 1 auto',
     padding: 0,
   },
+  embeddedHeaderBlock: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalXS,
+  },
+  embeddedTitle: {
+    fontWeight: tokens.fontWeightSemibold,
+    fontSize: tokens.fontSizeBase400,
+    lineHeight: tokens.lineHeightBase400,
+  },
+  embeddedSubtitle: {
+    color: tokens.colorNeutralForeground2,
+    fontSize: tokens.fontSizeBase300,
+    lineHeight: tokens.lineHeightBase300,
+  },
+  workflowTitleBlock: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalXS,
+  },
   summaryStrip: {
+    display: 'flex',
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXS,
   },
   summaryButton: {
     minWidth: 'unset',
@@ -94,11 +139,11 @@ const useStyles = makeStyles({
   },
   summaryButtonInfo: {
     backgroundColor: tokens.colorNeutralBackground1,
-    borderTopColor: tokens.colorBrandStroke2,
-    borderRightColor: tokens.colorBrandStroke2,
-    borderBottomColor: tokens.colorBrandStroke2,
-    borderLeftColor: tokens.colorBrandStroke2,
-    color: tokens.colorBrandForeground1,
+    borderTopColor: tokens.colorNeutralStrokeAccessible,
+    borderRightColor: tokens.colorNeutralStrokeAccessible,
+    borderBottomColor: tokens.colorNeutralStrokeAccessible,
+    borderLeftColor: tokens.colorNeutralStrokeAccessible,
+    color: tokens.colorNeutralForeground1,
   },
   summaryButtonWarning: {
     backgroundColor: tokens.colorNeutralBackground1,
@@ -121,6 +166,21 @@ const useStyles = makeStyles({
     maxWidth: '72ch',
   },
   boardSurface: {
+    backgroundColor: tokens.colorNeutralBackground1,
+    borderRadius: tokens.borderRadiusMedium,
+    borderTopWidth: '1px',
+    borderRightWidth: '1px',
+    borderBottomWidth: '1px',
+    borderLeftWidth: '1px',
+    borderTopStyle: 'solid',
+    borderRightStyle: 'solid',
+    borderBottomStyle: 'solid',
+    borderLeftStyle: 'solid',
+    borderTopColor: tokens.colorNeutralStroke2,
+    borderRightColor: tokens.colorNeutralStroke2,
+    borderBottomColor: tokens.colorNeutralStroke2,
+    borderLeftColor: tokens.colorNeutralStroke2,
+    padding: `${tokens.spacingVerticalL} ${tokens.spacingHorizontalL}`,
   },
   columnsViewport: {
     overflowX: 'auto',
@@ -139,6 +199,24 @@ const useStyles = makeStyles({
     minWidth: 0,
   },
   problemsSection: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalS,
+    backgroundColor: tokens.colorNeutralBackground1,
+    borderRadius: tokens.borderRadiusMedium,
+    borderTopWidth: '1px',
+    borderRightWidth: '1px',
+    borderBottomWidth: '1px',
+    borderLeftWidth: '1px',
+    borderTopStyle: 'solid',
+    borderRightStyle: 'solid',
+    borderBottomStyle: 'solid',
+    borderLeftStyle: 'solid',
+    borderTopColor: tokens.colorNeutralStroke2,
+    borderRightColor: tokens.colorNeutralStroke2,
+    borderBottomColor: tokens.colorNeutralStroke2,
+    borderLeftColor: tokens.colorNeutralStroke2,
+    padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM}`,
   },
   problemsColumns: {
     display: 'grid',
@@ -299,25 +377,23 @@ export function KanbanBoard({ projectId, pollIntervalMs }: KanbanBoardProps) {
   };
 
   return (
-    <div className="azf-stack azf-gap-m">
+    <div className={styles.boardRoot}>
       <section
-        className={mergeClasses('azf-surface azf-surface--raised azf-surface--padding-comfortable', styles.intakeSection)}
+        className={styles.intakeSection}
         aria-labelledby="board-intake-title"
       >
         <div className={styles.intakeMain}>
-          <div className={mergeClasses('azf-stack azf-gap-xs', styles.intakeCopy)}>
-            <BladeHeader
-              size="compact"
-              className={styles.embeddedHeader}
-              title={<span id="board-intake-title">Intake</span>}
-              subtitle="Capture agent-executable work, import tasks from a spec, or tune automatic pickup."
-            />
+          <div className={styles.intakeCopy}>
+            <div className={mergeClasses(styles.embeddedHeader, styles.embeddedHeaderBlock)}>
+              <Text as="h2" id="board-intake-title" className={styles.embeddedTitle}>Intake</Text>
+              <Text className={styles.embeddedSubtitle}>Capture agent-executable work, import tasks from a spec, or tune automatic pickup.</Text>
+            </div>
           </div>
           <div className={styles.capture}>
             <CaptureTaskForm projectId={projectId} onCaptured={refetch} />
           </div>
         </div>
-        <AzureToolbar actions={[]} ariaLabel="Intake commands" className={styles.toolbarActions}>
+        <div role="toolbar" aria-label="Intake commands" className={styles.toolbarActions}>
           <Button
             appearance="secondary"
             icon={<ArrowImportRegular />}
@@ -326,7 +402,7 @@ export function KanbanBoard({ projectId, pollIntervalMs }: KanbanBoardProps) {
             Import from workspace
           </Button>
           <PickupSettings projectId={projectId} />
-        </AzureToolbar>
+        </div>
       </section>
 
       {importSuccess && (
@@ -364,16 +440,14 @@ export function KanbanBoard({ projectId, pollIntervalMs }: KanbanBoardProps) {
       )}
 
       {board && (
-        <section className={mergeClasses('azf-stack azf-gap-s', styles.workflowSection)} aria-labelledby="board-workflow-title">
-          <div className={mergeClasses('azf-row azf-gap-m azf-wrap', styles.sectionHeader)}>
-            <div className="azf-stack azf-gap-xs">
-              <BladeHeader
-                size="compact"
-                className={styles.embeddedHeader}
-                title={<span id="board-workflow-title">Agent task board</span>}
-                subtitle="Fixed Kanban states show the autonomous orchestration flow from intake through completion."
-              />
-              <div className={mergeClasses('azf-row azf-gap-xs azf-wrap', styles.summaryStrip)} aria-label="Board execution summary">
+        <section className={styles.workflowSection} aria-labelledby="board-workflow-title">
+          <div className={styles.sectionHeader}>
+            <div className={styles.workflowTitleBlock}>
+              <div className={mergeClasses(styles.embeddedHeader, styles.embeddedHeaderBlock)}>
+                <Text as="h2" id="board-workflow-title" className={styles.embeddedTitle}>Agent task board</Text>
+                <Text className={styles.embeddedSubtitle}>Fixed states show the autonomous flow from intake through completion.</Text>
+              </div>
+              <div className={styles.summaryStrip} aria-label="Board execution summary">
                 <Button
                   appearance="secondary"
                   size="small"
@@ -414,7 +488,7 @@ export function KanbanBoard({ projectId, pollIntervalMs }: KanbanBoardProps) {
             </div>
             <ZoomControls zoom={zoom} onZoomIn={zoomIn} onZoomOut={zoomOut} />
           </div>
-          <div className={mergeClasses('azf-surface azf-surface--panel azf-surface--padding-comfortable', styles.boardSurface)}>
+          <div className={styles.boardSurface}>
             <div className={styles.columnsViewport} ref={viewportRef}>
               <div className={styles.columns} style={{ zoom }}>
                 {mainColumns.map(({ col: column, accent }) => (
@@ -438,11 +512,10 @@ export function KanbanBoard({ projectId, pollIntervalMs }: KanbanBoardProps) {
               </div>
             </div>
             {boardSummary.total === 0 && (
-              <AzureEmptyState
-                compact
+              <EmptyState
                 className={styles.boardEmpty}
                 title="No orchestration tasks yet."
-                body="Capture a task or import a spec to seed Backlog, then move committed work to Ready for agent pickup."
+                description="Capture a task or import a spec to seed Backlog, then move committed work to Ready for agent pickup."
               />
             )}
           </div>
@@ -451,15 +524,13 @@ export function KanbanBoard({ projectId, pollIntervalMs }: KanbanBoardProps) {
             <section
               id="board-attention-section"
               tabIndex={-1}
-              className={mergeClasses('azf-surface azf-surface--panel azf-surface--padding-compact azf-stack azf-gap-s', styles.problemsSection)}
+              className={styles.problemsSection}
               aria-labelledby="board-attention-title"
             >
-              <BladeHeader
-                size="compact"
-                className={styles.embeddedHeader}
-                title={<span id="board-attention-title">Needs attention / review</span>}
-                subtitle="Human review, failed, or blocked runs are separated from the autonomous flow so operators can intervene quickly."
-              />
+              <div className={mergeClasses(styles.embeddedHeader, styles.embeddedHeaderBlock)}>
+                <Text as="h2" id="board-attention-title" className={styles.embeddedTitle}>Needs attention / review</Text>
+                <Text className={styles.embeddedSubtitle}>Human review, failed, or blocked runs are separated from the main flow for quick intervention.</Text>
+              </div>
               <div className={styles.problemsColumns}>
                 {attentionColumns.map(({ col: column, accent }) => (
                   <KanbanColumn
@@ -485,7 +556,7 @@ export function KanbanBoard({ projectId, pollIntervalMs }: KanbanBoardProps) {
         </section>
       )}
       {board && columnsWithAccent.length === 0 && (
-        <AzureEmptyState compact title="No board states are available yet." />
+        <EmptyState title="No board states are available yet." />
       )}
 
       {/* Workspace file picker dialog */}
@@ -529,3 +600,4 @@ export function KanbanBoard({ projectId, pollIntervalMs }: KanbanBoardProps) {
     </div>
   );
 }
+

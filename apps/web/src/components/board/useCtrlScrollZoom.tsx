@@ -1,10 +1,5 @@
-import {
-  Button } from '../../copilot-fluent-system';
-import { Caption1,
-  makeStyles,
-  tokens,
-} from '../../copilot-fluent-system';
-import { ArrowMaximizeRegular, ZoomInRegular, ZoomOutRegular } from '../../copilot-fluent-system';
+import { Button, Caption1, makeStyles, tokens } from '@fluentui/react-components';
+import { ArrowMaximizeRegular, ZoomInRegular, ZoomOutRegular } from '@fluentui/react-icons';
 import { useCallback, useRef, useState } from 'react';
 /**
  * useCtrlScrollZoom — shared Ctrl+Scroll zoom behaviour and affordance.

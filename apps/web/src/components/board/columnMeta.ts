@@ -1,6 +1,4 @@
-import {
-  tokens,
-} from '../../copilot-fluent-system';
+import { tokens } from '@fluentui/react-components';
 import type { BoardCardDto, BoardColumnDto, RunCardDto } from '../../api/types';
 // Deterministic accent palette + stage copy for the Kanban board columns. Kept in a
 // standalone module (not the component file) so React Fast Refresh stays happy and so
@@ -21,7 +19,7 @@ export const FIXED_BOARD_COLUMNS: ReadonlyArray<Pick<BoardColumnDto, 'id' | 'kin
 // position among the non-intake (workflow) columns; it is ignored for backlog/ready.
 export function columnAccentColor(columnId: string, _workflowIndex: number): string {
   if (columnId === 'backlog') return tokens.colorNeutralStroke1;
-  if (columnId === 'ready') return tokens.colorPaletteBlueBorderActive;
+  if (columnId === 'ready') return tokens.colorPaletteMarigoldBorderActive;
   if (columnId === 'problems') return tokens.colorPaletteRedBorderActive;
   if (columnId === 'human-review') return tokens.colorPalettePurpleBorderActive;
   if (columnId === 'active') return tokens.colorPaletteTealBorderActive;
@@ -34,7 +32,7 @@ export function columnAccentColor(columnId: string, _workflowIndex: number): str
 export const STAGE_DESCRIPTIONS: Record<string, string> = {
   backlog: "Captured work not yet committed to an agent run.",
   ready: 'Committed tasks queued for the coordinator or pickup monitor.',
-  problems: 'Failed, blocked, or declined runs that need operator attention.',
+  problems: 'Failed, blocked, or declined runs that need attention.',
   'human-review': 'Agent work paused for human review or approval.',
   active: 'Runs actively moving through orchestration.',
   done: 'Completed, merged, or no-change runs kept for closure.',
@@ -98,3 +96,4 @@ export function fixedBoardColumns(columns: BoardColumnDto[]): BoardColumnDto[] {
 
   return FIXED_BOARD_COLUMNS.map((col) => byId.get(col.id) ?? { ...col, cards: [] });
 }
+

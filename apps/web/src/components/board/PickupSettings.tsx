@@ -1,29 +1,17 @@
 import {
   apiClient } from '../../api/apiClient';
 import { ApiError } from '../../api/client';
-import { Button,
-  Dialog,
-  DialogActions,
-  DialogBody,
-  DialogContent,
-  DialogSurface,
-  DialogTitle,
-  DialogTrigger,
-  Field,
-  SpinButton,
-  Text,
-  } from '../../copilot-fluent-system';
+import { Button, Dialog, DialogActions, DialogBody, DialogContent, DialogSurface, DialogTitle, DialogTrigger, Field, makeStyles, SpinButton, Text, tokens } from '@fluentui/react-components';
+import { SettingsRegular } from '@fluentui/react-icons';
 import { AUTOMATION_HELP } from '../automationHelp';
 import { AutomationToggle } from '../AutomationToggle';
-import { makeStyles,
-  mergeClasses,
-  tokens,
-} from '../../copilot-fluent-system';
-import { SettingsRegular } from '../../copilot-fluent-system';
 import { useEffect, useState } from 'react';
 import type { BacklogSettingsDto } from '../../api/types';
 const useStyles = makeStyles({
   fields: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalM,
   },
   error: {
     color: tokens.colorPaletteRedForeground1,
@@ -77,7 +65,7 @@ export function PickupSettings({ projectId }: PickupSettingsProps) {
         <DialogBody>
           <DialogTitle>Pickup settings</DialogTitle>
           <DialogContent>
-            <div className={mergeClasses('azf-stack azf-gap-m', styles.fields)}>
+            <div className={styles.fields}>
               <Field label="Max Ready items per heartbeat" hint="How many Ready tasks the coordinator may claim per tick (1-20).">
                 <SpinButton
                   min={1}

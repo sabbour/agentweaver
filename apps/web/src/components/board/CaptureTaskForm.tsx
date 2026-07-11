@@ -1,17 +1,14 @@
 import {
   apiClient } from '../../api/apiClient';
 import { ApiError } from '../../api/client';
-import { Button,
-  Text,
-  Textarea } from '../../copilot-fluent-system';
-import { makeStyles,
-  mergeClasses,
-  tokens,
-} from '../../copilot-fluent-system';
-import { AddRegular } from '../../copilot-fluent-system';
+import { Button, makeStyles, Text, Textarea, tokens } from '@fluentui/react-components';
+import { AddRegular } from '@fluentui/react-icons';
 import { useState } from 'react';
 const useStyles = makeStyles({
   root: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalXS,
   },
   textarea: {
     width: '100%',
@@ -19,6 +16,9 @@ const useStyles = makeStyles({
     resize: 'none',
   },
   actions: {
+    display: 'flex',
+    flexDirection: 'row',
+    alignItems: 'center',
     justifyContent: 'flex-end',
   },
   error: {
@@ -59,7 +59,7 @@ export function CaptureTaskForm({ projectId, onCaptured }: CaptureTaskFormProps)
   };
 
   return (
-    <div className={mergeClasses('azf-stack azf-gap-xs', styles.root)}>
+    <div className={styles.root}>
       <Textarea
         className={styles.textarea}
         value={title}
@@ -72,7 +72,7 @@ export function CaptureTaskForm({ projectId, onCaptured }: CaptureTaskFormProps)
         onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void submit(); } }}
       />
       {error && <Text className={styles.error}>{error}</Text>}
-      <div className={mergeClasses('azf-row', styles.actions)}>
+      <div className={styles.actions}>
         <Button appearance="primary" icon={<AddRegular />} disabled={busy || !title.trim()} onClick={() => void submit()}>
           Add
         </Button>

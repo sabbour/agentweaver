@@ -1,45 +1,48 @@
 import {
   apiClient } from '../../api/apiClient';
 import { ApiError } from '../../api/client';
-import { AzureEmptyState,
-  Badge,
-  Button,
-  StatusIconText,
-  Text,
-  Textarea,
-  } from '../../copilot-fluent-system';
+import { Badge, Button, Caption1, makeStyles, mergeClasses, Popover, PopoverSurface, PopoverTrigger, Text, Textarea, tokens } from '@fluentui/react-components';
+import { AddRegular, PlayCircleRegular } from '@fluentui/react-icons';
+import { EmptyState } from '../ui';
 import { STAGE_DESCRIPTIONS } from './columnMeta';
 import { RunCard } from './RunCard';
 import { TaskCard } from './TaskCard';
-import { Caption1,
-  makeStyles,
-  mergeClasses,
-  Popover,
-  PopoverSurface,
-  PopoverTrigger,
-  tokens,
-} from '../../copilot-fluent-system';
-import { AddRegular, PlayCircleRegular } from '../../copilot-fluent-system';
 import { useState } from 'react';
 import type { BoardColumnDto, RunCardDto, TaskCardDto } from '../../api/types';
 const useStyles = makeStyles({
   column: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalS,
     width: '100%',
     minWidth: 0,
-    // Fit-content height — empty columns must not leave a giant vertical gap.
     alignSelf: 'flex-start',
+    backgroundColor: tokens.colorNeutralBackground2,
+    borderRadius: tokens.borderRadiusMedium,
+    padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalS}`,
   },
   header: {
+    display: 'flex',
+    flexDirection: 'row',
+    flexWrap: 'wrap',
     alignItems: 'flex-start',
     justifyContent: 'space-between',
+    gap: tokens.spacingHorizontalS,
   },
   headerMain: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalXS,
     minWidth: 0,
     flex: 1,
     padding: `${tokens.spacingVerticalS} 0 0`,
     borderTop: `3px solid ${tokens.colorNeutralStroke2}`,
   },
   titleRow: {
+    display: 'flex',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXS,
     minWidth: 0,
   },
   label: {
@@ -62,6 +65,11 @@ const useStyles = makeStyles({
     overflowWrap: 'anywhere',
   },
   summaryRow: {
+    display: 'flex',
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXS,
     paddingTop: tokens.spacingVerticalXXS,
   },
   summaryText: {
@@ -70,11 +78,25 @@ const useStyles = makeStyles({
     lineHeight: tokens.lineHeightBase200,
     fontVariantNumeric: 'tabular-nums',
   },
+  summaryTextDanger: {
+    color: tokens.colorStatusDangerForeground1,
+  },
+  summaryTextWarning: {
+    color: tokens.colorStatusWarningForeground1,
+  },
   headerActions: {
     flexShrink: 0,
+    display: 'flex',
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
     justifyContent: 'flex-end',
+    gap: tokens.spacingHorizontalXS,
   },
   cards: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalS,
   },
   dropzone: {
     display: 'flex',
@@ -91,14 +113,20 @@ const useStyles = makeStyles({
     textAlign: 'center',
   },
   dropzoneActive: {
-    border: `1px dashed ${tokens.colorBrandStroke1}`,
+    border: `1px dashed ${tokens.colorNeutralStrokeAccessible}`,
     backgroundColor: tokens.colorNeutralBackground1Selected,
     color: tokens.colorNeutralForeground2,
   },
   addSurface: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalS,
     minWidth: '260px',
   },
   addActions: {
+    display: 'flex',
+    flexDirection: 'row',
+    alignItems: 'center',
     justifyContent: 'flex-end',
   },
   addTextarea: {
@@ -165,7 +193,8 @@ export function KanbanColumn(props: KanbanColumnProps) {
   const summary = isIntake
     ? `${taskCount} ${taskCount === 1 ? 'task' : 'tasks'} queued`
     : `${runCount} ${runCount === 1 ? 'run' : 'runs'}${approvals ? ` · ${approvals} awaiting approval` : ''}`;
-  const summaryTone = column.id === 'problems' ? 'danger' : approvals ? 'warning' : isIntake ? 'neutral' : 'info';
+  const summaryDanger = column.id === 'problems';
+  const summaryWarning = approvals > 0 && !summaryDanger;
 
   const handleSendAllToReady = async () => {
     setSendingAll(true);
@@ -237,7 +266,7 @@ export function KanbanColumn(props: KanbanColumnProps) {
   return (
     <section
       id={`board-column-${column.id}`}
-      className={mergeClasses('azf-surface azf-surface--subtle azf-surface--panel azf-surface--padding-compact azf-stack azf-gap-s', styles.column, className)}
+      className={mergeClasses(styles.column, className)}
       tabIndex={-1}
       aria-label={`${column.label} column`}
       data-testid={`column-${column.id}`}
@@ -245,14 +274,14 @@ export function KanbanColumn(props: KanbanColumnProps) {
       data-accent-color={accentColor}
       {...intakeHandlers}
     >
-      <div className={mergeClasses('azf-row azf-gap-s azf-wrap', styles.header)}>
-        <div className={mergeClasses('azf-stack azf-gap-xs', styles.headerMain)} style={{ borderTopColor: accentColor }}>
-          <div className={mergeClasses('azf-row azf-gap-xs', styles.titleRow)}>
+      <div className={styles.header}>
+        <div className={styles.headerMain} style={{ borderTopColor: accentColor }}>
+          <div className={styles.titleRow}>
             <Text className={styles.label}>{column.label}</Text>
             <Badge
               className={styles.countChip}
               appearance="tint"
-              color="informative"
+              color="subtle"
               shape="rounded"
               size="small"
               data-testid={`count-${column.id}`}
@@ -261,16 +290,20 @@ export function KanbanColumn(props: KanbanColumnProps) {
             </Badge>
           </div>
           {description && <Caption1 className={styles.description}>{description}</Caption1>}
-          <div className={mergeClasses('azf-row azf-gap-xs azf-wrap', styles.summaryRow)} aria-label={`${column.label} summary`}>
-            <Badge appearance="tint" color={isIntake ? 'subtle' : column.id === 'problems' ? 'danger' : 'informative'} size="small" icon={!isIntake ? <PlayCircleRegular /> : undefined}>
+          <div className={styles.summaryRow} aria-label={`${column.label} summary`}>
+            <Badge appearance="tint" color={isIntake ? 'subtle' : column.id === 'problems' ? 'danger' : 'subtle'} size="small" icon={!isIntake ? <PlayCircleRegular /> : undefined}>
               {isIntake ? 'Task queue' : 'Run state'}
             </Badge>
-            <StatusIconText className={styles.summaryText} status={summaryTone} icon={!isIntake ? <PlayCircleRegular /> : undefined}>
+            <Text className={mergeClasses(
+              styles.summaryText,
+              summaryDanger && styles.summaryTextDanger,
+              summaryWarning && styles.summaryTextWarning,
+            )}>
               {summary}
-            </StatusIconText>
+            </Text>
           </div>
         </div>
-        <div className={mergeClasses('azf-row azf-gap-xs azf-wrap', styles.headerActions)}>
+        <div className={styles.headerActions}>
           {column.id === 'backlog' && column.cards.length > 0 && (
             <Button
               appearance="subtle"
@@ -300,7 +333,7 @@ export function KanbanColumn(props: KanbanColumnProps) {
                 />
               </PopoverTrigger>
               <PopoverSurface aria-label={`Add task to ${column.label}`}>
-                <div className={mergeClasses('azf-stack azf-gap-s', styles.addSurface)}>
+                <div className={styles.addSurface}>
                   <Textarea
                     className={styles.addTextarea}
                     value={addTitle}
@@ -314,7 +347,7 @@ export function KanbanColumn(props: KanbanColumnProps) {
                     onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void submitAdd(); } }}
                   />
                   {addError && <Text className={styles.addError}>{addError}</Text>}
-                  <div className={mergeClasses('azf-row', styles.addActions)}>
+                  <div className={styles.addActions}>
                     <Button
                       appearance="primary"
                       icon={<AddRegular />}
@@ -336,13 +369,12 @@ export function KanbanColumn(props: KanbanColumnProps) {
           className={mergeClasses(styles.dropzone, isIntake && dragOver && styles.dropzoneActive)}
           data-testid={`dropzone-${column.id}`}
         >
-          <AzureEmptyState
-            compact
+          <EmptyState
             title={isIntake ? 'Drop tasks here to queue them.' : column.id === 'problems' ? 'No blocked or failed runs.' : 'No runs in this state.'}
           />
         </div>
       ) : (
-        <div className={mergeClasses('azf-stack azf-gap-s', styles.cards)}>
+        <div className={styles.cards}>
           {column.cards.map((card, index) =>
             card.kind === 'task' ? (
               <div
