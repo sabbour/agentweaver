@@ -94,8 +94,9 @@ internal sealed class FakeWorkflowTurnAgent : IWorkflowTurnAgent
             _runId, _modelId, _stream, ct, _systemPromptContext),
 
         // Rai must NOT touch the shared runner (it would corrupt LastTask/InvocationCount). A GREEN
-        // verdict lets the workflow proceed to the review gate.
-        FakeAgentRole.Rai => Task.FromResult("GREEN — no issues, safe to ship."),
+        // verdict (with the machine-readable VERDICT: sentinel) lets the workflow proceed to the
+        // review gate.
+        FakeAgentRole.Rai => Task.FromResult("GREEN — no issues, safe to ship.\nVERDICT: GREEN"),
 
         // Rubberduck is also isolated from the shared runner. PASS lets injected policy gates proceed.
         FakeAgentRole.Rubberduck => Task.FromResult("PASS — critique complete, no changes requested."),
