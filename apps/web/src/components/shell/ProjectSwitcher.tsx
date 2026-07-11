@@ -1,14 +1,7 @@
-import {
-  Option,
-  OptionGroup,
-  Tooltip } from '../../copilot-fluent-system';
+import { Combobox, makeStyles, Option, OptionGroup, tokens, Tooltip } from '@fluentui/react-components';
 import { GITHUB_AUTHORIZE_URL } from '../../config';
 import { useProjectList } from '../../hooks/useProjectList';
 import { NAV_ITEMS } from './navConfig';
-import { Combobox,
-  makeStyles,
-  tokens,
-} from '../../copilot-fluent-system';
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { Project } from '../../api/types';

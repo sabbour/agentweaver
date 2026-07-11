@@ -1,10 +1,5 @@
-import {
-  apiClient } from '../../api/apiClient';
-import { Tooltip } from '../../copilot-fluent-system';
-import { makeStyles,
-  mergeClasses,
-  tokens,
-} from '../../copilot-fluent-system';
+import { apiClient } from '../../api/apiClient';
+import { makeStyles, mergeClasses, tokens, Tooltip } from '@fluentui/react-components';
 import { useEffect, useRef, useState } from 'react';
 // Spec 011, FR-013 — top-bar health indicator representing API reachability only
 // (not coordinator heartbeat liveness). Polls a lightweight health check and
@@ -59,7 +54,7 @@ export function StatusDot() {
       <span
         role="status"
         aria-label={LABELS[state]}
-        className={mergeClasses('azf-row', styles.dot, styles[state])}
+        className={mergeClasses(styles.dot, styles[state])}
       />
     </Tooltip>
   );

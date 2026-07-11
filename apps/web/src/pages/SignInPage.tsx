@@ -1,4 +1,4 @@
-import { Button, Text, makeStyles, tokens } from '../copilot-fluent-system';
+import { Button, makeStyles, Text, tokens } from '@fluentui/react-components';
 import { GITHUB_AUTHORIZE_URL } from '../config';
 import { GitHubIcon } from '../components/GitHubIcon';
 
@@ -23,6 +23,7 @@ const useStyles = makeStyles({
     padding: `${tokens.spacingVerticalXXL} ${tokens.spacingHorizontalXXL}`,
     backgroundColor: tokens.colorNeutralBackground1,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusXLarge,
     boxShadow: tokens.shadow16,
   },
   brand: {
