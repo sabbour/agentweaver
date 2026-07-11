@@ -162,7 +162,7 @@ describe('ProjectSettingsPage', () => {
     const outcome = screen.getByRole('textbox', { name: 'Outcome spec generation model' }) as HTMLInputElement;
     expect(blueprint.value).toBe('gpt-5.5');
 
-    fireEvent.click(screen.getByRole('button', { name: 'Reset generation models to inherit defaults' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Reset to inherit defaults' }));
 
     await waitFor(() => expect(apiClient.updateProjectProviderSettings).toHaveBeenCalledWith('proj-1', {
       default_provider: 'github-copilot',

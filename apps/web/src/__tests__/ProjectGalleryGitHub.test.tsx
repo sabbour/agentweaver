@@ -215,7 +215,7 @@ describe('ProjectGalleryPage — listProjects 401', () => {
     render(<Wrapper><ProjectGalleryPage /></Wrapper>);
 
     await waitFor(() =>
-      expect(screen.getByText('No projects yet. Create one to get started.')).toBeDefined(),
+      expect(screen.getByText('No projects yet')).toBeDefined(),
     );
     expect(screen.queryByText(/Sign in with GitHub to see your projects/)).toBeNull();
   });

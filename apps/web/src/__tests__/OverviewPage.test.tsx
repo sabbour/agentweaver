@@ -93,10 +93,10 @@ describe('OverviewPage', () => {
 
     renderPage();
 
-    await waitFor(() => expect(screen.getByText('Recent Projects')).toBeDefined());
-    expect(screen.getByText('AI Usage & Performance')).toBeDefined();
-    expect(screen.getByText('Activity Feed')).toBeDefined();
-    expect(screen.getByText('Needs Attention')).toBeDefined();
+    await waitFor(() => expect(screen.getByText('Recent projects')).toBeDefined());
+    expect(screen.getByText('AI usage & performance')).toBeDefined();
+    expect(screen.getByText('Activity feed')).toBeDefined();
+    expect(screen.getByText('Needs attention')).toBeDefined();
     expect(screen.getAllByText('Demo').length).toBeGreaterThan(0);
     expect(screen.getByText('microsoft/demo')).toBeDefined();
     expect(screen.getByText('Run completed', { exact: false })).toBeDefined();

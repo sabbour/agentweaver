@@ -247,7 +247,7 @@ memories) follow the **M "list" pattern**, not the Azure dense command strip:
 
 Reserve the **Azure dense command bar** (`+ Create · Manage View · Refresh ·
 Export · Delete … Group by`) only for a true multi-select data grid with bulk
-operations. Most Agentweaver surfaces are item-centric and must use the list
+operations. Most operator-app surfaces are item-centric and must use the list
 pattern — a wall of command buttons is intimidating and cold, which we reject.
 
 ## 8. Motion

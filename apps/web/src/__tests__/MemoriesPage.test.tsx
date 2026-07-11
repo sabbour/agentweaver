@@ -81,10 +81,10 @@ describe('MemoriesPage — Decisions tab', () => {
 
     renderPage();
 
-    await waitFor(() => expect(screen.getByText('Proposed — awaiting Coordinator')).toBeTruthy());
+    await waitFor(() => expect(screen.getByText('Pending proposals')).toBeTruthy());
     expect(screen.getByText('Cut the export feature')).toBeTruthy();
     expect(screen.getByText('Proposed')).toBeTruthy();
-    expect(screen.getByText(/promotes these proposals into active Team Memory/)).toBeTruthy();
+    expect(screen.getByText(/merge, promote, or reject/)).toBeTruthy();
     // Active decision still renders as the primary list.
     expect(screen.getByText('Active decision')).toBeTruthy();
   });
@@ -117,6 +117,6 @@ describe('MemoriesPage — Decisions tab', () => {
 
     renderPage();
 
-    await waitFor(() => expect(screen.getByText('No decisions recorded yet.')).toBeTruthy());
+    await waitFor(() => expect(screen.getByText('No decisions recorded yet')).toBeTruthy());
   });
 });

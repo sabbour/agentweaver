@@ -458,9 +458,9 @@ describe('copilot-fluent-system hardened components', () => {
 
   it('documents the pattern guidance in DESIGN.md', () => {
     const design = readFileSync(resolve(process.cwd(), '..', '..', 'DESIGN.md'), 'utf8');
-    expect(design).toContain('Coverage is not fidelity.');
-    expect(design).toContain('Resource Type node `4417:3962` is representative of one pattern family, not the whole showcase scope.');
-    expect(design).toContain('pattern workbench/gallery');
+    expect(design).toContain('The Calm Workbench');
+    expect(design).toContain('Warm-monochrome');
+    expect(design).toContain('No blue');
   });
 
   it('documents a local-first downstream workflow without requiring MCP', () => {

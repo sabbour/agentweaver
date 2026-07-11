@@ -80,7 +80,7 @@ describe('ClusterPage', () => {
 
     renderPage();
 
-    expect(screen.getByText('Loading cluster diagnostics')).toBeDefined();
+    expect(screen.getByRole('status', { name: 'Loading cluster diagnostics' })).toBeDefined();
   });
 
   it('renders KPI cards and component health table on success', async () => {
@@ -94,9 +94,9 @@ describe('ClusterPage', () => {
 
     // KPI cards — "Active" removed (captured in Sandbox claims)
     expect(screen.queryByText('Active')).toBeNull();
-    expect(screen.getByText('Orphaned')).toBeDefined();
+    expect(screen.getByText('Orphaned pods')).toBeDefined();
     expect(screen.getByText('Pending capacity')).toBeDefined();
-    expect(screen.getByText('Checks OK')).toBeDefined();
+    expect(screen.getByText('Checks healthy')).toBeDefined();
 
     // Health check rows
     expect(screen.getByText('K8s API')).toBeDefined();

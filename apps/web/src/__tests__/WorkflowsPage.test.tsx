@@ -98,7 +98,7 @@ describe('WorkflowsPage', () => {
     renderPage('proj-1');
 
     await waitFor(() => expect(screen.getByText('No workflows found')).toBeDefined());
-    expect(screen.getByText('Sync to load from .agentweaver/workflows/.')).toBeDefined();
+    expect(screen.getByText('Sync to load workflow definitions from .agentweaver/workflows/.')).toBeDefined();
   });
 
   it('calls the sync endpoint and refreshes the list', async () => {

@@ -60,9 +60,12 @@ describe('CastingWizardPage', () => {
     renderWithRouter('proj-001');
 
     expect(screen.getByText('Cast a team')).toBeDefined();
-    expect(screen.getByRole('tab', { name: /Step 1: Cast/ })).toBeDefined();
-    expect(screen.getByRole('tab', { name: /Step 2: Review proposal/ })).toBeDefined();
-    expect(screen.getByRole('tab', { name: /Step 3: Confirm/ })).toBeDefined();
+    // The wizard uses a custom step rail (not FluentUI Tabs) — check step text via the progress container
+    const progress = screen.getByLabelText('Casting progress');
+    expect(progress.textContent).toContain('Cast');
+    expect(progress.textContent).toContain('Review proposal');
+    expect(progress.textContent).toContain('Confirm');
+    // Cast source tabs (these ARE FluentUI Tabs)
     expect(screen.getByRole('tab', { name: /Formulate/ })).toBeDefined();
     expect(screen.getByRole('tab', { name: /Template/ })).toBeDefined();
     expect(screen.getByRole('tab', { name: /Analyze/ })).toBeDefined();

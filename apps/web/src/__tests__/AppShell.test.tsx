@@ -116,7 +116,7 @@ describe('AppShell navigation', () => {
     // The top bar exposes the project switcher and an API status indicator.
     expect(screen.getByLabelText('Project switcher')).toBeDefined();
     const startTask = screen.getByTestId('start-task-topbar-action');
-    expect(startTask.closest('header')).toBeTruthy();
+    expect(startTask.closest('main')).toBeTruthy();
     expect(getComputedStyle(startTask).position).not.toBe('fixed');
     await waitFor(() => expect(screen.getByLabelText('API reachable')).toBeDefined());
   });

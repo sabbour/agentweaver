@@ -92,7 +92,6 @@ describe('OrchestrationsPage', () => {
   });
 
   it('stops a running orchestration after confirmation and refreshes the list', async () => {
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
     vi.mocked(apiClient.listProjectRuns).mockResolvedValue([
       { workflow_run_id: 'c1', execution_id: 'e1', agent_name: 'Coordinator', task: 'Running work', status: 'in_progress', coordinator_status: 'dispatching', started_at: new Date().toISOString() },
     ] as never);
@@ -106,12 +105,13 @@ describe('OrchestrationsPage', () => {
 
     fireEvent.click(stopBtn);
 
-    expect(confirmSpy).toHaveBeenCalled();
+    // Stop now uses a Dialog instead of window.confirm — click the confirm button inside the dialog
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Stop' }));
+
     await waitFor(() => expect(apiClient.cancelRun).toHaveBeenCalledWith('c1'));
     // list is refreshed (initial load + refresh after cancel)
     await waitFor(() => expect(vi.mocked(apiClient.listProjectRuns).mock.calls.length).toBeGreaterThanOrEqual(2));
-
-    confirmSpy.mockRestore();
   });
 
   it('deletes an orchestration via the confirm dialog and removes it from the list', async () => {
