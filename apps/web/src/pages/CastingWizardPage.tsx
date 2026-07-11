@@ -1,32 +1,40 @@
-import {
-  apiClient } from '../api/apiClient';
+﻿import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
-import { AzureStepList,
-  AzureTabList,
-  BladeHeader,
+import {
+  Accordion,
+  AccordionHeader,
+  AccordionItem,
+  AccordionPanel,
   Button,
   Checkbox,
   Field,
+  makeStyles,
+  mergeClasses,
   MessageBar,
   MessageBarBody,
   Radio,
   RadioGroup,
+  Select,
   SpinButton,
   Spinner,
+  Tab,
+  TabList,
   Text,
   Textarea,
-  } from '../copilot-fluent-system';
-import { PageHeader } from '../components/PageHeader';
-import { Accordion,
-  AccordionHeader,
-  AccordionItem,
-  AccordionPanel,
-  makeStyles,
-  Select,
   Title3,
   tokens,
-} from '../copilot-fluent-system';
-import { DocumentBulletListRegular, People24Regular, SearchRegular, SparkleRegular } from '../copilot-fluent-system';
+} from '@fluentui/react-components';
+import {
+  CheckmarkRegular,
+  DocumentBulletListRegular,
+  SearchRegular,
+  SparkleRegular,
+} from '@fluentui/react-icons';
+import {
+  PageContainer,
+  PageHeader,
+  PageSection,
+} from '../components/ui';
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import type {
@@ -36,43 +44,74 @@ import type {
   ProposedMemberDto,
   TeamTemplateDto,
 } from '../api/types';
+
 const useStyles = makeStyles({
-  root: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalXL,
-    maxWidth: '1040px',
-  },
-  breadcrumb: {
-    display: 'flex',
-    gap: tokens.spacingHorizontalS,
-    alignItems: 'center',
-    fontSize: tokens.fontSizeBase300,
-    color: tokens.colorNeutralForeground2,
-  },
   breadcrumbLink: {
-    color: tokens.colorBrandForeground1,
+    color: tokens.colorNeutralForeground2,
     textDecoration: 'none',
+    ':hover': { textDecorationLine: 'underline' },
+  },
+  breadcrumbSep: {
+    color: tokens.colorNeutralForeground4,
   },
   card: {
     display: 'flex',
     flexDirection: 'column',
     gap: tokens.spacingVerticalM,
   },
-  wizardShell: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalL,
-  },
   wizardLayout: {
     display: 'grid',
-    gridTemplateColumns: '240px minmax(0, 1fr)',
+    gridTemplateColumns: '200px minmax(0, 1fr)',
     gap: tokens.spacingHorizontalXL,
     alignItems: 'start',
   },
-  stepRail: {
+  stepRailList: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalS,
     position: 'sticky',
     top: tokens.spacingVerticalL,
+  },
+  stepItem: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalM,
+    padding: `${tokens.spacingVerticalXS} 0`,
+  },
+  stepBadge: {
+    width: '24px',
+    height: '24px',
+    borderRadius: '50%',
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    fontSize: tokens.fontSizeBase200,
+    fontWeight: tokens.fontWeightSemibold,
+    flexShrink: 0,
+    backgroundColor: tokens.colorNeutralBackground3,
+    color: tokens.colorNeutralForeground3,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+  },
+  stepBadgeCurrent: {
+    backgroundColor: tokens.colorNeutralForeground1,
+    color: tokens.colorNeutralForegroundOnBrand,
+    border: 'none',
+  },
+  stepBadgeComplete: {
+    backgroundColor: tokens.colorNeutralBackground3,
+    color: tokens.colorNeutralForeground1,
+    border: `1px solid ${tokens.colorNeutralStroke1}`,
+  },
+  stepLabel: {
+    fontSize: tokens.fontSizeBase300,
+    color: tokens.colorNeutralForeground3,
+  },
+  stepLabelCurrent: {
+    color: tokens.colorNeutralForeground1,
+    fontWeight: tokens.fontWeightSemibold,
+  },
+  stepLabelComplete: {
+    color: tokens.colorNeutralForeground2,
   },
   wizardPane: {
     display: 'flex',
@@ -80,15 +119,8 @@ const useStyles = makeStyles({
     gap: tokens.spacingVerticalL,
     minWidth: 0,
   },
-  stepIndicator: {
-    display: 'flex',
-    gap: tokens.spacingHorizontalM,
-    alignItems: 'center',
-    fontSize: tokens.fontSizeBase200,
-    color: tokens.colorNeutralForeground3,
-  },
   stepActive: {
-    color: tokens.colorBrandForeground1,
+    color: tokens.colorNeutralForeground1,
     fontWeight: tokens.fontWeightSemibold,
   },
   navRow: {
@@ -142,7 +174,7 @@ const useStyles = makeStyles({
   },
   charterToggle: {
     alignSelf: 'flex-start',
-    color: tokens.colorBrandForeground1,
+    color: tokens.colorNeutralForeground1,
     fontSize: tokens.fontSizeBase200,
     padding: '0',
     minWidth: 'unset',
@@ -172,13 +204,15 @@ const useStyles = makeStyles({
     display: 'flex',
     flexDirection: 'column',
     gap: tokens.spacingVerticalXS,
+    padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM}`,
+    backgroundColor: tokens.colorNeutralBackground2,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusSmall,
   },
   rationaleLabel: {
     fontWeight: tokens.fontWeightSemibold,
     fontSize: tokens.fontSizeBase200,
     color: tokens.colorNeutralForeground2,
-    textTransform: 'uppercase' as const,
-    letterSpacing: '0.05em',
   },
   teamSizeRow: {
     display: 'flex',
@@ -210,19 +244,14 @@ const useStyles = makeStyles({
   },
   templateCardSelected: {
     padding: tokens.spacingVerticalM,
-    backgroundColor: tokens.colorBrandBackground2,
-    border: `2px solid ${tokens.colorBrandStroke1}`,
+    backgroundColor: tokens.colorNeutralBackground3,
+    border: `2px solid ${tokens.colorNeutralStroke1}`,
     borderRadius: tokens.borderRadiusSmall,
     cursor: 'pointer',
   },
   templateTitle: {
     fontWeight: tokens.fontWeightSemibold,
     display: 'block',
-  },
-  roleGrid: {
-    display: 'grid',
-    gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))',
-    gap: tokens.spacingVerticalS,
   },
   rolesSection: {
     display: 'flex',
@@ -242,8 +271,6 @@ const useStyles = makeStyles({
 
 type Step = 'cast' | 'review' | 'confirm';
 
-// Order-insensitive set comparison of two role-id lists. Used to decide whether the
-// user overrode a template's default roles via the Roles checkboxes.
 function sameRoleSet(a: string[], b: string[]): boolean {
   if (a.length !== b.length) return false;
   const setB = new Set(b);
@@ -253,7 +280,6 @@ function sameRoleSet(a: string[], b: string[]): boolean {
 function buildRationale(proposal: CastProposalDto | null, selectedTemplate: TeamTemplateDto | null): string {
   if (!proposal) return '';
   if (proposal.rationale) return proposal.rationale;
-  // Fallback for scenario mode (template description from frontend)
   if (proposal.mode === 'scenario' && selectedTemplate?.description)
     return selectedTemplate.description;
   return '';
@@ -273,44 +299,33 @@ export function CastingWizardPage() {
   const navigate = useNavigate();
 
   const [step, setStep] = useState<Step>('cast');
-
-  // Cast step
   const [activePanel, setActivePanel] = useState<ActivePanel>('formulate');
   const [goal, setGoal] = useState('');
   const [universe, setUniverse] = useState('');
   const [selectedTemplateId, setSelectedTemplateId] = useState('');
   const [teamSize, setTeamSize] = useState(4);
 
-  // Formulate panel
   const [formulateProposal, setFormulateProposal] = useState<CastProposalDto | null>(null);
   const [formulateLoading, setFormulateLoading] = useState(false);
   const [formulateError, setFormulateError] = useState<string | null>(null);
 
-  // Analyze panel
   const [analyzeProposal, setAnalyzeProposal] = useState<CastProposalDto | null>(null);
   const [analyzeLoading, setAnalyzeLoading] = useState(false);
   const [analyzeError, setAnalyzeError] = useState<string | null>(null);
 
-  // Template cast loading
   const [castLoading, setCastLoading] = useState(false);
   const [castError, setCastError] = useState<string | null>(null);
 
-  // Templates data
   const [templates, setTemplates] = useState<TeamTemplateDto[]>([]);
   const [templatesLoading, setTemplatesLoading] = useState(true);
 
-  // Universes (fetched from backend policy)
   const [universes, setUniverses] = useState<string[]>([]);
-
-  // Configure panel
   const [selectedRoleIds, setSelectedRoleIds] = useState<string[]>([]);
 
-  // Proposal (review / confirm)
   const [proposal, setProposal] = useState<CastProposalDto | null>(null);
   const [proposalLoading, setProposalLoading] = useState(false);
   const [proposalError, setProposalError] = useState<string | null>(null);
 
-  // Charter expand
   const [expandedCharters, setExpandedCharters] = useState<Set<string>>(new Set());
   const toggleCharter = (name: string) => {
     setExpandedCharters((prev) => {
@@ -320,10 +335,7 @@ export function CastingWizardPage() {
     });
   };
 
-  // Review intent
   const [intent, setIntent] = useState<'augment' | 'recast'>('augment');
-
-  // Confirm
   const [confirming, setConfirming] = useState(false);
   const [confirmError, setConfirmError] = useState<string | null>(null);
 
@@ -424,10 +436,6 @@ export function CastingWizardPage() {
       setCastLoading(true);
       setCastError(null);
       try {
-        // Detect whether the user overrode the template's default roles via the Roles
-        // checkboxes. If unchanged, keep the scenario branch (preserves the template's
-        // description/rationale in review). If overridden, switch to manual + role_ids so
-        // the proposal/review/cast reflect the exact selected set.
         const templateRoleIds = selectedTemplate?.roles.map((r) => r.id) ?? [];
         const overridden = !sameRoleSet(selectedRoleIds, templateRoleIds);
         const req: CreateProposalRequest = overridden
@@ -478,7 +486,6 @@ export function CastingWizardPage() {
     }
   };
 
-
   const handleConfirm = async () => {
     if (!proposal) return;
     setConfirming(true);
@@ -513,363 +520,366 @@ export function CastingWizardPage() {
   const currentStepIndex = STEPS.indexOf(step);
 
   return (
-    <div className={['azf-stack azf-page azf-pattern-shell', styles.root].filter(Boolean).join(' ')}>
+    <PageContainer>
       <PageHeader
         title="Cast a team"
-        subtitle="Choose roles from a template, project analysis, or a plain-language team brief."
-        resourceIcon={<People24Regular />}
-        breadcrumb={
-          <nav className={styles.breadcrumb} aria-label="Breadcrumb">
+        description="Choose roles from a template, project analysis, or a plain-language team brief."
+        breadcrumbs={
+          <>
             <Link to="/" className={styles.breadcrumbLink}>Projects</Link>
-            <span>/</span>
+            <span className={styles.breadcrumbSep}>/</span>
             <Link to={`/projects/${projectId}/team`} className={styles.breadcrumbLink}>Team</Link>
-            <span>/</span>
+            <span className={styles.breadcrumbSep}>/</span>
             <span>Cast</span>
-          </nav>
+          </>
         }
       />
 
-      <div className={['azf-surface azf-surface--panel azf-surface--padding-comfortable', styles.wizardShell].filter(Boolean).join(' ')}>
-        <BladeHeader
-          size="compact"
-          title="Team casting blade"
-          subtitle="Progress through cast, review, and confirm steps before writing the team resource."
-        />
-        <div className={styles.wizardLayout}>
-          <AzureStepList
-            className={styles.stepRail}
-            orientation="vertical"
-            ariaLabel="Casting progress"
-            selectedValue={step}
-            steps={STEPS.map((s, index) => ({
-              id: s,
-              label: STEP_LABELS[s],
-              description: index === currentStepIndex ? 'Current step' : undefined,
-              status: index < currentStepIndex ? 'complete' : 'default',
-            }))}
-          />
-          <div className={styles.wizardPane}>
-
-      {/* Step 1: Cast */}
-      {step === 'cast' && (
-        <>
-          <AzureTabList
-            ariaLabel="Casting source"
-            selectedValue={activePanel}
-            onTabSelect={(value) => setActivePanel(value as ActivePanel)}
-            tabs={[
-              { id: 'formulate', label: 'Formulate', icon: <SparkleRegular /> },
-              { id: 'template', label: 'Template', icon: <DocumentBulletListRegular /> },
-              { id: 'analyze', label: 'Analyze', icon: <SearchRegular /> },
-            ]}
-          />
-
-          <div className={['azf-surface azf-surface--panel azf-surface--padding-comfortable', styles.tabContent].filter(Boolean).join(' ')}>
-            {activePanel === 'formulate' && (
-              <>
-                <Text className={styles.panelDesc}>
-                  Sketch the team in plain language; AI picks a universe, team size, and required roles.
+      <div className={styles.wizardLayout}>
+        {/* Step rail */}
+        <div className={styles.stepRailList} aria-label="Casting progress">
+          {STEPS.map((s, index) => {
+            const isComplete = index < currentStepIndex;
+            const isCurrent = s === step;
+            return (
+              <div key={s} className={styles.stepItem}>
+                <span className={mergeClasses(
+                  styles.stepBadge,
+                  isComplete && styles.stepBadgeComplete,
+                  isCurrent && styles.stepBadgeCurrent,
+                )}>
+                  {isComplete ? <CheckmarkRegular style={{ fontSize: '14px' }} /> : index + 1}
+                </span>
+                <Text className={mergeClasses(
+                  styles.stepLabel,
+                  isComplete && styles.stepLabelComplete,
+                  isCurrent && styles.stepLabelCurrent,
+                )}>
+                  {STEP_LABELS[s]}
                 </Text>
-                <Textarea
-                  value={goal}
-                  onChange={(_, v) => setGoal(v.value)}
-                  placeholder="e.g. a small team of 3 to ship a SaaS MVP fast..."
-                  rows={3}
-                />
-                <div className={styles.teamSizeRow}>
-                  <Field label="Team size">
-                    <SpinButton
-                      min={2}
-                      max={10}
-                      step={1}
-                      value={teamSize}
-                      onChange={(_, data) => {
-                        if (data.value !== undefined && data.value !== null) setTeamSize(data.value);
-                      }}
-                    />
-                  </Field>
-                </div>
-                {formulateError && (
-                  <MessageBar intent="error">
-                    <MessageBarBody>{formulateError}</MessageBarBody>
-                  </MessageBar>
-                )}
-                <div className={styles.panelActionRow}>
-                  {formulateLoading && <Spinner size="extra-tiny" aria-hidden="true" />}
-                  <Button
-                    appearance="primary"
-                    disabled={goal.trim() === '' || formulateLoading}
-                    onClick={() => void handleFormulate()}
-                  >
-                    {formulateLoading ? 'Formulating' : 'Formulate \u2192'}
-                  </Button>
-                </div>
-              </>
-            )}
+              </div>
+            );
+          })}
+        </div>
 
-            {activePanel === 'template' && (
-              <>
-                {templatesLoading && <Spinner label="Loading templates..." size="small" />}
-                {!templatesLoading && templates.length === 0 && (
-                  <Text className={styles.panelDesc}>No templates available.</Text>
-                )}
-                {!templatesLoading && templates.length > 0 && (
-                  <div className={styles.templateGrid}>
-                    {templates.map((t) => (
-                      <div
-                        key={t.id}
-                        className={selectedTemplateId === t.id ? styles.templateCardSelected : styles.templateCard}
-                        onClick={() => {
-                          setSelectedTemplateId(t.id);
-                          setSelectedRoleIds(t.roles.map((r) => r.id));
-                        }}
-                        role="button"
-                        tabIndex={0}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter' || e.key === ' ') {
-                            setSelectedTemplateId(t.id);
-                            setSelectedRoleIds(t.roles.map((r) => r.id));
-                          }
-                        }}
-                        aria-pressed={selectedTemplateId === t.id}
+        <div className={styles.wizardPane}>
+
+          {/* Step 1: Cast */}
+          {step === 'cast' && (
+            <>
+              <TabList
+                selectedValue={activePanel}
+                onTabSelect={(_, data) => setActivePanel(data.value as ActivePanel)}
+                aria-label="Casting source"
+              >
+                <Tab value="formulate" icon={<SparkleRegular />}>Formulate</Tab>
+                <Tab value="template" icon={<DocumentBulletListRegular />}>Template</Tab>
+                <Tab value="analyze" icon={<SearchRegular />}>Analyze</Tab>
+              </TabList>
+
+              <div className={styles.tabContent}>
+                {activePanel === 'formulate' && (
+                  <>
+                    <Text className={styles.panelDesc}>
+                      Sketch the team in plain language; AI picks a universe, team size, and required roles.
+                    </Text>
+                    <Textarea
+                      value={goal}
+                      onChange={(_, v) => setGoal(v.value)}
+                      placeholder="e.g. a small team of 3 to ship a SaaS MVP fast..."
+                      rows={3}
+                    />
+                    <div className={styles.teamSizeRow}>
+                      <Field label="Team size">
+                        <SpinButton
+                          min={2}
+                          max={10}
+                          step={1}
+                          value={teamSize}
+                          onChange={(_, data) => {
+                            if (data.value !== undefined && data.value !== null) setTeamSize(data.value);
+                          }}
+                        />
+                      </Field>
+                    </div>
+                    {formulateError && (
+                      <MessageBar intent="error">
+                        <MessageBarBody>{formulateError}</MessageBarBody>
+                      </MessageBar>
+                    )}
+                    <div className={styles.panelActionRow}>
+                      {formulateLoading && <Spinner size="extra-tiny" aria-hidden="true" />}
+                      <Button
+                        appearance="primary"
+                        disabled={goal.trim() === '' || formulateLoading}
+                        onClick={() => void handleFormulate()}
                       >
-                        <Text className={styles.templateTitle}>{t.title}</Text>
+                        {formulateLoading ? 'Formulating' : 'Formulate \u2192'}
+                      </Button>
+                    </div>
+                  </>
+                )}
+
+                {activePanel === 'template' && (
+                  <>
+                    {templatesLoading && <Spinner size="small" label="Loading templates..." />}
+                    {!templatesLoading && templates.length === 0 && (
+                      <Text className={styles.panelDesc}>No templates available.</Text>
+                    )}
+                    {!templatesLoading && templates.length > 0 && (
+                      <div className={styles.templateGrid}>
+                        {templates.map((t) => (
+                          <div
+                            key={t.id}
+                            className={selectedTemplateId === t.id ? styles.templateCardSelected : styles.templateCard}
+                            onClick={() => {
+                              setSelectedTemplateId(t.id);
+                              setSelectedRoleIds(t.roles.map((r) => r.id));
+                            }}
+                            role="button"
+                            tabIndex={0}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter' || e.key === ' ') {
+                                setSelectedTemplateId(t.id);
+                                setSelectedRoleIds(t.roles.map((r) => r.id));
+                              }
+                            }}
+                            aria-pressed={selectedTemplateId === t.id}
+                          >
+                            <Text className={styles.templateTitle}>{t.title}</Text>
+                          </div>
+                        ))}
                       </div>
+                    )}
+                  </>
+                )}
+
+                {activePanel === 'analyze' && (
+                  <>
+                    <div className={styles.teamSizeRow}>
+                      <Field label="Team size">
+                        <SpinButton
+                          value={teamSize}
+                          min={2}
+                          max={10}
+                          step={1}
+                          onChange={(_, data) => {
+                            if (data.value !== undefined && data.value !== null) setTeamSize(data.value);
+                            else if (data.displayValue) {
+                              const n = parseInt(data.displayValue, 10);
+                              if (!isNaN(n)) setTeamSize(Math.min(10, Math.max(2, n)));
+                            }
+                          }}
+                        />
+                      </Field>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM }}>
+                      <Text className={styles.panelDesc} style={{ flex: 1 }}>
+                        The system will analyze your project and suggest roles.
+                      </Text>
+                      {analyzeLoading && <Spinner size="extra-tiny" aria-hidden="true" />}
+                      <Button
+                        appearance="primary"
+                        disabled={analyzeLoading}
+                        onClick={() => void handleAnalyze()}
+                      >
+                        {analyzeLoading ? 'Analyzing' : 'Analyze \u2192'}
+                      </Button>
+                    </div>
+                    {analyzeError && (
+                      <MessageBar intent="error">
+                        <MessageBarBody>{analyzeError}</MessageBarBody>
+                      </MessageBar>
+                    )}
+                  </>
+                )}
+              </div>
+
+              {castRationale && (
+                <div className={styles.rationaleBox}>
+                  <Text className={styles.rationaleLabel}>Why this team</Text>
+                  <Text>{castRationale}</Text>
+                </div>
+              )}
+
+              {/* Roles section */}
+              <PageSection title="Roles" description="Tune the role mix before reviewing the proposal.">
+                {templatesLoading && <Spinner size="extra-tiny" />}
+                {!templatesLoading && (
+                  <div className={styles.rolesGrid}>
+                    {allCatalogRoles.map((role) => (
+                      <Checkbox
+                        key={role.id}
+                        label={role.title}
+                        checked={selectedRoleIds.includes(role.id)}
+                        onChange={(_, data) => {
+                          setSelectedRoleIds((prev) =>
+                            data.checked
+                              ? [...prev, role.id]
+                              : prev.filter((id) => id !== role.id)
+                          );
+                        }}
+                      />
                     ))}
                   </div>
                 )}
-              </>
-            )}
+              </PageSection>
 
-            {activePanel === 'analyze' && (
-              <>
-                <div className={styles.teamSizeRow}>
-                  <Field label="Team size">
-                    <SpinButton
-                      value={teamSize}
-                      min={2}
-                      max={10}
-                      step={1}
+              <Accordion collapsible>
+                <AccordionItem value="universe">
+                  <AccordionHeader>Universe</AccordionHeader>
+                  <AccordionPanel>
+                    <Select
+                      value={universe}
                       onChange={(_, data) => {
-                        if (data.value !== undefined && data.value !== null) setTeamSize(data.value);
-                        else if (data.displayValue) {
-                          const n = parseInt(data.displayValue, 10);
-                          if (!isNaN(n)) setTeamSize(Math.min(10, Math.max(2, n)));
-                        }
+                        setUniverse(data.value);
+                        setFormulateProposal(null);
+                        setAnalyzeProposal(null);
                       }}
-                    />
-                  </Field>
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM }}>
-                  <Text className={styles.panelDesc} style={{ flex: 1 }}>
-                    The system will analyze your project and suggest roles.
-                  </Text>
-                  {analyzeLoading && <Spinner size="extra-tiny" aria-hidden="true" />}
+                    >
+                      <option value="">Random (any universe)</option>
+                      {universes.map((u) => (
+                        <option key={u} value={u}>{u}</option>
+                      ))}
+                    </Select>
+                  </AccordionPanel>
+                </AccordionItem>
+              </Accordion>
+
+              {castError && (
+                <MessageBar intent="error">
+                  <MessageBarBody>{castError}</MessageBarBody>
+                </MessageBar>
+              )}
+
+              <div className={styles.castNavRow}>
+                <Button appearance="secondary" onClick={() => void handleCancel()}>Cancel</Button>
+                <div className={styles.castNavRowRight}>
+                  {castLoading && <Spinner size="extra-tiny" aria-hidden="true" />}
                   <Button
                     appearance="primary"
-                    disabled={analyzeLoading}
-                    onClick={() => void handleAnalyze()}
+                    disabled={!canCastTeam || castLoading}
+                    onClick={() => void handleCastTeam()}
                   >
-                    {analyzeLoading ? 'Analyzing' : 'Analyze \u2192'}
+                    {castLoading ? 'Casting' : 'Review'}
                   </Button>
                 </div>
-                {analyzeError && (
-                  <MessageBar intent="error">
-                    <MessageBarBody>{analyzeError}</MessageBarBody>
-                  </MessageBar>
-                )}
-              </>
-            )}
-
-          </div>
-
-          {castRationale && (
-            <div className={['azf-surface azf-surface--subtle azf-surface--padding-compact', styles.rationaleBox].filter(Boolean).join(' ')}>
-              <Text className={styles.rationaleLabel}>Why this team</Text>
-              <Text>{castRationale}</Text>
-            </div>
+              </div>
+            </>
           )}
 
-          {/* Roles section */}
-          <div className={['azf-surface azf-surface--panel azf-surface--padding-comfortable', styles.rolesSection].filter(Boolean).join(' ')}>
-            <BladeHeader size="compact" title="Roles" subtitle="Tune the role mix before reviewing the proposal." />
-            {templatesLoading && <Spinner size="extra-tiny" />}
-            {!templatesLoading && (
-              <div className={styles.rolesGrid}>
-                {allCatalogRoles.map((role) => (
-                  <Checkbox
-                    key={role.id}
-                    label={role.title}
-                    checked={selectedRoleIds.includes(role.id)}
-                    onChange={(_, data) => {
-                      setSelectedRoleIds((prev) =>
-                        data.checked
-                          ? [...prev, role.id]
-                          : prev.filter((id) => id !== role.id)
-                      );
-                    }}
-                  />
+          {/* Step 2: Review proposal */}
+          {step === 'review' && proposal && (
+            <div className={styles.card}>
+              <Title3>Review proposal</Title3>
+
+              {proposal.warnings.length > 0 && proposal.warnings.map((w, i) => (
+                <MessageBar key={i} intent="warning">
+                  <MessageBarBody>{w}</MessageBarBody>
+                </MessageBar>
+              ))}
+
+              {proposal.existing_team_present && (
+                <div>
+                  <Text>An existing team is present. How would you like to proceed?</Text>
+                  <RadioGroup
+                    value={intent}
+                    onChange={(_, data) => setIntent(data.value as 'augment' | 'recast')}
+                  >
+                    <Radio value="augment" label="Augment — add new members to the existing team" />
+                    <Radio value="recast" label="Recast — replace the existing team" />
+                  </RadioGroup>
+                </div>
+              )}
+
+              <div className={styles.memberList}>
+                {proposal.members.map((member) => (
+                  <div key={member.proposed_name} className={styles.memberCard}>
+                    <div className={styles.memberHeader}>
+                      <div>
+                        <Text className={styles.memberName}>{member.proposed_name}</Text>
+                        <Text className={styles.memberRole}> — {member.role.title}</Text>
+                      </div>
+                      <Button
+                        appearance="subtle"
+                        size="small"
+                        disabled={proposalLoading}
+                        onClick={() => void handleRemoveMember(member)}
+                      >
+                        Remove
+                      </Button>
+                    </div>
+                    {member.justification && (
+                      <Text className={styles.memberSummary}>{member.justification}</Text>
+                    )}
+                    <Text className={styles.memberSummary}>{member.role.summary}</Text>
+                    <Button
+                      appearance="transparent"
+                      size="small"
+                      className={styles.charterToggle}
+                      onClick={() => toggleCharter(member.proposed_name)}
+                    >
+                      {expandedCharters.has(member.proposed_name) ? 'Hide charter' : 'View charter'}
+                    </Button>
+                    {expandedCharters.has(member.proposed_name) && (
+                      <pre className={styles.charterFull}>{member.charter_markdown}</pre>
+                    )}
+                  </div>
                 ))}
               </div>
-            )}
-          </div>
 
-          <Accordion collapsible>
-            <AccordionItem value="universe">
-              <AccordionHeader>Universe</AccordionHeader>
-              <AccordionPanel>
-                <Select
-                  value={universe}
-                  onChange={(_, data) => {
-                    setUniverse(data.value);
-                    setFormulateProposal(null);
-                    setAnalyzeProposal(null);
-                  }}
-                >
-                  <option value="">Random (any universe)</option>
-                  {universes.map((u) => (
-                    <option key={u} value={u}>{u}</option>
-                  ))}
-                </Select>
-              </AccordionPanel>
-            </AccordionItem>
-          </Accordion>
+              {proposalError && (
+                <MessageBar intent="error">
+                  <MessageBarBody>{proposalError}</MessageBarBody>
+                </MessageBar>
+              )}
 
-          {castError && (
-            <MessageBar intent="error">
-              <MessageBarBody>{castError}</MessageBarBody>
-            </MessageBar>
-          )}
-
-          <div className={styles.castNavRow}>
-            <Button appearance="secondary" onClick={() => void handleCancel()}>Cancel</Button>
-            <div className={styles.castNavRowRight}>
-              {castLoading && <Spinner size="extra-tiny" aria-hidden="true" />}
-              <Button
-                appearance="primary"
-                disabled={!canCastTeam || castLoading}
-                onClick={() => void handleCastTeam()}
-              >
-                {castLoading ? 'Casting' : 'Review'}
-              </Button>
-            </div>
-          </div>
-        </>
-      )}
-
-      {/* Step 2: Review proposal */}
-      {step === 'review' && proposal && (
-        <div className={['azf-surface azf-surface--panel azf-surface--padding-comfortable', styles.card].filter(Boolean).join(' ')}>
-          <Title3>Review proposal</Title3>
-
-          {proposal.warnings.length > 0 && proposal.warnings.map((w, i) => (
-            <MessageBar key={i} intent="warning">
-              <MessageBarBody>{w}</MessageBarBody>
-            </MessageBar>
-          ))}
-
-          {proposal.existing_team_present && (
-            <div>
-              <Text>An existing team is present. How would you like to proceed?</Text>
-              <RadioGroup
-                value={intent}
-                onChange={(_, data) => setIntent(data.value as 'augment' | 'recast')}
-              >
-                <Radio value="augment" label="Augment — add new members to the existing team" />
-                <Radio value="recast" label="Recast — replace the existing team" />
-              </RadioGroup>
-            </div>
-          )}
-
-          <div className={styles.memberList}>
-            {proposal.members.map((member) => (
-              <div key={member.proposed_name} className={styles.memberCard}>
-                <div className={styles.memberHeader}>
-                  <div>
-                    <Text className={styles.memberName}>{member.proposed_name}</Text>
-                    <Text className={styles.memberRole}> — {member.role.title}</Text>
-                  </div>
-                  <Button
-                    appearance="subtle"
-                    size="small"
-                    disabled={proposalLoading}
-                    onClick={() => void handleRemoveMember(member)}
-                  >
-                    Remove
-                  </Button>
-                </div>
-                {member.justification && (
-                  <Text className={styles.memberSummary}>{member.justification}</Text>
-                )}
-                <Text className={styles.memberSummary}>{member.role.summary}</Text>
+              <div className={styles.navRow}>
+                <Button appearance="secondary" onClick={goBack}>Back</Button>
+                <Button appearance="secondary" onClick={() => void handleCancel()}>Cancel</Button>
                 <Button
-                  appearance="transparent"
-                  size="small"
-                  className={styles.charterToggle}
-                  onClick={() => toggleCharter(member.proposed_name)}
+                  appearance="primary"
+                  disabled={proposal.members.length === 0 || proposalLoading}
+                  onClick={() => setStep('confirm')}
                 >
-                  {expandedCharters.has(member.proposed_name) ? 'Hide charter' : 'View charter'}
+                  Confirm
                 </Button>
-                {expandedCharters.has(member.proposed_name) && (
-                  <pre className={styles.charterFull}>{member.charter_markdown}</pre>
-                )}
               </div>
-            ))}
-          </div>
-
-          {proposalError && (
-            <MessageBar intent="error">
-              <MessageBarBody>{proposalError}</MessageBarBody>
-            </MessageBar>
+            </div>
           )}
 
-          <div className={styles.navRow}>
-            <Button appearance="secondary" onClick={goBack}>Back</Button>
-            <Button appearance="secondary" onClick={() => void handleCancel()}>Cancel</Button>
-            <Button
-              appearance="primary"
-              disabled={proposal.members.length === 0 || proposalLoading}
-              onClick={() => setStep('confirm')}
-            >
-              Confirm
-            </Button>
-          </div>
-        </div>
-      )}
+          {/* Step 3: Confirm */}
+          {step === 'confirm' && proposal && (
+            <div className={styles.card}>
+              <Title3>Cast team</Title3>
+              <Text>
+                You are about to create a team with {proposal.members.length} member{proposal.members.length !== 1 ? 's' : ''}.
+                {proposal.existing_team_present && intent === 'recast' && ' The existing team will be replaced.'}
+                {proposal.existing_team_present && intent === 'augment' && ' New members will be added to the existing team.'}
+              </Text>
 
-      {/* Step 3: Confirm */}
-      {step === 'confirm' && proposal && (
-        <div className={['azf-surface azf-surface--panel azf-surface--padding-comfortable', styles.card].filter(Boolean).join(' ')}>
-          <Title3>Cast team</Title3>
-          <Text>
-            You are about to create a team with {proposal.members.length} member{proposal.members.length !== 1 ? 's' : ''}.
-            {proposal.existing_team_present && intent === 'recast' && ' The existing team will be replaced.'}
-            {proposal.existing_team_present && intent === 'augment' && ' New members will be added to the existing team.'}
-          </Text>
+              {confirmError && (
+                <MessageBar intent="error">
+                  <MessageBarBody>{confirmError}</MessageBarBody>
+                </MessageBar>
+              )}
 
-          {confirmError && (
-            <MessageBar intent="error">
-              <MessageBarBody>{confirmError}</MessageBarBody>
-            </MessageBar>
+              <div className={styles.navRow}>
+                <Button appearance="secondary" onClick={goBack}>Back</Button>
+                <Button appearance="secondary" onClick={() => void handleCancel()}>Cancel</Button>
+                <Button
+                  appearance="primary"
+                  disabled={confirming}
+                  onClick={() => void handleConfirm()}
+                >
+                  {confirming ? 'Casting' : 'Cast team'}
+                </Button>
+                {confirming && <Spinner size="extra-tiny" aria-hidden="true" />}
+              </div>
+            </div>
           )}
-
-          <div className={styles.navRow}>
-            <Button appearance="secondary" onClick={goBack}>Back</Button>
-            <Button appearance="secondary" onClick={() => void handleCancel()}>Cancel</Button>
-            <Button
-              appearance="primary"
-              disabled={confirming}
-              onClick={() => void handleConfirm()}
-            >
-              {confirming ? 'Casting' : 'Cast team'}
-            </Button>
-            {confirming && <Spinner size="extra-tiny" aria-hidden="true" />}
-          </div>
-        </div>
-      )}
-          </div>
         </div>
       </div>
-    </div>
+    </PageContainer>
   );
 }

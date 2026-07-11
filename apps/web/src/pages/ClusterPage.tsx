@@ -1,28 +1,21 @@
-import {
-  apiClient } from '../api/apiClient';
+﻿import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
-import { Badge,
-  BladeHeader,
+import {
+  Badge,
   Button,
-  EssentialsGrid,
   MessageBar,
   MessageBarBody,
-  Spinner,
   Switch,
-  Text,
-  } from '../copilot-fluent-system';
-import { PageHeader } from '../components/PageHeader';
-import { RefreshCountdown } from '../hooks/useRefreshCountdown';
-import { makeStyles,
   Table,
   TableBody,
   TableCell,
   TableHeader,
   TableHeaderCell,
   TableRow,
+  makeStyles,
   tokens,
-} from '../copilot-fluent-system';
-import { ArrowClockwiseRegular, Server24Regular } from '../copilot-fluent-system';
+} from '@fluentui/react-components';
+import { ArrowClockwiseRegular } from '@fluentui/react-icons';
 import { useCallback, useEffect, useState } from 'react';
 import type {
   AgentPodInfoDto,
@@ -33,6 +26,17 @@ import type {
   SandboxObjectDto,
   WarmPoolStatusDto,
 } from '../api/types';
+import { RefreshCountdown } from '../hooks/useRefreshCountdown';
+import {
+  EmptyState,
+  Label,
+  LoadingState,
+  MetricRow,
+  PageContainer,
+  PageHeader,
+  PageSection,
+  StatTile,
+} from '../components/ui';
 // Cluster (spec-018) — Kubernetes cluster health and capacity view.
 // Calls GET /api/diagnostics/cluster; shows a "Not available" placeholder until
 // the backend endpoint is deployed (404 response).
@@ -40,53 +44,12 @@ import type {
 const REFRESH_MS = 30_000;
 
 const useStyles = makeStyles({
-  root: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalL,
-  },
   kpiRow: {
     display: 'grid',
     gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))',
     gap: tokens.spacingHorizontalM,
   },
-  kpiCard: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalXXS,
-  },
-  kpiLabel: {
-    fontSize: tokens.fontSizeBase200,
-    color: tokens.colorNeutralForeground3,
-    textTransform: 'uppercase',
-    letterSpacing: '0.04em',
-  },
-  kpiValue: {
-    fontSize: tokens.fontSizeBase600,
-    fontWeight: tokens.fontWeightSemibold,
-    lineHeight: 1.1,
-  },
-  kpiSub: {
-    fontSize: tokens.fontSizeBase200,
-    color: tokens.colorNeutralForeground3,
-  },
-  section: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalM,
-  },
-  overviewSurface: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalM,
-  },
   generated: { fontSize: tokens.fontSizeBase200, color: tokens.colorNeutralForeground3 },
-  emptyState: {
-    fontSize: tokens.fontSizeBase300,
-    color: tokens.colorNeutralForeground3,
-    fontStyle: 'italic',
-    padding: `${tokens.spacingVerticalM} 0`,
-  },
 });
 
 function formatAge(ageSeconds: number | null | undefined): string {
@@ -105,26 +68,14 @@ function healthBadgeColor(
   return 'subtle';
 }
 
-function podBadgeColor(status: string): 'success' | 'warning' | 'informative' {
+function podBadgeColor(status: string): 'success' | 'warning' | 'subtle' {
   if (status === 'ready') return 'success';
   if (status === 'pending') return 'warning';
-  return 'informative';
-}
-
-function KpiCard({ label, value, sub }: { label: string; value: number | string; sub?: string }) {
-  const styles = useStyles();
-  return (
-    <div className={['azf-surface azf-surface--panel azf-surface--padding-compact', styles.kpiCard].filter(Boolean).join(' ')}>
-      <Text className={styles.kpiLabel}>{label}</Text>
-      <Text className={styles.kpiValue}>{value}</Text>
-      {sub && <Text className={styles.kpiSub}>{sub}</Text>}
-    </div>
-  );
+  return 'subtle';
 }
 
 function HealthChecksTable({ rows }: { rows: DetailedHealthCheckDto[] }) {
-  const styles = useStyles();
-  if (rows.length === 0) return <Text className={styles.emptyState}>No health checks.</Text>;
+  if (rows.length === 0) return <EmptyState title="No health checks" />;
   return (
     <Table aria-label="Health checks" size="small">
       <TableHeader>
@@ -152,8 +103,7 @@ function HealthChecksTable({ rows }: { rows: DetailedHealthCheckDto[] }) {
 }
 
 function AgentPodsTable({ pods, label }: { pods: AgentPodInfoDto[]; label: string }) {
-  const styles = useStyles();
-  if (pods.length === 0) return <Text className={styles.emptyState}>No {label.toLowerCase()}.</Text>;
+  if (pods.length === 0) return <EmptyState title={`No ${label.toLowerCase()}`} />;
   return (
     <Table aria-label={label} size="small">
       <TableHeader>
@@ -181,8 +131,7 @@ function AgentPodsTable({ pods, label }: { pods: AgentPodInfoDto[]; label: strin
 }
 
 function PendingCapacityTable({ rows }: { rows: PendingCapacityRunDto[] }) {
-  const styles = useStyles();
-  if (rows.length === 0) return <Text className={styles.emptyState}>No pending capacity runs.</Text>;
+  if (rows.length === 0) return <EmptyState title="No pending capacity runs" />;
   return (
     <Table aria-label="Pending capacity runs" size="small">
       <TableHeader>
@@ -212,8 +161,7 @@ function PendingCapacityTable({ rows }: { rows: PendingCapacityRunDto[] }) {
 }
 
 function WarmPoolsTable({ rows }: { rows: WarmPoolStatusDto[] }) {
-  const styles = useStyles();
-  if (rows.length === 0) return <Text className={styles.emptyState}>No SandboxWarmPool objects found.</Text>;
+  if (rows.length === 0) return <EmptyState title="No warm pools configured" />;
   return (
     <Table aria-label="Warm pools" size="small">
       <TableHeader>
@@ -241,8 +189,7 @@ function WarmPoolsTable({ rows }: { rows: WarmPoolStatusDto[] }) {
 }
 
 function SandboxObjectsTable({ rows }: { rows: SandboxObjectDto[] }) {
-  const styles = useStyles();
-  if (rows.length === 0) return <Text className={styles.emptyState}>No Sandbox objects found.</Text>;
+  if (rows.length === 0) return <EmptyState title="No sandbox objects" description="Sandbox objects will appear when agent runs are active." />;
   return (
     <Table aria-label="Sandbox objects" size="small">
       <TableHeader>
@@ -274,8 +221,7 @@ function SandboxObjectsTable({ rows }: { rows: SandboxObjectDto[] }) {
 }
 
 function SandboxClaimsTable({ rows }: { rows: SandboxClaimObjectDto[] }) {
-  const styles = useStyles();
-  if (rows.length === 0) return <Text className={styles.emptyState}>No SandboxClaim objects.</Text>;
+  if (rows.length === 0) return <EmptyState title="No sandbox claims" description="Claims will appear when runs are assigned to sandbox environments." />;
   return (
     <Table aria-label="Sandbox claims" size="small">
       <TableHeader>
@@ -354,11 +300,10 @@ export function ClusterPage() {
   }, [load, autoRefresh]);
 
   return (
-    <div className={['azf-stack azf-page azf-pattern-shell', styles.root].filter(Boolean).join(' ')}>
+    <PageContainer>
       <PageHeader
         title="Cluster"
-        subtitle="Kubernetes cluster health and capacity."
-        resourceIcon={<Server24Regular />}
+        description="Kubernetes cluster health and capacity."
         actions={
           <>
             {autoRefresh && lastRefreshedAt != null && (
@@ -395,85 +340,68 @@ export function ClusterPage() {
         </MessageBar>
       )}
 
-      {loading && !data && !notAvailable && <Spinner label="Loading cluster diagnostics" />}
+      {loading && !data && !notAvailable && <LoadingState label="Loading cluster diagnostics" />}
 
       {data && (
         <>
-          <div className={['azf-surface azf-surface--panel azf-surface--padding-comfortable', styles.overviewSurface].filter(Boolean).join(' ')}>
-            <BladeHeader
-              size="compact"
-              title="Cluster resource overview"
-              subtitle="Live diagnostics, capacity queues, and Kubernetes sandbox resource state."
-            />
-            <EssentialsGrid
-              properties={[
-                { id: 'checks', label: 'Check summary', value: `${data.checks.filter(c => c.status === 'healthy').length} healthy / ${data.checks.length}` },
-                { id: 'claims', label: 'Sandbox claims', value: data.sandbox_claims?.length ?? 0 },
-                { id: 'pending', label: 'Capacity queue', value: data.pending_capacity_runs.length },
-                { id: 'generated', label: 'Generated UTC', value: data.generated_utc },
-              ]}
-            />
-          </div>
+          <PageSection
+            title="Cluster overview"
+            description="Live diagnostics, capacity queues, and sandbox resource state."
+          >
+            <MetricRow items={[
+              { label: 'Check summary', value: `${data.checks.filter(c => c.status === 'healthy').length} healthy / ${data.checks.length}` },
+              { label: 'Sandbox claims', value: String(data.sandbox_claims?.length ?? 0) },
+              { label: 'Capacity queue', value: String(data.pending_capacity_runs.length) },
+              { label: 'Generated', value: data.generated_utc },
+            ]} />
+          </PageSection>
 
-          {/* KPI row */}
           <div className={styles.kpiRow}>
-            <KpiCard label="Orphaned" value={data.orphaned_agent_pods.length} />
-            <KpiCard label="Pending capacity" value={data.pending_capacity_runs.length} />
-            <KpiCard
-              label="Checks OK"
+            <StatTile label="Orphaned pods" value={String(data.orphaned_agent_pods.length)} />
+            <StatTile label="Pending capacity" value={String(data.pending_capacity_runs.length)} />
+            <StatTile
+              label="Checks healthy"
               value={`${data.checks.filter(c => c.status === 'healthy').length} / ${data.checks.length}`}
             />
             {(data.warm_pools?.length ?? 0) > 0 && (
-              <KpiCard
-                label="Warm pool"
-                value={`${data.warm_pools!.reduce((s, p) => s + p.ready_replicas, 0)} / ${data.warm_pools!.reduce((s, p) => s + p.desired_replicas, 0)} ready`}
+              <StatTile
+                label="Warm pool ready"
+                value={`${data.warm_pools!.reduce((s, p) => s + p.ready_replicas, 0)} / ${data.warm_pools!.reduce((s, p) => s + p.desired_replicas, 0)}`}
               />
             )}
           </div>
 
-          {/* Health checks */}
-          <div className={['azf-surface azf-surface--panel azf-surface--padding-comfortable', styles.section].filter(Boolean).join(' ')}>
-            <BladeHeader size="compact" title="Health checks" />
+          <PageSection title="Health checks">
             <HealthChecksTable rows={data.checks} />
-          </div>
+          </PageSection>
 
-          {/* Sandbox claims — moved up: shows bound pods, making active-pods section redundant */}
-          <div className={['azf-surface azf-surface--panel azf-surface--padding-comfortable', styles.section].filter(Boolean).join(' ')}>
-            <BladeHeader size="compact" title={`Sandbox claims (${data.sandbox_claims?.length ?? 0})`} />
+          <PageSection title={`Sandbox claims (${data.sandbox_claims?.length ?? 0})`}>
             <SandboxClaimsTable rows={data.sandbox_claims ?? []} />
-          </div>
+          </PageSection>
 
-          {/* Active agent pods removed — already captured in Sandbox claims */}
-
-          {/* Orphaned agent pods */}
           {data.orphaned_agent_pods.length > 0 && (
-            <div className={['azf-surface azf-surface--panel azf-surface--padding-comfortable', styles.section].filter(Boolean).join(' ')}>
-              <BladeHeader size="compact" title={`Orphaned agent pods (${data.orphaned_agent_pods.length})`} />
+            <PageSection title={`Orphaned agent pods (${data.orphaned_agent_pods.length})`}>
               <AgentPodsTable pods={data.orphaned_agent_pods} label="Orphaned agent pods" />
-            </div>
+            </PageSection>
           )}
 
-          {/* Pending capacity runs */}
-          <div className={['azf-surface azf-surface--panel azf-surface--padding-comfortable', styles.section].filter(Boolean).join(' ')}>
-            <BladeHeader size="compact" title={`Pending capacity (${data.pending_capacity_runs.length})`} />
+          <PageSection title={`Pending capacity (${data.pending_capacity_runs.length})`}>
             <PendingCapacityTable rows={data.pending_capacity_runs} />
-          </div>
+          </PageSection>
 
-          {/* Warm pools */}
-          <div className={['azf-surface azf-surface--panel azf-surface--padding-comfortable', styles.section].filter(Boolean).join(' ')}>
-            <BladeHeader size="compact" title={`Warm pools (${data.warm_pools?.length ?? 0})`} />
+          <PageSection title={`Warm pools (${data.warm_pools?.length ?? 0})`}>
             <WarmPoolsTable rows={data.warm_pools ?? []} />
-          </div>
+          </PageSection>
 
-          {/* Sandbox objects */}
-          <div className={['azf-surface azf-surface--panel azf-surface--padding-comfortable', styles.section].filter(Boolean).join(' ')}>
-            <BladeHeader size="compact" title={`Sandbox objects (${data.sandbox_objects?.length ?? 0})`} />
+          <PageSection title={`Sandbox objects (${data.sandbox_objects?.length ?? 0})`}>
             <SandboxObjectsTable rows={data.sandbox_objects ?? []} />
-          </div>
+          </PageSection>
 
-          <Text className={styles.generated}>Generated {data.generated_utc} · {data.total_duration_ms.toFixed(0)} ms</Text>
+          <Label as="p" tone="quiet" className={styles.generated}>
+            Generated {data.generated_utc} · {data.total_duration_ms.toFixed(0)} ms
+          </Label>
         </>
       )}
-    </div>
+    </PageContainer>
   );
 }

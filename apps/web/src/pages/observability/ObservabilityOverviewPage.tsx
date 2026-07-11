@@ -1,76 +1,42 @@
-import { useEffect, useMemo, useState } from 'react';
+﻿import { useEffect, useMemo, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { apiClient } from '../../api/apiClient';
 import { ApiError } from '../../api/client';
 import type { Project, ProjectMetricsDto } from '../../api/types';
 import {
   Badge,
-  BladeHeader,
-  CommandBar,
-  EmptyState,
-  FilterBar,
+  Button,
   MessageBar,
   MessageBarBody,
   Select,
-  Spinner,
-  StatusIconText,
-  Text,
   makeStyles,
   tokens,
-  ArrowSyncRegular,
-  Pulse24Regular,
-} from '../../copilot-fluent-system';
-import type { AzfTone } from '../../copilot-fluent-system';
+} from '@fluentui/react-components';
+import { ArrowSyncRegular } from '@fluentui/react-icons';
 import { ModelPerformancePanels } from '../../components/dashboard/ModelPerformancePanels';
 import { ObservabilityLayout } from '../../components/observability/ObservabilityLayout';
+import {
+  EmptyState,
+  LoadingState,
+  PageSection,
+  StatTile,
+} from '../../components/ui';
 
 type TimeRange = '7d' | '30d' | '90d';
 
 const useStyles = makeStyles({
-  commandSurface: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalXS,
-  },
-  filterSelect: {
-    width: '140px',
-  },
-  summaryGrid: {
+  tileGrid: {
     display: 'grid',
     gridTemplateColumns: 'repeat(4, minmax(0, 1fr))',
     gap: tokens.spacingHorizontalM,
     '@media (max-width: 980px)': { gridTemplateColumns: 'repeat(2, minmax(0, 1fr))' },
     '@media (max-width: 640px)': { gridTemplateColumns: '1fr' },
   },
-  summaryTile: {
+  filterRow: {
     display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalXS,
-    minHeight: '112px',
-  },
-  summaryLabel: {
-    color: tokens.colorNeutralForeground3,
-    fontSize: tokens.fontSizeBase200,
-    textTransform: 'uppercase',
-    letterSpacing: '0.04em',
-  },
-  summaryValue: {
-    fontSize: tokens.fontSizeHero700,
-    lineHeight: tokens.lineHeightHero700,
-    fontWeight: tokens.fontWeightSemibold,
-  },
-  summaryFooter: {
-    marginTop: 'auto',
-  },
-  dataSection: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalM,
-  },
-  loadingSurface: {
-    minHeight: '180px',
-    justifyContent: 'center',
     alignItems: 'center',
+    gap: tokens.spacingHorizontalS,
+    flexWrap: 'wrap',
   },
 });
 
@@ -113,17 +79,6 @@ function hasTelemetry(metrics: ProjectMetricsDto | null): boolean {
     || metrics.modelUsage?.some((row) => row.invocationCount > 0 || row.totalNanoAiu > 0)
     || metrics.responseDuration?.some((row) => row.p50Ms != null || row.p95Ms != null)
     || metrics.timeToFirstToken?.some((row) => row.p50Ms != null || row.p95Ms != null),
-  );
-}
-
-function SummaryTile({ label, value, detail, tone }: { label: string; value: string; detail: string; tone: AzfTone }) {
-  const styles = useStyles();
-  return (
-    <div className={['azf-surface azf-surface--subtle azf-surface--padding-comfortable', styles.summaryTile].join(' ')}>
-      <Text className={styles.summaryLabel}>{label}</Text>
-      <Text className={styles.summaryValue}>{value}</Text>
-      <StatusIconText status={tone} className={styles.summaryFooter}>{detail}</StatusIconText>
-    </div>
   );
 }
 
@@ -179,77 +134,62 @@ export function ObservabilityOverviewPage() {
       projectName={project?.name}
       activeTab="overview"
       title="Observability"
-      subtitle="Azure Monitor-style telemetry for model performance, token usage, and invocation trends."
+      description="Telemetry for model performance, token usage, and invocation trends."
     >
-      <div className={['azf-surface azf-surface--panel azf-surface--padding-compact', styles.commandSurface].join(' ')}>
-        <CommandBar
-          title="Monitor command band"
-          description="Refresh the project telemetry blade without leaving the current resource."
-          primaryActions={[{
-            id: 'refresh-overview',
-            label: 'Refresh',
-            icon: <ArrowSyncRegular />,
-            onClick: () => setReloadKey((value) => value + 1),
-          }]}
-        >
-          <Badge appearance="tint" color={hasTelemetry(metrics) ? 'success' : 'warning'}>
-            {hasTelemetry(metrics) ? 'Telemetry flowing' : 'Awaiting telemetry'}
-          </Badge>
-        </CommandBar>
-        <FilterBar
-          filters={[
-            { id: 'scope', label: 'Scope', value: project?.name ?? projectId, selected: true },
-            { id: 'signal', label: 'Signal', value: 'Model performance', selected: true },
-            { id: 'range', label: 'Window', value: rangeLabel(range), selected: true },
-          ]}
-        >
-          <Select
-            aria-label="Observability time range"
-            value={range}
-            onChange={(_, data) => setRange(data.value as TimeRange)}
-            size="small"
-            className={styles.filterSelect}
-          >
-            <option value="7d">Last 7 days</option>
-            <option value="30d">Last 30 days</option>
-            <option value="90d">Last 90 days</option>
-          </Select>
-        </FilterBar>
-      </div>
-
-      {error && (
-        <MessageBar intent="error">
-          <MessageBarBody>{error}</MessageBarBody>
-        </MessageBar>
-      )}
-
-      <section className={styles.dataSection} aria-label="Observability overview status">
-        <BladeHeader
-          size="compact"
-          title="Resource health summary"
-          subtitle="Fast Azure Monitor rollup for the selected project and time window."
-          resourceIcon={<Pulse24Regular />}
-          menuLabel={<Badge appearance="outline">{rangeLabel(range)}</Badge>}
-          loading={loading}
-        />
-        <div className={styles.summaryGrid}>
-          <SummaryTile label="Model calls" value={compactNumber(summary.totalCalls)} detail="Invocation trend" tone={summary.totalCalls > 0 ? 'success' : 'warning'} />
-          <SummaryTile label="AI credits" value={formatAiu(summary.totalAiu)} detail="AppInsights usage" tone={summary.totalAiu > 0 ? 'success' : 'info'} />
-          <SummaryTile label="Active models" value={String(summary.activeModels)} detail="Model mix" tone={summary.activeModels > 0 ? 'success' : 'warning'} />
-          <SummaryTile label="Agent rows" value={String(summary.agentRows)} detail={`${summary.p95Models} latency baselines`} tone={summary.agentRows > 0 ? 'success' : 'info'} />
+      <PageSection
+        title="Performance summary"
+        description={`Summary for the selected time window. ${rangeLabel(range)}.`}
+        actions={
+          <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS }}>
+            <Badge appearance="tint" color={hasTelemetry(metrics) ? 'success' : 'warning'}>
+              {hasTelemetry(metrics) ? 'Telemetry flowing' : 'Awaiting telemetry'}
+            </Badge>
+            <Select
+              aria-label="Observability time range"
+              value={range}
+              onChange={(_, data) => setRange(data.value as TimeRange)}
+              size="small"
+              style={{ width: '140px' }}
+            >
+              <option value="7d">Last 7 days</option>
+              <option value="30d">Last 30 days</option>
+              <option value="90d">Last 90 days</option>
+            </Select>
+            <Button
+              appearance="secondary"
+              icon={<ArrowSyncRegular />}
+              onClick={() => setReloadKey((value) => value + 1)}
+            >
+              Refresh
+            </Button>
+          </div>
+        }
+      >
+        {error && (
+          <MessageBar intent="error">
+            <MessageBarBody>{error}</MessageBarBody>
+          </MessageBar>
+        )}
+        <div className={styles.tileGrid}>
+          <StatTile label="Model calls" value={compactNumber(summary.totalCalls)} hint="Invocation trend" />
+          <StatTile label="AI credits" value={formatAiu(summary.totalAiu)} hint="Usage" />
+          <StatTile label="Active models" value={String(summary.activeModels)} hint="Model mix" />
+          <StatTile label="Agent rows" value={String(summary.agentRows)} hint={`${summary.p95Models} latency baselines`} />
         </div>
-      </section>
+      </PageSection>
 
       {loading && !metrics ? (
-        <div className={['azf-surface azf-surface--panel azf-surface--padding-comfortable azf-stack', styles.loadingSurface].join(' ')} aria-live="polite">
-          <Spinner label="Loading observability overview" />
-        </div>
+        <LoadingState label="Loading observability overview" />
       ) : (
-        <section className={styles.dataSection} aria-label="Model performance data">
-          <BladeHeader size="compact" title="Data sections" subtitle="Layered trend, model mix, and latency surfaces from the telemetry dataset." />
+        <PageSection title="Performance data" description="Trend, model mix, and latency data for the selected time range.">
           <ModelPerformancePanels metrics={metrics} />
-          {!metrics && <EmptyState title="No observability data yet" body="Run activity metrics will appear after project runs emit telemetry." />}
-        </section>
+          {!metrics && (
+            <EmptyState
+              title="No observability data yet"
+              description="Run activity metrics will appear after project runs emit telemetry."
+            />
+          )}
+        </PageSection>
       )}
     </ObservabilityLayout>
   );

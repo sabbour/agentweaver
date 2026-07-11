@@ -1,26 +1,36 @@
-import {
-  apiClient } from '../api/apiClient';
+﻿import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
-import { AzureDataGrid,
-  BladeHeader,
+import {
+  Badge,
   Button,
-  CommandBar,
-  EmptyState,
   MessageBar,
   MessageBarBody,
-  Spinner,
-  StatusIconText,
   Switch,
-  Text,
-  } from '../copilot-fluent-system';
-import { PageHeader } from '../components/PageHeader';
-import { RefreshCountdown } from '../hooks/useRefreshCountdown';
-import { makeStyles,
+  Table,
+  TableBody,
+  TableCell,
+  TableHeader,
+  TableHeaderCell,
+  TableRow,
+  makeStyles,
   tokens,
-} from '../copilot-fluent-system';
-import { ArrowClockwiseRegular } from '../copilot-fluent-system';
+} from '@fluentui/react-components';
+import { ArrowClockwiseRegular } from '@fluentui/react-icons';
 import { useCallback, useEffect, useState } from 'react';
 import type { HeartbeatAutomationDto, HeartbeatStatusDto, HeartbeatTickDto } from '../api/types';
+import { RefreshCountdown } from '../hooks/useRefreshCountdown';
+import {
+  AppCard,
+  Body,
+  EmptyState,
+  Label,
+  LoadingState,
+  MetricRow,
+  PageContainer,
+  PageHeader,
+  PageSection,
+  TitleText,
+} from '../components/ui';
 // Heartbeat (Spec 011, FR-017) — service status, last error, the real automations
 // catalog (exactly two: Coordinator Heartbeat + Checkpoint GC), and the recent
 // tick activity timeline (acted/errors/duration). Real data only — no invented rows.
@@ -28,58 +38,16 @@ import type { HeartbeatAutomationDto, HeartbeatStatusDto, HeartbeatTickDto } fro
 const REFRESH_MS = 15000;
 
 const useStyles = makeStyles({
-  root: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalL,
-  },
   statusRow: {
     display: 'flex',
     alignItems: 'center',
     gap: tokens.spacingHorizontalM,
     flexWrap: 'wrap',
   },
-  commandSurface: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalM,
-  },
-  summaryGrid: {
-    display: 'grid',
-    gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
-    gap: tokens.spacingHorizontalM,
-  },
-  summaryCard: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalXXS,
-  },
-  summaryLabel: {
-    color: tokens.colorNeutralForeground3,
-    fontSize: tokens.fontSizeBase200,
-    textTransform: 'uppercase',
-    letterSpacing: '0.04em',
-  },
-  summaryValue: {
-    fontSize: tokens.fontSizeBase600,
-    lineHeight: tokens.lineHeightBase600,
-    fontWeight: tokens.fontWeightSemibold,
-    fontVariantNumeric: 'tabular-nums',
-  },
-  section: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalM,
-  },
   automations: {
     display: 'grid',
     gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))',
     gap: tokens.spacingHorizontalM,
-  },
-  automationCard: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalXS,
   },
   automationHeader: {
     display: 'flex',
@@ -87,10 +55,6 @@ const useStyles = makeStyles({
     justifyContent: 'space-between',
     gap: tokens.spacingHorizontalM,
   },
-  automationName: { fontWeight: tokens.fontWeightSemibold },
-  automationDesc: { color: tokens.colorNeutralForeground2, fontSize: tokens.fontSizeBase200 },
-  meta: { color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200 },
-  generated: { fontSize: tokens.fontSizeBase200, color: tokens.colorNeutralForeground3 },
 });
 
 function relativeTime(iso: string): string {
@@ -105,10 +69,10 @@ function relativeTime(iso: string): string {
   return `${Math.floor(hours / 24)}d ago`;
 }
 
-function heartbeatTone(status: string): 'success' | 'warning' | 'danger' | 'neutral' {
+function heartbeatStatusColor(status: string): 'success' | 'warning' | 'danger' | 'subtle' {
   if (status === 'running' || status === 'idle') return 'success';
   if (status === 'waiting_first_tick') return 'warning';
-  if (status === 'disabled') return 'neutral';
+  if (status === 'disabled') return 'subtle';
   return 'danger';
 }
 
@@ -120,18 +84,22 @@ function AutomationCard({
   styles: ReturnType<typeof useStyles>;
 }) {
   return (
-    <div className={['azf-surface azf-surface--panel azf-surface--padding-compact', styles.automationCard].filter(Boolean).join(' ')}>
-      <div className={styles.automationHeader}>
-        <Text className={styles.automationName}>{automation.name}</Text>
-        <StatusIconText status={heartbeatTone(automation.status)}>{automation.status}</StatusIconText>
+    <AppCard>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS }}>
+        <div className={styles.automationHeader}>
+          <TitleText as="span">{automation.name}</TitleText>
+          <Badge appearance="tint" color={heartbeatStatusColor(automation.status)}>
+            {automation.status}
+          </Badge>
+        </div>
+        <Body as="p" tone="muted">{automation.description}</Body>
+        <Label as="span" tone="quiet">Cadence: every {Math.round(automation.cadence_seconds)}s</Label>
+        <Label as="span" tone="quiet">
+          Last run: {automation.last_run_utc ? relativeTime(automation.last_run_utc) : '—'}
+          {automation.last_acted_count != null && ` · acted ${automation.last_acted_count}`}
+        </Label>
       </div>
-      <Text className={styles.automationDesc}>{automation.description}</Text>
-      <Text className={styles.meta}>Cadence: every {Math.round(automation.cadence_seconds)}s</Text>
-      <Text className={styles.meta}>
-        Last run: {automation.last_run_utc ? relativeTime(automation.last_run_utc) : '—'}
-        {automation.last_acted_count != null && ` · acted ${automation.last_acted_count}`}
-      </Text>
-    </div>
+    </AppCard>
   );
 }
 
@@ -173,10 +141,10 @@ export function HeartbeatPage() {
   }, [load, autoRefresh]);
 
   return (
-    <div className={['azf-stack azf-page azf-pattern-shell', styles.root].filter(Boolean).join(' ')}>
+    <PageContainer>
       <PageHeader
         title="Heartbeat"
-        subtitle="Background automation status and recent ticks."
+        description="Background automation status and recent ticks."
         actions={
           <>
             {autoRefresh && lastRefreshedAt != null && (
@@ -205,43 +173,31 @@ export function HeartbeatPage() {
         </MessageBar>
       )}
 
-      {loading && !data && <Spinner label="Loading heartbeat status" />}
+      {loading && !data && <LoadingState label="Loading heartbeat status" />}
 
       {data && (
         <>
-          <section className={['azf-surface azf-surface--raised azf-surface--padding-comfortable', styles.commandSurface].filter(Boolean).join(' ')} aria-label="Heartbeat service resource summary">
-            <CommandBar
-              title="Automation command surface"
-              description="Azure resource monitor for background coordinator and checkpoint automations."
-            >
-              <div className={styles.statusRow}>
-                <StatusIconText status={heartbeatTone(data.service_status)}>{data.service_status}</StatusIconText>
-                <Text className={styles.meta}>
-                  {data.enabled ? 'Enabled' : 'Disabled'} · interval {Math.round(data.interval_seconds)}s
-                </Text>
-                <Text className={styles.meta}>
-                  Last tick: {data.last_tick_utc ? relativeTime(data.last_tick_utc) : '—'}
-                </Text>
-              </div>
-            </CommandBar>
-            <div className={styles.summaryGrid}>
-              <div className={['azf-surface azf-surface--subtle azf-surface--padding-compact', styles.summaryCard].filter(Boolean).join(' ')}>
-                <Text className={styles.summaryLabel}>Service state</Text>
-                <Text className={styles.summaryValue}>{data.enabled ? 'Enabled' : 'Disabled'}</Text>
-                <Text className={styles.automationDesc}>{data.enabled ? 'Background processing enabled' : 'Background processing disabled'}</Text>
-              </div>
-              <div className={['azf-surface azf-surface--subtle azf-surface--padding-compact', styles.summaryCard].filter(Boolean).join(' ')}>
-                <Text className={styles.summaryLabel}>Cadence</Text>
-                <Text className={styles.summaryValue}>{Math.round(data.interval_seconds)}s</Text>
-                <Text className={styles.automationDesc}>Coordinator heartbeat interval</Text>
-              </div>
-              <div className={['azf-surface azf-surface--subtle azf-surface--padding-compact', styles.summaryCard].filter(Boolean).join(' ')}>
-                <Text className={styles.summaryLabel}>Automations</Text>
-                <Text className={styles.summaryValue}>{data.automations.length}</Text>
-                <Text className={styles.automationDesc}>Catalogued background jobs</Text>
-              </div>
+          <PageSection
+            title="Service status"
+            description="Background coordinator and checkpoint automation status."
+          >
+            <div className={styles.statusRow}>
+              <Badge appearance="tint" color={heartbeatStatusColor(data.service_status)}>
+                {data.service_status}
+              </Badge>
+              <Label as="span" tone="muted">
+                {data.enabled ? 'Enabled' : 'Disabled'} · interval {Math.round(data.interval_seconds)}s
+              </Label>
+              <Label as="span" tone="muted">
+                Last tick: {data.last_tick_utc ? relativeTime(data.last_tick_utc) : '—'}
+              </Label>
             </div>
-          </section>
+            <MetricRow items={[
+              { label: 'Status', value: data.enabled ? 'Enabled' : 'Disabled' },
+              { label: 'Cadence', value: `${Math.round(data.interval_seconds)}s` },
+              { label: 'Automations', value: String(data.automations.length) },
+            ]} />
+          </PageSection>
 
           {data.last_error && (
             <MessageBar intent="error">
@@ -249,47 +205,53 @@ export function HeartbeatPage() {
             </MessageBar>
           )}
 
-          <div className={['azf-surface azf-surface--panel azf-surface--padding-comfortable', styles.section].filter(Boolean).join(' ')}>
-            <BladeHeader size="compact" title="Automations" />
+          <PageSection title="Automations">
             <div className={styles.automations}>
               {data.automations.map((a) => (
                 <AutomationCard key={a.name} automation={a} styles={styles} />
               ))}
             </div>
-          </div>
+          </PageSection>
 
-          <div className={['azf-surface azf-surface--panel azf-surface--padding-comfortable', styles.section].filter(Boolean).join(' ')}>
-            <BladeHeader size="compact" title="Recent activity" />
+          <PageSection title="Recent activity">
             {data.recent_activity.length === 0 ? (
-              <EmptyState title="No ticks recorded yet" body="Recent heartbeat activity will appear after the next automation cycle." />
-            ) : (
-              <AzureDataGrid<HeartbeatTickDto>
-                ariaLabel="Recent heartbeat ticks"
-                items={data.recent_activity}
-                getRowId={(tick, index) => `${tick.timestamp_utc}-${index}`}
-                columns={[
-                  { columnId: 'automation', header: 'Automation', renderCell: (tick) => tick.automation_name, sortable: true, sortValue: (tick) => tick.automation_name },
-                  { columnId: 'when', header: 'When', renderCell: (tick) => relativeTime(tick.timestamp_utc), sortable: true, sortValue: (tick) => tick.timestamp_utc },
-                  { columnId: 'acted', header: 'Acted', renderCell: (tick) => tick.acted_count, sortable: true, sortValue: (tick) => tick.acted_count },
-                  {
-                    columnId: 'errors',
-                    header: 'Errors',
-                    renderCell: (tick) => (
-                      tick.error_count > 0
-                        ? <StatusIconText status="danger">{tick.error_count}</StatusIconText>
-                        : tick.error_count
-                    ),
-                    sortable: true,
-                    sortValue: (tick) => tick.error_count,
-                  },
-                  { columnId: 'duration', header: 'Duration', renderCell: (tick) => `${Math.round(tick.duration_ms)} ms`, sortable: true, sortValue: (tick) => tick.duration_ms },
-                  { columnId: 'error', header: 'Error', renderCell: (tick) => tick.error ?? '—' },
-                ]}
+              <EmptyState
+                title="No ticks recorded yet"
+                description="Recent heartbeat activity will appear after the next automation cycle."
               />
+            ) : (
+              <Table aria-label="Recent heartbeat ticks" size="small">
+                <TableHeader>
+                  <TableRow>
+                    <TableHeaderCell>Automation</TableHeaderCell>
+                    <TableHeaderCell>When</TableHeaderCell>
+                    <TableHeaderCell>Acted</TableHeaderCell>
+                    <TableHeaderCell>Errors</TableHeaderCell>
+                    <TableHeaderCell>Duration</TableHeaderCell>
+                    <TableHeaderCell>Error</TableHeaderCell>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {data.recent_activity.map((tick: HeartbeatTickDto, index: number) => (
+                    <TableRow key={`${tick.timestamp_utc}-${index}`}>
+                      <TableCell>{tick.automation_name}</TableCell>
+                      <TableCell>{relativeTime(tick.timestamp_utc)}</TableCell>
+                      <TableCell>{tick.acted_count}</TableCell>
+                      <TableCell>
+                        {tick.error_count > 0 ? (
+                          <Badge appearance="tint" color="danger">{tick.error_count}</Badge>
+                        ) : tick.error_count}
+                      </TableCell>
+                      <TableCell>{Math.round(tick.duration_ms)} ms</TableCell>
+                      <TableCell>{tick.error ?? '—'}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
             )}
-          </div>
+          </PageSection>
         </>
       )}
-    </div>
+    </PageContainer>
   );
 }

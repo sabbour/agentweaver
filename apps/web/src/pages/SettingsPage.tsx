@@ -1,34 +1,31 @@
-import {
-  apiClient } from '../api/apiClient';
+﻿import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
-import { BladeHeader,
-FormFieldRow,
-FormFooter,
-Input,
+import {
+  Button,
+  Field,
+  Input,
   MessageBar,
   MessageBarBody,
   Spinner,
   Switch,
-  Text,
-  } from '../copilot-fluent-system';
-import { PageHeader } from '../components/PageHeader';
-import { makeStyles,
+  makeStyles,
   tokens,
-} from '../copilot-fluent-system';
-import { Settings24Regular, Shield24Regular } from '../copilot-fluent-system';
+} from '@fluentui/react-components';
 import { useState } from 'react';
 import type { SandboxPolicy } from '../api/types';
+import {
+  Label,
+  PageContainer,
+  PageHeader,
+  PageSection,
+} from '../components/ui';
+
 const useStyles = makeStyles({
-  root: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalL,
-    maxWidth: '900px',
-  },
   section: {
     display: 'flex',
     flexDirection: 'column',
     gap: tokens.spacingVerticalM,
+    maxWidth: '640px',
   },
   listBox: {
     backgroundColor: tokens.colorNeutralBackground3,
@@ -50,15 +47,10 @@ const useStyles = makeStyles({
     color: tokens.colorNeutralForeground3,
     fontStyle: 'italic',
   },
-  actions: {
+  formActions: {
     display: 'flex',
     gap: tokens.spacingHorizontalM,
     alignItems: 'center',
-  },
-  formSurface: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalL,
   },
 });
 
@@ -119,63 +111,66 @@ export function SettingsPage() {
   };
 
   return (
-    <div className={['azf-stack azf-page azf-pattern-shell', styles.root].filter(Boolean).join(' ')}>
+    <PageContainer width="readable">
       <PageHeader
         title="Settings"
-        subtitle="System-level configuration for local repository policy."
-        resourceIcon={<Settings24Regular />}
+        description="System-level configuration for local repository policy."
       />
 
-      <div className={['azf-surface azf-surface--panel azf-surface--padding-comfortable', styles.formSurface].filter(Boolean).join(' ')}>
-        <BladeHeader
-          size="compact"
-          title="Sandbox policy"
-          subtitle="View and update the sandbox policy for a repository. Enter the repository path to load its current policy."
-          resourceIcon={<Shield24Regular />}
-        />
+      <PageSection
+        title="Sandbox policy"
+        description="View and update the sandbox policy for a repository. Enter the repository path to load its current policy."
+      >
+        <div className={styles.section}>
+          <Field
+            label="Repository path"
+            hint="Use an absolute local path for the repository whose sandbox policy should be inspected."
+          >
+            <Input
+              id="settings-repository-path"
+              value={repositoryPath}
+              placeholder="C:/path/to/repo"
+              onChange={(_, data) => setRepositoryPath(data.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') void handleFetch(); }}
+            />
+          </Field>
 
-        <FormFieldRow label="Repository path" htmlFor="settings-repository-path" hint="Use an absolute local path for the repository whose sandbox policy should be inspected.">
-          <Input
-            id="settings-repository-path"
-            value={repositoryPath}
-            placeholder="C:/path/to/repo"
-            onChange={(_, data) => setRepositoryPath(data.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter') void handleFetch(); }}
-          />
-        </FormFieldRow>
+          <div className={styles.formActions}>
+            <Button
+              appearance="primary"
+              disabled={!repositoryPath.trim() || loading}
+              onClick={() => void handleFetch()}
+            >
+              {loading ? 'Loading' : 'Load policy'}
+            </Button>
+            <Button
+              appearance="secondary"
+              disabled={loading && !repositoryPath}
+              onClick={() => {
+                setRepositoryPath('');
+                setPolicy(null);
+                setFetchError(null);
+                setSaveError(null);
+                setSaveSuccess(false);
+              }}
+            >
+              Clear
+            </Button>
+            {loading && <Spinner size="extra-tiny" aria-hidden="true" />}
+          </div>
 
-        <FormFooter
-          primaryAction={{
-            id: 'load-policy',
-            label: loading ? 'Loading' : 'Load policy',
-            disabled: !repositoryPath.trim() || loading,
-            loading,
-            onClick: () => void handleFetch(),
-          }}
-          secondaryAction={{
-            id: 'clear-policy',
-            label: 'Clear',
-            disabled: loading && !repositoryPath,
-            onClick: () => {
-              setRepositoryPath('');
-              setPolicy(null);
-              setFetchError(null);
-              setSaveError(null);
-              setSaveSuccess(false);
-            },
-          }}
-          feedback={loading ? <Spinner size="extra-tiny" aria-hidden="true" /> : undefined}
-        />
+          {fetchError && (
+            <MessageBar intent="error">
+              <MessageBarBody>{fetchError}</MessageBarBody>
+            </MessageBar>
+          )}
+        </div>
+      </PageSection>
 
-        {fetchError && (
-          <MessageBar intent="error">
-            <MessageBarBody>{fetchError}</MessageBarBody>
-          </MessageBar>
-        )}
-
-        {policy && (
-          <div className={['azf-surface azf-surface--subtle azf-surface--padding-comfortable', styles.section].filter(Boolean).join(' ')}>
-            <FormFieldRow label="Shell execution">
+      {policy && (
+        <PageSection title="Policy settings">
+          <div className={styles.section}>
+            <Field label="Shell execution">
               <Switch
                 label={policy.shell_enabled ? 'Enabled' : 'Disabled'}
                 checked={policy.shell_enabled}
@@ -183,9 +178,9 @@ export function SettingsPage() {
                   setPolicy((prev) => prev ? { ...prev, shell_enabled: data.checked } : prev)
                 }
               />
-            </FormFieldRow>
+            </Field>
 
-            <FormFieldRow
+            <Field
               label="Sandbox enabled"
               hint="When off, commands run directly on the host with no isolation layer."
             >
@@ -196,9 +191,9 @@ export function SettingsPage() {
                   setPolicy((prev) => prev ? { ...prev, direct: !data.checked } : prev)
                 }
               />
-            </FormFieldRow>
+            </Field>
 
-            <FormFieldRow
+            <Field
               label="Outbound network"
               hint={policy.direct ? 'Only applies when the sandbox is enabled.' : undefined}
             >
@@ -210,12 +205,12 @@ export function SettingsPage() {
                   setPolicy((prev) => prev ? { ...prev, network_enabled: data.checked } : prev)
                 }
               />
-            </FormFieldRow>
+            </Field>
 
-            <FormFieldRow label="Allowed repository roots">
+            <Field label="Allowed repository roots">
               <div className={styles.listBox}>
                 {policy.allowed_repository_roots.length === 0 ? (
-                  <Text className={styles.emptyNote}>None configured</Text>
+                  <Label as="span" className={styles.emptyNote}>None configured</Label>
                 ) : (
                   policy.allowed_repository_roots.map((root, i) => (
                     /* SECURITY (Y-3): root rendered as text — no HTML */
@@ -223,12 +218,12 @@ export function SettingsPage() {
                   ))
                 )}
               </div>
-            </FormFieldRow>
+            </Field>
 
-            <FormFieldRow label="Blocked command patterns">
+            <Field label="Blocked command patterns">
               <div className={styles.listBox}>
                 {policy.destructive_command_patterns.length === 0 ? (
-                  <Text className={styles.emptyNote}>None configured</Text>
+                  <Label as="span" className={styles.emptyNote}>None configured</Label>
                 ) : (
                   policy.destructive_command_patterns.map((pat, i) => (
                     /* SECURITY (Y-3): pattern rendered as text — no HTML */
@@ -236,24 +231,25 @@ export function SettingsPage() {
                   ))
                 )}
               </div>
-            </FormFieldRow>
+            </Field>
 
-            <FormFooter
-              primaryAction={{
-                id: 'save-policy',
-                label: saving ? 'Saving' : 'Save',
-                disabled: saving,
-                loading: saving,
-                onClick: () => void handleSave(),
-              }}
-              secondaryAction={{
-                id: 'discard-policy',
-                label: 'Discard changes',
-                disabled: saving || loading,
-                onClick: () => void handleFetch(),
-              }}
-              feedback={saving ? <Spinner size="extra-tiny" aria-hidden="true" /> : undefined}
-            />
+            <div className={styles.formActions}>
+              <Button
+                appearance="primary"
+                disabled={saving}
+                onClick={() => void handleSave()}
+              >
+                {saving ? 'Saving' : 'Save'}
+              </Button>
+              <Button
+                appearance="secondary"
+                disabled={saving || loading}
+                onClick={() => void handleFetch()}
+              >
+                Discard changes
+              </Button>
+              {saving && <Spinner size="extra-tiny" aria-hidden="true" />}
+            </div>
 
             {saveError && (
               <MessageBar intent="error">
@@ -266,8 +262,8 @@ export function SettingsPage() {
               </MessageBar>
             )}
           </div>
-        )}
-      </div>
-    </div>
+        </PageSection>
+      )}
+    </PageContainer>
   );
 }

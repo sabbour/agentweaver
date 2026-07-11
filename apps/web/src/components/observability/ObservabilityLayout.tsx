@@ -1,17 +1,9 @@
-import {
-  AzureTabList } from '../../copilot-fluent-system';
-import { PageHeader } from '../PageHeader';
-import { makeStyles,
-  tokens,
-} from '../../copilot-fluent-system';
+﻿import { Tab, TabList, makeStyles, tokens } from '@fluentui/react-components';
 import { Link, useNavigate } from 'react-router-dom';
 import type { ReactNode } from 'react';
+import { PageContainer, PageHeader } from '../ui';
+
 const useStyles = makeStyles({
-  root: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalL,
-  },
   breadcrumb: {
     display: 'flex',
     gap: tokens.spacingHorizontalS,
@@ -20,13 +12,9 @@ const useStyles = makeStyles({
     color: tokens.colorNeutralForeground2,
   },
   breadcrumbLink: {
-    color: tokens.colorBrandForeground1,
+    color: tokens.colorNeutralForeground2,
     textDecoration: 'none',
-  },
-  tabs: {
-    display: 'flex',
-    gap: tokens.spacingHorizontalS,
-    flexWrap: 'wrap',
+    ':hover': { textDecorationLine: 'underline' },
   },
 });
 
@@ -35,7 +23,7 @@ export function ObservabilityLayout({
   projectName,
   activeTab,
   title,
-  subtitle,
+  description,
   actions,
   children,
 }: {
@@ -43,7 +31,7 @@ export function ObservabilityLayout({
   projectName?: string | null;
   activeTab: 'overview' | 'traces' | 'agents';
   title: string;
-  subtitle: string;
+  description?: string;
   actions?: ReactNode;
   children: ReactNode;
 }) {
@@ -56,11 +44,11 @@ export function ObservabilityLayout({
   ] as const;
 
   return (
-    <div className={['azf-stack azf-page azf-pattern-shell', styles.root].filter(Boolean).join(' ')}>
+    <PageContainer>
       <PageHeader
         title={title}
-        subtitle={subtitle}
-        breadcrumb={(
+        description={description}
+        breadcrumbs={
           <div className={styles.breadcrumb}>
             <Link to="/" className={styles.breadcrumbLink}>Projects</Link>
             <span>/</span>
@@ -70,21 +58,22 @@ export function ObservabilityLayout({
             <span>/</span>
             <span>Observability</span>
           </div>
-        )}
+        }
         actions={actions}
       />
-      <div className={['azf-surface azf-surface--panel azf-surface--padding-compact', styles.tabs].filter(Boolean).join(' ')}>
-        <AzureTabList
-          ariaLabel="Observability sections"
-          selectedValue={activeTab}
-          onTabSelect={(value) => {
-            const selected = tabs.find((tab) => tab.key === value);
-            if (selected) navigate(selected.href);
-          }}
-          tabs={tabs.map((tab) => ({ id: tab.key, label: tab.label }))}
-        />
-      </div>
+      <TabList
+        selectedValue={activeTab}
+        onTabSelect={(_, data) => {
+          const selected = tabs.find((tab) => tab.key === data.value);
+          if (selected) navigate(selected.href);
+        }}
+        aria-label="Observability sections"
+      >
+        {tabs.map((tab) => (
+          <Tab key={tab.key} value={tab.key}>{tab.label}</Tab>
+        ))}
+      </TabList>
       {children}
-    </div>
+    </PageContainer>
   );
 }

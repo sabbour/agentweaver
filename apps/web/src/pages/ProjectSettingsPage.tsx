@@ -1,30 +1,33 @@
-import {
-  apiClient } from '../api/apiClient';
+﻿import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
-import { BladeHeader,
+import {
+  Badge,
   Button,
   Checkbox,
-  EssentialsGrid,
-  FormFieldRow,
-  FormFooter,
+  Field,
   Input,
   MessageBar,
   MessageBarBody,
   Spinner,
-  ServiceMenu,
   Switch,
-  Text,
-  } from '../copilot-fluent-system';
-import { PageHeader } from '../components/PageHeader';
-import { makeStyles,
-  Title3,
+  makeStyles,
+  mergeClasses,
   tokens,
-} from '../copilot-fluent-system';
-import { Delete24Regular, Settings24Regular, Shield24Regular } from '../copilot-fluent-system';
+} from '@fluentui/react-components';
+import { Delete24Regular, Settings24Regular, Shield24Regular } from '@fluentui/react-icons';
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import type { Project, SandboxPolicy, UpdateProjectProviderSettingsRequest } from '../api/types';
 import type { ReactElement } from 'react';
+import {
+  Body,
+  Label,
+  MetricRow,
+  PageContainer,
+  PageHeader,
+  PageSection,
+  TitleText,
+} from '../components/ui';
 // Spec settings-subnav — project Settings restructured into a left in-page rail +
 // right content pane. Only sections with a real Agentweaver backend are shipped
 // (Principle VII): General, Sandbox policy, Danger Zone. The rail is
@@ -94,8 +97,9 @@ const useStyles = makeStyles({
     color: tokens.colorNeutralForeground2,
   },
   breadcrumbLink: {
-    color: tokens.colorBrandForeground1,
+    color: tokens.colorNeutralForeground2,
     textDecoration: 'none',
+    ':hover': { textDecorationLine: 'underline' },
   },
   layout: {
     display: 'flex',
@@ -156,20 +160,6 @@ const useStyles = makeStyles({
     flexDirection: 'column',
     gap: tokens.spacingVerticalL,
   },
-  paneHeader: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalXXS,
-  },
-  paneIntro: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalM,
-  },
-  paneDescription: {
-    color: tokens.colorNeutralForeground2,
-    fontSize: tokens.fontSizeBase300,
-  },
   section: {
     display: 'flex',
     flexDirection: 'column',
@@ -181,7 +171,7 @@ const useStyles = makeStyles({
     flexDirection: 'column',
     gap: tokens.spacingVerticalM,
   },
-  actions: {
+  formActions: {
     display: 'flex',
     gap: tokens.spacingHorizontalM,
     alignItems: 'center',
@@ -192,6 +182,8 @@ const useStyles = makeStyles({
     gap: tokens.spacingVerticalM,
     border: `1px solid ${tokens.colorPaletteRedBorder2}`,
     maxWidth: '640px',
+    padding: tokens.spacingVerticalL,
+    borderRadius: tokens.borderRadiusLarge,
   },
   listBox: {
     backgroundColor: tokens.colorNeutralBackground3,
@@ -438,24 +430,13 @@ export function ProjectSettingsPage() {
   if (!projectId) return null;
 
   const activeDef = SECTIONS.find((s) => s.id === activeSection) ?? SECTIONS[0];
-  const settingsMenuGroups = [{
-    id: 'project-settings',
-    label: 'Settings',
-    items: SECTIONS.map((section) => ({
-      id: section.id,
-      label: section.label,
-      icon: section.icon,
-      badge: section.danger ? 'Risk' : undefined,
-    })),
-  }];
 
   return (
-    <div className={['azf-stack azf-page azf-pattern-shell', styles.root].filter(Boolean).join(' ')}>
+    <PageContainer>
       <PageHeader
         title="Project settings"
-        subtitle="Project configuration and pickup behavior."
-        resourceIcon={<Settings24Regular />}
-        breadcrumb={
+        description="Project configuration and pickup behavior."
+        breadcrumbs={
           <div className={styles.breadcrumb}>
             <Link to="/" className={styles.breadcrumbLink}>Projects</Link>
             <span>/</span>
@@ -476,51 +457,63 @@ export function ProjectSettingsPage() {
 
       {project && (
         <div className={styles.layout}>
-          <ServiceMenu
-            className={styles.rail}
-            groups={settingsMenuGroups}
-            selectedId={activeSection}
-            searchable={false}
-            ariaLabel="Settings sections"
-            onSelect={(id) => { if (isSectionId(id)) selectSection(id); }}
-          />
+          <nav className={styles.rail} aria-label="Settings sections">
+            {SECTIONS.map((section) => (
+              <button
+                key={section.id}
+                className={mergeClasses(
+                  styles.railItem,
+                  activeSection === section.id && styles.railItemActive,
+                  section.danger ? styles.railItemDanger : undefined,
+                )}
+                onClick={() => selectSection(section.id)}
+              >
+                <span className={styles.railIcon}>{section.icon}</span>
+                <span>{section.label}</span>
+                {section.danger && (
+                  <Badge appearance="tint" color="danger" size="small">Risk</Badge>
+                )}
+              </button>
+            ))}
+          </nav>
 
           <div className={styles.pane}>
-            <div className={['azf-surface azf-surface--panel azf-surface--padding-comfortable', styles.paneIntro].filter(Boolean).join(' ')}>
-              <BladeHeader size="compact" title={activeDef.label} subtitle={activeDef.description} />
-              <EssentialsGrid
-                properties={[
-                  { id: 'project', label: 'Project', value: project.name },
-                  { id: 'working-dir', label: 'Working directory', value: project.working_directory ?? 'Not configured' },
-                  { id: 'provider', label: 'Default provider', value: project.default_provider ?? 'github-copilot' },
-                  { id: 'section', label: 'Active blade', value: activeDef.label },
-                ]}
-              />
-            </div>
+            <PageSection title={activeDef.label} description={activeDef.description}>
+              <MetricRow items={[
+                { label: 'Project', value: project.name },
+                { label: 'Working directory', value: project.working_directory ?? 'Not configured' },
+                { label: 'Default provider', value: project.default_provider ?? 'github-copilot' },
+                { label: 'Active section', value: activeDef.label },
+              ]} />
+            </PageSection>
 
             {activeSection === 'general' && (
               <div className={styles.section}>
-                <div className={['azf-surface azf-surface--panel azf-surface--padding-comfortable', styles.subBlock].filter(Boolean).join(' ')}>
-                  <Title3>Rename project</Title3>
-                  <FormFieldRow label="Name" htmlFor="project-settings-name" hint="This name is shown in project navigation, blades, and run context.">
+                <div className={styles.subBlock}>
+                  <TitleText>Rename project</TitleText>
+                  <Field
+                    label="Name"
+                    hint="Shown in project navigation, run context, and team views."
+                  >
                     <Input id="project-settings-name" value={newName} onChange={(_, v) => setNewName(v.value)} />
-                  </FormFieldRow>
-                  <FormFooter
-                    primaryAction={{
-                      id: 'save-project-name',
-                      label: savingRename ? 'Saving' : 'Save',
-                      disabled: savingRename || !newName.trim() || newName.trim() === project.name,
-                      loading: savingRename,
-                      onClick: () => void handleRename(),
-                    }}
-                    secondaryAction={{
-                      id: 'reset-project-name',
-                      label: 'Cancel',
-                      disabled: savingRename || newName === project.name,
-                      onClick: () => setNewName(project.name),
-                    }}
-                    feedback={savingRename ? <Spinner size="extra-tiny" aria-hidden="true" /> : undefined}
-                  />
+                  </Field>
+                  <div className={styles.formActions}>
+                    <Button
+                      appearance="primary"
+                      disabled={savingRename || !newName.trim() || newName.trim() === project.name}
+                      onClick={() => void handleRename()}
+                    >
+                      {savingRename ? 'Saving' : 'Save'}
+                    </Button>
+                    <Button
+                      appearance="secondary"
+                      disabled={savingRename || newName === project.name}
+                      onClick={() => setNewName(project.name)}
+                    >
+                      Cancel
+                    </Button>
+                    {savingRename && <Spinner size="extra-tiny" aria-hidden="true" />}
+                  </div>
                   {renameError && (
                     <MessageBar intent="error"><MessageBarBody>{renameError}</MessageBarBody></MessageBar>
                   )}
@@ -529,21 +522,29 @@ export function ProjectSettingsPage() {
                   )}
                 </div>
 
-                <div className={['azf-surface azf-surface--panel azf-surface--padding-comfortable', styles.subBlock].filter(Boolean).join(' ')}>
-                  <Title3>Default run model</Title3>
-                  <FormFieldRow label="GitHub Copilot model" htmlFor="project-settings-copilot-model" hint="Leave blank to use the service default for Copilot-backed runs.">
-                    <Input id="project-settings-copilot-model" value={copilotModel} onChange={(_, v) => setCopilotModel(v.value)} placeholder="e.g. gpt-4o" />
-                  </FormFieldRow>
-                  <FormFooter
-                    primaryAction={{
-                      id: 'save-default-model',
-                      label: savingModel ? 'Saving' : 'Save',
-                      disabled: savingModel,
-                      loading: savingModel,
-                      onClick: () => void handleSaveModel(),
-                    }}
-                    feedback={savingModel ? <Spinner size="extra-tiny" aria-hidden="true" /> : undefined}
-                  />
+                <div className={styles.subBlock}>
+                  <TitleText>Default run model</TitleText>
+                  <Field
+                    label="GitHub Copilot model"
+                    hint="Leave blank to use the service default for Copilot-backed runs."
+                  >
+                    <Input
+                      id="project-settings-copilot-model"
+                      value={copilotModel}
+                      onChange={(_, v) => setCopilotModel(v.value)}
+                      placeholder="e.g. gpt-4o"
+                    />
+                  </Field>
+                  <div className={styles.formActions}>
+                    <Button
+                      appearance="primary"
+                      disabled={savingModel}
+                      onClick={() => void handleSaveModel()}
+                    >
+                      {savingModel ? 'Saving' : 'Save'}
+                    </Button>
+                    {savingModel && <Spinner size="extra-tiny" aria-hidden="true" />}
+                  </div>
                   {modelError && (
                     <MessageBar intent="error"><MessageBarBody>{modelError}</MessageBarBody></MessageBar>
                   )}
@@ -552,51 +553,61 @@ export function ProjectSettingsPage() {
                   )}
                 </div>
 
-                <div className={['azf-surface azf-surface--panel azf-surface--padding-comfortable', styles.section].filter(Boolean).join(' ')}>
-                  <Title3>Generation models</Title3>
-                  <Text className={styles.helperText}>
+                <div className={styles.subBlock}>
+                  <TitleText>Generation models</TitleText>
+                  <Body as="p" tone="muted">
                     Leave a field blank to inherit the global generation default ({GENERATION_DEFAULT_MODEL}).
-                  </Text>
-                  <FormFieldRow label="Blueprint generation model" htmlFor="project-settings-blueprint-model" hint={`Blank inherits ${GENERATION_DEFAULT_MODEL}.`}>
+                  </Body>
+                  <Field
+                    label="Blueprint generation model"
+                    hint={`Blank inherits ${GENERATION_DEFAULT_MODEL}.`}
+                  >
                     <Input
                       id="project-settings-blueprint-model"
                       value={generationModels.blueprint_generation_model}
                       onChange={(_, v) => setGenerationModels((prev) => ({ ...prev, blueprint_generation_model: v.value }))}
                       placeholder={`Inherit ${GENERATION_DEFAULT_MODEL}`}
                     />
-                  </FormFieldRow>
-                  <FormFieldRow label="Workflow generation model" htmlFor="project-settings-workflow-model" hint={`Blank inherits ${GENERATION_DEFAULT_MODEL}.`}>
+                  </Field>
+                  <Field
+                    label="Workflow generation model"
+                    hint={`Blank inherits ${GENERATION_DEFAULT_MODEL}.`}
+                  >
                     <Input
                       id="project-settings-workflow-model"
                       value={generationModels.workflow_generation_model}
                       onChange={(_, v) => setGenerationModels((prev) => ({ ...prev, workflow_generation_model: v.value }))}
                       placeholder={`Inherit ${GENERATION_DEFAULT_MODEL}`}
                     />
-                  </FormFieldRow>
-                  <FormFieldRow label="Outcome spec generation model" htmlFor="project-settings-outcome-model" hint={`Blank inherits ${GENERATION_DEFAULT_MODEL}.`}>
+                  </Field>
+                  <Field
+                    label="Outcome spec generation model"
+                    hint={`Blank inherits ${GENERATION_DEFAULT_MODEL}.`}
+                  >
                     <Input
                       id="project-settings-outcome-model"
                       value={generationModels.outcome_spec_generation_model}
                       onChange={(_, v) => setGenerationModels((prev) => ({ ...prev, outcome_spec_generation_model: v.value }))}
                       placeholder={`Inherit ${GENERATION_DEFAULT_MODEL}`}
                     />
-                  </FormFieldRow>
-                  <FormFooter
-                    primaryAction={{
-                      id: 'save-generation-models',
-                      label: savingGeneration ? 'Saving generation models' : 'Save generation models',
-                      disabled: savingGeneration,
-                      loading: savingGeneration,
-                      onClick: () => void handleSaveGeneration(),
-                    }}
-                    secondaryAction={{
-                      id: 'reset-generation-models',
-                      label: 'Reset generation models to inherit defaults',
-                      disabled: savingGeneration,
-                      onClick: () => void handleResetGeneration(),
-                    }}
-                    feedback={savingGeneration ? <Spinner size="extra-tiny" aria-hidden="true" /> : undefined}
-                  />
+                  </Field>
+                  <div className={styles.formActions}>
+                    <Button
+                      appearance="primary"
+                      disabled={savingGeneration}
+                      onClick={() => void handleSaveGeneration()}
+                    >
+                      {savingGeneration ? 'Saving generation models' : 'Save generation models'}
+                    </Button>
+                    <Button
+                      appearance="secondary"
+                      disabled={savingGeneration}
+                      onClick={() => void handleResetGeneration()}
+                    >
+                      Reset to inherit defaults
+                    </Button>
+                    {savingGeneration && <Spinner size="extra-tiny" aria-hidden="true" />}
+                  </div>
                   {generationError && (
                     <MessageBar intent="error"><MessageBarBody>{generationError}</MessageBarBody></MessageBar>
                   )}
@@ -608,14 +619,14 @@ export function ProjectSettingsPage() {
             )}
 
             {activeSection === 'sandbox' && (
-              <div className={['azf-surface azf-surface--panel azf-surface--padding-comfortable', styles.section].filter(Boolean).join(' ')}>
+              <div className={styles.section}>
                 {sandboxLoading && <Spinner size="extra-tiny" label="Loading policy" />}
                 {sandboxError && (
                   <MessageBar intent="error"><MessageBarBody>{sandboxError}</MessageBarBody></MessageBar>
                 )}
                 {sandboxPolicy && (
                   <>
-                    <FormFieldRow label="Shell execution">
+                    <Field label="Shell execution">
                       <Switch
                         label={sandboxPolicy.shell_enabled ? 'Enabled' : 'Disabled'}
                         checked={sandboxPolicy.shell_enabled}
@@ -623,8 +634,8 @@ export function ProjectSettingsPage() {
                           setSandboxPolicy((prev) => prev ? { ...prev, shell_enabled: data.checked } : prev)
                         }
                       />
-                    </FormFieldRow>
-                    <FormFieldRow
+                    </Field>
+                    <Field
                       label="Sandbox enabled"
                       hint="When off, commands run directly on the host with no isolation layer."
                     >
@@ -635,8 +646,8 @@ export function ProjectSettingsPage() {
                           setSandboxPolicy((prev) => prev ? { ...prev, direct: !data.checked } : prev)
                         }
                       />
-                    </FormFieldRow>
-                    <FormFieldRow
+                    </Field>
+                    <Field
                       label="Outbound network"
                       hint={sandboxPolicy.direct ? 'Only applies when the sandbox is enabled.' : undefined}
                     >
@@ -648,42 +659,41 @@ export function ProjectSettingsPage() {
                           setSandboxPolicy((prev) => prev ? { ...prev, network_enabled: data.checked } : prev)
                         }
                       />
-                    </FormFieldRow>
-                    <FormFieldRow label="Allowed repository roots">
+                    </Field>
+                    <Field label="Allowed repository roots">
                       <div className={styles.listBox}>
                         {sandboxPolicy.allowed_repository_roots.length === 0 ? (
-                          <Text className={styles.emptyNote}>None configured</Text>
+                          <Label as="span" className={styles.emptyNote}>None configured</Label>
                         ) : (
                           sandboxPolicy.allowed_repository_roots.map((root, i) => (
                             <div key={i} className={styles.listItem}>{root}</div>
                           ))
                         )}
                       </div>
-                    </FormFieldRow>
-                    <FormFieldRow label="Blocked command patterns">
+                    </Field>
+                    <Field label="Blocked command patterns">
                       <div className={styles.listBox}>
                         {sandboxPolicy.destructive_command_patterns.length === 0 ? (
-                          <Text className={styles.emptyNote}>None configured</Text>
+                          <Label as="span" className={styles.emptyNote}>None configured</Label>
                         ) : (
                           sandboxPolicy.destructive_command_patterns.map((pat, i) => (
                             <div key={i} className={styles.listItem}>{pat}</div>
                           ))
                         )}
                       </div>
-                    </FormFieldRow>
-                    <FormFooter
-                      primaryAction={{
-                        id: 'save-sandbox-policy',
-                        label: savingSandbox ? 'Saving' : 'Save',
-                        disabled: savingSandbox,
-                        loading: savingSandbox,
-                        onClick: () => void handleSaveSandbox(),
-                      }}
-                      secondaryAction={{
-                        id: 'reload-sandbox-policy',
-                        label: 'Discard changes',
-                        disabled: savingSandbox || sandboxLoading,
-                        onClick: () => {
+                    </Field>
+                    <div className={styles.formActions}>
+                      <Button
+                        appearance="primary"
+                        disabled={savingSandbox}
+                        onClick={() => void handleSaveSandbox()}
+                      >
+                        {savingSandbox ? 'Saving' : 'Save'}
+                      </Button>
+                      <Button
+                        appearance="secondary"
+                        disabled={savingSandbox || sandboxLoading}
+                        onClick={() => {
                           if (!project?.working_directory) return;
                           setSandboxFetched(false);
                           setSandboxSaveError(null);
@@ -697,10 +707,12 @@ export function ProjectSettingsPage() {
                               setSandboxFetched(true);
                               setSandboxError(formatError(err));
                             });
-                        },
-                      }}
-                      feedback={savingSandbox ? <Spinner size="extra-tiny" aria-hidden="true" /> : undefined}
-                    />
+                        }}
+                      >
+                        Discard changes
+                      </Button>
+                      {savingSandbox && <Spinner size="extra-tiny" aria-hidden="true" />}
+                    </div>
                     {sandboxSaveError && (
                       <MessageBar intent="error"><MessageBarBody>{sandboxSaveError}</MessageBarBody></MessageBar>
                     )}
@@ -713,15 +725,15 @@ export function ProjectSettingsPage() {
             )}
 
             {activeSection === 'danger' && (
-              <div className={['azf-surface azf-surface--panel azf-surface--padding-comfortable', styles.dangerSection].filter(Boolean).join(' ')}>
-                <Title3>Delete project</Title3>
-                <Text>This action cannot be undone. The project and all its run history will be permanently removed.</Text>
+              <div className={styles.dangerSection}>
+                <TitleText>Delete project</TitleText>
+                <Body as="p">This action cannot be undone. The project and all its run history will be permanently removed.</Body>
                 <Checkbox
                   label="I understand this is permanent"
                   checked={deleteConfirmed}
                   onChange={(_, data) => setDeleteConfirmed(!!data.checked)}
                 />
-                <div className={styles.actions}>
+                <div className={styles.formActions}>
                   <Button
                     appearance="primary"
                     style={{ backgroundColor: tokens.colorPaletteRedBackground3, borderColor: tokens.colorPaletteRedBorder2 }}
@@ -740,6 +752,6 @@ export function ProjectSettingsPage() {
           </div>
         </div>
       )}
-    </div>
+    </PageContainer>
   );
 }
