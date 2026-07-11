@@ -1,106 +1,74 @@
 /**
- * OutputCard — the assistant response container.
+ * OutputCard — mirrors @1js/fai-react-output-card OutputCard anatomy.
  *
- * Wraps streamed or complete assistant output in the copilot-styled card:
- *   - Optional indeterminate ProgressBar at the top while streaming
- *   - Body: the message content (markdown, agentic steps, tool calls, etc.)
- *   - Optional feedback row (thumbs up / thumbs down)
+ * Props mirrored:
+ *   - isLoading?: boolean  (replaces streaming; triggers flair-done CSS on false transition)
+ *   - mode?: "canvas" | "sidecar"  (canvas adds shadow)
  *
- * Designed to be used INSIDE a MessageList, or standalone in a run view
- * alongside AgentStepList / ToolCallRow from components/ui/agentic/.
+ * Slots mirrored: root, progress (opt-in ProgressBar at top of card), body (children).
  *
- * Example:
- *   <OutputCard isStreaming>
- *     <Text>Thinking…</Text>
- *   </OutputCard>
- *
- *   <OutputCard
- *     showFeedback
- *     onFeedback={(v) => console.log(v)}
- *   >
- *     <AgentStepList steps={steps} onApprove={…} onDeny={…} />
- *   </OutputCard>
+ * When isLoading transitions from true → false a "done" CSS class is applied
+ * briefly to create a subtle border-brightening flair effect (mirrors @1js flair).
  */
+import React, { useEffect, useRef, useState } from "react";
+import { mergeClasses, ProgressBar } from "@fluentui/react-components";
+import { useOutputCardStyles } from "./copilotStyles";
 
-import type { ReactNode } from 'react';
-import { Button, ProgressBar, Text, Tooltip, mergeClasses } from '@fluentui/react-components';
-import { ThumbDislikeRegular, ThumbLikeRegular } from '@fluentui/react-icons';
-import { useCopilotStyles } from './copilotStyles';
-
-export type FeedbackValue = 'positive' | 'negative';
+export type OutputCardMode = "canvas" | "sidecar";
 
 export interface OutputCardProps {
-  children: ReactNode;
-  /** Shows an indeterminate progress bar at the top while streaming. */
-  isStreaming?: boolean;
-  /** Renders feedback thumbs in the footer when true. */
-  showFeedback?: boolean;
-  /** Called when the user clicks a feedback button. */
-  onFeedback?: (value: FeedbackValue) => void;
-  /** Current feedback selection (controlled). */
-  feedbackValue?: FeedbackValue;
-  /** Node rendered in the footer before the feedback buttons (e.g. copy action). */
-  footerActions?: ReactNode;
+  /** Whether the card is in a loading/streaming state — ProgressBar shown when true */
+  isLoading?: boolean;
+  /** canvas adds a shadow; sidecar (docked console) is flat */
+  mode?: OutputCardMode;
+  /** Opt-in progress slot: renders ProgressBar at the top of the card */
+  showProgress?: boolean;
+  children?: React.ReactNode;
   className?: string;
 }
 
 export function OutputCard({
+  isLoading = false,
+  mode = "sidecar",
+  showProgress,
   children,
-  isStreaming = false,
-  showFeedback = false,
-  onFeedback,
-  feedbackValue,
-  footerActions,
   className,
 }: OutputCardProps) {
-  const styles = useCopilotStyles();
-  const showFooter = showFeedback || Boolean(footerActions);
+  const styles = useOutputCardStyles();
+  const [doneFlair, setDoneFlair] = useState(false);
+  const prevLoading = useRef(isLoading);
+
+  // When isLoading transitions false → brief "done" flair
+  useEffect(() => {
+    if (prevLoading.current && !isLoading) {
+      setDoneFlair(true);
+      const id = setTimeout(() => setDoneFlair(false), 600);
+      prevLoading.current = isLoading;
+      return () => clearTimeout(id);
+    }
+    prevLoading.current = isLoading;
+  }, [isLoading]);
+
+  const renderProgress = showProgress ?? isLoading;
 
   return (
     <div
-      className={mergeClasses(styles.outputCard, className)}
-      aria-busy={isStreaming || undefined}
-    >
-      {isStreaming && (
-        <ProgressBar
-          className={styles.outputCardProgress}
-          aria-label="Generating response"
-        />
+      className={mergeClasses(
+        styles.root,
+        mode === "canvas" ? styles.rootCanvas : undefined,
+        doneFlair ? styles.done : undefined,
+        className
       )}
-      <div className={styles.outputCardBody}>{children}</div>
-      {showFooter && (
-        <div className={styles.outputCardFooter}>
-          {footerActions && (
-            <span className={styles.outputCardFooterSpacer}>{footerActions}</span>
-          )}
-          {!footerActions && <span className={styles.outputCardFooterSpacer} />}
-          {showFeedback && (
-            <>
-              <Text className={styles.outputCardFeedbackLabel}>Was this helpful?</Text>
-              <Tooltip content="Helpful" relationship="label">
-                <Button
-                  appearance="subtle"
-                  size="small"
-                  icon={<ThumbLikeRegular />}
-                  aria-label="Helpful"
-                  aria-pressed={feedbackValue === 'positive'}
-                  onClick={() => onFeedback?.('positive')}
-                />
-              </Tooltip>
-              <Tooltip content="Not helpful" relationship="label">
-                <Button
-                  appearance="subtle"
-                  size="small"
-                  icon={<ThumbDislikeRegular />}
-                  aria-label="Not helpful"
-                  aria-pressed={feedbackValue === 'negative'}
-                  onClick={() => onFeedback?.('negative')}
-                />
-              </Tooltip>
-            </>
-          )}
+    >
+      {/* slot: progress — opt-in ProgressBar at top of card */}
+      {renderProgress && (
+        <div className={styles.progress}>
+          <ProgressBar thickness="medium" />
         </div>
       )}
+
+      {/* body — message content */}
+      <div className={styles.body}>{children}</div>
     </div>
   );
 }

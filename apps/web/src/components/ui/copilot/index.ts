@@ -1,14 +1,40 @@
-// Composer — chat input (pill-shaped, auto-growing textarea)
-export { Composer } from './Composer';
-export type { ComposerProps } from './Composer';
+/**
+ * components/ui/copilot — barrel exports
+ *
+ * Native Copilot-styled chat surface. No @1js imports.
+ * Mirrored @1js component anatomy (as design reference only):
+ *   Composer     ← @1js/fai-react-chat-input ChatInput + SendButton
+ *   CopilotMessage ← @1js/fai-react-copilot-chat CopilotMessage
+ *   UserMessage  ← @1js/fai-react-copilot-chat UserMessage
+ *   CopilotChat  ← @1js/fai-react-copilot-chat CopilotChat
+ *   OutputCard   ← @1js/fai-react-output-card OutputCard
+ *   FeedbackButtons ← @1js/fai-react-feedback-buttons FeedbackButtons
+ *   Attachment   ← @1js/fai-react-attachments Attachment
+ */
 
-// MessageBubble / MessageList — user + assistant messages
-export { MessageBubble, MessageList } from './MessageBubble';
-export type { MessageBubbleProps, MessageListProps, MessageRole } from './MessageBubble';
+// Composer + attachments
+export { Composer } from "./Composer";
+export type { ComposerProps, ComposerSubmitData, ComposerAppearance } from "./Composer";
 
-// OutputCard — assistant response container with streaming + feedback
-export { OutputCard } from './OutputCard';
-export type { OutputCardProps, FeedbackValue } from './OutputCard';
+export { Attachment, AttachmentList } from "./Attachment";
+export type { AttachmentProps, AttachmentListProps } from "./Attachment";
 
-// CopilotSurface is dev-only — import directly for local review:
-//   import { CopilotSurface } from 'components/ui/copilot/CopilotSurface';
+// Messages + chat feed
+export { CopilotChat, CopilotMessage, UserMessage } from "./Message";
+export type {
+  CopilotChatProps,
+  CopilotMessageProps,
+  CopilotLoadingState,
+  UserMessageProps,
+} from "./Message";
+
+// Output card
+export { OutputCard } from "./OutputCard";
+export type { OutputCardProps, OutputCardMode } from "./OutputCard";
+
+// Feedback
+export { FeedbackButtons } from "./FeedbackButtons";
+export type { FeedbackButtonsProps, FeedbackValue } from "./FeedbackButtons";
+
+// Dev demo
+export { CopilotSurface } from "./CopilotSurface";

@@ -1,105 +1,112 @@
 /**
- * CopilotSurface — isolated demo wiring Composer + MessageList + MessageBubble
- * + OutputCard + AgentStepList together into the full run/console surface.
- *
- * NOT wired into any route. Import only for local review:
- *   import { CopilotSurface } from 'components/ui/copilot/CopilotSurface';
+ * CopilotSurface — dev-only demo wiring all copilot/ + agentic/ pieces.
+ * Not wired into app routes.
  */
+import React, { useState } from "react";
+import { tokens } from "@fluentui/react-components";
+import { Composer } from "./Composer";
+import { OutputCard } from "./OutputCard";
+import { FeedbackButtons } from "./FeedbackButtons";
+import type { FeedbackValue } from "./FeedbackButtons";
+import { CopilotChat, CopilotMessage, UserMessage } from "./Message";
+import { AgentStepList } from "../agentic";
+import type { AgentStep } from "../agentic";
 
-import { useState } from 'react';
-import { Text } from '@fluentui/react-components';
-import { DocumentRegular } from '@fluentui/react-icons';
-import { AgentStepList } from '../agentic';
-import type { AgentStep } from '../agentic';
-import { Composer } from './Composer';
-import { MessageBubble, MessageList } from './MessageBubble';
-import { OutputCard } from './OutputCard';
-import type { FeedbackValue } from './OutputCard';
-
-const demoSteps: AgentStep[] = [
+const DEMO_STEPS: AgentStep[] = [
   {
-    id: 'read',
-    title: 'Read repository context',
-    body: 'Scanning recent commits and open issues.',
-    status: 'complete',
-    artifacts: [{ id: 'ctx', title: 'context.json', type: 'JSON', icon: <DocumentRegular />, onOpen: () => undefined }],
+    id: "s1",
+    title: "Reading repository files",
+    status: "complete",
+    body: "Scanned 24 files across src/",
   },
   {
-    id: 'plan',
-    title: 'Propose changes',
-    body: 'The agent will modify two files. Approve to continue.',
-    status: 'warning',
+    id: "s2",
+    title: "Generating implementation plan",
+    status: "running",
+    body: "Drafting component tree and style tokens…",
+  },
+  {
+    id: "s3",
+    title: "Awaiting your review",
+    status: "running",
     needsInput: true,
-    riskText: 'Approving lets the agent write to src/api.ts and tests/api.test.ts. Review the diff before merge.',
-    disclaimer: 'Denying stops the run.',
+    body: "The plan is ready. Approve to proceed.",
+    riskText: "This will create 6 new files.",
   },
 ];
 
-interface Message {
-  id: string;
-  role: 'user' | 'assistant';
-  text?: string;
-  showSteps?: boolean;
-}
-
 export function CopilotSurface() {
-  const [messages, setMessages] = useState<Message[]>([
-    { id: '1', role: 'user', text: 'Fix the flaky API test and update the handler.' },
-    { id: '2', role: 'assistant', showSteps: true },
+  const [input, setInput] = useState("");
+  const [messages, setMessages] = useState<Array<{ role: "user" | "assistant"; text: string; id: string }>>([
+    { id: "m0", role: "assistant", text: "Hi! I'm the Coordinator. Describe what you'd like to build." },
   ]);
-  const [value, setValue] = useState('');
-  const [isStreaming, setIsStreaming] = useState(false);
-  const [feedback, setFeedback] = useState<FeedbackValue | undefined>();
+  const [sending, setSending] = useState(false);
+  const [feedback, setFeedback] = useState<FeedbackValue | undefined>(undefined);
 
-  const handleSubmit = (v: string) => {
-    if (!v.trim()) return;
-    const id = String(Date.now());
-    setValue('');
-    setIsStreaming(true);
-    setMessages((prev) => [...prev, { id, role: 'user', text: v }]);
+  const handleSubmit = (_ev: React.SyntheticEvent, { value }: { value: string }) => {
+    if (!value.trim()) return;
+    const newMessages = [
+      ...messages,
+      { id: `u${Date.now()}`, role: "user" as const, text: value },
+    ];
+    setMessages(newMessages);
+    setInput("");
+    setSending(true);
     setTimeout(() => {
-      setMessages((prev) => [
-        ...prev,
-        { id: `${id}-resp`, role: 'assistant', text: `Echo: ${v}` },
+      setMessages([
+        ...newMessages,
+        { id: `a${Date.now()}`, role: "assistant" as const, text: "Working on it! Here's what I found so far." },
       ]);
-      setIsStreaming(false);
-    }, 1400);
+      setSending(false);
+    }, 1500);
   };
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', gap: '12px', padding: '16px', maxWidth: '680px' }}>
-      <Text size={400} weight="semibold">Copilot surface demo</Text>
-      <MessageList aria-label="Run conversation">
-        {messages.map((msg) =>
-          msg.showSteps ? (
-            <OutputCard
-              key={msg.id}
-              showFeedback
-              onFeedback={setFeedback}
-              feedbackValue={feedback}
-            >
-              <AgentStepList steps={demoSteps} />
-            </OutputCard>
+    <div
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        height: "100vh",
+        maxWidth: "760px",
+        margin: "0 auto",
+        backgroundColor: tokens.colorNeutralBackground2,
+      }}
+    >
+      <CopilotChat style={{ flex: "1 1 auto", overflowY: "auto" } as React.CSSProperties}>
+        {messages.map((m) =>
+          m.role === "user" ? (
+            <UserMessage key={m.id}>{m.text}</UserMessage>
           ) : (
-            <MessageBubble key={msg.id} role={msg.role}>
-              <Text size={300}>{msg.text}</Text>
-            </MessageBubble>
-          ),
+            <CopilotMessage
+              key={m.id}
+              loadingState={sending && m.id === messages[messages.length - 1].id ? "streaming" : "none"}
+              actions={<FeedbackButtons selected={feedback} onFeedback={setFeedback} />}
+            >
+              <OutputCard
+                isLoading={sending}
+                mode="sidecar"
+              >
+                <p style={{ margin: 0 }}>{m.text}</p>
+                {m.id === messages[messages.length - 1].id && !sending && (
+                  <AgentStepList steps={DEMO_STEPS} />
+                )}
+              </OutputCard>
+            </CopilotMessage>
+          )
         )}
-        {isStreaming && (
-          <OutputCard isStreaming>
-            <Text size={300} style={{ color: '#746d68' }}>Generating…</Text>
-          </OutputCard>
-        )}
-      </MessageList>
-      <Composer
-        value={value}
-        onChange={setValue}
-        onSubmit={handleSubmit}
-        onStop={() => setIsStreaming(false)}
-        isStreaming={isStreaming}
-        placeholder="Ask the coordinator…"
-      />
+      </CopilotChat>
+
+      <div style={{ padding: `${tokens.spacingVerticalM} ${tokens.spacingHorizontalL}` }}>
+        <Composer
+          value={input}
+          onChange={setInput}
+          onSubmit={handleSubmit}
+          onStop={() => setSending(false)}
+          isSending={sending}
+          hideSendWhenEmpty
+          placeholder="Ask the Coordinator anything…"
+        />
+      </div>
     </div>
   );
 }

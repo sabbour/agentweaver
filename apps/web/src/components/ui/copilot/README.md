@@ -1,136 +1,199 @@
-# components/ui/copilot
+# components/ui/copilot — Native Copilot Chat Surface
 
-Native `@fluentui/react-components` chat surface components styled to the copilot.com Day look via our warm-monochrome theme. **No `@1js` dependency** — fully open-sourceable.
+Native `@fluentui/react-components` chat surface styled to the Agentweaver warm-monochrome theme. Zero `@1js` imports in shipped code — the @1js packages were used **as design reference only** (reading `.d.ts` type definitions to mirror component anatomy).
 
-Composes with `components/ui/agentic/` so a run view = `MessageList` + `OutputCard` + `AgentStepList`/`ToolCallRow` + `Composer`.
+## @1js anatomy mirrored
+
+| Native component | @1js reference |
+|---|---|
+| `Composer` | `@1js/fai-react-chat-input` `ChatInput` + `SendButton` |
+| `CopilotMessage` | `@1js/fai-react-copilot-chat` `CopilotMessage` |
+| `UserMessage` | `@1js/fai-react-copilot-chat` `UserMessage` |
+| `CopilotChat` | `@1js/fai-react-copilot-chat` `CopilotChat` |
+| `OutputCard` | `@1js/fai-react-output-card` `OutputCard` |
+| `FeedbackButtons` | `@1js/fai-react-feedback-buttons` `FeedbackButtons` |
+| `Attachment` / `AttachmentList` | `@1js/fai-react-attachments` `Attachment` |
+
+---
 
 ## Components
 
 ### `Composer`
 
-Auto-growing pill-shaped chat input. Built on a native `<textarea>` styled with Fluent tokens; no internal Fluent form control wrapper so the pill shape is clean.
+Pill-shaped chat input. Mirrors `ChatInput` slot anatomy exactly.
 
 ```tsx
-import { Composer } from 'components/ui/copilot';
-
 <Composer
-  value={value}
-  onChange={setValue}
-  onSubmit={(text) => send(text)}
-  onStop={() => cancelStream()}
-  isStreaming={isStreaming}
-  placeholder="Ask the coordinator…"
-  leftSlot={<AttachButton />}     // optional: attach affordance, model picker, etc.
-  rightSlot={<ModelSelector />}   // optional: rendered between textarea and send
+  value={text}
+  onChange={setText}
+  onSubmit={(ev, { value }) => send(value)}
+  onStop={() => stopGeneration()}
+  isSending={isGenerating}
+  hideSendWhenEmpty
+  placeholder="Ask anything…"
+  attachments={[{ id: "f1", name: "design.pdf", onRemove: () => {} }]}
+  banner={<>You are in read-only mode</>}
+  contentBefore={<ModelDropdown />}
+  actions={<VoiceButton />}
 />
 ```
 
-Props:
+**Slots** (mirrored from `ChatInputSlots`):
+- `banner` — above attachments, for warnings/notices
+- `attachments` — file/agent chips above the editor
+- `contentBefore` — left of editor (model selector, attach icon)
+- `editor` — the textarea element
+- `actions` — right of editor, before send
+- `send` — SendButton with animated send↔stop
+- `errorMessage` — character limit exceeded
+- `contentBelow` — below the shell (suggestions)
 
-| Prop | Type | Default | Notes |
-|------|------|---------|-------|
-| `value` | `string` | required | Controlled |
-| `onChange` | `(value: string) => void` | required | |
-| `onSubmit` | `(value: string) => void` | — | Enter (no Shift) or send button |
-| `onStop` | `() => void` | — | Stop button while `isStreaming` |
-| `placeholder` | `string` | `"Message…"` | |
-| `disabled` | `boolean` | `false` | |
-| `isStreaming` | `boolean` | `false` | Shows Stop instead of Send |
-| `leftSlot` | `ReactNode` | — | Left of textarea |
-| `rightSlot` | `ReactNode` | — | Right of textarea, before Send |
-| `aria-label` | `string` | `"Chat composer"` | |
-
-### `MessageBubble`
-
-A single chat message, user or assistant.
-
-```tsx
-import { MessageBubble } from 'components/ui/copilot';
-
-// User bubble — right-aligned, near-black background
-<MessageBubble role="user">
-  <Text size={300}>Fix the flaky API test.</Text>
-</MessageBubble>
-
-// Assistant bubble — left-aligned, surface background + border
-<MessageBubble role="assistant" senderName="Coordinator">
-  <Text size={300}>I'll start by reading the test file.</Text>
-</MessageBubble>
+**Props**:
+```ts
+value?: string
+onChange?: (v: string) => void
+onSubmit?: (ev, { value }) => void   // mirrors ChatInputProps.onSubmit
+onStop?: (ev) => void                // mirrors ChatInputProps.onStop
+isSending?: boolean                  // mirrors ChatInputProps.isSending
+disableSend?: boolean
+hideSendWhenEmpty?: boolean
+maxLength?: number
+appearance?: "auto" | "single" | "multi"
+disabled?: boolean
+banner?: ReactNode
+attachments?: AttachmentProps[]
+contentBefore?: ReactNode
+actions?: ReactNode
+contentBelow?: ReactNode
 ```
 
-Props: `role`, `children`, `senderName?`, `timestamp?`, `className?`.
+---
 
-### `MessageList`
+### `CopilotMessage`
 
-Scrollable container for a sequence of messages. Sets `role="log"` + `aria-live="polite"` for screen readers.
+Structured assistant message. Mirrors `CopilotMessage` slot anatomy.
 
 ```tsx
-import { MessageList } from 'components/ui/copilot';
-
-<MessageList aria-label="Run conversation">
-  <MessageBubble role="user">…</MessageBubble>
-  <OutputCard isStreaming>…</OutputCard>
-</MessageList>
+<CopilotMessage
+  name="Coordinator"
+  loadingState="streaming"
+  disclaimer="AI-generated content may be inaccurate"
+  actions={<FeedbackButtons onFeedback={setFeedback} />}
+  footnote="Sources: 3 files"
+>
+  <OutputCard isLoading>
+    <AgentStepList steps={steps} />
+  </OutputCard>
+</CopilotMessage>
 ```
+
+**Slots**: `avatar`, `name`, `disclaimer`, `content`, `progress`, `footnote`, `actions`
+
+**Props**:
+```ts
+loadingState?: "loading" | "streaming" | "none"  // mirrors CopilotMessageProps
+name?: string
+avatar?: ReactNode
+disclaimer?: ReactNode
+footnote?: ReactNode
+actions?: ReactNode
+announcement?: string  // aria-live
+```
+
+---
+
+### `UserMessage`
+
+Right-aligned user bubble. Mirrors `UserMessage` slot anatomy.
+
+```tsx
+<UserMessage timestamp="2:34 PM" actionBar={<CopyButton />}>
+  Hello, can you help me build a workflow?
+</UserMessage>
+```
+
+**Slots**: `message`, `timestamp`, `actionBar`, `topContent`
+
+---
 
 ### `OutputCard`
 
-Assistant response container. Combines a streaming progress bar, body content, and optional feedback buttons. Designed to hold any content — prose, `AgentStepList`, `ToolCallRow`, code, etc.
+Content container with streaming ProgressBar. Mirrors `OutputCard`.
 
 ```tsx
-import { OutputCard } from 'components/ui/copilot';
-
-// While streaming
-<OutputCard isStreaming>
-  <Text size={300}>Generating…</Text>
-</OutputCard>
-
-// Complete, with feedback
-<OutputCard showFeedback onFeedback={(v) => record(v)} feedbackValue={feedback}>
-  <AgentStepList steps={steps} onApprove={onApprove} onDeny={onDeny} />
-</OutputCard>
-
-// Complete, with custom footer actions
-<OutputCard footerActions={<CopyButton />}>
-  <Text size={300}>Here is the result.</Text>
+<OutputCard isLoading={isStreaming} mode="canvas">
+  <MarkdownContent content={text} />
 </OutputCard>
 ```
 
-Props:
-
-| Prop | Type | Default | Notes |
-|------|------|---------|-------|
-| `children` | `ReactNode` | required | |
-| `isStreaming` | `boolean` | `false` | Indeterminate progress bar |
-| `showFeedback` | `boolean` | `false` | Thumb up/down in footer |
-| `onFeedback` | `(v: "positive"\|"negative") => void` | — | |
-| `feedbackValue` | `"positive"\|"negative"` | — | Controlled selection |
-| `footerActions` | `ReactNode` | — | Custom footer node |
-
-## Composing with agentic
-
-A full run console surface:
-
-```tsx
-import { MessageList, MessageBubble, OutputCard, Composer } from 'components/ui/copilot';
-import { AgentStepList, ToolCallRow } from 'components/ui/agentic';
-
-<div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-  <MessageList style={{ flex: 1, minHeight: 0 }}>
-    <MessageBubble role="user">Fix the test.</MessageBubble>
-    <OutputCard showFeedback onFeedback={recordFeedback}>
-      <AgentStepList steps={steps} onApprove={approve} onDeny={deny} />
-    </OutputCard>
-  </MessageList>
-  <Composer value={value} onChange={setValue} onSubmit={send} />
-</div>
+**Props**:
+```ts
+isLoading?: boolean      // mirrors OutputCard.isLoading
+mode?: "canvas" | "sidecar"
+showProgress?: boolean   // opt-in ProgressBar (auto when isLoading)
 ```
 
-## Design notes
+---
 
-- Warm-monochrome only — no blue, no @1js, fully open-sourceable.
-- All colors and spacing from `@fluentui/react-components` tokens.
-- User bubbles: `colorNeutralForeground1` bg (near-black), `colorNeutralForegroundOnBrand` text.
-- Assistant bubbles / OutputCard: `colorNeutralBackground1` + `colorNeutralStroke2` border.
-- Composer: `borderRadiusCircular` pill shell, auto-grow textarea (max 200px), focus ring via `colorStrokeFocus2`.
-- All transitions respect `prefers-reduced-motion`.
+### `FeedbackButtons`
+
+Controlled thumbs up/down. Mirrors `FeedbackButtons`.
+
+```tsx
+<FeedbackButtons
+  selected={feedback}  // "positive" | "negative" | undefined
+  onFeedback={setFeedback}
+  disabled={isStreaming}
+/>
+```
+
+---
+
+### `Attachment` / `AttachmentList`
+
+File/reference chip for the `Composer` attachments slot. Mirrors `Attachment`.
+
+```tsx
+<AttachmentList
+  attachments={[
+    { id: "1", name: "design.pdf", onRemove: () => remove("1"), onOpen: () => open("1") }
+  ]}
+/>
+```
+
+---
+
+### `CopilotChat`
+
+Scrollable feed container (`role="feed"`). Mirrors `CopilotChat`.
+
+```tsx
+<CopilotChat label="Run conversation">
+  <UserMessage>...</UserMessage>
+  <CopilotMessage ...>...</CopilotMessage>
+</CopilotChat>
+```
+
+---
+
+## Composition with `components/ui/agentic/`
+
+The copilot surface composes directly with agentic pieces:
+
+```tsx
+<CopilotMessage loadingState="streaming" actions={<FeedbackButtons />}>
+  <OutputCard isLoading>
+    {/* Agentic progress inside assistant response */}
+    <AgentStepList steps={steps} />
+    <ToolCallRow call={call} />
+  </OutputCard>
+</CopilotMessage>
+```
+
+The `ApprovalGate` renders inline inside a `CopilotMessage` content area for human-in-the-loop approvals.
+
+---
+
+## Demo
+
+`CopilotSurface` — a dev-only demo wiring all pieces. Not in app routes.

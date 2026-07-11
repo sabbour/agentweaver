@@ -1,145 +1,273 @@
 /**
- * Composer — a Copilot-styled chat input built on native @fluentui/react-components.
+ * Composer — mirrors @1js/fai-react-chat-input ChatInput anatomy.
  *
- * Shape: rounded-pill warm-white card with an auto-growing textarea, a send
- * button, and optional left/right slots. No @1js dependency.
+ * Slots mirrored: root, banner, attachments, inputWrapper, contentBefore,
+ *   editor (textarea), actions, send (SendButton), errorMessage, contentBelow.
  *
- * Props:
- *   value        controlled text value
- *   onChange     called on every keystroke
- *   onSubmit     called on Enter (without Shift) or send button click
- *   placeholder  placeholder text (default: "Message…")
- *   disabled     disables input and buttons
- *   leftSlot     node rendered to the left of the textarea (e.g. an attach button)
- *   rightSlot    node rendered between textarea and send (e.g. a model picker)
- *   isStreaming  true while assistant is responding; shows a Stop button
- *   onStop       called when the Stop button is clicked
+ * Props mirrored from ChatInputProps:
+ *   - isSending, onSubmit, onStop
+ *   - disableSend, hideSendWhenEmpty
+ *   - maxLength (enables character count/error)
+ *   - appearance: "auto" | "single" | "multi"
+ *   - attachments: AttachmentProps[]
+ *
+ * SendButton mirrors @1js/fai-react-send-button:
+ *   - isSending=false: send icon (active or idle)
+ *   - isSending=true: stop icon with circular affordance
+ *   - Animated cross-fade between send ↔ stop icons
  */
-
+import React, { useCallback, useRef, useEffect } from "react";
+import { mergeClasses, Tooltip } from "@fluentui/react-components";
 import {
-  type KeyboardEvent,
-  type ReactNode,
-  useCallback,
-  useEffect,
-  useRef,
-} from 'react';
-import { Button, Tooltip, mergeClasses } from '@fluentui/react-components';
-import { SendRegular, StopRegular } from '@fluentui/react-icons';
-import { useCopilotStyles } from './copilotStyles';
+  SendRegular,
+  StopRegular,
+  AttachRegular,
+} from "@fluentui/react-icons";
+import { useComposerStyles, useSendButtonStyles } from "./copilotStyles";
+import { AttachmentList } from "./Attachment";
+import type { AttachmentProps } from "./Attachment";
+
+export type ComposerAppearance = "auto" | "single" | "multi";
+
+export interface ComposerSubmitData {
+  /** Current editor value at time of submit */
+  value: string;
+}
 
 export interface ComposerProps {
-  value: string;
-  onChange: (value: string) => void;
-  onSubmit?: (value: string) => void;
-  onStop?: () => void;
+  value?: string;
+  onChange?: (value: string) => void;
+  /** Mirrors ChatInputProps.onSubmit(ev, { value }) */
+  onSubmit?: (ev: React.SyntheticEvent, data: ComposerSubmitData) => void;
+  /** Mirrors ChatInputProps.onStop(ev) — called when stop button pressed */
+  onStop?: (ev: React.MouseEvent<HTMLButtonElement>) => void;
   placeholder?: string;
   disabled?: boolean;
-  isStreaming?: boolean;
-  /** Node rendered to the left of the textarea (e.g. attach button or model label). */
-  leftSlot?: ReactNode;
-  /** Node rendered to the right of the textarea and before the send button. */
-  rightSlot?: ReactNode;
+  /** Mirrors ChatInputProps.isSending — animates send → stop */
+  isSending?: boolean;
+  /** Mirrors ChatInputProps.disableSend */
+  disableSend?: boolean;
+  /** Mirrors ChatInputProps.hideSendWhenEmpty */
+  hideSendWhenEmpty?: boolean;
+  /** Mirrors ChatInputProps.maxLength — enables character count + error */
+  maxLength?: number;
+  /** Mirrors ChatInputProps.appearance */
+  appearance?: ComposerAppearance;
+  /** slot: banner — rendered above attachments + inputWrapper */
+  banner?: React.ReactNode;
+  /** slot: attachments — file/agent chips above the editor */
+  attachments?: AttachmentProps[];
+  /** slot: contentBefore — left zone (model selector, attach affordance) */
+  contentBefore?: React.ReactNode;
+  /** slot: actions — right of editor, before send button */
+  actions?: React.ReactNode;
+  /** slot: contentBelow — below the input shell (suggestions, etc.) */
+  contentBelow?: React.ReactNode;
   className?: string;
-  'aria-label'?: string;
+}
+
+function SendButton({
+  isSending,
+  canSend,
+  onSend,
+  onStop,
+  hidden,
+}: {
+  isSending: boolean;
+  canSend: boolean;
+  onSend: (ev: React.MouseEvent<HTMLButtonElement>) => void;
+  onStop: (ev: React.MouseEvent<HTMLButtonElement>) => void;
+  hidden: boolean;
+}) {
+  const styles = useSendButtonStyles();
+
+  if (hidden) return null;
+
+  if (isSending) {
+    return (
+      <Tooltip content="Stop" relationship="label" withArrow>
+        <button
+          type="button"
+          className={mergeClasses(styles.root, styles.stopping)}
+          onClick={onStop}
+          aria-label="Stop"
+        >
+          {/* slot: stopIcon */}
+          <span className={mergeClasses(styles.stopIcon, styles.iconVisible)}>
+            <StopRegular fontSize={14} />
+          </span>
+        </button>
+      </Tooltip>
+    );
+  }
+
+  return (
+    <Tooltip content="Send" relationship="label" withArrow>
+      <button
+        type="button"
+        className={mergeClasses(
+          styles.root,
+          canSend ? styles.active : styles.idle
+        )}
+        onClick={onSend}
+        disabled={!canSend}
+        aria-label="Send"
+      >
+        {/* slot: sendIcon */}
+        <span className={mergeClasses(styles.sendIcon, styles.iconVisible)}>
+          <SendRegular fontSize={14} />
+        </span>
+      </button>
+    </Tooltip>
+  );
 }
 
 export function Composer({
-  value,
+  value = "",
   onChange,
   onSubmit,
   onStop,
-  placeholder = 'Message…',
+  placeholder = "Ask anything…",
   disabled = false,
-  isStreaming = false,
-  leftSlot,
-  rightSlot,
+  isSending = false,
+  disableSend = false,
+  hideSendWhenEmpty = false,
+  maxLength,
+  appearance = "multi",
+  banner,
+  attachments = [],
+  contentBefore,
+  actions,
+  contentBelow,
   className,
-  'aria-label': ariaLabel,
 }: ComposerProps) {
-  const styles = useCopilotStyles();
+  const styles = useComposerStyles();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  // Auto-grow: adjust height on value change
-  const adjustHeight = useCallback(() => {
-    const ta = textareaRef.current;
-    if (!ta) return;
-    ta.style.height = 'auto';
-    ta.style.height = `${Math.min(ta.scrollHeight, 200)}px`;
-  }, []);
+  const hasValue = value.trim().length > 0;
+  const charCount = value.length;
+  const isOverLimit = maxLength != null && charCount > maxLength;
+  const canSend = !disabled && !disableSend && !isOverLimit && (hasValue || !hideSendWhenEmpty) && !isSending;
+  const hideSend = hideSendWhenEmpty && !hasValue && !isSending;
 
+  // Auto-resize textarea
   useEffect(() => {
-    adjustHeight();
-  }, [value, adjustHeight]);
+    const el = textareaRef.current;
+    if (!el || appearance === "single") return;
+    el.style.height = "auto";
+    el.style.height = `${el.scrollHeight}px`;
+  }, [value, appearance]);
 
-  const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
-    // Submit on Enter without Shift
-    if (e.key === 'Enter' && !e.shiftKey && !disabled && !isStreaming) {
-      e.preventDefault();
-      if (value.trim()) {
-        onSubmit?.(value);
+  const handleKeyDown = useCallback(
+    (ev: React.KeyboardEvent<HTMLTextAreaElement>) => {
+      if (ev.key === "Enter" && !ev.shiftKey && !disabled && canSend) {
+        ev.preventDefault();
+        onSubmit?.(ev, { value });
       }
-    }
-  };
+    },
+    [onSubmit, value, disabled, canSend]
+  );
 
-  const handleSend = () => {
-    if (value.trim() && !disabled && !isStreaming) {
-      onSubmit?.(value);
-    }
-  };
+  const handleSend = useCallback(
+    (ev: React.MouseEvent<HTMLButtonElement>) => {
+      if (canSend) onSubmit?.(ev, { value });
+    },
+    [onSubmit, value, canSend]
+  );
 
-  const canSend = !disabled && !isStreaming && value.trim().length > 0;
+  const handleStop = useCallback(
+    (ev: React.MouseEvent<HTMLButtonElement>) => {
+      onStop?.(ev);
+    },
+    [onStop]
+  );
 
   return (
     <div
-      className={mergeClasses(styles.composerShell, className)}
-      aria-label={ariaLabel ?? 'Chat composer'}
+      className={mergeClasses(styles.root, className)}
+      role="region"
+      aria-label="Message input"
     >
-      <div className={styles.composerRow}>
-        {leftSlot && (
-          <span className={styles.composerLeftSlot}>{leftSlot}</span>
+      {/* slot: banner */}
+      {banner && <div className={styles.banner}>{banner}</div>}
+
+      {/* slot: attachments */}
+      {attachments.length > 0 && (
+        <div className={styles.attachments}>
+          <AttachmentList attachments={attachments} />
+        </div>
+      )}
+
+      {/* slot: inputWrapper */}
+      <div className={styles.inputWrapper}>
+        {/* slot: contentBefore — defaults to attach icon if not overridden */}
+        {contentBefore !== undefined ? (
+          <div className={styles.contentBefore}>{contentBefore}</div>
+        ) : (
+          <div className={styles.contentBefore}>
+            <Tooltip content="Attach" relationship="label" withArrow>
+              <button
+                type="button"
+                aria-label="Attach file"
+                style={{
+                  background: "none",
+                  border: "none",
+                  cursor: "pointer",
+                  display: "flex",
+                  alignItems: "center",
+                  padding: "4px",
+                  borderRadius: "6px",
+                  color: "var(--colorNeutralForeground3)",
+                }}
+              >
+                <AttachRegular fontSize={18} />
+              </button>
+            </Tooltip>
+          </div>
         )}
+
+        {/* slot: editor */}
         <textarea
           ref={textareaRef}
-          className={styles.composerTextarea}
+          className={mergeClasses(
+            styles.editor,
+            appearance === "single" ? styles.editorSingle : undefined
+          )}
           value={value}
-          onChange={(e) => onChange(e.target.value)}
+          onChange={(ev) => onChange?.(ev.target.value)}
           onKeyDown={handleKeyDown}
           placeholder={placeholder}
           disabled={disabled}
-          rows={1}
-          aria-label={ariaLabel ?? 'Message'}
-          aria-multiline="true"
+          rows={appearance === "single" ? 1 : 1}
+          maxLength={maxLength}
+          aria-label={placeholder}
+          aria-multiline={appearance !== "single"}
         />
-        <span className={styles.composerActions}>
-          {rightSlot}
-          {isStreaming ? (
-            <Tooltip content="Stop generating" relationship="label">
-              <Button
-                appearance="subtle"
-                shape="circular"
-                size="small"
-                className={styles.stopButton}
-                icon={<StopRegular />}
-                onClick={onStop}
-                aria-label="Stop generating"
-              />
-            </Tooltip>
-          ) : (
-            <Tooltip content={canSend ? 'Send message' : 'Type a message to send'} relationship="label">
-              <Button
-                appearance="subtle"
-                shape="circular"
-                size="small"
-                className={canSend ? styles.sendButtonActive : styles.sendButtonIdle}
-                icon={<SendRegular />}
-                onClick={handleSend}
-                disabled={!canSend}
-                aria-label="Send message"
-              />
-            </Tooltip>
-          )}
-        </span>
+
+        {/* slot: actions */}
+        {actions && <div className={styles.actions}>{actions}</div>}
+
+        {/* slot: send */}
+        <SendButton
+          isSending={isSending}
+          canSend={canSend}
+          onSend={handleSend}
+          onStop={handleStop}
+          hidden={hideSend}
+        />
       </div>
+
+      {/* slot: errorMessage */}
+      {isOverLimit && (
+        <div className={styles.errorMessage} role="alert">
+          Character limit exceeded ({charCount}/{maxLength})
+        </div>
+      )}
+
+      {/* slot: contentBelow */}
+      {contentBelow && (
+        <div className={styles.contentBelow}>{contentBelow}</div>
+      )}
     </div>
   );
 }
