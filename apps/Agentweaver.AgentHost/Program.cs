@@ -227,7 +227,8 @@ app.MapPost("/configure", async (HttpContext ctx) =>
 
     await startup.ConfigureAsync(
         body.RunId, body.UserId ?? string.Empty, body.TurnBearerToken ?? string.Empty,
-        body.KvUserSecretName, body.GitHubAccessToken, body.WorkingDirectory, ctx.RequestAborted).ConfigureAwait(false);
+        body.KvUserSecretName, body.GitHubAccessToken, body.WorkingDirectory,
+        body.AutoApproveTools, ctx.RequestAborted).ConfigureAwait(false);
 
     return Results.Ok(new { configured = true, runId = body.RunId });
 });
@@ -460,6 +461,15 @@ internal sealed record ConfigureRequest
     /// references, so files produced by one stage are visible to the next.
     /// </summary>
     public string? WorkingDirectory { get; init; }
+
+    /// <summary>
+    /// Per-run <c>AutoApproveTools</c> run option (bug #221). When true, the pod auto-grants the
+    /// allow-with-approval HITL gate (e.g. <c>web_fetch</c>) instead of stalling for an operator.
+    /// The API resolves this from its own run-options store and the pod seeds its in-pod
+    /// <c>IRunOptionsStore</c> from it — otherwise the fresh pod store defaults to false and every
+    /// <c>web_fetch</c> waits out the HITL timeout under autopilot.
+    /// </summary>
+    public bool AutoApproveTools { get; init; }
 }
 
 internal sealed record PreviewProcessStartRequest

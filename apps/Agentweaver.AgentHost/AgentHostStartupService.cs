@@ -1,4 +1,5 @@
 using Agentweaver.AgentRuntime;
+using Agentweaver.Domain;
 using Microsoft.Extensions.Options;
 
 namespace Agentweaver.AgentHost;
@@ -38,6 +39,7 @@ internal sealed class AgentHostStartupService : IHostedService
     private readonly CopilotAIAgent _agent;
     private readonly AgentHostOptions _options;
     private readonly AgentHostRuntimeState _runtimeState;
+    private readonly IRunOptionsStore _runOptions;
     private readonly ILogger<AgentHostStartupService> _logger;
 
     private volatile bool _ready;
@@ -53,11 +55,13 @@ internal sealed class AgentHostStartupService : IHostedService
         CopilotAIAgent agent,
         IOptions<AgentHostOptions> options,
         AgentHostRuntimeState runtimeState,
+        IRunOptionsStore runOptions,
         ILogger<AgentHostStartupService> logger)
     {
         _agent = agent;
         _options = options.Value;
         _runtimeState = runtimeState;
+        _runOptions = runOptions;
         _logger = logger;
     }
 
@@ -89,11 +93,21 @@ internal sealed class AgentHostStartupService : IHostedService
         string? kvUserSecretName,
         string? gitHubAccessToken,
         string? workingDirectory,
+        bool autoApproveTools,
         CancellationToken ct)
     {
         _standby = false;
+
+        // Seed the pod's in-memory run-options store from the per-run flag delivered by the API
+        // (bug #221). The pod boots a fresh IRunOptionsStore defaulting AutoApproveTools=false, so
+        // without this the CopilotAIAgent HITL gate never auto-approves web_fetch and every request
+        // stalls out the 5-minute timeout under autopilot. CopilotAIAgent reads this lazily at
+        // tool-call time (after /configure returns), so setting it here is safe.
+        _runOptions.SetAutoApproveTools(runId, autoApproveTools);
+
         _logger.LogInformation(
-            "AgentHostStartupService: /configure received — provisioning agent for run {RunId}.", runId);
+            "AgentHostStartupService: /configure received — provisioning agent for run {RunId} (autoApproveTools={AutoApproveTools}).",
+            runId, autoApproveTools);
         await RunSetupAsync(runId, userId, workingDirectory, ct).ConfigureAwait(false);
     }
 

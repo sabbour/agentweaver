@@ -27,6 +27,7 @@ public sealed class SandboxExecutorRouter : ISandboxExecutorRouter
     private readonly IGitHubTokenStore? _tokenStore;
     private readonly Agentweaver.Api.Auth.ISecretStore? _secretStore;
     private readonly IRunEventStream? _runEventStream;
+    private readonly IRunOptionsStore? _runOptions;
 
     public SandboxExecutorRouter(IConfiguration config, ILoggerFactory loggerFactory,
         IPodNameRegistry? podRegistry = null, IHttpClientFactory? httpClientFactory = null,
@@ -34,7 +35,8 @@ public sealed class SandboxExecutorRouter : ISandboxExecutorRouter
         IAgentHostTurnTokenRegistry? turnTokenRegistry = null,
         IGitHubTokenStore? tokenStore = null,
         Agentweaver.Api.Auth.ISecretStore? secretStore = null,
-        IRunEventStream? runEventStream = null)
+        IRunEventStream? runEventStream = null,
+        IRunOptionsStore? runOptions = null)
     {
         _config = config;
         _loggerFactory = loggerFactory;
@@ -45,6 +47,7 @@ public sealed class SandboxExecutorRouter : ISandboxExecutorRouter
         _tokenStore = tokenStore;
         _secretStore = secretStore;
         _runEventStream = runEventStream;
+        _runOptions = runOptions;
     }
 
     public ISandboxExecutor Resolve()
@@ -129,7 +132,8 @@ public sealed class SandboxExecutorRouter : ISandboxExecutorRouter
                 sandboxOptions.Namespace, sandboxOptions.WorkspaceMountPath);
             return new KubernetesSandboxExecutor(
                 k8sClient, sandboxOptions, k8sLogger, _podRegistry, _turnTokenRegistry, readinessProbe,
-                _submittingUserResolver, _httpClientFactory, _tokenStore, _secretStore, _runEventStream);
+                _submittingUserResolver, _httpClientFactory, _tokenStore, _secretStore, _runEventStream,
+                _runOptions);
         }
         catch (Exception ex)
         {

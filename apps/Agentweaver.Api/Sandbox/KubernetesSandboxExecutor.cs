@@ -190,6 +190,9 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
     // parent coordinator's stall timer alive during a legitimately-long Pending wait (issue #217).
     // Null in unit tests → the heartbeat is skipped (same null-skip convention as the readiness probe).
     private readonly IRunEventStream? _runEventStream;
+    // Source of the per-run AutoApproveTools flag propagated to the warm pod via /configure (bug
+    // #221). Null in unit tests → the flag defaults false (same null-skip convention as above).
+    private readonly IRunOptionsStore? _runOptions;
 
     public bool IsRealIsolation => true;
     public string BackendName => "kubernetes-sandbox-claim";
@@ -209,7 +212,8 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
         IHttpClientFactory? httpClientFactory = null,
         IGitHubTokenStore? tokenStore = null,
         ISecretStore? secretStore = null,
-        IRunEventStream? runEventStream = null)
+        IRunEventStream? runEventStream = null,
+        IRunOptionsStore? runOptions = null)
     {
         _client = client;
         _options = options;
@@ -222,6 +226,7 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
         _tokenStore = tokenStore;
         _secretStore = secretStore;
         _runEventStream = runEventStream;
+        _runOptions = runOptions;
     }
 
     public async Task<SandboxExecResult> ExecuteAsync(
@@ -699,6 +704,9 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
             gitHubAccessToken,
             workingDirectory,
             previewRunnerCredential,
+            // Per-run AutoApproveTools flag (bug #221). Resolved from the API-side run-options store
+            // keyed by the child runId; defaults false when the store is unavailable (unit tests).
+            autoApproveTools = _runOptions?.Get(runId).AutoApproveTools ?? false,
         };
 
         _logger.LogInformation(
