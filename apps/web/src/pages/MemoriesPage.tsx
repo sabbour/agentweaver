@@ -1,101 +1,44 @@
-import {
-  apiClient } from '../api/apiClient';
+﻿import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
-import { AzureTabList,
+import {
   Badge,
-  BladeHeader,
   Button,
-  CommandBar,
-  EmptyState,
   Field,
   Input,
+  makeStyles,
   MessageBar,
   MessageBarBody,
-  Spinner,
-  StatusIconText,
-  Text,
+  Tab,
+  TabList,
   Textarea,
-  } from '../copilot-fluent-system';
-import { PageHeader } from '../components/PageHeader';
-import { makeStyles,
   tokens,
-} from '../copilot-fluent-system';
+} from '@fluentui/react-components';
+import {
+  EmptyState,
+  ErrorState,
+  LoadingState,
+  MetricRow,
+  PageContainer,
+  PageHeader,
+  PageSection,
+} from '../components/ui';
 import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import type { AgentMemoryDto, DecisionDto, DecisionInboxEntryDto } from '../api/types';
-// ---------------------------------------------------------------------------
-// Styles
-// ---------------------------------------------------------------------------
 
 const useStyles = makeStyles({
-  root: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalL,
-  },
-  breadcrumb: {
-    display: 'flex',
-    gap: tokens.spacingHorizontalS,
-    alignItems: 'center',
-    fontSize: tokens.fontSizeBase300,
-    color: tokens.colorNeutralForeground2,
-  },
   breadcrumbLink: {
-    color: tokens.colorBrandForeground1,
+    color: tokens.colorNeutralForeground2,
     textDecoration: 'none',
+    ':hover': { textDecorationLine: 'underline' },
   },
-  commandSurface: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalM,
-  },
-  statusPills: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: tokens.spacingHorizontalS,
-    flexWrap: 'wrap',
-  },
-  statusPill: {
-    display: 'inline-flex',
-    alignItems: 'center',
-    minHeight: '28px',
-    padding: `${tokens.spacingVerticalXXS} ${tokens.spacingHorizontalS}`,
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: tokens.borderRadiusMedium,
-    backgroundColor: tokens.colorNeutralBackground2,
-    fontSize: tokens.fontSizeBase200,
-    fontVariantNumeric: 'tabular-nums',
-  },
-  summaryGrid: {
-    display: 'grid',
-    gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
-    gap: tokens.spacingHorizontalM,
-  },
-  summaryCard: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalXXS,
-  },
-  summaryLabel: {
-    color: tokens.colorNeutralForeground3,
-    fontSize: tokens.fontSizeBase200,
-    textTransform: 'uppercase',
-    letterSpacing: '0.04em',
-  },
-  summaryValue: {
-    fontSize: tokens.fontSizeBase600,
-    lineHeight: tokens.lineHeightBase600,
-    fontWeight: tokens.fontWeightSemibold,
-    fontVariantNumeric: 'tabular-nums',
+  breadcrumbSep: {
+    color: tokens.colorNeutralForeground4,
   },
   tabContent: {
     display: 'flex',
     flexDirection: 'column',
     gap: tokens.spacingVerticalM,
-  },
-  empty: {
-    color: tokens.colorNeutralForeground3,
-    fontStyle: 'italic',
   },
   itemList: {
     display: 'flex',
@@ -106,6 +49,10 @@ const useStyles = makeStyles({
     display: 'flex',
     flexDirection: 'column',
     gap: tokens.spacingVerticalXS,
+    padding: tokens.spacingVerticalS,
+    backgroundColor: tokens.colorNeutralBackground2,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusMedium,
   },
   itemHeader: {
     display: 'flex',
@@ -134,28 +81,13 @@ const useStyles = makeStyles({
     fontStyle: 'italic',
     lineHeight: '1.5',
   },
-  proposedSection: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalS,
-    marginTop: tokens.spacingVerticalL,
-  },
-  proposedHeading: {
-    fontWeight: tokens.fontWeightSemibold,
-    fontSize: tokens.fontSizeBase300,
-    color: tokens.colorNeutralForeground2,
-  },
-  proposedCaption: {
-    color: tokens.colorNeutralForeground3,
-    fontSize: tokens.fontSizeBase200,
-    lineHeight: '1.4',
-    maxWidth: '640px',
-  },
   proposedItem: {
     border: `1px dashed ${tokens.colorNeutralStroke2}`,
     display: 'flex',
     flexDirection: 'column',
     gap: tokens.spacingVerticalXS,
+    padding: tokens.spacingVerticalS,
+    borderRadius: tokens.borderRadiusMedium,
   },
   actions: {
     display: 'flex',
@@ -166,7 +98,6 @@ const useStyles = makeStyles({
   form: {
     display: 'grid',
     gap: tokens.spacingVerticalS,
-    marginBottom: tokens.spacingVerticalL,
     maxWidth: '720px',
   },
   inlineFields: {
@@ -180,10 +111,6 @@ function formatApiError(err: unknown): string {
   if (err instanceof ApiError) return `API error ${err.status}: ${err.body || 'Request failed'}`;
   return err instanceof Error ? err.message : String(err);
 }
-
-// ---------------------------------------------------------------------------
-// Component
-// ---------------------------------------------------------------------------
 
 export function MemoriesPage() {
   const styles = useStyles();
@@ -309,77 +236,38 @@ export function MemoriesPage() {
   const memoryCount = memory?.length ?? 0;
 
   return (
-    <div className={['azf-stack azf-page azf-pattern-shell', styles.root].filter(Boolean).join(' ')}>
+    <PageContainer>
       <PageHeader
-        title="Team Memory"
-        subtitle="Decisions and learnings the team has captured."
-        breadcrumb={
-          <nav className={styles.breadcrumb} aria-label="Breadcrumb">
+        title="Team memory"
+        description="Decisions and learnings the team has captured."
+        breadcrumbs={
+          <>
             <Link to="/" className={styles.breadcrumbLink}>Projects</Link>
-            <span>/</span>
+            <span className={styles.breadcrumbSep}>/</span>
             <Link to={`/projects/${projectId}`} className={styles.breadcrumbLink}>Project</Link>
-            <span>/</span>
-            <span>Team Memory</span>
-          </nav>
+            <span className={styles.breadcrumbSep}>/</span>
+            <span>Team memory</span>
+          </>
         }
       />
 
-      <section className={['azf-surface azf-surface--raised azf-surface--padding-comfortable', styles.commandSurface].filter(Boolean).join(' ')} aria-label="Team memory resource command surface">
-        <CommandBar
-          title="Memory command surface"
-          description="Azure resource blade for durable decisions, pending proposals, and agent learnings."
-        >
-          <div className={styles.statusPills}>
-            <StatusIconText className={styles.statusPill} status={pending.length > 0 ? 'warning' : 'success'}>
-              {pending.length} pending
-            </StatusIconText>
-            <StatusIconText className={styles.statusPill} status="info">
-              {decisionCount} decisions
-            </StatusIconText>
-            <StatusIconText className={styles.statusPill} status="neutral">
-              {memoryCount} memories
-            </StatusIconText>
-          </div>
-        </CommandBar>
-        <div className={styles.summaryGrid}>
-          <div className={['azf-surface azf-surface--subtle azf-surface--padding-compact', styles.summaryCard].filter(Boolean).join(' ')}>
-            <Text className={styles.summaryLabel}>Decision inbox</Text>
-            <Text className={styles.summaryValue}>{pending.length}</Text>
-            <Text className={styles.proposedCaption}>Coordinator-reviewed proposals awaiting action.</Text>
-          </div>
-          <div className={['azf-surface azf-surface--subtle azf-surface--padding-compact', styles.summaryCard].filter(Boolean).join(' ')}>
-            <Text className={styles.summaryLabel}>Accepted decisions</Text>
-            <Text className={styles.summaryValue}>{decisionCount}</Text>
-            <Text className={styles.proposedCaption}>Merged architectural and scope decisions.</Text>
-          </div>
-          <div className={['azf-surface azf-surface--subtle azf-surface--padding-compact', styles.summaryCard].filter(Boolean).join(' ')}>
-            <Text className={styles.summaryLabel}>Agent memory</Text>
-            <Text className={styles.summaryValue}>{memoryCount}</Text>
-            <Text className={styles.proposedCaption}>Durable learnings by agent and type.</Text>
-          </div>
-        </div>
-      </section>
+      <MetricRow items={[
+        { label: 'Pending', value: pending.length },
+        { label: 'Decisions', value: decisionCount },
+        { label: 'Memories', value: memoryCount },
+      ]} />
 
-      <div className="azf-surface azf-surface--panel azf-surface--padding-compact">
-        <AzureTabList
-          ariaLabel="Team memory sections"
-          selectedValue={selectedTab}
-          onTabSelect={(value) => setSelectedTab(value as 'decisions' | 'memory')}
-          tabs={[
-            { id: 'decisions', label: 'Decisions' },
-            { id: 'memory', label: 'Agent Memory' },
-          ]}
-        />
-      </div>
+      <TabList
+        selectedValue={selectedTab}
+        onTabSelect={(_, data) => setSelectedTab(data.value as 'decisions' | 'memory')}
+      >
+        <Tab value="decisions">Decisions</Tab>
+        <Tab value="memory">Agent memory</Tab>
+      </TabList>
 
-      <div className={['azf-surface azf-surface--panel azf-surface--padding-comfortable', styles.tabContent].filter(Boolean).join(' ')}>
-        {loading && <Spinner size="small" label="Loading…" />}
-        {loadError && (
-          <MessageBar intent="error">
-            <MessageBarBody>{loadError}</MessageBarBody>
-            <Button size="small" onClick={retryLoad}>Retry</Button>
-          </MessageBar>
-        )}
+      <div className={styles.tabContent}>
+        {loading && <LoadingState rows={3} />}
+        {loadError && <ErrorState message={loadError} onRetry={retryLoad} />}
         {mutationError && (
           <MessageBar intent="error">
             <MessageBarBody>{mutationError}</MessageBarBody>
@@ -388,53 +276,63 @@ export function MemoriesPage() {
 
         {!loading && !loadError && selectedTab === 'decisions' && (
           !hasActiveDecisions && pending.length === 0
-            ? <EmptyState title="No decisions recorded yet." body="Accepted decisions and pending proposals will appear here." />
+            ? (
+              <EmptyState
+                title="No decisions recorded yet"
+                description="Accepted decisions and pending proposals will appear here."
+              />
+            )
             : (
               <>
                 {hasActiveDecisions && (
-                  <div className={styles.itemList}>
-                    <BladeHeader size="compact" title="Accepted decisions" subtitle="Resource history of merged team decisions and rationale." />
-                    {decisions!.map(d => (
-                      <div key={d.id} className={['azf-surface azf-surface--subtle azf-surface--padding-compact', styles.item].filter(Boolean).join(' ')}>
-                        <div className={styles.itemHeader}>
-                          <span className={styles.itemTitle}>{d.title}</span>
-                          <Badge appearance="tint" color="informative">{d.type}</Badge>
-                          <Badge appearance="outline">{d.agent_name}</Badge>
-                          <span className={styles.itemMeta}>{new Date(d.created_at).toLocaleString()}</span>
+                  <PageSection title="Accepted decisions">
+                    <div className={styles.itemList}>
+                      {decisions!.map(d => (
+                        <div key={d.id} className={styles.item}>
+                          <div className={styles.itemHeader}>
+                            <span className={styles.itemTitle}>{d.title}</span>
+                            <Badge appearance="tint" color="subtle">{d.type}</Badge>
+                            <Badge appearance="outline">{d.agent_name}</Badge>
+                            <span className={styles.itemMeta}>{new Date(d.created_at).toLocaleString()}</span>
+                          </div>
+                          <span className={styles.itemContent}>{d.content}</span>
+                          {d.rationale && (
+                            <span className={styles.itemRationale}>Rationale: {d.rationale}</span>
+                          )}
                         </div>
-                        <span className={styles.itemContent}>{d.content}</span>
-                        {d.rationale && (
-                          <span className={styles.itemRationale}>Rationale: {d.rationale}</span>
-                        )}
-                      </div>
-                    ))}
-                  </div>
+                      ))}
+                    </div>
+                  </PageSection>
                 )}
 
                 {pending.length > 0 && (
-                  <section className={styles.proposedSection} aria-label="Proposed decisions awaiting Coordinator">
-                    <BladeHeader size="compact" title="Proposed — awaiting Coordinator" subtitle="Review pending proposals and merge, promote, or reject them. Approving a proposal promotes these proposals into active Team Memory." />
-                    {pending.map(e => (
-                      <div key={e.id} className={['azf-surface azf-surface--flat azf-surface--padding-compact', styles.proposedItem].filter(Boolean).join(' ')}>
-                        <div className={styles.itemHeader}>
-                          <span className={styles.itemTitle}>{e.title}</span>
-                          <Badge appearance="tint" color="warning">Proposed</Badge>
-                          <Badge appearance="tint" color="informative">{e.type}</Badge>
-                          <Badge appearance="outline">{e.agent_name}</Badge>
-                          <span className={styles.itemMeta}>{new Date(e.created_at).toLocaleString()}</span>
+                  <PageSection
+                    title="Pending proposals"
+                    description="Review proposals and merge, promote, or reject them."
+                  >
+                    <div className={styles.itemList}>
+                      {pending.map(e => (
+                        <div key={e.id} className={styles.proposedItem}>
+                          <div className={styles.itemHeader}>
+                            <span className={styles.itemTitle}>{e.title}</span>
+                            <Badge appearance="tint" color="warning">Proposed</Badge>
+                            <Badge appearance="tint" color="subtle">{e.type}</Badge>
+                            <Badge appearance="outline">{e.agent_name}</Badge>
+                            <span className={styles.itemMeta}>{new Date(e.created_at).toLocaleString()}</span>
+                          </div>
+                          <span className={styles.itemContent}>{e.content}</span>
+                          {e.rationale && (
+                            <span className={styles.itemRationale}>Rationale: {e.rationale}</span>
+                          )}
+                          <div className={styles.actions}>
+                            <Button size="small" appearance="primary" disabled={busy} onClick={() => void runInboxAction(e.id, 'merge')}>Merge</Button>
+                            <Button size="small" disabled={busy} onClick={() => void runInboxAction(e.id, 'promote')}>Promote</Button>
+                            <Button size="small" appearance="outline" disabled={busy} onClick={() => void runInboxAction(e.id, 'reject')}>Reject</Button>
+                          </div>
                         </div>
-                        <span className={styles.itemContent}>{e.content}</span>
-                        {e.rationale && (
-                          <span className={styles.itemRationale}>Rationale: {e.rationale}</span>
-                        )}
-                        <div className={styles.actions}>
-                          <Button size="small" appearance="primary" disabled={busy} onClick={() => void runInboxAction(e.id, 'merge')}>Merge</Button>
-                          <Button size="small" disabled={busy} onClick={() => void runInboxAction(e.id, 'promote')}>Promote</Button>
-                          <Button size="small" appearance="outline" disabled={busy} onClick={() => void runInboxAction(e.id, 'reject')}>Reject</Button>
-                        </div>
-                      </div>
-                    ))}
-                  </section>
+                      ))}
+                    </div>
+                  </PageSection>
                 )}
               </>
             )
@@ -442,29 +340,39 @@ export function MemoriesPage() {
 
         {!loading && !loadError && selectedTab === 'memory' && (
           <>
-            <section className={styles.form} aria-label="Create memory entry">
-              <BladeHeader size="compact" title="Agent memory entries" subtitle="Create or update durable operational learnings." />
-              <div className={styles.inlineFields}>
-                <Field label="Agent name" required>
-                  <Input value={newAgentName} onChange={(_, data) => setNewAgentName(data.value)} disabled={busy} />
+            <PageSection title="Add a memory entry" description="Create durable operational learnings for agents.">
+              <div className={styles.form}>
+                <div className={styles.inlineFields}>
+                  <Field label="Agent name" required>
+                    <Input value={newAgentName} onChange={(_, data) => setNewAgentName(data.value)} disabled={busy} />
+                  </Field>
+                  <Field label="Type" required>
+                    <Input value={newType} onChange={(_, data) => setNewType(data.value)} disabled={busy} />
+                  </Field>
+                </div>
+                <Field label="Content" required>
+                  <Textarea value={newContent} onChange={(_, data) => setNewContent(data.value)} disabled={busy} rows={4} />
                 </Field>
-                <Field label="Type" required>
-                  <Input value={newType} onChange={(_, data) => setNewType(data.value)} disabled={busy} />
-                </Field>
+                <Button
+                  appearance="primary"
+                  disabled={busy || !newAgentName.trim() || !newType.trim() || !newContent.trim()}
+                  onClick={() => void createMemory()}
+                >
+                  Create memory
+                </Button>
               </div>
-              <Field label="Content" required>
-                <Textarea value={newContent} onChange={(_, data) => setNewContent(data.value)} disabled={busy} rows={4} />
-              </Field>
-              <Button appearance="primary" disabled={busy || !newAgentName.trim() || !newType.trim() || !newContent.trim()} onClick={() => void createMemory()}>
-                Create memory
-              </Button>
-            </section>
+            </PageSection>
             {memory === null || memory.length === 0
-              ? <EmptyState title="No agent memory recorded yet" body="Create a memory entry to capture durable team learnings." />
+              ? (
+                <EmptyState
+                  title="No agent memory recorded yet"
+                  description="Create a memory entry to capture durable team learnings."
+                />
+              )
               : (
                 <div className={styles.itemList}>
                   {memory.map(m => (
-                    <div key={m.id} className={['azf-surface azf-surface--subtle azf-surface--padding-compact', styles.item].filter(Boolean).join(' ')}>
+                    <div key={m.id} className={styles.item}>
                       <div className={styles.itemHeader}>
                         <Badge appearance="outline">{m.agent_name}</Badge>
                         <Badge appearance="tint" color={
@@ -502,6 +410,6 @@ export function MemoriesPage() {
           </>
         )}
       </div>
-    </div>
+    </PageContainer>
   );
 }

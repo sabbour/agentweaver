@@ -1,11 +1,8 @@
-import {
-  apiClient } from '../api/apiClient';
+﻿import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
-import { AzureTabList,
-  BladeHeader,
+import {
   Badge,
   Button,
-  EssentialsGrid,
   Dialog,
   DialogActions,
   DialogBody,
@@ -14,27 +11,43 @@ import { AzureTabList,
   DialogTitle,
   DialogTrigger,
   DrawerBody,
+  DrawerFooter,
   DrawerHeader,
+  DrawerHeaderTitle,
   Field,
   Input,
+  makeStyles,
   MessageBar,
   MessageBarBody,
   OverlayDrawer,
+  Select,
   Spinner,
+  Tab,
+  TabList,
   Text,
   Textarea,
-  } from '../copilot-fluent-system';
-import { AgentAvatar } from '../components/AgentAvatar';
-import { PageHeader } from '../components/PageHeader';
-import { SyncPanel } from '../components/SyncPanel';
-import { DrawerFooter,
-  DrawerHeaderTitle,
-  makeStyles,
-  Select,
   Title3,
   tokens,
-} from '../copilot-fluent-system';
-import { Dismiss24Regular, People24Regular, PersonAddRegular, PuzzlePiece20Regular } from '../copilot-fluent-system';
+} from '@fluentui/react-components';
+import {
+  Dismiss24Regular,
+  People24Regular,
+  PersonAddRegular,
+  PuzzlePiece20Regular,
+} from '@fluentui/react-icons';
+import { AgentAvatar } from '../components/AgentAvatar';
+import { SyncPanel } from '../components/SyncPanel';
+import {
+  EmptyState,
+  ErrorState,
+  ListRow,
+  LoadingState,
+  MetricRow,
+  PageContainer,
+  PageHeader,
+  PageSection,
+  RichList,
+} from '../components/ui';
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import type {
@@ -49,121 +62,23 @@ import type {
   TeamMemberDto,
   TeamTemplateDto,
 } from '../api/types';
+
 type FilterTab = 'all' | 'active' | 'retired';
 type PanelTab = 'overview' | 'charter' | 'capabilities';
 
 const useStyles = makeStyles({
-  root: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalL,
-  },
-  breadcrumb: {
-    display: 'flex',
-    gap: tokens.spacingHorizontalS,
-    alignItems: 'center',
-    fontSize: tokens.fontSizeBase300,
-    color: tokens.colorNeutralForeground2,
-  },
   breadcrumbLink: {
-    color: tokens.colorBrandForeground1,
+    color: tokens.colorNeutralForeground2,
     textDecoration: 'none',
+    ':hover': { textDecorationLine: 'underline' },
   },
-  emptyState: {
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'center',
-    gap: tokens.spacingVerticalM,
-    padding: `${tokens.spacingVerticalXXL} ${tokens.spacingHorizontalXXL}`,
-    backgroundColor: tokens.colorNeutralBackground1,
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: tokens.borderRadiusMedium,
-    textAlign: 'center',
+  breadcrumbSep: {
+    color: tokens.colorNeutralForeground4,
   },
   dialogFields: {
     display: 'flex',
     flexDirection: 'column',
     gap: tokens.spacingVerticalM,
-  },
-  cardGrid: {
-    display: 'grid',
-    gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))',
-    gap: tokens.spacingVerticalM,
-  },
-  systemSection: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalM,
-  },
-  managementSurface: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalL,
-  },
-  systemSectionHeader: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: tokens.spacingHorizontalM,
-    paddingTop: tokens.spacingVerticalXS,
-  },
-  systemSectionRule: {
-    flex: 1,
-    height: '1px',
-    backgroundColor: tokens.colorNeutralStroke2,
-  },
-  systemSectionLabel: {
-    fontSize: tokens.fontSizeBase200,
-    fontWeight: tokens.fontWeightSemibold,
-    color: tokens.colorNeutralForeground3,
-    textTransform: 'uppercase' as const,
-    letterSpacing: '0.05em',
-    whiteSpace: 'nowrap' as const,
-  },
-  card: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalS,
-    padding: tokens.spacingVerticalM,
-    backgroundColor: tokens.colorNeutralBackground1,
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: tokens.borderRadiusMedium,
-    cursor: 'pointer',
-    boxShadow: tokens.shadow2,
-    ':hover': {
-      backgroundColor: tokens.colorNeutralBackground1Hover,
-      border: `1px solid ${tokens.colorNeutralStroke1Hover}`,
-    },
-  },
-  cardHeader: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: tokens.spacingHorizontalM,
-  },
-  cardInfo: {
-    display: 'flex',
-    flexDirection: 'column',
-    minWidth: '0',
-    overflow: 'hidden',
-  },
-  cardName: {
-    fontWeight: tokens.fontWeightSemibold,
-    fontSize: tokens.fontSizeBase300,
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
-    whiteSpace: 'nowrap',
-  },
-  cardRole: {
-    fontSize: tokens.fontSizeBase200,
-    color: tokens.colorNeutralForeground3,
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
-    whiteSpace: 'nowrap',
-  },
-  cardFooter: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: tokens.spacingHorizontalS,
-    marginTop: tokens.spacingVerticalXS,
   },
   panelTabBar: {
     paddingInline: tokens.spacingHorizontalM,
@@ -183,8 +98,6 @@ const useStyles = makeStyles({
     fontSize: tokens.fontSizeBase100,
     fontWeight: tokens.fontWeightSemibold,
     color: tokens.colorNeutralForeground3,
-    textTransform: 'uppercase',
-    letterSpacing: '0.05em',
   },
   monoText: {
     fontFamily: tokens.fontFamilyMonospace,
@@ -228,7 +141,7 @@ const useStyles = makeStyles({
   skillName: {
     fontWeight: tokens.fontWeightSemibold,
     fontSize: tokens.fontSizeBase300,
-    color: tokens.colorBrandForeground1,
+    color: tokens.colorNeutralForeground1,
     textDecoration: 'none',
     ':hover': {
       textDecoration: 'underline',
@@ -416,7 +329,6 @@ function AddMemberDialog({
   const [error, setError] = useState<string | null>(null);
   const [catalogRoles, setCatalogRoles] = useState<RoleDto[]>([]);
 
-  // Load catalog roles when dialog opens
   useEffect(() => {
     if (open && catalogRoles.length === 0) {
       void apiClient.getRoles().then(setCatalogRoles).catch(() => {});
@@ -527,7 +439,6 @@ function AgentDetailPanel({
   const [skillsError, setSkillsError] = useState<string | null>(null);
   const [skillsLoaded, setSkillsLoaded] = useState(false);
 
-  // Derived loading states avoid synchronous setState calls inside effects
   const historyLoading = panelTab === 'overview' && !historyLoaded && historyError === null;
   const charterLoading = panelTab === 'charter' && !charterLoaded && charterError === null;
   const skillsTabActive = panelTab === 'overview' || panelTab === 'capabilities';
@@ -620,7 +531,6 @@ function AgentDetailPanel({
     }
   };
 
-  // suppress unused variable warning — charter state is managed for side-effects
   void charter;
 
   const skillsSection = (
@@ -680,7 +590,7 @@ function AgentDetailPanel({
           {member.is_built_in && (
             <Badge
               appearance="tint"
-              color="brand"
+              color="subtle"
               size="small"
               style={{ marginLeft: '8px', verticalAlign: 'middle' }}
             >
@@ -692,16 +602,15 @@ function AgentDetailPanel({
       </DrawerHeader>
 
       <div className={styles.panelTabBar}>
-        <AzureTabList
-          ariaLabel="Agent detail sections"
+        <TabList
           selectedValue={panelTab}
-          onTabSelect={(value) => { setPanelTab(value as PanelTab); }}
-          tabs={[
-            { id: 'overview', label: 'Overview' },
-            { id: 'charter', label: 'Charter' },
-            { id: 'capabilities', label: 'Capabilities' },
-          ]}
-        />
+          onTabSelect={(_, data) => { setPanelTab(data.value as PanelTab); }}
+          aria-label="Agent detail sections"
+        >
+          <Tab value="overview">Overview</Tab>
+          <Tab value="charter">Charter</Tab>
+          <Tab value="capabilities">Capabilities</Tab>
+        </TabList>
       </div>
 
       <DrawerBody>
@@ -819,64 +728,6 @@ function AgentDetailPanel({
   );
 }
 
-type TeamPageStyles = ReturnType<typeof useStyles>;
-
-function MemberCard({
-  member,
-  styles,
-  onClick,
-}: {
-  member: TeamMemberDto;
-  styles: TeamPageStyles;
-  onClick: () => void;
-}) {
-  return (
-    <div
-      className={styles.card}
-      role="button"
-      tabIndex={0}
-      aria-label={`Open details for ${member.name}`}
-      onClick={onClick}
-      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') onClick(); }}
-    >
-      <div className={styles.cardHeader}>
-        <AgentAvatar
-          name={member.name}
-          size={40}
-          isBuiltIn={member.is_built_in}
-          isRetired={member.status === 'retired'}
-        />
-        <div className={styles.cardInfo}>
-          <Text className={styles.cardName}>{member.name}</Text>
-          <Text className={styles.cardRole}>{member.role_title}</Text>
-        </div>
-      </div>
-      <div className={styles.cardFooter}>
-        <span
-          aria-hidden="true"
-          style={{
-            width: '8px',
-            height: '8px',
-            borderRadius: '50%',
-            display: 'inline-block',
-            flexShrink: 0,
-            backgroundColor: member.status === 'active' ? '#107c10' : '#8a8886',
-          }}
-        />
-        {member.is_built_in ? (
-          <Badge appearance="tint" color="brand" size="small">
-            System agent
-          </Badge>
-        ) : (
-          <Badge appearance="tint" color="informative" size="small">
-            Project agent
-          </Badge>
-        )}
-      </div>
-    </div>
-  );
-}
-
 export function TeamPage() {
   const styles = useStyles();
   const { projectId } = useParams<{ projectId: string }>();
@@ -953,31 +804,23 @@ export function TeamPage() {
   const builtInMembers = filteredMembers.filter((m) => m.is_built_in);
 
   return (
-    <div className={['azf-stack azf-page azf-pattern-shell', styles.root].filter(Boolean).join(' ')}>
-      <div className={styles.breadcrumb}>
-        <Link to="/" className={styles.breadcrumbLink}>Projects</Link>
-        <span>/</span>
-        <Link to={`/projects/${projectId}`} className={styles.breadcrumbLink}>
-          {project?.name ?? team?.project_name ?? projectId}
-        </Link>
-        <span>/</span>
-        <span>Team</span>
-      </div>
-
-      {loading && <Spinner label="Loading team" />}
-
-      {error && (
-        <MessageBar intent="error">
-          <MessageBarBody>{error}</MessageBarBody>
-        </MessageBar>
-      )}
-
-      {!loading && (
-        <PageHeader
-          title="Agents"
-          subtitle="The cast working on this project."
-          resourceIcon={<People24Regular />}
-          actions={
+    <PageContainer>
+      <PageHeader
+        title="Agents"
+        description="The cast working on this project."
+        breadcrumbs={
+          <>
+            <Link to="/" className={styles.breadcrumbLink}>Projects</Link>
+            <span className={styles.breadcrumbSep}>/</span>
+            <Link to={`/projects/${projectId}`} className={styles.breadcrumbLink}>
+              {project?.name ?? team?.project_name ?? projectId}
+            </Link>
+            <span className={styles.breadcrumbSep}>/</span>
+            <span>Team</span>
+          </>
+        }
+        actions={
+          !loading && !error ? (
             <>
               {team && (
                 <AddMemberDialog
@@ -993,88 +836,97 @@ export function TeamPage() {
               </Button>
               <Button
                 appearance="primary"
+                icon={<People24Regular />}
                 onClick={() => { navigate(`/projects/${projectId}/team/cast`); }}
               >
                 Cast team
               </Button>
             </>
-          }
-        />
-      )}
+          ) : undefined
+        }
+      />
+
+      {loading && <LoadingState rows={4} label="Loading team…" />}
+      {error && <ErrorState message={error} />}
 
       {showSync && <SyncPanel projectId={projectId} />}
 
       {!loading && !team && !error && (
-        <div className={['azf-surface azf-surface--panel azf-surface--padding-comfortable', styles.emptyState].filter(Boolean).join(' ')}>
-          <BladeHeader size="compact" title="No team resource configured" subtitle="Cast a team to create project agents, charters, and capability assignments." />
-          <div>
-            <Title3>No team yet</Title3>
-            <Text>Cast a team to get started. The casting wizard will help you pick roles and generate agent charters.</Text>
-          </div>
-          <Button appearance="primary" onClick={() => { navigate(`/projects/${projectId}/team/cast`); }}>
-            Cast team
-          </Button>
-        </div>
+        <EmptyState
+          title="No team yet"
+          description="Cast a team to get started. The wizard will help you pick roles and generate agent charters."
+          action={
+            <Button appearance="primary" onClick={() => { navigate(`/projects/${projectId}/team/cast`); }}>
+              Cast team
+            </Button>
+          }
+        />
       )}
 
       {team && members.length > 0 && (
-        <div className={['azf-surface azf-surface--panel azf-surface--padding-comfortable', styles.managementSurface].filter(Boolean).join(' ')}>
-          <BladeHeader
-            size="compact"
-            title="Agent inventory"
-            subtitle="Manage project and system agents as an Azure-style resource collection."
-          />
-          <EssentialsGrid
-            properties={[
-              { id: 'project', label: 'Project', value: project?.name ?? team.project_name ?? projectId },
-              { id: 'total', label: 'Total agents', value: members.length },
-              { id: 'active', label: 'Active', value: activeCount, tags: activeCount > 0 ? ['Healthy'] : undefined },
-              { id: 'retired', label: 'Retired', value: retiredCount },
-            ]}
-          />
-          <AzureTabList
-            ariaLabel="Agent filters"
+        <>
+          <MetricRow items={[
+            { label: 'Total', value: members.length },
+            { label: 'Active', value: activeCount },
+            { label: 'Retired', value: retiredCount },
+          ]} />
+
+          <TabList
             selectedValue={filterTab}
-            onTabSelect={(value) => { setFilterTab(value as FilterTab); }}
-            tabs={[
-              { id: 'all', label: `All (${members.length})` },
-              { id: 'active', label: `Active (${activeCount})` },
-              { id: 'retired', label: `Retired (${retiredCount})` },
-            ]}
-          />
+            onTabSelect={(_, data) => { setFilterTab(data.value as FilterTab); }}
+            aria-label="Filter agents"
+          >
+            <Tab value="all">All ({members.length})</Tab>
+            <Tab value="active">Active ({activeCount})</Tab>
+            <Tab value="retired">Retired ({retiredCount})</Tab>
+          </TabList>
+
+          {filteredMembers.length === 0 && (
+            <EmptyState title={`No ${filterTab} agents`} description="Adjust the filter to see more agents." />
+          )}
 
           {projectMembers.length > 0 && (
-            <div className={styles.cardGrid}>
+            <RichList aria-label="Project agents">
               {projectMembers.map((member) => (
-                <MemberCard
+                <ListRow
                   key={member.name}
-                  member={member}
-                  styles={styles}
+                  media={<AgentAvatar name={member.name} size={32} isBuiltIn={member.is_built_in} isRetired={member.status === 'retired'} />}
+                  primary={member.name}
+                  primaryAside={
+                    <>
+                      {member.status === 'active' && <Badge appearance="tint" color="success" size="small">Active</Badge>}
+                      {member.status === 'retired' && <Badge appearance="tint" color="subtle" size="small">Retired</Badge>}
+                    </>
+                  }
+                  secondary={member.role_title}
                   onClick={() => { setSelectedMember(member); }}
                 />
               ))}
-            </div>
+            </RichList>
           )}
 
           {builtInMembers.length > 0 && (
-            <div className={styles.systemSection}>
-              <div className={styles.systemSectionHeader}>
-                <span className={styles.systemSectionLabel}>System agents</span>
-                <div className={styles.systemSectionRule} />
-              </div>
-              <div className={styles.cardGrid}>
+            <PageSection title="System agents">
+              <RichList aria-label="System agents">
                 {builtInMembers.map((member) => (
-                  <MemberCard
+                  <ListRow
                     key={member.name}
-                    member={member}
-                    styles={styles}
+                    media={<AgentAvatar name={member.name} size={32} isBuiltIn={member.is_built_in} isRetired={member.status === 'retired'} />}
+                    primary={member.name}
+                    primaryAside={
+                      <>
+                        {member.status === 'active' && <Badge appearance="tint" color="success" size="small">Active</Badge>}
+                        {member.status === 'retired' && <Badge appearance="tint" color="subtle" size="small">Retired</Badge>}
+                      </>
+                    }
+                    secondary={member.role_title}
                     onClick={() => { setSelectedMember(member); }}
                   />
                 ))}
-              </div>
-            </div>
+              </RichList>
+            </PageSection>
           )}
-        </div>
+        </>
       )}
 
       <OverlayDrawer
@@ -1098,6 +950,6 @@ export function TeamPage() {
           />
         )}
       </OverlayDrawer>
-    </div>
+    </PageContainer>
   );
 }

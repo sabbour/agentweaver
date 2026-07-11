@@ -1,10 +1,7 @@
-import {
-  apiClient } from '../api/apiClient';
+﻿import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
-import { AzureTabList,
-  AzureToolbar,
+import {
   Badge,
-  BladeHeader,
   Button,
   Checkbox,
   Dialog,
@@ -15,25 +12,20 @@ import { AzureTabList,
   DialogTitle,
   DrawerBody,
   DrawerHeader,
-  EmptyState,
-  EssentialsGrid,
+  DrawerHeaderTitle,
   Field,
   Input,
+  makeStyles,
   MessageBar,
   MessageBarBody,
   OverlayDrawer,
-  Spinner,
+  Tab,
+  TabList,
   Text,
   Textarea,
-  Tooltip,
-  } from '../copilot-fluent-system';
-import { PageHeader } from '../components/PageHeader';
-import { collectFilesFromDataTransfer,
-  supportsEntryApi } from '../utils/skillDrop';
-import { DrawerHeaderTitle,
-  makeStyles,
   tokens,
-} from '../copilot-fluent-system';
+  Tooltip,
+} from '@fluentui/react-components';
 import {
   ArrowSync24Regular,
   ArrowUpload24Regular,
@@ -42,26 +34,41 @@ import {
   Dismiss24Regular,
   Eye24Regular,
   PuzzlePiece20Regular,
-} from '../copilot-fluent-system';
+} from '@fluentui/react-icons';
+import {
+  EmptyState,
+  ErrorState,
+  LoadingState,
+  MetricRow,
+  PageContainer,
+  PageHeader,
+} from '../components/ui';
+import { collectFilesFromDataTransfer, supportsEntryApi } from '../utils/skillDrop';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import type { SkillAcquisitionResponse, SkillCandidateDto, SkillDetailDto, SkillDto, TeamMemberDto } from '../api/types';
 import type { DroppedSkillFile } from '../utils/skillDrop';
+
 const useStyles = makeStyles({
-  root: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL },
-  breadcrumb: {
-    display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center',
-    fontSize: tokens.fontSizeBase300, color: tokens.colorNeutralForeground2,
+  breadcrumbLink: {
+    color: tokens.colorNeutralForeground2,
+    textDecoration: 'none',
+    ':hover': { textDecorationLine: 'underline' },
   },
-  breadcrumbLink: { color: tokens.colorBrandForeground1, textDecoration: 'none' },
+  breadcrumbSep: {
+    color: tokens.colorNeutralForeground4,
+  },
   tabContent: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM },
   toolbar: { display: 'flex', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' },
-  managementHeader: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM },
   empty: { color: tokens.colorNeutralForeground3, fontStyle: 'italic' },
   itemList: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM },
   item: {
     display: 'flex', flexDirection: 'column',
     gap: tokens.spacingVerticalXS,
+    padding: tokens.spacingVerticalS,
+    backgroundColor: tokens.colorNeutralBackground2,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusMedium,
   },
   itemHeader: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' },
   itemTitle: { fontWeight: tokens.fontWeightSemibold, fontSize: tokens.fontSizeBase300, flexGrow: 1 },
@@ -131,17 +138,14 @@ export function SkillsPage() {
   const [busy, setBusy] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
 
-  // Detail drawer
   const [detail, setDetail] = useState<SkillDetailDto | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
 
-  // Import dialog
   const [importOpen, setImportOpen] = useState(false);
   const [sourceUrl, setSourceUrl] = useState('');
   const [candidates, setCandidates] = useState<SkillCandidateDto[] | null>(null);
   const [selectedLocations, setSelectedLocations] = useState<Set<string>>(new Set());
 
-  // Manual add + generate dialogs
   const [addOpen, setAddOpen] = useState(false);
   const [generateOpen, setGenerateOpen] = useState(false);
   const [skillName, setSkillName] = useState('');
@@ -232,9 +236,6 @@ export function SkillsPage() {
     if (folderInputRef.current) folderInputRef.current.value = '';
   };
 
-  // Drag-and-drop import. A dropped FOLDER is not readable via dataTransfer.files (that path
-  // yields a directory handle whose upload fails with net::ERR_ACCESS_DENIED), so we walk the
-  // FileSystemEntry tree via webkitGetAsEntry() and upload each file with its relative path.
   const onDropUpload = async (e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault();
     if (!projectId || busy) return;
@@ -242,7 +243,6 @@ export function SkillsPage() {
     if (supportsEntryApi(dt.items)) {
       let collected: DroppedSkillFile[];
       try {
-        // Must capture entries synchronously before any await; the helper does this internally.
         collected = await collectFilesFromDataTransfer(dt.items);
       } catch (err) {
         setMutationError(formatApiError(err));
@@ -255,7 +255,6 @@ export function SkillsPage() {
         return;
       }
     }
-    // Fallback: plain single/multi file drop with no directory support.
     await onUploadFiles(dt.files);
   };
 
@@ -361,69 +360,54 @@ export function SkillsPage() {
   };
 
   return (
-    <div className={['azf-stack azf-page azf-pattern-shell', styles.root].filter(Boolean).join(' ')}>
+    <PageContainer>
       <PageHeader
         title="Skills"
-        subtitle="Import, sync, and assign reusable agent skills for this project."
-        resourceIcon={<PuzzlePiece20Regular />}
-        breadcrumb={
-          <nav className={styles.breadcrumb} aria-label="Breadcrumb">
+        description="Import, sync, and assign reusable agent skills for this project."
+        breadcrumbs={
+          <>
             <Link to="/" className={styles.breadcrumbLink}>Projects</Link>
-            <span>/</span>
+            <span className={styles.breadcrumbSep}>/</span>
             <Link to={`/projects/${projectId}`} className={styles.breadcrumbLink}>Project</Link>
-            <span>/</span>
+            <span className={styles.breadcrumbSep}>/</span>
             <span>Skills</span>
-          </nav>
+          </>
         }
       />
 
-      <div className={['azf-surface azf-surface--panel azf-surface--padding-comfortable', styles.tabContent].filter(Boolean).join(' ')}>
-        <div className={styles.managementHeader}>
-          <BladeHeader
-            size="compact"
-            title="Skill management"
-            subtitle="Operate the project skill catalog, imports, assignments, and repository sync from one resource blade."
-          />
-          <EssentialsGrid
-            properties={[
-              { id: 'total', label: 'Catalog items', value: skillRows.length },
-              { id: 'active', label: 'Active skills', value: activeSkillCount, tags: activeSkillCount > 0 ? ['Ready'] : undefined },
-              { id: 'assigned', label: 'Assigned skills', value: assignedSkillCount },
-              { id: 'repository', label: 'Repository sourced', value: repositorySkillCount },
-            ]}
-          />
-          <AzureTabList
-            ariaLabel="Skills sections"
-            selectedValue={selectedTab}
-            onTabSelect={(value) => setSelectedTab(value as 'catalog' | 'assignments')}
-            tabs={[
-              { id: 'catalog', label: 'Catalog' },
-              { id: 'assignments', label: 'Assignments' },
-            ]}
-          />
-        </div>
-        <AzureToolbar actions={[]} topOfPage ariaLabel="Skill actions" className={styles.toolbar}>
-          <Button icon={<BranchFork24Regular />} disabled={isBusy} onClick={() => { resetSkillForm(); setAddOpen(true); }}>
-            Add Skill
-          </Button>
-          <Button icon={<Eye24Regular />} disabled={isBusy} onClick={() => { resetSkillForm(); setGeneratePrompt(''); setGenerateOpen(true); }}>
-            Generate Skill
-          </Button>
-          <Button icon={<ArrowUpload24Regular />} disabled={isBusy} onClick={() => setImportOpen(true)}>
-            Import Skill
-          </Button>
-          <Button icon={<ArrowSync24Regular />} disabled={isBusy} onClick={onSync}>
-            {busy === 'Sync' ? 'Syncing…' : 'Sync connected repo'}
-          </Button>
-        </AzureToolbar>
+      <MetricRow items={[
+        { label: 'Total', value: skillRows.length },
+        { label: 'Active', value: activeSkillCount },
+        { label: 'Assigned', value: assignedSkillCount },
+        { label: 'From repo', value: repositorySkillCount },
+      ]} />
 
-        {loading && <Spinner size="small" label="Loading…" />}
-        {loadError && (
-          <MessageBar intent="error">
-            <MessageBarBody>{loadError}</MessageBarBody>
-            <Button size="small" onClick={reload}>Retry</Button>
-          </MessageBar>
-        )}
+      <div className={styles.toolbar}>
+        <Button icon={<BranchFork24Regular />} disabled={isBusy} onClick={() => { resetSkillForm(); setAddOpen(true); }}>
+          Add skill
+        </Button>
+        <Button icon={<Eye24Regular />} disabled={isBusy} onClick={() => { resetSkillForm(); setGeneratePrompt(''); setGenerateOpen(true); }}>
+          Generate skill
+        </Button>
+        <Button icon={<ArrowUpload24Regular />} disabled={isBusy} onClick={() => setImportOpen(true)}>
+          Import skill
+        </Button>
+        <Button icon={<ArrowSync24Regular />} disabled={isBusy} onClick={onSync}>
+          {busy === 'Sync' ? 'Syncing…' : 'Sync connected repo'}
+        </Button>
+      </div>
+
+      <TabList
+        selectedValue={selectedTab}
+        onTabSelect={(_, data) => setSelectedTab(data.value as 'catalog' | 'assignments')}
+      >
+        <Tab value="catalog">Catalog</Tab>
+        <Tab value="assignments">Assignments</Tab>
+      </TabList>
+
+      <div className={styles.tabContent}>
+        {loading && <LoadingState rows={3} />}
+        {loadError && <ErrorState message={loadError} onRetry={reload} />}
         {notice && (
           <MessageBar intent="success"><MessageBarBody>{notice}</MessageBarBody></MessageBar>
         )}
@@ -433,11 +417,15 @@ export function SkillsPage() {
 
         {!loading && !loadError && selectedTab === 'catalog' && (
           skills === null || skills.length === 0
-            ? <EmptyState title="No skills in the catalog yet" body="Sync the connected repo, import from a Git repo, or upload a skill." />
+            ? <EmptyState
+                title="No skills in the catalog yet"
+                description="Sync the connected repo, import from a Git repo, or upload a skill."
+                icon={<PuzzlePiece20Regular />}
+              />
             : (
               <div className={styles.itemList}>
                 {skills.map((s) => (
-                  <div key={s.id} className={['azf-surface azf-surface--subtle azf-surface--padding-compact', styles.item].filter(Boolean).join(' ')}>
+                  <div key={s.id} className={styles.item}>
                     <div className={styles.itemHeader}>
                       <span className={styles.itemTitle}>{s.name}</span>
                       <Badge appearance="tint" color={statusColor(s.status)}>{s.status}</Badge>
@@ -450,7 +438,7 @@ export function SkillsPage() {
                     )}
                     {s.assigned_agents.length > 0 && (
                       <div className={styles.agentChips}>
-                        {s.assigned_agents.map((a) => <Badge key={a} appearance="tint" color="brand">{labelForAgent(a)}</Badge>)}
+                        {s.assigned_agents.map((a) => <Badge key={a} appearance="tint" color="subtle">{labelForAgent(a)}</Badge>)}
                       </div>
                     )}
                     <div className={styles.actions}>
@@ -465,13 +453,13 @@ export function SkillsPage() {
 
         {!loading && !loadError && selectedTab === 'assignments' && (
           skills === null || skills.length === 0
-            ? <EmptyState title="No skills to assign" body="Add skills in the Catalog tab first." />
+            ? <EmptyState title="No skills to assign" description="Add skills in the Catalog tab first." />
             : members.length === 0
-              ? <EmptyState title="No agents in this project's team yet" body="Cast a team to assign skills." />
+              ? <EmptyState title="No agents in this project's team yet" description="Cast a team to assign skills." />
               : (
                 <div className={styles.itemList}>
                   {skills.map((s) => (
-                    <div key={s.id} className={['azf-surface azf-surface--subtle azf-surface--padding-compact', styles.item].filter(Boolean).join(' ')}>
+                    <div key={s.id} className={styles.item}>
                       <div className={styles.itemHeader}>
                         <span className={styles.itemTitle}>{s.name}</span>
                         <Badge appearance="tint" color={statusColor(s.status)}>{s.status}</Badge>
@@ -515,12 +503,12 @@ export function SkillsPage() {
         </DrawerHeader>
         <DrawerBody>
           {detail === null
-            ? <Spinner size="small" label="Loading skill…" />
+            ? <LoadingState rows={2} />
             : (
               <>
                 <Text as="p">{detail.description}</Text>
                 {detail.resources.length > 0 && (
-                  <Text as="p" className={styles.itemMeta}>{detail.resources.length} bundled resource(s)</Text>
+                  <Text as="p" style={{ color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase100 }}>{detail.resources.length} bundled resource(s)</Text>
                 )}
                 <div className={styles.drawerContent}>{detail.instructions}</div>
               </>
@@ -528,16 +516,16 @@ export function SkillsPage() {
         </DrawerBody>
       </OverlayDrawer>
 
-      {/* Add Skill dialog */}
+      {/* Add skill dialog */}
       <Dialog open={addOpen} onOpenChange={(_, d) => setAddOpen(d.open)}>
         <DialogSurface>
           <DialogBody>
-            <DialogTitle>Add Skill</DialogTitle>
+            <DialogTitle>Add skill</DialogTitle>
             <DialogContent className={styles.formGrid}>
               <Field label="Name" required hint="Command slug: lowercase letters, numbers, and hyphens.">
                 <Input value={skillName} onChange={(_, data) => setSkillName(data.value)} disabled={isBusy} placeholder="code-review" />
               </Field>
-              <Field label="Display Name" hint="Optional label for review before saving.">
+              <Field label="Display name" hint="Optional label for review before saving.">
                 <Input value={skillDisplayName} onChange={(_, data) => setSkillDisplayName(data.value)} disabled={isBusy} placeholder="Code Review" />
               </Field>
               <Field label="Description">
@@ -550,18 +538,18 @@ export function SkillsPage() {
             <DialogActions>
               <Button appearance="secondary" disabled={isBusy} onClick={() => setAddOpen(false)}>Cancel</Button>
               <Button appearance="primary" disabled={isBusy || !skillName.trim() || !skillInstructions.trim()} onClick={() => void onCreateSkill()}>
-                {busy === 'Create skill' ? 'Creating…' : 'Create Skill'}
+                {busy === 'Create skill' ? 'Creating…' : 'Create skill'}
               </Button>
             </DialogActions>
           </DialogBody>
         </DialogSurface>
       </Dialog>
 
-      {/* Generate Skill dialog */}
+      {/* Generate skill dialog */}
       <Dialog open={generateOpen} onOpenChange={(_, d) => setGenerateOpen(d.open)}>
         <DialogSurface>
           <DialogBody>
-            <DialogTitle>Generate Skill</DialogTitle>
+            <DialogTitle>Generate skill</DialogTitle>
             <DialogContent className={styles.formGrid}>
               <Field label="Describe the skill to generate" required>
                 <Textarea value={generatePrompt} onChange={(_, data) => setGeneratePrompt(data.value)} disabled={isBusy} rows={4} resize="vertical" />
@@ -574,7 +562,7 @@ export function SkillsPage() {
                   <Field label="Name" required hint="Review and edit before creating.">
                     <Input value={skillName} onChange={(_, data) => setSkillName(data.value)} disabled={isBusy} />
                   </Field>
-                  <Field label="Display Name">
+                  <Field label="Display name">
                     <Input value={skillDisplayName} onChange={(_, data) => setSkillDisplayName(data.value)} disabled={isBusy} />
                   </Field>
                   <Field label="Description">
@@ -600,7 +588,7 @@ export function SkillsPage() {
       <Dialog open={importOpen} onOpenChange={(_, d) => { setImportOpen(d.open); if (!d.open) { setCandidates(null); setSourceUrl(''); } }}>
         <DialogSurface>
           <DialogBody>
-            <DialogTitle>Import Skill</DialogTitle>
+            <DialogTitle>Import skill</DialogTitle>
             <DialogContent className={styles.formGrid}>
               <MessageBar intent="warning"><MessageBarBody>Only import skills from sources you trust. Imported skills can change how the agent behaves.</MessageBarBody></MessageBar>
               <div
@@ -612,7 +600,7 @@ export function SkillsPage() {
                 onDragOver={(e) => e.preventDefault()}
               >
                 <Text weight="semibold">Drop .md skill files here</Text>
-                <Text className={styles.itemMeta}>or click to browse</Text>
+                <Text style={{ color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase100 }}>or click to browse</Text>
               </div>
               <div
                 className={styles.dropzone}
@@ -623,7 +611,7 @@ export function SkillsPage() {
                 onDragOver={(e) => e.preventDefault()}
               >
                 <Text weight="semibold">Drop a skill folder here</Text>
-                <Text className={styles.itemMeta}>Directory with SKILL.md and supporting files</Text>
+                <Text style={{ color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase100 }}>Directory with SKILL.md and supporting files</Text>
               </div>
               <input
                 ref={mdFileInputRef}
@@ -650,10 +638,10 @@ export function SkillsPage() {
                   disabled={isBusy}
                 />
               </Field>
-              <Text className={styles.itemMeta}>On GitHub, open a SKILL.md, click Raw, copy the URL.</Text>
+              <Text style={{ color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase100 }}>On GitHub, open a SKILL.md, click Raw, copy the URL.</Text>
               {candidates !== null && (
                 candidates.length === 0
-                  ? <Text className={styles.empty}>No candidate skills found. Try a SKILL.md, a folder of skill directories, or a recognized skills folder.</Text>
+                  ? <Text style={{ color: tokens.colorNeutralForeground3, fontStyle: 'italic' }}>No candidate skills found. Try a SKILL.md, a folder of skill directories, or a recognized skills folder.</Text>
                   : (
                     <div className={styles.candidateList}>
                       {candidates.map((c) => (
@@ -689,6 +677,6 @@ export function SkillsPage() {
           </DialogBody>
         </DialogSurface>
       </Dialog>
-    </div>
+    </PageContainer>
   );
 }
