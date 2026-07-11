@@ -1,13 +1,12 @@
 import {
   apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
-import { AzureEmptyState,
-  AzureToolbar,
-  BladeHeader,
+import {
   Button,
   Dropdown,
   Field,
   Input,
+  makeStyles,
   Menu,
   MenuItem,
   MenuList,
@@ -16,10 +15,23 @@ import { AzureEmptyState,
   MessageBar,
   MessageBarBody,
   Option,
-  StatusIconText,
   Text,
   Textarea,
-  } from '../copilot-fluent-system';
+  tokens,
+} from '@fluentui/react-components';
+import {
+  AddRegular,
+  BeakerRegular,
+  CodeRegular,
+  DeleteRegular,
+  DismissRegular,
+  EyeRegular,
+  PersonFeedbackRegular,
+  PersonRegular,
+  ShieldCheckmarkRegular,
+  WarningRegular,
+} from '@fluentui/react-icons';
+import { EmptyState, PageHeader } from './ui';
 import { DAG_NODE_SEP,
   layoutDag,
   workflowNodeSizeHint } from '../utils/dagLayout';
@@ -47,21 +59,7 @@ import { ActiveEdgeContext,
   workflowEdgeTypes,
   workflowNodeTypes,
   } from './WorkflowGraphPanel';
-import { makeStyles,
-  mergeClasses,
-  tokens,
-} from '../copilot-fluent-system';
 import '@xyflow/react/dist/style.css';
-import {
-  AddRegular,
-  BeakerRegular,
-  CodeRegular,
-  DeleteRegular,
-  EyeRegular,
-  PersonFeedbackRegular,
-  PersonRegular,
-  ShieldCheckmarkRegular,
-} from '../copilot-fluent-system';
 import {
   applyNodeChanges,
   Background,
@@ -174,6 +172,14 @@ function gateKey(node: WfNode): string | null {
 }
 
 const useStyles = makeStyles({
+  root: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalM,
+    padding: tokens.spacingHorizontalL,
+    backgroundColor: tokens.colorNeutralBackground1,
+    borderRadius: tokens.borderRadiusLarge,
+  },
   identityGrid: {
     display: 'grid',
     gridTemplateColumns: '1fr 1fr',
@@ -191,13 +197,24 @@ const useStyles = makeStyles({
     flexGrow: 1,
     overflow: 'hidden',
     position: 'relative',
+    backgroundColor: tokens.colorNeutralBackground2,
+    borderRadius: tokens.borderRadiusMedium,
   },
   sidePane: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalM,
     flexBasis: '40%',
     overflowY: 'auto',
     maxHeight: '560px',
+    padding: tokens.spacingHorizontalL,
+    backgroundColor: tokens.colorNeutralBackground1,
+    borderRadius: tokens.borderRadiusMedium,
   },
   paneHeader: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalS,
     justifyContent: 'space-between',
   },
   canvasToolbar: {
@@ -223,7 +240,26 @@ const useStyles = makeStyles({
     boxSizing: 'border-box',
   },
   footer: {
-    justifyContent: 'space-between',
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalS,
+  },
+  footerActions: {
+    display: 'flex',
+    gap: tokens.spacingHorizontalS,
+    marginLeft: 'auto',
+  },
+  branchStack: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalS,
+  },
+  statusWarning: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXS,
+    color: tokens.colorStatusWarningForeground1,
+    fontSize: tokens.fontSizeBase200,
   },
   hintText: {
     color: tokens.colorNeutralForeground3,
@@ -497,12 +533,19 @@ export function VisualWorkflowEditor({
   }, [onClose]);
 
   return (
-    <div className="azf-stack azf-gap-m azf-surface azf-surface--padding-comfortable">
-      <BladeHeader
-        size="compact"
+    <div className={styles.root}>
+      <PageHeader
         title={model?.name || workflowId}
-        subtitle={model?.id ?? workflowId}
-        onDismiss={handleClose}
+        description={model?.id ?? workflowId}
+        actions={
+          <Button
+            appearance="subtle"
+            size="small"
+            icon={<DismissRegular />}
+            onClick={handleClose}
+            aria-label="Close"
+          />
+        }
       />
       <div className={styles.identityGrid}>
         <Field label="Workflow id">
@@ -553,8 +596,8 @@ export function VisualWorkflowEditor({
       )}
 
       <div className={styles.split}>
-        <div className={mergeClasses('azf-surface azf-surface--subtle', styles.canvasPane)}>
-          <AzureToolbar actions={[]} ariaLabel="Workflow canvas actions" className={styles.canvasToolbar}>
+        <div className={styles.canvasPane}>
+          <div className={styles.canvasToolbar} role="toolbar" aria-label="Workflow canvas actions">
             <Menu>
               <MenuTrigger disableButtonEnhancement>
                 <Button appearance="primary" size="small" icon={<AddRegular />}>Add node</Button>
@@ -574,7 +617,7 @@ export function VisualWorkflowEditor({
                 </MenuList>
               </MenuPopover>
             </Menu>
-          </AzureToolbar>
+          </div>
           <ExecutionModalContext.Provider value={undefined}>
             <ActiveEdgeContext.Provider value={undefined}>
               <ReactFlow
@@ -600,8 +643,8 @@ export function VisualWorkflowEditor({
           </ExecutionModalContext.Provider>
         </div>
 
-        <div className={mergeClasses('azf-stack azf-gap-m azf-surface azf-surface--padding-comfortable', styles.sidePane)}>
-          <div className={mergeClasses('azf-row azf-gap-s', styles.paneHeader)}>
+        <div className={styles.sidePane}>
+          <div className={styles.paneHeader}>
             <Text weight="semibold">
               {rightMode === 'yaml' ? 'YAML' : 'Inspector'}
             </Text>
@@ -712,7 +755,7 @@ export function VisualWorkflowEditor({
                     ? 'Build & Test uses fixed verdicts and no prompt field.'
                     : 'Each declared branch should route to a target node.'}
                 >
-                  <div className="azf-stack azf-gap-s">
+                  <div className={styles.branchStack}>
                     {selectedNode.type === 'check' && (
                       <Input
                         value={selectedGateBranches.join(', ')}
@@ -774,33 +817,31 @@ export function VisualWorkflowEditor({
           )}
 
           {rightMode === 'inspector' && !selectedNode && !selectedEdge && (
-            <AzureEmptyState
-              compact
+            <EmptyState
               title="Select a node or edge"
-              body="Edit its properties, drag from a node handle to connect, or use Add node."
+              description="Edit its properties, drag from a node handle to connect, or use Add node."
             />
           )}
         </div>
       </div>
 
-      <AzureToolbar
-        actions={[
-          {
-            id: 'save',
-            label: saving ? 'Saving' : 'Save',
-            appearance: 'primary',
-            loading: saving,
-            disabled: saving,
-            onClick: () => { void handleSave(); },
-          },
-        ]}
-        ariaLabel="Visual workflow editor actions"
-        className={styles.footer}
-      >
+      <div className={styles.footer}>
         {isDirty && (
-          <StatusIconText status="warning">Unsaved changes</StatusIconText>
+          <span className={styles.statusWarning}>
+            <WarningRegular fontSize={14} aria-hidden="true" />
+            <Text size={200}>Unsaved changes</Text>
+          </span>
         )}
-      </AzureToolbar>
+        <div className={styles.footerActions}>
+          <Button
+            appearance="primary"
+            disabled={saving}
+            onClick={() => { void handleSave(); }}
+          >
+            {saving ? 'Saving...' : 'Save'}
+          </Button>
+        </div>
+      </div>
     </div>
   );
 }

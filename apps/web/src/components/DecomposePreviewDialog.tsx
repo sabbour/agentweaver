@@ -1,6 +1,4 @@
 import {
-  AzureDataGrid,
-  AzureEmptyState,
   Button,
   Dialog,
   DialogActions,
@@ -8,22 +6,32 @@ import {
   DialogContent,
   DialogSurface,
   DialogTitle,
+  makeStyles,
   MessageBar,
   MessageBarBody,
   Spinner,
-  StatusIconText,
+  Table,
+  TableBody,
+  TableCell,
+  TableHeader,
+  TableHeaderCell,
+  TableRow,
   Text,
-  } from '../copilot-fluent-system';
-import { makeStyles,
-  mergeClasses,
   tokens,
-} from '../copilot-fluent-system';
+} from '@fluentui/react-components';
+import { CheckmarkCircleRegular, InfoRegular } from '@fluentui/react-icons';
+import { EmptyState } from './ui';
 import type { ProposedBacklogItem } from '../api/types';
-import type { AzfColumn } from '../copilot-fluent-system';
+
 const useStyles = makeStyles({
   grid: {
     maxHeight: '400px',
     overflowY: 'auto',
+  },
+  itemStack: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalXS,
   },
   itemTitle: {
     flex: 1,
@@ -41,7 +49,17 @@ const useStyles = makeStyles({
     fontStyle: 'italic',
   },
   loadingRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalS,
     padding: `${tokens.spacingVerticalM} 0`,
+  },
+  statusRow: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXS,
+    fontSize: tokens.fontSizeBase200,
+    color: tokens.colorNeutralForeground2,
   },
 });
 
@@ -67,26 +85,6 @@ export function DecomposePreviewDialog({
   error,
 }: DecomposePreviewDialogProps) {
   const styles = useStyles();
-  const columns: AzfColumn<ProposedBacklogItem>[] = [
-    {
-      columnId: 'item',
-      header: 'Backlog item',
-      renderCell: (item) => (
-        <div className="azf-stack azf-gap-xs">
-          <Text className={styles.itemTitle}>{item.title}</Text>
-          {item.description && <Text className={styles.itemDescription}>{item.description}</Text>}
-        </div>
-      ),
-    },
-    {
-      columnId: 'state',
-      header: 'State',
-      width: '140px',
-      renderCell: (item) => item.already_exists
-        ? <StatusIconText status="info">Already exists</StatusIconText>
-        : <StatusIconText status="success">New</StatusIconText>,
-    },
-  ];
 
   return (
     <Dialog open={isOpen} onOpenChange={(_, d) => { if (!d.open) onClose(); }}>
@@ -95,7 +93,7 @@ export function DecomposePreviewDialog({
           <DialogTitle>Preview proposed backlog items</DialogTitle>
           <DialogContent>
             {isLoading ? (
-              <div className={mergeClasses('azf-row azf-gap-s', styles.loadingRow)}>
+              <div className={styles.loadingRow}>
                 <Spinner size="extra-tiny" aria-hidden="true" />
                 <Text>Analyzing spec file...</Text>
               </div>
@@ -110,14 +108,47 @@ export function DecomposePreviewDialog({
                     Showing first {proposedItems.length} of {totalFound} items found.
                   </Text>
                 )}
-                <AzureDataGrid
-                  className={styles.grid}
-                  items={proposedItems}
-                  columns={columns}
-                  getRowId={(item, index) => `${item.title}-${index}`}
-                  ariaLabel="Proposed backlog items"
-                  emptyState={<AzureEmptyState compact title="No actionable items found in this file." />}
-                />
+                {proposedItems.length === 0 ? (
+                  <EmptyState title="No actionable items found in this file." />
+                ) : (
+                  <div className={styles.grid}>
+                    <Table aria-label="Proposed backlog items">
+                      <TableHeader>
+                        <TableRow>
+                          <TableHeaderCell>Backlog item</TableHeaderCell>
+                          <TableHeaderCell style={{ width: '140px' }}>State</TableHeaderCell>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {proposedItems.map((item, index) => (
+                          <TableRow key={`${item.title}-${index}`}>
+                            <TableCell>
+                              <div className={styles.itemStack}>
+                                <Text className={styles.itemTitle}>{item.title}</Text>
+                                {item.description && (
+                                  <Text className={styles.itemDescription}>{item.description}</Text>
+                                )}
+                              </div>
+                            </TableCell>
+                            <TableCell>
+                              {item.already_exists ? (
+                                <span className={styles.statusRow}>
+                                  <InfoRegular fontSize={14} aria-hidden="true" />
+                                  <Text size={200}>Already exists</Text>
+                                </span>
+                              ) : (
+                                <span className={styles.statusRow}>
+                                  <CheckmarkCircleRegular fontSize={14} aria-hidden="true" />
+                                  <Text size={200}>New</Text>
+                                </span>
+                              )}
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                )}
               </>
             )}
           </DialogContent>

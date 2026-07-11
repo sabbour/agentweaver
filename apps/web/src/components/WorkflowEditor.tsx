@@ -1,15 +1,16 @@
 import {
   apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
-import { AzureToolbar,
-  BladeHeader,
+import {
+  Button,
+  makeStyles,
   MessageBar,
   MessageBarBody,
-  StatusIconText } from '../copilot-fluent-system';
-import { makeStyles,
-  mergeClasses,
+  Text,
   tokens,
-} from '../copilot-fluent-system';
+} from '@fluentui/react-components';
+import { DismissRegular, WarningRegular } from '@fluentui/react-icons';
+import { PageHeader } from './ui';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { WorkflowDetailDto } from '../api/types';
 // US7 — YAML workflow editor. Presents a workflow as an editable YAML document with:
@@ -54,6 +55,12 @@ export { BLANK_TEMPLATE };
 
 const useStyles = makeStyles({
   root: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalM,
+    padding: tokens.spacingHorizontalL,
+    backgroundColor: tokens.colorNeutralBackground1,
+    borderRadius: tokens.borderRadiusLarge,
     minHeight: '480px',
   },
   textarea: {
@@ -73,7 +80,21 @@ const useStyles = makeStyles({
     boxSizing: 'border-box',
   },
   footer: {
-    justifyContent: 'space-between',
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalS,
+  },
+  footerActions: {
+    display: 'flex',
+    gap: tokens.spacingHorizontalS,
+    marginLeft: 'auto',
+  },
+  statusWarning: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXS,
+    color: tokens.colorStatusWarningForeground1,
+    fontSize: tokens.fontSizeBase200,
   },
 });
 
@@ -155,8 +176,20 @@ export function WorkflowEditor({ projectId, workflowId, initialYaml, onSave, onC
   const displayId = extractYamlScalar(yaml, 'id') ?? workflowId;
 
   return (
-    <div className={mergeClasses('azf-stack azf-gap-m azf-surface azf-surface--padding-comfortable', styles.root)}>
-      <BladeHeader size="compact" title={displayName} subtitle={displayId} onDismiss={handleClose} />
+    <div className={styles.root}>
+      <PageHeader
+        title={displayName}
+        description={displayId}
+        actions={
+          <Button
+            appearance="subtle"
+            size="small"
+            icon={<DismissRegular />}
+            onClick={handleClose}
+            aria-label="Close"
+          />
+        }
+      />
 
       {saveError && (
         <MessageBar intent="error">
@@ -176,30 +209,30 @@ export function WorkflowEditor({ projectId, workflowId, initialYaml, onSave, onC
         aria-label="Workflow YAML"
       />
 
-      <AzureToolbar
-        actions={[
-          {
-            id: 'save',
-            label: saving ? 'Saving' : 'Save',
-            appearance: 'primary',
-            loading: saving,
-            disabled: saving,
-            onClick: () => { void handleSave(); },
-          },
-          {
-            id: 'discard',
-            label: 'Discard changes',
-            disabled: saving || !isDirty,
-            onClick: handleDiscard,
-          },
-        ]}
-        ariaLabel="Workflow editor actions"
-        className={styles.footer}
-      >
+      <div className={styles.footer}>
         {isDirty && (
-          <StatusIconText status="warning">Unsaved changes</StatusIconText>
+          <span className={styles.statusWarning}>
+            <WarningRegular fontSize={14} aria-hidden="true" />
+            <Text size={200}>Unsaved changes</Text>
+          </span>
         )}
-      </AzureToolbar>
+        <div className={styles.footerActions}>
+          <Button
+            appearance="primary"
+            disabled={saving}
+            onClick={() => { void handleSave(); }}
+          >
+            {saving ? 'Saving...' : 'Save'}
+          </Button>
+          <Button
+            appearance="secondary"
+            disabled={saving || !isDirty}
+            onClick={handleDiscard}
+          >
+            Discard changes
+          </Button>
+        </div>
+      </div>
     </div>
   );
 }

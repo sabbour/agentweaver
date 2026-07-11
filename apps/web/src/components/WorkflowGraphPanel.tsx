@@ -1,15 +1,14 @@
 import { apiClient } from '../api/apiClient';
 import {
   Button,
+  makeStyles,
+  mergeClasses,
   MessageBar,
   MessageBarBody,
   Spinner,
-  StatusIconText,
   Text,
-  makeStyles,
-  mergeClasses,
   tokens,
-} from '../copilot-fluent-system';
+} from '@fluentui/react-components';
 import { formatModelLabel } from '../utils/agentIdentity';
 import {
   buildSteppedConnectorRoute,
@@ -38,7 +37,8 @@ import {
   ShieldKeyholeRegular,
   ShieldRegular,
   SubtractCircleRegular,
-} from '../copilot-fluent-system';
+} from '@fluentui/react-icons';
+import type { FluentIcon } from '@fluentui/react-icons';
 import { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
@@ -55,7 +55,6 @@ import {
   type NodeProps,
 } from '@xyflow/react';
 import type { GraphNodeType, WorkflowGraphDto } from '../api/types';
-import type { FluentIcon } from '../copilot-fluent-system';
 /**
  * WorkflowGraphPanel — shared generic workflow graph renderer.
  *
@@ -203,7 +202,7 @@ export const useNodeStyles = makeStyles({
     pointerEvents: 'none',
   },
   accentPending:   { backgroundColor: tokens.colorNeutralStroke2 },
-  accentStarted:   { backgroundColor: tokens.colorBrandStroke1 },
+  accentStarted:   { backgroundColor: tokens.colorPaletteMarigoldBorderActive },
   accentAwaiting:  { backgroundColor: tokens.colorPaletteMarigoldBorderActive },
   accentCompleted: { backgroundColor: tokens.colorPaletteGreenForeground1 },
   accentSkipped:   { backgroundColor: tokens.colorPaletteLightTealForeground2 },
@@ -237,13 +236,13 @@ export const useNodeStyles = makeStyles({
     width: `${NODE_W}px`,
   },
   cardActive: {
-    borderTopColor: tokens.colorBrandStroke1,
-    borderRightColor: tokens.colorBrandStroke1,
-    borderBottomColor: tokens.colorBrandStroke1,
-    borderLeftColor: tokens.colorBrandStroke1,
-    backgroundColor: tokens.colorBrandBackground2,
+    borderTopColor: tokens.colorPaletteMarigoldBorderActive,
+    borderRightColor: tokens.colorPaletteMarigoldBorderActive,
+    borderBottomColor: tokens.colorPaletteMarigoldBorderActive,
+    borderLeftColor: tokens.colorPaletteMarigoldBorderActive,
+    backgroundColor: tokens.colorPaletteMarigoldBackground2,
     animationName: {
-      '0%':   { boxShadow: `0 0 0 0 ${tokens.colorBrandStroke1}` },
+      '0%':   { boxShadow: `0 0 0 0 ${tokens.colorPaletteMarigoldBorderActive}` },
       '70%':  { boxShadow: `0 0 0 5px transparent` },
       '100%': { boxShadow: `0 0 0 0 transparent` },
     },
@@ -255,7 +254,7 @@ export const useNodeStyles = makeStyles({
     },
   },
   cardSelected: {
-    outline: `2px solid ${tokens.colorBrandStroke1}`,
+    outline: `2px solid ${tokens.colorNeutralForeground2}`,
     outlineOffset: '2px',
     boxShadow: tokens.shadow4,
   },
@@ -326,7 +325,7 @@ export const useNodeStyles = makeStyles({
     whiteSpace: 'nowrap',
   },
   badgePending:   { backgroundColor: tokens.colorNeutralBackground4,              color: tokens.colorNeutralForeground3  },
-  badgeStarted:   { backgroundColor: tokens.colorBrandBackground2,                color: tokens.colorBrandForeground1    },
+  badgeStarted:   { backgroundColor: tokens.colorPaletteMarigoldBackground2,       color: tokens.colorPaletteMarigoldForeground2 },
   badgeAwaiting:  { backgroundColor: tokens.colorPaletteMarigoldBorderActive,     color: tokens.colorNeutralForegroundInverted },
   badgeCompleted: { backgroundColor: tokens.colorPaletteGreenBackground2,         color: tokens.colorPaletteGreenForeground1 },
   badgeSkipped:   { backgroundColor: tokens.colorPaletteLightTealBackground2,     color: tokens.colorPaletteLightTealForeground2 },
@@ -608,7 +607,6 @@ export function WorkflowNode({ data, selected }: NodeProps) {
     :                           s.cardDefault;
 
   const cardClass = mergeClasses(
-    'azf-surface',
     s.card,
     widthClass,
     isActive        ? s.cardActive         : undefined,
@@ -681,7 +679,7 @@ export function WorkflowNode({ data, selected }: NodeProps) {
         </div>
       )}
 
-      <div className={mergeClasses('azf-row azf-gap-xs', s.cardHeader)}>
+      <div className={s.cardHeader}>
         <StatusBadge
           status={effectiveStatus}
           isAwaiting={isHumanWaiting}
@@ -691,7 +689,7 @@ export function WorkflowNode({ data, selected }: NodeProps) {
         <CostChip totalNanoAiu={totalNanoAiu as number | null | undefined} totalTokens={totalTokens as number | null | undefined} />
       </div>
 
-      <div className={mergeClasses('azf-row azf-gap-s', s.cardMain)}>
+      <div className={s.cardMain}>
         <span className={s.cardIcon} aria-hidden="true">
           {key === 'agent' && agentName
             ? <AgentAvatar name={agentName as string} size={28} circle badgeIcon={Icon} badgeTitle={roleText} />
@@ -708,7 +706,7 @@ export function WorkflowNode({ data, selected }: NodeProps) {
 
       {key === 'coordinator' && !isPlanned && openSession && (
         <div
-          className={mergeClasses('azf-stack azf-gap-xs', s.cardActions, 'nopan', 'nodrag')}
+          className={mergeClasses(s.cardActions, 'nopan', 'nodrag')}
           style={{ fontSize: 'var(--fontSizeBase100)', color: 'var(--colorNeutralForeground3)', cursor: 'pointer' }}
           role="button"
           tabIndex={0}
@@ -729,21 +727,21 @@ export function WorkflowNode({ data, selected }: NodeProps) {
         </div>
       )}
       {key === 'agent' && !isPlanned && (
-        <div className={mergeClasses('azf-stack azf-gap-xs', s.cardActions, 'nopan', 'nodrag')}>
+        <div className={mergeClasses(s.cardActions, 'nopan', 'nodrag')}>
           <Button appearance="outline" size="small" onClick={() => openModal?.(executionId as string)}>
             View execution
           </Button>
         </div>
       )}
       {key === 'rai' && !isPlanned && (status === 'started' || status === 'completed' || status === 'failed' || status === 'revise') && (
-        <div className={mergeClasses('azf-stack azf-gap-xs', s.cardActions, 'nopan', 'nodrag')}>
+        <div className={mergeClasses(s.cardActions, 'nopan', 'nodrag')}>
           <Button appearance="outline" size="small" onClick={() => openModal?.(`${executionId as string}-rai`)}>
             View execution
           </Button>
         </div>
       )}
       {key === 'scribe' && !isPlanned && (
-        <div className={mergeClasses('azf-stack azf-gap-xs', s.cardActions, 'nopan', 'nodrag')}>
+        <div className={mergeClasses(s.cardActions, 'nopan', 'nodrag')}>
           {(status === 'started' || status === 'completed' || status === 'failed') && startedAt !== undefined && (
             <Button appearance="outline" size="small" onClick={() => openModal?.(`${executionId as string}-scribe`)}>
               View execution
@@ -755,24 +753,24 @@ export function WorkflowNode({ data, selected }: NodeProps) {
         </div>
       )}
       {key === 'merge' && !isPlanned && status === 'completed' && (
-        <div className={mergeClasses('azf-stack azf-gap-xs', s.cardActions, 'nopan', 'nodrag')}>
+        <div className={mergeClasses(s.cardActions, 'nopan', 'nodrag')}>
           <Button appearance="outline" size="small" icon={<FolderRegular />} onClick={() => (browseFiles ?? openModal)?.(executionId as string)}>
             Browse files
           </Button>
         </div>
       )}
       {key === 'review' && !isPlanned && status === 'started' && (
-        <div className={mergeClasses('azf-stack azf-gap-xs', s.cardActions, 'nopan', 'nodrag')}>
+        <div className={mergeClasses(s.cardActions, 'nopan', 'nodrag')}>
           <Button appearance="primary" size="small" onClick={() => openModal?.(executionId as string)}>
             Review now
           </Button>
         </div>
       )}
       {key === 'review' && !isPlanned && (status === 'completed' || status === 'revise') && reviewedBy && (
-        <div className={mergeClasses('azf-row azf-gap-s', s.reviewerRow, 'nopan', 'nodrag')}>
+        <div className={mergeClasses(s.reviewerRow, 'nopan', 'nodrag')}>
           <img
             src={`https://github.com/${reviewedBy as string}.png?size=28`}
-            style={{ width: 28, height: 28, borderRadius: '50%', border: `2px solid ${tokens.colorBrandForeground1}` }}
+            style={{ width: 28, height: 28, borderRadius: '50%', border: `2px solid ${tokens.colorNeutralStroke1}` }}
             alt={reviewedBy as string}
           />
           <Text size={200} style={{ color: tokens.colorNeutralForeground2 }}>{reviewedBy as string}</Text>
@@ -799,7 +797,7 @@ export const workflowNodeTypes = { workflow: WorkflowNode };
 // ---------------------------------------------------------------------------
 
 const LOOPBACK_STROKE        = 'var(--colorNeutralStroke1)';
-const LOOPBACK_STROKE_ACTIVE = 'var(--colorBrandForeground1)';
+const LOOPBACK_STROKE_ACTIVE = 'var(--colorNeutralForeground1)';
 const LOOPBACK_TEXT_COLOR    = 'var(--colorNeutralForeground2)';
 const RETURN_RAIL_GAP        = 36;
 const RETURN_RAIL_STAGGER    = 26;
@@ -1120,7 +1118,7 @@ export function WorkflowDefinitionInlinePanel({
   return (
     <ExecutionModalContext.Provider value={undefined}>
       <ActiveEdgeContext.Provider value={undefined}>
-        <div className={mergeClasses('azf-surface azf-surface--subtle', s.container)}>
+        <div className={s.container}>
           <ReactFlow
             nodes={rfNodes}
             edges={rfEdges}
@@ -1141,7 +1139,7 @@ export function WorkflowDefinitionInlinePanel({
             proOptions={{ hideAttribution: true }}
           >
             <Panel position="bottom-right">
-              <StatusIconText status="neutral">Read-only</StatusIconText>
+              <Text size={200} style={{ color: 'var(--colorNeutralForeground3)' }}>Read-only</Text>
             </Panel>
           </ReactFlow>
         </div>
