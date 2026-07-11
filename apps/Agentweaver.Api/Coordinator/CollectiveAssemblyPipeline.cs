@@ -100,12 +100,14 @@ public sealed class CollectiveAssemblyPipeline : ICollectiveAssemblyPipeline
 
         // The aggregate is already-assembled git state, so we feed the integration diff straight in
         // (no agent turn). RunId = coordinatorRunId routes RAI events onto the coordinator stream.
+        // WorktreePath (#236) lets the reviewer read the assembled integration files host-side; the
+        // executor threads it into the sandbox root (RaiTurnExecutor.cs:120-122 → CopilotAIAgent).
         var input = new AgentTurnOutput(
             RunId: request.CoordinatorRunId,
             TreeHash: string.Empty,
             Diff: request.AggregateDiff,
             StepCount: 0,
-            WorktreePath: string.Empty,
+            WorktreePath: request.WorktreePath,
             WorktreeBranch: string.Empty,
             RepositoryPath: request.RepositoryPath,
             OriginatingBranch: string.Empty,
@@ -136,7 +138,7 @@ public sealed class CollectiveAssemblyPipeline : ICollectiveAssemblyPipeline
             TreeHash: string.Empty,
             Diff: request.AggregateDiff,
             StepCount: 0,
-            WorktreePath: string.Empty,
+            WorktreePath: request.WorktreePath,
             WorktreeBranch: string.Empty,
             RepositoryPath: request.RepositoryPath,
             OriginatingBranch: string.Empty,
@@ -292,6 +294,21 @@ public sealed class CollectiveAssemblyPipeline : ICollectiveAssemblyPipeline
 
     public string GetBuildTestWorktreePath(string coordinatorRunId) =>
         _worktreeManager.DetachedWorktreePath(BuildTestWorktreeName(coordinatorRunId));
+
+    public string PrepareReviewerWorktree(string coordinatorRunId, string repositoryPath, string integrationBranch)
+    {
+        // #236: provision a detached worktree at the assembled integration branch so the collective RAI
+        // + rubber-duck reviewers can read the integration files host-side. Reuse the SAME pattern (and
+        // deterministic name) as RunBuildTestAsync: AddDetachedWorktree destructively recreates the dir
+        // (Directory.Delete + prune + `git worktree add --detach`), so reviewer writes can never bleed
+        // into a later Build/Test run (Build/Test recreates the same-named worktree fresh), and teardown
+        // is handled by the existing CleanupBuildTestResourcesAsync path — no extra cleanup wiring.
+        var info = _worktreeManager.AddDetachedWorktree(
+            repositoryPath,
+            integrationBranch,
+            BuildTestWorktreeName(coordinatorRunId));
+        return info.WorktreePath;
+    }
 
     private void RemoveDetachedWorktreeBestEffort(string repositoryPath, string worktreePath)
     {

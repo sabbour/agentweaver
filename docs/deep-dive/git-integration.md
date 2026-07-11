@@ -137,7 +137,7 @@ stateDiagram-v2
 
 A normal run follows this logic:
 
-1. **Create branch and worktree**: create `agentweaver/{runId}` from the originating branch and check it out in a dedicated worktree.
+1. **Create branch and worktree**: create `agentweaver/{runId}` from the originating branch tip and check it out in a dedicated worktree with a single git-CLI `git worktree add -b agentweaver/{runId} {path} {sha}` (recovery re-checks out the already-existing branch with `git worktree add {path} agentweaver/{runId}`). Provisioning in one step — rather than the older LibGit2Sharp add-at-HEAD-then-checkout — means a run whose branch tip diverges from the primary repository HEAD in a checkout-unsafe way (for example a file/directory typechange) no longer aborts worktree creation, so dependent subtasks that base on the run integration branch provision reliably (`apps/Agentweaver.Api/Git/WorktreeManager.cs:127`, `:171`, `:178`).
 2. **Persist before execution**: store the worktree path and branch on the run before the agent starts.
 3. **Agent writes files**: the agent executes inside the worktree.
 4. **Commit candidate result**: stage every non-ignored change, commit them on the run branch, and compute the tree hash.
@@ -293,9 +293,9 @@ Reasoning model: git branch state and database metadata are durable; ephemeral w
 
 ### Orphaned worktree branch
 
-LibGit2Sharp's worktree add behavior can create a throw-away branch named after the worktree name. Agentweaver deletes that orphaned branch during recovery so recreating the real `agentweaver/{runId}` worktree does not fail with a name conflict.
+Worktrees are provisioned through the git CLI (`git worktree add -b agentweaver/{runId} …`), which does **not** create a throw-away branch named after the worktree. Older builds (pre-v0.9.33) used LibGit2Sharp's worktree add, whose underlying `git_worktree_add` always created such a `{runId}`-named branch as a side effect. During a rolling restart a worktree may still have been provisioned by that old code, leaving an orphaned `{runId}` branch that would make a fresh `git worktree add` fail with a name conflict. Agentweaver deletes that orphaned branch before recreating the real `agentweaver/{runId}` worktree; for worktrees created by the current git-CLI path no such branch exists, so the deletion is a harmless no-op.
 
-Reasoning model: the run branch is `agentweaver/{runId}`; a plain `{runId}` branch is an implementation artifact.
+Reasoning model: the run branch is `agentweaver/{runId}`; a plain `{runId}` branch is a legacy LibGit2Sharp implementation artifact.
 
 ### No changes
 
@@ -403,7 +403,7 @@ If rebuilding the git integration subsystem, implement it in this order:
 
 ## Common gotchas
 
-- `agentweaver/{runId}` is the real run branch; a plain run-id branch can be a LibGit2Sharp worktree side effect.
+- `agentweaver/{runId}` is the real run branch; a plain run-id branch is a legacy (pre-v0.9.33) LibGit2Sharp worktree side effect — current git-CLI provisioning never creates one.
 - A run branch name is not enough for approval. The tree hash is the content identity.
 - The diff shown for review is against the originating branch, not just the last commit.
 - A missing physical worktree can be recoverable if the database row and git branch still exist.

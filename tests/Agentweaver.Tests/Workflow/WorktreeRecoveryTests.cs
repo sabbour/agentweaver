@@ -97,9 +97,12 @@ public sealed class WorktreeRecoveryTests : IDisposable
         Directory.Exists(original.WorktreePath).Should().BeFalse("pre-condition: directory wiped");
 
         // Verify that the stale admin entry blocks a direct AddWorktree call.
-        // LibGit2Sharp wraps the "already checked out" git error as a LibGit2SharpException.
+        // AddWorktree now provisions via the git CLI (`git worktree add`), which exits non-zero when a
+        // stale admin entry still claims the branch is "already checked out"; RunGit surfaces that as an
+        // InvalidOperationException (WorktreeManager.RunGit). EnsureWorktree is what prunes the stale
+        // entry first — a direct AddWorktree must still fail loudly.
         var directRecreateAction = () => manager.AddWorktree(repoPath, "main", runId);
-        directRecreateAction.Should().Throw<LibGit2SharpException>(
+        directRecreateAction.Should().Throw<InvalidOperationException>(
             "direct AddWorktree should fail when a stale admin entry exists for the branch");
 
         // Act — EnsureWorktree must handle this case.

@@ -1665,6 +1665,71 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         state.AssemblyStage.Should().Be(AssemblyStage.Done);
     }
 
+    // #236: when the assembly gate runs with a NON-EMPTY integration diff, the coordinator must
+    // provision exactly ONE detached reviewer worktree (at the integration branch) and thread its path
+    // into the reviewer requests, so RAI + rubber-duck can read the assembled integration files
+    // host-side instead of only the aggregate diff text. (The default gate set here is [rai,
+    // human-review]; the same reviewerWorktreePath local feeds the rubber-duck request too.)
+    [Fact]
+    public async Task RunAssembly_WithChanges_PreparesReviewerWorktreeOnce_AndPropagatesPathToReviewers()
+    {
+        var coordinatorRunId = RunId.New().ToString();
+        var (_, _) = await SeedPlanAsync(coordinatorRunId,
+            new[] { SubtaskStatus.Completed, SubtaskStatus.AssembleReady });
+        await SeedCoordinatorRunAsync(coordinatorRunId);
+        _streamStore.Create(coordinatorRunId, "alice");
+
+        // Default FakePipeline integration result has a non-empty diff ⇒ HasChanges == true.
+        var run = _sut.RunAssemblyAsync(Context(coordinatorRunId), default);
+        await WaitUntilArmedAsync(coordinatorRunId);
+        _reviewGate.TrySubmit(coordinatorRunId, "alice",
+            new AssemblyReviewDecision(Approved: true, RequestChanges: false, Feedback: null,
+                TargetFiles: null, Reviewer: "alice"))
+            .Should().Be(AssemblyReviewSubmitResult.Accepted);
+        await run;
+
+        _pipeline.ReviewerWorktreePreparations.Should().Be(1,
+            "a single detached reviewer worktree must be provisioned for a non-empty assembly");
+        _pipeline.LastReviewerWorktreeIntegrationBranch.Should().NotBeNullOrEmpty(
+            "the reviewer worktree must check out the assembled integration branch");
+
+        var expectedPath = _pipeline.LastReviewerWorktreePath;
+        expectedPath.Should().NotBeNullOrEmpty();
+        _pipeline.LastRaiRequest.Should().NotBeNull();
+        _pipeline.LastRaiRequest!.WorktreePath.Should().Be(expectedPath,
+            "the RAI reviewer request must carry the checked-out worktree path, not an empty string");
+    }
+
+    // #236: an EMPTY-diff assembly early-returns approved in the reviewers, so no worktree is needed —
+    // the coordinator must NOT provision one, and the reviewer requests carry an empty WorktreePath.
+    [Fact]
+    public async Task RunAssembly_EmptyDiff_DoesNotPrepareReviewerWorktree_AndReviewerWorktreePathIsEmpty()
+    {
+        var coordinatorRunId = RunId.New().ToString();
+        var (_, _) = await SeedPlanAsync(coordinatorRunId,
+            new[] { SubtaskStatus.Completed, SubtaskStatus.AssembleReady });
+        await SeedCoordinatorRunAsync(coordinatorRunId);
+        _streamStore.Create(coordinatorRunId, "alice");
+
+        // Empty aggregate diff ⇒ IntegrationBranchResult.HasChanges == false.
+        _pipeline.IntegrationResult = IntegrationBranchResult.Success(
+            "agentweaver/integration/coord-empty", treeHash: string.Empty, diff: string.Empty);
+
+        var run = _sut.RunAssemblyAsync(Context(coordinatorRunId), default);
+        await WaitUntilArmedAsync(coordinatorRunId);
+        _reviewGate.TrySubmit(coordinatorRunId, "alice",
+            new AssemblyReviewDecision(Approved: true, RequestChanges: false, Feedback: null,
+                TargetFiles: null, Reviewer: "alice"))
+            .Should().Be(AssemblyReviewSubmitResult.Accepted);
+        await run;
+
+        _pipeline.ReviewerWorktreePreparations.Should().Be(0,
+            "an empty-diff assembly must not provision a reviewer worktree");
+        _pipeline.LastRaiRequest.Should().NotBeNull();
+        _pipeline.LastRaiRequest!.WorktreePath.Should().BeEmpty(
+            "with no changes the RAI reviewer request carries no worktree (diff-text-only)");
+    }
+
     [Fact]
     public async Task RunAssembly_PreviewRequiredWithoutStartPreview_EmitsFailureBeforeBuildTestApproval()
     {
@@ -3055,11 +3120,20 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         public void PrepareIntegrationBranchRetry(CollectiveIntegrationRequest request) =>
             IntegrationRetryPreparations++;
 
-        public Task<CollectiveRaiResult> RunRaiAsync(CollectiveRaiRequest request, CancellationToken ct) =>
-            Task.FromResult(new CollectiveRaiResult(SafetyFlagged: false));
+        public CollectiveRaiRequest? LastRaiRequest;
+        public CollectiveRubberduckRequest? LastRubberduckRequest;
 
-        public Task<CollectiveGateDecision> RunRubberduckAsync(CollectiveRubberduckRequest request, CancellationToken ct) =>
-            Task.FromResult(new CollectiveGateDecision(Approved: true, RequestChanges: false, Feedback: null));
+        public Task<CollectiveRaiResult> RunRaiAsync(CollectiveRaiRequest request, CancellationToken ct)
+        {
+            LastRaiRequest = request;
+            return Task.FromResult(new CollectiveRaiResult(SafetyFlagged: false));
+        }
+
+        public Task<CollectiveGateDecision> RunRubberduckAsync(CollectiveRubberduckRequest request, CancellationToken ct)
+        {
+            LastRubberduckRequest = request;
+            return Task.FromResult(new CollectiveGateDecision(Approved: true, RequestChanges: false, Feedback: null));
+        }
 
         public Task<CollectiveGateDecision> RunBuildTestAsync(CollectiveBuildTestRequest request, CancellationToken ct)
         {
@@ -3080,6 +3154,18 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
 
         public string GetBuildTestWorktreePath(string coordinatorRunId) =>
             $"/workspace/assembly-build-test-{coordinatorRunId}";
+
+        public int ReviewerWorktreePreparations;
+        public string? LastReviewerWorktreeIntegrationBranch;
+        public string? LastReviewerWorktreePath;
+
+        public string PrepareReviewerWorktree(string coordinatorRunId, string repositoryPath, string integrationBranch)
+        {
+            ReviewerWorktreePreparations++;
+            LastReviewerWorktreeIntegrationBranch = integrationBranch;
+            LastReviewerWorktreePath = $"/workspace/assembly-build-test-{coordinatorRunId}";
+            return LastReviewerWorktreePath;
+        }
 
         public Task<CollectiveMergeResult> MergeAsync(CollectiveMergeRequest request, CancellationToken ct)
         {

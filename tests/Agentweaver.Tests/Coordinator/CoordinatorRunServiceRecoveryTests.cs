@@ -611,6 +611,9 @@ public sealed class CoordinatorRunServiceRecoveryTests : IAsyncDisposable
         public string GetBuildTestWorktreePath(string coordinatorRunId) =>
             throw new NotImplementedException();
 
+        public string PrepareReviewerWorktree(string coordinatorRunId, string repositoryPath, string integrationBranch) =>
+            throw new NotImplementedException();
+
         public Task<CollectiveMergeResult> MergeAsync(
             CollectiveMergeRequest request,
             CancellationToken ct) =>

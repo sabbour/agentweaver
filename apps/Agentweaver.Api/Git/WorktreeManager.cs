@@ -110,12 +110,13 @@ public sealed class WorktreeManager
         // repository to inspect its HEAD and fails when the physical directory is missing).
         PruneWorktreeByName(repositoryPath, runId.ToString());
 
-        // WorktreeCollection.Add(committishOrBranchSpec, name, ...) calls git_worktree_add
-        // which always creates a NEW branch named `name` (= runId.ToString()) as a side-effect,
-        // then does Commands.Checkout to switch the worktree to committishOrBranchSpec.
-        // The runId-named branch is a throw-away: all commits go to agentweaver/<runId>.
-        // On re-create after pod restart this orphaned branch still exists and git_worktree_add
-        // fails with NameConflictException. Delete it before calling AddWorktree.
+        // AddWorktree now provisions via the git CLI (`git worktree add -b agentweaver/<runId>
+        // <path> <sha>`), which does NOT create a throw-away `<runId>`-named side-effect branch.
+        // Older code (pre-v0.9.33) used LibGit2Sharp WorktreeCollection.Add, whose underlying
+        // git_worktree_add always created such a branch as a side-effect. During a rolling restart a
+        // worktree may have been provisioned by that old code, leaving an orphaned `<runId>` branch
+        // that would make a fresh `git worktree add` fail with a name conflict. Delete it before
+        // recreating. For new-code worktrees no such branch exists, so this is a harmless no-op.
         DeleteOrphanedWorktreeBranch(repositoryPath, runId.ToString());
 
         // AddWorktree skips branch creation when agentweaver/<runId> already exists (recovery: always).
@@ -136,27 +137,52 @@ public sealed class WorktreeManager
                 "Repository path is not a valid git repository.", ex);
         }
 
+        var branchName = BranchNameFor(runId);
+        var worktreePath = Path.Combine(_basePath, runId.ToString());
+        bool branchExists;
+        string startSha;
+
         using (repo)
         {
             var origin = repo.Branches[originatingBranch]
                 ?? throw new RunSubmissionValidationException(
                     $"Originating branch '{Truncate(originatingBranch, 200)}' was not found.");
 
-            var branchName = BranchNameFor(runId);
-            if (repo.Branches[branchName] is null)
-            {
-                repo.CreateBranch(branchName, origin.Tip);
-            }
+            branchExists = repo.Branches[branchName] is not null;
 
-            var worktreePath = Path.Combine(_basePath, runId.ToString());
-            repo.Worktrees.Add(branchName, runId.ToString(), worktreePath, isLocked: false);
-
-            return new WorktreeInfo
-            {
-                WorktreePath = worktreePath,
-                BranchName = branchName
-            };
+            // Resolve the originating branch to a concrete commit SHA while the repo handle is open.
+            // Passing the resolved SHA (NOT the raw branch string) to `git worktree add` preserves the
+            // case-insensitive branch resolution LibGit2Sharp gives us (e.g. originatingBranch="main"
+            // resolving against a HEAD named "Main"), which callers/tests rely on and which the
+            // case-sensitive git CLI would otherwise fail to reproduce.
+            startSha = branchExists ? string.Empty : origin.Tip.Sha;
         }
+        // Dispose the LibGit2Sharp repo handle (exit the using block) BEFORE invoking the git CLI to
+        // avoid Windows file-handle contention on the .git directory.
+
+        if (!branchExists)
+        {
+            // New run: create the run branch at the resolved originating commit and check it out into
+            // a fresh worktree in a single git_worktree_add. This replaces the old LibGit2Sharp
+            // two-step (add at the main repo's HEAD + a non-forced Commands.Checkout onto
+            // agentweaver/<runId>), whose step 2 aborted with CheckoutConflictException when the
+            // integration tip diverged from HEAD in a checkout-unsafe way (e.g. a file<->directory
+            // typechange). Dependent subtasks base on the integration branch and hit exactly that.
+            RunGit(repositoryPath, "worktree", "add", "-b", branchName, worktreePath, startSha);
+        }
+        else
+        {
+            // Recovery: the run branch already exists (e.g. re-provisioning after a pod restart wiped
+            // ephemeral storage). Check the existing branch out into the worktree, preserving all
+            // prior committed work.
+            RunGit(repositoryPath, "worktree", "add", worktreePath, branchName);
+        }
+
+        return new WorktreeInfo
+        {
+            WorktreePath = worktreePath,
+            BranchName = branchName
+        };
     }
 
     /// <summary>

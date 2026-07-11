@@ -593,7 +593,7 @@ Eligible child branches are merged into one integration branch in dependency ord
 
 ### Collective RAI
 
-The production pipeline reuses the existing RAI executor over the aggregate diff. A collective RAI safety flag is a hard stop: the WorkPlan is marked `rai_blocked`, the coordinator run is failed, and a human override/recovery path is required.
+The production pipeline reuses the existing RAI executor over the aggregate diff. When the integration has changes, the coordinator first provisions **one** detached reviewer worktree checked out at the integration tip and passes its path to both the collective RAI and Rubberduck reviewers, so they review the **actual assembled files** — raw bytes, line endings, integration state — rather than only the aggregate diff string. This eliminated spurious blocking findings and premature human escalation that arose when reviewers received only the diff text with an empty worktree path. The reviewer worktree reuses the deterministic Build/Test worktree name, so Build & Test destructively recreates the same worktree when it runs (no reviewer-write bleed into Build/Test) and the existing Build/Test cleanup path tears it down with no extra wiring; empty-diff assemblies skip the worktree entirely (`apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyService.cs:785`, `apps/Agentweaver.Api/Coordinator/CollectiveAssemblyPipeline.cs:298`). A collective RAI safety flag is a hard stop: the WorkPlan is marked `rai_blocked`, the coordinator run is failed, and a human override/recovery path is required.
 
 ### Build & Test infrastructure classification
 

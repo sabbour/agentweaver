@@ -774,6 +774,21 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         var aggregateTreeHash = integration.TreeHash ?? string.Empty;
         var assemblyGates = await ResolveAssemblyGatesAsync(workPlanId, ct).ConfigureAwait(false);
 
+        // #236: the assembly-gate RAI + rubber-duck reviewers must be able to READ the assembled
+        // integration files host-side (raw bytes, line endings, integration state) — not just the
+        // aggregate diff text. Provision ONE detached reviewer worktree at the integration branch,
+        // reusing the deterministic Build/Test worktree name so (a) Build/Test destructively recreates
+        // it fresh when it runs — no reviewer-write bleed into Build/Test — and (b) the existing
+        // CleanupBuildTestResourcesAsync / TerminalizeCoordinatorRunAsync teardown removes it (no extra
+        // cleanup wiring). Skipped for empty-diff assemblies: the reviewers early-return approved
+        // without touching a worktree, matching the HasChanges guard here.
+        var reviewerWorktreePath = string.Empty;
+        if (integration.HasChanges)
+        {
+            reviewerWorktreePath = _pipeline.PrepareReviewerWorktree(
+                context.CoordinatorRunId, context.RepositoryPath, integrationBranch);
+        }
+
         foreach (var gate in assemblyGates)
         {
             if (gate.GateKind == "build-test")
@@ -895,7 +910,7 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
                 Emit(context.CoordinatorRunId, EventTypes.CoordinatorAssemblyRaiStarted, new { workPlanId, integrationBranch, gateId = gate.Id });
 
                 var rai = await _pipeline.RunRaiAsync(
-                    new CollectiveRaiRequest(context.CoordinatorRunId, context.RepositoryPath, aggregateDiff, context.SubmittingUser), ct)
+                    new CollectiveRaiRequest(context.CoordinatorRunId, context.RepositoryPath, aggregateDiff, context.SubmittingUser, reviewerWorktreePath), ct)
                     .ConfigureAwait(false);
 
                 Emit(context.CoordinatorRunId, EventTypes.CoordinatorAssemblyRaiCompleted, new
@@ -935,7 +950,8 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
                         aggregateDiff,
                         context.SubmittingUser,
                         gate.GraphNodeId,
-                        gate.Label),
+                        gate.Label,
+                        WorktreePath: reviewerWorktreePath),
                     ct).ConfigureAwait(false);
 
                 if (rubberduck.RequestChanges)

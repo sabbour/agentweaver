@@ -30,6 +30,18 @@ public interface ICollectiveAssemblyPipeline
     /// <summary>Runs the collective Build & Test gate over the assembled integration branch.</summary>
     Task<CollectiveGateDecision> RunBuildTestAsync(CollectiveBuildTestRequest request, CancellationToken ct);
 
+    /// <summary>
+    /// Provisions (or destructively recreates) the detached reviewer worktree for the assembly gates so
+    /// the collective RAI + rubber-duck reviewers can READ the assembled integration files host-side —
+    /// raw bytes, line endings, integration state — rather than only the aggregate diff text (#236).
+    /// Reuses the deterministic Build/Test worktree name: Build/Test destructively recreates the same
+    /// worktree when it runs (no reviewer-write bleed into Build/Test) and the existing
+    /// <see cref="CleanupBuildTestResourcesAsync"/> path tears it down (no extra cleanup wiring).
+    /// Returns the absolute worktree path. Callers should only invoke this when the integration has
+    /// changes; empty-diff assemblies never need a worktree.
+    /// </summary>
+    string PrepareReviewerWorktree(string coordinatorRunId, string repositoryPath, string integrationBranch);
+
     /// <summary>Releases any coordinator-scoped Build/Test pod and detached worktree.</summary>
     Task CleanupBuildTestResourcesAsync(
         string coordinatorRunId,
@@ -59,23 +71,31 @@ public sealed record CollectiveIntegrationRequest(
     IReadOnlyList<string> ChildBranchesInOrder);
 
 /// <summary>Inputs to the collective RAI review of the aggregate diff.</summary>
+/// <param name="WorktreePath">
+/// #236 — absolute path of a checked-out worktree at the assembled integration branch, so the reviewer
+/// can read the integration files host-side. Empty ⇒ diff-text-only (empty-diff assemblies).</param>
 public sealed record CollectiveRaiRequest(
     string CoordinatorRunId,
     string RepositoryPath,
     string AggregateDiff,
-    string SubmittingUser);
+    string SubmittingUser,
+    string WorktreePath = "");
 
 /// <summary>Outcome of the collective RAI review.</summary>
 public sealed record CollectiveRaiResult(bool SafetyFlagged);
 
 /// <summary>Inputs to the collective rubber-duck review of the aggregate diff.</summary>
+/// <param name="WorktreePath">
+/// #236 — absolute path of a checked-out worktree at the assembled integration branch, so the reviewer
+/// can read the integration files host-side. Empty ⇒ diff-text-only (empty-diff assemblies).</param>
 public sealed record CollectiveRubberduckRequest(
     string CoordinatorRunId,
     string RepositoryPath,
     string AggregateDiff,
     string SubmittingUser,
     string? GateNodeId = null,
-    string? DisplayLabel = null);
+    string? DisplayLabel = null,
+    string WorktreePath = "");
 
 /// <summary>Inputs to the collective Build & Test gate.</summary>
 public sealed record CollectiveBuildTestRequest(
