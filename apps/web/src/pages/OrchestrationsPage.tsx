@@ -1,29 +1,26 @@
 import {
   apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
-import { Badge,
+import {
+  Badge,
   Button,
-  CommandBar,
   Dialog,
   DialogActions,
   DialogBody,
   DialogContent,
   DialogSurface,
   DialogTitle,
-  MessageBar,
-  MessageBarBody,
+  makeStyles,
   Spinner,
-  StatusIconText,
   Text,
-  Tooltip,
-  } from '../copilot-fluent-system';
-import { PageHeader } from '../components/PageHeader';
-import { isCoordinatorRun } from '../utils/runKind';
-import { makeStyles,
   Title3,
   tokens,
-} from '../copilot-fluent-system';
-import { ArrowSyncRegular, DeleteRegular, DismissCircleRegular } from '../copilot-fluent-system';
+  Tooltip,
+} from '@fluentui/react-components';
+import { ArrowSyncRegular, DeleteRegular, DismissCircleRegular } from '@fluentui/react-icons';
+import { PageHeader } from '../components/PageHeader';
+import { isCoordinatorRun } from '../utils/runKind';
+import { ErrorState, MetricRow } from '../components/ui';
 import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import type { Project, WorkflowRunDto } from '../api/types';
@@ -54,16 +51,11 @@ function coordinatorStatusLabel(status: string | undefined): string | undefined 
   return status;
 }
 
-function badgeColor(label: string | undefined): 'success' | 'danger' | 'warning' | 'informative' {
+function badgeColor(label: string | undefined): 'success' | 'danger' | 'warning' | 'subtle' {
   if (label === 'Complete') return 'success';
   if (label === 'Failed' || label === 'Blocked' || label === 'Declined') return 'danger';
   if (label === 'In review') return 'warning';
-  return 'informative';
-}
-
-function statusTone(label: string | undefined): 'success' | 'danger' | 'warning' | 'info' {
-  const color = badgeColor(label);
-  return color === 'informative' ? 'info' : color;
+  return 'subtle';
 }
 
 const useStyles = makeStyles({
@@ -80,7 +72,8 @@ const useStyles = makeStyles({
     color: tokens.colorNeutralForeground2,
   },
   breadcrumbLink: {
-    color: tokens.colorBrandForeground1,
+    color: tokens.colorNeutralForeground1,
+    fontWeight: tokens.fontWeightSemibold,
     textDecoration: 'none',
   },
   statusSurface: {
@@ -146,8 +139,6 @@ const useStyles = makeStyles({
   resourceLabel: {
     color: tokens.colorNeutralForeground3,
     fontSize: tokens.fontSizeBase200,
-    textTransform: 'uppercase',
-    letterSpacing: '0.04em',
   },
   resourceValue: {
     fontSize: tokens.fontSizeBase600,
@@ -270,6 +261,7 @@ export function OrchestrationsPage() {
   const [error, setError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<WorkflowRunDto | null>(null);
+  const [stopTarget, setStopTarget] = useState<WorkflowRunDto | null>(null);
 
   const formatError = (err: unknown): string =>
     err instanceof ApiError
@@ -324,9 +316,14 @@ export function OrchestrationsPage() {
   ].filter((section) => section.items.length > 0);
 
   const handleStop = (run: WorkflowRunDto) => {
-    const runId = runIdOf(run);
-    if (!window.confirm('Stop this orchestration? The running work will be cancelled, but the run is kept so you can inspect it.')) return;
+    setStopTarget(run);
+  };
+
+  const confirmStop = () => {
+    if (!stopTarget) return;
+    const runId = runIdOf(stopTarget);
     setBusyId(runId);
+    setStopTarget(null);
     apiClient
       .cancelRun(runId)
       .then(() => load(false))
@@ -351,10 +348,10 @@ export function OrchestrationsPage() {
   if (!projectId) return null;
 
   return (
-    <div className={['azf-stack azf-page azf-pattern-shell', styles.root].filter(Boolean).join(' ')}>
+    <div className={styles.root}>
       <PageHeader
         title="Orchestrations"
-        subtitle="Coordinator runs across this project."
+        subtitle="Coordinator runs for this project."
         breadcrumb={
           <div className={styles.breadcrumb}>
             <Link to="/" className={styles.breadcrumbLink}>Projects</Link>
@@ -379,48 +376,35 @@ export function OrchestrationsPage() {
       />
 
       {error && (
-        <MessageBar intent="error">
-          <MessageBarBody>{error}</MessageBarBody>
-        </MessageBar>
+        <ErrorState
+          title="Couldn't load orchestrations"
+          message={error}
+          onRetry={() => { void load(true); }}
+        />
       )}
 
       {runs.length > 0 && (
         <div className={styles.statusSurface} aria-label="Orchestration status summary">
-          <CommandBar
-            title="Coordinator command surface"
-            description="Azure run blade for live orchestration, terminal history, and operator actions."
-          >
-            <div className={styles.statusPills}>
-              <StatusIconText className={styles.statusPill} status={activeRuns.length > 0 ? 'warning' : 'neutral'}>
-                <span className={styles.statusPillValue}>{activeRuns.length}</span> active
-              </StatusIconText>
-              <StatusIconText className={styles.statusPill} status="info">
-                <span className={styles.statusPillValue}>{recentRuns.length}</span> recent
-              </StatusIconText>
-              {Object.entries(statusCounts).map(([label, count]) => (
-                <StatusIconText key={label} className={styles.statusPill} status={statusTone(label)}>
-                  <span className={styles.statusPillValue}>{count}</span> {label}
-                </StatusIconText>
-              ))}
-            </div>
-          </CommandBar>
-          <div className={styles.resourceGrid}>
-            <div className={['azf-surface azf-surface--subtle azf-surface--padding-compact', styles.resourceCard].filter(Boolean).join(' ')}>
-              <Text className={styles.resourceLabel}>Hierarchy</Text>
-              <Text className={styles.resourceValue}>{project?.name ?? projectId}</Text>
-              <Text className={styles.statusHelp}>Project resource scope</Text>
-            </div>
-            <div className={['azf-surface azf-surface--subtle azf-surface--padding-compact', styles.resourceCard].filter(Boolean).join(' ')}>
-              <Text className={styles.resourceLabel}>Live runs</Text>
-              <Text className={styles.resourceValue}>{activeRuns.length}</Text>
-              <Text className={styles.statusHelp}>Stop-enabled orchestration work</Text>
-            </div>
-            <div className={['azf-surface azf-surface--subtle azf-surface--padding-compact', styles.resourceCard].filter(Boolean).join(' ')}>
-              <Text className={styles.resourceLabel}>Retained runs</Text>
-              <Text className={styles.resourceValue}>{recentRuns.length}</Text>
-              <Text className={styles.statusHelp}>Inspectable terminal history</Text>
-            </div>
+          <div className={styles.statusPills}>
+            <span className={styles.statusPill}>
+              <span className={styles.statusPillValue}>{activeRuns.length}</span> active
+            </span>
+            <span className={styles.statusPill}>
+              <span className={styles.statusPillValue}>{recentRuns.length}</span> recent
+            </span>
+            {Object.entries(statusCounts).map(([label, count]) => (
+              <span key={label} className={styles.statusPill}>
+                <span className={styles.statusPillValue}>{count}</span> {label}
+              </span>
+            ))}
           </div>
+          <MetricRow
+            items={[
+              { label: 'Project', value: project?.name ?? projectId },
+              { label: 'Active', value: activeRuns.length, hint: 'in-flight' },
+              { label: 'Retained', value: recentRuns.length, hint: 'terminal' },
+            ]}
+          />
         </div>
       )}
 
@@ -527,6 +511,28 @@ export function OrchestrationsPage() {
                 onClick={confirmDelete}
               >
                 Delete
+              </Button>
+            </DialogActions>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
+
+      <Dialog open={stopTarget !== null} onOpenChange={(_, data) => { if (!data.open) setStopTarget(null); }}>
+        <DialogSurface>
+          <DialogBody>
+            <DialogTitle>Stop orchestration?</DialogTitle>
+            <DialogContent>
+              The running work will be cancelled, but the run is kept so you can inspect it.
+            </DialogContent>
+            <DialogActions>
+              <Button appearance="secondary" onClick={() => setStopTarget(null)}>Cancel</Button>
+              <Button
+                appearance="primary"
+                icon={<DismissCircleRegular />}
+                disabled={stopTarget !== null && busyId === (stopTarget.workflow_run_id ?? stopTarget.execution_id)}
+                onClick={confirmStop}
+              >
+                Stop
               </Button>
             </DialogActions>
           </DialogBody>

@@ -1,10 +1,9 @@
 import {
   apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
-import { Badge,
-  BladeHeader,
+import {
+  Badge,
   Button,
-  CommandBar,
   Dialog,
   DialogActions,
   DialogBody,
@@ -15,14 +14,14 @@ import { Badge,
   MessageBar,
   MessageBarBody,
   Spinner,
-  StatusIconText,
   Text,
-  } from '../copilot-fluent-system';
+} from '@fluentui/react-components';
 import { KanbanBoard } from '../components/board/KanbanBoard';
 import { PageHeader } from '../components/PageHeader';
 import { StartOrchestrationDialog } from '../components/StartOrchestrationDialog';
 import { isCoordinatorRun } from '../utils/runKind';
-import { Accordion,
+import {
+  Accordion,
   AccordionHeader,
   AccordionItem,
   AccordionPanel,
@@ -35,8 +34,9 @@ import { Accordion,
   TableHeaderCell,
   TableRow,
   tokens,
-} from '../copilot-fluent-system';
-import { DeleteRegular, DismissCircleRegular } from '../copilot-fluent-system';
+} from '@fluentui/react-components';
+import { DeleteRegular, DismissCircleRegular } from '@fluentui/react-icons';
+import { ErrorState, MetricRow } from '../components/ui';
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import type { Project, WorkflowRunDto } from '../api/types';
@@ -72,7 +72,8 @@ const useStyles = makeStyles({
     color: tokens.colorNeutralForeground2,
   },
   breadcrumbLink: {
-    color: tokens.colorBrandForeground1,
+    color: tokens.colorNeutralForeground1,
+    fontWeight: tokens.fontWeightSemibold,
     textDecoration: 'none',
   },
   commandSurface: {
@@ -93,9 +94,6 @@ const useStyles = makeStyles({
   },
   summaryLabel: {
     color: tokens.colorNeutralForeground3,
-    fontSize: tokens.fontSizeBase200,
-    textTransform: 'uppercase',
-    letterSpacing: '0.04em',
   },
   summaryValue: {
     fontSize: tokens.fontSizeBase600,
@@ -254,7 +252,7 @@ function RunRow({ run, projectId, onDeleted }: { run: WorkflowRunDto; projectId:
               coordLabel === 'Complete' ? 'success' :
               coordLabel === 'Failed' || coordLabel === 'Blocked' || coordLabel === 'Declined' ? 'danger' :
               coordLabel === 'In review' ? 'warning' :
-              'informative'
+              'subtle'
             }>
               {coordLabel}
             </Badge>
@@ -263,10 +261,10 @@ function RunRow({ run, projectId, onDeleted }: { run: WorkflowRunDto; projectId:
         ) : (
           <Badge appearance="tint" size="small" color={
             run.status === 'merged' ? 'success' :
-            run.status === 'completed' && run.result === 'no_changes' ? 'informative' :
+            run.status === 'completed' && run.result === 'no_changes' ? 'subtle' :
             run.status === 'completed' ? 'success' :
             run.status === 'failed' || run.status === 'merge_failed' ? 'danger' :
-            run.status === 'in_progress' ? 'informative' : 'subtle'
+            run.status === 'in_progress' ? 'subtle' : 'subtle'
           }>
             {run.status === 'completed' && run.result === 'no_changes' ? 'No Changes' :
              run.status === 'completed' ? 'Completed' :
@@ -426,13 +424,15 @@ export function ProjectPage() {
   const completedRuns = runs.length - liveRuns.length;
 
   return (
-    <div className={['azf-stack azf-page azf-pattern-shell', styles.root].filter(Boolean).join(' ')}>
-      {loading && <Spinner label="Loading project board" />}
+    <div className={styles.root}>
+      {loading && !project && <Spinner label="Loading project board" />}
 
       {error && (
-        <MessageBar intent="error">
-          <MessageBarBody>{error}</MessageBarBody>
-        </MessageBar>
+        <ErrorState
+          title="Couldn't load project board"
+          message={error}
+          onRetry={() => { window.location.reload(); }}
+        />
       )}
 
       {project && !project.available && (
@@ -465,44 +465,24 @@ export function ProjectPage() {
             }
           />
 
-          <section className={['azf-surface azf-surface--raised azf-surface--padding-comfortable', styles.commandSurface].filter(Boolean).join(' ')} aria-label="Project resource command surface">
-            <CommandBar
-              title="Workbench command band"
-              description="Azure resource board for intake, execution, review, and recovery."
-            >
-              <div className={styles.resourceMeta}>
-                <StatusIconText status={project.available ? 'success' : 'warning'}>
-                  {project.available ? 'Available' : 'Unavailable'}
-                </StatusIconText>
-                <Badge appearance="outline">{project.origin ?? 'project'}</Badge>
-                <Badge appearance="outline">{project.default_branch ?? 'default branch'}</Badge>
-              </div>
-            </CommandBar>
-            <div className={styles.summaryGrid} aria-label="Project resource summary">
-              <div className={['azf-surface azf-surface--subtle azf-surface--padding-compact', styles.summaryCard].filter(Boolean).join(' ')}>
-                <Text className={styles.summaryLabel}>Board state</Text>
-                <Text className={styles.summaryValue}>Live</Text>
-                <Text className={styles.summaryDescription}>Kanban lanes remain the primary recovery surface.</Text>
-              </div>
-              <div className={['azf-surface azf-surface--subtle azf-surface--padding-compact', styles.summaryCard].filter(Boolean).join(' ')}>
-                <Text className={styles.summaryLabel}>Active runs</Text>
-                <Text className={styles.summaryValue}>{liveRuns.length}</Text>
-                <Text className={styles.summaryDescription}>In-flight work tracked by the audit trail.</Text>
-              </div>
-              <div className={['azf-surface azf-surface--subtle azf-surface--padding-compact', styles.summaryCard].filter(Boolean).join(' ')}>
-                <Text className={styles.summaryLabel}>Historical runs</Text>
-                <Text className={styles.summaryValue}>{completedRuns}</Text>
-                <Text className={styles.summaryDescription}>Terminal runs retained for inspection.</Text>
-              </div>
+          <section className={styles.commandSurface} aria-label="Project status">
+            <div className={styles.resourceMeta}>
+              <Badge appearance="tint" color={project.available ? 'success' : 'warning'}>
+                {project.available ? 'Available' : 'Unavailable'}
+              </Badge>
+              <Badge appearance="outline">{project.origin ?? 'project'}</Badge>
+              <Badge appearance="outline">{project.default_branch ?? 'default branch'}</Badge>
             </div>
+            <MetricRow
+              items={[
+                { label: 'Board state', value: 'Live', hint: 'Kanban lanes active' },
+                { label: 'Active runs', value: liveRuns.length, hint: 'in-flight' },
+                { label: 'Historical runs', value: completedRuns, hint: 'terminal' },
+              ]}
+            />
           </section>
 
-          <section className={['azf-surface azf-surface--panel azf-surface--padding-comfortable', styles.boardSurface].filter(Boolean).join(' ')} aria-label="Project work board">
-            <BladeHeader
-              size="compact"
-              title="Work board"
-              subtitle="Layered Azure work surface for backlog, ready, running, review, and done lanes."
-            />
+          <section className={styles.boardSurface} aria-label="Work board">
             <KanbanBoard projectId={projectId} />
           </section>
 
@@ -513,7 +493,7 @@ export function ProjectPage() {
                   <div className={styles.runHeaderContent}>
                     <div className={styles.runHeaderTitleRow}>
                       <Text id="project-runs-title" className={styles.runTitle}>Run audit trail</Text>
-                      <Badge className={styles.runCountBadge} appearance="tint" color={runs.length ? 'informative' : 'subtle'} size="small">{runs.length} runs</Badge>
+                      <Badge className={styles.runCountBadge} appearance="tint" color={runs.length ? 'subtle' : 'subtle'} size="small">{runs.length} runs</Badge>
                     </div>
                     <Caption1 className={styles.runDescription}>
                       Collapsed by default. Open for historical navigation; use the board above for current recovery work.

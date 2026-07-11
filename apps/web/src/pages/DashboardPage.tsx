@@ -1,22 +1,12 @@
 import {
   apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
-import { Badge,
+import {
+  Badge,
   Button,
-  MessageBar,
-  MessageBarBody,
-  Spinner,
-  Text,
-  } from '../copilot-fluent-system';
-import { formatAic } from '../components/CostChip';
-import { AgentInvocationChart } from '../components/dashboard/AgentInvocationChart';
-import { ModelPerformancePanels } from '../components/dashboard/ModelPerformancePanels';
-import { MetricEmptyState,
-  MetricSectionHeading } from '../components/MetricTypography';
-import { PageHeader } from '../components/PageHeader';
-import { RefreshCountdown } from '../hooks/useRefreshCountdown';
-import { makeStyles,
+  makeStyles,
   Select,
+  Spinner,
   Table,
   TableBody,
   TableCell,
@@ -24,8 +14,9 @@ import { makeStyles,
   TableHeader,
   TableHeaderCell,
   TableRow,
+  Text,
   tokens,
-} from '../copilot-fluent-system';
+} from '@fluentui/react-components';
 import {
   ArrowSyncRegular,
   BotRegular,
@@ -33,7 +24,15 @@ import {
   ClockRegular,
   FlowRegular,
   WarningRegular,
-} from '../copilot-fluent-system';
+} from '@fluentui/react-icons';
+import { formatAic } from '../components/CostChip';
+import { AgentInvocationChart } from '../components/dashboard/AgentInvocationChart';
+import { ModelPerformancePanels } from '../components/dashboard/ModelPerformancePanels';
+import { MetricEmptyState,
+  MetricSectionHeading } from '../components/MetricTypography';
+import { PageHeader } from '../components/PageHeader';
+import { RefreshCountdown } from '../hooks/useRefreshCountdown';
+import { ErrorState } from '../components/ui';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import type { AgentLeaderboardEntryDto, ProjectDashboardDto, ProjectMetricsDto, ThroughputPointDto } from '../api/types';
@@ -87,7 +86,7 @@ const useStyles = makeStyles({
     minWidth: 0,
   },
   breadcrumbLink: {
-    color: tokens.colorBrandForeground1,
+    color: tokens.colorNeutralForeground1,
     textDecorationLine: 'none',
     fontWeight: tokens.fontWeightSemibold,
     ':hover': { textDecorationLine: 'underline' },
@@ -204,8 +203,6 @@ const useStyles = makeStyles({
     color: tokens.colorNeutralForeground3,
     fontSize: tokens.fontSizeBase200,
     lineHeight: tokens.lineHeightBase200,
-    textTransform: 'uppercase',
-    letterSpacing: '0.04em',
   },
   summaryMeta: {
     display: 'block',
@@ -700,7 +697,7 @@ function ThroughputChart({ points }: { points: ThroughputPointDto[] }) {
   const toPath = (sel: (p: ThroughputPointDto) => number) =>
     points.map((p, i) => `${i === 0 ? 'M' : 'L'}${x(i).toFixed(1)},${y(sel(p)).toFixed(1)}`).join(' ');
 
-  const createdColor = tokens.colorBrandForeground1;
+  const createdColor = '#635c57';
   const doneColor = tokens.colorPaletteGreenForeground1;
 
   return (
@@ -824,10 +821,10 @@ export function DashboardPage() {
   if (!projectId) return null;
 
   return (
-    <div className={['azf-stack azf-page azf-pattern-shell', styles.root].filter(Boolean).join(' ')}>
+    <div className={styles.root}>
       <PageHeader
         title="Dashboard"
-        subtitle="Project command center for live work, agent output, and throughput quality."
+        subtitle="Live work, agent output, and throughput quality for this project."
         breadcrumb={
           <nav className={styles.breadcrumb} aria-label="Breadcrumb">
             <Link to="/" className={styles.breadcrumbLink}>Projects</Link>
@@ -862,9 +859,11 @@ export function DashboardPage() {
       />
 
       {error && (
-        <MessageBar intent="error">
-          <MessageBarBody>{error}</MessageBarBody>
-        </MessageBar>
+        <ErrorState
+          title="Couldn't load dashboard"
+          message={error}
+          onRetry={() => { setLoading(true); void load({ cancelled: false }); }}
+        />
       )}
 
       {loading && !data && <LoadingDashboard />}
@@ -1002,7 +1001,7 @@ export function DashboardPage() {
                   />
                   <div className={styles.legend} aria-label="Throughput legend">
                     <span className={styles.legendItem}>
-                      <span className={styles.swatch} style={{ backgroundColor: tokens.colorBrandForeground1 }} />
+                      <span className={styles.swatch} style={{ backgroundColor: '#635c57' }} />
                       Created
                     </span>
                     <span className={styles.legendItem}>

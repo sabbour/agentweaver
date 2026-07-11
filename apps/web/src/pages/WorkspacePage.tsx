@@ -1,24 +1,22 @@
 import {
   apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
-import { Badge,
-  BladeHeader,
+import {
+  Badge,
   Button,
-  CommandBar,
   Dropdown,
+  makeStyles,
   Option,
   Spinner,
-  StatusIconText,
   Text,
-  } from '../copilot-fluent-system';
+  tokens,
+} from '@fluentui/react-components';
+import { BranchRegular, TasksAppRegular } from '@fluentui/react-icons';
 import { FilesTabPanel } from '../components/ArtifactBrowser';
 import { DecomposePreviewDialog } from '../components/DecomposePreviewDialog';
 import { FileViewer } from '../components/FileViewer';
 import { PageHeader } from '../components/PageHeader';
-import { makeStyles,
-  tokens,
-} from '../copilot-fluent-system';
-import { BranchRegular, TasksAppRegular } from '../copilot-fluent-system';
+import { ErrorState } from '../components/ui';
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import type { Project, ProposedBacklogItem, WorkspaceNode, WorkspaceRef } from '../api/types';
@@ -44,7 +42,8 @@ const useStyles = makeStyles({
     color: tokens.colorNeutralForeground2,
   },
   breadcrumbLink: {
-    color: tokens.colorBrandForeground1,
+    color: tokens.colorNeutralForeground1,
+    fontWeight: tokens.fontWeightSemibold,
     textDecoration: 'none',
   },
   toolbar: {
@@ -168,11 +167,11 @@ const useStyles = makeStyles({
 });
 
 // Short, human-readable status badge color for a worktree's owning run.
-function runStatusColor(status: string | undefined): 'success' | 'danger' | 'warning' | 'informative' | 'subtle' {
+function runStatusColor(status: string | undefined): 'success' | 'danger' | 'warning' | 'subtle' {
   if (status === 'completed' || status === 'merged') return 'success';
   if (status === 'failed' || status === 'merge_failed') return 'danger';
   if (status === 'blocked' || status === 'parked') return 'warning';
-  if (status === 'running' || status === 'dispatched') return 'informative';
+  if (status === 'running' || status === 'dispatched') return 'subtle';
   return 'subtle';
 }
 
@@ -191,6 +190,7 @@ export function WorkspacePage() {
   const [nodes, setNodes] = useState<WorkspaceNode[]>([]);
   const [nodesLoading, setNodesLoading] = useState(false);
   const [nodesError, setNodesError] = useState<string | null>(null);
+  const [nodesReloadKey, setNodesReloadKey] = useState(0);
 
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
 
@@ -293,7 +293,7 @@ export function WorkspacePage() {
     return () => {
       cancelled = true;
     };
-  }, [projectId, selectedRef]);
+  }, [projectId, selectedRef, nodesReloadKey]);
 
   const selectedRefObj = useMemo(
     () => refs.find((r) => r.branch === selectedRef) ?? null,
@@ -322,10 +322,10 @@ export function WorkspacePage() {
   if (!projectId) return null;
 
   return (
-    <div className={['azf-stack azf-page azf-pattern-shell azf-page--full-height', styles.root].filter(Boolean).join(' ')}>
+    <div className={styles.root}>
       <PageHeader
         title="Workspace"
-        subtitle="Browse the project repository and active run worktrees, read-only."
+        subtitle="Browse repository branches and run worktrees, read-only."
         breadcrumb={
           <nav className={styles.breadcrumb} aria-label="Breadcrumb">
             <Link to="/" className={styles.breadcrumbLink}>Projects</Link>
@@ -369,34 +369,37 @@ export function WorkspacePage() {
         }
       />
 
-      <section className={['azf-surface azf-surface--raised azf-surface--padding-comfortable', styles.commandSurface].filter(Boolean).join(' ')} aria-label="Workspace command surface">
-        <CommandBar
-          title="Workspace command surface"
-          description="Azure/Copilot workbench for browsing the base repository, run worktrees, and assembly branches."
-        >
-          <div className={styles.statusPills}>
-            <StatusIconText className={styles.statusPill} status="info">{selectedKindLabel}</StatusIconText>
-            <StatusIconText className={styles.statusPill} status={nodesError ? 'danger' : 'success'}>{nodes.length} nodes</StatusIconText>
-            <StatusIconText className={styles.statusPill} status={worktreeCount > 0 ? 'warning' : 'neutral'}>{worktreeCount} active refs</StatusIconText>
-          </div>
-        </CommandBar>
+      <section className={styles.commandSurface} aria-label="Workspace status">
+        <div className={styles.statusPills}>
+          <span className={styles.statusPill}>{selectedKindLabel}</span>
+          <span className={styles.statusPill}>{nodes.length} nodes</span>
+          <span className={styles.statusPill}>{worktreeCount} active refs</span>
+        </div>
       </section>
 
       <div className={styles.panels}>
         <div className={styles.leftPanel}>
           <div className={styles.panelHeader}>
-            <BladeHeader size="compact" title="Resource tree" subtitle={selectedRef ? `Browsing ${selectedRef}` : 'Select a branch or worktree'} />
+            <Text weight="semibold">{selectedRef ? `Files — ${selectedRef}` : 'Files'}</Text>
           </div>
           {nodesLoading ? (
             <div className={styles.spinnerWrapper}>
               <Spinner size="tiny" />
+            </div>
+          ) : nodesError ? (
+            <div className={styles.leftPanelBody}>
+              <ErrorState
+                title="Couldn't load files"
+                message={nodesError}
+                onRetry={() => { setNodesError(null); setNodesReloadKey(k => k + 1); }}
+              />
             </div>
           ) : (
             <div className={styles.leftPanelBody}>
               <FilesTabPanel
                 workspaceFiles={nodes}
                 workspaceLoading={false}
-                workspaceError={nodesError}
+                workspaceError={null}
                 selectedPath={selectedPath}
                 onFileClick={(path) => setSelectedPath(path)}
               />
@@ -405,7 +408,7 @@ export function WorkspacePage() {
         </div>
         <div className={styles.rightPanel}>
           <div className={styles.panelHeader}>
-            <BladeHeader size="compact" title="File workspace" subtitle={selectedPath ?? 'No file selected'} />
+            <Text weight="semibold">{selectedPath ? selectedPath : 'Viewer'}</Text>
           </div>
           {selectedPath !== null ? (
             <div className={styles.fileViewerWrapper}>
