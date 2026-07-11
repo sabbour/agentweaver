@@ -175,11 +175,13 @@ The first coordinator phase is a Microsoft Agents Framework workflow:
 flowchart LR
     Draft[coordinator-draft]
     Gate[await-confirmation RequestPort]
+    Auto[autopilot auto-confirm<br/>ScheduleUnattendedConfirm]
     Finalize[finalize spec]
     Revise[revise input]
     Orchestrate[orchestrate confirmed spec]
 
     Draft --> Gate
+    Auto -. auto-confirm defineOutcome .-> Gate
     Gate -- revise --> Revise --> Draft
     Gate -- confirm / decline --> Finalize --> Orchestrate
 
@@ -192,6 +194,7 @@ flowchart LR
     classDef evt fill:#D6F0F0,stroke:#038387,stroke-width:1px,color:#242424;
 
     class Draft,Gate,Finalize,Revise runtime;
+    class Auto evt;
     class Orchestrate svc;
 ```
 
@@ -207,9 +210,9 @@ Important details:
 
 ### Confirmation paths
 
-Interactive runs suspend at the confirmation gate until a human confirms, revises, or declines.
+Interactive `defineOutcome` runs suspend at the confirmation gate until a human confirms, revises, or declines — **unless autopilot is on**. When an interactive run starts with autopilot=true (`POST /api/projects/{id}/orchestrations`, `defineOutcome` mode), `StartCoordinatorRunAsync` schedules the same bounded `ScheduleUnattendedConfirm` loop and confirms the spec unattended once it reaches `awaiting_confirmation`, attributing the confirmation to the submitting user (`confirmedBy` = the authenticated caller). `direct`-mode runs have no confirmation gate, so no loop is scheduled for them.
 
-Backlog pickup runs also go through the same gate. When autopilot is on (`PickupAutopilot: true`, the project default), a bounded `ScheduleUnattendedConfirm` loop fires once the spec reaches `awaiting_confirmation` and confirms it on behalf of the accountable human captured on the backlog item. When autopilot is off, no loop fires — the run stays at `awaiting_confirmation` until the human confirms via the UI. This is not Autopilot bypassing safety: the confirmation is still attributed to the named accountable human, the gate is still enforced, and turning off autopilot simply makes that confirmation explicit instead of automatic. Autopilot also auto-answers child clarifying questions; it does not grant tool approvals, skip the gate for interactive runs, or skip collective human review.
+Backlog pickup runs go through the same gate and the same unattended-confirm loop. When autopilot is on (`PickupAutopilot: true`, the project default), the loop fires once the spec reaches `awaiting_confirmation` and confirms it on behalf of the accountable human captured on the backlog item. When autopilot is off, no loop fires — the run stays at `awaiting_confirmation` until the human confirms via the UI. This is not Autopilot bypassing safety: the confirmation is still attributed to a named human (the submitting user for interactive runs, the captured accountable human for pickups), the gate is still enforced and recorded, and turning off autopilot simply makes that confirmation explicit instead of automatic. Autopilot also auto-answers child clarifying questions; it does not grant tool approvals or skip collective human review.
 
 There is a small ordering race between "the spec was persisted and emitted" and "the framework request port is armed." The resume seam handles this by waiting briefly for the pending gate while the spec remains `awaiting_confirmation`, preserving double-submit protection without rejecting a fast confirm.
 

@@ -237,6 +237,44 @@ public sealed class CoordinatorOutcomeSpecTests : IDisposable
     }
 
     // =========================================================================
+    // Autopilot: define-outcome runs auto-confirm the spec unattended, with no manual
+    // confirm POST, and record the submitting user as ConfirmedBy (#228). Off-by-default
+    // stays parked at the gate.
+    // =========================================================================
+    [Fact]
+    public async Task Start_AutopilotDefineOutcome_AutoConfirmsSpec_WithoutManualConfirm()
+    {
+        var projectId = await CreateProjectAsync();
+
+        // Start with autopilot on and the default define-outcome mode. No manual confirm POST is sent:
+        // the unattended-confirm loop must advance the spec on the submitting user's behalf.
+        var runId = await StartOrchestrationAsync(
+            projectId, "Autopilot should auto-confirm the outcome spec", autopilot: true);
+
+        var spec = await PollOutcomeSpecUntilAsync(runId, s => s.Status == "confirmed", timeoutSeconds: 30);
+        spec.Should().NotBeNull("autopilot must auto-confirm the outcome spec without a human POST (#228)");
+        spec!.ConfirmedBy.Should().Be(CoordinatorWebApplicationFactory.OwnerUser,
+            "the accountable submitting user must be recorded as ConfirmedBy for the unattended confirm");
+    }
+
+    [Fact]
+    public async Task Start_AutopilotOff_DefineOutcome_ParksAtGate()
+    {
+        var projectId = await CreateProjectAsync();
+
+        var runId = await StartOrchestrationAsync(
+            projectId, "Without autopilot the run must wait for a human to confirm");
+
+        await WaitForGateAsync(runId);
+
+        var spec = await GetOutcomeSpecAsync(_owner, runId);
+        spec.Should().NotBeNull();
+        spec!.Status.Should().Be("awaiting_confirmation",
+            "with autopilot off the run must park at the confirmation gate until a human confirms");
+        spec.ConfirmedBy.Should().BeNull("no one has confirmed a run that is parked at the gate");
+    }
+
+    // =========================================================================
     // Confirm (RunNotActive at HTTP layer): an existing run with no live workflow -> 409.
     // =========================================================================
     [Fact]
@@ -565,9 +603,16 @@ public sealed class CoordinatorOutcomeSpecTests : IDisposable
         return body.GetProperty("project_id").GetString()!;
     }
 
-    private async Task<string> StartOrchestrationAsync(string projectId, string goal, string? startMode = null)
+    private async Task<string> StartOrchestrationAsync(
+        string projectId, string goal, string? startMode = null, bool autopilot = false)
     {
-        object request = startMode is null ? new { goal } : new { goal, start_mode = startMode };
+        object request = (startMode, autopilot) switch
+        {
+            (null, false) => new { goal },
+            (null, true) => new { goal, autopilot },
+            (_, false) => new { goal, start_mode = startMode },
+            (_, true) => new { goal, start_mode = startMode, autopilot },
+        };
         var resp = await _owner.PostAsJsonAsync($"/api/projects/{projectId}/orchestrations", request);
         resp.StatusCode.Should().Be(HttpStatusCode.Created, "starting a coordinator run must return 201");
         var body = await resp.Content.ReadFromJsonAsync<JsonElement>();

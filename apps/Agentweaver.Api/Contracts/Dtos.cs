@@ -880,8 +880,9 @@ public sealed record StartOrchestrationRequest
     [JsonPropertyName("autoApproveTools")] public bool AutoApproveTools { get; init; }
 
     /// <summary>When true, the coordinator auto-answers clarifying questions (its own and bubbled
-    /// child questions) using the coordinator model. Permissions are NOT auto-granted. Cascades to
-    /// children. Defaults to false. (Feature 008)</summary>
+    /// child questions) using the coordinator model. It also auto-confirms the Phase-1 outcome spec
+    /// (defineOutcome mode) unattended on behalf of the submitting user. Permissions are NOT
+    /// auto-granted. Cascades to children. Defaults to false. (Feature 008)</summary>
     [JsonPropertyName("autopilot")] public bool Autopilot { get; init; }
 
     /// <summary>Optional workflow id override. When set, the coordinator uses this workflow instead of auto-selecting.

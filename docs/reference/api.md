@@ -707,7 +707,7 @@ Errors: `400` invalid run id; `404` run not found; `403` caller is not the run o
 
 ### POST /api/runs/{id}/autopilot
 
-Toggles the coordinator **Autopilot** option. When enabled, CLARIFYING QUESTIONS ONLY (the coordinator's own and those bubbled by child workers as `coordinator.child_question`) are auto-answered by the coordinator model from the outcome spec + subtask context, then resolved on the child's question gate. Each auto-answer is logged as `coordinator.autopilot_answered`, and the normal `agent.question_answered` resolution still surfaces on the child stream. Autopilot does NOT auto-grant tool approvals/permissions (that is the separate auto-approve-tools opt-in). Settable at launch (`autopilot` on `POST /api/projects/{id}/orchestrations`) and cascades to children. Defaults to OFF.
+Toggles the coordinator **Autopilot** option. When enabled, CLARIFYING QUESTIONS ONLY (the coordinator's own and those bubbled by child workers as `coordinator.child_question`) are auto-answered by the coordinator model from the outcome spec + subtask context, then resolved on the child's question gate. Each auto-answer is logged as `coordinator.autopilot_answered`, and the normal `agent.question_answered` resolution still surfaces on the child stream. Autopilot does NOT auto-grant tool approvals/permissions (that is the separate auto-approve-tools opt-in). Settable at launch (`autopilot` on `POST /api/projects/{id}/orchestrations`) and cascades to children. Defaults to OFF. Set **at launch** in `defineOutcome` mode, autopilot additionally auto-confirms the Phase-1 outcome spec unattended (`confirmedBy` = the submitting user) instead of parking at `awaiting_confirmation`; this live toggle only governs the clarifying-question answering described above.
 
 Request:
 
@@ -1209,7 +1209,7 @@ Request:
 | `modelId` | string | No | Model override. Falls back to the project's GitHub Copilot default, then the role default. |
 | `start_mode` | `"direct"` or `"define_outcome"` | No | Required contract for the Start Task dialog. Omit or use `"define_outcome"` to preserve the current outcome-spec draft/confirm gate. Use `"direct"` to start coordinator planning/dispatch from `goal` without generating or confirming an outcome spec. Direct still enforces child tool approvals, assembly review, and merge gates. |
 | `autoApproveTools` | bool | No | Launch with auto-approve-tools ON for the coordinator and its children. Defaults to `false`. |
-| `autopilot` | bool | No | Launch with Autopilot ON (auto-answer clarifying questions only). Cascades to children. Defaults to `false`. |
+| `autopilot` | bool | No | Launch with Autopilot ON: auto-answers clarifying questions **and**, in `defineOutcome` mode, auto-confirms the Phase-1 outcome spec unattended (`confirmedBy` = the submitting user) instead of parking at `awaiting_confirmation`. Does NOT auto-grant tool approvals. Cascades to children. Defaults to `false`. |
 
 Response `201 Created` (with `Location: /api/runs/{runId}`):
 

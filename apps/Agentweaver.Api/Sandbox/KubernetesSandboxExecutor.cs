@@ -2,6 +2,7 @@ using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 using System.Text;
 using System.Net.Http.Json;
+using System.Net.Sockets;
 using System.Text.Json;
 using Agentweaver.Api.Auth;
 using Agentweaver.Api.Infrastructure;
@@ -152,6 +153,14 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
     private const string ApiVersion = SandboxClaimConventions.ApiVersion;
     private const string ClaimPlural = SandboxClaimConventions.ClaimPlural;
     private const string ContainerName = "agentweaver-sandbox";
+
+    /// <summary>
+    /// Bounded attempt count for <see cref="ExecuteK8sWithRetryAsync{T}"/> — the total number of
+    /// tries (initial + retries) for a transient Kubernetes API fault (issue #230). A transient
+    /// connection reset (SocketException 104 → IOException → HttpRequestException) that used to fail
+    /// a subtask fatally is now retried with exponential backoff + jitter.
+    /// </summary>
+    private const int MaxK8sAttempts = 3;
 
     /// <summary>
     /// Cadence for the <see cref="EventTypes.SandboxProvisioningPending"/> heartbeat emitted while an
@@ -593,20 +602,117 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
             },
         };
 
-        try
+        // Idempotent create with bounded transient-fault retry (issue #230). A mid-flight connection
+        // reset can commit the SandboxClaim server-side BEFORE we observe the response, so the retry
+        // may see a 409 for OUR OWN create — handled attempt-awarely below.
+        for (var attempt = 1; ; attempt++)
         {
-            await _client.CustomObjects.CreateNamespacedCustomObjectAsync(
-                manifest, ApiGroup, ApiVersion, _options.Namespace, ClaimPlural,
-                cancellationToken: ct).ConfigureAwait(false);
-            return true;
+            try
+            {
+                await _client.CustomObjects.CreateNamespacedCustomObjectAsync(
+                    manifest, ApiGroup, ApiVersion, _options.Namespace, ClaimPlural,
+                    cancellationToken: ct).ConfigureAwait(false);
+                return true;
+            }
+            catch (HttpOperationException ex) when (ex.Response?.StatusCode == System.Net.HttpStatusCode.Conflict)
+            {
+                if (attempt > 1)
+                {
+                    // Retry-409: a transient reset committed our create server-side before we saw the
+                    // response, and this retry now observes our own claim. We own it → return true so
+                    // the caller registers the turn token and runs /configure exactly as on a 200,
+                    // rather than taking the silent "reuse pre-existing claim" path (which would leave
+                    // the pod un-configured and token-less).
+                    _logger.LogInformation(
+                        "KubernetesSandboxExecutor: SandboxClaim {Claim} returned 409 on retry attempt {Attempt}; " +
+                        "treating as our own create that committed before a transient reset — configuring it.",
+                        claimName, attempt);
+                    return true;
+                }
+
+                // First-attempt 409: a genuinely pre-existing claim owned by an earlier launch.
+                _logger.LogInformation(
+                    "KubernetesSandboxExecutor: SandboxClaim {Claim} already exists; waiting for existing claim",
+                    claimName);
+                return false;
+            }
+            catch (Exception ex) when (attempt < MaxK8sAttempts && IsTransientK8sFault(ex, ct))
+            {
+                var delay = BackoffWithJitter(attempt);
+                _logger.LogWarning(ex,
+                    "KubernetesSandboxExecutor: transient fault creating SandboxClaim {Claim} on attempt " +
+                    "{Attempt}/{Max}; retrying in {DelayMs}ms.",
+                    claimName, attempt, MaxK8sAttempts, (int)delay.TotalMilliseconds);
+                await Task.Delay(delay, ct).ConfigureAwait(false);
+            }
         }
-        catch (HttpOperationException ex) when (ex.Response?.StatusCode == System.Net.HttpStatusCode.Conflict)
+    }
+
+    // ── Transient Kubernetes API resilience (issue #230) ──────────────────────────
+
+    /// <summary>
+    /// Executes an <b>idempotent</b> Kubernetes API call with a bounded retry (<see cref="MaxK8sAttempts"/>
+    /// total attempts) over <b>transient</b> faults only — a mid-flight connection reset
+    /// (SocketException 104 → IOException → HttpRequestException), a 429/5xx from the API server, or an
+    /// HttpClient timeout. Caller cancellation is never retried and aborts the backoff immediately
+    /// (<c>await Task.Delay(delay, ct)</c>). Non-transient faults (e.g. 404/409/422) propagate on the
+    /// first attempt. MUST NOT wrap non-idempotent calls (e.g. the AgentHost <c>POST /configure</c>,
+    /// whose second delivery 409-hard-fails).
+    /// </summary>
+    private async Task<T> ExecuteK8sWithRetryAsync<T>(
+        Func<CancellationToken, Task<T>> operation, CancellationToken ct)
+    {
+        for (var attempt = 1; ; attempt++)
         {
-            _logger.LogInformation(
-                "KubernetesSandboxExecutor: SandboxClaim {Claim} already exists; waiting for existing claim",
-                claimName);
-            return false;
+            try
+            {
+                return await operation(ct).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (attempt < MaxK8sAttempts && IsTransientK8sFault(ex, ct))
+            {
+                var delay = BackoffWithJitter(attempt);
+                _logger.LogWarning(ex,
+                    "KubernetesSandboxExecutor: transient Kubernetes API fault on attempt {Attempt}/{Max}; " +
+                    "retrying in {DelayMs}ms.", attempt, MaxK8sAttempts, (int)delay.TotalMilliseconds);
+                await Task.Delay(delay, ct).ConfigureAwait(false);
+            }
         }
+    }
+
+    /// <summary>
+    /// Exponential backoff (~250ms · 2^(attempt-1), capped at ~2s) plus 0-250ms jitter to de-sync
+    /// concurrent launches retrying against the same API server after a blip.
+    /// </summary>
+    private static TimeSpan BackoffWithJitter(int attempt)
+    {
+        var baseMs = Math.Min(250 * (1 << (attempt - 1)), 2000);
+        var jitterMs = Random.Shared.Next(0, 250);
+        return TimeSpan.FromMilliseconds(baseMs + jitterMs);
+    }
+
+    /// <summary>
+    /// True only for faults worth retrying an idempotent k8s call over: 429/5xx from the API server,
+    /// a socket/IO connection reset (directly or nested in an inner exception), or an HttpClient
+    /// timeout (<see cref="OperationCanceledException"/> with no caller cancellation). Caller
+    /// cancellation short-circuits to false so a genuine cancel is never retried. A 409 Conflict is
+    /// intentionally NOT transient here — it is handled separately (idempotent create semantics).
+    /// </summary>
+    private static bool IsTransientK8sFault(Exception ex, CancellationToken ct)
+    {
+        if (ct.IsCancellationRequested) return false;                 // caller cancel — never retry
+        switch (ex)
+        {
+            case HttpOperationException k when k.Response is not null:
+                var s = (int)k.Response.StatusCode;
+                return s == 429 || s >= 500;                          // 409 handled separately, NOT here
+            case HttpRequestException: return true;
+            case IOException: return true;
+            case OperationCanceledException:                          // includes TaskCanceledException (HttpClient timeout)
+                return !ct.IsCancellationRequested;
+        }
+        for (Exception? i = ex.InnerException; i is not null; i = i.InnerException)
+            if (i is SocketException or IOException) return true;
+        return false;
     }
 
     private async Task<string?> TryGetAgentHostClaimWorkingDirectoryAsync(string claimName, CancellationToken ct)
@@ -881,8 +987,10 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
         {
             ct.ThrowIfCancellationRequested();
 
-            var pod = await _client.CoreV1.ReadNamespacedPodAsync(
-                podName, _options.Namespace, cancellationToken: ct).ConfigureAwait(false);
+            var pod = await ExecuteK8sWithRetryAsync(
+                token => _client.CoreV1.ReadNamespacedPodAsync(
+                    podName, _options.Namespace, cancellationToken: token),
+                ct).ConfigureAwait(false);
 
             var ip = pod?.Status?.PodIP;
             if (!string.IsNullOrWhiteSpace(ip))
@@ -943,9 +1051,11 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
         {
             ct.ThrowIfCancellationRequested();
 
-            var raw = await _client.CustomObjects.GetNamespacedCustomObjectAsync(
-                ApiGroup, ApiVersion, _options.Namespace, ClaimPlural, claimName,
-                cancellationToken: ct);
+            var raw = await ExecuteK8sWithRetryAsync(
+                token => _client.CustomObjects.GetNamespacedCustomObjectAsync(
+                    ApiGroup, ApiVersion, _options.Namespace, ClaimPlural, claimName,
+                    cancellationToken: token),
+                ct).ConfigureAwait(false);
 
             var json = JsonSerializer.Serialize(raw);
             using var doc = JsonDocument.Parse(json);

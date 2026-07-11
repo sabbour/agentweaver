@@ -158,6 +158,12 @@ public sealed class CoordinatorRunService
                 direct: startMode == CoordinatorStartMode.Direct)
             .ConfigureAwait(false);
 
+        // Autopilot honors the same unattended outcome-spec confirmation as the backlog-pickup paths (#228).
+        // Direct mode has no confirmation gate, so only schedule for DefineOutcome — otherwise the loop would
+        // spin a wasted 5-minute timeout and log a misleading "left for a human" warning.
+        if (autopilot && startMode == CoordinatorStartMode.DefineOutcome)
+            ScheduleUnattendedConfirm(runId.ToString(), submittingUser);
+
         return runId;
     }
 
