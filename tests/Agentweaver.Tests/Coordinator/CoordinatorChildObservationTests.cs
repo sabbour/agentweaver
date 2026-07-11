@@ -1,3 +1,4 @@
+using System.Text.Json;
 using FluentAssertions;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
@@ -349,8 +350,147 @@ public sealed class CoordinatorChildObservationTests : IAsyncDisposable
     }
 
     // -----------------------------------------------------------------------
+    // MID-RUN STEERING drain (Feature 008 Phase 2; #226 mid-run counterpart).
+    //
+    // Ahmed's doubt: when a human messages a RUNNING coordinator between subtask
+    // turns, does the directive get PICKED UP AND ACTED ON, or silently dropped the
+    // way a steer at the assembly review gate was in #226 (queued into a void that
+    // nothing drained)?
+    //
+    // These drive the FULL mid-run cycle deterministically through the REAL service +
+    // REAL dispatch loop:
+    //   (1) QUEUE  — CoordinatorSteeringService.SteerAsync (the exact code path
+    //       POST /api/runs/{id}/steer calls) queues the directive for a live,
+    //       non-parked, non-review-gate coordinator via QueueNextBoundaryAsync.
+    //   (2) DRAIN  — RunDispatchLoopAsync, when the in-flight child reaches its next
+    //       turn boundary, CLAIMS the queued directive at the TryTakeForChild* seam
+    //       (CoordinatorDispatchService ~L417/432): queued -> relayed, and begins
+    //       injecting it as a revised turn CARRYING the human's instruction.
+    //
+    // The boundary is driven deterministically by replaying the child's durable
+    // terminal event (assemble_ready) — no timing/sleep race. The terminal `applied`
+    // transition and the child agent actually re-executing require a live child
+    // workflow (a real worktree + agent), which is out of scope for this hermetic
+    // unit host; the queue -> drain (queued -> relayed, event carrying the
+    // instruction) is the property that refutes "silently dropped".
+    // -----------------------------------------------------------------------
+
+    [Fact]
+    public async Task Steer_MidRun_RedirectQueuedThenDrainedAndInjectedAtNextBoundary()
+    {
+        var stream = new SqliteRunEventStream(_streamConfig);
+        var childRunId = await SeedChildRunAsync(RunStatus.InProgress);
+
+        // The child is mid-flight and reaches a clean turn boundary (assemble_ready) via replay.
+        await stream.AppendAsync(childRunId, new RunEvent(0, EventTypes.AgentMessage, new { content = "working" }));
+        await stream.AppendAsync(childRunId, new RunEvent(0, EventTypes.RunAssembleReady, new { raiSafetyFlagged = false }));
+        await stream.CompleteAsync(childRunId);
+
+        // A non-GUID coordinator id keeps SteerAsync on the live-queue path (RunId.TryParse fails, so
+        // the parked-coordinator resume short-circuits) — mirroring the lightweight steering unit tests.
+        const string coord = "midrun-redirect-coord";
+        await SeedPlanAsync(coord, [(SubtaskStatus.Running, childRunId)]);
+        _streamStore.Create(coord, "owner");
+
+        // (1) QUEUE — a human redirect lands on the RUNNING coordinator.
+        const string instruction = "switch the failing subtask to the v2 API endpoint";
+        var steering = BuildSteering();
+        var view = await steering.SteerAsync(coord, SteeringKind.Redirect, childRunId, instruction, "alice", default);
+
+        view.Status.Should().Be(SteeringStatus.Queued,
+            "a mid-run redirect never interrupts the turn; it queues for the child's next turn boundary");
+        (await GetDirectiveAsync(view.Id))!.Status.Should().Be(SteeringStatus.Queued,
+            "before the boundary the directive is persisted queued (the durable SteeringDirectives row IS the queue)");
+
+        // (2) DRAIN + INJECT — run the LIVE dispatch loop.
+        var sut = BuildDispatch(stream);
+        await sut.RunDispatchLoopAsync(Context(coord), default);
+
+        // The KEY anti-#226 property: the loop DRAINED the queued directive at the child's boundary —
+        // it is no longer sitting queued in a void.
+        var drained = await GetDirectiveAsync(view.Id);
+        drained!.Status.Should().NotBe(SteeringStatus.Queued,
+            "the live dispatch loop must drain the queued directive at the child's next turn boundary — never leave it queued into a void (#226)");
+        drained.Status.Should().Be(SteeringStatus.Relayed,
+            "TryTakeForChildAsync claims the directive queued -> relayed and TryInjectSteeringRevisionAsync begins injecting it");
+        drained.RelayedAt.Should().NotBeNull("a drained directive records when it was relayed to the child's control seam");
+
+        // The loop emits coordinator.steering{relayed} CARRYING the human instruction: it is injecting
+        // the human's directive into the child's revised turn, not just observing it.
+        var relayed = RelayedSteeringPayloads(coord);
+        relayed.Should().ContainSingle("the boundary drain relays exactly the one queued directive");
+        relayed[0]["kind"]!.GetValue<string>().Should().Be(SteeringKind.Redirect);
+        relayed[0]["targetChildRunId"]!.GetValue<string>().Should().Be(childRunId,
+            "the drained redirect is scoped to the child it targeted");
+        relayed[0]["instruction"]!.GetValue<string>().Should().Be(instruction,
+            "the drained directive re-dispatches the child carrying the human's steering instruction");
+    }
+
+    [Fact]
+    public async Task Steer_MidRun_SendAdvisoryQueuedThenDrainedAtNextBoundary()
+    {
+        var stream = new SqliteRunEventStream(_streamConfig);
+        var childRunId = await SeedChildRunAsync(RunStatus.InProgress);
+        await stream.AppendAsync(childRunId, new RunEvent(0, EventTypes.AgentMessage, new { content = "working" }));
+        await stream.AppendAsync(childRunId, new RunEvent(0, EventTypes.RunAssembleReady, new { raiSafetyFlagged = false }));
+        await stream.CompleteAsync(childRunId);
+
+        const string coord = "midrun-send-coord";
+        await SeedPlanAsync(coord, [(SubtaskStatus.Running, childRunId)]);
+        _streamStore.Create(coord, "owner");
+
+        // A mid-run advisory 'send' (broadcast — no target child) must ALSO be drained at the next
+        // boundary rather than dropped.
+        const string note = "heads up: prefer structured logging in the remaining work";
+        var steering = BuildSteering();
+        var view = await steering.SteerAsync(coord, SteeringKind.Send, targetChildRunId: null, note, "alice", default);
+        view.Status.Should().Be(SteeringStatus.Queued, "a mid-run advisory send queues for the next safe boundary");
+
+        var sut = BuildDispatch(stream);
+        await sut.RunDispatchLoopAsync(Context(coord), default);
+
+        var drained = await GetDirectiveAsync(view.Id);
+        drained!.Status.Should().NotBe(SteeringStatus.Queued,
+            "the live dispatch loop must also drain a mid-run advisory send at the child's next boundary (not drop it)");
+        drained.Status.Should().Be(SteeringStatus.Relayed);
+
+        var relayed = RelayedSteeringPayloads(coord);
+        relayed.Should().ContainSingle();
+        relayed[0]["kind"]!.GetValue<string>().Should().Be(SteeringKind.Send);
+        relayed[0]["instruction"]!.GetValue<string>().Should().Be(note,
+            "the drained send carries the operator's advisory note to the child's next turn");
+    }
+
+    // -----------------------------------------------------------------------
     // Harness
     // -----------------------------------------------------------------------
+
+    /// <summary>
+    /// Builds the real steering surface over the shared stream store + scope factory. No run store or
+    /// review gate is wired, so — combined with a non-GUID coordinator id — SteerAsync stays on the
+    /// live next-turn-boundary queue path (QueueNextBoundaryAsync), exactly as POST /steer does for a
+    /// running, non-parked, non-review-gate coordinator.
+    /// </summary>
+    private CoordinatorSteeringService BuildSteering() => new(
+        _streamStore,
+        new RunWorkflowRegistry(),
+        _scopeFactory,
+        NullLogger<CoordinatorSteeringService>.Instance);
+
+    /// <summary>The <c>coordinator.steering</c> event payloads on the coordinator stream whose status is <c>relayed</c>.</summary>
+    private List<System.Text.Json.Nodes.JsonObject> RelayedSteeringPayloads(string coordinatorRunId) =>
+        _streamStore.Get(coordinatorRunId)!.GetSnapshotSince(0).Events
+            .Where(e => e.Type == EventTypes.CoordinatorSteering)
+            .Select(e => JsonSerializer.SerializeToNode(e.Payload)!.AsObject())
+            .Where(p => p["status"]!.GetValue<string>() == SteeringStatus.Relayed)
+            .ToList();
+
+    private async Task<SteeringDirective?> GetDirectiveAsync(int id)
+    {
+        using var scope = _provider.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        return await db.SteeringDirectives.AsNoTracking().FirstOrDefaultAsync(d => d.Id == id);
+    }
 
     private CoordinatorDispatchService BuildDispatch(
         IRunEventStream eventStream,
