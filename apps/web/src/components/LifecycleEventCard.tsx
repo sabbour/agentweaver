@@ -2,13 +2,12 @@ import {
   apiClient } from '../api/apiClient';
 import { Badge,
   Button,
-  StatusIconText,
   Text,
-  Tooltip } from '../copilot-fluent-system';
+  Tooltip } from '@fluentui/react-components';
 import { makeStyles,
   mergeClasses,
   tokens,
-} from '../copilot-fluent-system';
+} from '@fluentui/react-components';
 import {
   BranchRegular,
   CheckmarkCircleFilled,
@@ -24,14 +23,48 @@ import {
   ShieldRegular,
   TaskListSquareLtrRegular,
   WarningFilled,
-} from '../copilot-fluent-system';
+} from '@fluentui/react-icons';
 import { memo, useEffect, useState } from 'react';
 import type { RunStreamEvent } from '../api/sse';
 const useStyles = makeStyles({
   card: {
-    padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM}`,
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalS,
+    padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalS}`,
     marginTop: tokens.spacingVerticalXS,
     marginBottom: tokens.spacingVerticalXS,
+    backgroundColor: tokens.colorNeutralBackground1,
+    borderRadius: tokens.borderRadiusSmall,
+  },
+  // Generic flex row helpers (replaces azf-row)
+  rowS: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalS,
+  },
+  rowXS: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXS,
+  },
+  rowWrap: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXS,
+    flexWrap: 'wrap',
+  },
+  // Inline status indicator (replaces StatusIconText wrapper)
+  statusRow: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXXS,
+    flexShrink: 0,
+  },
+  statusIcon: {
+    display: 'inline-flex',
+    flexShrink: 0,
+    alignItems: 'center',
   },
   successIcon: { color: tokens.colorPaletteGreenForeground1, flexShrink: 0 },
   errorIcon: { color: tokens.colorPaletteRedForeground1, flexShrink: 0 },
@@ -70,6 +103,9 @@ const useStyles = makeStyles({
     wordBreak: 'break-word',
   },
   terminalLine: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXS,
     padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalM}`,
     fontFamily: tokens.fontFamilyMonospace,
     fontSize: tokens.fontSizeBase200,
@@ -101,6 +137,9 @@ const useStyles = makeStyles({
 
   // shell.approval_required
   approvalCard: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalXS,
     padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM}`,
     borderRadius: tokens.borderRadiusMedium,
     border: `1px solid ${tokens.colorStatusDangerBorder1}`,
@@ -110,6 +149,9 @@ const useStyles = makeStyles({
     boxShadow: tokens.shadow8,
   },
   approvalHeading: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalS,
     fontWeight: tokens.fontWeightSemibold,
     fontSize: tokens.fontSizeBase300,
   },
@@ -129,6 +171,9 @@ const useStyles = makeStyles({
   },
 
   approvalActions: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalS,
     marginTop: tokens.spacingVerticalXS,
   },
   approvalResolved: {
@@ -145,6 +190,8 @@ const useStyles = makeStyles({
 
   // --- ToolApprovalCard redesign styles ---
   approvalCardRedesign: {
+    display: 'flex',
+    flexDirection: 'column',
     borderRadius: tokens.borderRadiusMedium,
     border: `1px solid ${tokens.colorStatusWarningBorder1}`,
     backgroundColor: tokens.colorNeutralBackground1,
@@ -154,11 +201,17 @@ const useStyles = makeStyles({
     boxShadow: tokens.shadow8,
   },
   approvalHeaderRedesign: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalS,
     padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM}`,
     backgroundColor: tokens.colorStatusWarningBackground2,
     borderBottom: `1px solid ${tokens.colorStatusWarningBorder1}`,
   },
   approvalBodyRedesign: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalS,
     padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM}`,
   },
   approvalToolBadgeRedesign: {
@@ -170,6 +223,8 @@ const useStyles = makeStyles({
     color: tokens.colorNeutralForeground1,
   },
   approvalUrlRowRedesign: {
+    display: 'flex',
+    gap: tokens.spacingHorizontalS,
     alignItems: 'flex-start',
   },
   approvalUrlBlockRedesign: {
@@ -193,9 +248,11 @@ const useStyles = makeStyles({
     color: tokens.colorNeutralForeground2,
   },
   approvalActionsRedesign: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalS,
     flexWrap: 'wrap',
     marginTop: tokens.spacingVerticalXS,
-    alignItems: 'center',
   },
   approvalResolvedRedesign: {
     fontSize: tokens.fontSizeBase200,
@@ -209,7 +266,7 @@ const useStyles = makeStyles({
   },
 });
 
-type BadgeColor = 'success' | 'warning' | 'danger' | 'subtle' | 'informative';
+type BadgeColor = 'success' | 'warning' | 'danger' | 'subtle';
 
 function lifecycleProps(event: RunStreamEvent, runOutcome?: { achieved: boolean; reason: string }): {
   icon: React.ReactNode;
@@ -282,7 +339,7 @@ function lifecycleProps(event: RunStreamEvent, runOutcome?: { achieved: boolean;
         icon: <WarningFilled aria-hidden="true" />,
         label: 'revision.started',
         summary: String(p['message'] ?? 'Revision started'),
-        badgeColor: 'informative',
+        badgeColor: 'subtle',
       };
     case 'merge.completed':
       return {
@@ -315,7 +372,7 @@ function lifecycleProps(event: RunStreamEvent, runOutcome?: { achieved: boolean;
         icon: <ShieldRegular aria-hidden="true" />,
         label: 'sandbox.selected',
         summary: `${String(p['backend'] ?? '')}${p['isRealIsolation'] === false ? ' \u2014 no isolation' : ''}`,
-        badgeColor: p['isRealIsolation'] === false ? 'warning' : 'informative',
+        badgeColor: p['isRealIsolation'] === false ? 'warning' : 'subtle',
       };
     case 'agent.system_prompt': {
       const provider = String(p['provider'] ?? 'unknown');
@@ -338,7 +395,7 @@ function lifecycleProps(event: RunStreamEvent, runOutcome?: { achieved: boolean;
         icon: <ShieldRegular aria-hidden="true" />,
         label: 'recovered',
         summary: `Resumed after restart (${String(p['status'] ?? 'in progress')})`,
-        badgeColor: 'informative',
+        badgeColor: 'subtle',
       };
     case 'coordinator.outcome_spec':
       return {
@@ -347,7 +404,7 @@ function lifecycleProps(event: RunStreamEvent, runOutcome?: { achieved: boolean;
         summary: p['desiredOutcome']
           ? `Drafted: ${String(p['desiredOutcome']).slice(0, 140).replace(/\n/g, ' ')}`
           : 'Drafted outcome plan for review',
-        badgeColor: 'informative',
+        badgeColor: 'subtle',
       };
     case 'coordinator.outcome_spec.confirmed':
       return {
@@ -362,7 +419,7 @@ function lifecycleProps(event: RunStreamEvent, runOutcome?: { achieved: boolean;
         icon: <TaskListSquareLtrRegular aria-hidden="true" />,
         label: 'work plan',
         summary: `Decomposed into ${subtasks} subtask${subtasks === 1 ? '' : 's'}`,
-        badgeColor: 'informative',
+        badgeColor: 'subtle',
       };
     }
     case 'subtask.dispatched':
@@ -370,7 +427,7 @@ function lifecycleProps(event: RunStreamEvent, runOutcome?: { achieved: boolean;
         icon: <BranchRegular aria-hidden="true" />,
         label: 'subtask dispatched',
         summary: `${String(p['assignedAgent'] ?? 'agent')}${p['selectedModelId'] ? ` · ${String(p['selectedModelId'])}` : ''}`,
-        badgeColor: 'informative',
+        badgeColor: 'subtle',
       };
     case 'subtask.pending_capacity':
       return {
@@ -412,21 +469,21 @@ function lifecycleProps(event: RunStreamEvent, runOutcome?: { achieved: boolean;
         icon: <CheckmarkCircleFilled aria-hidden="true" />,
         label: 'subtasks done',
         summary: `${Number(p['assembleReady'] ?? 0)} ready · ${Number(p['completed'] ?? 0)} no-change · ${Number(p['failed'] ?? 0)} failed of ${Number(p['total'] ?? 0)}`,
-        badgeColor: Number(p['failed'] ?? 0) > 0 ? 'warning' : 'informative',
+        badgeColor: Number(p['failed'] ?? 0) > 0 ? 'warning' : 'subtle',
       };
     case 'coordinator.steering':
       return {
         icon: <WarningFilled aria-hidden="true" />,
         label: 'steering',
         summary: `${String(p['kind'] ?? 'directive')}${p['instruction'] ? `: ${String(p['instruction']).slice(0, 120)}` : ''} (${String(p['status'] ?? '')})`,
-        badgeColor: 'informative',
+        badgeColor: 'subtle',
       };
     case 'coordinator.assembly_started':
       return {
         icon: <BranchRegular aria-hidden="true" />,
         label: 'assembly',
         summary: `Collective assembly started${p['integrationBranch'] ? ` on ${String(p['integrationBranch'])}` : ''}`,
-        badgeColor: 'informative',
+        badgeColor: 'subtle',
       };
     case 'coordinator.integration_conflict_auto_resolved': {
       const files = Array.isArray(p['conflictingFiles'])
@@ -436,7 +493,7 @@ function lifecycleProps(event: RunStreamEvent, runOutcome?: { achieved: boolean;
         icon: <BranchRegular aria-hidden="true" />,
         label: 'auto-resolved merge conflict',
         summary: `Accepted changes from ${String(p['conflictingBranch'] ?? 'child branch')}${files ? ` for files: ${files}` : ''}`,
-        badgeColor: 'informative',
+        badgeColor: 'subtle',
       };
     }
     case 'coordinator.assembly_rai_started':
@@ -444,14 +501,14 @@ function lifecycleProps(event: RunStreamEvent, runOutcome?: { achieved: boolean;
         icon: <ShieldRegular aria-hidden="true" />,
         label: 'assembly rai',
         summary: 'Collective RAI review started',
-        badgeColor: 'informative',
+        badgeColor: 'subtle',
       };
     case 'coordinator.assembly_rai_completed':
       return {
         icon: <ShieldRegular aria-hidden="true" />,
         label: 'assembly rai',
         summary: p['raiSafetyFlagged'] ? 'RAI review complete — safety flagged' : 'RAI review complete',
-        badgeColor: p['raiSafetyFlagged'] ? 'warning' : 'informative',
+        badgeColor: p['raiSafetyFlagged'] ? 'warning' : 'subtle',
       };
     case 'coordinator.assembly_review_requested':
       return {
@@ -489,7 +546,7 @@ function lifecycleProps(event: RunStreamEvent, runOutcome?: { achieved: boolean;
         icon: <BranchRegular aria-hidden="true" />,
         label: 'merge',
         summary: `Merging${p['integrationBranch'] ? ` ${String(p['integrationBranch'])}` : ''}`,
-        badgeColor: 'informative',
+        badgeColor: 'subtle',
       };
     case 'coordinator.assembly_merge_completed':
       return {
@@ -510,14 +567,14 @@ function lifecycleProps(event: RunStreamEvent, runOutcome?: { achieved: boolean;
         icon: <CodeRegular aria-hidden="true" />,
         label: 'scribe',
         summary: 'Documentation pass started',
-        badgeColor: 'informative',
+        badgeColor: 'subtle',
       };
     case 'coordinator.assembly_scribe_completed':
       return {
         icon: <CodeRegular aria-hidden="true" />,
         label: 'scribe',
         summary: 'Documentation pass complete',
-        badgeColor: 'informative',
+        badgeColor: 'subtle',
       };
     case 'coordinator.assembly_completed':
       return {
@@ -656,20 +713,22 @@ function ToolApprovalCard({ styles, requestId, displayId, toolName, url, intenti
       label = `\u2713 ${scopeLabel(resolvedScope)} \u00b7 ${toolName}`;
       color = tokens.colorStatusSuccessForeground1;
     }
-    const tone = resolvedScope === 'expired' ? 'neutral' : resolvedScope === 'deny' ? 'danger' : 'success';
     return (
-      <div className="azf-row azf-gap-s" style={{ padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalS}` }}>
-        <StatusIconText status={tone} icon={resolvedScope === 'deny' ? <DismissCircleFilled /> : resolvedScope === 'expired' ? <ClockRegular /> : <CheckmarkCircleFilled />}>
-          <span style={{ color }}>{label}</span>
-        </StatusIconText>
+      <div className={styles.rowS} style={{ padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalS}` }}>
+        <span className={styles.statusRow}>
+          <span className={styles.statusIcon}>
+            {resolvedScope === 'deny' ? <DismissCircleFilled aria-hidden="true" /> : resolvedScope === 'expired' ? <ClockRegular aria-hidden="true" /> : <CheckmarkCircleFilled aria-hidden="true" />}
+          </span>
+          <Text as="span" style={{ color }}>{label}</Text>
+        </span>
       </div>
     );
   }
 
   return (
     // SECURITY (Y-3): all values rendered as text — no HTML
-    <div className={mergeClasses('azf-surface azf-stack', styles.approvalCardRedesign)} role="alert">
-      <div className={mergeClasses('azf-row azf-gap-s', styles.approvalHeaderRedesign)}>
+    <div className={styles.approvalCardRedesign} role="alert">
+      <div className={styles.approvalHeaderRedesign}>
         <ShieldLockRegular
           style={{ fontSize: '18px', color: tokens.colorStatusWarningForeground1 }}
           aria-hidden="true"
@@ -679,16 +738,16 @@ function ToolApprovalCard({ styles, requestId, displayId, toolName, url, intenti
         </Text>
       </div>
 
-      <div className={mergeClasses('azf-stack azf-gap-s', styles.approvalBodyRedesign)}>
-        <div className="azf-row azf-gap-s">
+      <div className={styles.approvalBodyRedesign}>
+        <div className={styles.rowS}>
           <Text size={200} style={{ color: tokens.colorNeutralForeground3 }}>Tool</Text>
-          <Badge appearance="filled" color="informative" shape="rounded">
+          <Badge appearance="filled" color="subtle" shape="rounded">
             {toolName}
           </Badge>
         </div>
 
         {url && (
-          <div className={mergeClasses('azf-row azf-gap-s', styles.approvalUrlRowRedesign)}>
+          <div className={styles.approvalUrlRowRedesign}>
             <pre className={styles.approvalUrlBlockRedesign}>{url}</pre>
             <Tooltip content={copied ? 'Copied!' : 'Copy URL'} relationship="label">
               <Button
@@ -706,7 +765,7 @@ function ToolApprovalCard({ styles, requestId, displayId, toolName, url, intenti
           <Text className={styles.approvalIntentionRedesign}>{intention}</Text>
         )}
 
-        <div className={mergeClasses('azf-row azf-gap-s azf-wrap', styles.approvalActionsRedesign)}>
+        <div className={styles.approvalActionsRedesign}>
           <Button
             appearance="primary"
             size="small"
@@ -825,21 +884,21 @@ function ShellApprovalCard({ styles, requestId, commandHash, command, runId, isR
       ? `\u2717 Denied \u00b7 run_command`
       : `\u2713 Approved \u00b7 run_command`;
     return (
-      <div className="azf-row azf-gap-s" style={{ padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalS}` }}>
-        <StatusIconText
-          status={resolvedOutcome === 'denied' ? 'danger' : 'success'}
-          icon={resolvedOutcome === 'denied' ? <DismissCircleFilled /> : <CheckmarkCircleFilled />}
-        >
-          {label}
-        </StatusIconText>
+      <div className={styles.rowS} style={{ padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalS}` }}>
+        <span className={styles.statusRow}>
+          <span className={styles.statusIcon}>
+            {resolvedOutcome === 'denied' ? <DismissCircleFilled aria-hidden="true" /> : <CheckmarkCircleFilled aria-hidden="true" />}
+          </span>
+          <Text as="span">{label}</Text>
+        </span>
       </div>
     );
   }
 
   return (
     // SECURITY (Y-3): command and requestId rendered as text — no HTML
-    <div className={mergeClasses('azf-surface azf-stack azf-gap-xs', styles.approvalCard)} role="alert">
-      <div className={mergeClasses('azf-row azf-gap-s', styles.approvalHeading)}>
+    <div className={styles.approvalCard} role="alert">
+      <div className={styles.approvalHeading}>
         <WarningFilled className={styles.warningIcon} aria-hidden="true" />
         <Text weight="semibold">Dangerous command — approval required</Text>
       </div>
@@ -849,7 +908,7 @@ function ShellApprovalCard({ styles, requestId, commandHash, command, runId, isR
         </Text>
       )}
       <Text className={styles.approvalMeta}>Request ID: {requestId}</Text>
-      <div className={mergeClasses('azf-row azf-gap-s', styles.approvalActions)}>
+      <div className={styles.approvalActions}>
         <Button
           appearance="primary"
           size="small"
@@ -904,11 +963,11 @@ export const LifecycleEventCard = memo(function LifecycleEventCard({ event, runI
       ? prompt.slice(0, 120).replace(/\n/g, ' ') + `… (${prompt.length} chars)`
       : (note ?? '');
     return (
-      <div className={mergeClasses('azf-surface azf-surface--padding-compact azf-row azf-gap-s', styles.card)} style={{ flexDirection: 'column', alignItems: 'flex-start', cursor: prompt ? 'pointer' : undefined }}
+      <div className={styles.card} style={{ flexDirection: 'column', alignItems: 'flex-start', cursor: prompt ? 'pointer' : undefined }}
         onClick={prompt ? () => setExpanded(e => !e) : undefined}
         role={prompt ? 'button' : undefined}
         aria-expanded={prompt ? expanded : undefined}>
-        <div className="azf-row azf-gap-s" style={{ width: '100%' }}>
+        <div className={styles.rowS} style={{ width: '100%' }}>
           {prompt && (expanded
             ? <ChevronDownRegular style={{ flexShrink: 0, fontSize: '10px', color: tokens.colorNeutralForeground3 }} aria-hidden="true" />
             : <ChevronRightRegular style={{ flexShrink: 0, fontSize: '10px', color: tokens.colorNeutralForeground3 }} aria-hidden="true" />)}
@@ -932,16 +991,16 @@ export const LifecycleEventCard = memo(function LifecycleEventCard({ event, runI
       ? taskText.slice(0, 120).replace(/\n/g, ' ') + (taskText.length > 120 ? `… (${taskText.length} chars)` : '')
       : '';
     return (
-      <div className={mergeClasses('azf-surface azf-surface--padding-compact azf-row azf-gap-s', styles.card)} style={{ flexDirection: 'column', alignItems: 'flex-start', cursor: taskText ? 'pointer' : undefined }}
+      <div className={styles.card} style={{ flexDirection: 'column', alignItems: 'flex-start', cursor: taskText ? 'pointer' : undefined }}
         onClick={taskText ? () => setExpanded(e => !e) : undefined}
         role={taskText ? 'button' : undefined}
         aria-expanded={taskText ? expanded : undefined}>
-        <div className="azf-row azf-gap-s" style={{ width: '100%' }}>
+        <div className={styles.rowS} style={{ width: '100%' }}>
           {taskText && (expanded
             ? <ChevronDownRegular style={{ flexShrink: 0, fontSize: '10px', color: tokens.colorNeutralForeground3 }} aria-hidden="true" />
             : <ChevronRightRegular style={{ flexShrink: 0, fontSize: '10px', color: tokens.colorNeutralForeground3 }} aria-hidden="true" />)}
           <TaskListSquareLtrRegular className={styles.subtleIcon} aria-hidden="true" />
-          <Badge className={styles.badge} color="informative" shape="rounded" size="small">task</Badge>
+          <Badge className={styles.badge} color="subtle" shape="rounded" size="small">task</Badge>
           <Text className={styles.summary}>{preview}</Text>
         </div>
         {expanded && taskText && (
@@ -961,7 +1020,7 @@ export const LifecycleEventCard = memo(function LifecycleEventCard({ event, runI
     return (
       // SECURITY (Y-3): content rendered as text — no HTML
       <div
-        className={mergeClasses('azf-row azf-gap-xs', styles.terminalLine, isStderr && styles.terminalStderrLine)}
+        className={mergeClasses(styles.terminalLine, isStderr && styles.terminalStderrLine)}
         role="log"
         aria-label={`${stream} output`}
       >
@@ -987,7 +1046,7 @@ export const LifecycleEventCard = memo(function LifecycleEventCard({ event, runI
     const exitCode = Number(event.payload['exitCode'] ?? event.payload['exit_code'] ?? 0);
     const isFailure = exitCode !== 0;
     return (
-      <div className={mergeClasses('azf-surface azf-surface--padding-compact azf-row azf-gap-s', styles.card)}>
+      <div className={styles.card}>
         <CodeRegular className={styles.subtleIcon} aria-hidden="true" />
         <Badge
           className={styles.badge}
@@ -1088,10 +1147,10 @@ export const LifecycleEventCard = memo(function LifecycleEventCard({ event, runI
     const tools = event.payload['tools'] as string[] | undefined;
     if (!tools || tools.length === 0) return null;
     return (
-      <div className={mergeClasses('azf-surface azf-surface--padding-compact azf-row azf-gap-s', styles.card)} style={{ flexWrap: 'wrap', alignItems: 'flex-start' }}>
+      <div className={styles.card} style={{ flexWrap: 'wrap', alignItems: 'flex-start' }}>
         <CodeRegular className={styles.subtleIcon} aria-hidden="true" style={{ marginTop: '2px' }} />
         <Badge className={styles.badge} color="subtle" shape="rounded" size="small">tools</Badge>
-        <div className="azf-row azf-gap-xs azf-wrap">
+        <div className={styles.rowWrap}>
           {tools.map(tool => (
             <Badge key={tool} appearance="outline" size="small" shape="rounded" style={{ fontFamily: tokens.fontFamilyMonospace, fontSize: tokens.fontSizeBase100 }}>{tool}</Badge>
           ))}
@@ -1104,8 +1163,8 @@ export const LifecycleEventCard = memo(function LifecycleEventCard({ event, runI
   if (event.type === 'review.changes_requested') {
     const comment = event.payload['comment'] ? String(event.payload['comment']) : null;
     return (
-      <div className={mergeClasses('azf-surface azf-surface--padding-compact azf-row azf-gap-s', styles.card)} style={{ flexDirection: 'column', alignItems: 'flex-start' }}>
-        <div className="azf-row azf-gap-s" style={{ width: '100%' }}>
+      <div className={styles.card} style={{ flexDirection: 'column', alignItems: 'flex-start' }}>
+        <div className={styles.rowS} style={{ width: '100%' }}>
           <span className={styles.warningIcon}><WarningFilled aria-hidden="true" /></span>
           <Badge className={styles.badge} color="warning" shape="rounded" size="small">review.changes_requested</Badge>
           <Text className={styles.summary}>Changes requested</Text>
@@ -1127,8 +1186,8 @@ export const LifecycleEventCard = memo(function LifecycleEventCard({ event, runI
     styles.subtleIcon;
 
   return (
-    <div className={mergeClasses('azf-surface azf-surface--padding-compact azf-row azf-gap-s', styles.card)}>
-      <StatusIconText status={badgeColor === 'danger' ? 'danger' : badgeColor === 'warning' ? 'warning' : badgeColor === 'success' ? 'success' : 'neutral'} icon={icon} className={iconClass} />
+    <div className={styles.card}>
+      {icon && <span className={mergeClasses(styles.statusIcon, iconClass)} aria-hidden="true">{icon}</span>}
       <Badge className={styles.badge} color={badgeColor} shape="rounded" size="small">
         {label}
       </Badge>

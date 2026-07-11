@@ -1,14 +1,13 @@
 import {
-  AzureIcon,
-  Text } from '../copilot-fluent-system';
+  Text } from '@fluentui/react-components';
 import { makeStyles,
   mergeClasses,
   tokens,
-} from '../copilot-fluent-system';
+} from '@fluentui/react-components';
 import ReactMarkdown from 'react-markdown';
 import rehypeSanitize from 'rehype-sanitize';
 import remarkGfm from 'remark-gfm';
-import { BotRegular } from '../copilot-fluent-system';
+import { BotRegular } from '@fluentui/react-icons';
 import { memo } from 'react';
 import { defaultSchema } from 'rehype-sanitize';
 import type { ComponentProps } from 'react';
@@ -19,11 +18,18 @@ const SANITIZE_SCHEMA = defaultSchema;
 
 const useStyles = makeStyles({
   wrapper: {
+    display: 'flex',
     alignItems: 'flex-start',
+    gap: tokens.spacingHorizontalS,
     paddingTop: tokens.spacingVerticalXS,
     paddingBottom: tokens.spacingVerticalXS,
   },
   icon: {
+    display: 'inline-flex',
+    width: '20px',
+    height: '20px',
+    alignItems: 'center',
+    justifyContent: 'center',
     color: tokens.colorNeutralForeground3,
     flexShrink: 0,
     marginTop: tokens.spacingVerticalXXS,
@@ -47,7 +53,7 @@ const useStyles = makeStyles({
       display: 'inline-block',
       width: '2px',
       height: '1em',
-      backgroundColor: tokens.colorBrandForeground1,
+      backgroundColor: tokens.colorNeutralForeground2,
       marginLeft: tokens.spacingHorizontalXS,
       verticalAlign: 'text-bottom',
       animationName: {
@@ -141,7 +147,7 @@ const useStyles = makeStyles({
       color: tokens.colorNeutralForeground3,
     },
     '& a': {
-      color: tokens.colorBrandForeground1,
+      color: tokens.colorNeutralForeground2,
     },
     '& table': {
       borderCollapse: 'collapse',
@@ -199,8 +205,8 @@ export const AgentMessageBubble = memo(function AgentMessageBubble({
   const looksLikeSpecDraft = /^\s*\{/.test(content) && /"desired_outcome"\s*:/.test(content);
   if (looksLikeSpecDraft) {
     return (
-      <div className={mergeClasses('azf-row azf-gap-s', styles.wrapper)} aria-label="Agent message">
-        <AzureIcon icon={<BotRegular />} className={styles.icon} size={20} decorative />
+      <div className={styles.wrapper} aria-label="Agent message">
+        <span className={styles.icon} aria-hidden="true"><BotRegular style={{ fontSize: 20 }} /></span>
         <Text as="span" style={{ color: tokens.colorNeutralForeground3, fontStyle: 'italic', paddingTop: tokens.spacingVerticalXXS }}>
           Drafted the outcome plan — see the Outcome plan panel.
         </Text>
@@ -213,11 +219,11 @@ export const AgentMessageBubble = memo(function AgentMessageBubble({
 
   return (
     // aria-label on wrapper; aria-live scoped to inner text only when streaming (§6.3, fix #6)
-    <div className={mergeClasses('azf-row azf-gap-s', styles.wrapper)} aria-label="Agent message">
+    <div className={styles.wrapper} aria-label="Agent message">
       {/* aria-hidden — icon is decorative, text is the accessible label (§6.4) */}
-      <AzureIcon icon={<BotRegular />} className={styles.icon} size={20} decorative />
+      <span className={styles.icon} aria-hidden="true"><BotRegular style={{ fontSize: 20 }} /></span>
       <div
-        className={mergeClasses('azf-chat-bubble', styles.bubble, showCursor && styles.cursorAfter, !renderMarkdown && styles.plainText)}
+        className={mergeClasses(styles.bubble, showCursor && styles.cursorAfter, !renderMarkdown && styles.plainText)}
         data-author="assistant"
       >
         {renderMarkdown ? (

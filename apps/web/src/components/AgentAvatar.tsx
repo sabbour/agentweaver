@@ -1,8 +1,8 @@
 import {
   makeStyles,
   tokens,
-} from '../copilot-fluent-system';
-import type { FluentIcon } from '../copilot-fluent-system';
+} from '@fluentui/react-components';
+import type { FluentIcon } from '@fluentui/react-icons';
 const useStyles = makeStyles({
   root: {
     position: 'relative',
@@ -22,7 +22,7 @@ const useStyles = makeStyles({
     width: '14px',
     height: '14px',
     borderRadius: '50%',
-    background: tokens.colorBrandBackground,
+    background: tokens.colorNeutralBackground4,
     border: `2px solid ${tokens.colorNeutralBackground1}`,
     display: 'flex',
     alignItems: 'center',

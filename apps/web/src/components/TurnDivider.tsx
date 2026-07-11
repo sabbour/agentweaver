@@ -1,21 +1,34 @@
 import {
   Divider,
   Spinner,
-  StatusIconText } from '../copilot-fluent-system';
+  Text,
+} from '@fluentui/react-components';
 import { makeStyles,
-  mergeClasses,
   tokens,
-} from '../copilot-fluent-system';
-import { CheckmarkCircleFilled } from '../copilot-fluent-system';
+} from '@fluentui/react-components';
+import { CheckmarkCircleFilled } from '@fluentui/react-icons';
 import { memo } from 'react';
 const useStyles = makeStyles({
   root: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalS,
     paddingTop: tokens.spacingVerticalXXS,
     paddingBottom: tokens.spacingVerticalXXS,
   },
   label: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXXS,
     fontSize: tokens.fontSizeBase200,
     flexShrink: 0,
+  },
+  labelIcon: {
+    display: 'inline-flex',
+    flexShrink: 0,
+    alignItems: 'center',
+    fontSize: '14px',
+    lineHeight: '1',
   },
 });
 
@@ -29,16 +42,17 @@ export const TurnDivider = memo(function TurnDivider({ turnIndex, stepCount, act
   const styles = useStyles();
   const stepWord = stepCount === 1 ? 'step' : 'steps';
   return (
-    <div className={mergeClasses('azf-row azf-gap-s', styles.root)}>
+    <div className={styles.root}>
       <Divider style={{ flexGrow: 1 }} />
-      <StatusIconText
-        className={styles.label}
-        status={active ? 'info' : 'success'}
-        icon={active ? <Spinner size="extra-tiny" aria-hidden="true" /> : <CheckmarkCircleFilled aria-hidden="true" />}
-      >
-        Turn {turnIndex}
-        {stepCount > 0 && ` \u00b7 ${stepCount} ${stepWord}`}
-      </StatusIconText>
+      <span className={styles.label}>
+        <span className={styles.labelIcon}>
+          {active ? <Spinner size="extra-tiny" aria-hidden="true" /> : <CheckmarkCircleFilled aria-hidden="true" />}
+        </span>
+        <Text size={200}>
+          Turn {turnIndex}
+          {stepCount > 0 && ` \u00b7 ${stepCount} ${stepWord}`}
+        </Text>
+      </span>
       <Divider style={{ flexGrow: 1 }} />
     </div>
   );

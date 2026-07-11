@@ -2,21 +2,21 @@ import {
   apiClient } from '../api/apiClient';
 import { Badge,
   Button,
-  StatusIconText,
   Text,
-  Textarea } from '../copilot-fluent-system';
+  Textarea } from '@fluentui/react-components';
 import { makeStyles,
-  mergeClasses,
   tokens,
-} from '../copilot-fluent-system';
-import { CheckmarkCircleFilled, ClockRegular, QuestionCircleFilled, SendRegular } from '../copilot-fluent-system';
+} from '@fluentui/react-components';
+import { CheckmarkCircleFilled, ClockRegular, QuestionCircleFilled, SendRegular } from '@fluentui/react-icons';
 import { useState } from 'react';
 const useStyles = makeStyles({
-  // Mirrors the HITL tool-approval card treatment (brand-stroked, shadowed) so a blocked
-  // question reads as an equally prominent operator action.
+  // Mirrors the HITL tool-approval card treatment (warning-stroked, shadowed) so a blocked
+  // question reads as an equally prominent action required.
   card: {
+    display: 'flex',
+    flexDirection: 'column',
     borderRadius: tokens.borderRadiusMedium,
-    border: `1px solid ${tokens.colorBrandStroke2}`,
+    border: `1px solid ${tokens.colorStatusWarningBorder1}`,
     backgroundColor: tokens.colorNeutralBackground1,
     marginTop: tokens.spacingVerticalXS,
     marginBottom: tokens.spacingVerticalXS,
@@ -24,11 +24,17 @@ const useStyles = makeStyles({
     boxShadow: tokens.shadow4,
   },
   header: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalS,
     padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM}`,
-    backgroundColor: tokens.colorBrandBackground2,
-    borderBottom: `1px solid ${tokens.colorBrandStroke2}`,
+    backgroundColor: tokens.colorStatusWarningBackground2,
+    borderBottom: `1px solid ${tokens.colorStatusWarningBorder1}`,
   },
   body: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalS,
     padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM}`,
   },
   question: {
@@ -38,6 +44,9 @@ const useStyles = makeStyles({
     wordBreak: 'break-word',
   },
   actions: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalS,
     flexWrap: 'wrap',
   },
   requestId: {
@@ -46,12 +55,26 @@ const useStyles = makeStyles({
   },
   // Collapsed answered state — muted, consistent with the resolved approval inline view.
   answered: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalXS,
     padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalM}`,
     borderRadius: tokens.borderRadiusMedium,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground2,
     marginTop: tokens.spacingVerticalXS,
     marginBottom: tokens.spacingVerticalXS,
+  },
+  answeredRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXS,
+  },
+  statusIcon: {
+    display: 'inline-flex',
+    flexShrink: 0,
+    alignItems: 'center',
+    fontSize: '14px',
   },
   answeredAnswer: {
     fontSize: tokens.fontSizeBase200,
@@ -103,14 +126,14 @@ export function QuestionAnswerCard({ runId, requestId, question, answer, timedOu
 
   if (isAnswered) {
     return (
-      <div className={mergeClasses('azf-surface azf-surface--subtle azf-stack azf-gap-xs', styles.answered)} role="status">
-        <div className="azf-row azf-gap-xs">
-          <StatusIconText
-            status={timedOut ? 'warning' : 'success'}
-            icon={timedOut ? <ClockRegular aria-hidden="true" /> : <CheckmarkCircleFilled aria-hidden="true" />}
-          >
+      <div className={styles.answered} role="status">
+        <div className={styles.answeredRow}>
+          <span className={styles.statusIcon}>
+            {timedOut ? <ClockRegular aria-hidden="true" /> : <CheckmarkCircleFilled aria-hidden="true" />}
+          </span>
+          <Text size={200}>
             {sourceLabel ? `${sourceLabel} · ` : ''}{timedOut ? 'Question timed out' : 'Question answered'}
-          </StatusIconText>
+          </Text>
         </div>
         <Text className={styles.answeredAnswer}>{question}</Text>
         {resolvedAnswer && (
@@ -123,20 +146,20 @@ export function QuestionAnswerCard({ runId, requestId, question, answer, timedOu
   }
 
   return (
-    <div className={mergeClasses('azf-surface azf-stack', styles.card)} role="alert">
-      <div className={mergeClasses('azf-row azf-gap-s', styles.header)}>
+    <div className={styles.card} role="alert">
+      <div className={styles.header}>
         <QuestionCircleFilled
-          style={{ fontSize: '18px', color: tokens.colorBrandForeground1 }}
+          style={{ fontSize: '18px', color: tokens.colorStatusWarningForeground1 }}
           aria-hidden="true"
         />
-        <Text weight="semibold" size={300} style={{ color: tokens.colorBrandForeground1 }}>
+        <Text weight="semibold" size={300} style={{ color: tokens.colorStatusWarningForeground1 }}>
           Answer required
         </Text>
         {sourceLabel && (
-          <Badge appearance="tint" color="brand" shape="rounded">{sourceLabel}</Badge>
+          <Badge appearance="tint" color="warning" shape="rounded">{sourceLabel}</Badge>
         )}
       </div>
-      <div className={mergeClasses('azf-stack azf-gap-s', styles.body)}>
+      <div className={styles.body}>
         <Text className={styles.question}>{question}</Text>
         <Textarea
           value={value}
@@ -149,7 +172,7 @@ export function QuestionAnswerCard({ runId, requestId, question, answer, timedOu
         {error && (
           <Text size={200} style={{ color: tokens.colorStatusDangerForeground1 }}>{error}</Text>
         )}
-        <div className={mergeClasses('azf-row azf-gap-s azf-wrap', styles.actions)}>
+        <div className={styles.actions}>
           <Button
             appearance="primary"
             size="small"

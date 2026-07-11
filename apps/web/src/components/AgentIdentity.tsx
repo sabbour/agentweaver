@@ -4,7 +4,7 @@ import { AgentAvatar } from './AgentAvatar';
 import { makeStyles,
   mergeClasses,
   tokens,
-} from '../copilot-fluent-system';
+} from '@fluentui/react-components';
 import {
   BotRegular,
   CheckmarkCircleRegular,
@@ -13,9 +13,9 @@ import {
   NotebookRegular,
   PersonRegular,
   ShieldRegular,
-} from '../copilot-fluent-system';
+} from '@fluentui/react-icons';
 import type { ResolvedAgentIdentity } from '../utils/agentIdentity';
-import type { FluentIcon } from '../copilot-fluent-system';
+import type { FluentIcon } from '@fluentui/react-icons';
 
 const ROLE_ICON_BY_KEY: Readonly<Record<string, FluentIcon>> = {
   agent: BotRegular,

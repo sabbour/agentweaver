@@ -1,21 +1,26 @@
 import {
-  Text } from '../copilot-fluent-system';
+  Text } from '@fluentui/react-components';
 import { AgentMessageBubble } from './AgentMessageBubble';
 import { LifecycleEventCard } from './LifecycleEventCard';
 import { ToolCallCard } from './ToolCallCard';
 import { makeStyles,
-  mergeClasses,
   tokens,
-} from '../copilot-fluent-system';
-import { ChevronDownRegular, ChevronRightRegular } from '../copilot-fluent-system';
+} from '@fluentui/react-components';
+import { ChevronDownRegular, ChevronRightRegular } from '@fluentui/react-icons';
 import { memo, useState } from 'react';
 import type { StreamStatus } from '../api/sse';
 import type { AgentMessageItem, ApprovalRequestItem, ToolCallItem, TurnGroupItem, TurnStep } from '../timeline/types';
 const useStyles = makeStyles({
   steps: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalXS,
     paddingLeft: tokens.spacingHorizontalM,
   },
   toolsHeader: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXS,
     cursor: 'pointer',
     background: 'none',
     border: 'none',
@@ -27,6 +32,9 @@ const useStyles = makeStyles({
   },
   /** Button style for a report_intent line acting as a cluster toggle header. */
   intentToggleHeader: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXS,
     cursor: 'pointer',
     background: 'none',
     border: 'none',
@@ -41,6 +49,9 @@ const useStyles = makeStyles({
     flexShrink: 0,
   },
   toolsList: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalXS,
     paddingLeft: tokens.spacingHorizontalM,
   },
   intentAnnotation: {
@@ -106,7 +117,7 @@ const ToolClusterRow = memo(function ToolClusterRow({ cluster, defaultExpanded, 
   return (
     <>
       <button
-        className={mergeClasses('azf-row azf-gap-xs', styles.toolsHeader)}
+        className={styles.toolsHeader}
         onClick={() => setExpanded(e => !e)}
         aria-expanded={expanded}
       >
@@ -118,7 +129,7 @@ const ToolClusterRow = memo(function ToolClusterRow({ cluster, defaultExpanded, 
         </Text>
       </button>
       {expanded && (
-        <div className={mergeClasses('azf-stack azf-gap-xs', styles.toolsList)}>
+        <div className={styles.toolsList}>
           {cluster.steps.map((step, i) => (
             <ToolCallCard
               key={step.callId != null ? String(step.callId) : "tc-" + i}
@@ -171,7 +182,7 @@ const HeaderedClusterRow = memo(function HeaderedClusterRow({
     // report_intent: the compact intent text IS the toggle button.
     headerNode = (
       <button
-        className={mergeClasses('azf-row azf-gap-xs', styles.intentToggleHeader)}
+        className={styles.intentToggleHeader}
         onClick={toggle}
         aria-expanded={expanded}
       >
@@ -193,7 +204,7 @@ const HeaderedClusterRow = memo(function HeaderedClusterRow({
           isLiveRun={isLiveRun}
         />
         <button
-          className={mergeClasses('azf-row azf-gap-xs', styles.toolsHeader)}
+          className={styles.toolsHeader}
           onClick={toggle}
           aria-expanded={expanded}
         >
@@ -210,7 +221,7 @@ const HeaderedClusterRow = memo(function HeaderedClusterRow({
     <>
       {headerNode}
       {expanded && (
-        <div className={mergeClasses('azf-stack azf-gap-xs', styles.toolsList)}>
+        <div className={styles.toolsList}>
           {cluster.steps.map((step, i) => (
             <ToolCallCard
               key={step.callId != null ? String(step.callId) : 'tc-' + i}
@@ -242,7 +253,7 @@ export const TurnGroup = memo(function TurnGroup({ item, isLiveRun, streamStatus
   const isComplete = !item.active;
 
   return (
-    <div className={mergeClasses('azf-stack azf-gap-xs', styles.steps)}>
+    <div className={styles.steps}>
       {clusters.map((cluster, i) => {
         if (cluster.kind === 'inline') {
           const step = cluster.step;
@@ -339,7 +350,7 @@ export const TurnGroup = memo(function TurnGroup({ item, isLiveRun, streamStatus
 
         // Active turn: show tool calls inline (always expanded; users see streaming progress).
         return (
-          <div key={"cluster-" + i} className={mergeClasses('azf-stack azf-gap-xs', styles.toolsList)}>
+          <div key={"cluster-" + i} className={styles.toolsList}>
             {cluster.steps.map((step, j) => (
               <ToolCallCard
                 key={step.callId != null ? String(step.callId) : "tc-" + j}

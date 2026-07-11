@@ -1,12 +1,11 @@
 import {
   Badge,
   Spinner,
-  StatusIconText,
-  Text } from '../copilot-fluent-system';
+  Text } from '@fluentui/react-components';
 import { makeStyles,
   mergeClasses,
   tokens,
-} from '../copilot-fluent-system';
+} from '@fluentui/react-components';
 import {
   CheckmarkCircleFilled,
   ChevronDownRegular,
@@ -22,16 +21,19 @@ import {
   SearchRegular,
   WarningFilled,
   WrenchRegular,
-} from '../copilot-fluent-system';
+} from '@fluentui/react-icons';
 import { memo, useState } from 'react';
 import type { StreamStatus } from '../api/sse';
 import type { ToolCallItem } from '../timeline/types';
-import type { FluentIcon } from '../copilot-fluent-system';
+import type { FluentIcon } from '@fluentui/react-icons';
 /** Characters displayed per content block before truncation (Y-1). */
 const BLOCK_MAX = 50_000;
 
 const useStyles = makeStyles({
   row: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXS,
     paddingTop: '1px',
     paddingBottom: '1px',
     cursor: 'pointer',
@@ -60,7 +62,9 @@ const useStyles = makeStyles({
     flexShrink: 0,
   },
   statusIcon: {
+    display: 'inline-flex',
     flexShrink: 0,
+    alignItems: 'center',
   },
   statusIconText: {
     flexShrink: 0,
@@ -99,6 +103,9 @@ const useStyles = makeStyles({
     flexShrink: 0,
   },
   detail: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalXS,
     marginLeft: tokens.spacingHorizontalXL,
     paddingLeft: tokens.spacingHorizontalS,
     borderLeft: `2px solid ${tokens.colorNeutralStroke2}`,
@@ -240,20 +247,12 @@ export const ToolCallCard = memo(function ToolCallCard({ item, streamStatus, has
 
   const LeadIcon = leadingIcon(item);
   const meta = deriveMeta(item);
-  const statusTone = !item.settled
-    ? 'info'
-    : isSandbox || isNonZeroExit || hasFollowingErrors
-      ? 'warning'
-      : item.error
-        ? 'danger'
-        : 'success';
 
   return (
     <div>
       {/* SECURITY (Y-3): all user-controlled strings rendered as text nodes */}
       <button
         className={mergeClasses(
-          'azf-row azf-gap-xs',
           styles.row,
           isSandbox ? styles.rowSandbox : undefined,
           isError ? styles.rowError : undefined,
@@ -269,7 +268,7 @@ export const ToolCallCard = memo(function ToolCallCard({ item, streamStatus, has
           : <span style={{ width: 10, display: 'inline-block', flexShrink: 0 }} aria-hidden="true" />
         }
         <LeadIcon className={styles.icon} aria-hidden="true" />
-        <StatusIconText status={statusTone} icon={<StatusIcon />} className={styles.statusIconText} />
+        <span className={mergeClasses(styles.statusIcon, styles.statusIconText)}><StatusIcon /></span>
         <Text className={styles.title}>{item.humanTitle}</Text>
         {meta && <Text className={styles.meta} aria-hidden="true">{meta}</Text>}
         <span className={styles.spacer} aria-hidden="true" />
@@ -278,7 +277,7 @@ export const ToolCallCard = memo(function ToolCallCard({ item, streamStatus, has
       </button>
 
       {expanded && hasDetail && (
-        <div className={mergeClasses('azf-stack azf-gap-xs', styles.detail)}>
+        <div className={styles.detail}>
           {/* Args block — always shown first so the literal tool call is visible */}
           {hasArgs && (() => {
             const argsJson = JSON.stringify(item.args, null, 2);

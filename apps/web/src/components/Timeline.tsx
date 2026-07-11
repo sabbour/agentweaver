@@ -1,27 +1,37 @@
 import {
   Spinner,
-  StatusIconText,
-  Text } from '../copilot-fluent-system';
+  Text } from '@fluentui/react-components';
 import { LifecycleEventCard } from './LifecycleEventCard';
 import { QuestionAnswerCard } from './QuestionAnswerCard';
 import { TurnGroup } from './TurnGroup';
 import { WorkflowStepCard } from './WorkflowStepCard';
 import { makeStyles,
-  mergeClasses,
   tokens,
-} from '../copilot-fluent-system';
+} from '@fluentui/react-components';
 import { memo, useMemo } from 'react';
 import type { StreamStatus } from '../api/sse';
 import type { TimelineItem } from '../timeline/types';
 const useStyles = makeStyles({
   root: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalXS,
   },
   connecting: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXXS,
     fontSize: tokens.fontSizeBase200,
     paddingTop: tokens.spacingVerticalS,
+    color: tokens.colorNeutralForeground3,
   },
   skipped: {
+    display: 'block',
     fontSize: tokens.fontSizeBase200,
+    color: tokens.colorNeutralForeground3,
+    backgroundColor: tokens.colorNeutralBackground2,
+    borderRadius: tokens.borderRadiusSmall,
+    padding: `${tokens.spacingVerticalXXS} ${tokens.spacingHorizontalS}`,
   },
 });
 
@@ -60,13 +70,13 @@ export const Timeline = memo(function Timeline({ items, streamStatus, isLiveRun,
   return (
     // role="log" announces new items; aria-live="polite" only when live (fix #6)
     <div
-      className={mergeClasses('azf-stack azf-gap-xs', styles.root)}
+      className={styles.root}
       role="log"
       aria-label="Run timeline"
       aria-live={isLiveRun ? 'polite' : undefined}
     >
       {skippedEventCount > 0 && (
-        <Text className={mergeClasses('azf-surface azf-surface--subtle azf-surface--padding-compact azf-muted', styles.skipped)}>
+        <Text className={styles.skipped}>
           {skippedEventCount} older events not shown.
         </Text>
       )}
@@ -126,9 +136,10 @@ export const Timeline = memo(function Timeline({ items, streamStatus, isLiveRun,
       })}
 
       {streamStatus === 'connecting' && (
-        <StatusIconText status="info" icon={<Spinner size="extra-tiny" aria-hidden="true" />} className={styles.connecting}>
-          Waiting for agent...
-        </StatusIconText>
+        <span className={styles.connecting}>
+          <Spinner size="extra-tiny" aria-hidden="true" />
+          <Text size={200}>Waiting for agent...</Text>
+        </span>
       )}
     </div>
   );

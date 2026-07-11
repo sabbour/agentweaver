@@ -1,10 +1,10 @@
 import {
   Badge,
-  Text } from '../copilot-fluent-system';
+  Text } from '@fluentui/react-components';
 import { AgentAvatar } from './AgentAvatar';
 import { makeStyles,
   tokens,
-} from '../copilot-fluent-system';
+} from '@fluentui/react-components';
 import type { AgentQueueItem } from '../api/agentQueues';
 // Re-export so consumers can use this one import for both type and component.
 export type { AgentQueueItem } from '../api/agentQueues';
@@ -19,8 +19,6 @@ const useStyles = makeStyles({
     fontSize: tokens.fontSizeBase200,
     fontWeight: tokens.fontWeightSemibold,
     color: tokens.colorNeutralForeground3,
-    textTransform: 'uppercase',
-    letterSpacing: '0.04em',
   },
   list: {
     display: 'flex',
@@ -119,7 +117,7 @@ export function AgentRail({ agents, selectedAgent, onSelectAgent, title = 'Agent
                 <Text className={styles.agentName}>{agent.agentName}</Text>
                 <div className={styles.chips}>
                   {agent.active > 0 && (
-                    <Badge appearance="tint" color="informative" size="small">
+                    <Badge appearance="tint" color="subtle" size="small">
                       {agent.active} active
                     </Badge>
                   )}
