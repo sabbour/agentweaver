@@ -93,6 +93,37 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
 
     private readonly ConcurrentDictionary<string, byte> _active = new();
 
+    /// <summary>
+    /// Per-run cancellation source (linked to <see cref="_appStopping"/>) for each active dispatch
+    /// loop. The lease heartbeat cancels this to FENCE the loop when the coordinator lease is lost to a
+    /// peer replica, so the fenced loop stops racing the shared repo. Tracked alongside
+    /// <see cref="_active"/> and disposed in the launch task's finally.
+    /// </summary>
+    private readonly ConcurrentDictionary<string, CancellationTokenSource> _runCts = new();
+
+    /// <summary>
+    /// How often the owning pod renews its coordinator lease (bumps <see cref="WorkPlan.UpdatedAt"/>)
+    /// while a dispatch loop is alive, so a long child turn cannot let the lease go stale and let a
+    /// peer replica steal it. Configurable via <c>Coordinator:PodLeaseHeartbeatSeconds</c> (default
+    /// 30 s). Must stay well below <c>Coordinator:PodLeaseStaleTtlSeconds</c> (120 s).
+    /// </summary>
+    private readonly TimeSpan _leaseHeartbeatInterval;
+
+    /// <summary>
+    /// Cross-process lock (keyed by projectId) taken around the dependency-base integration branch
+    /// build so two pods never race the shared <c>/workspace/{projectId}/.git</c> repo. Null in unit
+    /// tests that do not exercise the git path.
+    /// </summary>
+    private readonly IntegrationBuildLock? _integrationBuildLock;
+
+    /// <summary>
+    /// How long to wait for the per-project integration build lock before giving up on a
+    /// dependency-base rebuild (best-effort; a missed rebuild is repaired later by the mandatory
+    /// contains-check in <see cref="ResolveChildBaseBranchAsync"/>). Configurable via
+    /// <c>Coordinator:IntegrationBuildLockAcquireTimeoutSeconds</c> (default 120 s).
+    /// </summary>
+    private readonly TimeSpan _integrationBuildLockTimeout;
+
     /// <summary>Pod name / hostname used as the distributed lease owner identity.</summary>
     private readonly string _myPodId;
 
@@ -114,7 +145,8 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         IPodNameRegistry? podRegistry = null,
         IAgentHostPodLifecycle? podLifecycle = null,
         IOptions<SandboxRuntimeOptions>? sandboxRuntime = null,
-        IKubernetesEnvironment? k8sEnv = null)
+        IKubernetesEnvironment? k8sEnv = null,
+        IntegrationBuildLock? integrationBuildLock = null)
     {
         _runStore = runStore;
         _streamStore = streamStore;
@@ -133,9 +165,18 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         _sandboxRuntime = sandboxRuntime?.Value ?? new SandboxRuntimeOptions();
         _logger = logger;
         _appStopping = lifetime.ApplicationStopping;
+        _integrationBuildLock = integrationBuildLock;
 
         var stallMinutes = configuration?.GetValue("Coordinator:SubtaskStallTimeoutMinutes", 5.0) ?? 5.0;
         _stallTimeout = TimeSpan.FromMinutes(Math.Max(0, stallMinutes));
+
+        // Renew the coordinator lease every 30 s by default — comfortably below the 120 s stale TTL so
+        // a long child turn (implement/debug runs of 5-15+ min) can never let the lease go stale.
+        var heartbeatSecs = configuration?.GetValue("Coordinator:PodLeaseHeartbeatSeconds", 30) ?? 30;
+        _leaseHeartbeatInterval = TimeSpan.FromSeconds(Math.Max(1, heartbeatSecs));
+
+        var lockTimeoutSecs = configuration?.GetValue("Coordinator:IntegrationBuildLockAcquireTimeoutSeconds", 120) ?? 120;
+        _integrationBuildLockTimeout = TimeSpan.FromSeconds(Math.Max(1, lockTimeoutSecs));
 
         _myPodId = configuration?.GetValue<string>("App:PodId")
                    ?? Environment.GetEnvironmentVariable("HOSTNAME")
@@ -155,15 +196,30 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
                 "Coordinator dispatch already active for run {RunId}; skipping", context.CoordinatorRunId);
             return;
         }
+
+        // Per-run cancellation, linked to app shutdown. The lease heartbeat cancels this to FENCE the
+        // loop when a peer replica takes over the coordinator lease (see RunLeaseHeartbeatAsync), so a
+        // loop whose lease was stolen stops racing the shared repo.
+        var runCts = CancellationTokenSource.CreateLinkedTokenSource(_appStopping);
+        _runCts[context.CoordinatorRunId] = runCts;
+
         _ = Task.Run(async () =>
         {
             try
             {
-                await RunDispatchLoopAsync(context, _appStopping).ConfigureAwait(false);
+                await RunDispatchLoopAsync(context, runCts.Token).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (_appStopping.IsCancellationRequested)
             {
                 // App shutting down — not an error.
+            }
+            catch (OperationCanceledException) when (runCts.IsCancellationRequested)
+            {
+                // Fence-cancel: a peer replica took over the coordinator lease while this loop was
+                // running. This is a clean, expected stop (not a failure) — the peer now drives the run.
+                _logger.LogInformation(
+                    "Coordinator dispatch loop for run {RunId} fenced: a peer replica took over the coordinator lease",
+                    context.CoordinatorRunId);
             }
             catch (Exception ex)
             {
@@ -172,8 +228,10 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
             finally
             {
                 _active.TryRemove(context.CoordinatorRunId, out _);
+                _runCts.TryRemove(context.CoordinatorRunId, out _);
+                runCts.Dispose();
             }
-        }, _appStopping);
+        }, CancellationToken.None);
     }
 
     /// <inheritdoc />
@@ -210,6 +268,16 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         // Advance the plan to dispatching and publish the FULL topology snapshot (reflecting the new
         // status) so the client can render the graph thin before any child has been launched.
         await SetWorkPlanStatusAsync(workPlanId.Value, WorkPlanStatus.Dispatching, ct, coordinatorPodId: _myPodId).ConfigureAwait(false);
+
+        // Lease heartbeat (issue #218): while this loop owns the plan, renew the coordinator lease every
+        // ~30s from its OWN DI scope + DbContext so a long child turn (implement/debug runs of 5-15+ min)
+        // cannot let CoordinatorPodId/UpdatedAt go stale and let a peer replica declare this healthy owner
+        // an orphan and start a SECOND dispatch loop that then races the shared repo. The heartbeat fences
+        // THIS loop (via the per-run CTS) only if the lease is lost to a peer. Disposed on every
+        // exit (return / break / exception) by `await using`.
+        _runCts.TryGetValue(context.CoordinatorRunId, out var perRunCts);
+        await using var heartbeat = StartLeaseHeartbeat(workPlanId.Value, context.CoordinatorRunId, perRunCts, ct);
+
         var snapshotSubtasks = await ReloadSubtasksAsync(workPlanId.Value, ct).ConfigureAwait(false);
         entry?.RecordNext(EventTypes.CoordinatorTopology, CoordinatorTopology.BuildSnapshot(
             context.CoordinatorRunId, workPlanId.Value, WorkPlanStatus.Dispatching, snapshotSubtasks, edges, seq.Current, _podRegistry, _k8sEnv?.PodName));
@@ -376,7 +444,137 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
                 context, workPlanId.Value, result, statusById, edges, seq, ct).ConfigureAwait(false);
         }
 
+        // Hand-off: stop the heartbeat BEFORE FinalizeDispatchAsync advances dispatching -> awaiting_assembly,
+        // so the ownership-keyed renew never races the status transition. Disposal below is idempotent.
+        await heartbeat.StopAsync().ConfigureAwait(false);
         await FinalizeDispatchAsync(context, workPlanId.Value, statusById, edges, seq, ct).ConfigureAwait(false);
+    }
+
+    private LeaseHeartbeat StartLeaseHeartbeat(
+        int workPlanId, string coordinatorRunId, CancellationTokenSource? perRunCts, CancellationToken ct)
+    {
+        var stop = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        var task = RunLeaseHeartbeatAsync(workPlanId, coordinatorRunId, perRunCts, stop.Token);
+        return new LeaseHeartbeat(stop, task);
+    }
+
+    /// <summary>
+    /// Renews the coordinator lease every <see cref="_leaseHeartbeatInterval"/> while a dispatch loop is
+    /// alive. Uses its OWN DI scope + <see cref="MemoryDbContext"/> per tick (NEVER the dispatch loop's
+    /// DbContext, which is not thread-safe). Stops on <paramref name="stopToken"/> (normal hand-off /
+    /// shutdown), or when a tick reports the lease is no longer renewable (fenced to a peer, or benignly
+    /// released because the loop advanced the plan past dispatching). A transient per-tick DB/SMB error
+    /// is NON-fatal: it is logged and the loop keeps heartbeating on the next interval, so a single blip
+    /// never permanently stops renewals (which would let the lease go stale and a peer steal it).
+    /// </summary>
+    internal async Task RunLeaseHeartbeatAsync(
+        int workPlanId, string coordinatorRunId, CancellationTokenSource? perRunCts, CancellationToken stopToken)
+    {
+        try
+        {
+            using var timer = new PeriodicTimer(_leaseHeartbeatInterval);
+            while (await timer.WaitForNextTickAsync(stopToken).ConfigureAwait(false))
+            {
+                try
+                {
+                    var tick = await HeartbeatTickAsync(workPlanId, perRunCts, stopToken).ConfigureAwait(false);
+                    if (tick != LeaseHeartbeatTick.Renewed)
+                        return; // Fenced (peer took over) or Released (plan advanced / gone) — stop heartbeating.
+                }
+                catch (OperationCanceledException)
+                {
+                    throw; // Cancellation (app-stop or per-run token) is a clean stop, not a transient error.
+                }
+                catch (Exception ex)
+                {
+                    // Transient per-tick DB/SMB blip: log and keep heartbeating on the next interval. A
+                    // single failed tick must NOT stop renewals — that would defeat the lease/fencing net.
+                    _logger.LogWarning(ex,
+                        "Coordinator lease heartbeat tick for run {RunId} (plan {PlanId}) failed transiently; continuing",
+                        coordinatorRunId, workPlanId);
+                }
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // stopToken cancelled: normal teardown at hand-off or app shutdown.
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "Coordinator lease heartbeat for run {RunId} (plan {PlanId}) stopped on an unexpected error",
+                coordinatorRunId, workPlanId);
+        }
+    }
+
+    internal enum LeaseHeartbeatTick { Renewed, Fenced, Released }
+
+    /// <summary>
+    /// One heartbeat tick. Renews the lease with an OWNERSHIP-and-status keyed UPDATE
+    /// (<c>WHERE Id=@planId AND CoordinatorPodId=@myPodId AND Status='dispatching'</c>). If a row is
+    /// updated the lease is held (<see cref="LeaseHeartbeatTick.Renewed"/>). If zero rows are updated,
+    /// "lost" is decided by OWNERSHIP, NOT the row count (R1): re-read the row and FENCE (cancel
+    /// <paramref name="perRunCts"/>) only when <see cref="WorkPlan.CoordinatorPodId"/> now belongs to a
+    /// PEER (<see cref="LeaseHeartbeatTick.Fenced"/>). If it is STILL this pod (the loop itself advanced
+    /// dispatching -&gt; awaiting_assembly) or the row is gone, that is a BENIGN stop
+    /// (<see cref="LeaseHeartbeatTick.Released"/>) — never cancel, so a normal hand-off never self-fences.
+    /// </summary>
+    internal async Task<LeaseHeartbeatTick> HeartbeatTickAsync(
+        int workPlanId, CancellationTokenSource? perRunCts, CancellationToken ct)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var now = DateTimeOffset.UtcNow;
+
+        // Ownership + status keyed renew. No DateTimeOffset comparison is in the WHERE clause (only
+        // equality on Id/CoordinatorPodId/Status), so a single EF ExecuteUpdateAsync translates
+        // correctly on BOTH SQLite and Postgres — unlike TryClaimCoordinatorPodAsync, which needs the
+        // IsSqlite() raw-SQL branch purely for its `UpdatedAt < staleThreshold` comparison.
+        var renewed = await db.WorkPlans
+            .Where(w => w.Id == workPlanId
+                     && w.CoordinatorPodId == _myPodId
+                     && w.Status == WorkPlanStatus.Dispatching)
+            .ExecuteUpdateAsync(s => s.SetProperty(w => w.UpdatedAt, now), ct)
+            .ConfigureAwait(false);
+        if (renewed > 0)
+            return LeaseHeartbeatTick.Renewed;
+
+        var owner = await db.WorkPlans.AsNoTracking()
+            .Where(w => w.Id == workPlanId)
+            .Select(w => w.CoordinatorPodId)
+            .FirstOrDefaultAsync(ct)
+            .ConfigureAwait(false);
+
+        if (owner is not null && !string.Equals(owner, _myPodId, StringComparison.Ordinal))
+        {
+            _logger.LogWarning(
+                "Coordinator lease for plan {PlanId} lost to pod {Owner} (was {MyPod}); fencing dispatch loop",
+                workPlanId, owner, _myPodId);
+            perRunCts?.Cancel();
+            return LeaseHeartbeatTick.Fenced;
+        }
+
+        // Still owned by this pod (status advanced past dispatching) or the row is gone — benign stop.
+        return LeaseHeartbeatTick.Released;
+    }
+
+    /// <summary>Handle for a running lease heartbeat; disposal (or explicit stop) tears it down once.</summary>
+    private sealed class LeaseHeartbeat(CancellationTokenSource stop, Task task) : IAsyncDisposable
+    {
+        private int _stopped;
+
+        public async Task StopAsync()
+        {
+            if (Interlocked.Exchange(ref _stopped, 1) != 0)
+                return;
+            try { stop.Cancel(); }
+            catch (ObjectDisposedException) { }
+            try { await task.ConfigureAwait(false); }
+            catch { /* the heartbeat swallows its own faults; nothing to observe here */ }
+            stop.Dispose();
+        }
+
+        public async ValueTask DisposeAsync() => await StopAsync().ConfigureAwait(false);
     }
 
     private async Task<bool> IsCoordinatorDispatchStoppedAsync(string coordinatorRunId, CancellationToken ct)
@@ -874,15 +1072,34 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
 
         var integrationBranch = CoordinatorAssemblyService.IntegrationBranchName(context.CoordinatorRunId);
 
+        // Cross-process serialization (issue #218): the physical repo at /workspace/{projectId}/.git is
+        // shared by EVERY run in the project, so two pods (or two runs on one pod) building an integration
+        // branch race the same .git and hit LockedFileException / a null ref mid-swap. Take the per-project
+        // build lock (repo granularity, NOT per-run) around the build. Best-effort: if a peer build holds it
+        // past the timeout, skip this rebuild — the mandatory contains-check + repair in
+        // ResolveChildBaseBranchAsync re-runs it before any dependent dispatches from an incomplete base.
+        var lockKey = IntegrationBuildLock.ResolveProjectKey(context.ProjectId?.ToString(), context.RepositoryPath);
+        await using var projectLock = _integrationBuildLock is null
+            ? null
+            : await _integrationBuildLock.TryAcquireAsync(lockKey, _integrationBuildLockTimeout, ct).ConfigureAwait(false);
+        if (_integrationBuildLock is not null && projectLock is null)
+        {
+            _logger.LogWarning(
+                "Coordinator dispatch: skipping dependency-base rebuild for run {RunId}; could not acquire the project " +
+                "integration-build lock in time (a peer build holds it). The contains-check will repair before any dependent dispatches",
+                context.CoordinatorRunId);
+            return;
+        }
+
         // Replica/concurrency (BLOCKING #5): BuildIntegrationBranch deletes+recreates the integration
         // ref on every rebuild (WorktreeManager.BuildIntegrationBranch), so a concurrent or crashed
-        // rebuild could clobber/leave the ref incomplete. We deliberately DO NOT add cross-process
-        // locking here: the dispatch loop is single-writer per plan (StartDispatch's _active guard), and
-        // the AUTHORITATIVE guard against a clobbered/stale/incomplete integration branch is the
-        // mandatory contains-check + repair in ResolveChildBaseBranchAsync — a dependent never dispatches
-        // from an integration branch that is missing a required upstream head; it repairs (re-runs this
-        // rebuild) and re-verifies first. This rebuild is itself headless + idempotent (reset-to-origin
-        // then re-merge), so a re-run re-derives the same branch deterministically.
+        // rebuild could clobber/leave the ref incomplete. Cross-pod concurrency is now serialized by the
+        // per-project integration-build lock acquired above; the AUTHORITATIVE guard against a
+        // clobbered/stale/incomplete integration branch remains the mandatory contains-check + repair in
+        // ResolveChildBaseBranchAsync — a dependent never dispatches from an integration branch that is
+        // missing a required upstream head; it repairs (re-runs this rebuild) and re-verifies first. This
+        // rebuild is itself headless + idempotent (reset-to-origin then re-merge), so a re-run re-derives
+        // the same branch deterministically.
         //
         // Retry up to 3 times on lock contention: a stale .lock file from a crashed prior process
         // causes LibGit2Sharp.LockedFileException. Clean the stale lock and retry with backoff.

@@ -172,8 +172,12 @@ After confirmation, the coordinator decomposes the spec into a **work plan**: a 
 The `WorkPlan` row also carries **`CoordinatorPodId`**, the distributed lease owner for
 `dispatching`. When a pod starts or re-arms dispatch, it atomically stamps this field and refreshes
 `UpdatedAt`; other replicas skip the plan while that claim is fresh and only try to steal it after
-`Coordinator:PodLeaseStaleTtlSeconds` (default **60 s**). This prevents multiple replicas from
-re-arming the same dispatch loop at once.
+`Coordinator:PodLeaseStaleTtlSeconds` (default **120 s**). While a pod owns a dispatch loop it renews
+the lease every `Coordinator:PodLeaseHeartbeatSeconds` (default **30 s**) from an independent timer, so
+a long child turn cannot let the lease age into staleness and let a peer start a second loop. This
+prevents multiple replicas from re-arming the same dispatch loop at once. See
+[coordinator internals](../deep-dive/coordinator-internals.md) for the heartbeat, fencing, and the
+per-project integration-branch build lock.
 
 When no catalog/roster role adequately covers a subtask's function, the decomposition MAY mint a **bespoke role**: a descriptive id plus a short **inline charter** (2–4 sentences defining the agent's persona, expertise, and approach). Bespoke roles are a last resort — the decomposition prompt prefers exact catalog/roster ids and only sets a subtask's `charter` field when the role is bespoke. A subtask's inline charter is persisted on the subtask and flows to the dispatched child run's `AgentCharter`, overriding file-based charter resolution so the coordinator can stand up a domain-specific persona without a catalog role.
 

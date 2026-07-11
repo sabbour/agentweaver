@@ -619,8 +619,15 @@ public sealed class WorktreeManager
                 prettifyMessage: true);
         }
 
-        // Point the integration branch ref at the final assembled commit.
-        repo.Refs.UpdateTarget(repo.Refs[intBranch.CanonicalName], integrationCommit.Id);
+        // Point the integration branch ref at the final assembled commit. Under the shared-repo race
+        // (issue #218) a concurrent build can delete+recreate this ref between its creation above and
+        // here, so repo.Refs[intBranch.CanonicalName] may momentarily be null. Re-create the ref in that
+        // case instead of dereferencing null (which surfaced as an ArgumentNullException from UpdateTarget).
+        var intRef = repo.Refs[intBranch.CanonicalName];
+        if (intRef is null)
+            repo.Refs.Add(intBranch.CanonicalName, integrationCommit.Id, allowOverwrite: true);
+        else
+            repo.Refs.UpdateTarget(intRef, integrationCommit.Id);
 
         using var patch = repo.Diff.Compare<Patch>(origin.Tip.Tree, integrationCommit.Tree);
         return IntegrationBranchResult.Success(
