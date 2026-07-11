@@ -181,17 +181,77 @@ public sealed class CoordinatorLeaseHeartbeatTests : IAsyncDisposable
     }
 
     // -----------------------------------------------------------------------
+    // (d) A transient per-tick error does not stop the heartbeat: a later tick renews the lease.
+    // -----------------------------------------------------------------------
+
+    [Fact]
+    public async Task LeaseHeartbeat_TransientTickError_DoesNotStopHeartbeat_RenewsOnNextTick()
+    {
+        const string coord = "coord-hb-flaky";
+        var staleUpdatedAt = DateTimeOffset.UtcNow.AddMinutes(-5);
+        var planId = await SeedDispatchingPlanAsync(coord, OwnerPod, staleUpdatedAt);
+
+        // The first heartbeat tick fails (a transient scope/DB blip); every later tick succeeds.
+        var flaky = new FlakyScopeFactory(_scopeFactory, failFirstN: 1);
+        var sut = BuildDispatch(OwnerPod, flaky, heartbeatSeconds: 1);
+
+        using var stop = new CancellationTokenSource();
+        var task = sut.RunLeaseHeartbeatAsync(planId, coord, perRunCts: null, stop.Token);
+
+        // Wait until the lease is renewed. This can only happen if the loop survived the failing first tick.
+        var renewed = await WaitUntilAsync(
+            async () => (await GetPlanLeaseAsync(planId)).UpdatedAt > staleUpdatedAt,
+            timeout: TimeSpan.FromSeconds(8));
+
+        stop.Cancel();
+        await task;
+
+        renewed.Should().BeTrue("a transient failing tick must not stop the heartbeat; a later tick renews the lease");
+        flaky.Calls.Should().BeGreaterThan(1, "the first tick failed and at least one subsequent tick ran");
+        (await GetPlanLeaseAsync(planId)).PodId.Should().Be(OwnerPod, "ownership is unchanged by the transient blip");
+    }
+
+    // -----------------------------------------------------------------------
     // Harness
     // -----------------------------------------------------------------------
 
-    private CoordinatorDispatchService BuildDispatch(string podId)
+    private static async Task<bool> WaitUntilAsync(Func<Task<bool>> predicate, TimeSpan timeout)
     {
-        var config = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                ["App:PodId"] = podId,
-            })
-            .Build();
+        var deadline = DateTimeOffset.UtcNow + timeout;
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            if (await predicate())
+                return true;
+            await Task.Delay(100);
+        }
+        return await predicate();
+    }
+
+    // A scope factory that throws on its first N CreateScope calls, then delegates to the real one.
+    // Models a transient DB/SMB blip on a heartbeat tick without touching production code paths.
+    private sealed class FlakyScopeFactory(IServiceScopeFactory inner, int failFirstN) : IServiceScopeFactory
+    {
+        private int _calls;
+
+        public int Calls => Volatile.Read(ref _calls);
+
+        public IServiceScope CreateScope()
+        {
+            var n = Interlocked.Increment(ref _calls);
+            if (n <= failFirstN)
+                throw new InvalidOperationException("transient scope failure (test)");
+            return inner.CreateScope();
+        }
+    }
+
+    private CoordinatorDispatchService BuildDispatch(
+        string podId, IServiceScopeFactory? scopeFactory = null, int? heartbeatSeconds = null)
+    {
+        var settings = new Dictionary<string, string?> { ["App:PodId"] = podId };
+        if (heartbeatSeconds is { } hb)
+            settings["Coordinator:PodLeaseHeartbeatSeconds"] =
+                hb.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var config = new ConfigurationBuilder().AddInMemoryCollection(settings).Build();
 
         var orchestrator = new RunOrchestrator(
             _runStore, _streamStore,
@@ -200,7 +260,7 @@ public sealed class CoordinatorLeaseHeartbeatTests : IAsyncDisposable
 
         return new CoordinatorDispatchService(
             _runStore, _streamStore, orchestrator, null!, new CoordinatorSteeringQueue(_scopeFactory), _assembly,
-            _scopeFactory, new TestHostApplicationLifetime(),
+            scopeFactory ?? _scopeFactory, new TestHostApplicationLifetime(),
             NullLogger<CoordinatorDispatchService>.Instance,
             runOptions: null, autopilot: null, configuration: config);
     }

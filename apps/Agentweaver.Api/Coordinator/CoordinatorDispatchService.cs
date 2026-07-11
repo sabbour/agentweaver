@@ -463,9 +463,11 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
     /// alive. Uses its OWN DI scope + <see cref="MemoryDbContext"/> per tick (NEVER the dispatch loop's
     /// DbContext, which is not thread-safe). Stops on <paramref name="stopToken"/> (normal hand-off /
     /// shutdown), or when a tick reports the lease is no longer renewable (fenced to a peer, or benignly
-    /// released because the loop advanced the plan past dispatching).
+    /// released because the loop advanced the plan past dispatching). A transient per-tick DB/SMB error
+    /// is NON-fatal: it is logged and the loop keeps heartbeating on the next interval, so a single blip
+    /// never permanently stops renewals (which would let the lease go stale and a peer steal it).
     /// </summary>
-    private async Task RunLeaseHeartbeatAsync(
+    internal async Task RunLeaseHeartbeatAsync(
         int workPlanId, string coordinatorRunId, CancellationTokenSource? perRunCts, CancellationToken stopToken)
     {
         try
@@ -473,9 +475,24 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
             using var timer = new PeriodicTimer(_leaseHeartbeatInterval);
             while (await timer.WaitForNextTickAsync(stopToken).ConfigureAwait(false))
             {
-                var tick = await HeartbeatTickAsync(workPlanId, perRunCts, stopToken).ConfigureAwait(false);
-                if (tick != LeaseHeartbeatTick.Renewed)
-                    return; // Fenced (peer took over) or Released (plan advanced / gone) — stop heartbeating.
+                try
+                {
+                    var tick = await HeartbeatTickAsync(workPlanId, perRunCts, stopToken).ConfigureAwait(false);
+                    if (tick != LeaseHeartbeatTick.Renewed)
+                        return; // Fenced (peer took over) or Released (plan advanced / gone) — stop heartbeating.
+                }
+                catch (OperationCanceledException)
+                {
+                    throw; // Cancellation (app-stop or per-run token) is a clean stop, not a transient error.
+                }
+                catch (Exception ex)
+                {
+                    // Transient per-tick DB/SMB blip: log and keep heartbeating on the next interval. A
+                    // single failed tick must NOT stop renewals — that would defeat the lease/fencing net.
+                    _logger.LogWarning(ex,
+                        "Coordinator lease heartbeat tick for run {RunId} (plan {PlanId}) failed transiently; continuing",
+                        coordinatorRunId, workPlanId);
+                }
             }
         }
         catch (OperationCanceledException)
@@ -485,7 +502,7 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         catch (Exception ex)
         {
             _logger.LogWarning(ex,
-                "Coordinator lease heartbeat for run {RunId} (plan {PlanId}) failed; stopping heartbeat",
+                "Coordinator lease heartbeat for run {RunId} (plan {PlanId}) stopped on an unexpected error",
                 coordinatorRunId, workPlanId);
         }
     }
