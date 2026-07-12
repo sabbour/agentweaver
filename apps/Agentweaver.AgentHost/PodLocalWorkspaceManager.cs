@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using Agentweaver.AgentRuntime.Workflow;
 using Agentweaver.Domain;
 using Microsoft.Extensions.Options;
 
@@ -116,13 +117,16 @@ internal sealed class PodLocalWorkspaceManager
 
             var cacheRoot = ConfigurePackageCaches(workspacePath);
             var prepared = new PreparedWorkspace(
+                spec.RunId,
                 workspacePath,
                 cacheRoot,
                 spec.SourceRepositoryPath,
                 spec.SourceRef,
                 spec.BaseCommitSha,
                 spec.ExpectedTreeHash,
-                spec.Mode);
+                spec.Mode,
+                spec.CommitAuthorName,
+                spec.CommitAuthorEmail);
             _preparedWorkspace = prepared;
 
             _logger.LogInformation(
@@ -142,10 +146,10 @@ internal sealed class PodLocalWorkspaceManager
     }
 
     /// <summary>
-    /// Returns the immutable inputs needed by the future #253 finalizer. It intentionally performs
-    /// no commit or push itself; read-only assembly workspaces fail closed here.
+    /// Captures the final working tree through a platform-owned alternate index, creates one commit
+    /// parented directly to the immutable base, and publishes it to a unique temporary shared ref.
     /// </summary>
-    public Task<PreparedWriteback> PrepareWritebackAsync(CancellationToken ct = default)
+    public async Task<PreparedWriteback> PrepareWritebackAsync(CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();
         var workspace = _preparedWorkspace
@@ -167,12 +171,152 @@ internal sealed class PodLocalWorkspaceManager
                 "Write-back is only available for writable pod-local workspaces.");
         }
 
-        return Task.FromResult(new PreparedWriteback(
-            workspace.WorkspacePath,
-            workspace.SourceRepositoryPath,
-            workspace.SourceRef,
-            workspace.BaseCommitSha,
-            workspace.ExpectedTreeHash));
+        var runRoot = Directory.GetParent(workspace.WorkspacePath)?.FullName
+            ?? throw new AgentHostConfigurationException(
+                "workspace_path_invalid",
+                "The pod-local workspace path has no run root for its platform index.");
+        var indexPath = Path.Combine(runRoot, $".agentweaver-index-{Guid.NewGuid():N}");
+        var gitEnvironment = new Dictionary<string, string?>
+        {
+            ["GIT_INDEX_FILE"] = indexPath,
+        };
+
+        try
+        {
+            await RunGitWithEnvironmentAsync(
+                workspace.WorkspacePath,
+                gitEnvironment,
+                ct,
+                "read-tree",
+                workspace.BaseCommitSha).ConfigureAwait(false);
+            await RunGitWithEnvironmentAsync(
+                workspace.WorkspacePath,
+                gitEnvironment,
+                ct,
+                "add",
+                "-A",
+                "--",
+                ".").ConfigureAwait(false);
+
+            var initiallyChangedPaths = await GetChangedPathsAsync(
+                workspace.WorkspacePath,
+                workspace.BaseCommitSha,
+                gitEnvironment,
+                ct).ConfigureAwait(false);
+            var nestedRoots = FindNestedRepositoryRoots(
+                workspace.WorkspacePath,
+                initiallyChangedPaths);
+            foreach (var nestedRoot in nestedRoots)
+            {
+                await RunGitWithEnvironmentAsync(
+                    workspace.WorkspacePath,
+                    gitEnvironment,
+                    ct,
+                    "reset",
+                    workspace.BaseCommitSha,
+                    "--",
+                    nestedRoot).ConfigureAwait(false);
+            }
+
+            if (nestedRoots.Count > 0)
+            {
+                _logger.LogWarning(
+                    "Run {RunId}: skipped {Count} nested git repository root(s) during local write-back: {Roots}",
+                    workspace.RunId,
+                    nestedRoots.Count,
+                    string.Join(", ", nestedRoots));
+            }
+
+            var resultTree = await RunGitWithEnvironmentAsync(
+                workspace.WorkspacePath,
+                gitEnvironment,
+                ct,
+                "write-tree").ConfigureAwait(false);
+            var changedPaths = await GetChangedPathsAsync(
+                workspace.WorkspacePath,
+                workspace.BaseCommitSha,
+                gitEnvironment,
+                ct).ConfigureAwait(false);
+
+            if (string.Equals(
+                    resultTree,
+                    workspace.ExpectedTreeHash,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                return new PreparedWriteback(
+                    workspace.RunId,
+                    workspace.SourceRef,
+                    WritebackRef: null,
+                    workspace.BaseCommitSha,
+                    workspace.BaseCommitSha,
+                    workspace.ExpectedTreeHash,
+                    ChangedPathCount: 0);
+            }
+
+            var commitEnvironment = new Dictionary<string, string?>(gitEnvironment)
+            {
+                ["GIT_AUTHOR_NAME"] = workspace.CommitAuthorName,
+                ["GIT_AUTHOR_EMAIL"] = workspace.CommitAuthorEmail,
+                ["GIT_COMMITTER_NAME"] = workspace.CommitAuthorName,
+                ["GIT_COMMITTER_EMAIL"] = workspace.CommitAuthorEmail,
+            };
+            var resultCommit = await RunGitWithEnvironmentAsync(
+                workspace.WorkspacePath,
+                commitEnvironment,
+                ct,
+                "commit-tree",
+                resultTree,
+                "-p",
+                workspace.BaseCommitSha,
+                "-m",
+                $"Agentweaver run {workspace.RunId}").ConfigureAwait(false);
+            var writebackRef =
+                $"{PodLocalExecutionWorkspace.WritebackRefPrefix}" +
+                $"{PodLocalExecutionWorkspace.GetRunHash(workspace.RunId)}/{Guid.NewGuid():N}";
+
+            await RunGitAsync(
+                workspace.WorkspacePath,
+                ct,
+                "push",
+                "--no-force",
+                "origin",
+                $"{resultCommit}:{writebackRef}").ConfigureAwait(false);
+            await RunGitAsync(
+                workspace.WorkspacePath,
+                ct,
+                "checkout",
+                "--detach",
+                "--force",
+                resultCommit).ConfigureAwait(false);
+            _preparedWorkspace = workspace with
+            {
+                BaseCommitSha = resultCommit,
+                ExpectedTreeHash = resultTree,
+            };
+
+            _logger.LogInformation(
+                "Prepared pod-local write-back for run {RunId}: ref={WritebackRef} base={BaseCommit} result={ResultCommit} tree={ResultTree} changedPaths={ChangedPathCount}",
+                workspace.RunId,
+                writebackRef,
+                workspace.BaseCommitSha,
+                resultCommit,
+                resultTree,
+                changedPaths.Count);
+
+            return new PreparedWriteback(
+                workspace.RunId,
+                workspace.SourceRef,
+                writebackRef,
+                workspace.BaseCommitSha,
+                resultCommit,
+                resultTree,
+                changedPaths.Count);
+        }
+        finally
+        {
+            TryDeleteFile(indexPath);
+            TryDeleteFile(indexPath + ".lock");
+        }
     }
 
     public Task CleanupAsync(CancellationToken ct = default)
@@ -200,11 +344,30 @@ internal sealed class PodLocalWorkspaceManager
         }
 
         if (configuration.Purpose == AgentHostPurpose.ImplementationTurn
-            || configuration.WorkspaceMode == ExecutionWorkspaceMode.LocalWritable)
+            && configuration.WorkspaceMode != ExecutionWorkspaceMode.LocalWritable)
         {
             throw new AgentHostConfigurationException(
-                "implementation_turn_not_enabled",
-                "ImplementationTurn and LocalWritable are reserved for issue #253 and are not wired yet.");
+                "workspace_mode_invalid",
+                "ImplementationTurn requires workspaceMode LocalWritable.");
+        }
+
+        if (configuration.WorkspaceMode == ExecutionWorkspaceMode.LocalWritable
+            && configuration.Purpose != AgentHostPurpose.ImplementationTurn)
+        {
+            throw new AgentHostConfigurationException(
+                "workspace_mode_invalid",
+                "LocalWritable is only valid for ImplementationTurn.");
+        }
+
+        if (configuration.Purpose == AgentHostPurpose.ImplementationTurn
+            && !string.Equals(
+                configuration.SourceRef,
+                $"agentweaver/{configuration.RunId}",
+                StringComparison.Ordinal))
+        {
+            throw new AgentHostConfigurationException(
+                "workspace_source_ref_invalid",
+                "ImplementationTurn must fetch the authoritative agentweaver/<childRunId> branch.");
         }
 
         if (configuration.WorkspaceMode == ExecutionWorkspaceMode.Shared)
@@ -219,6 +382,15 @@ internal sealed class PodLocalWorkspaceManager
             throw new AgentHostConfigurationException(
                 "workspace_configuration_invalid",
                 "Pod-local execution requires sourceRepositoryPath, sourceRef, baseCommitSha, expectedTreeHash, and scratchRoot.");
+        }
+
+        if (configuration.WorkspaceMode == ExecutionWorkspaceMode.LocalWritable
+            && (string.IsNullOrWhiteSpace(configuration.CommitAuthorName)
+                || string.IsNullOrWhiteSpace(configuration.CommitAuthorEmail)))
+        {
+            throw new AgentHostConfigurationException(
+                "workspace_commit_identity_invalid",
+                "Writable pod-local execution requires the platform commit author name and email.");
         }
     }
 
@@ -235,6 +407,15 @@ internal sealed class PodLocalWorkspaceManager
             throw new AgentHostConfigurationException(
                 "workspace_configuration_invalid",
                 "A valid local workspace mode, run, source ref, base commit, tree hash, and scratch root are required.");
+        }
+
+        if (spec.Mode == ExecutionWorkspaceMode.LocalWritable
+            && (string.IsNullOrWhiteSpace(spec.CommitAuthorName)
+                || string.IsNullOrWhiteSpace(spec.CommitAuthorEmail)))
+        {
+            throw new AgentHostConfigurationException(
+                "workspace_commit_identity_invalid",
+                "Writable pod-local execution requires the platform commit author name and email.");
         }
     }
 
@@ -264,6 +445,17 @@ internal sealed class PodLocalWorkspaceManager
     private static string ConfigurePackageCaches(string workspacePath)
     {
         const string cacheDirectory = ".agentweaver-cache";
+        var excludePath = Path.Combine(workspacePath, ".git", "info", "exclude");
+        Directory.CreateDirectory(Path.GetDirectoryName(excludePath)!);
+        var excludeEntry = $"/{cacheDirectory}/";
+        var existingExcludes = File.Exists(excludePath) ? File.ReadAllText(excludePath) : string.Empty;
+        if (!existingExcludes
+            .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
+            .Contains(excludeEntry, StringComparer.Ordinal))
+        {
+            File.AppendAllText(excludePath, excludeEntry + Environment.NewLine);
+        }
+
         var cacheRoot = Path.Combine(workspacePath, cacheDirectory);
         var npm = Path.Combine(cacheRoot, "npm");
         var yarn = Path.Combine(cacheRoot, "yarn");
@@ -286,6 +478,17 @@ internal sealed class PodLocalWorkspaceManager
     private static async Task<string> RunGitAsync(
         string workingDirectory,
         CancellationToken ct,
+        params string[] arguments) =>
+        await RunGitWithEnvironmentAsync(
+            workingDirectory,
+            environment: null,
+            ct,
+            arguments).ConfigureAwait(false);
+
+    private static async Task<string> RunGitWithEnvironmentAsync(
+        string workingDirectory,
+        IReadOnlyDictionary<string, string?>? environment,
+        CancellationToken ct,
         params string[] arguments)
     {
         using var process = new Process
@@ -301,6 +504,11 @@ internal sealed class PodLocalWorkspaceManager
         };
         foreach (var argument in arguments)
             process.StartInfo.ArgumentList.Add(argument);
+        if (environment is not null)
+        {
+            foreach (var (name, value) in environment)
+                process.StartInfo.Environment[name] = value;
+        }
 
         if (!process.Start())
         {
@@ -334,6 +542,61 @@ internal sealed class PodLocalWorkspaceManager
         return stdout;
     }
 
+    private static async Task<IReadOnlyList<string>> GetChangedPathsAsync(
+        string workspacePath,
+        string baseCommitSha,
+        IReadOnlyDictionary<string, string?> environment,
+        CancellationToken ct)
+    {
+        var output = await RunGitWithEnvironmentAsync(
+            workspacePath,
+            environment,
+            ct,
+            "diff",
+            "--cached",
+            "--name-only",
+            "-z",
+            baseCommitSha).ConfigureAwait(false);
+        return output
+            .Split('\0', StringSplitOptions.RemoveEmptyEntries)
+            .Select(path => path.Replace('\\', '/'))
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+    }
+
+    private static IReadOnlyList<string> FindNestedRepositoryRoots(
+        string workspacePath,
+        IReadOnlyList<string> changedPaths)
+    {
+        var roots = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var inspected = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var path in changedPaths)
+        {
+            var segments = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
+            var prefix = string.Empty;
+            foreach (var segment in segments)
+            {
+                prefix = prefix.Length == 0 ? segment : $"{prefix}/{segment}";
+                if (roots.Contains(prefix))
+                    break;
+                if (!inspected.Add(prefix))
+                    continue;
+
+                var absolute = Path.Combine(
+                    workspacePath,
+                    prefix.Replace('/', Path.DirectorySeparatorChar));
+                if (Directory.Exists(Path.Combine(absolute, ".git"))
+                    || File.Exists(Path.Combine(absolute, ".git")))
+                {
+                    roots.Add(prefix);
+                    break;
+                }
+            }
+        }
+
+        return roots.OrderBy(root => root, StringComparer.Ordinal).ToArray();
+    }
+
     private static bool IsPathUnder(string path, string root)
     {
         var fullPath = Path.GetFullPath(path);
@@ -363,6 +626,19 @@ internal sealed class PodLocalWorkspaceManager
             // Claim deletion removes the emptyDir; cleanup here is best-effort only.
         }
     }
+
+    private static void TryDeleteFile(string path)
+    {
+        try
+        {
+            if (File.Exists(path))
+                File.Delete(path);
+        }
+        catch
+        {
+            // The execution-scratch claim is deleted with the pod; cleanup is best-effort.
+        }
+    }
 }
 
 internal sealed record PodLocalWorkspaceSpec(
@@ -372,23 +648,21 @@ internal sealed record PodLocalWorkspaceSpec(
     string BaseCommitSha,
     string ExpectedTreeHash,
     ExecutionWorkspaceMode Mode,
-    string ScratchRoot);
+    string ScratchRoot,
+    string? CommitAuthorName = null,
+    string? CommitAuthorEmail = null);
 
 internal sealed record PreparedWorkspace(
+    string RunId,
     string WorkspacePath,
     string CacheRoot,
     string SourceRepositoryPath,
     string SourceRef,
     string BaseCommitSha,
     string ExpectedTreeHash,
-    ExecutionWorkspaceMode Mode);
-
-internal sealed record PreparedWriteback(
-    string WorkspacePath,
-    string SourceRepositoryPath,
-    string SourceRef,
-    string BaseCommitSha,
-    string ExpectedTreeHash);
+    ExecutionWorkspaceMode Mode,
+    string? CommitAuthorName,
+    string? CommitAuthorEmail);
 
 /// <summary>Typed one-time AgentHost configuration failure returned by <c>POST /configure</c>.</summary>
 internal sealed class AgentHostConfigurationException : Exception

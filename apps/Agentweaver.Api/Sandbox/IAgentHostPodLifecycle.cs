@@ -72,4 +72,6 @@ public sealed record AgentHostLaunchContext(
     string? ExpectedTreeHash = null,
     Agentweaver.Domain.ExecutionWorkspaceMode WorkspaceMode = Agentweaver.Domain.ExecutionWorkspaceMode.Shared,
     Agentweaver.Domain.AgentHostPurpose Purpose = Agentweaver.Domain.AgentHostPurpose.Default,
-    string? ScratchRoot = null);
+    string? ScratchRoot = null,
+    string? CommitAuthorName = null,
+    string? CommitAuthorEmail = null);

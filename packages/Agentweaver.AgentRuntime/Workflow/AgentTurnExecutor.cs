@@ -161,6 +161,17 @@ public sealed class AgentTurnExecutor : Executor<AgentTurnInput, AgentTurnOutput
         var commitDiagnostics = new List<string>();
         try
         {
+            if (_agent is IPreparedWritebackSource writebackSource
+                && writebackSource.TakePreparedWriteback() is { } writeback)
+            {
+                _worktreeOps.ApplyPreparedWriteback(
+                    input.RepositoryPath,
+                    input.WorktreePath,
+                    input.WorktreeBranch,
+                    input.RunId,
+                    writeback);
+            }
+
             treeHash = await CommitChangesWithRetryAsync(
                 input.WorktreePath, input.RunId, commitDiagnostics, ct).ConfigureAwait(false);
         }
@@ -177,11 +188,14 @@ public sealed class AgentTurnExecutor : Executor<AgentTurnInput, AgentTurnOutput
             // instead of a bare rethrow that only the watcher stream-abort backstop could catch. We
             // still NEVER fabricate a no-change assemble_ready — the failure is VISIBLE, with evidence.
             var evidence = BuildCommitFailureEvidence(ex, commitDiagnostics);
+            var failureReason = ex is WorktreeWritebackException writebackException
+                ? writebackException.Reason
+                : "commit_failed_persistent";
             if (_emitTerminalFailureOutput)
             {
                 _logger.LogError(ex,
-                    "Post-turn CommitChanges failed for child run {RunId} after bounded clear+retry; emitting graph-native child-turn-failed terminal (evidence: {Evidence})",
-                    input.RunId, evidence);
+                    "Post-turn publication failed for child run {RunId}; emitting graph-native child-turn-failed terminal reason={Reason} (evidence: {Evidence})",
+                    input.RunId, failureReason, evidence);
                 return new AgentTurnOutput(
                     input.RunId,
                     TreeHash: string.Empty,
@@ -196,7 +210,7 @@ public sealed class AgentTurnExecutor : Executor<AgentTurnInput, AgentTurnOutput
                     SubmittingUser: input.SubmittingUser,
                     ProjectId: input.ProjectId,
                     AgentName: input.AgentName,
-                    TerminalFailureReason: "commit_failed_persistent",
+                    TerminalFailureReason: failureReason,
                     TerminalFailureEvidence: evidence);
             }
 

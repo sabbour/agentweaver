@@ -66,6 +66,8 @@ internal sealed class A2ATurnBridgeAgent : DelegatingAIAgent
     public const string AgentName = "agentweaver-pod";
 
     private readonly IPodTurnRunner _runner;
+    private readonly PodLocalWorkspaceManager? _workspaceManager;
+    private readonly AgentHostRuntimeState? _runtimeState;
     private readonly ILogger<A2ATurnBridgeAgent> _logger;
 
     /// <summary>
@@ -78,16 +80,38 @@ internal sealed class A2ATurnBridgeAgent : DelegatingAIAgent
 
     /// <summary>Production constructor: drives the pod's singleton <see cref="CopilotAIAgent"/>.</summary>
     public A2ATurnBridgeAgent(CopilotAIAgent inner, ILogger<A2ATurnBridgeAgent> logger)
-        : this(inner, new CopilotPodTurnRunner(inner), logger)
+        : this(inner, new CopilotPodTurnRunner(inner), workspaceManager: null, runtimeState: null, logger)
+    {
+    }
+
+    /// <summary>Production constructor with writable-workspace finalization.</summary>
+    public A2ATurnBridgeAgent(
+        CopilotAIAgent inner,
+        PodLocalWorkspaceManager workspaceManager,
+        AgentHostRuntimeState runtimeState,
+        ILogger<A2ATurnBridgeAgent> logger)
+        : this(inner, new CopilotPodTurnRunner(inner), workspaceManager, runtimeState, logger)
     {
     }
 
     /// <summary>Test seam: the <paramref name="inner"/> backs MAF session plumbing; the
     /// <paramref name="runner"/> executes the turn.</summary>
     internal A2ATurnBridgeAgent(AIAgent inner, IPodTurnRunner runner, ILogger<A2ATurnBridgeAgent> logger)
+        : this(inner, runner, workspaceManager: null, runtimeState: null, logger)
+    {
+    }
+
+    internal A2ATurnBridgeAgent(
+        AIAgent inner,
+        IPodTurnRunner runner,
+        PodLocalWorkspaceManager? workspaceManager,
+        AgentHostRuntimeState? runtimeState,
+        ILogger<A2ATurnBridgeAgent> logger)
         : base(inner)
     {
         _runner = runner ?? throw new ArgumentNullException(nameof(runner));
+        _workspaceManager = workspaceManager;
+        _runtimeState = runtimeState;
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -170,6 +194,18 @@ internal sealed class A2ATurnBridgeAgent : DelegatingAIAgent
             if (!string.IsNullOrEmpty(responseText))
             {
                 yield return new AgentResponseUpdate(ChatRole.Assistant, responseText);
+            }
+
+            if (_runtimeState?.WorkspaceMode == ExecutionWorkspaceMode.LocalWritable)
+            {
+                var writeback = await (_workspaceManager
+                    ?? throw new InvalidOperationException(
+                        "A writable AgentHost turn requires PodLocalWorkspaceManager."))
+                    .PrepareWritebackAsync(cancellationToken)
+                    .ConfigureAwait(false);
+                yield return new AgentResponseUpdate(
+                    ChatRole.Assistant,
+                    new List<AIContent> { PreparedWritebackDataPartCodec.Encode(writeback) });
             }
         }
         finally

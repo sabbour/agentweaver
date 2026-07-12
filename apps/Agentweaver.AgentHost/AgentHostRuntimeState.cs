@@ -40,6 +40,8 @@ internal sealed class AgentHostRuntimeState
     public string? BaseCommitSha { get; private set; }
     public string? ExpectedTreeHash { get; private set; }
     public string? ScratchRoot { get; private set; }
+    public string? CommitAuthorName { get; private set; }
+    public string? CommitAuthorEmail { get; private set; }
 
     /// <summary>
     /// Effective repository/tool root after workspace preparation. For shared execution this is the
@@ -90,6 +92,8 @@ internal sealed class AgentHostRuntimeState
         BaseCommitSha = null;
         ExpectedTreeHash = null;
         ScratchRoot = null;
+        CommitAuthorName = null;
+        CommitAuthorEmail = null;
         EffectiveWorkingDirectory = options.WorkingDirectory;
     }
 
@@ -131,6 +135,8 @@ internal sealed class AgentHostRuntimeState
         BaseCommitSha = configuration.BaseCommitSha;
         ExpectedTreeHash = configuration.ExpectedTreeHash;
         ScratchRoot = configuration.ScratchRoot;
+        CommitAuthorName = configuration.CommitAuthorName;
+        CommitAuthorEmail = configuration.CommitAuthorEmail;
         EffectiveWorkingDirectory = configuration.SharedWorkingDirectory;
         return true;
     }
@@ -154,4 +160,6 @@ internal sealed record AgentHostRunConfiguration(
     string? BaseCommitSha = null,
     string? ExpectedTreeHash = null,
     ExecutionWorkspaceMode WorkspaceMode = ExecutionWorkspaceMode.Shared,
-    string? ScratchRoot = null);
+    string? ScratchRoot = null,
+    string? CommitAuthorName = null,
+    string? CommitAuthorEmail = null);

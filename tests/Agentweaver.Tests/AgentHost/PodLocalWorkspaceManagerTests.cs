@@ -86,7 +86,7 @@ public sealed class PodLocalWorkspaceManagerTests : IDisposable
     }
 
     [Fact]
-    public void ValidateConfiguration_leaves_implementation_turn_defined_but_unwired()
+    public void ValidateConfiguration_accepts_implementation_turn_on_child_branch()
     {
         var configuration = Configuration(
             sharedWorkingDirectory: "/workspace/child",
@@ -97,8 +97,7 @@ public sealed class PodLocalWorkspaceManagerTests : IDisposable
 
         var act = () => PodLocalWorkspaceManager.ValidateConfiguration(configuration);
 
-        act.Should().Throw<AgentHostConfigurationException>()
-            .Which.Reason.Should().Be("implementation_turn_not_enabled");
+        act.Should().NotThrow();
     }
 
     [Fact]
@@ -194,7 +193,7 @@ public sealed class PodLocalWorkspaceManagerTests : IDisposable
     }
 
     [Fact]
-    public async Task PrepareWritebackAsync_exposes_writable_finalization_seam_without_writing_back()
+    public async Task PrepareWritebackAsync_returns_no_change_descriptor_when_workspace_is_unchanged()
     {
         var repository = CreateRepository();
         var commitSha = Git(repository, "rev-parse", "integration");
@@ -208,6 +207,9 @@ public sealed class PodLocalWorkspaceManagerTests : IDisposable
 
         writeback.SourceRef.Should().Be("integration");
         writeback.BaseCommitSha.Should().Be(commitSha);
+        writeback.ResultCommitSha.Should().Be(commitSha);
+        writeback.WritebackRef.Should().BeNull();
+        writeback.ChangedPathCount.Should().Be(0);
         await manager.CleanupAsync();
     }
 
@@ -232,7 +234,9 @@ public sealed class PodLocalWorkspaceManagerTests : IDisposable
             baseCommitSha,
             expectedTreeHash,
             mode,
-            Path.Combine(_root, "scratch"));
+            Path.Combine(_root, "scratch"),
+            CommitAuthorName: "Agentweaver Tests",
+            CommitAuthorEmail: "tests@example.invalid");
 
     private static AgentHostRunConfiguration Configuration(
         string? sharedWorkingDirectory,
@@ -247,11 +251,15 @@ public sealed class PodLocalWorkspaceManagerTests : IDisposable
             SharedWorkingDirectory: sharedWorkingDirectory,
             Purpose: AgentHostPurpose.AssemblyBuildTest,
             SourceRepositoryPath: "/workspace/repository",
-            SourceRef: "integration",
+            SourceRef: workspaceMode == ExecutionWorkspaceMode.LocalWritable
+                ? "agentweaver/workspace-run"
+                : "integration",
             BaseCommitSha: new string('1', 40),
             ExpectedTreeHash: new string('2', 40),
             WorkspaceMode: workspaceMode,
-            ScratchRoot: "/local-workspace");
+            ScratchRoot: "/local-workspace",
+            CommitAuthorName: "Agentweaver Tests",
+            CommitAuthorEmail: "tests@example.invalid");
 
     private string CreateRepository()
     {

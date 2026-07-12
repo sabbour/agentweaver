@@ -6,6 +6,15 @@ namespace Agentweaver.AgentRuntime.Workflow;
 /// </summary>
 public interface IWorktreeOperations
 {
+    void ApplyPreparedWriteback(
+        string repositoryPath,
+        string worktreePath,
+        string worktreeBranch,
+        string runId,
+        PreparedWriteback writeback) =>
+        throw new WorktreeWritebackException(
+            "writeback_not_supported",
+            "This worktree provider does not support pod-local write-back.");
     string CommitChanges(string worktreePath, string runId);
     string GetDiff(string repositoryPath, string originatingBranch, string worktreeBranch);
     int GetStepCount(string runId);
@@ -26,6 +35,15 @@ public interface IWorktreeOperations
     IndexLockClearResult TryClearStaleIndexLock(string worktreePath) =>
         new(LockPresent: false, Cleared: false, LockAgeSeconds: null, LiveGitProcessDetected: false,
             LockPath: null, Detail: "no-op");
+}
+
+/// <summary>Typed failure while validating or applying a pod-prepared write-back commit.</summary>
+public sealed class WorktreeWritebackException : Exception
+{
+    public WorktreeWritebackException(string reason, string message, Exception? innerException = null)
+        : base(message, innerException) => Reason = reason;
+
+    public string Reason { get; }
 }
 
 /// <summary>Diagnostics from <see cref="IWorktreeOperations.TryClearStaleIndexLock"/>.</summary>

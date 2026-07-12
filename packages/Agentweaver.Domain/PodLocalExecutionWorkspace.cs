@@ -37,6 +37,7 @@ public enum ExecutionWorkspaceMode
 public static partial class PodLocalExecutionWorkspace
 {
     public const string DefaultScratchRoot = "/local-workspace";
+    public const string WritebackRefPrefix = "refs/agentweaver/writeback/";
 
     public static string GetRunHash(string runId)
     {

@@ -39,7 +39,7 @@ namespace Agentweaver.AgentRuntime.Workflow;
 /// reassigns monotonic sequence numbers in arrival order, preserving SSE ordering.
 /// </para>
 /// </summary>
-public sealed class RemoteAgentProxy : IWorkflowTurnAgent
+public sealed class RemoteAgentProxy : IWorkflowTurnAgent, IPreparedWritebackSource
 {
     private const string A2AAgentId = "agentweaver-worker-proxy";
     private const string A2AAgentName = "Agentweaver Worker Agent Proxy";
@@ -63,6 +63,7 @@ public sealed class RemoteAgentProxy : IWorkflowTurnAgent
     private string? _apiBaseUrl;
     private string? _apiKey;
     private string? _userId;
+    private PreparedWriteback? _preparedWriteback;
 
     // Created in SetupAsync, used in RunTurnAsync, disposed in DisposeAsync.
     private A2AAgent? _a2aAgent;
@@ -108,6 +109,7 @@ public sealed class RemoteAgentProxy : IWorkflowTurnAgent
         _apiBaseUrl = apiBaseUrl;
         _apiKey = apiKey;
         _userId = userId;
+        _preparedWriteback = null;
 
         // Resolve the per-run pod's A2A base endpoint (e.g. https://10.0.0.5:8080/a2a/agent).
         // Supplied by ISandboxAgentEndpointResolver using the bound SandboxClaim pod name/IP.
@@ -203,6 +205,7 @@ public sealed class RemoteAgentProxy : IWorkflowTurnAgent
         //   - DataContent (RunEventDataPartCodec.MediaType): RunEvent side-channel events
         //     forwarded to _streamWriter → RecordingChannelWriter → RunStreamStore → SSE
         var textAccumulator = new StringBuilder();
+        _preparedWriteback = null;
 
         _logger.LogDebug(
             "RemoteAgentProxy: RunTurnAsync starting — run={RunId}, isRevision={IsRevision}",
@@ -221,14 +224,20 @@ public sealed class RemoteAgentProxy : IWorkflowTurnAgent
                     {
                         textAccumulator.Append(textContent.Text);
                     }
-                    else if (content is DataContent dataContent &&
-                             _streamWriter is not null)
+                    else if (content is DataContent dataContent)
                     {
+                        var writeback = PreparedWritebackDataPartCodec.TryDecode(dataContent);
+                        if (writeback is not null)
+                        {
+                            _preparedWriteback = writeback;
+                            continue;
+                        }
+
                         // Decode RunEvent DataPart and forward to the worker's stream.
                         // Sequence is reassigned by RecordingChannelWriter, preserving total
                         // monotonic ordering on the worker side (§4.4).
                         var runEvent = RunEventDataPartCodec.TryDecodeRunEvent(dataContent);
-                        if (runEvent is not null)
+                        if (runEvent is not null && _streamWriter is not null)
                         {
                             await _streamWriter.WriteAsync(runEvent, ct).ConfigureAwait(false);
                         }
@@ -255,6 +264,13 @@ public sealed class RemoteAgentProxy : IWorkflowTurnAgent
         return responseText;
     }
 
+    public PreparedWriteback? TakePreparedWriteback()
+    {
+        var writeback = _preparedWriteback;
+        _preparedWriteback = null;
+        return writeback;
+    }
+
     /// <inheritdoc />
     public ValueTask DisposeAsync()
     {
@@ -263,6 +279,7 @@ public sealed class RemoteAgentProxy : IWorkflowTurnAgent
         _httpClient = null;
         _a2aAgent = null;
         _session = null;
+        _preparedWriteback = null;
         return ValueTask.CompletedTask;
     }
 }

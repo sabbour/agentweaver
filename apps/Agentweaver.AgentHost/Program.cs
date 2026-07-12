@@ -157,6 +157,8 @@ var agentHostedBuilder = builder.AddAIAgent(
     A2ATurnBridgeAgent.AgentName,
     (sp, _) => new A2ATurnBridgeAgent(
         sp.GetRequiredService<CopilotAIAgent>(),
+        sp.GetRequiredService<PodLocalWorkspaceManager>(),
+        sp.GetRequiredService<AgentHostRuntimeState>(),
         sp.GetRequiredService<ILogger<A2ATurnBridgeAgent>>()),
     Microsoft.Extensions.DependencyInjection.ServiceLifetime.Singleton);
 
@@ -526,6 +528,12 @@ internal sealed record ConfigureRequest
     /// <summary>Root of the execution-scratch emptyDir where the pod creates local workspaces.</summary>
     public string? ScratchRoot { get; init; }
 
+    /// <summary>Platform-owned identity used for the generated implementation commit.</summary>
+    public string? CommitAuthorName { get; init; }
+
+    /// <summary>Platform-owned email used for the generated implementation commit.</summary>
+    public string? CommitAuthorEmail { get; init; }
+
     internal AgentHostRunConfiguration ToRunConfiguration() => new(
         RunId ?? string.Empty,
         UserId ?? string.Empty,
@@ -540,7 +548,9 @@ internal sealed record ConfigureRequest
         BaseCommitSha,
         ExpectedTreeHash,
         WorkspaceMode,
-        ScratchRoot);
+        ScratchRoot,
+        CommitAuthorName,
+        CommitAuthorEmail);
 }
 
 internal sealed record PreviewProcessStartRequest

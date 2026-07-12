@@ -76,6 +76,9 @@ public sealed class WorktreeManager
 
     public static string BranchNameFor(RunId runId) => $"agentweaver/{runId}";
 
+    public string CommitAuthorName => _signature.Name;
+    public string CommitAuthorEmail => _signature.Email;
+
     /// <summary>
     /// Idempotent worktree provisioner. Returns immediately if the physical directory already
     /// exists (normal first-run case). When the directory is missing — e.g. after a pod restart
@@ -436,6 +439,15 @@ public sealed class WorktreeManager
         return repo.Branches[branchName]?.Tip?.Sha;
     }
 
+    public string? GetBranchTipTreeSha(string repositoryPath, string branchName)
+    {
+        if (string.IsNullOrEmpty(branchName) || !Repository.IsValid(repositoryPath))
+            return null;
+
+        using var repo = new Repository(repositoryPath);
+        return repo.Branches[branchName]?.Tip?.Tree.Sha;
+    }
+
     /// <summary>
     /// Ancestor / containment check used to VERIFY that an integration branch actually incorporates a
     /// required dependency's HEAD before a dependent child dispatches from it (issue #197, BLOCKING #3).
@@ -464,6 +476,170 @@ public sealed class WorktreeManager
 
         var mergeBase = repo.ObjectDatabase.FindMergeBase(branchTip, candidate);
         return mergeBase is not null && string.Equals(mergeBase.Sha, candidate.Sha, StringComparison.Ordinal);
+    }
+
+    public void ApplyPreparedWriteback(
+        string repositoryPath,
+        string worktreePath,
+        string worktreeBranch,
+        RunId runId,
+        PreparedWriteback writeback)
+    {
+        ArgumentNullException.ThrowIfNull(writeback);
+
+        if (!string.Equals(writeback.RunId, runId.ToString(), StringComparison.Ordinal)
+            || !string.Equals(writeback.SourceRef, worktreeBranch, StringComparison.Ordinal)
+            || !PodLocalExecutionWorkspace.IsGitObjectId(writeback.BaseCommitSha)
+            || !PodLocalExecutionWorkspace.IsGitObjectId(writeback.ResultCommitSha)
+            || !PodLocalExecutionWorkspace.IsGitObjectId(writeback.ResultTreeSha)
+            || writeback.ChangedPathCount < 0)
+        {
+            throw new WorktreeWritebackException(
+                "writeback_descriptor_invalid",
+                "The prepared write-back descriptor does not match the target run and branch.");
+        }
+
+        var alreadyApplied = false;
+        using (var worktree = new Repository(worktreePath))
+        {
+            if (worktree.Info.IsHeadDetached
+                || !string.Equals(worktree.Head.FriendlyName, worktreeBranch, StringComparison.Ordinal))
+            {
+                throw new WorktreeWritebackException(
+                    "writeback_branch_mismatch",
+                    $"The authoritative worktree is not checked out on '{worktreeBranch}'.");
+            }
+
+            var dirty = worktree.RetrieveStatus(new StatusOptions
+                {
+                    IncludeUntracked = true,
+                    IncludeIgnored = false,
+                    RecurseUntrackedDirs = true,
+                    RecurseIgnoredDirs = false,
+                })
+                .Any(entry => entry.State != 0 && (entry.State & FileStatus.Ignored) == 0);
+            if (dirty)
+            {
+                throw new WorktreeWritebackException(
+                    "writeback_worktree_dirty",
+                    "The authoritative worktree contains nonignored changes; write-back was refused.");
+            }
+
+            var currentHead = worktree.Head.Tip?.Sha;
+            if (string.Equals(currentHead, writeback.ResultCommitSha, StringComparison.OrdinalIgnoreCase))
+            {
+                if (!string.Equals(
+                        worktree.Head.Tip?.Tree.Sha,
+                        writeback.ResultTreeSha,
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new WorktreeWritebackException(
+                        "writeback_result_tree_mismatch",
+                        "The already-applied write-back commit has an unexpected tree.");
+                }
+
+                alreadyApplied = true;
+            }
+            else if (!string.Equals(currentHead, writeback.BaseCommitSha, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new WorktreeWritebackException(
+                    "writeback_base_mismatch",
+                    $"The authoritative branch moved from base '{writeback.BaseCommitSha}' to '{currentHead}'.");
+            }
+        }
+
+        if (!writeback.HasChanges)
+        {
+            if (writeback.WritebackRef is not null
+                || !string.Equals(
+                    writeback.ResultCommitSha,
+                    writeback.BaseCommitSha,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                throw new WorktreeWritebackException(
+                    "writeback_descriptor_invalid",
+                    "A no-change descriptor must point at the immutable base without a temporary ref.");
+            }
+
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(writeback.WritebackRef)
+            || !writeback.WritebackRef.StartsWith(
+                PodLocalExecutionWorkspace.WritebackRefPrefix,
+                StringComparison.Ordinal))
+        {
+            throw new WorktreeWritebackException(
+                "writeback_ref_invalid",
+                "The prepared write-back ref is outside the Agentweaver write-back namespace.");
+        }
+
+        using (var repository = new Repository(repositoryPath))
+        {
+            var resultCommit = repository.Lookup<Commit>(writeback.WritebackRef);
+            if (resultCommit is null
+                || !string.Equals(
+                    resultCommit.Sha,
+                    writeback.ResultCommitSha,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                throw new WorktreeWritebackException(
+                    "writeback_ref_mismatch",
+                    "The temporary write-back ref does not resolve to the declared result commit.");
+            }
+
+            var parents = resultCommit.Parents.ToArray();
+            if (parents.Length != 1
+                || !string.Equals(
+                    parents[0].Sha,
+                    writeback.BaseCommitSha,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                throw new WorktreeWritebackException(
+                    "writeback_parent_mismatch",
+                    "The prepared write-back commit is not a single-parent child of the immutable base.");
+            }
+
+            if (!string.Equals(
+                    resultCommit.Tree.Sha,
+                    writeback.ResultTreeSha,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                throw new WorktreeWritebackException(
+                    "writeback_result_tree_mismatch",
+                    "The prepared write-back commit tree does not match its descriptor.");
+            }
+        }
+
+        if (alreadyApplied)
+            return;
+
+        try
+        {
+            RunGit(worktreePath, "merge", "--ff-only", writeback.ResultCommitSha);
+        }
+        catch (Exception ex)
+        {
+            throw new WorktreeWritebackException(
+                "writeback_fast_forward_failed",
+                "The authoritative worktree could not fast-forward to the prepared result.",
+                ex);
+        }
+
+        using var verified = new Repository(worktreePath);
+        if (!string.Equals(
+                verified.Head.Tip?.Sha,
+                writeback.ResultCommitSha,
+                StringComparison.OrdinalIgnoreCase)
+            || !string.Equals(
+                verified.Head.Tip?.Tree.Sha,
+                writeback.ResultTreeSha,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            throw new WorktreeWritebackException(
+                "writeback_verification_failed",
+                "The authoritative worktree did not match the prepared commit after fast-forward.");
+        }
     }
 
     public string CommitChanges(string worktreePath, RunId runId)
