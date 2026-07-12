@@ -158,6 +158,69 @@ public sealed class A2ARoundTripIntegrationTests
         }
     }
 
+    [Fact]
+    public async Task RemoteAgentProxy_Resiliency_PreservesStructuredRunFailedAcrossA2AFault()
+    {
+        var port = GetFreeTcpPort();
+        var runner = new StructuredFailingTurnRunner();
+        var builder = WebApplication.CreateBuilder();
+        builder.Logging.ClearProviders();
+        builder.WebHost.UseUrls($"http://localhost:{port}");
+        var agentHostedBuilder = builder.AddAIAgent(
+            A2ATurnBridgeAgent.AgentName,
+            (sp, _) => new A2ATurnBridgeAgent(
+                new MinimalInnerAgent(),
+                runner,
+                NullLogger<A2ATurnBridgeAgent>.Instance),
+            ServiceLifetime.Singleton);
+#pragma warning disable MEAI001
+        agentHostedBuilder.AddA2AServer(options => options.AgentRunMode = AgentRunMode.DisallowBackground);
+#pragma warning restore MEAI001
+
+        await using var app = builder.Build();
+        app.MapA2AHttpJson(agentHostedBuilder, "/a2a/agent");
+        await app.StartAsync();
+
+        try
+        {
+            using var clientServices = new ServiceCollection().AddHttpClient().BuildServiceProvider();
+            var httpFactory = clientServices.GetRequiredService<IHttpClientFactory>();
+            var resolver = new FixedEndpointResolver(new Uri($"http://localhost:{port}/a2a/agent"));
+            await using var proxy = new RemoteAgentProxy(
+                resolver,
+                httpFactory,
+                NullLoggerFactory.Instance);
+            var workerEvents = Channel.CreateUnbounded<RunEvent>();
+            await proxy.SetupAsync(
+                "/workspace",
+                "/workspace",
+                "run-structured-failure-254",
+                modelId: null,
+                systemPromptContext: null,
+                workerEvents.Writer,
+                projectId: null,
+                agentName: null,
+                apiBaseUrl: null,
+                apiKey: null,
+                TestCt,
+                userId: null);
+
+            var act = () => proxy.RunTurnAsync("long shell", isRevision: false, TestCt);
+
+            var ex = await act.Should().ThrowAsync<WorkflowAgentInfrastructureException>();
+            ex.Which.Reason.Should().Be("shell_execution_timeout");
+            ex.Which.Message.Should().Contain("hard deadline");
+            ex.Which.Message.Should().NotContain("Internal error");
+            ex.Which.IsRetryable.Should().BeTrue();
+            var forwarded = await workerEvents.Reader.ReadAsync(TestCt);
+            forwarded.Type.Should().Be(EventTypes.RunFailed);
+        }
+        finally
+        {
+            await app.StopAsync();
+        }
+    }
+
     private static CancellationToken TestCt =>
         new CancellationTokenSource(TimeSpan.FromSeconds(60)).Token;
 
@@ -200,6 +263,29 @@ public sealed class A2ARoundTripIntegrationTests
                 cancellationToken).ConfigureAwait(false);
 
             return isRevision ? $"revised:{task}" : $"fresh:{task}";
+        }
+    }
+
+    private sealed class StructuredFailingTurnRunner : IPodTurnRunner
+    {
+        private ChannelWriter<RunEvent>? _writer;
+
+        public void SetTurnStreamWriter(ChannelWriter<RunEvent>? streamWriter) => _writer = streamWriter;
+
+        public async Task<string> RunTurnAsync(
+            string task,
+            bool isRevision,
+            CancellationToken cancellationToken)
+        {
+            await (_writer ?? throw new InvalidOperationException("Stream writer not attached."))
+                .WriteAsync(new RunEvent(1, EventTypes.RunFailed, new
+                {
+                    message = "Shell execution exceeded its hard deadline and was terminated.",
+                    errorCode = "shell_execution_timeout",
+                    retryable = true,
+                }), cancellationToken)
+                .ConfigureAwait(false);
+            throw new InvalidOperationException("Internal error");
         }
     }
 

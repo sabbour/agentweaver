@@ -1,4 +1,5 @@
 using System.Threading.Channels;
+using Agentweaver.AgentRuntime.Providers;
 using Microsoft.Agents.AI.Workflows;
 using Microsoft.Extensions.Logging;
 using Agentweaver.Domain;
@@ -113,6 +114,17 @@ public sealed class AgentTurnExecutor : Executor<AgentTurnInput, AgentTurnOutput
             _logger.LogWarning(ex, "Content safety violation detected for run {RunId}", input.RunId);
             safetyFlagged = true;
         }
+        catch (Exception ex) when (_emitTerminalFailureOutput && TryGetKnownTerminalFailure(ex, out var failure))
+        {
+            WorkflowStepEvents.Emit(writer, _logger, input.RunId, LogicalNodeId, "failed", DisplayLabel,
+                agentName: input.AgentName);
+            _logger.LogError(
+                ex,
+                "Agent turn failed with structured reason {Reason} for run {RunId}; emitting graph-native terminal output",
+                failure.Reason,
+                input.RunId);
+            return CreateTerminalFailureOutput(input, failure);
+        }
         catch
         {
             WorkflowStepEvents.Emit(writer, _logger, input.RunId, LogicalNodeId, "failed", DisplayLabel);
@@ -142,10 +154,9 @@ public sealed class AgentTurnExecutor : Executor<AgentTurnInput, AgentTurnOutput
         // was emitted). CommitChanges is the only operation below that can throw — GetDiff and
         // GetStepCount are best-effort and swallow their own errors.
         //
-        // ROOT CAUSE (in-place steering revision wedge): the coordinator CHILD pipeline is a trimmed
-        // graph (agent -> child-assemble-ready) with NO failure->terminal edge, so any executor throw
-        // hangs the stream (RunWatchLoopService then fails the run with
-        // `watch_stream_completed_without_terminal_event`). The observed trigger was a TRANSIENT
+        // ROOT CAUSE (in-place steering revision wedge): an executor throw can end a workflow stream
+        // without a terminal output and collapse to `watch_stream_completed_without_terminal_event`.
+        // The observed trigger was a TRANSIENT
         // LibGit2 worktree-state error on a resumed revision (a lingering child process holding
         // index.lock — the benign 'kill needs PID' tool.error seen live). Two-part handling:
         //   1. TRANSIENT: retry the commit a bounded number of times so a flaky lock/index/ref error
@@ -153,10 +164,8 @@ public sealed class AgentTurnExecutor : Executor<AgentTurnInput, AgentTurnOutput
         //      SAME worktree (context preserved — no fresh pod).
         //   2. PERSISTENT: after retries are exhausted, do NOT fabricate a no-change assemble-ready.
         //      That would silently DROP the revision's uncommitted edits and hide the failure. Emit a
-        //      visible failed step and rethrow: the child run terminalizes as a VISIBLE Failure (the
-        //      watch loop converts a child ExecutorFailedEvent into a terminal Failed run), which
-        //      marks the subtask failed so the coordinator consciously re-dispatches the revision
-        //      (steering feedback preserved) instead of losing work inside a fake success.
+        //      visible failed step and return a typed terminal failure. Root and child graphs route
+        //      that output to their failure terminals, preserving evidence and machine-readable cause.
         string treeHash;
         var commitDiagnostics = new List<string>();
         try
@@ -169,18 +178,18 @@ public sealed class AgentTurnExecutor : Executor<AgentTurnInput, AgentTurnOutput
             WorkflowStepEvents.Emit(writer, _logger, input.RunId, LogicalNodeId, "failed", DisplayLabel,
                 agentName: input.AgentName);
 
-            // FIX 2 (graph-native failure->terminal): in the trimmed child/revision pipeline the
-            // executor is constructed with emitTerminalFailureOutput=true. A PERSISTENT post-turn
+            // Graph-native failure->terminal: production root and child pipelines construct the
+            // executor with emitTerminalFailureOutput=true. A PERSISTENT post-turn
             // commit fault (the bounded clear+retry could not clear the blocker) is RETURNED as a
-            // typed AgentTurnOutput carrying TerminalFailureReason — the child graph's conditional
-            // edge routes it to the child-turn-failed terminal (exactly one WorkflowOutputEvent),
+            // typed AgentTurnOutput carrying TerminalFailureReason — the graph's conditional
+            // edge routes it to the appropriate turn-failed terminal (exactly one WorkflowOutputEvent),
             // instead of a bare rethrow that only the watcher stream-abort backstop could catch. We
             // still NEVER fabricate a no-change assemble_ready — the failure is VISIBLE, with evidence.
             var evidence = BuildCommitFailureEvidence(ex, commitDiagnostics);
             if (_emitTerminalFailureOutput)
             {
                 _logger.LogError(ex,
-                    "Post-turn CommitChanges failed for child run {RunId} after bounded clear+retry; emitting graph-native child-turn-failed terminal (evidence: {Evidence})",
+                    "Post-turn CommitChanges failed for run {RunId} after bounded clear+retry; emitting graph-native turn-failed terminal (evidence: {Evidence})",
                     input.RunId, evidence);
                 return new AgentTurnOutput(
                     input.RunId,
@@ -197,11 +206,12 @@ public sealed class AgentTurnExecutor : Executor<AgentTurnInput, AgentTurnOutput
                     ProjectId: input.ProjectId,
                     AgentName: input.AgentName,
                     TerminalFailureReason: "commit_failed_persistent",
-                    TerminalFailureEvidence: evidence);
+                    TerminalFailureEvidence: evidence,
+                    TerminalFailureMessage: ex.Message,
+                    TerminalFailureRetryable: false);
             }
 
-            // Full pipeline: preserve existing behavior — rethrow so the fault terminalizes via the
-            // watcher's ExecutorFailedEvent backstop (never a silent no-change success).
+            // Compatibility fallback for callers that explicitly disable graph-native failures.
             _logger.LogError(ex,
                 "Post-turn CommitChanges failed for run {RunId} after bounded clear+retry; terminalizing the run as a visible failure (evidence: {Evidence})",
                 input.RunId, evidence);
@@ -230,6 +240,59 @@ public sealed class AgentTurnExecutor : Executor<AgentTurnInput, AgentTurnOutput
             AgentName: input.AgentName);
     }
 
+    private static bool TryGetKnownTerminalFailure(
+        Exception ex,
+        out (string Reason, string Message, bool? Retryable, string Evidence) failure)
+    {
+        for (Exception? current = ex; current is not null; current = current.InnerException)
+        {
+            if (current is WorkflowAgentInfrastructureException infrastructure)
+            {
+                failure = (
+                    infrastructure.Reason,
+                    infrastructure.Message,
+                    infrastructure.IsRetryable,
+                    $"exception={infrastructure.GetType().Name}: {infrastructure.Message}");
+                return true;
+            }
+
+            if (current is AgentProviderException provider)
+            {
+                failure = (
+                    provider.ErrorCode,
+                    provider.UserMessage,
+                    provider.IsRetryable,
+                    $"exception={provider.GetType().Name}: {provider.Message}");
+                return true;
+            }
+        }
+
+        failure = default;
+        return false;
+    }
+
+    private static AgentTurnOutput CreateTerminalFailureOutput(
+        AgentTurnInput input,
+        (string Reason, string Message, bool? Retryable, string Evidence) failure) =>
+        new(
+            input.RunId,
+            TreeHash: string.Empty,
+            Diff: string.Empty,
+            StepCount: 0,
+            input.WorktreePath,
+            input.WorktreeBranch,
+            input.RepositoryPath,
+            input.OriginatingBranch,
+            ContentSafetyFlagged: false,
+            Iteration: input.Iteration,
+            SubmittingUser: input.SubmittingUser,
+            ProjectId: input.ProjectId,
+            AgentName: input.AgentName,
+            TerminalFailureReason: failure.Reason,
+            TerminalFailureEvidence: failure.Evidence,
+            TerminalFailureMessage: failure.Message,
+            TerminalFailureRetryable: failure.Retryable);
+
     /// <summary>
     /// Commits the worktree with a bounded retry so a TRANSIENT git failure (a LibGit2 index.lock /
     /// ref race — e.g. a lingering child process briefly holding the lock) does not strand the run.
@@ -248,7 +311,7 @@ public sealed class AgentTurnExecutor : Executor<AgentTurnInput, AgentTurnOutput
     /// killing by path/name (which could reap an unrelated process).
     /// </para>
     /// A genuinely PERSISTENT failure still surfaces after the final attempt — the caller then
-    /// terminalizes the run visibly (typed child-turn-failed output, or rethrow in the full pipeline)
+    /// terminalizes the run visibly (typed root/child turn-failed output, or a compatibility rethrow)
     /// instead of fabricating a no-change success.
     /// </summary>
     private async Task<string> CommitChangesWithRetryAsync(

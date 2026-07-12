@@ -614,14 +614,34 @@ public sealed class RunWatchLoopService
             return true;
         }
 
-        // Coordinator CHILD run graph-native failure terminal (FIX 2): the child's agent turn ended
-        // cleanly but the POST-TURN commit failed persistently. This is a VISIBLE run failure (never a
-        // fabricated no-change success), delivered as a single WorkflowOutputEvent via the child graph's
-        // conditional failure->terminal edge — so the watcher NEVER falls to
-        // `watch_stream_completed_without_terminal_event`. Marking the run Failed marks the subtask
-        // Failed, so the coordinator consciously re-dispatches the revision (steering feedback +
-        // branch/session preserved) rather than losing the work inside a hung stream. The worktree is
-        // preserved (no cleanup) so the re-dispatch/handoff can build on the prior work.
+        // Root/full-pipeline graph-native failure terminal. Preserve the structured reason emitted
+        // by AgentTurnExecutor instead of falling through to the generic stream-ended fallback.
+        if (woe.Is<AgentTurnFailedOutput>(out var turnFailed))
+        {
+            var changed = await _runStore.TrySetTerminalStatusAsync(
+                parsedRunId, RunStatus.Failed, now, turnFailed.Reason, CancellationToken.None).ConfigureAwait(false);
+
+            EmitTerminalMetrics(currentRun, now, "failed", turnFailed.Reason, changed);
+            if (!entry.HasEventType(EventTypes.RunFailed))
+            {
+                entry.RecordNext(EventTypes.RunFailed, new
+                {
+                    reason = turnFailed.Reason,
+                    errorCode = turnFailed.Reason,
+                    message = turnFailed.Message,
+                    evidence = turnFailed.Evidence,
+                    retryable = turnFailed.Retryable,
+                });
+            }
+
+            _streamStore.Complete(runId);
+            _ = _factory.PersistRunEventsAsync(runId);
+            return true;
+        }
+
+        // Coordinator child graph-native failure terminal. Known agent/provider/transport/workspace
+        // and post-turn failures arrive with their original machine-readable reason, so the watcher
+        // never collapses them to child_executor_failed:agent-turn or stream-ended-without-terminal.
         if (woe.Is<ChildTurnFailedOutput>(out var childFailed))
         {
             var changed = await _runStore.TrySetTerminalStatusAsync(
@@ -629,7 +649,16 @@ public sealed class RunWatchLoopService
 
             EmitTerminalMetrics(currentRun, now, "failed", childFailed.Reason, changed);
             if (!entry.HasEventType(EventTypes.RunFailed))
-                entry.RecordNext(EventTypes.RunFailed, new { reason = childFailed.Reason, evidence = childFailed.Evidence });
+            {
+                entry.RecordNext(EventTypes.RunFailed, new
+                {
+                    reason = childFailed.Reason,
+                    errorCode = childFailed.Reason,
+                    message = childFailed.Message,
+                    evidence = childFailed.Evidence,
+                    retryable = childFailed.Retryable,
+                });
+            }
 
             _streamStore.Complete(runId);
             _ = _factory.PersistRunEventsAsync(runId);
