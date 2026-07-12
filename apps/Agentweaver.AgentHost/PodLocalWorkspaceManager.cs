@@ -198,20 +198,12 @@ internal sealed class PodLocalWorkspaceManager
                 "--",
                 ".").ConfigureAwait(false);
 
-            var initiallyChangedPaths = await GetChangedPathsAsync(
-                workspace.WorkspacePath,
-                workspace.BaseCommitSha,
-                gitEnvironment,
-                ct).ConfigureAwait(false);
-            var nestedRoots = FindNestedRepositoryRoots(
-                workspace.WorkspacePath,
-                initiallyChangedPaths);
+            var nestedRoots = FindNestedRepositoryRoots(workspace.WorkspacePath);
             if (nestedRoots.Count > 0)
             {
                 await StageNestedRepositoryContentsAsync(
                     workspace.WorkspacePath,
                     runRoot,
-                    workspace.BaseCommitSha,
                     nestedRoots,
                     gitEnvironment,
                     ct).ConfigureAwait(false);
@@ -227,6 +219,18 @@ internal sealed class PodLocalWorkspaceManager
                 gitEnvironment,
                 ct,
                 "write-tree").ConfigureAwait(false);
+            var residualGitlinks = await GetGitlinkPathsAsync(
+                workspace.WorkspacePath,
+                resultTree,
+                gitEnvironment,
+                ct).ConfigureAwait(false);
+            if (residualGitlinks.Count > 0)
+            {
+                throw new AgentHostConfigurationException(
+                    "writeback_invalid",
+                    $"Write-back tree contains unflattened nested repositories: {string.Join(", ", residualGitlinks)}.");
+            }
+
             var changedPaths = await GetChangedPathsAsync(
                 workspace.WorkspacePath,
                 workspace.BaseCommitSha,
@@ -559,43 +563,61 @@ internal sealed class PodLocalWorkspaceManager
             .ToArray();
     }
 
-    private static IReadOnlyList<string> FindNestedRepositoryRoots(
-        string workspacePath,
-        IReadOnlyList<string> changedPaths)
+    private static IReadOnlyList<string> FindNestedRepositoryRoots(string workspacePath)
     {
-        var roots = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var inspected = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var path in changedPaths)
-        {
-            var segments = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
-            var prefix = string.Empty;
-            foreach (var segment in segments)
-            {
-                prefix = prefix.Length == 0 ? segment : $"{prefix}/{segment}";
-                if (roots.Contains(prefix))
-                    break;
-                if (!inspected.Add(prefix))
-                    continue;
+        var roots = new List<string>();
+        var pending = new Stack<string>();
+        pending.Push(workspacePath);
 
-                var absolute = Path.Combine(
-                    workspacePath,
-                    prefix.Replace('/', Path.DirectorySeparatorChar));
-                if (Directory.Exists(Path.Combine(absolute, ".git"))
-                    || File.Exists(Path.Combine(absolute, ".git")))
+        try
+        {
+            while (pending.Count > 0)
+            {
+                var directory = pending.Pop();
+                if (!PathEquals(directory, workspacePath))
                 {
-                    roots.Add(prefix);
-                    break;
+                    var metadataPath = Path.Combine(directory, ".git");
+                    if (Directory.Exists(metadataPath) || File.Exists(metadataPath))
+                    {
+                        roots.Add(Path.GetRelativePath(workspacePath, directory)
+                            .Replace('\\', '/'));
+                    }
+                }
+
+                foreach (var child in Directory.EnumerateDirectories(directory))
+                {
+                    if (string.Equals(
+                            Path.GetFileName(child),
+                            ".git",
+                            OperatingSystem.IsWindows()
+                                ? StringComparison.OrdinalIgnoreCase
+                                : StringComparison.Ordinal))
+                    {
+                        continue;
+                    }
+
+                    if ((File.GetAttributes(child) & FileAttributes.ReparsePoint) == 0)
+                        pending.Push(child);
                 }
             }
         }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            throw new AgentHostConfigurationException(
+                "writeback_invalid",
+                "Nested repositories could not be safely discovered from the pod-local filesystem.",
+                ex);
+        }
 
-        return roots.OrderBy(root => root, StringComparer.Ordinal).ToArray();
+        return roots
+            .OrderByDescending(GetPathDepth)
+            .ThenBy(root => root, StringComparer.Ordinal)
+            .ToArray();
     }
 
     private static async Task StageNestedRepositoryContentsAsync(
         string workspacePath,
         string runRoot,
-        string baseCommitSha,
         IReadOnlyList<string> nestedRoots,
         IReadOnlyDictionary<string, string?> environment,
         CancellationToken ct)
@@ -617,15 +639,25 @@ internal sealed class PodLocalWorkspaceManager
                     $".agentweaver-nested-git-{Guid.NewGuid():N}");
                 MoveGitMetadata(metadataPath, backupPath);
                 movedMetadata.Add(new NestedRepositoryMetadata(metadataPath, backupPath));
+            }
 
+            foreach (var nestedRoot in nestedRoots.OrderBy(GetPathDepth))
+            {
                 await RunGitWithEnvironmentAsync(
                     workspacePath,
                     environment,
                     ct,
-                    "reset",
-                    baseCommitSha,
+                    "rm",
+                    "--cached",
+                    "-r",
+                    "-f",
+                    "--ignore-unmatch",
                     "--",
                     nestedRoot).ConfigureAwait(false);
+            }
+
+            foreach (var nestedRoot in nestedRoots)
+            {
                 await RunGitWithEnvironmentAsync(
                     workspacePath,
                     environment,
@@ -664,6 +696,35 @@ internal sealed class PodLocalWorkspaceManager
                 failure);
         }
     }
+
+    private static async Task<IReadOnlyList<string>> GetGitlinkPathsAsync(
+        string workspacePath,
+        string treeHash,
+        IReadOnlyDictionary<string, string?> environment,
+        CancellationToken ct)
+    {
+        var output = await RunGitWithEnvironmentAsync(
+            workspacePath,
+            environment,
+            ct,
+            "ls-tree",
+            "-r",
+            "-z",
+            treeHash).ConfigureAwait(false);
+        return output
+            .Split('\0', StringSplitOptions.RemoveEmptyEntries)
+            .Where(entry => entry.StartsWith("160000 ", StringComparison.Ordinal))
+            .Select(entry =>
+            {
+                var separator = entry.IndexOf('\t');
+                return separator >= 0 ? entry[(separator + 1)..] : entry;
+            })
+            .OrderBy(path => path, StringComparer.Ordinal)
+            .ToArray();
+    }
+
+    private static int GetPathDepth(string path) =>
+        path.Count(character => character is '/' or '\\') + 1;
 
     private static void MoveGitMetadata(string sourcePath, string backupPath)
     {

@@ -282,6 +282,90 @@ public sealed class ImplementationWritebackTests : IDisposable
     }
 
     [Fact]
+    public async Task Impl_writeback_captures_dirty_existing_submodule_with_unchanged_head()
+    {
+        string? nestedSource = null;
+        var fixture = CreateFixture(repository =>
+        {
+            nestedSource = Path.Combine(repository, "existing-submodule");
+            CreateNestedRepository(nestedSource, "nested.txt", "committed content");
+        });
+        var local = CreateLocalManager();
+        var prepared = await local.PrepareAsync(
+            fixture.LocalSpec,
+            CancellationToken.None);
+        var nested = Path.Combine(prepared.WorkspacePath, "existing-submodule");
+        Git(prepared.WorkspacePath, "clone", nestedSource!, nested);
+        File.WriteAllText(Path.Combine(nested, "nested.txt"), "dirty deliverable");
+
+        var writeback = await local.PrepareWritebackAsync();
+
+        writeback.HasChanges.Should().BeTrue();
+        fixture.WorktreeManager.ApplyPreparedWriteback(
+            fixture.Repository,
+            fixture.Worktree.WorktreePath,
+            fixture.Worktree.BranchName,
+            fixture.RunId,
+            writeback);
+
+        File.ReadAllText(Path.Combine(
+                fixture.Worktree.WorktreePath,
+                "existing-submodule",
+                "nested.txt"))
+            .Should().Be("dirty deliverable");
+        Git(
+                fixture.Worktree.WorktreePath,
+                "ls-files",
+                "--stage",
+                "existing-submodule/nested.txt")
+            .Should().StartWith("100644 ");
+
+        await local.CleanupAsync();
+    }
+
+    [Fact]
+    public async Task Impl_writeback_flattens_recursively_nested_repositories_deepest_first()
+    {
+        var fixture = CreateFixture();
+        var local = CreateLocalManager();
+        var prepared = await local.PrepareAsync(
+            fixture.LocalSpec,
+            CancellationToken.None);
+        var outer = Path.Combine(prepared.WorkspacePath, "outer");
+        CreateNestedRepository(outer, "outer.txt", "outer deliverable");
+        var inner = Path.Combine(outer, "inner");
+        CreateNestedRepository(inner, "inner.txt", "inner deliverable");
+        Git(outer, "add", "inner");
+        Git(outer, "commit", "-m", "add inner repository");
+
+        var writeback = await local.PrepareWritebackAsync();
+
+        writeback.HasChanges.Should().BeTrue();
+        fixture.WorktreeManager.ApplyPreparedWriteback(
+            fixture.Repository,
+            fixture.Worktree.WorktreePath,
+            fixture.Worktree.BranchName,
+            fixture.RunId,
+            writeback);
+
+        File.ReadAllText(Path.Combine(
+                fixture.Worktree.WorktreePath,
+                "outer",
+                "outer.txt"))
+            .Should().Be("outer deliverable");
+        File.ReadAllText(Path.Combine(
+                fixture.Worktree.WorktreePath,
+                "outer",
+                "inner",
+                "inner.txt"))
+            .Should().Be("inner deliverable");
+        Git(fixture.Worktree.WorktreePath, "ls-files", "--stage")
+            .Should().NotContain("160000 ");
+
+        await local.CleanupAsync();
+    }
+
+    [Fact]
     public async Task Impl_writeback_conflict_fails_with_structured_base_mismatch()
     {
         var fixture = CreateFixture();
@@ -312,7 +396,7 @@ public sealed class ImplementationWritebackTests : IDisposable
         await local.CleanupAsync();
     }
 
-    private Fixture CreateFixture()
+    private Fixture CreateFixture(Action<string>? configureRepository = null)
     {
         var repository = Path.Combine(_root, "r-" + Guid.NewGuid().ToString("n")[..8]);
         Directory.CreateDirectory(repository);
@@ -321,6 +405,7 @@ public sealed class ImplementationWritebackTests : IDisposable
         Git(repository, "config", "user.email", "fixture@example.invalid");
         File.WriteAllText(Path.Combine(repository, ".gitignore"), "node_modules/\n.agentweaver-cache/\n");
         File.WriteAllText(Path.Combine(repository, "README.md"), "base");
+        configureRepository?.Invoke(repository);
         Git(repository, "add", ".");
         Git(repository, "commit", "-m", "base");
         Git(repository, "branch", "-M", "main");
