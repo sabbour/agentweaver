@@ -2,7 +2,7 @@ import { AzureFluentProvider } from '../copilot-fluent-system';
 import { ActiveEdgeContext, ExecutionModalContext, workflowNodeTypes } from '../components/WorkflowGraphPanel';
 import { buildSteppedConnectorRoute } from '../utils/dagLayout';
 import { BotRegular, CheckmarkCircleRegular, MergeRegular, ShieldRegular } from '../copilot-fluent-system';
-import { cleanup, render, waitFor } from '@testing-library/react';
+import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import { ReactFlow } from '@xyflow/react';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -50,11 +50,11 @@ function makeAgentNode(nodeType: WorkflowNodeData['nodeType']): Node[] {
   ];
 }
 
-function Wrapper({ nodes }: { nodes: Node[] }) {
+function Wrapper({ nodes, openModal }: { nodes: Node[]; openModal?: (id: string) => void }) {
   return (
     <AzureFluentProvider density="compact">
       <MemoryRouter>
-        <ExecutionModalContext.Provider value={undefined}>
+        <ExecutionModalContext.Provider value={openModal}>
           <ActiveEdgeContext.Provider value={undefined}>
             <div style={{ width: 800, height: 600 }}>
               <ReactFlow
@@ -207,6 +207,73 @@ describe('WorkflowNode — message field display', () => {
     );
     // The hardcoded 'Reviewing safety...' should NOT appear — message takes priority.
     expect(document.body.textContent).not.toContain('Reviewing safety');
+  });
+
+  it('shows an on-face "Review now" action for the Human Review gate while it awaits a decision (grows to fit)', async () => {
+    const nodes: Node[] = [{
+      id: 'n1', type: 'workflow', position: { x: 0, y: 0 },
+      data: {
+        def: { key: 'review', label: 'Human Review', roleDescription: 'Human reviewer', Icon: ShieldRegular },
+        state: { status: 'started' },
+        nodeType: 'gate',
+        runId: 'run-1', executionId: 'exec-1', projectId: 'p1',
+      } satisfies WorkflowNodeData,
+    }];
+    render(<Wrapper nodes={nodes} openModal={() => {}} />);
+    // Awaiting review ⇒ the primary action renders on the node face (button, not just popover).
+    const btnText = await screen.findByText('Review now', undefined, { timeout: 4000 });
+    expect(btnText.closest('button')).toBeTruthy();
+  });
+
+  it('does NOT show an on-face action button for a Human Review gate that is not awaiting', async () => {
+    const nodes: Node[] = [{
+      id: 'n1', type: 'workflow', position: { x: 0, y: 0 },
+      data: {
+        def: { key: 'review', label: 'Human Review', roleDescription: 'Human reviewer', Icon: ShieldRegular },
+        state: { status: 'pending' },
+        nodeType: 'gate',
+        runId: 'run-1', executionId: 'exec-1', projectId: 'p1',
+      } satisfies WorkflowNodeData,
+    }];
+    render(<Wrapper nodes={nodes} />);
+    await waitFor(() => expect(document.body.textContent).toContain('Human Review'), { timeout: 4000 });
+    expect(screen.queryByText('Review now')).toBeNull();
+  });
+
+  it('stays compact (no Name/Role on face) but renders the model caption for a node that has a model (Coordinator/RAI)', async () => {
+    const nodes: Node[] = [{
+      id: 'n1', type: 'workflow', position: { x: 0, y: 0 },
+      data: {
+        def: { key: 'rai', label: 'RAI Check', roleDescription: 'Responsible AI', Icon: ShieldRegular },
+        state: { status: 'completed' },
+        nodeType: 'gate',
+        agentName: 'Sentinel',
+        agentRoleTitle: 'RAI Reviewer',
+        modelId: 'claude-3-5-sonnet',
+        runId: 'run-1', executionId: 'exec-1', projectId: 'p1',
+      } satisfies WorkflowNodeData,
+    }];
+    render(<Wrapper nodes={nodes} />);
+    // The model caption renders BELOW the compact card…
+    await waitFor(() => expect(document.body.textContent).toContain('Claude 3 5 Sonnet'), { timeout: 4000 });
+    // …but the agent Name (Role) is NOT on the compact face (it lives in the hover popover only).
+    expect(document.body.textContent).not.toContain('Sentinel (RAI Reviewer)');
+  });
+
+  it('stays compact with NO model caption for a pure gate node with no model', async () => {
+    const nodes: Node[] = [{
+      id: 'n1', type: 'workflow', position: { x: 0, y: 0 },
+      data: {
+        def: { key: 'merge', label: 'Merge', roleDescription: 'Integrate branch', Icon: MergeRegular },
+        state: { status: 'completed' },
+        nodeType: 'gate',
+        runId: 'run-1', executionId: 'exec-1', projectId: 'p1',
+      } satisfies WorkflowNodeData,
+    }];
+    render(<Wrapper nodes={nodes} />);
+    await waitFor(() => expect(document.body.textContent).toContain('Merge'), { timeout: 4000 });
+    // No agent/model ⇒ compact: no Name(Role) face line and no model caption.
+    expect(document.body.textContent).not.toContain('(Integrate branch)');
   });
 });
 

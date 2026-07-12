@@ -604,6 +604,38 @@ describe('CoordinatorRunPage — unified coordinator graph view', () => {
     expect(html).toContain('data-node-type="subtask"');
   });
 
+  it('removes background minimap graph nodes while the topology panel is open so the first subtask click targets the visible graph', async () => {
+    const originalMatchMedia = window.matchMedia;
+    window.matchMedia = ((query: string) => ({
+      matches: true,
+      media: query,
+      onchange: null,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      addListener: () => {},
+      removeListener: () => {},
+      dispatchEvent: () => false,
+    })) as unknown as typeof window.matchMedia;
+    try {
+      render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+      const button = await screen.findByTestId('open-topology-minimap', undefined, { timeout: 4000 });
+      await waitFor(() => expect(button.querySelectorAll('[data-node-type="subtask"]').length).toBeGreaterThan(0), { timeout: 4000 });
+
+      const inspector = await openTopologyInspector();
+      await waitFor(() => expect(inspector.textContent).toContain('Subtask 1'), { timeout: 4000 });
+      expect(button.querySelector('[data-node-type="subtask"]')).toBeNull();
+
+      const viewport = inspector.querySelector('.react-flow__viewport') as HTMLElement;
+      const firstVisibleSubtask = document.querySelector('[data-node-type="subtask"]')!.closest('.react-flow__node') as HTMLElement;
+      fireEvent.click(firstVisibleSubtask);
+
+      await waitFor(() => expect(viewport.style.transform).toContain('scale(1.6)'));
+    } finally {
+      window.matchMedia = originalMatchMedia;
+    }
+  });
+
   it('renders subtask nodes without showing API pod chip when no executionPodName is set', async () => {
     vi.mocked(apiClient.getSystemRuntime).mockResolvedValue({ kubernetes: true, podName: 'agentweaver-api-pod-1' });
 
@@ -667,6 +699,82 @@ describe('CoordinatorRunPage — unified coordinator graph view', () => {
     expect(columns.size).toBeGreaterThan(1);
     expect(rows.size).toBeGreaterThan(1);
   });
+
+  it('cinematically zooms the viewport onto a node on click (setCenter), in addition to selecting it', async () => {
+    // Force reduced motion so setCenter applies instantly (duration 0) — deterministic in jsdom.
+    const originalMatchMedia = window.matchMedia;
+    window.matchMedia = ((query: string) => ({
+      matches: true,
+      media: query,
+      onchange: null,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      addListener: () => {},
+      removeListener: () => {},
+      dispatchEvent: () => false,
+    })) as unknown as typeof window.matchMedia;
+    try {
+      render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+      const inspector = await openTopologyInspector();
+      await waitFor(() => expect(inspector.textContent).toContain('Subtask 1'), { timeout: 4000 });
+
+      const viewport = inspector.querySelector('.react-flow__viewport') as HTMLElement;
+      const nodeEl = inspector
+        .querySelector('[data-node-type="subtask"]')!
+        .closest('.react-flow__node') as HTMLElement;
+      expect(viewport).toBeTruthy();
+      expect(nodeEl).toBeTruthy();
+
+      fireEvent.click(nodeEl);
+
+      // The viewport tweens to the cinematic target zoom (1.6). Click-select still runs alongside it.
+      await waitFor(() => expect(viewport.style.transform).toContain('scale(1.6)'));
+    } finally {
+      window.matchMedia = originalMatchMedia;
+    }
+  });
+
+
+  it('zooms back OUT toward the whole graph when the empty pane is clicked (onPaneClick → fit)', async () => {
+    const originalMatchMedia = window.matchMedia;
+    window.matchMedia = ((query: string) => ({
+      matches: true,
+      media: query,
+      onchange: null,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      addListener: () => {},
+      removeListener: () => {},
+      dispatchEvent: () => false,
+    })) as unknown as typeof window.matchMedia;
+    try {
+      render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+      const inspector = await openTopologyInspector();
+      await waitFor(() => expect(inspector.textContent).toContain('Subtask 1'), { timeout: 4000 });
+
+      const viewport = inspector.querySelector('.react-flow__viewport') as HTMLElement;
+      const nodeEl = inspector
+        .querySelector('[data-node-type="subtask"]')!
+        .closest('.react-flow__node') as HTMLElement;
+      const pane = inspector.querySelector('.react-flow__pane') as HTMLElement;
+      expect(pane).toBeTruthy();
+
+      // Zoom in on a node first (scale 1.6)…
+      fireEvent.click(nodeEl);
+      await waitFor(() => expect(viewport.style.transform).toContain('scale(1.6)'));
+
+      // …then click the empty pane. The onPaneClick handler fits the whole graph back out; in jsdom
+      // fitView can't measure the 0-size container, so we assert the handler is wired and harmless
+      // (no throw) and the graph/nodes remain intact rather than asserting an exact fit transform.
+      expect(() => fireEvent.click(pane)).not.toThrow();
+      expect(inspector.querySelectorAll('.react-flow__node').length).toBeGreaterThan(4);
+    } finally {
+      window.matchMedia = originalMatchMedia;
+    }
+  });
+
 
   it('keeps the run tree order completely stable when the graph orientation changes (LR ⇄ TB)', async () => {
     render(<Wrapper><CoordinatorRunPage /></Wrapper>);

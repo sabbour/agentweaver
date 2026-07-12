@@ -1,4 +1,15 @@
-import { layoutDagBalancedGrid, layoutDagColumns, layoutDagStaircase, NODE_H, NODE_W } from '../utils/dagLayout';
+import {
+  FIXED_NODE_H,
+  FIXED_NODE_W,
+  SUBTASK_NODE_H,
+  SUBTASK_NODE_W,
+  layoutDagBalancedGrid,
+  layoutDagColumns,
+  layoutDagStaircase,
+  layoutBBox,
+  NODE_H,
+  NODE_W,
+} from '../utils/dagLayout';
 import { describe, expect, it } from 'vitest';
 import type { NodeSizeHint } from '../utils/dagLayout';
 import type { Edge, Node } from '@xyflow/react';
@@ -311,6 +322,40 @@ describe('layoutDagStaircase', () => {
     expect(new Set(ys).size).toBeGreaterThan(1);
   });
 
+  it('uses a shorter primary-axis pitch for compact→compact than compact→subtask transitions in both LR and TB', () => {
+    const nodes: Node[] = ['compact-a', 'compact-b', 'subtask-c', 'compact-d'].map(makeNode);
+    const edges: Edge[] = [
+      makeEdge('compact-a', 'compact-b'),
+      makeEdge('compact-b', 'subtask-c'),
+      makeEdge('subtask-c', 'compact-d'),
+    ];
+    const hints: Record<string, NodeSizeHint> = {
+      'compact-a': { width: FIXED_NODE_W, height: FIXED_NODE_H },
+      'compact-b': { width: FIXED_NODE_W, height: FIXED_NODE_H },
+      'subtask-c': { width: SUBTASK_NODE_W, height: SUBTASK_NODE_H },
+      'compact-d': { width: FIXED_NODE_W, height: FIXED_NODE_H },
+    };
+    const laneGap = 40;
+
+    for (const rankdir of ['LR', 'TB'] as const) {
+      const laid = layoutDagStaircase(nodes, edges, { rankdir, rankSep: laneGap, nodeSep: 28, minStepRanks: 10 }, hints);
+      const byId = new Map(laid.map((node) => [node.id, node]));
+      const primary = (id: string) => rankdir === 'LR' ? byId.get(id)!.position.x : byId.get(id)!.position.y;
+
+      const compactToCompact = primary('compact-b') - primary('compact-a');
+      const compactToSubtask = primary('subtask-c') - primary('compact-b');
+      const expectedCompact = (rankdir === 'LR' ? FIXED_NODE_W : FIXED_NODE_H) + laneGap;
+      const expectedSubtask = Math.max(
+        rankdir === 'LR' ? FIXED_NODE_W : FIXED_NODE_H,
+        rankdir === 'LR' ? SUBTASK_NODE_W : SUBTASK_NODE_H,
+      ) + laneGap;
+
+      expect(compactToCompact).toBe(expectedCompact);
+      expect(compactToSubtask).toBe(expectedSubtask);
+      expect(compactToCompact).toBeLessThan(compactToSubtask);
+    }
+  });
+
   it('never produces negative coordinates', () => {
     const { nodes, edges, hints } = coordinatorWithSubtasks(4);
     for (const rankdir of ['LR', 'TB'] as const) {
@@ -318,6 +363,27 @@ describe('layoutDagStaircase', () => {
       for (const n of laid) {
         expect(n.position.x).toBeGreaterThanOrEqual(0);
         expect(n.position.y).toBeGreaterThanOrEqual(0);
+      }
+    }
+  });
+
+  it('keeps mixed-size nodes non-overlapping in both LR and TB after per-transition pitch tightening', () => {
+    const { nodes, edges, hints } = coordinatorWithSubtasks(5);
+    for (const rankdir of ['LR', 'TB'] as const) {
+      const laid = layoutDagStaircase(nodes, edges, { rankdir, ...SEP, minStepRanks: 3 }, hints);
+      for (let i = 0; i < laid.length; i += 1) {
+        for (let j = i + 1; j < laid.length; j += 1) {
+          const a = laid[i];
+          const b = laid[j];
+          const ah = hints[a.id];
+          const bh = hints[b.id];
+          const separated =
+            a.position.x + ah.width <= b.position.x ||
+            b.position.x + bh.width <= a.position.x ||
+            a.position.y + ah.height <= b.position.y ||
+            b.position.y + bh.height <= a.position.y;
+          expect(separated).toBe(true);
+        }
       }
     }
   });
@@ -342,5 +408,48 @@ describe('layoutDagStaircase', () => {
         expect(n.position.y).toBeGreaterThanOrEqual(0);
       }
     }
+  });
+});
+
+describe('layoutBBox + fill-maximizing orientation', () => {
+  // A long, mostly-linear spine (the shape that overflows a wide panel as a single row).
+  const spine: Node[] = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'].map(makeNode);
+  const spineEdges: Edge[] = [
+    { id: 'e1', source: 'a', target: 'b' },
+    { id: 'e2', source: 'b', target: 'c' },
+    { id: 'e3', source: 'c', target: 'd' },
+    { id: 'e4', source: 'd', target: 'e' },
+    { id: 'e5', source: 'e', target: 'f' },
+    { id: 'e6', source: 'f', target: 'g' },
+    { id: 'e7', source: 'g', target: 'h' },
+  ];
+  const hints: Record<string, NodeSizeHint> = Object.fromEntries(
+    spine.map((n) => [n.id, { width: 250, height: 104 }]),
+  );
+  const OPTS = { rankSep: 70, nodeSep: 26, targetAspect: 1.35, minStepRanks: 3 } as const;
+
+  it('reports a positive, hint-aware bounding box', () => {
+    const laid = layoutDagStaircase(spine, spineEdges, { rankdir: 'LR', ...OPTS }, hints);
+    const bb = layoutBBox(laid, hints);
+    expect(bb.w).toBeGreaterThan(250); // wider than a single node
+    expect(bb.h).toBeGreaterThan(104); // taller than a single node (staircase uses height)
+  });
+
+  it('LR and TB footprints are transposes, so the fill-maximizing pick tracks the container aspect', () => {
+    const bbLR = layoutBBox(layoutDagStaircase(spine, spineEdges, { rankdir: 'LR', ...OPTS }, hints), hints);
+    const bbTB = layoutBBox(layoutDagStaircase(spine, spineEdges, { rankdir: 'TB', ...OPTS }, hints), hints);
+    const fit = (bb: { w: number; h: number }, cw: number, ch: number) => Math.min(cw / bb.w, ch / bb.h);
+    const pick = (cw: number, ch: number): 'LR' | 'TB' =>
+      fit(bbTB, cw, ch) > fit(bbLR, cw, ch) * 1.001 ? 'TB' : 'LR';
+    // Wide landscape panel → the wider (LR) staircase fills more area.
+    expect(pick(1600, 500)).toBe('LR');
+    // Tall portrait panel → the taller (TB) staircase fills more area.
+    expect(pick(500, 1600)).toBe('TB');
+  });
+
+  it('is deterministic — identical input yields identical bbox (Tidy-safe)', () => {
+    const a = layoutBBox(layoutDagStaircase(spine, spineEdges, { rankdir: 'LR', ...OPTS }, hints), hints);
+    const b = layoutBBox(layoutDagStaircase(spine, spineEdges, { rankdir: 'LR', ...OPTS }, hints), hints);
+    expect(a).toEqual(b);
   });
 });

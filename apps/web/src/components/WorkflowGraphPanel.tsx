@@ -16,7 +16,9 @@ import { formatModelLabel } from '../utils/agentIdentity';
 import {
   buildSteppedConnectorRoute,
   COMPACT_CARD_H,
+  FIXED_CARD_H,
   COMPACT_NODE_W,
+  FIXED_NODE_W,
   DAG_NODE_SEP,
   layoutDag,
   NODE_TYPE_W,
@@ -24,7 +26,6 @@ import {
   roundedOrthogonalPath,
   workflowNodeSizeHint,
 } from '../utils/dagLayout';
-import { AgentAvatar } from './AgentAvatar';
 import { AiCredits } from './AiCredits';
 import { PodIndicator } from './PodIndicator';
 import {
@@ -428,10 +429,14 @@ export const useNodeStyles = makeStyles({
     flexDirection: 'column',
     gap: '2px',
   },
+  // Narrower wrapper for the compact gate/system/coordinator nodes (icon + title + optional model
+  // caption). Subtask nodes keep the full COMPACT_NODE_W via pillWrap.
+  pillWrapShort: {
+    width: `${FIXED_NODE_W}px`,
+  },
   pill: {
     boxSizing: 'border-box',
     width: '100%',
-    minHeight: `${COMPACT_CARD_H}px`,
     display: 'flex',
     alignItems: 'center',
     gap: tokens.spacingHorizontalS,
@@ -453,6 +458,26 @@ export const useNodeStyles = makeStyles({
       transitionProperty: 'none',
       ':hover': { transform: 'none' },
     },
+  },
+  // Tall pill — subtask (agent) nodes carrying avatar + 2-line title + Name(Role) + credits.
+  pillTall: {
+    minHeight: `${COMPACT_CARD_H}px`,
+  },
+  // Short pill — fixed stage/gate/system nodes (icon + one-line title + optional sub-label). The
+  // minHeight is only a FLOOR, so the Human Review gate still grows to fit on-face action buttons.
+  pillShort: {
+    minHeight: `${FIXED_CARD_H}px`,
+  },
+  // On-face action row for the Human Review gate while it awaits a decision. It re-enables pointer
+  // events (the node face is the click target for select/zoom) and stops propagation so pressing the
+  // button acts on the review, not the node selection.
+  pillFaceActions: {
+    display: 'flex',
+    flexWrap: 'wrap',
+    gap: tokens.spacingHorizontalXS,
+    marginTop: tokens.spacingVerticalXS,
+    pointerEvents: 'auto',
+    '& button': { minWidth: 0 },
   },
   pillSelected: {
     border: `1px solid ${tokens.colorNeutralStroke1}`,
@@ -489,9 +514,12 @@ export const useNodeStyles = makeStyles({
     fontSize: tokens.fontSizeBase300,
     lineHeight: tokens.lineHeightBase300,
     color: tokens.colorNeutralForeground1,
+    display: '-webkit-box',
+    WebkitLineClamp: 2,
+    WebkitBoxOrient: 'vertical',
     overflow: 'hidden',
-    textOverflow: 'ellipsis',
-    whiteSpace: 'nowrap',
+    whiteSpace: 'normal',
+    wordBreak: 'break-word',
   },
   pillCredits: {
     flexShrink: 0,
@@ -531,6 +559,10 @@ export const useNodeStyles = makeStyles({
     gap: tokens.spacingVerticalS,
     minWidth: '240px',
     maxWidth: '320px',
+    // The hover popover is informational and can overlap the node/arrow region; never let its
+    // surface swallow a click meant for the node (click = select + cinematic zoom). Interactive
+    // affordances (the action buttons/links) opt back in via detailActions below.
+    pointerEvents: 'none',
   },
   detailHeader: {
     display: 'flex',
@@ -578,6 +610,8 @@ export const useNodeStyles = makeStyles({
     display: 'flex',
     flexDirection: 'column',
     gap: tokens.spacingVerticalXS,
+    // Re-enable pointer events for the actionable controls (the surface disables them).
+    pointerEvents: 'auto',
     '& button': { width: '100%' },
     '& a': { width: '100%' },
   },
@@ -865,9 +899,16 @@ export function WorkflowNode({ data, selected }: NodeProps) {
 
   const isActive       = effectiveStatus === 'started' && key !== 'review';
   const isHumanWaiting = key === 'review' && effectiveStatus === 'started';
+  // The Human Review gate shows its primary action on the FACE while awaiting a decision, so it
+  // grows to fit; every other fixed stage/gate/system node stays compact.
+  const showFaceReviewAction = key === 'review' && !isPlanned && isHumanWaiting && Boolean(openModal);
 
+  // WorkflowNodes are ALWAYS the compact card (icon + title only on the face). Only the actual
+  // subtask (agent) nodes get the tall/rich face — that lives in SubtaskNode, not here. The Human
+  // Review gate stays compact but GROWS to fit its on-face approve/decline action while awaiting.
   const pillClass = mergeClasses(
     s.pill,
+    s.pillShort,
     isActive        ? s.cardActive         : undefined,
     isHumanWaiting  ? s.cardActionRequired : undefined,
     isPlanned       ? s.pillPlanned        : undefined,
@@ -881,29 +922,24 @@ export function WorkflowNode({ data, selected }: NodeProps) {
   const rawSubText = statusDescription(key, effectiveStatus);
   // message (from workflow.step payload) takes priority over the hardcoded statusDescription fallback.
   const subText    = degradedReason ?? ((key === 'agent' && effectiveStatus === 'started' && intent) ? intent : (message ?? rawSubText));
-  const roleText   = key === 'agent' ? (agentRoleTitle ?? def.roleDescription) : def.roleDescription;
+  const roleText   = agentRoleTitle ?? def.roleDescription;
   const coordinatorClickable = key === 'coordinator' && !isPlanned && Boolean(openSession);
   const statusText = isPlanned ? 'Planned' : isHumanWaiting ? 'Awaiting' : statusLabel(effectiveStatus);
 
-  const avatar = key === 'agent' && agentName
-    ? <AgentAvatar name={agentName as string} size={26} circle badgeIcon={Icon} badgeTitle={roleText} />
-    : <Icon fontSize={20} />;
+  // Compact face: always the role ICON (never an avatar). The agent name lives in the hover popover.
+  const avatar = <Icon fontSize={20} />;
 
-  // "Name (Role)" face line. Agents show "Deckard (Lead Researcher)"; gate/system nodes fall back to
-  // their role/system name. Hidden when it would merely repeat the title.
-  const nameRoleText = key === 'agent' && agentName
-    ? `${agentName as string} (${roleText})`
-    : roleText;
-  const showNameRole = Boolean(nameRoleText) && nameRoleText !== label;
-  // Model caption rendered BELOW the card (only for agent nodes that have a model).
-  const modelCaption = key === 'agent' && modelId ? formatModelLabel(modelId as string) : undefined;
-  const hasCredits = totalNanoAiu != null || totalTokens != null;
+  // Model caption rendered BELOW the compact card for ANY node that HAS a model (data-driven, not
+  // role-gated) — so Coordinator, RAI, Scribe, and any gate carrying a model show it beneath the
+  // pill, while nodes with no model show nothing. Everything else (agent, credits, role, phase,
+  // duration, pod) is popover-only.
+  const modelCaption = modelId ? formatModelLabel(modelId as string) : undefined;
 
   const rows: NodeDetailRow[] = [
     { label: 'Status', value: statusText },
     { label: 'Role', value: roleText },
     ...(agentName ? [{ label: 'Agent', value: agentName as string }] : []),
-    ...(modelId && key === 'agent' ? [{ label: 'Model', value: formatModelLabel(modelId as string), mono: true }] : []),
+    ...(modelId ? [{ label: 'Model', value: formatModelLabel(modelId as string), mono: true }] : []),
     ...(startedAt !== undefined ? [{ label: 'Duration', value: <ElapsedTimer startedAt={startedAt} completedAt={completedAt} /> }] : []),
     ...(nodeExecutionPodName ? [{ label: 'Pod', value: nodeExecutionPodName as string, mono: true }] : []),
     ...((totalNanoAiu != null || totalTokens != null)
@@ -938,9 +974,7 @@ export function WorkflowNode({ data, selected }: NodeProps) {
       {key === 'merge' && !isPlanned && status === 'completed' && (
         <Button appearance="outline" size="small" icon={<FolderRegular />} onClick={() => (browseFiles ?? openModal)?.(executionId as string)}>Browse files</Button>
       )}
-      {key === 'review' && !isPlanned && status === 'started' && (
-        <Button appearance="primary" size="small" onClick={() => openModal?.(executionId as string)}>Review now</Button>
-      )}
+      {/* Review-now while awaiting renders on the node FACE (see showFaceReviewAction), not here. */}
       {key === 'review' && !isPlanned && (status === 'completed' || status === 'revise') && reviewedBy && (
         <div className={s.reviewerRow}>
           <img
@@ -955,7 +989,7 @@ export function WorkflowNode({ data, selected }: NodeProps) {
   );
 
   const face = (
-    <div className={s.pillWrap}>
+    <div className={mergeClasses(s.pillWrap, s.pillWrapShort)}>
       <div
         className={pillClass}
         role="article"
@@ -1005,14 +1039,18 @@ export function WorkflowNode({ data, selected }: NodeProps) {
         <div className={s.pillBody}>
           <div className={s.pillTitleRow}>
             <span className={s.pillTitle}>{label}</span>
-            {hasCredits && (
-              <span className={s.pillCredits}>
-                <AiCredits totalNanoAiu={totalNanoAiu as number | null | undefined} totalTokens={totalTokens as number | null | undefined} />
-              </span>
-            )}
           </div>
-          {showNameRole && <span className={s.pillNameRole}>{nameRoleText}</span>}
           {subText && <span className={s.pillSub}>{subText}</span>}
+          {showFaceReviewAction && (
+            <div
+              className={mergeClasses(s.pillFaceActions, 'nopan', 'nodrag')}
+              onClick={(e) => e.stopPropagation()}
+              onKeyDown={(e) => e.stopPropagation()}
+              role="presentation"
+            >
+              <Button appearance="primary" size="small" onClick={() => openModal?.(executionId as string)}>Review now</Button>
+            </div>
+          )}
         </div>
       </div>
       {modelCaption && <span className={s.pillModelCaption} title={modelCaption}>{modelCaption}</span>}

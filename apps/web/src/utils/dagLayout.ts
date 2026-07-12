@@ -4,14 +4,37 @@ export const NODE_W = 200;
 export const NODE_H = 145;
 export const DAG_NODE_SEP = 96;
 
-// Compact "pill" node dimensions for the coordinator topology DAG. Every node (subtask or gate)
-// renders at this fixed size so dagre can pack a real, data-driven dependency graph tightly.
-// COMPACT_CARD_H is the height of the card box itself; COMPACT_NODE_H additionally reserves room
-// for the model-name caption that renders just BELOW the card (outside its border), so dagre keeps
-// vertical/rank spacing that accounts for the caption.
-export const COMPACT_NODE_W = 250;
-export const COMPACT_CARD_H = 58;
-export const COMPACT_NODE_H = 80;
+// Compact "pill" node dimensions for the coordinator topology DAG. Node heights are DIFFERENTIATED
+// so dagre packs a tight, data-driven graph without wasted space:
+//   • SUBTASK (agent task) nodes are TALL — avatar + 2-line title + "Name (Role)" line + AI credits,
+//     with the model-name caption rendered just BELOW the card. SUBTASK_CARD_H is the card box;
+//     SUBTASK_NODE_H additionally reserves room for that caption (dagre hint).
+//   • ALL other nodes (Coordinator, Outcome plan, Work plan, RAI, Review, Merge, Scribe) use the
+//     SMALL card — icon + one-line title (+ short sub-label), no avatar/credits on the face
+//     (FIXED_CARD_H / FIXED_NODE_H). ANY compact node that HAS a model additionally renders a
+//     model-name caption BELOW the card, so its dagre hint reserves the extra caption room
+//     (FIXED_NODE_WITH_CAPTION_H) — driven purely off the node's model, not its role.
+//   • The Human Review gate GROWS to fit on-face action buttons while it is awaiting a decision;
+//     REVIEW_EXPANDED_NODE_H is its dagre hint in that state so the staircase reserves the room.
+// Node WIDTHS are differentiated too: SUBTASK nodes are WIDE (SUBTASK_NODE_W) to fit the 2-line
+// title + "Name (Role)" + AI credits; the compact gate/system/coordinator nodes are NARROWER
+// (FIXED_NODE_W) since they only carry an icon + title (+ model caption). Both widths are fed to
+// dagre as per-node hints so columns stay cleanly aligned.
+export const SUBTASK_NODE_W = 250;
+export const FIXED_NODE_W = 184;
+// Back-compat alias: existing imports refer to the wide (subtask) pill width.
+export const COMPACT_NODE_W = SUBTASK_NODE_W;
+export const SUBTASK_CARD_H = 88;
+export const SUBTASK_NODE_H = 112;
+export const FIXED_CARD_H = 48;
+export const FIXED_NODE_H = 56;
+// A compact node that also shows a model caption below the card (Coordinator / RAI): small card +
+// the same caption reserve the subtask node uses (SUBTASK_NODE_H − SUBTASK_CARD_H = 24px).
+export const FIXED_NODE_WITH_CAPTION_H = FIXED_CARD_H + (SUBTASK_NODE_H - SUBTASK_CARD_H);
+export const REVIEW_EXPANDED_NODE_H = 96;
+// Back-compat aliases: existing imports refer to the subtask (tall) pill dimensions.
+export const COMPACT_CARD_H = SUBTASK_CARD_H;
+export const COMPACT_NODE_H = SUBTASK_NODE_H;
 
 // Stair tread length: how many nodes advance along the SAME row (LR) / column (TB) before the stair
 // steps down/right to the next tread. A value of 2 keeps chunky, clearly-horizontal treads (instead of
@@ -77,6 +100,33 @@ export interface NodeSizeHint {
 export interface ConnectorPoint {
   x: number;
   y: number;
+}
+
+/**
+ * Computes the axis-aligned bounding box (width/height) that encloses a laid-out
+ * node set, honoring each node's size hint (falling back to the default node box).
+ * Used to compare LR vs TB staircase footprints when auto-picking the orientation
+ * that best fills the topology panel.
+ */
+export function layoutBBox(
+  nodes: { id: string; position: { x: number; y: number } }[],
+  nodeSizeHints?: Record<string, NodeSizeHint>,
+): { w: number; h: number } {
+  if (nodes.length === 0) return { w: 0, h: 0 };
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const n of nodes) {
+    const hint = nodeSizeHints?.[n.id];
+    const w = hint?.width ?? NODE_W;
+    const h = hint?.height ?? NODE_H;
+    minX = Math.min(minX, n.position.x);
+    minY = Math.min(minY, n.position.y);
+    maxX = Math.max(maxX, n.position.x + w);
+    maxY = Math.max(maxY, n.position.y + h);
+  }
+  return { w: Math.max(1, maxX - minX), h: Math.max(1, maxY - minY) };
 }
 
 export interface SteppedConnectorRoute {
@@ -640,11 +690,10 @@ export function layoutDagStaircase(
   const crossGap = opts.nodeSep ?? 40;  // cross-axis gap between stacked parallel nodes
   const MARGIN = 24;
 
-  // Uniform primary pitch keeps successive ranks (and the diagonal edges between them) even.
-  const colPitch = ranks.reduce(
-    (max, ids) => Math.max(max, ids.reduce((m, id) => Math.max(m, primarySize(id)), 0)),
-    0,
-  ) + laneGap;
+  // Primary-axis pitch is computed PER adjacent-rank transition so compact→compact steps do not inherit
+  // the spacing required by a tall/wide subtask elsewhere in the graph. Each transition still reserves
+  // enough room for the larger of the two participating ranks plus the configured lane gap.
+  const rankPrimaryExtent = ranks.map((ids) => ids.reduce((max, id) => Math.max(max, primarySize(id)), 0));
 
   const rankCrossExtent = (ids: string[]) =>
     ids.reduce((sum, id) => sum + crossSize(id), 0) + Math.max(0, ids.length - 1) * crossGap;
@@ -683,7 +732,7 @@ export function layoutDagStaircase(
       // Step down only when starting a new tread (every `run` ranks); otherwise advance along the tread.
       const advancePrimary = straight || rankIndex % run !== 0;
       if (advancePrimary) {
-        primaryPos += colPitch;
+        primaryPos += Math.max(rankPrimaryExtent[rankIndex - 1], rankPrimaryExtent[rankIndex]) + laneGap;
       } else {
         const prevExtent = rankCrossExtent(ranks[rankIndex - 1]);
         crossPos += Math.max(prevExtent + crossGap, explicitStep);

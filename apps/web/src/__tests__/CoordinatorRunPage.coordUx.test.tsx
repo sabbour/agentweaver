@@ -573,15 +573,60 @@ describe('CoordinatorRunPage operator console redesign', () => {
     await waitFor(() => expect(indicator.textContent).toContain('Failure workflow'), { timeout: 4000 });
     expect(indicator.textContent).toContain('Failed');
     expect(indicator.textContent).not.toContain('Last attempted:');
-    // The short failure summary stays inline; the full "Failure context: …" moved to a tooltip
-    // beside the workflow name.
+    // The short failure summary stays inline beside the workflow status; the ⓘ tooltip beside the
+    // workflow NAME explains why THIS workflow was selected (not the failure).
     expect(indicator.textContent).toContain('Child run crashed after dispatch.');
+    const reasonInfo = within(indicator).getByTestId('rail-status-reason-info');
+    expect(reasonInfo.getAttribute('aria-label')).toBe('Why this workflow was selected');
+    fireEvent.focus(reasonInfo);
+    const tip = await screen.findByRole('tooltip', undefined, { timeout: 4000 });
+    // Auto-selected with no explicit rationale ⇒ the "why selected" fallback, never the failure text.
+    expect(tip.textContent).toContain('Automatically selected by the coordinator');
+    expect(tip.textContent).not.toContain('Failure context');
+    expect(indicator.textContent).not.toMatch(/\bExecuting\b/);
+    expect(indicator.querySelector('[data-state-color="danger"]')).toBeTruthy();
+  });
+
+  it('shows the workflow-selection rationale (not the failure) in the workflow-name info tooltip', async () => {
+    vi.mocked(apiClient.getRun).mockResolvedValue({
+      status: 'failed',
+      coordinator_status: 'failed',
+      coordinator_status_reason: 'Child run crashed after dispatch.',
+      autopilot: false,
+      auto_approve_tools: false,
+    } as never);
+    vi.mocked(apiClient.getRunGraph).mockResolvedValue({
+      ...COORDINATOR_GRAPH_DESCRIPTOR,
+      nodes: [
+        { id: 'coordinator', label: 'Coordinator', role: 'coordinator', kind: 'live', node_type: 'agent' },
+        { id: 'plan:subtask-1', label: 'Last restored task', role: 'subtask', kind: 'live', node_type: 'subtask' },
+      ],
+      edges: [{ from: 'coordinator', to: 'plan:subtask-1', cardinality: 'direct', loopback: false }],
+    });
+    vi.mocked(apiClient.getRunEvents).mockResolvedValue([
+      {
+        sequence: 1,
+        type: 'coordinator.workflow_selected',
+        payload: {
+          selectedName: 'Content Authoring',
+          wasAutoSelected: true,
+          rationale: 'The task asks to review error handling and propose improvements; the content-authoring workflow fits this review-and-propose process.',
+        },
+      },
+    ] as never);
+
+    render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    const indicator = await screen.findByTestId('rail-status-block', undefined, { timeout: 4000 });
+    await waitFor(() => expect(indicator.textContent).toContain('Content Authoring'), { timeout: 4000 });
     const reasonInfo = within(indicator).getByTestId('rail-status-reason-info');
     fireEvent.focus(reasonInfo);
     const tip = await screen.findByRole('tooltip', undefined, { timeout: 4000 });
-    expect(tip.textContent).toContain('Failure context: Child run crashed after dispatch.');
-    expect(indicator.textContent).not.toMatch(/\bExecuting\b/);
-    expect(indicator.querySelector('[data-state-color="danger"]')).toBeTruthy();
+    expect(tip.textContent).toContain('review-and-propose process');
+    expect(tip.textContent).not.toContain('Child run crashed after dispatch.');
+    expect(tip.textContent).not.toContain('Failure context');
+    // The failure reason still shows on the inline status line beneath the name.
+    expect(indicator.textContent).toContain('Child run crashed after dispatch.');
   });
 
   it('color codes run tree states with restrained semantic affordances', async () => {

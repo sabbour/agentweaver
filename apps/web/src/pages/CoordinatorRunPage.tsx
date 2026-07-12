@@ -55,7 +55,7 @@ import {
 import { useSeededRunStream } from '../hooks/useSeededRunStream';
 import { buildTopologyState, initialTopologyState, seedTopologyFromWorkPlan } from '../state/topologyReducer';
 import { formatModelLabel } from '../utils/agentIdentity';
-import { layoutDagStaircase, COMPACT_NODE_H, COMPACT_NODE_W } from '../utils/dagLayout';
+import { layoutDagStaircase, layoutBBox, COMPACT_NODE_H, COMPACT_NODE_W, FIXED_NODE_W, FIXED_NODE_H, FIXED_NODE_WITH_CAPTION_H, REVIEW_EXPANDED_NODE_H } from '../utils/dagLayout';
 import {
   ArrowAutofitHeightRegular,
   ArrowAutofitWidthRegular,
@@ -87,7 +87,7 @@ import {
   useRef,
   useState,
 } from 'react';
-import type { ReactNode } from 'react';
+import type { ReactNode, RefObject } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import type { FormattedApiError } from '../api/errors';
 import type { RunStreamEvent } from '../api/sse';
@@ -832,8 +832,8 @@ interface SubtaskNodeData extends Record<string, unknown> {
 // (columns in the LR layout) sit COORD_GRAPH_RANK_SEP apart, and parallel siblings within a
 // rank stack COORD_GRAPH_NODE_SEP apart. Independent subtasks land at the same dagre rank
 // (parallel); dependents chain into later ranks — all derived from the real graph edges.
-const COORD_GRAPH_RANK_SEP = 64;
-const COORD_GRAPH_NODE_SEP = 28;
+const COORD_GRAPH_RANK_SEP = 40;
+const COORD_GRAPH_NODE_SEP = 20;
 
 function SubtaskNode({ id, data, selected }: NodeProps) {
   const s = useNodeStyles();
@@ -849,6 +849,8 @@ function SubtaskNode({ id, data, selected }: NodeProps) {
   const agentName   = d.agent as string | undefined;
   const modelCaption = d.model ? formatModelLabel(d.model as string) : undefined;
   const hasCredits  = d.totalNanoAiu != null || d.totalTokens != null;
+  // Subtask (agent) nodes are the ONLY tall/rich pills — avatar + 2-line title + Name(Role) line +
+  // model caption below + AI credits on the face. Every other node uses the compact WorkflowNode.
   const nameRoleText = agentName ? `${agentName} (${roleTitle})` : roleTitle;
   const showNameRole = Boolean(nameRoleText) && nameRoleText !== label;
 
@@ -884,6 +886,7 @@ function SubtaskNode({ id, data, selected }: NodeProps) {
       <div
         className={mergeClasses(
           s.pill,
+          s.pillTall,
           stepStatus === 'started' ? s.cardActive : undefined,
           selected ? s.pillSelected : undefined,
         )}
@@ -1946,6 +1949,44 @@ function TopologyToolbar({ orientation, onToggleOrientation, onTidy, fitPadding 
   );
 }
 
+// Cinematic zoom-to-node: registers imperative viewport helpers on the shared ref so the parent's
+// onNodeClick can glide onto a clicked node (in addition to selecting it) and onPaneClick can glide
+// back out to the whole graph. Lives inside the ReactFlowProvider so it can reach the native viewport
+// API (`setCenter` / `fitView`).
+type TopologyViewportApi = { centerOnNode: (node: Node) => void; fitAll: () => void };
+
+function TopologyViewportController({
+  apiRef,
+  fitPadding,
+}: {
+  apiRef: RefObject<TopologyViewportApi | null>;
+  fitPadding: number;
+}) {
+  const { setCenter, fitView } = useReactFlow();
+  useEffect(() => {
+    const prefersReducedMotion = () =>
+      window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches ?? false;
+    apiRef.current = {
+      centerOnNode: (node: Node) => {
+        const w = node.measured?.width ?? node.initialWidth ?? COMPACT_NODE_W;
+        const h = node.measured?.height ?? node.initialHeight ?? COMPACT_NODE_H;
+        const cx = node.position.x + w / 2;
+        const cy = node.position.y + h / 2;
+        // Comfortable zoom-in that still reveals neighbours/edges; instant if reduced motion is set.
+        setCenter(cx, cy, { zoom: 1.6, duration: prefersReducedMotion() ? 0 : 600 });
+      },
+      // Cinematic reverse of centerOnNode: glide back out to the whole graph (same ease/duration).
+      fitAll: () => {
+        fitView({ padding: fitPadding, duration: prefersReducedMotion() ? 0 : 600 });
+      },
+    };
+    return () => {
+      apiRef.current = null;
+    };
+  }, [setCenter, fitView, apiRef, fitPadding]);
+  return null;
+}
+
 export function CoordinatorRunPage() {
   const styles = useStyles();
   const { projectId, runId } = useParams<{ projectId: string; runId: string }>();
@@ -1975,6 +2016,13 @@ export function CoordinatorRunPage() {
   // Topology graph orientation (dagre rank direction). LR = horizontal (default), TB = vertical.
   // The toolbar's "Switch orientation" toggles this and re-fits the view.
   const [graphOrientation, setGraphOrientation] = useState<'LR' | 'TB'>('LR');
+  // True once the user manually toggles orientation via the toolbar — suppresses the auto-pick so
+  // their explicit choice sticks. Reset when the topology panel closes so reopening re-evaluates.
+  const [orientationUserChose, setOrientationUserChose] = useState(false);
+  // Measured topology-graph container size (from a ResizeObserver on the canvas wrapper). Drives the
+  // fill-maximizing default-orientation pick. Null until first measured.
+  const [topoContainerSize, setTopoContainerSize] = useState<{ w: number; h: number } | null>(null);
+  const topoContainerRef = useRef<HTMLDivElement | null>(null);
   // Bumped by "Tidy" to force a fresh dagre layout + re-fit even when inputs are unchanged.
   const [tidyNonce, setTidyNonce] = useState(0);
 
@@ -2598,8 +2646,8 @@ export function CoordinatorRunPage() {
   }, [events, effectiveDescriptor]);
 
 
-  const { rfNodes, displayEdges } = useMemo<{ rfNodes: Node[]; displayEdges: Edge[] }>(() => {
-    if (!planningDescriptor) return { rfNodes: [], displayEdges: [] };
+  const { rfNodes, displayEdges, bboxLR, bboxTB } = useMemo<{ rfNodes: Node[]; displayEdges: Edge[]; bboxLR: { w: number; h: number }; bboxTB: { w: number; h: number } }>(() => {
+    if (!planningDescriptor) return { rfNodes: [], displayEdges: [], bboxLR: { w: 0, h: 0 }, bboxTB: { w: 0, h: 0 } };
 
     const fwdEdges: Edge[] = [];
     const allEdges: Edge[] = [];
@@ -2624,11 +2672,15 @@ export function CoordinatorRunPage() {
     const nodeSizeHints: Record<string, NodeSizeHint> = {};
     const raw: Node[] = planningDescriptor.nodes.map((node) => {
       const nt = node.node_type;
-      // Every coordinator node now renders as a compact fixed-size pill (~210x60); feed dagre those
-      // dimensions so ranks pack tightly regardless of node type.
+      // Per-node dagre height hints so the staircase packs variable-height nodes tightly. Fixed
+      // stage/gate/system nodes are short by default; subtask (agent) nodes get the tall hint below;
+      // the Human Review gate gets an expanded hint while it awaits a decision (on-face buttons).
+      // Default per-node hint: the NARROW compact card (gate/system/coordinator nodes are icon +
+      // title only). The subtask branch below widens+heightens to the tall pill; the model-caption
+      // and Human-Review-awaiting cases adjust height further.
       nodeSizeHints[node.id] = {
-        width:  COMPACT_NODE_W,
-        height: COMPACT_NODE_H,
+        width:  FIXED_NODE_W,
+        height: FIXED_NODE_H,
       };
 
       const planned = node.kind === 'planned';
@@ -2636,6 +2688,10 @@ export function CoordinatorRunPage() {
       const shouldTerminalizeLiveNodes = viewState.terminal && runStatusColor !== 'success';
 
       if (nt === 'subtask') {
+        // Subtask (agent) nodes are the WIDE, tall pills — avatar + 2-line title + Name(Role) +
+        // credits + model caption; hint dagre with the full subtask footprint.
+        nodeSizeHints[node.id].width  = COMPACT_NODE_W;
+        nodeSizeHints[node.id].height = COMPACT_NODE_H;
         // Subtask node — look up topology status by mapped id.
         const topoNode = resolveSubtaskTopoNode(node.id, topology);
         // Defensive: read display fields from flat props OR nested data map.
@@ -2681,6 +2737,24 @@ export function CoordinatorRunPage() {
       // action-required ("Awaiting your review") and the coordinator keeps its "View session" button.
       const roleKey = effectiveGraphRole(node);
       const coordTopoNode = topology.nodes['coordinator'];
+
+      // Resolve the workflow node's own topology entry (coordinator + assembly stages) so we can
+      // surface its agent / model / pod on the pill. This is what makes the height CONTENT-DRIVEN:
+      // Coordinator and RAI carry an agent (and model), so they render the TALL card like the
+      // subtasks; pure gates (Outcome plan, Work plan, Merge, Scribe) have none and stay compact.
+      const wfTopoNode = topology.nodes[node.id] ?? topology.nodes[roleKey];
+      const isCoordinatorNode = node.id === 'coordinator';
+      const wfAgent = node.agent ?? (node.data?.['agent'] as string | undefined) ?? wfTopoNode?.assignedAgent
+        ?? (isCoordinatorNode ? 'Coordinator' : undefined);
+      const wfModel = node.model ?? (node.data?.['model'] as string | undefined) ?? wfTopoNode?.selectedModelId;
+      const wfPod = wfTopoNode?.executionPodName ?? null;
+      // WorkflowNodes are always the SMALL card. When the node HAS a model (data-driven — Coordinator,
+      // RAI, Scribe, or any gate carrying a model) it also renders a model caption BELOW the card, so
+      // reserve the extra caption room in the layout; nodes with no model stay at the plain compact
+      // height. (Human Review awaiting a decision is expanded further below to fit its on-face buttons.)
+      if (wfModel) {
+        nodeSizeHints[node.id].height = FIXED_NODE_WITH_CAPTION_H;
+      }
 
       // Collective-assembly stage status. Two sources combine: the phase projection
       // (assemblyNodeStatus) covers RAI + the human Review gate, but merge/scribe have no distinct
@@ -2737,6 +2811,12 @@ export function CoordinatorRunPage() {
         ? { status: 'pending' }
         : { status: stepStatus };
 
+      // Human Review gate awaiting a decision renders on-face action buttons and grows — reserve the
+      // room in the layout so the staircase keeps clear of it. (Matches WorkflowNode's isHumanWaiting.)
+      if (roleKey === 'review' && !nodePlanned && stepStatus === 'started') {
+        nodeSizeHints[node.id].height = REVIEW_EXPANDED_NODE_H;
+      }
+
       // Feed the stage's wall-clock timing so the generic WorkflowNode renders a live count-up
       // timer (RAI / Review / Merge / Scribe), matching the subtask cards.
       if (at?.startedAt !== undefined) {
@@ -2762,6 +2842,12 @@ export function CoordinatorRunPage() {
           runId:     runId      ?? '',
           executionId: runId    ?? '',
           projectId:   projectId ?? '',
+          // Agent / role / model / pod resolved from the node's topology entry (coordinator +
+          // assembly stages). Their presence drives the content-driven TALL vs compact card.
+          agentName:      wfAgent,
+          agentRoleTitle: wfAgent ? roleByAgent[wfAgent] : undefined,
+          modelId:        wfModel,
+          executionPodName: wfPod,
           // Assembly/workflow stages (RAI / Human Review / Merge / Scribe) have their own
           // persisted sub-run streams — carry the child run id so selecting the node in the
           // session tree scopes Activity to that sub-run instead of an empty stream.
@@ -2774,24 +2860,25 @@ export function CoordinatorRunPage() {
       };
     });
 
-    const laidOutNodes = layoutDagStaircase(
-      raw,
-      fwdEdges,
-      {
-        rankdir: graphOrientation,
-        rankSep: COORD_GRAPH_RANK_SEP,
-        nodeSep: COORD_GRAPH_NODE_SEP,
-        // Cascade the long mostly-linear spine diagonally so the run uses the panel's height (not
-        // just its width). True parallel ranks still fan out; the sequence steps consistently one
-        // way (LR ⇒ down-right, TB ⇒ down-right) and never reverses.
-        targetAspect: 1.35,
-        minStepRanks: 3,
-      },
-      nodeSizeHints,
-    );
+    const staircaseOpts = {
+      rankSep: COORD_GRAPH_RANK_SEP,
+      nodeSep: COORD_GRAPH_NODE_SEP,
+      // Cascade the long mostly-linear spine diagonally so the run uses the panel's height (not
+      // just its width). True parallel ranks still fan out; the sequence steps consistently one
+      // way (LR ⇒ down-right, TB ⇒ down-right) and never reverses.
+      targetAspect: 1.35,
+      minStepRanks: 3,
+    };
+    // Lay out BOTH orientations deterministically so we can (a) render the active one and
+    // (b) compare their footprints to auto-pick the orientation that fills the panel best.
+    const laidOutLR = layoutDagStaircase(raw, fwdEdges, { ...staircaseOpts, rankdir: 'LR' }, nodeSizeHints);
+    const laidOutTB = layoutDagStaircase(raw, fwdEdges, { ...staircaseOpts, rankdir: 'TB' }, nodeSizeHints);
+    const laidOutNodes = graphOrientation === 'TB' ? laidOutTB : laidOutLR;
     return {
       rfNodes:      laidOutNodes,
       displayEdges: routeGridEdges(allEdges, laidOutNodes),
+      bboxLR:       layoutBBox(laidOutLR, nodeSizeHints),
+      bboxTB:       layoutBBox(laidOutTB, nodeSizeHints),
     };
   }, [planningDescriptor, topology, projectId, runId, coordNodeStatusOverride, orch.phase, subtaskTiming, assemblyTiming, roleByAgent, latestOutcomePlanDraftingEvent, latestOutcomePlanEvent, specConfirmed, workPlanSeen, coordStatusField, graphOrientation, tidyNonce, viewState.terminal, runStatusColor, revisingSubtasks, activePreviewUrl]);
 
@@ -3041,6 +3128,48 @@ export function CoordinatorRunPage() {
   // Run-wide (coordinator-level) collective-diff summary for the Changes chip above the composer.
   const [runChangesSummary, setRunChangesSummary] = useState<{ files: number; added: number; removed: number } | null>(null);
   const [topologyPanelOpen, setTopologyPanelOpen] = useState(false);
+
+  // Measure the topology graph container so we can auto-pick the fill-maximizing orientation.
+  useEffect(() => {
+    const el = topoContainerRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const measure = () => {
+      const w = el.clientWidth;
+      const h = el.clientHeight;
+      if (w > 0 && h > 0) {
+        setTopoContainerSize((prev) => (prev && prev.w === w && prev.h === h ? prev : { w, h }));
+      }
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [topologyPanelOpen]);
+
+  // Reset the manual-override + measurement when the panel closes so each open re-evaluates the
+  // default orientation from scratch (deterministic: same run + same container ⇒ same choice).
+  useEffect(() => {
+    if (!topologyPanelOpen) {
+      setOrientationUserChose(false);
+      setTopoContainerSize(null);
+    }
+  }, [topologyPanelOpen]);
+
+  // Auto-pick the DEFAULT orientation to fill the most of the panel. For each staircase footprint the
+  // fit scale into the container is min(cw/bw, ch/bh); the larger scale fills more area. We only drive
+  // the default here — a manual toolbar toggle sets orientationUserChose and wins from then on. This
+  // never touches the run-tree ordering (that is derived from dependency edges, not graph layout).
+  useEffect(() => {
+    if (orientationUserChose || !topologyPanelOpen) return;
+    const size = topoContainerSize;
+    if (!size || bboxLR.w <= 0 || bboxTB.w <= 0) return;
+    const scaleLR = Math.min(size.w / bboxLR.w, size.h / bboxLR.h);
+    const scaleTB = Math.min(size.w / bboxTB.w, size.h / bboxTB.h);
+    // Tie-break toward LR (landscape default) when the two fits are effectively equal.
+    const best: 'LR' | 'TB' = scaleTB > scaleLR * 1.001 ? 'TB' : 'LR';
+    setGraphOrientation((prev) => (prev === best ? prev : best));
+  }, [orientationUserChose, topologyPanelOpen, topoContainerSize, bboxLR, bboxTB]);
+
   const [sessionPanelOpen, setSessionPanelOpen] = useState(true);
   const [panelNodeId, setPanelNodeId] = useState<string | null>(null);
   const [composerFocusSignal, setComposerFocusSignal] = useState(0);
@@ -3050,6 +3179,10 @@ export function CoordinatorRunPage() {
     setPanelNodeId(nodeId);
     setSessionPanelOpen(true);
   }, []);
+
+  // Imperative handle to the full-topology viewport (registered by TopologyViewportController inside
+  // the ReactFlowProvider) so a node click can cinematically pan+zoom onto the node.
+  const topologyViewportApiRef = useRef<TopologyViewportApi | null>(null);
 
   const focusOutcomePlanComposer = useCallback(() => {
     setOutcomePlanClarifying(true);
@@ -3115,11 +3248,17 @@ export function CoordinatorRunPage() {
         : viewState.bucket === 'blocked' ? 'Blocked'
           : 'Executing';
   const executionDisplayStateColor = viewState.terminal ? runStatusColor : executingStateColor;
-  const executionReasonPrefix = runStatusColor === 'danger' ? 'Failure context' : 'Why';
   const executionContextReason = runStatusColor === 'danger'
     ? (viewState.reason ?? executionWhy)
     : executionWhy;
-  const executionReasonFull = `${executionReasonPrefix}: ${executionContextReason}`;
+  // The workflow-name ⓘ tooltip explains WHY this workflow was SELECTED (the selection rationale),
+  // never the failure/status context (that stays on the inline reason line beneath the name).
+  const executionWhySelected = selectedWorkflow?.rationale
+    ?? (selectedWorkflow
+      ? selectedWorkflow.auto
+        ? 'Automatically selected by the coordinator'
+        : 'Selected for this run'
+      : 'Workflow not selected yet');
   const executionReasonShort = executionContextReason && executionContextReason.length <= 60
     ? executionContextReason
     : null;
@@ -3538,10 +3677,14 @@ export function CoordinatorRunPage() {
           <ReactFlowProvider>
           <TopologyToolbar
             orientation={graphOrientation}
-            onToggleOrientation={() => setGraphOrientation((o) => (o === 'LR' ? 'TB' : 'LR'))}
+            onToggleOrientation={() => {
+              setOrientationUserChose(true);
+              setGraphOrientation((o) => (o === 'LR' ? 'TB' : 'LR'));
+            }}
             onTidy={() => setTidyNonce((n) => n + 1)}
             fitPadding={0.14}
           />
+          <TopologyViewportController apiRef={topologyViewportApiRef} fitPadding={0.14} />
           <div
             className={`${styles.dagContainer} ${styles.topologyDag}`}
             role="region"
@@ -3551,7 +3694,7 @@ export function CoordinatorRunPage() {
             tabIndex={0}
             aria-label="Topology graph. Drag to pan; use the toolbar or ctrl+scroll to zoom."
           >
-            <div data-testid="topology-graph-canvas" style={{ width: '100%', height: '100%' }}>
+            <div ref={topoContainerRef} data-testid="topology-graph-canvas" style={{ width: '100%', height: '100%' }}>
               <ReactFlow
                 key={`${graphOrientation}:${displayNodes.length}:${displayEdges2.length}:${tidyNonce}:${layoutSignature}`}
                 nodes={linkedDisplayNodes}
@@ -3573,7 +3716,13 @@ export function CoordinatorRunPage() {
                 zoomOnDoubleClick={false}
                 panOnDrag
                 style={{ width: '100%', height: '100%' }}
-                onNodeClick={(_, node) => openPanelForNode(node.id)}
+                onNodeClick={(_, node) => {
+                  openPanelForNode(node.id);
+                  topologyViewportApiRef.current?.centerOnNode(node);
+                }}
+                onPaneClick={() => {
+                  topologyViewportApiRef.current?.fitAll();
+                }}
                 proOptions={{ hideAttribution: true }}
               >
                 <MiniMap
@@ -3979,8 +4128,8 @@ export function CoordinatorRunPage() {
               <span className={styles.railStatusWorkflow}>
                 <FlowchartRegular aria-hidden="true" />
                 <span title={executionWorkflowName}>{executionWorkflowName}</span>
-                <Tooltip content={executionReasonFull} relationship="description" withArrow>
-                  <span className={styles.railStatusInfoTrigger} tabIndex={0} role="button" aria-label="Workflow reason" data-testid="rail-status-reason-info">
+                <Tooltip content={executionWhySelected} relationship="description" withArrow>
+                  <span className={styles.railStatusInfoTrigger} tabIndex={0} role="button" aria-label="Why this workflow was selected" data-testid="rail-status-reason-info">
                     <InfoRegular className={styles.railStatusInfoGlyph} aria-hidden="true" />
                   </span>
                 </Tooltip>
@@ -4002,7 +4151,7 @@ export function CoordinatorRunPage() {
                 >
                   <span className={styles.minimapCaption}>Topology</span>
                   <div className={styles.minimapCanvas} aria-hidden="true">
-                    {hasGraph ? (
+                    {!topologyPanelOpen && hasGraph ? (
                     <ExecutionModalContext.Provider value={viewAssemblyExecution}>
                     <BrowseFilesContext.Provider value={browseAssemblyFiles}>
                     <ActiveEdgeContext.Provider value={activeLoopbackId}>
