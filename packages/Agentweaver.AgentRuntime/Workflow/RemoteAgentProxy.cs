@@ -14,11 +14,23 @@ namespace Agentweaver.AgentRuntime.Workflow;
 /// <summary>Worker-side deadlines for streaming A2A turns.</summary>
 public sealed class RemoteAgentProxyOptions
 {
+    internal static readonly TimeSpan ReadIdleSafetyMargin = TimeSpan.FromMinutes(5);
+
     /// <summary>Absolute worker-side backstop for one pod turn. Zero disables it.</summary>
     public TimeSpan TotalTurnTimeout { get; set; } = TimeSpan.FromMinutes(70);
 
-    /// <summary>Maximum gap between A2A stream updates. Zero disables it.</summary>
-    public TimeSpan ReadIdleTimeout { get; set; } = TimeSpan.FromMinutes(5);
+    /// <summary>
+    /// Maximum gap between A2A stream updates. Zero disables it. The worker cannot see the pod's
+    /// shell-aware liveness, so this defaults to the authoritative in-pod idle window plus a safety
+    /// margin. Once this expires, the pod should already have emitted progress or a structured
+    /// timeout; continued silence indicates a dead pod or transport.
+    /// </summary>
+    public TimeSpan ReadIdleTimeout { get; set; } =
+        CopilotAIAgent.DefaultStreamIdleTimeout + ReadIdleSafetyMargin;
+
+    /// <summary>Test seam for observing deadline timer lifetime.</summary>
+    internal Func<TimeSpan, CancellationToken, Task> DelayAsync { get; set; } =
+        static (delay, ct) => Task.Delay(delay, ct);
 }
 
 /// <summary>
@@ -332,14 +344,30 @@ public sealed class RemoteAgentProxy : IWorkflowTurnAgent
                 }
 
                 pendingMove = enumerator.MoveNextAsync().AsTask();
-                var idleTask = idleTimeout == Timeout.InfiniteTimeSpan
-                    ? Task.Delay(Timeout.InfiniteTimeSpan, ct)
-                    : Task.Delay(idleTimeout, ct);
-                var totalTask = totalDeadline == DateTimeOffset.MaxValue
-                    ? Task.Delay(Timeout.InfiniteTimeSpan, ct)
-                    : Task.Delay(remainingTotal, ct);
+                Task completed;
+                Task idleTask;
+                Task totalTask;
+                using (var iterationCts = CancellationTokenSource.CreateLinkedTokenSource(ct))
+                {
+                    idleTask = idleTimeout == Timeout.InfiniteTimeSpan
+                        ? options.DelayAsync(Timeout.InfiniteTimeSpan, iterationCts.Token)
+                        : options.DelayAsync(idleTimeout, iterationCts.Token);
+                    totalTask = totalDeadline == DateTimeOffset.MaxValue
+                        ? options.DelayAsync(Timeout.InfiniteTimeSpan, iterationCts.Token)
+                        : options.DelayAsync(remainingTotal, iterationCts.Token);
 
-                var completed = await Task.WhenAny(pendingMove, idleTask, totalTask).ConfigureAwait(false);
+                    try
+                    {
+                        completed = await Task.WhenAny(pendingMove, idleTask, totalTask).ConfigureAwait(false);
+                    }
+                    finally
+                    {
+                        iterationCts.Cancel();
+                    }
+
+                    await ObserveCancelledDeadlineTasksAsync(idleTask, totalTask).ConfigureAwait(false);
+                }
+
                 if (ReferenceEquals(completed, pendingMove))
                 {
                     var moved = await pendingMove.ConfigureAwait(false);
@@ -379,6 +407,18 @@ public sealed class RemoteAgentProxy : IWorkflowTurnAgent
             {
                 await enumerator.DisposeAsync().ConfigureAwait(false);
             }
+        }
+    }
+
+    private static async Task ObserveCancelledDeadlineTasksAsync(Task idleTask, Task totalTask)
+    {
+        try
+        {
+            await Task.WhenAll(idleTask, totalTask).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            // The per-iteration deadline CTS intentionally tears down whichever delay lost the race.
         }
     }
 

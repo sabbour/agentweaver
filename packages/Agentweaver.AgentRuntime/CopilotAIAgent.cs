@@ -165,6 +165,12 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
     internal TimeSpan StreamIdleTimeout { get; set; } = ResolveStreamIdleTimeoutDefault();
 
     /// <summary>
+    /// Authoritative default inactivity window inside the AgentHost pod. Worker-side transport
+    /// deadlines must remain strictly longer because they cannot observe active-shell liveness.
+    /// </summary>
+    internal static readonly TimeSpan DefaultStreamIdleTimeout = TimeSpan.FromMinutes(15);
+
+    /// <summary>
     /// Hard wall-clock limit for an active shell. While a shell is active this replaces the normal
     /// stream-idle window. Override with
     /// <c>AGENTWEAVER_SHELL_EXECUTION_HARD_TIMEOUT_SECONDS</c> (0 disables the hard deadline).
@@ -200,7 +206,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
     {
         return ResolveTimeoutDefault(
             "AGENTWEAVER_AGENT_TURN_IDLE_TIMEOUT_SECONDS",
-            TimeSpan.FromMinutes(15));
+            DefaultStreamIdleTimeout);
     }
 
     private static TimeSpan ResolveTimeoutDefault(string variableName, TimeSpan fallback)
