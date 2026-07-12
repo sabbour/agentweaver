@@ -30,7 +30,10 @@ const useStyles = makeStyles({
 export interface CoordinatorArtifactsPanelProps {
   runId: string;
   runStatus: string;
-  adapter: ArtifactBrowserAdapter;
+  adapter?: ArtifactBrowserAdapter;
+  /** Which sub-view to open on first render: the integration diff ('changes', default) or the
+   *  produced-files browser ('files'). Lets the Changes vs Files chips reach distinct destinations. */
+  initialTab?: 'changes' | 'files';
 }
 
 /**
@@ -38,9 +41,9 @@ export interface CoordinatorArtifactsPanelProps {
  * artifact-browser hook + file tree, pointing at the coordinator's integration-branch adapter so the
  * panel shows the collective diff. Clicking a file opens the standard file viewer (with diffs).
  */
-export function CoordinatorArtifactsPanel({ runId, runStatus, adapter }: CoordinatorArtifactsPanelProps) {
+export function CoordinatorArtifactsPanel({ runId, runStatus, adapter, initialTab = 'changes' }: CoordinatorArtifactsPanelProps) {
   const styles = useStyles();
-  const state = useArtifactBrowser(runId, runStatus, undefined, undefined, undefined, undefined, adapter);
+  const state = useArtifactBrowser(runId, runStatus, undefined, undefined, undefined, undefined, adapter, initialTab);
 
   return (
     <div className={styles.root} data-testid="coord-artifacts-panel">
@@ -58,7 +61,7 @@ export function CoordinatorArtifactsPanel({ runId, runStatus, adapter }: Coordin
         diffLoading={state.diffLoading}
         diffError={state.diffError}
         isChanged={state.selectedPathIsChanged}
-        getContent={adapter.getContent}
+        getContent={adapter?.getContent}
       />
     </div>
   );

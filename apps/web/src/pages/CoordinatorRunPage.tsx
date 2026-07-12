@@ -17,8 +17,6 @@ import {
   MessageBarActions,
   MessageBarBody,
   Spinner,
-  Tab,
-  TabList,
   Text,
   Tooltip,
   Tree,
@@ -26,19 +24,16 @@ import {
   TreeItemLayout,
   makeStyles,
   mergeClasses,
-  Popover,
-  PopoverSurface,
-  PopoverTrigger,
   tokens,
 } from '@fluentui/react-components';
 import { Display, EmptyState, TitleText } from '../components/ui';
 import { AgentStepList } from '../components/ui/agentic';
-import type { AgentArtifact, AgentStep, AgentStepStatus } from '../components/ui/agentic';
+import type { AgentArtifact, AgentStep } from '../components/ui/agentic';
 import { AgentAvatar } from '../components/AgentAvatar';
 import { AgentSessionPanel } from '../components/AgentSessionPanel';
 import { useCtrlScrollZoom, ZoomControls } from '../components/board/useCtrlScrollZoom';
 import { CoordinatorArtifactsPanel } from '../components/CoordinatorArtifactsPanel';
-import { CostChip, formatAic } from '../components/CostChip';
+import { AiCredits } from '../components/AiCredits';
 import { OutcomePlanPanel } from '../components/OutcomePlanPanel';
 import { AgentTokenBreakdown } from '../components/runs/AgentTokenBreakdown';
 import { SlidePanel } from '../components/SlidePanel';
@@ -73,7 +68,10 @@ import {
   DocumentRegular,
   FlowchartRegular,
   FolderRegular,
+  InfoRegular,
   OpenRegular,
+  PanelLeftContractRegular,
+  PanelLeftExpandRegular,
 } from '@fluentui/react-icons';
 import { Handle, MiniMap, Position, ReactFlow } from '@xyflow/react';
 import {
@@ -883,7 +881,7 @@ function SubtaskNode({ id, data, selected }: NodeProps) {
       {/* Top row: status chip left, cost right */}
       <div className={s.cardHeader}>
         <StatusBadge status={stepStatus} label={statusLabel} />
-        <CostChip totalNanoAiu={d.totalNanoAiu as number | null | undefined} totalTokens={d.totalTokens as number | null | undefined} />
+        <AiCredits totalNanoAiu={d.totalNanoAiu as number | null | undefined} totalTokens={d.totalTokens as number | null | undefined} />
       </div>
 
       <div className={s.cardMain}>
@@ -1223,7 +1221,7 @@ const useStyles = makeStyles({
   // ---- Body: tree | center --------------------------------------------------
   bodyGrid: {
     display: 'grid',
-    gridTemplateColumns: 'minmax(220px, 300px) minmax(0, 1fr)',
+    gridTemplateColumns: 'minmax(260px, 340px) minmax(0, 1fr)',
     gridTemplateRows: 'minmax(0, 1fr)',
     gap: tokens.spacingHorizontalL,
     alignItems: 'stretch',
@@ -1233,6 +1231,14 @@ const useStyles = makeStyles({
     '@media (max-width: 960px)': {
       gridTemplateColumns: '1fr',
       gridTemplateRows: 'auto minmax(0, 1fr)',
+    },
+  },
+  // Collapsed rail: shrink the first column to a thin strip so the center Messages surface reflows
+  // to fill the freed width.
+  bodyGridCollapsed: {
+    gridTemplateColumns: 'min-content minmax(0, 1fr)',
+    '@media (max-width: 960px)': {
+      gridTemplateColumns: '1fr',
     },
   },
   treeRail: {
@@ -1249,16 +1255,94 @@ const useStyles = makeStyles({
       maxHeight: '320px',
     },
   },
+  // Collapsed rail strip: just the expand affordance pinned to the top.
+  treeRailCollapsed: {
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    flexShrink: 0,
+    paddingTop: tokens.spacingVerticalM,
+    paddingBottom: tokens.spacingVerticalM,
+    paddingLeft: tokens.spacingHorizontalXXS,
+    paddingRight: tokens.spacingHorizontalXXS,
+    borderRadius: tokens.borderRadiusLarge,
+    backgroundColor: tokens.colorNeutralBackground2,
+    border: `${tokens.strokeWidthThin} solid ${tokens.colorNeutralStroke2}`,
+  },
   treeRailHeader: {
     display: 'flex',
     alignItems: 'baseline',
     justifyContent: 'space-between',
     gap: tokens.spacingHorizontalS,
   },
+  treeRailHeaderRight: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXS,
+    flexShrink: 0,
+  },
   treeScroll: {
+    flexGrow: 1,
     minHeight: 0,
     overflowY: 'auto',
     overflowX: 'hidden',
+    // No per-level indentation — every row (Coordinator + children) aligns at the same left
+    // edge; the tree hierarchy reads from the status icon + "· Agent (Role)" secondary, not
+    // from indentation. Flat, consistent left gutter across all levels.
+    '& .fui-TreeItemLayout': {
+      paddingLeft: tokens.spacingHorizontalXS,
+    },
+  },
+  treeRailFooter: {
+    flexShrink: 0,
+    marginTop: tokens.spacingVerticalS,
+    paddingTop: tokens.spacingVerticalS,
+    borderTop: `${tokens.strokeWidthThin} solid ${tokens.colorNeutralStroke2}`,
+  },
+  railStatusBlock: {
+    flexShrink: 0,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalXS,
+    marginTop: tokens.spacingVerticalS,
+    paddingTop: tokens.spacingVerticalS,
+    borderTop: `${tokens.strokeWidthThin} solid ${tokens.colorNeutralStroke2}`,
+  },
+  railStatusCaption: {
+    fontSize: tokens.fontSizeBase200,
+    color: tokens.colorNeutralForeground3,
+  },
+  railStatusWorkflow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXS,
+    fontSize: tokens.fontSizeBase300,
+    fontWeight: tokens.fontWeightSemibold,
+    color: tokens.colorNeutralForeground1,
+  },
+  railStatusReason: {
+    fontSize: tokens.fontSizeBase200,
+    lineHeight: tokens.lineHeightBase200,
+    color: tokens.colorNeutralForeground2,
+    whiteSpace: 'normal',
+    overflowWrap: 'anywhere',
+  },
+  railStatusState: {
+    fontWeight: tokens.fontWeightSemibold,
+  },
+  railStatusInfoTrigger: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    cursor: 'help',
+    color: tokens.colorNeutralForeground3,
+  },
+  railStatusInfoGlyph: {
+    fontSize: tokens.fontSizeBase200,
+    color: tokens.colorNeutralForeground3,
+  },
+  railStatusReasonShort: {
+    marginLeft: tokens.spacingHorizontalXS,
+    color: tokens.colorNeutralForeground2,
   },
   treeEmpty: {
     padding: tokens.spacingVerticalS,
@@ -1266,9 +1350,16 @@ const useStyles = makeStyles({
   runTreeItem: {
     minWidth: 0,
   },
-  runTreeItemSelected: {
-    backgroundColor: tokens.colorNeutralBackground1Selected,
+  treeItemLayout: {
+    paddingTop: tokens.spacingVerticalXS,
+    paddingBottom: tokens.spacingVerticalXS,
+    minHeight: '40px',
     borderRadius: tokens.borderRadiusMedium,
+    border: `${tokens.strokeWidthThin} solid transparent`,
+  },
+  treeItemLayoutSelected: {
+    border: `${tokens.strokeWidthThin} solid ${tokens.colorNeutralStroke1}`,
+    backgroundColor: tokens.colorNeutralBackground1Selected,
   },
   runTreeStatusIcon: {
     display: 'inline-flex',
@@ -1286,13 +1377,15 @@ const useStyles = makeStyles({
   treeText: {
     display: 'flex',
     flexDirection: 'column',
-    gap: '2px',
+    gap: '3px',
+    lineHeight: tokens.lineHeightBase300,
     minWidth: 0,
   },
   treeNode: {
     display: 'flex',
     alignItems: 'center',
     gap: tokens.spacingHorizontalSNudge,
+    marginLeft: '-4px',
     minWidth: 0,
   },
   // Task-first tree row: bold PRIMARY = task title (full width, ellipsis); one muted
@@ -1350,26 +1443,6 @@ const useStyles = makeStyles({
     minWidth: 0,
     minHeight: 0,
   },
-  centerHeader: {
-    display: 'flex',
-    alignItems: 'flex-start',
-    justifyContent: 'space-between',
-    gap: tokens.spacingHorizontalM,
-    flexWrap: 'wrap',
-    minWidth: 0,
-  },
-  centerHeaderTitles: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalXXS,
-    minWidth: 0,
-  },
-  centerTabRow: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: tokens.spacingHorizontalM,
-    flexWrap: 'wrap',
-  },
   minimapButton: {
     display: 'flex',
     flexDirection: 'column',
@@ -1384,8 +1457,8 @@ const useStyles = makeStyles({
   },
   minimapCanvas: {
     position: 'relative',
-    width: '180px',
-    height: '110px',
+    width: '100%',
+    height: '104px',
     overflow: 'hidden',
     borderRadius: tokens.borderRadiusSmall,
     backgroundColor: tokens.colorNeutralBackground2,
@@ -1409,6 +1482,15 @@ const useStyles = makeStyles({
     fontSize: tokens.fontSizeBase100,
     color: tokens.colorNeutralForeground3,
     textAlign: 'center',
+  },
+  minimapEmpty: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '100%',
+    height: '100%',
+    fontSize: tokens.fontSizeBase200,
+    color: tokens.colorNeutralForeground3,
   },
   centerTabBody: {
     display: 'flex',
@@ -1472,6 +1554,20 @@ const useStyles = makeStyles({
   runChipRemoved: {
     fontVariantNumeric: 'tabular-nums',
     color: tokens.colorPaletteRedForeground1,
+  },
+  // Disabled/empty-state chip (e.g. "Changes · None"): non-interactive, muted, no hover.
+  runChipDisabled: {
+    cursor: 'default',
+    color: tokens.colorNeutralForeground3,
+    opacity: 0.8,
+    ':hover': { backgroundColor: tokens.colorNeutralBackground1 },
+  },
+  runChipDot: {
+    width: '6px',
+    height: '6px',
+    borderRadius: '50%',
+    backgroundColor: tokens.colorPaletteGreenForeground1,
+    flexShrink: 0,
   },
   scopeHint: {
     fontSize: tokens.fontSizeBase200,
@@ -1592,16 +1688,6 @@ function semanticStateColorForStatus(status: string | undefined): SemanticStateC
   }
 }
 
-function semanticStateColorToAgentStatus(color: SemanticStateColor): AgentStepStatus {
-  switch (color) {
-    case 'running': return 'running';
-    case 'success': return 'complete';
-    case 'danger': return 'blocked';
-    case 'input': return 'warning';
-    default: return 'pending';
-  }
-}
-
 function semanticStateColorForBucket(bucket: CoordinatorRunBucket): SemanticStateColor {
   switch (bucket) {
     case 'running': return 'running';
@@ -1639,13 +1725,6 @@ const BLOCKED_TASK_STATUSES = new Set(['blocked', 'rai_flagged', 'needs_clarific
 const WAITING_TASK_STATUSES = new Set(['waiting', 'awaiting_confirmation']);
 const PENDING_TASK_STATUSES = new Set(['pending']);
 const EXECUTING_TASK_STATUSES = new Set(['drafting_outcome', 'planning', 'running', 'dispatched', 'dispatching', 'in_progress', 'awaiting_assembly', 'assembling']);
-
-function formatPhaseUpdated(timestamp: string | undefined): string {
-  if (!timestamp) return 'No timestamp from source yet';
-  const parsed = new Date(timestamp);
-  if (Number.isNaN(parsed.getTime())) return `Updated ${timestamp}`;
-  return `Updated ${parsed.toLocaleString()}`;
-}
 
 function graphEmptyCopy(
   isConnecting: boolean,
@@ -1752,7 +1831,6 @@ export function CoordinatorRunPage() {
   const [coordStatusField, setCoordStatusField] = useState<string | undefined>(undefined);
   const [coordStatusReason, setCoordStatusReason] = useState<string | undefined>(undefined);
   const [workPlanStatus, setWorkPlanStatus] = useState<string | undefined>(undefined);
-  const [retriedFrom, setRetriedFrom] = useState<string | null>(null);
   // Per-run work-plan snapshot.
   const [workPlanData, setWorkPlanData] = useState<WorkPlanResponse | null>(null);
 
@@ -1973,7 +2051,6 @@ export function CoordinatorRunPage() {
       setCoordStatusReason(reasonField);
       setWorkPlanStatus(wpStatus);
       setRunLevelStatus(detail?.status ?? undefined);
-      if (detail?.retried_from) setRetriedFrom(detail.retried_from);
       // Seed the option toggles once from the run detail; subsequent user toggles own the state.
       if (!seededToggles.current && detail) {
         setAutopilot(Boolean(detail.autopilot));
@@ -2698,7 +2775,6 @@ export function CoordinatorRunPage() {
   );
   const elapsedLabel = earliestStart ? fmtTotal(elapsedNow - earliestStart) : '0s';
   const runStatusText = viewState.label;
-  const aiCreditsLabel = `${formatAic(tokenBreakdown?.totalNanoAiu ?? null)} AI credits`;
   const taskCountsLabel = `${taskRows.length} tasks · ${taskStatusSummary.pending} pending · ${taskStatusSummary.waiting} waiting`;
 
   // ---------------------------------------------------------------------------
@@ -2707,14 +2783,17 @@ export function CoordinatorRunPage() {
 
   const [planPanelOpen, setPlanPanelOpen] = useState(false);
   const [artifactsPanelOpen, setArtifactsPanelOpen] = useState(false);
+  // Files chip opens the produced-files browser.
+  const [filesPanelOpen, setFilesPanelOpen] = useState(false);
+  // Left rail (run tree) collapse — collapsed shrinks the rail to a thin strip so the center
+  // Messages surface gets more width. Default expanded.
+  const [treeRailCollapsed, setTreeRailCollapsed] = useState(false);
   // Run-wide (coordinator-level) collective-diff summary for the Changes chip above the composer.
   const [runChangesSummary, setRunChangesSummary] = useState<{ files: number; added: number; removed: number } | null>(null);
   const [topologyPanelOpen, setTopologyPanelOpen] = useState(false);
-  const [topologyView, setTopologyView] = useState<'topology' | 'progress'>('topology');
   const [sessionPanelOpen, setSessionPanelOpen] = useState(true);
   const [panelNodeId, setPanelNodeId] = useState<string | null>(null);
   const [composerFocusSignal, setComposerFocusSignal] = useState(0);
-  const [runDetailsOpen, setRunDetailsOpen] = useState(false);
   const lastSelectedOutcomePlanSeqRef = useRef<number | null>(null);
 
   const openPanelForNode = useCallback((nodeId: string) => {
@@ -2764,9 +2843,6 @@ export function CoordinatorRunPage() {
       ?? flatSessionTree[0]
       ?? null;
   }, [defaultSessionNodeId, flatSessionTree, selectedSessionItem, viewState.bucket, viewState.terminal]);
-  const executingTaskStatus = executingSessionItem
-    ? runTreeStatusLabel(executingSessionItem.status, executingSessionItem.nodeId === 'outcome-plan' ? outcomePlanConfirmedBy : undefined)
-    : orchPhaseLabel(orch.phase);
   const executingStateColor = executingSessionItem
     ? semanticStateColorForStatus(executingSessionItem.status)
     : semanticStateColorForBucket(viewState.bucket);
@@ -2783,21 +2859,21 @@ export function CoordinatorRunPage() {
         : orch.phase !== 'unknown'
           ? `Phase: ${orchPhaseLabel(orch.phase)}`
           : `Source: ${viewState.sourceLabel}`);
-  const executionTaskLabel = executingSessionItem
-    ? `${executingSessionItem.label} (${executingTaskStatus})`
-    : orchPhaseLabel(orch.phase);
   const executionKickerLabel = viewState.terminal
     ? runStatusColor === 'danger' ? 'Failed' : 'Finished'
     : viewState.bucket === 'waiting' ? 'Waiting'
       : viewState.bucket === 'pending' ? 'Queued'
         : viewState.bucket === 'blocked' ? 'Blocked'
           : 'Executing';
-  const executionTaskPrefix = viewState.terminal && runStatusColor === 'danger' ? 'Last attempted' : 'Task';
   const executionDisplayStateColor = viewState.terminal ? runStatusColor : executingStateColor;
   const executionReasonPrefix = runStatusColor === 'danger' ? 'Failure context' : 'Why';
   const executionContextReason = runStatusColor === 'danger'
     ? (viewState.reason ?? executionWhy)
     : executionWhy;
+  const executionReasonFull = `${executionReasonPrefix}: ${executionContextReason}`;
+  const executionReasonShort = executionContextReason && executionContextReason.length <= 60
+    ? executionContextReason
+    : null;
   const selectedGraphNodeId = selectedSessionItem?.nodeId ?? defaultSessionNodeId;
   const linkedDisplayNodes = useMemo(
     () => displayNodes.map((node) => ({
@@ -2925,7 +3001,6 @@ export function CoordinatorRunPage() {
   const isStreaming     = streamStatus === 'streaming';
   const hasGraph        = rfNodes.length > 0;
   const isRetryable     = viewState.canRetry;
-  const retriedFromShort = retriedFrom ? retriedFrom.slice(0, 8) : null;
   // Auto-size the graph band to its content so it grows as subtask pipelines expand, instead of a
   // fixed height that clips tall fan-outs (horizontal LR layout still varies in height per rank).
   const graphHeight = useMemo(() => {
@@ -3063,22 +3138,32 @@ export function CoordinatorRunPage() {
     return () => { cancelled = true; };
   }, [isChildRun, runId, coordRunStatus]);
 
-  // Plan chip count = number of planned subtasks in the work plan (real, from the graph descriptor).
-  const planItemCount = useMemo(
-    () => displayNodes.filter((n) => n.type === 'subtask').length,
-    [displayNodes],
-  );
-
-  // Run-wide summary chips pinned just above the composer (coordinator scope only). Each chip is
-  // shown only when its data exists, and opens the matching run-level SlidePanel overlay. Per-subtask
-  // changes remain reachable via the Activity | Changes segmented control (not these chips).
+  // Run-wide summary chips pinned just above the composer. Three distinct chips — Goal, Changes,
+  // Files — each opening the matching overlay. All three are pinned to the coordinator/run
+  // view and ALWAYS represent run-wide data, regardless of which node/scope is selected. Changes +
+  // Files stay visible but disabled ("· None") when no run-wide diff/files exist yet.
   const runSummaryChips = useMemo<ReactNode>(() => {
     if (isChildRun) return null;
     const chips: ReactNode[] = [];
+
+    // 1) Goal — opens the Outcome plan overlay (goal/scope/assumptions/questions).
+    chips.push(
+      <button
+        key="goal"
+        type="button"
+        className={styles.runChip}
+        onClick={() => setPlanPanelOpen(true)}
+        data-testid="run-summary-chip-goal"
+        title="Open the goal, scope, and assumptions"
+        aria-label="Open the goal, scope, and assumptions"
+      >
+        <span className={styles.runChipLabel}>Goal</span>
+        {specConfirmed && <span className={styles.runChipDot} aria-hidden="true" />}
+      </button>,
+    );
+
+    // 2) Changes — opens the integration diff. Disabled + muted when no diff exists.
     if (runChangesSummary) {
-      // One "Changes" chip — the run's collective integration diff. Files count + the +A −R delta
-      // both derive from the same assembly diff, so we don't split into a duplicate "Artifacts" chip
-      // that opens the same panel with a misleading label.
       chips.push(
         <button
           key="changes"
@@ -3086,37 +3171,64 @@ export function CoordinatorRunPage() {
           className={styles.runChip}
           onClick={() => setArtifactsPanelOpen(true)}
           data-testid="run-summary-chip-changes"
-          title="Review the collective integration diff for this run"
+          title="Review the run-wide integration diff"
         >
           <span className={styles.runChipLabel}>Changes</span>
           <span className={styles.runChipCount}>
-            {`${runChangesSummary.files.toLocaleString()} ${runChangesSummary.files === 1 ? 'file' : 'files'}`}
+            {`\u00b7 ${runChangesSummary.files.toLocaleString()} ${runChangesSummary.files === 1 ? 'file' : 'files'} \u00b7 `}
           </span>
           <span className={styles.runChipAdded}>+{runChangesSummary.added.toLocaleString()}</span>
           <span className={styles.runChipRemoved}>&minus;{runChangesSummary.removed.toLocaleString()}</span>
         </button>,
       );
-    }
-    if (planItemCount > 0) {
+    } else {
       chips.push(
-        <button
-          key="plan"
-          type="button"
-          className={styles.runChip}
-          onClick={() => setPlanPanelOpen(true)}
-          data-testid="run-summary-chip-plan"
-          title={`${planItemCount} planned ${planItemCount === 1 ? 'task' : 'tasks'} — open the plan`}
-          aria-label={`Open the plan: ${planItemCount} planned ${planItemCount === 1 ? 'task' : 'tasks'}`}
+        <span
+          key="changes"
+          className={mergeClasses(styles.runChip, styles.runChipDisabled)}
+          data-testid="run-summary-chip-changes"
+          aria-disabled="true"
+          title="No integration changes yet"
         >
-          <span className={styles.runChipLabel}>Plan</span>
-          <span className={styles.runChipCount}>
-            {`${planItemCount} ${planItemCount === 1 ? 'task' : 'tasks'}`}
-          </span>
-        </button>,
+          <span className={styles.runChipLabel}>Changes</span>
+          <span className={styles.runChipCount}>{'\u00b7 None'}</span>
+        </span>,
       );
     }
+
+    // 3) Files — opens the produced-files browser. Disabled + muted when no files exist.
+    if (runChangesSummary) {
+      chips.push(
+        <button
+          key="files"
+          type="button"
+          className={styles.runChip}
+          onClick={() => setFilesPanelOpen(true)}
+          data-testid="run-summary-chip-files"
+          title="Browse the files produced in this run"
+          aria-label={`Browse produced files: ${runChangesSummary.files} ${runChangesSummary.files === 1 ? 'file' : 'files'}`}
+        >
+          <span className={styles.runChipLabel}>Files</span>
+          <span className={styles.runChipCount}>{`\u00b7 ${runChangesSummary.files.toLocaleString()}`}</span>
+        </button>,
+      );
+    } else {
+      chips.push(
+        <span
+          key="files"
+          className={mergeClasses(styles.runChip, styles.runChipDisabled)}
+          data-testid="run-summary-chip-files"
+          aria-disabled="true"
+          title="No produced files yet"
+        >
+          <span className={styles.runChipLabel}>Files</span>
+          <span className={styles.runChipCount}>{'\u00b7 None'}</span>
+        </span>,
+      );
+    }
+
     return chips.length > 0 ? <>{chips}</> : null;
-  }, [isChildRun, runChangesSummary, planItemCount, styles]);
+  }, [isChildRun, runChangesSummary, specConfirmed, styles]);
 
   const primaryAction = reviewActionable
     ? {
@@ -3169,55 +3281,6 @@ export function CoordinatorRunPage() {
   }, [isChildRun, latestOutcomePlanEvent, reviewActionable, specConfirmed]);
 
   // Nested agentic progress tree: coordinator/agents and their tasks with live status.
-  const coordinatorProgressSteps = useMemo<AgentStep[]>(() => (
-    flatSessionTree.length > 0
-      ? flatSessionTree.slice(0, 12).map((item) => {
-          const color = semanticStateColorForStatus(item.status);
-          const statusLabel = runTreeStatusLabel(item.status, item.nodeId === 'outcome-plan' ? outcomePlanConfirmedBy : undefined);
-          const owner = item.agentName
-            ? `${item.agentName}${item.agentRole ? ` (${item.agentRole})` : ''}`
-            : item.agentRole
-              ? `Coordinator (${item.agentRole})`
-              : 'Coordinator';
-          const step: AgentStep = {
-            id: item.nodeId,
-            title: item.label,
-            body: `${statusLabel} \u00b7 ${owner}`,
-            status: semanticStateColorToAgentStatus(color),
-            defaultOpen: item.nodeId === selectedSessionItem?.nodeId || color === 'running' || color === 'input',
-            needsInput: color === 'input',
-            riskText: color === 'input' ? 'This step is waiting on an operator decision or a blocked dependency.' : undefined,
-            artifacts: item.childRunId
-              ? [{
-                  id: `${item.nodeId}-session`,
-                  title: item.childRunId,
-                  type: 'Child run',
-                  icon: <OpenRegular />,
-                  onOpen: () => openPanelForNode(item.nodeId),
-                }]
-              : undefined,
-          };
-          return step;
-        })
-      : [{
-          id: 'waiting-for-plan',
-          title: 'Waiting for coordinator plan',
-          body: graphEmptyCopy(isConnecting, noWorkPlan, graphError, viewState).body,
-          status: isConnecting || isStreaming ? 'running' : 'pending',
-          defaultOpen: true,
-        }]
-  ), [
-    flatSessionTree,
-    graphError,
-    isConnecting,
-    isStreaming,
-    noWorkPlan,
-    openPanelForNode,
-    outcomePlanConfirmedBy,
-    selectedSessionItem?.nodeId,
-    viewState,
-  ]);
-
   const approvalSteps = useMemo<AgentStep[]>(() => reviewActionable
     ? [{
         id: 'assembly-review',
@@ -3254,16 +3317,7 @@ export function CoordinatorRunPage() {
         <Text className={styles.hint}>{topologySelectionCopy}</Text>
         <Text className={styles.hint}>Select a node to focus its run messages, changes, and files.</Text>
       </div>
-      <TabList
-        selectedValue={topologyView}
-        onTabSelect={(_, data) => setTopologyView(data.value === 'progress' ? 'progress' : 'topology')}
-        aria-label="Topology inspector views"
-        size="small"
-      >
-        <Tab value="topology" icon={<FlowchartRegular />}>Topology</Tab>
-        <Tab value="progress" icon={<BotRegular />}>Progress</Tab>
-      </TabList>
-      {topologyView === 'topology' ? hasGraph ? (
+      {hasGraph ? (
         <ExecutionModalContext.Provider value={viewAssemblyExecution}>
         <BrowseFilesContext.Provider value={browseAssemblyFiles}>
         <ActiveEdgeContext.Provider value={activeLoopbackId}>
@@ -3346,8 +3400,6 @@ export function CoordinatorRunPage() {
         </ExecutionModalContext.Provider>
       ) : (
         <EmptyState title={graphEmptyState.title} description={graphEmptyState.body} />
-      ) : (
-        <AgentStepList steps={coordinatorProgressSteps} aria-label="Coordinator progress" />
       )}
     </div>
   );
@@ -3394,6 +3446,7 @@ export function CoordinatorRunPage() {
     const avatarName = identityName ?? item.agentRole ?? item.label;
     const layout = (
       <TreeItemLayout
+        className={mergeClasses(styles.treeItemLayout, selected && styles.treeItemLayoutSelected)}
         iconBefore={(
           <span
             className={mergeClasses(styles.runTreeStatusIcon, stateIconClass(color))}
@@ -3432,7 +3485,6 @@ export function CoordinatorRunPage() {
         itemType="branch"
         value={item.nodeId}
         aria-label={`Select ${item.label}: ${statusLabel}`}
-        className={selected ? styles.runTreeItemSelected : undefined}
         onClick={() => openPanelForNode(item.nodeId)}
       >
         {layout}
@@ -3444,16 +3496,15 @@ export function CoordinatorRunPage() {
         itemType="leaf"
         value={item.nodeId}
         aria-label={`Select ${item.label}: ${statusLabel}`}
-        className={selected ? styles.runTreeItemSelected : undefined}
         onClick={() => openPanelForNode(item.nodeId)}
       >
         {layout}
       </TreeItem>
     );
   });
-  const retryHint = isRetryable ? 'Retry resumes failed work' : 'Retry after failure';
+  const retryHint = isRetryable ? 'Starts a fresh run from the same goal. The original run is kept and linked.' : 'Re-run available after failure';
   const stopHint = viewState.canStop ? 'Stop cancels run' : 'Stop while running';
-  const retryAriaLabel = isRetryable ? 'Retry failed run' : `Retry failed unavailable: ${retryHint}`;
+  const retryAriaLabel = isRetryable ? 'Re-run this orchestration' : `Re-run unavailable: ${retryHint}`;
   const stopAriaLabel = viewState.canStop ? 'Stop run' : `Stop run unavailable: ${stopHint}`;
 
   if (!projectId || !runId) {
@@ -3526,7 +3577,7 @@ export function CoordinatorRunPage() {
           )}
           {retryError && (
             <MessageBar intent="error">
-              <MessageBarBody>Retry failed: {retryError}</MessageBarBody>
+              <MessageBarBody>Re-run failed: {retryError}</MessageBarBody>
             </MessageBar>
           )}
           {stopError && (
@@ -3566,25 +3617,7 @@ export function CoordinatorRunPage() {
               </div>
               <div className={styles.statsStrip} aria-label="Run progress" data-testid="run-progress-chips">
                 <span className={styles.statusChip}>{taskCountsLabel}</span>
-                {taskStatusSummary.blocked > 0 && (
-                  <span className={mergeClasses(styles.statusChip, styles.stateTextInput)} data-state-color="input">
-                    {taskStatusSummary.blocked} blocked
-                  </span>
-                )}
-                {taskStatusSummary.failed > 0 && (
-                  <span className={mergeClasses(styles.statusChip, styles.stateTextDanger)} data-state-color="danger">
-                    {taskStatusSummary.failed} failed
-                  </span>
-                )}
                 <span className={styles.statusChip}>{elapsedLabel} elapsed</span>
-                <Popover positioning="below-start">
-                  <PopoverTrigger disableButtonEnhancement>
-                    <Button appearance="secondary" size="small" className={styles.statusChip}>{aiCreditsLabel}</Button>
-                  </PopoverTrigger>
-                  <PopoverSurface className={styles.creditsSurface}>
-                    <AgentTokenBreakdown data={tokenBreakdown} roleByAgent={roleByAgent} />
-                  </PopoverSurface>
-                </Popover>
               </div>
               <div className={styles.compactChromeActions}>
                 {primaryAction && (
@@ -3619,15 +3652,6 @@ export function CoordinatorRunPage() {
                   aria-label={stopAriaLabel}
                   title={stopHint}
                 />
-                <Button
-                  appearance="transparent"
-                  size="small"
-                  icon={<FlowchartRegular />}
-                  onClick={() => setTopologyPanelOpen(true)}
-                  data-testid="open-topology-panel"
-                  aria-label="Topology"
-                  title="Topology"
-                />
                 {isKubernetesSandbox && (
                   <Button
                     appearance="transparent"
@@ -3638,106 +3662,38 @@ export function CoordinatorRunPage() {
                     title="Preview Sandbox"
                   />
                 )}
-                <Button
-                  appearance="subtle"
-                  size="small"
-                  aria-expanded={runDetailsOpen}
-                  onClick={() => setRunDetailsOpen((value) => !value)}
-                  data-testid="run-chrome-toggle"
-                >
-                  Details
-                </Button>
               </div>
             </div>
-            <div className={styles.executionContext} data-testid="coordinator-execution-indicator" aria-label={`${executionKickerLabel} workflow ${executionWorkflowName}. ${executionTaskPrefix} ${executionTaskLabel}. ${executionReasonPrefix}: ${executionContextReason}`}>
-              <span className={mergeClasses(styles.executionKicker, stateTextClass(executionDisplayStateColor))} data-state-color={executionDisplayStateColor}>{executionKickerLabel}</span>
-              <span className={styles.executionSeparator} aria-hidden="true">·</span>
-              <span className={styles.executionValue} title={executionWorkflowName}>
-                <FlowchartRegular aria-hidden="true" />
-                <span>Workflow: {executionWorkflowName}</span>
-              </span>
-              <span className={styles.executionSeparator} aria-hidden="true">·</span>
-              <span className={`${styles.executionValue} ${stateTextClass(executionDisplayStateColor)}`} title={executionTaskLabel} data-state-color={executionDisplayStateColor}>
-                {executionTaskPrefix}: {executionTaskLabel}
-              </span>
-              <span className={styles.executionSeparator} aria-hidden="true">·</span>
-              <span className={styles.executionReason} title={executionContextReason}>{executionReasonPrefix}: {executionContextReason}</span>
-            </div>
-            {runDetailsOpen && <div className={styles.metaRail} aria-label="Run metadata" data-testid="run-metadata">
-              <span className={styles.metaItem} title={runId}>
-                <span className={styles.metaItemStrong}>Run</span>
-                <span className={styles.metaValue}>{shortId}</span>
-              </span>
-              {selectedWorkflow && (
-                <>
-                  <span className={styles.metaSeparator} aria-hidden="true">·</span>
-                  <Tooltip
-                    relationship="description"
-                    content={
-                      selectedWorkflow.rationale
-                        ? `${selectedWorkflow.auto ? 'Auto-selected' : 'Selected'}: ${selectedWorkflow.rationale}`
-                        : selectedWorkflow.auto
-                          ? 'Automatically selected by the coordinator'
-                          : 'Selected for this orchestration'
-                    }
-                  >
-                    <span className={styles.metaItem} data-testid="coordinator-selected-workflow" title={selectedWorkflow.name}>
-                      <FlowchartRegular aria-hidden="true" />
-                      <span className={styles.metaItemStrong}>{selectedWorkflow.auto ? 'Auto workflow' : 'Workflow'}</span>
-                      <span className={styles.metaValue}>{selectedWorkflow.name}</span>
-                    </span>
-                  </Tooltip>
-                </>
-              )}
-              {!selectedWorkflow && goal && (
-                <>
-                  <span className={styles.metaSeparator} aria-hidden="true">·</span>
-                  <span className={styles.metaItem} title={goal}>
-                    <span className={styles.metaItemStrong}>Goal</span>
-                    <span className={styles.metaValue}>{goal}</span>
-                  </span>
-                </>
-              )}
-              {retriedFromShort && (
-                <>
-                  <span className={styles.metaSeparator} aria-hidden="true">·</span>
-                  <span className={styles.metaItem}>
-                    <span className={styles.metaItemStrong}>Retried from</span>
-                    <Link to={`/projects/${projectId}/orchestrations/${retriedFrom}`} className={styles.breadcrumbLink}>
-                      {retriedFromShort}
-                    </Link>
-                  </span>
-                </>
-              )}
-              <span className={styles.metaSeparator} aria-hidden="true">·</span>
-              <span className={styles.metaItem} title={viewState.sourceLabel} data-testid="run-status-source">
-                <span className={styles.metaItemStrong}>Status source:</span>
-                <span className={styles.metaValue}>{viewState.sourceLabel}</span>
-              </span>
-              <span className={styles.metaSeparator} aria-hidden="true">·</span>
-              <span className={styles.metaItem}>{formatPhaseUpdated(orch.updatedAt)}</span>
-            </div>}
-            {runDetailsOpen && (
-              <details className={styles.statusDetails} data-testid="run-status-details">
-                <summary className={styles.statusDetailsSummary}>Status details</summary>
-                <div className={styles.statusDetailsBody}>
-                  {viewState.bucket === 'unknown' && (
-                    <Text className={styles.phaseSource}>
-                      Waiting for a durable coordinator phase instead of assuming the run is running.
-                    </Text>
-                  )}
-                  {viewState.reason && <Text className={styles.stateReason}>{viewState.reason}</Text>}
-                </div>
-              </details>
-            )}
           </div>
         </div>
 
-        <div className={styles.bodyGrid}>
+        <div className={mergeClasses(styles.bodyGrid, treeRailCollapsed && styles.bodyGridCollapsed)}>
+          {treeRailCollapsed ? (
+            <aside className={styles.treeRailCollapsed} aria-label="Run tree (collapsed)">
+              <Button
+                appearance="subtle"
+                size="small"
+                icon={<PanelLeftExpandRegular />}
+                aria-label="Expand run tree"
+                data-testid="toggle-run-tree"
+                onClick={() => setTreeRailCollapsed(false)}
+              />
+            </aside>
+          ) : (
           <aside className={styles.treeRail} aria-label="Run tree">
             <div className={styles.treeRailHeader}>
               <TitleText>Run tree</TitleText>
-              <Text className={styles.hint}>{flatSessionTree.length} nodes</Text>
+              <div className={styles.treeRailHeaderRight}>
+                <Text className={styles.hint}>{flatSessionTree.length} nodes</Text>
+                <Button
+                  appearance="subtle"
+                  size="small"
+                  icon={<PanelLeftContractRegular />}
+                  aria-label="Collapse run tree"
+                  data-testid="toggle-run-tree"
+                  onClick={() => setTreeRailCollapsed(true)}
+                />
+              </div>
             </div>
             {flatSessionTree.length === 0 ? (
               <div className={styles.treeEmpty}>
@@ -3753,78 +3709,95 @@ export function CoordinatorRunPage() {
                 </Tree>
               </div>
             )}
+            <div className={styles.railStatusBlock} data-testid="rail-status-block">
+              <span className={styles.railStatusCaption}>Workflow</span>
+              <span className={styles.railStatusWorkflow}>
+                <FlowchartRegular aria-hidden="true" />
+                <span title={executionWorkflowName}>{executionWorkflowName}</span>
+                <Tooltip content={executionReasonFull} relationship="description" withArrow>
+                  <span className={styles.railStatusInfoTrigger} tabIndex={0} role="button" aria-label="Workflow reason" data-testid="rail-status-reason-info">
+                    <InfoRegular className={styles.railStatusInfoGlyph} aria-hidden="true" />
+                  </span>
+                </Tooltip>
+              </span>
+              <span className={styles.railStatusReason} data-state-color={executionDisplayStateColor} data-testid="rail-status-reason">
+                <span className={mergeClasses(styles.railStatusState, stateTextClass(executionDisplayStateColor))}>{executionKickerLabel}</span>
+                {executionReasonShort && <span className={styles.railStatusReasonShort}>{executionReasonShort}</span>}
+              </span>
+            </div>
+            <div className={styles.treeRailFooter}>
+                <div
+                  role="button"
+                  tabIndex={0}
+                  className={styles.minimapButton}
+                  aria-label="Open full topology graph"
+                  onClick={() => setTopologyPanelOpen(true)}
+                  onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setTopologyPanelOpen(true); } }}
+                  data-testid="open-topology-minimap"
+                >
+                  <span className={styles.minimapCaption}>Topology</span>
+                  <div className={styles.minimapCanvas} aria-hidden="true">
+                    {hasGraph ? (
+                    <ExecutionModalContext.Provider value={viewAssemblyExecution}>
+                    <BrowseFilesContext.Provider value={browseAssemblyFiles}>
+                    <ActiveEdgeContext.Provider value={activeLoopbackId}>
+                    <CoordinatorSessionContext.Provider value={() => openPanelForNode('coordinator')}>
+                    <CoordExpandContext.Provider value={expandValue}>
+                    <CoordPanelContext.Provider value={openPanelForNode}>
+                      <ReactFlow
+                        nodes={linkedDisplayNodes}
+                        edges={displayEdges2}
+                        nodeTypes={coordinatorNodeTypes}
+                        edgeTypes={workflowEdgeTypes}
+                        fitView
+                        fitViewOptions={{ padding: 0.12 }}
+                        nodesDraggable={false}
+                        nodesConnectable={false}
+                        nodesFocusable={false}
+                        edgesFocusable={false}
+                        elementsSelectable={false}
+                        panOnDrag={false}
+                        panOnScroll={false}
+                        zoomOnScroll={false}
+                        zoomOnPinch={false}
+                        zoomOnDoubleClick={false}
+                        preventScrolling={false}
+                        proOptions={{ hideAttribution: true }}
+                        style={{ width: '100%', height: '100%' }}
+                      >
+                        <MiniMap
+                          nodeStrokeWidth={0}
+                          nodeBorderRadius={2}
+                          pannable={false}
+                          zoomable={false}
+                          bgColor="var(--colorNeutralBackground2)"
+                          maskColor="transparent"
+                          nodeColor={(n) => {
+                            const s = (n.data as SubtaskNodeData | undefined)?.topoStatus as string | undefined;
+                            if (s === 'completed' || s === 'assemble_ready') return '#107c41';
+                            if (s === 'running' || s === 'dispatching' || s === 'awaiting_assembly' || s === 'assembling') return '#8c837c';
+                            if (s === 'waiting') return '#d47c00';
+                            if (s === 'failed' || s === 'declined') return '#c50f1f';
+                            return '#b8afa8';
+                          }}
+                        />
+                      </ReactFlow>
+                    </CoordPanelContext.Provider>
+                    </CoordExpandContext.Provider>
+                    </CoordinatorSessionContext.Provider>
+                    </ActiveEdgeContext.Provider>
+                    </BrowseFilesContext.Provider>
+                    </ExecutionModalContext.Provider>
+                    ) : (
+                      <span className={styles.minimapEmpty}>No graph yet</span>
+                    )}
+                  </div>
+                </div>
+              </div>
           </aside>
+          )}
 
           <section className={styles.centerZone} aria-label="Selected task">
-            <div className={styles.centerHeader}>
-              <div className={styles.centerTabRow}>
-                {hasGraph && (
-                  <div
-                    role="button"
-                    tabIndex={0}
-                    className={styles.minimapButton}
-                    aria-label="Open full topology graph"
-                    onClick={() => setTopologyPanelOpen(true)}
-                    onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setTopologyPanelOpen(true); } }}
-                    data-testid="open-topology-minimap"
-                  >
-                    <div className={styles.minimapCanvas} aria-hidden="true">
-                      <ExecutionModalContext.Provider value={viewAssemblyExecution}>
-                      <BrowseFilesContext.Provider value={browseAssemblyFiles}>
-                      <ActiveEdgeContext.Provider value={activeLoopbackId}>
-                      <CoordinatorSessionContext.Provider value={() => openPanelForNode('coordinator')}>
-                      <CoordExpandContext.Provider value={expandValue}>
-                      <CoordPanelContext.Provider value={openPanelForNode}>
-                        <ReactFlow
-                          nodes={linkedDisplayNodes}
-                          edges={displayEdges2}
-                          nodeTypes={coordinatorNodeTypes}
-                          edgeTypes={workflowEdgeTypes}
-                          fitView
-                          fitViewOptions={{ padding: 0.12 }}
-                          nodesDraggable={false}
-                          nodesConnectable={false}
-                          nodesFocusable={false}
-                          edgesFocusable={false}
-                          elementsSelectable={false}
-                          panOnDrag={false}
-                          panOnScroll={false}
-                          zoomOnScroll={false}
-                          zoomOnPinch={false}
-                          zoomOnDoubleClick={false}
-                          preventScrolling={false}
-                          proOptions={{ hideAttribution: true }}
-                          style={{ width: '100%', height: '100%' }}
-                        >
-                          <MiniMap
-                            nodeStrokeWidth={0}
-                            nodeBorderRadius={2}
-                            pannable={false}
-                            zoomable={false}
-                            bgColor="var(--colorNeutralBackground2)"
-                            maskColor="transparent"
-                            nodeColor={(n) => {
-                              const s = (n.data as SubtaskNodeData | undefined)?.topoStatus as string | undefined;
-                              if (s === 'completed' || s === 'assemble_ready') return '#107c41';
-                              if (s === 'running' || s === 'dispatching' || s === 'awaiting_assembly' || s === 'assembling') return '#8c837c';
-                              if (s === 'waiting') return '#d47c00';
-                              if (s === 'failed' || s === 'declined') return '#c50f1f';
-                              return '#b8afa8';
-                            }}
-                          />
-                        </ReactFlow>
-                      </CoordPanelContext.Provider>
-                      </CoordExpandContext.Provider>
-                      </CoordinatorSessionContext.Provider>
-                      </ActiveEdgeContext.Provider>
-                      </BrowseFilesContext.Provider>
-                      </ExecutionModalContext.Provider>
-                    </div>
-                  </div>
-                )}
-              </div>
-            </div>
-
             {reviewActionable && approvalSteps.length > 0 && (
               <div className={styles.approvalGateWrap}>
                 <AgentStepList
@@ -3856,6 +3829,11 @@ export function CoordinatorRunPage() {
                   onOutcomePlanClarify={() => setOutcomePlanClarifying(true)}
                   artifactAdapter={coordAdapter}
                   runChips={runSummaryChips}
+                  outcomePlanDispatched={hasSubtaskNodes || viewState.terminal}
+                  credits={{
+                    totalNanoAiu: tokenBreakdown?.totalNanoAiu ?? null,
+                    detail: <AgentTokenBreakdown data={tokenBreakdown} roleByAgent={roleByAgent} plain showHeader={false} />,
+                  }}
                   automation={{
                     autopilot,
                     autoApprove,
@@ -3898,18 +3876,30 @@ export function CoordinatorRunPage() {
             onCollapse={() => setPlanPanelOpen(false)}
             onReconnect={reconnectStream}
             onClarifyPlan={() => { setPlanPanelOpen(false); focusOutcomePlanComposer(); }}
+            dispatched={hasSubtaskNodes || viewState.terminal}
           />
         </SlidePanel>
       )}
 
-      {!isChildRun && runId && (
+      {!isChildRun && (
         <SlidePanel
           open={artifactsPanelOpen}
           onClose={() => setArtifactsPanelOpen(false)}
-          title="Artifacts"
+          title="Changes"
           width="min(960px, 96vw)"
         >
           <CoordinatorArtifactsPanel runId={runId} runStatus={coordRunStatus} adapter={coordAdapter} />
+        </SlidePanel>
+      )}
+
+      {!isChildRun && (
+        <SlidePanel
+          open={filesPanelOpen}
+          onClose={() => setFilesPanelOpen(false)}
+          title="Files"
+          width="min(960px, 96vw)"
+        >
+          <CoordinatorArtifactsPanel runId={runId} runStatus={coordRunStatus} adapter={coordAdapter} initialTab="files" />
         </SlidePanel>
       )}
 

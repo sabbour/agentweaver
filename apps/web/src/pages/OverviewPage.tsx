@@ -14,7 +14,7 @@ import {
   Text,
   tokens,
 } from '@fluentui/react-components';
-import { costChipLabel } from '../components/CostChip';
+import { AiCredits } from '../components/AiCredits';
 import { MetricCardHeader, MetricEmptyState } from '../components/MetricTypography';
 import { RefreshCountdown } from '../hooks/useRefreshCountdown';
 import {
@@ -243,7 +243,7 @@ function UsageTiles({ metrics, previousMetrics, range, recentProjectId }: { metr
   return <div className={styles.usageGrid}>
   <div className={mergeClasses(styles.usageTile, styles.usagePrimary)}>
       <MetricCardHeader title="Token consumption by model" subtitle={`AIC in the selected ${range} range.`} />
-      {usage.length === 0 ? <MetricEmptyState>No data yet.</MetricEmptyState> : <div className={styles.list}>{usage.slice(0, 4).map((row) => <div key={row.model}><div className={styles.modelRow}><Text className={styles.modelName}>{row.model}</Text><Text>{costChipLabel(row.totalNanoAiu, 0) ?? '—'}</Text></div><div className={styles.barTrack}><div className={styles.bar} style={{ width: `${Math.max(4, (row.totalNanoAiu / Math.max(1, usage[0].totalNanoAiu)) * 100)}%` }} /></div></div>)}</div>}
+      {usage.length === 0 ? <MetricEmptyState>No data yet.</MetricEmptyState> : <div className={styles.list}>{usage.slice(0, 4).map((row) => <div key={row.model}><div className={styles.modelRow}><Text className={styles.modelName}>{row.model}</Text>{row.totalNanoAiu > 0 ? <AiCredits totalNanoAiu={row.totalNanoAiu} /> : <Text>—</Text>}</div><div className={styles.barTrack}><div className={styles.bar} style={{ width: `${Math.max(4, (row.totalNanoAiu / Math.max(1, usage[0].totalNanoAiu)) * 100)}%` }} /></div></div>)}</div>}
       <Link className={styles.link} to={detailsLink}>View details →</Link>
     </div>
     <div className={styles.usageTile}>

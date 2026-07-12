@@ -15,6 +15,7 @@ import {
 import { ArrowSyncRegular } from '@fluentui/react-icons';
 import { ObservabilityLayout } from '../../components/observability/ObservabilityLayout';
 import { AgentTokenBreakdown } from '../../components/runs/AgentTokenBreakdown';
+import { AiCredits } from '../../components/AiCredits';
 import {
   LoadingState,
   PageSection,
@@ -53,10 +54,6 @@ function formatError(error: unknown): string {
 
 function compactNumber(value: number): string {
   return new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 }).format(value);
-}
-
-function formatAiu(nanoAiu: number): string {
-  return `${compactNumber(nanoAiu / 1_000_000_000)} AIC`;
 }
 
 export function ObservabilityAgentsPage() {
@@ -160,7 +157,7 @@ export function ObservabilityAgentsPage() {
           <StatTile label="Agents" value={String(summary.agents)} hint="Rows with usage" />
           <StatTile label="Invocations" value={compactNumber(summary.invocations)} hint="Agent turns" />
           <StatTile label="Tokens" value={compactNumber(summary.totalTokens)} hint="Input + output" />
-          <StatTile label="AI credits" value={formatAiu(summary.totalAiu)} hint="Usage" />
+          <StatTile label="AI credits" value={<AiCredits totalNanoAiu={summary.totalAiu} plain showZero />} hint="Usage" />
         </div>
       </PageSection>
 

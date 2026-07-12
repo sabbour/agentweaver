@@ -228,9 +228,12 @@ interface OutcomePlanPanelProps {
   onReconnect?: () => void;
   onClarifyPlan?: () => void;
   clarificationSent?: boolean;
+  /** True once the run has decomposed into a work plan / dispatched subtasks, or is terminal.
+   *  Hides the pre-dispatch "Break into tasks" authoring action for mid/post-run views. */
+  dispatched?: boolean;
 }
 
-export function OutcomePlanPanel({ runId, projectId, events, streamStatus, runStatus, onCollapse, onReconnect, onClarifyPlan, clarificationSent = false }: OutcomePlanPanelProps) {
+export function OutcomePlanPanel({ runId, projectId, events, streamStatus, runStatus, onCollapse, onReconnect, onClarifyPlan, clarificationSent = false, dispatched = false }: OutcomePlanPanelProps) {
   const styles = useStyles();
 
   const [specFromApi, setSpecFromApi] = useState<OutcomeSpec | null>(null);
@@ -241,7 +244,10 @@ export function OutcomePlanPanel({ runId, projectId, events, streamStatus, runSt
   const [answers, setAnswers] = useState<string[]>([]);
   const [extraFeedback, setExtraFeedback] = useState('');
   const [revising, setRevising] = useState(false);
-  const [fullPlanOpen, setFullPlanOpen] = useState(false);
+  // Default to the fully-expanded plan so the goal/scope/assumptions are visible immediately
+  // when the panel is opened from the run-wide Goal chip (was previously minimized to just the
+  // goal behind a "View full plan" button).
+  const [fullPlanOpen, setFullPlanOpen] = useState(true);
   // Snapshot of spec content at the moment a revise request is submitted. Used to detect
   // when the coordinator has finished re-drafting (content changes while revising=true).
   const revisingSnapshotRef = useRef<string | null>(null);
@@ -634,7 +640,7 @@ export function OutcomePlanPanel({ runId, projectId, events, streamStatus, runSt
         </div>
       )}
 
-      {status === 'confirmed' && projectId && (
+      {status === 'confirmed' && projectId && !dispatched && (
         <div role="group" className={styles.actionRow}>
           <Button
             appearance="secondary"

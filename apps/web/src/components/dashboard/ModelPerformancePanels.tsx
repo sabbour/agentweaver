@@ -328,6 +328,7 @@ export function ModelPerformancePanels({ metrics }: { metrics: ProjectMetricsDto
             {aiCreditUsageTrend.length === 0 || !hasAiCreditTrend ? (
               <EmptyState title="No AI credit usage data yet." />
             ) : (
+              // TODO(ai-credits): chart axis formatter needs a plain string, not the <AiCredits> control — left as text.
               <LineChart
                 points={aiCreditUsageTrend}
                 valueOf={(point) => 'totalNanoAiu' in point ? point.totalNanoAiu : 0}
@@ -349,6 +350,7 @@ export function ModelPerformancePanels({ metrics }: { metrics: ProjectMetricsDto
           {modelUsage.length === 0 ? (
             <EmptyState title="No AI credit usage data yet." />
           ) : (
+            // TODO(ai-credits): BarList valueLabel requires a plain string, not the <AiCredits> hover control — left as text.
             <BarList
               rows={modelUsage}
               valueOf={(row) => row.totalNanoAiu}

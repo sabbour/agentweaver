@@ -43,6 +43,24 @@ const useStyles = makeStyles({
     flexDirection: 'column',
     gap: tokens.spacingVerticalM,
     minHeight: 0,
+    // Strip the embedded @1js ChainOfThought's own bordered/scrolling Card chrome so the thread
+    // grows naturally and the parent scroll region (AgentSessionPanel's tabBody) is the ONLY
+    // scroller. Without this the messages are squeezed into a short inner card (~208px max-height)
+    // with its own scrollbar and dead space below.
+    '& .fai-ChainOfThought__card': {
+      border: 'none',
+      boxShadow: 'none',
+      backgroundColor: 'transparent',
+      padding: 0,
+    },
+    '& .fai-ChainOfThought__card::after': {
+      display: 'none',
+    },
+    '& .fai-ChainOfThought__activitiesPanel': {
+      maxHeight: 'none',
+      overflow: 'visible',
+      padding: 0,
+    },
   },
   cotHeaderText: {
     display: 'inline-flex',
@@ -541,7 +559,7 @@ export function RunTimeline({ steps, running, emptyHint, embedded = false }: Run
             defaultExpanded
             progressState={running ? 'loading' : 'finished'}
             progressMessage={running ? 'Run in progress' : 'Run finished'}
-            activitiesAccordion={{ multiple: true, collapsible: true }}
+            activitiesAccordion={{ multiple: true, collapsible: true, defaultOpenItems: steps.map((s) => s.id) }}
           >
             {steps.map((step) => (
               <ChainOfThoughtItem

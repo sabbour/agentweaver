@@ -16,6 +16,13 @@ const useStyles = makeStyles({
     gap: tokens.spacingVerticalM,
     minWidth: 0,
   },
+  panelPlain: {
+    // Chrome-free variant for embedding inside another surface (e.g. the AiCredits popover) where a
+    // bordered/filled panel would nest a card inside a card. Strip the border, fill and padding.
+    backgroundColor: 'transparent',
+    border: 'none',
+    padding: 0,
+  },
   header: {
     display: 'flex',
     flexDirection: 'column',
@@ -72,11 +79,18 @@ export function AgentTokenBreakdown({
   title = 'Agent token breakdown',
   subtitle = 'Per-agent usage for this orchestration run.',
   roleByAgent,
+  plain = false,
+  showHeader = true,
 }: {
   data: RunAgentTokenBreakdownDto | null;
   title?: string;
   subtitle?: string;
   roleByAgent?: Record<string, string>;
+  /** Strip the bordered/filled panel chrome so the breakdown can embed inside another surface
+   *  (e.g. the AiCredits popover) without nesting a card. */
+  plain?: boolean;
+  /** Show the title/subtitle header. Off for embedded contexts that already provide a heading. */
+  showHeader?: boolean;
 }) {
   const styles = useStyles();
   const rows = data?.breakdown ?? [];
@@ -84,11 +98,13 @@ export function AgentTokenBreakdown({
   const hasFallbackTotal = !data?.hasAgentData && ((data?.totalTokens ?? 0) > 0 || (data?.totalNanoAiu ?? 0) > 0);
 
   return (
-    <div className={styles.panel}>
-      <div className={styles.header}>
-        <TitleText as="h2">{title}</TitleText>
-        <Body tone="muted">{subtitle}</Body>
-      </div>
+    <div className={mergeClasses(styles.panel, plain && styles.panelPlain)}>
+      {showHeader && (
+        <div className={styles.header}>
+          <TitleText as="h2">{title}</TitleText>
+          <Body tone="muted">{subtitle}</Body>
+        </div>
+      )}
 
       {!data ? (
         <EmptyState title="Loading usage…" />
@@ -96,6 +112,8 @@ export function AgentTokenBreakdown({
         <EmptyState title="No agent usage data yet." />
       ) : (
         <div className={styles.usageList}>
+          {/* TODO(ai-credits): rows kept as plain AIC text — this breakdown is rendered as the `detail`
+              inside the AiCredits popover, so nesting another hover control here would nest popovers. */}
           {rows.map((entry) => (
             <div key={entry.agentName} className={styles.usageItem}>
               <div className={styles.rowHead}>

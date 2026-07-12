@@ -462,8 +462,7 @@ describe('AgentSessionPanel', () => {
     );
 
     const timeline = await screen.findByTestId('run-timeline', undefined, { timeout: 4000 });
-    // Steps are collapsed by default; expand the intent that ran the tool.
-    fireEvent.click(within(timeline).getByText('Writing hotel booking design doc'));
+    // Steps are expanded by default, so the intent's tool group is visible immediately.
 
     const group = await within(timeline).findByTestId('timeline-tool-group', undefined, { timeout: 4000 });
     expect(group.textContent).toContain('Used 1 tool');
@@ -474,7 +473,7 @@ describe('AgentSessionPanel', () => {
     expect(rows[0].getAttribute('data-tool-status')).toBe('complete');
   });
 
-  it('renders scope tool activity and exposes Activity/Changes without a Files tab', async () => {
+  it('renders scope tool activity in a single thread without Activity/Changes/Files tabs', async () => {
     currentEvents = [
       { sequence: 1, type: 'agent.turn.start', payload: { turnId: 'worker-turn' } },
       { sequence: 2, type: 'agent.message', payload: { content: 'Creating the booking page components.' } },
@@ -506,16 +505,15 @@ describe('AgentSessionPanel', () => {
       </Wrapper>,
     );
 
-    // The surface uses a single Activity | Changes segmented control — the old Files tab is gone.
-    expect(await screen.findByTestId('session-tab-activity', undefined, { timeout: 4000 })).toBeDefined();
-    expect(screen.getByTestId('session-tab-changes')).toBeDefined();
+    // The surface is a single thread — the Activity | Changes segmented control (and old Files tab) are gone.
+    expect(screen.queryByTestId('session-tab-activity')).toBeNull();
+    expect(screen.queryByTestId('session-tab-changes')).toBeNull();
     expect(screen.queryByTestId('session-tab-files')).toBeNull();
 
     // The write_file tool surfaces as a Timeline activity row, not a run-tree/Files artifact.
     const timeline = await screen.findByTestId('run-timeline', undefined, { timeout: 4000 });
-    // With no agent.intent, activity nests under the synthetic "Working" step; expand it.
-    fireEvent.click(within(timeline).getByText('Working'));
-    // Tool group is collapsed by default; expand it to reveal the rows.
+    // With no agent.intent, activity nests under the synthetic "Working" step, which is expanded
+    // by default. Tool group is collapsed by default; expand it to reveal the rows.
     fireEvent.click(await within(timeline).findByTestId('timeline-tool-group', undefined, { timeout: 4000 }));
     const rows = await within(timeline).findAllByTestId('timeline-tool-row', undefined, { timeout: 4000 });
     expect(rows.length).toBeGreaterThan(0);
@@ -545,10 +543,9 @@ describe('AgentSessionPanel', () => {
       </Wrapper>,
     );
 
-    // A message with no preceding intent opens a synthetic "Working" step; expand it
-    // to reveal the agent's actual output rendered as a message.
+    // A message with no preceding intent opens a synthetic "Working" step, expanded by default,
+    // revealing the agent's actual output rendered as a message.
     const timeline = await screen.findByTestId('run-timeline', undefined, { timeout: 4000 });
-    fireEvent.click(within(timeline).getByText('Working'));
     await waitFor(
       () => expect(within(timeline).getByTestId('timeline-message').textContent).toContain('I found the implementation details.'),
       { timeout: 4000 },
@@ -631,8 +628,7 @@ describe('AgentSessionPanel', () => {
     );
 
     const timeline = await screen.findByTestId('run-timeline', undefined, { timeout: 4000 });
-    // Message + tool with no preceding intent group under a single synthetic step.
-    fireEvent.click(within(timeline).getByText('Working'));
+    // Message + tool with no preceding intent group under a single synthetic step, expanded by default.
 
     const group = await within(timeline).findByTestId('timeline-tool-group', undefined, { timeout: 4000 });
     expect(group.textContent).toContain('Used 1 tool');
@@ -701,8 +697,7 @@ describe('AgentSessionPanel', () => {
     );
 
     const timeline = await screen.findByTestId('run-timeline', undefined, { timeout: 4000 });
-    fireEvent.click(within(timeline).getByText('Working'));
-    // Tool group is collapsed by default; expand it to reveal the rows.
+    // The synthetic step is expanded by default; the tool group is collapsed by default, so expand it.
     fireEvent.click(await within(timeline).findByTestId('timeline-tool-group', undefined, { timeout: 4000 }));
 
     const rows = await within(timeline).findAllByTestId('timeline-tool-row', undefined, { timeout: 4000 });
@@ -825,8 +820,8 @@ describe('AgentSessionPanel', () => {
     );
 
     expect(screen.getByText(/has not been dispatched yet/i)).toBeDefined();
-    await userEvent.click(screen.getByTestId('session-tab-changes'));
-    expect(screen.getByTestId('planned-node-artifact-guard')).toBeDefined();
+    // No segmented Changes tab anymore; the panel must still avoid run/workspace API calls for
+    // an undispatched planned node.
     expect(vi.mocked(apiClient.getRun)).not.toHaveBeenCalled();
     expect(vi.mocked(apiClient.getRunFiles)).not.toHaveBeenCalled();
     expect(vi.mocked(apiClient.getRunWorkspace)).not.toHaveBeenCalled();

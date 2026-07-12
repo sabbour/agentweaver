@@ -1,5 +1,23 @@
 import type { RunStreamEvent } from '../api/sse';
 import { deriveHumanTitle, extractCallId, stripPathPrefix } from './reducer';
+import { isSerializedWorkPlan } from './coordinatorPlanFilter';
+
+/**
+ * Count the subtask drafts inside the decompose agent's serialized work-plan JSON array, so the
+ * illegible raw dump can be replaced with a short friendly line ("Decomposed the work into N
+ * subtasks."). Returns null when the count can't be recovered.
+ */
+function serializedWorkPlanSubtaskCount(content: string): number | null {
+  const start = content.indexOf('[');
+  const end = content.lastIndexOf(']');
+  if (start < 0 || end <= start) return null;
+  try {
+    const parsed = JSON.parse(content.slice(start, end + 1));
+    return Array.isArray(parsed) ? parsed.length : null;
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Intent-driven Timeline model.
@@ -330,7 +348,14 @@ function closeStep(step: RunTimelineStep): void {
  * `events` may arrive out of order across reconnects — we sort by `sequence`
  * (there is no timestamp on the wire) before grouping.
  */
-export function buildRunTimeline(events: readonly RunStreamEvent[]): RunTimelineModel {
+export function buildRunTimeline(
+  events: readonly RunStreamEvent[],
+  options?: { stripSerializedWorkPlan?: boolean },
+): RunTimelineModel {
+  // The serialized work-plan replacement is only meaningful on the coordinator run stream, where the
+  // decompose agent's raw JSON array actually originates. Defaults on so existing callers/tests keep
+  // the summary; child agent scopes pass false so a child's legit JSON output is never rewritten.
+  const stripSerializedWorkPlan = options?.stripSerializedWorkPlan ?? true;
   // Sort by sequence, but force run-terminal singletons (often sequence 0) to sort LAST
   // so they close steps only after every intent/tool/message has been placed.
   const sortKey = (e: RunStreamEvent): number =>
@@ -553,6 +578,24 @@ export function buildRunTimeline(events: readonly RunStreamEvent[]): RunTimeline
 
       default:
         break;
+    }
+  }
+
+  // Replace the coordinator decompose agent's serialized work-plan JSON (a giant illegible array)
+  // with a short friendly line. The structured work-plan chip + subagents overlay stay the source of
+  // truth. Children reference the same message objects, so mutating text covers both surfaces.
+  // Only applied on the coordinator scope (stripSerializedWorkPlan) — a child agent may legitimately
+  // emit a title/scope JSON array in its own output, which must be left intact.
+  if (stripSerializedWorkPlan) {
+    for (const step of steps) {
+      for (const msg of step.messages) {
+        if (isSerializedWorkPlan(msg.text)) {
+          const n = serializedWorkPlanSubtaskCount(msg.text);
+          msg.text = n != null
+            ? `Decomposed the work into ${n} subtask${n === 1 ? '' : 's'}.`
+            : 'Decomposed the work into subtasks.';
+        }
+      }
     }
   }
 

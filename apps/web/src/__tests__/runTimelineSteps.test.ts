@@ -281,4 +281,45 @@ describe('buildRunTimeline', () => {
     // The delta still reflects all 500 added lines (counted before truncation).
     expect(edit.resultMeta).toBe('+500');
   });
+
+  it('replaces the serialized work-plan JSON message with a short friendly summary', () => {
+    const workPlanJson = JSON.stringify([
+      { title: 'Research', scope: 'Gather sources', role: 'researcher', depends_on: [] },
+      { title: 'Draft', scope: 'Write the piece', role: 'writer', depends_on: [] },
+      { title: 'Editorial', scope: 'Polish', role: 'editor', depends_on: [] },
+    ]);
+    const model = buildRunTimeline([
+      evt(1, 'agent.intent', { intent: 'Decomposing work plan' }),
+      evt(2, 'agent.message', { messageId: 'm1', content: workPlanJson }),
+      evt(3, 'agent.turn.end', {}),
+    ]);
+
+    const step = model.steps[0];
+    // The raw JSON wall must never render.
+    expect(step.messages[0].text).not.toContain('"scope"');
+    expect(step.messages[0].text).not.toContain('[{');
+    // It is summarised with the subtask count instead.
+    expect(step.messages[0].text).toBe('Decomposed the work into 3 subtasks.');
+    // The ordered children mirror the summarised text (same object reference).
+    const msgChild = step.children.find((c) => c.kind === 'message');
+    expect(msgChild && msgChild.kind === 'message' && msgChild.message.text).toBe('Decomposed the work into 3 subtasks.');
+  });
+
+  it('does NOT rewrite a title/scope JSON array on a non-coordinator (child) scope', () => {
+    // A child agent may legitimately emit a JSON array whose objects carry title+scope (e.g. an
+    // example payload). With stripSerializedWorkPlan disabled the message must be left verbatim.
+    const legitArray = JSON.stringify([
+      { title: 'Endpoint A', scope: 'GET /a returns colors' },
+      { title: 'Endpoint B', scope: 'POST /b adds a color' },
+    ]);
+    const model = buildRunTimeline([
+      evt(1, 'agent.intent', { intent: 'Drafting response' }),
+      evt(2, 'agent.message', { messageId: 'm1', content: legitArray }),
+      evt(3, 'agent.turn.end', {}),
+    ], { stripSerializedWorkPlan: false });
+
+    const step = model.steps[0];
+    expect(step.messages[0].text).toBe(legitArray);
+    expect(step.messages[0].text).not.toContain('Decomposed the work into');
+  });
 });

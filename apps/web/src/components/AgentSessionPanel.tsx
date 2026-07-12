@@ -12,25 +12,22 @@ import {
   tokens,
 } from '@fluentui/react-components';
 import {
-  ArrowDownloadRegular,
   CheckmarkCircleFilled,
   ChevronDownRegular,
   CircleRegular,
   ClockRegular,
   DismissCircleFilled,
   DismissRegular,
-  DocumentRegular,
-  OpenRegular,
 } from '@fluentui/react-icons';
 import { ApprovalGate } from './ui/agentic';
 import { Composer } from './ui/copilot';
-import { EmptyState } from './ui';
 import { AutomationToggle } from './AutomationToggle';
 import { AUTOMATION_HELP } from './automationHelp';
 import { useArtifactBrowser } from '../hooks/useArtifactBrowser';
 import { mergeRunEvents as sharedMergeRunEvents, SEED_STATUSES } from '../timeline/mergeRunEvents';
 import { deriveHumanTitle } from '../timeline/reducer';
 import { AgentAvatar } from './AgentAvatar';
+import { AiCredits } from './AiCredits';
 import { FileViewerModal } from './FileViewerModal';
 import { OutcomePlanPanel } from './OutcomePlanPanel';
 import { RunTimeline } from './RunTimeline';
@@ -38,7 +35,6 @@ import { buildRunTimeline } from '../timeline/runTimelineSteps';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { EventType, RunStreamEvent } from '../api/sse';
-import type { WorkspaceFileContent, WorkspaceFileEntry } from '../api/types';
 import type { ArtifactBrowserAdapter } from '../hooks/useArtifactBrowser';
 const PANEL_TOP = '48px';
 const useStyles = makeStyles({
@@ -309,90 +305,12 @@ const useStyles = makeStyles({
     paddingLeft: tokens.spacingHorizontalM,
     borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
   },
-  segmented: {
-    display: 'inline-flex',
-    alignSelf: 'flex-start',
-    gap: '2px',
-    margin: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalL}`,
-    padding: '2px',
-    borderRadius: tokens.borderRadiusMedium,
-    backgroundColor: tokens.colorNeutralBackground3,
-  },
-  segmentBtn: {
-    appearance: 'none',
-    border: 'none',
-    cursor: 'pointer',
-    padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalM}`,
-    borderRadius: tokens.borderRadiusSmall,
-    backgroundColor: 'transparent',
-    color: tokens.colorNeutralForeground2,
-    fontSize: tokens.fontSizeBase200,
-    fontWeight: tokens.fontWeightMedium,
-    fontFamily: tokens.fontFamilyBase,
-    ':hover': { color: tokens.colorNeutralForeground1 },
-  },
-  segmentBtnActive: {
-    backgroundColor: tokens.colorNeutralBackground1,
-    color: tokens.colorNeutralForeground1,
-    boxShadow: tokens.shadow2,
-  },
   composerUtilityRow: {
     display: 'flex',
     alignItems: 'center',
     flexWrap: 'wrap',
     gap: tokens.spacingHorizontalL,
     paddingTop: tokens.spacingVerticalXS,
-  },
-  changesList: {
-    display: 'flex',
-    flexDirection: 'column',
-  },
-  changeRow: {
-    display: 'grid',
-    gridTemplateColumns: '20px 1fr auto',
-    alignItems: 'center',
-    gap: tokens.spacingHorizontalS,
-    paddingTop: tokens.spacingVerticalXS,
-    paddingBottom: tokens.spacingVerticalXS,
-    borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
-  },
-  changeIcon: {
-    display: 'inline-flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    color: tokens.colorNeutralForeground3,
-  },
-  changeNameBtn: {
-    appearance: 'none',
-    border: 'none',
-    background: 'transparent',
-    cursor: 'pointer',
-    textAlign: 'left',
-    display: 'flex',
-    flexDirection: 'column',
-    minWidth: 0,
-    padding: 0,
-  },
-  changeName: {
-    fontWeight: tokens.fontWeightSemibold,
-    fontSize: tokens.fontSizeBase300,
-    color: tokens.colorNeutralForeground1,
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
-    whiteSpace: 'nowrap',
-  },
-  changeMeta: {
-    fontSize: tokens.fontSizeBase200,
-    color: tokens.colorNeutralForeground3,
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
-    whiteSpace: 'nowrap',
-  },
-  changeActions: {
-    display: 'inline-flex',
-    alignItems: 'center',
-    gap: tokens.spacingHorizontalXXS,
-    flexShrink: 0,
   },
   content: {
     flex: 1,
@@ -429,10 +347,6 @@ const useStyles = makeStyles({
     justifyContent: 'flex-end',
     paddingTop: tokens.spacingVerticalXS,
     backgroundColor: tokens.colorNeutralBackground1,
-  },
-  emptyState: {
-    padding: tokens.spacingVerticalXL,
-    color: tokens.colorNeutralForeground3,
   },
   statusChip: {
     display: 'inline-flex',
@@ -831,6 +745,15 @@ export interface AgentSessionPanelProps {
    *  coordinator scope. Hidden for non-coordinator (child) scopes, whose per-scope changes
    *  live in the Activity | Changes segmented control instead. */
   runChips?: ReactNode;
+  /** Run-level AI-credits indicator, rendered immediately left of the composer send button as the
+   *  shared hoverable AiCredits control (Session credits + USD estimate). */
+  credits?: {
+    totalNanoAiu?: number | null;
+    detail?: ReactNode;
+  };
+  /** True once the run has decomposed into a work plan / dispatched subtasks (or is terminal), so the
+   *  inline Outcome-plan view hides the pre-dispatch "Break into tasks" authoring action. */
+  outcomePlanDispatched?: boolean;
 }
 
 interface ConversationRow {
@@ -1469,6 +1392,8 @@ export function AgentSessionPanel({
   onOutcomePlanClarify,
   artifactAdapter,
   runChips,
+  credits,
+  outcomePlanDispatched = false,
 }: AgentSessionPanelProps) {
   const styles = useStyles();
   const composerRef = useRef<HTMLDivElement>(null);
@@ -1479,7 +1404,6 @@ export function AgentSessionPanel({
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const docked = variant === 'docked';
   const [isVisible, setIsVisible] = useState(open);
-  const [activeTab, setActiveTab] = useState<'activity' | 'changes'>('activity');
   const [seedEvents, setSeedEvents] = useState<RunStreamEvent[]>([]);
   const [runDetailLoading, setRunDetailLoading] = useState(false);
   const [runDetailError, setRunDetailError] = useState<string | null>(null);
@@ -1531,15 +1455,11 @@ export function AgentSessionPanel({
     effectiveAdapter,
   );
   const {
-    files,
-    filesLoading,
-    filesError,
     selectedPath,
     diff: selectedDiff,
     diffLoading: selectedDiffLoading,
     diffError: selectedDiffError,
     selectedPathIsChanged,
-    handleFileSelect,
     clearSelection,
   } = artifactState;
 
@@ -1552,7 +1472,12 @@ export function AgentSessionPanel({
   // The Messages surface renders the intent-driven Timeline (ChainOfThought steps) from
   // the same scope-aware event stream. `turns` is still used for approvals, file
   // references and the needs-input counters.
-  const timelineModel = useMemo(() => buildRunTimeline(events), [events]);
+  const timelineModel = useMemo(
+    () => buildRunTimeline(events, {
+      stripSerializedWorkPlan: Boolean(selectedItem?.isCoordinator || selectedItem?.nodeId === 'work-plan'),
+    }),
+    [events, selectedItem?.isCoordinator, selectedItem?.nodeId],
+  );
   const timelineApprovals = useMemo(
     () => turns.flatMap((turn) => turn.approvals),
     [turns],
@@ -1582,7 +1507,6 @@ export function AgentSessionPanel({
   }, [open, onClose]);
 
   useEffect(() => {
-    setActiveTab('activity');
     setSeedEvents([]);
     setFollowUpError(null);
     setFollowUpNotice(null);
@@ -1607,7 +1531,6 @@ export function AgentSessionPanel({
 
   const focusOutcomePlanClarification = useCallback(() => {
     setFollowUp((value) => value.trim() ? value : 'Clarify the outcome plan: ');
-    setActiveTab('activity');
     onOutcomePlanClarify?.();
     window.setTimeout(() => focusComposer(), 0);
   }, [onOutcomePlanClarify, focusComposer]);
@@ -1830,144 +1753,90 @@ export function AgentSessionPanel({
                 </Text>
               </div>
               <div className={styles.headerActions}>
-                <Button appearance="subtle" icon={<DismissRegular />} aria-label="Close panel" onClick={onClose} />
+                {/* Docked (merged single-surface) layout always has a selection, so there is no
+                    empty center to close to — only the modal variant shows a close affordance. */}
+                {!docked && (
+                  <Button appearance="subtle" icon={<DismissRegular />} aria-label="Close panel" onClick={onClose} />
+                )}
               </div>
             </div>
 
-            <div className={styles.segmented} role="tablist" aria-label="Selected scope views">
-              <button
-                type="button"
-                role="tab"
-                aria-selected={activeTab === 'activity'}
-                className={mergeClasses(styles.segmentBtn, activeTab === 'activity' && styles.segmentBtnActive)}
-                onClick={() => setActiveTab('activity')}
-                data-testid="session-tab-activity"
-              >
-                Activity
-              </button>
-              <button
-                type="button"
-                role="tab"
-                aria-selected={activeTab === 'changes'}
-                className={mergeClasses(styles.segmentBtn, activeTab === 'changes' && styles.segmentBtnActive)}
-                onClick={() => setActiveTab('changes')}
-                data-testid="session-tab-changes"
-              >
-                Changes{files.length > 0 ? ` (${files.length})` : ''}
-              </button>
-            </div>
-
             <div className={styles.content}>
-              {activeTab === 'activity' && (
-                <>
-                  <div
-                    className={styles.tabBody}
-                    ref={messagesScrollRef}
-                    tabIndex={0}
-                    data-testid="session-message-scroll"
-                    aria-label="Session messages"
-                  >
-                    {selectedRunUnavailableReason && (
-                      <MessageBar intent="info">
-                        <MessageBarBody>{selectedRunUnavailableReason}</MessageBarBody>
-                      </MessageBar>
-                    )}
-                    {runDetailError && !selectedRunUnavailableReason && (
-                      <MessageBar intent="warning">
-                        <MessageBarBody>{runDetailError}</MessageBarBody>
-                      </MessageBar>
-                    )}
-                    {runDetailLoading && (
-                      <div className={styles.loadingWrap} style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS }}>
-                        <Spinner size="tiny" />
-                        <Text>Loading session details...</Text>
-                      </div>
-                    )}
-                    {selectedItem.nodeId === 'outcome-plan' ? (
-                      <OutcomePlanPanel
-                        runId={coordinatorRunId}
-                        projectId={projectId}
-                        events={events}
-                        streamStatus="streaming"
-                        runStatus={runDetail?.status ?? undefined}
-                        onReconnect={onCoordinatorFollowUp}
-                        onClarifyPlan={focusOutcomePlanClarification}
-                        clarificationSent={selectedItem.status === 'needs_clarification'}
-                      />
-                    ) : (
-                      <>
-                        <RunTimeline
-                          embedded
-                          steps={timelineModel.steps}
-                          running={timelineModel.running}
-                          emptyHint="Messages, tool calls, and activity will appear here as the run emits events."
-                        />
-                        {timelineApprovals.length > 0 && (
-                          <div className={styles.timelineApprovals}>
-                            {timelineApprovals.map((approval) => (
-                              <InThreadApprovalGate
-                                key={`approval-${approval.event.sequence}`}
-                                event={approval.event}
-                                runId={selectedRunId}
-                                isResolved={approval.isResolved}
-                                resolvedScope={approval.resolvedScope}
-                              />
-                            ))}
-                          </div>
-                        )}
-                      </>
-                    )}
-                    <div ref={messagesEndRef} data-testid="session-message-end" />
-                    {selectedItem.nodeId !== 'outcome-plan' && turns.length > 0 && (
-                      <div className={styles.jumpToLatestBar}>
-                        <Button
-                          appearance="secondary"
-                          size="small"
-                          icon={<ChevronDownRegular />}
-                          onClick={jumpToLatestMessage}
-                          data-testid="jump-to-latest-messages"
-                        >
-                          Jump to latest
-                        </Button>
-                      </div>
-                    )}
+              <div
+                className={styles.tabBody}
+                ref={messagesScrollRef}
+                tabIndex={0}
+                data-testid="session-message-scroll"
+                aria-label="Session messages"
+              >
+                {selectedRunUnavailableReason && (
+                  <MessageBar intent="info">
+                    <MessageBarBody>{selectedRunUnavailableReason}</MessageBarBody>
+                  </MessageBar>
+                )}
+                {runDetailError && !selectedRunUnavailableReason && (
+                  <MessageBar intent="warning">
+                    <MessageBarBody>{runDetailError}</MessageBarBody>
+                  </MessageBar>
+                )}
+                {runDetailLoading && (
+                  <div className={styles.loadingWrap} style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS }}>
+                    <Spinner size="tiny" />
+                    <Text>Loading session details...</Text>
                   </div>
-                </>
-              )}
-
-              {activeTab === 'changes' && (
-                <div className={styles.tabBody}>
-                  {selectedRunUnavailableReason ? (
-                    <MessageBar intent="info" data-testid="planned-node-artifact-guard">
-                      <MessageBarBody>{selectedRunUnavailableReason}</MessageBarBody>
-                    </MessageBar>
-                  ) : filesLoading ? (
-                    <div className={styles.loadingWrap} style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS }}>
-                      <Spinner size="tiny" />
-                      <Text>Loading changes...</Text>
-                    </div>
-                  ) : filesError ? (
-                    <MessageBar intent="warning">
-                      <MessageBarBody>{filesError}</MessageBarBody>
-                    </MessageBar>
-                  ) : files.length === 0 ? (
-                    <EmptyState
-                      className={styles.emptyState}
-                      title="No changes yet"
-                      description="Created and changed files will appear here as the agent writes them."
+                )}
+                {selectedItem.nodeId === 'outcome-plan' ? (
+                  <OutcomePlanPanel
+                    runId={coordinatorRunId}
+                    projectId={projectId}
+                    events={events}
+                    streamStatus="streaming"
+                    runStatus={runDetail?.status ?? undefined}
+                    onReconnect={onCoordinatorFollowUp}
+                    onClarifyPlan={focusOutcomePlanClarification}
+                    clarificationSent={selectedItem.status === 'needs_clarification'}
+                    dispatched={outcomePlanDispatched}
+                  />
+                ) : (
+                  <>
+                    <RunTimeline
+                      embedded
+                      steps={timelineModel.steps}
+                      running={timelineModel.running}
+                      emptyHint="Messages, tool calls, and activity will appear here as the run emits events."
                     />
-                  ) : (
-                    <ScopeChangesList
-                      files={files}
-                      runId={selectedRunId}
-                      onOpen={(path) => handleFileSelect(path, true)}
-                      getContent={effectiveAdapter?.getContent}
-                    />
-                  )}
-                </div>
-              )}
+                    {timelineApprovals.length > 0 && (
+                      <div className={styles.timelineApprovals}>
+                        {timelineApprovals.map((approval) => (
+                          <InThreadApprovalGate
+                            key={`approval-${approval.event.sequence}`}
+                            event={approval.event}
+                            runId={selectedRunId}
+                            isResolved={approval.isResolved}
+                            resolvedScope={approval.resolvedScope}
+                          />
+                        ))}
+                      </div>
+                    )}
+                  </>
+                )}
+                <div ref={messagesEndRef} data-testid="session-message-end" />
+                {selectedItem.nodeId !== 'outcome-plan' && turns.length > 0 && (
+                  <div className={styles.jumpToLatestBar}>
+                    <Button
+                      appearance="secondary"
+                      size="small"
+                      icon={<ChevronDownRegular />}
+                      onClick={jumpToLatestMessage}
+                      data-testid="jump-to-latest-messages"
+                    >
+                      Jump to latest
+                    </Button>
+                  </div>
+                )}
+              </div>
             </div>
-            {runChips && !isNonCoordinatorAgentScope && (
+            {runChips && (
               <div className={styles.runChipsBar} data-testid="run-summary-chips">
                 {runChips}
               </div>
@@ -2004,6 +1873,14 @@ export function AgentSessionPanel({
                   disabled={!coordinatorActive || followUpBusy}
                   disableSend={!coordinatorActive || followUpBusy || !followUp.trim()}
                   contentBefore={null}
+                  actions={credits ? (
+                    <AiCredits
+                      totalNanoAiu={credits.totalNanoAiu}
+                      detail={credits.detail}
+                      showZero
+                      data-testid="composer-credits"
+                    />
+                  ) : null}
                 />
               </div>
               {automation && !isNonCoordinatorAgentScope && (
@@ -2055,84 +1932,6 @@ export function AgentSessionPanel({
         getContent={effectiveAdapter?.getContent}
       />
     </>
-  );
-}
-
-// ScopeChangesList — a clean, card-free list of the selected scope's created/changed files.
-// Each row: file-type icon + filename (semibold) + "{ext} file · +A −R" (muted) + right-aligned
-// download + open-in-new actions. Dividers only, no cards, no side-stripes.
-function ScopeChangesList({
-  files,
-  runId,
-  onOpen,
-  getContent,
-}: {
-  files: WorkspaceFileEntry[];
-  runId: string;
-  onOpen: (path: string) => void;
-  getContent?: (runId: string, path: string) => Promise<WorkspaceFileContent>;
-}) {
-  const styles = useStyles();
-  const [downloading, setDownloading] = useState<string | null>(null);
-
-  const handleDownload = async (path: string) => {
-    if (downloading) return;
-    setDownloading(path);
-    try {
-      const fetcher = getContent ?? apiClient.getRunFileContent.bind(apiClient);
-      const file = await fetcher(runId, path);
-      const blob = new Blob([file.content ?? ''], { type: 'text/plain;charset=utf-8' });
-      const url = URL.createObjectURL(blob);
-      const anchor = document.createElement('a');
-      anchor.href = url;
-      anchor.download = path.split(/[\\/]/).pop() ?? path;
-      document.body.appendChild(anchor);
-      anchor.click();
-      document.body.removeChild(anchor);
-      URL.revokeObjectURL(url);
-    } catch {
-      // Download is best-effort; the open-in-new action remains available on failure.
-    } finally {
-      setDownloading(null);
-    }
-  };
-
-  return (
-    <div className={styles.changesList} data-testid="scope-changes-list">
-      {files.map((file) => {
-        const name = file.path.split(/[\\/]/).pop() ?? file.path;
-        const dot = name.lastIndexOf('.');
-        const ext = dot > 0 ? name.slice(dot + 1) : '';
-        const typeLabel = ext ? `${ext} file` : 'file';
-        const meta = `${typeLabel} · +${file.added_lines} \u2212${file.removed_lines}`;
-        return (
-          <div key={file.path} className={styles.changeRow} data-testid="scope-change-row" title={file.path}>
-            <span className={styles.changeIcon} aria-hidden><DocumentRegular /></span>
-            <button type="button" className={styles.changeNameBtn} onClick={() => onOpen(file.path)}>
-              <span className={styles.changeName}>{name}</span>
-              <span className={styles.changeMeta}>{meta}</span>
-            </button>
-            <span className={styles.changeActions}>
-              <Button
-                appearance="subtle"
-                size="small"
-                icon={<ArrowDownloadRegular />}
-                aria-label={`Download ${name}`}
-                disabled={downloading === file.path}
-                onClick={() => void handleDownload(file.path)}
-              />
-              <Button
-                appearance="subtle"
-                size="small"
-                icon={<OpenRegular />}
-                aria-label={`Open ${name}`}
-                onClick={() => onOpen(file.path)}
-              />
-            </span>
-          </div>
-        );
-      })}
-    </div>
   );
 }
 

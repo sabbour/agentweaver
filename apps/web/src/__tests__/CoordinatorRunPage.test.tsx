@@ -137,12 +137,12 @@ afterEach(() => {
 });
 
 async function expandRunControls(): Promise<void> {
-  // Run controls (topology / plan / artifacts / details) are always visible in the compact header now.
-  await screen.findByTestId('open-topology-panel', undefined, { timeout: 4000 });
+  // The topology entry point now lives in the left rail (minimap), not the header.
+  await screen.findByTestId('open-topology-minimap', undefined, { timeout: 4000 });
 }
 
 async function openTopologyInspector(): Promise<HTMLElement> {
-  const button = await screen.findByTestId('open-topology-panel', undefined, { timeout: 4000 });
+  const button = await screen.findByTestId('open-topology-minimap', undefined, { timeout: 4000 });
   fireEvent.click(button);
   return screen.findByTestId('topology-inspector', undefined, { timeout: 4000 });
 }

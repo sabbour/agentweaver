@@ -14,6 +14,7 @@ import {
 } from '@fluentui/react-components';
 import { ArrowSyncRegular } from '@fluentui/react-icons';
 import { ModelPerformancePanels } from '../../components/dashboard/ModelPerformancePanels';
+import { AiCredits } from '../../components/AiCredits';
 import { ObservabilityLayout } from '../../components/observability/ObservabilityLayout';
 import {
   EmptyState,
@@ -66,10 +67,6 @@ function rangeLabel(range: TimeRange): string {
 
 function compactNumber(value: number): string {
   return new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 }).format(value);
-}
-
-function formatAiu(nanoAiu: number): string {
-  return `${compactNumber(nanoAiu / 1_000_000_000)} AIC`;
 }
 
 function hasTelemetry(metrics: ProjectMetricsDto | null): boolean {
@@ -172,7 +169,7 @@ export function ObservabilityOverviewPage() {
         )}
         <div className={styles.tileGrid}>
           <StatTile label="Model calls" value={compactNumber(summary.totalCalls)} hint="Invocation trend" />
-          <StatTile label="AI credits" value={formatAiu(summary.totalAiu)} hint="Usage" />
+          <StatTile label="AI credits" value={<AiCredits totalNanoAiu={summary.totalAiu} plain showZero />} hint="Usage" />
           <StatTile label="Active models" value={String(summary.activeModels)} hint="Model mix" />
           <StatTile label="Agent rows" value={String(summary.agentRows)} hint={`${summary.p95Models} latency baselines`} />
         </div>

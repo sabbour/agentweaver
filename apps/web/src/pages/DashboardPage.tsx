@@ -25,7 +25,7 @@ import {
   FlowRegular,
   WarningRegular,
 } from '@fluentui/react-icons';
-import { formatAic } from '../components/CostChip';
+import { AiCredits } from '../components/AiCredits';
 import { AgentInvocationChart } from '../components/dashboard/AgentInvocationChart';
 import { ModelPerformancePanels } from '../components/dashboard/ModelPerformancePanels';
 import { MetricEmptyState,
@@ -1157,7 +1157,7 @@ export function DashboardPage() {
                                   </div>
                                 </TableCell>
                                 <TableCell>{formatDuration(row.avgDurationMs)}</TableCell>
-                                <TableCell>{row.costAic > 0 ? `${formatAic(Math.round(row.costAic * 1_000_000_000))} AIC` : '—'}</TableCell>
+                                <TableCell>{row.costAic > 0 ? <AiCredits totalNanoAiu={Math.round(row.costAic * 1_000_000_000)} /> : '—'}</TableCell>
                               </TableRow>
                             ))}
                           </TableBody>

@@ -20,7 +20,7 @@ import {
   workflowNodeSizeHint,
 } from '../utils/dagLayout';
 import { AgentAvatar } from './AgentAvatar';
-import { CostChip } from './CostChip';
+import { AiCredits } from './AiCredits';
 import { PodIndicator } from './PodIndicator';
 import {
   AlertRegular,
@@ -690,7 +690,7 @@ export function WorkflowNode({ data, selected }: NodeProps) {
           isPlanned={!!isPlanned}
           label={key === 'agent' && effectiveStatus === 'revise' ? 'Incomplete' : undefined}
         />
-        <CostChip totalNanoAiu={totalNanoAiu as number | null | undefined} totalTokens={totalTokens as number | null | undefined} />
+        <AiCredits totalNanoAiu={totalNanoAiu as number | null | undefined} totalTokens={totalTokens as number | null | undefined} />
       </div>
 
       <div className={s.cardMain}>

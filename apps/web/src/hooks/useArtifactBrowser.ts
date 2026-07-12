@@ -95,6 +95,7 @@ export function useArtifactBrowser(
   onSubmitReviewSuccess?: () => void,
   commitMessage?: string | null,
   adapter?: ArtifactBrowserAdapter,
+  initialTab: 'changes' | 'files' = 'changes',
 ): ArtifactBrowserState {
   const isHistorical = HISTORICAL_STATUSES.has(runStatus);
   const isLive = runStatus === 'in_progress';
@@ -114,7 +115,7 @@ export function useArtifactBrowser(
   const [reviewResult, setReviewResult] = useState<ReviewResponse | null>(null);
   const [reviewError, setReviewError] = useState<string | null>(null);
 
-  const [activeTab, setActiveTab] = useState<'changes' | 'files'>('changes');
+  const [activeTab, setActiveTab] = useState<'changes' | 'files'>(initialTab);
   const [workspaceFiles, setWorkspaceFiles] = useState<WorkspaceNode[]>([]);
   const [workspaceLoading, setWorkspaceLoading] = useState(false);
   const [workspaceError, setWorkspaceError] = useState<string | null>(null);
