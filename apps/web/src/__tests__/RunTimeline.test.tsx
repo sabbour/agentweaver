@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from '@testing-library/react';
+import { act, cleanup, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { ReactNode } from 'react';
 import { AzureFluentProvider } from '../copilot-fluent-system';
@@ -48,5 +48,43 @@ describe('RunTimeline default expansion', () => {
       expect(group.getAttribute('aria-expanded')).toBe('false');
     }
     expect(screen.queryByTestId('timeline-tool-diff')).toBeNull();
+  });
+
+  it('opens later steps by default even when they stream in after the first render', () => {
+    // Regression test: the underlying Accordion's `defaultOpenItems` only applies at the
+    // moment it first mounts. Steps commonly arrive asynchronously (SSE / history load), so a
+    // step that streams in after mount must still default to open — it must not silently
+    // render collapsed just because it wasn't part of the very first render.
+    const firstBatch = buildRunTimeline([
+      evt(1, 'agent.turn.start', { turnId: 't1' }),
+      evt(2, 'agent.intent', { intent: 'Read the code' }),
+      evt(3, 'agent.message', { messageId: 'm1', content: 'Finished reading.' }),
+    ]);
+
+    const { rerender } = render(
+      <Wrapper>
+        <RunTimeline embedded steps={firstBatch.steps} running />
+      </Wrapper>,
+    );
+    expect(screen.getByText('Finished reading.')).toBeTruthy();
+
+    const secondBatch = buildRunTimeline([
+      evt(1, 'agent.turn.start', { turnId: 't1' }),
+      evt(2, 'agent.intent', { intent: 'Read the code' }),
+      evt(3, 'agent.message', { messageId: 'm1', content: 'Finished reading.' }),
+      evt(4, 'agent.intent', { intent: 'Build the project' }),
+      evt(5, 'agent.message', { messageId: 'm2', content: 'Build finished.' }),
+    ]);
+
+    act(() => {
+      rerender(
+        <Wrapper>
+          <RunTimeline embedded steps={secondBatch.steps} running={false} />
+        </Wrapper>,
+      );
+    });
+
+    // The newly-streamed second step must already be expanded — no click required.
+    expect(screen.getByText('Build finished.')).toBeTruthy();
   });
 });

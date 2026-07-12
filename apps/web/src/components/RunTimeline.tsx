@@ -22,7 +22,7 @@ import {
   WrenchRegular,
 } from '@fluentui/react-icons';
 import { SafeMarkdown } from './SafeMarkdown';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { AgentweaverCopilotProvider } from './ui/copilot/AgentweaverCopilotProvider';
 import { Body, EmptyState, Label } from './ui';
@@ -536,6 +536,19 @@ export function RunTimeline({ steps, running, emptyHint, embedded = false }: Run
   const styles = useStyles();
   const stepLabel = `${steps.length} ${steps.length === 1 ? 'step' : 'steps'}`;
 
+  // `defaultOpenItems` on the underlying Accordion only applies at first mount. Steps stream in
+  // asynchronously (SSE / history load), so by the time later steps arrive the Accordion has
+  // already locked in its initial (often empty) open set and new steps render collapsed. Track
+  // open items ourselves and auto-open any step id we haven't seen before, while still letting a
+  // user manually collapse a step (we only ever ADD ids here, never remove one the user closed).
+  const [openItems, setOpenItems] = useState<string[]>(() => steps.map((s) => s.id));
+  const knownStepIds = useRef(new Set(steps.map((s) => s.id)));
+  const newIds = steps.map((s) => s.id).filter((id) => !knownStepIds.current.has(id));
+  if (newIds.length > 0) {
+    newIds.forEach((id) => knownStepIds.current.add(id));
+    setOpenItems((prev) => [...prev, ...newIds]);
+  }
+
   return (
     <AgentweaverCopilotProvider>
       <div className={styles.root} data-testid="run-timeline">
@@ -559,7 +572,12 @@ export function RunTimeline({ steps, running, emptyHint, embedded = false }: Run
             defaultExpanded
             progressState={running ? 'loading' : 'finished'}
             progressMessage={running ? 'Run in progress' : 'Run finished'}
-            activitiesAccordion={{ multiple: true, collapsible: true, defaultOpenItems: steps.map((s) => s.id) }}
+            activitiesAccordion={{
+              multiple: true,
+              collapsible: true,
+              openItems,
+              onOpenChange: (_event, data) => setOpenItems(data.openItems as string[]),
+            }}
           >
             {steps.map((step) => (
               <ChainOfThoughtItem
