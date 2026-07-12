@@ -92,6 +92,16 @@ const useStyles = makeStyles({
     flexDirection: 'column',
     gap: tokens.spacingVerticalXXS,
   },
+  // Overrides the library's ChainOfThoughtItem headerText, which hard-codes
+  // `white-space: nowrap; text-overflow: ellipsis` for a single-line clamp — fine for short
+  // reported intents, but long ones (a full sentence summarizing what happened) get silently
+  // cut off with no way to read the rest. Let it wrap across lines instead.
+  stepHeaderText: {
+    whiteSpace: 'normal',
+    overflow: 'visible',
+    textOverflow: 'clip',
+    textAlign: 'left',
+  },
   toolGroupHeader: {
     display: 'inline-flex',
     alignItems: 'center',
@@ -591,7 +601,7 @@ export function RunTimeline({ steps, running, emptyHint, embedded = false }: Run
                     </span>
                   ),
                 }}
-                headerText={<Body>{step.intent}</Body>}
+                headerText={{ className: styles.stepHeaderText, children: <Body>{step.intent}</Body> }}
               >
                 <StepBody step={step} />
               </ChainOfThoughtItem>
