@@ -41,6 +41,7 @@ internal sealed class KubernetesPodAgentEndpointResolver : ISandboxAgentEndpoint
     // instead of the worker surfacing the generic "run interrupted" message. Best-effort: a null
     // store (or a missing run row) degrades to the generic failure path unchanged.
     private readonly IRunStore? _runStore;
+    private readonly IRunAgentHostContextResolver? _launchContextResolver;
     // Dedupes concurrent launches for the same run (e.g. parallel sub-agent turns) and
     // caches the in-flight/launched task so a run is launched at most once.
     private readonly ConcurrentDictionary<string, Lazy<Task<string>>> _launches = new(StringComparer.Ordinal);
@@ -52,7 +53,8 @@ internal sealed class KubernetesPodAgentEndpointResolver : ISandboxAgentEndpoint
         SandboxAgentOptions options,
         ILogger<KubernetesPodAgentEndpointResolver> logger,
         IAgentHostPodLifecycle? podLifecycle = null,
-        IRunStore? runStore = null)
+        IRunStore? runStore = null,
+        IRunAgentHostContextResolver? launchContextResolver = null)
     {
         _k8sClient = k8sClient ?? throw new ArgumentNullException(nameof(k8sClient));
         _podRegistry = podRegistry ?? throw new ArgumentNullException(nameof(podRegistry));
@@ -61,6 +63,7 @@ internal sealed class KubernetesPodAgentEndpointResolver : ISandboxAgentEndpoint
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _podLifecycle = podLifecycle;
         _runStore = runStore;
+        _launchContextResolver = launchContextResolver;
     }
 
     /// <inheritdoc />
@@ -127,6 +130,17 @@ internal sealed class KubernetesPodAgentEndpointResolver : ISandboxAgentEndpoint
         }
     }
 
+    /// <inheritdoc />
+    public async Task<bool> RequiresPreparedWritebackAsync(string runId, CancellationToken ct)
+    {
+        if (_launchContextResolver is null)
+            return false;
+
+        var context = await _launchContextResolver.ResolveAsync(runId, ct).ConfigureAwait(false);
+        return context.Purpose == AgentHostPurpose.ImplementationTurn
+            && context.WorkspaceMode == ExecutionWorkspaceMode.LocalWritable;
+    }
+
     /// <summary>
     /// Launches the AgentHost pod for <paramref name="runId"/> exactly once, deduping
     /// concurrent callers. Returns the bound pod name (now registered in
@@ -144,7 +158,7 @@ internal sealed class KubernetesPodAgentEndpointResolver : ISandboxAgentEndpoint
             id => new Lazy<Task<string>>(
                 // Use a non-cancelable token: the pod's lifetime spans the whole run, not a
                 // single turn's cancellation scope. Released by RunWatchLoopService on suspend.
-                () => _podLifecycle!.LaunchAgentHostPodAsync(id, CancellationToken.None)));
+                () => LaunchPodAsync(id)));
 
         try
         {
@@ -187,6 +201,21 @@ internal sealed class KubernetesPodAgentEndpointResolver : ISandboxAgentEndpoint
                 (reason is null ? $": {ex.Message}" : $" ({reason})."),
                 ex);
         }
+    }
+
+    private async Task<string> LaunchPodAsync(string runId)
+    {
+        if (_launchContextResolver is null)
+            return await _podLifecycle!
+                .LaunchAgentHostPodAsync(runId, CancellationToken.None)
+                .ConfigureAwait(false);
+
+        var context = await _launchContextResolver
+            .ResolveAsync(runId, CancellationToken.None)
+            .ConfigureAwait(false);
+        return await _podLifecycle!
+            .LaunchAgentHostPodAsync(runId, context, CancellationToken.None)
+            .ConfigureAwait(false);
     }
 
     /// <summary>

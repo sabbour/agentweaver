@@ -169,7 +169,9 @@ internal sealed class AgentHostStartupService : IHostedService
                     configuration.BaseCommitSha!,
                     configuration.ExpectedTreeHash!,
                     configuration.WorkspaceMode,
-                    configuration.ScratchRoot!),
+                    configuration.ScratchRoot!,
+                    configuration.CommitAuthorName,
+                    configuration.CommitAuthorEmail),
                 ct).ConfigureAwait(false);
             workingDirectory = prepared.WorkspacePath;
             repositoryPath = prepared.WorkspacePath;
@@ -234,6 +236,15 @@ internal sealed class AgentHostStartupService : IHostedService
                 ASSEMBLY BUILD/TEST EXECUTION
                 The native Copilot shell is disabled for this gate. Use the custom run_command tool.
                 Commands are serialized, time-bounded, and must remain in the foreground.
+                """);
+        }
+        else if (purpose == Agentweaver.Domain.AgentHostPurpose.ImplementationTurn)
+        {
+            sections.Add(
+                """
+                IMPLEMENTATION TURN EXECUTION
+                Work in the isolated local execution workspace as normal. The platform publishes
+                deliverables to the run branch after the turn. Do not run git commands.
                 """);
         }
 

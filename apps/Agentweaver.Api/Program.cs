@@ -349,6 +349,13 @@ builder.Services.AddSingleton<IAgentHostTurnTokenRegistry>(sp =>
 // AgentHost__UserId, scoping the in-pod GitHub Copilot auth to the user's Copilot-entitled token
 // instead of the installation token (which fails the first model turn).
 builder.Services.AddSingleton<IRunSubmittingUserResolver, RunStoreSubmittingUserResolver>();
+builder.Services.AddSingleton<IRunAgentHostContextResolver>(sp =>
+    new RunAgentHostContextResolver(
+        sp.GetRequiredService<Agentweaver.Api.Infrastructure.IRunStore>(),
+        sp.GetRequiredService<WorktreeManager>(),
+        builder.Configuration.GetValue(
+            "Sandbox:PodLocalWorkspace:ImplementationEnabled",
+            true)));
 builder.Services.AddSingleton<ISandboxExecutorRouter, SandboxExecutorRouter>();
 builder.Services.AddSingleton<ISandboxExecutor>(sp =>
     sp.GetRequiredService<ISandboxExecutorRouter>().Resolve());
@@ -393,10 +400,11 @@ builder.Services.AddSingleton<ISandboxExecutor>(sp =>
             // Optional: lets the resolver record a precise FailureReason (agent_quota_exceeded /
             // agent_pod_reconciler_error) on the run when a lazy pod launch fails.
             var runStore = sp.GetService<Agentweaver.Api.Infrastructure.IRunStore>();
+            var launchContextResolver = sp.GetService<IRunAgentHostContextResolver>();
             return new KubernetesPodAgentEndpointResolver(
                 k8sClient, podRegistry, ns, sandboxAgentOptions,
                 loggerFactory.CreateLogger<KubernetesPodAgentEndpointResolver>(),
-                podLifecycle, runStore);
+                podLifecycle, runStore, launchContextResolver);
         }
         catch
         {

@@ -62,7 +62,7 @@ public sealed class RemoteAgentProxyOptions
 /// reassigns monotonic sequence numbers in arrival order, preserving SSE ordering.
 /// </para>
 /// </summary>
-public sealed class RemoteAgentProxy : IWorkflowTurnAgent
+public sealed class RemoteAgentProxy : IWorkflowTurnAgent, IPreparedWritebackSource
 {
     internal sealed record StructuredRunFailure(string ErrorCode, string Message, bool? IsRetryable);
 
@@ -91,6 +91,10 @@ public sealed class RemoteAgentProxy : IWorkflowTurnAgent
     private string? _apiBaseUrl;
     private string? _apiKey;
     private string? _userId;
+    private bool _preparedWritebackRequired;
+    private bool _preparedWritebackEnvelopeSeen;
+    private bool _preparedWritebackEnvelopeInvalid;
+    private PreparedWriteback? _preparedWriteback;
 
     // Created in SetupAsync, used in RunTurnAsync, disposed in DisposeAsync.
     private A2AAgent? _a2aAgent;
@@ -138,6 +142,10 @@ public sealed class RemoteAgentProxy : IWorkflowTurnAgent
         _apiBaseUrl = apiBaseUrl;
         _apiKey = apiKey;
         _userId = userId;
+        _preparedWritebackRequired = false;
+        _preparedWritebackEnvelopeSeen = false;
+        _preparedWritebackEnvelopeInvalid = false;
+        _preparedWriteback = null;
 
         // Resolve the per-run pod's A2A base endpoint (e.g. https://10.0.0.5:8080/a2a/agent).
         // Supplied by ISandboxAgentEndpointResolver using the bound SandboxClaim pod name/IP.
@@ -153,6 +161,10 @@ public sealed class RemoteAgentProxy : IWorkflowTurnAgent
                 "or ISandboxAgentEndpointResolver is not configured for this environment. " +
                 "Set Sandbox:AgentExecutionMode=in-api to revert to in-process execution.");
         }
+
+        _preparedWritebackRequired = await _endpointResolver
+            .RequiresPreparedWritebackAsync(runId, ct)
+            .ConfigureAwait(false);
 
         // Streaming has a dedicated infinite-transport-timeout client. The worker deadlines in
         // RunTurnAsync remain authoritative even if the pod dies after response headers arrive.
@@ -233,6 +245,9 @@ public sealed class RemoteAgentProxy : IWorkflowTurnAgent
         //   - DataContent (RunEventDataPartCodec.MediaType): RunEvent side-channel events
         //     forwarded to _streamWriter → RecordingChannelWriter → RunStreamStore → SSE
         var textAccumulator = new StringBuilder();
+        _preparedWritebackEnvelopeSeen = false;
+        _preparedWritebackEnvelopeInvalid = false;
+        _preparedWriteback = null;
         StructuredRunFailure? lastStructuredFailure = null;
 
         _logger.LogDebug(
@@ -258,6 +273,9 @@ public sealed class RemoteAgentProxy : IWorkflowTurnAgent
                     }
                     else if (content is DataContent dataContent)
                     {
+                        if (TryCapturePreparedWritebackEnvelope(dataContent))
+                            continue;
+
                         // Decode RunEvent DataPart and forward to the worker's stream.
                         // Sequence is reassigned by RecordingChannelWriter, preserving total
                         // monotonic ordering on the worker side (§4.4).
@@ -300,6 +318,43 @@ public sealed class RemoteAgentProxy : IWorkflowTurnAgent
             _runId, responseText.Length);
 
         return responseText;
+    }
+
+    internal bool TryCapturePreparedWritebackEnvelope(DataContent content)
+    {
+        if (!PreparedWritebackDataPartCodec.IsWritebackContent(content))
+            return false;
+
+        if (_preparedWritebackEnvelopeSeen)
+        {
+            _preparedWritebackEnvelopeInvalid = true;
+            _preparedWriteback = null;
+            return true;
+        }
+
+        _preparedWritebackEnvelopeSeen = true;
+        var envelope = PreparedWritebackDataPartCodec.DecodeEnvelope(content);
+        _preparedWriteback = envelope.Writeback;
+        _preparedWritebackEnvelopeInvalid =
+            envelope.Status == PreparedWritebackEnvelopeStatus.Invalid;
+        return true;
+    }
+
+    public PreparedWritebackEnvelope TakePreparedWritebackEnvelope()
+    {
+        var writeback = _preparedWriteback;
+        var status = _preparedWritebackEnvelopeInvalid
+            ? PreparedWritebackEnvelopeStatus.Invalid
+            : _preparedWritebackEnvelopeSeen && writeback is not null
+                ? PreparedWritebackEnvelopeStatus.Valid
+                : _preparedWritebackRequired
+                    ? PreparedWritebackEnvelopeStatus.Missing
+                    : PreparedWritebackEnvelopeStatus.NotRequired;
+
+        _preparedWritebackEnvelopeSeen = false;
+        _preparedWritebackEnvelopeInvalid = false;
+        _preparedWriteback = null;
+        return new PreparedWritebackEnvelope(status, writeback);
     }
 
     internal static async IAsyncEnumerable<T> WithWorkerStreamDeadline<T>(
@@ -517,6 +572,10 @@ public sealed class RemoteAgentProxy : IWorkflowTurnAgent
         _httpClient = null;
         _a2aAgent = null;
         _session = null;
+        _preparedWritebackRequired = false;
+        _preparedWritebackEnvelopeSeen = false;
+        _preparedWritebackEnvelopeInvalid = false;
+        _preparedWriteback = null;
         return ValueTask.CompletedTask;
     }
 }

@@ -86,7 +86,7 @@ public sealed class PodLocalWorkspaceManagerTests : IDisposable
     }
 
     [Fact]
-    public void ValidateConfiguration_leaves_implementation_turn_defined_but_unwired()
+    public void ValidateConfiguration_accepts_implementation_turn_on_child_branch()
     {
         var configuration = Configuration(
             sharedWorkingDirectory: "/workspace/child",
@@ -97,8 +97,7 @@ public sealed class PodLocalWorkspaceManagerTests : IDisposable
 
         var act = () => PodLocalWorkspaceManager.ValidateConfiguration(configuration);
 
-        act.Should().Throw<AgentHostConfigurationException>()
-            .Which.Reason.Should().Be("implementation_turn_not_enabled");
+        act.Should().NotThrow();
     }
 
     [Fact]
@@ -194,7 +193,7 @@ public sealed class PodLocalWorkspaceManagerTests : IDisposable
     }
 
     [Fact]
-    public async Task PrepareWritebackAsync_exposes_writable_finalization_seam_without_writing_back()
+    public async Task PrepareWritebackAsync_returns_no_change_descriptor_when_workspace_is_unchanged()
     {
         var repository = CreateRepository();
         var commitSha = Git(repository, "rev-parse", "integration");
@@ -208,7 +207,71 @@ public sealed class PodLocalWorkspaceManagerTests : IDisposable
 
         writeback.SourceRef.Should().Be("integration");
         writeback.BaseCommitSha.Should().Be(commitSha);
+        writeback.ResultCommitSha.Should().Be(commitSha);
+        writeback.WritebackRef.Should().BeNull();
+        writeback.ChangedPathCount.Should().Be(0);
         await manager.CleanupAsync();
+    }
+
+    [Fact]
+    public void FindNestedRepositoryRoots_prunes_ignored_trees_and_finds_normal_nested_repo()
+    {
+        var workspace = Path.Combine(_root, "scan-workspace");
+        var ignoredRoot = Path.Combine(workspace, "node_modules");
+        var ignoredDirectory = ignoredRoot;
+        Directory.CreateDirectory(workspace);
+        for (var index = 0; index < 100; index++)
+        {
+            ignoredDirectory = Path.Combine(ignoredDirectory, $"level-{index}");
+            Directory.CreateDirectory(ignoredDirectory);
+        }
+        Directory.CreateDirectory(Path.Combine(ignoredDirectory, ".git"));
+
+        var nestedRepository = Path.Combine(workspace, "src", "nested-deliverable");
+        Directory.CreateDirectory(Path.Combine(nestedRepository, ".git"));
+        var excludedNameRepository = Path.Combine(workspace, "dist");
+        Directory.CreateDirectory(Path.Combine(excludedNameRepository, ".git"));
+        var visitedDirectories = new List<string>();
+
+        var roots = PodLocalWorkspaceManager.FindNestedRepositoryRoots(
+            workspace,
+            CancellationToken.None,
+            visitedDirectories.Add);
+
+        roots.Should().Equal("src/nested-deliverable", "dist");
+        visitedDirectories.Should().HaveCount(4);
+        visitedDirectories.Should().NotContain(path => path.StartsWith(
+            ignoredRoot + Path.DirectorySeparatorChar,
+            OperatingSystem.IsWindows()
+                ? StringComparison.OrdinalIgnoreCase
+                : StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void FindNestedRepositoryRoots_honors_cancellation_during_traversal()
+    {
+        var workspace = Path.Combine(_root, "cancelled-scan-workspace");
+        Directory.CreateDirectory(workspace);
+        const int directoryCount = 512;
+        for (var index = 0; index < directoryCount; index++)
+            Directory.CreateDirectory(Path.Combine(workspace, $"directory-{index:D4}", "child"));
+
+        using var cancellation = new CancellationTokenSource();
+        var visitedDirectoryCount = 0;
+
+        var act = () => PodLocalWorkspaceManager.FindNestedRepositoryRoots(
+            workspace,
+            cancellation.Token,
+            _ =>
+            {
+                visitedDirectoryCount++;
+                if (visitedDirectoryCount == 25)
+                    cancellation.Cancel();
+            });
+
+        act.Should().Throw<OperationCanceledException>();
+        visitedDirectoryCount.Should().Be(25);
+        visitedDirectoryCount.Should().BeLessThan(directoryCount);
     }
 
     private PodLocalWorkspaceManager Manager() =>
@@ -232,7 +295,9 @@ public sealed class PodLocalWorkspaceManagerTests : IDisposable
             baseCommitSha,
             expectedTreeHash,
             mode,
-            Path.Combine(_root, "scratch"));
+            Path.Combine(_root, "scratch"),
+            CommitAuthorName: "Agentweaver Tests",
+            CommitAuthorEmail: "tests@example.invalid");
 
     private static AgentHostRunConfiguration Configuration(
         string? sharedWorkingDirectory,
@@ -247,11 +312,15 @@ public sealed class PodLocalWorkspaceManagerTests : IDisposable
             SharedWorkingDirectory: sharedWorkingDirectory,
             Purpose: AgentHostPurpose.AssemblyBuildTest,
             SourceRepositoryPath: "/workspace/repository",
-            SourceRef: "integration",
+            SourceRef: workspaceMode == ExecutionWorkspaceMode.LocalWritable
+                ? "agentweaver/workspace-run"
+                : "integration",
             BaseCommitSha: new string('1', 40),
             ExpectedTreeHash: new string('2', 40),
             WorkspaceMode: workspaceMode,
-            ScratchRoot: "/local-workspace");
+            ScratchRoot: "/local-workspace",
+            CommitAuthorName: "Agentweaver Tests",
+            CommitAuthorEmail: "tests@example.invalid");
 
     private string CreateRepository()
     {
