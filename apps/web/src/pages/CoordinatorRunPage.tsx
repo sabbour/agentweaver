@@ -3479,18 +3479,11 @@ export function CoordinatorRunPage() {
         </span>
       </TreeItemLayout>
     );
-    return item.children.length > 0 ? (
-      <TreeItem
-        key={item.nodeId}
-        itemType="branch"
-        value={item.nodeId}
-        aria-label={`Select ${item.label}: ${statusLabel}`}
-        onClick={() => openPanelForNode(item.nodeId)}
-      >
-        {layout}
-        <Tree>{renderTreeItems(item.children)}</Tree>
-      </TreeItem>
-    ) : (
+    // Flat list: every node (Coordinator + all subtasks/stages) renders as a single-level leaf
+    // row so there is NO indentation and NO expand chevron — every row shares the identical
+    // [status icon][avatar][title / status · Agent (Role)] structure and aligns at the same
+    // left edge. Hierarchy reads from the status + "· Agent (Role)" secondary, not indentation.
+    return (
       <TreeItem
         key={item.nodeId}
         itemType="leaf"
@@ -3705,7 +3698,7 @@ export function CoordinatorRunPage() {
             ) : (
               <div className={styles.treeScroll}>
                 <Tree aria-label="Run tree" size="small" openItems={treeBranchIds}>
-                  {renderTreeItems(sessionTree)}
+                  {renderTreeItems(flatSessionTree)}
                 </Tree>
               </div>
             )}
