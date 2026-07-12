@@ -141,7 +141,7 @@ public sealed class AssemblyBuildTestShellGuardTests : IDisposable
     }
 
     [Fact]
-    public async Task Controlled_run_command_runs_npm_install_with_workspace_local_cache_in_real_linux_sandbox()
+    public async Task Controlled_run_command_exposes_workspace_local_home_and_xdg_roots_in_real_linux_sandbox()
     {
         ISandboxExecutor realExecutor;
         if (OperatingSystem.IsLinux())
@@ -165,22 +165,29 @@ public sealed class AssemblyBuildTestShellGuardTests : IDisposable
         }
 
         var workspace = Path.Combine(_root, "real-linux-install");
-        const string cacheRelativePath = ".agentweaver-cache/npm";
-        var cachePath = Path.Combine(workspace, ".agentweaver-cache", "npm");
-        Directory.CreateDirectory(cachePath);
-        File.WriteAllText(
-            Path.Combine(workspace, "package.json"),
-            """{"name":"controlled-cache-test","version":"1.0.0","private":true}""");
+        var sandboxVariables = new Dictionary<string, string>
+        {
+            ["HOME"] = ".agentweaver-home",
+            ["XDG_CACHE_HOME"] = ".agentweaver-home/.cache",
+            ["XDG_DATA_HOME"] = ".agentweaver-home/.local/share",
+            ["XDG_CONFIG_HOME"] = ".agentweaver-home/.config",
+        };
+        foreach (var path in sandboxVariables.Values)
+            Directory.CreateDirectory(Path.Combine(workspace, path));
 
-        var originalCache = Environment.GetEnvironmentVariable("npm_config_cache");
+        var originalValues = sandboxVariables.Keys.ToDictionary(
+            name => name,
+            Environment.GetEnvironmentVariable);
         var originalWslEnv = Environment.GetEnvironmentVariable("WSLENV");
-        Environment.SetEnvironmentVariable("npm_config_cache", cacheRelativePath);
+        foreach (var (name, value) in sandboxVariables)
+            Environment.SetEnvironmentVariable(name, value);
         if (OperatingSystem.IsWindows())
         {
             var wslVariables = (originalWslEnv ?? "")
                 .Split(':', StringSplitOptions.RemoveEmptyEntries)
                 .ToHashSet(StringComparer.Ordinal);
-            wslVariables.Add("npm_config_cache");
+            foreach (var name in sandboxVariables.Keys)
+                wslVariables.Add(name);
             Environment.SetEnvironmentVariable("WSLENV", string.Join(':', wslVariables));
         }
         try
@@ -196,21 +203,36 @@ public sealed class AssemblyBuildTestShellGuardTests : IDisposable
                 new Dictionary<string, object?>
                 {
                     ["command"] =
-                        "npm install --ignore-scripts --no-audit --no-fund && " +
-                        "test -w \"$npm_config_cache\" && " +
-                        "printf ok > \"$npm_config_cache/controlled-install.ok\"",
+                        "test \"$HOME\" = '.agentweaver-home' && " +
+                        "test -w \"$HOME\" && test -w \"$XDG_CACHE_HOME\" && " +
+                        "test -w \"$XDG_DATA_HOME\" && test -w \"$XDG_CONFIG_HOME\" && " +
+                        "printf home > \"$HOME/controlled-home.ok\" && " +
+                        "printf cache > \"$XDG_CACHE_HOME/controlled-cache.ok\" && " +
+                        "printf data > \"$XDG_DATA_HOME/controlled-data.ok\" && " +
+                        "printf config > \"$XDG_CONFIG_HOME/controlled-config.ok\"",
                 }));
 
             result?.ToString().Should().Contain("exit_code: 0");
-            File.ReadAllText(Path.Combine(cachePath, "controlled-install.ok")).Should().Be("ok");
+            File.ReadAllText(Path.Combine(workspace, ".agentweaver-home", "controlled-home.ok"))
+                .Should().Be("home");
+            File.ReadAllText(Path.Combine(
+                workspace, ".agentweaver-home", ".cache", "controlled-cache.ok"))
+                .Should().Be("cache");
+            File.ReadAllText(Path.Combine(
+                workspace, ".agentweaver-home", ".local", "share", "controlled-data.ok"))
+                .Should().Be("data");
+            File.ReadAllText(Path.Combine(
+                workspace, ".agentweaver-home", ".config", "controlled-config.ok"))
+                .Should().Be("config");
             executor.LastCommand.Should().NotBeNull();
             executor.LastCommand!.FilesystemPolicy.ReadWritePaths.Should().Contain(workspace);
             executor.LastCommand.FilesystemPolicy.ReadWritePaths.Should().ContainSingle(
-                "SandboxToolContext uses the checkout as SandboxRoot, so the workspace-local cache is covered by the sole writable root");
+                "SandboxToolContext uses the checkout as SandboxRoot, so the sandbox-local home is covered by the sole writable root");
         }
         finally
         {
-            Environment.SetEnvironmentVariable("npm_config_cache", originalCache);
+            foreach (var (name, value) in originalValues)
+                Environment.SetEnvironmentVariable(name, value);
             Environment.SetEnvironmentVariable("WSLENV", originalWslEnv);
         }
     }

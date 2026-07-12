@@ -11,11 +11,11 @@ namespace Agentweaver.AgentHost;
 /// </summary>
 internal sealed class PodLocalWorkspaceManager
 {
-    private const string PackageCacheDirectoryName = ".agentweaver-cache";
+    private const string SandboxHomeDirectoryName = ".agentweaver-home";
 
     private static readonly HashSet<string> NestedRepositoryScanExcludedDirectories = new(
         [
-            PackageCacheDirectoryName,
+            SandboxHomeDirectoryName,
             ".git",
             ".next",
             "bin",
@@ -132,11 +132,10 @@ internal sealed class PodLocalWorkspaceManager
                     spec.BaseCommitSha)
                 .ConfigureAwait(false);
 
-            var cacheRoot = ConfigurePackageCaches(workspacePath);
+            ConfigureSandboxHome(workspacePath);
             var prepared = new PreparedWorkspace(
                 spec.RunId,
                 workspacePath,
-                cacheRoot,
                 spec.SourceRepositoryPath,
                 spec.SourceRef,
                 spec.BaseCommitSha,
@@ -458,11 +457,11 @@ internal sealed class PodLocalWorkspaceManager
         }
     }
 
-    private static string ConfigurePackageCaches(string workspacePath)
+    private static void ConfigureSandboxHome(string workspacePath)
     {
         var excludePath = Path.Combine(workspacePath, ".git", "info", "exclude");
         Directory.CreateDirectory(Path.GetDirectoryName(excludePath)!);
-        var excludeEntry = $"/{PackageCacheDirectoryName}/";
+        var excludeEntry = $"/{SandboxHomeDirectoryName}/";
         var existingExcludes = File.Exists(excludePath) ? File.ReadAllText(excludePath) : string.Empty;
         if (!existingExcludes
             .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
@@ -471,23 +470,17 @@ internal sealed class PodLocalWorkspaceManager
             File.AppendAllText(excludePath, excludeEntry + Environment.NewLine);
         }
 
-        var cacheRoot = Path.Combine(workspacePath, PackageCacheDirectoryName);
-        var npm = Path.Combine(cacheRoot, "npm");
-        var yarn = Path.Combine(cacheRoot, "yarn");
-        var pnpmHome = Path.Combine(cacheRoot, "pnpm", "home");
-        var pnpmStore = Path.Combine(cacheRoot, "pnpm", "store");
-        var xdg = Path.Combine(cacheRoot, "xdg");
+        var home = SandboxHomeDirectoryName;
+        var cache = $"{home}/.cache";
+        var data = $"{home}/.local/share";
+        var config = $"{home}/.config";
+        foreach (var path in new[] { home, cache, data, config })
+            Directory.CreateDirectory(Path.Combine(workspacePath, path));
 
-        foreach (var path in new[] { npm, yarn, pnpmHome, pnpmStore, xdg })
-            Directory.CreateDirectory(path);
-
-        Environment.SetEnvironmentVariable("npm_config_cache", $"{PackageCacheDirectoryName}/npm");
-        Environment.SetEnvironmentVariable("YARN_CACHE_FOLDER", $"{PackageCacheDirectoryName}/yarn");
-        Environment.SetEnvironmentVariable("PNPM_HOME", $"{PackageCacheDirectoryName}/pnpm/home");
-        Environment.SetEnvironmentVariable("PNPM_STORE_DIR", $"{PackageCacheDirectoryName}/pnpm/store");
-        Environment.SetEnvironmentVariable("npm_config_store_dir", $"{PackageCacheDirectoryName}/pnpm/store");
-        Environment.SetEnvironmentVariable("XDG_CACHE_HOME", $"{PackageCacheDirectoryName}/xdg");
-        return cacheRoot;
+        Environment.SetEnvironmentVariable("HOME", home);
+        Environment.SetEnvironmentVariable("XDG_CACHE_HOME", cache);
+        Environment.SetEnvironmentVariable("XDG_DATA_HOME", data);
+        Environment.SetEnvironmentVariable("XDG_CONFIG_HOME", config);
     }
 
     private static async Task<string> RunGitAsync(
@@ -841,7 +834,6 @@ internal sealed record PodLocalWorkspaceSpec(
 internal sealed record PreparedWorkspace(
     string RunId,
     string WorkspacePath,
-    string CacheRoot,
     string SourceRepositoryPath,
     string SourceRef,
     string BaseCommitSha,

@@ -403,7 +403,7 @@ public sealed class ImplementationWritebackTests : IDisposable
         Git(repository, "init");
         Git(repository, "config", "user.name", "Fixture Author");
         Git(repository, "config", "user.email", "fixture@example.invalid");
-        File.WriteAllText(Path.Combine(repository, ".gitignore"), "node_modules/\n.agentweaver-cache/\n");
+        File.WriteAllText(Path.Combine(repository, ".gitignore"), "node_modules/\n.agentweaver-home/\n");
         File.WriteAllText(Path.Combine(repository, "README.md"), "base");
         configureRepository?.Invoke(repository);
         Git(repository, "add", ".");
