@@ -406,6 +406,50 @@ count. When a renew affects zero rows, the heartbeat re-reads the plan:
 The heartbeat is stopped explicitly just before the `awaiting_assembly` hand-off and again in the
 loop's teardown, so it never outlives the loop it renews.
 
+#### Assembly-phase lease heartbeat
+
+The dispatch heartbeat only renews the lease while the plan is `dispatching`. The **assembly** phases
+(`assembling` / `assembly_steering`) have the same exposure: building the integration branch, the
+collective RAI / Rubberduck / Build & Test gates, and steering decisions routinely run well past the
+120 s stale TTL with no status change, so `UpdatedAt` would age out and a peer reconciler could
+reclaim an actively-assembling run — re-running already-completed subtasks. The reconciler's
+`IsAssemblyActive` check is in-memory per pod, so it always reads `false` on a peer replica and cannot
+see the healthy owner's live loop.
+
+`CoordinatorAssemblyService` therefore runs its own per-run heartbeat for the life of the assembly
+loop, launched alongside `RunAssemblyAsync` in `StartAssembly` and cancelled + awaited in the `finally`
+so it never outlives the loop (`apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyService.cs:288`).
+Each tick (`AssemblyHeartbeatTickAsync`, `:379`) runs from its **own DI scope + `DbContext`** — never
+the assembly loop's context — and issues an ownership-and-status-keyed conditional UPDATE:
+`WHERE Id = @planId AND CoordinatorPodId = @myPodId AND Status IN ('assembling','assembly_steering')`,
+setting `UpdatedAt = now`. The interval reuses the same `Coordinator:PodLeaseHeartbeatSeconds`
+(default **30 s**); no new config key is added.
+
+The status set is **exactly** `{assembling, assembly_steering}`:
+
+- `in_review` is deliberately **excluded** so the heartbeat never masks
+  `CoordinatorReconciler.TryAbandonStaleReviewAsync`'s 24 h idle backstop
+  (`apps/Agentweaver.Api/Coordinator/CoordinatorReconciler.cs:396`); `in_review` is already
+  cross-pod-protected by the durable pending-gate check, not by the stale TTL.
+- `awaiting_assembly` / `assembly_blocked` are excluded because their reclaim is not stale-TTL-gated.
+
+Ownership decides the outcome, not the row count. When a renew affects zero rows the tick re-reads
+`CoordinatorPodId`: a **peer** owner (non-null and not this pod) returns `PeerOwned` and stops the
+heartbeat (this owner is being superseded); still-this-pod, a transient non-assembling status, or a
+missing row returns `Idle` — the tick is skipped but the loop keeps ticking, because the multi-phase
+lifecycle may re-enter `assembling` later (for example after a review approval). A transient per-tick
+DB/SMB blip is logged and the loop keeps heartbeating on the next interval — a single failed tick must
+never stop renewals (`RunAssemblyLeaseHeartbeatAsync`, `:425`).
+
+**Companion hardening (post-terminal delta drop).** A late `agent.message.delta` arriving after a run
+is already terminal must never re-persist and re-drive the run or flood the stream past the heartbeat.
+Both event-stream backends drop **only** that one type once a run is completed —
+`if (_completedRuns.ContainsKey(runId) && evt.Type == EventTypes.AgentMessageDelta) return;` at the top
+of `AppendAsync` (`apps/Agentweaver.Api/Infrastructure/SqliteRunEventStream.cs:86`,
+`apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:70`). Every terminal, diagnostic, final
+coalesced `agent.message`, tool, usage, subtask, and topology event still persists post-terminal for a
+durable audit trail and gapless replay.
+
 ### Shared worktree conflict control
 
 Child subtasks share one orchestration worktree. `IsolationStrategy` helps communicate intent, but it is not an enforced sandbox.
@@ -485,13 +529,24 @@ Terminal child events map to coordinator outcomes:
 
 Mid-run child questions and tool approval requests are re-emitted on the coordinator stream with child run id, subtask id, and request id. Autopilot may answer bubbled **questions** by running a one-shot Copilot coordinator turn grounded in the OutcomeSpec and subtask. Tool approvals remain separate and are not auto-granted by Autopilot.
 
-Observation includes stall handling. If a child emits no events within `Coordinator:SubtaskStallTimeoutMinutes` (default five minutes), the coordinator emits `coordinator.child_stall_detected`, persists any partial-output checkpoint it saw, fails the stalled child subtask with recovery guidance, and increments the recovery-attempt counter.
+Observation includes stall handling. If a child emits no events within `Coordinator:SubtaskStallTimeoutMinutes` (default five minutes), the coordinator emits `coordinator.child_stall_detected`, persists any partial-output checkpoint it saw, and then — while recovery budget remains — redispatches the stalled subtask on a fresh child instead of failing it, incrementing the recovery-attempt counter; only once the budget is exhausted does the stall become terminal (see [Stall redispatch before dead-end](#stall-redispatch-before-dead-end) below).
 
 An unresolved tool-approval gate is exempt from that stall timer (issue #212). While a child's most recent interaction is a `tool.approval_required` that has not resolved — with only `tool.approval_pending` heartbeats (every ~20s) following — the watcher records the pending `requestId` and treats the child as a legitimate human-paced wait, logging and continuing to observe instead of firing `agent_stall_timeout`. The exemption self-heals and cannot latch: any other real event (`tool.result` on grant, `tool.error` on deny/expiry, `tool.approval_resolved`, agent output, or a terminal event) clears the flag, so a pod that genuinely hangs after a gate self-expires is still caught. The guard also protects gate sites that emit no heartbeat, such as the preview gate (`AgentPreviewGate.RequestApprovalAsync`). See the [Tool Approval SSE Contract](../tool-approval-sse-contract.md#stall-resilience-coordinator-approval-gate-guard-212).
 
 A child whose AgentHost sandbox pod is still being provisioned is exempt from the same stall timer (issue #217). Kubernetes owns pod admission and scheduling, so a `SandboxClaim` can sit unbound (pod `Pending`) while a node frees up or `katapool` autoscales — a legitimate wait, not a stall. While the claim is unbound the executor emits a `sandbox.provisioning_pending` heartbeat (about every 20s) on the child stream; the watcher records that the child's most recent event is that heartbeat and, on stall-TTL expiry, resets the window and keeps observing instead of firing `agent_stall_timeout`. Like the approval-gate guard it self-heals and cannot latch: any other real event (the pod binding, agent output, or a terminal event) clears the flag, so a pod that genuinely hangs after provisioning is still caught. This mirrors the #212 `tool.approval_pending` mechanism.
 
 Pending dependents of that stalled prerequisite do not become runnable. Instead, the dispatcher marks them `blocked`: a terminal, assembly-ineligible status that does not satisfy dependencies and means "this subtask never ran because an upstream dependency stalled." That distinction matters operationally: the stalled child owns the failure, while the blocked dependents record the cascade.
+
+#### Stall redispatch before dead-end
+
+A single stalled subtask used to dead-end the entire run: the frontier (`SubtaskFrontier.ReadyPending`) only dispatches `pending` subtasks, so a subtask terminalized as `failed` never re-entered, and the eligibility gate then stopped assembly with `coordinator.assembly_blocked: ineligible_subtasks` → `coordinator.assembly_failed`. Marking the stall terminal wasted a run that may have completed every other subtask.
+
+The dispatch loop now spends the subtask's bounded **recovery budget** before dead-ending. In the `ChildOutcome.Stalled` branch, `TryRedispatchStalledSubtaskAsync` runs first (`apps/Agentweaver.Api/Coordinator/CoordinatorDispatchService.cs:399`, `:1235`):
+
+- If `RecoveryAttempts < CoordinatorSteeringService.MaxRecoveryAttempts` (**3**), the subtask row is revived for a fresh child — `Status = pending`, `ChildRunId = null`, `PriorChildRunId = childRunId` (so the fresh child builds on the prior branch through the existing handoff bundle), `RecoveryAttempts` incremented **monotonically** (never reset), `UpdatedAt = now` — persisted from a fresh DI scope + `DbContext` (mirroring `ApplyStallFailureAsync`). The in-memory `statusById` entry is set back to `pending`, a `coordinator.subtask_redispatched` diagnostic is emitted, and the loop `continue`s so `SubtaskFrontier.ReadyPending` redispatches it next iteration on a fresh pod. The **old** child run is still terminalized (`agent_stall_timeout`) and its AgentHost pod released — only the subtask is reset.
+- Once the budget is exhausted (`RecoveryAttempts >= MaxRecoveryAttempts`), the loop falls through to the pre-existing dead-end path: `ApplyStallFailureAsync` terminalizes the subtask `failed`, `PropagateBlockedDependentsAsync` marks its dependents `blocked`, and assembly stops at the eligibility gate. This is now a genuine terminal after up to three bounded attempts, not on the first stall.
+
+Because `RecoveryAttempts` is capped and never reset, the redispatch cannot loop forever, and single-replica runs simply gain up to three fresh attempts before reaching the same terminal they had before. The `coordinator.subtask_redispatched` payload (`subtaskId`, `priorChildRunId`, `attempt`, `maxAttempts`, `reason`) is documented in the [events reference](../reference/events.md#coordinator-subtask-redispatched).
 
 ### Topology emission and pod registry projection
 
@@ -852,3 +907,5 @@ When the coordinator fails while the review is open, `MarkCoordinatorFailedAsync
 ## See also
 
 - [Resilient assembly-review loop — Deep Dive](./resilient-assembly-review.md) — the hardening built on top of the assembly pipeline: budget-exhausted escalation, accumulated context, reviewer-rejection lockout, and reliable child-turn terminal emission.
+- [Events reference — `coordinator.subtask_redispatched`](../reference/events.md#coordinator-subtask-redispatched) — the diagnostic emitted when a stalled subtask is redispatched before dead-ending.
+- [Git integration — resilient worktree deletion](./git-integration.md#resilient-worktree-deletion-on-azure-files-smb) — how assembly Build & Test survives the Azure Files SMB `Directory not empty` window during worktree teardown.

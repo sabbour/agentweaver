@@ -65,6 +65,7 @@ Clients should order and deduplicate events by `sequence`.
 | `coordinator.work_plan` | When the coordinator has decomposed the confirmed spec into a persisted work plan | `workPlanId`, `status`, `subtasks`, `dependencies` |
 | `coordinator.workflow_selected` | When the coordinator selects which workflow to run from a project's multi-workflow set (skipped silently when the project carries only one workflow) | `selectedId`, `selectedName`, `rationale`, `wasAutoSelected`, `overrideHint`, `available` (`[{ id, name }]`) |
 | `coordinator.child_stall_detected` | When a child run emits no new events past the configured stall timeout and the coordinator marks that path as stalled | `childRunId`, `subtaskId`, `staleSinceUtc`, `stallTimeoutMinutes`, `lastEventSequence` |
+| `coordinator.subtask_redispatched` | When a stalled subtask still has recovery budget and is reset to `pending` for a fresh child (on a fresh pod) instead of dead-ending the run | `subtaskId`, `priorChildRunId`, `attempt`, `maxAttempts`, `reason` (`stall_redispatch`), `timestamp_utc` |
 | `coordinator.topology` | When the orchestration graph is first dispatched (snapshot) and on every subsequent subtask lifecycle transition (delta) | `version`, `kind`, `seq`, `nodes` (snapshot) / `changed` (delta), `edges` (snapshot) |
 | `coordinator.graph` | When the unified coordinator graph shape changes (a subtask child run is dispatched, or the plan reaches its terminal snapshot) | a shape-only `GraphDescriptor` (variant `coordinator`) |
 | `subtask.dispatched` / `subtask.running` / `subtask.assemble_ready` / `subtask.rai_flagged` / `subtask.completed` / `subtask.failed` | As a subtask's child run advances through its lifecycle | `subtaskId`, `childRunId`, `assignedAgent`, `selectedModelId`, `status` |
@@ -327,6 +328,23 @@ Unlike `coordinator.topology`, runtime status is NOT baked into the descriptor �
 The `subtask.dispatched`, `subtask.running`, `subtask.assemble_ready`, `subtask.rai_flagged`, `subtask.completed`, and `subtask.failed` events track a single subtask's child run through its lifecycle on the coordinator stream. Each carries `subtaskId`, `childRunId`, `assignedAgent`, `selectedModelId`, and `status`. The subtask status advances `pending -> dispatched -> running -> {assemble_ready | rai_flagged | completed | failed}`. Each `subtask.*` event is paired with a `coordinator.topology` delta for the changed node, so observers can choose either the granular per-subtask signal or the graph view.
 
 A `subtask.pending_capacity` event (subtask status `pending_capacity`) is **legacy / historical**: it was emitted when the dispatcher parked a subtask because the namespace had no AgentHost pod capacity. Kubernetes now owns pod admission and scheduling, so new runs never emit it (issue #217) — a pod that is still being scheduled is surfaced instead by `sandbox.provisioning_pending` heartbeats on the child run's own stream, and a pre-upgrade subtask stranded in `pending_capacity` is recovered to `pending`. It is documented only so old records still render.
+
+### `coordinator.subtask_redispatched`
+
+Emitted on the coordinator stream when a child subtask **stalls** (its child run made no progress past the stall TTL) but the subtask still has recovery budget, so the coordinator redispatches it instead of dead-ending the run. Before this change a single stalled subtask blocked the whole run at the eligibility gate (`coordinator.assembly_blocked: ineligible_subtasks` → `coordinator.assembly_failed`); now the subtask is reset to `pending` for a fresh child on a fresh pod, and it only becomes a genuine terminal `failed` once the budget is exhausted.
+
+The redispatch is bounded by `CoordinatorSteeringService.MaxRecoveryAttempts` (**3**). `RecoveryAttempts` is incremented **monotonically** and never reset, so at most three stall-redispatches occur per subtask before the stall dead-ends. The **prior** stalled child run is still terminalized (`agent_stall_timeout`) and its AgentHost pod released — only the *subtask* is revived; the old child stays failed.
+
+Payload:
+
+- `subtaskId` — the subtask being redispatched.
+- `priorChildRunId` — the stalled child run, recorded on the subtask's `PriorChildRunId` so the fresh child builds on the prior branch through the existing handoff bundle.
+- `attempt` — the new `RecoveryAttempts` value (`N` of `maxAttempts`).
+- `maxAttempts` — `MaxRecoveryAttempts` (3).
+- `reason` — always `"stall_redispatch"`.
+- `timestamp_utc` — ISO-8601 emit time.
+
+Grounded in `CoordinatorDispatchService.TryRedispatchStalledSubtaskAsync` (`apps/Agentweaver.Api/Coordinator/CoordinatorDispatchService.cs:1235`), wired into the `ChildOutcome.Stalled` branch of the dispatch loop (`:399`). See the coordinator deep-dive [stall redispatch before dead-end](/deep-dive/coordinator-internals#stall-redispatch-before-dead-end).
 
 ### `coordinator.steering`
 

@@ -198,6 +198,49 @@ public sealed class CoordinatorDispatchFinalizationTests : IDisposable
             .Should().NotContain(e => e.Type == EventTypes.CoordinatorChildrenComplete);
     }
 
+    [Fact]
+    public async Task FinalizeDispatch_AfterStallRedispatchSuccess_AllEligible_HandsOffToAssembly()
+    {
+        // #241: a subtask that stalled and was REDISPATCHED (a recovery attempt consumed) then reached
+        // assemble_ready must be fully eligible — finalization hands off to assembly, and the recovery
+        // budget is never reset by finalization.
+        const string coordinatorRunId = "coord-final-redispatch";
+        var (workPlanId, subtaskIds) = await SeedPlanAsync(coordinatorRunId);
+        _streamStore.Create(coordinatorRunId, "alice");
+
+        // Mark subtask[0] as a redispatch survivor: one recovery attempt consumed, now assemble_ready.
+        await using (var scope = _provider.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var row = await db.Subtasks.FirstAsync(s => s.Id == subtaskIds[0]);
+            row.RecoveryAttempts = 1;
+            row.PriorChildRunId = "prior-stalled-child";
+            row.Status = SubtaskStatus.AssembleReady;
+            await db.SaveChangesAsync();
+        }
+
+        var statusById = subtaskIds.ToDictionary(id => id, _ => SubtaskStatus.AssembleReady);
+        AssemblyPlanning.AllEligible(statusById).Should().BeTrue(
+            "the redispatched-then-assemble_ready subtask leaves every subtask eligible");
+
+        var context = new CoordinatorDispatchContext(coordinatorRunId, "repo", "main", "alice", null);
+        await _sut.FinalizeDispatchAsync(
+            context, workPlanId, statusById, edges: [], new CoordinatorDispatchService.SeqCounter(), default);
+
+        await using (var scope = _provider.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var plan = await db.WorkPlans.AsNoTracking().FirstAsync(w => w.Id == workPlanId);
+            plan.Status.Should().Be(WorkPlanStatus.AwaitingAssembly);
+            var row = await db.Subtasks.AsNoTracking().FirstAsync(s => s.Id == subtaskIds[0]);
+            row.RecoveryAttempts.Should().Be(1, "finalization must never reset the recovery budget");
+        }
+
+        _assembly.Started.Should().ContainSingle().Which.CoordinatorRunId.Should().Be(coordinatorRunId);
+        _streamStore.Get(coordinatorRunId)!.GetSnapshotSince(0).Events
+            .Should().Contain(e => e.Type == EventTypes.CoordinatorChildrenComplete);
+    }
+
     private sealed class RecordingAssembly : ICoordinatorAssembly
     {
         public List<CoordinatorDispatchContext> Started { get; } = [];

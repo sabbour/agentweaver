@@ -462,6 +462,115 @@ public sealed class CoordinatorChildObservationTests : IAsyncDisposable
     }
 
     // -----------------------------------------------------------------------
+    // MID-RUN STEERING — coordinator-scoped AMEND, full-lifecycle regression lock.
+    //
+    // Mirrors the LIVE staging evidence Ahmed captured refuting "steering doesn't
+    // work mid-run": directive id=9, kind=amend, targetChildRunId=null
+    // (coordinator-scoped), sent to an in-flight coordinator run, observed on the
+    // run stream going queued(seq460) -> relayed(seq461) -> applied(seq464) in
+    // ~4s, every event carrying the exact human instruction.
+    //
+    // WHY THIS IS NEW COVERAGE (not a dup of the two tests above):
+    //   - Steer_MidRun_Redirect...      : CHILD-scoped `redirect` (targetChildRunId set).
+    //   - Steer_MidRun_SendAdvisory...  : broadcast `send`.
+    //   Neither exercises a coordinator-scoped `amend` (kind=amend, target=null) —
+    //   the EXACT directive shape from the live evidence — nor the anti-#226
+    //   "never left queued" property for `amend`. `amend` also has distinct
+    //   semantics from `redirect` (additive; NOT applied on a child FAILURE — see
+    //   the Failed branch in RunDispatchLoopAsync that only claims a redirect), so
+    //   locking its clean-boundary drain in is a separate, real oracle.
+    //
+    // TERMINAL `applied` — WHERE IT IS PROVEN, AND WHY IT IS NOT ASSERTED HERE:
+    //   The dispatch loop reaches `applied` ONLY inside
+    //   CoordinatorDispatchService.TryInjectSteeringRevisionAsync (~L1345-1367),
+    //   and ONLY AFTER `_orchestrator.StartRevisionAsync(child, ...)` SUCCEEDS:
+    //   relayed -> applied is strictly gated behind the revised child turn actually
+    //   launching. StartRevisionAsync needs a real worktree + MAF workflow + live
+    //   agent execution (it throws "has no worktree path" for the seeded child, and
+    //   this hermetic host wires null workflow/registry/watch collaborators), so
+    //   `applied` CANNOT be driven deterministically here without real sandbox/agent
+    //   execution. Introducing a stub seam would require a PRODUCTION change, which
+    //   is explicitly out of scope for this test-only regression lock. Therefore the
+    //   terminal transition is proven at the OTHER two layers, and this test asserts
+    //   the strongest deterministic property the hermetic unit host supports:
+    //     * PROVEN LIVE (staging): seq460 queued -> seq461 relayed -> seq464 applied,
+    //       all carrying the human instruction (the evidence this test guards against
+    //       silently regressing).
+    //     * PROVEN AT SERVICE LEVEL: UnifiedSteeringTests drives the relayed -> applied
+    //       state machine (ProbeRevisionEffect / Decorator effect-confirmation and the
+    //       synchronous applied paths) deterministically.
+    //     * PROVEN HERE (this test): a coordinator-scoped `amend` queued on a RUNNING
+    //       coordinator is DRAINED at the child's next turn boundary (queued -> relayed),
+    //       records RelayedAt, and is RELAYED carrying the human instruction — i.e. it is
+    //       ACTED ON, never silently dropped / left queued into a void (#226).
+    //   Layer honesty: this test owns queued->relayed for the coordinator-scoped amend;
+    //   live + UnifiedSteeringTests own relayed->applied.
+    // -----------------------------------------------------------------------
+
+    [Fact]
+    public async Task Steer_MidRun_CoordinatorScopedAmend_QueuedThenDrainedAndRelayed_CarriesInstruction()
+    {
+        var stream = new SqliteRunEventStream(_streamConfig);
+        var childRunId = await SeedChildRunAsync(RunStatus.InProgress);
+
+        // The child is mid-flight and reaches a clean turn boundary (assemble_ready) via replay —
+        // the deterministic boundary at which a queued next-boundary directive is drained.
+        await stream.AppendAsync(childRunId, new RunEvent(0, EventTypes.AgentMessage, new { content = "working" }));
+        await stream.AppendAsync(childRunId, new RunEvent(0, EventTypes.RunAssembleReady, new { raiSafetyFlagged = false }));
+        await stream.CompleteAsync(childRunId);
+
+        // A non-GUID coordinator id keeps SteerAsync on the live next-turn-boundary queue path
+        // (RunId.TryParse fails, so TryResumeParkedCoordinatorAsync short-circuits) — the running,
+        // non-parked, non-review-gate coordinator case POST /steer hits.
+        const string coord = "midrun-amend-coord";
+        await SeedPlanAsync(coord, [(SubtaskStatus.Running, childRunId)]);
+        _streamStore.Create(coord, "owner");
+
+        // (1) QUEUE — a human COORDINATOR-SCOPED amend (targetChildRunId=null) lands on the RUNNING
+        // coordinator, mirroring the live id=9 directive.
+        const string instruction = "also add integration tests for the new endpoint before finishing";
+        var steering = BuildSteering();
+        var view = await steering.SteerAsync(coord, SteeringKind.Amend, targetChildRunId: null, instruction, "ahmed", default);
+
+        view.Status.Should().Be(SteeringStatus.Queued,
+            "a mid-run amend never interrupts the turn; it queues for the child's next turn boundary");
+        view.Kind.Should().Be(SteeringKind.Amend);
+        view.TargetChildRunId.Should().BeNull(
+            "the amend is coordinator-scoped (broadcast, no specific child) — mirroring the live id=9 directive");
+        (await GetDirectiveAsync(view.Id))!.Status.Should().Be(SteeringStatus.Queued,
+            "before the boundary the durable SteeringDirectives row IS the queue (persisted queued)");
+
+        // (2) DRAIN + RELAY — run the LIVE dispatch loop; the in-flight child hits its next boundary.
+        var sut = BuildDispatch(stream);
+        await sut.RunDispatchLoopAsync(Context(coord), default);
+
+        var drained = await GetDirectiveAsync(view.Id);
+
+        // Anti-#226 (the property Ahmed doubted): the loop MUST drain the queued amend at the child's
+        // next turn boundary — it is NEVER left sitting queued into a void that nothing reads.
+        drained!.Status.Should().NotBe(SteeringStatus.Queued,
+            "the live dispatch loop must drain the queued coordinator-scoped amend at the child's next boundary — never leave it queued into a void (#226)");
+
+        // NEW coverage: a coordinator-scoped (null-target) amend is CLAIMED by the child-boundary drain
+        // (broadcast match in CoordinatorSteeringQueue.TryTakeForChildAsync) and RELAYED — the
+        // coordinator is ACTING on the human's directive, not merely observing it.
+        drained.Status.Should().Be(SteeringStatus.Relayed,
+            "TryTakeForChildAsync claims the null-target amend (broadcast) queued -> relayed and TryInjectSteeringRevisionAsync begins injecting it");
+        drained.RelayedAt.Should().NotBeNull(
+            "a drained directive records when it was relayed to the child's control seam");
+
+        // The loop emits coordinator.steering{relayed} CARRYING the human instruction, kind=amend,
+        // coordinator-scoped (null target) — the shape observed live at seq461.
+        var relayed = RelayedSteeringPayloads(coord);
+        relayed.Should().ContainSingle("the boundary drain relays exactly the one queued amend");
+        relayed[0]["kind"]!.GetValue<string>().Should().Be(SteeringKind.Amend);
+        relayed[0]["targetChildRunId"].Should().BeNull(
+            "the drained amend is coordinator-scoped — the relayed event preserves the null (broadcast) target");
+        relayed[0]["instruction"]!.GetValue<string>().Should().Be(instruction,
+            "the drained amend re-dispatches the child carrying the human's steering instruction (the same instruction proven to reach `applied` live at seq464)");
+    }
+
+    // -----------------------------------------------------------------------
     // Harness
     // -----------------------------------------------------------------------
 

@@ -160,6 +160,15 @@ public static class EventTypes
     public const string CoordinatorChildStallDetected = "coordinator.child_stall_detected";
 
     /// <summary>
+    /// Emitted on the coordinator run stream when a stalled child subtask is redispatched (reset to
+    /// pending for a fresh child on a fresh pod) instead of dead-ending the run, while the subtask
+    /// still has recovery budget remaining (RecoveryAttempts &lt; MaxRecoveryAttempts). The prior child
+    /// run is terminalized (agent_stall_timeout) and its pod released; only the subtask is revived.
+    /// Payload: { subtaskId, priorChildRunId, attempt, maxAttempts, reason:"stall_redispatch" }
+    /// </summary>
+    public const string CoordinatorSubtaskRedispatched = "coordinator.subtask_redispatched";
+
+    /// <summary>
     /// Emitted when the coordinator begins drafting or re-drafting the outcome spec. This is the
     /// active counterpart to <see cref="CoordinatorOutcomeSpec"/>, which is emitted only after the
     /// draft is ready for confirmation.

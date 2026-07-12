@@ -195,8 +195,7 @@ public sealed class WorktreeManager
         var safeName = SanitizeWorktreeName(worktreeName);
         var worktreePath = DetachedWorktreePath(safeName);
 
-        if (Directory.Exists(worktreePath))
-            Directory.Delete(worktreePath, recursive: true);
+        DeleteDirectoryResilient(worktreePath);
 
         PruneWorktreeByName(repositoryPath, safeName);
         TryRunGitWorktreePrune(repositoryPath);
@@ -230,12 +229,165 @@ public sealed class WorktreeManager
 
     public void RemoveDetachedWorktree(string repositoryPath, string worktreePath)
     {
-        if (Directory.Exists(worktreePath))
-            Directory.Delete(worktreePath, recursive: true);
+        DeleteDirectoryResilient(worktreePath);
 
         var worktreeName = Path.GetFileName(worktreePath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
         if (!string.IsNullOrWhiteSpace(worktreeName))
             PruneWorktreeByName(repositoryPath, worktreeName);
+    }
+
+    // -------------------------------------------------------------------------
+    // Resilient recursive delete (issue #243)
+    //
+    // Azure Files SMB (Linux) can throw `IOException: Directory not empty`
+    // (ENOTEMPTY) when recursively deleting a populated worktree — a native
+    // `node_modules` tree (e.g. better-sqlite3 build artifacts) races SMB
+    // eventual-consistency of the child unlinks, so the parent rmdir still sees
+    // stale directory-listing metadata. A single transient failure at
+    // AddDetachedWorktree dead-ends the whole assembly Build/Test. The fix is a
+    // BOUNDED RETRY that absorbs the SMB consistency window (mirrors the
+    // lock-retry precedent in CoordinatorDispatchService). It is deliberately
+    // NOT a lingering-handle fix: Linux unlink orphans open inodes and never
+    // throws ENOTEMPTY, so there is no "kill the build process" step.
+    // -------------------------------------------------------------------------
+
+    /// <summary>Test seam (#243): overrides a single physical delete ATTEMPT so the retry/backoff
+    /// behaviour is unit-testable without a real SMB filesystem race. The bool argument is
+    /// <c>bottomUp</c> — <c>false</c> for the top-down <see cref="Directory.Delete(string,bool)"/>
+    /// fast path, <c>true</c> for the last-resort deepest-first manual sweep. <c>null</c> (default)
+    /// runs the real deletes. Never set in production.</summary>
+    internal Action<string, bool>? DeleteAttemptOverride { get; set; }
+
+    /// <summary>
+    /// Recursively deletes <paramref name="path"/>, tolerating the transient <c>Directory not empty</c>
+    /// / sharing-violation failures that Azure Files SMB throws while its child-unlink metadata is
+    /// still converging (issue #243). Attempt 1 is the plain top-down recursive delete (the common
+    /// success path — no extra work). On <see cref="IOException"/> or
+    /// <see cref="UnauthorizedAccessException"/> it retries up to 4 attempts total with short backoff
+    /// (~150→300→600 ms, &lt; ~2 s total), clearing read-only attributes between attempts and, on the
+    /// FINAL attempt, falling back to a deepest-first manual delete. If the directory still exists
+    /// after all attempts it RETHROWS the last error — it never returns while <paramref name="path"/>
+    /// survives, so a subsequent <c>git worktree add</c> can never build on a dirty tree.
+    /// </summary>
+    internal void DeleteDirectoryResilient(string path)
+    {
+        if (!Directory.Exists(path))
+            return;
+
+        // Attempt 1 == today's hot path. Runs on every assembly + teardown, so no read-only walk or
+        // bottom-up sweep here — keep the common success case cheap.
+        try
+        {
+            DeleteAttempt(path, bottomUp: false);
+            return;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            _logger.LogWarning(ex,
+                "WorktreeManager: recursive delete of '{Path}' failed (attempt 1/4); retrying with backoff", path);
+        }
+
+        // Manual-recursion path-safety guard: the retry path walks/deletes children itself, so refuse
+        // to operate on anything outside the worktree base (defence-in-depth against a bad path).
+        if (!IsPathUnder(path, _basePath))
+            throw new UnauthorizedAccessException(
+                $"WorktreeManager refuses to manually delete '{path}' — it is not under the worktree base '{_basePath}'.");
+
+        const int maxAttempts = 4;
+        var backoffMs = 150;
+        Exception? lastError = null;
+        for (var attempt = 2; attempt <= maxAttempts; attempt++)
+        {
+            Thread.Sleep(backoffMs);
+            backoffMs = Math.Min(backoffMs * 2, 1000);
+
+            // Native build artifacts (and Windows dev trees) are often read-only; clearing the bit is
+            // required on Windows and a harmless no-op on Linux.
+            TryClearReadOnlyRecursive(path);
+
+            try
+            {
+                DeleteAttempt(path, bottomUp: attempt == maxAttempts);
+                if (!Directory.Exists(path))
+                    return;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                lastError = ex;
+                _logger.LogWarning(ex,
+                    "WorktreeManager: recursive delete of '{Path}' failed (attempt {Attempt}/{Max})",
+                    path, attempt, maxAttempts);
+            }
+        }
+
+        // No-silent-success invariant: NEVER return while the directory still exists.
+        if (Directory.Exists(path))
+            throw lastError ?? new IOException(
+                $"WorktreeManager failed to delete directory '{path}' after {maxAttempts} attempts.");
+    }
+
+    private void DeleteAttempt(string path, bool bottomUp)
+    {
+        if (DeleteAttemptOverride is not null)
+        {
+            DeleteAttemptOverride(path, bottomUp);
+            return;
+        }
+
+        if (bottomUp)
+            DeleteDirectoryBottomUp(path);
+        else
+            Directory.Delete(path, recursive: true);
+    }
+
+    /// <summary>Deepest-first manual delete: removes every file, then every directory ordered by
+    /// descending path length (children before parents). More robust than the BCL's top-down
+    /// recursion against SMB eventual-consistency because each rmdir only runs once the directory is
+    /// provably empty. Exposed <c>internal</c> so the bottom-up branch can be unit-tested directly.</summary>
+    internal static void DeleteDirectoryBottomUp(string path)
+    {
+        if (!Directory.Exists(path))
+            return;
+
+        foreach (var file in Directory.EnumerateFiles(path, "*", SearchOption.AllDirectories))
+        {
+            try { File.SetAttributes(file, FileAttributes.Normal); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException) { }
+            File.Delete(file);
+        }
+
+        foreach (var dir in Directory
+                     .EnumerateDirectories(path, "*", SearchOption.AllDirectories)
+                     .OrderByDescending(d => d.Length))
+        {
+            Directory.Delete(dir, recursive: false);
+        }
+
+        Directory.Delete(path, recursive: false);
+    }
+
+    private void TryClearReadOnlyRecursive(string path)
+    {
+        try
+        {
+            var root = new DirectoryInfo(path);
+            if (!root.Exists)
+                return;
+
+            if ((root.Attributes & FileAttributes.ReadOnly) != 0)
+                root.Attributes &= ~FileAttributes.ReadOnly;
+
+            foreach (var info in root.EnumerateFileSystemInfos("*", SearchOption.AllDirectories))
+            {
+                if ((info.Attributes & FileAttributes.ReadOnly) != 0)
+                    info.Attributes &= ~FileAttributes.ReadOnly;
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex,
+                "WorktreeManager: clearing read-only attributes under '{Path}' failed (best-effort)", path);
+        }
     }
 
     public bool BranchExists(string repositoryPath, string branchName)
@@ -1114,7 +1266,7 @@ public sealed class WorktreeManager
 
             if (!string.IsNullOrEmpty(path) && Directory.Exists(path))
             {
-                try { Directory.Delete(path, recursive: true); }
+                try { DeleteDirectoryResilient(path); }
                 catch (Exception ex) { _logger.LogWarning(ex, "Failed to delete worktree directory '{Path}'", path); }
             }
 
@@ -1716,7 +1868,7 @@ public sealed class WorktreeManager
         // must be gone so that Prune (Step 2) can remove the admin entry.
         if (Directory.Exists(worktreePath))
         {
-            Directory.Delete(worktreePath, recursive: true);
+            DeleteDirectoryResilient(worktreePath);
         }
 
         // Step 2: Prune the stale admin entry (.git/worktrees/<name>/HEAD).

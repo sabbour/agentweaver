@@ -63,6 +63,13 @@ public sealed class EfRunEventStream : IRunEventStream
     /// <inheritdoc />
     public async ValueTask AppendAsync(string runId, RunEvent evt, CancellationToken ct = default)
     {
+        // #239 companion hardening: once a run is completed, drop streaming AgentMessageDelta events —
+        // a straggling delta arriving after the terminal must never re-persist and re-drive the run.
+        // ONLY agent.message.delta is dropped; every terminal/diagnostic/final-message/tool/usage/
+        // subtask/topology event still persists post-terminal (durable audit + gapless replay).
+        if (_completedRuns.ContainsKey(runId) && evt.Type == EventTypes.AgentMessageDelta)
+            return;
+
         var sequence = await WriteThroughAsync(runId, evt, ct).ConfigureAwait(false);
 
         if (_completedRuns.ContainsKey(runId))

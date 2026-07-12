@@ -291,6 +291,21 @@ The database can remember a worktree path while the physical directory is gone. 
 
 Reasoning model: git branch state and database metadata are durable; ephemeral worktree directories can be reconstructed when enough metadata remains.
 
+### Resilient worktree deletion on Azure Files SMB
+
+Worktree directories are deleted and recreated constantly: `AddDetachedWorktree` destructively recreates the shared `assembly-build-test-{…}` worktree on every assembly Build & Test, and the teardown paths remove run worktrees after merge. On the Azure Files **SMB** volume that backs `/workspace` in the cloud, a plain `Directory.Delete(path, recursive: true)` of a populated native `node_modules` tree (for example `better-sqlite3` with deep `build/Release/obj/gen/sqlite3` build artifacts) can throw `IOException: Directory not empty` (ENOTEMPTY): the BCL removes children and then rmdir's the parent, but SMB's directory-listing metadata is only eventually consistent, so a child unlink returns success while the parent's rmdir still sees the stale entry. A single transient failure in `AddDetachedWorktree` re-threw and dead-ended assembly Build & Test.
+
+The worktree delete sites now route through `WorktreeManager.DeleteDirectoryResilient` (`apps/Agentweaver.Api/Git/WorktreeManager.cs:272`), a bounded retry that absorbs the SMB eventual-consistency window:
+
+- **Fast path first.** Attempt 1 is the plain top-down `Directory.Delete(recursive: true)` with no extra work, so the common success case — which runs on every assembly and teardown — pays nothing.
+- **Bounded retry on `IOException` / `UnauthorizedAccessException` only.** Up to four attempts total with short backoff (~150 → 300 → 600 ms, under ~2 s total — not minutes, not exponential-to-30 s), clearing read-only attributes between attempts (needed on Windows dev machines, a harmless no-op on Linux).
+- **Bottom-up last resort.** On the final attempt only, it deletes deepest-first (files then directories) rather than top-down. The manual recursion is refused unless the target is under the worktree base path (reusing the existing `IsPathUnder` guard, `:221`), so a bad path can never walk outside `_basePath`.
+- **Never silent-succeed.** If the directory still exists after all attempts, the last exception is re-thrown. Returning while a non-empty directory survived would let the next `git worktree add` build on a dirty tree and produce a corrupt or misleading Build & Test — so that outcome is designed out.
+
+Applied at `AddDetachedWorktree` (the terminal failing site, `:198`), `RemoveDetachedWorktree` (`:232`), `PruneWorktreesCheckedOutOnBranch` (`:1269`), and `RemoveWorktree` (`:1871`). This is deliberately **not** a lingering-file-handle fix: on Linux `unlink` succeeds on open files (orphaning the inode), so it never causes ENOTEMPTY, and there is no "kill the build process first" step. It is a filesystem-robustness fix, kept general rather than `better-sqlite3`-specific.
+
+Reasoning model: on an eventually-consistent network filesystem a delete that "failed" may already be converging — a bounded retry is correct, but silently proceeding on a surviving directory is not.
+
 ### Orphaned worktree branch
 
 Worktrees are provisioned through the git CLI (`git worktree add -b agentweaver/{runId} …`), which does **not** create a throw-away branch named after the worktree. Older builds (pre-v0.9.33) used LibGit2Sharp's worktree add, whose underlying `git_worktree_add` always created such a `{runId}`-named branch as a side effect. During a rolling restart a worktree may still have been provisioned by that old code, leaving an orphaned `{runId}` branch that would make a fresh `git worktree add` fail with a name conflict. Agentweaver deletes that orphaned branch before recreating the real `agentweaver/{runId}` worktree; for worktrees created by the current git-CLI path no such branch exists, so the deletion is a harmless no-op.
@@ -356,6 +371,7 @@ A rebuild should preserve these rules:
 11. **Coordinator integration branches are assembled headlessly and all-or-nothing**.
 12. **GitHub tokens are credentials, not project metadata**.
 13. **Raw access tokens are not logged or stored in run/project records**.
+14. **Worktree directory deletes are resilient to SMB eventual consistency** and never silently succeed while the directory still exists.
 
 ## Trade-offs
 
@@ -410,4 +426,5 @@ If rebuilding the git integration subsystem, implement it in this order:
 - A missing branch is much harder to recover because git has lost the candidate content reference.
 - Dirty checked-out target branches may merge ref-only, so the working directory can lag behind the branch ref.
 - Coordinator children are not isolated like normal runs; they intentionally share an orchestration worktree.
+- Worktree deletes on Azure Files SMB can transiently fail with `Directory not empty`; `WorktreeManager.DeleteDirectoryResilient` retries with backoff and never silently proceeds while the directory still exists (see [Resilient worktree deletion](#resilient-worktree-deletion-on-azure-files-smb)).
 - The GitHub API usage is raw `HttpClient`, not Octokit.

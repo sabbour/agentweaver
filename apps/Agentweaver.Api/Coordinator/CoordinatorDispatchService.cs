@@ -399,6 +399,15 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
             // spins forever and the frontier can advance / the run can settle.
             if (result.Outcome == ChildOutcome.Stalled)
             {
+                // #241: before dead-ending the whole run on a single stalled child, spend the
+                // subtask's bounded recovery budget — reset it to Pending so the frontier redispatches
+                // a fresh child (on a fresh pod) next iteration. Only when the budget is exhausted
+                // (RecoveryAttempts >= MaxRecoveryAttempts) does the stall become a genuine terminal.
+                if (await TryRedispatchStalledSubtaskAsync(
+                        context, workPlanId.Value, result.SubtaskId, result.ChildRunId, statusById, seq, ct)
+                        .ConfigureAwait(false))
+                    continue;
+
                 await ApplyStallFailureAsync(
                     context, workPlanId.Value, result, statusById, seq, ct).ConfigureAwait(false);
                 await PropagateBlockedDependentsAsync(
@@ -1207,6 +1216,102 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
                 .OrderBy(id => id))
                 toFail.Enqueue(next);
         }
+    }
+
+    /// <summary>
+    /// #241 — Redispatches a stalled child subtask INSTEAD of dead-ending the run, while the subtask
+    /// still has recovery budget remaining. Resets the row to <see cref="SubtaskStatus.Pending"/> with
+    /// <c>ChildRunId = null</c> (so <see cref="SubtaskFrontier.ReadyPending"/> launches a fresh child on
+    /// a fresh pod next iteration), records the stalled child on <c>PriorChildRunId</c> for provenance,
+    /// and bumps <c>RecoveryAttempts</c> MONOTONICALLY (capped at
+    /// <see cref="CoordinatorSteeringService.MaxRecoveryAttempts"/>; NEVER reset — invariant honored by
+    /// <c>ResetSubtasksToPendingAsync</c>). The stalled child's AgentHost pod is released and its run is
+    /// terminalized (agent_stall_timeout) exactly as <see cref="ApplyStallFailureAsync"/> does — only the
+    /// SUBTASK is revived. Uses its OWN DI scope + <see cref="MemoryDbContext"/> (never the dispatch
+    /// loop's context). Returns <c>true</c> when the subtask was redispatched (the caller should
+    /// <c>continue</c>); <c>false</c> when the budget is exhausted (the caller dead-ends via
+    /// <see cref="ApplyStallFailureAsync"/>) or the row is gone.
+    /// </summary>
+    internal async Task<bool> TryRedispatchStalledSubtaskAsync(
+        CoordinatorDispatchContext context,
+        int workPlanId,
+        int subtaskId,
+        string childRunId,
+        Dictionary<int, string> statusById,
+        SeqCounter seq,
+        CancellationToken ct)
+    {
+        int attempt;
+        using (var scope = _scopeFactory.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var row = await db.Subtasks.FirstOrDefaultAsync(s => s.Id == subtaskId, ct).ConfigureAwait(false);
+            if (row is null)
+                return false;
+
+            // Budget check BEFORE increment: only redispatch while attempts remain. Once the cap is
+            // reached the stall is a genuine terminal — the caller falls through to ApplyStallFailureAsync.
+            if (row.RecoveryAttempts >= CoordinatorSteeringService.MaxRecoveryAttempts)
+                return false;
+
+            // Record the stalled branch for provenance / handoff continuity (mirrors
+            // ResetSubtasksToPendingAsync), then revive the subtask for a fresh child.
+            if (!string.IsNullOrEmpty(childRunId))
+                row.PriorChildRunId = childRunId;
+            row.Status = SubtaskStatus.Pending;
+            row.ChildRunId = null;
+            row.RecoveryAttempts = Math.Min(
+                row.RecoveryAttempts + 1, CoordinatorSteeringService.MaxRecoveryAttempts);
+            attempt = row.RecoveryAttempts;
+            row.RecoveryGuidance =
+                $"Prior child run {childRunId} stalled (no progress past the stall TTL); redispatching a " +
+                $"fresh attempt ({attempt}/{CoordinatorSteeringService.MaxRecoveryAttempts}). " +
+                "Continue the subtask from the integration base and drive it to completion.";
+            row.UpdatedAt = DateTimeOffset.UtcNow;
+            await db.SaveChangesAsync(ct).ConfigureAwait(false);
+            db.Entry(row).State = EntityState.Detached;
+        }
+
+        statusById[subtaskId] = SubtaskStatus.Pending;
+
+        // Structured redispatch diagnostic on the coordinator stream.
+        var entry = _streamStore.Get(context.CoordinatorRunId);
+        entry?.RecordNext(EventTypes.CoordinatorSubtaskRedispatched, new
+        {
+            subtaskId,
+            priorChildRunId = childRunId,
+            attempt,
+            maxAttempts = CoordinatorSteeringService.MaxRecoveryAttempts,
+            reason = "stall_redispatch",
+            timestamp_utc = DateTimeOffset.UtcNow.ToString("O"),
+        });
+
+        // Same orphan-cleanup contract as ApplyStallFailureAsync: the stalled child has no live watch
+        // loop, so release its AgentHost pod and terminalize the OLD child run (agent_stall_timeout).
+        // The prior child stays terminally failed; only the subtask is revived for a fresh child.
+        await ReleaseAgentHostPodSafeAsync(childRunId, ct).ConfigureAwait(false);
+        if (RunId.TryParse(childRunId, out var stalledRunId))
+        {
+            try
+            {
+                await _runStore.TrySetTerminalStatusAsync(
+                    stalledRunId, RunStatus.Failed, DateTimeOffset.UtcNow, "agent_stall_timeout", ct)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex,
+                    "Coordinator dispatch: failed to record agent_stall_timeout for redispatched child run {ChildRunId}",
+                    childRunId);
+            }
+        }
+
+        _logger.LogWarning(
+            "Coordinator dispatch: subtask {SubtaskId} stalled child {ChildRunId} redispatched " +
+            "(attempt {Attempt}/{Max}); prior child terminalized and subtask reset to pending",
+            subtaskId, childRunId, attempt, CoordinatorSteeringService.MaxRecoveryAttempts);
+
+        return true;
     }
 
     /// <summary>

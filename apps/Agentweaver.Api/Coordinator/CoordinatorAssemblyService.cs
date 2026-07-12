@@ -112,6 +112,8 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
     private readonly TimeSpan _integrationBuildLockTimeout;
     private readonly ILogger<CoordinatorAssemblyService> _logger;
     private readonly CancellationToken _appStopping;
+    private readonly string _myPodId;
+    private readonly TimeSpan _leaseHeartbeatInterval;
     private readonly TimeSpan _reviewTimeout;
     private readonly TimeSpan _steeringWaitTimeout;
     private readonly TimeSpan _assemblyLeaseStaleTtl;
@@ -163,6 +165,15 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         _integrationBuildLock = integrationBuildLock;
         _logger = logger;
         _appStopping = lifetime.ApplicationStopping;
+        // #239 root-cause: renew the per-run assembly lease on a timer for the WHOLE assembly lifecycle
+        // (Assembling/AssemblySteering routinely run >120 s), which the Dispatching-only heartbeat in
+        // CoordinatorDispatchService never covers. Reuse the SAME config key + pod-id resolution as the
+        // dispatch heartbeat (no new config key) so both loops keep the lease fresh identically.
+        var heartbeatSecs = configuration?.GetValue("Coordinator:PodLeaseHeartbeatSeconds", 30) ?? 30;
+        _leaseHeartbeatInterval = TimeSpan.FromSeconds(Math.Max(1, heartbeatSecs));
+        _myPodId = configuration?.GetValue<string>("App:PodId")
+                   ?? Environment.GetEnvironmentVariable("HOSTNAME")
+                   ?? Environment.MachineName;
         var reviewTimeoutMinutes = configuration?.GetValue("Coordinator:AssemblyReviewTimeoutMinutes", 60.0) ?? 60.0;
         _reviewTimeout = TimeSpan.FromMinutes(Math.Max(1.0, reviewTimeoutMinutes));
         var steeringWaitSeconds = configuration?.GetValue<double?>("Coordinator:AssemblyBlockedSteeringTimeoutSeconds");
@@ -285,8 +296,21 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
 
         _ = Task.Run(async () =>
         {
+            // #239 root-cause: a dedicated per-run assembly lease heartbeat renews WorkPlans.UpdatedAt
+            // on a timer for the WHOLE assembly lifecycle (Assembling/AssemblySteering can routinely
+            // run >120 s with nothing else renewing the lease), so a healthy owner's lease never goes
+            // stale and a peer's CoordinatorReconciler never reclaims it mid-assembly. Linked to
+            // app-stop; cancelled + awaited in the finally so it never outlives the assembly loop.
+            using var heartbeatCts = CancellationTokenSource.CreateLinkedTokenSource(_appStopping);
+            Task? heartbeat = null;
             try
             {
+                var workPlanId = await ResolveWorkPlanIdAsync(context.CoordinatorRunId, _appStopping)
+                    .ConfigureAwait(false);
+                if (workPlanId is { } planId)
+                    heartbeat = RunAssemblyLeaseHeartbeatAsync(
+                        planId, context.CoordinatorRunId, heartbeatCts.Token);
+
                 await RunAssemblyAsync(context, _appStopping).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (_appStopping.IsCancellationRequested)
@@ -299,9 +323,143 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
             }
             finally
             {
+                heartbeatCts.Cancel();
+                if (heartbeat is not null)
+                {
+                    try
+                    {
+                        await heartbeat.ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        // Heartbeat cancelled at hand-off/shutdown — a clean stop.
+                    }
+                }
                 _active.TryRemove(context.CoordinatorRunId, out _);
             }
         }, _appStopping);
+    }
+
+    /// <summary>
+    /// Resolves the work plan id for a coordinator run via its OWN DI scope + context (never a caller's
+    /// context). Used by <see cref="StartAssembly"/> to key the per-run assembly lease heartbeat.
+    /// </summary>
+    private async Task<int?> ResolveWorkPlanIdAsync(string coordinatorRunId, CancellationToken ct)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        return await db.WorkPlans.AsNoTracking()
+            .Where(w => w.CoordinatorRunId == coordinatorRunId)
+            .Select(w => (int?)w.Id)
+            .FirstOrDefaultAsync(ct)
+            .ConfigureAwait(false);
+    }
+
+    internal enum AssemblyLeaseTick { Renewed, Idle, PeerOwned }
+
+    /// <summary>
+    /// One per-run ASSEMBLY lease heartbeat tick (#239 root-cause). Renews <c>WorkPlans.UpdatedAt</c>
+    /// with an OWNERSHIP-and-status keyed UPDATE
+    /// (<c>WHERE Id=@planId AND CoordinatorPodId=@myPodId AND Status IN (assembling, assembly_steering)</c>)
+    /// so a healthy owner's lease stays fresh through the long assembly phases and a peer reconciler
+    /// never reclaims it. Uses its OWN DI scope + <see cref="MemoryDbContext"/> per tick (NEVER the
+    /// assembly loop's context, which is not thread-safe).
+    ///
+    /// <para>If a row is updated → <see cref="AssemblyLeaseTick.Renewed"/>. Otherwise re-read the owner:
+    /// a PEER (non-null and != this pod) → <see cref="AssemblyLeaseTick.PeerOwned"/> (stop heartbeating).
+    /// Still this pod, the row is gone, or the status is transiently outside the assembling set (e.g. a
+    /// multi-phase lifecycle briefly in <c>in_review</c>) → <see cref="AssemblyLeaseTick.Idle"/>: skip
+    /// this tick but KEEP ticking, because the plan may re-enter <c>assembling</c> later in the run.</para>
+    ///
+    /// <para>The set is EXACTLY {assembling, assembly_steering}. <c>in_review</c> is deliberately
+    /// excluded so this heartbeat never masks <c>TryAbandonStaleReviewAsync</c>'s 24 h idle backstop
+    /// (in_review is already cross-pod-protected by the durable pending-gate check);
+    /// awaiting_assembly/assembly_blocked are excluded because their reclaim is not staleTtl-gated.</para>
+    /// </summary>
+    internal async Task<AssemblyLeaseTick> AssemblyHeartbeatTickAsync(int workPlanId, CancellationToken ct)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var now = DateTimeOffset.UtcNow;
+
+        // Equality-only WHERE + SetProperty(UpdatedAt): a single ExecuteUpdateAsync translates on BOTH
+        // SQLite and Postgres (no DateTimeOffset comparison in the predicate), so no IsSqlite() raw-SQL
+        // branch is needed (mirrors CoordinatorDispatchService.HeartbeatTickAsync).
+        var renewed = await db.WorkPlans
+            .Where(w => w.Id == workPlanId
+                     && w.CoordinatorPodId == _myPodId
+                     && (w.Status == WorkPlanStatus.Assembling
+                      || w.Status == WorkPlanStatus.AssemblySteering))
+            .ExecuteUpdateAsync(s => s.SetProperty(w => w.UpdatedAt, now), ct)
+            .ConfigureAwait(false);
+        if (renewed > 0)
+            return AssemblyLeaseTick.Renewed;
+
+        var owner = await db.WorkPlans.AsNoTracking()
+            .Where(w => w.Id == workPlanId)
+            .Select(w => w.CoordinatorPodId)
+            .FirstOrDefaultAsync(ct)
+            .ConfigureAwait(false);
+
+        if (owner is not null && !string.Equals(owner, _myPodId, StringComparison.Ordinal))
+        {
+            _logger.LogWarning(
+                "Assembly lease for plan {PlanId} is owned by peer pod {Owner} (was {MyPod}); stopping assembly heartbeat",
+                workPlanId, owner, _myPodId);
+            return AssemblyLeaseTick.PeerOwned;
+        }
+
+        // Still this pod (status transiently outside the assembling set) or the row is gone — skip this
+        // tick but keep ticking; the multi-phase lifecycle may re-enter assembling later.
+        return AssemblyLeaseTick.Idle;
+    }
+
+    /// <summary>
+    /// Renews the per-run assembly lease every <see cref="_leaseHeartbeatInterval"/> for the life of an
+    /// assembly loop (#239 root-cause). Uses its OWN DI scope + <see cref="MemoryDbContext"/> per tick.
+    /// Stops on <paramref name="stopToken"/> (normal hand-off / shutdown) or when a tick reports a PEER
+    /// now owns the row. A transient per-tick error is NON-fatal: it is logged and the loop keeps
+    /// heartbeating on the next interval (a single blip must never stop renewals and let the lease go
+    /// stale). Mirrors <see cref="CoordinatorDispatchService.RunLeaseHeartbeatAsync"/>.
+    /// </summary>
+    internal async Task RunAssemblyLeaseHeartbeatAsync(
+        int workPlanId, string coordinatorRunId, CancellationToken stopToken)
+    {
+        try
+        {
+            using var timer = new PeriodicTimer(_leaseHeartbeatInterval);
+            while (await timer.WaitForNextTickAsync(stopToken).ConfigureAwait(false))
+            {
+                try
+                {
+                    var tick = await AssemblyHeartbeatTickAsync(workPlanId, stopToken).ConfigureAwait(false);
+                    if (tick == AssemblyLeaseTick.PeerOwned)
+                        return; // A peer owns the row — stop renewing (this owner is being superseded).
+                }
+                catch (OperationCanceledException)
+                {
+                    throw; // Cancellation (app-stop / assembly hand-off) is a clean stop, not a blip.
+                }
+                catch (Exception ex)
+                {
+                    // Transient per-tick DB/SMB blip: log and keep heartbeating on the next interval. A
+                    // single failed tick must NOT stop renewals — that would defeat the lease/fencing net.
+                    _logger.LogWarning(ex,
+                        "Assembly lease heartbeat tick for run {RunId} (plan {PlanId}) failed transiently; continuing",
+                        coordinatorRunId, workPlanId);
+                }
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // stopToken cancelled: normal teardown at assembly hand-off or app shutdown.
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "Assembly lease heartbeat for run {RunId} (plan {PlanId}) stopped on an unexpected error",
+                coordinatorRunId, workPlanId);
+        }
     }
 
     public void EnsureFinalScribe(Run coordinatorRun)

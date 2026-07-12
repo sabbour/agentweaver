@@ -212,6 +212,139 @@ public sealed class CoordinatorLeaseHeartbeatTests : IAsyncDisposable
     }
 
     // -----------------------------------------------------------------------
+    // (e) #239 root-cause: a DEDICATED per-run assembly lease heartbeat renews UpdatedAt during the
+    //     long Assembling/AssemblySteering phases (which the Dispatching-only heartbeat never covers),
+    //     so a healthy owner's lease can never go stale and get reclaimed by a peer mid-assembly.
+    // -----------------------------------------------------------------------
+
+    [Fact]
+    public async Task AssemblyHeartbeatTick_RenewsUpdatedAt_OnBusyAssemblingPlan_OwnedByThisPod()
+    {
+        const string coord = "coord-asm-renew";
+        var staleUpdatedAt = DateTimeOffset.UtcNow.AddSeconds(-100);
+        var planId = await SeedPlanAsync(coord, OwnerPod, staleUpdatedAt, WorkPlanStatus.Assembling);
+
+        var sut = BuildAssembly(OwnerPod);
+        var tick = await sut.AssemblyHeartbeatTickAsync(planId, ct: default);
+
+        tick.Should().Be(CoordinatorAssemblyService.AssemblyLeaseTick.Renewed);
+        var (podId, status, updatedAt) = await GetPlanLeaseAsync(planId);
+        podId.Should().Be(OwnerPod, "the renew must not change ownership");
+        status.Should().Be(WorkPlanStatus.Assembling);
+        updatedAt.Should().BeAfter(staleUpdatedAt, "the heartbeat bumped UpdatedAt to keep the assembly lease fresh");
+        updatedAt.Should().BeCloseTo(DateTimeOffset.UtcNow, TimeSpan.FromSeconds(30));
+    }
+
+    [Fact]
+    public async Task AssemblyHeartbeatTick_Renews_OnAssemblySteeringPlan()
+    {
+        const string coord = "coord-asm-steer-renew";
+        var staleUpdatedAt = DateTimeOffset.UtcNow.AddSeconds(-100);
+        var planId = await SeedPlanAsync(coord, OwnerPod, staleUpdatedAt, WorkPlanStatus.AssemblySteering);
+
+        var sut = BuildAssembly(OwnerPod);
+        var tick = await sut.AssemblyHeartbeatTickAsync(planId, ct: default);
+
+        tick.Should().Be(CoordinatorAssemblyService.AssemblyLeaseTick.Renewed);
+        var (podId, status, updatedAt) = await GetPlanLeaseAsync(planId);
+        podId.Should().Be(OwnerPod, "the renew must not change ownership");
+        status.Should().Be(WorkPlanStatus.AssemblySteering);
+        updatedAt.Should().BeAfter(staleUpdatedAt, "the steering decision window is also kept fresh by the heartbeat");
+        updatedAt.Should().BeCloseTo(DateTimeOffset.UtcNow, TimeSpan.FromSeconds(30));
+    }
+
+    [Fact]
+    public async Task AssemblyHeartbeatTick_DoesNotRenew_InReview_PreservingAbandonTimer()
+    {
+        const string coord = "coord-asm-inreview";
+        // in_review is deliberately OUTSIDE the heartbeat's status set: renewing it would keep bumping
+        // UpdatedAt and defeat the reconciler's 24h now-UpdatedAt stale-review abandon backstop.
+        var reviewSince = DateTimeOffset.UtcNow.AddSeconds(-100);
+        var planId = await SeedPlanAsync(coord, OwnerPod, reviewSince, WorkPlanStatus.InReview);
+
+        var sut = BuildAssembly(OwnerPod);
+        var tick = await sut.AssemblyHeartbeatTickAsync(planId, ct: default);
+
+        tick.Should().Be(CoordinatorAssemblyService.AssemblyLeaseTick.Idle);
+        var (podId, status, updatedAt) = await GetPlanLeaseAsync(planId);
+        podId.Should().Be(OwnerPod, "ownership is untouched");
+        status.Should().Be(WorkPlanStatus.InReview);
+        updatedAt.Should().BeCloseTo(reviewSince, TimeSpan.FromSeconds(1),
+            "in_review must NOT be renewed so the stale-review abandon timer keeps counting from the review start");
+    }
+
+    [Fact]
+    public async Task PeerReconciler_DoesNotReclaim_FreshlyRenewedAssemblingPlan_ButReclaimsWhenStale()
+    {
+        var coord = RunId.New().ToString();
+        await SeedCoordinatorRunAsync(coord);
+        // Plan is owned by OwnerPod but its lease has gone stale (a long assembly with no heartbeat).
+        var planId = await SeedPlanAsync(coord, OwnerPod, DateTimeOffset.UtcNow.AddMinutes(-5), WorkPlanStatus.Assembling);
+
+        var owner = BuildAssembly(OwnerPod);
+        var peerReconciler = BuildReconciler(PeerPod);
+
+        // The owner's assembly heartbeat renews the lease -> a peer sweep must NOT re-arm the busy plan.
+        (await owner.AssemblyHeartbeatTickAsync(planId, ct: default))
+            .Should().Be(CoordinatorAssemblyService.AssemblyLeaseTick.Renewed);
+        (await peerReconciler.SweepAsync(default)).Should().Be(0,
+            "a freshly-renewed Assembling lease owned by a live peer must not be re-armed");
+        (await GetPlanLeaseAsync(planId)).PodId.Should().Be(OwnerPod, "ownership stayed with the live owner");
+        _assembly.Started.Should().BeEmpty("no re-arm happened while the lease was fresh");
+
+        // Simulate the owner going away (no more heartbeats): the lease goes stale and the peer re-arms.
+        await ForceLeaseStaleAsync(planId, DateTimeOffset.UtcNow.AddMinutes(-5));
+        (await peerReconciler.SweepAsync(default)).Should().Be(1,
+            "once the Assembling lease is stale the peer reconciler re-arms the orphaned assembly");
+        _assembly.Started.Should().ContainSingle(c => c.CoordinatorRunId == coord,
+            "the stale assembly was re-armed via StartAssembly on the peer");
+    }
+
+    [Fact]
+    public async Task AssemblyHeartbeatTick_StopsWhenPeerOwnsRow()
+    {
+        const string coord = "coord-asm-peer";
+        // The row is Assembling but a PEER already owns it (this owner was superseded).
+        var planId = await SeedPlanAsync(coord, PeerPod, DateTimeOffset.UtcNow.AddSeconds(-100), WorkPlanStatus.Assembling);
+
+        var sut = BuildAssembly(OwnerPod);
+        var tick = await sut.AssemblyHeartbeatTickAsync(planId, ct: default);
+
+        tick.Should().Be(CoordinatorAssemblyService.AssemblyLeaseTick.PeerOwned);
+        var (podId, _, updatedAt) = await GetPlanLeaseAsync(planId);
+        podId.Should().Be(PeerPod, "the peer's ownership is untouched");
+        updatedAt.Should().BeCloseTo(DateTimeOffset.UtcNow.AddSeconds(-100), TimeSpan.FromSeconds(2),
+            "the owner pod must never renew a row that a peer owns");
+    }
+
+    [Fact]
+    public async Task AssemblyLeaseHeartbeat_TransientTickError_DoesNotStopHeartbeat_RenewsOnNextTick()
+    {
+        const string coord = "coord-asm-flaky";
+        var staleUpdatedAt = DateTimeOffset.UtcNow.AddMinutes(-5);
+        var planId = await SeedPlanAsync(coord, OwnerPod, staleUpdatedAt, WorkPlanStatus.Assembling);
+
+        // The first heartbeat tick fails (a transient scope/DB blip); every later tick succeeds.
+        var flaky = new FlakyScopeFactory(_scopeFactory, failFirstN: 1);
+        var sut = BuildAssembly(OwnerPod, flaky, heartbeatSeconds: 1);
+
+        using var stop = new CancellationTokenSource();
+        var task = sut.RunAssemblyLeaseHeartbeatAsync(planId, coord, stop.Token);
+
+        // Wait until the lease is renewed. This can only happen if the loop survived the failing first tick.
+        var renewed = await WaitUntilAsync(
+            async () => (await GetPlanLeaseAsync(planId)).UpdatedAt > staleUpdatedAt,
+            timeout: TimeSpan.FromSeconds(8));
+
+        stop.Cancel();
+        await task;
+
+        renewed.Should().BeTrue("a transient failing tick must not stop the assembly heartbeat; a later tick renews the lease");
+        flaky.Calls.Should().BeGreaterThan(1, "the first tick failed and at least one subsequent tick ran");
+        (await GetPlanLeaseAsync(planId)).PodId.Should().Be(OwnerPod, "ownership is unchanged by the transient blip");
+    }
+
+    // -----------------------------------------------------------------------
     // Harness
     // -----------------------------------------------------------------------
 
@@ -265,6 +398,31 @@ public sealed class CoordinatorLeaseHeartbeatTests : IAsyncDisposable
             runOptions: null, autopilot: null, configuration: config);
     }
 
+    private CoordinatorAssemblyService BuildAssembly(
+        string podId, IServiceScopeFactory? scopeFactory = null, int? heartbeatSeconds = null)
+    {
+        var settings = new Dictionary<string, string?> { ["App:PodId"] = podId };
+        if (heartbeatSeconds is { } hb)
+            settings["Coordinator:PodLeaseHeartbeatSeconds"] =
+                hb.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var config = new ConfigurationBuilder().AddInMemoryCollection(settings).Build();
+
+        // Only the lease-heartbeat surface is exercised (AssemblyHeartbeatTickAsync /
+        // RunAssemblyLeaseHeartbeatAsync), which needs just the scope factory, pod id + interval, and
+        // logger; the heavy assembly-pipeline collaborators are never touched here so they stay null.
+        return new CoordinatorAssemblyService(
+            runStore: _runStore,
+            streamStore: _streamStore,
+            assemblyStore: null!,
+            reviewGate: null!,
+            pipeline: null!,
+            scopeFactory: scopeFactory ?? _scopeFactory,
+            serviceProvider: _provider,
+            lifetime: new TestHostApplicationLifetime(),
+            logger: NullLogger<CoordinatorAssemblyService>.Instance,
+            configuration: config);
+    }
+
     private CoordinatorReconciler BuildReconciler(string podId)
     {
         var config = new ConfigurationBuilder()
@@ -287,7 +445,11 @@ public sealed class CoordinatorLeaseHeartbeatTests : IAsyncDisposable
         return new IntegrationBuildLock(_scopeFactory, NullLogger<IntegrationBuildLock>.Instance, config);
     }
 
-    private async Task<int> SeedDispatchingPlanAsync(string coordinatorRunId, string podId, DateTimeOffset updatedAt)
+    private Task<int> SeedDispatchingPlanAsync(string coordinatorRunId, string podId, DateTimeOffset updatedAt) =>
+        SeedPlanAsync(coordinatorRunId, podId, updatedAt, WorkPlanStatus.Dispatching);
+
+    private async Task<int> SeedPlanAsync(
+        string coordinatorRunId, string podId, DateTimeOffset updatedAt, string status)
     {
         using var scope = _provider.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
@@ -312,7 +474,7 @@ public sealed class CoordinatorLeaseHeartbeatTests : IAsyncDisposable
             OutcomeSpecId = spec.Id,
             ProjectId = "proj-1",
             CoordinatorRunId = coordinatorRunId,
-            Status = WorkPlanStatus.Dispatching,
+            Status = status,
             CoordinatorPodId = podId,
             CreatedAt = DateTimeOffset.UtcNow,
             UpdatedAt = updatedAt,

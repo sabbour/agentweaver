@@ -184,6 +184,46 @@ public sealed class EfRunEventStreamTests : IDisposable
             EventTypes.CoordinatorRecovered);
     }
 
+    [Fact]
+    public async Task AppendAsync_PostTerminalAgentMessageDelta_IsNotPersisted()
+    {
+        var runId = "run-postterminal-delta-ef";
+        var producer = new EfRunEventStream(new TestMemoryDbContextFactory(_options));
+        await producer.AppendAsync(runId, new RunEvent(1, EventTypes.RunAssembleReady, new { }));
+        await producer.CompleteAsync(runId);
+        // A straggling streaming delta arriving after the terminal must be dropped — never persisted,
+        // so it can never resurrect/re-drive a completed run (#239 companion hardening).
+        await producer.AppendAsync(runId, new RunEvent(2, EventTypes.AgentMessageDelta, new { delta = "late" }));
+
+        var subscriber = new EfRunEventStream(new TestMemoryDbContextFactory(_options));
+        var replayed = await ReplayWithTimeoutAsync(subscriber, runId);
+
+        replayed.Select(e => e.Sequence).Should().Equal(1);
+        replayed.Select(e => e.Type).Should().Equal(EventTypes.RunAssembleReady);
+    }
+
+    [Fact]
+    public async Task AppendAsync_PostTerminalDiagnostic_StillPersists()
+    {
+        var runId = "run-postterminal-diag-ef";
+        var producer = new EfRunEventStream(new TestMemoryDbContextFactory(_options));
+        await producer.AppendAsync(runId, new RunEvent(1, EventTypes.RunAssembleReady, new { }));
+        await producer.CompleteAsync(runId);
+        // Regression lock: ONLY agent.message.delta is dropped post-terminal — a diagnostic terminal
+        // (coordinator.assembly_failed) MUST still persist + replay for the durable audit trail.
+        await producer.AppendAsync(runId, new RunEvent(2, EventTypes.CoordinatorAssemblyFailed, new
+        {
+            reason = "build_test_infra_agenthost_launch_failed",
+        }));
+
+        var subscriber = new EfRunEventStream(new TestMemoryDbContextFactory(_options));
+        var replayed = await ReplayWithTimeoutAsync(subscriber, runId);
+
+        replayed.Select(e => e.Sequence).Should().Equal(1, 2);
+        replayed.Select(e => e.Type).Should().Equal(
+            EventTypes.RunAssembleReady, EventTypes.CoordinatorAssemblyFailed);
+    }
+
     public void Dispose()
     {
         try { Directory.Delete(_dir, recursive: true); } catch { }

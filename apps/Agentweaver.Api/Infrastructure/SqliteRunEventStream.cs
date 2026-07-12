@@ -79,6 +79,13 @@ public sealed class SqliteRunEventStream : IRunEventStream
     /// <inheritdoc />
     public ValueTask AppendAsync(string runId, RunEvent evt, CancellationToken ct = default)
     {
+        // #239 companion hardening: once a run is completed, drop streaming AgentMessageDelta events —
+        // a straggling delta arriving after the terminal must never re-persist and re-drive the run.
+        // ONLY agent.message.delta is dropped; every terminal/diagnostic/final-message/tool/usage/
+        // subtask/topology event still persists post-terminal (durable audit + gapless replay).
+        if (_completedRuns.ContainsKey(runId) && evt.Type == EventTypes.AgentMessageDelta)
+            return ValueTask.CompletedTask;
+
         // Layer 1: synchronous, durable write-through BEFORE the channel publish so the event is
         // crash-safe before any live subscriber observes it. Honors a pre-assigned sequence when
         // present (idempotent via the unique (RunId, Sequence) index), otherwise assigns MAX+1.

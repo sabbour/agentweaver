@@ -217,6 +217,8 @@ The persisted subtask status values are:
 | `failed` | Child ran but ended unsuccessfully. | No | Yes |
 | `blocked` | The subtask never ran because an upstream dependency stalled, so the coordinator terminalized it as ineligible. | No | Yes |
 
+A stall is **not** immediately terminal. When a child stalls, the coordinator redispatches the subtask on a fresh child/pod up to `CoordinatorSteeringService.MaxRecoveryAttempts` (**3**) times — emitting `coordinator.subtask_redispatched` and incrementing the monotonic `RecoveryAttempts` each time — before the stall becomes a terminal `failed` and its dependents cascade to `blocked` (`apps/Agentweaver.Api/Coordinator/CoordinatorDispatchService.cs:399`, `:1235`). See the coordinator deep-dive [stall redispatch before dead-end](/deep-dive/coordinator-internals#stall-redispatch-before-dead-end).
+
 ### Observation and topology events
 
 The coordinator observes each child through its read-only run timeline and projects two views onto its own run stream:
