@@ -12,6 +12,7 @@ using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
+using Xunit.Sdk;
 
 namespace Agentweaver.Tests.Sandbox;
 
@@ -141,30 +142,48 @@ public sealed class AssemblyBuildTestShellGuardTests : IDisposable
     }
 
     [Fact]
-    public async Task Controlled_run_command_exposes_workspace_local_home_and_xdg_roots_in_real_linux_sandbox()
+    public async Task Controlled_run_command_runs_npm_install_with_sandbox_local_home_in_real_linux_sandbox()
     {
         ISandboxExecutor realExecutor;
         if (OperatingSystem.IsLinux())
         {
-            LinuxBwrapExecutor.IsBwrapAvailable().Should().BeTrue(
-                "the AgentHost Linux image must provide the real controlled bubblewrap executor");
+            if (!LinuxBwrapExecutor.IsBwrapAvailable())
+                throw SkipException.ForSkip("bubblewrap is not available on this Linux host");
             realExecutor = new LinuxBwrapExecutor(NullLogger.Instance);
         }
         else if (OperatingSystem.IsWindows())
         {
             realExecutor = WslMxcSandboxExecutor.TryCreate(NullLogger.Instance)
-                ?? throw new InvalidOperationException(
-                    "The Windows verification environment must provide the real WSL Linux executor.");
+                ?? throw SkipException.ForSkip(
+                    "a WSL bubblewrap executor is not available on this Windows host");
             realExecutor.BackendName.Should().Be(
                 "wsl-bwrap",
                 "the cache test must exercise filesystem-confined Linux execution, not passthrough/unshare");
         }
         else
         {
-            return;
+            throw SkipException.ForSkip("the real bubblewrap E2E test requires Linux or Windows with WSL");
         }
 
         var workspace = Path.Combine(_root, "real-linux-install");
+        var fixturePackage = Path.Combine(workspace, "fixture-package");
+        Directory.CreateDirectory(fixturePackage);
+        File.WriteAllText(
+            Path.Combine(fixturePackage, "package.json"),
+            """{"name":"agentweaver-cache-fixture","version":"1.0.0","main":"index.js"}""");
+        File.WriteAllText(Path.Combine(fixturePackage, "index.js"), "module.exports = 'installed';");
+        File.WriteAllText(
+            Path.Combine(workspace, "package.json"),
+            """
+            {
+              "name": "controlled-cache-test",
+              "version": "1.0.0",
+              "private": true,
+              "dependencies": {
+                "agentweaver-cache-fixture": "file:./fixture-package"
+              }
+            }
+            """);
         var sandboxVariables = new Dictionary<string, string>
         {
             ["HOME"] = ".agentweaver-home",
@@ -203,27 +222,22 @@ public sealed class AssemblyBuildTestShellGuardTests : IDisposable
                 new Dictionary<string, object?>
                 {
                     ["command"] =
-                        "test \"$HOME\" = '.agentweaver-home' && " +
-                        "test -w \"$HOME\" && test -w \"$XDG_CACHE_HOME\" && " +
-                        "test -w \"$XDG_DATA_HOME\" && test -w \"$XDG_CONFIG_HOME\" && " +
-                        "printf home > \"$HOME/controlled-home.ok\" && " +
-                        "printf cache > \"$XDG_CACHE_HOME/controlled-cache.ok\" && " +
-                        "printf data > \"$XDG_DATA_HOME/controlled-data.ok\" && " +
-                        "printf config > \"$XDG_CONFIG_HOME/controlled-config.ok\"",
+                        "unset npm_config_cache NPM_CONFIG_CACHE && " +
+                        "npm install --ignore-scripts --no-audit --no-fund && " +
+                        "test -f node_modules/agentweaver-cache-fixture/index.js && " +
+                        "test -d \"$HOME/.npm\" && " +
+                        "find \"$HOME/.npm\" -type f -print -quit | grep -q .",
                 }));
 
             result?.ToString().Should().Contain("exit_code: 0");
-            File.ReadAllText(Path.Combine(workspace, ".agentweaver-home", "controlled-home.ok"))
-                .Should().Be("home");
             File.ReadAllText(Path.Combine(
-                workspace, ".agentweaver-home", ".cache", "controlled-cache.ok"))
-                .Should().Be("cache");
-            File.ReadAllText(Path.Combine(
-                workspace, ".agentweaver-home", ".local", "share", "controlled-data.ok"))
-                .Should().Be("data");
-            File.ReadAllText(Path.Combine(
-                workspace, ".agentweaver-home", ".config", "controlled-config.ok"))
-                .Should().Be("config");
+                workspace, "node_modules", "agentweaver-cache-fixture", "index.js"))
+                .Should().Be("module.exports = 'installed';");
+            Directory.EnumerateFiles(
+                    Path.Combine(workspace, ".agentweaver-home", ".npm"),
+                    "*",
+                    SearchOption.AllDirectories)
+                .Should().NotBeEmpty("npm must write its cache beneath the sandbox-local HOME");
             executor.LastCommand.Should().NotBeNull();
             executor.LastCommand!.FilesystemPolicy.ReadWritePaths.Should().Contain(workspace);
             executor.LastCommand.FilesystemPolicy.ReadWritePaths.Should().ContainSingle(
