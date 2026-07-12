@@ -67,7 +67,7 @@ The coordinator will not start any agent work until you explicitly confirm the O
 Once you confirm the spec, the coordinator:
 
 1. Decomposes the OutcomeSpec into a **WorkPlan** — a dependency graph of subtasks
-2. Assigns each subtask to the best-fit agent and selects a model per task based on complexity
+2. Assigns each subtask to the best-fit agent and selects a model — an explicit run `modelId` (or the project's GitHub Copilot default) pins every subtask; otherwise each subtask uses its role's default model
 3. Dispatches independent subtasks in parallel; dependent ones run in series
 
 You see the **topology view** — a live graph of the entire orchestration.

@@ -167,7 +167,13 @@ The selected workflow is not only recorded for display: it becomes prompt contex
 
 ### Decomposition and the work plan
 
-After confirmation, the coordinator decomposes the spec into a **work plan**: a set of subtasks plus the dependency edges between them. Each subtask carries an assigned roster agent (selected for role fit), a selected model (chosen for the subtask's complexity within the GitHub Copilot provider), a `phase`, an `isolation`, and a status. The plan is persisted to the memory store and emitted as `coordinator.work_plan`. Subagents read the confirmed spec and plan from the memory store; the coordinator does not introduce a parallel store. Read it over HTTP with `GET /api/runs/{id}/work-plan` or over MCP with `coordinator_work_plan_get`.
+After confirmation, the coordinator decomposes the spec into a **work plan**: a set of subtasks plus the dependency edges between them. Each subtask carries an assigned roster agent (selected for role fit), a selected model (within the GitHub Copilot provider), a `phase`, an `isolation`, and a status. The plan is persisted to the memory store and emitted as `coordinator.work_plan`. Subagents read the confirmed spec and plan from the memory store; the coordinator does not introduce a parallel store. Read it over HTTP with `GET /api/runs/{id}/work-plan` or over MCP with `coordinator_work_plan_get`.
+
+**Model selection precedence (per subtask).** A non-empty **run model pin** — the run's explicit `modelId` on `POST /api/projects/{id}/orchestrations`, or (when no explicit id is passed) the project's GitHub Copilot default — is selected for **every** subtask regardless of complexity; otherwise the subtask uses its assigned role's default model, then a catalog role default, then the configured Copilot default. The same precedence is preserved when a reviewer rejection rotates a subtask to a different eligible author (the pin wins over the rotated author's role default).
+
+::: warning Behavior change
+A non-empty run model pin now pins **all** subtasks (previously only high-complexity subtasks adopted the run's explicit model). Two consequences follow: (a) a well-formed but nonexistent pinned model id now affects **every** subtask (not just high-complexity ones); and (b) setting a project GitHub Copilot default disables per-role model differentiation for that project's runs — leave both the explicit `modelId` and the project default unset if you want subtasks to use their individual role-default models.
+:::
 
 The `WorkPlan` row also carries **`CoordinatorPodId`**, the distributed lease owner for
 `dispatching`. When a pod starts or re-arms dispatch, it atomically stamps this field and refreshes

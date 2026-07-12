@@ -769,6 +769,56 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         EventTypes_(coordinatorRunId).Should().NotContain(EventTypes.CoordinatorAssemblyBlocked);
     }
 
+    // #238 — a non-empty run model PIN must survive a reviewer-rejection ROTATION. The rotation selector
+    // only knows the rotated author's ROLE default model ("model-rotated" from the default fake), so
+    // WITHOUT the fix the pinned model would be OVERWRITTEN back to that role default at BOTH the
+    // TryRotateSubtaskAuthorAsync persist AND the handoff child's ModelId. This test seeds a coordinator
+    // run PINNED to "gpt-5.6-sol", forces a rejection→rotation with reusable prior work (so the handoff
+    // path is exercised), and asserts the pin wins at both consumers — mirroring SelectModel precedence.
+    [Fact]
+    public async Task RouteAssembly_Rejection_Lockout_UnderRunModelPin_KeepsPinnedModel_NotRoleDefault()
+    {
+        const string pinnedModel = "gpt-5.6-sol";
+
+        var coordinatorRunId = RunId.New().ToString();
+        await SeedCoordinatorRunAsync(coordinatorRunId, modelId: pinnedModel);
+        _streamStore.Create(coordinatorRunId, "alice");
+
+        var priorChildRunId = RunId.New().ToString();
+        var (workPlanId, subtaskIds) = await SeedPlanAsync(
+            coordinatorRunId, new[] { SubtaskStatus.AssembleReady }, new string?[] { priorChildRunId });
+        await SeedChildRunAsync(RunId.Parse(priorChildRunId), "agentweaver/wt/child-prior", DiffTouching("app.ts"));
+        // DECIDER-OWNED ROUTING: lapse retention so the target is UNRESUMABLE → DispatchFresh → lockout.
+        await LapseSteeringRetentionAsync(subtaskIds[0]);
+
+        await SeedPriorRejectionDirectiveAsync(
+            coordinatorRunId, subtaskIds, SteeringSource.Rubberduck, "gate:rubberduck",
+            "Round1: accessibility labels are missing.");
+
+        var touched = subtaskIds.ToDictionary(id => id, _ => (IReadOnlySet<string>)new HashSet<string>());
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+
+        // Default rotation fake rotates "morpheus" → "rotated-morpheus" with role-default model "model-rotated".
+        await InvokeRouteAssemblyGateThroughSteeringAsync(
+            Context(coordinatorRunId), workPlanId, SteeringSource.Rubberduck,
+            "Round2: contrast ratios fail WCAG AA.", touched, "tree-pin", cts.Token);
+
+        // The rotation happened (author rotated to a DIFFERENT eligible agent) ...
+        var (assigned, _, _, _) = await GetSubtaskFieldsAsync(subtaskIds[0]);
+        assigned.Should().Be("rotated-morpheus", "the reviewer rejection still rotates to a different eligible agent");
+
+        // ... but the run PIN wins over the rotated author's role default at the PERSIST (TryRotate...).
+        var persistedModel = await GetSubtaskSelectedModelAsync(subtaskIds[0]);
+        persistedModel.Should().Be(pinnedModel,
+            "a non-empty run model pin must survive the rotation persist and NOT be overwritten by the " +
+            "rotated author's role default (\"model-rotated\") (#238)");
+
+        // ... and at the handoff child (ModelId = choice.SelectedModelId).
+        _handoff.Calls.Should().ContainSingle();
+        _handoff.Calls[0].NewAgentRun.ModelId.Should().Be(pinnedModel,
+            "the context-carrying handoff child must run under the pinned model, not the rotated role default (#238)");
+    }
+
     [Fact]
     public async Task RouteAssembly_Rejection_Lockout_TwoRotations_Round1GuidanceAppearsExactlyOnce()
     {
@@ -2869,6 +2919,14 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         return (s.AssignedAgent, s.LockedOutAgents, s.PriorChildRunId, s.RecoveryGuidance);
     }
 
+    private async Task<string> GetSubtaskSelectedModelAsync(int subtaskId)
+    {
+        using var scope = _provider.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        return await db.Subtasks.AsNoTracking().Where(x => x.Id == subtaskId)
+            .Select(x => x.SelectedModelId).FirstAsync();
+    }
+
     private async Task<int> GetSubtaskRecoveryAttemptsAsync(int subtaskId)
     {
         using var scope = _provider.CreateScope();
@@ -2985,7 +3043,7 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
             _scopeFactory, coordinatorRunId, decision, CancellationToken.None);
     }
 
-    private async Task SeedCoordinatorRunAsync(string coordinatorRunId)
+    private async Task SeedCoordinatorRunAsync(string coordinatorRunId, string? modelId = null)
     {
         await _runStore.InsertAsync(new Run
         {
@@ -2998,6 +3056,7 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
             Status = RunStatus.InProgress,
             StartedAt = DateTimeOffset.UtcNow,
             AgentName = "Coordinator",
+            ModelId = modelId,
         });
     }
 

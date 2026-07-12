@@ -297,13 +297,14 @@ This is a pragmatic trade-off: it preserves progress for most accidental cycles 
 
 Subtasks are assigned to active, dispatchable roster members. Built-in infrastructure agents such as Scribe and RAI are excluded. Role matching scores exact role/title matches, token overlap across capabilities and responsibilities, and phase affinity.
 
-Model selection is fixed to GitHub Copilot on this path:
+Model selection is fixed to GitHub Copilot on this path. A non-empty **run model pin** — the coordinator run's explicit `modelId` OR the project's GitHub Copilot default — wins for **every** subtask regardless of complexity:
 
-1. high-complexity subtasks can use the coordinator run's explicit model override;
+1. if the run carries a model pin (explicit request `modelId`, else the project default), use it for every subtask;
 2. otherwise use the assigned role's default model;
 3. otherwise use a catalog role default;
-4. otherwise use the run override;
-5. otherwise use the configured Copilot default.
+4. otherwise use the configured Copilot default.
+
+Because the pin wins uniformly, setting a project default (or passing an explicit `modelId`) disables per-role model differentiation for that run; leave the pin unset for mixed per-role models. The same precedence is honored when a reviewer rejection rotates a subtask to a different eligible author — the pin is preserved across the rotation rather than falling back to the rotated author's role default.
 
 The persisted WorkPlan starts as `planned`, with subtasks in `pending` and dependency edges persisted by database ids.
 

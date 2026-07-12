@@ -2152,6 +2152,17 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
                 .ToListAsync(ct).ConfigureAwait(false);
         }
 
+        // #238 — a non-empty run model PIN (the coordinator run's explicit request.ModelId OR the
+        // project's GitHub Copilot default, both captured on Run.ModelId at start) must win for EVERY
+        // subtask, including a lockout ROTATION. The rotation selector only knows the rotated author's
+        // role DEFAULT model (CoordinatorAuthorRotation.cs: role?.DefaultModel), so without this the
+        // first reviewer rejection would OVERWRITE the pinned model back to a role default — both at the
+        // TryRotateSubtaskAuthorAsync persist and the handoff child's ModelId. Mirror SelectModel
+        // precedence: run pin wins; else keep the rotation's role-default choice.
+        var runModelPin = (await TryGetCoordinatorRunAsync(context.CoordinatorRunId, ct).ConfigureAwait(false))?.ModelId;
+        RotationChoice PinModel(RotationChoice choice) =>
+            string.IsNullOrWhiteSpace(runModelPin) ? choice : choice with { SelectedModelId = runModelPin! };
+
         // Plan the rotation for EACH target BEFORE mutating anything: pick a different eligible author.
         // IDEMPOTENT RE-DRIVE (change #1): a target this directive/attempt ALREADY rotated (the durable
         // (LastResetDirectiveId, LastResetAttempt) stamp written atomically with the rotation) is NOT
@@ -2167,8 +2178,8 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
             if (subtask.LastResetDirectiveId == directiveId && subtask.LastResetAttempt == attempt)
             {
                 // Already rotated by THIS directive/attempt — carry under the current rotated author.
-                alreadyRotated.Add((subtask,
-                    new RotationChoice(subtask.AssignedAgent, subtask.SelectedModelId, subtask.AgentCharter)));
+                alreadyRotated.Add((subtask, PinModel(
+                    new RotationChoice(subtask.AssignedAgent, subtask.SelectedModelId, subtask.AgentCharter))));
                 continue;
             }
             var lockedOut = new HashSet<string>(
@@ -2188,7 +2199,7 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
                 deadlockRoster.AddRange(roster);
                 continue;
             }
-            planned.Add((subtask, choice));
+            planned.Add((subtask, PinModel(choice)));
         }
 
         // A pure re-drive where EVERY target is already rotated by this directive/attempt has nothing to

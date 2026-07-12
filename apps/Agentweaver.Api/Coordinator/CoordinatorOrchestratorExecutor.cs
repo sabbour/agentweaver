@@ -25,8 +25,9 @@ namespace Agentweaver.Api.Coordinator;
 /// turn (mirroring the Phase 1 drafting pattern) with a deterministic fallback so the path works
 /// offline. The spec content is fenced and treated as untrusted data.</item>
 /// <item>SELECTS a real roster agent (Feature 005 <see cref="Team"/>/<see cref="CastMember"/> read
-/// via <see cref="SquadReader"/>) per subtask by role fit (FR-011), and a Copilot model per
-/// complexity honoring the role's default model with an explicit override hook (FR-012).</item>
+/// via <see cref="SquadReader"/>) per subtask by role fit (FR-011), and a Copilot model honoring a
+/// non-empty run model pin (the run's explicit model or the project default) for EVERY subtask, else
+/// the role's default model (FR-012).</item>
 /// <item>BUILDS the dependency DAG, validates it is acyclic (breaking cycles deterministically),
 /// and PERSISTS one <see cref="WorkPlan"/> (planned), the <see cref="Subtask"/> rows (pending), and
 /// the <see cref="SubtaskDependency"/> edges via the EF <see cref="MemoryDbContext"/> (FR-004a).</item>
@@ -153,7 +154,7 @@ public sealed class CoordinatorOrchestratorExecutor
                 ?? CatalogModelForRole(d.Role)
                 ?? string.Empty;
             var agentName = member.Name;
-            var model = SelectModel(roleDefaultModel, d.Complexity, input.ModelId);
+            var model = SelectModel(roleDefaultModel, input.ModelId);
             assigned.Add(new AssignedSubtask(d, agentName, model));
         }
 
@@ -817,18 +818,16 @@ public sealed class CoordinatorOrchestratorExecutor
 
     /// <summary>
     /// Selects the Copilot model for a subtask (FR-012). Provider is fixed to GitHub Copilot.
-    /// Baseline: the assigned role's DEFAULT model. Override hook: a HIGH-complexity subtask adopts
-    /// the coordinator run's explicit model when one was supplied. Falls back to the configured
-    /// default Copilot model only when no role default exists. No parallel model catalog is invented.
+    /// Precedence (run pin wins for EVERY subtask regardless of complexity): a non-empty run model
+    /// pin — the coordinator run's explicit <c>request.ModelId</c> OR the project's GitHub Copilot
+    /// default, resolved upstream into <c>input.ModelId</c> — pins the subtask; else the assigned
+    /// role's DEFAULT model; else the configured default Copilot model. No parallel model catalog is
+    /// invented.
     /// </summary>
-    private string SelectModel(string roleDefaultModel, string complexity, string? runModelOverride)
+    private string SelectModel(string roleDefaultModel, string? runModelOverride)
     {
-        if (complexity == "high" && !string.IsNullOrWhiteSpace(runModelOverride))
-            return runModelOverride!;
-        if (!string.IsNullOrWhiteSpace(roleDefaultModel))
-            return roleDefaultModel;
-        if (!string.IsNullOrWhiteSpace(runModelOverride))
-            return runModelOverride!;
+        if (!string.IsNullOrWhiteSpace(runModelOverride)) return runModelOverride!;
+        if (!string.IsNullOrWhiteSpace(roleDefaultModel)) return roleDefaultModel;
         return _defaultCopilotModel;
     }
 

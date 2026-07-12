@@ -92,7 +92,7 @@ The Coordinator:
 - **Scopes** your goal using team memories and decisions, then drafts an OutcomeSpec
 - **Confirms** the spec with you before dispatching any work
 - **Plans** — decomposes the confirmed spec into a WorkPlan with a dependency graph
-- **Dispatches** — assigns subtasks to roster agents, choosing a model per task by complexity; runs independent subtasks in parallel
+- **Dispatches** — assigns subtasks to roster agents; a run's model pin (explicit `modelId` or the project default) selects the model for every subtask, otherwise each uses its role's default model; runs independent subtasks in parallel
 - **Steers** — monitors each agent via a read-only timeline; relays your direction (stop, redirect, amend)
 - **Assembles** — collects each agent's output into one combined result
 - **Routes review feedback** — if RAI flags an issue or you request changes, the Coordinator dispatches fixes
