@@ -576,7 +576,7 @@ export function RunTimeline({ steps, running, emptyHint, embedded = false }: Run
               multiple: true,
               collapsible: true,
               openItems,
-              onOpenChange: (_event, data) => setOpenItems(data.openItems as string[]),
+              onToggle: (_event, data) => setOpenItems(data.openItems as string[]),
             }}
           >
             {steps.map((step) => (

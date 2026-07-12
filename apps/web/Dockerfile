@@ -2,11 +2,18 @@
 # Build context must be the repo root so both apps/web/ and apps/Agentweaver.Web/ are accessible.
 FROM node:22-alpine AS web-build
 WORKDIR /app
-COPY apps/web/package.json apps/web/package-lock.json* ./
+COPY apps/web/package.json apps/web/package-lock.json* apps/web/.npmrc ./
+# The 1JS FluentAI packages resolve from a private Azure Artifacts feed (see
+# apps/web/.npmrc) that requires auth. Pass it as a BuildKit secret (never
+# baked into an image layer): docker build --secret id=npmrc,src=<path-to-.npmrc-with-token>
+# e.g. `az artifacts universal ...` / `vsts-npm-auth -config apps/web/.npmrc -F` writes a
+# user-scoped .npmrc with the token locally; point --secret at that file.
 # --legacy-peer-deps: internal @1js/fluentai-family packages carry mutually
 # conflicting @fluentui/react-icons peer ranges (e.g. ^2.0.324 vs ^2.0.332) that
 # cannot be satisfied by any single pin; the resolved tree builds and runs fine.
-RUN npm ci --legacy-peer-deps
+RUN --mount=type=secret,id=npmrc,target=/root/.npmrc,required=false \
+    if [ -s /root/.npmrc ]; then cat /root/.npmrc >> .npmrc; fi && \
+    npm ci --legacy-peer-deps --userconfig ./.npmrc
 COPY apps/web/ .
 RUN unset VITE_API_URL VITE_API_KEY; npm run build
 
