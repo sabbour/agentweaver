@@ -608,8 +608,13 @@ internal sealed class PodLocalWorkspaceManager
                 foreach (var child in Directory.EnumerateDirectories(directory))
                 {
                     ct.ThrowIfCancellationRequested();
-                    if (NestedRepositoryScanExcludedDirectories.Contains(Path.GetFileName(child)))
+                    var metadataPath = Path.Combine(child, ".git");
+                    if (NestedRepositoryScanExcludedDirectories.Contains(Path.GetFileName(child))
+                        && !Directory.Exists(metadataPath)
+                        && !File.Exists(metadataPath))
+                    {
                         continue;
+                    }
 
                     if ((File.GetAttributes(child) & FileAttributes.ReparsePoint) == 0)
                         pending.Push(child);

@@ -229,6 +229,8 @@ public sealed class PodLocalWorkspaceManagerTests : IDisposable
 
         var nestedRepository = Path.Combine(workspace, "src", "nested-deliverable");
         Directory.CreateDirectory(Path.Combine(nestedRepository, ".git"));
+        var excludedNameRepository = Path.Combine(workspace, "dist");
+        Directory.CreateDirectory(Path.Combine(excludedNameRepository, ".git"));
         var visitedDirectories = new List<string>();
 
         var roots = PodLocalWorkspaceManager.FindNestedRepositoryRoots(
@@ -236,8 +238,8 @@ public sealed class PodLocalWorkspaceManagerTests : IDisposable
             CancellationToken.None,
             visitedDirectories.Add);
 
-        roots.Should().Equal("src/nested-deliverable");
-        visitedDirectories.Should().HaveCount(3);
+        roots.Should().Equal("src/nested-deliverable", "dist");
+        visitedDirectories.Should().HaveCount(4);
         visitedDirectories.Should().NotContain(path => path.StartsWith(
             ignoredRoot + Path.DirectorySeparatorChar,
             OperatingSystem.IsWindows()
@@ -246,21 +248,30 @@ public sealed class PodLocalWorkspaceManagerTests : IDisposable
     }
 
     [Fact]
-    public void FindNestedRepositoryRoots_honors_cancellation_before_traversal()
+    public void FindNestedRepositoryRoots_honors_cancellation_during_traversal()
     {
         var workspace = Path.Combine(_root, "cancelled-scan-workspace");
         Directory.CreateDirectory(workspace);
+        const int directoryCount = 512;
+        for (var index = 0; index < directoryCount; index++)
+            Directory.CreateDirectory(Path.Combine(workspace, $"directory-{index:D4}", "child"));
+
         using var cancellation = new CancellationTokenSource();
-        cancellation.Cancel();
         var visitedDirectoryCount = 0;
 
         var act = () => PodLocalWorkspaceManager.FindNestedRepositoryRoots(
             workspace,
             cancellation.Token,
-            _ => visitedDirectoryCount++);
+            _ =>
+            {
+                visitedDirectoryCount++;
+                if (visitedDirectoryCount == 25)
+                    cancellation.Cancel();
+            });
 
         act.Should().Throw<OperationCanceledException>();
-        visitedDirectoryCount.Should().Be(0);
+        visitedDirectoryCount.Should().Be(25);
+        visitedDirectoryCount.Should().BeLessThan(directoryCount);
     }
 
     private PodLocalWorkspaceManager Manager() =>
