@@ -278,6 +278,8 @@ public sealed class EfBacklogTaskStore : IBacklogTaskStore
             SubmittingUser = coordinatorRun.SubmittingUser,
             Status = coordinatorRun.Status.ToApiString(),
             StartedAt = coordinatorRun.StartedAt,
+            EndedAt = coordinatorRun.EndedAt,
+            Result = coordinatorRun.Result,
             ProjectId = pid,
             ModelId = coordinatorRun.ModelId,
             AgentName = coordinatorRun.AgentName,

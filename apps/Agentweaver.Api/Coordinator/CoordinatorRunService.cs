@@ -58,6 +58,7 @@ public sealed class CoordinatorRunService
     private readonly IAgentHostPodLifecycle? _podLifecycle;
     private readonly SandboxRuntimeOptions _sandboxRuntime;
     private readonly bool _autoDispatch;
+    private readonly int _finalScribeMaxAttempts;
     private readonly CancellationToken _appStopping;
 
     public CoordinatorRunService(
@@ -99,6 +100,7 @@ public sealed class CoordinatorRunService
         // confirm/decline lifecycle and the decompose+persist contract stay deterministic; the
         // dispatch-frontier logic is covered by a focused unit test instead.
         _autoDispatch = configuration.GetValue("Coordinator:AutoDispatch", true);
+        _finalScribeMaxAttempts = CoordinatorAssemblyService.GetFinalScribeMaxAttempts(configuration);
         _appStopping = lifetime.ApplicationStopping;
     }
 
@@ -122,6 +124,8 @@ public sealed class CoordinatorRunService
         string? retriedFrom = null,
         CoordinatorStartMode startMode = CoordinatorStartMode.DefineOutcome)
     {
+        CoordinatorRosterGuard.EnsureDispatchableTeam(repositoryPath);
+
         var runId = RunId.New();
         var now = DateTimeOffset.UtcNow;
 
@@ -154,6 +158,12 @@ public sealed class CoordinatorRunService
                 direct: startMode == CoordinatorStartMode.Direct)
             .ConfigureAwait(false);
 
+        // Autopilot honors the same unattended outcome-spec confirmation as the backlog-pickup paths (#228).
+        // Direct mode has no confirmation gate, so only schedule for DefineOutcome — otherwise the loop would
+        // spin a wasted 5-minute timeout and log a misleading "left for a human" warning.
+        if (autopilot && startMode == CoordinatorStartMode.DefineOutcome)
+            ScheduleUnattendedConfirm(runId.ToString(), submittingUser);
+
         return runId;
     }
 
@@ -170,6 +180,8 @@ public sealed class CoordinatorRunService
     public async Task<RunId> StartRetriedPickupCoordinatorRunAsync(
         Run source, bool autoApproveTools, bool autopilot, CancellationToken ct)
     {
+        CoordinatorRosterGuard.EnsureDispatchableTeam(source.RepositoryPath);
+
         var runId = RunId.New();
         var now = DateTimeOffset.UtcNow;
 
@@ -983,6 +995,14 @@ public sealed class CoordinatorRunService
             {
                 if (run.ParentRunId is not null
                     || !string.Equals(run.AgentName, "Coordinator", StringComparison.Ordinal))
+                    continue;
+
+                var existingChildren = await _runStore
+                    .GetRunsByParentAsync(run.Id.ToString(), ct)
+                    .ConfigureAwait(false);
+                if (!CoordinatorAssemblyService.ShouldAttemptFinalScribe(
+                        existingChildren,
+                        _finalScribeMaxAttempts))
                     continue;
 
                 _assembly.EnsureFinalScribe(run);

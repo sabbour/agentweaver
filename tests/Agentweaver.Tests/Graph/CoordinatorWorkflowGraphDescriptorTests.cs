@@ -123,13 +123,20 @@ public sealed class CoordinatorWorkflowGraphDescriptorTests : IClassFixture<Coor
 
         d.Variant.Should().Be("child");
         d.StartNodeId.Should().Be("agent");
-        d.Nodes.Select(n => n.Id).Should().BeEquivalentTo(new[] { "agent", "assemble-ready" });
+        // FIX 2: the trimmed child pipeline now has a graph-native failure->terminal node
+        // (child-turn-failed) alongside the assemble-ready success terminal.
+        d.Nodes.Select(n => n.Id).Should().BeEquivalentTo(new[] { "agent", "assemble-ready", "child-turn-failed" });
         // The trimmed child pipeline has no per-child RAI / review / merge / scribe.
         d.Nodes.Select(n => n.Id).Should().NotContain(new[] { "rai", "review", "merge", "scribe" });
 
         var assemble = d.Nodes.Single(n => n.Id == "assemble-ready");
         assemble.Label.Should().Be("Assemble-ready");
         assemble.Role.Should().Be("assembly");
+
+        var turnFailed = d.Nodes.Single(n => n.Id == "child-turn-failed");
+        turnFailed.Label.Should().Be("Turn failed");
+        turnFailed.Role.Should().Be("assembly");
+        turnFailed.NodeType.Should().Be("terminal");
 
         // node_type taxonomy: agent turns are "agent", the assemble-ready checkpoint is "terminal".
         d.Nodes.Single(n => n.Id == "agent").NodeType.Should().Be("agent");
@@ -145,8 +152,10 @@ public sealed class CoordinatorWorkflowGraphDescriptorTests : IClassFixture<Coor
         edges.Should().BeEquivalentTo(new[]
         {
             E("agent", "assemble-ready"),
+            E("agent", "child-turn-failed"),
         });
 
         Find(d, "agent", "assemble-ready")!.Loopback.Should().BeFalse();
+        Find(d, "agent", "child-turn-failed")!.Loopback.Should().BeFalse();
     }
 }

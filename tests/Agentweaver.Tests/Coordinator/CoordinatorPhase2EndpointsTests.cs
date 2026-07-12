@@ -10,6 +10,7 @@ using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Memory;
 using Agentweaver.Api.Runs;
 using Agentweaver.Domain;
+using Agentweaver.Tests.Casting;
 using Agentweaver.Tests.Helpers;
 
 namespace Agentweaver.Tests.Coordinator;
@@ -327,6 +328,149 @@ public sealed class CoordinatorPhase2EndpointsTests : IDisposable
             "the snake_case target_child_run_id from the request body must be bound to TargetChildRunId");
     }
 
+    [Fact]
+    public async Task Steer_Send_AwaitingAssemblyReviewCoordinator_DeliveredAsAdvisory_NotQueued()
+    {
+        var runId = await InsertInactiveCoordinatorRunAsync(
+            CoordinatorWebApplicationFactory.OwnerUser,
+            RunStatus.AwaitingReview);
+        await SeedWorkPlanAsync(runId, WorkPlanStatus.InReview, AssemblyStage.Review);
+
+        var detail = await _owner.GetFromJsonAsync<JsonElement>($"/api/runs/{runId}");
+        detail.GetProperty("status").GetString().Should().Be("awaiting_review");
+        detail.GetProperty("coordinator_steerable").GetBoolean().Should().BeTrue(
+            "an assembly human-review gate is parked but still operator-addressable");
+
+        var resp = await _owner.PostAsJsonAsync($"/api/runs/{runId}/steer",
+            new { kind = "send", instruction = "Please explain the assembly risk before I approve." });
+
+        resp.StatusCode.Should().Be(HttpStatusCode.Created,
+            "awaiting_review coordinator runs must accept steering messages during human review");
+        var directive = await resp.Content.ReadFromJsonAsync<SteeringDirectiveResponse>();
+        directive.Should().NotBeNull();
+        directive!.Kind.Should().Be("send");
+        // #226 (Q4/N3): a send at the review gate has no running child and no change request, so it is
+        // delivered as an ADVISORY timeline note (settled `applied`) rather than left `queued` forever.
+        directive.Status.Should().Be(SteeringStatus.Applied,
+            "a send at the assembly review gate is an advisory note, not a queued directive that never drains");
+        directive.Status.Should().NotBe(SteeringStatus.Queued);
+
+        // The advisory send must NOT be turned into a review decision (no request-changes/approve).
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        (await db.AssemblyReviews.CountAsync(r => r.CoordinatorRunId == runId && r.DecisionJson != null))
+            .Should().Be(0, "an advisory send must not submit an assembly review decision");
+    }
+
+    // =========================================================================
+    // #226: a human /steer redirect|amend at the assembly human-review gate must DRAIN (be delivered
+    // into the review gate through the same mechanism /assembly/review uses), never persist a `queued`
+    // directive that nothing drains. On a non-owning replica (no locally-armed gate) it is durably
+    // deferred (202), mirroring /assembly/review. Q1 default scoping = broad all-contributors fallback
+    // (TargetFiles null); an optional target_child_run_id narrows to that subtask's touched files.
+    // =========================================================================
+    [Fact]
+    public async Task Steer_Redirect_AtAssemblyReviewGate_NoLocalGate_Returns202_PersistsDeferredRequestChanges()
+    {
+        var runId = await InsertInactiveCoordinatorRunAsync(
+            CoordinatorWebApplicationFactory.OwnerUser, RunStatus.AwaitingReview);
+        await SeedWorkPlanAsync(runId, WorkPlanStatus.InReview, AssemblyStage.Review);
+        await CoordinatorAssemblyReviewPersistence.UpsertReviewRequestAsync(
+            _factory.Services.GetRequiredService<IServiceScopeFactory>(),
+            runId,
+            CoordinatorWebApplicationFactory.OwnerUser,
+            $"agentweaver/integration/{runId}",
+            "tree-hash",
+            CancellationToken.None);
+
+        var resp = await _owner.PostAsJsonAsync($"/api/runs/{runId}/steer",
+            new { kind = "redirect", instruction = "Rework the signup validation." });
+
+        resp.StatusCode.Should().Be(HttpStatusCode.Accepted,
+            "a human redirect at the review gate on a replica without the armed gate is durably deferred, mirroring /assembly/review");
+        var directive = await resp.Content.ReadFromJsonAsync<SteeringDirectiveResponse>();
+        directive!.Kind.Should().Be("redirect");
+        directive.Status.Should().Be(SteeringStatus.Deferred);
+
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var record = await db.AssemblyReviews.AsNoTracking().SingleAsync(r => r.CoordinatorRunId == runId);
+        record.DecisionJson.Should().Contain("\"RequestChanges\":true",
+            "a redirect maps to request_changes at the gate");
+        record.DecisionJson.Should().Contain("Rework the signup validation.");
+        record.DecisionJson.Should().NotContain("TargetFiles",
+            "Q1 default: a bare redirect uses the broad all-contributors fallback; the null TargetFiles field is omitted by the serializer");
+        record.DecisionSubmittedAt.Should().NotBeNull();
+
+        (await db.SteeringDirectives.CountAsync(d =>
+                d.CoordinatorRunId == runId && d.Status == SteeringStatus.Queued))
+            .Should().Be(0, "a redirect delivered to the review gate must never persist a queued directive (N2/Q5)");
+    }
+
+    [Fact]
+    public async Task Steer_Amend_AtAssemblyReviewGate_NoLocalGate_Returns202_PersistsDeferredRequestChanges()
+    {
+        var runId = await InsertInactiveCoordinatorRunAsync(
+            CoordinatorWebApplicationFactory.OwnerUser, RunStatus.AwaitingReview);
+        await SeedWorkPlanAsync(runId, WorkPlanStatus.InReview, AssemblyStage.Review);
+        await CoordinatorAssemblyReviewPersistence.UpsertReviewRequestAsync(
+            _factory.Services.GetRequiredService<IServiceScopeFactory>(),
+            runId,
+            CoordinatorWebApplicationFactory.OwnerUser,
+            $"agentweaver/integration/{runId}",
+            "tree-hash",
+            CancellationToken.None);
+
+        var resp = await _owner.PostAsJsonAsync($"/api/runs/{runId}/steer",
+            new { kind = "amend", instruction = "Also cover the empty-email edge case." });
+
+        resp.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        var directive = await resp.Content.ReadFromJsonAsync<SteeringDirectiveResponse>();
+        directive!.Kind.Should().Be("amend");
+        directive.Status.Should().Be(SteeringStatus.Deferred);
+
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var record = await db.AssemblyReviews.AsNoTracking().SingleAsync(r => r.CoordinatorRunId == runId);
+        // N1: amend also maps to request_changes; "never discard completed work" softens to the decider
+        // preferring in-place — we do NOT force-pin amend→InPlaceSteer here (the decider chooses).
+        record.DecisionJson.Should().Contain("\"RequestChanges\":true");
+        record.DecisionJson.Should().Contain("Also cover the empty-email edge case.");
+    }
+
+    [Fact]
+    public async Task Steer_Redirect_TargetChildRunId_AtReviewGate_NarrowsTargetFilesFromSubtaskDiff()
+    {
+        var runId = await InsertInactiveCoordinatorRunAsync(
+            CoordinatorWebApplicationFactory.OwnerUser, RunStatus.AwaitingReview);
+
+        var childRunId = await SeedAssembleReadyChildRunAsync(
+            "diff --git a/src/api/Signup.cs b/src/api/Signup.cs\n+++ b/src/api/Signup.cs\n@@ -1 +1 @@\n");
+        await SeedWorkPlanWithChildAsync(runId, childRunId, WorkPlanStatus.InReview, AssemblyStage.Review);
+        await CoordinatorAssemblyReviewPersistence.UpsertReviewRequestAsync(
+            _factory.Services.GetRequiredService<IServiceScopeFactory>(),
+            runId,
+            CoordinatorWebApplicationFactory.OwnerUser,
+            $"agentweaver/integration/{runId}",
+            "tree-hash",
+            CancellationToken.None);
+
+        var json = $$"""{"kind":"redirect","target_child_run_id":"{{childRunId}}","instruction":"fix the signup path"}""";
+        var content = new StringContent(json, System.Text.Encoding.UTF8, "application/json");
+        var resp = await _owner.PostAsync($"/api/runs/{runId}/steer", content);
+
+        resp.StatusCode.Should().Be(HttpStatusCode.Accepted);
+
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var record = await db.AssemblyReviews.AsNoTracking().SingleAsync(r => r.CoordinatorRunId == runId);
+        // Optional clean narrowing: the targeted subtask's touched files flow through as TargetFiles so the
+        // SAME ScopeImplicatedSubtasks reverse-map narrows scope to that subtask (∪ co-touching subtasks).
+        record.DecisionJson.Should().Contain("src/api/Signup.cs");
+        record.DecisionJson.Should().Contain("\"TargetFiles\"",
+            "a targeted child run narrows TargetFiles instead of the broad fallback");
+    }
+
     // =========================================================================
     // Feature 008: coordinator orchestration status + failure reason surfacing.
     // A coordinator run parked at a terminal assembly status must expose the work-plan status on the
@@ -438,6 +582,98 @@ public sealed class CoordinatorPhase2EndpointsTests : IDisposable
         await db.SaveChangesAsync();
     }
 
+    /// <summary>
+    /// Seeds a child (subtask) run in <c>assemble_ready</c> with the given unified diff so its touched
+    /// files can be reverse-mapped by #226's <c>ResolveTargetFilesForChildAsync</c> when a steer targets it.
+    /// </summary>
+    private async Task<string> SeedAssembleReadyChildRunAsync(string diff)
+    {
+        var runStore = _factory.Services.GetRequiredService<SqliteRunStore>();
+        var runId = RunId.New();
+        var run = new Run
+        {
+            Id = runId,
+            RepositoryPath = _factory.NewWorkingDirectory(),
+            OriginatingBranch = "main",
+            ModelSource = ModelSource.GitHubCopilot,
+            Task = "child subtask run",
+            SubmittingUser = CoordinatorWebApplicationFactory.OwnerUser,
+            Status = RunStatus.InProgress,
+            StartedAt = DateTimeOffset.UtcNow,
+            AgentName = "morpheus",
+            ParentRunId = null,
+            SubtaskId = null,
+        };
+        await runStore.InsertAsync(run, CancellationToken.None);
+        await runStore.SetAssembleReadyAsync(
+            runId,
+            treeHash: "child-tree",
+            worktreeBranch: $"agentweaver/wt/{runId}",
+            diff: diff,
+            stepCount: 1,
+            endedAt: DateTimeOffset.UtcNow,
+            CancellationToken.None);
+        return runId.ToString();
+    }
+
+    /// <summary>
+    /// Seeds an OutcomeSpec + WorkPlan + one Completed subtask whose <c>ChildRunId</c> points at
+    /// <paramref name="childRunId"/>, so a steer's <c>target_child_run_id</c> resolves to that subtask.
+    /// </summary>
+    private async Task SeedWorkPlanWithChildAsync(
+        string coordinatorRunId,
+        string childRunId,
+        string status,
+        string? assemblyStage = null)
+    {
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<Agentweaver.Api.Memory.MemoryDbContext>();
+
+        var spec = new Agentweaver.Api.Memory.OutcomeSpec
+        {
+            ProjectId = "proj-x",
+            CoordinatorRunId = coordinatorRunId,
+            Goal = "g",
+            DesiredOutcome = "o",
+            Scope = "s",
+            Assumptions = "a",
+            Status = "confirmed",
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow,
+        };
+        db.OutcomeSpecs.Add(spec);
+        await db.SaveChangesAsync();
+
+        var plan = new Agentweaver.Api.Memory.WorkPlan
+        {
+            OutcomeSpecId = spec.Id,
+            ProjectId = "proj-x",
+            CoordinatorRunId = coordinatorRunId,
+            Status = status,
+            AssemblyStage = assemblyStage,
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow,
+        };
+        db.WorkPlans.Add(plan);
+        await db.SaveChangesAsync();
+
+        db.Subtasks.Add(new Agentweaver.Api.Memory.Subtask
+        {
+            WorkPlanId = plan.Id,
+            Title = "t",
+            Scope = "s",
+            AssignedAgent = "morpheus",
+            SelectedModelId = "gpt",
+            Phase = "execution",
+            IsolationStrategy = "worktree",
+            Status = Agentweaver.Api.Coordinator.SubtaskStatus.Completed,
+            ChildRunId = childRunId,
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow,
+        });
+        await db.SaveChangesAsync();
+    }
+
     // =========================================================================
     // Helpers
     // =========================================================================
@@ -452,6 +688,7 @@ public sealed class CoordinatorPhase2EndpointsTests : IDisposable
             working_directory = dir,
         });
         resp.StatusCode.Should().Be(HttpStatusCode.Created);
+        SquadTestFixtureHelper.CreateMinimalSquad(dir, "Coordinator P2");
         var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
         return body.GetProperty("project_id").GetString()!;
     }
@@ -495,7 +732,9 @@ public sealed class CoordinatorPhase2EndpointsTests : IDisposable
     /// Inserts a coordinator-style run owned by <paramref name="ownerUser"/> with no live workflow
     /// and no work plan, mirroring the shape produced by StartCoordinatorRunAsync.
     /// </summary>
-    private async Task<string> InsertInactiveCoordinatorRunAsync(string ownerUser)
+    private async Task<string> InsertInactiveCoordinatorRunAsync(
+        string ownerUser,
+        RunStatus status = RunStatus.InProgress)
     {
         var runStore = _factory.Services.GetRequiredService<SqliteRunStore>();
         var runId = RunId.New();
@@ -507,7 +746,7 @@ public sealed class CoordinatorPhase2EndpointsTests : IDisposable
             ModelSource = ModelSource.GitHubCopilot,
             Task = "inactive coordinator run",
             SubmittingUser = ownerUser,
-            Status = RunStatus.InProgress,
+            Status = status,
             StartedAt = DateTimeOffset.UtcNow,
             AgentName = "Coordinator",
             ParentRunId = null,

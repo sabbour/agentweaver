@@ -17,7 +17,7 @@ public sealed class ProjectRecord
     public DateTimeOffset UpdatedAt { get; set; }
     public int MaxReadyPerHeartbeat { get; set; } = 3;
     public bool PickupAutopilot { get; set; } = true;
-    public bool PickupAutoApproveTools { get; set; }
+    public bool PickupAutoApproveTools { get; set; } = true;
     public string? DefaultWorkflowId { get; set; }
     public string? ActiveReviewPolicyName { get; set; }
     public string? SandboxProfile { get; set; }

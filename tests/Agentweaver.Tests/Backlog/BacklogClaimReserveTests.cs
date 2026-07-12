@@ -197,6 +197,38 @@ public sealed class BacklogClaimReserveTests
         linked.CapturedBy.Should().Be(task.CapturedBy);
     }
 
+    [Fact]
+    public async Task ReservedTerminalRun_PersistsEndedAtAndResultAtomically()
+    {
+        await using var testDb = await TestSqliteDb.CreateAsync();
+        var projects = new SqliteProjectStore(testDb.Db);
+        var store = new SqliteBacklogTaskStore(testDb.Db);
+        var runStore = new SqliteRunStore(testDb.Db);
+
+        var project = MakeProject();
+        await projects.InsertAsync(project);
+        var task = MakeReadyTask(project.Id, "n");
+        await store.InsertAsync(task);
+
+        var runId = RunId.New();
+        var endedAt = DateTimeOffset.UtcNow;
+        var failedRun = MakeCoordinatorRun(project.Id, runId) with
+        {
+            Status = RunStatus.Failed,
+            EndedAt = endedAt,
+            Result = "no_team",
+        };
+
+        var won = await store.TryClaimAndReserveCoordinatorRunAsync(project.Id, task.Id, failedRun, endedAt);
+        won.Should().Be(ClaimReserveResult.Won);
+
+        var run = await runStore.GetAsync(runId);
+        run.Should().NotBeNull();
+        run!.Status.Should().Be(RunStatus.Failed);
+        run.Result.Should().Be("no_team");
+        run.EndedAt.Should().NotBeNull("terminal pickup refusal metadata must be stored in the claim+reserve transaction");
+    }
+
     // =========================================================================
     // 6b. Ordinary project runs default to Interactive origin (discrimination basis).
     // =========================================================================

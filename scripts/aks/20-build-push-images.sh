@@ -17,9 +17,39 @@
 
 set -euo pipefail
 
-# On Windows/PowerShell, az can inherit a legacy code page when stdout/stderr is piped and crash on
-# Unicode progress glyphs during 'az acr build'. Force UTF-8 for the Python-based CLI process.
-export PYTHONIOENCODING="${PYTHONIOENCODING:-utf-8}"
+# --- UTF-8-safe az wrapper (Windows) -----------------------------------------
+# The Azure CLI MSI launcher runs `python.exe -IBm azure.cli`. The -I (isolated)
+# flag implies -E, so Python IGNORES the PYTHONUTF8 / PYTHONIOENCODING env vars.
+# When az's stdout is redirected to a pipe/file (as in CI, or under Git Bash),
+# Python then falls back to the host ANSI code page (cp1252 on US-English Windows)
+# and `az acr build` CRASHES while streaming Unicode build-log glyphs — e.g. the
+# vite '✓' (U+2713) checkmark — through colorama:
+#     UnicodeEncodeError: 'charmap' codec can't encode character '\u2713'
+# Setting PYTHONUTF8/PYTHONIOENCODING does NOT help because -I discards them.
+# Root-cause fix: bypass the -I launcher and invoke the bundled interpreter
+# directly with `-X utf8` (a command-line flag, which -I cannot suppress). This
+# enables Python UTF-8 mode even for redirected stdio, so log streaming succeeds.
+# On Linux/macOS (UTF-8 locale) the stock `az` is fine, so only override on Windows.
+AZ_PYEXE=""
+case "$(uname -s 2>/dev/null || echo unknown)" in
+  MINGW*|MSYS*|CYGWIN*|Windows_NT)
+    _az_launcher="$(command -v az 2>/dev/null || true)"
+    if [[ -n "${_az_launcher}" ]]; then
+      _az_py="$(dirname "${_az_launcher}")/../python.exe"
+      [[ -f "${_az_py}" ]] && AZ_PYEXE="${_az_py}"
+    fi
+    ;;
+esac
+
+# Shell function shadowing `az`: all `az ...` calls below route through the
+# UTF-8-safe interpreter on Windows, or the stock CLI everywhere else.
+az() {
+  if [[ -n "${AZ_PYEXE}" ]]; then
+    AZ_INSTALLER=MSI "${AZ_PYEXE}" -X utf8 -B -m azure.cli "$@"
+  else
+    command az "$@"
+  fi
+}
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"

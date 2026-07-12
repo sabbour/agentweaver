@@ -252,7 +252,7 @@ Six component health checks run **concurrently** with a 5-second individual time
 | `postgresql` | Postgres connectivity |
 | `github_installation_token` | GitHub token-store validity for the configured scope |
 | `key_vault` | Azure Key Vault reachability and required `mcp-oauth-signing-key` lookup. `critical: secret 'mcp-oauth-signing-key' not found` means `scripts/aks/16-provision-oauth-signing-key.sh` was skipped. |
-| `agent_pod_quota` | CPU headroom ≥ 2 CPU in the sandbox namespace |
+| `agent_pod_quota` | CPU headroom in the sandbox namespace. Since #217 removed the `ResourceQuota` CPU cap there is no hard limit to measure against, so this check reports `unknown`. |
 | `warm_pool` | Warm-pool agent-sandbox availability |
 | `kubernetes_api` | Kubernetes API server reachability |
 
@@ -283,10 +283,10 @@ Response `200 OK` — a `ClusterDiagnosticsDto`:
 | Field | Type | Notes |
 | --- | --- | --- |
 | `component_health` | `ComponentHealthDto[]` | One entry per check; `status` is `pass`, `warn`, or `fail`. |
-| `namespace_quota` | object | Current CPU and memory usage vs. namespace limits. |
+| `namespace_quota` | object | Namespace CPU/memory usage. Since #217 removed the `ResourceQuota` CPU/memory caps there is no limit to report against; object-count quotas (pods, sandbox claims, PVCs, storage) are the enforced bounds. |
 | `active_agent_pods` | `AgentPodInfoDto[]` | Pods currently running with a matching active run. |
 | `orphaned_agent_pods` | `AgentPodInfoDto[]` | Pods running with no matching active run (candidates for next reaper sweep). |
-| `pending_capacity_runs` | `PendingCapacityRunDto[]` | Subtasks waiting for CPU capacity to become available. |
+| `pending_capacity_runs` | `PendingCapacityRunDto[]` | **Legacy / back-compat.** Subtasks recorded in the historical `PendingCapacity` status; empty for new runs (Kubernetes now owns scheduling, issue #217). |
 
 See [Cluster diagnostics reference](./cluster-diagnostics.md) for the full DTO schema and field descriptions.
 
@@ -367,6 +367,8 @@ Response `200 OK`:
 Unknown ids return `404 Not Found`. Status values are `pending`, `in_progress`, `awaiting_review`, `merging`, `merged`, `declined`, `merge_failed`, `failed`, and `completed`. `completed` is reached when the agent turn produced no file changes (no review gate is entered on that path).
 
 For a **coordinator** run (`agent_name: "Coordinator"`, no parent), the response also carries `coordinator_status`: the current work-plan orchestration status (`dispatching`, `awaiting_assembly`, `assembling`, `in_review`, `complete`, `assembly_blocked`, `assembly_failed`, `assembly_declined`). It is `null` for normal runs and for coordinator runs that have no work plan yet. Because a coordinator run stays `in_progress` while it dispatches children and runs collective assembly, `coordinator_status` is what the UI should render (for example "Awaiting assembly" or "Failed: &lt;result&gt;") instead of the bare `status`. On a terminal assembly failure the `result` — also surfaced as `coordinator_status_reason` on this response (scoped to coordinator runs) — carries the human-readable reason (for example `assembly_blocked: <reason>`, `assembly_merge_failed: <reason>`, `assembly_error: <message>`).
+
+Coordinator run detail also includes `coordinator_steerable` (boolean). The backend sets it for coordinator runs whose `RunStatus` is `in_progress` or `awaiting_review`, so the UI can keep **Message coordinator** and steering controls enabled while the collective assembly review gate is parked (`apps/Agentweaver.Api/Contracts/Dtos.cs:178`, `apps/Agentweaver.Api/Endpoints/RunEndpoints.cs:185`, `apps/Agentweaver.Api/Coordinator/CoordinatorSteeringService.cs:348`).
 
 The response also carries `auto_approve_tools` and `autopilot` (booleans) reflecting the current per-run option state (launch value plus any live toggle). Both are `false` unless explicitly enabled. The frontend uses these to render the toggle controls; see `POST /api/runs/{id}/auto-approve` and `POST /api/runs/{id}/autopilot`.
 
@@ -639,12 +641,22 @@ Request:
 ```
 
 Scope values: `once` = this call only; `run` = all calls to the same tool+url this run; `always` = all calls this server session; `tool` = all calls to this tool regardless of url.
+For a decision forwarded to a pod-local gate, `always` is effectively run-scoped and does not survive a pod restart.
 
-Response `200 OK` `{ "run_id", "request_id", "approved": true }`. The returned `run_id` is the run that actually **owned** the approval, which may differ from `{id}` (see owning-run resolution below).
+Response `200 OK` `{ "run_id", "request_id", "approved": true }`. Terminal/replayed and pod-forwarded responses also include `resolved: true`, `expired`, and `state: "approved" | "denied" | "expired"`. The returned `run_id` is the run that actually **owned** the approval, which may differ from `{id}`.
 
-**Owning-run resolution.** The approval context lives on the run that *raised* the tool call. In a coordinator orchestration that is a CHILD subtask run, not the coordinator itself — yet operators grant from the coordinator view and may POST the coordinator run id. When `{id}` is a coordinator run (`ParentRunId == null` and `AgentName == "Coordinator"`) that does not itself hold the pending `request_id`, the server searches its child subtask runs (`runStore.GetRunsByParentAsync`) and routes the grant to the child that owns the request. Approving therefore works whether the client posts the coordinator id or the child id (`EndpointHelpers.ResolveApprovalOwningRunIdAsync`, recurrence of #196).
+**Owning-run resolution.** The approval context lives on the run that *raised* the tool call. When `{id}` is a coordinator run (`ParentRunId == null` and `AgentName == "Coordinator"`), the API checks its children and then scans persisted `coordinator.child_approval_required` events for the matching `requestId` and `childRunId`. Approving therefore works whether the client posts the coordinator id or the child id.
 
-Errors: `400` invalid run id / missing `request_id`; `404` run not found; `403` caller is not the run owner; `409` no pending approval for this `request_id` or run is not active.
+**Pod-per-run fallback.** If the API's `DurableToolApprovalGate` returns `Unknown` for the resolved child, the API uses `IAgentHostOriginResolver` and `AgentHostApprovalHttpClient` to forward the decision to the pod's authenticated `/tool-approvals` route through the `a2a-sandbox-pod` client. The bearer is re-fetched with `PreviewRunnerCredential.SecretKey(runId)`. A successful terminal forward emits `tool.approval_resolved` on the child run.
+
+| Status | Approval result |
+| --- | --- |
+| `200 OK` | The request is terminal (`approved`, `denied`, or `expired`) |
+| `404 Not Found` | `state: "unknown"` after owning-run resolution and any pod forward, or the run does not exist |
+| `409 Conflict` | `state: "pending"` and the decision should be retried, or the run is not active |
+| `503 Service Unavailable` | `state: "agenthost_unreachable"` because the AgentHost origin/call/response was unavailable |
+
+Other errors: `400` invalid run id / missing `request_id`; `403` caller is not the run owner.
 
 ### POST /api/runs/{id}/tool-denials
 
@@ -656,9 +668,14 @@ Request:
 { "request_id": "string" }
 ```
 
-Response `200 OK` `{ "run_id", "request_id", "denied": true }`. Like approvals, the denial uses **owning-run resolution**: on a coordinator run the server routes the denial to the child subtask run that raised the tool call, so the returned `run_id` may differ from `{id}` (`EndpointHelpers.ResolveApprovalOwningRunIdAsync`).
+Response `200 OK` `{ "run_id", "request_id", "denied": true }`. Terminal/replayed and pod-forwarded responses also include `resolved: true`, `expired`, and `state`. Denials use the same persisted coordinator-to-child owning-run resolution and authenticated pod fallback as approvals, so the returned `run_id` may differ from `{id}`.
 
-Errors: `400` invalid run id / missing `request_id`; `404` run not found; `403` caller is not the run owner; `409` no pending denial for this `request_id` or run is not active.
+Status codes are the same as tool approvals: `200` terminal, `404 state: "unknown"`, `409 state: "pending"`, and `503 state: "agenthost_unreachable"`, plus `400` validation, `403` ownership, and `409` inactive-run errors.
+
+Sources: `apps/Agentweaver.Api/Endpoints/RunEndpoints.cs:1559-1705`,
+`apps/Agentweaver.Api/Endpoints/RunEndpoints.cs:2590-2718`,
+`apps/Agentweaver.Api/Endpoints/EndpointHelpers.cs:43-98`,
+`apps/Agentweaver.Api/Sandbox/AgentHostApprovalHttpClient.cs:28-112`.
 
 ### POST /api/runs/{id}/questions/{requestId}/answer
 
@@ -690,7 +707,7 @@ Errors: `400` invalid run id; `404` run not found; `403` caller is not the run o
 
 ### POST /api/runs/{id}/autopilot
 
-Toggles the coordinator **Autopilot** option. When enabled, CLARIFYING QUESTIONS ONLY (the coordinator's own and those bubbled by child workers as `coordinator.child_question`) are auto-answered by the coordinator model from the outcome spec + subtask context, then resolved on the child's question gate. Each auto-answer is logged as `coordinator.autopilot_answered`, and the normal `agent.question_answered` resolution still surfaces on the child stream. Autopilot does NOT auto-grant tool approvals/permissions (that is the separate auto-approve-tools opt-in). Settable at launch (`autopilot` on `POST /api/projects/{id}/orchestrations`) and cascades to children. Defaults to OFF.
+Toggles the coordinator **Autopilot** option. When enabled, CLARIFYING QUESTIONS ONLY (the coordinator's own and those bubbled by child workers as `coordinator.child_question`) are auto-answered by the coordinator model from the outcome spec + subtask context, then resolved on the child's question gate. Each auto-answer is logged as `coordinator.autopilot_answered`, and the normal `agent.question_answered` resolution still surfaces on the child stream. Autopilot does NOT auto-grant tool approvals/permissions (that is the separate auto-approve-tools opt-in). Settable at launch (`autopilot` on `POST /api/projects/{id}/orchestrations`) and cascades to children. Defaults to OFF. Set **at launch** in `defineOutcome` mode, autopilot additionally auto-confirms the Phase-1 outcome spec unattended (`confirmedBy` = the submitting user) instead of parking at `awaiting_confirmation`; this live toggle only governs the clarifying-question answering described above.
 
 Request:
 
@@ -1174,6 +1191,8 @@ The Coordinator agent can either start directly from a goal or draft a confirmab
 
 Starts a coordinator run for the project. The project's working directory, default branch, and the authenticated caller are used as the run's repository path, originating branch, and submitting user. The provider is fixed to GitHub Copilot.
 
+The project must have at least one **dispatchable** cast team member before an orchestration can start. The start path calls `CoordinatorRosterGuard.EnsureDispatchableTeam` before inserting the run (`apps/Agentweaver.Api/Coordinator/CoordinatorRunService.cs:111`, `:125`). A dispatchable member is active, has a role, and is not one of the platform-owned Scribe/Ralph/RAI/Build & Test roles (`apps/Agentweaver.Api/Coordinator/CoordinatorRosterGuard.cs:54`, `apps/Agentweaver.Api/Coordinator/CoordinatorOrchestratorExecutor.cs:687`, `:750`).
+
 Request:
 
 ```json
@@ -1190,7 +1209,7 @@ Request:
 | `modelId` | string | No | Model override. Falls back to the project's GitHub Copilot default, then the role default. |
 | `start_mode` | `"direct"` or `"define_outcome"` | No | Required contract for the Start Task dialog. Omit or use `"define_outcome"` to preserve the current outcome-spec draft/confirm gate. Use `"direct"` to start coordinator planning/dispatch from `goal` without generating or confirming an outcome spec. Direct still enforces child tool approvals, assembly review, and merge gates. |
 | `autoApproveTools` | bool | No | Launch with auto-approve-tools ON for the coordinator and its children. Defaults to `false`. |
-| `autopilot` | bool | No | Launch with Autopilot ON (auto-answer clarifying questions only). Cascades to children. Defaults to `false`. |
+| `autopilot` | bool | No | Launch with Autopilot ON: auto-answers clarifying questions **and**, in `defineOutcome` mode, auto-confirms the Phase-1 outcome spec unattended (`confirmedBy` = the submitting user) instead of parking at `awaiting_confirmation`. Does NOT auto-grant tool approvals. Cascades to children. Defaults to `false`. |
 
 Response `201 Created` (with `Location: /api/runs/{runId}`):
 
@@ -1200,8 +1219,25 @@ Response `201 Created` (with `Location: /api/runs/{runId}`):
 
 `400 Bad Request` when `id` is not a valid project id or `goal` is missing.
 `404 Not Found` when the project does not exist.
+`409 Conflict` when the project has no dispatchable team:
+
+```json
+{
+  "error": "no_team",
+  "message": "This project has no team. Cast a team before starting an orchestration."
+}
+```
+
 `409 Conflict` with `error: "project_deleting"` when the project is being deleted.
 `409 Conflict` with `error: "workspace_unavailable"` when the working directory is not accessible.
+`422 Unprocessable Entity` when the team roster exists but cannot be read:
+
+```json
+{
+  "error": "invalid_team",
+  "message": "The project team roster could not be read. Fix the team before starting an orchestration."
+}
+```
 
 ### GET /api/runs/{id}/outcome-spec
 
@@ -1373,25 +1409,32 @@ Request:
 
 | Field | Type | Required | Notes |
 | --- | --- | --- | --- |
-| `kind` | string | Yes | `stop`, `redirect`, or `amend`. Pause is not supported in Phase 2. |
-| `targetChildRunId` | string | No | The child run to steer; omit to broadcast to every active child. |
-| `instruction` | string | Yes | Direction relayed to the targeted subagent(s). |
+| `kind` | string | Yes | `stop`, `send`, `redirect`, or `amend`. Pause is not supported in Phase 2. |
+| `targetChildRunId` | string | No | The child run to steer; omit to broadcast to every active child. At the assembly review gate (see below) this instead narrows the implicated-subtask scope. |
+| `instruction` | string | Yes | Direction relayed to the targeted subagent(s). Optional for `send`. |
 
-Response `202 Accepted` with the created directive:
+Response `201 Created` with the created directive:
 
 ```json
 {
   "directiveId": "d4c3b2a1-...",
   "kind": "redirect",
   "targetChildRunId": "7c1f...",
-  "status": "pending",
+  "status": "queued",
   "instruction": "Use the existing session store instead of adding a new table"
 }
 ```
 
-A `stop` takes effect immediately: it cancels the targeted child run's in-flight turn. A `redirect` or `amend` takes effect at the targeted subagent's next turn boundary, without restarting the run — it is queued and applied when the child's current turn completes (or when it next suspends at a gate). The directive's progress is observable as `coordinator.steering` events (`pending -> queued -> relayed -> applied`) on the coordinator run stream.
+A `stop` takes effect immediately: it cancels the targeted child run's in-flight turn. A `redirect` or `amend` takes effect at the targeted subagent's next turn boundary, without restarting the run — it is queued and applied when the child's current turn completes (or when it next suspends at a gate). The directive's progress is observable as `coordinator.steering` events (`pending -> queued -> relayed -> applied`, plus `deferred` at the review gate — see below) on the coordinator run stream.
 
-`400 Bad Request` when `id` is not a valid run id, `kind` is not one of `stop`/`redirect`/`amend`, or `instruction` is missing.
+**Steering at the assembly review gate (#226).** When the run is parked at the collective human-review gate (`run.status == awaiting_review`, `coordinator_steerable == true`), `redirect`/`amend`/`send` are intercepted and delivered to the parked assembly loop instead of the child-turn queue (previously they returned `queued` but were silently dropped):
+
+- `redirect` / `amend` → delivered as a request-changes review decision through the **same** mechanism as [`POST /assembly/review`](#post-apirunscoordinatorrunidassemblyreview) with `request_changes: true` — the parked loop re-dispatches the implicated subtasks (`#223` file-scoped implication + transitive dependents) and **unconditionally** resets the steering budget. With no target files the scope defaults to all contributors; set `targetChildRunId` to narrow to that subtask ∪ its co-touching subtasks. Settles `relayed` (or `deferred`, below).
+- `send` → an advisory note on the coordinator timeline; the gate stays armed with no decision and no budget reset. Settles `applied`.
+
+In all cases the directive reaches a definite terminal status and is **never** left silently `queued`. When the review gate is armed on a **different** API replica, the decision is durably persisted for the owning replica's poller to drain: the directive status is `deferred` and the endpoint returns **`202 Accepted`** instead of `201 Created` (mirroring the `/assembly/review` deferred response).
+
+`400 Bad Request` when `id` is not a valid run id, `kind` is not one of `stop`/`send`/`redirect`/`amend`, or `instruction` is missing (required for `redirect`/`amend`).
 `403 Forbidden` when the caller does not own the run.
 `404 Not Found` when the run does not exist.
 `409 Conflict` with `error: "run_not_active"` when no live coordinator run is registered for the id.
@@ -1417,13 +1460,13 @@ Request:
 | --- | --- | --- | --- |
 | `approved` | bool | Yes | `true` continues to the ONE collective merge → ONE collective scribe → `complete`. |
 | `request_changes` | bool | No | When `true` (and `approved` is `false`), the coordinator re-dispatches the affected children rather than declining. |
-| `feedback` | string | No | Free-text reviewer feedback; path-like tokens are parsed to infer which children to redo. |
-| `target_files` | string[] | No | Explicit list of files the changes should target; augments the tokens parsed from `feedback`. |
+| `feedback` | string | No | Free-text reviewer feedback, handed to the revising agent(s). It is **not** parsed for file paths — use `target_files` for the implicated-file hint. |
+| `target_files` | string[] | No | Explicit list of the repo-relative files your changes should target. Used as the structured implicated-file hint: the coordinator reverse-maps it onto the subtasks that committed those files (`AssemblyPlanning.ScopeImplicatedSubtasks`), never prose-scraped from `feedback`. If omitted or unmatched, the re-dispatch falls back to all contributors. |
 
 **Decision routing**
 
 - **Approve** (`approved: true`) → the pipeline merges the integration branch into the originating branch and runs the collective scribe, emitting `coordinator.assembly_merge_*`, `coordinator.assembly_scribe_*`, then `coordinator.assembly_completed`; the work plan reaches `complete`.
-- **Request changes** (`approved: false`, `request_changes: true`) → the coordinator infers the affected children from `target_files` ∪ path tokens in `feedback`, intersects them with each child's persisted touched-files, expands to include dependents, resets those subtasks to `pending` (leaving the rest intact), returns the plan to `dispatching`, and re-dispatches. If no file can be inferred or no child matches, it falls back to re-dispatching **all** children. Emits `coordinator.assembly_changes_requested`.
+- **Request changes** (`approved: false`, `request_changes: true`) → the coordinator scopes the re-dispatch to the subtasks that committed one of your `target_files` (the **implicated** set) plus their transitive dependents, resets those subtasks to `pending` (leaving the rest intact), returns the plan to `dispatching`, and re-dispatches. If `target_files` is omitted or matches no subtask, it falls back to re-dispatching **all** children and emits `coordinator.assembly_implicated_scope_fallback`. Emits `coordinator.assembly_changes_requested`. Because a human request-changes is a supervised action, it also **unconditionally** resets the autonomous steering budget (there is no round-trip cap).
 - **Decline** (`approved: false`, `request_changes: false`) → terminal `assembly_declined`; the coordinator emits `coordinator.assembly_declined` (`reason`, `reviewer`), the work plan moves to `assembly_declined`, the run ends `declined`, and the coordinator stream closes.
 
 When the pipeline arms this gate it emits `coordinator.assembly_review_requested` on the coordinator stream with `integrationBranch`, `treeHash` (the assembled integration tree hash), `includedSubtaskIds` (which subtasks the assembled output covers), `raiSafetyFlagged`, and `hasChanges` — the UI subscribes to this to know a collective human review is being requested and to render the assembled output. If the assembly background task hits an unexpected fault it emits `coordinator.assembly_failed` (`reason`, `phase`) and the run ends `failed` with `result: "assembly_error: &lt;message&gt;"`.
@@ -1953,7 +1996,7 @@ The run's event stream is held in memory by `RunStreamStore` and is not persiste
 | --- | --- | --- |
 | `Providers:GitHubCopilot:ApiKey` | none | GitHub Copilot provider credential |
 | `Providers:GitHubCopilot:Endpoint` | `https://api.githubcopilot.com` | GitHub Copilot base URL |
-| `Providers:GitHubCopilot:Model` | `gpt-4o` | GitHub Copilot model name |
+| `Providers:GitHubCopilot:Model` | `claude-sonnet-4.6` | GitHub Copilot model name |
 | `Providers:GitHubCopilot:RuntimeCliPath` | `""` (empty) | Optional explicit path to the native Copilot CLI binary; empty means use the SDK's auto-resolved runtime. Env fallbacks (in order): `AGENTWEAVER_COPILOT_CLI_PATH`, `COPILOT_CLI_PATH`. Grounded in `packages/Agentweaver.AgentRuntime/Providers/GitHubCopilotClientFactory.cs:50`. See [Configuration](/guide/configuration#provider-settings). |
 | `Generation:Model` | `gpt-5.4` | Global fallback for blueprint, workflow, and coordinator outcome-spec generation. |
 | `Generation:BlueprintModel` | `Generation:Model` | Optional global fallback when a project has no `blueprint_generation_model`. |

@@ -470,4 +470,11 @@ test.describe('User Guide · Workflows, operations, observability', () => {
     await page.getByText('Recent trace preview').waitFor().catch(() => undefined);
     await page.screenshot({ path: shot('observability-trace-preview'), fullPage: true });
   });
+
+  test.skip('assembly-review-escalation', async ({ page }) => {
+    test.skip(!RUN_ID, 'Set RUN_ID to a coordinator run whose assembly steering budget is exhausted.');
+    await captureAt(page, projectRoute(`/orchestrations/${RUN_ID}`), async () => {
+      await page.getByText('steering_budget_exhausted').waitFor();
+    }, shot('assembly-review-escalation'));
+  });
 });

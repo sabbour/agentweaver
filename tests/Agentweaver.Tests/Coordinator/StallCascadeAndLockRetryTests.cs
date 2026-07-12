@@ -161,6 +161,53 @@ public sealed class StallCascadeAndLockRetryTests : IAsyncDisposable
             "a fresh lock file (likely actively held) must NOT be deleted");
     }
 
+    [Fact]
+    public void ClearStaleIndexLock_ClearsStaleLock_WhenOnlyAgeGateApplies_NoFalseLiveProcessRefusal()
+    {
+        // FIX-1 (Fix-A #1 regression guard): the stale index.lock clear must FIRE on the age gate
+        // alone. The prior host-global `git` process check refused the clear whenever ANY unrelated
+        // `git` process existed on the host — which, on a busy coordinator (our own `git worktree
+        // add/prune` + agent git-tool subprocesses), is almost always. That re-wedged commit-retry in
+        // exactly the concurrent scenario Fix-A targets. This test would fail under that old guard on
+        // any host running a git process.
+        var repoPath = CreateTempGitRepo();
+        var manager = new WorktreeManager(
+            new ConfigurationBuilder().Build(), NullLogger<WorktreeManager>.Instance);
+
+        var lockPath = Path.Combine(repoPath, ".git", "index.lock");
+        File.WriteAllText(lockPath, "stale index lock from a crashed turn");
+        // Backdate well beyond the default 15s stale threshold so ONLY the age gate is relevant.
+        File.SetLastWriteTimeUtc(lockPath, DateTime.UtcNow.AddMinutes(-5));
+
+        var result = manager.ClearStaleIndexLock(repoPath);
+
+        result.LockPresent.Should().BeTrue();
+        result.Cleared.Should().BeTrue("a lock older than the stale threshold must be cleared on the age gate alone");
+        result.LiveGitProcessDetected.Should().BeFalse("the host-global git-process guard was removed (age-only guard)");
+        result.LockAgeSeconds.Should().BeGreaterThan(15);
+        File.Exists(lockPath).Should().BeFalse("the stale index.lock file must be deleted");
+    }
+
+    [Fact]
+    public void ClearStaleIndexLock_RefusesFreshLock_WithinStaleThreshold()
+    {
+        // The age gate is the SOLE guard, so a fresh lock (within threshold) must still be refused.
+        var repoPath = CreateTempGitRepo();
+        var manager = new WorktreeManager(
+            new ConfigurationBuilder().Build(), NullLogger<WorktreeManager>.Instance);
+
+        var lockPath = Path.Combine(repoPath, ".git", "index.lock");
+        File.WriteAllText(lockPath, "fresh lock held by an active in-process operation");
+        // Freshly written → within the 15s stale threshold.
+
+        var result = manager.ClearStaleIndexLock(repoPath);
+
+        result.LockPresent.Should().BeTrue();
+        result.Cleared.Should().BeFalse("a lock younger than the stale threshold is presumed actively held");
+        result.Detail.Should().Be("lock_too_recent");
+        File.Exists(lockPath).Should().BeTrue("a fresh lock must NOT be deleted");
+    }
+
     // -----------------------------------------------------------------------
     // Stall cascade: stalled subtask marks dependents as blocked (not failed)
     // -----------------------------------------------------------------------
@@ -177,6 +224,11 @@ public sealed class StallCascadeAndLockRetryTests : IAsyncDisposable
             [(SubtaskStatus.Running, stalledChildRunId), (SubtaskStatus.Pending, null)],
             declaredDependency: true); // ids[1] depends on ids[0]
         _streamStore.Create(coord, "owner");
+
+        // #241: this cascade asserts the GENUINE-terminal path — a stall AFTER the bounded recovery
+        // budget is exhausted. Seed RecoveryAttempts at the cap so the stall dead-ends immediately
+        // (no redispatch) and the dependent-blocking cascade is exercised exactly as before #241.
+        await SetRecoveryAttemptsAsync(ids[0], CoordinatorSteeringService.MaxRecoveryAttempts);
 
         // Extremely short stall TTL so the test resolves quickly.
         var sut = BuildDispatch(stream, stallTimeoutMinutes: 0.001);
@@ -300,6 +352,10 @@ public sealed class StallCascadeAndLockRetryTests : IAsyncDisposable
         dependencyPairs: [(4, 3), (5, 4)]);
         _streamStore.Create(coord, "owner");
 
+        // #241: exercise the genuine-terminal cascade — the stalled subtask has already exhausted its
+        // recovery budget, so the stall dead-ends (no redispatch) and propagates to blocked dependents.
+        await SetRecoveryAttemptsAsync(ids[3], CoordinatorSteeringService.MaxRecoveryAttempts);
+
         var sut = BuildDispatch(stream, stallTimeoutMinutes: 0.001);
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
         await sut.RunDispatchLoopAsync(Context(coord), cts.Token);
@@ -327,8 +383,211 @@ public sealed class StallCascadeAndLockRetryTests : IAsyncDisposable
     }
 
     // -----------------------------------------------------------------------
+    // #241: a stalled subtask with recovery budget remaining is REDISPATCHED
+    // (reset to pending for a fresh child) instead of dead-ending the whole run.
+    // -----------------------------------------------------------------------
+
+    [Fact]
+    public async Task StallRedispatch_SubtaskWithBudget_ResetToPending_NotFailed()
+    {
+        var stream = new SqliteRunEventStream(_streamConfig);
+        var stalledChildRunId = await SeedChildRunAsync(
+            RunStatus.InProgress, startedAt: DateTimeOffset.UtcNow.AddHours(-2));
+        const string coord = "stall-redispatch-coord";
+        var (planId, ids) = await SeedPlanAsync(coord, [(SubtaskStatus.Running, stalledChildRunId)]);
+        _streamStore.Create(coord, "owner");
+
+        var sut = BuildDispatch(stream);
+        var statusById = new Dictionary<int, string> { [ids[0]] = SubtaskStatus.Running };
+        var seq = new CoordinatorDispatchService.SeqCounter();
+
+        var redispatched = await sut.TryRedispatchStalledSubtaskAsync(
+            Context(coord), planId, ids[0], stalledChildRunId, statusById, seq, default);
+
+        redispatched.Should().BeTrue("a stalled subtask with RecoveryAttempts (0) < Max must be redispatched");
+
+        var subtask = await GetSubtaskAsync(ids[0]);
+        subtask.Status.Should().Be(SubtaskStatus.Pending,
+            "the redispatched subtask is reset to pending for a fresh child — NOT failed");
+        subtask.ChildRunId.Should().BeNull("the stalled child is detached so the frontier launches a fresh one");
+        subtask.PriorChildRunId.Should().Be(stalledChildRunId,
+            "the stalled branch is recorded on PriorChildRunId for handoff/provenance");
+        subtask.RecoveryAttempts.Should().Be(1, "the recovery attempt is consumed (monotonic, never reset)");
+        statusById[ids[0]].Should().Be(SubtaskStatus.Pending, "in-memory frontier state must track the reset");
+
+        // Pod-release / no-double-observation: the OLD child run is terminalized (agent_stall_timeout)
+        // so it can never be re-observed as an active child — only the subtask is revived.
+        var oldChild = await _runStore.GetAsync(RunId.Parse(stalledChildRunId));
+        oldChild!.Status.Should().Be(RunStatus.Failed,
+            "the stalled child run stays terminally failed; only the subtask is reset");
+
+        var coordEvents = _streamStore.Get(coord)!.GetSnapshotSince(0).Events;
+        coordEvents.Should().Contain(e => e.Type == EventTypes.CoordinatorSubtaskRedispatched,
+            "a structured redispatch diagnostic must be emitted on the coordinator stream");
+        var evt = coordEvents.First(e => e.Type == EventTypes.CoordinatorSubtaskRedispatched);
+        var payload = System.Text.Json.JsonSerializer.SerializeToNode(evt.Payload)!.AsObject();
+        payload["subtaskId"]!.GetValue<int>().Should().Be(ids[0]);
+        payload["priorChildRunId"]!.GetValue<string>().Should().Be(stalledChildRunId);
+        payload["attempt"]!.GetValue<int>().Should().Be(1);
+        payload["maxAttempts"]!.GetValue<int>().Should().Be(CoordinatorSteeringService.MaxRecoveryAttempts);
+        payload["reason"]!.GetValue<string>().Should().Be("stall_redispatch");
+    }
+
+    [Fact]
+    public async Task StallRedispatch_EndToEnd_FreshChildReachesAssembleReady_AssemblyAllEligible()
+    {
+        // End-to-end through the REAL dispatch loop: subtask stalls, is redispatched (reset to
+        // pending), the frontier re-dispatches it, the fresh child reaches assemble_ready, and
+        // finalization sees ALL subtasks eligible → hands off to assembly.
+        var stream = new SqliteRunEventStream(_streamConfig);
+        var stalledChildRunId = await SeedChildRunAsync(
+            RunStatus.InProgress, startedAt: DateTimeOffset.UtcNow.AddHours(-2));
+        const string coord = "stall-redispatch-e2e-coord";
+        var (_, ids) = await SeedPlanAsync(coord, [(SubtaskStatus.Running, stalledChildRunId)]);
+
+        // The FRESH child the redispatch will re-attach to (idempotency guard): an active child of
+        // (coord, subtask) whose stream already carries a terminal assemble_ready outcome.
+        var freshChildRunId = await SeedActiveChildForSubtaskAsync(coord, ids[0]);
+        await stream.AppendAsync(freshChildRunId, new RunEvent(0, EventTypes.RunAssembleReady, new { raiSafetyFlagged = false }));
+        await stream.CompleteAsync(freshChildRunId);
+
+        _streamStore.Create(coord, "owner");
+
+        // Short stall TTL so the idle child is detected quickly; the fresh child resolves immediately
+        // from its persisted terminal (assemble_ready) event regardless of the TTL.
+        var sut = BuildDispatch(stream, stallTimeoutMinutes: 0.001);
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        await sut.RunDispatchLoopAsync(Context(coord), cts.Token);
+
+        var subtask = await GetSubtaskAsync(ids[0]);
+        subtask.Status.Should().Be(SubtaskStatus.AssembleReady,
+            "after redispatch the fresh child reached assemble_ready");
+        subtask.RecoveryAttempts.Should().Be(1, "exactly one recovery attempt was consumed (never reset)");
+
+        var allStatuses = await GetAllSubtaskStatusesAsync(ids);
+        AssemblyPlanning.AllEligible(allStatuses).Should().BeTrue(
+            "with the redispatched subtask now assemble_ready, every subtask is eligible for assembly");
+        _assembly.Started.Should().Be(1, "dispatch hands off to assembly once all subtasks are terminal-eligible");
+    }
+
+    [Fact]
+    public async Task StallRedispatch_ExhaustsBudget_ThenFailsExactlyOnce_NeverResets()
+    {
+        // Drive the FULL bounded sequence deterministically: MaxRecoveryAttempts stall-redispatches,
+        // each consuming exactly one recovery attempt (monotonic, never reset), then a genuine
+        // terminal. Proves the loop cannot spin forever on a chronically stalling subtask.
+        var stream = new SqliteRunEventStream(_streamConfig);
+        var firstChild = await SeedChildRunAsync(
+            RunStatus.InProgress, startedAt: DateTimeOffset.UtcNow.AddHours(-2));
+        const string coord = "stall-redispatch-bound-coord";
+        var (planId, ids) = await SeedPlanAsync(coord, [(SubtaskStatus.Running, firstChild)]);
+        _streamStore.Create(coord, "owner");
+
+        var sut = BuildDispatch(stream, stallTimeoutMinutes: 0.001);
+        var statusById = new Dictionary<int, string> { [ids[0]] = SubtaskStatus.Running };
+        var seq = new CoordinatorDispatchService.SeqCounter();
+
+        var currentChild = firstChild;
+        for (var attempt = 1; attempt <= CoordinatorSteeringService.MaxRecoveryAttempts; attempt++)
+        {
+            var ok = await sut.TryRedispatchStalledSubtaskAsync(
+                Context(coord), planId, ids[0], currentChild, statusById, seq, default);
+            ok.Should().BeTrue($"attempt {attempt} is within budget and must redispatch");
+
+            var row = await GetSubtaskAsync(ids[0]);
+            row.Status.Should().Be(SubtaskStatus.Pending);
+            row.ChildRunId.Should().BeNull();
+            row.PriorChildRunId.Should().Be(currentChild);
+            row.RecoveryAttempts.Should().Be(attempt,
+                "each redispatch consumes exactly one attempt (monotonic; never reset)");
+
+            // Simulate the redispatched child stalling AGAIN for the next round.
+            currentChild = await SeedChildRunAsync(
+                RunStatus.InProgress, startedAt: DateTimeOffset.UtcNow.AddHours(-2));
+            await SetSubtaskRunningWithChildAsync(ids[0], currentChild);
+            statusById[ids[0]] = SubtaskStatus.Running;
+        }
+
+        // Budget now exhausted (RecoveryAttempts == Max): a further stall must NOT redispatch.
+        var exhausted = await sut.TryRedispatchStalledSubtaskAsync(
+            Context(coord), planId, ids[0], currentChild, statusById, seq, default);
+        exhausted.Should().BeFalse("once RecoveryAttempts >= Max the stall is a genuine terminal");
+        (await GetSubtaskAsync(ids[0])).RecoveryAttempts.Should().Be(
+            CoordinatorSteeringService.MaxRecoveryAttempts, "the cap holds — never reset, never exceeded");
+
+        // The genuine terminal: the real dispatch loop dead-ends the exhausted stalled subtask.
+        await sut.RunDispatchLoopAsync(Context(coord), new CancellationTokenSource(TimeSpan.FromSeconds(15)).Token);
+
+        var finalRow = await GetSubtaskAsync(ids[0]);
+        finalRow.Status.Should().Be(SubtaskStatus.Failed, "after the budget is exhausted the stall fails the subtask");
+        finalRow.RecoveryAttempts.Should().Be(CoordinatorSteeringService.MaxRecoveryAttempts,
+            "RecoveryAttempts is capped and never reset");
+
+        var coordEvents = _streamStore.Get(coord)!.GetSnapshotSince(0).Events;
+        coordEvents.Count(e => e.Type == EventTypes.CoordinatorSubtaskRedispatched)
+            .Should().Be(CoordinatorSteeringService.MaxRecoveryAttempts, "exactly Max redispatches happened — no more");
+        coordEvents.Count(e => e.Type == EventTypes.SubtaskFailed && SubtaskIdOf(e) == ids[0])
+            .Should().Be(1, "the subtask goes Failed exactly once");
+        _assembly.Started.Should().Be(1, "the exhausted run dead-ends and hands off (assembly then blocks)");
+    }
+
+    // -----------------------------------------------------------------------
     // Harness
     // -----------------------------------------------------------------------
+
+    private static int SubtaskIdOf(RunEvent e) =>
+        System.Text.Json.JsonSerializer.SerializeToNode(e.Payload)!.AsObject()["subtaskId"]!.GetValue<int>();
+
+    private async Task SetRecoveryAttemptsAsync(int subtaskId, int attempts)
+    {
+        using var scope = _provider.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var row = await db.Subtasks.FirstAsync(s => s.Id == subtaskId);
+        row.RecoveryAttempts = attempts;
+        await db.SaveChangesAsync();
+    }
+
+    private async Task SetSubtaskRunningWithChildAsync(int subtaskId, string childRunId)
+    {
+        using var scope = _provider.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var row = await db.Subtasks.FirstAsync(s => s.Id == subtaskId);
+        row.Status = SubtaskStatus.Running;
+        row.ChildRunId = childRunId;
+        row.UpdatedAt = DateTimeOffset.UtcNow;
+        await db.SaveChangesAsync();
+    }
+
+    private async Task<Dictionary<int, string>> GetAllSubtaskStatusesAsync(IEnumerable<int> ids)
+    {
+        using var scope = _provider.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var result = new Dictionary<int, string>();
+        foreach (var id in ids)
+            result[id] = (await db.Subtasks.AsNoTracking().FirstAsync(s => s.Id == id)).Status;
+        return result;
+    }
+
+    private async Task<string> SeedActiveChildForSubtaskAsync(string coordinatorRunId, int subtaskId)
+    {
+        var id = RunId.New();
+        var run = new Run
+        {
+            Id = id,
+            RepositoryPath = "repo",
+            OriginatingBranch = "main",
+            ModelSource = ModelSource.GitHubCopilot,
+            Task = "fresh child",
+            SubmittingUser = "owner",
+            Status = RunStatus.InProgress,
+            StartedAt = DateTimeOffset.UtcNow,
+            AgentName = "morpheus",
+            ParentRunId = coordinatorRunId,
+            SubtaskId = subtaskId.ToString(),
+        };
+        await _runStore.InsertAsync(run);
+        return id.ToString();
+    }
 
     private CoordinatorDispatchService BuildDispatch(IRunEventStream eventStream, double stallTimeoutMinutes = 5)
     {

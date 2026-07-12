@@ -22,6 +22,7 @@ import {
 } from '@fluentui/react-components';
 import { FlowRegular } from '@fluentui/react-icons';
 import { useEffect, useState } from 'react';
+import { parseNoTeamStartError } from '../api/errors';
 import type { StartOrchestrationMode, WorkflowSummaryDto } from '../api/types';
 
 const useStyles = makeStyles({
@@ -29,6 +30,9 @@ const useStyles = makeStyles({
     display: 'flex',
     flexDirection: 'column',
     gap: tokens.spacingVerticalM,
+  },
+  noTeamActions: {
+    marginTop: tokens.spacingVerticalS,
   },
 });
 interface StartOrchestrationDialogProps {
@@ -42,6 +46,7 @@ export function StartOrchestrationDialog({ projectId, onStarted }: StartOrchestr
   const [goal, setGoal] = useState('');
   const [savingMode, setSavingMode] = useState<StartOrchestrationMode | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [noTeamError, setNoTeamError] = useState<string | null>(null);
   const [workflowOverride, setWorkflowOverride] = useState<string | null>(null);
   const [selectableWorkflows, setSelectableWorkflows] = useState<WorkflowSummaryDto[]>([]);
   const saving = savingMode !== null;
@@ -60,6 +65,7 @@ export function StartOrchestrationDialog({ projectId, onStarted }: StartOrchestr
   const reset = () => {
     setGoal('');
     setError(null);
+    setNoTeamError(null);
     setSavingMode(null);
     setWorkflowOverride(null);
     setSelectableWorkflows([]);
@@ -69,6 +75,7 @@ export function StartOrchestrationDialog({ projectId, onStarted }: StartOrchestr
     if (!goal.trim()) return;
     setSavingMode(mode);
     setError(null);
+    setNoTeamError(null);
     try {
       const result = mode === 'direct'
         ? await apiClient.startOrchestration(projectId, goal.trim(), workflowOverride || null, 'direct')
@@ -77,6 +84,11 @@ export function StartOrchestrationDialog({ projectId, onStarted }: StartOrchestr
       reset();
       onStarted(result.runId);
     } catch (err) {
+      const noTeam = parseNoTeamStartError(err);
+      if (noTeam) {
+        setNoTeamError(noTeam.message);
+        return;
+      }
       setError(
         err instanceof ApiError
           ? `API error ${err.status}: ${err.body}`
@@ -128,6 +140,18 @@ export function StartOrchestrationDialog({ projectId, onStarted }: StartOrchestr
               {error && (
                 <MessageBar intent="error">
                   <MessageBarBody>{error}</MessageBarBody>
+                </MessageBar>
+              )}
+              {noTeamError && (
+                <MessageBar intent="warning">
+                  <MessageBarBody>
+                    {noTeamError}
+                    <div className={styles.noTeamActions}>
+                      <Button appearance="primary" as="a" href={`/projects/${encodeURIComponent(projectId)}/team/cast`}>
+                        Cast a team
+                      </Button>
+                    </div>
+                  </MessageBarBody>
                 </MessageBar>
               )}
             </div>

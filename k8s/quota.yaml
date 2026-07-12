@@ -7,14 +7,15 @@ metadata:
     app.kubernetes.io/part-of: agentweaver
 spec:
   hard:
-    pods: "30"
-    requests.cpu: "16"
-    requests.memory: 32Gi
-    limits.cpu: "32"
-    limits.memory: 64Gi
+    # Kubernetes owns pod admission/scheduling/queueing and the cluster autoscaler is the real
+    # concurrency ceiling (autoscaler max-nodes), so this quota no longer caps CPU/memory — capping
+    # them here made the app pre-flight capacity itself and hard-fail runs while nodes sat idle
+    # (issue #217). Only object counts are bounded, set well above realistic concurrency so a Pending
+    # pod waits for the pool to autoscale rather than being rejected on admission.
+    pods: "200"
     persistentvolumeclaims: "4"
     requests.storage: 80Gi
-    count/sandboxclaims.extensions.agents.x-k8s.io: "20"
+    count/sandboxclaims.extensions.agents.x-k8s.io: "200"
 ---
 apiVersion: v1
 kind: LimitRange

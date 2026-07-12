@@ -91,6 +91,64 @@ internal static class CoordinatorAssemblyReviewPersistence
         return true;
     }
 
+    /// <summary>
+    /// The ONE shared delivery path for an assembly human-review decision (#226 S2). Both
+    /// <c>POST /api/runs/{id}/assembly/review</c> AND the <c>AwaitingReview</c> branch of
+    /// <see cref="CoordinatorSteeringService.SteerAsync"/> call this so at-most-once / replica-safety /
+    /// ownership checks stay identical by construction. Sequence (mirrors the original endpoint block):
+    /// <list type="number">
+    /// <item>Validate a review is genuinely pending for this owner (<see cref="ValidatePendingRequestAsync"/>).</item>
+    /// <item>Attempt in-memory delivery to the armed gate (<see cref="AssemblyReviewGate.TrySubmit"/>). On
+    /// <c>Accepted</c> also durably persist the decision so the poller / crash-recovery agrees.</item>
+    /// <item>On <c>NotArmed</c> (the gate is armed on a DIFFERENT replica, or not yet) fall back to the
+    /// durable deferred persist (<see cref="PersistDecisionForPendingRequestAsync"/>); the owning pod's
+    /// deferred poller drains it. This cross-replica fallback is what a <c>TrySubmit</c>-only path would
+    /// silently miss (the drain-into-void bug across pods).</item>
+    /// </list>
+    /// </summary>
+    public static async Task<AssemblyReviewDeliveryResult> DeliverDecisionAsync(
+        IServiceScopeFactory scopeFactory,
+        AssemblyReviewGate reviewGate,
+        string coordinatorRunId,
+        AssemblyReviewDecision decision,
+        string callerUser,
+        string? callerGitHubLogin,
+        CancellationToken ct)
+    {
+        var pending = await ValidatePendingRequestAsync(
+            scopeFactory, coordinatorRunId, callerUser, callerGitHubLogin, ct).ConfigureAwait(false);
+        if (pending == AssemblyReviewPendingDecisionResult.Forbidden)
+            return AssemblyReviewDeliveryResult.Forbidden;
+        if (pending != AssemblyReviewPendingDecisionResult.Pending)
+            return AssemblyReviewDeliveryResult.NotPending;
+
+        var submit = reviewGate.TrySubmit(coordinatorRunId, callerUser, decision, callerGitHubLogin);
+        if (submit == AssemblyReviewSubmitResult.Accepted)
+        {
+            // The in-memory gate consumed it on THIS pod; durably record it too so the deferred poller /
+            // crash-recovery reconciler observes the same decision (never CancellationToken ct here — the
+            // persist must complete even if the request is aborted after the gate accepted the decision).
+            await PersistDecisionAsync(scopeFactory, coordinatorRunId, decision, CancellationToken.None)
+                .ConfigureAwait(false);
+            return AssemblyReviewDeliveryResult.Accepted;
+        }
+        if (submit == AssemblyReviewSubmitResult.Forbidden)
+            return AssemblyReviewDeliveryResult.Forbidden;
+
+        // NotArmed: the gate is armed on a different replica (or not yet). Persist durably for the owning
+        // pod's poller to drain (cross-replica safety — #226 B2).
+        var deferred = await PersistDecisionForPendingRequestAsync(
+            scopeFactory, coordinatorRunId, decision, callerUser, callerGitHubLogin, CancellationToken.None)
+            .ConfigureAwait(false);
+        return deferred switch
+        {
+            AssemblyReviewPendingDecisionResult.Persisted => AssemblyReviewDeliveryResult.Deferred,
+            AssemblyReviewPendingDecisionResult.Forbidden => AssemblyReviewDeliveryResult.Forbidden,
+            AssemblyReviewPendingDecisionResult.AlreadySubmitted => AssemblyReviewDeliveryResult.AlreadySubmitted,
+            _ => AssemblyReviewDeliveryResult.NotPending,
+        };
+    }
+
     public static async Task<AssemblyReviewPendingDecisionResult> ValidatePendingRequestAsync(
         IServiceScopeFactory scopeFactory,
         string coordinatorRunId,
@@ -236,6 +294,22 @@ public enum AssemblyReviewPendingDecisionResult
 {
     Pending,
     Persisted,
+    NotPending,
+    Forbidden,
+    AlreadySubmitted,
+}
+
+/// <summary>
+/// Outcome of <see cref="CoordinatorAssemblyReviewPersistence.DeliverDecisionAsync"/> so BOTH the
+/// <c>/assembly/review</c> endpoint and the <c>AwaitingReview</c> steer branch map to identical
+/// responses. <see cref="Accepted"/> = delivered to the armed local gate; <see cref="Deferred"/> =
+/// durably persisted for the owning pod's poller (cross-replica); the rest mirror the validation
+/// failure modes.
+/// </summary>
+public enum AssemblyReviewDeliveryResult
+{
+    Accepted,
+    Deferred,
     NotPending,
     Forbidden,
     AlreadySubmitted,

@@ -125,6 +125,7 @@ public sealed class CoordinatorReconciler
                 .Where(w => w.Status == WorkPlanStatus.Dispatching
                          || w.Status == WorkPlanStatus.AwaitingAssembly
                          || w.Status == WorkPlanStatus.Assembling
+                         || w.Status == WorkPlanStatus.AssemblySteering
                          || w.Status == WorkPlanStatus.InReview
                          || w.Status == WorkPlanStatus.AssemblyBlocked)
                 .Select(w => new PlanCandidate(w.Id, w.CoordinatorRunId, w.Status, w.CoordinatorPodId, w.UpdatedAt))
@@ -139,6 +140,7 @@ public sealed class CoordinatorReconciler
         var assemblyRunIds = candidates
             .Where(c => c.Status is WorkPlanStatus.AwaitingAssembly
                                  or WorkPlanStatus.Assembling
+                                 or WorkPlanStatus.AssemblySteering
                                  or WorkPlanStatus.InReview
                                  or WorkPlanStatus.AssemblyBlocked
                      && !string.IsNullOrWhiteSpace(c.CoordinatorRunId))
@@ -218,6 +220,23 @@ public sealed class CoordinatorReconciler
                             reArmed++;
                         break;
 
+                    case WorkPlanStatus.AssemblySteering:
+                        // UNIFIED AUTONOMOUS STEERING (rev8 §3b/§3c, RD#3/CR#1) — a plan wedged in
+                        // assembly_steering means a decider crashed mid-decision; without this case the
+                        // run never recovers. Same fresh-vs-stale discipline as `assembling`: skip if a
+                        // live decider owns it (same-pod fast path OR a fresh lease). Otherwise reclaim
+                        // the stale decision lease back to awaiting_assembly and — as the SINGLE reclaim
+                        // winner — return this run's stale `relayed` directives to `queued` (§3c claim
+                        // durability) before re-arming assembly, which re-drives the decision.
+                        if (IsAssemblyActive(plan))
+                            continue;
+                        if ((DateTimeOffset.UtcNow - plan.UpdatedAt) < _staleLeaseTtl)
+                            continue;
+                        if (await TryReclaimStaleAssemblySteeringAsync(plan, ct).ConfigureAwait(false)
+                            && await TryReArmAssemblyWithCapAsync(plan, ct).ConfigureAwait(false))
+                            reArmed++;
+                        break;
+
                     case WorkPlanStatus.AssemblyBlocked:
                         if (IsAssemblyActive(plan))
                             continue;
@@ -261,8 +280,18 @@ public sealed class CoordinatorReconciler
             .Select(w => w.AssemblyStatusReason)
             .FirstOrDefaultAsync(ct)
             .ConfigureAwait(false);
-        if (string.IsNullOrWhiteSpace(reason)
-            || !reason.Contains("ineligible_subtasks", StringComparison.Ordinal))
+        if (string.IsNullOrWhiteSpace(reason))
+            return false;
+
+        if (reason.Contains("build_test_infra_agenthost_capacity_pending", StringComparison.Ordinal)
+            || reason.Contains("build_test_infra_agenthost_quota_exceeded", StringComparison.Ordinal)
+            || reason.Contains("build_test_infra_agenthost_ip_not_ready", StringComparison.Ordinal)
+            || reason.Contains("build_test_infra_agenthost_launch_failed", StringComparison.Ordinal)
+            || reason.Contains("build_test_infra_a2a_endpoint_unavailable", StringComparison.Ordinal)
+            || reason.Contains("build_test_infra_a2a_transport_failure", StringComparison.Ordinal))
+            return true;
+
+        if (!reason.Contains("ineligible_subtasks", StringComparison.Ordinal))
             return false;
 
         var statuses = await db.Subtasks.AsNoTracking()
@@ -299,6 +328,32 @@ public sealed class CoordinatorReconciler
                         && r.DecisionSubmittedAt == null
                         && r.CoordinatorFailedAt == null, ct)
             .ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// UNIFIED AUTONOMOUS STEERING (rev8 §3b/§3c, RD#3/CR#1) — reclaims a STALE
+    /// <see cref="WorkPlanStatus.AssemblySteering"/> decision lease back to <c>awaiting_assembly</c> and,
+    /// for the single reclaim winner, returns this run's stale <c>relayed</c> steering directives to
+    /// <c>queued</c> in the SAME recovery step (claim durability). Resolves the singleton stores via a
+    /// scope (the reconciler holds neither directly). Returns true only for the reclaim winner.
+    /// </summary>
+    private async Task<bool> TryReclaimStaleAssemblySteeringAsync(PlanCandidate plan, CancellationToken ct)
+    {
+        var staleBefore = DateTimeOffset.UtcNow - _staleLeaseTtl;
+        using var scope = _scopeFactory.CreateScope();
+        var assemblyStore = scope.ServiceProvider.GetRequiredService<CoordinatorAssemblyStore>();
+        var reclaimed = await assemblyStore
+            .TryReclaimStaleAssemblySteeringAsync(plan.WorkPlanId, staleBefore, ct).ConfigureAwait(false);
+        if (!reclaimed)
+            return false;
+
+        if (!string.IsNullOrWhiteSpace(plan.CoordinatorRunId))
+        {
+            var steering = scope.ServiceProvider.GetRequiredService<CoordinatorSteeringService>();
+            await steering.ReclaimStaleRelayedDirectivesAsync(
+                plan.CoordinatorRunId!, staleBefore, ct).ConfigureAwait(false);
+        }
+        return true;
     }
 
     /// <summary>

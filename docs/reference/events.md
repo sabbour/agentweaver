@@ -28,6 +28,7 @@ Clients should order and deduplicate events by `sequence`.
 | `tool.result` | After an approved tool runs successfully | `callId`, `content` |
 | `tool.error` | After a tool is denied by the sandbox policy, or fails for any other reason such as a missing file or I/O failure | `callId`, `errorMessage` |
 | `tool.approval_required` | When a tool call is paused awaiting human approval | `request_id`, `tool_name`, `url` (optional), `intention` (optional) |
+| `tool.approval_pending` | Heartbeat re-emitted every ~20s while a tool call is blocked on a human-approval gate; keeps the run's stream flowing so the buffered `tool.approval_required` is delivered/persisted and the coordinator stall timer is reset. Non-terminal; consumers may ignore it | `requestId`, `displayId`, `toolName` |
 | `tool.auto_approved` | When the per-run auto-approve-tools option is ON and an allow-with-approval tool request is auto-granted at the gate instead of waiting for a human; audit-only (the tool then runs) | `requestId`, `toolName`, `url` (optional) |
 | `agent.question_asked` | When an agent calls `ask_question` to bubble a clarifying question or permission request; the run suspends inside the tool call until answered or timed out | `requestId`, `question` |
 | `agent.question_answered` | When a pending `ask_question` request is answered (or resolved by timeout) and the agent resumes | `requestId`, `answer`, `timedOut` |
@@ -38,9 +39,17 @@ Clients should order and deduplicate events by `sequence`.
 | `run.cancelled` | When an in-progress run is cancelled because its project was deleted | *(none)* |
 | `run.error` | When an operation fails but the run is reverted to a retryable state (e.g. back to AwaitingReview after a merge internal error); **non-terminal** — the stream stays open | `reason` |
 | `run.degraded` | When the sandbox blocks at least one tool call during a run; **non-terminal** — the run continues with a degraded outcome | `toolName`, `reason` |
-| `rai.verdict` | The RAI reviewer's verdict for a run; written to the `{runId}-rai` sub-stream | `verdict` (`green` / `yellow` / `red` / `revise`), `runId` |
+| `rai.verdict` | The RAI reviewer's verdict for a run; written to both the parent run stream and the `{runId}-rai` sub-stream | `verdict` (`green` / `yellow` / `red` / `revise`), `runId`, `rationale` |
 | `workflow.step` | When each workflow executor stage transitions (start/complete/fail/skip), for every node in both the full and child pipelines | `step`, `status`, `label`, `timestamp_utc`, `agent_name` (agent step only), `reviewer` (review step only), `message` (optional) |
 | `run.workflow_graph` | Once at run start, carrying the full workflow graph descriptor for rendering the run topology | `GraphDescriptor` (see below) |
+| `sandbox.provisioning_pending` | Heartbeat re-emitted about every 20s on a coordinator **child** run's own stream while its AgentHost `SandboxClaim` is unbound (the pod is still being scheduled by Kubernetes — a node may be freeing up or the pool autoscaling). Keeps the child stream flowing so the parent coordinator's subtask-stall timer resets during a legitimate provisioning wait instead of firing `agent_stall_timeout` (issue #217). Non-terminal and idempotent; consumers may ignore it | `claimName`, `timestamp_utc` |
+| `sandbox.preview_applicability` | Before assembly Build & Test approval is evaluated, records whether the assembled artifact needs a preview or is skipped as not applicable | `run_id`, `work_plan_id`, `tree_hash`, `state`, `reason`, `evidence` |
+| `sandbox.preview_start_requested` | When the deterministic preview step resolves a run command and starts the platform-owned preview attempt | `run_id`, `work_plan_id`, `tree_hash`, `source`, `command_source` |
+| `sandbox.preview_pending` | When the existing AgentPreviewGate is waiting for approval to expose the Build & Test preview port | `run_id`, `work_plan_id`, `tree_hash`, `target_port`, `approval`, `request_id` |
+| `sandbox.preview_ready` | When Gateway preview provisioning succeeds for the run | `run_id`, `work_plan_id`, `tree_hash`, `target_port`, `pod_name`, `session_id`, `preview_runner_session_id`, `preview_url`, `keepalive_url`, `started_at` |
+| `coordinator.preview_ready` | Coordinator-scoped mirror of `sandbox.preview_ready` for the assembly preview | Same as `sandbox.preview_ready` |
+| `sandbox.preview_failed` | When preview approval, app readiness, forwarder reachability, Gateway provisioning, or the approval-time outcome guard fails | `run_id`, `work_plan_id`, `tree_hash`, `source`, `reason`, `message`; optional `target_port` |
+| `sandbox.preview_skipped_not_applicable` | Final preview outcome for non-previewable assembled work or unavailable preview infrastructure | `run_id`, `work_plan_id`, `tree_hash`, `source`, `reason`, `message` or `evidence` |
 | `review.requested` | After the worktree is committed and the review tree hash is stored | `tree_hash`, `request_id` |
 | `review.approved` | When the owner approves the run and the merge proceeds | *(none)* |
 | `review.declined` | When the owner declines the run | *(none)* |
@@ -56,25 +65,29 @@ Clients should order and deduplicate events by `sequence`.
 | `coordinator.work_plan` | When the coordinator has decomposed the confirmed spec into a persisted work plan | `workPlanId`, `status`, `subtasks`, `dependencies` |
 | `coordinator.workflow_selected` | When the coordinator selects which workflow to run from a project's multi-workflow set (skipped silently when the project carries only one workflow) | `selectedId`, `selectedName`, `rationale`, `wasAutoSelected`, `overrideHint`, `available` (`[{ id, name }]`) |
 | `coordinator.child_stall_detected` | When a child run emits no new events past the configured stall timeout and the coordinator marks that path as stalled | `childRunId`, `subtaskId`, `staleSinceUtc`, `stallTimeoutMinutes`, `lastEventSequence` |
+| `coordinator.subtask_redispatched` | When a stalled subtask still has recovery budget and is reset to `pending` for a fresh child (on a fresh pod) instead of dead-ending the run | `subtaskId`, `priorChildRunId`, `attempt`, `maxAttempts`, `reason` (`stall_redispatch`), `timestamp_utc` |
 | `coordinator.topology` | When the orchestration graph is first dispatched (snapshot) and on every subsequent subtask lifecycle transition (delta) | `version`, `kind`, `seq`, `nodes` (snapshot) / `changed` (delta), `edges` (snapshot) |
 | `coordinator.graph` | When the unified coordinator graph shape changes (a subtask child run is dispatched, or the plan reaches its terminal snapshot) | a shape-only `GraphDescriptor` (variant `coordinator`) |
 | `subtask.dispatched` / `subtask.running` / `subtask.assemble_ready` / `subtask.rai_flagged` / `subtask.completed` / `subtask.failed` | As a subtask's child run advances through its lifecycle | `subtaskId`, `childRunId`, `assignedAgent`, `selectedModelId`, `status` |
 | `run.assemble_ready` | On a coordinator CHILD run's own stream when the child finishes its trimmed agent pipeline and is ready to be collected/assembled | `runId`, `subtaskId`, `parentRunId`, `worktreeBranch`, `treeHash`, `hasChanges`, `stepCount`, `raiSafetyFlagged` |
 | `run.no_changes_produced` | On a coordinator CHILD run when it reaches assemble-ready with no committed changes (the worker wrote no files) | `runId`, `subtaskId`, `parentRunId`, `message` |
 | `coordinator.steering` | When a steering directive is created or changes state | `directiveId`, `kind`, `targetChildRunId`, `status`, `instruction` |
+| `coordinator.steering_received` | When a steering signal from any source is persisted and queued for the coordinator | `directiveId`, `source`, `severity`, `verb`, `targetScope`, `feedback`, `treeHash` |
+| `coordinator.steering_decision` | When the coordinator records its steering decision before executing the effect | `directiveId`, `decision`, `rationale`, `subtaskIds`, `attempt` |
 | `coordinator.children_complete` | When every child subtask has reached a terminal status and the work plan moves to `awaiting_assembly` | `workPlanId` |
 | `coordinator.assembly_started` | When the collective-assembly pipeline claims the plan (`awaiting_assembly → assembling`, exactly-once) | `workPlanId`, `integrationBranch`, `subtaskCount` |
 | `coordinator.integration_conflict_auto_resolved` | When the integration-branch build auto-resolves a child conflict by accepting the child's version and continues | `workPlanId`, `conflictingBranch`, `conflictingFiles`, `strategy: "accept_child"` |
-| `coordinator.assembly_blocked` | When assembly stops with NO partial work — an ineligible subtask set | `workPlanId`, `reason`, `ineligibleSubtaskIds`, `ineligibleSubtasks` |
-| `coordinator.assembly_rai_started` / `coordinator.assembly_rai_completed` | The ONE collective RAI pass over the aggregate diff (advisory; never hard-blocks) | `workPlanId`, `integrationBranch` / `raiSafetyFlagged` |
-| `coordinator.assembly_review_requested` | When the pipeline suspends at the ONE collective human-review gate | `workPlanId`, `integrationBranch`, `treeHash`, `includedSubtaskIds`, `raiSafetyFlagged`, `hasChanges` |
-| `coordinator.assembly_review_approved` | When the reviewer approves the combined output | `workPlanId` |
-| `coordinator.assembly_changes_requested` | When the reviewer requests changes; the coordinator re-dispatches the inferred children | `workPlanId`, `redispatchSubtaskIds`, `inferredFiles`, `fellBackToAll`, `feedback` |
+| `coordinator.assembly_blocked` | When assembly stops with NO partial work — an ineligible subtask set, or when retryable Build & Test infrastructure is unavailable. Non-terminal for stream subscribers; the plan can be re-armed/recovered and emit more events. | `workPlanId`, `reason`; `ineligibleSubtaskIds`, `ineligibleSubtasks` for subtask eligibility blocks; `detail`, `exceptionMessage`, `innerExceptionMessage`, `innerExceptionType`, `infrastructureReason`, `retryable` for retryable Build & Test infrastructure blocks |
+| `coordinator.assembly_rai_started` / `coordinator.assembly_rai_completed` | The ONE collective RAI pass over the aggregate diff | `workPlanId`, `integrationBranch`, `gateId` / `raiSafetyFlagged` |
+| `coordinator.assembly_review_requested` | When an assembly gate starts. Emitted for automated Build & Test (`gateKind: "build-test"`), automated Rubberduck critique (`"rubberduck"`), and actionable human review (`"human-review"`; legacy events may omit `gateKind`) | `workPlanId`, `integrationBranch`, `treeHash`, `gateId`, `gateKind`, `hasChanges`; `includedSubtaskIds` on human review |
+| `coordinator.assembly_review_approved` | When a gate approves or passes the combined output | `workPlanId`, `reviewer` |
+| `coordinator.assembly_changes_requested` | When a gate requests changes; the coordinator re-dispatches the reviewer-implicated subtasks and their transitive dependents | `workPlanId`, `redispatchSubtaskIds`, `redispatchedSubtaskIds`, `implicatedSubtaskIds`, `dependentSubtaskIds`, `feedback` |
+| `coordinator.assembly_implicated_scope_fallback` | When the #223 implicated-subtask scoping reverts to the broad all-contributors set because the reviewer's structured `TARGET_FILES:` hint was missing or reverse-mapped to nothing (fail-safe, made observable) | `workPlanId`, `source`, `reviewer`, `reason` (`no_target_files_field` \| `target_files_matched_nothing`), `namedFiles`, `touchedFiles`, `contributorIds` |
 | `coordinator.assembly_merge_started` / `coordinator.assembly_merge_completed` / `coordinator.assembly_merge_failed` | The ONE collective merge of the integration branch into the originating branch | `workPlanId`, `integrationBranch` / `commitHash` / `reason`, `conflictingFiles` |
 | `coordinator.assembly_scribe_started` / `coordinator.assembly_scribe_completed` | The ONE collective scribe pass after a successful merge (best-effort) | `workPlanId` |
 | `coordinator.assembly_completed` | When collective assembly finishes and the work plan reaches `complete` | `workPlanId`, `integrationBranch`, `commitHash` |
 | `coordinator.assembly_declined` | When the reviewer declines the combined output (terminal); the coordinator run ends `declined` | `workPlanId`, `reason`, `reviewer` |
-| `coordinator.assembly_failed` | When the assembly background task hits an UNEXPECTED fault; the work plan moves to `assembly_failed` and the coordinator run ends with a human-readable `assembly_error: <message>` result | `workPlanId`, `reason`, `phase` |
+| `coordinator.assembly_failed` | When the assembly background task hits an UNEXPECTED fault, or when Build & Test infrastructure fails with a non-retryable configuration error; the work plan moves to `assembly_failed` and the coordinator run ends with a human-readable reason. This is a stream terminal. | `workPlanId`, `reason`, `phase` for unexpected faults; `detail`, `exceptionMessage`, `innerExceptionMessage`, `innerExceptionType`, `infrastructureReason` for Build & Test infrastructure failures |
 | `coordinator.child_question` | When a coordinator child run bubbles a question via `ask_question`; re-projected onto the coordinator stream so the operator can answer the child run | `childRunId`, `subtaskId`, `requestId`, `question` |
 | `coordinator.child_approval_required` | When a coordinator child run pauses on a tool-approval gate; re-projected onto the coordinator stream so the operator can grant/deny on the child run | `childRunId`, `subtaskId`, `requestId`, `toolName`, `url` (optional), `message` (optional) |
 | `coordinator.autopilot_answered` | When the coordinator's Autopilot option is ON and the coordinator model auto-answers a clarifying question (its own or one bubbled from a child); the answer is also resolved on the child's question gate, so the normal `agent.question_answered` still surfaces | `runId`, `childRunId` (optional), `requestId`, `question`, `answer` |
@@ -92,6 +105,18 @@ Both providers surface the same tool event vocabulary. For each tool the agent r
 SDK-internal tools (`report_outcome`, `glob`) are suppressed from the event stream. `report_intent` is translated into an `agent.intent` event rather than suppressed — the raw tool call is hidden, but the intent text surfaces as a first-class event. `agent.tools` is a synthetic event emitted by the runtime, not an SDK tool.
 
 ## Event details
+
+### `rai.verdict`
+
+The RAI executor emits one structured verdict event when a Responsible AI review completes. The payload is:
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `verdict` | `"green"` \| `"yellow"` \| `"red"` \| `"revise"` | Machine-readable token. There is no emoji field in the event payload. |
+| `runId` | string | The reviewed run. |
+| `rationale` | string | Human-readable rationale extracted from the RAI response, or a fallback failure rationale. |
+
+The event is written to both the parent run stream and the `{runId}-rai` sub-stream (`packages/Agentweaver.Domain/EventTypes.cs:104`, `packages/Agentweaver.AgentRuntime/Workflow/RaiTurnExecutor.cs:373`). The web session panel reads the token and maps it locally to a traffic-light presentation with the rationale (`apps/web/src/components/AgentSessionPanel.tsx:1200`, `:1216`).
 
 ### `agent.message`
 
@@ -117,7 +142,7 @@ This event is emitted exclusively by the watch loop (`RunWatchLoopService`) when
 
 ### `run.failed`
 
-This event marks a terminal failure. The `reason` field identifies the cause. When the agent's output is blocked by content safety policy, `reason` is `"content_safety"` and the run never reaches the review gate. Other values reflect infrastructure or watch-loop errors (for example, `"watch_loop_error"`).
+This event marks a terminal failure. The `reason` field identifies the cause. When the agent's output is blocked by content safety policy, `reason` is `"content_safety"` and the run never reaches the review gate. For coordinator child runs, an executor throw terminalizes as `child_executor_failed:{executor}` and is paired with a failed `workflow.step`; this makes in-place steering revision failures visible before the coordinator falls back to fresh dispatch. Other values reflect infrastructure or watch-loop errors (for example, `"watch_loop_error"`).
 
 ### `run.bounded`
 
@@ -175,9 +200,37 @@ The agent's self-assessment of task completion. `achieved: true` when the agent 
 
 Emitted when the human reviewer calls `POST /api/runs/{id}/request-changes`. `comment` is the reviewer's feedback passed to the agent for the revision cycle.
 
+### Build & Test infrastructure reasons
+
+Automated assembly Build & Test reports sandbox/A2A infrastructure separately from authored code feedback. Retryable failures emit `coordinator.assembly_blocked` and set `reason` to `build_test_infra_{reason}`; non-retryable configuration errors emit `coordinator.assembly_failed`. Current typed reasons are:
+
+| Reason suffix | Meaning |
+| --- | --- |
+| `agenthost_capacity_pending` | **Legacy / no longer produced.** Kubernetes now owns admission, so the assembly Build & Test launch waits for the pod to schedule instead of pre-checking capacity (issue #217); still matched for back-compat recovery of pre-upgrade records. |
+| `agenthost_launch_failed` | AgentHost pod launch failed for a retryable, non-specific launch error. |
+| `agenthost_ip_not_ready` | The claim is bound but the pod has no IP yet. |
+| `a2a_endpoint_unavailable` | No A2A endpoint could be resolved for the run-bound AgentHost pod. |
+| `a2a_transport_failure` | The A2A turn transport failed after endpoint setup. |
+
+The full event reason is prefixed, for example `build_test_infra_a2a_endpoint_unavailable`. These values come from `WorkflowAgentInfrastructureException` and the assembly parking path (`packages/Agentweaver.AgentRuntime/Workflow/WorkflowAgentInfrastructureException.cs:7`, `apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyService.cs:1567`).
+
+For infrastructure reasons, the payload also carries operator diagnostics: `detail` (outer message plus the
+innermost exception when different), `exceptionMessage`, `innerExceptionMessage`, `innerExceptionType`, and
+`infrastructureReason`. Retryable `assembly_blocked` includes `retryable: true`; terminal
+`assembly_failed` omits that flag and closes the stream after replay has drained persisted rows
+(`apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyService.cs:1590`, `:1604`, `:1648`).
+
 ### `tool.approval_required`
 
 Emitted when a tool call is paused waiting for human approval. `request_id` identifies the request and is used by `POST /api/runs/{id}/tool-approvals` and `POST /api/runs/{id}/tool-denials`. `tool_name` is the tool being called. `url` is the resource being accessed (for `web_fetch` and similar tools). `intention` is an optional human-readable description of what the agent intends to do. The run is paused until the human approves or denies; `tool.result` or `tool.error` follows once settled.
+
+### `tool.approval_pending`
+
+A lightweight **heartbeat** emitted repeatedly on the child run's stream while a tool call is blocked on a human-approval gate (issue #212). It fires every ~20 seconds (`ApprovalHeartbeatInterval`) from when the gate arms until it resolves, carrying the same `requestId` as the `tool.approval_required` card plus its short `displayId` and the `toolName`. Its purpose is operational, not a state change: it keeps the pod's outbound A2A/SSE stream flushing so the buffered `tool.approval_required` frame is delivered and durably persisted promptly, and it resets the parent coordinator's subtask-stall timer so a human-paced wait is not misclassified as `agent_stall_timeout`. The frame is non-terminal and idempotent — clients that already render the approval card may ignore it — and a prompt approval emits none. Emitted by both the pod runtime (`CopilotAIAgent`) and the in-API runner (`GitHubCopilotAgentRunner`). See the [Tool Approval SSE Contract](../tool-approval-sse-contract.md#tool-approval-pending-heartbeat-issue-212) for the full frame and the coordinator stall-guard behavior.
+
+### `sandbox.provisioning_pending`
+
+A **heartbeat** emitted repeatedly on a coordinator **child** run's own stream while its AgentHost `SandboxClaim` is still being provisioned — i.e. the claim is not yet bound because Kubernetes is still scheduling the pod (a node may need to free up or the pool may need to autoscale). It fires about every 20 seconds (`SandboxProvisioningHeartbeatInterval`) from `KubernetesSandboxExecutor` while the claim is unbound, carrying the `claimName` and a `timestamp_utc`. Like `tool.approval_pending` (issue #212), its purpose is operational: it keeps the child stream moving so the parent coordinator's subtask-stall timer resets during the (Kubernetes-paced) provisioning wait instead of false-firing `agent_stall_timeout` (issue #217). A **Pending** pod is therefore a legitimate wait, not a failure — the platform no longer pre-flights namespace capacity before launching. The frame is non-terminal and idempotent; consumers that do not care may ignore it, and the coordinator's exemption self-heals as soon as any other real event (the pod binding, agent output, or a terminal event) arrives. The emit is best-effort: a stream-append failure is logged and swallowed so it can never fail a launch Kubernetes would otherwise admit.
 
 ### `workflow.step`
 
@@ -191,6 +244,7 @@ Emitted by each workflow executor stage when it starts, completes, fails, or is 
 | `merge` | Branch merge | executor self-emit |
 | `scribe` | Session logger | executor self-emit |
 | `assemble-ready` | Coordinator child assemble-ready terminal | watch loop (MAF executor-lifecycle translation) |
+| `preview` | Build & Test live-preview stage | coordinator / preview endpoint |
 
 Lifecycle (`started` / `completed` / `failed`) is translated from the MAF `ExecutorInvoked` / `ExecutorCompleted` / `ExecutorFailed` events by the run watch loop for nodes that do not already self-emit (currently the child `assemble-ready` terminal); the agent/rai/merge/scribe executors self-emit their own lifecycle plus the richer branch statuses.
 
@@ -198,7 +252,7 @@ Possible `status` values: `started`, `completed`, `failed`, `skipped`, `revise` 
 
 The `step` value always equals the descriptor node id the frontend keys on (`run.workflow_graph` `nodes[].id`). The `label` field is a short human-readable description (e.g. `"Agent turn"`, `"RAI review"`, `"Assemble-ready"`). `timestamp_utc` is an ISO 8601 (`"O"`) timestamp; the `timestamp_utc` on the `started` event drives the per-node live elapsed timer. The `agent` step includes `agent_name` (the team member running the turn). The `review` step includes `reviewer` (GitHub username) when a human review decision is recorded. An optional `message` field carries a short human-readable status note when available (e.g. on the assemble-ready node); consumers must tolerate its absence.
 
-The web UI uses `workflow.step` events to drive the workflow diagram — each card in the Agent → Rai → Review → Merge → Scribe pipeline (or Agent → Assemble-ready for a child) updates live as these events arrive.
+The web UI uses `workflow.step` events to drive the workflow diagram — each card in the Agent → Rai → Review → Merge → Scribe pipeline (or Agent → Assemble-ready for a child) updates live as these events arrive. The preview stage uses the same event with `step: "preview"` and statuses such as `started`, `pending`, `completed`, `failed`, or `skipped`; see [Live-preview provisioning](./live-preview-provisioning.md).
 
 ### `run.workflow_graph`
 
@@ -266,33 +320,67 @@ Unlike `coordinator.topology`, runtime status is NOT baked into the descriptor �
 
 - Node `coordinator` (`node_type: "agent"`, `role: "coordinator"`, `kind: "live"`).
 - One `plan:subtask-{id}` node per subtask (`node_type: "subtask"`, `kind: "live"`) carrying optional `agent`, `model`, `phase`, `isolation`, `child_run_id` fields (omitted when null) and a `child_graph_ref` of `run:{childRunId}` once dispatched (null until then) so the child's own graph can be expanded via `GET /api/runs/{childRunId}/graph`.
-- PLANNED collective-assembly chain (`kind: "planned"`): `planned:assembly-rai` (`agent`) → `planned:assembly-review` (`gate`) → `planned:assembly-merge` (`action`) → `planned:assembly-scribe` (`agent`).
+- PLANNED collective-assembly chain (`kind: "planned"`): gate nodes resolved from the selected workflow's assembly gates (for built-in software workflows, RAI before Build & Test before human review), then `planned:assembly-merge` (`action`) → `planned:assembly-scribe` (`agent`).
 - Edges: `coordinator` → each root subtask; dependency edges between subtasks; each terminal (leaf) subtask → `planned:assembly-rai`; then the assembly chain. Two loopback back-edges (`loopback: true`) close the cycle — `planned:assembly-rai` → `coordinator` and `planned:assembly-review` → `coordinator` — reflecting that an RAI flag or a review request-changes re-dispatches affected subtasks through the coordinator; all forward edges are `loopback: false`, and loopback edges are always `direct` and excluded from the fan-out/fan-in degree counts. `coordinator.topology` remains emitted alongside for existing consumers; `coordinator.graph` is the unified-contract event.
 
 ### `subtask.*`
 
 The `subtask.dispatched`, `subtask.running`, `subtask.assemble_ready`, `subtask.rai_flagged`, `subtask.completed`, and `subtask.failed` events track a single subtask's child run through its lifecycle on the coordinator stream. Each carries `subtaskId`, `childRunId`, `assignedAgent`, `selectedModelId`, and `status`. The subtask status advances `pending -> dispatched -> running -> {assemble_ready | rai_flagged | completed | failed}`. Each `subtask.*` event is paired with a `coordinator.topology` delta for the changed node, so observers can choose either the granular per-subtask signal or the graph view.
 
+A `subtask.pending_capacity` event (subtask status `pending_capacity`) is **legacy / historical**: it was emitted when the dispatcher parked a subtask because the namespace had no AgentHost pod capacity. Kubernetes now owns pod admission and scheduling, so new runs never emit it (issue #217) — a pod that is still being scheduled is surfaced instead by `sandbox.provisioning_pending` heartbeats on the child run's own stream, and a pre-upgrade subtask stranded in `pending_capacity` is recovered to `pending`. It is documented only so old records still render.
+
+### `coordinator.subtask_redispatched`
+
+Emitted on the coordinator stream when a child subtask **stalls** (its child run made no progress past the stall TTL) but the subtask still has recovery budget, so the coordinator redispatches it instead of dead-ending the run. Before this change a single stalled subtask blocked the whole run at the eligibility gate (`coordinator.assembly_blocked: ineligible_subtasks` → `coordinator.assembly_failed`); now the subtask is reset to `pending` for a fresh child on a fresh pod, and it only becomes a genuine terminal `failed` once the budget is exhausted.
+
+The redispatch is bounded by `CoordinatorSteeringService.MaxRecoveryAttempts` (**3**). `RecoveryAttempts` is incremented **monotonically** and never reset, so at most three stall-redispatches occur per subtask before the stall dead-ends. The **prior** stalled child run is still terminalized (`agent_stall_timeout`) and its AgentHost pod released — only the *subtask* is revived; the old child stays failed.
+
+Payload:
+
+- `subtaskId` — the subtask being redispatched.
+- `priorChildRunId` — the stalled child run, recorded on the subtask's `PriorChildRunId` so the fresh child builds on the prior branch through the existing handoff bundle.
+- `attempt` — the new `RecoveryAttempts` value (`N` of `maxAttempts`).
+- `maxAttempts` — `MaxRecoveryAttempts` (3).
+- `reason` — always `"stall_redispatch"`.
+- `timestamp_utc` — ISO-8601 emit time.
+
+Grounded in `CoordinatorDispatchService.TryRedispatchStalledSubtaskAsync` (`apps/Agentweaver.Api/Coordinator/CoordinatorDispatchService.cs:1235`), wired into the `ChildOutcome.Stalled` branch of the dispatch loop (`:399`). See the coordinator deep-dive [stall redispatch before dead-end](/deep-dive/coordinator-internals#stall-redispatch-before-dead-end).
+
 ### `coordinator.steering`
 
-Emitted when a steering directive is created through `POST /api/runs/{id}/steer` and as it changes state. `directiveId` identifies the directive; `kind` is `stop`, `redirect`, or `amend`; `targetChildRunId` is the targeted child run, or null for a broadcast to every active child; `instruction` is the direction relayed to the subagent(s); `status` advances `pending -> queued -> relayed -> applied`. A `stop` collapses to `applied` essentially immediately because it cancels the in-flight turn's token. A `redirect` or `amend` reaches `applied` only at the targeted subagent's next turn boundary, so observers should surface it as queued until then. Pause is not supported in Phase 2.
+Emitted when a steering directive is created through `POST /api/runs/{id}/steer` and as it changes state. `directiveId` identifies the directive; `kind` is `stop`, `send`, `redirect`, or `amend`; `targetChildRunId` is the targeted child run, or null for a broadcast to every active child; `instruction` is the direction relayed to the subagent(s); `status` advances `pending -> queued -> relayed -> applied`. A `stop` collapses to `applied` essentially immediately because it cancels the in-flight turn's token. A `redirect` or `amend` reaches `applied` only at the targeted subagent's next turn boundary, so observers should surface it as queued until then. Pause is not supported in Phase 2.
+
+**At the assembly human-review gate (#226):** a `redirect`/`amend`/`send` sent while the coordinator is parked at collective review (`awaiting_review`) is delivered to the parked assembly loop instead of the child-turn queue (previously it stuck at `queued` and was dropped). `redirect`/`amend` translate into a request-changes review decision — the same path as `POST /assembly/review` — and settle `relayed`; `send` becomes an advisory note and settles `applied`. When the review gate is armed on another API replica the decision is durably persisted for the owner's poller, so `status` is the new terminal value **`deferred`** and the `/steer` endpoint returns `202 Accepted`.
+
+Unified autonomous steering adds two source-agnostic events around this legacy directive lifecycle:
+
+- `coordinator.steering_received` is emitted when feedback from any source is persisted and queued for the coordinator. `source` is `human-review`, `rai`, `rubberduck`, `build-test`, `agent`, `coordinator`, or `step`; `severity` is `advisory`, `request-changes`, or `blocking`.
+- `coordinator.steering_decision` is emitted before the effect executes. `decision` is `in_place_steer`, `dispatch_fresh`, `proceed`, or `advisory`; `rationale` explains why. Fresh dispatch is therefore visible before any reset/re-dispatch. See [Unified autonomous steering](./unified-steering.md).
 
 ### `coordinator.children_complete` and `coordinator.assembly_*`
 
 Phase 3 collective assembly runs ONE pipeline over the COMBINED output of all child runs, then flows back to the coordinator. Child output is git state, not in-memory text: each child commits to its own worktree branch. When every child subtask reaches a terminal status, the coordinator emits `coordinator.children_complete` and moves the work plan to `awaiting_assembly`.
 
-A single background pipeline then drives the collective stages, each emitting a paired `coordinator.graph` so its planned assembly node flips to `kind: "live"`:
+A single background pipeline then drives the collective stages, each emitting a paired `coordinator.graph` so its planned assembly node flips to `kind: "live"`. Authored assembly gates are ordered by happy-path traversal of the workflow graph, not YAML node declaration order:
 
 1. **Exactly-once claim** — a DB compare-and-swap transitions `awaiting_assembly → assembling`; only the winner proceeds. `coordinator.assembly_started` carries the `integrationBranch` name (`agentweaver/integration/{coordinatorRunId}`) and `subtaskCount`.
 2. **Eligibility gate (no partial assembly)** — every subtask must be assembly-eligible (`assemble_ready`, or `completed` with no changes). If any is failed / rai_flagged / pending / blocked, the pipeline emits `coordinator.assembly_blocked` and STOPS — no RAI, no merge. The payload includes `ineligibleSubtaskIds` plus enriched `ineligibleSubtasks`.
 3. **Integration branch** — the eligible child branches are merged in dependency (topological) order off the coordinator's originating branch, producing one aggregate diff + tree hash. If a child conflicts while being added, the coordinator accepts that child's version for each conflicting path, emits `coordinator.integration_conflict_auto_resolved`, and continues.
-4. **Collective RAI** (`coordinator.assembly_rai_started` → `coordinator.assembly_rai_completed`) — one RAI pass over the aggregate diff. It is advisory: it never hard-blocks, but `raiSafetyFlagged` is surfaced to the human reviewer.
-5. **One human review gate** (`coordinator.assembly_review_requested`, carrying `treeHash` and `includedSubtaskIds` so the UI can render the assembled tree and which subtasks it covers) — the pipeline suspends until a decision arrives via `POST /api/runs/{coordinatorRunId}/assembly/review`. The POST can land on any API replica; if it lands away from the owner pipeline while the work plan is durably `in_review`, the decision is deferred in shared state and the owner consumes it at most once. Approve → `coordinator.assembly_review_approved`. Request changes → `coordinator.assembly_changes_requested` (the coordinator infers the affected children from the reviewer's `target_files` ∪ path tokens in `feedback`, intersected with each child's touched-files and expanded to dependents — `redispatchSubtaskIds`, `inferredFiles`, `fellBackToAll`), resets those subtasks to `pending`, returns the plan to `dispatching`, and re-dispatches. A pure decline is the terminal `assembly_declined` status.
-6. **One merge** (`coordinator.assembly_merge_started` → `coordinator.assembly_merge_completed` with `commitHash`, or `coordinator.assembly_merge_failed` with `reason`/`conflictingFiles`).
-7. **One scribe** (`coordinator.assembly_scribe_started` → `coordinator.assembly_scribe_completed`) — best-effort; a scribe failure does not fail the already-merged assembly.
-8. **Completion** — `coordinator.assembly_completed` with the `integrationBranch` and `commitHash`; the work plan reaches `complete`.
+4. **Collective RAI** (`coordinator.assembly_rai_started` → `coordinator.assembly_rai_completed`) — one RAI pass over the aggregate diff. A safety flag hard-stops the plan before later gates.
+5. **Automated assembly review gates** (`coordinator.assembly_review_requested` with `gateKind: "rubberduck"` or `"build-test"`) — Rubberduck critique may request changes; Build & Test creates a detached integration-branch worktree and runs the build/test verdict. The deterministic preview step then runs after Build & Test for approved or request-changes verdicts, producing `sandbox.preview_ready`, `sandbox.preview_failed`, or `sandbox.preview_skipped_not_applicable` without changing the verdict. Automated gate request-changes feedback routes through unified steering: `coordinator.steering_received` records the source, and `coordinator.steering_decision` records whether the coordinator chose in-place steering, fresh dispatch, proceed/terminal, or advisory no-op. Fresh dispatch is therefore visible before any reset.
+6. **One human review gate** (`coordinator.assembly_review_requested` with `gateKind: "human-review"`, carrying `treeHash` and `includedSubtaskIds` so the UI can render the assembled tree and which subtasks it covers) — the pipeline suspends until a decision arrives via `POST /api/runs/{coordinatorRunId}/assembly/review`. The POST can land on any API replica; if it lands away from the owner pipeline while the work plan is durably `in_review`, the decision is deferred in shared state and the owner consumes it at most once. Approve → `coordinator.assembly_review_approved`. Request changes → `coordinator.assembly_changes_requested` (the coordinator scopes the re-dispatch to the reviewer's **implicated** subtasks — reverse-mapped from the reviewer's structured `TARGET_FILES:` hint via `AssemblyPlanning.ScopeImplicatedSubtasks`, never prose-scraped — plus their transitive dependents: `implicatedSubtaskIds`, `dependentSubtaskIds`, `redispatchSubtaskIds`; if no hint is present or it matches nothing it falls back to all contributors and emits `coordinator.assembly_implicated_scope_fallback`), resets those subtasks to `pending`, returns the plan to `dispatching`, and re-dispatches. A pure decline is the terminal `assembly_declined` status.
+7. **One merge** (`coordinator.assembly_merge_started` → `coordinator.assembly_merge_completed` with `commitHash`, or `coordinator.assembly_merge_failed` with `reason`/`conflictingFiles`).
+8. **One scribe** (`coordinator.assembly_scribe_started` → `coordinator.assembly_scribe_completed`) — best-effort; a scribe failure does not fail the already-merged assembly.
+9. **Completion** — `coordinator.assembly_completed` with the `integrationBranch` and `commitHash`; the work plan reaches `complete`.
 
 Work-plan status flows `dispatching → awaiting_assembly → assembling → in_review → assembling` (during merge/scribe after approval) `→ complete`, plus the parked/terminal states `assembly_blocked`, `assembly_failed`, and `assembly_declined`. On every terminal assembly path the coordinator run itself is moved to a terminal `RunStatus` that carries a human-readable `result` (the reason): `assembly_blocked: <reason>` (Failed), `assembly_merge_failed: <reason>` (MergeFailed), `assembly_declined` (Declined), `assembly_error: <message>` (Failed, unexpected fault), or `assembly_complete` (Completed). This `result` is surfaced as the `statusReason` on `GET /api/runs/{coordinatorRunId}/work-plan` and as the `result` on the run summary/detail, so the UI never shows a bare "Failed" with no explanation. The collective `coordinator.assembly_rai_*` events remain distinct from child-run lifecycle events: the former is the single RAI pass over the combined output, while child runs now stop at `run.assemble_ready` without launching their own `-rai` sub-stream. All events carry a monotonic `seq` on the coordinator stream.
+
+Durable replay drains the full persisted batch before terminal handling. A `coordinator.assembly_failed`
+row is terminal, but if a diagnostic row was persisted just after it in the same replay batch, subscribers
+still receive that row before `/api/runs/{id}/stream` completes. `coordinator.assembly_blocked` is
+intentionally not terminal: it represents a retryable park, so SSE subscribers stay attached until the plan
+recovers or reaches a real terminal event (`apps/Agentweaver.Api/Infrastructure/SqliteRunEventStream.cs:153`,
+`apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:111`).
 
 
 ## Model-assisted casting

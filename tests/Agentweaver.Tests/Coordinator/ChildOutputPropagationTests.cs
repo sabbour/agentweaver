@@ -34,6 +34,56 @@ public sealed class ChildOutputPropagationTests : IDisposable
         _manager = new WorktreeManager(config, NullLogger<WorktreeManager>.Instance);
     }
 
+    // (a2) #237 — a dependent subtask worktree must provision correctly when the integration branch
+    // diverges from the primary repo's checked-out HEAD via a FILE<->DIRECTORY typechange (`foo` file
+    // at HEAD vs `foo/` dir at the integration tip). The production incident (run 4314ee08) surfaced as
+    // a LibGit2Sharp CheckoutConflictException in the OLD two-step provisioner (git_worktree_add at the
+    // primary HEAD, then a non-forced Commands.Checkout onto the integration tip). The git-CLI
+    // single-step `git worktree add -b <run> <path> <sha>` checks out the integration tree directly
+    // with no intermediate primary-HEAD state, so no such conflict is possible. This test locks in that
+    // the assembled integration tree (including the typechanged path) is materialized on disk.
+    [Fact]
+    public void DependentSubtaskWorktree_ProvisionsThroughFileToDirectoryTypechange()
+    {
+        // Primary repo has `foo` as a FILE and is left checked out on main (the old two-step's
+        // intermediate checkout state), so the fix is exercised across the file->dir typechange.
+        var repoPath = CreateTempGitRepoWithFooFileOnMainHead();
+
+        // Child branch turns `foo` (file) into `foo/` (directory) and adds an upstream artifact.
+        CommitTypechangeAndUpstreamFile(
+            repoPath,
+            "agentweaver/child-typechange",
+            deleteFile: "foo",
+            addFilePath: "foo/bar",
+            addFileContent: "now foo is a directory",
+            upstreamPath: "research-domain.md",
+            upstreamContent: "coffee roasting SaaS domain research");
+
+        var integrationBranch = "agentweaver/integration/coord-237";
+        var result = _manager.BuildIntegrationBranch(
+            repoPath, "main", integrationBranch, new[] { "agentweaver/child-typechange" });
+        result.Outcome.Should().Be(IntegrationBranchOutcome.Built);
+
+        // The dependent subtask bases on the integration branch → its worktree checkout crosses the
+        // file->dir typechange relative to the primary HEAD. It must succeed and materialize the tree.
+        var dependentRunId = RunId.New();
+        var info = _manager.AddWorktree(repoPath, integrationBranch, dependentRunId);
+
+        Directory.Exists(info.WorktreePath).Should().BeTrue("the dependent worktree must be provisioned");
+
+        // The post-typechange tree must be materialized on disk: `foo` is now a directory holding
+        // `foo/bar`, the old `foo` file is gone, and the upstream artifact is present.
+        var oldFooAsFile = Path.Combine(info.WorktreePath, "foo");
+        Directory.Exists(oldFooAsFile).Should().BeTrue("`foo` must now be a directory in the worktree");
+        var typechangedPath = Path.Combine(info.WorktreePath, "foo", "bar");
+        File.Exists(typechangedPath).Should().BeTrue("the post-typechange file `foo/bar` must be on disk");
+        File.ReadAllText(typechangedPath).Should().Be("now foo is a directory");
+
+        var upstreamPath = Path.Combine(info.WorktreePath, "research-domain.md");
+        File.Exists(upstreamPath).Should().BeTrue("the upstream artifact must be materialized too");
+        File.ReadAllText(upstreamPath).Should().Be("coffee roasting SaaS domain research");
+    }
+
     // (a) Upstream subtask creates a file → dependent subtask's base contains it.
     [Fact]
     public void UpstreamFile_IsPresentInDependentSubtaskBaseWorktree()
@@ -187,6 +237,71 @@ public sealed class ChildOutputPropagationTests : IDisposable
         finally
         {
             if (File.Exists(tmpBlobPath)) File.Delete(tmpBlobPath);
+        }
+    }
+
+    // #237 setup: a repo whose CHECKED-OUT HEAD (main) contains `foo` as a FILE, so the old
+    // git_worktree_add two-step's intermediate checkout state carries the file that later collides
+    // (file->dir) with the integration tip. main is intentionally left checked out here.
+    private string CreateTempGitRepoWithFooFileOnMainHead()
+    {
+        var repoPath = Path.Combine(Path.GetTempPath(), $"aw-237-repo-{Guid.NewGuid():N}");
+        _tempDirs.Add(repoPath);
+
+        Repository.Init(repoPath);
+        using var repo = new Repository(repoPath);
+
+        File.WriteAllText(Path.Combine(repoPath, "readme.txt"), "initial content\n");
+        File.WriteAllText(Path.Combine(repoPath, "foo"), "foo is a file at HEAD\n");
+        Commands.Stage(repo, "*");
+        var sig = new Signature("Test", "test@localhost", DateTimeOffset.UtcNow);
+        repo.Commit("Initial commit with foo as a file", sig, sig);
+
+        if (!string.Equals(repo.Head.FriendlyName, "main", StringComparison.Ordinal))
+            repo.Branches.Rename(repo.Head, "main");
+
+        return repoPath;
+    }
+
+    // #237 setup: on a new child branch, DELETE a file and ADD a path under a directory of the same
+    // name (file->dir typechange), plus an additive upstream artifact — all in one commit built via
+    // the object database so no working-tree checkout of the primary repo is required.
+    private static void CommitTypechangeAndUpstreamFile(
+        string repositoryPath,
+        string branchName,
+        string deleteFile,
+        string addFilePath,
+        string addFileContent,
+        string upstreamPath,
+        string upstreamContent)
+    {
+        using var repo = new Repository(repositoryPath);
+        var main = repo.Branches["main"] ?? throw new InvalidOperationException("main not found");
+        var branch = repo.Branches[branchName] ?? repo.CreateBranch(branchName, main.Tip);
+
+        var tmpTypechange = Path.Combine(repositoryPath, ".git", $"tmp-blob-tc-{Guid.NewGuid():N}");
+        var tmpUpstream = Path.Combine(repositoryPath, ".git", $"tmp-blob-up-{Guid.NewGuid():N}");
+        File.WriteAllText(tmpTypechange, addFileContent, Encoding.UTF8);
+        File.WriteAllText(tmpUpstream, upstreamContent, Encoding.UTF8);
+        try
+        {
+            var typechangeBlob = repo.ObjectDatabase.CreateBlob(tmpTypechange);
+            var upstreamBlob = repo.ObjectDatabase.CreateBlob(tmpUpstream);
+            var treeDef = TreeDefinition.From(branch.Tip.Tree);
+            treeDef.Remove(deleteFile);
+            treeDef.Add(addFilePath, typechangeBlob, Mode.NonExecutableFile);
+            treeDef.Add(upstreamPath, upstreamBlob, Mode.NonExecutableFile);
+            var newTree = repo.ObjectDatabase.CreateTree(treeDef);
+            var sig = new Signature("Test", "test@localhost", DateTimeOffset.UtcNow);
+            var newCommit = repo.ObjectDatabase.CreateCommit(
+                sig, sig, "child: turn foo file into foo/ directory", newTree, new[] { branch.Tip },
+                prettifyMessage: true);
+            repo.Refs.UpdateTarget(repo.Refs[$"refs/heads/{branchName}"], newCommit.Id);
+        }
+        finally
+        {
+            if (File.Exists(tmpTypechange)) File.Delete(tmpTypechange);
+            if (File.Exists(tmpUpstream)) File.Delete(tmpUpstream);
         }
     }
 

@@ -2,7 +2,7 @@
   "id": "data-engineer",
   "title": "Data Engineer",
   "summary": "Builds and maintains data pipelines, storage, and models that deliver trustworthy data to downstream consumers.",
-  "default_model": "claude-sonnet-4.6",
+  "default_model": "claude-sonnet-5",
   "capabilities": [
     "data-pipeline-design",
     "etl-and-ingestion",

@@ -67,6 +67,40 @@ public sealed class SandboxPreviewServiceClusterTests
             "StartPreview must read the SandboxClaim from the cluster (replica-safe)");
     }
 
+
+    [Fact]
+    public async Task StartPreview_resolves_pod_from_retained_run_command_claim_status()
+    {
+        const string runId = "run-command-preview";
+        var agentClaimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
+        var runCommandClaimName = SandboxClaimConventions.DeriveRunCommandClaimName(runId);
+        using var listener = StartListener(out var targetPort);
+
+        var handler = new FakeKubeHandler();
+        handler.OnGet(
+            $"/apis/{SandboxClaimConventions.ApiGroup}/{SandboxClaimConventions.ApiVersion}/namespaces/agentweaver/sandboxclaims/{runCommandClaimName}",
+            """{"apiVersion":"extensions.agents.x-k8s.io/v1beta1","kind":"SandboxClaim","metadata":{"name":"c"},"status":{"conditions":[{"type":"Ready","status":"True","reason":"Bound","message":"sandbox ready","lastTransitionTime":"2026-06-28T06:00:00Z"}],"sandbox":{"name":"run-command-pod-zzz"}}}""");
+        handler.OnGet(
+            "/api/v1/namespaces/agentweaver/pods/run-command-pod-zzz",
+            """{"apiVersion":"v1","kind":"Pod","metadata":{"name":"run-command-pod-zzz"},"status":{"podIP":"127.0.0.1"}}""");
+        handler.OnAny(@"^/api/v1/namespaces/agentweaver/pods/", """{"apiVersion":"v1","kind":"Pod","metadata":{"name":"run-command-pod-zzz"}}""");
+        handler.OnEcho("POST", "/api/v1/namespaces/agentweaver/services");
+        handler.OnEcho("POST", "/apis/gateway.networking.k8s.io/v1/namespaces/agentweaver/httproutes");
+
+        var svc = NewService(handler);
+
+        var session = await svc.StartPreviewAsync(runId, targetPort, "user-1");
+
+        session.PodName.Should().Be("run-command-pod-zzz",
+            "Build/Test may start the preview server through run_command in the retained run-* sandbox claim");
+        handler.Requests.Should().Contain(r =>
+            r.Method == "GET" && r.Path.EndsWith($"/sandboxclaims/{agentClaimName}"),
+            "the resolver checks the AgentHost claim first");
+        handler.Requests.Should().Contain(r =>
+            r.Method == "GET" && r.Path.EndsWith($"/sandboxclaims/{runCommandClaimName}"),
+            "the resolver falls back to the retained command-sandbox claim for the same run");
+    }
+
     [Fact]
     public async Task StartPreview_returns_not_ready_when_claim_unbound_on_every_replica()
     {
@@ -113,6 +147,9 @@ public sealed class SandboxPreviewServiceClusterTests
         handler.OnGet(
             "/api/v1/namespaces/agentweaver/pods/agenthost-pod-1",
             """{"apiVersion":"v1","kind":"Pod","metadata":{"name":"agenthost-pod-1"},"status":{"podIP":"127.0.0.1"}}""");
+        // Pod-existence probe (label selector) confirms the run's bound pod is still present.
+        handler.OnGet("/api/v1/namespaces/agentweaver/pods",
+            """{"kind":"PodList","items":[{"metadata":{"name":"agenthost-pod-1"}}]}""");
 
         var svc = NewService(handler);
 
@@ -127,8 +164,12 @@ public sealed class SandboxPreviewServiceClusterTests
     }
 
     [Fact]
-    public async Task StartPreview_rejects_preview_when_nothing_is_listening_on_the_target_port()
+    public async Task StartPreview_does_not_tcp_probe_target_port_and_creates_route()
     {
+        // Under the sandbox isolation model the API pod cannot TCP-connect to podIP:targetPort
+        // (NetworkPolicy admits preview ports only from the Gateway). StartPreview must therefore
+        // NOT preflight-probe the port: readiness is proven upstream by the AgentHost observe step.
+        // Here nothing is listening on the target port, yet the Service + HTTPRoute must still be created.
         const string runId = "run-dead-port";
         var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
         var deadPort = ReserveUnusedLocalPort();
@@ -140,56 +181,46 @@ public sealed class SandboxPreviewServiceClusterTests
         handler.OnGet(
             "/api/v1/namespaces/agentweaver/pods/agenthost-pod-dead",
             """{"apiVersion":"v1","kind":"Pod","metadata":{"name":"agenthost-pod-dead"},"status":{"podIP":"127.0.0.1"}}""");
+        handler.OnEcho("POST", "/api/v1/namespaces/agentweaver/services");
+        handler.OnEcho("POST", "/apis/gateway.networking.k8s.io/v1/namespaces/agentweaver/httproutes");
 
         var svc = NewService(handler);
 
-        var act = async () => await svc.StartPreviewAsync(runId, deadPort, "user-1");
+        var session = await svc.StartPreviewAsync(runId, deadPort, "user-1");
 
-        await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*Nothing is listening*");
-        handler.Requests.Should().NotContain(r => r.Method == "POST" && r.Path.EndsWith("/services"),
-            "the preview must fail before advertising an inactive port");
+        session.PodName.Should().Be("agenthost-pod-dead");
+        session.PreviewUrl.Should().StartWith("https://");
+        handler.Requests.Should().Contain(r => r.Method == "POST" && r.Path.EndsWith("/services"),
+            "readiness is proven by the AgentHost observe step, so the route is created without an API->podIP probe");
     }
 
     [Fact]
-    public async Task ListForRun_filters_out_routes_whose_target_port_is_not_listening()
+    public async Task ListForRun_filters_out_routes_when_no_bound_pod_exists_for_the_run()
     {
+        // Under isolation we cannot TCP-probe podIP:targetPort from the API pod, so ListForRun uses
+        // the allowed control-plane pod-existence check (label selector) as the liveness proxy.
+        // When the run's bound pod is gone, its routes must not be reported as active.
         const string runId = "run-filter-dead-preview";
         var sanitizedRun = PreviewReaper.PerRunLabel(runId);
-        const string liveToken = "swift-falcon-amber-k7m2q9x4n8b3r6t5w1z0c2";
-        const string deadToken = "calm-otter-cobalt-k7m2q9x4n8b3r6t5w1z0c2";
-        using var listener = StartListener(out var livePort);
-        var deadPort = ReserveUnusedLocalPort();
+        const string token = "swift-falcon-amber-k7m2q9x4n8b3r6t5w1z0c2";
 
         var handler = new FakeKubeHandler();
         handler.OnGet("/apis/gateway.networking.k8s.io/v1/namespaces/agentweaver/httproutes",
             "{\"kind\":\"HTTPRouteList\",\"items\":[" +
-            "{\"metadata\":{\"name\":\"preview-live\",\"annotations\":{" +
-            "\"agentweaver.dev/preview-token\":\"" + liveToken + "\"," +
+            "{\"metadata\":{\"name\":\"preview-x\",\"annotations\":{" +
+            "\"agentweaver.dev/preview-token\":\"" + token + "\"," +
             "\"agentweaver.dev/preview-run\":\"" + sanitizedRun + "\"," +
-            "\"agentweaver.dev/preview-pod\":\"agenthost-pod-live\"," +
-            "\"agentweaver.dev/preview-target-port\":\"" + livePort + "\"," +
-            "\"agentweaver.dev/preview-started-at\":\"2026-06-30T23:00:00Z\"}}}," +
-            "{\"metadata\":{\"name\":\"preview-dead\",\"annotations\":{" +
-            "\"agentweaver.dev/preview-token\":\"" + deadToken + "\"," +
-            "\"agentweaver.dev/preview-run\":\"" + sanitizedRun + "\"," +
-            "\"agentweaver.dev/preview-pod\":\"agenthost-pod-dead\"," +
-            "\"agentweaver.dev/preview-target-port\":\"" + deadPort + "\"," +
+            "\"agentweaver.dev/preview-pod\":\"agenthost-pod-gone\"," +
+            "\"agentweaver.dev/preview-target-port\":\"5431\"," +
             "\"agentweaver.dev/preview-started-at\":\"2026-06-30T23:05:00Z\"}}}]}");
-        handler.OnGet(
-            "/api/v1/namespaces/agentweaver/pods/agenthost-pod-live",
-            """{"apiVersion":"v1","kind":"Pod","metadata":{"name":"agenthost-pod-live"},"status":{"podIP":"127.0.0.1"}}""");
-        handler.OnGet(
-            "/api/v1/namespaces/agentweaver/pods/agenthost-pod-dead",
-            """{"apiVersion":"v1","kind":"Pod","metadata":{"name":"agenthost-pod-dead"},"status":{"podIP":"127.0.0.1"}}""");
+        // Pod-existence probe (label selector) returns an empty list -> the pod is gone.
+        handler.OnGet("/api/v1/namespaces/agentweaver/pods", """{"kind":"PodList","items":[]}""");
 
         var svc = NewService(handler);
 
         var sessions = await svc.ListForRunAsync(runId);
 
-        sessions.Should().ContainSingle();
-        sessions[0].Token.Should().Be(liveToken);
-        sessions[0].TargetPort.Should().Be(livePort);
+        sessions.Should().BeEmpty("a route whose bound pod no longer exists must not be reported active");
     }
 
     [Fact]

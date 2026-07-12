@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using System.Text.Json;
 using Agentweaver.Api.Memory;
 
 namespace Agentweaver.Api.Coordinator;
@@ -115,7 +116,53 @@ public sealed class CoordinatorAssemblyStore
         return updated > 0;
     }
 
-    /// <summary>Sets the work-plan <see cref="WorkPlan.Status"/> (e.g. in_review, complete, assembly_*).</summary>
+    /// <summary>
+    /// UNIFIED AUTONOMOUS STEERING (rev8 §3b.4/§3c): reclaims a stale <see cref="WorkPlanStatus.AssemblySteering"/>
+    /// decision-in-progress lease back to <c>awaiting_assembly</c> so a resurrected pod re-enters the
+    /// assembly boundary and re-invokes the decider. Treated exactly like the <c>assembling</c> lease:
+    /// only reclaimed when <see cref="WorkPlan.AssemblyStartedAt"/> is null or older than
+    /// <paramref name="staleBefore"/> — a FRESH lease (a live decider on another replica, heartbeating)
+    /// is left untouched, so at most one decider is active at a time. The caller that wins this reclaim
+    /// also resets the run's stale <c>relayed</c> steering directives back to <c>queued</c> (via
+    /// <see cref="CoordinatorSteeringService.ReclaimStaleRelayedDirectivesAsync"/>) in the SAME recovery
+    /// step, closing the claim-durability window (§3c). Returns <c>true</c> for the single reclaim winner.
+    /// </summary>
+    public async Task<bool> TryReclaimStaleAssemblySteeringAsync(
+        int workPlanId, DateTimeOffset staleBefore, CancellationToken ct)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var now = DateTimeOffset.UtcNow;
+
+        if (db.Database.IsSqlite())
+        {
+            var rows = await db.Database.ExecuteSqlInterpolatedAsync($"""
+                UPDATE "WorkPlans"
+                   SET "Status" = {WorkPlanStatus.AwaitingAssembly},
+                       "AssemblyStage" = NULL,
+                       "AssemblyTerminalStage" = NULL,
+                       "AssemblyStatusReason" = NULL,
+                       "UpdatedAt" = {now}
+                 WHERE "Id" = {workPlanId}
+                   AND "Status" = {WorkPlanStatus.AssemblySteering}
+                   AND ("AssemblyStartedAt" IS NULL OR "AssemblyStartedAt" < {staleBefore})
+                """, ct).ConfigureAwait(false);
+            return rows > 0;
+        }
+
+        var updated = await db.WorkPlans
+            .Where(w => w.Id == workPlanId
+                     && w.Status == WorkPlanStatus.AssemblySteering
+                     && (w.AssemblyStartedAt == null || w.AssemblyStartedAt < staleBefore))
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(w => w.Status, WorkPlanStatus.AwaitingAssembly)
+                .SetProperty(w => w.AssemblyStage, (string?)null)
+                .SetProperty(w => w.AssemblyTerminalStage, (string?)null)
+                .SetProperty(w => w.AssemblyStatusReason, (string?)null)
+                .SetProperty(w => w.UpdatedAt, now), ct)
+            .ConfigureAwait(false);
+        return updated > 0;
+    }
     public async Task SetStatusAsync(int workPlanId, string status, CancellationToken ct)
     {
         using var scope = _scopeFactory.CreateScope();
@@ -181,6 +228,92 @@ public sealed class CoordinatorAssemblyStore
             .ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// UNIFIED AUTONOMOUS STEERING (rev8 §3b/§3c, RD#3/CR#1) — enters the
+    /// <see cref="WorkPlanStatus.AssemblySteering"/> decision-in-progress lease AND stamps
+    /// <see cref="WorkPlan.AssemblyStartedAt"/> as the lease heartbeat. The reclaim path
+    /// (<see cref="TryReclaimStaleAssemblySteeringAsync"/>) keys fresh-vs-stale on
+    /// <c>AssemblyStartedAt</c>; the generic <see cref="SetStatusAndStageAsync"/> does NOT stamp it, so
+    /// a crash mid-steering would otherwise look permanently stale (or, if left from a prior phase,
+    /// permanently fresh). Using a dedicated stamp here makes the heartbeat the reclaim relies on real.
+    /// </summary>
+    public async Task SetAssemblySteeringAsync(int workPlanId, CancellationToken ct)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var now = DateTimeOffset.UtcNow;
+        await db.WorkPlans
+            .Where(w => w.Id == workPlanId)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(w => w.Status, WorkPlanStatus.AssemblySteering)
+                .SetProperty(w => w.AssemblyStage, (string?)null)
+                .SetProperty(w => w.AssemblyTerminalStage, (string?)null)
+                .SetProperty(w => w.AssemblyStatusReason, (string?)null)
+                .SetProperty(w => w.AssemblyStartedAt, now)
+                .SetProperty(w => w.UpdatedAt, now), ct)
+            .ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// UNIFIED AUTONOMOUS STEERING (Fix-B, change #3) — GUARDED escalation of an exhausted steering
+    /// budget to the human-review gate. Atomically transitions the plan from the
+    /// <see cref="WorkPlanStatus.AssemblySteering"/> decision-in-progress lease (or the
+    /// <see cref="WorkPlanStatus.Assembling"/> phase, if the escalation runs outside the steering lease)
+    /// to <see cref="WorkPlanStatus.InReview"/> with the canonical <see cref="AssemblyStage.Review"/>
+    /// stage — the SAME state the normal human-review gate uses (so the review endpoint's
+    /// <c>ValidatePendingRequest</c> and the <c>ResumeInReviewAsync</c> recovery both work unchanged).
+    /// Returns <c>true</c> ONLY for the single replica that won the transition; a second replica that
+    /// finds the plan already <c>InReview</c> gets <c>false</c> and NO-OPs (prevents double-escalation
+    /// from clobbering an already-open review record).
+    /// </summary>
+    public async Task<bool> TryEscalateToInReviewAsync(int workPlanId, CancellationToken ct)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var now = DateTimeOffset.UtcNow;
+        var rows = await db.WorkPlans
+            .Where(w => w.Id == workPlanId
+                     && (w.Status == WorkPlanStatus.AssemblySteering
+                         || w.Status == WorkPlanStatus.Assembling))
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(w => w.Status, WorkPlanStatus.InReview)
+                .SetProperty(w => w.AssemblyStage, AssemblyStage.Review)
+                .SetProperty(w => w.AssemblyTerminalStage, (string?)null)
+                .SetProperty(w => w.AssemblyStatusReason, (string?)null)
+                .SetProperty(w => w.UpdatedAt, now), ct)
+            .ConfigureAwait(false);
+        return rows > 0;
+    }
+
+    /// <summary>
+    /// UNIFIED AUTONOMOUS STEERING (Fix-B, change #4) — atomically increments the persisted per-plan
+    /// HUMAN-review round-trip counter and returns the NEW value. This counter is TELEMETRY ONLY; it
+    /// gates nothing — a human request-changes UNCONDITIONALLY resets the autonomous steering budget
+    /// (there is no human-review round-trip cap). Persisted (not in-memory) so the count is
+    /// cross-replica/crash-safe. The increment and read happen in ONE transaction so concurrent human
+    /// decisions cannot observe a torn/duplicate count.
+    /// </summary>
+    public async Task<int> IncrementHumanReviewRoundTripAsync(int workPlanId, CancellationToken ct)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var now = DateTimeOffset.UtcNow;
+        await using var tx = await db.Database.BeginTransactionAsync(ct).ConfigureAwait(false);
+        await db.WorkPlans
+            .Where(w => w.Id == workPlanId)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(w => w.HumanReviewRoundTrips, w => w.HumanReviewRoundTrips + 1)
+                .SetProperty(w => w.UpdatedAt, now), ct)
+            .ConfigureAwait(false);
+        var count = await db.WorkPlans
+            .Where(w => w.Id == workPlanId)
+            .Select(w => w.HumanReviewRoundTrips)
+            .FirstAsync(ct)
+            .ConfigureAwait(false);
+        await tx.CommitAsync(ct).ConfigureAwait(false);
+        return count;
+    }
+
     /// <summary>Reads the current assembly-relevant state of a work plan (null when not found).</summary>
     public async Task<WorkPlanAssemblyState?> GetAsync(int workPlanId, CancellationToken ct)
     {
@@ -198,7 +331,106 @@ public sealed class CoordinatorAssemblyStore
             .FirstOrDefaultAsync(ct)
             .ConfigureAwait(false);
     }
+
+    /// <summary>
+    /// UNIFIED AUTONOMOUS STEERING (Req-2, change #4) — the Strict-Lockout rotation transition. In ONE
+    /// guarded transaction it (a) verifies the subtask's current author still equals
+    /// <paramref name="expectedAuthor"/> (optimistic CAS on <c>AssignedAgent</c>), (b) APPENDS that
+    /// author to the durable <c>LockedOutAgents</c> JSON set, and (c) persists the rotated author +
+    /// model + charter — so the append and the dispatch-field swap can never tear across replicas. The
+    /// CAS on the pre-rotation author is what prevents a lost update / double-rotation: the first
+    /// replica moves <c>AssignedAgent</c> away from <paramref name="expectedAuthor"/>, so a concurrent
+    /// second replica's guarded UPDATE matches 0 rows and NO-OPs (returns <c>Won=false</c>). Returns the
+    /// resulting locked-out roster for the visible rotation event.
+    /// </summary>
+    public async Task<SubtaskRotationResult> TryRotateSubtaskAuthorAsync(
+        int subtaskId,
+        string expectedAuthor,
+        string newAuthor,
+        string newModel,
+        string? newCharter,
+        CancellationToken ct,
+        int? directiveId = null,
+        int? attempt = null)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var now = DateTimeOffset.UtcNow;
+        await using var tx = await db.Database.BeginTransactionAsync(ct).ConfigureAwait(false);
+
+        var currentJson = await db.Subtasks
+            .Where(s => s.Id == subtaskId)
+            .Select(s => s.LockedOutAgents)
+            .FirstOrDefaultAsync(ct)
+            .ConfigureAwait(false);
+        var lockedSet = ParseLockedOut(currentJson);
+        if (!lockedSet.Any(a => string.Equals(a, expectedAuthor, StringComparison.OrdinalIgnoreCase)))
+            lockedSet.Add(expectedAuthor);
+        var newJson = JsonSerializer.Serialize(lockedSet);
+
+        // Guarded CAS on AssignedAgent == expectedAuthor: exactly one replica wins the rotation. The
+        // (directiveId, attempt) idempotency stamp is written ATOMICALLY with the rotation so a crash can
+        // never leave the author rotated but the stamp missing (which would let a re-drive double-rotate
+        // off the already-rotated author). DriveOutstandingSteeringExecutionAsync's re-drive reads this
+        // stamp to SKIP re-rotating a subtask this directive/attempt already rotated.
+        var rows = await db.Subtasks
+            .Where(s => s.Id == subtaskId && s.AssignedAgent == expectedAuthor)
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(s => s.AssignedAgent, newAuthor)
+                .SetProperty(s => s.SelectedModelId, newModel)
+                .SetProperty(s => s.AgentCharter, newCharter)
+                .SetProperty(s => s.LockedOutAgents, newJson)
+                .SetProperty(s => s.LastResetDirectiveId, s => directiveId ?? s.LastResetDirectiveId)
+                .SetProperty(s => s.LastResetAttempt, s => attempt ?? s.LastResetAttempt)
+                .SetProperty(s => s.UpdatedAt, now), ct)
+            .ConfigureAwait(false);
+
+        if (rows == 0)
+        {
+            await tx.RollbackAsync(ct).ConfigureAwait(false);
+            // Lost the CAS (a concurrent replica already rotated). Read back the durable locked set so
+            // the caller still sees the authoritative roster; do NOT re-append or re-dispatch.
+            var settledJson = await db.Subtasks
+                .Where(s => s.Id == subtaskId)
+                .Select(s => s.LockedOutAgents)
+                .FirstOrDefaultAsync(ct)
+                .ConfigureAwait(false);
+            return new SubtaskRotationResult(false, ParseLockedOut(settledJson));
+        }
+
+        await tx.CommitAsync(ct).ConfigureAwait(false);
+        return new SubtaskRotationResult(true, lockedSet);
+    }
+
+    /// <summary>Reads a subtask's durable locked-out author roster (empty when none/unknown).</summary>
+    public async Task<IReadOnlyList<string>> GetLockedOutAgentsAsync(int subtaskId, CancellationToken ct)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var json = await db.Subtasks.AsNoTracking()
+            .Where(s => s.Id == subtaskId)
+            .Select(s => s.LockedOutAgents)
+            .FirstOrDefaultAsync(ct)
+            .ConfigureAwait(false);
+        return ParseLockedOut(json);
+    }
+
+    private static List<string> ParseLockedOut(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return [];
+        try
+        {
+            return JsonSerializer.Deserialize<List<string>>(json) ?? [];
+        }
+        catch
+        {
+            return [];
+        }
+    }
 }
+
+/// <summary>Outcome of a <see cref="CoordinatorAssemblyStore.TryRotateSubtaskAuthorAsync"/> attempt.</summary>
+public sealed record SubtaskRotationResult(bool Won, IReadOnlyList<string> LockedOutRoster);
 
 /// <summary>Assembly-relevant projection of a <see cref="WorkPlan"/> row.</summary>
 public sealed record WorkPlanAssemblyState(

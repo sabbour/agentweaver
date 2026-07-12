@@ -24,6 +24,7 @@ builder.Services.Configure<AgentHostOptions>(builder.Configuration.GetSection("A
 // carries RunId/UserId/TurnBearerToken/KvUserSecretName delivered later via POST /configure
 // (warm pool) or seeded from options at startup (env-var launch).
 builder.Services.AddSingleton<AgentHostRuntimeState>();
+builder.Services.Configure<PreviewRunnerOptions>(builder.Configuration.GetSection("AgentHost:PreviewRunner"));
 
 // ── A2A listener: mTLS (production default) vs plain HTTP (PoC) ─────────────────
 // Sandbox:AgentHost:RequireMtls maps here as AgentHost:RequireMtls. Default TRUE keeps the
@@ -127,6 +128,10 @@ else
 builder.Services.AddSingleton<ISandboxPolicyStore, PodSandboxPolicyStore>();
 
 // ── Agent runtime (in-memory approvals, local executor — Kata VM IS the sandbox) ─
+builder.Services.AddSingleton<PreviewRunner>();
+builder.Services.AddSingleton<IPreviewRunner>(sp => sp.GetRequiredService<PreviewRunner>());
+builder.Services.AddHostedService(sp => sp.GetRequiredService<PreviewRunner>());
+builder.Services.AddSingleton<IAgentRuntimeToolProvider, PreviewRunnerToolProvider>();
 builder.Services.AddAgentRuntime();
 
 // ── CopilotAIAgent (singleton per pod — one run per pod lifetime) ──────────────
@@ -217,12 +222,13 @@ app.MapPost("/configure", async (HttpContext ctx) =>
     // Interlocked one-time gate (inside TryConfigure): first caller wins, the rest get 409.
     if (!runtimeState.TryConfigure(
             body.RunId, body.UserId ?? string.Empty, body.TurnBearerToken ?? string.Empty,
-            body.KvUserSecretName, body.GitHubAccessToken))
+            body.KvUserSecretName, body.GitHubAccessToken, body.PreviewRunnerCredential))
         return Results.Conflict("Already configured");
 
     await startup.ConfigureAsync(
         body.RunId, body.UserId ?? string.Empty, body.TurnBearerToken ?? string.Empty,
-        body.KvUserSecretName, body.GitHubAccessToken, body.WorkingDirectory, ctx.RequestAborted).ConfigureAwait(false);
+        body.KvUserSecretName, body.GitHubAccessToken, body.WorkingDirectory,
+        body.AutoApproveTools, ctx.RequestAborted).ConfigureAwait(false);
 
     return Results.Ok(new { configured = true, runId = body.RunId });
 });
@@ -278,6 +284,145 @@ app.Use(async (ctx, next) =>
 app.MapGet("/healthz", (AgentHostStartupService startup) =>
     Results.Ok(startup.IsReady ? "ready" : "standby"));
 
+// ── Tool approval endpoints ───────────────────────────────────────────────────
+app.MapPost("/tool-approvals", ToolApprovalEndpointHandlers.GrantAsync);
+app.MapPost("/tool-denials", ToolApprovalEndpointHandlers.DenyAsync);
+
+// ── PreviewRunner endpoints ───────────────────────────────────────────────────
+// API/Coordinator uses these to manage the pod-local preview process lifecycle. The model-facing
+// tools call the same PreviewRunner service in-process; these HTTP endpoints are for platform
+// cleanup/reconciliation (terminal assembly, explicit stop, stale-run repair). They are protected
+// with the same per-run TurnBearerToken used for A2A turns when one is configured.
+app.MapPost("/preview-runner/processes", async (
+    HttpContext ctx,
+    PreviewProcessStartRequest request,
+    IPreviewRunner previewRunner,
+    AgentHostRuntimeState runtimeState) =>
+{
+    if (!PreviewRunnerEndpointAuth.Authorize(ctx, runtimeState))
+        return Results.Unauthorized();
+    if (string.IsNullOrWhiteSpace(request.Command))
+        return Results.BadRequest(new { error = "command is required" });
+    if (string.IsNullOrWhiteSpace(request.Cwd))
+        return Results.BadRequest(new { error = "cwd is required" });
+
+    var result = await previewRunner.StartPreviewProcessAsync(
+        request.Command,
+        request.Cwd,
+        string.IsNullOrWhiteSpace(request.RunId) ? runtimeState.RunId : request.RunId,
+        request.WorkPlanId,
+        request.TreeHash,
+        ctx.RequestAborted).ConfigureAwait(false);
+
+    return Results.Ok(new
+    {
+        session_id = result.SessionId,
+        pid = result.Pid,
+        started_at = result.StartedAt,
+        working_directory = result.WorkingDirectory,
+    });
+});
+
+app.MapPost("/preview-runner/processes/{sessionId}/observe-bound-port", async (
+    HttpContext ctx,
+    string sessionId,
+    PreviewObservePortRequest request,
+    IPreviewRunner previewRunner,
+    AgentHostRuntimeState runtimeState) =>
+{
+    if (!PreviewRunnerEndpointAuth.Authorize(ctx, runtimeState))
+        return Results.Unauthorized();
+
+    PreviewPortObservation result;
+    try
+    {
+        result = await previewRunner.ObserveBoundPortAsync(
+            sessionId,
+            TimeSpan.FromSeconds(Math.Max(1, request.TimeoutSeconds ?? 60)),
+            request.HealthPath ?? "/",
+            ctx.RequestAborted).ConfigureAwait(false);
+    }
+    catch (OperationCanceledException) when (ctx.RequestAborted.IsCancellationRequested)
+    {
+        throw;
+    }
+    catch (Exception ex)
+    {
+        // Never surface an opaque HTTP 500 to PreviewStep: map any unexpected failure to a structured
+        // 200 unhealthy-with-reason so the run shows a legible cause (e.g. "observe_error"), not "500".
+        return Results.Ok(new
+        {
+            session_id = sessionId,
+            port = 0,
+            app_port = 0,
+            evidence = $"observe_error: {ex.Message}",
+            healthy = false,
+            health_evidence = ex.ToString(),
+            reason = "observe_error",
+        });
+    }
+
+    return Results.Ok(new
+    {
+        session_id = result.SessionId,
+        port = result.Port,
+        app_port = result.AppPort,
+        evidence = result.Evidence,
+        healthy = result.Healthy,
+        health_evidence = result.HealthEvidence,
+        reason = result.Reason,
+    });
+});
+
+app.MapPost("/preview-runner/processes/{sessionId}/health-check", async (
+    HttpContext ctx,
+    string sessionId,
+    PreviewHealthCheckRequest request,
+    IPreviewRunner previewRunner,
+    AgentHostRuntimeState runtimeState) =>
+{
+    if (!PreviewRunnerEndpointAuth.Authorize(ctx, runtimeState))
+        return Results.Unauthorized();
+    if (request.Port is <= 0 or > 65535)
+        return Results.BadRequest(new { error = "port must be between 1 and 65535" });
+
+    var result = await previewRunner.HealthCheckAsync(
+        sessionId, request.Port, request.Path ?? "/", ctx.RequestAborted).ConfigureAwait(false);
+
+    return Results.Ok(new
+    {
+        session_id = result.SessionId,
+        port = result.Port,
+        path = result.Path,
+        healthy = result.Healthy,
+        status_code = result.StatusCode,
+        evidence = result.Evidence,
+    });
+});
+
+app.MapDelete("/preview-runner/processes/{sessionId}", async (
+    HttpContext ctx,
+    string sessionId,
+    string? reason,
+    IPreviewRunner previewRunner,
+    AgentHostRuntimeState runtimeState) =>
+{
+    if (!PreviewRunnerEndpointAuth.Authorize(ctx, runtimeState))
+        return Results.Unauthorized();
+
+    var result = await previewRunner.StopPreviewProcessAsync(
+        sessionId,
+        string.IsNullOrWhiteSpace(reason) ? "api_stop" : reason!,
+        ctx.RequestAborted).ConfigureAwait(false);
+
+    return Results.Ok(new
+    {
+        session_id = result.SessionId,
+        stopped = result.Stopped,
+        reason = result.Reason,
+    });
+});
+
 // ── A2A endpoints ──────────────────────────────────────────────────────────────
 // Mounts:
 //   POST  {A2APath}/v1/message:stream  — streaming agent turn (SSE)
@@ -296,6 +441,13 @@ internal sealed record ConfigureRequest
     public string? KvUserSecretName { get; init; }
 
     /// <summary>
+    /// Per-run preview-runner credential (spec-006 decouple-preview, BLOCKER A). Delivered in-memory
+    /// only — never placed in pod env/config/file — so the untrusted preview process cannot inherit it.
+    /// <c>PreviewRunnerEndpointAuth</c> accepts this OR <see cref="TurnBearerToken"/>.
+    /// </summary>
+    public string? PreviewRunnerCredential { get; init; }
+
+    /// <summary>
     /// GitHub OAuth access token pre-resolved by the API (which has KV access).
     /// When present, the pod skips the Key Vault fetch entirely — no OIDC or KV egress needed.
     /// </summary>
@@ -309,4 +461,147 @@ internal sealed record ConfigureRequest
     /// references, so files produced by one stage are visible to the next.
     /// </summary>
     public string? WorkingDirectory { get; init; }
+
+    /// <summary>
+    /// Per-run <c>AutoApproveTools</c> run option (bug #221). When true, the pod auto-grants the
+    /// allow-with-approval HITL gate (e.g. <c>web_fetch</c>) instead of stalling for an operator.
+    /// The API resolves this from its own run-options store and the pod seeds its in-pod
+    /// <c>IRunOptionsStore</c> from it — otherwise the fresh pod store defaults to false and every
+    /// <c>web_fetch</c> waits out the HITL timeout under autopilot.
+    /// </summary>
+    public bool AutoApproveTools { get; init; }
+}
+
+internal sealed record PreviewProcessStartRequest
+{
+    public string Command { get; init; } = "";
+    public string Cwd { get; init; } = "";
+    public string? RunId { get; init; }
+    public string? WorkPlanId { get; init; }
+    public string? TreeHash { get; init; }
+}
+
+internal sealed record PreviewObservePortRequest
+{
+    public int? TimeoutSeconds { get; init; }
+    public string? HealthPath { get; init; }
+}
+
+internal sealed record PreviewHealthCheckRequest
+{
+    public int Port { get; init; }
+    public string? Path { get; init; }
+}
+
+internal sealed record AgentHostToolApprovalRequest
+{
+    public string? RunId { get; init; }
+    public string? RequestId { get; init; }
+    public string Scope { get; init; } = "once";
+}
+
+internal static class ToolApprovalEndpointHandlers
+{
+    public static async Task<IResult> GrantAsync(
+        HttpContext ctx,
+        AgentHostToolApprovalRequest request,
+        IToolApprovalGate gate,
+        AgentHostRuntimeState runtimeState)
+    {
+        if (!PreviewRunnerEndpointAuth.Authorize(ctx, runtimeState))
+            return Results.Unauthorized();
+        if (string.IsNullOrWhiteSpace(request.RequestId))
+            return Results.BadRequest(new { error = "requestId is required" });
+        if (IsRunMismatch(request.RunId, runtimeState.RunId))
+            return Results.Conflict(new { error = "run mismatch", state = "run_mismatch" });
+
+        var scope = request.Scope switch
+        {
+            "run" => ApprovalScope.Run,
+            "always" => ApprovalScope.Always,
+            "tool" => ApprovalScope.Tool,
+            _ => ApprovalScope.Once,
+        };
+
+        // A pod serves one run, so "always" is effectively run-scoped and does not survive pod restart.
+        await gate.GrantAsync(runtimeState.RunId, request.RequestId, scope).ConfigureAwait(false);
+        return ResultFor(gate.GetRequestState(runtimeState.RunId, request.RequestId));
+    }
+
+    public static Task<IResult> DenyAsync(
+        HttpContext ctx,
+        AgentHostToolApprovalRequest request,
+        IToolApprovalGate gate,
+        AgentHostRuntimeState runtimeState)
+    {
+        if (!PreviewRunnerEndpointAuth.Authorize(ctx, runtimeState))
+            return Task.FromResult<IResult>(Results.Unauthorized());
+        if (string.IsNullOrWhiteSpace(request.RequestId))
+            return Task.FromResult<IResult>(Results.BadRequest(new { error = "requestId is required" }));
+        if (IsRunMismatch(request.RunId, runtimeState.RunId))
+            return Task.FromResult<IResult>(Results.Conflict(new { error = "run mismatch", state = "run_mismatch" }));
+
+        gate.Deny(runtimeState.RunId, request.RequestId);
+        return Task.FromResult(ResultFor(gate.GetRequestState(runtimeState.RunId, request.RequestId)));
+    }
+
+    private static bool IsRunMismatch(string? requestedRunId, string runtimeRunId) =>
+        !string.IsNullOrWhiteSpace(requestedRunId)
+        && !string.IsNullOrWhiteSpace(runtimeRunId)
+        && !string.Equals(requestedRunId, runtimeRunId, StringComparison.Ordinal);
+
+    private static IResult ResultFor(ToolApprovalRequestState state) =>
+        state switch
+        {
+            ToolApprovalRequestState.Approved or
+            ToolApprovalRequestState.Denied or
+            ToolApprovalRequestState.Expired =>
+                Results.Ok(new { resolved = true, state = FormatState(state) }),
+            ToolApprovalRequestState.Pending =>
+                Results.Conflict(new { resolved = false, state = "pending" }),
+            _ => Results.NotFound(new { resolved = false, state = "unknown" }),
+        };
+
+    private static string FormatState(ToolApprovalRequestState state) =>
+        state switch
+        {
+            ToolApprovalRequestState.Approved => "approved",
+            ToolApprovalRequestState.Denied => "denied",
+            ToolApprovalRequestState.Expired => "expired",
+            ToolApprovalRequestState.Pending => "pending",
+            _ => "unknown",
+        };
+}
+
+internal static class PreviewRunnerEndpointAuth
+{
+    /// <summary>
+    /// Authorizes a <c>/preview-runner/*</c> call (spec-006 decouple-preview, BLOCKER 2/A). Accepts
+    /// EITHER the per-run <see cref="AgentHostRuntimeState.TurnBearerToken"/> OR the per-run
+    /// <see cref="AgentHostRuntimeState.PreviewRunnerCredential"/> (delivered in-memory via
+    /// <c>/configure</c>). Fail-closed: when EITHER credential is configured, a caller presenting
+    /// none/an invalid one is rejected. The dev "no credential configured ⇒ allow" branch applies
+    /// ONLY when neither credential is set (local/dev where preview infra is not active).
+    /// </summary>
+    public static bool Authorize(HttpContext ctx, AgentHostRuntimeState runtimeState)
+    {
+        var turnBearerToken = runtimeState.TurnBearerToken;
+        var previewCredential = runtimeState.PreviewRunnerCredential;
+
+        var hasTurn = !string.IsNullOrEmpty(turnBearerToken);
+        var hasCredential = !string.IsNullOrEmpty(previewCredential);
+
+        // Dev/local: no credential configured at all ⇒ allow (preview infra inactive).
+        if (!hasTurn && !hasCredential)
+            return true;
+
+        var authHeader = ctx.Request.Headers.Authorization.ToString();
+        if (hasTurn && string.Equals(authHeader, "Bearer " + turnBearerToken, StringComparison.Ordinal))
+            return true;
+        if (hasCredential && string.Equals(authHeader, "Bearer " + previewCredential, StringComparison.Ordinal))
+            return true;
+
+        // Fail-closed: a credential is configured but the caller presented none/an invalid one.
+        return false;
+    }
 }

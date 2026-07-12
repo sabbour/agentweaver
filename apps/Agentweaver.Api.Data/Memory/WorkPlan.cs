@@ -51,6 +51,24 @@ public sealed class WorkPlan
     /// </summary>
     public string? CoordinatorPodId { get; set; }
 
+    /// <summary>
+    /// UNIFIED AUTONOMOUS STEERING (rev8): per-plan count of steering iterations applied. Bounded by
+    /// the configurable plan cap (default 6) so gate-driven steering cannot loop forever; at the cap
+    /// the decider escalates to human review / terminal instead of steering again.
+    /// </summary>
+    public int SteeringIterations { get; set; }
+
+    /// <summary>
+    /// UNIFIED AUTONOMOUS STEERING (Fix-B): per-plan count of HUMAN-review round-trips taken after the
+    /// autonomous steering budget was exhausted and the plan was escalated to the human-review gate. A
+    /// human request-changes is a SUPERVISED action that ALWAYS resets the autonomous
+    /// <see cref="SteeringIterations"/> budget (a fresh convergence mandate) — there is no cap. This
+    /// counter is retained purely as a telemetry/observability signal (how many times a human has
+    /// re-steered the plan); it does NOT gate the reset. Atomically incremented so it is
+    /// cross-replica/crash-safe.
+    /// </summary>
+    public int HumanReviewRoundTrips { get; set; }
+
     public DateTimeOffset CreatedAt { get; set; }
     public DateTimeOffset UpdatedAt { get; set; }
 }

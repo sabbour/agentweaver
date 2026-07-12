@@ -6,6 +6,17 @@ The coordinator is itself an observable, streamed, human-accountable run (`agent
 
 This page documents the Phase 1 outcome-spec flow, the Phase 2 orchestration capabilities (decomposition, child dispatch, observation, topology events, and steering), and the Phase 3 collective assembly terminal-status surfaces (how a coordinator run reports its orchestration status and a human-readable reason on every terminal path).
 
+## Start contract and team requirement
+
+`POST /api/projects/{id}/orchestrations` starts a coordinator run only after the project has a dispatchable cast team. The HTTP endpoint maps the guard into two explicit client contracts (`apps/Agentweaver.Api/Endpoints/ProjectEndpoints.cs:429`, `:486`):
+
+| Status | Body | Meaning |
+| --- | --- | --- |
+| `409 Conflict` | `{ "error": "no_team", "message": "This project has no team. Cast a team before starting an orchestration." }` | No active, dispatchable team member exists. |
+| `422 Unprocessable Entity` | `{ "error": "invalid_team", "message": "The project team roster could not be read. Fix the team before starting an orchestration." }` | The roster could not be parsed/read. |
+
+The guard reads the same `.squad` team source the dispatcher uses: `EnsureDispatchableTeam` calls `SquadReader.ReadTeam`, requires at least one member that is `Active`, has a non-null role, and passes the built-in-agent deny list (`apps/Agentweaver.Api/Coordinator/CoordinatorRosterGuard.cs:30`, `:37`, `:54`; `apps/Agentweaver.Api/Coordinator/CoordinatorOrchestratorExecutor.cs:687`, `:750`). Platform-owned Scribe, Ralph, RAI, and Build & Test roles do not count as worker capacity.
+
 ## What it is (and is not)
 
 The coordinator is orchestration-only. It MUST NOT reimplement any platform capability. The following capabilities stay owned by their existing features; the coordinator reuses them and never duplicates them:
@@ -25,7 +36,7 @@ Because of this non-redundancy contract, the coordinator's charter describes onl
 A coordinator run drafts a confirmable restatement of the goal and blocks all dispatch until a human confirms it.
 
 1. **Start.** A goal is submitted for a project. The coordinator run begins and emits `coordinator.started` carrying the `goal`. The project's working directory, default branch, and the authenticated caller become the run's repository path, originating branch, and submitting user.
-2. **Draft.** The coordinator reads the project's existing memories and decision-inbox entries as grounding context, then drafts an **outcome spec**: a desired outcome, scope, assumptions, and any scoped clarifying questions.
+2. **Draft.** The coordinator reads the project's existing memories and decision-inbox entries as grounding context, then drafts an **outcome spec**: a desired outcome, scope, assumptions, and any scoped clarifying questions. Drafting is **roster/capability-aware** and **goal-breadth-faithful**: the drafter reads the project's `.squad` roster (dispatchable members only — Scribe, Ralph, RAI, and Build & Test are excluded) and injects a terse `TEAM CAPABILITIES` list plus a `SCOPE BREADTH` instruction so the drafted outcome enumerates the intermediate deliverables a full-journey goal asks for (e.g. research, PM, PRD, UX, build) while a narrow goal stays lean. The roster is only a capability **filter**; the goal's own words are the breadth **driver**, and the guidance is added outside the untrusted-goal fences (`apps/Agentweaver.Api/Coordinator/CopilotCoordinatorSpecDrafter.cs:165`, `:205`, `:229`).
 3. **Suspend at the gate.** The outcome spec is persisted with status `awaiting_confirmation`, and the run emits `coordinator.outcome_spec` and suspends at the confirmation gate. No decomposition or child dispatch occurs here — the run blocks until the human confirms or revises.
 4. **Confirm or revise.**
    - **Confirm** advances the spec to status `confirmed`, emits `coordinator.outcome_spec.confirmed`, and resumes the run. In Phase 1 the run then terminates (decomposition and dispatch are later phases), followed by `run.completed`.
@@ -156,13 +167,38 @@ The selected workflow is not only recorded for display: it becomes prompt contex
 
 ### Decomposition and the work plan
 
-After confirmation, the coordinator decomposes the spec into a **work plan**: a set of subtasks plus the dependency edges between them. Each subtask carries an assigned roster agent (selected for role fit), a selected model (chosen for the subtask's complexity within the GitHub Copilot provider), a `phase`, an `isolation`, and a status. The plan is persisted to the memory store and emitted as `coordinator.work_plan`. Subagents read the confirmed spec and plan from the memory store; the coordinator does not introduce a parallel store. Read it over HTTP with `GET /api/runs/{id}/work-plan` or over MCP with `coordinator_work_plan_get`.
+After confirmation, the coordinator decomposes the spec into a **work plan**: a set of subtasks plus the dependency edges between them. Each subtask carries an assigned roster agent (selected for role fit), a selected model (within the GitHub Copilot provider), a `phase`, an `isolation`, and a status. The plan is persisted to the memory store and emitted as `coordinator.work_plan`. Subagents read the confirmed spec and plan from the memory store; the coordinator does not introduce a parallel store. Read it over HTTP with `GET /api/runs/{id}/work-plan` or over MCP with `coordinator_work_plan_get`.
+
+**Model selection precedence (per subtask).** A non-empty **run model pin** — the run's explicit `modelId` on `POST /api/projects/{id}/orchestrations`, or (when no explicit id is passed) the project's GitHub Copilot default — is selected for **every** subtask regardless of complexity; otherwise the subtask uses its assigned role's default model, then a catalog role default, then the configured Copilot default. The configured Copilot default is `CoordinatorModelDefaults.DefaultCopilotModel = "claude-sonnet-4.6"` (`apps/Agentweaver.Api/Coordinator/CoordinatorModelDefaults.cs`), overridable via the `Providers:GitHubCopilot:Model` config key. The stale hardcoded `gpt-4o` last-resort fallback was removed; the constant is the single source of truth for the last-resort default. The same precedence is preserved when a reviewer rejection rotates a subtask to a different eligible author (the pin wins over the rotated author's role default).
+
+::: warning Behavior change
+A non-empty run model pin now pins **all** subtasks (previously only high-complexity subtasks adopted the run's explicit model). Two consequences follow: (a) a well-formed but nonexistent pinned model id now affects **every** subtask (not just high-complexity ones); and (b) setting a project GitHub Copilot default disables per-role model differentiation for that project's runs — leave both the explicit `modelId` and the project default unset if you want subtasks to use their individual role-default models.
+:::
+
+#### Run model pin: UI behaviour
+
+In **Project Settings → Default run model**, the field is free-text. Leaving it **empty** means "Auto (coordinator picks)" — the coordinator selects a model per task using per-role defaults; subtasks may use different models. Entering a model id pins every subtask in every run for this project to that single model.
+
+#### Model catalog (current)
+
+Model ids are free-text passthrough to the GitHub Copilot CLI. They are validated only by a permissive prefix regex (`^(gpt|claude|o)...`) — there is no hardcoded allowlist, so new models become available as GitHub Copilot publishes them without a server update. The currently documented catalog:
+
+| Family | Model ids |
+|---|---|
+| OpenAI GPT | `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5`, `gpt-5.4`, `gpt-5.3-codex`, `gpt-5.4-mini`, `gpt-5-mini` |
+| Claude | `claude-opus-4.8`, `claude-opus-4.7`, `claude-opus-4.6`, `claude-sonnet-5`, `claude-sonnet-4.6`, `claude-sonnet-4.5`, `claude-haiku-4.5` |
+
+A well-formed but unavailable id at runtime causes a classified provider error (`AgentProviderException`, kind `UnavailableModel`). The coordinator's last-resort default is `claude-sonnet-4.6`.
 
 The `WorkPlan` row also carries **`CoordinatorPodId`**, the distributed lease owner for
 `dispatching`. When a pod starts or re-arms dispatch, it atomically stamps this field and refreshes
 `UpdatedAt`; other replicas skip the plan while that claim is fresh and only try to steal it after
-`Coordinator:PodLeaseStaleTtlSeconds` (default **60 s**). This prevents multiple replicas from
-re-arming the same dispatch loop at once.
+`Coordinator:PodLeaseStaleTtlSeconds` (default **120 s**). While a pod owns a dispatch loop it renews
+the lease every `Coordinator:PodLeaseHeartbeatSeconds` (default **30 s**) from an independent timer, so
+a long child turn cannot let the lease age into staleness and let a peer start a second loop. This
+prevents multiple replicas from re-arming the same dispatch loop at once. See
+[coordinator internals](../deep-dive/coordinator-internals.md) for the heartbeat, fencing, and the
+per-project integration-branch build lock.
 
 When no catalog/roster role adequately covers a subtask's function, the decomposition MAY mint a **bespoke role**: a descriptive id plus a short **inline charter** (2–4 sentences defining the agent's persona, expertise, and approach). Bespoke roles are a last resort — the decomposition prompt prefers exact catalog/roster ids and only sets a subtask's `charter` field when the role is bespoke. A subtask's inline charter is persisted on the subtask and flows to the dispatched child run's `AgentCharter`, overriding file-based charter resolution so the coordinator can stand up a domain-specific persona without a catalog role.
 
@@ -189,12 +225,14 @@ The persisted subtask status values are:
 | `pending` | Planned and waiting for its dependencies and conflict checks. | No | No |
 | `dispatched` | Child run was created and handed off. | No | No |
 | `running` | Child run is actively executing. | No | No |
-| `pending_capacity` | Temporarily parked because no AgentHost pod capacity was available yet. | No | No |
+| `pending_capacity` | **Legacy / historical.** Kubernetes now owns pod admission and scheduling, so new runs never enter this status (issue #217). A pre-upgrade subtask stranded here is recovered to `pending` and re-attempted. | No | No |
 | `assemble_ready` | Child finished with mergeable changes ready for collective assembly. | Yes | Yes |
 | `completed` | Child finished with no further mergeable changes required. | Yes | Yes |
 | `rai_flagged` | Child hit a responsible-AI block. | No | Yes |
 | `failed` | Child ran but ended unsuccessfully. | No | Yes |
 | `blocked` | The subtask never ran because an upstream dependency stalled, so the coordinator terminalized it as ineligible. | No | Yes |
+
+A stall is **not** immediately terminal. When a child stalls, the coordinator redispatches the subtask on a fresh child/pod up to `CoordinatorSteeringService.MaxRecoveryAttempts` (**3**) times — emitting `coordinator.subtask_redispatched` and incrementing the monotonic `RecoveryAttempts` each time — before the stall becomes a terminal `failed` and its dependents cascade to `blocked` (`apps/Agentweaver.Api/Coordinator/CoordinatorDispatchService.cs:399`, `:1235`). See the coordinator deep-dive [stall redispatch before dead-end](/deep-dive/coordinator-internals#stall-redispatch-before-dead-end).
 
 ### Observation and topology events
 
@@ -213,7 +251,7 @@ Because these events ride the coordinator run's ordinary event stream, the live 
 
 ### Steering verbs
 
-A user steers the coordinator while subagents run, and the coordinator relays the direction to the targeted child run(s) via `POST /api/runs/{id}/steer` or the `coordinator_steer` MCP tool. The verbs carry the following semantics:
+A user steers the coordinator while subagents run or while the coordinator is parked at collective human review. `GET /api/runs/{id}` exposes `coordinator_steerable: true` for coordinator runs in `in_progress` or `awaiting_review`, and the web client uses that field to keep the coordinator message composer enabled during review (`apps/Agentweaver.Api/Contracts/Dtos.cs:178`, `apps/Agentweaver.Api/Coordinator/CoordinatorSteeringService.cs:348`, `apps/web/src/api/types.ts:81`). The coordinator relays direction to targeted child run(s) via `POST /api/runs/{id}/steer` or the `coordinator_steer` MCP tool. The verbs carry the following semantics:
 
 | Verb | Effect | Timing |
 | --- | --- | --- |
@@ -222,7 +260,9 @@ A user steers the coordinator while subagents run, and the coordinator relays th
 | `redirect` | Relays new direction the subagent applies as a revised task turn. | At the subagent's next turn boundary; no restart. |
 | `amend` | Relays an adjustment the subagent folds into its next turn. | At the subagent's next turn boundary; no restart. |
 
-An in-flight agent turn cannot be interrupted mid-turn under the run model, so only `stop` reaches a subagent during a turn. `send`, `redirect`, and `amend` are queued and applied when the child's current turn completes (or when it next suspends at a gate), without restarting the run. The queue is DB-backed and replica-safe: a queued directive transitions `queued -> relayed` under a compare-and-swap so a mid-run message is delivered exactly once even across API replicas. `stop` bypasses the queue entirely — it is the only hard interrupt. Omitting the target broadcasts to every active child. Directives progress through `coordinator.steering` events (`pending -> queued -> relayed -> applied`).
+An in-flight agent turn cannot be interrupted mid-turn under the run model, so only `stop` reaches a subagent during a turn. `send`, `redirect`, and `amend` are queued and applied when the child's current turn completes (or when it next suspends at a gate), without restarting the run. The queue is DB-backed and replica-safe: a queued directive transitions `queued -> relayed` under a compare-and-swap so a mid-run message is delivered exactly once even across API replicas. `stop` bypasses the queue entirely — it is the only hard interrupt. Omitting the target broadcasts to every active child. Directives progress through `coordinator.steering` events (`pending -> queued -> relayed -> applied`, plus `deferred` at the review gate).
+
+**At the assembly human-review gate (#226).** When the coordinator is parked at collective review (`awaiting_review`, `coordinator_steerable: true`), a `redirect`/`amend`/`send` is delivered to the parked assembly loop rather than the child-turn queue (previously it was accepted as `queued` and then silently dropped). `redirect`/`amend` are translated into a request-changes review decision — the same path as `POST /assembly/review {request_changes}` — re-dispatching the implicated subtasks (`#223` scoping) with an unconditional steering-budget reset and settling `relayed`; `send` posts an advisory note without changing the gate and settles `applied`. By default the change re-engages all contributors; set `targetChildRunId` to narrow to that subtask and its co-touching subtasks. If the gate is armed on another replica the decision is durably deferred for the owner's poller, the directive settles `deferred`, and `POST /steer` returns `202 Accepted` instead of `201 Created`. See [resilient assembly review](./resilient-assembly-review.md#operator-steering-at-the-review-gate-226).
 
 **Pause is not supported.** No hold-before-next-turn primitive exists in the run model; the steering surface is `send`, `stop`, `redirect`, and `amend` only. Pause is deferred to a later phase.
 
@@ -239,14 +279,14 @@ Two per-run boolean options, both default OFF, can be set at launch (`autopilot`
 
 - **Autopilot** does two things, both of which are on or off together:
   1. **Auto-answers clarifying questions.** A `coordinator.child_question` (or a question asked directly on the coordinator run) is answered by the coordinator model from the outcome spec + subtask context, and the answer is resolved on the question gate (`IQuestionGate.Answer(childRunId, requestId, answer)`). Each auto-answer is logged as `coordinator.autopilot_answered { runId, childRunId?, requestId, question, answer }`, and the normal `agent.question_answered` resolution still surfaces on the child stream, so the timeline shows every auto-answer.
-  2. **Auto-confirms the outcome spec for pickup runs.** When a backlog pickup run starts with autopilot=true, a bounded `ScheduleUnattendedConfirm` loop waits for the spec to reach `awaiting_confirmation` and then confirms it on behalf of the accountable human captured on the backlog item. When autopilot=false, the pickup run pauses at `awaiting_confirmation` and the human must confirm via the UI before any work begins. Interactive (non-pickup) runs always pause at the confirmation gate regardless of autopilot, because there is no prior captured accountable human to confirm on behalf of.
+  2. **Auto-confirms the outcome spec.** When a run starts with autopilot=true in `defineOutcome` mode, `StartCoordinatorRunAsync` schedules a bounded `ScheduleUnattendedConfirm` loop that waits for the spec to reach `awaiting_confirmation` and then confirms it unattended, with no human gate. For an **interactive** `POST /api/projects/{id}/orchestrations` launch the confirmation is attributed to the submitting user (`confirmedBy` = the authenticated caller); for a **backlog pickup** run it is attributed to the accountable human captured on the backlog item. When autopilot=false, the run pauses at `awaiting_confirmation` and a human must confirm (or revise) via the UI before any work begins. `direct`-mode runs have no confirmation gate at all, so autopilot schedules no confirm loop for them.
 
   Autopilot NEVER auto-grants tool approvals or permissions; those still go to the human. The `PickupAutopilot` project flag defaults to `true`, so existing projects retain the prior auto-confirm behavior unless the setting is turned off.
 - **auto-approve-tools** auto-grants allow-with-approval tool requests (for example `web_fetch`) at the human-in-the-loop gate, logging each as `tool.auto_approved { requestId, toolName, url? }`. It NEVER overrides a policy deny: dangerous tools are rejected upstream by sandbox governance before the approval gate is reached, so the auto-grant only short-circuits the HITL wait for tools that are already allowed-with-approval.
 
 ## Phase 3 collective assembly and terminal status
 
-After every child subtask finishes, the coordinator runs ONE collective assembly: it builds a single integration branch (all eligible child branches merged in dependency order off the originating branch), runs ONE collective RAI pass over the aggregate diff, and arms ONE human review gate (`POST /api/runs/{coordinatorRunId}/assembly/review`). On approve it merges, runs the collective scribe, and completes; on request_changes it re-dispatches the inferred children; on decline, conflict, or RAI block it parks terminal. The review POST is replica-safe: a non-owner API replica can persist a deferred decision while the work plan is durably `in_review`, and the owner pipeline consumes it at most once. The full event sequence is documented in the [events reference](./events.md).
+After every child subtask finishes, the coordinator runs ONE collective assembly: it builds a single integration branch (all eligible child branches merged in dependency order off the originating branch), then runs the selected workflow's assembly gates in happy-path traversal order. For software workflows that path places RAI before Build & Test and human review. The RAI reviewer returns a machine-readable `VERDICT: <GREEN|YELLOW|REVISE|RED>` sentinel as the last line of its response — only that line is parsed as the decision (prose is never scanned), and an unparseable verdict fails safe to a blocking `RED` after exactly one bounded re-ask (reason `unparseable_after_reask`), so a benign review can no longer be false-escalated by a legend echo (`apps/Agentweaver.Api/Coordinator/CollectiveAssemblyPipeline.cs:88`, `packages/Agentweaver.AgentRuntime/Workflow/RaiTurnExecutor.cs:183`). When the integration has changes, the RAI and Rubberduck reviewers read the actual assembled files through one shared detached worktree checked out at the integration tip (reusing the Build/Test worktree name), not just the aggregate diff text (`apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyService.cs:785`, `apps/Agentweaver.Api/Coordinator/CollectiveAssemblyPipeline.cs:298`). Build & Test is an automated platform gate over a detached integration-branch worktree; in `Sandbox:AgentExecutionMode=pod-per-run`, it binds a dedicated AgentHost sandbox pod to the coordinator run id and configures that pod to use the detached worktree as its working directory before running the turn (`apps/Agentweaver.Api/Coordinator/CollectiveAssemblyPipeline.cs:155`, `apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs:300`). After Build & Test returns approved or request-changes, the deterministic `PreviewStep` starts the app, observes the actual port, and emits `sandbox.preview_ready`, `sandbox.preview_failed`, or `sandbox.preview_skipped_not_applicable`; preview failure never changes the verdict or blocks human review (`apps/Agentweaver.Api/Coordinator/Preview/PreviewStep.cs:70`, `apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyService.cs:753`). Human review is the only gate that accepts `POST /api/runs/{coordinatorRunId}/assembly/review`. On approve it merges, runs the collective scribe, and completes. Request-changes feedback from human review, RAI, Rubberduck, Build & Test, agents, the coordinator, or a workflow step now flows through unified steering: `coordinator.steering_received` records the source and `coordinator.steering_decision` records whether the coordinator chose in-place steering, fresh dispatch, proceed/terminal, or advisory no-op before any effect executes (`apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyService.cs:1680`, `apps/Agentweaver.Api/Coordinator/CoordinatorSteeringDecider.cs:201`). The separate Assembly Gate route was removed in favor of this coordinator-owned steering path. Sandbox infrastructure failures are classified separately as `build_test_infra_*`: retryable cases park as `assembly_blocked`, and non-retryable configuration errors fail assembly. Their event payloads include `detail`, `exceptionMessage`, `innerExceptionMessage`, `innerExceptionType`, and `infrastructureReason`, so `/api/runs/{id}/events` shows the underlying AgentHost launch or transport failure instead of only the generic reason (`apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyService.cs:1590`, `:1604`). The review POST is replica-safe: a non-owner API replica can persist a deferred decision while the work plan is durably `in_review`, and the owner pipeline consumes it at most once. See [Decoupled live-preview provisioning](./live-preview-provisioning.md), [Unified steering](./unified-steering.md), and the [events reference](./events.md).
 
 When assembly stops with `coordinator.assembly_blocked`, the payload always includes `workPlanId` and `reason`. For the `ineligible_subtasks` path it also includes:
 
@@ -255,9 +295,16 @@ When assembly stops with `coordinator.assembly_blocked`, the payload always incl
 
 This is the no-partial-assembly gate: if any subtask is still ineligible, including `blocked`, the coordinator stops before collective review or merge.
 
+For retryable Build & Test infrastructure blocks, `coordinator.assembly_blocked` is a recoverable stream event,
+not a terminal stream event. Subscribers remain attached so they can see the subsequent re-arm/recovery path.
+`coordinator.assembly_failed` is terminal, but the durable stream drains all persisted replay rows before
+ending the SSE subscription, so diagnostics emitted around terminalization are still visible
+(`apps/Agentweaver.Api/Infrastructure/SqliteRunEventStream.cs:153`, `apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:111`).
+
 A coordinator run stays `in_progress` for the whole dispatch-plus-assembly window (its stream stays open), so the bare `RunStatus` is not enough for a UI to describe where the orchestration is. Two surfaces fix this:
 
 - **`coordinator_status`** — the current `WorkPlan.Status` (`dispatching`, `awaiting_assembly`, `assembling`, `in_review`, `complete`, `assembly_blocked`, `assembly_failed`, `assembly_declined`) is added to each coordinator run on `GET /api/projects/{id}/runs` and `GET /api/runs/{id}`. It is `null` for normal runs. The UI renders this (for example "Awaiting assembly", "In review") instead of the bare `status`.
+- **`coordinator_steerable`** — `true` on `GET /api/runs/{id}` for coordinator runs whose parent run status can still accept operator messages: `in_progress` and `awaiting_review`. This keeps steering and free-form coordinator messaging available while the assembly human-review gate is open.
 - **Terminal status with a reason** — every terminal assembly path moves the coordinator run to a terminal `RunStatus` AND records a human-readable `result` (the reason): `assembly_blocked: <reason>` (Failed), `assembly_merge_failed: <reason>` (MergeFailed), `assembly_declined` (Declined), `assembly_error: <message>` (Failed, unexpected fault in the assembly background task), or `assembly_complete` (Completed). The work plan moves to a matching terminal `WorkPlanStatus` so the topology coordinator node reflects it. The same `result` is exposed as `statusReason` on `GET /api/runs/{coordinatorRunId}/work-plan`. A user is never left with a bare "Failed" and no next action.
 
 ## Surviving a process restart

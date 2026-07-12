@@ -100,7 +100,9 @@ internal sealed class KubernetesPodAgentEndpointResolver : ISandboxAgentEndpoint
                     "KubernetesPodAgentEndpointResolver: pod {PodName} for run {RunId} has no IP yet " +
                     "(phase={Phase}). Returning null.",
                     podName, runId, pod?.Status?.Phase);
-                return null;
+                throw new WorkflowAgentInfrastructureException(
+                    "agenthost_ip_not_ready",
+                    $"AgentHost pod '{podName}' for run '{runId}' is bound but has no pod IP yet.");
             }
 
             var endpoint = new Uri(
@@ -115,6 +117,9 @@ internal sealed class KubernetesPodAgentEndpointResolver : ISandboxAgentEndpoint
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
+            if (ex is WorkflowAgentInfrastructureException)
+                throw;
+
             _logger.LogError(ex,
                 "KubernetesPodAgentEndpointResolver: failed to resolve pod IP for run {RunId} (pod={PodName})",
                 runId, podName);
@@ -160,23 +165,13 @@ internal sealed class KubernetesPodAgentEndpointResolver : ISandboxAgentEndpoint
             // Drop the cached failed launch so a subsequent turn can retry.
             _launches.TryRemove(runId, out _);
 
-            // Capacity-pending is a RETRY signal, not a hard failure: the dispatch engine parks the
-            // subtask in PendingCapacity and retries once the reaper frees quota or the node pool
-            // scales out. Do NOT terminalize the run — log and return null so the turn is retried.
-            if (ex is AgentHostCapacityPendingException cap)
-            {
-                _logger.LogWarning(
-                    "KubernetesPodAgentEndpointResolver: AgentHost pod capacity pending for run {RunId} " +
-                    "({Reason}: {Used}/{Hard} CPU used); not launched this turn — will retry",
-                    runId, cap.Reason, cap.UsedCpu, cap.HardCpu);
-                return null;
-            }
-
             // Map the known, actionable launch failures to a precise FailureReason so the run row
-            // (and the run_not_active API response) can explain *why* the run stopped.
+            // (and the run_not_active API response) can explain *why* the run stopped. Note: pod
+            // admission/scheduling/queueing is Kubernetes' job (issue #217) — a Pending pod is not a
+            // failure here; LaunchAgentHostPodAsync simply waits (emitting provisioning heartbeats)
+            // until the claim binds, so there is no capacity/quota exception to translate anymore.
             var reason = ex switch
             {
-                AgentHostQuotaExceededException => "agent_quota_exceeded",
                 AgentHostPodReconcilerErrorException => "agent_pod_reconciler_error",
                 _ => null,
             };
@@ -186,7 +181,11 @@ internal sealed class KubernetesPodAgentEndpointResolver : ISandboxAgentEndpoint
             _logger.LogError(ex,
                 "KubernetesPodAgentEndpointResolver: failed to launch AgentHost pod for run {RunId}{Reason}",
                 runId, reason is null ? string.Empty : $" ({reason})");
-            return null;
+            throw new WorkflowAgentInfrastructureException(
+                reason ?? "agenthost_launch_failed",
+                $"AgentHost pod launch failed for run '{runId}'" +
+                (reason is null ? $": {ex.Message}" : $" ({reason})."),
+                ex);
         }
     }
 

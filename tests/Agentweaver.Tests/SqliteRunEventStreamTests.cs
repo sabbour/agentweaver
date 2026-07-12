@@ -158,6 +158,154 @@ public sealed class SqliteRunEventStreamTests : IDisposable
         replayed.Should().HaveCount(1);
     }
 
+    [Fact]
+    public async Task SubscribeAsync_AfterLateAppendFollowingTerminal_DrainsPersistedDiagnosticsThenCompletes()
+    {
+        var runId = "run-late-assembly";
+        var stream = new SqliteRunEventStream(_config);
+
+        await stream.AppendAsync(runId, new RunEvent(1, EventTypes.RunAssembleReady, new { }));
+        await stream.CompleteAsync(runId);
+        await stream.AppendAsync(runId, new RunEvent(2, EventTypes.CoordinatorAssemblyFailed, new
+        {
+            reason = "build_test_infra_agenthost_launch_failed",
+            detail = "outer (inner: real configure 500)",
+        }));
+
+        var afterRestart = new SqliteRunEventStream(_config);
+        var replayed = await ReplayWithTimeoutAsync(afterRestart, runId);
+
+        replayed.Select(e => e.Sequence).Should().Equal(1, 2);
+        replayed.Select(e => e.Type).Should().Equal(EventTypes.RunAssembleReady, EventTypes.CoordinatorAssemblyFailed);
+        System.Text.Json.JsonSerializer.Serialize(replayed[^1].Payload).Should().Contain("real configure 500");
+    }
+
+    [Fact]
+    public async Task SubscribeAsync_PersistedCoordinatorAssemblyFailedAfterRestart_CompletesWithoutRunTerminal()
+    {
+        var runId = "run-assembly-failed-terminal";
+        var producer = new SqliteRunEventStream(_config);
+        await producer.AppendAsync(runId, new RunEvent(1, EventTypes.CoordinatorAssemblyFailed, new
+        {
+            reason = "build_test_infra_agenthost_launch_failed",
+        }));
+
+        var afterRestart = new SqliteRunEventStream(_config);
+        var replayed = await ReplayWithTimeoutAsync(afterRestart, runId);
+
+        replayed.Should().ContainSingle();
+        replayed[0].Type.Should().Be(EventTypes.CoordinatorAssemblyFailed);
+    }
+
+    [Fact]
+    public async Task SubscribeAsync_PersistedRetryableAssemblyBlocked_StaysOpenForRecoveredEvent()
+    {
+        var runId = "run-retryable-blocked-replay";
+        var stream = new SqliteRunEventStream(_config);
+        await stream.AppendAsync(runId, new RunEvent(1, EventTypes.CoordinatorAssemblyBlocked, new
+        {
+            reason = "build_test_infra_agenthost_launch_failed",
+            retryable = true,
+        }));
+
+        var received = new ConcurrentQueue<RunEvent>();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var consume = Task.Run(async () =>
+        {
+            await foreach (var evt in stream.SubscribeAsync(runId, 0, cts.Token))
+            {
+                received.Enqueue(evt);
+                if (evt.Type == EventTypes.CoordinatorRecovered)
+                    break;
+            }
+        }, cts.Token);
+
+        await WaitUntilAsync(() => received.Any(e => e.Type == EventTypes.CoordinatorAssemblyBlocked),
+            TimeSpan.FromSeconds(5), "subscriber should replay the blocked event");
+        consume.IsCompleted.Should().BeFalse("retryable assembly_blocked must not terminate the subscriber");
+
+        await stream.AppendAsync(runId, new RunEvent(2, EventTypes.CoordinatorRecovered, new { reason = "rearmed" }));
+        await consume;
+
+        received.Select(e => e.Type).Should().ContainInOrder(
+            EventTypes.CoordinatorAssemblyBlocked,
+            EventTypes.CoordinatorRecovered);
+    }
+
+    [Fact]
+    public async Task SubscribeAsync_LiveRetryableAssemblyBlocked_StaysOpenForRecoveredEvent()
+    {
+        var runId = "run-retryable-blocked-live";
+        var stream = new SqliteRunEventStream(_config);
+        var received = new ConcurrentQueue<RunEvent>();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var consume = Task.Run(async () =>
+        {
+            await foreach (var evt in stream.SubscribeAsync(runId, 0, cts.Token))
+            {
+                received.Enqueue(evt);
+                if (evt.Type == EventTypes.CoordinatorRecovered)
+                    break;
+            }
+        }, cts.Token);
+
+        await stream.AppendAsync(runId, new RunEvent(1, EventTypes.CoordinatorAssemblyBlocked, new
+        {
+            reason = "build_test_infra_agenthost_launch_failed",
+            retryable = true,
+        }));
+        await WaitUntilAsync(() => received.Any(e => e.Type == EventTypes.CoordinatorAssemblyBlocked),
+            TimeSpan.FromSeconds(5), "subscriber should receive the live blocked event");
+        consume.IsCompleted.Should().BeFalse("live retryable assembly_blocked must not close the stream");
+
+        await stream.AppendAsync(runId, new RunEvent(2, EventTypes.CoordinatorRecovered, new { reason = "rearmed" }));
+        await consume;
+
+        received.Select(e => e.Type).Should().ContainInOrder(
+            EventTypes.CoordinatorAssemblyBlocked,
+            EventTypes.CoordinatorRecovered);
+    }
+
+    [Fact]
+    public async Task AppendAsync_PostTerminalAgentMessageDelta_IsNotPersisted()
+    {
+        var runId = "run-postterminal-delta";
+        var stream = new SqliteRunEventStream(_config);
+        await stream.AppendAsync(runId, new RunEvent(1, EventTypes.RunAssembleReady, new { }));
+        await stream.CompleteAsync(runId);
+        // A straggling streaming delta arriving after the terminal must be dropped — never persisted,
+        // so it can never resurrect/re-drive a completed run (#239 companion hardening).
+        await stream.AppendAsync(runId, new RunEvent(2, EventTypes.AgentMessageDelta, new { delta = "late" }));
+
+        var afterRestart = new SqliteRunEventStream(_config);
+        var replayed = await ReplayWithTimeoutAsync(afterRestart, runId);
+
+        replayed.Select(e => e.Sequence).Should().Equal(1);
+        replayed.Select(e => e.Type).Should().Equal(EventTypes.RunAssembleReady);
+    }
+
+    [Fact]
+    public async Task AppendAsync_PostTerminalDiagnostic_StillPersists()
+    {
+        var runId = "run-postterminal-diag";
+        var stream = new SqliteRunEventStream(_config);
+        await stream.AppendAsync(runId, new RunEvent(1, EventTypes.RunAssembleReady, new { }));
+        await stream.CompleteAsync(runId);
+        // Regression lock: ONLY agent.message.delta is dropped post-terminal — a diagnostic terminal
+        // (coordinator.assembly_failed) MUST still persist + replay for the durable audit trail.
+        await stream.AppendAsync(runId, new RunEvent(2, EventTypes.CoordinatorAssemblyFailed, new
+        {
+            reason = "build_test_infra_agenthost_launch_failed",
+        }));
+
+        var afterRestart = new SqliteRunEventStream(_config);
+        var replayed = await ReplayWithTimeoutAsync(afterRestart, runId);
+
+        replayed.Select(e => e.Sequence).Should().Equal(1, 2);
+        replayed.Select(e => e.Type).Should().Equal(
+            EventTypes.RunAssembleReady, EventTypes.CoordinatorAssemblyFailed);
+    }
+
     public void Dispose()
     {
         try { Directory.Delete(_dir, recursive: true); } catch { /* best effort; pooled handles may linger */ }
@@ -183,5 +331,14 @@ public sealed class SqliteRunEventStreamTests : IDisposable
         }
 
         condition().Should().BeTrue(because);
+    }
+
+    private static async Task<List<RunEvent>> ReplayWithTimeoutAsync(IRunEventStream stream, string runId)
+    {
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var replayed = new List<RunEvent>();
+        await foreach (var evt in stream.SubscribeAsync(runId, 0, cts.Token))
+            replayed.Add(evt);
+        return replayed;
     }
 }

@@ -150,7 +150,8 @@ public sealed class CopilotBlueprintGenerator : IBlueprintGenerator
             - Sandbox validity: choose only one of the allowed sandbox profiles and use "restricted"
               for operations that should avoid network/shell writes unless explicitly approved.
             - Special gates: preserve build_test, rai, rubberduck, and human-review semantics from the
-              shared gate guidance; for software delivery build_test must be before human-review.
+              shared gate guidance; for software delivery build_test must be after any RAI safety
+              check and before human-review.
             - Common failure modes to reject: missing coordinator/owner role in a multi-agent process,
               disconnected or partial workflow coverage, missing review gate for user-facing output,
               unknown sandbox profile, unknown catalog role without bespoke_roles, and choosing a

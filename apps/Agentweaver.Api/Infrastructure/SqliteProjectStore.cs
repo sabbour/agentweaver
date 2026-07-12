@@ -325,7 +325,7 @@ public sealed class SqliteProjectStore : IProjectStore
             UpdatedAt = DateTimeOffset.Parse(r.GetString(12), null, DateTimeStyles.RoundtripKind),
             MaxReadyPerHeartbeat   = r.IsDBNull(13) ? 3 : r.GetInt32(13),
             PickupAutopilot        = r.IsDBNull(14) ? true : r.GetInt32(14) != 0,
-            PickupAutoApproveTools = r.IsDBNull(15) ? false : r.GetInt32(15) != 0,
+            PickupAutoApproveTools = r.IsDBNull(15) ? true : r.GetInt32(15) != 0,
             DefaultWorkflowId      = r.IsDBNull(16) ? null : r.GetString(16),
             ActiveReviewPolicyName = r.IsDBNull(17) ? null : r.GetString(17),
             SandboxProfile         = r.IsDBNull(18) ? null : r.GetString(18),

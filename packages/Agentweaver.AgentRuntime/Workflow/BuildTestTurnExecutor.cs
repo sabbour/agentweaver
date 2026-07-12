@@ -7,17 +7,13 @@ using Agentweaver.SandboxExec;
 
 namespace Agentweaver.AgentRuntime.Workflow;
 
-/// <summary>Platform-owned Build & Test gate with a single canned prompt and preview activation guidance.</summary>
+/// <summary>Platform-owned Build & Test gate with a single canned prompt.</summary>
 public sealed class BuildTestTurnExecutor : Executor<AgentTurnOutput, WorkflowReviewDecision>, IWorkflowNodeMeta
 {
     public const string CannedPrompt =
         "Run the project's build and ALL tests. Execute all available build commands and test runners for the repository. " +
         "The step passes only if the build succeeds AND all tests pass. Report any failures with full error output. " +
-        "Do not approve if there are compilation errors, test failures, or lint errors that indicate broken code. " +
-        "After tests pass, if the project is a web application or service, start its development/preview server so stakeholders can access the running changes before human review. " +
-        "Do NOT assume a hardcoded or pre-configured port — the port is not known ahead of time and can differ per execution. " +
-        "Instead, discover how to run the app by inspecting the project itself (package.json scripts, Dockerfile, Makefile, README, framework defaults, etc.), start the server, and then observe the actual port it binds to from the process stdout/logs. " +
-        "Once the server is up and verified (e.g. with curl), register it by calling the `start_preview(port=PORT)` tool with the exact port the server actually bound to, so the preview sandbox attaches to the running process.";
+        "Do not approve if there are compilation errors, test failures, or lint errors that indicate broken code.";
 
     public string LogicalNodeId { get; }
     public string DisplayLabel { get; }
@@ -38,6 +34,9 @@ public sealed class BuildTestTurnExecutor : Executor<AgentTurnOutput, WorkflowRe
     private readonly Func<string, string, ChannelWriter<RunEvent>>? _createSubStream;
     private readonly Action<string>? _completeSubStream;
     private readonly IWorkflowAgentFactory? _agentFactory;
+    private readonly string? _projectId;
+    private readonly string? _apiBaseUrl;
+    private readonly string? _apiKey;
     private readonly string _agentId;
 
     public BuildTestTurnExecutor(
@@ -55,7 +54,10 @@ public sealed class BuildTestTurnExecutor : Executor<AgentTurnOutput, WorkflowRe
         Func<string, string, ChannelWriter<RunEvent>>? createSubStream = null,
         Action<string>? completeSubStream = null,
         IWorkflowAgentFactory? agentFactory = null,
-        string? agentId = null)
+        string? agentId = null,
+        string? projectId = null,
+        string? apiBaseUrl = null,
+        string? apiKey = null)
         : base(name)
     {
         LogicalNodeId = logicalNodeId;
@@ -72,6 +74,9 @@ public sealed class BuildTestTurnExecutor : Executor<AgentTurnOutput, WorkflowRe
         _createSubStream = createSubStream;
         _completeSubStream = completeSubStream;
         _agentFactory = agentFactory;
+        _projectId = string.IsNullOrWhiteSpace(projectId) ? null : projectId.Trim();
+        _apiBaseUrl = apiBaseUrl;
+        _apiKey = apiKey;
         _agentId = string.IsNullOrWhiteSpace(agentId) ? "qa-engineer" : agentId.Trim();
     }
 
@@ -103,14 +108,14 @@ public sealed class BuildTestTurnExecutor : Executor<AgentTurnOutput, WorkflowRe
             await agent.SetupAsync(
                 worktree,
                 input.RepositoryPath,
-                subRunId,
+                input.RunId,
                 modelId: null,
                 systemPromptContext: null,
                 streamWriter: subWriter,
-                projectId: null,
+                projectId: _projectId ?? input.ProjectId,
                 agentName: _agentId,
-                apiBaseUrl: null,
-                apiKey: null,
+                apiBaseUrl: _apiBaseUrl,
+                apiKey: _apiKey,
                 ct,
                 input.SubmittingUser).ConfigureAwait(false);
 
@@ -135,6 +140,11 @@ public sealed class BuildTestTurnExecutor : Executor<AgentTurnOutput, WorkflowRe
                 Approved: false,
                 RequestChanges: true,
                 Feedback: string.IsNullOrWhiteSpace(response) ? "Build & Test did not return a parseable verdict." : response.Trim());
+        }
+        catch (WorkflowAgentInfrastructureException)
+        {
+            WorkflowStepEvents.Emit(writer, _logger, input.RunId, LogicalNodeId, "failed", DisplayLabel, agentName: _agentId);
+            throw;
         }
         catch (Exception ex)
         {
@@ -166,9 +176,15 @@ public sealed class BuildTestTurnExecutor : Executor<AgentTurnOutput, WorkflowRe
         --- END DIFF ---
 
         Issue exactly one verdict on its own line:
-        - APPROVED — build succeeds, all tests pass, and preview was registered when applicable.
-        - REQUEST_CHANGES — build/tests/lint fail, preview verification fails, or required checks cannot be completed.
+        - APPROVED — build succeeds and all tests pass.
+        - REQUEST_CHANGES — build/tests/lint fail, or required checks cannot be completed.
         - DECLINED — the work is not viable or should not continue.
+
+        If your verdict is REQUEST_CHANGES and the failures point at specific files, add a
+        machine-readable directive on its own line:
+        TARGET_FILES: <comma-separated repo-relative paths>
+        List ONLY the files that must change; omit the line entirely if you cannot attribute the
+        failures to specific files.
         """;
 
     internal static bool TryParseVerdict(string? response, out WorkflowReviewDecision decision)
@@ -189,7 +205,11 @@ public sealed class BuildTestTurnExecutor : Executor<AgentTurnOutput, WorkflowRe
 
             if (verdict == BuildTestVerdict.RequestChanges)
             {
-                decision = new WorkflowReviewDecision(false, RequestChanges: true, Feedback: ExtractFeedback(response));
+                decision = new WorkflowReviewDecision(
+                    false,
+                    RequestChanges: true,
+                    Feedback: ExtractFeedback(response),
+                    TargetFiles: ReviewTargetFiles.Parse(response));
                 return true;
             }
 
@@ -359,6 +379,7 @@ public sealed class BuildTestTurnExecutor : Executor<AgentTurnOutput, WorkflowRe
             {
                 return TryParseVerdictLine(l, out _);
             })
+            .Where(l => !ReviewTargetFiles.IsDirectiveLine(l))
             .ToArray();
         return lines.Length > 0 ? string.Join('\n', lines).Trim() : response.Trim();
     }

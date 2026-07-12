@@ -1,6 +1,10 @@
 using System.Reflection;
+using System.Net.Sockets;
 using System.Text.Json;
+using Agentweaver.AgentRuntime;
+using Agentweaver.AgentRuntime.Workflow;
 using Agentweaver.Api.Sandbox;
+using Agentweaver.Domain;
 using FluentAssertions;
 using k8s;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -34,15 +38,20 @@ public sealed class KubernetesSandboxExecutorClaimTests
     private static IKubernetes ClientFor(FakeKubeHandler handler) =>
         new Kubernetes(new KubernetesClientConfiguration { Host = "http://localhost:8080" }, handler);
 
+    // Chains multiple handlers (KubernetesClient makes handlers[0] outermost and fast-forwards to the
+    // terminal FakeKubeHandler), used to inject transient faults ahead of the fake API (issue #230).
+    private static IKubernetes ClientFor(params DelegatingHandler[] handlers) =>
+        new Kubernetes(new KubernetesClientConfiguration { Host = "http://localhost:8080" }, handlers);
+
     private static KubernetesSandboxExecutor NewExecutor(FakeKubeHandler handler) =>
         NewExecutor(handler, new StubSubmittingUserResolver("sabbour"));
 
     private static KubernetesSandboxExecutor NewExecutor(
         FakeKubeHandler handler, IRunSubmittingUserResolver submittingUserResolver,
-        IHttpClientFactory? httpClientFactory = null) =>
+        IHttpClientFactory? httpClientFactory = null, IRunOptionsStore? runOptions = null) =>
         new(ClientFor(handler), Options(), NullLogger<KubernetesSandboxExecutor>.Instance,
             podRegistry: null, readinessProbe: null, submittingUserResolver: submittingUserResolver,
-            httpClientFactory: httpClientFactory);
+            httpClientFactory: httpClientFactory, runOptions: runOptions);
 
     private sealed class StubSubmittingUserResolver : IRunSubmittingUserResolver
     {
@@ -80,6 +89,81 @@ public sealed class KubernetesSandboxExecutorClaimTests
         public StubHttpClientFactory(HttpMessageHandler handler) => _handler = handler;
         public HttpClient CreateClient(string name) => new(_handler, disposeHandler: false);
     }
+
+    // Records turn-token registration so tests can assert a claim was treated as CREATED (which
+    // registers a token) vs the silent "reuse already-configured claim" path (which does not).
+    private sealed class RecordingTurnTokenRegistry : IAgentHostTurnTokenRegistry
+    {
+        private readonly Dictionary<string, string> _tokens = new();
+        public void RegisterTurnToken(string runId, string token) => _tokens[runId] = token;
+        public void UnregisterTurnToken(string runId) => _tokens.Remove(runId);
+        public string? TryGetTurnToken(string runId) => _tokens.TryGetValue(runId, out var t) ? t : null;
+    }
+
+    // Fault-injecting Kubernetes handler for issue #230. Placed OUTSIDE the terminal FakeKubeHandler
+    // in the client pipeline. Throws `fault()` on the first `failCount` requests matching `match`,
+    // then returns `afterFault()` (when supplied) for the next matching request, otherwise delegates
+    // to the inner FakeKubeHandler. Honors cancellation first so a pre-canceled token surfaces as
+    // OperationCanceledException, mirroring the real transport.
+    private sealed class FailFirstKubeHandler : DelegatingHandler
+    {
+        private readonly int _failCount;
+        private readonly Func<Exception> _fault;
+        private readonly Predicate<HttpRequestMessage> _match;
+        private readonly Func<HttpResponseMessage>? _afterFault;
+
+        public int MatchedRequests { get; private set; }
+
+        public FailFirstKubeHandler(
+            int failCount, Func<Exception> fault, Predicate<HttpRequestMessage> match,
+            Func<HttpResponseMessage>? afterFault = null)
+        {
+            _failCount = failCount;
+            _fault = fault;
+            _match = match;
+            _afterFault = afterFault;
+        }
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (_match(request))
+            {
+                MatchedRequests++;
+                if (MatchedRequests <= _failCount)
+                    throw _fault();
+                if (_afterFault is not null)
+                {
+                    var resp = _afterFault();
+                    resp.RequestMessage = request;
+                    return Task.FromResult(resp);
+                }
+            }
+
+            return base.SendAsync(request, cancellationToken);
+        }
+    }
+
+    // The exact transient chain from issue #230: HttpRequestException → IOException → SocketException 104.
+    private static Exception ConnectionReset() =>
+        new HttpRequestException(
+            "Connection reset by peer",
+            new IOException(
+                "Connection reset by peer",
+                new SocketException((int)SocketError.ConnectionReset)));
+
+    private static bool IsClaimPost(HttpRequestMessage r) =>
+        r.Method == HttpMethod.Post && (r.RequestUri?.AbsolutePath.EndsWith("/sandboxclaims") ?? false);
+
+    // A 409 the KubernetesClient surfaces as HttpOperationException(Response.StatusCode = Conflict).
+    private static HttpResponseMessage ConflictResponse() =>
+        new(System.Net.HttpStatusCode.Conflict)
+        {
+            Content = new StringContent(
+                """{"kind":"Status","apiVersion":"v1","status":"Failure","reason":"AlreadyExists","code":409}"""),
+        };
 
     private static JsonElement SpecOf(string body)
     {
@@ -206,6 +290,64 @@ public sealed class KubernetesSandboxExecutorClaimTests
     }
 
     [Fact]
+    public async Task LaunchAgentHostPod_configure_body_carries_autoApproveTools_from_run_options()
+    {
+        // Bug #221: the per-run AutoApproveTools flag must ride the /configure body so the warm pod
+        // seeds its own IRunOptionsStore and its HITL gate can auto-approve web_fetch under autopilot.
+        const string runId = "run-claim-autoapprove";
+        var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
+
+        var handler = new FakeKubeHandler();
+        handler.OnGet(
+            $"/apis/{SandboxClaimConventions.ApiGroup}/{SandboxClaimConventions.ApiVersion}/namespaces/agentweaver/sandboxclaims/{claimName}",
+            """{"status":{"conditions":[{"type":"Ready","status":"True"}],"sandbox":{"name":"agent-pod-1"}}}""");
+        handler.OnAny(@"^/api/v1/namespaces/agentweaver/pods/agent-pod-1$",
+            """{"kind":"Pod","metadata":{"name":"agent-pod-1"},"status":{"podIP":"10.0.0.7"}}""");
+
+        var runOptions = new InMemoryRunOptionsStore();
+        runOptions.Set(runId, new RunOptions(AutoApproveTools: true));
+
+        var configureHandler = new RecordingConfigureHandler();
+        var executor = NewExecutor(
+            handler, new StubSubmittingUserResolver("sabbour"),
+            httpClientFactory: new StubHttpClientFactory(configureHandler), runOptions: runOptions);
+
+        await executor.LaunchAgentHostPodAsync(runId);
+
+        configureHandler.Body.Should().NotBeNull();
+        using var doc = JsonDocument.Parse(configureHandler.Body!);
+        doc.RootElement.GetProperty("autoApproveTools").GetBoolean().Should().BeTrue(
+            "the per-run AutoApproveTools flag must be propagated to the warm pod (bug #221)");
+    }
+
+    [Fact]
+    public async Task LaunchAgentHostPod_configure_body_defaults_autoApproveTools_false_without_run_options()
+    {
+        // No IRunOptionsStore injected (unit-test null-skip): the flag defaults false rather than
+        // throwing, matching the existing optional-dependency convention in the executor.
+        const string runId = "run-claim-autoapprove-default";
+        var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
+
+        var handler = new FakeKubeHandler();
+        handler.OnGet(
+            $"/apis/{SandboxClaimConventions.ApiGroup}/{SandboxClaimConventions.ApiVersion}/namespaces/agentweaver/sandboxclaims/{claimName}",
+            """{"status":{"conditions":[{"type":"Ready","status":"True"}],"sandbox":{"name":"agent-pod-1"}}}""");
+        handler.OnAny(@"^/api/v1/namespaces/agentweaver/pods/agent-pod-1$",
+            """{"kind":"Pod","metadata":{"name":"agent-pod-1"},"status":{"podIP":"10.0.0.7"}}""");
+
+        var configureHandler = new RecordingConfigureHandler();
+        var executor = NewExecutor(
+            handler, new StubSubmittingUserResolver("sabbour"),
+            httpClientFactory: new StubHttpClientFactory(configureHandler));
+
+        await executor.LaunchAgentHostPodAsync(runId);
+
+        configureHandler.Body.Should().NotBeNull();
+        using var doc = JsonDocument.Parse(configureHandler.Body!);
+        doc.RootElement.GetProperty("autoApproveTools").GetBoolean().Should().BeFalse();
+    }
+
+    [Fact]
     public async Task LaunchAgentHostPod_fails_when_no_submitting_user()
     {
         const string runId = "run-claim-nouser";
@@ -220,5 +362,114 @@ public sealed class KubernetesSandboxExecutorClaimTests
             .WithMessage("*without a submitting user*");
         handler.Requests.Should().NotContain(r => r.Method == "POST" && r.Path.EndsWith("/sandboxclaims"),
             "no pod should be claimed without a resolved run owner to scope the KV token to");
+    }
+
+    // =========================================================================
+    // Issue #230: a transient k8s connection reset during claim create must be retried, not fail
+    // the subtask fatally. The KEY regression is that a retry that observes a 409 for OUR OWN create
+    // (committed server-side before the reset) is treated as CREATED — the pod is fully configured,
+    // never left on the silent "reuse already-configured claim" path.
+    // =========================================================================
+    [Fact]
+    public async Task LaunchAgentHostPod_retries_transient_reset_on_claim_create_then_succeeds()
+    {
+        const string runId = "run-claim-retry-ok";
+        var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
+
+        var fake = new FakeKubeHandler();
+        fake.OnGet(
+            $"/apis/{SandboxClaimConventions.ApiGroup}/{SandboxClaimConventions.ApiVersion}/namespaces/agentweaver/sandboxclaims/{claimName}",
+            """{"status":{"conditions":[{"type":"Ready","status":"True"}],"sandbox":{"name":"agent-pod-1"}}}""");
+        fake.OnAny(@"^/api/v1/namespaces/agentweaver/pods/agent-pod-1$",
+            """{"kind":"Pod","metadata":{"name":"agent-pod-1"},"status":{"podIP":"10.0.0.7"}}""");
+
+        // First POST /sandboxclaims throws a connection reset; the retry delegates to the echo (200).
+        var fault = new FailFirstKubeHandler(failCount: 1, fault: ConnectionReset, match: IsClaimPost);
+
+        var turnTokens = new RecordingTurnTokenRegistry();
+        var configureHandler = new RecordingConfigureHandler();
+        var executor = new KubernetesSandboxExecutor(
+            ClientFor(fault, fake), Options(), NullLogger<KubernetesSandboxExecutor>.Instance,
+            podRegistry: null, turnTokenRegistry: turnTokens, readinessProbe: null,
+            submittingUserResolver: new StubSubmittingUserResolver("sabbour"),
+            httpClientFactory: new StubHttpClientFactory(configureHandler));
+
+        var endpoint = await executor.LaunchAgentHostPodAsync(runId);
+
+        endpoint.Should().Contain("10.0.0.7").And.Contain("8088",
+            "a transient connection reset on claim create must be retried, not fail the launch (#230)");
+        fault.MatchedRequests.Should().Be(2, "the create is attempted twice: initial reset + successful retry");
+
+        configureHandler.RequestUri.Should().Be("http://10.0.0.7:8088/configure",
+            "the warm pod must be configured after the retry succeeds");
+        turnTokens.TryGetTurnToken(runId).Should().NotBeNullOrEmpty(
+            "a successfully created claim registers the run's turn token");
+    }
+
+    [Fact]
+    public async Task LaunchAgentHostPod_treats_409_after_own_create_reset_as_created_and_configures()
+    {
+        const string runId = "run-claim-retry-409";
+        var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
+
+        var fake = new FakeKubeHandler();
+        fake.OnGet(
+            $"/apis/{SandboxClaimConventions.ApiGroup}/{SandboxClaimConventions.ApiVersion}/namespaces/agentweaver/sandboxclaims/{claimName}",
+            """{"status":{"conditions":[{"type":"Ready","status":"True"}],"sandbox":{"name":"agent-pod-1"}}}""");
+        fake.OnAny(@"^/api/v1/namespaces/agentweaver/pods/agent-pod-1$",
+            """{"kind":"Pod","metadata":{"name":"agent-pod-1"},"status":{"podIP":"10.0.0.7"}}""");
+
+        // First POST throws a reset AFTER the server committed our claim; the retry observes 409.
+        var fault = new FailFirstKubeHandler(
+            failCount: 1, fault: ConnectionReset, match: IsClaimPost, afterFault: ConflictResponse);
+
+        var turnTokens = new RecordingTurnTokenRegistry();
+        var configureHandler = new RecordingConfigureHandler();
+        var executor = new KubernetesSandboxExecutor(
+            ClientFor(fault, fake), Options(), NullLogger<KubernetesSandboxExecutor>.Instance,
+            podRegistry: null, turnTokenRegistry: turnTokens, readinessProbe: null,
+            submittingUserResolver: new StubSubmittingUserResolver("sabbour"),
+            httpClientFactory: new StubHttpClientFactory(configureHandler));
+
+        var endpoint = await executor.LaunchAgentHostPodAsync(runId);
+
+        endpoint.Should().Contain("10.0.0.7").And.Contain("8088");
+        fault.MatchedRequests.Should().Be(2, "initial reset + the retry that observes the 409");
+
+        // KEY regression (#230): a retry-409 means OUR create committed before the reset — the pod
+        // must be fully configured, NOT left on the silent "reuse already-configured claim" path.
+        configureHandler.RequestUri.Should().Be("http://10.0.0.7:8088/configure",
+            "a retry-409 is our own create → /configure must still run (not the reuse path)");
+        turnTokens.TryGetTurnToken(runId).Should().NotBeNullOrEmpty(
+            "a retry-409 is our own create → the run's turn token must be registered (not the reuse path)");
+    }
+
+    [Fact]
+    public async Task LaunchAgentHostPod_precanceled_token_is_not_retried_and_throws_promptly()
+    {
+        const string runId = "run-claim-canceled";
+
+        var fake = new FakeKubeHandler();
+        // A reset is configured, but a pre-canceled caller token must short-circuit BEFORE any retry.
+        var fault = new FailFirstKubeHandler(failCount: 1, fault: ConnectionReset, match: IsClaimPost);
+
+        var executor = new KubernetesSandboxExecutor(
+            ClientFor(fault, fake), Options(), NullLogger<KubernetesSandboxExecutor>.Instance,
+            podRegistry: null, turnTokenRegistry: new RecordingTurnTokenRegistry(), readinessProbe: null,
+            submittingUserResolver: new StubSubmittingUserResolver("sabbour"));
+
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        await executor.Invoking(e => e.LaunchAgentHostPodAsync(runId, cts.Token))
+            .Should().ThrowAsync<OperationCanceledException>(
+                "a pre-canceled caller token must never be retried and must surface promptly (#230)");
+        sw.Stop();
+
+        sw.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(1),
+            "cancellation must abort without waiting on any backoff delay");
+        fault.MatchedRequests.Should().BeLessThanOrEqualTo(1,
+            "the create must not be retried once the caller token is canceled");
     }
 }

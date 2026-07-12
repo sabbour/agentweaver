@@ -19,7 +19,7 @@ import { Button,
   tokens,
   } from '@fluentui/react-components';
 import { DAG_NODE_SEP,
-  layoutDag,
+  layoutDagColumns,
   NODE_W,
   RENDERED_TOPOLOGY_NODE_H } from '../utils/dagLayout';
 import { AgentAvatar } from './AgentAvatar';
@@ -60,6 +60,7 @@ import { createContext, useCallback, useContext, useMemo, useState } from 'react
 import type { SteerKind, TopologyEdge } from '../api/types';
 import type { TopologyNodeState } from '../state/topologyReducer';
 import type { Edge, Node, NodeProps } from '@xyflow/react';
+
 // ---------------------------------------------------------------------------
 // Steering context — lets a custom node trigger a steering action without
 // threading callbacks through React Flow node data.
@@ -592,7 +593,7 @@ export function CoordinatorTopologyGraph({ coordinatorRunId, nodes, edges }: Coo
     const nodeSizeHints = Object.fromEntries(
       nodes.map((node) => [node.id, { width: NODE_W, height: node.kind === 'coordinator' ? 220 : RENDERED_TOPOLOGY_NODE_H }]),
     );
-    return layoutDag(raw, rfEdges, { rankdir: 'LR', rankSep: 80, nodeSep: DAG_NODE_SEP }, nodeSizeHints);
+    return layoutDagColumns(raw, rfEdges, { rankdir: 'LR', rankSep: 80, nodeSep: DAG_NODE_SEP }, nodeSizeHints);
   }, [nodes, rfEdges]);
 
   // Pipeline order: left-to-right by layout x-position.

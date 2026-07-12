@@ -76,6 +76,33 @@ public sealed class CoordinatorPickupService
             Origin = RunOrigin.BacklogPickup,         // durable origin marker; persisted atomically in step (b)
         };
 
+        var blockedReason = (string?)null;
+        try
+        {
+            CoordinatorRosterGuard.EnsureDispatchableTeam(project.WorkingDirectory);
+        }
+        catch (NoTeamException)
+        {
+            blockedReason = NoTeamException.ErrorCode;
+            run = run with
+            {
+                Status = RunStatus.Failed,
+                EndedAt = now,
+                Result = blockedReason,
+            };
+        }
+        catch (InvalidTeamException ex)
+        {
+            blockedReason = InvalidTeamException.ErrorCode;
+            _logger.LogError(ex, "Pickup refused: project {ProjectId} team roster is invalid; task {TaskId}", project.Id, task.Id);
+            run = run with
+            {
+                Status = RunStatus.Failed,
+                EndedAt = now,
+                Result = blockedReason,
+            };
+        }
+
         var result = await _backlogStore
             .TryClaimAndReserveCoordinatorRunAsync(project.Id, task.Id, run, now, ct)
             .ConfigureAwait(false);
@@ -89,6 +116,17 @@ public sealed class CoordinatorPickupService
                 _logger.LogInformation(
                     "Pickup: project {ProjectId} not active; task {TaskId} left Ready", project.Id, task.Id);
                 return;
+        }
+
+        if (blockedReason is not null)
+        {
+            if (blockedReason == NoTeamException.ErrorCode)
+            {
+                _logger.LogWarning(
+                    "Pickup refused: project {ProjectId} has no dispatchable team; task {TaskId} claimed to failed run {RunId} with reason {Reason}",
+                    project.Id, task.Id, runId, blockedReason);
+            }
+            return;
         }
 
         // Reservation committed. Activate the coordinator workflow + unattended confirm post-commit.

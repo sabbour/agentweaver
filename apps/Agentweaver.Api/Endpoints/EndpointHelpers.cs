@@ -1,4 +1,5 @@
 using System.Text.Encodings.Web;
+using System.Text.Json;
 using LibGit2Sharp;
 using Microsoft.EntityFrameworkCore;
 using Agentweaver.AgentRuntime;
@@ -45,7 +46,8 @@ internal static async Task<string?> ResolveApprovalOwningRunIdAsync(
     string requestId,
     IToolApprovalGate gate,
     IRunStore runStore,
-    CancellationToken ct)
+    CancellationToken ct,
+    IServiceScopeFactory? scopeFactory = null)
 {
     if (gate.GetRequestState(postedRunId, requestId) != ToolApprovalRequestState.Unknown)
         return postedRunId;
@@ -63,6 +65,39 @@ internal static async Task<string?> ResolveApprovalOwningRunIdAsync(
         var childId = child.Id.ToString();
         if (gate.GetRequestState(childId, requestId) != ToolApprovalRequestState.Unknown)
             return childId;
+    }
+
+    if (scopeFactory is not null)
+    {
+        using var scope = scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var payloads = await db.RunEvents.AsNoTracking()
+            .Where(e => e.RunId == postedRunId
+                && e.EventType == EventTypes.CoordinatorChildApprovalRequired)
+            .OrderByDescending(e => e.Sequence)
+            .Select(e => e.PayloadJson)
+            .ToListAsync(ct)
+            .ConfigureAwait(false);
+
+        foreach (var payloadJson in payloads)
+        {
+            try
+            {
+                using var payload = JsonDocument.Parse(payloadJson);
+                var root = payload.RootElement;
+                if (root.TryGetProperty("requestId", out var persistedRequestId)
+                    && string.Equals(persistedRequestId.GetString(), requestId, StringComparison.Ordinal)
+                    && root.TryGetProperty("childRunId", out var childRunId)
+                    && !string.IsNullOrWhiteSpace(childRunId.GetString()))
+                {
+                    return childRunId.GetString();
+                }
+            }
+            catch (JsonException)
+            {
+                // Ignore a corrupt unrelated event and continue searching older matching records.
+            }
+        }
     }
 
     return null;

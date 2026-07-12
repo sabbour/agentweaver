@@ -104,6 +104,16 @@ The durable artifacts are:
 - **Stale assembly blocks can clear.** If dispatch later observes every subtask eligible, it can advance `assembly_blocked -> awaiting_assembly` so a stale block does not latch forever (`apps/Agentweaver.Api/Coordinator/CoordinatorDispatchService.cs:479`).
 - **Provider choice is not dynamic on the live path.** The live coordinator path directly builds Copilot-backed agents; the Foundry dispatcher seam is plumbed but not active here.
 
+## Dispatchable-team guard layers
+
+Coordinator orchestration no longer invents a default worker when a project has no cast team. The guard is layered so every entry point fails visibly instead of starting teamless work:
+
+1. **Interactive start.** `StartCoordinatorRunAsync` calls `CoordinatorRosterGuard.EnsureDispatchableTeam` before the coordinator run row is inserted (`apps/Agentweaver.Api/Coordinator/CoordinatorRunService.cs:111`, `:125`). The project endpoint maps `NoTeamException` to `409 no_team` and `InvalidTeamException` to `422 invalid_team` (`apps/Agentweaver.Api/Endpoints/ProjectEndpoints.cs:486`).
+2. **Backlog pickup.** `CoordinatorPickupService` checks the same guard before activating a Ready backlog task. If the roster is absent or unreadable, it atomically reserves a failed coordinator run with result `no_team` or `invalid_team` and returns before any Core Implementer child work can start (`apps/Agentweaver.Api/Coordinator/CoordinatorPickupService.cs:79`, `:106`, `:121`).
+3. **Executor defense.** The orchestrator resolves the roster from the same dispatchable-member predicate and fails the coordinator run with `no_team` if no candidate remains, rather than falling back to a fabricated worker (`apps/Agentweaver.Api/Coordinator/CoordinatorOrchestratorExecutor.cs:140`, `:716`). The predicate requires an active member with a role, then rejects Scribe, Ralph, RAI, and Build & Test names/roles (`apps/Agentweaver.Api/Coordinator/CoordinatorRosterGuard.cs:54`, `apps/Agentweaver.Api/Coordinator/CoordinatorOrchestratorExecutor.cs:687`, `:750`).
+
+This preserves the coordinator's model: casting defines who can do work; orchestration only decomposes and assigns work to that real team.
+
 ## Coordinator state machine
 
 There are two overlapping state machines: the parent run status and the WorkPlan status. The WorkPlan is the more precise coordinator-internal state after planning.
@@ -165,11 +175,13 @@ The first coordinator phase is a Microsoft Agents Framework workflow:
 flowchart LR
     Draft[coordinator-draft]
     Gate[await-confirmation RequestPort]
+    Auto[autopilot auto-confirm<br/>ScheduleUnattendedConfirm]
     Finalize[finalize spec]
     Revise[revise input]
     Orchestrate[orchestrate confirmed spec]
 
     Draft --> Gate
+    Auto -. auto-confirm defineOutcome .-> Gate
     Gate -- revise --> Revise --> Draft
     Gate -- confirm / decline --> Finalize --> Orchestrate
 
@@ -182,10 +194,18 @@ flowchart LR
     classDef evt fill:#D6F0F0,stroke:#038387,stroke-width:1px,color:#242424;
 
     class Draft,Gate,Finalize,Revise runtime;
+    class Auto evt;
     class Orchestrate svc;
 ```
 
 The drafting executor compiles team memory and active decisions, resolves the Coordinator charter, and runs a real Copilot coordinator turn. The prompt asks for one JSON object with `desired_outcome`, `scope`, `assumptions`, and `clarifying_questions`.
+
+Two pieces of trusted, drafter-authored guidance are injected into that prompt so the confirmed outcome faithfully spans what the goal actually asks for — instead of collapsing a full-lifecycle request to a delivery-only MVP at the source:
+
+- **Team-capability awareness.** Before drafting, the executor reads the project's `.squad` roster and builds a terse `TEAM CAPABILITIES` list — one line per **dispatchable** member as `- {role-id} ({role title})`. Platform infrastructure agents (Scribe, Ralph, RAI, Build & Test) are filtered out through the same `CoordinatorRosterGuard.IsDispatchableMember` predicate the orchestrator and decomposer use, so the drafted outcome only promises deliverables some real worker role can produce. Roster resolution degrades gracefully: a missing, empty, or unreadable team simply omits the block rather than failing the draft (`apps/Agentweaver.Api/Coordinator/CopilotCoordinatorSpecDrafter.cs:165`, `:190`; `apps/Agentweaver.Api/Coordinator/CoordinatorRosterGuard.cs:54`).
+- **Goal-breadth faithfulness.** A `SCOPE BREADTH` instruction tells the model to enumerate every intermediate deliverable the goal **explicitly** asks for, not just the terminal artifact. When a goal asks for the full journey — "take this all the way from the initial idea through to a working, previewable app" — the drafted `desired_outcome` and `scope` enumerate the discovery/PM/design/build deliverables the goal warrants (customer/market research, positioning/GTM/marketing, user stories, a PRD, and UX design **in addition to** the built app). When the goal is narrow (a bug fix, a small change, a single document), a **symmetric lean guard** keeps the outcome tight and forbids manufacturing lifecycle stages the goal never asked for. Genuinely ambiguous breadth becomes a `clarifying_question` rather than an assumption of the widest scope (`CopilotCoordinatorSpecDrafter.cs:205`, `:229`).
+
+The goal's stated breadth is the **driver**; the roster is only a capability **filter**. Breadth is read from the goal's own words, never inferred from team size or the presence of specialist roles, and the software-lifecycle stages above are **illustrative examples** — Agentweaver is a general orchestrator, so the drafter applies no hardcoded lifecycle checklist. Both the capability list and the breadth guidance are appended **outside** the `<<<USER_GOAL>>>` fences, so trusted roster/breadth text is never conflated with the untrusted goal and the prompt-injection defense is preserved (`CopilotCoordinatorSpecDrafter.cs:210`, `:227`).
 
 Important details:
 
@@ -197,9 +217,9 @@ Important details:
 
 ### Confirmation paths
 
-Interactive runs suspend at the confirmation gate until a human confirms, revises, or declines.
+Interactive `defineOutcome` runs suspend at the confirmation gate until a human confirms, revises, or declines — **unless autopilot is on**. When an interactive run starts with autopilot=true (`POST /api/projects/{id}/orchestrations`, `defineOutcome` mode), `StartCoordinatorRunAsync` schedules the same bounded `ScheduleUnattendedConfirm` loop and confirms the spec unattended once it reaches `awaiting_confirmation`, attributing the confirmation to the submitting user (`confirmedBy` = the authenticated caller). `direct`-mode runs have no confirmation gate, so no loop is scheduled for them.
 
-Backlog pickup runs also go through the same gate. When autopilot is on (`PickupAutopilot: true`, the project default), a bounded `ScheduleUnattendedConfirm` loop fires once the spec reaches `awaiting_confirmation` and confirms it on behalf of the accountable human captured on the backlog item. When autopilot is off, no loop fires — the run stays at `awaiting_confirmation` until the human confirms via the UI. This is not Autopilot bypassing safety: the confirmation is still attributed to the named accountable human, the gate is still enforced, and turning off autopilot simply makes that confirmation explicit instead of automatic. Autopilot also auto-answers child clarifying questions; it does not grant tool approvals, skip the gate for interactive runs, or skip collective human review.
+Backlog pickup runs go through the same gate and the same unattended-confirm loop. When autopilot is on (`PickupAutopilot: true`, the project default), the loop fires once the spec reaches `awaiting_confirmation` and confirms it on behalf of the accountable human captured on the backlog item. When autopilot is off, no loop fires — the run stays at `awaiting_confirmation` until the human confirms via the UI. This is not Autopilot bypassing safety: the confirmation is still attributed to a named human (the submitting user for interactive runs, the captured accountable human for pickups), the gate is still enforced and recorded, and turning off autopilot simply makes that confirmation explicit instead of automatic. Autopilot also auto-answers child clarifying questions; it does not grant tool approvals or skip collective human review.
 
 There is a small ordering race between "the spec was persisted and emitted" and "the framework request port is armed." The resume seam handles this by waiting briefly for the pending gate while the spec remains `awaiting_confirmation`, preserving double-submit protection without rejecting a fast confirm.
 
@@ -226,7 +246,7 @@ The selected workflow is not just recorded for display. It becomes prompt contex
 
 ### Decomposition strategy
 
-The decomposition turn asks for the **minimum set of independently dispatchable subtasks**. Each subtask must include:
+The decomposition turn asks for a subtask set that is **outcome-complete** — one that covers every lifecycle stage the outcome implies, rather than the fewest subtasks that technically compile. Every distinct deliverable or lifecycle stage the confirmed outcome calls for (customer/market research, business/GTM, user stories, PRD, UX design, implementation, and so on) must map to at least one **independently dispatchable, well-scoped subtask owned by exactly one agent** — a stage the outcome implies is never dropped, and two genuinely distinct deliverables are never merged. A **symmetric anti-over-engineering guard** balances that completeness: a small, well-defined change maps to a single implementation subtask, so trivial outcomes stay lean and no stage is manufactured that the outcome does not imply. This stays balanced only because the lifecycle breadth already originates upstream, in the confirmed outcome the [drafter produces](#how-drafting-works): decomposition inherits and honors that breadth rather than having to reconstruct it. Each subtask must include:
 
 - title;
 - exact scope, including files or outputs it owns;
@@ -237,7 +257,7 @@ The decomposition turn asks for the **minimum set of independently dispatchable 
 - advisory isolation hint;
 - 1-based dependency indices.
 
-The prompt pushes the model toward few, bounded subtasks and explicit dependency edges. It also asks parallel file-producing subtasks to write unique outputs, then add a consolidation subtask when parallel research needs synthesis.
+The prompt drives the model toward bounded subtasks and explicit dependency edges, but the selected workflow is **guidance for the stages it covers — not a cap on the plan**. A functional workflow may model only part of the outcome; when the desired outcome implies earlier lifecycle stages the workflow's topology does not enumerate, the coordinator **adds** subtasks for them rather than truncating the plan to the workflow's shape. It also asks parallel file-producing subtasks to write unique outputs, then add a consolidation subtask when parallel research needs synthesis.
 
 The decomposition turn is grounded in:
 
@@ -277,13 +297,14 @@ This is a pragmatic trade-off: it preserves progress for most accidental cycles 
 
 Subtasks are assigned to active, dispatchable roster members. Built-in infrastructure agents such as Scribe and RAI are excluded. Role matching scores exact role/title matches, token overlap across capabilities and responsibilities, and phase affinity.
 
-Model selection is fixed to GitHub Copilot on this path:
+Model selection is fixed to GitHub Copilot on this path. A non-empty **run model pin** — the coordinator run's explicit `modelId` OR the project's GitHub Copilot default — wins for **every** subtask regardless of complexity:
 
-1. high-complexity subtasks can use the coordinator run's explicit model override;
+1. if the run carries a model pin (explicit request `modelId`, else the project default), use it for every subtask;
 2. otherwise use the assigned role's default model;
 3. otherwise use a catalog role default;
-4. otherwise use the run override;
-5. otherwise use the configured Copilot default.
+4. otherwise use the configured Copilot default (`CoordinatorModelDefaults.DefaultCopilotModel = "claude-sonnet-4.6"`, overridable via `Providers:GitHubCopilot:Model`; the stale hardcoded `gpt-4o` last-resort was removed in issue #238).
+
+Because the pin wins uniformly, setting a project default (or passing an explicit `modelId`) disables per-role model differentiation for that run; leave the pin unset for mixed per-role models. The same precedence is honored when a reviewer rejection rotates a subtask to a different eligible author — the pin is preserved across the rotation rather than falling back to the rotated author's role default.
 
 The persisted WorkPlan starts as `planned`, with subtasks in `pending` and dependency edges persisted by database ids.
 
@@ -351,9 +372,83 @@ The reconciler now checks two things before trying to steal a plan:
 - if another pod owns `CoordinatorPodId` **and** that claim is still fresh, it skips the plan; and
 - if the claim is missing or stale, it tries one conditional UPDATE to take ownership.
 
-A lease is considered stale after `Coordinator:PodLeaseStaleTtlSeconds` (default **60 s**). In
-practice that means a healthy owner keeps the plan by touching `UpdatedAt`, while another replica
-may recover the work if the owner dies and stops refreshing the row.
+A lease is considered stale after `Coordinator:PodLeaseStaleTtlSeconds` (default **120 s**, kept
+above the 90 s `/healthz` probe window so a probe pause never lets a peer steal a live lease).
+
+#### Lease heartbeat
+
+Stamping `CoordinatorPodId` at claim time is not enough on its own. The lease freshness signal is
+`WorkPlan.UpdatedAt`, and for a long time that column was only touched on **status transitions**.
+A dispatch loop that `await`s a single child turn — an implement or debug run can take 5 to 15+
+minutes — made no status change during that wait, so `UpdatedAt` aged past the stale TTL while the
+owner was perfectly healthy. A peer replica's reconciler then read the plan as an orphan, claimed
+it, and started a **second** dispatch loop. Both loops drove the same run and raced the shared
+`/workspace/{projectId}/.git` repo.
+
+To close that gap, a pod that owns a dispatch loop runs an independent heartbeat (a `PeriodicTimer`
+on its own task) that renews the lease every `Coordinator:PodLeaseHeartbeatSeconds` (default
+**30 s**, well under the 120 s TTL). Each tick runs from its **own DI scope and `DbContext`** — never
+the dispatch loop's context, which is not thread-safe — and issues an ownership-keyed conditional
+UPDATE: `WHERE Id = @planId AND CoordinatorPodId = @myPodId AND Status = 'dispatching'`, setting
+`UpdatedAt = now`. A healthy owner therefore keeps the lease fresh for the whole child turn.
+
+The heartbeat also **fences** the loop on lease loss. Loss is decided by ownership, not by the row
+count. When a renew affects zero rows, the heartbeat re-reads the plan:
+
+- if `CoordinatorPodId` now belongs to a different pod, the peer took over — the heartbeat cancels a
+  per-run `CancellationTokenSource` (linked to app shutdown) so the fenced loop stops instead of
+  continuing to race the repo, and `StartDispatch` logs the stop as a fenced hand-off rather than a
+  failure; and
+- if the row is still owned by this pod (the loop itself advanced `dispatching -> awaiting_assembly`)
+  or the row is gone, that is a benign stop — the heartbeat tears down without cancelling anything,
+  so a normal hand-off never self-fences.
+
+The heartbeat is stopped explicitly just before the `awaiting_assembly` hand-off and again in the
+loop's teardown, so it never outlives the loop it renews.
+
+#### Assembly-phase lease heartbeat
+
+The dispatch heartbeat only renews the lease while the plan is `dispatching`. The **assembly** phases
+(`assembling` / `assembly_steering`) have the same exposure: building the integration branch, the
+collective RAI / Rubberduck / Build & Test gates, and steering decisions routinely run well past the
+120 s stale TTL with no status change, so `UpdatedAt` would age out and a peer reconciler could
+reclaim an actively-assembling run — re-running already-completed subtasks. The reconciler's
+`IsAssemblyActive` check is in-memory per pod, so it always reads `false` on a peer replica and cannot
+see the healthy owner's live loop.
+
+`CoordinatorAssemblyService` therefore runs its own per-run heartbeat for the life of the assembly
+loop, launched alongside `RunAssemblyAsync` in `StartAssembly` and cancelled + awaited in the `finally`
+so it never outlives the loop (`apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyService.cs:288`).
+Each tick (`AssemblyHeartbeatTickAsync`, `:379`) runs from its **own DI scope + `DbContext`** — never
+the assembly loop's context — and issues an ownership-and-status-keyed conditional UPDATE:
+`WHERE Id = @planId AND CoordinatorPodId = @myPodId AND Status IN ('assembling','assembly_steering')`,
+setting `UpdatedAt = now`. The interval reuses the same `Coordinator:PodLeaseHeartbeatSeconds`
+(default **30 s**); no new config key is added.
+
+The status set is **exactly** `{assembling, assembly_steering}`:
+
+- `in_review` is deliberately **excluded** so the heartbeat never masks
+  `CoordinatorReconciler.TryAbandonStaleReviewAsync`'s 24 h idle backstop
+  (`apps/Agentweaver.Api/Coordinator/CoordinatorReconciler.cs:396`); `in_review` is already
+  cross-pod-protected by the durable pending-gate check, not by the stale TTL.
+- `awaiting_assembly` / `assembly_blocked` are excluded because their reclaim is not stale-TTL-gated.
+
+Ownership decides the outcome, not the row count. When a renew affects zero rows the tick re-reads
+`CoordinatorPodId`: a **peer** owner (non-null and not this pod) returns `PeerOwned` and stops the
+heartbeat (this owner is being superseded); still-this-pod, a transient non-assembling status, or a
+missing row returns `Idle` — the tick is skipped but the loop keeps ticking, because the multi-phase
+lifecycle may re-enter `assembling` later (for example after a review approval). A transient per-tick
+DB/SMB blip is logged and the loop keeps heartbeating on the next interval — a single failed tick must
+never stop renewals (`RunAssemblyLeaseHeartbeatAsync`, `:425`).
+
+**Companion hardening (post-terminal delta drop).** A late `agent.message.delta` arriving after a run
+is already terminal must never re-persist and re-drive the run or flood the stream past the heartbeat.
+Both event-stream backends drop **only** that one type once a run is completed —
+`if (_completedRuns.ContainsKey(runId) && evt.Type == EventTypes.AgentMessageDelta) return;` at the top
+of `AppendAsync` (`apps/Agentweaver.Api/Infrastructure/SqliteRunEventStream.cs:86`,
+`apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:70`). Every terminal, diagnostic, final
+coalesced `agent.message`, tool, usage, subtask, and topology event still persists post-terminal for a
+durable audit trail and gapless replay.
 
 ### Shared worktree conflict control
 
@@ -371,6 +466,38 @@ This favors correctness over maximum parallelism. A poorly scoped subtask may re
 When dispatch rebuilds the dependency-base integration branch for downstream subtasks, it treats git ref-lock contention as a transient recovery case rather than a fatal orchestration fault. If LibGit2Sharp throws a locked-file error, the dispatcher asks `WorktreeManager` to best-effort delete stale `.git/refs/heads/{branch}.lock` and `.git/packed-refs.lock` files, then retries up to three times with a short linear backoff.
 
 This path exists for crashed or interrupted prior processes that left a stale lock behind. If the retry still fails, dispatch logs the problem and continues without refreshing that dependency base branch, instead of crashing the whole coordinator loop.
+
+### Integration-branch build lock (per project)
+
+The repo at `/workspace/{projectId}/.git` is shared by **every run in a project** (Azure Files SMB
+in the cloud), and `WorktreeManager.BuildIntegrationBranch` deletes and recreates the integration ref
+on each rebuild. Two builds racing that same repo produce a `LockedFileException` or a null ref while
+the ref is mid-swap — the second failure mode surfaced as an `ArgumentNullException` from
+`Refs.UpdateTarget` and pushed the run to `assembly_blocked`.
+
+The lease heartbeat removes the usual cause of a second concurrent loop, but one residual window
+remains: `BuildIntegrationBranch` is a synchronous, non-cancellable LibGit2Sharp call, so a loop that
+has just been fenced cannot be drained out of the middle of a build. Two builds can also legitimately
+overlap across separate runs in the same project. To serialize them, both the dispatch dependency-base
+rebuild and the collective-assembly integration build take a **per-project** lock (repo granularity,
+not per-run) around the build.
+
+The lock is a row in the `IntegrationBuildLocks` table, one per `ProjectId`, claimed with a
+conditional UPSERT (`INSERT ... ON CONFLICT (ProjectId) DO UPDATE ... WHERE AcquiredAt < <stale
+threshold>`) so exactly one caller wins. The same SQL runs on SQLite (local and tests) and Postgres
+(staging); a DB row is used rather than a named OS mutex (which would not span pods) or an SMB/git
+file lock (the substrate that fails under the race). Each acquisition mints a token that fences
+release, so a holder whose lock was reclaimed after the stale TTL can never delete the new holder's
+row, and a crashed holder's row is reclaimable after `Coordinator:IntegrationBuildLockStaleTtlSeconds`
+(default **300 s**) rather than deadlocking the project. Acquisition waits up to
+`Coordinator:IntegrationBuildLockAcquireTimeoutSeconds` (default **120 s**).
+
+On the dispatch side the lock is best-effort: if a peer build holds it past the timeout, the rebuild
+is skipped, because the mandatory contains-check and repair before a dependent dispatches re-runs it.
+On the assembly side the final build proceeds even if the lock cannot be taken in time, since the
+existing retry-on-`LockedFileException` is the backstop and the final integration build must not be
+skipped. The pre-existing three-attempt stale-lock retry stays in place for locks left behind by a
+crashed process.
 
 ### Child run construction
 
@@ -402,9 +529,24 @@ Terminal child events map to coordinator outcomes:
 
 Mid-run child questions and tool approval requests are re-emitted on the coordinator stream with child run id, subtask id, and request id. Autopilot may answer bubbled **questions** by running a one-shot Copilot coordinator turn grounded in the OutcomeSpec and subtask. Tool approvals remain separate and are not auto-granted by Autopilot.
 
-Observation includes stall handling. If a child emits no events within `Coordinator:SubtaskStallTimeoutMinutes` (default five minutes), the coordinator emits `coordinator.child_stall_detected`, persists any partial-output checkpoint it saw, fails the stalled child subtask with recovery guidance, and increments the recovery-attempt counter.
+Observation includes stall handling. If a child emits no events within `Coordinator:SubtaskStallTimeoutMinutes` (default five minutes), the coordinator emits `coordinator.child_stall_detected`, persists any partial-output checkpoint it saw, and then — while recovery budget remains — redispatches the stalled subtask on a fresh child instead of failing it, incrementing the recovery-attempt counter; only once the budget is exhausted does the stall become terminal (see [Stall redispatch before dead-end](#stall-redispatch-before-dead-end) below).
+
+An unresolved tool-approval gate is exempt from that stall timer (issue #212). While a child's most recent interaction is a `tool.approval_required` that has not resolved — with only `tool.approval_pending` heartbeats (every ~20s) following — the watcher records the pending `requestId` and treats the child as a legitimate human-paced wait, logging and continuing to observe instead of firing `agent_stall_timeout`. The exemption self-heals and cannot latch: any other real event (`tool.result` on grant, `tool.error` on deny/expiry, `tool.approval_resolved`, agent output, or a terminal event) clears the flag, so a pod that genuinely hangs after a gate self-expires is still caught. The guard also protects gate sites that emit no heartbeat, such as the preview gate (`AgentPreviewGate.RequestApprovalAsync`). See the [Tool Approval SSE Contract](../tool-approval-sse-contract.md#stall-resilience-coordinator-approval-gate-guard-212).
+
+A child whose AgentHost sandbox pod is still being provisioned is exempt from the same stall timer (issue #217). Kubernetes owns pod admission and scheduling, so a `SandboxClaim` can sit unbound (pod `Pending`) while a node frees up or `katapool` autoscales — a legitimate wait, not a stall. While the claim is unbound the executor emits a `sandbox.provisioning_pending` heartbeat (about every 20s) on the child stream; the watcher records that the child's most recent event is that heartbeat and, on stall-TTL expiry, resets the window and keeps observing instead of firing `agent_stall_timeout`. Like the approval-gate guard it self-heals and cannot latch: any other real event (the pod binding, agent output, or a terminal event) clears the flag, so a pod that genuinely hangs after provisioning is still caught. This mirrors the #212 `tool.approval_pending` mechanism.
 
 Pending dependents of that stalled prerequisite do not become runnable. Instead, the dispatcher marks them `blocked`: a terminal, assembly-ineligible status that does not satisfy dependencies and means "this subtask never ran because an upstream dependency stalled." That distinction matters operationally: the stalled child owns the failure, while the blocked dependents record the cascade.
+
+#### Stall redispatch before dead-end
+
+A single stalled subtask used to dead-end the entire run: the frontier (`SubtaskFrontier.ReadyPending`) only dispatches `pending` subtasks, so a subtask terminalized as `failed` never re-entered, and the eligibility gate then stopped assembly with `coordinator.assembly_blocked: ineligible_subtasks` → `coordinator.assembly_failed`. Marking the stall terminal wasted a run that may have completed every other subtask.
+
+The dispatch loop now spends the subtask's bounded **recovery budget** before dead-ending. In the `ChildOutcome.Stalled` branch, `TryRedispatchStalledSubtaskAsync` runs first (`apps/Agentweaver.Api/Coordinator/CoordinatorDispatchService.cs:399`, `:1235`):
+
+- If `RecoveryAttempts < CoordinatorSteeringService.MaxRecoveryAttempts` (**3**), the subtask row is revived for a fresh child — `Status = pending`, `ChildRunId = null`, `PriorChildRunId = childRunId` (so the fresh child builds on the prior branch through the existing handoff bundle), `RecoveryAttempts` incremented **monotonically** (never reset), `UpdatedAt = now` — persisted from a fresh DI scope + `DbContext` (mirroring `ApplyStallFailureAsync`). The in-memory `statusById` entry is set back to `pending`, a `coordinator.subtask_redispatched` diagnostic is emitted, and the loop `continue`s so `SubtaskFrontier.ReadyPending` redispatches it next iteration on a fresh pod. The **old** child run is still terminalized (`agent_stall_timeout`) and its AgentHost pod released — only the subtask is reset.
+- Once the budget is exhausted (`RecoveryAttempts >= MaxRecoveryAttempts`), the loop falls through to the pre-existing dead-end path: `ApplyStallFailureAsync` terminalizes the subtask `failed`, `PropagateBlockedDependentsAsync` marks its dependents `blocked`, and assembly stops at the eligibility gate. This is now a genuine terminal after up to three bounded attempts, not on the first stall.
+
+Because `RecoveryAttempts` is capped and never reset, the redispatch cannot loop forever, and single-replica runs simply gain up to three fresh attempts before reaching the same terminal they had before. The `coordinator.subtask_redispatched` payload (`subtaskId`, `priorChildRunId`, `attempt`, `maxAttempts`, `reason`) is documented in the [events reference](../reference/events.md#coordinator-subtask-redispatched).
 
 ### Topology emission and pod registry projection
 
@@ -430,9 +572,16 @@ flowchart TD
     Eligible{All subtasks eligible?}
     Order[Topological branch order]
     Integration[Build integration branch]
+    GateOrder[Resolve authored gates
+by happy-path traversal]
     Rai[Collective RAI over aggregate diff]
     RaiFlag{RAI flagged?}
-    Review[One collective human review]
+    Rubberduck[Optional Rubberduck critique]
+    BuildTest[Build & Test
+detached worktree]
+    Preview[Preview outcome
+ready / failed / skipped]
+    Review[Collective human review]
     Decision{Decision}
     Merge[Merge integration branch]
     Scribe[Collective scribe]
@@ -445,9 +594,9 @@ flowchart TD
     Claim -- won --> Eligible
     Eligible -- no --> Blocked
     Eligible -- yes --> Order --> Integration
-    Integration -- auto-resolve / ok --> Rai --> RaiFlag
+    Integration -- auto-resolve / ok --> GateOrder --> Rai --> RaiFlag
     RaiFlag -- yes --> Blocked
-    RaiFlag -- no --> Review --> Decision
+    RaiFlag -- no --> Rubberduck --> BuildTest --> Preview --> Review --> Decision
     Decision -- approve --> Merge
     Decision -- request changes --> RequestChanges
     Decision -- decline --> Blocked
@@ -463,14 +612,28 @@ flowchart TD
     classDef runtime fill:#DDF3DD,stroke:#107C10,stroke-width:1px,color:#242424;
     classDef evt fill:#D6F0F0,stroke:#038387,stroke-width:1px,color:#242424;
 
-    class Claim,Eligible,Order,RaiFlag,Review,Decision,Complete,RequestChanges,AlreadyClaimed,Blocked svc;
-    class Integration,Rai,Merge,Scribe runtime;
+    class Claim,Eligible,Order,GateOrder,RaiFlag,Review,Decision,Complete,RequestChanges,AlreadyClaimed,Blocked svc;
+    class Integration,Rai,Rubberduck,BuildTest,Merge,Scribe runtime;
     class Dispatching core;
 ```
 
 ### Exactly-once claim
 
 Assembly starts with a database compare-and-swap from `awaiting_assembly` to `assembling`, stamping the integration branch. Only the winner proceeds. This is the authoritative exactly-once guard across dispatch completion, recovery, and review-triggered re-dispatch.
+
+### Authored assembly gates
+
+After the integration branch is built, the coordinator resolves assembly gates from the selected workflow's happy path rather than from YAML node declaration order. It breadth-first traverses from `start`, following unconditional edges plus `approved`, `pass`, and `review` verdict edges, then runs matching gates in that traversal order (`apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyService.cs:1121`, `:1164`, `:1190`).
+
+Known assembly gates are `rai`, `rubberduck`, `build-test`, and `human-review`; `build_test` workflow nodes normalize to `build-test` (`CoordinatorAssemblyService.cs:1128`). The built-in software workflows now put RAI before Build & Test on the approval path: bug fix runs RAI -> Build & Test -> Human Review, while software delivery runs RAI -> Rubberduck -> Code Review -> Build & Test -> Human Review.
+
+Build & Test is a platform gate, not a human action. The assembly service emits `coordinator.assembly_review_requested` with `gateKind: "build-test"`, creates a detached worktree from the integration branch, runs the build/test verdict turn, and routes its verdict before the human-review gate (`CoordinatorAssemblyService.cs:671`, `apps/Agentweaver.Api/Git/WorktreeManager.cs:155`). In `pod-per-run` mode, the pipeline launches a dedicated AgentHost pod bound to the coordinator run id and passes the detached worktree path as the working-directory override (`apps/Agentweaver.Api/Coordinator/CollectiveAssemblyPipeline.cs:155`, `apps/Agentweaver.Api/Sandbox/IAgentHostPodLifecycle.cs:30`). `/configure` then sets the AgentHost working directory/file-tool root to that path before the first turn (`apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs:300`, `:423`). This gives the automated gate a routable A2A endpoint and a stable pod for the later deterministic preview step. Because that detached worktree uses the `git` CLI (`WorktreeManager.cs:546`), the API runtime image installs `git` alongside `libgit2` (`apps/Agentweaver.Api/Dockerfile:58`).
+
+Preview is decoupled from the Build & Test model verdict. After `RunBuildTestAsync` returns, `PreviewStep.RunAsync` runs for approved or request-changes verdicts and skips only declined verdicts (`CoordinatorAssemblyService.cs:753`). It is deterministic and platform-owned: `PreviewCommandResolver` finds a command, the API calls AgentHost `/preview-runner/*`, AgentHost observes the actual bound port, and the API registers the Gateway preview with that observed port (`apps/Agentweaver.Api/Coordinator/Preview/PreviewStep.cs:70`, `apps/Agentweaver.Api/Sandbox/Preview/PreviewCommandResolver.cs:25`, `apps/Agentweaver.Api/Sandbox/Preview/PreviewRunnerHttpClient.cs:78`).
+
+Preview failure is deliberately non-blocking. `PreviewStep` emits `sandbox.preview_ready`, `sandbox.preview_failed`, or `sandbox.preview_skipped_not_applicable` as the terminal preview outcome, and any failure still lets human review proceed (`PreviewStep.cs:229`, `:258`, `:272`). The old approval-time guard remains a safety net: if no final outcome exists, it emits `sandbox.preview_failed` with `reason: "preview_outcome_missing"` rather than resetting and redispatching subtasks (`CoordinatorAssemblyService.cs:2455`). See [Decoupled live-preview provisioning](./live-preview-provisioning.md).
+
+Automated gate request-changes now route through unified steering rather than a hidden reset-and-redispatch reflex. `RouteAssemblyGateThroughSteeringAsync` emits `coordinator.steering_received`, invokes the coordinator decider inline, and emits `coordinator.steering_decision` before executing the chosen action (`apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyService.cs:1680`). A decision can steer in place, dispatch fresh, proceed/terminal, or record an advisory no-op. Fresh dispatch is the only path that resets subtasks, and it is visible before the reset. In-place revision failures now terminalize visibly (`run.failed` reason `child_executor_failed:{executor}` plus failed `workflow.step`) and then fall back through a conscious `dispatch_fresh` decision when needed, so assembly does not silently wedge. See [Unified autonomous steering](./unified-steering.md).
 
 ### Eligibility gate
 
@@ -486,7 +649,25 @@ Eligible child branches are merged into one integration branch in dependency ord
 
 ### Collective RAI
 
-The production pipeline reuses the existing RAI executor over the aggregate diff. A collective RAI safety flag is a hard stop: the WorkPlan is marked `rai_blocked`, the coordinator run is failed, and a human override/recovery path is required.
+The production pipeline reuses the existing RAI executor over the aggregate diff. When the integration has changes, the coordinator first provisions **one** detached reviewer worktree checked out at the integration tip and passes its path to both the collective RAI and Rubberduck reviewers, so they review the **actual assembled files** — raw bytes, line endings, integration state — rather than only the aggregate diff string. This eliminated spurious blocking findings and premature human escalation that arose when reviewers received only the diff text with an empty worktree path. The reviewer worktree reuses the deterministic Build/Test worktree name, so Build & Test destructively recreates the same worktree when it runs (no reviewer-write bleed into Build/Test) and the existing Build/Test cleanup path tears it down with no extra wiring; empty-diff assemblies skip the worktree entirely (`apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyService.cs:785`, `apps/Agentweaver.Api/Coordinator/CollectiveAssemblyPipeline.cs:298`). A collective RAI safety flag is a hard stop: the WorkPlan is marked `rai_blocked`, the coordinator run is failed, and a human override/recovery path is required.
+
+### Build & Test infrastructure classification
+
+Build/test code feedback and sandbox infrastructure failures take different paths. A `request-changes`
+decision from the Build & Test agent is authored feedback and uses normal redispatch routing.
+Infrastructure failures are classified before that verdict layer: launch failure, missing
+pod IP, missing A2A endpoint, and A2A transport errors become `build_test_infra_*` reasons
+(`CollectiveAssemblyPipeline.cs:174`, `:252`; `KubernetesPodAgentEndpointResolver.cs:103`, `:177`;
+`RemoteAgentProxy.cs:119`, `:243`). Retryable cases park the plan as `assembly_blocked` so the reconciler
+can re-arm it; non-retryable configuration errors mark `assembly_failed` and terminalize the coordinator
+(`CoordinatorAssemblyService.cs:1567`, `CoordinatorReconciler.cs:267`). The emitted diagnostic payloads
+carry `detail`, `exceptionMessage`, `innerExceptionMessage`, `innerExceptionType`, and
+`infrastructureReason`, so operators can see the actual AgentHost launch or transport root cause rather
+than only `build_test_infra_agenthost_launch_failed` (`CoordinatorAssemblyService.cs:1590`, `:1604`,
+`:1648`). These events are persisted even when they are appended around terminalization because the run
+event stream writes late appends before checking completed-run state (`SqliteRunEventStream.cs:81`,
+`EfRunEventStream.cs:64`). They no longer masquerade as `REQUEST_CHANGES`, so they do not create a
+redispatch loop that keeps asking workers to fix unavailable infrastructure.
 
 ### One collective review
 
@@ -495,21 +676,29 @@ The human reviews the combined integration result once. The gate is an in-memory
 Review decisions:
 
 - **Approve** — proceed to one collective merge.
-- **Request changes** — infer affected subtasks and re-dispatch them.
+- **Request changes** — submit unified steering feedback to the coordinator. The coordinator chooses in-place steering, fresh dispatch, proceed/terminal, or advisory no-op.
 - **Decline** — mark assembly declined and terminalize the coordinator run.
 - **Timeout/cancel** — leave recoverable or mark failed depending on path.
 
 ### Request-changes routing
 
-When the reviewer requests changes, the coordinator tries to avoid redoing everything:
+The assembly Build & Test pod, detached worktree, and any Gateway preview are intentionally retained while
+the run waits at human review, so reviewers can open the preview URL against the exact assembled tree. They
+are also retained across automated Build & Test / Rubberduck request-changes redispatches, which preserves
+context and avoids a second-pass AgentHost relaunch failure class. Cleanup still runs on terminal outcomes,
+and it still runs before non-automated request-changes redispatches where the old review context should be
+discarded (`CoordinatorAssemblyService.cs:1536`, `:1548`, `:1869`, `:1918`). `AgentHostReaperService`
+treats `AwaitingReview` as active, so review/preview AgentHost claims are not reaped during that window
+(`apps/Agentweaver.Api/Sandbox/AgentHostReaperService.cs:86`, `:102`).
 
-1. Combine explicit target files with path-like tokens parsed from feedback.
-2. Match those files against files touched by each child diff.
-3. Select directly matched subtasks.
-4. Add every transitive dependent of those subtasks.
-5. If no files can be inferred or no child matches, fall back to all subtasks.
+When a gate requests changes, the coordinator avoids redoing everything by scoping to the reviewer's **implicated** subtasks (#223):
 
-Selected subtasks are reset to `pending` with recovery guidance containing the review feedback. Other completed subtasks remain intact. The WorkPlan returns to `dispatching`, and the dispatch loop re-runs the affected frontier. After those children finish, assembly starts again from `awaiting_assembly`.
+1. Read the reviewer's structured `TARGET_FILES:` hint (`ReviewTargetFiles.Parse`) — a machine-readable directive line, not prose scraped from feedback.
+2. Reverse-map those files onto the assembly-eligible subtasks that actually committed them (`AssemblyPlanning.ScopeImplicatedSubtasks`) — the *implicated* set. Only these authors are eligible for author lockout.
+3. Sweep the implicated set's transitive dependents (`AssemblyPlanning.TransitiveDependents`) — they must rebuild against the revised contract, but their authors are **never** locked out (locking a blameless dependent re-creates the roster-exhaustion deadlock).
+4. If the hint is missing or reverse-maps to nothing, fall back to all contributors (fail-safe) and emit `coordinator.assembly_implicated_scope_fallback`.
+
+The implicated subtasks are reset to `pending` with recovery guidance containing the review feedback; their already-satisfied dependents are reset too (`RedispatchDependentsAsync`). Other completed subtasks remain intact. The WorkPlan returns to `dispatching`, and the dispatch loop re-runs the affected frontier. After those children finish, assembly starts again from `awaiting_assembly`.
 
 ### Merge, scribe, and decision promotion
 
@@ -536,6 +725,18 @@ assembling plans whose in-memory loop is gone, recreates the coordinator stream 
 re-arms the correct service. For `dispatching` plans it honors the distributed `CoordinatorPodId`
 lease first, skipping freshly owned plans and stealing only stale ones. Each candidate is isolated
 by try/catch so one corrupt plan does not stop the sweep.
+
+### Bounded final-Scribe recovery
+
+At startup, recovery checks terminal coordinator runs for a missing final Scribe. It skips runs that
+already have a Completed or InProgress Scribe child, and stops retrying after the configured number
+of Failed attempts. Per-run admission prevents duplicate local launches, while a `SemaphoreSlim`
+bounds concurrent in-process Scribe pipelines.
+
+| Configuration key | Default | Effect |
+|---|---:|---|
+| `Coordinator:FinalScribeMaxConcurrency` | `2` | Maximum final-Scribe recovery pipelines admitted concurrently in this process; values below `1` are floored to `1`. |
+| `Coordinator:FinalScribeMaxAttempts` | `3` | Maximum Failed final-Scribe child attempts before recovery stops admitting another attempt; values below `1` are floored to `1`. |
 
 ### Reaper as the 3rd heartbeat phase
 
@@ -630,7 +831,8 @@ The provider-neutral `AgentRunnerDispatcher` can route one-shot runner calls to 
 | Assembly has ineligible subtasks | Block whole assembly; no partial merge. |
 | Integration branch conflict | Mark needs resolution; do not enter review/merge. |
 | Collective RAI flagged | Current behavior: mark `rai_blocked` and terminalize failed. |
-| Review requests changes | Reset inferred subtasks and dependents; re-dispatch. |
+| Build & Test infrastructure failure | Classify as `build_test_infra_*`; retryable cases park as `assembly_blocked`, non-retryable configuration errors fail assembly. |
+| Review requests changes | Reset inferred subtasks and dependents, then re-dispatch. Automated Build & Test / Rubberduck request-changes retain the assembly Build & Test pod and detached worktree for reuse; non-automated request-changes clean those resources up first. |
 | Review declines | Mark assembly declined and terminalize. |
 | Merge conflict | Mark needs resolution / merge failed. |
 | Scribe fails after merge | Emit failure event but keep assembly successful. |
@@ -701,3 +903,9 @@ When the coordinator fails while the review is open, `MarkCoordinatorFailedAsync
 - `apps/Agentweaver.Api/Memory/`
 - `packages/Agentweaver.AgentRuntime/Workflow/`
 - `packages/Agentweaver.AgentRuntime/CopilotAIAgent.cs`
+
+## See also
+
+- [Resilient assembly-review loop — Deep Dive](./resilient-assembly-review.md) — the hardening built on top of the assembly pipeline: budget-exhausted escalation, accumulated context, reviewer-rejection lockout, and reliable child-turn terminal emission.
+- [Events reference — `coordinator.subtask_redispatched`](../reference/events.md#coordinator-subtask-redispatched) — the diagnostic emitted when a stalled subtask is redispatched before dead-ending.
+- [Git integration — resilient worktree deletion](./git-integration.md#resilient-worktree-deletion-on-azure-files-smb) — how assembly Build & Test survives the Azure Files SMB `Directory not empty` window during worktree teardown.

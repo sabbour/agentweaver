@@ -123,6 +123,8 @@ export interface WorkflowNodeData extends Record<string, unknown> {
   dir?: 'LR' | 'TB' | 'GRID';
   /** When true and the node is running, an orange tool-approval badge is shown. */
   hasPendingApproval?: boolean;
+  /** Active preview URL associated with a build/test gate. */
+  previewUrl?: string | null;
   totalNanoAiu?: number | null;
   totalTokens?: number | null;
 }
@@ -160,6 +162,7 @@ export function roleDescForRole(role: string): string {
     coordinator: 'Coordinator',
     outcome_plan: 'Planning gate',
     work_plan:    'Work planning',
+    build_test:   'Build/test gate',
     subtask:     'Subtask Agent',
     assembly:    'Awaiting collective assembly',
   };
@@ -176,6 +179,7 @@ export function iconForRole(role: string): FluentIcon {
     coordinator: BotRegular,
     outcome_plan: NotebookRegular,
     work_plan:    NotebookRegular,
+    build_test:   CheckmarkCircleRegular,
     subtask:     BotRegular,
     assembly:    CheckmarkCircleRegular,
   };
@@ -837,6 +841,7 @@ export function WorkflowNode({ data, selected }: NodeProps) {
     runOutcome,
     runDegraded,
     hasPendingApproval,
+    previewUrl,
     totalNanoAiu,
     totalTokens,
     executionPodName: nodeExecutionPodName,
@@ -916,6 +921,9 @@ export function WorkflowNode({ data, selected }: NodeProps) {
       )}
       {key === 'rai' && !isPlanned && (status === 'started' || status === 'completed' || status === 'failed' || status === 'revise') && (
         <Button appearance="outline" size="small" onClick={() => openModal?.(`${executionId as string}-rai`)}>View execution</Button>
+      )}
+      {key === 'build_test' && !isPlanned && previewUrl && (
+        <Button appearance="primary" size="small" onClick={() => window.open(previewUrl as string, '_blank', 'noopener,noreferrer')}>Open preview</Button>
       )}
       {key === 'scribe' && !isPlanned && (
         <>

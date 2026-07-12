@@ -32,7 +32,10 @@ public interface IAgentHostReaper
 /// <summary>
 /// A single AgentHost <c>SandboxClaim</c> as seen by the reaper. <see cref="RunId"/> is only
 /// recoverable for active claims (the claim name is a lossy derivation of the run id), so it is null
-/// for orphaned claims.
+/// for orphaned claims. <see cref="AnnotatedRunId"/> carries the ORIGINAL run id stamped on the
+/// claim at creation time (see <c>SandboxClaimConventions.RunIdAnnotation</c>), which the reaper
+/// uses to delete run-scoped side artifacts (e.g. the per-run preview-runner credential) even for
+/// orphaned claims whose run already vanished from the store.
 /// </summary>
 public sealed record AgentHostClaimInfo(
     string ClaimName,
@@ -40,4 +43,5 @@ public sealed record AgentHostClaimInfo(
     string? PodName,
     bool Ready,
     DateTimeOffset? CreatedAt,
-    bool Orphaned);
+    bool Orphaned,
+    string? AnnotatedRunId = null);

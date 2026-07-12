@@ -783,13 +783,14 @@ export function FilesTabPanel({
 interface FileTreePanelProps {
   state: ArtifactBrowserState;
   onFileClick?: (path: string, isChanged?: boolean) => void;
+  previewStatusSlot?: ReactNode;
   /** True when the run emitted run.no_changes_produced (zero committed changes at review/assembly). */
   noChangesProduced?: boolean;
   /** Optional ids/titles of subtasks that produced nothing, surfaced in the explanation. */
   noChangeSubtaskIds?: string[];
 }
 
-export function FileTreePanel({ state, onFileClick, noChangesProduced, noChangeSubtaskIds }: FileTreePanelProps) {
+export function FileTreePanel({ state, onFileClick, previewStatusSlot, noChangesProduced, noChangeSubtaskIds }: FileTreePanelProps) {
   const styles = useFileTreeStyles();
   const {
     runStatus,
@@ -862,6 +863,7 @@ export function FileTreePanel({ state, onFileClick, noChangesProduced, noChangeS
       {/* Review bar — visible on both tabs when awaiting review */}
       {showReviewBar && (
         <div className={styles.reviewBar}>
+          {previewStatusSlot}
           {commitMessage && (
             <div className={styles.commitMessageBox}>
               <Text className={styles.commitMessageLabel}>Commit message</Text>

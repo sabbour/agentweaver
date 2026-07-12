@@ -108,11 +108,14 @@ public sealed class CoordinatorRunWorkflowDefinitionBindingTests
         var d = Factory.GetGraphDescriptor(isChild: true);
 
         d.Variant.Should().Be("child");
-        d.Nodes.Select(n => n.Id).Should().BeEquivalentTo(["agent", "assemble-ready"]);
+        // FIX 2: child graph gains the graph-native failure->terminal (child-turn-failed) alongside
+        // assemble-ready; agent now fans out to the two terminals on the TerminalFailureReason condition.
+        d.Nodes.Select(n => n.Id).Should().BeEquivalentTo(["agent", "assemble-ready", "child-turn-failed"]);
         d.Edges.Select(e => new EdgeShape(e.From, e.To, e.Cardinality, e.Loopback)).ToHashSet()
             .Should().BeEquivalentTo(
             [
-                new EdgeShape("agent", "assemble-ready", "direct", false),
+                new EdgeShape("agent", "assemble-ready", "fanout", false),
+                new EdgeShape("agent", "child-turn-failed", "fanout", false),
             ]);
     }
 

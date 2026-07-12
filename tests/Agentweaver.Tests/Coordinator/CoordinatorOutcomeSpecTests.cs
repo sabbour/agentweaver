@@ -11,6 +11,7 @@ using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Memory;
 using Agentweaver.Api.Runs;
 using Agentweaver.Domain;
+using Agentweaver.Tests.Casting;
 using Agentweaver.Tests.Helpers;
 
 namespace Agentweaver.Tests.Coordinator;
@@ -233,6 +234,44 @@ public sealed class CoordinatorOutcomeSpecTests : IDisposable
         // The gate has been consumed: no pending request remains for this run.
         var pendingStore = _factory.Services.GetRequiredService<PendingRequestStore>();
         (await pendingStore.GetAsync(runId)).Should().BeNull("confirm must atomically consume the pending gate");
+    }
+
+    // =========================================================================
+    // Autopilot: define-outcome runs auto-confirm the spec unattended, with no manual
+    // confirm POST, and record the submitting user as ConfirmedBy (#228). Off-by-default
+    // stays parked at the gate.
+    // =========================================================================
+    [Fact]
+    public async Task Start_AutopilotDefineOutcome_AutoConfirmsSpec_WithoutManualConfirm()
+    {
+        var projectId = await CreateProjectAsync();
+
+        // Start with autopilot on and the default define-outcome mode. No manual confirm POST is sent:
+        // the unattended-confirm loop must advance the spec on the submitting user's behalf.
+        var runId = await StartOrchestrationAsync(
+            projectId, "Autopilot should auto-confirm the outcome spec", autopilot: true);
+
+        var spec = await PollOutcomeSpecUntilAsync(runId, s => s.Status == "confirmed", timeoutSeconds: 30);
+        spec.Should().NotBeNull("autopilot must auto-confirm the outcome spec without a human POST (#228)");
+        spec!.ConfirmedBy.Should().Be(CoordinatorWebApplicationFactory.OwnerUser,
+            "the accountable submitting user must be recorded as ConfirmedBy for the unattended confirm");
+    }
+
+    [Fact]
+    public async Task Start_AutopilotOff_DefineOutcome_ParksAtGate()
+    {
+        var projectId = await CreateProjectAsync();
+
+        var runId = await StartOrchestrationAsync(
+            projectId, "Without autopilot the run must wait for a human to confirm");
+
+        await WaitForGateAsync(runId);
+
+        var spec = await GetOutcomeSpecAsync(_owner, runId);
+        spec.Should().NotBeNull();
+        spec!.Status.Should().Be("awaiting_confirmation",
+            "with autopilot off the run must park at the confirmation gate until a human confirms");
+        spec.ConfirmedBy.Should().BeNull("no one has confirmed a run that is parked at the gate");
     }
 
     // =========================================================================
@@ -485,11 +524,70 @@ public sealed class CoordinatorOutcomeSpecTests : IDisposable
         resp.StatusCode.Should().Be(HttpStatusCode.BadRequest);
     }
 
+    [Fact]
+    public async Task StartOrchestration_TeamlessProject_Returns409NoTeam_AndCreatesNoRun()
+    {
+        var projectId = await CreateProjectAsync(seedTeam: false);
+        var pid = ProjectId.Parse(projectId);
+        var runStore = _factory.Services.GetRequiredService<IRunStore>();
+        (await runStore.GetRunsByProjectAsync(pid)).Should().BeEmpty("precondition: project starts with no runs");
+
+        var resp = await _owner.PostAsJsonAsync(
+            $"/api/projects/{projectId}/orchestrations", new { goal = "build without a team" });
+
+        resp.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("error").GetString().Should().Be("no_team");
+        body.GetProperty("message").GetString()
+            .Should().Be("This project has no team. Cast a team before starting an orchestration.");
+        (await runStore.GetRunsByProjectAsync(pid)).Should().BeEmpty(
+            "the start guard must reject before creating a misleading coordinator run");
+    }
+
+    [Fact]
+    public async Task StartOrchestration_UnreadableTeamRoster_Returns422InvalidTeam_AndCreatesNoRun()
+    {
+        var projectId = await CreateProjectAsync(seedTeam: false);
+        var pid = ProjectId.Parse(projectId);
+        var project = await _factory.Services.GetRequiredService<IProjectStore>().GetAsync(pid);
+        project.Should().NotBeNull();
+
+        var squadDir = Path.Combine(project!.WorkingDirectory, ".squad");
+        Directory.CreateDirectory(Path.Combine(squadDir, "casting"));
+        await File.WriteAllTextAsync(Path.Combine(squadDir, "casting", "registry.json"), "{}");
+        await File.WriteAllTextAsync(Path.Combine(squadDir, "casting-registry.json"), "{\"members\":{\"x\":{}}}");
+
+        var runStore = _factory.Services.GetRequiredService<IRunStore>();
+        var resp = await _owner.PostAsJsonAsync(
+            $"/api/projects/{projectId}/orchestrations", new { goal = "build with a corrupt team layout" });
+
+        resp.StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
+        var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("error").GetString().Should().Be("invalid_team");
+        body.GetProperty("message").GetString()
+            .Should().Be("The project team roster could not be read. Fix the team before starting an orchestration.");
+        (await runStore.GetRunsByProjectAsync(pid)).Should().BeEmpty(
+            "roster read failures must reject before creating a coordinator run");
+    }
+
+    [Fact]
+    public async Task StartOrchestration_WithDispatchableTeam_Returns201()
+    {
+        var projectId = await CreateProjectAsync(seedTeam: true);
+
+        var resp = await _owner.PostAsJsonAsync(
+            $"/api/projects/{projectId}/orchestrations", new { goal = "build with a cast team" });
+
+        resp.StatusCode.Should().Be(HttpStatusCode.Created);
+        var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("runId").GetString().Should().NotBeNullOrWhiteSpace();
+    }
+
     // =========================================================================
     // Helpers
     // =========================================================================
 
-    private async Task<string> CreateProjectAsync()
+    private async Task<string> CreateProjectAsync(bool seedTeam = true)
     {
         var dir = _factory.NewWorkingDirectory();
         var resp = await _owner.PostAsJsonAsync("/api/projects", new
@@ -499,13 +597,22 @@ public sealed class CoordinatorOutcomeSpecTests : IDisposable
             working_directory = dir,
         });
         resp.StatusCode.Should().Be(HttpStatusCode.Created, "the test project must be created");
+        if (seedTeam)
+            SquadTestFixtureHelper.CreateMinimalSquad(dir, "Coordinator Test");
         var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
         return body.GetProperty("project_id").GetString()!;
     }
 
-    private async Task<string> StartOrchestrationAsync(string projectId, string goal, string? startMode = null)
+    private async Task<string> StartOrchestrationAsync(
+        string projectId, string goal, string? startMode = null, bool autopilot = false)
     {
-        object request = startMode is null ? new { goal } : new { goal, start_mode = startMode };
+        object request = (startMode, autopilot) switch
+        {
+            (null, false) => new { goal },
+            (null, true) => new { goal, autopilot },
+            (_, false) => new { goal, start_mode = startMode },
+            (_, true) => new { goal, start_mode = startMode, autopilot },
+        };
         var resp = await _owner.PostAsJsonAsync($"/api/projects/{projectId}/orchestrations", request);
         resp.StatusCode.Should().Be(HttpStatusCode.Created, "starting a coordinator run must return 201");
         var body = await resp.Content.ReadFromJsonAsync<JsonElement>();

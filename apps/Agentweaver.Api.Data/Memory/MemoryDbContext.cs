@@ -18,6 +18,7 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
     public DbSet<Subtask> Subtasks => Set<Subtask>();
     public DbSet<SubtaskDependency> SubtaskDependencies => Set<SubtaskDependency>();
     public DbSet<SteeringDirective> SteeringDirectives => Set<SteeringDirective>();
+    public DbSet<SteeringRevisionExecution> SteeringRevisionExecutions => Set<SteeringRevisionExecution>();
     public DbSet<McpRefreshToken> McpRefreshTokens => Set<McpRefreshToken>();
     public DbSet<McpRevokedJti> McpRevokedJtis => Set<McpRevokedJti>();
     public DbSet<McpClientRegistration> McpClientRegistrations => Set<McpClientRegistration>();
@@ -25,6 +26,7 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
     public DbSet<McpAuthorizationCode> McpAuthorizationCodes => Set<McpAuthorizationCode>();
     public DbSet<OAuthState> OAuthStates => Set<OAuthState>();
     public DbSet<WebSessionExchangeCode> WebSessionExchangeCodes => Set<WebSessionExchangeCode>();
+    public DbSet<IntegrationBuildLockRecord> IntegrationBuildLocks => Set<IntegrationBuildLockRecord>();
 
     // Replica-safe per-pod / per-run singleton state moved out of process memory.
     public DbSet<PendingRequestRecord> PendingRequests => Set<PendingRequestRecord>();
@@ -115,11 +117,25 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
         model.Entity<WebSessionExchangeCode>().HasKey(c => c.Code);
         model.Entity<WebSessionExchangeCode>().HasIndex(c => c.ExpiresAt);
 
+        model.Entity<IntegrationBuildLockRecord>().HasKey(l => l.ProjectId);
+
         model.Entity<PendingRequestRecord>().HasIndex(p => p.RunId).IsUnique();
         model.Entity<PendingRequestRecord>().HasIndex(p => p.ExpiresAt);
         model.Entity<HeartbeatStatusRecord>().HasKey(h => h.PodName);
         model.Entity<CoordinatorDeferredDecisionRecord>().HasIndex(d => d.RunId).IsUnique();
         model.Entity<CoordinatorAssemblyReviewRecord>().HasIndex(r => r.CoordinatorRunId).IsUnique();
+
+        // UNIFIED AUTONOMOUS STEERING (rev8, §3d; RD-B per-child): the attempt-specific two-phase
+        // revision-effect marker is PER TARGET CHILD. Direction A can target MULTIPLE subtasks, each
+        // resumed as its own child run; a single (SteeringDirectiveId, ActionAttempt) marker would let
+        // recovery mark the WHOLE directive applied after only ONE child confirmed, silently skipping
+        // the rest. The UNIQUE (SteeringDirectiveId, ActionAttempt, RunId) key gives each targeted child
+        // its own crash-safe idempotency guard — a racing/replayed launch of the SAME child conflicts,
+        // so at most one actor owns a (directive, attempt, child) launch, while distinct children each
+        // get their own marker. Mapped on BOTH providers (not in the SQLite ignore list) so
+        // EnsureCreated/tests build the table.
+        model.Entity<SteeringRevisionExecution>()
+            .HasIndex(e => new { e.SteeringDirectiveId, e.ActionAttempt, e.RunId }).IsUnique();
 
         // ── agentweaver.db entities (spec-018 P2) ──────────────────────────────────
         // These entities only exist in the Postgres schema (InitialPostgres migration).
@@ -218,7 +234,7 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
             e.Property(p => p.UpdatedAt).HasColumnName("updated_at");
             e.Property(p => p.MaxReadyPerHeartbeat).HasColumnName("max_ready_per_heartbeat").HasDefaultValue(3);
             e.Property(p => p.PickupAutopilot).HasColumnName("pickup_autopilot").HasDefaultValue(true);
-            e.Property(p => p.PickupAutoApproveTools).HasColumnName("pickup_auto_approve_tools").HasDefaultValue(false);
+            e.Property(p => p.PickupAutoApproveTools).HasColumnName("pickup_auto_approve_tools").HasDefaultValue(true);
             e.Property(p => p.DefaultWorkflowId).HasColumnName("default_workflow_id");
             e.Property(p => p.ActiveReviewPolicyName).HasColumnName("active_review_policy_name");
             e.Property(p => p.SandboxProfile).HasColumnName("sandbox_profile");

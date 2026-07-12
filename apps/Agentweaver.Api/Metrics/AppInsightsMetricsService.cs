@@ -1,6 +1,7 @@
 using Azure.Identity;
 using Azure.Monitor.Query;
 using Azure.Monitor.Query.Models;
+using System.Runtime.CompilerServices;
 using System.Text.Json;
 
 namespace Agentweaver.Api.Metrics;
@@ -94,6 +95,7 @@ public sealed class AppInsightsMetricsService
     public async Task<RunAgentTokenBreakdownDto> GetRunAgentTokenBreakdownAsync(
         string runId,
         string? projectId,
+        IReadOnlyDictionary<string, string?>? agentNameByRunId = null,
         CancellationToken ct = default)
     {
         var connectionString = _configuration["APPLICATIONINSIGHTS_CONNECTION_STRING"];
@@ -104,7 +106,12 @@ public sealed class AppInsightsMetricsService
         if (string.IsNullOrWhiteSpace(workspaceId))
             return EmptyRunBreakdown(runId);
 
-        var entries = await QueryRunAgentBreakdownAsync(workspaceId, runId, projectId, ct).ConfigureAwait(false);
+        var entries = await QueryRunAgentBreakdownAsync(
+            workspaceId,
+            runId,
+            projectId,
+            agentNameByRunId,
+            ct).ConfigureAwait(false);
         return new RunAgentTokenBreakdownDto
         {
             RunId = runId,
@@ -129,11 +136,16 @@ public sealed class AppInsightsMetricsService
         if (string.IsNullOrWhiteSpace(workspaceId))
             return EmptyRunTrace(runId);
 
-        var spans = await QueryRunTracesAsync(workspaceId, runId, agentNameByRunId, ct).ConfigureAwait(false);
+        var (spans, queryError) = await QueryRunTracesAsync(
+            workspaceId,
+            runId,
+            agentNameByRunId,
+            ct).ConfigureAwait(false);
         return new RunTraceDto
         {
             RunId = runId,
             Spans = spans,
+            QueryError = queryError,
         };
     }
 
@@ -441,10 +453,15 @@ public sealed class AppInsightsMetricsService
         string workspaceId,
         string runId,
         string? projectId,
+        IReadOnlyDictionary<string, string?>? agentNameByRunId,
         CancellationToken ct)
     {
         var timeTo = DateTimeOffset.UtcNow;
         var timeFrom = timeTo.AddDays(-30);
+        var runIds = agentNameByRunId?.Keys.Where(id => !string.IsNullOrWhiteSpace(id)).ToArray();
+        if (runIds is null || runIds.Length == 0)
+            runIds = [runId];
+        var runIdPredicate = BuildRunIdDimensionPredicate(runId, runIds, "Properties");
         var projectFilter = string.IsNullOrWhiteSpace(projectId)
             ? string.Empty
             : $"| where tostring(Properties[\"project.id\"]) == \"{EscapeKusto(projectId)}\"";
@@ -454,30 +471,57 @@ public sealed class AppInsightsMetricsService
             | where Name == "agentweaver.token.usage"
             | where TimeGenerated between (datetime({timeFrom.UtcDateTime:O}) .. datetime({timeTo.UtcDateTime:O}))
             {projectFilter}
-            | where
-                tostring(Properties["run_id"]) == "{EscapeKusto(runId)}"
-                or tostring(Properties["runId"]) == "{EscapeKusto(runId)}"
-                or tostring(Properties["run.id"]) == "{EscapeKusto(runId)}"
-                or tostring(Properties["parent_run_id"]) == "{EscapeKusto(runId)}"
-                or tostring(Properties["parentRunId"]) == "{EscapeKusto(runId)}"
+            | where {runIdPredicate}
             | extend agent_name = case(
                 isnotempty(tostring(Properties["agent_name"])), tostring(Properties["agent_name"]),
                 isnotempty(tostring(Properties["gen_ai.agent.name"])), tostring(Properties["gen_ai.agent.name"]),
                 "unknown")
-            | summarize invocation_count = count(), total_nano_aiu = sum(Sum) by agent_name
+            | extend run_id_dim = case(
+                isnotempty(tostring(Properties["run_id"])), tostring(Properties["run_id"]),
+                isnotempty(tostring(Properties["run.id"])), tostring(Properties["run.id"]),
+                isnotempty(tostring(Properties["runId"])), tostring(Properties["runId"]),
+                "")
+            | summarize invocation_count = count(), total_nano_aiu = sum(Sum) by agent_name, run_id_dim
             | order by total_nano_aiu desc, agent_name asc
             """;
 
         var result = await QueryAsync(workspaceId, query, timeFrom, timeTo, ct).ConfigureAwait(false);
         if (result is null) return [];
 
-        return result.Table.Rows.Select(row => new AgentUsageBreakdownDto
-        {
-            AgentName = row[0]?.ToString() ?? "unknown",
-            InvocationCount = Convert.ToInt32(row[1] ?? 0),
-            TotalTokens = 0,
-            TotalNanoAiu = Convert.ToInt64(row[2] ?? 0),
-        }).ToList();
+        return result.Table.Rows
+            .Select(row =>
+            {
+                var agentName = row[0]?.ToString();
+                var rowRunId = row[1]?.ToString();
+                if (string.IsNullOrWhiteSpace(agentName)
+                    || string.Equals(agentName, "unknown", StringComparison.OrdinalIgnoreCase))
+                {
+                    var mappedAgentName = ResolveFallbackAgentName(agentNameByRunId, rowRunId, runId);
+                    if (!string.IsNullOrWhiteSpace(mappedAgentName))
+                    {
+                        agentName = mappedAgentName;
+                    }
+                }
+
+                return new AgentUsageBreakdownDto
+                {
+                    AgentName = string.IsNullOrWhiteSpace(agentName) ? "unknown" : agentName,
+                    InvocationCount = Convert.ToInt32(row[2] ?? 0),
+                    TotalTokens = 0,
+                    TotalNanoAiu = Convert.ToInt64(row[3] ?? 0),
+                };
+            })
+            .GroupBy(entry => entry.AgentName, StringComparer.Ordinal)
+            .Select(group => new AgentUsageBreakdownDto
+            {
+                AgentName = group.Key,
+                InvocationCount = group.Sum(entry => entry.InvocationCount),
+                TotalTokens = 0,
+                TotalNanoAiu = group.Sum(entry => entry.TotalNanoAiu),
+            })
+            .OrderByDescending(entry => entry.TotalNanoAiu)
+            .ThenBy(entry => entry.AgentName, StringComparer.Ordinal)
+            .ToList();
     }
 
     private async Task<IReadOnlyList<AiCreditUsagePointDto>> QueryAiCreditUsageTrendAsync(
@@ -519,7 +563,7 @@ public sealed class AppInsightsMetricsService
         return points;
     }
 
-    private async Task<IReadOnlyList<RunTraceSpanDto>> QueryRunTracesAsync(
+    private async Task<(IReadOnlyList<RunTraceSpanDto> Spans, string? QueryError)> QueryRunTracesAsync(
         string workspaceId,
         string runId,
         IReadOnlyDictionary<string, string?>? agentNameByRunId,
@@ -560,7 +604,7 @@ public sealed class AppInsightsMetricsService
                     or isnotempty(tostring(Properties["gen_ai.agent.name"]))
                     or isnotempty(tostring(Properties["gen_ai.tool.name"]))
                     or isnotempty(tostring(Properties["agent_name"]))
-                | project id = tostring(Id), parentId = tostring(ParentId), name = Message, timestamp = TimeGenerated, duration = todouble(0), success = tobool(1), resultCode = tostring(""), customDimensions = Properties;
+                | project id = strcat("trace_", tostring(OperationId), "_", tostring(ParentId), "_", format_datetime(TimeGenerated, "yyyyMMddHHmmssfffffff")), parentId = tostring(ParentId), name = Message, timestamp = TimeGenerated, duration = todouble(0), success = tobool(1), resultCode = tostring(""), customDimensions = Properties;
             union isfuzzy=true
                 (agentic_dependencies),
                 (agentic_traces)
@@ -576,10 +620,17 @@ public sealed class AppInsightsMetricsService
             | order by timestamp asc
             """;
 
-        var result = await QueryAsync(workspaceId, query, timeFrom, timeTo, ct).ConfigureAwait(false);
-        if (result is null) return [];
+        string? queryError = null;
+        var result = await QueryAsync(
+            workspaceId,
+            query,
+            timeFrom,
+            timeTo,
+            ct,
+            _ => queryError = "Application Insights trace query failed.").ConfigureAwait(false);
+        if (result is null) return ([], queryError);
 
-        return result.Table.Rows
+        var spans = result.Table.Rows
             .Select((row, index) =>
             {
                 var customDimensions = ReadCustomDimensions(row[7]);
@@ -616,6 +667,7 @@ public sealed class AppInsightsMetricsService
                 };
             })
             .ToList();
+        return (spans, null);
     }
 
     /// <summary>
@@ -644,7 +696,9 @@ public sealed class AppInsightsMetricsService
         string query,
         DateTimeOffset from,
         DateTimeOffset to,
-        CancellationToken ct)
+        CancellationToken ct,
+        Action<Exception>? onError = null,
+        [CallerMemberName] string context = "")
     {
         var client = GetClient();
         if (client is null) return null;
@@ -659,9 +713,22 @@ public sealed class AppInsightsMetricsService
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Application Insights metrics query failed.");
+            onError?.Invoke(ex);
+            _logger.LogError(
+                ex,
+                "Application Insights query failed in {QueryContext}. KQL (truncated): {Query}",
+                context,
+                TruncateQuery(query));
             return null;
         }
+    }
+
+    private static string TruncateQuery(string query)
+    {
+        const int maxLoggedQueryLength = 4_000;
+        return query.Length <= maxLoggedQueryLength
+            ? query
+            : query[..maxLoggedQueryLength] + "...";
     }
 
     private ProjectMetricsDto Empty() => new()

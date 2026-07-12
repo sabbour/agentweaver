@@ -76,7 +76,9 @@ public sealed class RunOrchestrator
              - Web app / frontend  -> `npm start`, `npm run dev`, `vite`, `next dev`, etc.
              - Static site / files -> `python -m http.server PORT` from the output directory.
              - API / backend        -> run the server binary or `uvicorn`/`node server.js`/etc.
-           Bind to ALL interfaces (host 0.0.0.0), NOT just 127.0.0.1, on a port you choose (e.g. 3000).
+           Bind to ALL interfaces (host 0.0.0.0), NOT just 127.0.0.1. Do NOT hardcode or force a
+           specific port — let the app use its framework default (or process.env.PORT if it honors
+           one) and read back the actual port it printed on startup.
         2. VERIFY the port is live BEFORE registering it. You MUST confirm the server is actually
            accepting connections and returning a real response with `curl` (or `wget`), e.g.
            `curl -sSf http://localhost:PORT/` — fix errors and retry until it responds. Do NOT call
@@ -383,7 +385,8 @@ public sealed class RunOrchestrator
     /// this is the mechanism a queued <c>redirect</c>/<c>amend</c> steering directive uses to inject
     /// the steered instruction at the child's next turn boundary.
     /// </summary>
-    public async Task StartRevisionAsync(Run run, string revisedTask, CancellationToken ct, bool isChild = false)
+    public async Task StartRevisionAsync(Run run, string revisedTask, CancellationToken ct, bool isChild = false,
+        int? steeringDirectiveId = null, int? steeringAttempt = null)
     {
         if (string.IsNullOrEmpty(run.WorktreePath))
             throw new InvalidOperationException($"Run {run.Id} has no worktree path; cannot start revision.");
@@ -419,7 +422,7 @@ public sealed class RunOrchestrator
         var ctsRegistered = false;
         try
         {
-            var streamingRun = await StartWorkflowOrFailAsync(input, run.Id, entry, runCts.Token, isChild).ConfigureAwait(false);
+            var streamingRun = await StartWorkflowOrFailAsync(input, run.Id, entry, runCts.Token, isChild, steeringDirectiveId, steeringAttempt).ConfigureAwait(false);
             var runCt = _registry.Register(run.Id.ToString(), streamingRun, runCts);
             ctsRegistered = true;
             _watchLoop.StartWatching(run.Id.ToString(), streamingRun, entry, run.SubmittingUser, runCt);
@@ -428,6 +431,168 @@ public sealed class RunOrchestrator
         {
             CleanupFailedLaunchCts(run.Id.ToString(), ctsRegistered, runCts);
             throw;
+        }
+    }
+
+    /// <summary>
+    /// Fix-A(3a) Path-2: conscious hand-off of a REJECTED subtask to a DIFFERENT (non-locked-out)
+    /// agent under the Reviewer Rejection Lockout Protocol. Unlike <see cref="StartRevisionAsync"/>
+    /// (same-agent; RESUMES the prior SDK session so the author keeps its conversation), this MINTS
+    /// A NEW SDK SESSION IDENTITY for the new agent — <c>agentweaver-run-{newAgentRun.Id}</c> via
+    /// <c>IsRevision:false</c> → <c>CreateSessionAsync</c> — so the new agent does NOT inherit the
+    /// locked-out author's conversation state, prior instructions, or charter context (that would
+    /// silently defeat the strict lockout). Prior WORK is preserved by REUSING the prior child's
+    /// worktree when safe, else by branching a fresh worktree from
+    /// <paramref name="feedback"/>.PriorWorktreeBranch. The accumulated review feedback (ALL prior
+    /// rejection rounds, not just the latest complaint) is injected into the new agent's task prompt.
+    /// The coordinator OWNS producing <paramref name="feedback"/>
+    /// (<c>CoordinatorAssemblyService.BuildAccumulatedReviewFeedbackAsync</c>); this method MUST NOT
+    /// re-derive feedback or read <c>SteeringDirective</c> rows.
+    /// </summary>
+    public async Task StartChildRevisionHandoffAsync(
+        Run newAgentRun, Run priorChild, AccumulatedReviewFeedback feedback, CancellationToken ct)
+    {
+        if (string.IsNullOrEmpty(newAgentRun.ParentRunId))
+            throw new InvalidOperationException($"Handoff run {newAgentRun.Id} must carry a ParentRunId.");
+        if (string.IsNullOrWhiteSpace(feedback.PriorWorktreeBranch))
+            throw new InvalidOperationException(
+                $"Handoff for run {newAgentRun.Id} requires a non-empty PriorWorktreeBranch to preserve prior work.");
+
+        // Prompt-ready accumulated guidance (all prior rejection rounds). Prefer the coordinator's
+        // deterministic rendering; fall back to rendering the bundle if the producer left it null.
+        var guidance = !string.IsNullOrWhiteSpace(feedback.RenderedGuidance)
+            ? feedback.RenderedGuidance!
+            : feedback.RenderForRevisionPrompt();
+
+        // --- Preflight (VISIBLE): prefer REUSING the prior child's physical worktree so the new
+        // agent builds on the exact prior work (committed + staged). Fall back to a FRESH worktree
+        // BRANCHED FROM the prior branch (committed work only) if the prior worktree is missing or
+        // unsafe (live git process, or an index lock we could not conservatively clear) — never
+        // start the new agent on a broken/locked worktree. ---
+        var evidence = new Dictionary<string, object?>
+        {
+            ["prior_child_run_id"] = priorChild.Id.ToString(),
+            ["subtask_id"] = feedback.SubtaskId,
+            ["prior_worktree_branch"] = feedback.PriorWorktreeBranch,
+        };
+
+        var priorWorktreeUsable = !string.IsNullOrEmpty(priorChild.WorktreePath)
+            && Directory.Exists(priorChild.WorktreePath);
+        if (priorWorktreeUsable)
+        {
+            var clear = _worktreeManager.ClearStaleIndexLock(priorChild.WorktreePath!);
+            evidence["lock_present"] = clear.LockPresent;
+            evidence["lock_cleared"] = clear.Cleared;
+            evidence["lock_age_seconds"] = clear.LockAgeSeconds;
+            evidence["live_git_process"] = clear.LiveGitProcessDetected;
+            // Unsafe to reuse if a live git process still holds the worktree, or a lock is present
+            // and we could not conservatively clear it.
+            priorWorktreeUsable = !clear.LiveGitProcessDetected && (!clear.LockPresent || clear.Cleared);
+        }
+
+        WorktreeInfo? provisioned = null;
+        string worktreePath;
+        string worktreeBranch;
+        if (priorWorktreeUsable)
+        {
+            worktreePath = priorChild.WorktreePath!;
+            worktreeBranch = priorChild.WorktreeBranch ?? feedback.PriorWorktreeBranch;
+            evidence["worktree_strategy"] = "reused_prior";
+        }
+        else
+        {
+            // VISIBLE fallback: branch a clean worktree from the prior work branch so the committed
+            // prior work is inherited even though the prior physical worktree is unusable.
+            try
+            {
+                provisioned = _worktreeManager.AddWorktree(
+                    newAgentRun.RepositoryPath, feedback.PriorWorktreeBranch, newAgentRun.Id);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex,
+                    "Handoff worktree provisioning failed for run {RunId} from prior branch {Branch}",
+                    newAgentRun.Id, feedback.PriorWorktreeBranch);
+                throw;
+            }
+            worktreePath = provisioned.WorktreePath;
+            worktreeBranch = provisioned.BranchName;
+            evidence["worktree_strategy"] = "fresh_from_prior_branch";
+        }
+
+        var agentCharter = ResolveAgentCharter(newAgentRun);
+        // Inject the accumulated guidance into the task the new agent acts on. For child runs the
+        // executor uses input.Task (no separate agent-node prompt), so guidance reaches the agent.
+        var handoffTask = string.IsNullOrWhiteSpace(newAgentRun.Task)
+            ? guidance
+            : newAgentRun.Task + "\n\n" + guidance;
+
+        var started = newAgentRun with
+        {
+            Status = RunStatus.InProgress,
+            StartedAt = DateTimeOffset.UtcNow,
+            WorktreePath = worktreePath,
+            WorktreeBranch = worktreeBranch,
+            AgentCharter = agentCharter,
+            Task = handoffTask,
+        };
+
+        var launchCompleted = false;
+        try
+        {
+            await _runStore.InsertAsync(started, ct).ConfigureAwait(false);
+            EmitRunStartedMetrics(started);
+
+            // NEW stream entry keyed on the NEW run id — do NOT reuse the locked-out author's stream.
+            var entry = _streamStore.Create(newAgentRun.Id.ToString(), newAgentRun.SubmittingUser);
+            entry.RecordNext("coordinator.child_revision_handoff", evidence);
+
+            var (taskWithHarvest, systemPromptContext) = await BuildContextAsync(started, ct);
+
+            // BLOCKING #1 (lockout correctness): IsRevision:false → CreateSessionAsync mints a FRESH
+            // SDK session under agentweaver-run-{newAgentRun.Id}. The new agent does NOT resume — and
+            // thus does NOT inherit — the locked-out author's conversation state. Prior work is
+            // carried via the reused/branched worktree and the RenderedGuidance injected above.
+            var input = new AgentTurnInput(
+                newAgentRun.Id.ToString(),
+                taskWithHarvest,
+                worktreePath,
+                worktreeBranch,
+                newAgentRun.RepositoryPath,
+                newAgentRun.OriginatingBranch,
+                newAgentRun.ModelSource.ToApiString(),
+                newAgentRun.ModelId,
+                newAgentRun.SubmittingUser,
+                systemPromptContext,
+                newAgentRun.ProjectId?.ToString(),
+                newAgentRun.AgentName,
+                started.StartedAt,
+                IsRevision: false);
+
+            var runCts = new CancellationTokenSource();
+            var ctsRegistered = false;
+            try
+            {
+                var streamingRun = await StartWorkflowOrFailAsync(
+                    input, started.Id, entry, runCts.Token, isChild: true).ConfigureAwait(false);
+                var runCt = _registry.Register(newAgentRun.Id.ToString(), streamingRun, runCts);
+                ctsRegistered = true;
+                _watchLoop.StartWatching(
+                    newAgentRun.Id.ToString(), streamingRun, entry, newAgentRun.SubmittingUser, runCt);
+                launchCompleted = true;
+            }
+            catch
+            {
+                CleanupFailedLaunchCts(newAgentRun.Id.ToString(), ctsRegistered, runCts);
+                throw;
+            }
+        }
+        finally
+        {
+            // Only clean up a worktree WE provisioned in the fallback; never remove the reused prior
+            // worktree (the prior child / coordinator still owns that worktree's lifecycle).
+            if (!launchCompleted && provisioned is not null)
+                CleanupWorktreeSafe(newAgentRun.RepositoryPath, provisioned, newAgentRun.Id);
         }
     }
 
@@ -444,11 +609,13 @@ public sealed class RunOrchestrator
         RunId runId,
         RunStreamEntry entry,
         CancellationToken ct,
-        bool isChild = false)
+        bool isChild = false,
+        int? steeringDirectiveId = null,
+        int? steeringAttempt = null)
     {
         try
         {
-            return await _workflowFactory.StartAsync(input, runId.ToString(), ct, isChild).ConfigureAwait(false);
+            return await _workflowFactory.StartAsync(input, runId.ToString(), ct, isChild, steeringDirectiveId, steeringAttempt).ConfigureAwait(false);
         }
         catch (WorkflowBindException ex)
         {

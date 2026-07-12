@@ -11,7 +11,7 @@ namespace Agentweaver.Tests.Sandbox;
 /// Unit tests for <see cref="AgentPreviewGate"/> — the human-in-the-loop approval seam behind the
 /// agent-initiated <c>start_preview</c> tool. Verifies the auto-approve sources (global config,
 /// per-run option, scoped policy) grant unattended, that an operator grant resolves the gate, and
-/// that deny / timeout produce <see cref="PreviewApprovalOutcome.DeniedOrTimedOut"/>.
+/// that deny / timeout produce distinct final outcomes.
 /// </summary>
 public sealed class AgentPreviewGateTests
 {
@@ -85,7 +85,7 @@ public sealed class AgentPreviewGateTests
 
         // Resolve so the awaiting task completes deterministically.
         approvalGate.Deny(RunId, requestId);
-        (await task).Should().Be(PreviewApprovalOutcome.DeniedOrTimedOut);
+        (await task).Should().Be(PreviewApprovalOutcome.Denied);
     }
 
     [Fact]
@@ -99,7 +99,7 @@ public sealed class AgentPreviewGateTests
 
         approvalGate.Deny(RunId, requestId).Should().BeTrue();
 
-        (await task).Should().Be(PreviewApprovalOutcome.DeniedOrTimedOut);
+        (await task).Should().Be(PreviewApprovalOutcome.Denied);
     }
 
     [Fact]
@@ -110,7 +110,7 @@ public sealed class AgentPreviewGateTests
 
         var outcome = await gate.RequestApprovalAsync(RunId, 3000, CancellationToken.None);
 
-        outcome.Should().Be(PreviewApprovalOutcome.DeniedOrTimedOut);
+        outcome.Should().Be(PreviewApprovalOutcome.TimedOut);
     }
 
     private static async Task<string> WaitForRequestIdAsync(RunStreamStore streams)

@@ -90,11 +90,24 @@ Conceptually, event types fall into families:
 | Agent usage | GitHub Copilot token consumption, AIC cost, and AppInsights model-turn telemetry | `agent.turn.usage`; `agentweaver.token.usage`; `Agentweaver model turn` spans tagged `agentweaver.span.kind=agent_turn` |
 | Tooling and gates | Tool calls, tool results, tool errors, approval requests, auto-approval, and questions | `tool.call`, `tool.result`, `tool.error`, `tool.approval_required`, `tool.auto_approved`, `agent.question_asked` |
 | Review and merge | Human review gates and repository integration | `review.requested`, `review.approved`, `review.declined`, `merge.started`, `merge.completed`, `merge.failed` |
-| Workflow graph | Server-authored graph descriptors and step transitions | `run.workflow_graph`, `workflow.step` |
+| Workflow graph | Server-authored graph descriptors and step transitions, including the first-class preview stage | `run.workflow_graph`, `workflow.step` |
+| Preview provisioning | Deterministic Build & Test preview start, readiness, failure, and skip outcomes | `sandbox.preview_applicability`, `sandbox.preview_start_requested`, `sandbox.preview_pending`, `sandbox.preview_ready`, `sandbox.preview_failed`, `sandbox.preview_skipped_not_applicable`, `coordinator.preview_ready` |
+| Unified steering | Source-agnostic correction feedback and the coordinator's conscious routing decision | `coordinator.steering_received`, `coordinator.steering_decision`, `coordinator.steering` |
 | RAI and safety | RAI verdicts and degraded-but-continuing conditions | `rai.verdict`, `run.degraded` |
 | Coordinator orchestration | Outcome specs, work plans, topology, child lifecycle, steering, and assembly | `coordinator.started`, `coordinator.work_plan`, `coordinator.topology`, `subtask.dispatched`, `coordinator.assembly_completed` |
 
 The important rebuild rule is to keep event types **domain-shaped**, not UI-shaped. For example, emit "tool approval required" with the request identity and message; let the frontend decide how to render an approval card. Emit a coordinator topology snapshot or delta; let the frontend render the graph without inventing scheduling rules.
+
+Preview provisioning follows the same rule. The coordinator emits durable preview facts, not UI commands:
+`sandbox.preview_start_requested` records the deterministic platform attempt, `sandbox.preview_pending`
+records an existing tool-approval wait, `sandbox.preview_ready` / `coordinator.preview_ready` records the
+URL, and `sandbox.preview_failed` or `sandbox.preview_skipped_not_applicable` records why no URL is available.
+The preview stage also emits `workflow.step` with `step: "preview"` so graph consumers can show the stage
+without special-casing the Build & Test log text. See [Decoupled live-preview provisioning](./live-preview-provisioning.md).
+
+Unified steering uses the event stream to make correction routing auditable. `coordinator.steering_received`
+captures the incoming signal and source; `coordinator.steering_decision` captures the coordinator's chosen
+effect and rationale before any in-place steer or fresh dispatch happens. See [Unified autonomous steering](./unified-steering.md).
 
 ### Payload discipline
 
@@ -156,6 +169,14 @@ The unique invariant is `(run id, sequence)`. That is what makes the stream repl
 
 The live channel is bounded. That sounds risky until you remember the layers: the channel is an optimization, not the source of truth. If a slow subscriber misses a live copy, it can recover from SQLite on reconnect.
 
+Completed-run short-circuiting never happens before the durable write. Both SQLite and EF/PostgreSQL
+implementations write every append to `RunEvents` first; only after that do they decide whether the live
+channel for a completed run should stay closed (`apps/Agentweaver.Api/Infrastructure/SqliteRunEventStream.cs:81`,
+`:87`, `apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:64`, `:68`). That detail is operationally
+important for coordinator assembly terminalization: a late `coordinator.assembly_blocked` or
+`coordinator.assembly_failed` emitted while the coordinator run is settling still appears in
+`GET /api/runs/{id}/events`, even if it is too late to resurrect a live in-process channel.
+
 ## Replay-Then-Tail
 
 Subscribing to a run is not "start listening from now." It is:
@@ -165,7 +186,8 @@ Subscribing to a run is not "start listening from now." It is:
 3. remember the highest sequence replayed,
 4. tail the live channel,
 5. skip channel events already delivered by replay,
-6. stop when a terminal event or channel completion is observed.
+6. drain the current replay batch before honoring terminal semantics;
+7. stop when a terminal event or channel completion is observed.
 
 This order prevents the classic replay race. If the stream read SQLite first and only then created the live channel, an event appended between those operations could be lost to the subscriber. Agentweaver creates the channel before the database read, so anything not found in the replay is captured by the tail.
 
@@ -174,8 +196,8 @@ flowchart TD
     A[Subscriber provides last seen sequence] --> B[Create or get live channel]
     B --> C[Read persisted events with sequence greater than cursor]
     C --> D[Yield replayed events in order]
-    D --> E{Terminal event seen?}
-    E -->|yes| Done[Complete subscription]
+    D --> E{Replay batch contained terminal?}
+    E -->|yes| Done[Complete after draining batch]
     E -->|no| F[Tail channel]
     F --> G{Event sequence already replayed?}
     G -->|yes| F
@@ -190,7 +212,11 @@ The boundary guarantees are:
 - **No durable gap**: every acknowledged append is in SQLite.
 - **No replay/live gap**: the channel exists before replay begins.
 - **No duplicate at the handoff**: live events with sequence at or below the replay watermark are skipped.
-- **Clean terminal replay**: a finished run replays its history and then stops.
+- **Clean terminal replay**: a finished run replays the whole persisted batch and then stops.
+- **Post-terminal diagnostics are delivered**: if a diagnostic row was persisted just after a terminal row
+  but before the replay query returned, the subscriber receives both. `coordinator.assembly_failed` is
+  terminal; retryable `coordinator.assembly_blocked` is not, so replay/tail subscribers stay attached while
+  the plan can be re-armed and resume emitting events (`SqliteRunEventStream.cs:34`, `:153`; `EfRunEventStream.cs:35`).
 
 ## SSE Streaming to Clients
 
@@ -396,7 +422,10 @@ The live channel is bounded and may drop live copies under pressure. This does n
 
 ### Subscriber starts after run completion
 
-The subscriber replays persisted events. If a terminal event appears, the subscription completes cleanly. The frontend can also use the REST events seed to render without holding an SSE connection.
+The subscriber replays persisted events. If a terminal event appears, the subscription completes cleanly
+only after the replay batch is drained. This prevents an assembly diagnostic appended immediately around
+terminalization from being hidden behind an earlier terminal row. The frontend can also use the REST events
+seed to render without holding an SSE connection.
 
 ### Reconnect overlaps with prior delivery
 

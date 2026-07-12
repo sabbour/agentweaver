@@ -91,17 +91,38 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
     /// </summary>
     private readonly TimeSpan _stallTimeout;
 
-    /// <summary>
-    /// Maximum number of times a subtask parked in <see cref="SubtaskStatus.PendingCapacity"/> is
-    /// retried before it is failed with reason <c>capacity_unavailable</c>. With
-    /// <see cref="CapacityRetryDelay"/> this caps capacity-waiting at ~10 minutes.
-    /// </summary>
-    private const int MaxCapacityRetries = 10;
-
-    /// <summary>Back-off between agent-pod capacity retries for a parked subtask.</summary>
-    private static readonly TimeSpan CapacityRetryDelay = TimeSpan.FromSeconds(60);
-
     private readonly ConcurrentDictionary<string, byte> _active = new();
+
+    /// <summary>
+    /// Per-run cancellation source (linked to <see cref="_appStopping"/>) for each active dispatch
+    /// loop. The lease heartbeat cancels this to FENCE the loop when the coordinator lease is lost to a
+    /// peer replica, so the fenced loop stops racing the shared repo. Tracked alongside
+    /// <see cref="_active"/> and disposed in the launch task's finally.
+    /// </summary>
+    private readonly ConcurrentDictionary<string, CancellationTokenSource> _runCts = new();
+
+    /// <summary>
+    /// How often the owning pod renews its coordinator lease (bumps <see cref="WorkPlan.UpdatedAt"/>)
+    /// while a dispatch loop is alive, so a long child turn cannot let the lease go stale and let a
+    /// peer replica steal it. Configurable via <c>Coordinator:PodLeaseHeartbeatSeconds</c> (default
+    /// 30 s). Must stay well below <c>Coordinator:PodLeaseStaleTtlSeconds</c> (120 s).
+    /// </summary>
+    private readonly TimeSpan _leaseHeartbeatInterval;
+
+    /// <summary>
+    /// Cross-process lock (keyed by projectId) taken around the dependency-base integration branch
+    /// build so two pods never race the shared <c>/workspace/{projectId}/.git</c> repo. Null in unit
+    /// tests that do not exercise the git path.
+    /// </summary>
+    private readonly IntegrationBuildLock? _integrationBuildLock;
+
+    /// <summary>
+    /// How long to wait for the per-project integration build lock before giving up on a
+    /// dependency-base rebuild (best-effort; a missed rebuild is repaired later by the mandatory
+    /// contains-check in <see cref="ResolveChildBaseBranchAsync"/>). Configurable via
+    /// <c>Coordinator:IntegrationBuildLockAcquireTimeoutSeconds</c> (default 120 s).
+    /// </summary>
+    private readonly TimeSpan _integrationBuildLockTimeout;
 
     /// <summary>Pod name / hostname used as the distributed lease owner identity.</summary>
     private readonly string _myPodId;
@@ -124,7 +145,8 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         IPodNameRegistry? podRegistry = null,
         IAgentHostPodLifecycle? podLifecycle = null,
         IOptions<SandboxRuntimeOptions>? sandboxRuntime = null,
-        IKubernetesEnvironment? k8sEnv = null)
+        IKubernetesEnvironment? k8sEnv = null,
+        IntegrationBuildLock? integrationBuildLock = null)
     {
         _runStore = runStore;
         _streamStore = streamStore;
@@ -143,9 +165,18 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         _sandboxRuntime = sandboxRuntime?.Value ?? new SandboxRuntimeOptions();
         _logger = logger;
         _appStopping = lifetime.ApplicationStopping;
+        _integrationBuildLock = integrationBuildLock;
 
         var stallMinutes = configuration?.GetValue("Coordinator:SubtaskStallTimeoutMinutes", 5.0) ?? 5.0;
         _stallTimeout = TimeSpan.FromMinutes(Math.Max(0, stallMinutes));
+
+        // Renew the coordinator lease every 30 s by default — comfortably below the 120 s stale TTL so
+        // a long child turn (implement/debug runs of 5-15+ min) can never let the lease go stale.
+        var heartbeatSecs = configuration?.GetValue("Coordinator:PodLeaseHeartbeatSeconds", 30) ?? 30;
+        _leaseHeartbeatInterval = TimeSpan.FromSeconds(Math.Max(1, heartbeatSecs));
+
+        var lockTimeoutSecs = configuration?.GetValue("Coordinator:IntegrationBuildLockAcquireTimeoutSeconds", 120) ?? 120;
+        _integrationBuildLockTimeout = TimeSpan.FromSeconds(Math.Max(1, lockTimeoutSecs));
 
         _myPodId = configuration?.GetValue<string>("App:PodId")
                    ?? Environment.GetEnvironmentVariable("HOSTNAME")
@@ -165,15 +196,30 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
                 "Coordinator dispatch already active for run {RunId}; skipping", context.CoordinatorRunId);
             return;
         }
+
+        // Per-run cancellation, linked to app shutdown. The lease heartbeat cancels this to FENCE the
+        // loop when a peer replica takes over the coordinator lease (see RunLeaseHeartbeatAsync), so a
+        // loop whose lease was stolen stops racing the shared repo.
+        var runCts = CancellationTokenSource.CreateLinkedTokenSource(_appStopping);
+        _runCts[context.CoordinatorRunId] = runCts;
+
         _ = Task.Run(async () =>
         {
             try
             {
-                await RunDispatchLoopAsync(context, _appStopping).ConfigureAwait(false);
+                await RunDispatchLoopAsync(context, runCts.Token).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (_appStopping.IsCancellationRequested)
             {
                 // App shutting down — not an error.
+            }
+            catch (OperationCanceledException) when (runCts.IsCancellationRequested)
+            {
+                // Fence-cancel: a peer replica took over the coordinator lease while this loop was
+                // running. This is a clean, expected stop (not a failure) — the peer now drives the run.
+                _logger.LogInformation(
+                    "Coordinator dispatch loop for run {RunId} fenced: a peer replica took over the coordinator lease",
+                    context.CoordinatorRunId);
             }
             catch (Exception ex)
             {
@@ -182,8 +228,10 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
             finally
             {
                 _active.TryRemove(context.CoordinatorRunId, out _);
+                _runCts.TryRemove(context.CoordinatorRunId, out _);
+                runCts.Dispose();
             }
-        }, _appStopping);
+        }, CancellationToken.None);
     }
 
     /// <inheritdoc />
@@ -220,6 +268,16 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         // Advance the plan to dispatching and publish the FULL topology snapshot (reflecting the new
         // status) so the client can render the graph thin before any child has been launched.
         await SetWorkPlanStatusAsync(workPlanId.Value, WorkPlanStatus.Dispatching, ct, coordinatorPodId: _myPodId).ConfigureAwait(false);
+
+        // Lease heartbeat (issue #218): while this loop owns the plan, renew the coordinator lease every
+        // ~30s from its OWN DI scope + DbContext so a long child turn (implement/debug runs of 5-15+ min)
+        // cannot let CoordinatorPodId/UpdatedAt go stale and let a peer replica declare this healthy owner
+        // an orphan and start a SECOND dispatch loop that then races the shared repo. The heartbeat fences
+        // THIS loop (via the per-run CTS) only if the lease is lost to a peer. Disposed on every
+        // exit (return / break / exception) by `await using`.
+        _runCts.TryGetValue(context.CoordinatorRunId, out var perRunCts);
+        await using var heartbeat = StartLeaseHeartbeat(workPlanId.Value, context.CoordinatorRunId, perRunCts, ct);
+
         var snapshotSubtasks = await ReloadSubtasksAsync(workPlanId.Value, ct).ConfigureAwait(false);
         entry?.RecordNext(EventTypes.CoordinatorTopology, CoordinatorTopology.BuildSnapshot(
             context.CoordinatorRunId, workPlanId.Value, WorkPlanStatus.Dispatching, snapshotSubtasks, edges, seq.Current, _podRegistry, _k8sEnv?.PodName));
@@ -232,11 +290,6 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         }
 
         var inFlight = new Dictionary<int, Task<ChildResult>>();
-
-        // Tracks subtasks parked in PendingCapacity (no agent-pod CPU headroom) and when each is next
-        // eligible to retry. Bounded by MaxCapacityRetries so a persistently saturated cluster fails
-        // the subtask with capacity_unavailable instead of retrying forever.
-        var capacityRetry = new Dictionary<int, CapacityRetryState>();
 
         // Build a per-id lookup so DoSubtasksConflict can inspect Scope without a DB round-trip.
         var subtasksById = subtasks.ToDictionary(s => s.Id);
@@ -255,9 +308,10 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         foreach (var s in reArmed)
             inFlight[s.Id] = ObserveChildAsync(context.CoordinatorRunId, workPlanId.Value, s.Id, s.ChildRunId!, seq, ct);
 
-        // Recovery: a prior process may have parked subtasks in PendingCapacity. Treat them as
-        // pending in this fresh loop so the frontier re-attempts them (the retry budget restarts
-        // with the new process) rather than stranding them as a non-terminal, non-frontier status.
+        // Back-compat recovery: a pre-upgrade process may have persisted subtasks in the historical
+        // PendingCapacity status. Kubernetes now owns pod admission/scheduling (issue #217), so this
+        // loop no longer parks anything there; treat any stranded PendingCapacity row as pending so
+        // the frontier re-attempts it rather than stranding it as a non-terminal, non-frontier status.
         foreach (var s in subtasks.Where(s => s.Status == SubtaskStatus.PendingCapacity))
             statusById[s.Id] = SubtaskStatus.Pending;
 
@@ -287,11 +341,6 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
                 }
             }
 
-            // Thaw capacity-parked subtasks whose back-off window elapsed: flip them back to pending
-            // (in-memory) so the frontier re-dispatches them — capacity may have freed up via the
-            // reaper or a node scale-out. The retry count is preserved in capacityRetry.
-            ThawDueCapacityRetries(capacityRetry, statusById);
-
             // Dispatch the current frontier. Subtasks with non-overlapping file scopes run in
             // parallel; subtasks whose scopes conflict with any in-flight subtask run serially
             // (deferred until the conflicting in-flight task completes).
@@ -315,19 +364,11 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
                 if (inFlight.Count > 0 && ConflictsWithAnyInFlight(subtaskId, inFlight.Keys, subtasksById))
                     continue;
 
-                // Pre-flight capacity gate (pod-per-run only). If the namespace can't admit another
-                // agent pod, the subtask is parked in PendingCapacity and retried with back-off
-                // instead of launching a pod the controller would reject with "exceeded quota".
-                if (!await TryPassCapacityGateAsync(
-                        context, workPlanId.Value, subtaskId, capacityRetry, statusById, edges, seq, ct)
-                        .ConfigureAwait(false))
-                    continue;
-
                 if (await IsCoordinatorDispatchStoppedAsync(context.CoordinatorRunId, ct).ConfigureAwait(false))
                 {
                     coordinatorStopped = true;
                     _logger.LogInformation(
-                        "Coordinator dispatch: run {RunId} stopped after capacity gate; subtask {SubtaskId} will remain pending",
+                        "Coordinator dispatch: run {RunId} stopped before dispatch; subtask {SubtaskId} will remain pending",
                         context.CoordinatorRunId, subtaskId);
                     break;
                 }
@@ -337,7 +378,6 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
 
                 if (dispatched is { } childRunId)
                 {
-                    capacityRetry.Remove(subtaskId);
                     inFlight[subtaskId] = ObserveChildAsync(context.CoordinatorRunId, workPlanId.Value, subtaskId, childRunId, seq, ct);
                 }
             }
@@ -347,19 +387,6 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
                 if (coordinatorStopped)
                     return;
 
-                // If subtasks are parked awaiting capacity, don't go quiescent — wait for the soonest
-                // retry window (bounded) and loop so they are re-attempted once the reaper frees quota.
-                var nextRetry = capacityRetry.Count == 0
-                    ? (DateTimeOffset?)null
-                    : capacityRetry.Values.Min(r => r.NextRetryAt);
-                if (nextRetry is { } due)
-                {
-                    var wait = due - DateTimeOffset.UtcNow;
-                    if (wait > CapacityRetryDelay) wait = CapacityRetryDelay;
-                    if (wait > TimeSpan.Zero)
-                        await Task.Delay(wait, ct).ConfigureAwait(false);
-                    continue;
-                }
                 break; // quiescent: nothing running and no ready frontier (all terminal or blocked)
             }
 
@@ -372,6 +399,15 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
             // spins forever and the frontier can advance / the run can settle.
             if (result.Outcome == ChildOutcome.Stalled)
             {
+                // #241: before dead-ending the whole run on a single stalled child, spend the
+                // subtask's bounded recovery budget — reset it to Pending so the frontier redispatches
+                // a fresh child (on a fresh pod) next iteration. Only when the budget is exhausted
+                // (RecoveryAttempts >= MaxRecoveryAttempts) does the stall become a genuine terminal.
+                if (await TryRedispatchStalledSubtaskAsync(
+                        context, workPlanId.Value, result.SubtaskId, result.ChildRunId, statusById, seq, ct)
+                        .ConfigureAwait(false))
+                    continue;
+
                 await ApplyStallFailureAsync(
                     context, workPlanId.Value, result, statusById, seq, ct).ConfigureAwait(false);
                 await PropagateBlockedDependentsAsync(
@@ -417,7 +453,137 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
                 context, workPlanId.Value, result, statusById, edges, seq, ct).ConfigureAwait(false);
         }
 
+        // Hand-off: stop the heartbeat BEFORE FinalizeDispatchAsync advances dispatching -> awaiting_assembly,
+        // so the ownership-keyed renew never races the status transition. Disposal below is idempotent.
+        await heartbeat.StopAsync().ConfigureAwait(false);
         await FinalizeDispatchAsync(context, workPlanId.Value, statusById, edges, seq, ct).ConfigureAwait(false);
+    }
+
+    private LeaseHeartbeat StartLeaseHeartbeat(
+        int workPlanId, string coordinatorRunId, CancellationTokenSource? perRunCts, CancellationToken ct)
+    {
+        var stop = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        var task = RunLeaseHeartbeatAsync(workPlanId, coordinatorRunId, perRunCts, stop.Token);
+        return new LeaseHeartbeat(stop, task);
+    }
+
+    /// <summary>
+    /// Renews the coordinator lease every <see cref="_leaseHeartbeatInterval"/> while a dispatch loop is
+    /// alive. Uses its OWN DI scope + <see cref="MemoryDbContext"/> per tick (NEVER the dispatch loop's
+    /// DbContext, which is not thread-safe). Stops on <paramref name="stopToken"/> (normal hand-off /
+    /// shutdown), or when a tick reports the lease is no longer renewable (fenced to a peer, or benignly
+    /// released because the loop advanced the plan past dispatching). A transient per-tick DB/SMB error
+    /// is NON-fatal: it is logged and the loop keeps heartbeating on the next interval, so a single blip
+    /// never permanently stops renewals (which would let the lease go stale and a peer steal it).
+    /// </summary>
+    internal async Task RunLeaseHeartbeatAsync(
+        int workPlanId, string coordinatorRunId, CancellationTokenSource? perRunCts, CancellationToken stopToken)
+    {
+        try
+        {
+            using var timer = new PeriodicTimer(_leaseHeartbeatInterval);
+            while (await timer.WaitForNextTickAsync(stopToken).ConfigureAwait(false))
+            {
+                try
+                {
+                    var tick = await HeartbeatTickAsync(workPlanId, perRunCts, stopToken).ConfigureAwait(false);
+                    if (tick != LeaseHeartbeatTick.Renewed)
+                        return; // Fenced (peer took over) or Released (plan advanced / gone) — stop heartbeating.
+                }
+                catch (OperationCanceledException)
+                {
+                    throw; // Cancellation (app-stop or per-run token) is a clean stop, not a transient error.
+                }
+                catch (Exception ex)
+                {
+                    // Transient per-tick DB/SMB blip: log and keep heartbeating on the next interval. A
+                    // single failed tick must NOT stop renewals — that would defeat the lease/fencing net.
+                    _logger.LogWarning(ex,
+                        "Coordinator lease heartbeat tick for run {RunId} (plan {PlanId}) failed transiently; continuing",
+                        coordinatorRunId, workPlanId);
+                }
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // stopToken cancelled: normal teardown at hand-off or app shutdown.
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "Coordinator lease heartbeat for run {RunId} (plan {PlanId}) stopped on an unexpected error",
+                coordinatorRunId, workPlanId);
+        }
+    }
+
+    internal enum LeaseHeartbeatTick { Renewed, Fenced, Released }
+
+    /// <summary>
+    /// One heartbeat tick. Renews the lease with an OWNERSHIP-and-status keyed UPDATE
+    /// (<c>WHERE Id=@planId AND CoordinatorPodId=@myPodId AND Status='dispatching'</c>). If a row is
+    /// updated the lease is held (<see cref="LeaseHeartbeatTick.Renewed"/>). If zero rows are updated,
+    /// "lost" is decided by OWNERSHIP, NOT the row count (R1): re-read the row and FENCE (cancel
+    /// <paramref name="perRunCts"/>) only when <see cref="WorkPlan.CoordinatorPodId"/> now belongs to a
+    /// PEER (<see cref="LeaseHeartbeatTick.Fenced"/>). If it is STILL this pod (the loop itself advanced
+    /// dispatching -&gt; awaiting_assembly) or the row is gone, that is a BENIGN stop
+    /// (<see cref="LeaseHeartbeatTick.Released"/>) — never cancel, so a normal hand-off never self-fences.
+    /// </summary>
+    internal async Task<LeaseHeartbeatTick> HeartbeatTickAsync(
+        int workPlanId, CancellationTokenSource? perRunCts, CancellationToken ct)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var now = DateTimeOffset.UtcNow;
+
+        // Ownership + status keyed renew. No DateTimeOffset comparison is in the WHERE clause (only
+        // equality on Id/CoordinatorPodId/Status), so a single EF ExecuteUpdateAsync translates
+        // correctly on BOTH SQLite and Postgres — unlike TryClaimCoordinatorPodAsync, which needs the
+        // IsSqlite() raw-SQL branch purely for its `UpdatedAt < staleThreshold` comparison.
+        var renewed = await db.WorkPlans
+            .Where(w => w.Id == workPlanId
+                     && w.CoordinatorPodId == _myPodId
+                     && w.Status == WorkPlanStatus.Dispatching)
+            .ExecuteUpdateAsync(s => s.SetProperty(w => w.UpdatedAt, now), ct)
+            .ConfigureAwait(false);
+        if (renewed > 0)
+            return LeaseHeartbeatTick.Renewed;
+
+        var owner = await db.WorkPlans.AsNoTracking()
+            .Where(w => w.Id == workPlanId)
+            .Select(w => w.CoordinatorPodId)
+            .FirstOrDefaultAsync(ct)
+            .ConfigureAwait(false);
+
+        if (owner is not null && !string.Equals(owner, _myPodId, StringComparison.Ordinal))
+        {
+            _logger.LogWarning(
+                "Coordinator lease for plan {PlanId} lost to pod {Owner} (was {MyPod}); fencing dispatch loop",
+                workPlanId, owner, _myPodId);
+            perRunCts?.Cancel();
+            return LeaseHeartbeatTick.Fenced;
+        }
+
+        // Still owned by this pod (status advanced past dispatching) or the row is gone — benign stop.
+        return LeaseHeartbeatTick.Released;
+    }
+
+    /// <summary>Handle for a running lease heartbeat; disposal (or explicit stop) tears it down once.</summary>
+    private sealed class LeaseHeartbeat(CancellationTokenSource stop, Task task) : IAsyncDisposable
+    {
+        private int _stopped;
+
+        public async Task StopAsync()
+        {
+            if (Interlocked.Exchange(ref _stopped, 1) != 0)
+                return;
+            try { stop.Cancel(); }
+            catch (ObjectDisposedException) { }
+            try { await task.ConfigureAwait(false); }
+            catch { /* the heartbeat swallows its own faults; nothing to observe here */ }
+            stop.Dispose();
+        }
+
+        public async ValueTask DisposeAsync() => await StopAsync().ConfigureAwait(false);
     }
 
     private async Task<bool> IsCoordinatorDispatchStoppedAsync(string coordinatorRunId, CancellationToken ct)
@@ -577,8 +743,15 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
 
         var childTask = await ComposeChildTaskAsync(context, workPlanId, subtask, ct).ConfigureAwait(false);
 
-        var childBaseBranch = await ResolveChildBaseBranchAsync(context, subtaskId, edges, ct)
+        var childBaseBranch = await ResolveChildBaseBranchAsync(context, workPlanId, subtaskId, statusById, edges, ct)
             .ConfigureAwait(false);
+
+        // A null base branch is the dispatch-BLOCKING sentinel (BLOCKING #3/#4): the integration branch
+        // exists but is still missing a required upstream head after a repair. Do NOT dispatch the
+        // dependent from an incomplete base — leave the subtask pending; a later upstream completion
+        // triggers another rebuild and re-evaluation. The block was already logged loudly.
+        if (childBaseBranch is null)
+            return null;
 
         var childRun = new Run
         {
@@ -691,9 +864,24 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         }
     }
 
-    private async Task<string> ResolveChildBaseBranchAsync(
+    /// <summary>
+    /// Resolves the base branch a dependent child dispatches from. Returns the coordinator integration
+    /// branch (the assembled dependency base) after MANDATORY verification (BLOCKING #3/#4) that it
+    /// actually CONTAINS every satisfied upstream dependency's committed HEAD. If a required head is
+    /// missing, it repairs once (re-runs <see cref="RebuildDependencyBaseBranchAsync"/>) and re-checks.
+    /// <list type="bullet">
+    /// <item>Returns <see cref="CoordinatorDispatchContext.OriginatingBranch"/> when the subtask has no
+    /// dependencies, or when the integration branch is ENTIRELY ABSENT (existing loud fallback).</item>
+    /// <item>Returns <c>null</c> (a dispatch-BLOCKING sentinel) when the integration branch exists but,
+    /// even after a repair, is still missing a required upstream head — we must NOT silently dispatch a
+    /// dependent from a base missing upstream artifacts (issue #197 symptom B).</item>
+    /// </list>
+    /// </summary>
+    private async Task<string?> ResolveChildBaseBranchAsync(
         CoordinatorDispatchContext context,
+        int workPlanId,
         int subtaskId,
+        IReadOnlyDictionary<int, string> statusById,
         IReadOnlyCollection<(int SubtaskId, int DependsOnSubtaskId)> edges,
         CancellationToken ct)
     {
@@ -705,19 +893,49 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         var integrationBranch = CoordinatorAssemblyService.IntegrationBranchName(context.CoordinatorRunId);
         try
         {
-            if (_worktreeManager.BranchExists(context.RepositoryPath, integrationBranch))
+            if (!_worktreeManager.BranchExists(context.RepositoryPath, integrationBranch))
+            {
+                // A dependent subtask reached dispatch but the integration branch its upstreams should
+                // have produced does not exist. This is NOT a normal fallback: the child would start
+                // from the coordinator's originating branch and silently miss upstream artifacts
+                // (issue #197 symptom B). Surface it loudly so the degradation is visible instead of
+                // masquerading as a clean run built on the parent goal.
+                _logger.LogError(
+                    "Coordinator dispatch: dependent subtask {SubtaskId} found no integration branch {IntegrationBranch} for run {RunId}; " +
+                    "upstream artifacts may be missing. Falling back to originating branch {Origin} — investigate assembly rebuild.",
+                    subtaskId, integrationBranch, context.CoordinatorRunId, context.OriginatingBranch);
+                return context.OriginatingBranch;
+            }
+
+            // BLOCKING #3/#4: verify the integration branch CONTAINS every satisfied upstream head this
+            // dependent needs. BuildIntegrationBranch deletes+recreates the ref each rebuild, so a
+            // concurrent/stale rebuild could have clobbered it or dropped a child. If anything is
+            // missing, repair ONCE and re-verify.
+            var missing = await FindMissingRequiredHeadsAsync(
+                context, workPlanId, subtaskId, integrationBranch, statusById, edges, ct).ConfigureAwait(false);
+            if (missing.Count == 0)
                 return integrationBranch;
 
-            // A dependent subtask reached dispatch but the integration branch its upstreams should
-            // have produced does not exist. This is NOT a normal fallback: the child would start
-            // from the coordinator's originating branch and silently miss upstream artifacts
-            // (issue #197 symptom B). Surface it loudly so the degradation is visible instead of
-            // masquerading as a clean run built on the parent goal.
+            _logger.LogWarning(
+                "Coordinator dispatch: integration branch {IntegrationBranch} for run {RunId} is missing required upstream head(s) " +
+                "for dependent subtask {SubtaskId}: {Missing}. Repairing (rebuilding dependency base) before dispatch.",
+                integrationBranch, context.CoordinatorRunId, subtaskId, string.Join(", ", missing));
+
+            await RebuildDependencyBaseBranchAsync(context, workPlanId, statusById, edges, ct).ConfigureAwait(false);
+
+            var stillMissing = await FindMissingRequiredHeadsAsync(
+                context, workPlanId, subtaskId, integrationBranch, statusById, edges, ct).ConfigureAwait(false);
+            if (stillMissing.Count == 0)
+                return integrationBranch;
+
+            // Repair did not converge — do NOT silently fall back to the originating branch (that would
+            // ship a dependent built on a base missing upstream work). Block the dispatch loudly.
             _logger.LogError(
-                "Coordinator dispatch: dependent subtask {SubtaskId} found no integration branch {IntegrationBranch} for run {RunId}; " +
-                "upstream artifacts may be missing. Falling back to originating branch {Origin} — investigate assembly rebuild.",
-                subtaskId, integrationBranch, context.CoordinatorRunId, context.OriginatingBranch);
-            return context.OriginatingBranch;
+                "Coordinator dispatch: integration branch {IntegrationBranch} for run {RunId} STILL missing required upstream head(s) " +
+                "for dependent subtask {SubtaskId} after a repair rebuild: {Missing}. BLOCKING dispatch — refusing to launch the " +
+                "dependent from an incomplete base (issue #197). Subtask remains pending.",
+                integrationBranch, context.CoordinatorRunId, subtaskId, string.Join(", ", stillMissing));
+            return null;
         }
         catch (Exception ex)
         {
@@ -727,6 +945,82 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
             return context.OriginatingBranch;
         }
     }
+
+    /// <summary>
+    /// Returns the names of satisfied upstream dependency branches (transitive) whose committed HEAD is
+    /// NOT contained in <paramref name="integrationBranch"/>. An empty list means the integration branch
+    /// is a valid base for <paramref name="subtaskId"/>. Only VALID branches (exist + tip tree matches
+    /// the recorded handoff contract) are required — a missing/mismatched branch is a separate loud error
+    /// surfaced by <see cref="RebuildDependencyBaseBranchAsync"/> and is intentionally not double-counted
+    /// here (it cannot be "contained", and blocking on it would deadlock a genuinely-absent upstream).
+    /// </summary>
+    private async Task<IReadOnlyList<string>> FindMissingRequiredHeadsAsync(
+        CoordinatorDispatchContext context,
+        int workPlanId,
+        int subtaskId,
+        string integrationBranch,
+        IReadOnlyDictionary<int, string> statusById,
+        IReadOnlyCollection<(int SubtaskId, int DependsOnSubtaskId)> edges,
+        CancellationToken ct)
+    {
+        if (_worktreeManager is null)
+            return [];
+
+        var requiredIds = TransitiveDependencies(subtaskId, edges);
+        if (requiredIds.Count == 0)
+            return [];
+
+        var subtasks = await ReloadSubtasksAsync(workPlanId, ct).ConfigureAwait(false);
+        var byId = subtasks.ToDictionary(s => s.Id);
+
+        var missing = new List<string>();
+        foreach (var depId in requiredIds)
+        {
+            if (!statusById.TryGetValue(depId, out var status) || !SubtaskStatus.Satisfies(status))
+                continue;
+            if (!byId.TryGetValue(depId, out var dep) ||
+                string.IsNullOrEmpty(dep.ChildRunId) ||
+                !RunId.TryParse(dep.ChildRunId, out var depRunId))
+                continue;
+
+            var run = await _runStore.GetAsync(depRunId, ct).ConfigureAwait(false);
+            // Only VALID branches are required-and-containable. Missing/mismatched branches are handled
+            // (loudly) by the rebuild path, not blocked on here.
+            if (DependencyBranchInclusion.Evaluate(
+                    _worktreeManager, context.RepositoryPath, run?.WorktreeBranch, run?.TreeHash)
+                != BranchInclusionOutcome.Include)
+                continue;
+
+            var tipSha = _worktreeManager.GetBranchTipCommitSha(context.RepositoryPath, run!.WorktreeBranch!);
+            if (string.IsNullOrEmpty(tipSha))
+                continue;
+
+            if (!_worktreeManager.BranchContains(context.RepositoryPath, integrationBranch, tipSha))
+                missing.Add(run.WorktreeBranch!);
+        }
+
+        return missing;
+    }
+
+    /// <summary>All subtasks the given subtask depends on, transitively (upstream closure via edges).</summary>
+    private static HashSet<int> TransitiveDependencies(
+        int subtaskId, IReadOnlyCollection<(int SubtaskId, int DependsOnSubtaskId)> edges)
+    {
+        var result = new HashSet<int>();
+        var queue = new Queue<int>();
+        queue.Enqueue(subtaskId);
+        while (queue.Count > 0)
+        {
+            var current = queue.Dequeue();
+            foreach (var e in edges.Where(e => e.SubtaskId == current))
+            {
+                if (result.Add(e.DependsOnSubtaskId))
+                    queue.Enqueue(e.DependsOnSubtaskId);
+            }
+        }
+        return result;
+    }
+
 
     private async Task RebuildDependencyBaseBranchAsync(
         CoordinatorDispatchContext context,
@@ -753,12 +1047,69 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
                 continue;
 
             var run = await _runStore.GetAsync(childRunId, ct).ConfigureAwait(false);
-            if (!string.IsNullOrEmpty(run?.WorktreeBranch) && !string.IsNullOrEmpty(run.Diff))
-                branches.Add(run.WorktreeBranch);
+
+            // Issue #197 root-cause fix: include a satisfied dependency based on branch VALIDITY, NOT
+            // on run.Diff (a best-effort display string that GetDiff can leave EMPTY after a real
+            // commit). The committed worktree branch — whose tip tree == run.TreeHash — is the
+            // authoritative artifact. BuildIntegrationBranch no-ops/fast-forwards an unchanged branch,
+            // so passing a genuinely-empty (no-op) dependency is safe and cannot deadlock.
+            var decision = DependencyBranchInclusion.Evaluate(
+                _worktreeManager, context.RepositoryPath, run?.WorktreeBranch, run?.TreeHash);
+            switch (decision)
+            {
+                case BranchInclusionOutcome.Include:
+                    branches.Add(run!.WorktreeBranch!);
+                    break;
+                case BranchInclusionOutcome.ExcludeMissingBranch:
+                    _logger.LogError(
+                        "Coordinator dispatch: SATISFIED dependency subtask {SubtaskId} (child run {ChildRunId}) excluded from " +
+                        "dependency-base integration branch for run {RunId} because its worktree branch is missing " +
+                        "(WorktreeBranch={WorktreeBranch}, TreeHash={TreeHash}). A satisfied child must have committed its " +
+                        "branch — dependents may branch from a base missing upstream artifacts (issue #197).",
+                        id, subtask.ChildRunId, context.CoordinatorRunId, run?.WorktreeBranch ?? "<null>", run?.TreeHash ?? "<null>");
+                    break;
+                case BranchInclusionOutcome.ExcludeTreeMismatch:
+                    _logger.LogError(
+                        "Coordinator dispatch: SATISFIED dependency subtask {SubtaskId} (child run {ChildRunId}) excluded from " +
+                        "dependency-base integration branch for run {RunId} because its branch tip tree does not match the " +
+                        "recorded handoff contract (WorktreeBranch={WorktreeBranch}, expected TreeHash={TreeHash}). The branch " +
+                        "is stale/diverged — refusing to propagate a mismatched base (issue #197).",
+                        id, subtask.ChildRunId, context.CoordinatorRunId, run?.WorktreeBranch ?? "<null>", run?.TreeHash ?? "<null>");
+                    break;
+            }
         }
 
         var integrationBranch = CoordinatorAssemblyService.IntegrationBranchName(context.CoordinatorRunId);
 
+        // Cross-process serialization (issue #218): the physical repo at /workspace/{projectId}/.git is
+        // shared by EVERY run in the project, so two pods (or two runs on one pod) building an integration
+        // branch race the same .git and hit LockedFileException / a null ref mid-swap. Take the per-project
+        // build lock (repo granularity, NOT per-run) around the build. Best-effort: if a peer build holds it
+        // past the timeout, skip this rebuild — the mandatory contains-check + repair in
+        // ResolveChildBaseBranchAsync re-runs it before any dependent dispatches from an incomplete base.
+        var lockKey = IntegrationBuildLock.ResolveProjectKey(context.ProjectId?.ToString(), context.RepositoryPath);
+        await using var projectLock = _integrationBuildLock is null
+            ? null
+            : await _integrationBuildLock.TryAcquireAsync(lockKey, _integrationBuildLockTimeout, ct).ConfigureAwait(false);
+        if (_integrationBuildLock is not null && projectLock is null)
+        {
+            _logger.LogWarning(
+                "Coordinator dispatch: skipping dependency-base rebuild for run {RunId}; could not acquire the project " +
+                "integration-build lock in time (a peer build holds it). The contains-check will repair before any dependent dispatches",
+                context.CoordinatorRunId);
+            return;
+        }
+
+        // Replica/concurrency (BLOCKING #5): BuildIntegrationBranch deletes+recreates the integration
+        // ref on every rebuild (WorktreeManager.BuildIntegrationBranch), so a concurrent or crashed
+        // rebuild could clobber/leave the ref incomplete. Cross-pod concurrency is now serialized by the
+        // per-project integration-build lock acquired above; the AUTHORITATIVE guard against a
+        // clobbered/stale/incomplete integration branch remains the mandatory contains-check + repair in
+        // ResolveChildBaseBranchAsync — a dependent never dispatches from an integration branch that is
+        // missing a required upstream head; it repairs (re-runs this rebuild) and re-verifies first. This
+        // rebuild is itself headless + idempotent (reset-to-origin then re-merge), so a re-run re-derives
+        // the same branch deterministically.
+        //
         // Retry up to 3 times on lock contention: a stale .lock file from a crashed prior process
         // causes LibGit2Sharp.LockedFileException. Clean the stale lock and retry with backoff.
         // The whole method is best-effort — failure here must never crash the dispatch loop.
@@ -777,6 +1128,19 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
                         context.CoordinatorRunId,
                         result.ConflictingBranch,
                         string.Join(", ", result.ConflictingFiles ?? []));
+                }
+
+                // Conflict behavior (BLOCKING #6): BuildIntegrationBranch auto-resolves a sibling
+                // conflict by accepting the later child's version. That silently overwrites earlier
+                // child work, so surface EACH auto-resolution LOUDLY (naming branch + files) — never let
+                // it be swallowed at Information level inside the git layer.
+                foreach (var (branch, files) in result.AutoResolutions)
+                {
+                    _logger.LogWarning(
+                        "Coordinator dispatch: dependency-base rebuild for run {RunId} AUTO-RESOLVED a conflict by accepting " +
+                        "later child branch {Branch} — earlier child work on these files was overwritten: {Files}. Verify the " +
+                        "collective result is intended (issue #85).",
+                        context.CoordinatorRunId, branch, string.Join(", ", files));
                 }
                 return;
             }
@@ -852,6 +1216,102 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
                 .OrderBy(id => id))
                 toFail.Enqueue(next);
         }
+    }
+
+    /// <summary>
+    /// #241 — Redispatches a stalled child subtask INSTEAD of dead-ending the run, while the subtask
+    /// still has recovery budget remaining. Resets the row to <see cref="SubtaskStatus.Pending"/> with
+    /// <c>ChildRunId = null</c> (so <see cref="SubtaskFrontier.ReadyPending"/> launches a fresh child on
+    /// a fresh pod next iteration), records the stalled child on <c>PriorChildRunId</c> for provenance,
+    /// and bumps <c>RecoveryAttempts</c> MONOTONICALLY (capped at
+    /// <see cref="CoordinatorSteeringService.MaxRecoveryAttempts"/>; NEVER reset — invariant honored by
+    /// <c>ResetSubtasksToPendingAsync</c>). The stalled child's AgentHost pod is released and its run is
+    /// terminalized (agent_stall_timeout) exactly as <see cref="ApplyStallFailureAsync"/> does — only the
+    /// SUBTASK is revived. Uses its OWN DI scope + <see cref="MemoryDbContext"/> (never the dispatch
+    /// loop's context). Returns <c>true</c> when the subtask was redispatched (the caller should
+    /// <c>continue</c>); <c>false</c> when the budget is exhausted (the caller dead-ends via
+    /// <see cref="ApplyStallFailureAsync"/>) or the row is gone.
+    /// </summary>
+    internal async Task<bool> TryRedispatchStalledSubtaskAsync(
+        CoordinatorDispatchContext context,
+        int workPlanId,
+        int subtaskId,
+        string childRunId,
+        Dictionary<int, string> statusById,
+        SeqCounter seq,
+        CancellationToken ct)
+    {
+        int attempt;
+        using (var scope = _scopeFactory.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var row = await db.Subtasks.FirstOrDefaultAsync(s => s.Id == subtaskId, ct).ConfigureAwait(false);
+            if (row is null)
+                return false;
+
+            // Budget check BEFORE increment: only redispatch while attempts remain. Once the cap is
+            // reached the stall is a genuine terminal — the caller falls through to ApplyStallFailureAsync.
+            if (row.RecoveryAttempts >= CoordinatorSteeringService.MaxRecoveryAttempts)
+                return false;
+
+            // Record the stalled branch for provenance / handoff continuity (mirrors
+            // ResetSubtasksToPendingAsync), then revive the subtask for a fresh child.
+            if (!string.IsNullOrEmpty(childRunId))
+                row.PriorChildRunId = childRunId;
+            row.Status = SubtaskStatus.Pending;
+            row.ChildRunId = null;
+            row.RecoveryAttempts = Math.Min(
+                row.RecoveryAttempts + 1, CoordinatorSteeringService.MaxRecoveryAttempts);
+            attempt = row.RecoveryAttempts;
+            row.RecoveryGuidance =
+                $"Prior child run {childRunId} stalled (no progress past the stall TTL); redispatching a " +
+                $"fresh attempt ({attempt}/{CoordinatorSteeringService.MaxRecoveryAttempts}). " +
+                "Continue the subtask from the integration base and drive it to completion.";
+            row.UpdatedAt = DateTimeOffset.UtcNow;
+            await db.SaveChangesAsync(ct).ConfigureAwait(false);
+            db.Entry(row).State = EntityState.Detached;
+        }
+
+        statusById[subtaskId] = SubtaskStatus.Pending;
+
+        // Structured redispatch diagnostic on the coordinator stream.
+        var entry = _streamStore.Get(context.CoordinatorRunId);
+        entry?.RecordNext(EventTypes.CoordinatorSubtaskRedispatched, new
+        {
+            subtaskId,
+            priorChildRunId = childRunId,
+            attempt,
+            maxAttempts = CoordinatorSteeringService.MaxRecoveryAttempts,
+            reason = "stall_redispatch",
+            timestamp_utc = DateTimeOffset.UtcNow.ToString("O"),
+        });
+
+        // Same orphan-cleanup contract as ApplyStallFailureAsync: the stalled child has no live watch
+        // loop, so release its AgentHost pod and terminalize the OLD child run (agent_stall_timeout).
+        // The prior child stays terminally failed; only the subtask is revived for a fresh child.
+        await ReleaseAgentHostPodSafeAsync(childRunId, ct).ConfigureAwait(false);
+        if (RunId.TryParse(childRunId, out var stalledRunId))
+        {
+            try
+            {
+                await _runStore.TrySetTerminalStatusAsync(
+                    stalledRunId, RunStatus.Failed, DateTimeOffset.UtcNow, "agent_stall_timeout", ct)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex,
+                    "Coordinator dispatch: failed to record agent_stall_timeout for redispatched child run {ChildRunId}",
+                    childRunId);
+            }
+        }
+
+        _logger.LogWarning(
+            "Coordinator dispatch: subtask {SubtaskId} stalled child {ChildRunId} redispatched " +
+            "(attempt {Attempt}/{Max}); prior child terminalized and subtask reset to pending",
+            subtaskId, childRunId, attempt, CoordinatorSteeringService.MaxRecoveryAttempts);
+
+        return true;
     }
 
     /// <summary>
@@ -945,166 +1405,6 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
                 "CoordinatorDispatchService: failed to release AgentHost pod for run {RunId} (best-effort)",
                 runId);
         }
-    }
-
-    // -----------------------------------------------------------------------
-    // Agent-pod capacity gate — park-and-retry when the namespace quota is exhausted (Change to
-    // Task 2). When pod-per-run cannot admit another agent pod, the subtask is queued in
-    // PendingCapacity and retried with back-off rather than failing the run hard. The reaper frees
-    // orphaned-pod quota periodically, so parked subtasks eventually succeed (virtuous cycle).
-    // -----------------------------------------------------------------------
-
-    /// <summary>Per-subtask agent-pod capacity retry bookkeeping (in-loop, not persisted).</summary>
-    private readonly record struct CapacityRetryState(int Attempts, DateTimeOffset NextRetryAt);
-
-    /// <summary>
-    /// Flips capacity-parked subtasks whose back-off elapsed back to <see cref="SubtaskStatus.Pending"/>
-    /// in <paramref name="statusById"/> so the dispatch frontier re-attempts them. Purely in-memory:
-    /// the persisted row stays PendingCapacity until the subtask is actually dispatched (or fails),
-    /// avoiding churn for a subtask that is about to be re-parked.
-    /// </summary>
-    private static void ThawDueCapacityRetries(
-        Dictionary<int, CapacityRetryState> capacityRetry, Dictionary<int, string> statusById)
-    {
-        var now = DateTimeOffset.UtcNow;
-        foreach (var (subtaskId, state) in capacityRetry)
-        {
-            if (state.NextRetryAt <= now
-                && statusById.TryGetValue(subtaskId, out var s)
-                && s == SubtaskStatus.PendingCapacity)
-                statusById[subtaskId] = SubtaskStatus.Pending;
-        }
-    }
-
-    /// <summary>
-    /// Pre-flight agent-pod capacity gate. Returns <see langword="true"/> when the subtask may be
-    /// dispatched (capacity available, or not pod-per-run so the gate is a no-op). Returns
-    /// <see langword="false"/> when there is no agent-pod headroom: the subtask is parked in
-    /// PendingCapacity for retry, or — once the retry budget is exhausted — failed with reason
-    /// <c>capacity_unavailable</c> and its dependents propagated.
-    /// </summary>
-    private async Task<bool> TryPassCapacityGateAsync(
-        CoordinatorDispatchContext context,
-        int workPlanId,
-        int subtaskId,
-        Dictionary<int, CapacityRetryState> capacityRetry,
-        Dictionary<int, string> statusById,
-        IReadOnlyCollection<(int SubtaskId, int DependsOnSubtaskId)> edges,
-        SeqCounter seq,
-        CancellationToken ct)
-    {
-        // No capacity gating outside pod-per-run (in-api / non-Kubernetes) — always pass.
-        if (_podLifecycle is null || !_sandboxRuntime.IsPodPerRun)
-            return true;
-
-        try
-        {
-            await _podLifecycle.CheckAgentHostCapacityAsync(ct).ConfigureAwait(false);
-            return true; // capacity available
-        }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
-        catch (AgentHostCapacityPendingException cap)
-        {
-            await ParkOrFailForCapacityAsync(
-                context, workPlanId, subtaskId, cap, capacityRetry, statusById, edges, seq, ct)
-                .ConfigureAwait(false);
-            return false;
-        }
-    }
-
-    /// <summary>
-    /// Parks a subtask in <see cref="SubtaskStatus.PendingCapacity"/> with a back-off, or — when the
-    /// retry budget (<see cref="MaxCapacityRetries"/>) is exhausted — fails it with reason
-    /// <c>capacity_unavailable</c> and propagates the failure to its blocked dependents.
-    /// </summary>
-    private async Task ParkOrFailForCapacityAsync(
-        CoordinatorDispatchContext context,
-        int workPlanId,
-        int subtaskId,
-        AgentHostCapacityPendingException cap,
-        Dictionary<int, CapacityRetryState> capacityRetry,
-        Dictionary<int, string> statusById,
-        IReadOnlyCollection<(int SubtaskId, int DependsOnSubtaskId)> edges,
-        SeqCounter seq,
-        CancellationToken ct)
-    {
-        var attempts = (capacityRetry.TryGetValue(subtaskId, out var existing) ? existing.Attempts : 0) + 1;
-
-        if (attempts > MaxCapacityRetries)
-        {
-            capacityRetry.Remove(subtaskId);
-            await FailSubtaskCapacityUnavailableAsync(
-                context, workPlanId, subtaskId, statusById, seq, ct).ConfigureAwait(false);
-            await PropagateBlockedDependentsAsync(
-                context, workPlanId, subtaskId, "dependency_failed", SubtaskStatus.Failed, statusById, edges, seq, ct)
-                .ConfigureAwait(false);
-            return;
-        }
-
-        capacityRetry[subtaskId] = new CapacityRetryState(attempts, DateTimeOffset.UtcNow.Add(CapacityRetryDelay));
-
-        var parked = await SetSubtaskCapacityPendingAsync(subtaskId, cap.Reason, ct).ConfigureAwait(false);
-        statusById[subtaskId] = SubtaskStatus.PendingCapacity;
-        if (parked is not null)
-            EmitSubtask(context, workPlanId, parked, EventTypes.SubtaskPendingCapacity, seq.Next());
-
-        _logger.LogWarning(
-            "Subtask {SubtaskId}: agent pod capacity unavailable, retry {Attempt}/{Max} in {Delay}s",
-            subtaskId, attempts, MaxCapacityRetries, (int)CapacityRetryDelay.TotalSeconds);
-    }
-
-    private async Task<Subtask?> SetSubtaskCapacityPendingAsync(int subtaskId, string reason, CancellationToken ct)
-    {
-        using var scope = _scopeFactory.CreateScope();
-        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
-        var row = await db.Subtasks.FirstOrDefaultAsync(s => s.Id == subtaskId, ct).ConfigureAwait(false);
-        if (row is null) return null;
-
-        row.Status = SubtaskStatus.PendingCapacity;
-        row.RecoveryGuidance =
-            $"Agent pod capacity pending ({reason}); subtask queued for retry until namespace CPU frees up.";
-        row.UpdatedAt = DateTimeOffset.UtcNow;
-        await db.SaveChangesAsync(ct).ConfigureAwait(false);
-        db.Entry(row).State = EntityState.Detached;
-        return row;
-    }
-
-    private async Task FailSubtaskCapacityUnavailableAsync(
-        CoordinatorDispatchContext context,
-        int workPlanId,
-        int subtaskId,
-        Dictionary<int, string> statusById,
-        SeqCounter seq,
-        CancellationToken ct)
-    {
-        Subtask? updated;
-        using (var scope = _scopeFactory.CreateScope())
-        {
-            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
-            var row = await db.Subtasks.FirstOrDefaultAsync(s => s.Id == subtaskId, ct).ConfigureAwait(false);
-            if (row is not null)
-            {
-                row.Status = SubtaskStatus.Failed;
-                row.RecoveryGuidance =
-                    "Agent pod capacity remained unavailable after the retry budget was exhausted " +
-                    "(capacity_unavailable).";
-                row.UpdatedAt = DateTimeOffset.UtcNow;
-                await db.SaveChangesAsync(ct).ConfigureAwait(false);
-                db.Entry(row).State = EntityState.Detached;
-            }
-            updated = row;
-        }
-
-        statusById[subtaskId] = SubtaskStatus.Failed;
-        if (updated is not null)
-            EmitSubtask(context, workPlanId, updated, EventTypes.SubtaskFailed, seq.Next());
-
-        _logger.LogError(
-            "Subtask {SubtaskId}: agent pod capacity unavailable after {Max} retries — failing with capacity_unavailable",
-            subtaskId, MaxCapacityRetries);
     }
 
 
@@ -1255,6 +1555,13 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
     {
         var lastSeq = 0;
         object? lastPartialOutput = null;
+        // Tracks the requestId of an unresolved tool-approval gate the child is blocked on, so the
+        // stall path can distinguish a legitimate human-paced approval wait from a true stall (#212).
+        string? pendingApprovalRequestId = null;
+        // Tracks whether the child's most recent event was a sandbox.provisioning_pending heartbeat,
+        // i.e. its AgentHost pod is still being scheduled by Kubernetes (claim unbound). A Pending pod
+        // is a legitimate wait (a node may be freeing up / the pool autoscaling), NOT a stall (#217).
+        bool provisioningPending = false;
 
         while (!ct.IsCancellationRequested)
         {
@@ -1282,6 +1589,23 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
                     if (IsPartialOutputEvent(evt))
                         lastPartialOutput = evt.Payload;
 
+                    // Track approval-gate state so the stall path treats an unresolved gate as a
+                    // legitimate wait rather than agent_stall_timeout (#212). tool.approval_pending
+                    // heartbeats keep the flag set; ANY other real event (tool.result on grant,
+                    // tool.error on deny/expiry, tool.approval_resolved, agent output, terminal, …)
+                    // clears it so the guard self-heals and can never latch (#212 review finding 1).
+                    if (evt.Type == EventTypes.ToolApprovalRequired)
+                        pendingApprovalRequestId = ReadString(evt.Payload, "requestId");
+                    else if (evt.Type != EventTypes.ToolApprovalPending)
+                        pendingApprovalRequestId = null;
+
+                    // Track pod-provisioning state so the stall path treats an unbound AgentHost claim
+                    // as a legitimate Kubernetes-paced wait rather than agent_stall_timeout (#217).
+                    // sandbox.provisioning_pending heartbeats keep the flag set; ANY other real event
+                    // (the pod binding, agent output, terminal, …) clears it so the guard self-heals
+                    // and can never latch — mirrors the #212 approval-gate guard above.
+                    provisioningPending = evt.Type == EventTypes.SandboxProvisioningPending;
+
                     if (TryMapTerminalEvent(evt, out var outcome))
                     {
                         terminalOutcome = outcome;
@@ -1296,6 +1620,42 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
             {
                 if (await TryResolveFromStoreAsync(childRunId, ct).ConfigureAwait(false) is { } resolved)
                     return new ChildResult(subtaskId, childRunId, resolved);
+
+                // Defense-in-depth (#212): a child blocked on an unresolved tool-approval gate is a
+                // legitimate human-paced wait, not a stall. While the most recent observed
+                // interaction is an unresolved tool.approval_required (only tool.approval_pending
+                // heartbeats have followed), do NOT classify the child as agent_stall_timeout —
+                // reset the window and keep observing. Normal stall detection resumes as soon as ANY
+                // other real event arrives (grant, deny, expiry tool.error, terminal, …), so a truly
+                // hung pod after gate self-expiry is still caught. This also covers gate sites that
+                // do not emit heartbeats (e.g. the preview gate, which emits tool.approval_required).
+                if (pendingApprovalRequestId is not null)
+                {
+                    _logger.LogInformation(
+                        "Coordinator observation: child {ChildRunId} (subtask {SubtaskId}) stall TTL " +
+                        "({Timeout}) elapsed while tool approval {RequestId} is pending — treating as a " +
+                        "legitimate wait, not stalled",
+                        childRunId, subtaskId, _stallTimeout, pendingApprovalRequestId);
+                    continue;
+                }
+
+                // Defense-in-depth (#217): a child whose AgentHost pod is still being provisioned
+                // (SandboxClaim unbound) is a legitimate Kubernetes-paced wait, not a stall. While the
+                // most recent observed event is a sandbox.provisioning_pending heartbeat, do NOT
+                // classify the child as agent_stall_timeout — reset the window and keep observing. A
+                // Pending pod may sit until a node frees up or the pool autoscales; that is expected
+                // and must not discard the run. Normal stall detection resumes as soon as ANY other
+                // real event arrives (the pod binding, agent output, terminal, …), so a genuinely hung
+                // pod is still caught — the guard self-heals and cannot latch.
+                if (provisioningPending)
+                {
+                    _logger.LogInformation(
+                        "Coordinator observation: child {ChildRunId} (subtask {SubtaskId}) stall TTL " +
+                        "({Timeout}) elapsed while its AgentHost pod is still being provisioned " +
+                        "(sandbox.provisioning_pending) — treating as a legitimate wait, not stalled",
+                        childRunId, subtaskId, _stallTimeout);
+                    continue;
+                }
 
                 // Stall TTL expired: child emitted no event within the configured window.
                 _logger.LogWarning(
@@ -1845,7 +2205,13 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
 
     private static bool CanRecoverAssemblyBlockedOnEligibility(string? reason) =>
         !string.IsNullOrWhiteSpace(reason)
-        && reason.Contains("ineligible_subtasks", StringComparison.Ordinal);
+        && (reason.Contains("ineligible_subtasks", StringComparison.Ordinal)
+            || reason.Contains("build_test_infra_agenthost_capacity_pending", StringComparison.Ordinal)
+            || reason.Contains("build_test_infra_agenthost_quota_exceeded", StringComparison.Ordinal)
+            || reason.Contains("build_test_infra_agenthost_ip_not_ready", StringComparison.Ordinal)
+            || reason.Contains("build_test_infra_agenthost_launch_failed", StringComparison.Ordinal)
+            || reason.Contains("build_test_infra_a2a_endpoint_unavailable", StringComparison.Ordinal)
+            || reason.Contains("build_test_infra_a2a_transport_failure", StringComparison.Ordinal));
 
     // -----------------------------------------------------------------------
     // Event projection on the coordinator stream
@@ -2122,6 +2488,15 @@ public static class WorkPlanStatus
     /// <summary>Assembly stopped with NO partial assembly: a subtask was not eligible, or merging
     /// child branches into the integration branch conflicted. Terminal/parked.</summary>
     public const string AssemblyBlocked = "assembly_blocked";
+
+    /// <summary>
+    /// UNIFIED AUTONOMOUS STEERING (rev8): the plan is inside the assembly-owned steering DECISION
+    /// window — a gate delivered a steering signal and the <c>CoordinatorSteeringDecider</c> is
+    /// choosing/executing a direction. Durable so a crash re-enters the SAME decision boundary under a
+    /// stale-lease reclaim (see <c>CoordinatorReconciler</c>/<c>CoordinatorRecoveryRouter</c>) rather
+    /// than defaulting to Dispatch. Bounded by the per-plan steering-iteration cap so it cannot leak.
+    /// </summary>
+    public const string AssemblySteering = "assembly_steering";
 
     /// <summary>The collective merge of the integration branch into origin failed. Terminal.</summary>
     public const string AssemblyFailed = "assembly_failed";

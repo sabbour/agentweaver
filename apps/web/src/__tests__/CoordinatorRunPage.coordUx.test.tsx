@@ -66,6 +66,10 @@ vi.mock('../api/apiClient', () => ({
     getAssemblyFiles: vi.fn().mockResolvedValue([]),
     getAssemblyWorkspace: vi.fn().mockResolvedValue([]),
     getAssemblyFileDiff: vi.fn().mockResolvedValue(null),
+    listPortForwards: vi.fn().mockResolvedValue([]),
+    startPortForward: vi.fn(),
+    stopPortForward: vi.fn(),
+    pingKeepalive: vi.fn().mockResolvedValue(undefined),
   },
 }));
 
@@ -76,6 +80,8 @@ vi.mock('../api/sse', () => ({
 vi.mock('../components/OutcomePlanPanel', () => ({
   OutcomePlanPanel: () => null,
 }));
+
+import type { GraphDescriptor } from '../api/types';
 
 function Wrapper({ children }: { children: ReactNode }) {
   return (
@@ -104,6 +110,7 @@ beforeEach(() => {
     created_at: '2026-07-07T00:00:00.000Z',
     updated_at: '2026-07-07T00:00:00.000Z',
   } as never);
+  vi.mocked(apiClient.getRunEvents).mockResolvedValue([]);
   vi.mocked(apiClient.steerCoordinator).mockResolvedValue({ status: 'applied' });
   vi.mocked(apiClient.setAutopilot).mockResolvedValue({ run_id: 'coord-run-1', autopilot: true });
   vi.mocked(apiClient.setAutoApprove).mockResolvedValue({ run_id: 'coord-run-1', auto_approve_tools: true });
@@ -113,6 +120,87 @@ beforeEach(() => {
 afterEach(() => cleanup());
 
 describe('CoordinatorRunPage operator console redesign', () => {
+  const graphWithBuildTest: GraphDescriptor = {
+    ...COORDINATOR_GRAPH_DESCRIPTOR,
+    nodes: [
+      ...COORDINATOR_GRAPH_DESCRIPTOR.nodes.slice(0, 3),
+      { id: 'planned:assembly-build-test', label: 'Build & Test', role: 'build_test', kind: 'planned', node_type: 'gate' },
+      ...COORDINATOR_GRAPH_DESCRIPTOR.nodes.slice(3),
+    ],
+    edges: [
+      { from: 'coordinator', to: 'plan:subtask-1', cardinality: 'direct', loopback: false },
+      { from: 'coordinator', to: 'plan:subtask-2', cardinality: 'direct', loopback: false },
+      { from: 'plan:subtask-1', to: 'planned:assembly-build-test', cardinality: 'fanin', loopback: false },
+      { from: 'plan:subtask-2', to: 'planned:assembly-build-test', cardinality: 'fanin', loopback: false },
+      { from: 'planned:assembly-build-test', to: 'planned:assembly-rai', cardinality: 'direct', loopback: false },
+      { from: 'planned:assembly-rai', to: 'planned:assembly-review', cardinality: 'direct', loopback: false },
+      { from: 'planned:assembly-review', to: 'planned:assembly-merge', cardinality: 'direct', loopback: false },
+      { from: 'planned:assembly-merge', to: 'planned:assembly-scribe', cardinality: 'direct', loopback: false },
+    ],
+  };
+
+  it('surfaces a durable ready preview on Build & Test and human review', async () => {
+    const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null);
+    vi.mocked(apiClient.getRunGraph).mockResolvedValue(graphWithBuildTest);
+    vi.mocked(apiClient.getRun).mockResolvedValue({ status: 'awaiting_review', coordinator_status: 'in_review' } as never);
+    vi.mocked(apiClient.getRunEvents).mockResolvedValue([
+      { sequence: 10, type: 'sandbox.preview_ready', payload: { preview_url: 'https://preview.example.test', target_port: 5173 } },
+      { sequence: 11, type: 'coordinator.assembly_review_requested', payload: { gateKind: 'human-review' } },
+    ]);
+
+    render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    const buildRow = await screen.findByRole('treeitem', { name: /Select Build & Test:/i }, { timeout: 4000 });
+    fireEvent.click(buildRow);
+    const buildPreview = await screen.findByTestId('selected-build-preview-cta', undefined, { timeout: 4000 });
+    expect(buildPreview.textContent).toContain('Preview from Build & Test is active');
+    fireEvent.click(within(buildPreview).getByRole('button', { name: 'Open preview' }));
+    expect(openSpy).toHaveBeenCalledWith('https://preview.example.test', '_blank', 'noopener,noreferrer');
+
+    fireEvent.click(await screen.findByTestId('compact-primary-run-action', undefined, { timeout: 4000 }));
+    const reviewPreview = await screen.findByTestId('human-review-preview-status', undefined, { timeout: 4000 });
+    expect(reviewPreview.textContent).toContain('Preview from Build & Test is active');
+
+    openSpy.mockRestore();
+  });
+
+  it('shows pending approval for the latest preview event', async () => {
+    vi.mocked(apiClient.getRunGraph).mockResolvedValue(graphWithBuildTest);
+    vi.mocked(apiClient.getRunEvents).mockResolvedValue([
+      { sequence: 20, type: 'sandbox.preview_pending', payload: { target_port: 5173 } },
+    ]);
+
+    render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    const buildRow = await screen.findByRole('treeitem', { name: /Select Build & Test:/i }, { timeout: 4000 });
+    fireEvent.click(buildRow);
+    const buildPreview = await screen.findByTestId('selected-build-preview-cta', undefined, { timeout: 4000 });
+    expect(buildPreview.textContent).toContain('Preview pending approval');
+    expect(buildPreview.textContent).not.toContain('Open preview');
+  });
+
+  it('shows a non-blocking unavailable indication for failed previews', async () => {
+    vi.mocked(apiClient.getRunGraph).mockResolvedValue(graphWithBuildTest);
+    vi.mocked(apiClient.getRun).mockResolvedValue({ status: 'awaiting_review', coordinator_status: 'in_review' } as never);
+    vi.mocked(apiClient.getRunEvents).mockResolvedValue([
+      { sequence: 30, type: 'sandbox.preview_failed', payload: { reason: 'preview_not_requested', message: 'No preview was requested.' } },
+      { sequence: 31, type: 'coordinator.assembly_review_requested', payload: { gateKind: 'human-review' } },
+    ]);
+
+    render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    const buildRow = await screen.findByRole('treeitem', { name: /Select Build & Test:/i }, { timeout: 4000 });
+    fireEvent.click(buildRow);
+    const buildPreview = await screen.findByTestId('selected-build-preview-cta', undefined, { timeout: 4000 });
+    expect(buildPreview.textContent).toContain('Preview unavailable');
+    expect(buildPreview.textContent).toContain('preview not requested');
+    expect(buildPreview.textContent).toContain('Human review can still proceed');
+
+    fireEvent.click(await screen.findByTestId('compact-primary-run-action', undefined, { timeout: 4000 }));
+    const reviewPreview = await screen.findByTestId('human-review-preview-status', undefined, { timeout: 4000 });
+    expect(reviewPreview.textContent).toContain('Preview unavailable');
+  });
+
   it('prioritizes the run tree and selected-task workspace while keeping topology on demand', async () => {
     render(<Wrapper><CoordinatorRunPage /></Wrapper>);
 

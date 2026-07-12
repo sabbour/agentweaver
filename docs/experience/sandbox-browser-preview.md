@@ -61,6 +61,22 @@ Operators running automated demos can set `SANDBOX_PREVIEW_AUTO_APPROVE=true` (o
 auto-approve-tools option) to grant these requests automatically; in normal use the approval stays in your
 hands.
 
+## Build & Test preview
+
+Workflows that include the platform-owned **Build & Test** step can also produce a browser preview. After
+builds and tests pass, the platform starts the app/service, discovers the actual port, and registers a preview
+URL automatically. It no longer injects `PORT=3000` or `--port`; apps use their framework default or honor
+`process.env.PORT` if they already support it. Port discovery is dependency-free: AgentHost reads app log hints
+and the sandbox pod's `/proc/net/tcp` plus `/proc/net/tcp6` socket tables, so it works even when the image lacks
+`ss` and when Node binds IPv6-any (`::`). Before registration, AgentHost fronts the observed app port with a
+pod-local TCP forwarder on an allowed public port (`3000-9000`), so even a loopback-only app is reachable from
+the Gateway.
+
+The preview backend resolves
+either the run's AgentHost claim or a retained command-sandbox claim, so previews work whether the server was
+started in the `agent-{runId}` pod-per-run sandbox or the `run-{runId}` Build & Test command sandbox
+(`apps/Agentweaver.Api/Sandbox/SandboxClaimConventions.cs:28`, `apps/Agentweaver.Api/Sandbox/Preview/SandboxPreviewService.cs:432`).
+
 ## What to expect
 
 - **Kubernetes-only.** The preview routes into the run's own sandbox pod. On local/dev runs there is no
@@ -73,12 +89,21 @@ hands.
 - **Auto-expiry.** A preview is reaped after **30 minutes** idle (no keepalive), after a hard **8-hour**
   cap, or once its pod is gone — whichever comes first. By default it survives the run ending (you can keep
   previewing a finished run's artifact) until one of those limits or an explicit **Stop**.
-- **Bind to `0.0.0.0`.** For a server to be previewable it must listen on all interfaces, not just
-  `127.0.0.1`. When the feature is enabled, agents are told this automatically.
+- **Platform previews handle loopback binds.** The Build & Test live-preview path runs the app and forwarder
+  inside the sandbox pod and registers the forwarder's `0.0.0.0` public port, so apps that only bind
+  `127.0.0.1` can still be previewed. Manual previews still expose the port you enter directly, so prefer
+  all-interface binds there.
+- **Gateway is the reachability test.** The API does not data-path-probe sandbox preview ports; the preview is
+  proven ready in-pod first, then confirmed by opening the returned Gateway URL.
+- **Failure is actionable, not blocking.** If the app exits, no listening port appears, observe hits an
+  unexpected error, or the forwarder cannot make the app reachable, you see **Preview unavailable** with a
+  reason such as `process_exited:exit={code}`, `no_listening_port_discovered`, `observe_error`,
+  `bound_unreachable`, or `no_public_port_available`; review can continue.
 
 ## Related reading
 
 - [Sandbox browser preview — Reference](../reference/sandbox-browser-preview.md) — routes, DTO fields, config, status codes.
 - [Sandbox browser preview — Deep Dive](../deep-dive/sandbox-browser-preview.md) — the reverse proxy, lifecycle, and cleanup.
+- [Live-preview provisioning](./live-preview-provisioning.md) — the Build & Test preview review flow.
 - [Sandbox pod execution experience](./sandbox-pod-execution.md) — the pod pill and the pod-per-run model.
 - [Runs, board & live inspection](./runs-board-watch.md) — where embedded run inspection lives.

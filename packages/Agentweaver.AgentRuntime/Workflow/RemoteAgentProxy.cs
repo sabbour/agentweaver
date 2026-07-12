@@ -116,7 +116,8 @@ public sealed class RemoteAgentProxy : IWorkflowTurnAgent
 
         if (podEndpointUri is null)
         {
-            throw new InvalidOperationException(
+            throw new WorkflowAgentInfrastructureException(
+                "a2a_endpoint_unavailable",
                 $"RemoteAgentProxy: no A2A endpoint found for run '{runId}'. " +
                 "The sandbox pod may not yet be bound (IPodNameRegistry), " +
                 "or ISandboxAgentEndpointResolver is not configured for this environment. " +
@@ -207,30 +208,42 @@ public sealed class RemoteAgentProxy : IWorkflowTurnAgent
             "RemoteAgentProxy: RunTurnAsync starting — run={RunId}, isRevision={IsRevision}",
             _runId, isRevision);
 
-        await foreach (var update in _a2aAgent
-            .RunStreamingAsync(messages, _session, options: null, ct)
-            .ConfigureAwait(false))
+        try
         {
-            foreach (var content in update.Contents)
+            await foreach (var update in _a2aAgent
+                .RunStreamingAsync(messages, _session, options: null, ct)
+                .ConfigureAwait(false))
             {
-                if (content is TextContent textContent &&
-                    !string.IsNullOrEmpty(textContent.Text))
+                foreach (var content in update.Contents)
                 {
-                    textAccumulator.Append(textContent.Text);
-                }
-                else if (content is DataContent dataContent &&
-                         _streamWriter is not null)
-                {
-                    // Decode RunEvent DataPart and forward to the worker's stream.
-                    // Sequence is reassigned by RecordingChannelWriter, preserving total
-                    // monotonic ordering on the worker side (§4.4).
-                    var runEvent = RunEventDataPartCodec.TryDecodeRunEvent(dataContent);
-                    if (runEvent is not null)
+                    if (content is TextContent textContent &&
+                        !string.IsNullOrEmpty(textContent.Text))
                     {
-                        await _streamWriter.WriteAsync(runEvent, ct).ConfigureAwait(false);
+                        textAccumulator.Append(textContent.Text);
+                    }
+                    else if (content is DataContent dataContent &&
+                             _streamWriter is not null)
+                    {
+                        // Decode RunEvent DataPart and forward to the worker's stream.
+                        // Sequence is reassigned by RecordingChannelWriter, preserving total
+                        // monotonic ordering on the worker side (§4.4).
+                        var runEvent = RunEventDataPartCodec.TryDecodeRunEvent(dataContent);
+                        if (runEvent is not null)
+                        {
+                            await _streamWriter.WriteAsync(runEvent, ct).ConfigureAwait(false);
+                        }
                     }
                 }
             }
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (WorkflowAgentInfrastructureException) { throw; }
+        catch (Exception ex)
+        {
+            throw new WorkflowAgentInfrastructureException(
+                "a2a_transport_failure",
+                $"RemoteAgentProxy: A2A turn failed for run '{_runId}': {ex.Message}",
+                ex);
         }
 
         var responseText = textAccumulator.ToString();

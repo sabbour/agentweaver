@@ -6,6 +6,12 @@ import { useCallback, useMemo } from 'react';
 import type { RunStreamEvent, StreamStatus } from '../api/sse';
 import type { AssemblyReviewDecision, SteerCoordinatorRequest } from '../api/types';
 import type { TimelineItem, TurnGroupItem } from '../timeline/types';
+
+function isHumanReviewGateKind(payload: Record<string, unknown>): boolean {
+  const gateKind = payload['gateKind'] ?? payload['gate_kind'];
+  return gateKind == null || String(gateKind).toLowerCase() === 'human-review';
+}
+
 /**
  * Aggregate HITL gate state derived from the timeline/events, so a consumer can
  * surface the FULL gate set without re-scanning (BLOCKING #1 gate integrity).
@@ -72,12 +78,28 @@ export function useCoordinatorRunModel(runId: string, runStatus?: string): Coord
       switch (e.type) {
         case 'coordinator.outcome_spec': outcomeSpecDrafted = true; break;
         case 'coordinator.outcome_spec.confirmed': outcomeSpecConfirmed = true; break;
-        case 'coordinator.assembly_review_requested': assemblyReviewRequested = true; assemblyReviewResolved = false; break;
+        case 'coordinator.assembly_review_requested':
+          if (isHumanReviewGateKind(e.payload)) {
+            assemblyReviewRequested = true;
+            assemblyReviewResolved = false;
+          }
+          break;
         case 'coordinator.assembly_review_approved':
         case 'coordinator.assembly_review_preserved':
         case 'coordinator.assembly_changes_requested':
         case 'coordinator.assembly_declined':
           assemblyReviewResolved = true; break;
+        case 'coordinator.steering_decision': {
+          // A conscious coordinator action on steering feedback consumes a pending
+          // review (compat with the assembly_changes_requested alias). The values are
+          // the exact backend SteeringDirection constants. Advisory is surfaced but
+          // takes no action, so it does NOT resolve the review.
+          const decision = String((e.payload as Record<string, unknown>)['decision'] ?? '');
+          if (decision === 'in_place_steer' || decision === 'dispatch_fresh' || decision === 'proceed') {
+            assemblyReviewResolved = true;
+          }
+          break;
+        }
         default: break;
       }
     }

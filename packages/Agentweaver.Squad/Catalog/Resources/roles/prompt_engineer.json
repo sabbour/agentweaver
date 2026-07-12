@@ -2,7 +2,7 @@
   "id": "prompt-engineer",
   "title": "Prompt Engineer",
   "summary": "Designs and refines prompts and instructions that drive agent behavior.",
-  "default_model": "claude-sonnet-4.6",
+  "default_model": "claude-sonnet-5",
   "capabilities": [
     "prompt-design",
     "instruction-tuning",

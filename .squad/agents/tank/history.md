@@ -88,3 +88,9 @@ Redesigned Create blank/Create from GitHub dialogs and added `POST /api/blueprin
 ## 2026-07-06T22:05:00Z — v0.7.12 new-project dialogs v2
 
 Delivered shared-base refactor for Blank and From-GitHub creation dialogs: one shell, shared Blueprint panel/tabs, Templates parity, fixed blank right-column scrolling/clipping, wired View all templates, single footer No-blueprint affordance, personal repos via user-first GitHub accounts/repos, and Suggested-only recommendation view. Commits `112addc`, `b066eed`, `0e7d92f`; merged to `release/v0.7.0` and deployed to staging.
+
+## 2026-07-11T00:00:00Z — Dependency-base propagation fix shipped to staging
+
+Implemented the backend dependency-base propagation fix after rubber-duck GO-WITH-CHANGES and code-review CLEAN: inclusion now trusts committed branch/tree validity instead of run.Diff, integration branches must contain satisfied dependency heads before dependent dispatch, and final assembly uses the same inclusion authority. Link included the change in local-only staging release v0.9.19-rc1 for Ahmed validation.
+
+📌 Team update (2026-07-10T05:55:00-07:00): #207 roots in 28 unbounded non-idempotent final Scribes executing in the API. The first design was rejected; Tank is locked out from revision and Morpheus owns the independent redesign. — decided by Rubber-duck and Seraph

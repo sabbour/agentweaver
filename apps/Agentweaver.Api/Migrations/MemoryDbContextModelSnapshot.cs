@@ -504,6 +504,27 @@ namespace Agentweaver.Api.Migrations
                     b.ToTable("DecisionInbox");
                 });
 
+            modelBuilder.Entity("Agentweaver.Api.Memory.IntegrationBuildLockRecord", b =>
+                {
+                    b.Property<string>("ProjectId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTimeOffset>("AcquiredAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("OwnerPodId")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("OwnerToken")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("ProjectId");
+
+                    b.ToTable("IntegrationBuildLocks");
+                });
+
             modelBuilder.Entity("Agentweaver.Api.Memory.OutcomeSpec", b =>
                 {
                     b.Property<int>("Id")
@@ -606,6 +627,9 @@ namespace Agentweaver.Api.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("INTEGER");
 
+                    b.Property<int?>("ActionAttempt")
+                        .HasColumnType("INTEGER");
+
                     b.Property<string>("CoordinatorRunId")
                         .IsRequired()
                         .HasColumnType("TEXT");
@@ -616,6 +640,15 @@ namespace Agentweaver.Api.Migrations
                     b.Property<string>("CreatedBy")
                         .IsRequired()
                         .HasColumnType("TEXT");
+
+                    b.Property<string>("DecidedAction")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTimeOffset?>("ExecStartedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("ExecutionAttempts")
+                        .HasColumnType("INTEGER");
 
                     b.Property<string>("Instruction")
                         .IsRequired()
@@ -628,6 +661,12 @@ namespace Agentweaver.Api.Migrations
                     b.Property<DateTimeOffset?>("RelayedAt")
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("Severity")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Source")
+                        .HasColumnType("TEXT");
+
                     b.Property<string>("Status")
                         .IsRequired()
                         .HasColumnType("TEXT");
@@ -635,11 +674,54 @@ namespace Agentweaver.Api.Migrations
                     b.Property<string>("TargetChildRunId")
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("TargetScopeJson")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("TreeHash")
+                        .HasColumnType("TEXT");
+
                     b.HasKey("Id");
 
                     b.HasIndex("CoordinatorRunId", "Status");
 
                     b.ToTable("SteeringDirectives");
+                });
+
+            modelBuilder.Entity("Agentweaver.Api.Memory.SteeringRevisionExecution", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("ActionAttempt")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("CheckpointWatermark")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTimeOffset?>("ConfirmedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("EffectState")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("RunId")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("SteeringDirectiveId")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("SteeringDirectiveId", "ActionAttempt", "RunId")
+                        .IsUnique();
+
+                    b.ToTable("SteeringRevisionExecutions");
                 });
 
             modelBuilder.Entity("Agentweaver.Api.Memory.Subtask", b =>
@@ -665,11 +747,20 @@ namespace Agentweaver.Api.Migrations
                         .IsRequired()
                         .HasColumnType("TEXT");
 
+                    b.Property<int?>("LastResetAttempt")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int?>("LastResetDirectiveId")
+                        .HasColumnType("INTEGER");
+
                     b.Property<string>("LockedOutAgents")
                         .HasColumnType("TEXT");
 
                     b.Property<string>("Phase")
                         .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("PriorChildRunId")
                         .HasColumnType("TEXT");
 
                     b.Property<int>("RecoveryAttempts")
@@ -688,6 +779,9 @@ namespace Agentweaver.Api.Migrations
 
                     b.Property<string>("Status")
                         .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTimeOffset?>("SteeringRetentionUntil")
                         .HasColumnType("TEXT");
 
                     b.Property<string>("Title")
@@ -737,10 +831,10 @@ namespace Agentweaver.Api.Migrations
                     b.Property<string>("AssemblyStage")
                         .HasColumnType("TEXT");
 
-                    b.Property<string>("AssemblyStatusReason")
+                    b.Property<DateTimeOffset?>("AssemblyStartedAt")
                         .HasColumnType("TEXT");
 
-                    b.Property<DateTimeOffset?>("AssemblyStartedAt")
+                    b.Property<string>("AssemblyStatusReason")
                         .HasColumnType("TEXT");
 
                     b.Property<string>("AssemblyTerminalStage")
@@ -755,6 +849,9 @@ namespace Agentweaver.Api.Migrations
 
                     b.Property<DateTimeOffset>("CreatedAt")
                         .HasColumnType("TEXT");
+
+                    b.Property<int>("HumanReviewRoundTrips")
+                        .HasColumnType("INTEGER");
 
                     b.Property<string>("IntegrationBranch")
                         .HasColumnType("TEXT");
@@ -772,6 +869,9 @@ namespace Agentweaver.Api.Migrations
                     b.Property<string>("Status")
                         .IsRequired()
                         .HasColumnType("TEXT");
+
+                    b.Property<int>("SteeringIterations")
+                        .HasColumnType("INTEGER");
 
                     b.Property<DateTimeOffset>("UpdatedAt")
                         .HasColumnType("TEXT");

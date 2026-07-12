@@ -910,8 +910,9 @@ export class AgentweaverApiClient {
     if (!response.ok) throw new ApiError(response.status, text);
   }
 
-  listPortForwards(runId: string): Promise<PortForwardSessionDto[]> {
-    return this.request<PortForwardSessionDto[]>('GET', `/runs/${encodeURIComponent(runId)}/sandbox/port-forward`);
+  async listPortForwards(runId: string): Promise<PortForwardSessionDto[]> {
+    const response = await this.request<PortForwardSessionDto[] | { sessions?: PortForwardSessionDto[] }>('GET', `/runs/${encodeURIComponent(runId)}/sandbox/port-forward`);
+    return Array.isArray(response) ? response : (response.sessions ?? []);
   }
 
   // System runtime info — kubernetes context and pod name (Spec 006).

@@ -1,5 +1,4 @@
 using System.Globalization;
-using System.Net.Sockets;
 using k8s;
 using k8s.Autorest;
 using k8s.Models;
@@ -41,7 +40,13 @@ public interface ISandboxPreviewService
     /// cluster (replica-safe), not from any in-process registry. Throws
     /// <see cref="InvalidOperationException"/> when the claim is missing or not yet bound.
     /// </summary>
-    Task<PreviewSession> StartPreviewAsync(string runId, int targetPort, string ownerUserId, CancellationToken ct = default);
+    /// <param name="previewRunnerSessionId">
+    /// Optional PreviewRunner PROCESS session id (spec-006 §3.4). When supplied it is persisted in the
+    /// HTTPRoute annotations so keepalive can dual-touch the separate PreviewRunner idle clock.
+    /// </param>
+    Task<PreviewSession> StartPreviewAsync(
+        string runId, int targetPort, string ownerUserId, CancellationToken ct = default,
+        string? previewRunnerSessionId = null);
 
     /// <summary>
     /// Lists active previews for <paramref name="runId"/> from HTTPRoute annotations. Replica-safe.
@@ -79,25 +84,31 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
 
     /// <summary>Minimum age before a route-less preview Service is treated as a leaked orphan.</summary>
     private static readonly TimeSpan OrphanGrace = TimeSpan.FromMinutes(2);
-    private static readonly TimeSpan PreviewProbeTimeout = TimeSpan.FromSeconds(1);
-    private static readonly TimeSpan PreviewProbeRetryWindow = TimeSpan.FromSeconds(3);
-    private static readonly TimeSpan PreviewProbeRetryDelay = TimeSpan.FromMilliseconds(250);
 
     private readonly IKubernetes? _client;
     private readonly SandboxPreviewOptions _options;
     private readonly ILogger<SandboxPreviewService> _logger;
     private readonly TimeProvider _clock;
+    private readonly IPreviewRunnerHttpClient? _previewRunnerClient;
+    private readonly IAgentHostOriginResolver? _originResolver;
+    private readonly Agentweaver.Api.Auth.ISecretStore? _secretStore;
 
     public SandboxPreviewService(
         IKubernetes? client,
         SandboxPreviewOptions options,
         ILogger<SandboxPreviewService> logger,
-        TimeProvider? clock = null)
+        TimeProvider? clock = null,
+        IPreviewRunnerHttpClient? previewRunnerClient = null,
+        IAgentHostOriginResolver? originResolver = null,
+        Agentweaver.Api.Auth.ISecretStore? secretStore = null)
     {
         _client = client;
         _options = options;
         _logger = logger;
         _clock = clock ?? TimeProvider.System;
+        _previewRunnerClient = previewRunnerClient;
+        _originResolver = originResolver;
+        _secretStore = secretStore;
     }
 
     public bool Enabled => _options.Enabled && _client is not null;
@@ -107,7 +118,8 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
     public int AllowedPortMax => _options.AllowedPortMax;
 
     public async Task<PreviewSession> StartPreviewAsync(
-        string runId, int targetPort, string ownerUserId, CancellationToken ct = default)
+        string runId, int targetPort, string ownerUserId, CancellationToken ct = default,
+        string? previewRunnerSessionId = null)
     {
         EnsureReady();
         if (targetPort is <= 0 or > 65535)
@@ -118,7 +130,13 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
             throw new InvalidOperationException(
                 $"No bound sandbox pod for run {runId}. A preview is only available after the run's " +
                 "SandboxClaim reports a bound pod (status.phase=Bound).");
-        await EnsurePreviewTargetIsReachableAsync(podName, targetPort, ct).ConfigureAwait(false);
+
+        // NOTE: We deliberately do NOT TCP-probe podIP:targetPort from the API pod here.
+        // Under the sandbox isolation model (k8s/networkpolicy-sandbox.yaml), preview ports
+        // 3000-9000 admit ingress ONLY from the preview Gateway — a direct API->podIP connect is
+        // denied by policy and can never succeed. Readiness is already proven upstream by the
+        // AgentHost observe step (forwarder-verified, in-pod loopback) before this call, which is
+        // the correct readiness signal under isolation.
 
         var sanitizedRun = PreviewReaper.PerRunLabel(runId);
         await EnforcePreviewLimitsAsync(sanitizedRun, ct).ConfigureAwait(false);
@@ -181,7 +199,8 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
         var expiresAt = now.AddMinutes(_options.IdleTimeoutMinutes);
         var maxUntil = now.AddHours(_options.MaxLifetimeHours);
         var httpRoute = BuildHttpRoute(
-            token, sanitizedRun, ownerUserId, podName, targetPort, hostname, serviceName, now, expiresAt, maxUntil);
+            token, sanitizedRun, ownerUserId, podName, targetPort, hostname, serviceName, now, expiresAt, maxUntil,
+            runId, previewRunnerSessionId);
 
         try
         {
@@ -248,12 +267,115 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
             _logger.LogInformation(
                 "SandboxPreviewService: keepalive for unknown preview {Fingerprint} ignored (404)",
                 Fingerprint(token));
+            return;
         }
+
+        // spec-006 §3.4 (BLOCKER B): dual-touch the SEPARATE PreviewRunner process idle clock so the
+        // backing app process is not reaped while the Gateway route is still being kept alive. Reads
+        // the durable preview_runner_session_id + run-id + target-port annotations off the route and
+        // calls /preview-runner/processes/{sessionId}/health-check. Best-effort: never fails keepalive.
+        await TryTouchPreviewRunnerProcessAsync(serviceName, ct).ConfigureAwait(false);
 
         // TODO(morpheus): renew the backing SandboxClaim/pod TTL here once the claim-retention
         // seam (KubernetesSandboxExecutor claim retention) exposes a per-run renew hook. Today the
         // claim TTL is set at creation; the annotation bump above keeps the preview route alive and
         // the reaper's orphan check covers the pod-gone case, so keepalive never blocks on this.
+    }
+
+    /// <summary>
+    /// Best-effort PreviewRunner-process idle-clock touch for keepalive (spec-006 §3.4). Reads the
+    /// durable route annotations (<c>preview-runner-session-id</c>, <c>preview-run-id</c>,
+    /// <c>preview-target-port</c>), resolves the AgentHost origin + per-run credential, and calls
+    /// <c>/preview-runner/processes/{sessionId}/health-check</c>. Never throws — a failure here must
+    /// not fail the Gateway keepalive.
+    /// </summary>
+    private async Task TryTouchPreviewRunnerProcessAsync(string routeName, CancellationToken ct)
+    {
+        if (_previewRunnerClient is null || _originResolver is null)
+            return;
+
+        try
+        {
+            var raw = await _client!.CustomObjects.GetNamespacedCustomObjectAsync(
+                HttpRouteGroup, HttpRouteVersion, _options.Namespace, HttpRoutePlural, routeName,
+                cancellationToken: ct).ConfigureAwait(false);
+
+            var annotations = ExtractAnnotations(raw);
+            if (annotations is null)
+                return;
+
+            annotations.TryGetValue(PreviewReaper.AnnotationPreviewRunnerSessionId, out var sessionId);
+            annotations.TryGetValue(PreviewReaper.AnnotationRunId, out var runId);
+            annotations.TryGetValue(PreviewReaper.AnnotationTargetPort, out var portText);
+
+            if (string.IsNullOrWhiteSpace(sessionId) || string.IsNullOrWhiteSpace(runId))
+                return; // No PreviewRunner process bound to this route (e.g. legacy/manual preview).
+
+            var port = TryParseInt(portText) ?? 0;
+
+            var origin = await _originResolver.TryResolveOriginAsync(runId, ct).ConfigureAwait(false);
+            if (string.IsNullOrEmpty(origin))
+            {
+                _logger.LogDebug(
+                    "SandboxPreviewService: keepalive dual-touch skipped for {Fingerprint} — no AgentHost origin.",
+                    Fingerprint(routeName));
+                return;
+            }
+
+            var bearer = await ResolvePreviewRunnerBearerAsync(runId, ct).ConfigureAwait(false);
+
+            await _previewRunnerClient.HealthCheckByOriginAsync(origin, bearer, sessionId!, port, "/", ct)
+                .ConfigureAwait(false);
+            _logger.LogDebug(
+                "SandboxPreviewService: keepalive dual-touched PreviewRunner process for {Fingerprint}.",
+                Fingerprint(routeName));
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex,
+                "SandboxPreviewService: keepalive dual-touch failed for {Fingerprint} (ignored).",
+                Fingerprint(routeName));
+        }
+    }
+
+    private async Task<string?> ResolvePreviewRunnerBearerAsync(string runId, CancellationToken ct)
+    {
+        if (_secretStore is null)
+            return null;
+        try
+        {
+            var result = await _secretStore.GetSecretAsync(PreviewRunnerCredential.SecretKey(runId), ct)
+                .ConfigureAwait(false);
+            return result.Found ? result.Value : null;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogDebug(ex,
+                "SandboxPreviewService: failed to fetch preview-runner credential for keepalive dual-touch.");
+            return null;
+        }
+    }
+
+    private static IReadOnlyDictionary<string, string>? ExtractAnnotations(object raw)
+    {
+        var json = System.Text.Json.JsonSerializer.Serialize(raw);
+        using var doc = System.Text.Json.JsonDocument.Parse(json);
+        if (!doc.RootElement.TryGetProperty("metadata", out var meta) ||
+            !meta.TryGetProperty("annotations", out var ann) ||
+            ann.ValueKind != System.Text.Json.JsonValueKind.Object)
+            return null;
+
+        var result = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var prop in ann.EnumerateObject())
+        {
+            if (prop.Value.ValueKind == System.Text.Json.JsonValueKind.String)
+                result[prop.Name] = prop.Value.GetString() ?? "";
+        }
+        return result;
     }
 
     public async Task<IReadOnlyList<PreviewSession>> ListForRunAsync(string runId, CancellationToken ct = default)
@@ -274,11 +396,14 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
             if (string.IsNullOrWhiteSpace(route.PodName) || route.TargetPort is null or <= 0)
                 continue;
 
-            if (!await IsPreviewTargetReachableAsync(route.PodName, route.TargetPort.Value, ct).ConfigureAwait(false))
+            // Liveness proxy under isolation: we cannot TCP-probe podIP:targetPort from the API pod
+            // (denied by the sandbox NetworkPolicy). Use the allowed control-plane pod-existence check
+            // (label selector) instead so a torn-down pod stops being reported as active.
+            if (!await PodExistsForRunAsync(sanitizedRun, ct).ConfigureAwait(false))
             {
                 _logger.LogInformation(
-                    "SandboxPreviewService: preview {Fingerprint} for run {RunId} is not reporting active because pod {Pod} is not listening on port {Port}",
-                    Fingerprint(route.Token), runId, route.PodName, route.TargetPort.Value);
+                    "SandboxPreviewService: preview {Fingerprint} for run {RunId} is not reporting active because no bound pod exists for the run",
+                    Fingerprint(route.Token), runId);
                 continue;
             }
 
@@ -432,13 +557,29 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
     /// Resolves the run's bound sandbox pod name from <b>cluster state</b> (the run's SandboxClaim
     /// <c>status</c>), NOT from the in-process pod registry. The registry is only populated on the
     /// replica that launched the pod, so on a multi-replica deployment a preview-start request
-    /// hitting the other replica would otherwise spuriously fail. Reading the claim is replica-safe:
-    /// every replica sees the same claim status. Returns <see langword="null"/> when the claim is
-    /// missing or not yet bound (a correct, deterministic "not ready" for ALL replicas).
+    /// hitting the other replica would otherwise spuriously fail. Reading the claim is replica-safe.
+    /// Preview supports both retained claim conventions for the same run: AgentHost pod-per-run
+    /// claims (<c>agent-*</c>) and in-process command sandbox claims (<c>run-*</c>). Returns
+    /// <see langword="null"/> when neither claim is bound.
     /// </summary>
     private async Task<string?> ResolveBoundPodNameAsync(string runId, CancellationToken ct)
     {
-        var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
+        foreach (var claimName in new[]
+        {
+            SandboxClaimConventions.DeriveAgentHostClaimName(runId),
+            SandboxClaimConventions.DeriveRunCommandClaimName(runId),
+        }.Distinct(StringComparer.Ordinal))
+        {
+            var podName = await TryResolveBoundPodNameFromClaimAsync(claimName, ct).ConfigureAwait(false);
+            if (!string.IsNullOrEmpty(podName))
+                return podName;
+        }
+
+        return null;
+    }
+
+    private async Task<string?> TryResolveBoundPodNameFromClaimAsync(string claimName, CancellationToken ct)
+    {
         try
         {
             var raw = await _client!.CustomObjects.GetNamespacedCustomObjectAsync(
@@ -450,7 +591,6 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
         }
         catch (HttpOperationException ex) when (ex.Response?.StatusCode == System.Net.HttpStatusCode.NotFound)
         {
-            // No claim for this run yet (or already released) — not ready, deterministically.
             return null;
         }
     }
@@ -516,50 +656,59 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
 
     private object BuildHttpRoute(
         string token, string sanitizedRun, string ownerUserId, string podName, int targetPort, string hostname,
-        string serviceName, DateTimeOffset startedAt, DateTimeOffset expiresAt, DateTimeOffset maxUntil) => new
+        string serviceName, DateTimeOffset startedAt, DateTimeOffset expiresAt, DateTimeOffset maxUntil,
+        string runId, string? previewRunnerSessionId)
     {
-        apiVersion = $"{HttpRouteGroup}/{HttpRouteVersion}",
-        kind = "HTTPRoute",
-        metadata = new
+        var annotations = new Dictionary<string, string>
         {
-            name = serviceName,
-            @namespace = _options.Namespace,
-            labels = new Dictionary<string, string>
-            {
-                [PreviewReaper.LabelPartOf] = PreviewReaper.LabelPartOfValue,
-                [PreviewReaper.LabelToken] = token,
-            },
-            annotations = new Dictionary<string, string>
-            {
-                [PreviewReaper.AnnotationExpiresAt] = Rfc3339(expiresAt),
-                [PreviewReaper.AnnotationMaxUntil] = Rfc3339(maxUntil),
-                [PreviewReaper.AnnotationRun] = sanitizedRun,
-                [PreviewReaper.AnnotationToken] = token,
-                [PreviewReaper.AnnotationOwner] = ownerUserId ?? "",
-                [PreviewReaper.AnnotationPod] = podName,
-                [PreviewReaper.AnnotationTargetPort] = targetPort.ToString(CultureInfo.InvariantCulture),
-                [PreviewReaper.AnnotationStartedAt] = Rfc3339(startedAt),
-            },
-        },
-        spec = new
+            [PreviewReaper.AnnotationExpiresAt] = Rfc3339(expiresAt),
+            [PreviewReaper.AnnotationMaxUntil] = Rfc3339(maxUntil),
+            [PreviewReaper.AnnotationRun] = sanitizedRun,
+            [PreviewReaper.AnnotationRunId] = runId,
+            [PreviewReaper.AnnotationToken] = token,
+            [PreviewReaper.AnnotationOwner] = ownerUserId ?? "",
+            [PreviewReaper.AnnotationPod] = podName,
+            [PreviewReaper.AnnotationTargetPort] = targetPort.ToString(CultureInfo.InvariantCulture),
+            [PreviewReaper.AnnotationStartedAt] = Rfc3339(startedAt),
+        };
+        if (!string.IsNullOrWhiteSpace(previewRunnerSessionId))
+            annotations[PreviewReaper.AnnotationPreviewRunnerSessionId] = previewRunnerSessionId;
+
+        return new
         {
-            parentRefs = new[]
+            apiVersion = $"{HttpRouteGroup}/{HttpRouteVersion}",
+            kind = "HTTPRoute",
+            metadata = new
             {
-                new { name = _options.GatewayName, @namespace = _options.GatewayNamespace },
-            },
-            hostnames = new[] { hostname },
-            rules = new[]
-            {
-                new
+                name = serviceName,
+                @namespace = _options.Namespace,
+                labels = new Dictionary<string, string>
                 {
-                    backendRefs = new[]
+                    [PreviewReaper.LabelPartOf] = PreviewReaper.LabelPartOfValue,
+                    [PreviewReaper.LabelToken] = token,
+                },
+                annotations,
+            },
+            spec = new
+            {
+                parentRefs = new[]
+                {
+                    new { name = _options.GatewayName, @namespace = _options.GatewayNamespace },
+                },
+                hostnames = new[] { hostname },
+                rules = new[]
+                {
+                    new
                     {
-                        new { name = serviceName, port = 80 },
+                        backendRefs = new[]
+                        {
+                            new { name = serviceName, port = 80 },
+                        },
                     },
                 },
             },
-        },
-    };
+        };
+    }
 
     private async Task CreateServiceIdempotentAsync(V1Service service, CancellationToken ct)
     {
@@ -632,57 +781,6 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
             _logger.LogWarning(ex,
                 "SandboxPreviewService: pod-existence probe failed for run {Run}; assuming alive", sanitizedRun);
             return true;
-        }
-    }
-
-    private async Task EnsurePreviewTargetIsReachableAsync(string podName, int targetPort, CancellationToken ct)
-    {
-        var deadline = _clock.GetUtcNow() + PreviewProbeRetryWindow;
-        while (_clock.GetUtcNow() < deadline)
-        {
-            if (await IsPreviewTargetReachableAsync(podName, targetPort, ct).ConfigureAwait(false))
-                return;
-
-            await Task.Delay(PreviewProbeRetryDelay, ct).ConfigureAwait(false);
-        }
-
-        throw new InvalidOperationException(
-            $"Nothing is listening on sandbox pod {podName} port {targetPort}. Start the server and wait until it accepts TCP connections before requesting a preview.");
-    }
-
-    private async Task<bool> IsPreviewTargetReachableAsync(string podName, int targetPort, CancellationToken ct)
-    {
-        try
-        {
-            var pod = await _client!.CoreV1.ReadNamespacedPodAsync(
-                podName, _options.Namespace, cancellationToken: ct).ConfigureAwait(false);
-            var host = pod.Status?.PodIP
-                ?? pod.Status?.PodIPs?.FirstOrDefault(ip => !string.IsNullOrWhiteSpace(ip.Ip))?.Ip;
-            if (string.IsNullOrWhiteSpace(host))
-            {
-                _logger.LogInformation(
-                    "SandboxPreviewService: pod {Pod} has no IP yet; preview target port {Port} is not reachable",
-                    podName, targetPort);
-                return false;
-            }
-
-            using var client = new TcpClient();
-            using var attemptCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            attemptCts.CancelAfter(PreviewProbeTimeout);
-            await client.ConnectAsync(host, targetPort, attemptCts.Token).ConfigureAwait(false);
-            return true;
-        }
-        catch (HttpOperationException ex) when (ex.Response?.StatusCode == System.Net.HttpStatusCode.NotFound)
-        {
-            return false;
-        }
-        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
-        {
-            return false;
-        }
-        catch (SocketException)
-        {
-            return false;
         }
     }
 

@@ -140,3 +140,8 @@ Fixed Copilot workflow-selection and decompose installation-token identity handl
 ## 2026-07-06T22:05:00Z — v0.7.12 live 404 forensics
 
 Read-only forensics found no v0.7.11 identity or installation-scope regression for runs `f1f14868` and `1c18977c`; outcome-spec draft/confirm succeeded and the work plan persisted. The live 404s were benign transient/mis-targeted reads. New deferred backend bug: duplicate cross-replica subtask dispatch plus sibling isolated-worktree read caused sandbox denial and `assembly_blocked` on `1c18977c`.
+
+
+## 2026-07-06 v0.9.0 staging wave
+- Shipped live coordinator send routing plus the server-side Operator run direction; tests passed.
+📌 Team update (2026-07-10T05:55:00-07:00): #208 is independent of #207 and stems from client-aborted overview requests amplifying cancellation warnings. Morpheus owns the independent #207 redesign under durable fencing, queueing, tenancy, recovery, deletion, audit, and mTLS requirements. — decided by Rubber-duck and Seraph

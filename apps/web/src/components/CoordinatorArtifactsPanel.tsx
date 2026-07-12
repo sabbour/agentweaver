@@ -1,5 +1,5 @@
-import {
-  Text } from '@fluentui/react-components';
+import { Text } from '@fluentui/react-components';
+import { type ReactNode } from 'react';
 import { useArtifactBrowser } from '../hooks/useArtifactBrowser';
 import { FileTreePanel } from './ArtifactBrowser';
 import { FileViewerModal } from './FileViewerModal';
@@ -34,6 +34,7 @@ export interface CoordinatorArtifactsPanelProps {
   /** Which sub-view to open on first render: the integration diff ('changes', default) or the
    *  produced-files browser ('files'). Lets the Changes vs Files chips reach distinct destinations. */
   initialTab?: 'changes' | 'files';
+  previewStatusSlot?: ReactNode;
 }
 
 /**
@@ -41,7 +42,7 @@ export interface CoordinatorArtifactsPanelProps {
  * artifact-browser hook + file tree, pointing at the coordinator's integration-branch adapter so the
  * panel shows the collective diff. Clicking a file opens the standard file viewer (with diffs).
  */
-export function CoordinatorArtifactsPanel({ runId, runStatus, adapter, initialTab = 'changes' }: CoordinatorArtifactsPanelProps) {
+export function CoordinatorArtifactsPanel({ runId, runStatus, adapter, initialTab = 'changes', previewStatusSlot }: CoordinatorArtifactsPanelProps) {
   const styles = useStyles();
   const state = useArtifactBrowser(runId, runStatus, undefined, undefined, undefined, undefined, adapter, initialTab);
 
@@ -51,7 +52,7 @@ export function CoordinatorArtifactsPanel({ runId, runStatus, adapter, initialTa
         Files produced across this run, shown as the collective integration diff.
       </Text>
       <div className={styles.tree}>
-        <FileTreePanel state={state} onFileClick={(path, isChanged) => state.handleFileSelect(path, isChanged ?? true)} />
+        <FileTreePanel state={state} previewStatusSlot={previewStatusSlot} onFileClick={(path, isChanged) => state.handleFileSelect(path, isChanged ?? true)} />
       </div>
       <FileViewerModal
         runId={runId}

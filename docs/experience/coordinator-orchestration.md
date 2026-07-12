@@ -44,9 +44,13 @@ The experience is not a faster way to skip review. It makes the work larger and 
 
 The user starts from a project by choosing **Start task**. The dialog asks for a **Goal** and explains the contract in plain language: describe the goal, then the coordinator drafts an outcome spec for review and confirmation before any work is dispatched. The global floating **Start task** button offers the same entry point from anywhere in the app, adding a **Project** selector before the **Goal** field.
 
+Before starting, the project must have a cast team with at least one active worker role. If the API returns `no_team`, the dialog and global **Start task** button show a warning with the backend message and a **Cast a team** call to action that routes to `/projects/{id}/team/cast` (`apps/web/src/api/errors.ts:35`, `apps/web/src/components/StartOrchestrationDialog.tsx:145`, `apps/web/src/components/StartOrchestrationFab.tsx:141`). Casting the team is now a prerequisite for orchestration, not an optional setup step.
+
 When the user clicks **Start**, the UI posts the goal, receives the coordinator run id, and navigates directly to the orchestration detail page. The first thing the user sees is not a fan-out of workers. The first thing they see is a coordinator run that is drafting intent.
 
 That matters. A broad request such as "Add OAuth sign-in and update the docs and tests" can mean many things: provider choice, scope boundaries, migration expectations, documentation depth, and test coverage. The coordinator's first job is to turn that request into a confirmable contract, not to launch agents immediately.
+
+What the drafted **Scope** covers tracks the breadth the goal asks for, filtered by the team you cast. A full-journey goal — "take this from the initial idea all the way to a working, previewable app" — yields an outcome whose scope enumerates the intermediate deliverables the goal implies (customer/market research, positioning/marketing, user stories, a PRD, UX design, and the built app), but only for deliverables some role on the team can actually produce. A narrow goal (a bug fix or a single document) stays lean and does not sprout extra planning stages. If the breadth is unclear, the coordinator surfaces it as a clarifying question rather than assuming the widest scope — so review the drafted scope before confirming and revise if it is broader or narrower than you intended.
 
 ### Over MCP
 
@@ -342,7 +346,7 @@ The **Coordinator Graph** is the full-width band at the top. It is built to be w
 
 Nodes are connected by clean **spine edges** — each fan-out and fan-in routes through a shared rounded junction dot, drawn as straight vertical connectors rather than wavy S-curves — and every card carries a **colored top-accent bar** keyed to its status (green complete, blue running, amber awaiting, red failed) with the status pill in the top-left corner. Ranks are centered and aligned, so parallel subtasks line up horizontally directly under their shared parent. A **minimap** in the bottom-right corner shows the whole graph at a glance, coloring each node by its status and outlining the visible viewport, so you can orient yourself in a large orchestration. The **zoom control** in the corner has a **fit-to-view** button (resets to 100%, the natural fitted size), minus/plus buttons, and a live percentage readout; hold **Ctrl** while scrolling to zoom (shown as a tooltip).
 
-The graph includes the coordinator node, subtask nodes, dependency edges, and collective assembly stages when they are part of the descriptor. Assembly stages map to the overall orchestration phase: RAI starts during assembly, human review becomes actionable during **In review**, merge and scribe light up from their own assembly events, and completion turns the flow green.
+The graph includes the coordinator node, subtask nodes, dependency edges, and collective assembly stages when they are part of the descriptor. Assembly stages come from the selected workflow's happy path, so built-in software workflows show RAI before Build & Test and human review. Build & Test has its own status and elapsed-time projection; when it registers a sandbox preview, the preview URL is attached to the Build & Test node. Human review becomes actionable only during **In review**, merge and scribe light up from their own assembly events, and completion turns the flow green.
 
 ### Agent rail
 
@@ -354,6 +358,8 @@ Below the graph, the page uses two columns. The left column is the **Outcome spe
 
 The coordinator session reuses the standard run timeline. It shows the coordinator's own messages, lifecycle cards, tool activity, and stream state. It filters out raw serialized work-plan JSON when the structured plan is already visible in the graph and panels.
 
+Outcome-spec JSON that reaches the agent message stream is rendered as readable **Outcome plan** fields instead of a raw blob, and the row is attributed to **Coordinator (Outcome plan)** (`apps/web/src/components/AgentSessionPanel.tsx:777`, `:791`, `:1438`). RAI verdict cards also suppress placeholder rationales such as `-`, `---`, and `—`, so empty rationales do not show as noisy punctuation (`AgentSessionPanel.tsx:805`, `:1245`).
+
 The coordinator run also surfaces its assembled artifacts through the same **Artifact Browser** used
 on child runs — a compact **Changes** list plus a **Files** tab with a real folder tree — so the
 collective output of an orchestration is inspectable directly from the coordinator view rather than
@@ -363,9 +369,9 @@ Coordinator-only artifacts are also intentionally quiet on misses. The page stop
 
 ### Reading the session log
 
-The session log is tuned to read like a clean narrative rather than a machine trace. A **Show technical details** toggle sits above the timeline and is **OFF by default**. With it off, low-signal plumbing rows — system-prompt scaffolding, tool-call start/stop (shell, file view/edit, raw commands), and file-write rows — are collapsed, leaving agent and coordinator messages, instructions, narrative activity, and human-facing approvals. Nothing is deleted: flipping the toggle on reveals every technical row again. The classification is done entirely client-side from the shape of each event, so turning details on and off is instant.
+The session log is tuned to read like a clean narrative rather than a machine trace. A **Show technical details** toggle sits above the timeline and is **OFF by default**. With it off, low-signal plumbing rows — system-prompt scaffolding, internal assembly-gate prompts, tool-call start/stop (shell, file view/edit, raw commands), and file-write rows — are collapsed, leaving agent and coordinator messages, instructions, narrative activity, and human-facing approvals. Nothing is deleted: flipping the toggle on reveals every technical row again. The classification is done entirely client-side from the shape of each event, so turning details on and off is instant (`apps/web/src/components/AgentSessionPanel.tsx:740`, `:2388`).
 
-The session column is also wider than before so long tool output and messages have room to breathe, and the **Message coordinator** composer at the bottom of the panel is always visible — the input reserves clearance so the graph's minimap can never hide it. Use it to send a message to the coordinator (or the selected child) mid-run without leaving the page.
+The session column is also wider than before so long tool output and messages have room to breathe, and the **Message coordinator** composer at the bottom of the panel is always visible — the input reserves clearance so the graph's minimap can never hide it. Use it to send a message to the coordinator (or the selected child) mid-run without leaving the page. The composer stays enabled while the coordinator is parked in **In review** when the run detail reports `coordinator_steerable: true`, so you can message the coordinator during collective review instead of waiting for the gate to close (`apps/web/src/pages/CoordinatorRunPage.tsx:2192`, `:3216`).
 
 The **Coordinator Graph** band reflows responsively: a resize observer re-fits the topology to the available width as the panel or window changes size, so the graph stays readable whether the session column is expanded, collapsed, or the browser is resized.
 
@@ -377,11 +383,28 @@ Question cards route answers to the child run that asked. Tool approval cards al
 
 ### Assembly and review
 
-After child subtasks settle, the coordinator assembles the collective output. During **Awaiting assembly** or **Assembling**, the page shows **Assembling collective output...** and explains that subtasks are complete and the coordinator is integrating their outputs for collective review.
+After child subtasks settle, the coordinator assembles the collective output. During **Awaiting assembly**, **Assembling**, **RAI review**, or **Build & Test**, the page shows progress through the assembly nodes and explains that subtasks are complete and the coordinator is integrating their outputs for collective review. The `coordinator.assembly_review_requested` event can appear for automated gates (`gateKind: "build-test"` or `"rubberduck"`) as well as human review; only `gateKind: "human-review"` (or an older event with no `gateKind`) is treated as action-required for the user.
 
-During **In review**, the page shows a warning that review is pending and directs the user to the Changes panel. The review stage node in the graph also surfaces a primary **Review now** button while review is action-required; clicking it opens the artifacts/review panel (the same Changes/Files modal) so the user can jump straight from the topology into the collective assembly output. The Changes/Files experience is reused for the coordinator's collective assembly output. Approve, request a change, or decline actions go to the assembly review gate, not to individual children.
+When any correction feedback arrives, the revision loop is visible instead of looking like a stalled graph. The timeline first shows `coordinator.steering_received` with the source, then `coordinator.steering_decision` with the coordinator's chosen effect and rationale. **Steered in place** means the existing child session resumes with context preserved; **Fresh dispatch** means the coordinator deliberately chose a reset and new child work. See [Unified autonomous steering](./unified-steering.md).
 
-If assembly blocks or fails, the page explains why. It can show conflict files, blocking subtasks, status badges, and hints such as re-running affected subtasks or stopping the run. The important UX rule is that the user gets a reason and a recovery surface, not a bare failed state.
+For automated gate feedback, the retry is warmer than a fresh assembly. If Build & Test or Rubberduck asks
+for changes, the coordinator keeps the Build & Test pod and detached integration worktree while it
+re-dispatches the affected subtasks. When assembly reaches Build & Test again, it reuses that same
+run-bound pod/worktree instead of releasing resources and cold-launching a replacement. As an operator, that
+means previews and gate context survive the request-changes cycle, and a second pass reuses the warm
+pod instead of waiting for Kubernetes to schedule a replacement AgentHost pod.
+
+During **In review**, the page clearly marks that human review is pending and directs the user to the Changes panel. The review stage node in the graph also surfaces a primary **Review now** button while review is action-required; clicking it opens the artifacts/review panel (the same Changes/Files modal) so the user can jump straight from the topology into the collective assembly output. The Changes/Files experience is reused for the coordinator's collective assembly output. Approve, request a change, or decline actions go to the assembly review gate, not to individual children.
+
+If assembly blocks or fails, the page explains why. It can show conflict files, blocking subtasks, status
+badges, and hints such as re-running affected subtasks or stopping the run. Build & Test infrastructure
+blocks now include structured failure details in the event payload — `detail`, `exceptionMessage`,
+`innerExceptionMessage`, `innerExceptionType`, and `infrastructureReason` — so the timeline and events API
+can show the real AgentHost launch or transport root cause instead of a generic
+`agenthost_launch_failed`. Retryable `coordinator.assembly_blocked` events keep the stream alive for
+recovery; terminal `coordinator.assembly_failed` events still close the stream, but replay drains all
+persisted diagnostics first. The important UX rule is that the user gets a reason and a recovery surface,
+not a bare failed state.
 
 ### Stall diagnostics
 
@@ -469,7 +492,9 @@ The run page now makes the whole work plan visible after decomposition. Once `co
 
 The right-side Agents area is now a selected-task readout. It includes the coordinator root, the outcome/work-plan nodes, every planned subtask, and assembly stages. Planned subtasks are selectable even before they have a child run; their Changes and Files tabs explain that artifacts appear after dispatch (`CoordinatorRunPage.tsx:2702`; `apps/web/src/components/AgentSessionPanel.tsx:1640`).
 
-The message stream is quieter by default. High-signal coordinator updates remain visible, while system prompt scaffolding, raw activity details, tool calls, and file rows sit behind technical-detail toggles (`apps/web/src/components/AgentSessionPanel.tsx:740`, `:2160`). Subtask activity lines include the task title, assigned agent, role, and failure reason when those fields are present in `subtask.*` payloads or the work-plan event (`AgentSessionPanel.tsx:1314`, `:1360`).
+The run tree order is deterministic. Rows sort by workflow stage rank, then by numeric subtask id, then by label/position as tie-breakers: **Work plan**, **Outcome plan**, subtasks, **RAI**, **Build & Test**, **Human Review**, **Merge**, and **Scribe** (`apps/web/src/pages/CoordinatorRunPage.tsx:1933`, `:1951`, `:3155`). This avoids apparent reordering caused by event arrival or graph layout.
+
+The message stream is quieter by default. High-signal coordinator updates remain visible, while system prompt scaffolding, internal assembly-gate prompts, raw activity details, tool calls, and file rows sit behind technical-detail toggles (`apps/web/src/components/AgentSessionPanel.tsx:740`, `:2388`). Outcome-plan JSON in the stream is formatted as readable fields and attributed to **Coordinator (Outcome plan)**, and placeholder RAI rationales are hidden (`AgentSessionPanel.tsx:777`, `:805`, `:1438`).
 
 Steering now happens from the selected-task panel. Selecting the outcome plan focuses the clarification composer; selecting a subtask opens that task's transcript, files, and follow-up surface (`CoordinatorRunPage.tsx:2866`, `:2880`, `:3758`).
 
@@ -481,6 +506,6 @@ The UI can also distinguish the terminal stage and reason for parked assembly st
 
 ## Preview-first delivery
 
-For runnable work, the coordinator should make the review hand-off inspectable, not just readable. Workflows with the platform-owned `build_test` gate use that gate as the primary mechanism: it builds, tests, starts web/service artifacts, observes the actual bound port, verifies the server, and registers the sandbox preview through `start_preview(port=PORT)`.
+For runnable work, the coordinator should make the review hand-off inspectable, not just readable. Workflows with the platform-owned `build_test` gate use that gate as the primary mechanism: it builds, tests, starts web/service artifacts, observes the actual bound port, verifies the server, and registers the sandbox preview through `start_preview(port=PORT)`. The run tree ties that preview URL to the Build & Test assembly node and clears stale preview sessions when a newer run/gate replaces them, so users do not confuse an old preview with the current candidate.
 
 When a runnable subtask is outside that gate, the coordinator includes preview intent in the OutcomeSpec confirmation, dispatches the child with instructions to start and verify the app in its sandbox, and asks the child to include the preview URL in its completion message. The assembled review output should surface all reported URLs near the top in a `Live Previews` table with agent, URL, port, and description. If the sandbox backend cannot provide previews, the assembled output should include local run instructions instead.

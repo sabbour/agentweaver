@@ -51,6 +51,11 @@ public static class CoordinatorRecoveryRouter
             WorkPlanStatus.Dispatching => CoordinatorRecoveryAction.Dispatch,
             WorkPlanStatus.AwaitingAssembly => CoordinatorRecoveryAction.Assemble,
             WorkPlanStatus.Assembling => CoordinatorRecoveryAction.ReArmAssembly,
+            // UNIFIED AUTONOMOUS STEERING (rev8 §3b): a crash while the inline decider held the
+            // AssemblySteering decision lease must re-enter the assembly boundary (which re-hits the
+            // gate and re-invokes the decider) — NEVER fall through to the Dispatch default, which
+            // would wrongly dispatch instead of re-deciding the queued steering signal.
+            WorkPlanStatus.AssemblySteering => CoordinatorRecoveryAction.ReArmAssembly,
             WorkPlanStatus.InReview => CoordinatorRecoveryAction.ReArmAssembly,
             WorkPlanStatus.Complete => CoordinatorRecoveryAction.SettleComplete,
             WorkPlanStatus.AssemblyBlocked => CoordinatorRecoveryAction.SettleFailed,

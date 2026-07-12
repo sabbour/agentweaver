@@ -168,6 +168,28 @@ const useStyles = makeStyles({
 /** Characters shown before the "show more" truncation affordance (Y-1). */
 const DISPLAY_MAX = 50_000;
 
+function formatOutcomeSpecJson(content: string): string | null {
+  const trimmed = content.trim();
+  if (!trimmed.startsWith('{') || !/"desired_outcome"|"desiredOutcome"/.test(trimmed)) return null;
+  try {
+    const parsed = JSON.parse(trimmed) as Record<string, unknown>;
+    const desiredOutcome = parsed['desired_outcome'] ?? parsed['desiredOutcome'];
+    const scope = parsed['scope'];
+    const sections = [
+      '### Outcome plan',
+      typeof desiredOutcome === 'string' && desiredOutcome.trim()
+        ? `**Desired outcome:**\n\n${desiredOutcome.trim()}`
+        : null,
+      typeof scope === 'string' && scope.trim()
+        ? `**Scope:**\n\n${scope.trim()}`
+        : null,
+    ].filter(Boolean);
+    return sections.length > 1 ? sections.join('\n\n') : null;
+  } catch {
+    return null;
+  }
+}
+
 // SECURITY: custom link renderer forces safe external-link attributes.
 // This prevents target="_blank" without rel="noopener noreferrer" (reverse tabnapping).
 function SafeLink({ href, children }: ComponentProps<'a'>) {
@@ -215,7 +237,8 @@ export const AgentMessageBubble = memo(function AgentMessageBubble({
   }
 
   const isTruncated = content.length >= DISPLAY_MAX;
-  const displayContent = isTruncated ? content.slice(0, DISPLAY_MAX) : content;
+  const formattedOutcomeSpec = !showCursor ? formatOutcomeSpecJson(content) : null;
+  const displayContent = formattedOutcomeSpec ?? (isTruncated ? content.slice(0, DISPLAY_MAX) : content);
 
   return (
     // aria-label on wrapper; aria-live scoped to inner text only when streaming (§6.3, fix #6)

@@ -38,7 +38,7 @@ For simpler tasks that don't need a full team, start a single-agent run by selec
 
 ### Preview your work
 
-Runnable outputs are most useful when reviewers can open them live. Software delivery and bug-fix workflows include a platform `build_test` gate that builds, tests, starts web/service artifacts when applicable, verifies the actual bound port, and registers a sandbox preview with `start_preview(port=PORT)`.
+Runnable outputs are most useful when reviewers can open them live. Software delivery and bug-fix workflows include a platform `build_test` gate that runs after RAI and before human review. It builds, tests, starts web/service artifacts when applicable, verifies the actual bound port, and registers a sandbox preview with `start_preview(port=PORT)`.
 
 For direct agent runs or custom workflows without that gate, ask the agent to build and start the app inside its sandbox, use or discover a non-conflicting port such as 8080, 3000, or 5000, verify it responds, call `start_preview(port=PORT)`, and include the preview URL in its completion message. On non-Kubernetes backends, the agent should provide local run instructions instead.
 
@@ -67,7 +67,7 @@ The coordinator will not start any agent work until you explicitly confirm the O
 Once you confirm the spec, the coordinator:
 
 1. Decomposes the OutcomeSpec into a **WorkPlan** — a dependency graph of subtasks
-2. Assigns each subtask to the best-fit agent and selects a model per task based on complexity
+2. Assigns each subtask to the best-fit agent and selects a model — an explicit run `modelId` (or the project's GitHub Copilot default) pins every subtask; otherwise each subtask uses its role's default model
 3. Dispatches independent subtasks in parallel; dependent ones run in series
 
 You see the **topology view** — a live graph of the entire orchestration.
@@ -118,7 +118,7 @@ For standalone single-agent runs, the full pipeline is:
 Agent → RAI → Human Review → Merge → Scribe
 ```
 
-RAI, Human Review, Merge, and Scribe run once on the **combined** output of all child agents — not per subtask.
+RAI, Build & Test, Human Review, Merge, and Scribe run once on the **combined** output of all child agents — not per subtask. In the built-in software workflows, Build & Test runs after RAI and before Human Review.
 
 Loopback edges appear when RAI or a reviewer requests changes and the agent needs to revise.
 

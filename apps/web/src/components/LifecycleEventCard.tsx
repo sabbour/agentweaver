@@ -23,6 +23,11 @@ import {
   ShieldRegular,
   TaskListSquareLtrRegular,
   WarningFilled,
+  ArrowRoutingRegular,
+  ArrowSyncRegular,
+  RocketRegular,
+  ArrowForwardRegular,
+  InfoRegular,
 } from '@fluentui/react-icons';
 import { memo, useEffect, useState } from 'react';
 import type { RunStreamEvent } from '../api/sse';
@@ -266,7 +271,63 @@ const useStyles = makeStyles({
   },
 });
 
-type BadgeColor = 'success' | 'warning' | 'danger' | 'subtle';
+type BadgeColor = 'success' | 'warning' | 'danger' | 'subtle' | 'informative';
+
+// Human-readable label for the ORIGIN of a steering signal so every steering
+// action names WHO/WHAT triggered it (Ahmed: nothing should feel like a glitch).
+function steeringSourceLabel(source: string): string {
+  switch (source) {
+    case 'human-review':
+    case 'human_review':
+    case 'human': return 'human review';
+    case 'rai': return 'RAI review';
+    case 'rubberduck':
+    case 'rubber-duck': return 'rubber-duck review';
+    case 'build-test':
+    case 'build_test': return 'build/test gate';
+    case 'agent': return 'an agent';
+    case 'coordinator': return 'the coordinator';
+    case 'step': return 'a workflow step';
+    default: return source || 'an unknown source';
+  }
+}
+
+// Plain-language rendering of the coordinator's conscious A/B/C/D choice. The
+// `decision` strings are the EXACT backend SteeringDirection constants emitted on
+// coordinator.steering_decision: 'in_place_steer' | 'dispatch_fresh' | 'proceed' |
+// 'advisory'. `dispatch_fresh` (B) is deliberately loud + rocket-iconed so a fresh
+// re-dispatch reads as an explained decision, never an unexplained "glitch".
+function steeringDecisionMeta(decision: string): { icon: React.ReactNode; label: string; verb: string; badgeColor: BadgeColor } {
+  switch (decision) {
+    case 'in_place_steer':
+      return { icon: <ArrowSyncRegular aria-hidden="true" />, label: 'steered in place', verb: 'Steered in place (context preserved)', badgeColor: 'informative' };
+    case 'dispatch_fresh':
+      return { icon: <RocketRegular aria-hidden="true" />, label: 'fresh dispatch', verb: 'Dispatched fresh subtask', badgeColor: 'warning' };
+    case 'proceed':
+      return { icon: <ArrowForwardRegular aria-hidden="true" />, label: 'proceeded', verb: 'Proceeded to review', badgeColor: 'informative' };
+    case 'advisory':
+      return { icon: <InfoRegular aria-hidden="true" />, label: 'advisory noted', verb: 'Advisory noted (no action taken)', badgeColor: 'subtle' };
+    default:
+      return { icon: <ArrowRoutingRegular aria-hidden="true" />, label: 'steering decision', verb: decision ? `Decision: ${decision}` : 'Steering decision', badgeColor: 'informative' };
+  }
+}
+
+// Builds the "→ subtask a, b (attempt N)" tail shown on a decision so the target
+// and attempt are always visible.
+function steeringTargetSuffix(p: Record<string, unknown>): string {
+  const rawIds = p['subtaskIds'] ?? p['targetSubtaskIds'] ?? p['redispatchedSubtaskIds'] ?? p['redispatchSubtaskIds'];
+  const ids = Array.isArray(rawIds) ? (rawIds as unknown[]).map((v) => String(v)).filter(Boolean) : [];
+  let suffix = '';
+  if (ids.length > 0) {
+    const shown = ids.slice(0, 3).join(', ');
+    suffix += ` → subtask${ids.length === 1 ? '' : 's'} ${shown}${ids.length > 3 ? ` +${ids.length - 3} more` : ''}`;
+  }
+  const attempt = p['attempt'] ?? p['attemptNumber'] ?? p['iteration'];
+  if (attempt !== undefined && attempt !== null && String(attempt).length > 0) {
+    suffix += ` (attempt ${String(attempt)})`;
+  }
+  return suffix;
+}
 
 function lifecycleProps(event: RunStreamEvent, runOutcome?: { achieved: boolean; reason: string }): {
   icon: React.ReactNode;
@@ -531,14 +592,47 @@ function lifecycleProps(event: RunStreamEvent, runOutcome?: { achieved: boolean;
         summary: String(p['reason'] ?? 'Coordinator failed; review remains available'),
         badgeColor: 'warning',
       };
-    case 'coordinator.assembly_changes_requested': {
-      const rawIds = p['redispatchedSubtaskIds'] ?? p['redispatchSubtaskIds'];
-      const ids = Array.isArray(rawIds) ? (rawIds as unknown[]).length : 0;
+    case 'coordinator.steering_received': {
+      const source = steeringSourceLabel(String(p['source'] ?? ''));
+      const severity = String(p['severity'] ?? '');
+      const feedback = String(p['feedback'] ?? p['reason'] ?? p['summary'] ?? '');
+      const scope = String(p['targetScope'] ?? '');
+      let summary = `Steering signal received from ${source}`;
+      if (severity) summary += ` · ${severity}`;
+      if (scope) summary += ` · ${scope}`;
+      if (feedback) summary += `: ${feedback.slice(0, 160)}`;
       return {
-        icon: <WarningFilled aria-hidden="true" />,
-        label: 'changes requested',
-        summary: `Re-dispatching ${ids} subtask${ids === 1 ? '' : 's'}`,
-        badgeColor: 'warning',
+        icon: <ArrowRoutingRegular aria-hidden="true" />,
+        label: 'steering received',
+        summary,
+        badgeColor: severity === 'blocking' ? 'warning' : 'informative',
+      };
+    }
+    case 'coordinator.steering_decision': {
+      const meta = steeringDecisionMeta(String(p['decision'] ?? ''));
+      const rationale = String(p['rationale'] ?? p['reason'] ?? p['summary'] ?? '');
+      let summary = meta.verb + steeringTargetSuffix(p);
+      if (rationale) summary += ` — because: ${rationale.slice(0, 200)}`;
+      return {
+        icon: meta.icon,
+        label: meta.label,
+        summary,
+        badgeColor: meta.badgeColor,
+      };
+    }
+    case 'coordinator.assembly_changes_requested': {
+      // COMPAT ALIAS for the legacy re-dispatch event. Render it with the SAME
+      // steering visual treatment as coordinator.steering_decision{dispatch_fresh}
+      // so the old re-dispatch reads as an explained decision, not a glitch.
+      const meta = steeringDecisionMeta('dispatch_fresh');
+      const rationale = String(p['reason'] ?? p['feedback'] ?? p['summary'] ?? '');
+      let summary = meta.verb + steeringTargetSuffix(p);
+      if (rationale) summary += ` — because: ${rationale.slice(0, 200)}`;
+      return {
+        icon: meta.icon,
+        label: meta.label,
+        summary,
+        badgeColor: meta.badgeColor,
       };
     }
     case 'coordinator.assembly_merge_started':

@@ -6,7 +6,7 @@ internal static class WorkflowGatePromptGuidance
     public const string SoftwareBuildTestRequirement = """
         MANDATORY BUILD & TEST STEP (software workflows): For any software-oriented workflow — one that
         implements, fixes, refactors, or otherwise changes code (bug fix, feature delivery, refactor,
-        etc.) — you MUST include a build_test gate IMMEDIATELY before the human-review gate. This gate
+        etc.) — you MUST include a build_test gate after any RAI safety check and IMMEDIATELY before the human-review gate. This gate
         is static, platform-owned, and always-on; never omit it, never make it optional, and never add
         an inline prompt. Wire it exactly as:
           - id: build-test
@@ -17,9 +17,10 @@ internal static class WorkflowGatePromptGuidance
         Route its verdicts: `when: approved` advances to the human-review gate; `when: request-changes`
         loops back to the implementation node (e.g. implement/fix); `when: declined` goes to a terminal.
         If a software workflow has no human-review gate, add one (a `check` node with
-        `gate_kind: human-review`) placed immediately after build-test. Consider adding `rai` before
-        human review for safety-sensitive work and `rubberduck` before human review for code-quality
-        critique. Non-software
+        `gate_kind: human-review`) placed immediately after build-test. The build & test gate must run
+        after the RAI safety check whenever an RAI gate is present; never place RAI after build_test.
+        Consider adding `rai` before build_test for safety-sensitive work and `rubberduck` before
+        build_test for code-quality critique. Non-software
         workflows (pure content authoring, discovery, incident response, evaluation) do NOT need this step.
         """;
 
@@ -28,7 +29,7 @@ internal static class WorkflowGatePromptGuidance
         - `build_test` is the platform-owned Build & Test gate that also lights up preview. For any
           blueprint whose deliverable is buildable/runnable software — app, service, library, feature,
           bug fix, refactor, or other code change — the selected/generated workflow MUST include the
-          mandatory build_test gate immediately before human review.
+          mandatory build_test gate after any RAI safety check and immediately before human review.
         - `rai` is a `check` gate_kind for responsible-AI safety review. Include it for safety-sensitive
           work, user-facing content, policy/compliance-sensitive decisions, or workflows that could affect
           users if the output is unsafe.

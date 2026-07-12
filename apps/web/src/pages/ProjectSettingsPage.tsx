@@ -532,7 +532,7 @@ export function ProjectSettingsPage() {
                       id="project-settings-copilot-model"
                       value={copilotModel}
                       onChange={(_, v) => setCopilotModel(v.value)}
-                      placeholder="e.g. gpt-4o"
+                      placeholder="Auto (coordinator picks) — e.g. claude-sonnet-4.6"
                     />
                   </Field>
                   <div className={styles.formActions}>

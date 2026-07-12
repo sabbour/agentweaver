@@ -202,8 +202,7 @@ back when it's waiting."** Concretely:
   including instability in the experimental transport — flipping back to `in-api` restores in-process
   execution immediately, no redeploy. `Sandbox:ReleasePodOnSuspend` (default on) tunes whether pods are
   released during suspensions.
-- **Capacity is AgentHost pool + quota.** More concurrent runs means more claimed AgentHost pods; the `agentweaver-agent-host` pool keeps 2 run pods pre-warmed, while the namespace `ResourceQuota` (pod count, CPU/memory, sandbox-claim count) bounds how many runs can execute at once. Heavier per-pod agent runtimes mean these caps must be raised deliberately in the
-  manifests, not patched live. See [Operations](./operations.md) and the
+- **Kubernetes owns scheduling; the platform does not pre-gate on quota.** More concurrent runs means more claimed AgentHost pods; the `agentweaver-agent-host` pool keeps 2 run pods pre-warmed. The platform no longer checks quota headroom before a launch — it submits the `SandboxClaim` and waits for Kubernetes to schedule and bind the pod, so a **Pending** pod is an expected transient state (a node is freeing up or `katapool` is autoscaling), not a failure. The namespace `ResourceQuota` bounds only object counts (pod count, sandbox-claim count, PVCs, storage) — it no longer caps CPU/memory, and those counts are raised deliberately in the manifests, not patched live. See [Operations](./operations.md) and the
   [reference](../reference/sandbox-pods.md#pod-identity-and-quota).
 - **The isolation backend is chosen per host.** Independently of pod-per-run, every host selects one
   command-isolation backend at run start and announces it with a `sandbox.selected` event (`backend`,

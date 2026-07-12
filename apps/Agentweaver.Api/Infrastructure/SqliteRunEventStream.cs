@@ -40,6 +40,7 @@ public sealed class SqliteRunEventStream : IRunEventStream
         EventTypes.MergeFailed,
         EventTypes.ReviewDeclined,
         EventTypes.RunAssembleReady,
+        EventTypes.CoordinatorAssemblyFailed,
     };
 
     private static readonly IReadOnlyDictionary<string, Type> PayloadTypes = new Dictionary<string, Type>(StringComparer.Ordinal)
@@ -78,16 +79,25 @@ public sealed class SqliteRunEventStream : IRunEventStream
     /// <inheritdoc />
     public ValueTask AppendAsync(string runId, RunEvent evt, CancellationToken ct = default)
     {
-        if (_completedRuns.ContainsKey(runId))
-        {
-            _logger?.LogWarning("Discarding event {EventType} for completed run {RunId}", evt.Type, runId);
+        // #239 companion hardening: once a run is completed, drop streaming AgentMessageDelta events —
+        // a straggling delta arriving after the terminal must never re-persist and re-drive the run.
+        // ONLY agent.message.delta is dropped; every terminal/diagnostic/final-message/tool/usage/
+        // subtask/topology event still persists post-terminal (durable audit + gapless replay).
+        if (_completedRuns.ContainsKey(runId) && evt.Type == EventTypes.AgentMessageDelta)
             return ValueTask.CompletedTask;
-        }
 
         // Layer 1: synchronous, durable write-through BEFORE the channel publish so the event is
         // crash-safe before any live subscriber observes it. Honors a pre-assigned sequence when
         // present (idempotent via the unique (RunId, Sequence) index), otherwise assigns MAX+1.
         var sequence = WriteThrough(runId, evt, ct);
+
+        if (_completedRuns.ContainsKey(runId))
+        {
+            _logger?.LogWarning(
+                "Persisted late event {EventType} for completed run {RunId}; live channel remains closed",
+                evt.Type, runId);
+            return ValueTask.CompletedTask;
+        }
 
         // Layer 2: publish to the live channel. TryWrite never blocks; if the bounded channel is
         // full (slow/absent consumer) the live copy is dropped — it stays durable in SQLite.
@@ -126,13 +136,15 @@ public sealed class SqliteRunEventStream : IRunEventStream
 
         // 2. Replay persisted events from the cursor.
         var lastReplayed = fromSequence;
-        foreach (var evt in LoadFromSequence(runId, fromSequence, ct))
+        var replayBatch = LoadFromSequence(runId, fromSequence, ct).ToList();
+        foreach (var evt in replayBatch)
         {
             yield return evt;
             lastReplayed = evt.Sequence;
-            if (TerminalTypes.Contains(evt.Type))
-                yield break; // Completed run: replay history, then terminate cleanly.
         }
+
+        if (ShouldStopAfterReplayBatch(replayBatch))
+            yield break; // Completed/parked run: drain durable diagnostics, then terminate cleanly.
 
         if (channel is null)
             yield break;
@@ -148,6 +160,21 @@ public sealed class SqliteRunEventStream : IRunEventStream
             if (TerminalTypes.Contains(evt.Type))
                 yield break;
         }
+    }
+
+    private static bool ShouldStopAfterReplayBatch(IReadOnlyList<RunEvent> events)
+    {
+        var terminalIndex = -1;
+        for (var i = 0; i < events.Count; i++)
+        {
+            if (TerminalTypes.Contains(events[i].Type))
+                terminalIndex = i;
+        }
+
+        if (terminalIndex < 0)
+            return false;
+
+        return true;
     }
 
     /// <inheritdoc />

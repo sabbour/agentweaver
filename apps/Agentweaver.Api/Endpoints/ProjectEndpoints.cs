@@ -433,6 +433,7 @@ app.MapPost("/api/projects/{id}/orchestrations", async (
     IProjectStore projectStore,
     IProjectWorkspaceProvider workspaceProvider,
     CoordinatorRunService coordinator,
+    ILogger<Program> logger,
     CancellationToken ct) =>
 {
     if (!ProjectId.TryParse(id, out var projectId))
@@ -466,18 +467,31 @@ app.MapPost("/api/projects/{id}/orchestrations", async (
         ? project.ProviderSettings.GitHubCopilotModel
         : request.ModelId;
 
-    var runId = await coordinator.StartCoordinatorRunAsync(
-        projectId,
-        request.Goal!,
-        caller.User,
-        project.WorkingDirectory,
-        project.DefaultBranch,
-        modelId,
-        request.AutoApproveTools,
-        request.Autopilot,
-        ct,
-        workflowOverrideId: request.WorkflowOverrideId,
-        startMode: startMode);
+    RunId runId;
+    try
+    {
+        runId = await coordinator.StartCoordinatorRunAsync(
+            projectId,
+            request.Goal!,
+            caller.User,
+            project.WorkingDirectory,
+            project.DefaultBranch,
+            modelId,
+            request.AutoApproveTools,
+            request.Autopilot,
+            ct,
+            workflowOverrideId: request.WorkflowOverrideId,
+            startMode: startMode);
+    }
+    catch (NoTeamException)
+    {
+        return Results.Conflict(new { error = NoTeamException.ErrorCode, message = NoTeamException.DefaultMessage });
+    }
+    catch (InvalidTeamException ex)
+    {
+        logger.LogError(ex, "Failed to read dispatchable team roster for project {ProjectId}", projectId);
+        return Results.UnprocessableEntity(new { error = InvalidTeamException.ErrorCode, message = InvalidTeamException.DefaultMessage });
+    }
 
     return Results.Created(
         $"/api/runs/{runId}",

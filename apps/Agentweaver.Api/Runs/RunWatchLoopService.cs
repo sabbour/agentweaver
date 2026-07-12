@@ -295,6 +295,24 @@ public sealed class RunWatchLoopService
 
                 case ExecutorFailedEvent failed:
                     EmitExecutorStep(runId, entry, failed.ExecutorId, "failed");
+                    // STRUCTURAL ROOT CAUSE (in-place steering revision wedge): an executor throw
+                    // halts the MAF workflow and yields NO WorkflowOutputEvent. The trimmed
+                    // coordinator CHILD graph (agent -> child-assemble-ready) has no failure->terminal
+                    // edge, so without this the stream would simply END with no terminal and the run
+                    // would be failed as `watch_stream_completed_without_terminal_event` — fragile,
+                    // uninformative, and only via the stream-end fallback. Terminalize a CHILD run as
+                    // a VISIBLE Failure immediately so: (a) the watcher ALWAYS produces a terminal
+                    // after an executor failure (never a hung stream), and (b) the subtask is marked
+                    // Failed, so the coordinator's failed-target path consciously re-dispatches the
+                    // revision (steering feedback preserved) rather than losing the work. Scoped to
+                    // child runs: the child pipeline is strictly linear, so an executor failure there
+                    // is definitively terminal (no fan-out/recovery node could still emit output).
+                    if (await IsChildRunAsync(runId, ct).ConfigureAwait(false))
+                    {
+                        await FailRunSafeAsync(
+                            runId, entry, $"child_executor_failed:{failed.ExecutorId}").ConfigureAwait(false);
+                        return;
+                    }
                     break;
 
                 case RequestInfoEvent rie:
@@ -596,6 +614,28 @@ public sealed class RunWatchLoopService
             return true;
         }
 
+        // Coordinator CHILD run graph-native failure terminal (FIX 2): the child's agent turn ended
+        // cleanly but the POST-TURN commit failed persistently. This is a VISIBLE run failure (never a
+        // fabricated no-change success), delivered as a single WorkflowOutputEvent via the child graph's
+        // conditional failure->terminal edge — so the watcher NEVER falls to
+        // `watch_stream_completed_without_terminal_event`. Marking the run Failed marks the subtask
+        // Failed, so the coordinator consciously re-dispatches the revision (steering feedback +
+        // branch/session preserved) rather than losing the work inside a hung stream. The worktree is
+        // preserved (no cleanup) so the re-dispatch/handoff can build on the prior work.
+        if (woe.Is<ChildTurnFailedOutput>(out var childFailed))
+        {
+            var changed = await _runStore.TrySetTerminalStatusAsync(
+                parsedRunId, RunStatus.Failed, now, childFailed.Reason, CancellationToken.None).ConfigureAwait(false);
+
+            EmitTerminalMetrics(currentRun, now, "failed", childFailed.Reason, changed);
+            if (!entry.HasEventType(EventTypes.RunFailed))
+                entry.RecordNext(EventTypes.RunFailed, new { reason = childFailed.Reason, evidence = childFailed.Evidence });
+
+            _streamStore.Complete(runId);
+            _ = _factory.PersistRunEventsAsync(runId);
+            return true;
+        }
+
         if (woe.Is<DeclinedOutput>())
         {
             var changed = await _runStore.TrySetTerminalStatusAsync(
@@ -667,6 +707,20 @@ public sealed class RunWatchLoopService
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Best-effort worktree cleanup failed for run {RunId}", runId);
+        }
+    }
+
+    private async Task<bool> IsChildRunAsync(string runId, CancellationToken ct)
+    {
+        try
+        {
+            var run = await _runStore.GetAsync(RunId.Parse(runId), ct).ConfigureAwait(false);
+            return run?.ParentRunId is not null;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Could not determine child-run status for {RunId}; treating as non-child", runId);
+            return false;
         }
     }
 

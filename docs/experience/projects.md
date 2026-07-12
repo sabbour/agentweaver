@@ -342,7 +342,7 @@ MCP equivalent: `project_rename`.
 
 #### Default model
 
-**Default model** sets the model used by default for future runs. In the web UI, the field is **GitHub Copilot model** with placeholder **e.g. gpt-4o**. Success shows **Model settings saved.**
+**Default model** sets the model used by default for future runs. In the web UI, the field is **GitHub Copilot model** and is free-text — enter any model id from the GitHub Copilot catalog (e.g. `claude-sonnet-4.6`). Leave the field **empty** to use "Auto (coordinator picks)": the coordinator selects a model per subtask using per-role defaults, and different subtasks may use different models. Success shows **Model settings saved.**
 
 MCP equivalent: `project_configure`.
 

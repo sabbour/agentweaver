@@ -48,6 +48,10 @@ features:
     linkText: See it in action
   - title: Persistent team memory
     details: Agents build on prior work through four memory layers — decisions, core context, learnings, and open session. A Scribe records what the team learned after every run.
+  - title: Resilient assembly-review loop
+    details: Assembly runs no longer dead-end. When the autonomous steering budget is exhausted, the run escalates to the human-review gate automatically — assembled work is immediately reviewable and never parked forever.
+    link: /experience/resilient-assembly-review
+    linkText: See it in action
   - title: Sandbox browser preview
     details: When an agent starts a dev server inside its isolated Kubernetes sandbox pod, open a live browser preview of it from the run view — a port-forward tunnel scoped to that one run's pod, with no egress widening. <a href="/docs/experience/sandbox-browser-preview">See it in action →</a>
   - title: "AI credit and token usage monitoring"

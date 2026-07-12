@@ -20,8 +20,12 @@ public sealed record Project
     public bool PickupAutopilot { get; init; } = true;
 
     /// <summary>Auto-approve allow-with-approval tools ONLY on heartbeat-created runs; never the
-    /// destructive/irreversible safety floor (Principle X). Default off.</summary>
-    public bool PickupAutoApproveTools { get; init; } = false;
+    /// destructive/irreversible safety floor (Principle X). Default ON: backlog pickup is unattended
+    /// by definition (PickupAutopilot defaults on), so a child needing an allow-with-approval tool
+    /// (e.g. web_fetch) would otherwise stall forever with no operator to answer and fail the run.
+    /// The destructive/irreversible tool floor stays enforced regardless, so only reversible
+    /// allow-with-approval tools are auto-granted here.</summary>
+    public bool PickupAutoApproveTools { get; init; } = true;
 
     /// <summary>
     /// The project's default workflow, referenced by workflow id/name (Feature 010, FR-041). Selects

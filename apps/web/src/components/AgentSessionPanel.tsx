@@ -1,6 +1,5 @@
-import { apiClient } from '../api/apiClient';
-import { formatApiErrorMessage } from '../api/errors';
-import { useRunStream } from '../api/sse';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { ReactNode } from 'react';
 import {
   Button,
   MessageBar,
@@ -19,23 +18,27 @@ import {
   DismissCircleFilled,
   DismissRegular,
 } from '@fluentui/react-icons';
-import { ApprovalGate } from './ui/agentic';
-import { Composer } from './ui/copilot';
-import { AutomationToggle } from './AutomationToggle';
-import { AUTOMATION_HELP } from './automationHelp';
+import { apiClient } from '../api/apiClient';
+import { formatApiErrorMessage } from '../api/errors';
+import { useRunStream } from '../api/sse';
+import type { EventType, RunStreamEvent } from '../api/sse';
+import type { RaiVerdictEventPayload, RaiVerdictToken } from '../api/types';
 import { useArtifactBrowser } from '../hooks/useArtifactBrowser';
+import type { ArtifactBrowserAdapter } from '../hooks/useArtifactBrowser';
 import { mergeRunEvents as sharedMergeRunEvents, SEED_STATUSES } from '../timeline/mergeRunEvents';
+import { isSerializedWorkPlan } from '../timeline/coordinatorPlanFilter';
 import { deriveHumanTitle } from '../timeline/reducer';
+import { buildRunTimeline } from '../timeline/runTimelineSteps';
+import type { RunTimelineModel, RunTimelineStep } from '../timeline/runTimelineSteps';
 import { AgentAvatar } from './AgentAvatar';
 import { AiCredits } from './AiCredits';
+import { AutomationToggle } from './AutomationToggle';
+import { AUTOMATION_HELP } from './automationHelp';
 import { FileViewerModal } from './FileViewerModal';
 import { OutcomePlanPanel } from './OutcomePlanPanel';
 import { RunTimeline } from './RunTimeline';
-import { buildRunTimeline } from '../timeline/runTimelineSteps';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { ReactNode } from 'react';
-import type { EventType, RunStreamEvent } from '../api/sse';
-import type { ArtifactBrowserAdapter } from '../hooks/useArtifactBrowser';
+import { ApprovalGate } from './ui/agentic';
+import { Composer } from './ui/copilot';
 const PANEL_TOP = '48px';
 const useStyles = makeStyles({
   backdrop: {
@@ -339,6 +342,10 @@ const useStyles = makeStyles({
     padding: `0 0 ${tokens.spacingVerticalXS}`,
     backgroundColor: tokens.colorNeutralBackground1,
   },
+  emptyState: {
+    padding: tokens.spacingVerticalXL,
+    color: tokens.colorNeutralForeground3,
+  },
   jumpToLatestBar: {
     position: 'sticky',
     bottom: 0,
@@ -505,11 +512,18 @@ const useStyles = makeStyles({
   },
   activityEventRow: {
     display: 'grid',
-    gridTemplateColumns: 'minmax(0, 1fr) auto',
+    gridTemplateColumns: '1px minmax(0, 1fr) auto',
     alignItems: 'baseline',
     gap: tokens.spacingHorizontalS,
     padding: `${tokens.spacingVerticalXXS} 0 ${tokens.spacingVerticalXXS} 32px`,
     color: tokens.colorNeutralForeground3,
+  },
+  activityRail: {
+    width: '1px',
+    minHeight: '18px',
+    alignSelf: 'stretch',
+    borderRadius: tokens.borderRadiusCircular,
+    backgroundColor: tokens.colorNeutralStroke2,
   },
   activityGroup: {
     display: 'flex',
@@ -607,12 +621,26 @@ const useStyles = makeStyles({
     borderRadius: 0,
     backgroundColor: 'transparent',
   },
+  fileName: {
+    minWidth: 0,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  },
   fileMeta: {
     fontSize: tokens.fontSizeBase100,
     color: tokens.colorNeutralForeground3,
     whiteSpace: 'nowrap',
     overflow: 'hidden',
     textOverflow: 'ellipsis',
+  },
+  fileCardInfo: {
+    display: 'grid',
+    gridTemplateColumns: 'minmax(0, max-content) minmax(0, 1fr)',
+    alignItems: 'baseline',
+    gap: tokens.spacingHorizontalXS,
+    minWidth: 0,
+    flex: 1,
   },
   disclosure: {
     display: 'flex',
@@ -761,6 +789,7 @@ interface ConversationRow {
   role: 'system' | 'user' | 'agent' | 'activity';
   content: string;
   timestamp?: number;
+  authorOverride?: { displayName: string; avatarName: string; roleLabel: string; collapsedLabel?: string };
 }
 
 interface ConversationTool {
@@ -801,6 +830,39 @@ function readString(payload: Record<string, unknown>, keys: string[]): string | 
     if (value != null && String(value).trim() !== '') return String(value);
   }
   return undefined;
+}
+
+interface OutcomeSpecMessage {
+  desiredOutcome?: string;
+  scope?: string;
+}
+
+function parseOutcomeSpecMessage(content: string): OutcomeSpecMessage | null {
+  const trimmed = content.trim();
+  if (!trimmed.startsWith('{') || !/"desired_outcome"|"desiredOutcome"/.test(trimmed)) return null;
+  try {
+    const parsed = JSON.parse(trimmed) as Record<string, unknown>;
+    const desiredOutcome = readString(parsed, ['desiredOutcome', 'desired_outcome']);
+    const scope = readString(parsed, ['scope']);
+    if (!desiredOutcome && !scope) return null;
+    return { desiredOutcome, scope };
+  } catch {
+    return null;
+  }
+}
+
+function formatOutcomeSpecMessage(spec: OutcomeSpecMessage): string {
+  return [
+    '### Outcome plan',
+    spec.desiredOutcome ? `**Desired outcome:**\n\n${spec.desiredOutcome}` : null,
+    spec.scope ? `**Scope:**\n\n${spec.scope}` : null,
+  ].filter(Boolean).join('\n\n');
+}
+
+function normalizeRaiRationale(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed || trimmed === '-' || trimmed === '—' || trimmed === '---') return undefined;
+  return trimmed;
 }
 
 function readTimestamp(evt: RunStreamEvent): number | undefined {
@@ -849,6 +911,7 @@ function isFileWriteTool(toolName: string): boolean {
 }
 
 // A FluentUI glyph that makes the operation type obvious at a glance.
+
 function cleanText(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
   return trimmed ? trimmed : undefined;
@@ -880,15 +943,18 @@ function participantIdentityForNode(item: RunSessionTree | null): ParticipantIde
   };
 }
 
+
 function statusLabel(status: string): string {
   switch (status) {
     case 'drafting_outcome': return 'Drafting outcome plan';
+    case 'revising': return 'Changes requested — revising';
     case 'planning': return 'Planning';
     case 'dispatched': return 'Dispatching';
     case 'running':
     case 'in_progress': return 'Running';
     case 'assemble_ready': return 'Ready for assembly';
     case 'awaiting_assembly': return 'Preparing assembly';
+    case 'awaiting_review': return 'Awaiting review';
     case 'awaiting_confirmation': return 'Awaiting confirmation';
     case 'needs_clarification': return 'Needs clarification';
     case 'confirmed': return 'Confirmed';
@@ -923,7 +989,9 @@ function statusKind(status: string): StatusKind {
     case 'rai_flagged':
     case 'waiting':
     case 'awaiting_confirmation':
+    case 'awaiting_review':
     case 'needs_clarification':
+    case 'revising':
       return 'awaiting';
     case 'running':
     case 'dispatched':
@@ -942,6 +1010,107 @@ function StatusGlyph({ status, className }: { status: string; className?: string
   if (kind === 'awaiting') return <ClockRegular className={className} />;
   if (kind === 'running') return <Spinner size="extra-tiny" className={className} />;
   return <CircleRegular className={className} />;
+}
+
+const TERMINAL_EMPTY_STATUSES = new Set(['completed', 'merged', 'confirmed', 'assemble_ready', 'failed', 'merge_failed', 'declined']);
+
+interface RaiVerdict {
+  verdict?: RaiVerdictToken;
+  rationale?: string;
+}
+
+type RaiVerdictPresentation = {
+  intent: 'success' | 'warning' | 'error' | 'info';
+  label: string;
+  emoji: string;
+};
+
+const RAI_VERDICT_PRESENTATION: Record<RaiVerdictToken, RaiVerdictPresentation> = {
+  red:    { intent: 'error',   label: 'Red',    emoji: '🔴' },
+  revise: { intent: 'warning', label: 'Revise', emoji: '🟡' },
+  yellow: { intent: 'warning', label: 'Yellow', emoji: '🟡' },
+  green:  { intent: 'success', label: 'Green',  emoji: '🟢' },
+};
+
+const UNKNOWN_RAI_VERDICT_PRESENTATION: RaiVerdictPresentation = {
+  intent: 'info',
+  label: 'Unknown',
+  emoji: '⚪',
+};
+
+function parseRaiVerdictToken(value: string | undefined): RaiVerdictToken | undefined {
+  if (value === 'green' || value === 'yellow' || value === 'red' || value === 'revise') return value;
+  return undefined;
+}
+
+function isAssemblyAggregateNode(item: RunSessionTree | FlatTreeNode | null | undefined): boolean {
+  if (!item) return false;
+  const key = `${item.nodeId} ${item.label}`.toLowerCase();
+  return key.includes('assembly-rai')
+    || key.includes('assembly-review')
+    || key.includes('assembly-merge')
+    || key.includes('assembly-scribe')
+    || /\brai\b/.test(key)
+    || key.includes('human review')
+    || /\bmerge\b/.test(key)
+    || /\bscribe\b/.test(key);
+}
+
+function isRaiNode(item: RunSessionTree | FlatTreeNode | null | undefined): boolean {
+  if (!item) return false;
+  const key = `${item.nodeId} ${item.label}`.toLowerCase();
+  return key.includes('assembly-rai') || /\brai\b/.test(key);
+}
+
+function latestRaiVerdict(events: RunStreamEvent[]): RaiVerdict | null {
+  for (let i = events.length - 1; i >= 0; i -= 1) {
+    const evt = events[i];
+    if (evt.type !== 'rai.verdict') continue;
+    const payload = evt.payload as Partial<RaiVerdictEventPayload>;
+    const rawTrafficLight = readString(evt.payload, ['trafficLight', 'traffic_light']);
+    const rawVerdict = typeof payload.verdict === 'string' ? payload.verdict : rawTrafficLight;
+    return {
+      verdict: parseRaiVerdictToken(rawVerdict),
+      rationale: normalizeRaiRationale(typeof payload.rationale === 'string'
+        ? payload.rationale
+        : readString(evt.payload, ['message', 'summary'])),
+    };
+  }
+  return null;
+}
+
+function RaiVerdictCard({ verdict }: { verdict: RaiVerdict }) {
+  const presentation = verdict.verdict
+    ? RAI_VERDICT_PRESENTATION[verdict.verdict]
+    : UNKNOWN_RAI_VERDICT_PRESENTATION;
+  return (
+    <MessageBar intent={presentation.intent} data-testid="rai-verdict-card" data-intent={presentation.intent}>
+      <MessageBarBody>
+        RAI verdict: {presentation.emoji} {presentation.label}
+        {verdict.rationale ? ` — ${verdict.rationale}` : ''}
+      </MessageBarBody>
+    </MessageBar>
+  );
+}
+
+function EmptySessionStatusFallback({ item }: { item: RunSessionTree }) {
+  const styles = useStyles();
+  const label = statusLabel(item.status);
+  const duration = formatNodeDuration(item.startedAt, item.completedAt);
+  const isTerminal = TERMINAL_EMPTY_STATUSES.has(item.status);
+
+  if (!isTerminal) {
+    return <Text className={styles.emptyState}>No streamed messages yet for this session.</Text>;
+  }
+
+  return (
+    <MessageBar intent={statusKind(item.status) === 'danger' ? 'error' : 'success'}>
+      <MessageBarBody>
+        {item.label} {label.toLowerCase()}
+        {duration ? ` in ${duration}` : ''}. No chat messages were emitted for this completed platform gate.
+      </MessageBarBody>
+    </MessageBar>
+  );
 }
 
 function formatNodeDuration(startedAt?: number, completedAt?: number): string | null {
@@ -1046,6 +1215,7 @@ function buildTurns(events: RunStreamEvent[]): ConversationTurn[] {
     if (evt.type === 'agent.message' || evt.type === 'agent.message.delta') {
       const content = readString(evt.payload, ['content', 'delta', 'text']);
       if (!content) continue;
+      if (isSerializedWorkPlan(content)) continue;
       appendAgentText(evt, content);
       continue;
     }
@@ -1100,6 +1270,19 @@ function buildTurns(events: RunStreamEvent[]): ConversationTurn[] {
   // agent.turn.end) is the single event-level active turn — mark it so only
   // its agent row streams. Cleared implicitly on agent.turn.end (current=null).
   if (current) current.open = true;
+  for (const turn of turns) {
+    for (const row of turn.rows) {
+      if (row.role !== 'agent') continue;
+      const outcomeSpec = parseOutcomeSpecMessage(row.content);
+      if (!outcomeSpec) continue;
+      row.content = formatOutcomeSpecMessage(outcomeSpec);
+      row.authorOverride = {
+        displayName: 'Coordinator (Outcome plan)',
+        avatarName: 'Coordinator',
+        roleLabel: 'outcome plan',
+      };
+    }
+  }
   return turns.filter((turn) => turn.rows.length > 0 || turn.toolCalls.length > 0 || turn.approvals.length > 0);
 }
 
@@ -1116,6 +1299,21 @@ function readArray(payload: Record<string, unknown>, keys: string[]): unknown[] 
     if (Array.isArray(value)) return value;
   }
   return undefined;
+}
+
+function readGateKind(payload: Record<string, unknown>): string | undefined {
+  const gateKind = payload['gateKind'] ?? payload['gate_kind'];
+  return gateKind == null ? undefined : String(gateKind).toLowerCase();
+}
+
+function gateLabelForKind(gateKind: string | undefined): string {
+  switch (gateKind) {
+    case 'build-test': return 'Build & Test';
+    case 'rubberduck': return 'Rubberduck';
+    case 'human-review':
+    case undefined: return 'Human Review';
+    default: return gateKind.replace(/[-_]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+  }
 }
 
 function buildSubtaskInfo(events: RunStreamEvent[]): Map<string, SubtaskNarrativeInfo> {
@@ -1164,7 +1362,7 @@ function subtaskDescription(payload: Record<string, unknown>, subtasks: Map<stri
   return `${title}${actor}`;
 }
 
-function coordinatorActivityLine(evt: RunStreamEvent, subtasks: Map<string, SubtaskNarrativeInfo>): string | null {
+function coordinatorActivityLine(evt: RunStreamEvent, subtasks: Map<string, SubtaskNarrativeInfo>, gateLabelBySequence: Map<number, string>): string | null {
   const p = evt.payload;
   switch (evt.type) {
     case 'coordinator.started': {
@@ -1236,8 +1434,12 @@ function coordinatorActivityLine(evt: RunStreamEvent, subtasks: Map<string, Subt
     }
     case 'coordinator.assembly_review_preserved':
       return 'Human review preserved after coordinator failure.';
-    case 'coordinator.assembly_changes_requested':
-      return 'Human review requested changes; coordinator will redispatch affected subtasks.';
+    case 'coordinator.assembly_changes_requested': {
+      const rawIds = readArray(p, ['redispatchedSubtaskIds', 'redispatchSubtaskIds']) ?? [];
+      const gate = gateLabelBySequence.get(evt.sequence) ?? 'Assembly gate';
+      const feedback = readString(p, ['feedback']);
+      return `🔁 ${gate} requested changes → revising ${rawIds.length} subtask${rawIds.length === 1 ? '' : 's'}${feedback ? ` — Feedback: ${feedback}` : ''}.`;
+    }
     case 'coordinator.assembly_merge_started':
       return 'Collective assembly: merge started.';
     case 'coordinator.assembly_merge_completed': {
@@ -1300,14 +1502,51 @@ function coordinatorActivityLine(evt: RunStreamEvent, subtasks: Map<string, Subt
   }
 }
 
+
+function turnsToTimelineModel(turns: ConversationTurn[], eventCount: number): RunTimelineModel {
+  const steps: RunTimelineStep[] = turns.map((turn, index) => {
+    const messages = turn.rows
+      .filter((row) => row.role !== 'system' && row.role !== 'user')
+      .map((row, rowIndex) => ({
+        messageId: row.key || `${turn.key}-row-${rowIndex}`,
+        text: row.content,
+        streaming: Boolean(turn.open && row.role === 'agent'),
+      }));
+    return {
+      id: turn.key || `turn-${index}`,
+      intent: index === 0 ? 'Activity' : `Activity ${index + 1}`,
+      status: turn.open ? 'running' : 'complete',
+      active: Boolean(turn.open),
+      synthetic: true,
+      tools: [],
+      messages,
+      children: messages.map((message) => ({ kind: 'message' as const, message })),
+      sequence: index + 1,
+    };
+  });
+  return {
+    steps,
+    eventCount,
+    running: steps.some((step) => step.active),
+  };
+}
+
 function buildCoordinatorTurns(events: RunStreamEvent[]): ConversationTurn[] {
   const subtasks = buildSubtaskInfo(events);
   const turns: ConversationTurn[] = [];
   const resolvedApprovals = new Map<string, string>();
+  const gateLabelBySequence = new Map<number, string>();
+  let latestGateLabel = gateLabelForKind(undefined);
   let firstSystem: ConversationRow | null = null;
   let firstTask: ConversationRow | null = null;
+  let activityTurn: ConversationTurn | null = null;
 
   for (const evt of events) {
+    if (evt.type === 'coordinator.assembly_review_requested') {
+      latestGateLabel = gateLabelForKind(readGateKind(evt.payload));
+    } else if (evt.type === 'coordinator.assembly_changes_requested') {
+      gateLabelBySequence.set(evt.sequence, latestGateLabel);
+    }
     if (evt.type === 'tool.approval_resolved' || evt.type === 'coordinator.child_approval_resolved') {
       const requestId = readString(evt.payload, ['requestId', 'request_id']);
       if (!requestId) continue;
@@ -1336,7 +1575,7 @@ function buildCoordinatorTurns(events: RunStreamEvent[]): ConversationTurn[] {
   }
 
   for (const evt of events) {
-    const line = coordinatorActivityLine(evt, subtasks);
+    const line = coordinatorActivityLine(evt, subtasks, gateLabelBySequence);
     if (!line) continue;
     const requestId = readString(evt.payload, ['requestId', 'request_id']) ?? '';
     const resolvedScope = requestId ? (resolvedApprovals.get(requestId) ?? null) : null;
@@ -1346,13 +1585,18 @@ function buildCoordinatorTurns(events: RunStreamEvent[]): ConversationTurn[] {
     const approvals = isApprovalRequest
       ? [{ event: evt, isResolved: resolvedScope !== null, resolvedScope }]
       : [];
-    turns.push({
-      key: `coordinator-activity-${evt.sequence}`,
-      rows: [{ key: `activity-${evt.sequence}`, role: 'activity', content: line, timestamp: readTimestamp(evt) }],
-      toolCalls: [],
-      approvals,
-      filePaths: [],
-    });
+    if (!activityTurn) {
+      activityTurn = {
+        key: `coordinator-activity-${evt.sequence}`,
+        rows: [],
+        toolCalls: [],
+        approvals: [],
+        filePaths: [],
+      };
+      turns.push(activityTurn);
+    }
+    activityTurn.rows.push({ key: `activity-${evt.sequence}`, role: 'activity', content: line, timestamp: readTimestamp(evt) });
+    activityTurn.approvals.push(...approvals);
   }
 
   return turns.length > 0 ? turns : buildTurns(events);
@@ -1422,8 +1666,9 @@ export function AgentSessionPanel({
     () => flatTree.find((item) => item.nodeId === selectedNodeId) ?? flatTree[0] ?? null,
     [flatTree, selectedNodeId],
   );
+  const selectedIsAssemblyAggregate = isAssemblyAggregateNode(selectedItem);
   const selectedRunId = selectedItem
-    ? (selectedItem.isCoordinator || selectedItem.nodeId === 'outcome-plan' || selectedItem.nodeId === 'work-plan' ? coordinatorRunId : (selectedItem.childRunId ?? ''))
+    ? (selectedItem.isCoordinator || selectedItem.nodeId === 'outcome-plan' || selectedItem.nodeId === 'work-plan' || selectedIsAssemblyAggregate ? coordinatorRunId : (selectedItem.childRunId ?? ''))
     : '';
 
   // Coordinator-aggregate nodes (coordinator itself, work-plan, outcome-plan) own no worktree —
@@ -1432,7 +1677,8 @@ export function AgentSessionPanel({
   const isCoordinatorAggregate = !!selectedItem
     && (selectedItem.isCoordinator
       || selectedItem.nodeId === 'work-plan'
-      || selectedItem.nodeId === 'outcome-plan');
+      || selectedItem.nodeId === 'outcome-plan'
+      || selectedIsAssemblyAggregate);
   const effectiveAdapter = useMemo(
     () => (isCoordinatorAggregate ? artifactAdapter : undefined),
     [isCoordinatorAggregate, artifactAdapter],
@@ -1465,18 +1711,36 @@ export function AgentSessionPanel({
 
   const { events: liveEvents } = useRunStream(open && canBrowseSelectedRun ? selectedRunId : '');
   const events = useMemo(() => mergeRunEvents(seedEvents, liveEvents), [seedEvents, liveEvents]);
+  const selectedRaiVerdict = useMemo(
+    () => (isRaiNode(selectedItem) ? latestRaiVerdict(events) : null),
+    [events, selectedItem],
+  );
   const turns = useMemo(
-    () => selectedItem?.isCoordinator || selectedItem?.nodeId === 'work-plan' ? buildCoordinatorTurns(events) : buildTurns(events),
-    [events, selectedItem?.isCoordinator, selectedItem?.nodeId],
+    () => (selectedItem?.isCoordinator || selectedItem?.nodeId === 'work-plan' || selectedIsAssemblyAggregate)
+      ? buildCoordinatorTurns(events)
+      : buildTurns(events),
+    [events, selectedItem?.isCoordinator, selectedItem?.nodeId, selectedIsAssemblyAggregate],
   );
   // The Messages surface renders the intent-driven Timeline (ChainOfThought steps) from
   // the same scope-aware event stream. `turns` is still used for approvals, file
-  // references and the needs-input counters.
+  // references and the needs-input counters. The timeline model, approvals and the
+  // empty-state fallback all derive from the SAME `turns` for assembly aggregate /
+  // coordinator scopes so they can never disagree (e.g. render assembly activity while
+  // also showing "No streamed messages yet").
   const timelineModel = useMemo(
-    () => buildRunTimeline(events, {
-      stripSerializedWorkPlan: Boolean(selectedItem?.isCoordinator || selectedItem?.nodeId === 'work-plan'),
-    }),
-    [events, selectedItem?.isCoordinator, selectedItem?.nodeId],
+    () => {
+      if (selectedIsAssemblyAggregate) {
+        return turnsToTimelineModel(turns, events.length);
+      }
+      if (selectedItem?.isCoordinator || selectedItem?.nodeId === 'work-plan') {
+        const model = buildRunTimeline(events, { stripSerializedWorkPlan: true });
+        return model.steps.length > 0 ? model : turnsToTimelineModel(turns, events.length);
+      }
+      return buildRunTimeline(events, {
+        stripSerializedWorkPlan: false,
+      });
+    },
+    [events, selectedItem?.isCoordinator, selectedItem?.nodeId, selectedIsAssemblyAggregate, turns],
   );
   const timelineApprovals = useMemo(
     () => turns.flatMap((turn) => turn.approvals),
@@ -1799,6 +2063,10 @@ export function AgentSessionPanel({
                   />
                 ) : (
                   <>
+                    {selectedRaiVerdict && <RaiVerdictCard verdict={selectedRaiVerdict} />}
+                    {!runDetailLoading && turns.length === 0 && !selectedRaiVerdict && (
+                      <EmptySessionStatusFallback item={selectedItem} />
+                    )}
                     <RunTimeline
                       embedded
                       steps={timelineModel.steps}

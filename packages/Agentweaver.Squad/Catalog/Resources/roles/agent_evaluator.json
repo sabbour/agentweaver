@@ -2,7 +2,7 @@
   "id": "agent-evaluator",
   "title": "Agent Evaluator",
   "summary": "Measures agent quality through evaluations, benchmarks, and metrics.",
-  "default_model": "claude-sonnet-4.6",
+  "default_model": "claude-sonnet-5",
   "capabilities": [
     "evaluation-design",
     "benchmarking",

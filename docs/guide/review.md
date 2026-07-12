@@ -26,6 +26,22 @@ flowchart LR
 
 Before your review step, a **Responsible AI (RAI)** check runs on the assembled output. If the check flags the output, the agent is automatically sent back for revision — this loopback is visible as a "Revise" edge in the run's workflow pipeline graph. The human review step is only presented when the RAI check passes.
 
+### Build & Test preview
+
+For projects that produce a browser preview, the run tree shows the preview state on the **Build & Test** step:
+
+- **Open preview** opens the preview URL in a new tab.
+- **Preview pending approval** means the preview is waiting for a tool-approval decision.
+- **Preview unavailable** includes the reason and does not block human review; you can still inspect the diff and approve, request changes, or decline.
+
+The same preview status appears in the human-review file panel so you do not have to search the event timeline for the URL.
+
+For the full contract behind this stage, see [Decoupled live-preview provisioning](../experience/live-preview-provisioning.md).
+
+### Request changes and steering
+
+When review feedback asks for changes, it goes through the coordinator's unified steering path. The timeline shows the feedback source and then the coordinator's decision: steer the existing child in place, dispatch fresh work, proceed, or record an advisory no-op. See [Unified autonomous steering](../experience/unified-steering.md).
+
 ## The file panel
 
 When a run reaches the review stage, the **file panel** on the left side of the run detail page automatically expands to show the review controls.

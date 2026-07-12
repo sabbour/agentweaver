@@ -171,6 +171,12 @@ The coordinator node's status reflects the **orchestration lifecycle** rather th
 
 The coordinator node also carries a **View session** button that scrolls to the coordinator session panel (provided via `CoordinatorSessionContext`).
 
+#### Build & Test preview status
+
+When the run emits durable preview events, the coordinator run page reads them from `GET /api/runs/{id}/events` and uses the latest preview event as the UI source of truth. `sandbox.preview_ready` and `coordinator.preview_ready` show an **Open preview** button on the **Build & Test** row and in the human-review artifacts panel. `sandbox.preview_pending` shows **Preview pending approval**. `sandbox.preview_failed` shows **Preview unavailable** with the backend reason while leaving human review actionable. `sandbox.preview_skipped_not_applicable` is treated as an intentional skip, not a blocking error.
+
+See [Decoupled live-preview provisioning](./live-preview-provisioning.md) for the event contract and [the user guide](../experience/live-preview-provisioning.md) for the review workflow.
+
 #### Graph rendering affordances (edges, cards, minimap, zoom)
 
 The graph's visual layer is shared across the coordinator run page and inline editor previews via `WorkflowGraphPanel.tsx`:
@@ -185,15 +191,17 @@ The graph's visual layer is shared across the coordinator run page and inline ed
 
 The **Agent Sessions** slide-in (`AgentSessionPanel.tsx`) opens from the graph and hosts a left sidebar tree of the coordinator plus its subtasks, alongside the selected node's live session stream. The tree is built in `CoordinatorRunPage.tsx` and includes **every subtask node** — both dispatched subtasks (with a `childRunId` and a streamable conversation) and still-planned/pending ones — rather than only dispatched children, so the full plan is visible from the moment it is confirmed. The tree is **flat**: every subtask renders as a direct child of the Coordinator (one indentation level), matching the graph — data dependencies between subtasks are shown as edges in the graph, not as nested indentation in the tree.
 
-Each row renders an indentation guide line (vertical connector and elbow), a circular **status glyph** that is color-coded to match the graph — filled green check for complete/merged/assemble-ready, filled red dismiss for failed/declined, a marigold clock for awaiting/waiting/RAI-flagged, a blue spinner for running/dispatched, and a neutral hollow circle for pending — the node label with a role subline, and a right-aligned duration derived from the node's `startedAt` / `completedAt`. Selecting a row streams that node's session; planned nodes with no child run simply show no conversation yet.
+Rows are sorted deterministically by stage rank, then numeric subtask id, then label/position tie-breakers: **Work plan**, **Outcome plan**, subtasks, **RAI**, **Build & Test**, **Human Review**, **Merge**, and **Scribe** (`apps/web/src/pages/CoordinatorRunPage.tsx:1933`, `:1951`, `:3155`). Each row renders an indentation guide line (vertical connector and elbow), a circular **status glyph** that is color-coded to match the graph — filled green check for complete/merged/assemble-ready, filled red dismiss for failed/declined, a marigold clock for awaiting/waiting/RAI-flagged/revising, a blue spinner for running/dispatched, and a neutral hollow circle for pending — the node label with a role subline, and a right-aligned duration derived from the node's `startedAt` / `completedAt`. Selecting a row streams that node's session; planned nodes with no child run simply show no conversation yet.
 
 #### Coordinator session panel and steering chat box
 
 The right column hosts an all-up **Coordinator session** panel:
 
-- A **timeline** derived from the coordinator's own event stream — `coordinator.started` (goal), outcome spec confirmed, work plan ready, each `subtask.*` transition, `coordinator.children_complete`, and the `coordinator.assembly_*` milestones — each with a relative elapsed offset from the first timestamped milestone.
+- A **timeline** derived from the coordinator's own event stream — `coordinator.started` (goal), outcome spec confirmed, work plan ready, each `subtask.*` transition, `coordinator.children_complete`, and the `coordinator.assembly_*` milestones — each with a relative elapsed offset from the first timestamped milestone. For `coordinator.assembly_changes_requested`, the timeline text is `🔁 {Gate} requested changes → revising N subtasks` and includes feedback when present (`apps/web/src/components/AgentSessionPanel.tsx:1599`).
 - An **Action required** block (above the timeline) that surfaces bubbled child questions and tool-approval requests re-projected onto the coordinator stream (see below).
 - A persistent **steering chat box** (a text area + **Send** button, plus quick **Redirect** and **Stop** affordances) that submits free-form steering via `POST /api/runs/{id}/steer` (default `kind: "amend"`) **without** opening a dialog. Queued/applied steering directives from `coordinator.steering` events are listed below the box.
+
+Outcome-spec JSON rows in the message stream are parsed client-side into an **Outcome plan** message and attributed to **Coordinator (Outcome plan)** (`apps/web/src/components/AgentSessionPanel.tsx:777`, `:791`, `:1438`). RAI verdict rationales that are only placeholders (`-`, `---`, `—`) normalize to empty and are omitted from the verdict row (`AgentSessionPanel.tsx:805`, `:1245`). With technical details hidden, system-prompt scaffolding and internal assembly-gate prompt rows are hidden from the user-facing transcript (`AgentSessionPanel.tsx:740`, `:2388`).
 
 ##### Automation toggles (Autopilot + auto-approve tools)
 
@@ -223,6 +231,7 @@ When the orchestration reaches the collective human-review stage, the page prese
 
 - **`awaiting_assembly` / `assembling`** — an "Assembling collective output…" panel with a spinner.
 - **`in_review`** (or a `coordinator.assembly_review_requested` event) — an **Assembly review** panel that surfaces the integration diff/summary (read from the event payload's `diff` / `summary` / `treeHash` fields) and **Approve** / **Request changes** / **Decline** buttons. These POST to `POST /api/runs/{coordinatorRunId}/assembly/review` via `apiClient.reviewAssembly(runId, { decision, comment? })`. A comment is required for request-changes and decline.
+- **`coordinator.steering_received` / `coordinator.steering_decision`** — correction feedback is shown as a source-agnostic steering signal followed by the coordinator's decision. The timeline labels distinguish **steered in place** from **fresh dispatch**, so a reset is never presented as an unexplained graph jump (`apps/web/src/components/LifecycleEventCard.tsx:564`).
 - **`failed` / `blocked` / `declined`** — the human-readable **reason** (from the `coordinator.assembly_failed`/`blocked`/`declined` event payload or `coordinator_status_reason`) plus guidance that the subtasks are parked and can be redirected/amended via the steering chat box. The stuck state never renders a bare "Failed" with no explanation.
 
 #### Steering bar

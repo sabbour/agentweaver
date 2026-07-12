@@ -8,6 +8,7 @@ using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Memory;
 using Agentweaver.Api.Runs;
 using Agentweaver.Domain;
+using Agentweaver.Tests.Casting;
 using Agentweaver.Tests.Helpers;
 
 namespace Agentweaver.Tests.Coordinator;
@@ -102,6 +103,45 @@ public sealed class CoordinatorOrchestratorTests : IDisposable
         planEvents.Should().HaveCount(1, "exactly one plan-time snapshot event is emitted");
     }
 
+    // #238 — a non-empty run model pin (explicit request `modelId` OR the project's GitHub Copilot
+    // default) must pin EVERY subtask, regardless of complexity. The deterministic decomposition
+    // fallback yields a single MEDIUM-complexity subtask assigned to the roster's sole member, whose
+    // role carries a NON-EMPTY default model ("claude-opus-4.8") that differs from the pin — exactly
+    // the #238 scenario where planning subtasks used to fall back to the role's claude-* default.
+    // BEFORE the fix, a non-high subtask ignored the run pin and adopted that role default, so this
+    // test would observe "claude-opus-4.8". AFTER the fix, the pin wins for the medium subtask, so
+    // every subtask carries exactly the pinned model.
+    [Fact]
+    public async Task Confirm_WithExplicitRunModel_PinsEverySubtask_IncludingNonHighComplexity()
+    {
+        const string pinnedModel = "gpt-5.6-sol";
+        const string roleDefaultModel = "claude-opus-4.8";
+
+        var projectId = await CreateProjectWithRoleDefaultModelAsync(roleDefaultModel);
+        var runId = await StartOrchestrationAsync(
+            projectId, "Build a deterministic work plan for testing", modelId: pinnedModel);
+        await WaitForGateAsync(runId);
+
+        var confirm = await _owner.PostAsync($"/api/runs/{runId}/outcome-spec/confirm", content: null);
+        confirm.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var workPlan = await PollAsync(async db =>
+            await db.WorkPlans.AsNoTracking().FirstOrDefaultAsync(w => w.CoordinatorRunId == runId));
+        workPlan.Should().NotBeNull("confirm must route to orchestration and persist a work plan");
+
+        var subtasks = await PollAsync(async db =>
+        {
+            var rows = await db.Subtasks.AsNoTracking()
+                .Where(s => s.WorkPlanId == workPlan!.Id).ToListAsync();
+            return rows.Count > 0 ? rows : null;
+        });
+        subtasks.Should().NotBeNull("the work plan must decompose into at least one subtask");
+        subtasks!.Should().OnlyContain(s => s.SelectedModelId == pinnedModel,
+            "a non-empty run model pin wins for EVERY subtask regardless of complexity (#238), " +
+            "including the deterministic fallback's MEDIUM-complexity subtask — it must NOT fall back " +
+            "to the assigned role's non-empty default model (claude-opus-4.8)");
+    }
+
     // =========================================================================
     // Helpers
     // =========================================================================
@@ -116,13 +156,58 @@ public sealed class CoordinatorOrchestratorTests : IDisposable
             working_directory = dir,
         });
         resp.StatusCode.Should().Be(HttpStatusCode.Created);
+        SquadTestFixtureHelper.CreateMinimalSquad(dir, "Coordinator Orchestrate");
         var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
         return body.GetProperty("project_id").GetString()!;
     }
 
-    private async Task<string> StartOrchestrationAsync(string projectId, string goal)
+    // Creates a project whose sole roster member ("Alpha") resolves a NON-EMPTY role default model.
+    // The minimal fixture keys registry.json by role id ("lead-architect"), but SquadReader resolves a
+    // member's DefaultModel by the team.md member NAME ("Alpha") — so the default silently reads empty.
+    // We overwrite registry.json keyed by the member name so the assigned member carries a real role
+    // default (mirroring a production blueprint), making the pin-vs-role-default distinction observable.
+    private async Task<string> CreateProjectWithRoleDefaultModelAsync(string roleDefaultModel)
     {
-        var resp = await _owner.PostAsJsonAsync($"/api/projects/{projectId}/orchestrations", new { goal });
+        var dir = _factory.NewWorkingDirectory();
+        var resp = await _owner.PostAsJsonAsync("/api/projects", new
+        {
+            name = $"Coordinator Orchestrate {Guid.NewGuid():N}",
+            origin = "blank",
+            working_directory = dir,
+        });
+        resp.StatusCode.Should().Be(HttpStatusCode.Created);
+        SquadTestFixtureHelper.CreateMinimalSquad(dir, "Coordinator Orchestrate");
+
+        var registryPath = Path.Combine(dir, ".squad", "casting", "registry.json");
+        File.WriteAllText(registryPath,
+            $$"""
+            {
+              "agents": {
+                "Alpha": {
+                  "name": "Alpha",
+                  "persistent_name": "Alpha",
+                  "universe": "Inception",
+                  "default_model": "{{roleDefaultModel}}",
+                  "status": "Active",
+                  "created_at": "2026-01-01T00:00:00Z",
+                  "previous_name": null,
+                  "succeeded_by": null,
+                  "retired_at": null,
+                  "charter_path": ".squad/agents/alpha/charter.md"
+                }
+              }
+            }
+            """);
+
+        var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
+        return body.GetProperty("project_id").GetString()!;
+    }
+
+    private async Task<string> StartOrchestrationAsync(string projectId, string goal, string? modelId = null)
+    {
+        var resp = await _owner.PostAsJsonAsync(
+            $"/api/projects/{projectId}/orchestrations",
+            modelId is null ? new { goal } : (object)new { goal, modelId });
         resp.StatusCode.Should().Be(HttpStatusCode.Created);
         var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
         return body.GetProperty("runId").GetString()!;

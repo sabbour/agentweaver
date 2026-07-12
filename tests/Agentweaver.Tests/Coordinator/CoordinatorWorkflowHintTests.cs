@@ -21,6 +21,28 @@ public sealed class CoordinatorWorkflowHintTests
         hint.Should().Contain("coordinator collective assembly supplies those exactly once");
     }
 
+    [Fact]
+    public void BuildWorkflowHint_TellsCoordinatorTheWorkflowIsNotACapOnThePlan()
+    {
+        var workflow = LoadCatalogWorkflow("software-delivery");
+
+        var hint = CoordinatorOrchestratorExecutor.BuildWorkflowHint(workflow);
+
+        // GitHub #225 item#1: the workflow hint must not anchor the decomposition to the
+        // delivery-only pipeline. It should invite the coordinator to add earlier lifecycle
+        // stages the outcome implies but the workflow topology does not model.
+        hint.Should().Contain("not a cap on the plan");
+        hint.Should().Contain("if the desired outcome implies earlier");
+        hint.Should().Contain("ADD subtasks for them");
+
+        // The old minimality/anchoring language must be gone.
+        hint.Should().NotContain("fit this intended pipeline");
+        hint.Should().NotContain("SHAPE of the decomposition");
+
+        // The platform-node exclusion guidance is untouched by the #225 fix.
+        hint.Should().Contain("coordinator collective assembly supplies those exactly once");
+    }
+
     [Theory]
     [InlineData("software-delivery", "Code Review")]
     [InlineData("bug-fix", "Verify")]

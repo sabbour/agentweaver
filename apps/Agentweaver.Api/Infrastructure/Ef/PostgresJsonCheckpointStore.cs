@@ -29,15 +29,45 @@ public sealed class PostgresJsonCheckpointStore : JsonCheckpointStore
     private readonly string _storeName;
     private readonly ILogger? _logger;
 
+    // UNIFIED AUTONOMOUS STEERING (rev8 §3d, RD#1) — optional per-launch hook that co-commits the
+    // attempt-specific RevisionEffectRecord in the SAME EF SaveChanges as this launch's FIRST checkpoint,
+    // so "effect_confirmed" and "first superstep durably checkpointed" are ONE atomic unit (no crash
+    // window between them). Runs at most once per decorated instance (Interlocked latch).
+    private readonly Func<MemoryDbContext, CancellationToken, Task>? _firstCheckpointEffect;
+    private int _firstCheckpointDone;
+
     public PostgresJsonCheckpointStore(
         IDbContextFactory<MemoryDbContext> factory,
         string storeName,
         ILogger? logger = null)
+        : this(factory, storeName, logger, firstCheckpointEffect: null)
+    {
+    }
+
+    private PostgresJsonCheckpointStore(
+        IDbContextFactory<MemoryDbContext> factory,
+        string storeName,
+        ILogger? logger,
+        Func<MemoryDbContext, CancellationToken, Task>? firstCheckpointEffect)
     {
         _factory = factory;
         _storeName = storeName;
         _logger = logger;
+        _firstCheckpointEffect = firstCheckpointEffect;
     }
+
+    /// <summary>
+    /// UNIFIED AUTONOMOUS STEERING (rev8 §3d, RD#1) — returns a PER-LAUNCH decorated instance (sharing
+    /// this store's factory/name/logger) whose FIRST <see cref="CreateCheckpointAsync"/> ALSO applies
+    /// <paramref name="firstCheckpointEffect"/> on the SAME <see cref="MemoryDbContext"/> and commits it
+    /// in the SAME <c>SaveChanges</c> as the checkpoint insert — the effect row and the checkpoint are
+    /// therefore atomic (a crash leaves BOTH or NEITHER, closing the confirm-after-write window). The
+    /// blast radius is scoped to the returned instance only; the shared store used by normal runs is
+    /// untouched.
+    /// </summary>
+    public PostgresJsonCheckpointStore WithFirstCheckpointEffect(
+        Func<MemoryDbContext, CancellationToken, Task> firstCheckpointEffect)
+        => new(_factory, _storeName, _logger, firstCheckpointEffect);
 
     /// <inheritdoc />
     public override async ValueTask<CheckpointInfo> CreateCheckpointAsync(
@@ -60,7 +90,32 @@ public sealed class PostgresJsonCheckpointStore : JsonCheckpointStore
             CreatedAt = now,
             UpdatedAt = now,
         });
-        await db.SaveChangesAsync().ConfigureAwait(false);
+
+        // Co-commit the steering effect row on the FIRST checkpoint of a decorated revision launch, in
+        // the SAME SaveChanges as the checkpoint insert → atomic effect confirmation (RD#1).
+        var claimedFirstCheckpoint = _firstCheckpointEffect is not null
+            && Interlocked.CompareExchange(ref _firstCheckpointDone, 1, 0) == 0;
+        if (claimedFirstCheckpoint)
+        {
+            await _firstCheckpointEffect!(db, default).ConfigureAwait(false);
+        }
+
+        try
+        {
+            await db.SaveChangesAsync().ConfigureAwait(false);
+        }
+        catch
+        {
+            // FIX (Nit 2, belt-and-suspenders): if this SaveChanges throws, the checkpoint AND the
+            // co-committed effect row both roll back together (single transaction). Release the
+            // once-latch so a RETRIED checkpoint re-applies the effect hook and re-commits it atomically
+            // — otherwise the latch would stay set and a later checkpoint would commit WITHOUT the effect
+            // row. (Recovery also self-heals this via checkpoint-watermark corroboration, but resetting
+            // the latch closes the window directly.)
+            if (claimedFirstCheckpoint)
+                Interlocked.Exchange(ref _firstCheckpointDone, 0);
+            throw;
+        }
 
         return new CheckpointInfo(sessionId, checkpointId);
     }

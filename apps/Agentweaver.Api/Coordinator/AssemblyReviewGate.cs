@@ -10,22 +10,32 @@ namespace Agentweaver.Api.Coordinator;
 /// the single-run <see cref="PendingRequestStore"/> / RequestPort pattern (owner-scoped, at-most-once
 /// consumption) but is service-driven rather than MAF-RequestPort-driven, because the collective
 /// review routes BACK to the coordinator (re-dispatch) rather than looping to an agent.
+///
+/// <para>The gate waits <b>indefinitely</b> for the human operator. It is intentionally free of any
+/// wall-clock timeout: an armed gate ends only when a decision is submitted (<see cref="TrySubmit"/>)
+/// or the host is shutting down (the caller's <see cref="CancellationToken"/> fires →
+/// <see cref="TaskCanceledException"/>). Faulting an open gate on elapsed time would kill runs that
+/// are correctly parked awaiting the accountable human — the durable review record plus the
+/// coordinator reconciler recover the gate across restarts, so parking here forever is safe.</para>
 /// </summary>
 public sealed class AssemblyReviewGate
 {
     private readonly object _gateLock = new();
     private readonly Dictionary<string, GateEntry> _gates = new(StringComparer.Ordinal);
-    private readonly TimeSpan _reviewTimeout;
 
+    // Constructor keeps the optional IConfiguration parameter for DI compatibility. The former
+    // Coordinator:AssemblyReviewTimeoutMinutes setting is intentionally ignored: the human-review gate
+    // has no wall-clock timeout (see type remarks). The parameter is retained so existing service
+    // registrations and any residual config keys continue to bind without error.
     public AssemblyReviewGate(IConfiguration? configuration = null)
     {
-        var timeoutMinutes = configuration?.GetValue("Coordinator:AssemblyReviewTimeoutMinutes", 60.0) ?? 60.0;
-        _reviewTimeout = TimeSpan.FromMinutes(Math.Max(0.001, timeoutMinutes));
+        _ = configuration;
     }
 
     /// <summary>
     /// Arms the gate for a coordinator run and returns a task that completes when the reviewer
-    /// submits a decision (or faults/cancels). Replaces any prior armed gate for the same run.
+    /// submits a decision, or is cancelled when the host stops (<paramref name="ct"/>). Replaces any
+    /// prior armed gate for the same run. There is no timeout — the wait is indefinite by design.
     /// </summary>
     public Task<AssemblyReviewDecision> ArmAsync(string coordinatorRunId, string ownerUser, CancellationToken ct)
     {
@@ -33,20 +43,14 @@ public sealed class AssemblyReviewGate
             new TaskCompletionSource<AssemblyReviewDecision>(TaskCreationOptions.RunContinuationsAsynchronously),
             ownerUser);
 
-        var timeoutCts = new CancellationTokenSource(_reviewTimeout);
         var cancellationRegistration = ct.CanBeCanceled
             ? ct.Register(static state =>
             {
                 var (gate, runId, gateEntry) = ((AssemblyReviewGate Gate, string RunId, GateEntry Entry))state!;
-                gate.CancelEntry(runId, gateEntry, timeout: false);
+                gate.CancelEntry(runId, gateEntry);
             }, (this, coordinatorRunId, entry))
             : default;
-        var timeoutRegistration = timeoutCts.Token.Register(static state =>
-        {
-            var (gate, runId, gateEntry) = ((AssemblyReviewGate Gate, string RunId, GateEntry Entry))state!;
-            gate.CancelEntry(runId, gateEntry, timeout: true);
-        }, (this, coordinatorRunId, entry));
-        entry.SetRegistrations(cancellationRegistration, timeoutRegistration, timeoutCts);
+        entry.SetRegistration(cancellationRegistration);
 
         lock (_gateLock)
         {
@@ -60,9 +64,7 @@ public sealed class AssemblyReviewGate
         }
 
         if (ct.IsCancellationRequested)
-            CancelEntry(coordinatorRunId, entry, timeout: false);
-        else if (timeoutCts.IsCancellationRequested)
-            CancelEntry(coordinatorRunId, entry, timeout: true);
+            CancelEntry(coordinatorRunId, entry);
 
         return entry.Tcs.Task;
     }
@@ -112,7 +114,7 @@ public sealed class AssemblyReviewGate
             : AssemblyReviewSubmitResult.NotArmed;
     }
 
-    private void CancelEntry(string coordinatorRunId, GateEntry entry, bool timeout)
+    private void CancelEntry(string coordinatorRunId, GateEntry entry)
     {
         lock (_gateLock)
         {
@@ -124,22 +126,12 @@ public sealed class AssemblyReviewGate
         }
 
         entry.DisposeRegistrations();
-        if (timeout)
-        {
-            entry.Tcs.TrySetException(new TimeoutException(
-                $"Assembly review gate for coordinator run {coordinatorRunId} timed out after {_reviewTimeout}."));
-        }
-        else
-        {
-            entry.Tcs.TrySetCanceled();
-        }
+        entry.Tcs.TrySetCanceled();
     }
 
     private sealed class GateEntry
     {
         private CancellationTokenRegistration _cancellationRegistration;
-        private CancellationTokenRegistration _timeoutRegistration;
-        private CancellationTokenSource? _timeoutSource;
         private int _disposed;
 
         public GateEntry(TaskCompletionSource<AssemblyReviewDecision> tcs, string ownerUser)
@@ -151,14 +143,9 @@ public sealed class AssemblyReviewGate
         public TaskCompletionSource<AssemblyReviewDecision> Tcs { get; }
         public string OwnerUser { get; }
 
-        public void SetRegistrations(
-            CancellationTokenRegistration cancellationRegistration,
-            CancellationTokenRegistration timeoutRegistration,
-            CancellationTokenSource timeoutSource)
+        public void SetRegistration(CancellationTokenRegistration cancellationRegistration)
         {
             _cancellationRegistration = cancellationRegistration;
-            _timeoutRegistration = timeoutRegistration;
-            _timeoutSource = timeoutSource;
         }
 
         public void DisposeRegistrations()
@@ -167,8 +154,6 @@ public sealed class AssemblyReviewGate
                 return;
 
             _cancellationRegistration.Dispose();
-            _timeoutRegistration.Dispose();
-            _timeoutSource?.Dispose();
         }
     }
 }

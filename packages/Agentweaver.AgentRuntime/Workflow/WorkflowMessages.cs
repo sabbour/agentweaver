@@ -40,7 +40,23 @@ public sealed record AgentTurnOutput(
     /// <summary>Carried through from <see cref="AgentTurnInput.Iteration"/> for edge conditions.</summary>
     int Iteration = 0,
     /// <summary>The accountable human whose Copilot-entitled token must be used by downstream model turns.</summary>
-    string? SubmittingUser = null);
+    string? SubmittingUser = null,
+    /// <summary>Project context carried forward for downstream gates that expose Agentweaver API tools.</summary>
+    string? ProjectId = null,
+    /// <summary>Agent context carried forward for downstream gates that expose Agentweaver API tools.</summary>
+    string? AgentName = null,
+    /// <summary>
+    /// Set (non-null) by the agent executor when a PERSISTENT post-turn commit fault could not be
+    /// cleared by the bounded clear+retry. Null = success. Drives the child graph's conditional
+    /// failure->terminal edge (agent -> child-turn-failed) so the fault terminalizes as a graph-native
+    /// <see cref="ChildTurnFailedOutput"/> instead of a bare rethrow. Only produced in the trimmed
+    /// child/revision pipeline (the executor is constructed with the terminal-failure flag there);
+    /// the full pipeline keeps rethrowing to the watcher backstop.
+    /// </summary>
+    string? TerminalFailureReason = null,
+    /// <summary>Structured diagnostics for <see cref="TerminalFailureReason"/> (exception summary,
+    /// gitdir lock path, lock age, whether the stale-lock clear ran, live-process detection).</summary>
+    string? TerminalFailureEvidence = null);
 
 /// <summary>Data surfaced to the external caller via the review request port.</summary>
 public sealed record WorkflowReviewRequest(
@@ -59,7 +75,13 @@ public sealed record WorkflowReviewDecision(
     /// <summary>Reviewer's feedback text sent back to the agent for the next iteration.</summary>
     string? Feedback = null,
     /// <summary>The human reviewer that approved the irreversible action, when applicable.</summary>
-    string? ReviewedBy = null);
+    string? ReviewedBy = null,
+    /// <summary>
+    /// #223 — OPTIONAL structured list of repo-relative files the reviewer implicated (parsed from a
+    /// dedicated <c>TARGET_FILES:</c> directive line, never from prose). Lets the coordinator scope a
+    /// request-changes to the subtasks that actually touched those files instead of every contributor.
+    /// Null/empty when the reviewer named no files.</summary>
+    IReadOnlyList<string>? TargetFiles = null);
 
 /// <summary>Input to the merge executor.</summary>
 public sealed record MergeInput(
@@ -105,6 +127,21 @@ public sealed record AssembleReadyOutput(
     int StepCount,
     /// <summary>True when RAI flagged a safety concern; carried forward so the collective gate sees it.</summary>
     bool RaiSafetyFlagged = false);
+
+/// <summary>
+/// Terminal output for a coordinator CHILD run whose agent turn ended cleanly but whose POST-TURN
+/// commit failed PERSISTENTLY (the bounded clear+retry could not clear the blocker). Emitted by the
+/// <c>child-turn-failed</c> executor via the child graph's conditional failure->terminal edge — a
+/// graph-native, single terminal <c>WorkflowOutputEvent</c> (never a bare rethrow, never a fabricated
+/// no-change assemble_ready). The watch loop maps this to a VISIBLE run failure so the coordinator
+/// consciously re-dispatches the revision (steering feedback preserved) rather than losing work.
+/// </summary>
+public sealed record ChildTurnFailedOutput(
+    string RunId,
+    string Reason,
+    /// <summary>Structured diagnostics (commit exception summary, gitdir lock path + age, whether the
+    /// stale-lock clear ran, live-process detection) for live debugging of the persistent fault.</summary>
+    string? Evidence = null);
 
 /// <summary>Input to the Scribe agent turn, carrying context + terminal output for pass-through.</summary>
 public sealed record ScribeTurnInput(

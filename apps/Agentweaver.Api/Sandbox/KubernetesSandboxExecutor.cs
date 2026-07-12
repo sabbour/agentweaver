@@ -2,11 +2,14 @@ using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 using System.Text;
 using System.Net.Http.Json;
+using System.Net.Sockets;
 using System.Text.Json;
 using Agentweaver.Api.Auth;
+using Agentweaver.Api.Infrastructure;
 using Agentweaver.AgentRuntime.Workflow;
 using Agentweaver.Domain;
 using k8s;
+using k8s.Autorest;
 using Agentweaver.SandboxExec;
 using Microsoft.Extensions.Logging;
 
@@ -86,6 +89,14 @@ public sealed class KubernetesSandboxOptions
     public int AgentHostReadyPollIntervalMs { get; init; } = 1000;
 
     /// <summary>
+    /// Minimum age before the orphan reaper may delete an AgentHost claim that is absent from the
+    /// active-run map. Config key: <c>Sandbox:Kubernetes:AgentHostClaimCreationGraceSeconds</c>.
+    /// The effective value is floored above <see cref="AgentHostReadyTimeoutSeconds"/>.
+    /// Default: 300s.
+    /// </summary>
+    public int AgentHostClaimCreationGraceSeconds { get; init; } = 300;
+
+    /// <summary>
     /// Azure Key Vault URI injected into AgentHost pods as <c>AgentHost__KeyVaultUri</c> so the
     /// warm pod can fetch the run owner's GitHub token via workload identity at /configure-time
     /// (Option C). Sourced from the API's own KV config (<c>Auth:TokenStore:KeyVaultUri</c>). When
@@ -143,11 +154,22 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
     private const string ClaimPlural = SandboxClaimConventions.ClaimPlural;
     private const string ContainerName = "agentweaver-sandbox";
 
-    /// <summary>Namespace ResourceQuota that caps total agent-pod CPU (spec: 24 cores).</summary>
-    private const string ResourceQuotaName = "agentweaver-quota";
+    /// <summary>
+    /// Bounded attempt count for <see cref="ExecuteK8sWithRetryAsync{T}"/> — the total number of
+    /// tries (initial + retries) for a transient Kubernetes API fault (issue #230). A transient
+    /// connection reset (SocketException 104 → IOException → HttpRequestException) that used to fail
+    /// a subtask fatally is now retried with exponential backoff + jitter.
+    /// </summary>
+    private const int MaxK8sAttempts = 3;
 
-    /// <summary>CPU cores reserved by a single AgentHost pod (its <c>limits.cpu</c>).</summary>
-    private const double AgentPodCpuLimit = 2.0;
+    /// <summary>
+    /// Cadence for the <see cref="EventTypes.SandboxProvisioningPending"/> heartbeat emitted while an
+    /// AgentHost <c>SandboxClaim</c> is still being provisioned (unbound). Must stay well under the
+    /// parent coordinator's <c>Coordinator:SubtaskStallTimeoutMinutes</c> (default 5 min) so each
+    /// provisioning wait window is punctuated by an event that keeps the outbound stream flowing and
+    /// resets the stall timer (issue #217, mirrors the #212 tool.approval_pending heartbeat cadence).
+    /// </summary>
+    internal static readonly TimeSpan SandboxProvisioningHeartbeatInterval = TimeSpan.FromSeconds(20);
 
     private readonly IKubernetes _client;
     private readonly KubernetesSandboxOptions _options;
@@ -168,6 +190,18 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
     // Resolves the run owner's GitHub token so the API can pass it in /configure, avoiding the need
     // for the kata VM pod to call Azure AD or Key Vault (blocked by Cilium FQDN policies).
     private readonly IGitHubTokenStore? _tokenStore;
+    // Replica-safe run secret store used to persist the per-run preview-runner credential so a
+    // reconcile/keepalive on either API replica can re-fetch it, and to durably DELETE it on pod
+    // release (spec-006 decouple-preview, BLOCKER A / RESIDUAL). Null in unit tests → no minting.
+    private readonly ISecretStore? _secretStore;
+    // Durable run-event log used to emit sandbox.provisioning_pending heartbeats into the CHILD run's
+    // stream while its AgentHost claim is still being scheduled by Kubernetes (unbound). Keeps the
+    // parent coordinator's stall timer alive during a legitimately-long Pending wait (issue #217).
+    // Null in unit tests → the heartbeat is skipped (same null-skip convention as the readiness probe).
+    private readonly IRunEventStream? _runEventStream;
+    // Source of the per-run AutoApproveTools flag propagated to the warm pod via /configure (bug
+    // #221). Null in unit tests → the flag defaults false (same null-skip convention as above).
+    private readonly IRunOptionsStore? _runOptions;
 
     public bool IsRealIsolation => true;
     public string BackendName => "kubernetes-sandbox-claim";
@@ -185,7 +219,10 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
         IAgentHostReadinessProbe? readinessProbe = null,
         IRunSubmittingUserResolver? submittingUserResolver = null,
         IHttpClientFactory? httpClientFactory = null,
-        IGitHubTokenStore? tokenStore = null)
+        IGitHubTokenStore? tokenStore = null,
+        ISecretStore? secretStore = null,
+        IRunEventStream? runEventStream = null,
+        IRunOptionsStore? runOptions = null)
     {
         _client = client;
         _options = options;
@@ -196,6 +233,9 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
         _submittingUserResolver = submittingUserResolver;
         _httpClientFactory = httpClientFactory;
         _tokenStore = tokenStore;
+        _secretStore = secretStore;
+        _runEventStream = runEventStream;
+        _runOptions = runOptions;
     }
 
     public async Task<SandboxExecResult> ExecuteAsync(
@@ -203,10 +243,9 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
     {
         // Use the Agentweaver run ID as the claim name when available so the pod can be
         // looked up by run ID later (preview port-forward). Fall back to a random ID.
-        string claimBase = string.IsNullOrEmpty(command.AgentweaverRunId)
-            ? Guid.NewGuid().ToString("N")[..16]
-            : command.AgentweaverRunId.Replace("-", "")[..Math.Min(16, command.AgentweaverRunId.Replace("-", "").Length)];
-        var claimName = $"run-{claimBase}";
+        var claimName = string.IsNullOrEmpty(command.AgentweaverRunId)
+            ? $"run-{Guid.NewGuid():N}"[..20]
+            : SandboxClaimConventions.DeriveRunCommandClaimName(command.AgentweaverRunId);
 
         var requestedTimeoutMs = command.TimeoutMs > 0
             ? command.TimeoutMs
@@ -246,8 +285,7 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
         {
             _logger.LogInformation(
                 "KubernetesSandboxExecutor: creating SandboxClaim {Claim}", claimName);
-            await CreateClaimAsync(claimName, token);
-            claimCreated = true;
+            claimCreated = await CreateClaimAsync(claimName, token);
 
             var podName = await WaitForBoundAsync(claimName, token);
             _logger.LogInformation(
@@ -294,15 +332,19 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
     // ── IAgentHostPodLifecycle — pod-per-run lifecycle (spec §9 / Q3) ─────────────
 
     /// <inheritdoc/>
-    public async Task<string> LaunchAgentHostPodAsync(string runId, CancellationToken ct = default)
+    public Task<string> LaunchAgentHostPodAsync(string runId, CancellationToken ct = default) =>
+        LaunchAgentHostPodAsync(runId, workingDirectoryOverride: null, ct);
+
+    /// <inheritdoc/>
+    public async Task<string> LaunchAgentHostPodAsync(
+        string runId,
+        string? workingDirectoryOverride,
+        CancellationToken ct = default)
     {
         var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
-
-        // Fail fast before creating the claim if the namespace quota cannot admit another agent pod
-        // (2 CPU). Without this the claim is accepted but the controller's pod reconcile is rejected
-        // with "exceeded quota", which surfaces as a generic mid-turn failure. Throws
-        // AgentHostCapacityPendingException so the launch path can park-and-retry instead of failing.
-        await CheckQuotaHeadroomAsync(ct).ConfigureAwait(false);
+        var requestedWorkingDirectory = string.IsNullOrWhiteSpace(workingDirectoryOverride)
+            ? null
+            : Path.GetFullPath(workingDirectoryOverride);
 
         _logger.LogInformation(
             "KubernetesSandboxExecutor: launching AgentHost pod for run {RunId} via claim {Claim}",
@@ -332,17 +374,47 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
             // Bind to the SHARED, pre-warmed AgentHost warm pool (replicas: 2). No per-run SPC,
             // SandboxTemplate, or warm pool — the pod is already warm and gets its per-run context
             // via the /configure POST below.
-            await CreateAgentHostClaimAsync(claimName, _options.AgentHostWarmPoolRef, ct).ConfigureAwait(false);
-            claimCreated = true;
+            claimCreated = await CreateAgentHostClaimAsync(
+                claimName, _options.AgentHostWarmPoolRef, requestedWorkingDirectory, runId, ct).ConfigureAwait(false);
 
-            var podName = await WaitForBoundAsync(claimName, ct).ConfigureAwait(false);
+            if (!claimCreated && requestedWorkingDirectory is not null)
+            {
+                var existingWorkingDirectory = await TryGetAgentHostClaimWorkingDirectoryAsync(claimName, ct)
+                    .ConfigureAwait(false);
+                var sameWorktree = string.Equals(
+                    existingWorkingDirectory, requestedWorkingDirectory, StringComparison.Ordinal);
+                var hasTurnToken = !string.IsNullOrWhiteSpace(_turnTokenRegistry?.TryGetTurnToken(runId));
+
+                if (!sameWorktree || !hasTurnToken)
+                {
+                    _logger.LogWarning(
+                        "KubernetesSandboxExecutor: existing AgentHost claim {Claim} for run {RunId} " +
+                        "is not reusable (sameWorktree={SameWorktree}, hasTurnToken={HasTurnToken}); recreating.",
+                        claimName, runId, sameWorktree, hasTurnToken);
+                    await DeleteClaimAsync(claimName).ConfigureAwait(false);
+                    _podRegistry?.Unregister(runId);
+                    _turnTokenRegistry?.UnregisterTurnToken(runId);
+                    await Task.Delay(1000, ct).ConfigureAwait(false);
+                    claimCreated = await CreateAgentHostClaimAsync(
+                        claimName, _options.AgentHostWarmPoolRef, requestedWorkingDirectory, runId, ct).ConfigureAwait(false);
+                    if (!claimCreated)
+                    {
+                        throw new InvalidOperationException(
+                            $"AgentHost claim '{claimName}' for run '{runId}' was deleted for worktree reconfiguration, " +
+                            "but the replacement create still conflicted. Retrying later avoids reusing a token-less or stale pod.");
+                    }
+                }
+            }
+
+            var podName = await WaitForBoundWithProvisioningHeartbeatAsync(runId, claimName, ct).ConfigureAwait(false);
             _logger.LogInformation(
                 "KubernetesSandboxExecutor: AgentHost claim {Claim} bound to pod {Pod}", claimName, podName);
 
             // Register also persists sandbox.execution_pod.bound into the shared RunEvents store so
             // graph snapshots/deltas on any API replica can resolve the execution pod.
             _podRegistry?.Register(runId, podName);
-            _turnTokenRegistry?.RegisterTurnToken(runId, turnToken);
+            if (claimCreated)
+                _turnTokenRegistry?.RegisterTurnToken(runId, turnToken);
 
             var podIp = await GetPodIpAsync(podName, ct).ConfigureAwait(false);
 
@@ -387,11 +459,20 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
             // (and therefore its file-tool root) matches the path the run's system prompt references —
             // without it, warm pods default to the static /workspace env and sibling agents of one
             // parent write to divergent dirs, breaking cross-stage file hand-off.
-            await CallAgentHostConfigureAsync(
-                podIp, _options.AgentHostPort, runId, submittingUser, turnToken, kvUserSecretName,
-                await ResolveGitHubAccessTokenAsync(submittingUser, ct).ConfigureAwait(false),
-                await ResolveWorkingDirectoryAsync(runId, ct).ConfigureAwait(false), ct)
-                .ConfigureAwait(false);
+            if (claimCreated)
+            {
+                await CallAgentHostConfigureAsync(
+                    podIp, _options.AgentHostPort, runId, submittingUser, turnToken, kvUserSecretName,
+                    await ResolveGitHubAccessTokenAsync(submittingUser, ct).ConfigureAwait(false),
+                    requestedWorkingDirectory ?? await ResolveWorkingDirectoryAsync(runId, ct).ConfigureAwait(false), ct)
+                    .ConfigureAwait(false);
+            }
+            else
+            {
+                _logger.LogInformation(
+                    "KubernetesSandboxExecutor: reusing already-configured AgentHost claim {Claim} for run {RunId}",
+                    claimName, runId);
+            }
 
             _podRegistry?.RegisterAgentEndpoint(runId, endpointUrl);
 
@@ -407,6 +488,9 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
                 await DeleteClaimAsync(claimName).ConfigureAwait(false);
             _podRegistry?.Unregister(runId);
             _turnTokenRegistry?.UnregisterTurnToken(runId);
+            // Crash/timeout during launch: delete any credential minted before the failure so it is
+            // never left behind (spec-006 decouple-preview, RESIDUAL rev3 gap).
+            await DeletePreviewRunnerCredentialAsync(runId, CancellationToken.None).ConfigureAwait(false);
             throw;
         }
     }
@@ -423,6 +507,7 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
         await DeleteClaimAsync(claimName).ConfigureAwait(false);
         _podRegistry?.Unregister(runId);
         _turnTokenRegistry?.UnregisterTurnToken(runId);
+        await DeletePreviewRunnerCredentialAsync(runId, ct).ConfigureAwait(false);
 
         _logger.LogInformation(
             "KubernetesSandboxExecutor: AgentHost pod released for run {RunId}", runId);
@@ -484,14 +569,29 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
     /// KV secret name) is delivered after bind via <c>POST /configure</c>
     /// (<see cref="CallAgentHostConfigureAsync"/>).
     /// </summary>
-    private Task CreateAgentHostClaimAsync(
-        string claimName, string warmPoolName, CancellationToken ct)
+    private async Task<bool> CreateAgentHostClaimAsync(
+        string claimName, string warmPoolName, string? workingDirectory, string runId, CancellationToken ct)
     {
+        var annotations = new Dictionary<string, string>
+        {
+            // Persist the ORIGINAL run id so the reaper can recover it from an orphaned claim (the
+            // claim name is a lossy 12-char derivation) and delete run-scoped side artifacts such as
+            // the per-run preview-runner credential (spec-006 decouple-preview).
+            [SandboxClaimConventions.RunIdAnnotation] = runId,
+        };
+        if (!string.IsNullOrWhiteSpace(workingDirectory))
+            annotations["agentweaver.io/working-directory"] = workingDirectory;
+
         var manifest = new
         {
             apiVersion = $"{ApiGroup}/{ApiVersion}",
             kind = "SandboxClaim",
-            metadata = new { name = claimName, @namespace = _options.Namespace },
+            metadata = new
+            {
+                name = claimName,
+                @namespace = _options.Namespace,
+                annotations = annotations.Count == 0 ? null : annotations,
+            },
             spec = new
             {
                 // v0.5.0 v1beta1 SandboxClaimSpec: spec.warmPoolRef.name references the
@@ -502,9 +602,142 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
             },
         };
 
-        return _client.CustomObjects.CreateNamespacedCustomObjectAsync(
-            manifest, ApiGroup, ApiVersion, _options.Namespace, ClaimPlural,
-            cancellationToken: ct);
+        // Idempotent create with bounded transient-fault retry (issue #230). A mid-flight connection
+        // reset can commit the SandboxClaim server-side BEFORE we observe the response, so the retry
+        // may see a 409 for OUR OWN create — handled attempt-awarely below.
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                await _client.CustomObjects.CreateNamespacedCustomObjectAsync(
+                    manifest, ApiGroup, ApiVersion, _options.Namespace, ClaimPlural,
+                    cancellationToken: ct).ConfigureAwait(false);
+                return true;
+            }
+            catch (HttpOperationException ex) when (ex.Response?.StatusCode == System.Net.HttpStatusCode.Conflict)
+            {
+                if (attempt > 1)
+                {
+                    // Retry-409: a transient reset committed our create server-side before we saw the
+                    // response, and this retry now observes our own claim. We own it → return true so
+                    // the caller registers the turn token and runs /configure exactly as on a 200,
+                    // rather than taking the silent "reuse pre-existing claim" path (which would leave
+                    // the pod un-configured and token-less).
+                    _logger.LogInformation(
+                        "KubernetesSandboxExecutor: SandboxClaim {Claim} returned 409 on retry attempt {Attempt}; " +
+                        "treating as our own create that committed before a transient reset — configuring it.",
+                        claimName, attempt);
+                    return true;
+                }
+
+                // First-attempt 409: a genuinely pre-existing claim owned by an earlier launch.
+                _logger.LogInformation(
+                    "KubernetesSandboxExecutor: SandboxClaim {Claim} already exists; waiting for existing claim",
+                    claimName);
+                return false;
+            }
+            catch (Exception ex) when (attempt < MaxK8sAttempts && IsTransientK8sFault(ex, ct))
+            {
+                var delay = BackoffWithJitter(attempt);
+                _logger.LogWarning(ex,
+                    "KubernetesSandboxExecutor: transient fault creating SandboxClaim {Claim} on attempt " +
+                    "{Attempt}/{Max}; retrying in {DelayMs}ms.",
+                    claimName, attempt, MaxK8sAttempts, (int)delay.TotalMilliseconds);
+                await Task.Delay(delay, ct).ConfigureAwait(false);
+            }
+        }
+    }
+
+    // ── Transient Kubernetes API resilience (issue #230) ──────────────────────────
+
+    /// <summary>
+    /// Executes an <b>idempotent</b> Kubernetes API call with a bounded retry (<see cref="MaxK8sAttempts"/>
+    /// total attempts) over <b>transient</b> faults only — a mid-flight connection reset
+    /// (SocketException 104 → IOException → HttpRequestException), a 429/5xx from the API server, or an
+    /// HttpClient timeout. Caller cancellation is never retried and aborts the backoff immediately
+    /// (<c>await Task.Delay(delay, ct)</c>). Non-transient faults (e.g. 404/409/422) propagate on the
+    /// first attempt. MUST NOT wrap non-idempotent calls (e.g. the AgentHost <c>POST /configure</c>,
+    /// whose second delivery 409-hard-fails).
+    /// </summary>
+    private async Task<T> ExecuteK8sWithRetryAsync<T>(
+        Func<CancellationToken, Task<T>> operation, CancellationToken ct)
+    {
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                return await operation(ct).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (attempt < MaxK8sAttempts && IsTransientK8sFault(ex, ct))
+            {
+                var delay = BackoffWithJitter(attempt);
+                _logger.LogWarning(ex,
+                    "KubernetesSandboxExecutor: transient Kubernetes API fault on attempt {Attempt}/{Max}; " +
+                    "retrying in {DelayMs}ms.", attempt, MaxK8sAttempts, (int)delay.TotalMilliseconds);
+                await Task.Delay(delay, ct).ConfigureAwait(false);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Exponential backoff (~250ms · 2^(attempt-1), capped at ~2s) plus 0-250ms jitter to de-sync
+    /// concurrent launches retrying against the same API server after a blip.
+    /// </summary>
+    private static TimeSpan BackoffWithJitter(int attempt)
+    {
+        var baseMs = Math.Min(250 * (1 << (attempt - 1)), 2000);
+        var jitterMs = Random.Shared.Next(0, 250);
+        return TimeSpan.FromMilliseconds(baseMs + jitterMs);
+    }
+
+    /// <summary>
+    /// True only for faults worth retrying an idempotent k8s call over: 429/5xx from the API server,
+    /// a socket/IO connection reset (directly or nested in an inner exception), or an HttpClient
+    /// timeout (<see cref="OperationCanceledException"/> with no caller cancellation). Caller
+    /// cancellation short-circuits to false so a genuine cancel is never retried. A 409 Conflict is
+    /// intentionally NOT transient here — it is handled separately (idempotent create semantics).
+    /// </summary>
+    private static bool IsTransientK8sFault(Exception ex, CancellationToken ct)
+    {
+        if (ct.IsCancellationRequested) return false;                 // caller cancel — never retry
+        switch (ex)
+        {
+            case HttpOperationException k when k.Response is not null:
+                var s = (int)k.Response.StatusCode;
+                return s == 429 || s >= 500;                          // 409 handled separately, NOT here
+            case HttpRequestException: return true;
+            case IOException: return true;
+            case OperationCanceledException:                          // includes TaskCanceledException (HttpClient timeout)
+                return !ct.IsCancellationRequested;
+        }
+        for (Exception? i = ex.InnerException; i is not null; i = i.InnerException)
+            if (i is SocketException or IOException) return true;
+        return false;
+    }
+
+    private async Task<string?> TryGetAgentHostClaimWorkingDirectoryAsync(string claimName, CancellationToken ct)
+    {
+        try
+        {
+            var raw = await _client.CustomObjects.GetNamespacedCustomObjectAsync(
+                ApiGroup, ApiVersion, _options.Namespace, ClaimPlural, claimName,
+                cancellationToken: ct).ConfigureAwait(false);
+            var json = JsonSerializer.Serialize(raw);
+            using var doc = JsonDocument.Parse(json);
+            if (doc.RootElement.TryGetProperty("metadata", out var meta) &&
+                meta.TryGetProperty("annotations", out var ann) &&
+                ann.TryGetProperty("agentweaver.io/working-directory", out var wd) &&
+                wd.ValueKind == JsonValueKind.String)
+                return wd.GetString();
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(ex,
+                "KubernetesSandboxExecutor: failed to read working-directory annotation for claim {Claim}",
+                claimName);
+        }
+
+        return null;
     }
 
     /// <summary>
@@ -561,6 +794,13 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
 
         var scheme = AgentHostEndpoint.Scheme(_options.RequireMtls);
         var configureUrl = $"{scheme}://{podIp}:{port}/configure";
+
+        // Mint a FRESH per-run preview-runner credential (spec-006 decouple-preview, BLOCKER A).
+        // Delivered in-memory via this /configure body ONLY (never pod env/file), and persisted to the
+        // run secret store so any replica can re-fetch it for reconcile/keepalive. Durably deleted on
+        // pod release. Every launch/relaunch mints a new value — the old one is never reused.
+        var previewRunnerCredential = await MintPreviewRunnerCredentialAsync(runId, ct).ConfigureAwait(false);
+
         var body = new
         {
             runId,
@@ -569,6 +809,10 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
             kvUserSecretName,
             gitHubAccessToken,
             workingDirectory,
+            previewRunnerCredential,
+            // Per-run AutoApproveTools flag (bug #221). Resolved from the API-side run-options store
+            // keyed by the child runId; defaults false when the store is unavailable (unit tests).
+            autoApproveTools = _runOptions?.Get(runId).AutoApproveTools ?? false,
         };
 
         _logger.LogInformation(
@@ -588,40 +832,109 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
         }
     }
 
-    /// <inheritdoc/>
-    public Task CheckAgentHostCapacityAsync(CancellationToken ct = default) =>
-        CheckQuotaHeadroomAsync(ct);
-
     /// <summary>
-    /// Pre-launch guard: throws <see cref="AgentHostCapacityPendingException"/> when the namespace
-    /// ResourceQuota has less than one agent pod's worth of CPU headroom
-    /// (<see cref="AgentPodCpuLimit"/>). Capacity-pending is a <i>retry signal</i>, not a hard
-    /// failure: the reaper frees orphaned pods and the node pool can scale out, so the caller queues
-    /// and retries. The quota check itself is best-effort: if the quota does not exist or the read
-    /// fails, it logs a warning and returns so a transient API/quota issue never blocks a launch that
-    /// the controller would otherwise admit.
+    /// Mints and persists a fresh per-run preview-runner credential and returns it for in-memory
+    /// delivery via <c>/configure</c>. Returns <see cref="string.Empty"/> when no secret store is
+    /// available (unit tests) — the pod then relies on the turn token only. The persisted key is
+    /// derived deterministically from the run id (<see cref="Preview.PreviewRunnerCredential.SecretKey"/>)
+    /// so the release-time delete matches (spec-006 decouple-preview, BLOCKER A).
     /// </summary>
-    private async Task CheckQuotaHeadroomAsync(CancellationToken ct)
+    private async Task<string> MintPreviewRunnerCredentialAsync(string runId, CancellationToken ct)
     {
-        double used;
-        double hard;
+        if (_secretStore is null)
+            return string.Empty;
+
+        var credential = Preview.PreviewRunnerCredential.Mint();
+        var key = Preview.PreviewRunnerCredential.SecretKey(runId);
         try
         {
-            var quota = await _client.CoreV1.ReadNamespacedResourceQuotaAsync(
-                ResourceQuotaName, _options.Namespace, cancellationToken: ct).ConfigureAwait(false);
+            await _secretStore.SetSecretAsync(key, credential, etag: null, ct).ConfigureAwait(false);
+            _logger.LogInformation(
+                "KubernetesSandboxExecutor: minted per-run preview-runner credential for run {RunId}", runId);
+            return credential;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // Best-effort: a persist failure must not fail the launch. The pod still receives the
+            // credential in-memory (same-process affinity uses the turn token anyway), but a
+            // cross-replica reconcile could not re-fetch it — acceptable degradation.
+            _logger.LogWarning(ex,
+                "KubernetesSandboxExecutor: failed to persist preview-runner credential for run {RunId}; " +
+                "delivering in-memory only.", runId);
+            return credential;
+        }
+    }
 
-            var usedStr = TryGetQuotaValue(quota?.Status?.Used, "limits.cpu");
-            var hardStr = TryGetQuotaValue(quota?.Status?.Hard, "limits.cpu");
+    /// <summary>
+    /// Durably deletes the per-run preview-runner credential from the run secret store. No-op when
+    /// absent (<see cref="ISecretStore.DeleteSecretAsync"/> ignores a missing key). Never throws —
+    /// a delete failure must not break terminal cleanup. Called on EVERY terminal path (happy
+    /// release + crash/timeout/failed-run via the pod-release seam) so the credential's durable
+    /// lifetime is bounded by the pod's (spec-006 decouple-preview, RESIDUAL rev3 gap).
+    /// </summary>
+    private async Task DeletePreviewRunnerCredentialAsync(string runId, CancellationToken ct)
+    {
+        if (_secretStore is null)
+            return;
 
-            if (usedStr is null || hardStr is null ||
-                !TryParseCpu(usedStr, out used) || !TryParseCpu(hardStr, out hard))
+        try
+        {
+            await _secretStore.DeleteSecretAsync(Preview.PreviewRunnerCredential.SecretKey(runId), ct)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(ex,
+                "KubernetesSandboxExecutor: failed to delete preview-runner credential for run {RunId} (best-effort)",
+                runId);
+        }
+    }
+
+    /// <summary>
+    /// Waits for the AgentHost <c>SandboxClaim</c> to bind while emitting periodic
+    /// <see cref="EventTypes.SandboxProvisioningPending"/> heartbeats into the CHILD run's event
+    /// stream. Scheduling is Kubernetes' job: a claim may sit unbound (pod Pending) for a while until
+    /// a node frees up or the pool autoscales — that is FINE and must not fail the run (issue #217).
+    /// The heartbeat keeps the parent coordinator's subtask-stall timer alive during that legitimate
+    /// wait, mirroring the #212 tool.approval_pending heartbeat. Best-effort: if no
+    /// <see cref="IRunEventStream"/> is wired (unit tests) this degrades to a plain
+    /// <see cref="WaitForBoundAsync"/>.
+    /// </summary>
+    private async Task<string> WaitForBoundWithProvisioningHeartbeatAsync(
+        string runId, string claimName, CancellationToken ct)
+    {
+        if (_runEventStream is null)
+            return await WaitForBoundAsync(claimName, ct).ConfigureAwait(false);
+
+        var boundTask = WaitForBoundAsync(claimName, ct);
+        while (true)
+        {
+            var delayTask = Task.Delay(SandboxProvisioningHeartbeatInterval, ct);
+            var completed = await Task.WhenAny(boundTask, delayTask).ConfigureAwait(false);
+            if (ReferenceEquals(completed, boundTask))
+                return await boundTask.ConfigureAwait(false); // propagates the bound pod name / any error
+
+            // The claim is still unbound after the heartbeat interval — emit a non-terminal
+            // heartbeat so the coordinator's stall window resets while Kubernetes schedules the pod.
+            await delayTask.ConfigureAwait(false); // observe cancellation
+            await EmitProvisioningPendingAsync(runId, claimName, ct).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    /// Appends a single <see cref="EventTypes.SandboxProvisioningPending"/> heartbeat to
+    /// <paramref name="runId"/>'s durable event stream. Best-effort: a stream-append failure is
+    /// logged and swallowed so it can never fail a launch that Kubernetes would otherwise admit.
+    /// </summary>
+    private async Task EmitProvisioningPendingAsync(string runId, string claimName, CancellationToken ct)
+    {
+        try
+        {
+            await _runEventStream!.AppendAsync(runId, new RunEvent(0, EventTypes.SandboxProvisioningPending, new
             {
-                _logger.LogWarning(
-                    "KubernetesSandboxExecutor: agent pod quota '{Quota}' missing or unparseable " +
-                    "limits.cpu (used={Used}, hard={Hard}); skipping pre-launch quota check",
-                    ResourceQuotaName, usedStr ?? "(none)", hardStr ?? "(none)");
-                return;
-            }
+                claimName,
+                timestamp_utc = DateTimeOffset.UtcNow.ToString("O"),
+            }), ct).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
@@ -630,28 +943,9 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
         catch (Exception ex)
         {
             _logger.LogWarning(ex,
-                "KubernetesSandboxExecutor: could not read ResourceQuota '{Quota}' in namespace " +
-                "{Namespace}; skipping pre-launch quota check (best-effort)",
-                ResourceQuotaName, _options.Namespace);
-            return;
+                "KubernetesSandboxExecutor: failed to emit sandbox.provisioning_pending heartbeat for run {RunId} (best-effort)",
+                runId);
         }
-
-        if (hard - used < AgentPodCpuLimit)
-        {
-            _logger.LogWarning(
-                "KubernetesSandboxExecutor: agent pod quota exhausted ({Used}/{Hard} CPU used); " +
-                "need {Limit} CPU headroom to launch a new agent pod — signalling capacity-pending retry",
-                used, hard, AgentPodCpuLimit);
-            throw new AgentHostCapacityPendingException(used, hard, "quota_exceeded");
-        }
-    }
-
-    private static string? TryGetQuotaValue(
-        IDictionary<string, k8s.Models.ResourceQuantity>? map, string key)
-    {
-        if (map is not null && map.TryGetValue(key, out var quantity) && quantity is not null)
-            return quantity.ToString();
-        return null;
     }
 
     /// <summary>
@@ -693,8 +987,10 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
         {
             ct.ThrowIfCancellationRequested();
 
-            var pod = await _client.CoreV1.ReadNamespacedPodAsync(
-                podName, _options.Namespace, cancellationToken: ct).ConfigureAwait(false);
+            var pod = await ExecuteK8sWithRetryAsync(
+                token => _client.CoreV1.ReadNamespacedPodAsync(
+                    podName, _options.Namespace, cancellationToken: token),
+                ct).ConfigureAwait(false);
 
             var ip = pod?.Status?.PodIP;
             if (!string.IsNullOrWhiteSpace(ip))
@@ -710,7 +1006,7 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
 
     // ── Claim management ──────────────────────────────────────────────────────────
 
-    private Task CreateClaimAsync(string claimName, CancellationToken ct)
+    private async Task<bool> CreateClaimAsync(string claimName, CancellationToken ct)
     {
         // The cluster service CIDR must be present in SandboxEgressCidrExclusions so
         // sandbox NetworkPolicy does not accidentally allow in-cluster service egress.
@@ -729,9 +1025,20 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
             },
         };
 
-        return _client.CustomObjects.CreateNamespacedCustomObjectAsync(
-            manifest, ApiGroup, ApiVersion, _options.Namespace, ClaimPlural,
-            cancellationToken: ct);
+        try
+        {
+            await _client.CustomObjects.CreateNamespacedCustomObjectAsync(
+                manifest, ApiGroup, ApiVersion, _options.Namespace, ClaimPlural,
+                cancellationToken: ct).ConfigureAwait(false);
+            return true;
+        }
+        catch (HttpOperationException ex) when (ex.Response?.StatusCode == System.Net.HttpStatusCode.Conflict)
+        {
+            _logger.LogInformation(
+                "KubernetesSandboxExecutor: SandboxClaim {Claim} already exists; waiting for existing claim",
+                claimName);
+            return false;
+        }
     }
 
     /// <summary>
@@ -744,9 +1051,11 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
         {
             ct.ThrowIfCancellationRequested();
 
-            var raw = await _client.CustomObjects.GetNamespacedCustomObjectAsync(
-                ApiGroup, ApiVersion, _options.Namespace, ClaimPlural, claimName,
-                cancellationToken: ct);
+            var raw = await ExecuteK8sWithRetryAsync(
+                token => _client.CustomObjects.GetNamespacedCustomObjectAsync(
+                    ApiGroup, ApiVersion, _options.Namespace, ClaimPlural, claimName,
+                    cancellationToken: token),
+                ct).ConfigureAwait(false);
 
             var json = JsonSerializer.Serialize(raw);
             using var doc = JsonDocument.Parse(json);

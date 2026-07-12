@@ -138,13 +138,22 @@ Agentweaver's workflow schema models these conceptual node types:
 
 - **prompt** — an agent turn that produces work or analysis.
 - **peer_review** — an AI review turn that can emit approval, change request, decline, pass, or fail verdicts.
+- **build_test** — the platform-owned Build & Test gate. It runs the canonical build/test/preview instruction, emits `approved`, `request-changes`, or `declined`, and should sit after any RAI safety gate and before human review for software workflows. In `Sandbox:AgentExecutionMode=pod-per-run`, assembly Build & Test first launches a dedicated AgentHost pod for the coordinator run and configures it with the detached integration worktree as its working directory, so the gate and any `start_preview` server run from the same assembled tree.
 - **check** — a routing gate with declared branches. Known gate kinds include `rai`, `human-review`, and `rubberduck`.
 - **merge** — an action that applies produced changes.
 - **scribe** — a recording step that captures the outcome.
 - **terminal** — an explicit sink such as done, declined, or safety failed.
 - **fan_out**, **fan_in**, **serial**, **coordinator_composed** — schema-level extension points for richer topologies.
 
-Runtime binding supports prompt, peer-review, check gates with known gate kinds, merge, scribe, terminal sinks, and a set of sequential / review / direct-completion topologies. Extension node types remain explicit schema concepts; until executors bind them, the runtime fails closed.
+Runtime binding supports prompt, peer-review, `build_test`, check gates with known gate kinds, merge, scribe, terminal sinks, and a set of sequential / review / direct-completion topologies. Extension node types remain explicit schema concepts; until executors bind them, the runtime fails closed.
+
+### Software assembly gate order
+
+Authored assembly gates are executed in workflow traversal order, not YAML declaration order. The coordinator starts at `start` and performs a breadth-first traversal over only the happy-path edges: unconditional edges plus verdict edges whose `when` is `approved`, `pass`, or `review` (`apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyService.cs:1121`, `:1164`, `:1190`). Gate nodes discovered on that path are then projected to canonical assembly stages (`rai`, `build-test`, `rubberduck`, `human-review`) and deduplicated by stage (`CoordinatorAssemblyService.cs:1128`, `:1139`).
+
+For the built-in software workflows this means RAI runs before Build & Test, even if a YAML author groups node declarations differently. `bug-fix` follows `triage -> fix -> verify -> rai-check -> build-test -> human-review`; `software-delivery` follows `plan -> implement -> test-gate -> rai-check -> rubberduck -> code-review -> build-test -> review-gate` (`packages/Agentweaver.Squad/Catalog/Resources/workflows/bug_fix.yaml`, `software_delivery.yaml`). Copilot workflow and blueprint generation prompts carry the same rule so generated software workflows place `build_test` after any RAI gate and immediately before human review (`apps/Agentweaver.Api/Workflows/WorkflowGatePromptGuidance.cs:7`, `apps/Agentweaver.Api/Workflows/CopilotWorkflowGenerator.cs:243`, `apps/Agentweaver.Api/Blueprints/CopilotBlueprintGenerator.cs:152`).
+
+Build & Test infrastructure failures are not authored `request-changes` verdicts. Pod capacity, launch/readiness, endpoint-resolution, and A2A transport failures are raised as typed infrastructure exceptions, then parked as retryable `assembly_blocked` reasons or failed terminally for non-retryable configuration errors (`apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyService.cs:688`, `:1567`; `packages/Agentweaver.AgentRuntime/Workflow/WorkflowAgentInfrastructureException.cs:7`). The emitted event payload includes `detail`, `exceptionMessage`, `innerExceptionMessage`, `innerExceptionType`, and `infrastructureReason`, so operators can distinguish a quota park from an AgentHost launch or A2A transport root cause.
 
 ### The Default Workflow
 

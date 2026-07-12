@@ -2,7 +2,7 @@
   "id": "security-engineer",
   "title": "Security Engineer",
   "summary": "Safeguards the application and its supply chain through threat modeling, vulnerability review, and security-focused gating.",
-  "default_model": "claude-sonnet-4.6",
+  "default_model": "claude-sonnet-5",
   "capabilities": [
     "threat-modeling",
     "vulnerability-review",

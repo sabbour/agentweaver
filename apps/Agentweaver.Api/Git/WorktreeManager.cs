@@ -2,13 +2,11 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Text.RegularExpressions;
 using LibGit2Sharp;
-using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Agentweaver.Api.Contracts;
 using Agentweaver.Api.Infrastructure;
-using Agentweaver.Api.Memory;
 using Agentweaver.Api.Runs;
+using Agentweaver.AgentRuntime.Workflow;
 using Agentweaver.Domain;
 
 namespace Agentweaver.Api.Git;
@@ -24,7 +22,6 @@ public sealed class WorktreeManager
     private readonly string _basePath;
     private readonly Signature _signature;
     private readonly ILogger<WorktreeManager> _logger;
-    private readonly IServiceScopeFactory? _scopeFactory;
 
     /// <summary>How old a git lock file must be before it is considered stale (left by a crashed
     /// process) and safe to delete. A lock held by a CONCURRENTLY-RUNNING git operation is only a few
@@ -44,15 +41,25 @@ public sealed class WorktreeManager
 
     public WorktreeManager(
         IConfiguration configuration,
-        ILogger<WorktreeManager> logger,
-        IServiceScopeFactory? scopeFactory = null)
+        ILogger<WorktreeManager> logger)
     {
         _logger = logger;
-        _scopeFactory = scopeFactory;
         var configuredBase = configuration["Worktrees:BasePath"];
         _basePath = string.IsNullOrWhiteSpace(configuredBase)
             ? Path.Combine(AppPaths.DataDirectory, "worktrees")
             : Path.GetFullPath(configuredBase);
+
+        var workspaceMount = configuration["Sandbox:Kubernetes:WorkspaceMountPath"]
+            ?? configuration["Workspace:PersistentVolume:MountRoot"]
+            ?? configuration["Workspace:Path"]
+            ?? "/workspace";
+        if (!string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("KUBERNETES_SERVICE_HOST")) &&
+            !IsPathUnder(_basePath, Path.GetFullPath(workspaceMount)))
+        {
+            throw new InvalidOperationException(
+                $"Worktrees:BasePath must resolve under the shared workspace mount '{workspaceMount}' in Kubernetes. " +
+                $"Resolved value: '{_basePath}'.");
+        }
 
         Directory.CreateDirectory(_basePath);
 
@@ -103,12 +110,13 @@ public sealed class WorktreeManager
         // repository to inspect its HEAD and fails when the physical directory is missing).
         PruneWorktreeByName(repositoryPath, runId.ToString());
 
-        // WorktreeCollection.Add(committishOrBranchSpec, name, ...) calls git_worktree_add
-        // which always creates a NEW branch named `name` (= runId.ToString()) as a side-effect,
-        // then does Commands.Checkout to switch the worktree to committishOrBranchSpec.
-        // The runId-named branch is a throw-away: all commits go to agentweaver/<runId>.
-        // On re-create after pod restart this orphaned branch still exists and git_worktree_add
-        // fails with NameConflictException. Delete it before calling AddWorktree.
+        // AddWorktree now provisions via the git CLI (`git worktree add -b agentweaver/<runId>
+        // <path> <sha>`), which does NOT create a throw-away `<runId>`-named side-effect branch.
+        // Older code (pre-v0.9.33) used LibGit2Sharp WorktreeCollection.Add, whose underlying
+        // git_worktree_add always created such a branch as a side-effect. During a rolling restart a
+        // worktree may have been provisioned by that old code, leaving an orphaned `<runId>` branch
+        // that would make a fresh `git worktree add` fail with a name conflict. Delete it before
+        // recreating. For new-code worktrees no such branch exists, so this is a harmless no-op.
         DeleteOrphanedWorktreeBranch(repositoryPath, runId.ToString());
 
         // AddWorktree skips branch creation when agentweaver/<runId> already exists (recovery: always).
@@ -129,27 +137,52 @@ public sealed class WorktreeManager
                 "Repository path is not a valid git repository.", ex);
         }
 
+        var branchName = BranchNameFor(runId);
+        var worktreePath = Path.Combine(_basePath, runId.ToString());
+        bool branchExists;
+        string startSha;
+
         using (repo)
         {
             var origin = repo.Branches[originatingBranch]
                 ?? throw new RunSubmissionValidationException(
                     $"Originating branch '{Truncate(originatingBranch, 200)}' was not found.");
 
-            var branchName = BranchNameFor(runId);
-            if (repo.Branches[branchName] is null)
-            {
-                repo.CreateBranch(branchName, origin.Tip);
-            }
+            branchExists = repo.Branches[branchName] is not null;
 
-            var worktreePath = Path.Combine(_basePath, runId.ToString());
-            repo.Worktrees.Add(branchName, runId.ToString(), worktreePath, isLocked: false);
-
-            return new WorktreeInfo
-            {
-                WorktreePath = worktreePath,
-                BranchName = branchName
-            };
+            // Resolve the originating branch to a concrete commit SHA while the repo handle is open.
+            // Passing the resolved SHA (NOT the raw branch string) to `git worktree add` preserves the
+            // case-insensitive branch resolution LibGit2Sharp gives us (e.g. originatingBranch="main"
+            // resolving against a HEAD named "Main"), which callers/tests rely on and which the
+            // case-sensitive git CLI would otherwise fail to reproduce.
+            startSha = branchExists ? string.Empty : origin.Tip.Sha;
         }
+        // Dispose the LibGit2Sharp repo handle (exit the using block) BEFORE invoking the git CLI to
+        // avoid Windows file-handle contention on the .git directory.
+
+        if (!branchExists)
+        {
+            // New run: create the run branch at the resolved originating commit and check it out into
+            // a fresh worktree in a single git_worktree_add. This replaces the old LibGit2Sharp
+            // two-step (add at the main repo's HEAD + a non-forced Commands.Checkout onto
+            // agentweaver/<runId>), whose step 2 aborted with CheckoutConflictException when the
+            // integration tip diverged from HEAD in a checkout-unsafe way (e.g. a file<->directory
+            // typechange). Dependent subtasks base on the integration branch and hit exactly that.
+            RunGit(repositoryPath, "worktree", "add", "-b", branchName, worktreePath, startSha);
+        }
+        else
+        {
+            // Recovery: the run branch already exists (e.g. re-provisioning after a pod restart wiped
+            // ephemeral storage). Check the existing branch out into the worktree, preserving all
+            // prior committed work.
+            RunGit(repositoryPath, "worktree", "add", worktreePath, branchName);
+        }
+
+        return new WorktreeInfo
+        {
+            WorktreePath = worktreePath,
+            BranchName = branchName
+        };
     }
 
     /// <summary>
@@ -160,10 +193,9 @@ public sealed class WorktreeManager
     public WorktreeInfo AddDetachedWorktree(string repositoryPath, string sourceBranch, string worktreeName)
     {
         var safeName = SanitizeWorktreeName(worktreeName);
-        var worktreePath = Path.Combine(_basePath, safeName);
+        var worktreePath = DetachedWorktreePath(safeName);
 
-        if (Directory.Exists(worktreePath))
-            Directory.Delete(worktreePath, recursive: true);
+        DeleteDirectoryResilient(worktreePath);
 
         PruneWorktreeByName(repositoryPath, safeName);
         TryRunGitWorktreePrune(repositoryPath);
@@ -183,14 +215,179 @@ public sealed class WorktreeManager
         };
     }
 
+    public string DetachedWorktreePath(string worktreeName) =>
+        Path.Combine(_basePath, SanitizeWorktreeName(worktreeName));
+
+    private static bool IsPathUnder(string path, string root)
+    {
+        var fullPath = Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var fullRoot = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        return fullPath.Equals(fullRoot, StringComparison.OrdinalIgnoreCase)
+            || fullPath.StartsWith(fullRoot + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)
+            || fullPath.StartsWith(fullRoot + Path.AltDirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
+    }
+
     public void RemoveDetachedWorktree(string repositoryPath, string worktreePath)
     {
-        if (Directory.Exists(worktreePath))
-            Directory.Delete(worktreePath, recursive: true);
+        DeleteDirectoryResilient(worktreePath);
 
         var worktreeName = Path.GetFileName(worktreePath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
         if (!string.IsNullOrWhiteSpace(worktreeName))
             PruneWorktreeByName(repositoryPath, worktreeName);
+    }
+
+    // -------------------------------------------------------------------------
+    // Resilient recursive delete (issue #243)
+    //
+    // Azure Files SMB (Linux) can throw `IOException: Directory not empty`
+    // (ENOTEMPTY) when recursively deleting a populated worktree — a native
+    // `node_modules` tree (e.g. better-sqlite3 build artifacts) races SMB
+    // eventual-consistency of the child unlinks, so the parent rmdir still sees
+    // stale directory-listing metadata. A single transient failure at
+    // AddDetachedWorktree dead-ends the whole assembly Build/Test. The fix is a
+    // BOUNDED RETRY that absorbs the SMB consistency window (mirrors the
+    // lock-retry precedent in CoordinatorDispatchService). It is deliberately
+    // NOT a lingering-handle fix: Linux unlink orphans open inodes and never
+    // throws ENOTEMPTY, so there is no "kill the build process" step.
+    // -------------------------------------------------------------------------
+
+    /// <summary>Test seam (#243): overrides a single physical delete ATTEMPT so the retry/backoff
+    /// behaviour is unit-testable without a real SMB filesystem race. The bool argument is
+    /// <c>bottomUp</c> — <c>false</c> for the top-down <see cref="Directory.Delete(string,bool)"/>
+    /// fast path, <c>true</c> for the last-resort deepest-first manual sweep. <c>null</c> (default)
+    /// runs the real deletes. Never set in production.</summary>
+    internal Action<string, bool>? DeleteAttemptOverride { get; set; }
+
+    /// <summary>
+    /// Recursively deletes <paramref name="path"/>, tolerating the transient <c>Directory not empty</c>
+    /// / sharing-violation failures that Azure Files SMB throws while its child-unlink metadata is
+    /// still converging (issue #243). Attempt 1 is the plain top-down recursive delete (the common
+    /// success path — no extra work). On <see cref="IOException"/> or
+    /// <see cref="UnauthorizedAccessException"/> it retries up to 4 attempts total with short backoff
+    /// (~150→300→600 ms, &lt; ~2 s total), clearing read-only attributes between attempts and, on the
+    /// FINAL attempt, falling back to a deepest-first manual delete. If the directory still exists
+    /// after all attempts it RETHROWS the last error — it never returns while <paramref name="path"/>
+    /// survives, so a subsequent <c>git worktree add</c> can never build on a dirty tree.
+    /// </summary>
+    internal void DeleteDirectoryResilient(string path)
+    {
+        if (!Directory.Exists(path))
+            return;
+
+        // Attempt 1 == today's hot path. Runs on every assembly + teardown, so no read-only walk or
+        // bottom-up sweep here — keep the common success case cheap.
+        try
+        {
+            DeleteAttempt(path, bottomUp: false);
+            return;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            _logger.LogWarning(ex,
+                "WorktreeManager: recursive delete of '{Path}' failed (attempt 1/4); retrying with backoff", path);
+        }
+
+        // Manual-recursion path-safety guard: the retry path walks/deletes children itself, so refuse
+        // to operate on anything outside the worktree base (defence-in-depth against a bad path).
+        if (!IsPathUnder(path, _basePath))
+            throw new UnauthorizedAccessException(
+                $"WorktreeManager refuses to manually delete '{path}' — it is not under the worktree base '{_basePath}'.");
+
+        const int maxAttempts = 4;
+        var backoffMs = 150;
+        Exception? lastError = null;
+        for (var attempt = 2; attempt <= maxAttempts; attempt++)
+        {
+            Thread.Sleep(backoffMs);
+            backoffMs = Math.Min(backoffMs * 2, 1000);
+
+            // Native build artifacts (and Windows dev trees) are often read-only; clearing the bit is
+            // required on Windows and a harmless no-op on Linux.
+            TryClearReadOnlyRecursive(path);
+
+            try
+            {
+                DeleteAttempt(path, bottomUp: attempt == maxAttempts);
+                if (!Directory.Exists(path))
+                    return;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                lastError = ex;
+                _logger.LogWarning(ex,
+                    "WorktreeManager: recursive delete of '{Path}' failed (attempt {Attempt}/{Max})",
+                    path, attempt, maxAttempts);
+            }
+        }
+
+        // No-silent-success invariant: NEVER return while the directory still exists.
+        if (Directory.Exists(path))
+            throw lastError ?? new IOException(
+                $"WorktreeManager failed to delete directory '{path}' after {maxAttempts} attempts.");
+    }
+
+    private void DeleteAttempt(string path, bool bottomUp)
+    {
+        if (DeleteAttemptOverride is not null)
+        {
+            DeleteAttemptOverride(path, bottomUp);
+            return;
+        }
+
+        if (bottomUp)
+            DeleteDirectoryBottomUp(path);
+        else
+            Directory.Delete(path, recursive: true);
+    }
+
+    /// <summary>Deepest-first manual delete: removes every file, then every directory ordered by
+    /// descending path length (children before parents). More robust than the BCL's top-down
+    /// recursion against SMB eventual-consistency because each rmdir only runs once the directory is
+    /// provably empty. Exposed <c>internal</c> so the bottom-up branch can be unit-tested directly.</summary>
+    internal static void DeleteDirectoryBottomUp(string path)
+    {
+        if (!Directory.Exists(path))
+            return;
+
+        foreach (var file in Directory.EnumerateFiles(path, "*", SearchOption.AllDirectories))
+        {
+            try { File.SetAttributes(file, FileAttributes.Normal); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException) { }
+            File.Delete(file);
+        }
+
+        foreach (var dir in Directory
+                     .EnumerateDirectories(path, "*", SearchOption.AllDirectories)
+                     .OrderByDescending(d => d.Length))
+        {
+            Directory.Delete(dir, recursive: false);
+        }
+
+        Directory.Delete(path, recursive: false);
+    }
+
+    private void TryClearReadOnlyRecursive(string path)
+    {
+        try
+        {
+            var root = new DirectoryInfo(path);
+            if (!root.Exists)
+                return;
+
+            if ((root.Attributes & FileAttributes.ReadOnly) != 0)
+                root.Attributes &= ~FileAttributes.ReadOnly;
+
+            foreach (var info in root.EnumerateFileSystemInfos("*", SearchOption.AllDirectories))
+            {
+                if ((info.Attributes & FileAttributes.ReadOnly) != 0)
+                    info.Attributes &= ~FileAttributes.ReadOnly;
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex,
+                "WorktreeManager: clearing read-only attributes under '{Path}' failed (best-effort)", path);
+        }
     }
 
     public bool BranchExists(string repositoryPath, string branchName)
@@ -199,14 +396,84 @@ public sealed class WorktreeManager
         return repo.Branches[branchName] is not null;
     }
 
+    /// <summary>
+    /// Validates a child branch tip against the run handoff contract (issue #197 dependency-base fix).
+    /// Returns <c>true</c> when <paramref name="branchName"/> exists AND — when
+    /// <paramref name="expectedTreeSha"/> is non-empty — the branch tip's TREE sha equals it. This is the
+    /// authoritative "does this committed child carry the artifacts the coordinator recorded?" check,
+    /// replacing the unreliable <c>run.Diff</c> display string as the inclusion predicate. A non-empty
+    /// <paramref name="expectedTreeSha"/> that mismatches the branch tip means the branch is stale /
+    /// diverged from the recorded handoff (e.g. an in-place steer re-commit whose row was not observed),
+    /// so the caller must NOT include it silently. An empty/absent <paramref name="expectedTreeSha"/> is
+    /// treated as "no contract to verify" and passes as long as the branch exists.
+    /// <see cref="BranchExists"/> alone is too weak — it cannot detect a stale/mismatched tip.
+    /// </summary>
+    public bool BranchTipMatchesTree(string repositoryPath, string branchName, string? expectedTreeSha)
+    {
+        if (string.IsNullOrEmpty(branchName) || !Repository.IsValid(repositoryPath))
+            return false;
+
+        using var repo = new Repository(repositoryPath);
+        var tip = repo.Branches[branchName]?.Tip;
+        if (tip is null)
+            return false;
+        if (string.IsNullOrEmpty(expectedTreeSha))
+            return true;
+        return string.Equals(tip.Tree.Sha, expectedTreeSha, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Returns the tip COMMIT sha of <paramref name="branchName"/>, or <c>null</c> when the branch is
+    /// absent/empty. Used by the dependency-base contains-check to obtain a concrete commit id to feed
+    /// into <see cref="BranchContains"/> (which needs a commit, not the run's TREE hash).
+    /// </summary>
+    public string? GetBranchTipCommitSha(string repositoryPath, string branchName)
+    {
+        if (string.IsNullOrEmpty(branchName) || !Repository.IsValid(repositoryPath))
+            return null;
+
+        using var repo = new Repository(repositoryPath);
+        return repo.Branches[branchName]?.Tip?.Sha;
+    }
+
+    /// <summary>
+    /// Ancestor / containment check used to VERIFY that an integration branch actually incorporates a
+    /// required dependency's HEAD before a dependent child dispatches from it (issue #197, BLOCKING #3).
+    /// Returns <c>true</c> when <paramref name="candidateTipSha"/> is reachable from
+    /// <paramref name="branchName"/>'s tip (i.e. the merge-base of the two is exactly the candidate),
+    /// meaning the candidate commit is contained in the branch. An empty <paramref name="candidateTipSha"/>
+    /// is vacuously contained. This is the authoritative guard against a clobbered / stale / incomplete
+    /// integration branch (BuildIntegrationBranch deletes+recreates the ref each rebuild), so a concurrent
+    /// or crashed rebuild that dropped a required child is detected here and repaired before dispatch.
+    /// </summary>
+    public bool BranchContains(string repositoryPath, string branchName, string candidateTipSha)
+    {
+        if (string.IsNullOrEmpty(candidateTipSha))
+            return true;
+        if (string.IsNullOrEmpty(branchName) || !Repository.IsValid(repositoryPath))
+            return false;
+
+        using var repo = new Repository(repositoryPath);
+        var branchTip = repo.Branches[branchName]?.Tip;
+        if (branchTip is null)
+            return false;
+
+        var candidate = repo.Lookup<Commit>(candidateTipSha);
+        if (candidate is null)
+            return false;
+
+        var mergeBase = repo.ObjectDatabase.FindMergeBase(branchTip, candidate);
+        return mergeBase is not null && string.Equals(mergeBase.Sha, candidate.Sha, StringComparison.Ordinal);
+    }
+
     public string CommitChanges(string worktreePath, RunId runId)
     {
         using var repo = new Repository(worktreePath);
 
         Commands.Unstage(repo, "*");
         var pathsToStage = ResolveStagingPaths(repo, worktreePath, runId);
-        foreach (var path in pathsToStage)
-            Commands.Stage(repo, path);
+        if (pathsToStage.Count > 0)
+            Commands.Stage(repo, pathsToStage);
 
         // Check whether staging produced any actual changes vs HEAD. Creating an empty commit when
         // the agent wrote nothing causes the child branch to diverge from the origin with a
@@ -237,6 +504,13 @@ public sealed class WorktreeManager
             RecurseIgnoredDirs = false,
         });
 
+        // Scope-independent staging (issue #222 root cause): capture EVERY changed entry that is not
+        // ignored. Previously this set was filtered against a whitelist of path-like tokens scraped
+        // from the subtask scope prose, so a deliverable written outside that (mis-scraped) list —
+        // e.g. an entire server/ tree — was silently dropped and never committed, leaving dependent
+        // subtasks unable to see the work. This canonical set already INCLUDES deletions and renames,
+        // so it must NOT be narrowed to a New/Modified-only mask (that would drop deletions and
+        // corrupt renames).
         var changed = status
             .Where(e => e.State != 0 && (e.State & FileStatus.Ignored) == 0)
             .Select(e => NormalizePathSeparators(e.FilePath))
@@ -245,112 +519,75 @@ public sealed class WorktreeManager
         if (changed.Count == 0)
             return [];
 
-        var subtaskScope = TryLoadSubtaskScope(runId);
-        if (string.IsNullOrWhiteSpace(subtaskScope))
+        return ExcludeNestedRepositoryPaths(worktreePath, changed, runId);
+    }
+
+    /// <summary>
+    /// Defensively removes any changed path that lives at or under a NESTED git repository — a
+    /// subdirectory that contains its own <c>.git</c>. Scaffolders such as create-react-app and Vite
+    /// run <c>git init</c>, and libgit2 would stage such a subdirectory as an empty gitlink (a
+    /// submodule pointer) instead of the deliverable file tree, silently losing the work. Any skipped
+    /// nested-repo roots are logged as a warning.
+    /// </summary>
+    private IReadOnlyList<string> ExcludeNestedRepositoryPaths(
+        string worktreePath, IReadOnlyList<string> changed, RunId runId)
+    {
+        var nestedRoots = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var inspected = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var path in changed)
+        {
+            var segments = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
+            // Walk every prefix directory from the top-level segment down to (and INCLUDING) the leaf.
+            // The leaf is probed on purpose: libgit2 reports an embedded repo as a single "client" or
+            // "client/" gitlink entry (no child paths), so unless we test the leaf itself we would miss
+            // it and stage it as an empty gitlink (the N2 case). DirectoryIsGitRepository only matches
+            // real directories containing a .git, so probing a regular file leaf costs one extra stat
+            // and never false-positives — an accepted trade-off; do not "optimize" the leaf probe away.
+            var prefix = string.Empty;
+            for (var i = 0; i < segments.Length; i++)
+            {
+                prefix = i == 0 ? segments[i] : prefix + "/" + segments[i];
+                if (nestedRoots.Contains(prefix))
+                    break;
+                if (inspected.Add(prefix) && DirectoryIsGitRepository(
+                        Path.Combine(worktreePath, prefix.Replace('/', Path.DirectorySeparatorChar))))
+                {
+                    nestedRoots.Add(prefix);
+                    break;
+                }
+            }
+        }
+
+        if (nestedRoots.Count == 0)
             return changed;
 
-        var declaredOutputs = ExtractDeclaredPaths(subtaskScope);
-        if (declaredOutputs.Count > 0)
-        {
-            var selected = changed
-                .Where(path => declaredOutputs.Any(output => PathMatchesDeclaration(path, output)))
-                .ToList();
-            if (selected.Count == 0)
-                _logger.LogWarning(
-                    "Run {RunId} declared output file(s) but none matched changed files; no files will be committed",
-                    runId);
-            return selected;
-        }
+        _logger.LogWarning(
+            "Run {RunId}: skipping {Count} nested git repository root(s) during staging to avoid " +
+            "committing them as empty gitlinks: {Roots}",
+            runId, nestedRoots.Count, string.Join(", ", nestedRoots.OrderBy(r => r, StringComparer.Ordinal)));
 
-        var workingDir = ExtractDeclaredWorkingDirectory(subtaskScope);
-        var newOrModified = status
-            .Where(e => IsNewOrModified(e.State))
-            .Select(e => NormalizePathSeparators(e.FilePath))
-            .Where(path => string.IsNullOrEmpty(workingDir) || IsUnderDirectory(path, workingDir))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
+        return changed
+            .Where(path => !IsUnderAnyRoot(path, nestedRoots))
             .ToList();
-        return newOrModified;
     }
 
-    private string? TryLoadSubtaskScope(RunId runId)
+    private static bool IsUnderAnyRoot(string path, HashSet<string> roots)
     {
-        if (_scopeFactory is null)
-            return null;
-
-        try
+        var trimmed = path.TrimEnd('/');
+        foreach (var root in roots)
         {
-            using var scope = _scopeFactory.CreateScope();
-            var runStore = scope.ServiceProvider.GetRequiredService<IRunStore>();
-            var run = runStore.GetAsync(runId, CancellationToken.None).GetAwaiter().GetResult();
-            if (run?.SubtaskId is null || !int.TryParse(run.SubtaskId, out var subtaskId))
-                return null;
-
-            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
-            return db.Subtasks.AsNoTracking()
-                .Where(s => s.Id == subtaskId)
-                .Select(s => s.Scope)
-                .FirstOrDefault();
+            if (string.Equals(trimmed, root, StringComparison.OrdinalIgnoreCase)
+                || path.StartsWith(root + "/", StringComparison.OrdinalIgnoreCase))
+                return true;
         }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex,
-                "Could not resolve declared output files for run {RunId}; falling back to changed files",
-                runId);
-            return null;
-        }
+        return false;
     }
 
-    private static readonly Regex PathLikeToken = new(
-        @"(?<![\w./\\-])(?:[\w.+\-]+[/\\])+[\w.+\-]+|(?<![\w./\\-])[\w.+\-]+\.[A-Za-z0-9]{1,8}",
-        RegexOptions.Compiled);
-
-    private static IReadOnlyList<string> ExtractDeclaredPaths(string scope)
+    private static bool DirectoryIsGitRepository(string absoluteDirectory)
     {
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var result = new List<string>();
-        foreach (Match match in PathLikeToken.Matches(scope))
-        {
-            var path = NormalizePathSeparators(match.Value).Trim('/');
-            if (path.Length == 0 || path.Split('/').Any(seg => seg == "..") || Path.IsPathRooted(path))
-                continue;
-            if (seen.Add(path))
-                result.Add(path);
-        }
-        return result;
-    }
-
-    private static string? ExtractDeclaredWorkingDirectory(string scope)
-    {
-        var match = Regex.Match(scope,
-            @"(?i)(?:working\s+directory|workdir|directory)\s*[:=]\s*([A-Za-z0-9_.+\-/\\]+)");
-        if (!match.Success)
-            return null;
-        var path = NormalizePathSeparators(match.Groups[1].Value).Trim('/');
-        if (path.Length == 0 || path.Split('/').Any(seg => seg == "..") || Path.IsPathRooted(path))
-            return null;
-        return path;
-    }
-
-    private static bool PathMatchesDeclaration(string changedPath, string declaredPath) =>
-        string.Equals(changedPath, declaredPath, StringComparison.OrdinalIgnoreCase)
-        || changedPath.StartsWith(declaredPath.TrimEnd('/') + "/", StringComparison.OrdinalIgnoreCase);
-
-    private static bool IsUnderDirectory(string changedPath, string directory) =>
-        string.Equals(changedPath, directory, StringComparison.OrdinalIgnoreCase)
-        || changedPath.StartsWith(directory.TrimEnd('/') + "/", StringComparison.OrdinalIgnoreCase);
-
-    private static bool IsNewOrModified(FileStatus state)
-    {
-        const FileStatus mask =
-            FileStatus.NewInIndex
-            | FileStatus.ModifiedInIndex
-            | FileStatus.RenamedInIndex
-            | FileStatus.TypeChangeInIndex
-            | FileStatus.NewInWorkdir
-            | FileStatus.ModifiedInWorkdir
-            | FileStatus.RenamedInWorkdir
-            | FileStatus.TypeChangeInWorkdir;
-        return (state & mask) != 0;
+        var gitPath = Path.Combine(absoluteDirectory, ".git");
+        return Directory.Exists(gitPath) || File.Exists(gitPath);
     }
 
     public string GetDiff(string repositoryPath, string originatingBranch, string worktreeBranch)
@@ -524,8 +761,15 @@ public sealed class WorktreeManager
                 prettifyMessage: true);
         }
 
-        // Point the integration branch ref at the final assembled commit.
-        repo.Refs.UpdateTarget(repo.Refs[intBranch.CanonicalName], integrationCommit.Id);
+        // Point the integration branch ref at the final assembled commit. Under the shared-repo race
+        // (issue #218) a concurrent build can delete+recreate this ref between its creation above and
+        // here, so repo.Refs[intBranch.CanonicalName] may momentarily be null. Re-create the ref in that
+        // case instead of dereferencing null (which surfaced as an ArgumentNullException from UpdateTarget).
+        var intRef = repo.Refs[intBranch.CanonicalName];
+        if (intRef is null)
+            repo.Refs.Add(intBranch.CanonicalName, integrationCommit.Id, allowOverwrite: true);
+        else
+            repo.Refs.UpdateTarget(intRef, integrationCommit.Id);
 
         using var patch = repo.Diff.Compare<Patch>(origin.Tip.Tree, integrationCommit.Tree);
         return IntegrationBranchResult.Success(
@@ -717,6 +961,100 @@ public sealed class WorktreeManager
                 "WorktreeManager: failed to clean stale index lock file in repository {Path} (best-effort)",
                 repositoryPath);
         }
+    }
+
+    /// <summary>
+    /// Conservatively clears a STALE <c>index.lock</c> for a run's worktree between post-turn commit
+    /// retries (the in-place-revision wedge: a lingering/crashed process left the index locked). This
+    /// is the age-checked pattern used by <see cref="TryDeleteStaleLock"/> — NOT the unconditional
+    /// direct-delete anti-pattern — extended to resolve the ACTUAL gitdir for LINKED worktrees (their
+    /// <c>.git</c> is a pointer file, and the per-worktree index.lock lives under the resolved gitdir,
+    /// not <c>worktreePath/.git/index.lock</c>).
+    /// <para>
+    /// The SOLE guard is the configurable AGE threshold (<c>Coordinator:StaleLockThresholdSeconds</c>,
+    /// default 15s). We deliberately do NOT consult a host-global <c>git</c> process list: our own
+    /// commits use IN-PROCESS LibGit2Sharp (no subprocess), while a busy coordinator almost always has
+    /// SOME unrelated <c>git</c> process running (our own <c>git worktree add/prune</c> subprocesses,
+    /// agents invoking git as a tool). A global check would therefore refuse the clear in exactly the
+    /// concurrent scenario Fix-A #1 targets, re-wedging commit-retry. A lock older than the threshold
+    /// with no in-process git operation is safe to clear.
+    /// </para>
+    /// Never throws; returns diagnostics for the child-turn-failed evidence trail. The
+    /// <c>LiveGitProcessDetected</c> evidence field is retained for contract stability and is always
+    /// <c>false</c> under the age-only guard.
+    /// </summary>
+    public IndexLockClearResult ClearStaleIndexLock(string worktreePath)
+    {
+        try
+        {
+            var gitDir = ResolveGitDir(worktreePath);
+            if (gitDir is null)
+                return new IndexLockClearResult(false, false, null, false, null, "gitdir_unresolved");
+
+            var lockPath = Path.Combine(gitDir, "index.lock");
+            if (!File.Exists(lockPath))
+                return new IndexLockClearResult(false, false, null, false, lockPath, "no_lock_present");
+
+            var ageSeconds = (DateTime.UtcNow - File.GetLastWriteTimeUtc(lockPath)).TotalSeconds;
+
+            // The AGE gate is the sole guard. A lock younger than the configurable stale threshold is
+            // presumed actively held by a concurrent operation — refuse. A lock OLDER than the
+            // threshold is safe to clear: our own commits go through IN-PROCESS LibGit2Sharp (no git
+            // subprocess), so nothing of ours legitimately holds an index.lock for longer than the
+            // threshold. (We deliberately do NOT consult a host-global `git` process list — on a busy
+            // coordinator our own `git worktree add/prune` subprocesses and agent git-tool invocations
+            // mean a `git` process is almost always present, which would make the clear NEVER fire in
+            // exactly the concurrent scenario Fix-A #1 targets and re-wedge commit-retry. See
+            // decision note morpheus-fixa-inplace-terminal-design.md.)
+            if (ageSeconds < _staleLockThreshold.TotalSeconds)
+            {
+                _logger.LogDebug(
+                    "WorktreeManager: index.lock {Path} is only {AgeSec:F1}s old (< {ThresholdSec:F0}s); refusing to clear (likely active)",
+                    lockPath, ageSeconds, _staleLockThreshold.TotalSeconds);
+                return new IndexLockClearResult(true, false, ageSeconds, false, lockPath, "lock_too_recent");
+            }
+
+            File.Delete(lockPath);
+            _logger.LogWarning(
+                "WorktreeManager: cleared stale index.lock {Path} (age {AgeSec:F1}s) before post-turn commit retry",
+                lockPath, ageSeconds);
+            return new IndexLockClearResult(true, true, ageSeconds, false, lockPath, "cleared");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "WorktreeManager: best-effort stale index.lock clear failed for worktree {Path}", worktreePath);
+            return new IndexLockClearResult(false, false, null, false, null, $"error:{ex.GetType().Name}");
+        }
+    }
+
+    /// <summary>
+    /// Resolves the real gitdir for a worktree. A MAIN worktree has a <c>.git</c> DIRECTORY; a LINKED
+    /// worktree has a <c>.git</c> FILE containing <c>gitdir: &lt;abs-or-rel path&gt;</c>. Returns null
+    /// when neither is found.
+    /// </summary>
+    private static string? ResolveGitDir(string worktreePath)
+    {
+        var dotGit = Path.Combine(worktreePath, ".git");
+        if (Directory.Exists(dotGit))
+            return dotGit;
+        if (File.Exists(dotGit))
+        {
+            const string prefix = "gitdir:";
+            foreach (var rawLine in File.ReadAllLines(dotGit))
+            {
+                var line = rawLine.Trim();
+                if (!line.StartsWith(prefix, StringComparison.Ordinal))
+                    continue;
+                var pointer = line[prefix.Length..].Trim();
+                if (pointer.Length == 0)
+                    return null;
+                return Path.IsPathRooted(pointer)
+                    ? Path.GetFullPath(pointer)
+                    : Path.GetFullPath(Path.Combine(worktreePath, pointer));
+            }
+        }
+        return null;
     }
 
     private void TryRunGitWorktreePrune(string repositoryPath)
@@ -928,7 +1266,7 @@ public sealed class WorktreeManager
 
             if (!string.IsNullOrEmpty(path) && Directory.Exists(path))
             {
-                try { Directory.Delete(path, recursive: true); }
+                try { DeleteDirectoryResilient(path); }
                 catch (Exception ex) { _logger.LogWarning(ex, "Failed to delete worktree directory '{Path}'", path); }
             }
 
@@ -1530,7 +1868,7 @@ public sealed class WorktreeManager
         // must be gone so that Prune (Step 2) can remove the admin entry.
         if (Directory.Exists(worktreePath))
         {
-            Directory.Delete(worktreePath, recursive: true);
+            DeleteDirectoryResilient(worktreePath);
         }
 
         // Step 2: Prune the stale admin entry (.git/worktrees/<name>/HEAD).

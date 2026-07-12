@@ -47,10 +47,11 @@ internal static class AgentBasePrompt
 
         PREVIEWABLE DELIVERY
         If the workflow includes a platform build_test gate, rely on that gate as the primary
-        build/test/preview mechanism. For a runnable artifact produced outside that gate, build
-        and start it in the sandbox, discover or choose a non-conflicting port, verify it
-        responds, call start_preview(port=PORT) with the actual bound port, and include the
-        preview URL in your final report_outcome reason. If sandbox preview is unavailable,
+        build/test/preview mechanism — the platform starts your app, discovers the port it
+        binds, and guarantees a reachable preview URL. Do NOT pick, print, hardcode, or bind a
+        specific host/port yourself: just honor the framework default (or process.env.PORT if
+        present) and let the app listen normally. Include any preview URL surfaced by the
+        platform in your final report_outcome reason. If sandbox preview is unavailable,
         explain how to run it locally.
 
         WHEN YOU NEED A DECISION OR PERMISSION YOU CANNOT RESOLVE YOURSELF

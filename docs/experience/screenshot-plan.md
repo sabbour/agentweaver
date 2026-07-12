@@ -101,6 +101,7 @@ rg "📸 \*\*Screenshot" docs/experience
 | 49 | `observability-traces.png` | `transaction-traces.md` | `/projects/:projectId/observability/traces` | Observability → Traces | Observability Traces tab listing recent coordinator runs with status badges, Open run, Preview trace, and Refresh. | ≥1 coordinator run |
 | 50 | `observability-trace-preview.png` | `transaction-traces.md` | `/projects/:projectId/observability/traces` | Traces → Preview trace | Expanded trace preview with hierarchical transaction trace panel, span rows, and selected span details when AppInsights data is available. | App Insights trace data for run |
 | 51 | `browser-console.png` | `browser-console.md` | `/overview or /console` | Click Console in top bar (or navigate /console) | Control console slide panel with Agentweaver Console header, context badges, shortcut buttons, response scrollback, and bottom prompt. | signed-in session; project/run context optional |
+| 52 | `assembly-review-escalation.png` | `resilient-assembly-review.md` | `/projects/:projectId/orchestrations/:runId` | Let an assembly gate exhaust its steering budget → review card opens | Human-review card with `reason: steering_budget_exhausted`, accumulated autonomous gate feedback, and Approve / Decline / Request changes actions. | active RUN_ID whose assembly steering budget is exhausted |
 
 ## Count per page
 
@@ -123,4 +124,5 @@ rg "📸 \*\*Screenshot" docs/experience
 | `token-usage-monitoring.md` | 5 |
 | `transaction-traces.md` | 2 |
 | `workflows-backlog.md` | 4 |
-| **Total** | **51** |
+| `resilient-assembly-review.md` | 1 |
+| **Total** | **52** |

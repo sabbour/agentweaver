@@ -85,7 +85,7 @@ public sealed class CoordinatorAutopilot : ICoordinatorAutopilot
         _scopeFactory = scopeFactory;
         _loggerFactory = loggerFactory;
         _logger = loggerFactory.CreateLogger<CoordinatorAutopilot>();
-        _defaultCopilotModel = configuration["Providers:GitHubCopilot:Model"] ?? "gpt-4o";
+        _defaultCopilotModel = configuration["Providers:GitHubCopilot:Model"] ?? CoordinatorModelDefaults.DefaultCopilotModel;
     }
 
     /// <inheritdoc />

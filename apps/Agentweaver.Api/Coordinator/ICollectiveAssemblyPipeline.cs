@@ -30,6 +30,32 @@ public interface ICollectiveAssemblyPipeline
     /// <summary>Runs the collective Build & Test gate over the assembled integration branch.</summary>
     Task<CollectiveGateDecision> RunBuildTestAsync(CollectiveBuildTestRequest request, CancellationToken ct);
 
+    /// <summary>
+    /// Provisions (or destructively recreates) the detached reviewer worktree for the assembly gates so
+    /// the collective RAI + rubber-duck reviewers can READ the assembled integration files host-side —
+    /// raw bytes, line endings, integration state — rather than only the aggregate diff text (#236).
+    /// Reuses the deterministic Build/Test worktree name: Build/Test destructively recreates the same
+    /// worktree when it runs (no reviewer-write bleed into Build/Test) and the existing
+    /// <see cref="CleanupBuildTestResourcesAsync"/> path tears it down (no extra cleanup wiring).
+    /// Returns the absolute worktree path. Callers should only invoke this when the integration has
+    /// changes; empty-diff assemblies never need a worktree.
+    /// </summary>
+    string PrepareReviewerWorktree(string coordinatorRunId, string repositoryPath, string integrationBranch);
+
+    /// <summary>Releases any coordinator-scoped Build/Test pod and detached worktree.</summary>
+    Task CleanupBuildTestResourcesAsync(
+        string coordinatorRunId,
+        string repositoryPath,
+        CancellationToken ct = default);
+
+    /// <summary>
+    /// Absolute path of the coordinator's detached Build/Test worktree (spec-006 decouple-preview).
+    /// The deterministic <c>PreviewStep</c> uses it as its command-discovery root and process cwd.
+    /// The path is deterministic from the coordinator run id and is valid from the moment
+    /// <see cref="RunBuildTestAsync"/> creates the worktree until <see cref="CleanupBuildTestResourcesAsync"/>.
+    /// </summary>
+    string GetBuildTestWorktreePath(string coordinatorRunId);
+
     /// <summary>Performs the ONE collective merge of the integration branch into the originating branch.</summary>
     Task<CollectiveMergeResult> MergeAsync(CollectiveMergeRequest request, CancellationToken ct);
 
@@ -45,27 +71,36 @@ public sealed record CollectiveIntegrationRequest(
     IReadOnlyList<string> ChildBranchesInOrder);
 
 /// <summary>Inputs to the collective RAI review of the aggregate diff.</summary>
+/// <param name="WorktreePath">
+/// #236 — absolute path of a checked-out worktree at the assembled integration branch, so the reviewer
+/// can read the integration files host-side. Empty ⇒ diff-text-only (empty-diff assemblies).</param>
 public sealed record CollectiveRaiRequest(
     string CoordinatorRunId,
     string RepositoryPath,
     string AggregateDiff,
-    string SubmittingUser);
+    string SubmittingUser,
+    string WorktreePath = "");
 
 /// <summary>Outcome of the collective RAI review.</summary>
 public sealed record CollectiveRaiResult(bool SafetyFlagged);
 
 /// <summary>Inputs to the collective rubber-duck review of the aggregate diff.</summary>
+/// <param name="WorktreePath">
+/// #236 — absolute path of a checked-out worktree at the assembled integration branch, so the reviewer
+/// can read the integration files host-side. Empty ⇒ diff-text-only (empty-diff assemblies).</param>
 public sealed record CollectiveRubberduckRequest(
     string CoordinatorRunId,
     string RepositoryPath,
     string AggregateDiff,
     string SubmittingUser,
     string? GateNodeId = null,
-    string? DisplayLabel = null);
+    string? DisplayLabel = null,
+    string WorktreePath = "");
 
 /// <summary>Inputs to the collective Build & Test gate.</summary>
 public sealed record CollectiveBuildTestRequest(
     string CoordinatorRunId,
+    string? ProjectId,
     string RepositoryPath,
     string IntegrationBranch,
     string AggregateTreeHash,
@@ -76,7 +111,32 @@ public sealed record CollectiveBuildTestRequest(
     string? AgentId = null);
 
 /// <summary>Normalized pass/revise decision from an authored collective assembly gate.</summary>
-public sealed record CollectiveGateDecision(bool Approved, bool RequestChanges, string? Feedback);
+/// <param name="TargetFiles">
+/// #223 — the reviewer's OPTIONAL structured implicated-file hint (repo-relative diff paths it
+/// actually saw). Reverse-mapped to implicated subtasks deterministically by the coordinator; never
+/// inferred from prose. Null/empty ⇒ the coordinator fails safe to the whole contributor set.</param>
+public sealed record CollectiveGateDecision(
+    bool Approved,
+    bool RequestChanges,
+    string? Feedback,
+    IReadOnlyList<string>? TargetFiles = null);
+
+public sealed class CollectiveBuildTestInfrastructureException : Exception
+{
+    public string Reason { get; }
+    public bool Retryable { get; }
+
+    public CollectiveBuildTestInfrastructureException(
+        string reason,
+        string message,
+        bool retryable = true,
+        Exception? innerException = null)
+        : base(message, innerException)
+    {
+        Reason = string.IsNullOrWhiteSpace(reason) ? "build_test_infrastructure_failure" : reason;
+        Retryable = retryable;
+    }
+}
 
 /// <summary>Inputs to the single collective merge of the integration branch into origin.</summary>
 public sealed record CollectiveMergeRequest(

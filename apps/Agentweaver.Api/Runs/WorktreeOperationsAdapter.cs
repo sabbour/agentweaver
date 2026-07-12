@@ -94,4 +94,9 @@ public sealed class WorktreeOperationsAdapter : IWorktreeOperations
             return null;
         }
     }
+
+    public IndexLockClearResult TryClearStaleIndexLock(string worktreePath)
+    {
+        return _worktreeManager.ClearStaleIndexLock(worktreePath);
+    }
 }

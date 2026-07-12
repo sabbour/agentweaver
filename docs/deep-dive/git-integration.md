@@ -137,10 +137,10 @@ stateDiagram-v2
 
 A normal run follows this logic:
 
-1. **Create branch and worktree**: create `agentweaver/{runId}` from the originating branch and check it out in a dedicated worktree.
+1. **Create branch and worktree**: create `agentweaver/{runId}` from the originating branch tip and check it out in a dedicated worktree with a single git-CLI `git worktree add -b agentweaver/{runId} {path} {sha}` (recovery re-checks out the already-existing branch with `git worktree add {path} agentweaver/{runId}`). Provisioning in one step — rather than the older LibGit2Sharp add-at-HEAD-then-checkout — means a run whose branch tip diverges from the primary repository HEAD in a checkout-unsafe way (for example a file/directory typechange) no longer aborts worktree creation, so dependent subtasks that base on the run integration branch provision reliably (`apps/Agentweaver.Api/Git/WorktreeManager.cs:127`, `:171`, `:178`).
 2. **Persist before execution**: store the worktree path and branch on the run before the agent starts.
 3. **Agent writes files**: the agent executes inside the worktree.
-4. **Commit candidate result**: stage allowed changes, commit them on the run branch, and compute the tree hash.
+4. **Commit candidate result**: stage every non-ignored change, commit them on the run branch, and compute the tree hash.
 5. **Compute diff**: compare the originating branch tree with the run branch tree.
 6. **Wait for review**: store tree hash, diff, step count, and move to `awaiting_review`.
 7. **Approve, decline, or revise**: human review either merges, declines, or sends the run back into the same worktree for another revision.
@@ -151,12 +151,12 @@ A normal run follows this logic:
 
 Agentweaver commits the worktree branch after the agent turn. The commit message is deterministic: `Agentweaver run {runId}`. The author identity comes from configuration, defaulting to `Agentweaver <agentweaver@localhost>`.
 
-The staging rule has two modes:
+Staging is **scope-independent**. Agentweaver stages every changed, non-ignored path in the worktree — including deletions and renames — regardless of any coordinator subtask scope. There is no whitelist derived from a subtask's declared output paths or declared working directory. An earlier version scraped path-like tokens from the subtask scope prose and committed only matching changes; that whitelist silently dropped deliverables written to subdirectories (for example an entire `server/` tree), leaving dependent subtasks unable to see the work.
 
-- **Normal runs** stage all non-ignored changed paths.
-- **Coordinator subtask runs** can narrow staging based on declared output paths or a declared working directory in the subtask scope.
+Two defensive rules keep that broad capture safe:
 
-That subtask filtering matters because coordinator children may share an orchestration worktree. If a subtask declares outputs, Agentweaver attempts to commit only matching changed paths. If no declared paths are found, it falls back to new or modified files under the declared working directory when one is present.
+- **Nested git repositories are skipped.** Scaffolders such as create-react-app and Vite run their own `git init`, so a changed subdirectory can contain its own `.git`. Agentweaver walks each changed path and excludes anything at or under such a nested repository, because libgit2 would otherwise stage it as an empty gitlink (a submodule pointer) and lose the actual file tree. Skipped nested-repo roots are logged.
+- **Blank projects are seeded with a baseline `.gitignore`.** When a blank project is initialized, Agentweaver writes a baseline ignore file — covering `node_modules/`, `dist/`, `build/`, `.venv/`, `__pycache__/`, `.env*`, `bin/`, `obj/`, and similar — and commits it in the initial commit, without ever clobbering an existing `.gitignore`. This keeps dependency and build artifacts out of the scope-independent staging set.
 
 Agentweaver avoids empty commits. If staging produces no difference from HEAD, it returns the existing HEAD tree hash. That lets the workflow treat the child as a no-change result instead of manufacturing a zero-diff commit that looks like delivered work.
 
@@ -291,11 +291,26 @@ The database can remember a worktree path while the physical directory is gone. 
 
 Reasoning model: git branch state and database metadata are durable; ephemeral worktree directories can be reconstructed when enough metadata remains.
 
+### Resilient worktree deletion on Azure Files SMB
+
+Worktree directories are deleted and recreated constantly: `AddDetachedWorktree` destructively recreates the shared `assembly-build-test-{…}` worktree on every assembly Build & Test, and the teardown paths remove run worktrees after merge. On the Azure Files **SMB** volume that backs `/workspace` in the cloud, a plain `Directory.Delete(path, recursive: true)` of a populated native `node_modules` tree (for example `better-sqlite3` with deep `build/Release/obj/gen/sqlite3` build artifacts) can throw `IOException: Directory not empty` (ENOTEMPTY): the BCL removes children and then rmdir's the parent, but SMB's directory-listing metadata is only eventually consistent, so a child unlink returns success while the parent's rmdir still sees the stale entry. A single transient failure in `AddDetachedWorktree` re-threw and dead-ended assembly Build & Test.
+
+The worktree delete sites now route through `WorktreeManager.DeleteDirectoryResilient` (`apps/Agentweaver.Api/Git/WorktreeManager.cs:272`), a bounded retry that absorbs the SMB eventual-consistency window:
+
+- **Fast path first.** Attempt 1 is the plain top-down `Directory.Delete(recursive: true)` with no extra work, so the common success case — which runs on every assembly and teardown — pays nothing.
+- **Bounded retry on `IOException` / `UnauthorizedAccessException` only.** Up to four attempts total with short backoff (~150 → 300 → 600 ms, under ~2 s total — not minutes, not exponential-to-30 s), clearing read-only attributes between attempts (needed on Windows dev machines, a harmless no-op on Linux).
+- **Bottom-up last resort.** On the final attempt only, it deletes deepest-first (files then directories) rather than top-down. The manual recursion is refused unless the target is under the worktree base path (reusing the existing `IsPathUnder` guard, `:221`), so a bad path can never walk outside `_basePath`.
+- **Never silent-succeed.** If the directory still exists after all attempts, the last exception is re-thrown. Returning while a non-empty directory survived would let the next `git worktree add` build on a dirty tree and produce a corrupt or misleading Build & Test — so that outcome is designed out.
+
+Applied at `AddDetachedWorktree` (the terminal failing site, `:198`), `RemoveDetachedWorktree` (`:232`), `PruneWorktreesCheckedOutOnBranch` (`:1269`), and `RemoveWorktree` (`:1871`). This is deliberately **not** a lingering-file-handle fix: on Linux `unlink` succeeds on open files (orphaning the inode), so it never causes ENOTEMPTY, and there is no "kill the build process first" step. It is a filesystem-robustness fix, kept general rather than `better-sqlite3`-specific.
+
+Reasoning model: on an eventually-consistent network filesystem a delete that "failed" may already be converging — a bounded retry is correct, but silently proceeding on a surviving directory is not.
+
 ### Orphaned worktree branch
 
-LibGit2Sharp's worktree add behavior can create a throw-away branch named after the worktree name. Agentweaver deletes that orphaned branch during recovery so recreating the real `agentweaver/{runId}` worktree does not fail with a name conflict.
+Worktrees are provisioned through the git CLI (`git worktree add -b agentweaver/{runId} …`), which does **not** create a throw-away branch named after the worktree. Older builds (pre-v0.9.33) used LibGit2Sharp's worktree add, whose underlying `git_worktree_add` always created such a `{runId}`-named branch as a side effect. During a rolling restart a worktree may still have been provisioned by that old code, leaving an orphaned `{runId}` branch that would make a fresh `git worktree add` fail with a name conflict. Agentweaver deletes that orphaned branch before recreating the real `agentweaver/{runId}` worktree; for worktrees created by the current git-CLI path no such branch exists, so the deletion is a harmless no-op.
 
-Reasoning model: the run branch is `agentweaver/{runId}`; a plain `{runId}` branch is an implementation artifact.
+Reasoning model: the run branch is `agentweaver/{runId}`; a plain `{runId}` branch is a legacy LibGit2Sharp implementation artifact.
 
 ### No changes
 
@@ -356,6 +371,7 @@ A rebuild should preserve these rules:
 11. **Coordinator integration branches are assembled headlessly and all-or-nothing**.
 12. **GitHub tokens are credentials, not project metadata**.
 13. **Raw access tokens are not logged or stored in run/project records**.
+14. **Worktree directory deletes are resilient to SMB eventual consistency** and never silently succeed while the directory still exists.
 
 ## Trade-offs
 
@@ -373,7 +389,7 @@ Ref-only merge protects dirty base workspaces from destructive resets. The trade
 
 ### Shared coordinator worktree
 
-Coordinator child runs can collaborate through a shared orchestration worktree. That enables multi-agent decomposition, but it weakens isolation between children. Agentweaver compensates with conservative scheduling, subtask output scoping, and a final integration branch.
+Coordinator child runs can collaborate through a shared orchestration worktree. That enables multi-agent decomposition, but it weakens isolation between children. Agentweaver compensates with conservative scheduling and a final integration branch.
 
 ### SQLite metadata plus git content
 
@@ -384,13 +400,13 @@ This split keeps large file content and history in git while SQLite tracks lifec
 If rebuilding the git integration subsystem, implement it in this order:
 
 1. Define run metadata: repository path, originating branch, worktree path, worktree branch, tree hash, diff, status, merge result, merged commit hash, and conflict list.
-2. Initialize blank repositories with an initial commit so default branches are never unborn.
+2. Initialize blank repositories with a baseline `.gitignore` and an initial commit so default branches are never unborn and dependency/build artifacts stay untracked.
 3. Clone GitHub repositories using ephemeral HTTPS credentials from a refresh-aware token provider.
 4. Create deterministic run branches as `agentweaver/{runId}` from the originating branch.
 5. Add run worktrees under a controlled base path using the run id as directory name.
 6. Persist worktree path and branch before agent execution.
 7. Execute agents with the worktree as their working directory and sandbox boundary.
-8. Stage changed files, respecting coordinator subtask output scopes where applicable.
+8. Stage every changed, non-ignored file (including deletions and renames), skipping nested git repositories to avoid committing them as empty gitlinks.
 9. Avoid empty commits; return the current HEAD tree hash for no-change results.
 10. Store the candidate tree hash, full diff against the originating branch, and review-ready state.
 11. Implement request-changes by reusing the same worktree and branch for revision.
@@ -403,11 +419,12 @@ If rebuilding the git integration subsystem, implement it in this order:
 
 ## Common gotchas
 
-- `agentweaver/{runId}` is the real run branch; a plain run-id branch can be a LibGit2Sharp worktree side effect.
+- `agentweaver/{runId}` is the real run branch; a plain run-id branch is a legacy (pre-v0.9.33) LibGit2Sharp worktree side effect — current git-CLI provisioning never creates one.
 - A run branch name is not enough for approval. The tree hash is the content identity.
 - The diff shown for review is against the originating branch, not just the last commit.
 - A missing physical worktree can be recoverable if the database row and git branch still exist.
 - A missing branch is much harder to recover because git has lost the candidate content reference.
 - Dirty checked-out target branches may merge ref-only, so the working directory can lag behind the branch ref.
 - Coordinator children are not isolated like normal runs; they intentionally share an orchestration worktree.
+- Worktree deletes on Azure Files SMB can transiently fail with `Directory not empty`; `WorktreeManager.DeleteDirectoryResilient` retries with backoff and never silently proceeds while the directory still exists (see [Resilient worktree deletion](#resilient-worktree-deletion-on-azure-files-smb)).
 - The GitHub API usage is raw `HttpClient`, not Octokit.

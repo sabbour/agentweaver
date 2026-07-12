@@ -171,6 +171,14 @@ public sealed record RunResponse
     public string? CoordinatorStatusReason { get; init; }
 
     /// <summary>
+    /// True when a COORDINATOR run can accept steering/messages. Human-review parking
+    /// (<c>awaiting_review</c>) is intentionally steerable so operators can talk to the
+    /// coordinator while the collective assembly gate is open.
+    /// </summary>
+    [JsonPropertyName("coordinator_steerable")]
+    public bool CoordinatorSteerable { get; init; }
+
+    /// <summary>
     /// Current value of the per-run <c>auto-approve-tools</c> option (allow-with-approval tool
     /// requests are auto-granted at the HITL gate; policy denies are unaffected). Reflects launch
     /// value and any live toggle. (Feature 008)
@@ -872,8 +880,9 @@ public sealed record StartOrchestrationRequest
     [JsonPropertyName("autoApproveTools")] public bool AutoApproveTools { get; init; }
 
     /// <summary>When true, the coordinator auto-answers clarifying questions (its own and bubbled
-    /// child questions) using the coordinator model. Permissions are NOT auto-granted. Cascades to
-    /// children. Defaults to false. (Feature 008)</summary>
+    /// child questions) using the coordinator model. It also auto-confirms the Phase-1 outcome spec
+    /// (defineOutcome mode) unattended on behalf of the submitting user. Permissions are NOT
+    /// auto-granted. Cascades to children. Defaults to false. (Feature 008)</summary>
     [JsonPropertyName("autopilot")] public bool Autopilot { get; init; }
 
     /// <summary>Optional workflow id override. When set, the coordinator uses this workflow instead of auto-selecting.

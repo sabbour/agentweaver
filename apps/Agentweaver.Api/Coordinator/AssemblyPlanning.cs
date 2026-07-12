@@ -158,89 +158,113 @@ public static class AssemblyPlanning
         return files;
     }
 
+    // UNIFIED AUTONOMOUS STEERING (rev8, §9): the fragile prose-parsing InferRedispatch heuristic and
+    // its AssemblyRejectionPlan result record are DELETED. Reviewer feedback no longer selects
+    // subtasks by parsing prose; the coordinator (or the deterministic direction-B executor in
+    // CoordinatorAssemblyService.RequestChangesAsync) chooses targets explicitly. The tokenizers
+    // (ExtractFileTokens / ExtractTouchedFiles / NormalizePath) are retained: output-conflict
+    // detection still uses them.
+
+    // -----------------------------------------------------------------------
+    // #223 implicated-subtask scoping (shared by the deterministic direction-B executor and the
+    // live steering path). Deterministic reverse-map from a reviewer's STRUCTURED file hint onto the
+    // subtasks that touched those files — never prose, never subtask ids. Fail-safe over-include.
+    // -----------------------------------------------------------------------
+
+    /// <summary>Fallback reason: the reviewer emitted no structured <c>targetFiles</c> field at all.</summary>
+    public const string ScopeFallbackNoField = "no_target_files_field";
+
+    /// <summary>Fallback reason: a <c>targetFiles</c> field was present but reverse-mapped to no subtask.</summary>
+    public const string ScopeFallbackNoMatch = "target_files_matched_nothing";
+
     /// <summary>
-    /// D6 rejection routing. Given reviewer feedback (free text + optional explicit
-    /// <paramref name="targetFiles"/>), the files each child subtask touched, and the dependency
-    /// edges, selects the subtasks to RE-DISPATCH: every child whose touched files intersect the
-    /// inferred file set, PLUS all of their (transitive) dependents. FALLBACK: if no files can be
-    /// inferred, or no child matches, ALL subtasks are selected (re-dispatch everything).
+    /// #223 — the SINGLE implicated-scoping rule shared by <c>RequestChangesAsync</c> and the live
+    /// <c>RouteAssemblyGateThroughSteeringAsync</c>. Reverse-maps a reviewer's STRUCTURED
+    /// <paramref name="targetFiles"/> hint (repo-relative diff paths the reviewer actually saw — never
+    /// prose, never subtask ids) onto the assembly-eligible subtasks that touched one of those files.
+    /// Only these subtasks' authors produced a rejected artifact, so only these are eligible for author
+    /// lockout — a prose/research/PRD/UX subtask that committed only unnamed files is EXCLUDED.
+    /// <para>Fail-safe over-include: when no target files are provided (<paramref name="usedFallback"/> =
+    /// true, reason <see cref="ScopeFallbackNoField"/>) OR the provided files match nothing
+    /// (<paramref name="usedFallback"/> = true, reason <see cref="ScopeFallbackNoMatch"/>), the WHOLE
+    /// contributor set is returned — a request-changes must always reset SOMETHING. The out-params make
+    /// the reversion to broad behavior observable rather than silent.</para>
     /// </summary>
-    public static AssemblyRejectionPlan InferRedispatch(
-        string? feedback,
-        IReadOnlyCollection<string>? targetFiles,
+    /// <param name="touchedFilesBySubtask">Assembly-eligible subtask id → the (normalized) files it committed.</param>
+    /// <param name="targetFiles">The reviewer's structured implicated-file hint (may be null/empty).</param>
+    /// <param name="usedFallback">True when the broad all-contributors set was returned.</param>
+    /// <param name="fallbackReason">
+    /// <see cref="ScopeFallbackNoField"/> / <see cref="ScopeFallbackNoMatch"/> when
+    /// <paramref name="usedFallback"/>; empty otherwise.</param>
+    public static IReadOnlyList<int> ScopeImplicatedSubtasks(
         IReadOnlyDictionary<int, IReadOnlySet<string>> touchedFilesBySubtask,
+        IReadOnlyList<string>? targetFiles,
+        out bool usedFallback,
+        out string fallbackReason)
+    {
+        var candidateIds = touchedFilesBySubtask.Keys.OrderBy(x => x).ToList();
+
+        var wanted = (targetFiles ?? [])
+            .Select(NormalizePath)
+            .Where(f => f.Length > 0)
+            .ToList();
+
+        if (wanted.Count == 0)
+        {
+            usedFallback = true;
+            fallbackReason = ScopeFallbackNoField;
+            return candidateIds;
+        }
+
+        var matched = touchedFilesBySubtask
+            .Where(kv => kv.Value.Any(tf => wanted.Any(w =>
+                string.Equals(tf, w, StringComparison.OrdinalIgnoreCase)
+                || tf.EndsWith("/" + w, StringComparison.OrdinalIgnoreCase))))
+            .Select(kv => kv.Key)
+            .OrderBy(x => x)
+            .ToList();
+
+        if (matched.Count > 0)
+        {
+            usedFallback = false;
+            fallbackReason = string.Empty;
+            return matched;
+        }
+
+        usedFallback = true;
+        fallbackReason = ScopeFallbackNoMatch;
+        return candidateIds;
+    }
+
+    /// <summary>
+    /// #223 — the transitive DEPENDENT closure of <paramref name="implicated"/>: every subtask that
+    /// depends, directly or transitively, on an implicated subtask (following the
+    /// <c>(SubtaskId, DependsOnSubtaskId)</c> edges in REVERSE). EXCLUDES the implicated subtasks
+    /// themselves. The redispatch set is <c>implicated ∪ dependents</c>: a dependent did nothing wrong
+    /// (its author is NEVER locked out) but must rebuild against the revised contract of the subtask it
+    /// depends on. Deterministic (ascending id), cycle-safe (each id visited once).
+    /// </summary>
+    public static IReadOnlyList<int> TransitiveDependents(
+        IReadOnlyCollection<int> implicated,
         IReadOnlyCollection<(int SubtaskId, int DependsOnSubtaskId)> edges)
     {
-        var allIds = touchedFilesBySubtask.Keys.ToHashSet();
-
-        // Inferred file set = explicit target_files ∪ tokens parsed from the free-text feedback.
-        var inferred = new List<string>();
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var f in (targetFiles ?? []).Concat(ExtractFileTokens(feedback)))
+        var seed = implicated.ToHashSet();
+        var dependents = new HashSet<int>();
+        var queue = new Queue<int>(seed);
+        while (queue.Count > 0)
         {
-            var n = NormalizePath(f);
-            if (n.Length > 0 && seen.Add(n)) inferred.Add(n);
+            var current = queue.Dequeue();
+            foreach (var e in edges.Where(e => e.DependsOnSubtaskId == current))
+            {
+                if (seed.Contains(e.SubtaskId))
+                    continue;
+                if (dependents.Add(e.SubtaskId))
+                    queue.Enqueue(e.SubtaskId);
+            }
         }
-
-        if (inferred.Count == 0)
-            return new AssemblyRejectionPlan(allIds.OrderBy(x => x).ToList(), inferred, FellBackToAll: true);
-
-        // Direct matches: a child whose touched files intersect the inferred set.
-        var directlyMatched = new HashSet<int>();
-        foreach (var (subtaskId, touched) in touchedFilesBySubtask)
-            if (touched.Any(tf => inferred.Any(inf => FilesMatch(tf, inf))))
-                directlyMatched.Add(subtaskId);
-
-        if (directlyMatched.Count == 0)
-            return new AssemblyRejectionPlan(allIds.OrderBy(x => x).ToList(), inferred, FellBackToAll: true);
-
-        // Expand to include every (transitive) dependent of a matched subtask.
-        var selected = new HashSet<int>(directlyMatched);
-        bool changed = true;
-        while (changed)
-        {
-            changed = false;
-            foreach (var (dependent, dependency) in edges)
-                if (selected.Contains(dependency) && allIds.Contains(dependent) && selected.Add(dependent))
-                    changed = true;
-        }
-
-        return new AssemblyRejectionPlan(selected.OrderBy(x => x).ToList(), inferred, FellBackToAll: false);
-    }
-
-    /// <summary>
-    /// A touched repo path <paramref name="touched"/> matches an inferred token <paramref name="inferred"/>
-    /// when they are equal, when the touched path ends with <c>/inferred</c> (token is a suffix path),
-    /// or when their file names match (token is a bare filename). All comparisons forward-slash,
-    /// case-insensitive (cross-platform reviewer feedback is forgiving).
-    /// </summary>
-    private static bool FilesMatch(string touched, string inferred)
-    {
-        if (string.Equals(touched, inferred, StringComparison.OrdinalIgnoreCase)) return true;
-        if (touched.EndsWith("/" + inferred, StringComparison.OrdinalIgnoreCase)) return true;
-        if (inferred.EndsWith("/" + touched, StringComparison.OrdinalIgnoreCase)) return true;
-        // Bare filename token (no separator) matches the touched path's filename.
-        if (!inferred.Contains('/') &&
-            string.Equals(FileName(touched), inferred, StringComparison.OrdinalIgnoreCase)) return true;
-        return false;
-    }
-
-    private static string FileName(string path)
-    {
-        var idx = path.LastIndexOf('/');
-        return idx >= 0 ? path[(idx + 1)..] : path;
+        return dependents.OrderBy(x => x).ToList();
     }
 
     private static string NormalizePath(string path) =>
         path.Replace('\\', '/').Trim().TrimStart('/');
 }
-
-/// <summary>
-/// Outcome of <see cref="AssemblyPlanning.InferRedispatch"/>: the subtask ids to re-dispatch, the
-/// inferred file set (for the <c>coordinator.assembly_changes_requested</c> event), and whether the
-/// fallback (re-dispatch ALL) was triggered.
-/// </summary>
-public sealed record AssemblyRejectionPlan(
-    IReadOnlyList<int> SubtaskIds,
-    IReadOnlyList<string> InferredFiles,
-    bool FellBackToAll);

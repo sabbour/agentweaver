@@ -24,14 +24,21 @@ the run's pod:
 %%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
 flowchart LR
     User([Browser]) -->|"https://{token}-preview.{ZoneSuffix}"| GW[Preview Gateway<br/>agentweaver-preview-gateway]
-    GW -->|hostname match| Route[HTTPRoute<br/>preview-token]
-    Route -->|backendRef :80| Svc[ClusterIP Service<br/>preview-token]
-    Svc -->|selector preview-run| Pod[(Run's sandbox pod<br/>target_port 3000-9000)]
+    API[API orchestrator<br/>creates objects only] -.-> Route[HTTPRoute<br/>preview-token]
+    API -.-> Svc[ClusterIP Service<br/>preview-token]
+    GW -->|hostname match| Route
+    Route -->|backendRef :80| Svc
+    Svc -->|selector preview-run| Pub[Sandbox pod<br/>0.0.0.0:{publicPort}<br/>3000-9000]
+    Pub -->|accepted in pod| Fwd[TcpPortForwarder<br/>inside sandbox pod]
+    Fwd -->|pump TCP| App[Preview app<br/>127.0.0.1:{appPort}<br/>or framework bind]
     subgraph cluster["namespace: agentweaver"]
+        API
         GW
         Route
         Svc
-        Pod
+        Pub
+        Fwd
+        App
     end
 ```
 
@@ -51,7 +58,9 @@ When the user clicks **Preview** and picks a port, `StartPreviewAsync`
 3. **Patch the pod** with the per-run selector label `agentweaver.dev/preview-run`
    ([`SandboxPreviewService.cs:122`](#source)) so a Service can target it.
 4. **Create a ClusterIP Service** named `preview-{token}` whose selector is the per-run label and whose
-   port `80` forwards to the agent-chosen `target_port` ([`SandboxPreviewService.cs:134`](#source)).
+   port `80` forwards to the requested `target_port` ([`SandboxPreviewService.cs:134`](#source)). For
+   operator/manual previews that is the port the user entered; for the platform-owned live-preview path it
+   is the AgentHost forwarder's public port, not necessarily the app's own port.
 5. **Create an HTTPRoute** named `preview-{token}` that attaches to the shared preview Gateway, matches the
    `{token}-preview.{ZoneSuffix}` hostname, and backends the Service. Idle/max expiry and the run binding
    are stored in **annotations** ([`SandboxPreviewService.cs:168`](#source),
@@ -60,7 +69,40 @@ When the user clicks **Preview** and picks a port, `StartPreviewAsync`
    ([`SandboxPreviewService.cs:184`](#source)).
 
 The API returns `preview_url` and a relative `keepalive_url`; the browser opens the URL (in an iframe with
-`referrerPolicy="no-referrer"`) and pings keepalive every 60 s.
+`referrerPolicy="no-referrer"`) and pings keepalive every 60 s. The API does **not** prove readiness by
+connecting to `podIP:{target_port}`. `StartPreviewAsync` deliberately skips that TCP preflight because the
+sandbox NetworkPolicy admits preview ports only from the preview Gateway, not from API pods
+([`SandboxPreviewService.cs:134`](#source), [`k8s/networkpolicy-sandbox.yaml`](#source)). End-to-end data-path
+reachability is therefore exercised at the Gateway hostname (`preview_url`), while registration readiness comes
+from the in-pod AgentHost observation described next.
+
+### Live-preview forwarder: pod-IP reachability guarantee
+
+The Build & Test live-preview path adds one pod-local hop before step 4 above. `PreviewRunner` runs **inside
+the same sandbox pod as the preview app**: it first discovers the app's real bound port using app log hints and
+the pod's namespace-local kernel socket tables (`/proc/net/tcp` and `/proc/net/tcp6`), health-checks that app
+port, then starts `TcpPortForwarder` in that pod. Reading `/proc/net/tcp6` is required for common Node defaults
+such as `server.listen(port)`, which bind IPv6-any (`::`) and may not appear in `/proc/net/tcp`. The forwarder
+listens on `0.0.0.0:{publicPort}` and pumps TCP to `127.0.0.1:{appPort}`
+([`apps/Agentweaver.AgentHost/TcpPortForwarder.cs`](#source),
+[`apps/Agentweaver.AgentHost/PreviewRunner.cs:315`](#source)). The public port is chosen by scanning the
+allowed preview range `3000-9000`, matching both `SandboxPreviewOptions.AllowedPortMin/Max` and
+`k8s/networkpolicy-sandbox.yaml`, and that public port is the value registered with the Gateway
+([`PreviewRunner.cs:21`](#source), [`SandboxPreviewOptions.cs:56`](#source)).
+
+This closes the loopback failure mode: previously an app that listened only on `127.0.0.1:3000` could pass the
+AgentHost health check, but Gateway registration failed because Kubernetes routes to `podIP:port` and nothing
+was listening there. The forwarder makes the registered port reachable on the pod IP regardless of whether the
+app bound loopback-only or all interfaces. `ObserveBoundPortAsync` verifies reachability **inside the pod,
+through the forwarder public port** before `PreviewStep` asks for approval or registers the Gateway route; if
+the public port cannot be reached, the outcome is `sandbox.preview_failed` with reason `bound_unreachable`, and
+if no port in `3000-9000` is free, the reason is `no_public_port_available`
+([`PreviewRunner.cs:321`](#source), [`PreviewStep.cs:152`](#source)). Port-discovery failures are legible and
+closed-set: `no_listening_port_discovered` when the observe timeout expires without a healthy listening port,
+`process_exited:exit={code}` when the app exits before readiness, and `observe_error` for an unexpected
+observe-endpoint error ([`PreviewRunner.cs:262`](#source), [`apps/Agentweaver.AgentHost/Program.cs:347`](#source)).
+Failed preview paths best-effort stop the supervised process and dispose the forwarder, so preview failures do
+not leak listeners and never block human review ([`PreviewStep.cs:154`](#source), [`PreviewRunner.cs:776`](#source)).
 
 ### Single-label subdomain (no nested wildcards)
 
@@ -97,7 +139,9 @@ is torn down by a background reaper, an explicit stop, or pod disappearance:
   ~60 s, listing preview HTTPRoutes and feeding each route's two timestamps plus a live pod-exists flag into
   the pure decision function `PreviewReaper.Decide` ([`PreviewReaper.cs:56`](#source)) →
   `Alive` / `ExpiredIdle` / `ExpiredMax` / `Orphan`. Non-alive previews are deleted (HTTPRoute then
-  Service).
+  Service). `ListForRunAsync` uses the same isolation-safe liveness proxy — a control-plane pod lookup by
+  `agentweaver.dev/preview-run` label — instead of a forbidden API-pod TCP probe
+  ([`SandboxPreviewService.cs:399`](#source), [`:768`](#source)).
 - **Orphan-Service sweep.** The same pass also deletes any `preview-*` Service that has **no** matching
   HTTPRoute (e.g. the process died between Service-create and HTTPRoute-create), after a 2-minute grace, so
   a retry loop can never accumulate leaked ClusterIPs ([`SandboxPreviewService.cs:303`](#source)).
@@ -127,8 +171,9 @@ replica-safe.
   (`gateway.networking.k8s.io/gateway-name=agentweaver-preview-gateway`). With no `namespaceSelector`, the
   peer matches those pods in the policy's own namespace (`agentweaver`) — exactly where the
   approuting-istio preview gateway data-plane runs — so only the preview gateway can reach the sandbox
-  preview ports. Out-of-range ports are rejected by the endpoint, so we never provision a preview the
-  policy would black-hole.
+  preview ports. API pods are intentionally not in this data path; an API-side `podIP:{target_port}` probe
+  would be denied by policy. Out-of-range ports are rejected by the endpoint, so we never provision a preview
+  the policy would black-hole.
 - **Capability token in the URL.** The 128-bit token rides in the preview URL and therefore the Host header
   (and keepalive path). This is expected and inherent to an unguessable capability URL: app code only ever
   logs a non-reversible fingerprint (`SHA-256[0..4]+token`), never the raw token, and the URL is unguessable
@@ -140,13 +185,29 @@ replica-safe.
 
 When the feature is enabled, `RunOrchestrator.ComposeCapabilities`
 ([`RunOrchestrator.cs:590`](#source)) appends a short **Browser Preview** note
-([`RunOrchestrator.cs:64`](#source)) to worker/child system prompts, telling the agent to bind its server to
-`0.0.0.0` (not `127.0.0.1`), keep it running, and tell the user which port to preview.
+([`RunOrchestrator.cs:64`](#source)) to worker/child system prompts, telling the agent to start and verify a
+server, then call `start_preview(port=PORT)` with the actual port it observed. The prompt no longer tells the
+model to pick, hardcode, force, or print a specific port; the same no-hardcoded-port guidance is present in
+`AgentBasePrompt`, the project agent template, and `CharterCompiler` ([`AgentBasePrompt.cs:48`](#source),
+[`apps/Agentweaver.Api/Projects/Templates/agentweaver.agent.md`](#source), [`CharterCompiler.cs:74`](#source)).
 
 The note is additionally gated by `RunOrchestrator.RunSupportsPreview`: the orchestrating **Coordinator**
 run (a run with no parent whose agent is `Coordinator`) never launches a server itself — it only dispatches
 child worker runs — so it is not given the "you MUST launch, test, and preview a server" mandate. Child
 worker runs and ordinary single-agent runs still receive it when the feature is enabled.
+
+Build & Test gets a platform-owned preview step instead of asking the model to pick a port. The command
+resolver deliberately avoids the old `PORT=3000` / `--port` injection: known stacks may receive host-binding
+hints, but the app keeps its framework default or honors `process.env.PORT` if it already does so
+([`PreviewCommandResolver.cs:25`](#source)). AgentHost then observes the actual app port, fronts it with the
+pod-local `TcpPortForwarder`, and `PreviewStep` registers the forwarder's public port with the Gateway
+([`PreviewRunner.cs:315`](#source), [`PreviewStep.cs:166`](#source)). During coordinator assembly in
+`pod-per-run` mode, the step runs inside a dedicated AgentHost pod bound to the coordinator run id and
+configured with the detached integration worktree as its working directory (`CollectiveAssemblyPipeline.cs:155`,
+`KubernetesSandboxExecutor.cs:423`). The preview service therefore creates the HTTPRoute to that AgentHost pod,
+so the review URL reaches the server running from the assembled tree. The preview service supports this by
+resolving both run claim conventions: the AgentHost `agent-{runId}` claim and the retained command-sandbox
+`run-{runId}` claim (`SandboxClaimConventions.cs:28`, `SandboxPreviewService.cs:432`).
 
 ## Agent-initiated preview (`start_preview`)
 
@@ -225,6 +286,9 @@ governs unattended runs; production stays human-gated.
 | Concern | File |
 |---|---|
 | Preview provisioning, reap, orphan sweep, run↔token binding | `apps/Agentweaver.Api/Sandbox/Preview/SandboxPreviewService.cs` |
+| Pod-local live-preview TCP forwarder | `apps/Agentweaver.AgentHost/TcpPortForwarder.cs` |
+| Supervised live-preview process, `/proc/net/tcp{,6}` port discovery, and forwarder observation | `apps/Agentweaver.AgentHost/PreviewRunner.cs` |
+| Deterministic live-preview step and failure reasons | `apps/Agentweaver.Api/Coordinator/Preview/PreviewStep.cs` |
 | Config defaults & port-range check | `apps/Agentweaver.Api/Sandbox/Preview/SandboxPreviewOptions.cs` |
 | Capability token (128-bit, reserved deny, DNS-1123) | `apps/Agentweaver.Api/Sandbox/Preview/PreviewToken.cs` |
 | Reaper decision logic & label/Service-name helpers | `apps/Agentweaver.Api/Sandbox/Preview/PreviewReaper.cs` |
@@ -237,6 +301,7 @@ governs unattended runs; production stays human-gated.
 | Owner-or-agent-callback authorization helper | `apps/Agentweaver.Api/Endpoints/EndpointHelpers.cs` |
 | HITL approval primitive (shared with `web_fetch`) | `apps/Agentweaver.Api/Runs/DurableToolApprovalGate.cs` |
 | Agent capability note injection | `apps/Agentweaver.Api/Runs/RunOrchestrator.cs` |
+| Build & Test preview activation prompt | `packages/Agentweaver.AgentRuntime/Workflow/BuildTestTurnExecutor.cs` |
 | Shared preview Gateway | `k8s/gateway-preview.yaml` |
 | Sandbox NetworkPolicy (preview ingress range) | `k8s/networkpolicy-sandbox.yaml` |
 | API RBAC (claims read, service/route write) | `k8s/rbac-api.yaml` |
@@ -248,6 +313,7 @@ governs unattended runs; production stays human-gated.
 
 - [Sandbox browser preview — Reference](../reference/sandbox-browser-preview.md) — routes, DTO, config, status codes.
 - [Sandbox browser preview — User Guide](../experience/sandbox-browser-preview.md) — the step-by-step user flow.
+- [Live-preview provisioning](./live-preview-provisioning.md) — how Build & Test produces and enforces preview outcomes.
 - [Sandbox](./sandbox.md) — the sandbox claim/pod model the preview targets.
 - [Sandbox pod execution](./sandbox-pod-execution.md) — how the per-run pod is claimed and bound.
 - [Sandbox pods reference](../reference/sandbox-pods.md) — pod naming and the wider sandbox API surface.

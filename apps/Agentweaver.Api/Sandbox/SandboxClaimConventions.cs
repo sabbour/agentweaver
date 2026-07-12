@@ -28,6 +28,18 @@ public static class SandboxClaimConventions
     /// <summary>Prefix distinguishing AgentHost (pod-per-run) claims from per-command claims.</summary>
     public const string AgentHostClaimPrefix = "agent-";
 
+    /// <summary>Prefix for retained command-sandbox claims created by KubernetesSandboxExecutor.ExecuteAsync.</summary>
+    public const string RunCommandClaimPrefix = "run-";
+
+    /// <summary>
+    /// Annotation carrying the ORIGINAL (un-truncated) run id on an AgentHost claim. The claim name
+    /// is a lossy 12-char derivation of the run id, so the reaper cannot reverse it back to a run id
+    /// to clean up run-scoped side artifacts (e.g. the per-run preview-runner credential in the
+    /// secret store). Persisting the full run id here lets the orphan-sweep path derive
+    /// <c>PreviewRunnerCredential.SecretKey(runId)</c> and delete it (spec-006 decouple-preview).
+    /// </summary>
+    public const string RunIdAnnotation = "agentweaver.io/run-id";
+
     /// <summary>
     /// Derives the AgentHost <c>SandboxClaim</c> name for <paramref name="runId"/>:
     /// hyphens stripped, truncated to 12 chars, prefixed with <see cref="AgentHostClaimPrefix"/>.
@@ -36,9 +48,25 @@ public static class SandboxClaimConventions
     /// </summary>
     public static string DeriveAgentHostClaimName(string runId)
     {
-        var claimBase = (runId ?? string.Empty).Replace("-", "", StringComparison.Ordinal);
-        claimBase = claimBase[..Math.Min(12, claimBase.Length)];
+        var claimBase = NormalizeRunIdForClaim(runId, 12);
         return $"{AgentHostClaimPrefix}{claimBase}";
+    }
+
+    /// <summary>
+    /// Derives the retained command-sandbox <c>SandboxClaim</c> name for <paramref name="runId"/>.
+    /// This mirrors <see cref="KubernetesSandboxExecutor.ExecuteAsync"/> so preview activation can
+    /// find a server started by an in-process <c>run_command</c> turn.
+    /// </summary>
+    public static string DeriveRunCommandClaimName(string runId)
+    {
+        var claimBase = NormalizeRunIdForClaim(runId, 16);
+        return $"{RunCommandClaimPrefix}{claimBase}";
+    }
+
+    private static string NormalizeRunIdForClaim(string? runId, int maxLength)
+    {
+        var claimBase = (runId ?? string.Empty).Replace("-", "", StringComparison.Ordinal);
+        return claimBase[..Math.Min(maxLength, claimBase.Length)];
     }
 
     public static string DeriveAgentHostSecretProviderClassName(string claimName) =>
@@ -158,6 +186,28 @@ public static class SandboxClaimConventions
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// Reads the original run id persisted at <c>metadata.annotations["agentweaver.io/run-id"]</c>
+    /// (see <see cref="RunIdAnnotation"/>), or <see langword="null"/> when the annotation is absent.
+    /// Pure — safe to unit test without a cluster.
+    /// </summary>
+    public static string? TryGetRunIdAnnotation(JsonElement root)
+    {
+        if (!root.TryGetProperty("metadata", out var metadata) ||
+            !metadata.TryGetProperty("annotations", out var annotations) ||
+            annotations.ValueKind != JsonValueKind.Object)
+            return null;
+
+        if (annotations.TryGetProperty(RunIdAnnotation, out var runId) &&
+            runId.ValueKind == JsonValueKind.String)
+        {
+            var value = runId.GetString();
+            return string.IsNullOrEmpty(value) ? null : value;
+        }
+
+        return null;
     }
 
     /// <summary>

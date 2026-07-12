@@ -27,6 +27,8 @@ vi.mock('../api/apiClient', () => ({
   },
 }));
 
+import { ApiError } from '../api/client';
+
 function makeProject(id: string, name: string): Project {
   return {
     project_id: id,
@@ -239,5 +241,35 @@ describe('StartOrchestrationFab', () => {
     await waitFor(() =>
       expect(apiClient.startOrchestration).toHaveBeenCalledWith('proj-a', 'Ship a feature', 'software-delivery'),
     );
+  });
+
+  it('shows a Cast a team CTA for no_team start failures and routes to casting', async () => {
+    vi.mocked(apiClient.listProjects).mockResolvedValue([makeProject('proj-a', 'Alpha')]);
+    vi.mocked(apiClient.startOrchestration).mockRejectedValue(new ApiError(
+      409,
+      JSON.stringify({
+        error: 'no_team',
+        message: 'This project has no team. Cast a team before starting an orchestration.',
+      }),
+    ));
+
+    render(
+      <Wrapper>
+        <StartOrchestrationFab currentProjectId="proj-a" />
+      </Wrapper>,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Start task' }));
+    await screen.findByRole('combobox', { name: 'Project' });
+    fireEvent.change(screen.getByRole('textbox', { name: 'Goal' }), {
+      target: { value: 'Ship a feature' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Direct' }));
+
+    expect(await screen.findByText('This project has no team. Cast a team before starting an orchestration.')).toBeDefined();
+    expect(document.body.textContent).not.toContain('API error 409');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cast a team' }));
+    expect(navigateMock).toHaveBeenCalledWith('/projects/proj-a/team/cast');
   });
 });

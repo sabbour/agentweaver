@@ -274,6 +274,18 @@ expire) and the controller garbage-collects the pod and its service. Anything no
 manifests or the executor code (controller replica count, leader election, image, RBAC of the controller
 itself) is **operationally configured by the agent-sandbox release**, not specified by Agentweaver.
 
+### Transient Kubernetes API resilience
+
+Pod-claim creation and the bind/IP polls that follow it are guarded against transient Kubernetes API faults (issue #230). A single mid-flight connection reset during `CreateClaimAsync` used to fail the subtask's first agent turn outright, cascading into `assembly_blocked` for every dependent subtask. The executor now wraps the **idempotent** k8s calls — the mutating claim create plus the read-only `WaitForBoundAsync` and `GetPodIpAsync` polls — in a bounded retry (`ExecuteK8sWithRetryAsync<T>`, `MaxK8sAttempts = 3` total tries) with exponential backoff (~250 ms · 2^(n−1), capped ~2 s) plus 0–250 ms jitter to de-sync concurrent launches retrying the same API server after a blip.
+
+`IsTransientK8sFault` decides what is worth retrying:
+
+- **Retried** — a socket/IO connection reset (`SocketException 104` → `IOException` → `HttpRequestException`, directly or nested in an inner exception), a `429` or `5xx` from the API server, and an `HttpClient` timeout (`OperationCanceledException`/`TaskCanceledException` with no caller cancellation).
+- **Never retried** — caller cancellation short-circuits to `false`, so a genuine cancel aborts immediately (the backoff `Task.Delay` also honors the token).
+- **`409 Conflict` is not a transient fault.** It is handled attempt-awarely to preserve idempotency: a first-attempt `409` is a genuinely pre-existing claim owned by an earlier launch (wait for it); a `409` on a **retry** means our own create committed server-side before a reset hid the response, so the claim is treated as created and configured — never reused un-configured and token-less.
+
+The retry wrapper must only wrap idempotent calls: the non-idempotent AgentHost `POST /configure` stays outside it, because a second delivery hard-fails `409`.
+
 ### Warm-pool configure and readiness gate (AgentHost)
 
 A bound claim means the controller assigned a pod; it does **not** mean the run-specific AgentHost
@@ -283,7 +295,7 @@ they are waiting for `/configure`. This lets
 and Copilot SDK host are already warm, but no run context is required until a claim binds. With the
 Worker now in `pod-per-run`, those two standby pods are the hot path for coordinator child turns.
 
-At run launch, `KubernetesSandboxExecutor` generates a 256-bit turn bearer token, resolves the run owner's Key Vault secret name, resolves the run's shared orchestration worktree path, and calls `POST {scheme}://{podIP}:8088/configure` with `runId`, `userId`, `turnBearerToken`, `kvUserSecretName`, and `workingDirectory`. The `workingDirectory` value is `Run.WorktreePath` (for example `/workspace/{worktree}`); coordinator sub-run ids such as `-coordinator-decompose` resolve back to the parent run so child stages inherit the same shared worktree. `/configure` is one-time (`409` after the first successful call), returns `400` when `runId` is missing, is excluded from the readiness gate, and is intentionally not protected by the turn token because it delivers that token. NetworkPolicy limiting AgentHost ingress to API/worker pods is the guard.
+At run launch, `KubernetesSandboxExecutor` generates a 256-bit turn bearer token, resolves the run owner's Key Vault secret name, resolves the run's shared orchestration worktree path, reads the run's `AutoApproveTools` option from the API-side `IRunOptionsStore`, and calls `POST {scheme}://{podIP}:8088/configure` with `runId`, `userId`, `turnBearerToken`, `kvUserSecretName`, `workingDirectory`, and `autoApproveTools`. The `workingDirectory` value is `Run.WorktreePath` (for example `/workspace/{worktree}`); coordinator sub-run ids such as `-coordinator-decompose` resolve back to the parent run so child stages inherit the same shared worktree. `autoApproveTools` propagates the per-run auto-approve flag so the warm pod — which boots a fresh `IRunOptionsStore` defaulting to `false` — honors run-level auto-approve at its HITL gate; without it, every `web_fetch` in a `pod-per-run` autopilot run would stall the 5-minute approval gate and auto-deny (issue #221). `/configure` is one-time (`409` after the first successful call), returns `400` when `runId` is missing, is excluded from the readiness gate, and is intentionally not protected by the turn token because it delivers that token. NetworkPolicy limiting AgentHost ingress to API/worker pods is the guard.
 
 After `/configure`, `AgentHostStartupService.ConfigureAsync` runs `SetupAsync` with that per-run working directory overriding the static `AgentHost__WorkingDirectory` env default; only then does `/healthz` return `200` and the executor registers the A2A endpoint. This establishes the invariant `SetupAsync` working directory == `Run.WorktreePath` == the path named in the run's system prompt, so files written by one sibling agent are visible to later synthesis or assembly stages. If working-directory resolution fails, launch continues and the pod falls back to the env default. The wait is bounded (default `90 s`, `1 s` interval, `5 s` per-attempt timeout) and honors the launch cancellation token. The `a2a-sandbox-pod` client still carries the connection-refused retry handler as defense-in-depth, but the normal path is: **claim warm pod → configure → health ready → first turn**.
 
@@ -433,6 +445,63 @@ and the git remote(s) the run legitimately needs. Everything else — especially
 services and the database — is denied. Sandbox pods talk to the worker tier, never directly to the
 database.
 
+The pod-root control endpoints use the separately minted per-run preview-runner credential. It is
+delivered only in the `/configure` body, stored in `AgentHostRuntimeState`, and persisted under the
+replica-safe key returned by `PreviewRunnerCredential.SecretKey(runId)`. The API re-fetches this
+credential when it must call back into the pod for preview control or tool-approval resolution.
+
+## Returning tool-approval decisions to AgentHost
+
+Pod-per-run moves the approval wait into AgentHost: its in-memory `IToolApprovalGate` owns the pending
+request while the public approval endpoint runs in the API process with a `DurableToolApprovalGate`.
+Issue #196 closed the missing API-to-pod return leg.
+
+When an operator posts either the child run id or its coordinator run id, the API resolves the owning
+child. If the durable gate reports `Unknown` and `Sandbox:AgentExecutionMode` is `pod-per-run`, the API
+resolves the pod origin, loads the per-run credential, and forwards the decision over the existing
+`a2a-sandbox-pod` HTTP client. AgentHost authenticates the request and resolves its local gate. A
+terminal result is mapped to HTTP 200 and the API emits `tool.approval_resolved`; `unknown`, `pending`,
+and unreachable results map to 404, 409, and 503 respectively.
+
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
+sequenceDiagram
+    participant User as Operator
+    participant API as Run approval endpoint
+    participant Events as Persisted run events
+    participant Durable as DurableToolApprovalGate
+    participant Client as AgentHostApprovalHttpClient
+    participant Host as AgentHost pod
+    participant Local as In-memory IToolApprovalGate
+    User->>API: POST coordinator or child run decision
+    API->>Durable: resolve posted run + request
+    opt coordinator does not own request
+        API->>Events: find coordinator.child_approval_required
+        Events-->>API: owning childRunId
+    end
+    API->>Durable: grant/deny owning child
+    alt durable gate resolves
+        Durable-->>API: terminal state
+    else Unknown and pod-per-run
+        API->>Client: childRunId + per-run bearer
+        Client->>Host: POST /tool-approvals or /tool-denials
+        Host->>Local: grant/deny request
+        Local-->>Host: approved / denied / expired
+        Host-->>Client: terminal response
+        Client-->>API: resolved state
+        API->>API: emit tool.approval_resolved
+    end
+    API-->>User: 200 terminal result
+```
+
+| Source | Role |
+| --- | --- |
+| `apps/Agentweaver.Api/Endpoints/EndpointHelpers.cs:43-98` | Resolves a coordinator post to the owning child, including persisted approval-required events. |
+| `apps/Agentweaver.Api/Endpoints/RunEndpoints.cs:1559-1705` | Tries the durable gate, invokes the pod fallback, and exposes the public status contract. |
+| `apps/Agentweaver.Api/Endpoints/RunEndpoints.cs:2590-2718` | Loads the per-run credential, maps pod outcomes, and emits `tool.approval_resolved`. |
+| `apps/Agentweaver.Api/Sandbox/AgentHostApprovalHttpClient.cs:28-112` | Resolves the pod origin and sends authenticated decisions through `a2a-sandbox-pod`. |
+| `apps/Agentweaver.AgentHost/Program.cs:287-288,486-588` | Hosts and authenticates the pod-local approval routes and resolves the in-memory gate. |
+
 ## Reaching into the pod: browser preview
 
 Default-deny egress governs traffic *out* of the pod. A separate, deliberate path lets an operator (or a
@@ -516,7 +585,7 @@ To rebuild pod-per-run from these ideas:
   brokered checkpoint, so killing a pod loses no run.
 - The whole capability is **reversible by a single flag** (`Sandbox:AgentExecutionMode=in-api`).
 
-## Orphaned-pod reaper and quota lifecycle
+## Orphaned-pod reaper and Kubernetes-owned admission
 
 ### Why orphaned pods happen
 
@@ -532,25 +601,32 @@ Coordinator:ReaperIntervalTicks   (default 12)
 
 With the default heartbeat interval the reaper fires roughly **every 2 minutes** (12 ticks × ~10 s). It terminates orphaned pods and emits a telemetry event for each one reaped.
 
+Fresh claims are protected by the creation-grace policy documented in the
+[sandbox pods reference](../reference/sandbox-pods.md#orphan-reaper-creation-grace).
+
 All stall-fail and cancellation paths in `CoordinatorDispatchService` call `ReleaseAgentHostPodAsync` explicitly to minimize the reaper's workload. The reaper is the belt to that suspender.
 
-### Pre-dispatch quota check
+### Kubernetes owns admission — there is no app-side capacity gate
 
-Before dispatching a new subtask, `KubernetesSandboxExecutor.CheckAgentHostCapacityAsync` checks the namespace's current CPU quota headroom. If the headroom is less than **2 CPU**, the executor throws `AgentHostCapacityPendingException` rather than trying to schedule a pod that would be unschedulable.
+Agentweaver does **not** pre-flight namespace quota before it launches a pod (issue #217). Earlier builds ran a `CheckAgentHostCapacityAsync` headroom check and, if the namespace had less than ~2 CPU of headroom, threw `AgentHostCapacityPendingException`, parked the subtask in `PendingCapacity`, and retried on a fixed interval before hard-failing with `capacity_unavailable`. That made the application second-guess the scheduler and discard runs while nodes sat idle.
 
-### PendingCapacity subtask flow
+The model is now simpler: the executor submits the `SandboxClaim` and **waits for Kubernetes to bind it** (`WaitForBoundWithProvisioningHeartbeatAsync` → `WaitForBoundAsync`). Kubernetes owns pod admission, scheduling, queueing, and — through the cluster autoscaler — headroom. A pod that sits **Pending** while a node frees up or `katapool` autoscales is a **legitimate wait, not a failure**. The namespace `ResourceQuota` no longer caps CPU/memory; it bounds only object counts (see the [sandbox pods reference](../reference/sandbox-pods.md#pod-identity-and-quota)).
 
-`CoordinatorDispatchService` catches `AgentHostCapacityPendingException` and transitions the subtask to the `PendingCapacity` status. The UI emits a `subtask.pending_capacity` SSE event and the frontend renders the subtask node with an amber **⏳ Waiting for capacity** badge. The dispatcher retries the dispatch on a **60-second interval** for up to **10 attempts**. If capacity is still unavailable after 10 retries, the subtask fails with the detail code `capacity_unavailable`.
+### Provisioning heartbeat and the coordinator stall exemption
+
+A claim can stay unbound longer than the coordinator's subtask-stall timeout (`Coordinator:SubtaskStallTimeoutMinutes`, default 5 min). To keep that legitimate wait from being misread as a hung child, the executor emits a `sandbox.provisioning_pending` heartbeat (`EventTypes.SandboxProvisioningPending`) into the **child run's** event stream about every **20 s** (`SandboxProvisioningHeartbeatInterval`) while the claim is unbound. This mirrors the #212 `tool.approval_pending` heartbeat pattern.
+
+The coordinator's child-observation loop exempts a subtask whose most recent event is `sandbox.provisioning_pending`: it resets the stall window and keeps observing instead of firing `agent_stall_timeout`. The guard self-heals and cannot latch — any other real event (the pod binding, agent output, a terminal event) clears the flag, so a pod that genuinely hangs after provisioning is still caught. The heartbeat is best-effort: if the run-event stream is unavailable the wait degrades to a plain bind poll and never fails the launch.
 
 ```mermaid
 %%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
 flowchart TD
-    Dispatch["CoordinatorDispatchService<br/>dispatch subtask"] --> Check{"CheckAgentHostCapacityAsync<br/>headroom ≥ 2 CPU?"}
-    Check -- yes --> Launch["launch pod / claim"]
-    Check -- "no → AgentHostCapacityPendingException" --> Pending["SubtaskStatus.PendingCapacity<br/>emit subtask.pending_capacity SSE"]
-    Pending --> Retry{"retry ≤ 10 × 60s?"}
-    Retry -- yes --> Check
-    Retry -- "no → capacity_unavailable" --> Failed["subtask failed<br/>detail: capacity_unavailable"]
+    Dispatch["CoordinatorDispatchService<br/>dispatch subtask"] --> Submit["KubernetesSandboxExecutor<br/>submit SandboxClaim"]
+    Submit --> Wait{"claim Bound /<br/>pod Ready?"}
+    Wait -- "not yet (pod Pending)" --> HB["emit sandbox.provisioning_pending<br/>heartbeat (~20s)"]
+    HB --> Exempt["coordinator resets stall<br/>timer while pending"]
+    Exempt --> Wait
+    Wait -- "yes → pod bound" --> Run["child run executes"]
 
     classDef core fill:#CFE4FA,stroke:#0F6CBD,stroke-width:2px,color:#242424;
     classDef svc fill:#F3F2F1,stroke:#8A8886,stroke-width:1px,color:#242424;
@@ -559,19 +635,24 @@ flowchart TD
     classDef evt fill:#D6F0F0,stroke:#038387,stroke-width:1px,color:#242424;
 
     class Dispatch core;
-    class Check,Retry svc;
-    class Pending evt;
-    class Failed runtime;
-    class Launch data;
+    class Submit data;
+    class Wait,Exempt svc;
+    class HB evt;
+    class Run runtime;
 ```
 
-The `OutcomeSpecPanel.tsx` sidebar surfaces human-readable messages for all detail codes that reach terminal runs: `agent_stall_timeout`, `agent_quota_exceeded`, `agent_pod_reconciler_error`, and `capacity_unavailable`.
+::: info Legacy states
+The `SubtaskStatus.PendingCapacity` enum, the `subtask.pending_capacity` event, and the amber **⏳ Waiting for capacity** badge are **retained for back-compat only**. New runs never enter `PendingCapacity`; a pre-upgrade subtask stranded in that status is recovered to `pending` and re-attempted. The terminal `capacity_unavailable` detail code is likewise legacy — Kubernetes now absorbs the wait instead of hard-failing.
+:::
+
+`OutcomeSpecPanel.tsx` still surfaces human-readable messages for terminal detail codes such as `agent_stall_timeout` and `agent_pod_reconciler_error`; `capacity_unavailable` and `agent_quota_exceeded` remain mapped for older records but are no longer produced.
 
 Where this lives:
 
+- `apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs` — claim submit, bind wait, `sandbox.provisioning_pending` heartbeat.
+- `apps/Agentweaver.Api/Coordinator/CoordinatorDispatchService.cs` — child-observation stall exemption and the `PendingCapacity → pending` back-compat recovery.
+- `packages/Agentweaver.Domain/EventTypes.cs` — `SandboxProvisioningPending`.
 - `apps/Agentweaver.Api/Sandbox/AgentHostReaperService.cs`
-- `apps/Agentweaver.Api/Sandbox/AgentHostCapacityPendingException.cs`
-- `apps/Agentweaver.Api/Coordinator/CoordinatorDispatchService.cs`
 - `apps/Agentweaver.Api/Coordinator/CoordinatorHeartbeatService.cs`
 
 ## Related reading
@@ -588,3 +669,5 @@ Where this lives:
   carries agent turns to the pod.
 - [Sandbox browser preview](./sandbox-browser-preview.md) — exposing a server running inside the run's pod
   to the user over a public HTTPS reverse proxy.
+- [Tool Approval SSE Contract](../tool-approval-sse-contract.md) — public approval outcomes and
+  `tool.approval_resolved` behavior.

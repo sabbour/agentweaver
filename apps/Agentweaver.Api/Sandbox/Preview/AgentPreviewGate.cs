@@ -9,8 +9,11 @@ public enum PreviewApprovalOutcome
     /// <summary>The preview was approved (auto-approved or granted by an operator).</summary>
     Approved,
 
-    /// <summary>The preview was denied by an operator or the approval window timed out.</summary>
-    DeniedOrTimedOut,
+    /// <summary>The preview was denied by an operator.</summary>
+    Denied,
+
+    /// <summary>The approval window timed out.</summary>
+    TimedOut,
 }
 
 /// <summary>
@@ -82,7 +85,12 @@ public sealed class AgentPreviewGate
     /// immediately as <see cref="PreviewApprovalOutcome.Approved"/> when auto-approved; otherwise
     /// emits a HITL card and suspends until an operator grants/denies or the timeout elapses.
     /// </summary>
-    public async Task<PreviewApprovalOutcome> RequestApprovalAsync(string runId, int port, CancellationToken ct)
+    public async Task<PreviewApprovalOutcome> RequestApprovalAsync(
+        string runId,
+        int port,
+        CancellationToken ct,
+        int? workPlanId = null,
+        string? treeHash = null)
     {
         if (IsAutoApproved(runId))
         {
@@ -108,13 +116,36 @@ public sealed class AgentPreviewGate
             url = $"sandbox-preview:{port}",
             message = $"The agent wants to expose a preview server on port {port}. Operator approval required.",
         });
+        _streams.Get(runId)?.RecordNext(EventTypes.SandboxPreviewPending, new
+        {
+            run_id = runId,
+            work_plan_id = workPlanId,
+            tree_hash = treeHash,
+            target_port = port,
+            approval = "pending",
+            request_id = requestId,
+            timestamp_utc = DateTimeOffset.UtcNow.ToString("O"),
+        });
+        _streams.Get(runId)?.RecordNext(EventTypes.WorkflowStep, new
+        {
+            step = "preview",
+            status = "pending",
+            label = "Preview",
+            message = "Waiting for preview approval.",
+            timestamp_utc = DateTimeOffset.UtcNow.ToString("O"),
+        });
 
         _logger.LogInformation(
             "start_preview HITL gate — waiting for operator approval: requestId={RequestId} port={Port} runId={RunId}",
             displayId, port, runId);
 
         var approved = await approvalTask.ConfigureAwait(false);
-        return approved ? PreviewApprovalOutcome.Approved : PreviewApprovalOutcome.DeniedOrTimedOut;
+        if (approved)
+            return PreviewApprovalOutcome.Approved;
+
+        return _approvalGate.GetRequestState(runId, requestId) == ToolApprovalRequestState.Expired
+            ? PreviewApprovalOutcome.TimedOut
+            : PreviewApprovalOutcome.Denied;
     }
 
     /// <summary>

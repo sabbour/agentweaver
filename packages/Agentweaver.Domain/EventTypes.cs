@@ -47,6 +47,36 @@ public static class EventTypes
     public const string ToolApprovalRequired = "tool.approval_required";
 
     /// <summary>
+    /// Heartbeat emitted repeatedly while a run is blocked on a tool-approval gate awaiting an
+    /// operator decision. It keeps the pod's outbound A2A/SSE stream moving so the buffered
+    /// <see cref="ToolApprovalRequired"/> frame is delivered and durably persisted promptly, and
+    /// so the parent coordinator's subtask-stall timer is reset during the (human-paced) wait
+    /// instead of false-firing <c>agent_stall_timeout</c> (issue #212). Non-terminal and
+    /// idempotent; consumers that do not care may ignore it. Payload: { requestId, displayId?, toolName? }
+    /// </summary>
+    public const string ToolApprovalPending = "tool.approval_pending";
+
+    public const string SandboxPreviewApplicability = "sandbox.preview_applicability";
+    public const string SandboxPreviewPending = "sandbox.preview_pending";
+    public const string SandboxPreviewStartRequested = "sandbox.preview_start_requested";
+    public const string SandboxPreviewReady = "sandbox.preview_ready";
+    public const string SandboxPreviewFailed = "sandbox.preview_failed";
+    public const string SandboxPreviewSkippedNotApplicable = "sandbox.preview_skipped_not_applicable";
+    public const string SandboxPreviewStopped = "sandbox.preview_stopped";
+    public const string CoordinatorPreviewReady = "coordinator.preview_ready";
+
+    /// <summary>
+    /// Heartbeat emitted repeatedly on a run's own stream while its AgentHost sandbox pod is being
+    /// provisioned — i.e. the <c>SandboxClaim</c> is not yet <c>Bound</c> because Kubernetes is still
+    /// scheduling the pod (a node may need to free up or the pool may need to autoscale). It keeps the
+    /// run's outbound event stream moving so the parent coordinator's subtask-stall timer is reset
+    /// during the (Kubernetes-paced) provisioning wait instead of false-firing
+    /// <c>agent_stall_timeout</c> (issue #217). Non-terminal and idempotent; consumers that do not
+    /// care may ignore it. Payload: { claimName, timestamp_utc }.
+    /// </summary>
+    public const string SandboxProvisioningPending = "sandbox.provisioning_pending";
+
+    /// <summary>
     /// Emitted on a run's own stream when an agent calls the <c>ask_question</c> tool to bubble a
     /// clarifying question or permission request to the operator (or, for a coordinator child, to
     /// the coordinator watcher). The run suspends inside the tool call until the question is
@@ -102,8 +132,8 @@ public static class EventTypes
 
     /// <summary>
     /// Emitted by <see cref="RaiTurnExecutor"/> with the verdict issued by the RAI reviewer.
-    /// Payload: { verdict: "green"|"yellow"|"red", runId: string }
-    /// Written to the Rai sub-stream ({runId}-rai).
+    /// Payload: { verdict: "green"|"yellow"|"red"|"revise", runId: string, rationale: string }
+    /// Written to both the parent run stream and the Rai sub-stream ({runId}-rai).
     /// </summary>
     public const string RaiVerdict = "rai.verdict";
 
@@ -128,6 +158,15 @@ public static class EventTypes
     /// Payload: { childRunId, subtaskId, staleSinceUtc, stallTimeoutMinutes }
     /// </summary>
     public const string CoordinatorChildStallDetected = "coordinator.child_stall_detected";
+
+    /// <summary>
+    /// Emitted on the coordinator run stream when a stalled child subtask is redispatched (reset to
+    /// pending for a fresh child on a fresh pod) instead of dead-ending the run, while the subtask
+    /// still has recovery budget remaining (RecoveryAttempts &lt; MaxRecoveryAttempts). The prior child
+    /// run is terminalized (agent_stall_timeout) and its pod released; only the subtask is revived.
+    /// Payload: { subtaskId, priorChildRunId, attempt, maxAttempts, reason:"stall_redispatch" }
+    /// </summary>
+    public const string CoordinatorSubtaskRedispatched = "coordinator.subtask_redispatched";
 
     /// <summary>
     /// Emitted when the coordinator begins drafting or re-drafting the outcome spec. This is the
@@ -267,6 +306,24 @@ public static class EventTypes
     public const string CoordinatorSteering = "coordinator.steering";
 
     /// <summary>
+    /// UNIFIED AUTONOMOUS STEERING (rev8): emitted the moment a steering signal from ANY source
+    /// (human-review | rai | rubberduck | build-test | agent | coordinator | step) is persisted and
+    /// queued to the coordinator, so the action is immediately visible ("never a glitch"). This is
+    /// the source-agnostic receipt; the coordinator's subsequent choice is
+    /// <see cref="CoordinatorSteeringDecision"/>. Payload: { directiveId, source, severity, verb,
+    /// targetScope, feedback, treeHash }.
+    /// </summary>
+    public const string CoordinatorSteeringReceived = "coordinator.steering_received";
+
+    /// <summary>
+    /// UNIFIED AUTONOMOUS STEERING (rev8): emitted BEFORE any steering action executes, recording the
+    /// coordinator's conscious choice among {in_place_steer | dispatch_fresh | proceed | advisory}
+    /// with a rationale. A fresh dispatch is thus never silent. Payload: { directiveId, decision,
+    /// rationale, targetSubtaskIds, attempt, decidedBy }.
+    /// </summary>
+    public const string CoordinatorSteeringDecision = "coordinator.steering_decision";
+
+    /// <summary>
     /// Emitted on the COORDINATOR run's stream once EVERY child subtask has reached a terminal
     /// state (completed / assemble_ready / failed) and the dispatch + observe loop has drained.
     /// The coordinator run now awaits Phase 3 collective assembly (merge), which is NOT yet built —
@@ -314,6 +371,14 @@ public static class EventTypes
     /// <summary>The reviewer requested changes; selected children are re-dispatched (review flows
     /// back to the coordinator). Payload: { workPlanId, reviewer, redispatchedSubtaskIds, inferredFiles }.</summary>
     public const string CoordinatorAssemblyChangesRequested = "coordinator.assembly_changes_requested";
+
+    /// <summary>
+    /// #223 — the implicated-subtask scoping for a request-changes fell back to the broad
+    /// all-contributors set instead of a narrowed reviewer-named subset. Emitted so a silent reversion
+    /// to broad reset/lockout is observable. Payload: { workPlanId, source, reviewer, reason
+    /// (no_target_files_field | target_files_matched_nothing), namedFiles, touchedFiles, contributorIds }.</summary>
+    public const string CoordinatorAssemblyImplicatedScopeFallback = "coordinator.assembly_implicated_scope_fallback";
+
 
     /// <summary>The single collective merge of the integration branch into origin began.
     /// Payload: { workPlanId, integrationBranch }.</summary>

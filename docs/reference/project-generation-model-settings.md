@@ -42,7 +42,7 @@ Postgres migration: `apps/Agentweaver.Api.Migrations.Postgres/Migrations/2026070
 | Code | When |
 |---|---|
 | `204 No Content` | Settings were saved. |
-| `400 Bad Request` | Project id is invalid, a model id fails `IsAllowedModelId`, or service validation throws `ArgumentException`. |
+| `400 Bad Request` | Project id is invalid, a model id fails `IsAllowedModelId` (the check uses a permissive `^(gpt\|claude\|o)` prefix regex — no hardcoded allowlist), or service validation throws `ArgumentException`. |
 | `403 Forbidden` | Caller does not own the project. |
 | `404 Not Found` | Project does not exist or update found no row. |
 

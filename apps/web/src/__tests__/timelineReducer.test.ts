@@ -146,6 +146,19 @@ describe('timelineReducer', () => {
     expect(s.items.every((i) => i.kind === 'lifecycle')).toBe(true);
   });
 
+  // Unified steering: the new coordinator.steering_received / steering_decision
+  // events narrate every steering action as lifecycle cards.
+  it('coordinator.steering_received and steering_decision surface as lifecycle items', () => {
+    const s = fold([
+      makeEvent('coordinator.steering_received', { source: 'rubberduck', feedback: 'fix parser' }),
+      makeEvent('coordinator.steering_decision', { decision: 'dispatch_fresh', subtaskIds: ['subtask-1'] }),
+    ]);
+    expect(s.items).toHaveLength(2);
+    expect(s.items[0].kind).toBe('lifecycle');
+    expect(s.items[1].kind).toBe('lifecycle');
+    expect(s.items.every((i) => i.kind === 'lifecycle' && i.event.type.startsWith('coordinator.steering'))).toBe(true);
+  });
+
   // T-07
   it('run.failed mid-turn: open turn closed (active=false), LifecycleItem appended', () => {
     const s = fold([

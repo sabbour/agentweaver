@@ -2,7 +2,7 @@
   "id": "prototype-designer",
   "title": "Prototype Designer",
   "summary": "Designs and builds prototypes to validate product concepts.",
-  "default_model": "claude-sonnet-4.6",
+  "default_model": "claude-sonnet-5",
   "capabilities": [
     "prototyping",
     "interaction-design",

@@ -73,6 +73,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
     private readonly IToolApprovalGate _toolApprovalGate;
     private readonly IQuestionGate? _questionGate;
     private readonly IRunOptionsStore? _runOptions;
+    private readonly IEnumerable<IAgentRuntimeToolProvider> _toolProviders;
     protected readonly ILogger<CopilotAIAgent> _logger;
 
     // --- Per-run config — set by the workflow executor before CreateSessionAsync ---
@@ -151,6 +152,34 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
     private string? _degradedReason;
     private int _runDegradedEmitted;
 
+    /// <summary>
+    /// Inactivity watchdog window for a streaming turn. If the Copilot SDK yields no chunk within
+    /// this span, the turn is aborted (retryable) instead of hanging forever and stranding the run
+    /// in <c>in_progress</c> — see <see cref="AsyncStreamIdleTimeout"/> for the root cause. Reset on
+    /// every delivered chunk, so slow first tokens and long tool calls stay alive. Default 15 min
+    /// (well above any legitimate stream gap while still bounding a true hang); override with the
+    /// <c>AGENTWEAVER_AGENT_TURN_IDLE_TIMEOUT_SECONDS</c> environment variable (0 disables it).
+    /// Settable for tests.
+    /// </summary>
+    internal TimeSpan StreamIdleTimeout { get; set; } = ResolveStreamIdleTimeoutDefault();
+
+    /// <summary>
+    /// Cadence for the <see cref="EventTypes.ToolApprovalPending"/> heartbeat emitted while the
+    /// permission handler is blocked on a tool-approval gate. Must stay well under the parent
+    /// coordinator's <c>Coordinator:SubtaskStallTimeoutMinutes</c> (default 5 min) so each wait
+    /// window is punctuated by an event that keeps the outbound stream flowing and resets the
+    /// stall timer (issue #212).
+    /// </summary>
+    internal static readonly TimeSpan ApprovalHeartbeatInterval = TimeSpan.FromSeconds(20);
+
+    private static TimeSpan ResolveStreamIdleTimeoutDefault()
+    {
+        var raw = Environment.GetEnvironmentVariable("AGENTWEAVER_AGENT_TURN_IDLE_TIMEOUT_SECONDS");
+        if (int.TryParse(raw, out var seconds))
+            return seconds <= 0 ? TimeSpan.Zero : TimeSpan.FromSeconds(seconds);
+        return TimeSpan.FromMinutes(15);
+    }
+
     public CopilotAIAgent(
         GitHubCopilotClientFactory factory,
         IGitHubTokenScopeProvider scopeProvider,
@@ -160,7 +189,8 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         IToolApprovalGate toolApprovalGate,
         ILogger<CopilotAIAgent> logger,
         IQuestionGate? questionGate = null,
-        IRunOptionsStore? runOptions = null)
+        IRunOptionsStore? runOptions = null,
+        IEnumerable<IAgentRuntimeToolProvider>? toolProviders = null)
     {
         _factory = factory ?? throw new ArgumentNullException(nameof(factory));
         _scopeProvider = scopeProvider ?? throw new ArgumentNullException(nameof(scopeProvider));
@@ -171,6 +201,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _questionGate = questionGate;
         _runOptions = runOptions;
+        _toolProviders = toolProviders ?? [];
     }
 
     /// <summary>
@@ -282,7 +313,8 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
             QuestionGate: _questionGate);
         _toolContext = toolContext;
 
-        var sessionTools = BuildSessionConfigTools(toolContext, _projectId, _agentName, _apiBaseUrl, _apiKey);
+        var sessionTools = BuildSessionConfigTools(
+            toolContext, _projectId, _agentName, _apiBaseUrl, _apiKey, _toolProviders);
         _registeredToolNames = sessionTools.Select(t => t.Name).ToList();
 
         var sessionConfig = new SessionConfig
@@ -678,7 +710,8 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         if (_inner is null)
             throw new InvalidOperationException("SetupAsync must be called before ExecuteStreamingLoopAsync.");
 
-        await foreach (var chunk in _inner.RunStreamingAsync(task, session, options: null, ct).WithCancellation(ct))
+        await foreach (var chunk in _inner.RunStreamingAsync(task, session, options: null, ct)
+                   .WithIdleTimeout(StreamIdleTimeout, _runId ?? "unknown", _logger, ct))
         {
             if (chunk is null) continue;
 
@@ -1099,6 +1132,22 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
                     "Tool HITL gate — waiting for operator approval: requestId={RequestId} url={Url} runId={RunId}",
                     displayId, rawUrl.Length > 80 ? rawUrl[..80] : rawUrl, runId);
 
+                // Heartbeat-punctuated wait: block the SDK callback thread on the gate, but wake
+                // every ApprovalHeartbeatInterval to emit a lightweight tool.approval_pending frame.
+                // The bridge drains the run-event channel on a separate task, so each heartbeat is
+                // flushed over A2A/SSE immediately — keeping the pod's outbound stream moving while
+                // the operator decides so the buffered tool.approval_required is delivered + durably
+                // persisted promptly and the parent coordinator's stall timer is reset (issue #212).
+                while (!approvalTask.Wait((int)ApprovalHeartbeatInterval.TotalMilliseconds))
+                {
+                    emit(EventTypes.ToolApprovalPending, new
+                    {
+                        requestId,
+                        displayId,
+                        toolName = "web_fetch",
+                    });
+                }
+
                 var approved = approvalTask.ConfigureAwait(false).GetAwaiter().GetResult();
 
                 if (!approved)
@@ -1367,7 +1416,8 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         string? projectId = null,
         string? agentName = null,
         string? apiBaseUrl = null,
-        string? apiKey = null)
+        string? apiKey = null,
+        IEnumerable<IAgentRuntimeToolProvider>? toolProviders = null)
     {
         var all = SandboxToolRegistry.Build(context);
         var intentFn = all.First(f => string.Equals(f.Name, "report_intent", StringComparison.Ordinal));
@@ -1391,6 +1441,12 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         {
             var effectiveBaseUrl = apiBaseUrl ?? "http://localhost:5000";
             tools.AddRange(AgentweaverApiTools.Build(projectId, agentName, effectiveBaseUrl, apiKey, runId: context.RunId));
+        }
+
+        if (toolProviders is not null)
+        {
+            foreach (var provider in toolProviders)
+                tools.AddRange(provider.BuildTools(context));
         }
 
         return tools;
