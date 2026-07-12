@@ -135,6 +135,29 @@ public sealed class AgentTurnExecutorRevisionTerminalTests
         worktree.CommitAttempts.Should().Be(1, "the happy path commits on the first attempt");
     }
 
+    [Fact]
+    public async Task StructuredAgentFailure_InChildPipeline_PreservesRealReason()
+    {
+        var worktree = new StubWorktreeOperations();
+        var executor = new AgentTurnExecutor(
+            new StructuredFailingTurnAgent(),
+            worktree,
+            _ => null,
+            NullLogger<AgentTurnExecutor>.Instance,
+            emitTerminalFailureOutput: true);
+
+        var result = await executor.HandleAsync(
+            RevisionInput(),
+            context: null!,
+            CancellationToken.None);
+
+        result.TerminalFailureReason.Should().Be("shell_execution_timeout");
+        result.TerminalFailureMessage.Should().Contain("hard deadline");
+        result.TerminalFailureRetryable.Should().BeTrue();
+        worktree.CommitAttempts.Should().Be(0,
+            "a failed agent turn must not proceed into post-turn commit bookkeeping");
+    }
+
     private sealed class CleanTurnAgent : IWorkflowTurnAgent
     {
         public Task SetupAsync(
@@ -155,6 +178,31 @@ public sealed class AgentTurnExecutorRevisionTerminalTests
         // post-turn commit, not the turn itself.
         public Task<string> RunTurnAsync(string task, bool isRevision, CancellationToken ct) =>
             Task.FromResult("Revision applied.");
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    private sealed class StructuredFailingTurnAgent : IWorkflowTurnAgent
+    {
+        public Task SetupAsync(
+            string workingDirectory,
+            string repositoryPath,
+            string runId,
+            string? modelId,
+            string? systemPromptContext,
+            ChannelWriter<RunEvent>? streamWriter,
+            string? projectId,
+            string? agentName,
+            string? apiBaseUrl,
+            string? apiKey,
+            CancellationToken ct,
+            string? userId = null) => Task.CompletedTask;
+
+        public Task<string> RunTurnAsync(string task, bool isRevision, CancellationToken ct) =>
+            Task.FromException<string>(new WorkflowAgentInfrastructureException(
+                "shell_execution_timeout",
+                "Shell execution exceeded its hard deadline and was terminated.",
+                isRetryable: true));
 
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }

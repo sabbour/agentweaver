@@ -41,6 +41,8 @@ namespace Agentweaver.AgentRuntime.Workflow;
 /// </summary>
 public sealed class RemoteAgentProxy : IWorkflowTurnAgent
 {
+    internal sealed record StructuredRunFailure(string ErrorCode, string Message, bool? IsRetryable);
+
     private const string A2AAgentId = "agentweaver-worker-proxy";
     private const string A2AAgentName = "Agentweaver Worker Agent Proxy";
     private const string A2AAgentDescription = "Worker-side A2A proxy for sandbox pod CopilotAIAgent (spec-018 P1)";
@@ -203,6 +205,7 @@ public sealed class RemoteAgentProxy : IWorkflowTurnAgent
         //   - DataContent (RunEventDataPartCodec.MediaType): RunEvent side-channel events
         //     forwarded to _streamWriter → RecordingChannelWriter → RunStreamStore → SSE
         var textAccumulator = new StringBuilder();
+        StructuredRunFailure? lastStructuredFailure = null;
 
         _logger.LogDebug(
             "RemoteAgentProxy: RunTurnAsync starting — run={RunId}, isRevision={IsRevision}",
@@ -221,8 +224,7 @@ public sealed class RemoteAgentProxy : IWorkflowTurnAgent
                     {
                         textAccumulator.Append(textContent.Text);
                     }
-                    else if (content is DataContent dataContent &&
-                             _streamWriter is not null)
+                    else if (content is DataContent dataContent)
                     {
                         // Decode RunEvent DataPart and forward to the worker's stream.
                         // Sequence is reassigned by RecordingChannelWriter, preserving total
@@ -230,7 +232,11 @@ public sealed class RemoteAgentProxy : IWorkflowTurnAgent
                         var runEvent = RunEventDataPartCodec.TryDecodeRunEvent(dataContent);
                         if (runEvent is not null)
                         {
-                            await _streamWriter.WriteAsync(runEvent, ct).ConfigureAwait(false);
+                            if (TryReadStructuredFailure(runEvent) is { } structuredFailure)
+                                lastStructuredFailure = structuredFailure;
+
+                            if (_streamWriter is not null)
+                                await _streamWriter.WriteAsync(runEvent, ct).ConfigureAwait(false);
                         }
                     }
                 }
@@ -240,6 +246,15 @@ public sealed class RemoteAgentProxy : IWorkflowTurnAgent
         catch (WorkflowAgentInfrastructureException) { throw; }
         catch (Exception ex)
         {
+            if (lastStructuredFailure is not null)
+            {
+                throw new WorkflowAgentInfrastructureException(
+                    lastStructuredFailure.ErrorCode,
+                    lastStructuredFailure.Message,
+                    ex,
+                    lastStructuredFailure.IsRetryable);
+            }
+
             throw new WorkflowAgentInfrastructureException(
                 "a2a_transport_failure",
                 $"RemoteAgentProxy: A2A turn failed for run '{_runId}': {ex.Message}",
@@ -253,6 +268,54 @@ public sealed class RemoteAgentProxy : IWorkflowTurnAgent
             _runId, responseText.Length);
 
         return responseText;
+    }
+
+    internal static StructuredRunFailure? TryReadStructuredFailure(RunEvent runEvent)
+    {
+        if (!string.Equals(runEvent.Type, EventTypes.RunFailed, StringComparison.Ordinal))
+            return null;
+
+        try
+        {
+            var payload = runEvent.Payload is JsonElement element
+                ? element
+                : JsonSerializer.SerializeToElement(runEvent.Payload);
+            if (payload.ValueKind != JsonValueKind.Object)
+                return null;
+
+            string? errorCode = null;
+            string? message = null;
+            bool? retryable = null;
+            foreach (var property in payload.EnumerateObject())
+            {
+                if (property.Name.Equals("errorCode", StringComparison.OrdinalIgnoreCase) &&
+                    property.Value.ValueKind == JsonValueKind.String)
+                {
+                    errorCode = property.Value.GetString();
+                }
+                else if (property.Name.Equals("message", StringComparison.OrdinalIgnoreCase) &&
+                         property.Value.ValueKind == JsonValueKind.String)
+                {
+                    message = property.Value.GetString();
+                }
+                else if (property.Name.Equals("retryable", StringComparison.OrdinalIgnoreCase) &&
+                         property.Value.ValueKind is JsonValueKind.True or JsonValueKind.False)
+                {
+                    retryable = property.Value.GetBoolean();
+                }
+            }
+
+            return string.IsNullOrWhiteSpace(errorCode)
+                ? null
+                : new StructuredRunFailure(
+                    errorCode,
+                    string.IsNullOrWhiteSpace(message) ? errorCode : message,
+                    retryable);
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     /// <inheritdoc />

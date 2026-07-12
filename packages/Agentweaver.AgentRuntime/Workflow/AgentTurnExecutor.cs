@@ -1,4 +1,5 @@
 using System.Threading.Channels;
+using Agentweaver.AgentRuntime.Providers;
 using Microsoft.Agents.AI.Workflows;
 using Microsoft.Extensions.Logging;
 using Agentweaver.Domain;
@@ -113,6 +114,17 @@ public sealed class AgentTurnExecutor : Executor<AgentTurnInput, AgentTurnOutput
             _logger.LogWarning(ex, "Content safety violation detected for run {RunId}", input.RunId);
             safetyFlagged = true;
         }
+        catch (Exception ex) when (_emitTerminalFailureOutput && TryGetKnownTerminalFailure(ex, out var failure))
+        {
+            WorkflowStepEvents.Emit(writer, _logger, input.RunId, LogicalNodeId, "failed", DisplayLabel,
+                agentName: input.AgentName);
+            _logger.LogError(
+                ex,
+                "Agent turn failed with structured reason {Reason} for child run {RunId}; emitting graph-native terminal output",
+                failure.Reason,
+                input.RunId);
+            return CreateTerminalFailureOutput(input, failure);
+        }
         catch
         {
             WorkflowStepEvents.Emit(writer, _logger, input.RunId, LogicalNodeId, "failed", DisplayLabel);
@@ -197,7 +209,9 @@ public sealed class AgentTurnExecutor : Executor<AgentTurnInput, AgentTurnOutput
                     ProjectId: input.ProjectId,
                     AgentName: input.AgentName,
                     TerminalFailureReason: "commit_failed_persistent",
-                    TerminalFailureEvidence: evidence);
+                    TerminalFailureEvidence: evidence,
+                    TerminalFailureMessage: ex.Message,
+                    TerminalFailureRetryable: false);
             }
 
             // Full pipeline: preserve existing behavior — rethrow so the fault terminalizes via the
@@ -229,6 +243,59 @@ public sealed class AgentTurnExecutor : Executor<AgentTurnInput, AgentTurnOutput
             ProjectId: input.ProjectId,
             AgentName: input.AgentName);
     }
+
+    private static bool TryGetKnownTerminalFailure(
+        Exception ex,
+        out (string Reason, string Message, bool? Retryable, string Evidence) failure)
+    {
+        for (Exception? current = ex; current is not null; current = current.InnerException)
+        {
+            if (current is WorkflowAgentInfrastructureException infrastructure)
+            {
+                failure = (
+                    infrastructure.Reason,
+                    infrastructure.Message,
+                    infrastructure.IsRetryable,
+                    $"exception={infrastructure.GetType().Name}: {infrastructure.Message}");
+                return true;
+            }
+
+            if (current is AgentProviderException provider)
+            {
+                failure = (
+                    provider.ErrorCode,
+                    provider.UserMessage,
+                    provider.IsRetryable,
+                    $"exception={provider.GetType().Name}: {provider.Message}");
+                return true;
+            }
+        }
+
+        failure = default;
+        return false;
+    }
+
+    private static AgentTurnOutput CreateTerminalFailureOutput(
+        AgentTurnInput input,
+        (string Reason, string Message, bool? Retryable, string Evidence) failure) =>
+        new(
+            input.RunId,
+            TreeHash: string.Empty,
+            Diff: string.Empty,
+            StepCount: 0,
+            input.WorktreePath,
+            input.WorktreeBranch,
+            input.RepositoryPath,
+            input.OriginatingBranch,
+            ContentSafetyFlagged: false,
+            Iteration: input.Iteration,
+            SubmittingUser: input.SubmittingUser,
+            ProjectId: input.ProjectId,
+            AgentName: input.AgentName,
+            TerminalFailureReason: failure.Reason,
+            TerminalFailureEvidence: failure.Evidence,
+            TerminalFailureMessage: failure.Message,
+            TerminalFailureRetryable: failure.Retryable);
 
     /// <summary>
     /// Commits the worktree with a bounded retry so a TRANSIENT git failure (a LibGit2 index.lock /

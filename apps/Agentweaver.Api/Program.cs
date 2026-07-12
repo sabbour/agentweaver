@@ -410,7 +410,9 @@ builder.Services.AddSingleton<ISandboxExecutor>(sp =>
     // a mounted secret — left as the documented hook). When RequireMtls=false (PoC), no client
     // cert is configured and the worker connects over plain http.
     builder.Services.AddHttpClient("a2a-sandbox-pod")
-        .ConfigureHttpClient(c => c.Timeout = TimeSpan.FromMinutes(30))
+        // Streaming turns are bounded by the runtime's tool-aware shell watchdog and separate
+        // total-turn deadline. A transport-wide timeout would sever an otherwise healthy stream.
+        .ConfigureHttpClient(c => c.Timeout = Timeout.InfiniteTimeSpan)
         // Defense-in-depth for the A2A cold-start race: retry ONLY connection-refused (the AgentHost
         // Kestrel listener has not bound :8088 yet). Safe for streaming sends — a refused connect
         // delivers no bytes, so there is no duplicate side effect. See ConnectRefusedRetryHandler.

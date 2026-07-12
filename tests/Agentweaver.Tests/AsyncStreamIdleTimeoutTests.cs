@@ -1,6 +1,7 @@
 using FluentAssertions;
 using Agentweaver.AgentRuntime;
 using Agentweaver.AgentRuntime.Providers;
+using Agentweaver.AgentTools;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Agentweaver.Tests;
@@ -88,6 +89,70 @@ public sealed class AsyncStreamIdleTimeoutTests
             collected.Add(item);
 
         collected.Should().Equal(7, 8);
+    }
+
+    [Fact]
+    public async Task ActiveShell_UsesHardDeadline_EmitsHeartbeats_AndTerminates()
+    {
+        using var tracker = new ShellExecutionTracker();
+        tracker.TryStartObservedExecution(
+            "shell-call-254",
+            "command-hash-254",
+            TimeSpan.FromMilliseconds(180)).Should().BeTrue();
+        var heartbeats = new List<ShellExecutionSnapshot>();
+        var terminated = false;
+
+        var act = async () =>
+        {
+            await foreach (var _ in HangsForever<int>().WithToolAwareWatchdog(
+                               new StreamWatchdogOptions(
+                                   IdleTimeout: TimeSpan.FromMilliseconds(40),
+                                   TotalTurnTimeout: TimeSpan.FromSeconds(5),
+                                   ShellHeartbeatInterval: TimeSpan.FromMilliseconds(30)),
+                               tracker,
+                               "run-shell-timeout",
+                               Logger,
+                               heartbeats.Add,
+                               _ =>
+                               {
+                                   terminated = true;
+                                   return Task.CompletedTask;
+                               }))
+            {
+            }
+        };
+
+        var ex = await act.Should().ThrowAsync<AgentProviderException>();
+        ex.Which.ErrorCode.Should().Be("shell_execution_timeout",
+            "an active shell uses its hard deadline instead of the shorter ordinary idle window");
+        terminated.Should().BeTrue("the hard timeout must terminate the shell process tree");
+        heartbeats.Should().HaveCountGreaterThanOrEqualTo(2,
+            "a healthy silent shell emits progress often enough to reset the coordinator stall window");
+    }
+
+    [Fact]
+    public async Task NoActiveShell_UsesIdleDeadline_NotShellDeadline()
+    {
+        using var tracker = new ShellExecutionTracker();
+
+        var act = async () =>
+        {
+            await foreach (var _ in HangsForever<int>().WithToolAwareWatchdog(
+                               new StreamWatchdogOptions(
+                                   IdleTimeout: TimeSpan.FromMilliseconds(60),
+                                   TotalTurnTimeout: TimeSpan.FromSeconds(5),
+                                   ShellHeartbeatInterval: TimeSpan.FromMilliseconds(20)),
+                               tracker,
+                               "run-idle-timeout",
+                               Logger,
+                               onShellHeartbeat: null,
+                               onShellHardTimeout: null))
+            {
+            }
+        };
+
+        var ex = await act.Should().ThrowAsync<AgentProviderException>();
+        ex.Which.ErrorCode.Should().Be("github_copilot_turn_stalled");
     }
 
     private static async IAsyncEnumerable<int> Source(params int[] items)

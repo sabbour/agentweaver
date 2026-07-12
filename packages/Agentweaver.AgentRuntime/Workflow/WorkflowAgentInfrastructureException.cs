@@ -7,10 +7,16 @@ namespace Agentweaver.AgentRuntime.Workflow;
 public sealed class WorkflowAgentInfrastructureException : Exception
 {
     public string Reason { get; }
+    public bool? IsRetryable { get; }
 
-    public WorkflowAgentInfrastructureException(string reason, string message, Exception? innerException = null)
+    public WorkflowAgentInfrastructureException(
+        string reason,
+        string message,
+        Exception? innerException = null,
+        bool? isRetryable = null)
         : base(message, innerException)
     {
         Reason = string.IsNullOrWhiteSpace(reason) ? "agent_infrastructure_failure" : reason;
+        IsRetryable = isRetryable;
     }
 }

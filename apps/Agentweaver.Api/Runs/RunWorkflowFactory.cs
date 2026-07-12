@@ -477,17 +477,17 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
                 StepCount: input.StepCount,
                 RaiSafetyFlagged: input.ContentSafetyFlagged)));
 
-        // Child failure terminal (FIX 2): the trimmed child pipeline's graph-native failure->terminal.
-        // When a child's agent turn ends cleanly but the POST-TURN commit fails PERSISTENTLY (the
-        // executor could not clear the blocker), the executor returns an AgentTurnOutput carrying
-        // TerminalFailureReason; the conditional edge below routes it here to yield exactly ONE
-        // terminal ChildTurnFailedOutput (a VISIBLE failure, never a fabricated no-change success).
+        // Child graph-native failure terminal. Known agent/provider/transport/workspace and
+        // persistent post-turn failures carry TerminalFailureReason through this edge, yielding one
+        // typed terminal output instead of a bare executor fault.
         ExecutorBinding childTurnFailed = new VisualFunctionExecutor<AgentTurnOutput, ChildTurnFailedOutput>(
             "child-turn-failed", "child-turn-failed", "Turn failed", "assembly", "terminal", false,
             (input, ctx, ct) => new ValueTask<ChildTurnFailedOutput>(new ChildTurnFailedOutput(
                 RunId: input.RunId,
                 Reason: input.TerminalFailureReason ?? "child_turn_failed",
-                Evidence: input.TerminalFailureEvidence)));
+                Evidence: input.TerminalFailureEvidence,
+                Message: input.TerminalFailureMessage,
+                Retryable: input.TerminalFailureRetryable)));
 
         ExecutorBinding terminalDeclined = new VisualFunctionExecutor<WorkflowReviewDecision, DeclinedOutput>(
             "terminal-declined", "terminal-declined", "Declined", "plumbing", "terminal", true,
