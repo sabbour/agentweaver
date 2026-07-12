@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Agentweaver.AgentRuntime.Workflow;
 
 namespace Agentweaver.Api.Sandbox;
@@ -27,17 +28,20 @@ internal sealed class RemoteWorkflowAgentFactory : IWorkflowAgentFactory
     private readonly IAgentHostTurnTokenRegistry _turnTokenRegistry;
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly ILoggerFactory _loggerFactory;
+    private readonly RemoteAgentProxyOptions _proxyOptions;
 
     public RemoteWorkflowAgentFactory(
         ISandboxAgentEndpointResolver endpointResolver,
         IAgentHostTurnTokenRegistry turnTokenRegistry,
         IHttpClientFactory httpClientFactory,
-        ILoggerFactory loggerFactory)
+        ILoggerFactory loggerFactory,
+        IOptions<RemoteAgentProxyOptions> proxyOptions)
     {
         _endpointResolver = endpointResolver ?? throw new ArgumentNullException(nameof(endpointResolver));
         _turnTokenRegistry = turnTokenRegistry ?? throw new ArgumentNullException(nameof(turnTokenRegistry));
         _httpClientFactory = httpClientFactory ?? throw new ArgumentNullException(nameof(httpClientFactory));
         _loggerFactory = loggerFactory ?? throw new ArgumentNullException(nameof(loggerFactory));
+        _proxyOptions = proxyOptions?.Value ?? throw new ArgumentNullException(nameof(proxyOptions));
     }
 
     public IWorkflowTurnAgent CreateWorkerAgent() => CreateProxy();
@@ -47,5 +51,5 @@ internal sealed class RemoteWorkflowAgentFactory : IWorkflowAgentFactory
     public IWorkflowTurnAgent CreateScribeAgent() => CreateProxy();
 
     private RemoteAgentProxy CreateProxy() =>
-        new(_endpointResolver, _httpClientFactory, _loggerFactory, _turnTokenRegistry);
+        new(_endpointResolver, _httpClientFactory, _loggerFactory, _turnTokenRegistry, _proxyOptions);
 }

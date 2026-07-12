@@ -18,6 +18,7 @@ namespace Agentweaver.Api.Workflows;
 internal sealed record RunWorkflowBindings(
     ExecutorBinding AgentInputStorer,
     ExecutorBinding AgentBinding,
+    ExecutorBinding TerminalTurnFailed,
     ExecutorBinding RaiBinding,
     ExecutorBinding RaiRevisionAdapter,
     ExecutorBinding TerminalSafetyFailed,
@@ -107,6 +108,16 @@ internal static class RunWorkflowGraphBinder
         var startNode = GetNode(definition, definition.Start);
         builder.AddEdge(bindings.AgentInputStorer, ResolveEntry(ctx, startNode));
 
+        // Every root/full-pipeline AgentTurnExecutor can return a structured terminal failure.
+        // Route it directly to one typed graph output before any normal successor consumes it.
+        foreach (var node in definition.Nodes.Where(n => EffectiveKind(definition, n) == NodeKind.Agent))
+        {
+            builder.AddEdge<AgentTurnOutput>(
+                bindings.Wiring.ResolveAgentNode(node),
+                bindings.TerminalTurnFailed,
+                output => output is not null && output.TerminalFailureReason is not null);
+        }
+
         // Each logical edge expands to its raw executor wiring + predicate.
         foreach (var edge in definition.Edges)
             WireEdge(ctx, edge);
@@ -117,6 +128,7 @@ internal static class RunWorkflowGraphBinder
             if (node.Type == WorkflowNodeType.Terminal)
                 WireOutputs(ctx, node);
         }
+        builder.WithOutputFrom(bindings.TerminalTurnFailed);
     }
 
     /// <summary>
@@ -306,7 +318,10 @@ internal static class RunWorkflowGraphBinder
 
             // agent turn -> RAI gate (unconditional).
             case (NodeKind.Agent, NodeKind.Rai, null):
-                g.AddEdge(s.ResolveAgentNode(fromNode), ResolveRai(toNode, b));
+                g.AddEdge<AgentTurnOutput>(
+                    s.ResolveAgentNode(fromNode),
+                    ResolveRai(toNode, b),
+                    IsSuccessfulAgentTurn);
                 return true;
 
             // RAI REVISE (iteration < cap) -> revision adapter -> loop back to agent.
@@ -390,7 +405,7 @@ internal static class RunWorkflowGraphBinder
             case (NodeKind.Agent, NodeKind.Agent, null):
             {
                 var adapter = s.SequentialAgentAdapter(edge);
-                g.AddEdge(s.ResolveAgentNode(fromNode), adapter)
+                g.AddEdge<AgentTurnOutput>(s.ResolveAgentNode(fromNode), adapter, IsSuccessfulAgentTurn)
                  .AddEdge(adapter, s.ResolveAgentNode(toNode));
                 return true;
             }
@@ -400,7 +415,7 @@ internal static class RunWorkflowGraphBinder
             case (NodeKind.Agent, NodeKind.PeerReview, null):
             {
                 var storer = s.StoreAgentOutputAdapter(edge);
-                g.AddEdge(s.ResolveAgentNode(fromNode), storer)
+                g.AddEdge<AgentTurnOutput>(s.ResolveAgentNode(fromNode), storer, IsSuccessfulAgentTurn)
                  .AddEdge(storer, s.ResolvePeerReviewNode(toNode));
                 return true;
             }
@@ -409,7 +424,7 @@ internal static class RunWorkflowGraphBinder
             case (NodeKind.Agent, NodeKind.Scribe, null):
             {
                 var path = s.AgentScribePath(edge);
-                g.AddEdge(s.ResolveAgentNode(fromNode), path.Input)
+                g.AddEdge<AgentTurnOutput>(s.ResolveAgentNode(fromNode), path.Input, IsSuccessfulAgentTurn)
                  .AddEdge(path.Input, path.Scribe)
                  .AddEdge(path.Scribe, path.Output);
                 ctx.ScribeOutputs.Add(path.Output);
@@ -420,14 +435,17 @@ internal static class RunWorkflowGraphBinder
             case (NodeKind.Agent, NodeKind.HumanReview, null):
             {
                 var req = s.AgentToReviewRequestAdapter(edge);
-                g.AddEdge(s.ResolveAgentNode(fromNode), req)
+                g.AddEdge<AgentTurnOutput>(s.ResolveAgentNode(fromNode), req, IsSuccessfulAgentTurn)
                  .AddEdge(req, ResolveReview(toNode, b));
                 return true;
             }
 
             // Producer agent turn -> rubber-duck gate directly.
             case (NodeKind.Agent, NodeKind.Rubberduck, null):
-                g.AddEdge(s.ResolveAgentNode(fromNode), ResolveRubberduck(toNode, b));
+                g.AddEdge<AgentTurnOutput>(
+                    s.ResolveAgentNode(fromNode),
+                    ResolveRubberduck(toNode, b),
+                    IsSuccessfulAgentTurn);
                 return true;
 
             // RAI cleared (has a diff) -> merge directly (publish-style: no human gate before merge).
@@ -988,18 +1006,22 @@ internal static class RunWorkflowGraphBinder
 
     private static bool AgentTurnPredicate(AgentTurnOutput? output, string? when, string? sourceKind, int maxIterations)
     {
-        if (output is null) return false;
+        if (!IsSuccessfulAgentTurn(output)) return false;
+        var successful = output!;
         return when switch
         {
             null or "" => true,
-            "pass" => !output.RaiRevisionRequired && !output.ContentSafetyFlagged,
-            "review" => !output.RaiRevisionRequired && !string.IsNullOrEmpty(output.Diff),
-            "revise" => output.RaiRevisionRequired && output.Iteration < maxIterations,
-            "safety-failed" => output.ContentSafetyFlagged,
-            "no-changes" => !output.RaiRevisionRequired && string.IsNullOrEmpty(output.Diff) && !output.ContentSafetyFlagged,
+            "pass" => !successful.RaiRevisionRequired && !successful.ContentSafetyFlagged,
+            "review" => !successful.RaiRevisionRequired && !string.IsNullOrEmpty(successful.Diff),
+            "revise" => successful.RaiRevisionRequired && successful.Iteration < maxIterations,
+            "safety-failed" => successful.ContentSafetyFlagged,
+            "no-changes" => !successful.RaiRevisionRequired && string.IsNullOrEmpty(successful.Diff) && !successful.ContentSafetyFlagged,
             _ => false,
         };
     }
+
+    private static bool IsSuccessfulAgentTurn(AgentTurnOutput? output) =>
+        output is not null && output.TerminalFailureReason is null;
 
     private static bool ReviewDecisionPredicate(WorkflowReviewDecision? decision, string? when) =>
         when switch

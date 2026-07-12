@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using System.Net.Http.Headers;
+using System.Runtime.CompilerServices;
 using System.Threading.Channels;
 using A2A;
 using Microsoft.Agents.AI.A2A;
@@ -9,6 +10,16 @@ using Microsoft.Extensions.Logging;
 using Agentweaver.Domain;
 
 namespace Agentweaver.AgentRuntime.Workflow;
+
+/// <summary>Worker-side deadlines for streaming A2A turns.</summary>
+public sealed class RemoteAgentProxyOptions
+{
+    /// <summary>Absolute worker-side backstop for one pod turn. Zero disables it.</summary>
+    public TimeSpan TotalTurnTimeout { get; set; } = TimeSpan.FromMinutes(70);
+
+    /// <summary>Maximum gap between A2A stream updates. Zero disables it.</summary>
+    public TimeSpan ReadIdleTimeout { get; set; } = TimeSpan.FromMinutes(5);
+}
 
 /// <summary>
 /// Worker-side <see cref="IWorkflowTurnAgent"/> adapter that forwards each agent turn to a
@@ -43,6 +54,8 @@ public sealed class RemoteAgentProxy : IWorkflowTurnAgent
 {
     internal sealed record StructuredRunFailure(string ErrorCode, string Message, bool? IsRetryable);
 
+    public const string StreamingHttpClientName = "a2a-sandbox-pod-streaming";
+
     private const string A2AAgentId = "agentweaver-worker-proxy";
     private const string A2AAgentName = "Agentweaver Worker Agent Proxy";
     private const string A2AAgentDescription = "Worker-side A2A proxy for sandbox pod CopilotAIAgent (spec-018 P1)";
@@ -52,6 +65,7 @@ public sealed class RemoteAgentProxy : IWorkflowTurnAgent
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly ILoggerFactory _loggerFactory;
     private readonly ILogger<RemoteAgentProxy> _logger;
+    private readonly RemoteAgentProxyOptions _options;
 
     // Per-run state — populated by SetupAsync, consumed by RunTurnAsync.
     private string _runId = "";
@@ -75,12 +89,14 @@ public sealed class RemoteAgentProxy : IWorkflowTurnAgent
         ISandboxAgentEndpointResolver endpointResolver,
         IHttpClientFactory httpClientFactory,
         ILoggerFactory loggerFactory,
-        IAgentHostTurnTokenRegistry? turnTokenRegistry = null)
+        IAgentHostTurnTokenRegistry? turnTokenRegistry = null,
+        RemoteAgentProxyOptions? options = null)
     {
         _endpointResolver = endpointResolver ?? throw new ArgumentNullException(nameof(endpointResolver));
         _httpClientFactory = httpClientFactory ?? throw new ArgumentNullException(nameof(httpClientFactory));
         _loggerFactory = loggerFactory ?? throw new ArgumentNullException(nameof(loggerFactory));
         _turnTokenRegistry = turnTokenRegistry;
+        _options = options ?? new RemoteAgentProxyOptions();
         _logger = loggerFactory.CreateLogger<RemoteAgentProxy>();
     }
 
@@ -126,9 +142,9 @@ public sealed class RemoteAgentProxy : IWorkflowTurnAgent
                 "Set Sandbox:AgentExecutionMode=in-api to revert to in-process execution.");
         }
 
-        // HttpClient named "a2a-sandbox-pod" — configured in Program.cs with appropriate
-        // TLS/cert settings per H1 (mTLS or bearer). Client lifetime is per-run.
-        _httpClient = _httpClientFactory.CreateClient("a2a-sandbox-pod");
+        // Streaming has a dedicated infinite-transport-timeout client. The worker deadlines in
+        // RunTurnAsync remain authoritative even if the pod dies after response headers arrive.
+        _httpClient = _httpClientFactory.CreateClient(StreamingHttpClientName);
         var turnToken = _turnTokenRegistry?.TryGetTurnToken(runId);
         if (!string.IsNullOrEmpty(turnToken))
             _httpClient.DefaultRequestHeaders.Authorization =
@@ -213,8 +229,12 @@ public sealed class RemoteAgentProxy : IWorkflowTurnAgent
 
         try
         {
-            await foreach (var update in _a2aAgent
-                .RunStreamingAsync(messages, _session, options: null, ct)
+            await foreach (var update in WithWorkerStreamDeadline(
+                streamToken => _a2aAgent.RunStreamingAsync(
+                    messages, _session, options: null, streamToken),
+                _options,
+                _runId,
+                ct)
                 .ConfigureAwait(false))
             {
                 foreach (var content in update.Contents)
@@ -268,6 +288,137 @@ public sealed class RemoteAgentProxy : IWorkflowTurnAgent
             _runId, responseText.Length);
 
         return responseText;
+    }
+
+    internal static async IAsyncEnumerable<T> WithWorkerStreamDeadline<T>(
+        Func<CancellationToken, IAsyncEnumerable<T>> streamFactory,
+        RemoteAgentProxyOptions options,
+        string runId,
+        [EnumeratorCancellation] CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(streamFactory);
+        ArgumentNullException.ThrowIfNull(options);
+
+        var totalTimeout = options.TotalTurnTimeout > TimeSpan.Zero
+            ? options.TotalTurnTimeout
+            : Timeout.InfiniteTimeSpan;
+        var idleTimeout = options.ReadIdleTimeout > TimeSpan.Zero
+            ? options.ReadIdleTimeout
+            : Timeout.InfiniteTimeSpan;
+        var totalDeadline = totalTimeout == Timeout.InfiniteTimeSpan
+            ? DateTimeOffset.MaxValue
+            : DateTimeOffset.UtcNow.Add(totalTimeout);
+
+        using var streamCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        var enumerator = streamFactory(streamCts.Token).GetAsyncEnumerator(streamCts.Token);
+        Task<bool>? pendingMove = null;
+        var abandonEnumerator = false;
+
+        try
+        {
+            while (true)
+            {
+                ct.ThrowIfCancellationRequested();
+
+                var remainingTotal = totalDeadline - DateTimeOffset.UtcNow;
+                if (remainingTotal <= TimeSpan.Zero)
+                {
+                    abandonEnumerator = true;
+                    streamCts.Cancel();
+                    throw CreateStreamTimeout(
+                        "a2a_turn_timeout",
+                        $"RemoteAgentProxy: A2A turn for run '{runId}' exceeded the worker total deadline of {totalTimeout.TotalMinutes:n0} minutes.",
+                        runId);
+                }
+
+                pendingMove = enumerator.MoveNextAsync().AsTask();
+                var idleTask = idleTimeout == Timeout.InfiniteTimeSpan
+                    ? Task.Delay(Timeout.InfiniteTimeSpan, ct)
+                    : Task.Delay(idleTimeout, ct);
+                var totalTask = totalDeadline == DateTimeOffset.MaxValue
+                    ? Task.Delay(Timeout.InfiniteTimeSpan, ct)
+                    : Task.Delay(remainingTotal, ct);
+
+                var completed = await Task.WhenAny(pendingMove, idleTask, totalTask).ConfigureAwait(false);
+                if (ReferenceEquals(completed, pendingMove))
+                {
+                    var moved = await pendingMove.ConfigureAwait(false);
+                    pendingMove = null;
+                    if (!moved)
+                        yield break;
+
+                    yield return enumerator.Current;
+                    continue;
+                }
+
+                ct.ThrowIfCancellationRequested();
+                abandonEnumerator = true;
+                streamCts.Cancel();
+
+                if (ReferenceEquals(completed, totalTask))
+                {
+                    throw CreateStreamTimeout(
+                        "a2a_turn_timeout",
+                        $"RemoteAgentProxy: A2A turn for run '{runId}' exceeded the worker total deadline of {totalTimeout.TotalMinutes:n0} minutes.",
+                        runId);
+                }
+
+                throw CreateStreamTimeout(
+                    "a2a_stream_idle_timeout",
+                    $"RemoteAgentProxy: A2A stream for run '{runId}' produced no update for {idleTimeout.TotalMinutes:n1} minutes; the pod or network may be unavailable.",
+                    runId);
+            }
+        }
+        finally
+        {
+            if (abandonEnumerator && pendingMove is not null)
+            {
+                await DisposeAbandonedStreamAsync(pendingMove, enumerator).ConfigureAwait(false);
+            }
+            else
+            {
+                await enumerator.DisposeAsync().ConfigureAwait(false);
+            }
+        }
+    }
+
+    private static WorkflowAgentInfrastructureException CreateStreamTimeout(
+        string reason,
+        string message,
+        string runId) =>
+        new(reason, message, new TimeoutException($"Worker A2A stream deadline elapsed for run '{runId}'."), isRetryable: true);
+
+    private static async Task DisposeAbandonedStreamAsync<T>(
+        Task<bool> pendingMove,
+        IAsyncEnumerator<T> enumerator)
+    {
+        var cleanupDelay = Task.Delay(TimeSpan.FromSeconds(1));
+        if (ReferenceEquals(await Task.WhenAny(pendingMove, cleanupDelay).ConfigureAwait(false), pendingMove))
+        {
+            try
+            {
+                await pendingMove.ConfigureAwait(false);
+            }
+            catch
+            {
+                // The typed worker-side timeout is already being surfaced.
+            }
+        }
+
+        try
+        {
+            var disposeTask = enumerator.DisposeAsync().AsTask();
+            if (ReferenceEquals(
+                    await Task.WhenAny(disposeTask, Task.Delay(TimeSpan.FromSeconds(1))).ConfigureAwait(false),
+                    disposeTask))
+            {
+                await disposeTask.ConfigureAwait(false);
+            }
+        }
+        catch
+        {
+            // Deadline cleanup is best-effort and must never replace the typed timeout.
+        }
     }
 
     internal static StructuredRunFailure? TryReadStructuredFailure(RunEvent runEvent)

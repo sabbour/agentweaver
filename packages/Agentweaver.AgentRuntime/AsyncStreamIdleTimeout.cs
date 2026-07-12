@@ -10,7 +10,8 @@ namespace Agentweaver.AgentRuntime;
 internal sealed record StreamWatchdogOptions(
     TimeSpan IdleTimeout,
     TimeSpan TotalTurnTimeout,
-    TimeSpan ShellHeartbeatInterval);
+    TimeSpan ShellHeartbeatInterval,
+    TimeSpan CleanupTimeout = default);
 
 /// <summary>
 /// Tool-aware watchdog for streaming agent turns. A normal stream gap is bounded by
@@ -52,6 +53,9 @@ internal static class AsyncStreamIdleTimeout
             ? startedAt.Add(options.TotalTurnTimeout)
             : DateTimeOffset.MaxValue;
         var lastProgressAt = startedAt;
+        var cleanupTimeout = options.CleanupTimeout > TimeSpan.Zero
+            ? options.CleanupTimeout
+            : TimeSpan.FromSeconds(1);
         ShellExecutionSnapshot? priorShell = null;
         DateTimeOffset nextHeartbeatAt = DateTimeOffset.MaxValue;
 
@@ -68,6 +72,12 @@ internal static class AsyncStreamIdleTimeout
                 {
                     abandonEnumerator = true;
                     sourceCts.Cancel();
+                    await ForceStopActiveShellAsync(
+                        shellTracker?.Observe().ActiveExecution ?? priorShell,
+                        onShellHardTimeout,
+                        logger,
+                        runId,
+                        "total-turn deadline").ConfigureAwait(false);
                     throw new AgentProviderException(
                         ModelSource.GitHubCopilot,
                         AgentProviderFailureKind.ProviderUnavailable,
@@ -107,6 +117,12 @@ internal static class AsyncStreamIdleTimeout
                     {
                         abandonEnumerator = true;
                         sourceCts.Cancel();
+                        await ForceStopActiveShellAsync(
+                            activeShell,
+                            onShellHardTimeout,
+                            logger,
+                            runId,
+                            "total-turn deadline").ConfigureAwait(false);
                         throw new AgentProviderException(
                             ModelSource.GitHubCopilot,
                             AgentProviderFailureKind.ProviderUnavailable,
@@ -119,22 +135,12 @@ internal static class AsyncStreamIdleTimeout
                     {
                         abandonEnumerator = true;
                         sourceCts.Cancel();
-
-                        if (onShellHardTimeout is not null)
-                        {
-                            try
-                            {
-                                await onShellHardTimeout(activeShell).ConfigureAwait(false);
-                            }
-                            catch (Exception ex)
-                            {
-                                logger.LogError(
-                                    ex,
-                                    "Failed to terminate the timed-out shell process tree (runId={RunId}, toolCallId={ToolCallId})",
-                                    runId,
-                                    activeShell.ToolCallId);
-                            }
-                        }
+                        await ForceStopActiveShellAsync(
+                            activeShell,
+                            onShellHardTimeout,
+                            logger,
+                            runId,
+                            "shell hard deadline").ConfigureAwait(false);
 
                         throw new AgentProviderException(
                             ModelSource.GitHubCopilot,
@@ -151,6 +157,12 @@ internal static class AsyncStreamIdleTimeout
                     {
                         abandonEnumerator = true;
                         sourceCts.Cancel();
+                        await ForceStopActiveShellAsync(
+                            activeShell,
+                            onShellHardTimeout,
+                            logger,
+                            runId,
+                            "idle deadline").ConfigureAwait(false);
                         logger.LogError(
                             "Streaming turn produced no output for {IdleSeconds:n0}s (runId={RunId}); treating as a hung turn.",
                             options.IdleTimeout.TotalSeconds,
@@ -226,7 +238,12 @@ internal static class AsyncStreamIdleTimeout
         {
             if (abandonEnumerator && pendingMove is not null)
             {
-                _ = ObserveAndDisposeAbandonedEnumeratorAsync(pendingMove, enumerator, logger, runId);
+                await ObserveAndDisposeAbandonedEnumeratorAsync(
+                    pendingMove,
+                    enumerator,
+                    cleanupTimeout,
+                    logger,
+                    runId).ConfigureAwait(false);
             }
             else
             {
@@ -242,24 +259,76 @@ internal static class AsyncStreamIdleTimeout
         DateTimeOffset fourth) =>
         new[] { first, second, third, fourth }.Min();
 
+    private static async Task ForceStopActiveShellAsync(
+        ShellExecutionSnapshot? activeShell,
+        Func<ShellExecutionSnapshot, Task>? onShellHardTimeout,
+        ILogger logger,
+        string runId,
+        string deadline)
+    {
+        if (activeShell is null || onShellHardTimeout is null)
+            return;
+
+        try
+        {
+            await onShellHardTimeout(activeShell).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(
+                ex,
+                "Failed to terminate the shell process tree after {Deadline} elapsed (runId={RunId}, toolCallId={ToolCallId})",
+                deadline,
+                runId,
+                activeShell.ToolCallId);
+        }
+    }
+
     private static async Task ObserveAndDisposeAbandonedEnumeratorAsync<T>(
         Task<bool> pendingMove,
         IAsyncEnumerator<T> enumerator,
+        TimeSpan cleanupTimeout,
         ILogger logger,
         string runId)
     {
-        try
+        var pendingCompleted = ReferenceEquals(
+            await Task.WhenAny(pendingMove, Task.Delay(cleanupTimeout)).ConfigureAwait(false),
+            pendingMove);
+        if (pendingCompleted)
         {
-            await pendingMove.ConfigureAwait(false);
+            try
+            {
+                await pendingMove.ConfigureAwait(false);
+            }
+            catch
+            {
+                // The watchdog already surfaced the typed failure.
+            }
         }
-        catch
+        else
         {
-            // The watchdog already surfaced the typed failure.
+            logger.LogWarning(
+                "Streaming source ignored cancellation for {CleanupMilliseconds:n0}ms; forcing enumerator disposal for run {RunId}",
+                cleanupTimeout.TotalMilliseconds,
+                runId);
         }
 
         try
         {
-            await enumerator.DisposeAsync().ConfigureAwait(false);
+            var disposeTask = enumerator.DisposeAsync().AsTask();
+            if (ReferenceEquals(
+                    await Task.WhenAny(disposeTask, Task.Delay(cleanupTimeout)).ConfigureAwait(false),
+                    disposeTask))
+            {
+                await disposeTask.ConfigureAwait(false);
+            }
+            else
+            {
+                logger.LogWarning(
+                    "Streaming enumerator disposal exceeded the {CleanupMilliseconds:n0}ms cleanup bound for run {RunId}",
+                    cleanupTimeout.TotalMilliseconds,
+                    runId);
+            }
         }
         catch (Exception ex)
         {

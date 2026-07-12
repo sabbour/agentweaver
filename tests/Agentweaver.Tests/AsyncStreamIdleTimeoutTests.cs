@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using FluentAssertions;
 using Agentweaver.AgentRuntime;
 using Agentweaver.AgentRuntime.Providers;
@@ -155,6 +156,76 @@ public sealed class AsyncStreamIdleTimeoutTests
         ex.Which.ErrorCode.Should().Be("github_copilot_turn_stalled");
     }
 
+    [Fact]
+    public async Task TotalTurnTimeout_WithActiveShell_ForceStopsProcessTree()
+    {
+        using var tracker = new ShellExecutionTracker();
+        tracker.TryStartObservedExecution(
+            "shell-total-timeout",
+            "command-total-timeout",
+            TimeSpan.FromSeconds(5)).Should().BeTrue();
+        var terminated = false;
+
+        var act = async () =>
+        {
+            await foreach (var _ in HangsForever<int>().WithToolAwareWatchdog(
+                               new StreamWatchdogOptions(
+                                   IdleTimeout: TimeSpan.FromMinutes(5),
+                                   TotalTurnTimeout: TimeSpan.FromMilliseconds(80),
+                                   ShellHeartbeatInterval: TimeSpan.FromMilliseconds(20)),
+                               tracker,
+                               "run-total-timeout",
+                               Logger,
+                               onShellHeartbeat: null,
+                               _ =>
+                               {
+                                   terminated = true;
+                                   return Task.CompletedTask;
+                               }))
+            {
+            }
+        };
+
+        var ex = await act.Should().ThrowAsync<AgentProviderException>();
+        ex.Which.ErrorCode.Should().Be("github_copilot_turn_timeout");
+        terminated.Should().BeTrue(
+            "every watchdog-owned timeout must force-stop an active shell, not only its shell deadline");
+    }
+
+    [Fact]
+    public async Task WatchdogTimeout_CancellationIgnoringSource_ReturnsAfterBoundedCleanup()
+    {
+        var source = new CancellationIgnoringSource();
+        var stopwatch = Stopwatch.StartNew();
+
+        var act = async () =>
+        {
+            await foreach (var _ in source.WithToolAwareWatchdog(
+                               new StreamWatchdogOptions(
+                                   IdleTimeout: TimeSpan.FromMilliseconds(60),
+                                   TotalTurnTimeout: TimeSpan.FromSeconds(5),
+                                   ShellHeartbeatInterval: TimeSpan.Zero,
+                                   CleanupTimeout: TimeSpan.FromMilliseconds(40)),
+                               shellTracker: null,
+                               "run-cancellation-ignoring-source",
+                               Logger,
+                               onShellHeartbeat: null,
+                               onShellHardTimeout: null))
+            {
+            }
+        };
+
+        var ex = await act.Should().ThrowAsync<AgentProviderException>();
+
+        stopwatch.Stop();
+        ex.Which.ErrorCode.Should().Be("github_copilot_turn_stalled");
+        await source.DisposeCalled.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        source.PendingMove.IsCompleted.Should().BeTrue(
+            "forced disposal releases the cancellation-ignoring MoveNext task");
+        stopwatch.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(1),
+            "bounded cleanup must not await a cancellation-ignoring SDK MoveNext forever");
+    }
+
     private static async IAsyncEnumerable<int> Source(params int[] items)
     {
         foreach (var i in items)
@@ -180,5 +251,28 @@ public sealed class AsyncStreamIdleTimeoutTests
     {
         await Task.Delay(Timeout.Infinite, ct);
         yield break;
+    }
+
+    private sealed class CancellationIgnoringSource : IAsyncEnumerable<int>, IAsyncEnumerator<int>
+    {
+        private readonly TaskCompletionSource<bool> _pendingMove =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public TaskCompletionSource DisposeCalled { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task<bool> PendingMove => _pendingMove.Task;
+        public int Current => 0;
+
+        public IAsyncEnumerator<int> GetAsyncEnumerator(CancellationToken cancellationToken = default) => this;
+
+        public ValueTask<bool> MoveNextAsync() => new(_pendingMove.Task);
+
+        public ValueTask DisposeAsync()
+        {
+            DisposeCalled.TrySetResult();
+            _pendingMove.TrySetResult(false);
+            return ValueTask.CompletedTask;
+        }
     }
 }

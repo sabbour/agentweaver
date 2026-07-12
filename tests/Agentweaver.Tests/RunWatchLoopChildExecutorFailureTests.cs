@@ -31,6 +31,82 @@ namespace Agentweaver.Tests.Api;
 public sealed class RunWatchLoopChildExecutorFailureTests
 {
     [Fact]
+    public async Task RootRun_StructuredAgentFailure_PreservesErrorCode_NotStreamFallback()
+    {
+        await using var factory = new ReviewWebApplicationFactory()
+            .WithWebHostBuilder(builder =>
+            {
+                builder.ConfigureServices(services =>
+                {
+                    var descriptor = services.FirstOrDefault(d => d.ServiceType == typeof(IWorkflowAgentFactory));
+                    if (descriptor is not null)
+                        services.Remove(descriptor);
+                    services.AddSingleton<IWorkflowAgentFactory>(new StructuredFailingWorkerAgentFactory());
+                });
+            });
+
+        var services = factory.Services;
+        var runStore = services.GetRequiredService<SqliteRunStore>();
+        var streamStore = services.GetRequiredService<RunStreamStore>();
+        var workflowFactory = services.GetRequiredService<RunWorkflowFactory>();
+        var watchLoop = services.GetRequiredService<RunWatchLoopService>();
+        var runId = RunId.New();
+        var runIdText = runId.ToString();
+
+        await runStore.InsertAsync(new Run
+        {
+            Id = runId,
+            RepositoryPath = Path.GetTempPath(),
+            OriginatingBranch = "main",
+            ModelSource = ModelSource.GitHubCopilot,
+            Task = "Run a long shell command.",
+            SubmittingUser = ReviewWebApplicationFactory.OwnerUser,
+            Status = RunStatus.InProgress,
+            StartedAt = DateTimeOffset.UtcNow,
+            AgentName = "tank",
+            WorktreePath = Path.GetTempPath(),
+            WorktreeBranch = "agentweaver/root-branch",
+        }, CancellationToken.None);
+
+        var entry = streamStore.Create(runIdText, ReviewWebApplicationFactory.OwnerUser);
+        var input = new AgentTurnInput(
+            RunId: runIdText,
+            Task: "Run a long shell command.",
+            WorktreePath: Path.GetTempPath(),
+            WorktreeBranch: "agentweaver/root-branch",
+            RepositoryPath: Path.GetTempPath(),
+            OriginatingBranch: "main",
+            ModelSource: ModelSource.GitHubCopilot.ToApiString(),
+            ModelId: "claude-sonnet-5",
+            SubmittingUser: ReviewWebApplicationFactory.OwnerUser);
+
+        var streamingRun = await workflowFactory.StartAsync(input, runIdText, CancellationToken.None);
+        watchLoop.StartWatching(
+            runIdText,
+            streamingRun,
+            entry,
+            ReviewWebApplicationFactory.OwnerUser,
+            CancellationToken.None);
+
+        Run? run = null;
+        var deadline = DateTimeOffset.UtcNow.AddSeconds(30);
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            run = await runStore.GetAsync(runId, CancellationToken.None);
+            if (run?.Status == RunStatus.Failed)
+                break;
+            await Task.Delay(100);
+        }
+
+        run.Should().NotBeNull();
+        run!.Status.Should().Be(RunStatus.Failed);
+        run.Result.Should().Be("shell_execution_timeout");
+        run.Result.Should().NotBe("watch_stream_completed_without_terminal_event");
+        var failed = entry.GetSnapshotSince(0).Events.Single(e => e.Type == EventTypes.RunFailed);
+        System.Text.Json.JsonSerializer.Serialize(failed.Payload).Should().Contain("shell_execution_timeout");
+    }
+
+    [Fact]
     public async Task ChildRun_AgentExecutorThrows_TerminalizesVisibleFailure_NotHungStream()
     {
         await using var factory = new ReviewWebApplicationFactory()
@@ -120,6 +196,15 @@ public sealed class RunWatchLoopChildExecutorFailureTests
         public IWorkflowTurnAgent CreateScribeAgent() => new ThrowingTurnAgent();
     }
 
+    private sealed class StructuredFailingWorkerAgentFactory : IWorkflowAgentFactory
+    {
+        public IWorkflowTurnAgent CreateWorkerAgent() => new StructuredFailingTurnAgent();
+        public IWorkflowTurnAgent CreateRaiAgent() => new StructuredFailingTurnAgent();
+        public IWorkflowTurnAgent CreateRubberduckAgent() => new StructuredFailingTurnAgent();
+        public IWorkflowTurnAgent CreateBuildTestAgent() => new StructuredFailingTurnAgent();
+        public IWorkflowTurnAgent CreateScribeAgent() => new StructuredFailingTurnAgent();
+    }
+
     private sealed class ThrowingTurnAgent : IWorkflowTurnAgent
     {
         public Task SetupAsync(
@@ -140,6 +225,31 @@ public sealed class RunWatchLoopChildExecutorFailureTests
         // MAF surfaces as ExecutorFailedEvent (the structural failure this test exercises).
         public Task<string> RunTurnAsync(string task, bool isRevision, CancellationToken ct) =>
             throw new InvalidOperationException("simulated agent turn failure (transient runtime error)");
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    private sealed class StructuredFailingTurnAgent : IWorkflowTurnAgent
+    {
+        public Task SetupAsync(
+            string workingDirectory,
+            string repositoryPath,
+            string runId,
+            string? modelId,
+            string? systemPromptContext,
+            ChannelWriter<RunEvent>? streamWriter,
+            string? projectId,
+            string? agentName,
+            string? apiBaseUrl,
+            string? apiKey,
+            CancellationToken ct,
+            string? userId = null) => Task.CompletedTask;
+
+        public Task<string> RunTurnAsync(string task, bool isRevision, CancellationToken ct) =>
+            Task.FromException<string>(new WorkflowAgentInfrastructureException(
+                "shell_execution_timeout",
+                "Shell execution exceeded its hard deadline and was terminated.",
+                isRetryable: true));
 
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }

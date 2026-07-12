@@ -173,6 +173,29 @@ public sealed class RunWatchLoopTerminalOutputTests : IClassFixture<ReviewWebApp
             "the watcher must not flatten the typed failure to child_executor_failed:agent-turn");
     }
 
+    [Fact]
+    public async Task HandleTerminalOutput_RootStructuredShellTimeout_PersistsRealFailureReason()
+    {
+        var (svc, entry, runId) = CreateServiceAndEntry();
+        var woe = new WorkflowOutputEvent(
+            new AgentTurnFailedOutput(
+                runId,
+                "shell_execution_timeout",
+                Evidence: "exception=WorkflowAgentInfrastructureException",
+                Message: "Shell execution exceeded its hard deadline and was terminated.",
+                Retryable: true),
+            "terminal-turn-failed");
+
+        var result = await svc.HandleTerminalOutputAsync(runId, woe, entry, CancellationToken.None);
+
+        result.Should().BeTrue();
+        var failed = entry.GetSnapshotSince(0).Events.Single(e => e.Type == EventTypes.RunFailed);
+        var payload = JsonSerializer.SerializeToElement(failed.Payload);
+        payload.GetProperty("errorCode").GetString().Should().Be("shell_execution_timeout",
+            "root failures must not flatten to watch_stream_completed_without_terminal_event");
+        entry.IsCompleted.Should().BeTrue();
+    }
+
     private (RunWatchLoopService Service, RunStreamEntry Entry, string RunId) CreateServiceAndEntry()
     {
         var scope = _factory.Services.CreateScope();

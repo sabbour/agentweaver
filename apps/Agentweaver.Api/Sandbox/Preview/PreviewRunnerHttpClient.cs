@@ -61,7 +61,7 @@ public interface IPreviewRunnerHttpClient
 
 public sealed class PreviewRunnerHttpClient : IPreviewRunnerHttpClient
 {
-    /// <summary>Reuses the A2A named client (mTLS/scheme wiring + connect-refused retry).</summary>
+    /// <summary>Finite-timeout AgentHost client (mTLS/scheme wiring + connect-refused retry).</summary>
     public const string HttpClientName = "a2a-sandbox-pod";
 
     private readonly IHttpClientFactory _httpClientFactory;

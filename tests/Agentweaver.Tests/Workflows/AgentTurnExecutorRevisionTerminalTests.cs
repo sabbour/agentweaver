@@ -72,10 +72,10 @@ public sealed class AgentTurnExecutorRevisionTerminalTests
     }
 
     [Fact]
-    public async Task PersistentCommitFailure_Rethrows_VisibleFailure_NeverFakeSuccess()
+    public async Task PersistentCommitFailure_WhenTerminalOutputDisabled_Rethrows_NeverFakeSuccess()
     {
-        // FULL pipeline (emitTerminalFailureOutput=false): every attempt throws (corrupt/unopenable
-        // repo) — must rethrow (watcher backstop terminalizes), never degrade to a no-change success.
+        // Compatibility mode (emitTerminalFailureOutput=false): every attempt throws
+        // (corrupt/unopenable repo), never degrading to a no-change success.
         var worktree = new StubWorktreeOperations
         {
             FailuresBeforeSuccess = int.MaxValue,
@@ -156,6 +156,28 @@ public sealed class AgentTurnExecutorRevisionTerminalTests
         result.TerminalFailureRetryable.Should().BeTrue();
         worktree.CommitAttempts.Should().Be(0,
             "a failed agent turn must not proceed into post-turn commit bookkeeping");
+    }
+
+    [Fact]
+    public async Task StructuredAgentFailure_InRootPipeline_ReturnsTerminalFailureOutput()
+    {
+        var worktree = new StubWorktreeOperations();
+        var executor = new AgentTurnExecutor(
+            new StructuredFailingTurnAgent(),
+            worktree,
+            _ => null,
+            NullLogger<AgentTurnExecutor>.Instance,
+            emitTerminalFailureOutput: true);
+
+        var result = await executor.HandleAsync(
+            RevisionInput(),
+            context: null!,
+            CancellationToken.None);
+
+        result.TerminalFailureReason.Should().Be("shell_execution_timeout");
+        result.TerminalFailureMessage.Should().Contain("hard deadline");
+        result.TerminalFailureRetryable.Should().BeTrue();
+        worktree.CommitAttempts.Should().Be(0);
     }
 
     private sealed class CleanTurnAgent : IWorkflowTurnAgent

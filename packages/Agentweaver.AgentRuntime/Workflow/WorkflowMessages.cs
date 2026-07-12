@@ -46,9 +46,9 @@ public sealed record AgentTurnOutput(
     /// <summary>Agent context carried forward for downstream gates that expose Agentweaver API tools.</summary>
     string? AgentName = null,
     /// <summary>
-    /// Machine-readable reason for a known terminal child-turn failure (provider, transport,
-    /// workspace/write-back, or persistent commit failure). Null = success. Drives the child graph's
-    /// conditional failure->terminal edge so structured failures do not collapse into an executor id.
+    /// Machine-readable reason for a known terminal turn failure (provider, transport,
+    /// workspace/write-back, or persistent commit failure). Null = success. Drives root and child
+    /// failure terminals so structured failures do not collapse into an executor id.
     /// </summary>
     string? TerminalFailureReason = null,
     /// <summary>Structured diagnostics for <see cref="TerminalFailureReason"/>.</summary>
@@ -104,6 +104,16 @@ public sealed record DeclinedOutput(string RunId);
 
 /// <summary>Terminal output for content-safety-flagged runs.</summary>
 public sealed record ContentSafetyFailedOutput(string RunId);
+
+/// <summary>
+/// Terminal output for a root/full-pipeline agent turn that failed with a known structured reason.
+/// </summary>
+public sealed record AgentTurnFailedOutput(
+    string RunId,
+    string Reason,
+    string? Evidence = null,
+    string? Message = null,
+    bool? Retryable = null);
 
 /// <summary>
 /// Terminal output for a coordinator CHILD run (ParentRunId != null). Produced by the

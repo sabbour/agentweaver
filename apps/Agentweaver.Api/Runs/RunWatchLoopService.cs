@@ -614,6 +614,31 @@ public sealed class RunWatchLoopService
             return true;
         }
 
+        // Root/full-pipeline graph-native failure terminal. Preserve the structured reason emitted
+        // by AgentTurnExecutor instead of falling through to the generic stream-ended fallback.
+        if (woe.Is<AgentTurnFailedOutput>(out var turnFailed))
+        {
+            var changed = await _runStore.TrySetTerminalStatusAsync(
+                parsedRunId, RunStatus.Failed, now, turnFailed.Reason, CancellationToken.None).ConfigureAwait(false);
+
+            EmitTerminalMetrics(currentRun, now, "failed", turnFailed.Reason, changed);
+            if (!entry.HasEventType(EventTypes.RunFailed))
+            {
+                entry.RecordNext(EventTypes.RunFailed, new
+                {
+                    reason = turnFailed.Reason,
+                    errorCode = turnFailed.Reason,
+                    message = turnFailed.Message,
+                    evidence = turnFailed.Evidence,
+                    retryable = turnFailed.Retryable,
+                });
+            }
+
+            _streamStore.Complete(runId);
+            _ = _factory.PersistRunEventsAsync(runId);
+            return true;
+        }
+
         // Coordinator child graph-native failure terminal. Known agent/provider/transport/workspace
         // and post-turn failures arrive with their original machine-readable reason, so the watcher
         // never collapses them to child_executor_failed:agent-turn or stream-ended-without-terminal.
