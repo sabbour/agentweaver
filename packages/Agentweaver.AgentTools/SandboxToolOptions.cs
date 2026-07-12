@@ -27,4 +27,13 @@ public sealed record SandboxToolOptions(
     /// Mirrors <c>SandboxPolicy.NetworkEnabled</c>.
     /// </summary>
     public bool NetworkEnabled { get; init; } = false;
+
+    /// <summary>Reject destructive commands instead of waiting for operator approval.</summary>
+    public bool RejectDestructiveCommands { get; init; } = false;
+
+    /// <summary>Reject commands that detach/background work outside the command lifetime.</summary>
+    public bool RejectBackgroundCommands { get; init; } = false;
+
+    /// <summary>Upper bound for model-supplied command timeouts. Zero means no extra cap.</summary>
+    public int MaximumTimeoutMs { get; init; } = 0;
 }

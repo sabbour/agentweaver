@@ -58,6 +58,37 @@ public sealed class PreviewStepTests : IDisposable
         Str(ready, "preview_url").Should().NotBeNullOrEmpty();
     }
 
+    [Fact]
+    public async Task Preview_resolves_from_source_tree_but_executes_in_equivalent_local_checkout_directory()
+    {
+        File.Delete(Path.Combine(_worktree, "package.json"));
+        var sourceFrontend = Path.Combine(_worktree, "frontend");
+        Directory.CreateDirectory(sourceFrontend);
+        File.WriteAllText(
+            Path.Combine(sourceFrontend, "package.json"),
+            """{ "scripts": { "dev": "vite" } }""");
+        var executionRoot = Path.Combine(
+            AppContext.BaseDirectory,
+            ".preview-execution-tests",
+            Guid.NewGuid().ToString("n"));
+        Directory.CreateDirectory(executionRoot);
+
+        try
+        {
+            var h = new Harness(_worktree);
+            await h.Step.RunAsync(
+                Request() with { ExecutionCheckoutPath = executionRoot },
+                CancellationToken.None);
+
+            h.PreviewRunner.LastCommand.Should().Be("npm run dev -- --host 0.0.0.0");
+            h.PreviewRunner.LastCwd.Should().Be(Path.Combine(executionRoot, "frontend"));
+        }
+        finally
+        {
+            try { Directory.Delete(executionRoot, recursive: true); } catch { }
+        }
+    }
+
     // ── Infra off → skipped, never failed ───────────────────────────────────────────────
 
     [Fact]
@@ -380,6 +411,8 @@ public sealed class PreviewStepTests : IDisposable
         public int StartCalls;
         public int StopCalls;
         public string? LastStopReason;
+        public string? LastCommand;
+        public string? LastCwd;
         public Func<PreviewRunnerStartResult>? StartBehavior;
         public Func<PreviewRunnerPortResult>? ObserveBehavior;
         public PreviewRunnerPortResult PortResult = new("proc-sess-1", 3000, Healthy: true, "ok");
@@ -388,6 +421,8 @@ public sealed class PreviewStepTests : IDisposable
             string runId, string? bearer, string command, string cwd, int? workPlanId, string? treeHash, CancellationToken ct)
         {
             StartCalls++;
+            LastCommand = command;
+            LastCwd = cwd;
             if (StartBehavior is not null) return Task.FromResult(StartBehavior());
             return Task.FromResult(new PreviewRunnerStartResult("proc-sess-1", 123, cwd));
         }

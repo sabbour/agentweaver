@@ -40,6 +40,7 @@ internal sealed class AgentHostStartupService : IHostedService
     private readonly AgentHostOptions _options;
     private readonly AgentHostRuntimeState _runtimeState;
     private readonly IRunOptionsStore _runOptions;
+    private readonly AssemblyBuildCheckoutPreparer _checkoutPreparer;
     private readonly ILogger<AgentHostStartupService> _logger;
 
     private volatile bool _ready;
@@ -56,13 +57,17 @@ internal sealed class AgentHostStartupService : IHostedService
         IOptions<AgentHostOptions> options,
         AgentHostRuntimeState runtimeState,
         IRunOptionsStore runOptions,
-        ILogger<AgentHostStartupService> logger)
+        ILogger<AgentHostStartupService> logger,
+        AssemblyBuildCheckoutPreparer? checkoutPreparer = null)
     {
         _agent = agent;
         _options = options.Value;
         _runtimeState = runtimeState;
         _runOptions = runOptions;
         _logger = logger;
+        _checkoutPreparer = checkoutPreparer ?? new AssemblyBuildCheckoutPreparer(
+            options,
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<AssemblyBuildCheckoutPreparer>.Instance);
     }
 
     public async Task StartAsync(CancellationToken cancellationToken)
@@ -79,7 +84,16 @@ internal sealed class AgentHostStartupService : IHostedService
 
         // Env-var launch: seed runtime state from options and provision the agent now.
         _runtimeState.InitializeFromOptions(opts);
-        await RunSetupAsync(opts.RunId, opts.UserId, workingDirectoryOverride: null, cancellationToken).ConfigureAwait(false);
+        await RunSetupAsync(
+            new AgentHostRunConfiguration(
+                opts.RunId,
+                opts.UserId ?? string.Empty,
+                opts.TurnBearerToken ?? string.Empty,
+                opts.KvUserSecretName,
+                GitHubAccessToken: null,
+                PreviewRunnerCredential: null,
+                WorkingDirectory: null),
+            cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -95,6 +109,23 @@ internal sealed class AgentHostStartupService : IHostedService
         string? workingDirectory,
         bool autoApproveTools,
         CancellationToken ct)
+        => await ConfigureAsync(
+            new AgentHostRunConfiguration(
+                runId,
+                userId,
+                turnBearerToken,
+                kvUserSecretName,
+                gitHubAccessToken,
+                PreviewRunnerCredential: null,
+                workingDirectory),
+            autoApproveTools,
+            ct).ConfigureAwait(false);
+
+    /// <summary>Warm-pool deferred provisioning with the complete purpose-specific configuration.</summary>
+    public async Task ConfigureAsync(
+        AgentHostRunConfiguration configuration,
+        bool autoApproveTools,
+        CancellationToken ct)
     {
         _standby = false;
 
@@ -103,17 +134,19 @@ internal sealed class AgentHostStartupService : IHostedService
         // without this the CopilotAIAgent HITL gate never auto-approves web_fetch and every request
         // stalls out the 5-minute timeout under autopilot. CopilotAIAgent reads this lazily at
         // tool-call time (after /configure returns), so setting it here is safe.
-        _runOptions.SetAutoApproveTools(runId, autoApproveTools);
+        _runOptions.SetAutoApproveTools(configuration.RunId, autoApproveTools);
 
         _logger.LogInformation(
-            "AgentHostStartupService: /configure received — provisioning agent for run {RunId} (autoApproveTools={AutoApproveTools}).",
-            runId, autoApproveTools);
-        await RunSetupAsync(runId, userId, workingDirectory, ct).ConfigureAwait(false);
+            "AgentHostStartupService: /configure received — provisioning agent for run {RunId} purpose={Purpose} (autoApproveTools={AutoApproveTools}).",
+            configuration.RunId, configuration.Purpose, autoApproveTools);
+        await RunSetupAsync(configuration, ct).ConfigureAwait(false);
     }
 
-    private async Task RunSetupAsync(string runId, string? userId, string? workingDirectoryOverride, CancellationToken ct)
+    private async Task RunSetupAsync(AgentHostRunConfiguration configuration, CancellationToken ct)
     {
         var opts = _options;
+        var runId = configuration.RunId;
+        var workingDirectoryOverride = configuration.WorkingDirectory;
 
         // Warm pods carry a static AgentHost__WorkingDirectory env (the /workspace mount root). The
         // per-run worktree path delivered via /configure overrides it so the pod's file-tool root
@@ -126,9 +159,18 @@ internal sealed class AgentHostStartupService : IHostedService
             ? opts.RepositoryPath
             : workingDirectoryOverride!;
 
+        if (configuration.Purpose == Agentweaver.Domain.AgentHostPurpose.AssemblyBuildTest)
+        {
+            var localCheckout = await _checkoutPreparer.PrepareAsync(configuration, ct).ConfigureAwait(false);
+            workingDirectory = localCheckout;
+            repositoryPath = localCheckout;
+        }
+
         // Prepend the sandbox tool manifest (baked into the image) to the per-run system prompt
         // context so every agent knows what tools are available without probing.
-        var systemPromptContext = BuildSystemPromptContext(opts.SystemPromptContext);
+        var systemPromptContext = BuildSystemPromptContext(
+            opts.SystemPromptContext,
+            configuration.Purpose);
 
         _logger.LogInformation(
             "AgentHostStartupService: calling SetupAsync for run {RunId}, workingDir={WorkingDir} (override={HasOverride}), manifestAttached={ManifestAttached}",
@@ -146,7 +188,8 @@ internal sealed class AgentHostStartupService : IHostedService
             apiBaseUrl: opts.ApiBaseUrl,
             apiKey: opts.ApiKey,
             ct: ct,
-            userId: userId).ConfigureAwait(false);
+            userId: configuration.UserId,
+            purpose: configuration.Purpose).ConfigureAwait(false);
 
         _ready = true;
         _logger.LogInformation(
@@ -158,22 +201,36 @@ internal sealed class AgentHostStartupService : IHostedService
     /// is available (i.e., running inside a production AgentHost image).
     /// The manifest is baked at image build time; see <c>apps/Agentweaver.AgentHost/Dockerfile</c>.
     /// </summary>
-    private static string? BuildSystemPromptContext(string? configuredContext)
+    private static string? BuildSystemPromptContext(
+        string? configuredContext,
+        Agentweaver.Domain.AgentHostPurpose purpose)
     {
-        if (SandboxManifestJson is null)
-            return configuredContext;
+        var sections = new List<string>();
+        if (SandboxManifestJson is not null)
+        {
+            sections.Add(
+                $"""
+                SANDBOX TOOL MANIFEST
+                The following tools are pre-installed in this sandbox (from /etc/agentweaver/sandbox-manifest.json).
+                Check this list before attempting to install anything:
+                {SandboxManifestJson}
+                """);
+        }
 
-        var manifestSection =
-            $"""
-            SANDBOX TOOL MANIFEST
-            The following tools are pre-installed in this sandbox (from /etc/agentweaver/sandbox-manifest.json).
-            Check this list before attempting to install anything:
-            {SandboxManifestJson}
-            """;
+        if (purpose == Agentweaver.Domain.AgentHostPurpose.AssemblyBuildTest)
+        {
+            sections.Add(
+                """
+                ASSEMBLY BUILD/TEST EXECUTION
+                The native Copilot shell is disabled for this gate. Use the custom run_command tool.
+                Commands are serialized, time-bounded, and must remain in the foreground.
+                """);
+        }
 
-        return string.IsNullOrWhiteSpace(configuredContext)
-            ? manifestSection
-            : manifestSection + "\n\n" + configuredContext;
+        if (!string.IsNullOrWhiteSpace(configuredContext))
+            sections.Add(configuredContext);
+
+        return sections.Count == 0 ? null : string.Join("\n\n", sections);
     }
 
     public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;

@@ -14,7 +14,8 @@ public sealed record PreviewStepRequest(
     int WorkPlanId,
     string TreeHash,
     string WorktreePath,
-    string SubmittingUser);
+    string SubmittingUser,
+    string? ExecutionCheckoutPath = null);
 
 /// <summary>
 /// Deterministic, platform-owned live-preview step (spec-006 decouple-preview). Runs AFTER Build&amp;Test
@@ -102,6 +103,22 @@ public sealed class PreviewStep
 
             EmitStartRequested(request, resolution.Source);
 
+            var sourceCwd = resolution.Cwd ?? request.WorktreePath;
+            var executionCwd = string.IsNullOrWhiteSpace(request.ExecutionCheckoutPath)
+                ? sourceCwd
+                : PreviewCommandResolver.MapExecutionCwd(
+                    request.WorktreePath,
+                    sourceCwd,
+                    request.ExecutionCheckoutPath!);
+            if (string.IsNullOrWhiteSpace(executionCwd))
+            {
+                EmitFailed(
+                    request,
+                    "preview_cwd_mapping_invalid",
+                    "Resolved preview working directory was outside the API-visible assembly source tree.");
+                return;
+            }
+
             // 4. Bearer: same-process affinity uses the run's turn token; fall back to the per-run
             //    preview-runner credential from the run secret store for a cross-replica reconcile.
             var bearer = await ResolveBearerAsync(runId, ct).ConfigureAwait(false);
@@ -114,7 +131,7 @@ public sealed class PreviewStep
             try
             {
                 started = await _httpClient.StartProcessAsync(
-                    runId, bearer, resolution.Command!, resolution.Cwd ?? request.WorktreePath,
+                    runId, bearer, resolution.Command!, executionCwd,
                     request.WorkPlanId, request.TreeHash, ct).ConfigureAwait(false);
             }
             catch (PreviewRunnerHttpException ex) when (ex.Reason == "preview_runner_unauthorized")

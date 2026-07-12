@@ -38,6 +38,11 @@ public sealed class BuildTestTurnExecutor : Executor<AgentTurnOutput, WorkflowRe
     private readonly string? _apiBaseUrl;
     private readonly string? _apiKey;
     private readonly string _agentId;
+    private readonly TimeSpan _totalTimeout;
+    private readonly TimeSpan _stallTimeout;
+
+    public const string WallClockTimeoutReason = "build_test_gate_wall_clock_timeout";
+    public const string StallTimeoutReason = "build_test_gate_stall_timeout";
 
     public BuildTestTurnExecutor(
         GitHubCopilotClientFactory copilotClientFactory,
@@ -57,7 +62,9 @@ public sealed class BuildTestTurnExecutor : Executor<AgentTurnOutput, WorkflowRe
         string? agentId = null,
         string? projectId = null,
         string? apiBaseUrl = null,
-        string? apiKey = null)
+        string? apiKey = null,
+        TimeSpan? totalTimeout = null,
+        TimeSpan? stallTimeout = null)
         : base(name)
     {
         LogicalNodeId = logicalNodeId;
@@ -78,6 +85,8 @@ public sealed class BuildTestTurnExecutor : Executor<AgentTurnOutput, WorkflowRe
         _apiBaseUrl = apiBaseUrl;
         _apiKey = apiKey;
         _agentId = string.IsNullOrWhiteSpace(agentId) ? "qa-engineer" : agentId.Trim();
+        _totalTimeout = totalTimeout ?? TimeSpan.FromMinutes(20);
+        _stallTimeout = stallTimeout ?? TimeSpan.FromMinutes(12);
     }
 
     public override async ValueTask<WorkflowReviewDecision> HandleAsync(
@@ -88,6 +97,7 @@ public sealed class BuildTestTurnExecutor : Executor<AgentTurnOutput, WorkflowRe
 
         var subRunId = input.RunId + "-build-test";
         var subWriter = _createSubStream?.Invoke(subRunId, "build-test");
+        var progressWriter = subWriter is null ? null : new ProgressTrackingChannelWriter(subWriter);
         IWorkflowTurnAgent? agent = null;
 
         try
@@ -105,21 +115,45 @@ public sealed class BuildTestTurnExecutor : Executor<AgentTurnOutput, WorkflowRe
                     _toolApprovalGate,
                     _loggerFactory.CreateLogger<CopilotAIAgent>());
 
-            await agent.SetupAsync(
-                worktree,
-                input.RepositoryPath,
-                input.RunId,
-                modelId: null,
-                systemPromptContext: null,
-                streamWriter: subWriter,
-                projectId: _projectId ?? input.ProjectId,
-                agentName: _agentId,
-                apiBaseUrl: _apiBaseUrl,
-                apiKey: _apiKey,
-                ct,
-                input.SubmittingUser).ConfigureAwait(false);
+            if (agent is CopilotAIAgent copilotAgent)
+            {
+                await copilotAgent.SetupAsync(
+                    worktree,
+                    input.RepositoryPath,
+                    input.RunId,
+                    modelId: null,
+                    systemPromptContext: null,
+                    streamWriter: progressWriter,
+                    projectId: _projectId ?? input.ProjectId,
+                    agentName: _agentId,
+                    apiBaseUrl: _apiBaseUrl,
+                    apiKey: _apiKey,
+                    ct,
+                    input.SubmittingUser,
+                    AgentHostPurpose.AssemblyBuildTest).ConfigureAwait(false);
+            }
+            else
+            {
+                await agent.SetupAsync(
+                    worktree,
+                    input.RepositoryPath,
+                    input.RunId,
+                    modelId: null,
+                    systemPromptContext: null,
+                    streamWriter: progressWriter,
+                    projectId: _projectId ?? input.ProjectId,
+                    agentName: _agentId,
+                    apiBaseUrl: _apiBaseUrl,
+                    apiKey: _apiKey,
+                    ct,
+                    input.SubmittingUser).ConfigureAwait(false);
+            }
 
-            var response = await agent.RunTurnAsync(BuildTask(input), isRevision: false, ct).ConfigureAwait(false);
+            var response = await RunTurnWithWatchdogAsync(
+                agent,
+                BuildTask(input),
+                progressWriter,
+                ct).ConfigureAwait(false);
             if (TryParseVerdict(response, out var decision))
             {
                 WorkflowStepEvents.Emit(
@@ -146,6 +180,11 @@ public sealed class BuildTestTurnExecutor : Executor<AgentTurnOutput, WorkflowRe
             WorkflowStepEvents.Emit(writer, _logger, input.RunId, LogicalNodeId, "failed", DisplayLabel, agentName: _agentId);
             throw;
         }
+        catch (OperationCanceledException)
+        {
+            WorkflowStepEvents.Emit(writer, _logger, input.RunId, LogicalNodeId, "failed", DisplayLabel, agentName: _agentId);
+            throw;
+        }
         catch (Exception ex)
         {
             WorkflowStepEvents.Emit(writer, _logger, input.RunId, LogicalNodeId, "failed", DisplayLabel, agentName: _agentId);
@@ -159,6 +198,50 @@ public sealed class BuildTestTurnExecutor : Executor<AgentTurnOutput, WorkflowRe
             _completeSubStream?.Invoke(subRunId);
         }
     }
+
+    private async Task<string> RunTurnWithWatchdogAsync(
+        IWorkflowTurnAgent agent,
+        string task,
+        ProgressTrackingChannelWriter? progressWriter,
+        CancellationToken ct)
+    {
+        var startedAt = DateTimeOffset.UtcNow;
+        using var turnCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        var turnTask = agent.RunTurnAsync(task, isRevision: false, turnCts.Token);
+
+        while (true)
+        {
+            var now = DateTimeOffset.UtcNow;
+            var lastProgress = progressWriter?.LastProgressAt ?? startedAt;
+            var totalRemaining = _totalTimeout - (now - startedAt);
+            var stallRemaining = _stallTimeout - (now - lastProgress);
+            var remaining = totalRemaining < stallRemaining ? totalRemaining : stallRemaining;
+
+            if (remaining <= TimeSpan.Zero)
+            {
+                var totalExpired = totalRemaining <= TimeSpan.Zero;
+                turnCts.Cancel();
+                ObserveAfterCancellation(turnTask);
+                var reason = totalExpired ? WallClockTimeoutReason : StallTimeoutReason;
+                var timeout = totalExpired ? _totalTimeout : _stallTimeout;
+                throw new WorkflowAgentInfrastructureException(
+                    reason,
+                    $"Build & Test gate exceeded its {(totalExpired ? "total wall-clock" : "no-progress stall")} timeout of {timeout}.");
+            }
+
+            var poll = remaining < TimeSpan.FromSeconds(5) ? remaining : TimeSpan.FromSeconds(5);
+            var completed = await Task.WhenAny(turnTask, Task.Delay(poll, ct)).ConfigureAwait(false);
+            if (completed == turnTask)
+                return await turnTask.ConfigureAwait(false);
+        }
+    }
+
+    private static void ObserveAfterCancellation(Task turnTask) =>
+        _ = turnTask.ContinueWith(
+            static task => _ = task.Exception,
+            CancellationToken.None,
+            TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
 
     private static string BuildTask(AgentTurnOutput input) =>
         $$"""
@@ -389,5 +472,27 @@ public sealed class BuildTestTurnExecutor : Executor<AgentTurnOutput, WorkflowRe
         if (string.IsNullOrEmpty(response)) return string.Empty;
         const int max = 500;
         return response.Length <= max ? response : response[..max] + "…";
+    }
+
+    private sealed class ProgressTrackingChannelWriter(ChannelWriter<RunEvent> inner)
+        : ChannelWriter<RunEvent>
+    {
+        private long _lastProgressTicks = DateTimeOffset.UtcNow.UtcTicks;
+
+        public DateTimeOffset LastProgressAt =>
+            new(Interlocked.Read(ref _lastProgressTicks), TimeSpan.Zero);
+
+        public override bool TryComplete(Exception? error = null) => inner.TryComplete(error);
+
+        public override bool TryWrite(RunEvent item)
+        {
+            var written = inner.TryWrite(item);
+            if (written)
+                Interlocked.Exchange(ref _lastProgressTicks, DateTimeOffset.UtcNow.UtcTicks);
+            return written;
+        }
+
+        public override ValueTask<bool> WaitToWriteAsync(CancellationToken cancellationToken = default) =>
+            inner.WaitToWriteAsync(cancellationToken);
     }
 }

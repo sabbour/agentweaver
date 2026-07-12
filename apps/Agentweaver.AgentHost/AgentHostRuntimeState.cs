@@ -1,5 +1,7 @@
 namespace Agentweaver.AgentHost;
 
+using Agentweaver.Domain;
+
 /// <summary>
 /// Mutable, process-wide runtime state for the AgentHost pod. <see cref="AgentHostOptions"/> is
 /// <c>init</c>-only (immutable, bound from config/env at startup); this holder carries the per-run
@@ -30,6 +32,12 @@ internal sealed class AgentHostRuntimeState
     public string RunId { get; private set; } = string.Empty;
     public string UserId { get; private set; } = string.Empty;
     public string TurnBearerToken { get; private set; } = string.Empty;
+    public AgentHostPurpose Purpose { get; private set; } = AgentHostPurpose.Default;
+    public string? SourceRepositoryPath { get; private set; }
+    public string? IntegrationRef { get; private set; }
+    public string? CommitSha { get; private set; }
+    public string? ExpectedTreeHash { get; private set; }
+    public string? LocalExecutionPath { get; private set; }
 
     /// <summary>
     /// Per-run preview-runner credential (spec-006 decouple-preview, BLOCKER A). Delivered in-memory
@@ -66,6 +74,12 @@ internal sealed class AgentHostRuntimeState
         PreviewRunnerCredential = string.Empty; // not available on env-var launch path
         KvUserSecretName = options.KvUserSecretName;
         GitHubAccessToken = null; // not available on env-var launch path
+        Purpose = AgentHostPurpose.Default;
+        SourceRepositoryPath = null;
+        IntegrationRef = null;
+        CommitSha = null;
+        ExpectedTreeHash = null;
+        LocalExecutionPath = null;
     }
 
     /// <summary>
@@ -73,16 +87,53 @@ internal sealed class AgentHostRuntimeState
     /// when the pod was already configured (one-time semantics → caller returns 409).
     /// </summary>
     public bool TryConfigure(string runId, string userId, string turnBearerToken, string? kvUserSecretName, string? gitHubAccessToken, string? previewRunnerCredential = null)
+        => TryConfigure(new AgentHostRunConfiguration(
+            runId,
+            userId,
+            turnBearerToken,
+            kvUserSecretName,
+            gitHubAccessToken,
+            previewRunnerCredential,
+            WorkingDirectory: null));
+
+    /// <summary>Atomically applies the complete run-scoped warm-pod configuration.</summary>
+    public bool TryConfigure(AgentHostRunConfiguration configuration)
     {
         if (Interlocked.CompareExchange(ref _configured, 1, 0) != 0)
             return false;
 
-        RunId = runId ?? string.Empty;
-        UserId = userId ?? string.Empty;
-        TurnBearerToken = turnBearerToken ?? string.Empty;
-        PreviewRunnerCredential = previewRunnerCredential ?? string.Empty;
-        KvUserSecretName = string.IsNullOrWhiteSpace(kvUserSecretName) ? null : kvUserSecretName;
-        GitHubAccessToken = string.IsNullOrWhiteSpace(gitHubAccessToken) ? null : gitHubAccessToken;
+        RunId = configuration.RunId ?? string.Empty;
+        UserId = configuration.UserId ?? string.Empty;
+        TurnBearerToken = configuration.TurnBearerToken ?? string.Empty;
+        PreviewRunnerCredential = configuration.PreviewRunnerCredential ?? string.Empty;
+        KvUserSecretName = string.IsNullOrWhiteSpace(configuration.KvUserSecretName)
+            ? null
+            : configuration.KvUserSecretName;
+        GitHubAccessToken = string.IsNullOrWhiteSpace(configuration.GitHubAccessToken)
+            ? null
+            : configuration.GitHubAccessToken;
+        Purpose = configuration.Purpose;
+        SourceRepositoryPath = configuration.SourceRepositoryPath;
+        IntegrationRef = configuration.IntegrationRef;
+        CommitSha = configuration.CommitSha;
+        ExpectedTreeHash = configuration.ExpectedTreeHash;
+        LocalExecutionPath = configuration.LocalExecutionPath;
         return true;
     }
 }
+
+/// <summary>Complete one-time configuration delivered to a warm AgentHost pod.</summary>
+internal sealed record AgentHostRunConfiguration(
+    string RunId,
+    string UserId,
+    string TurnBearerToken,
+    string? KvUserSecretName,
+    string? GitHubAccessToken,
+    string? PreviewRunnerCredential,
+    string? WorkingDirectory,
+    AgentHostPurpose Purpose = AgentHostPurpose.Default,
+    string? SourceRepositoryPath = null,
+    string? IntegrationRef = null,
+    string? CommitSha = null,
+    string? ExpectedTreeHash = null,
+    string? LocalExecutionPath = null);

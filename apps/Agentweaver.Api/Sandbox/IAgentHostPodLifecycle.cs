@@ -44,9 +44,30 @@ public interface IAgentHostPodLifecycle
         CancellationToken ct = default);
 
     /// <summary>
+    /// Provisions an AgentHost with an explicit purpose and immutable source revision. The default
+    /// implementation preserves compatibility for lifecycle fakes/providers that only understand a
+    /// working-directory override.
+    /// </summary>
+    Task<string> LaunchAgentHostPodAsync(
+        string runId,
+        AgentHostLaunchContext context,
+        CancellationToken ct = default) =>
+        LaunchAgentHostPodAsync(runId, context.LocalExecutionPath ?? context.WorkingDirectory, ct);
+
+    /// <summary>
     /// Releases the AgentHost pod for the given run by deleting its
     /// <c>SandboxClaim</c>. Called on workflow suspension (HITL / coordinator-idle)
     /// when <c>Sandbox:ReleasePodOnSuspend=true</c>.
     /// </summary>
     Task ReleaseAgentHostPodAsync(string runId, CancellationToken ct = default);
 }
+
+/// <summary>Run-scoped inputs delivered to the warm AgentHost through <c>POST /configure</c>.</summary>
+public sealed record AgentHostLaunchContext(
+    string? WorkingDirectory,
+    Agentweaver.Domain.AgentHostPurpose Purpose = Agentweaver.Domain.AgentHostPurpose.Default,
+    string? SourceRepositoryPath = null,
+    string? IntegrationRef = null,
+    string? CommitSha = null,
+    string? ExpectedTreeHash = null,
+    string? LocalExecutionPath = null);

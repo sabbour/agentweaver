@@ -1,4 +1,5 @@
 using System.Net;
+using System.Text.Json.Serialization;
 using Agentweaver.AgentHost;
 using Agentweaver.AgentRuntime;
 using Agentweaver.AgentRuntime.Providers;
@@ -24,6 +25,7 @@ builder.Services.Configure<AgentHostOptions>(builder.Configuration.GetSection("A
 // carries RunId/UserId/TurnBearerToken/KvUserSecretName delivered later via POST /configure
 // (warm pool) or seeded from options at startup (env-var launch).
 builder.Services.AddSingleton<AgentHostRuntimeState>();
+builder.Services.AddSingleton<AssemblyBuildCheckoutPreparer>();
 builder.Services.Configure<PreviewRunnerOptions>(builder.Configuration.GetSection("AgentHost:PreviewRunner"));
 
 // ── A2A listener: mTLS (production default) vs plain HTTP (PoC) ─────────────────
@@ -219,16 +221,35 @@ app.MapPost("/configure", async (HttpContext ctx) =>
     if (body is null || string.IsNullOrWhiteSpace(body.RunId))
         return Results.BadRequest("runId is required");
 
+    var configuration = body.ToRunConfiguration();
+    try
+    {
+        AssemblyBuildCheckoutPreparer.Validate(configuration);
+    }
+    catch (AgentHostConfigurationException ex)
+    {
+        return Results.Json(
+            new { error = ex.Reason, message = ex.Message },
+            statusCode: StatusCodes.Status422UnprocessableEntity);
+    }
+
     // Interlocked one-time gate (inside TryConfigure): first caller wins, the rest get 409.
-    if (!runtimeState.TryConfigure(
-            body.RunId, body.UserId ?? string.Empty, body.TurnBearerToken ?? string.Empty,
-            body.KvUserSecretName, body.GitHubAccessToken, body.PreviewRunnerCredential))
+    if (!runtimeState.TryConfigure(configuration))
         return Results.Conflict("Already configured");
 
-    await startup.ConfigureAsync(
-        body.RunId, body.UserId ?? string.Empty, body.TurnBearerToken ?? string.Empty,
-        body.KvUserSecretName, body.GitHubAccessToken, body.WorkingDirectory,
-        body.AutoApproveTools, ctx.RequestAborted).ConfigureAwait(false);
+    try
+    {
+        await startup.ConfigureAsync(configuration, body.AutoApproveTools, ctx.RequestAborted)
+            .ConfigureAwait(false);
+    }
+    catch (AgentHostConfigurationException ex)
+    {
+        return Results.Json(
+            new { error = ex.Reason, message = ex.Message },
+            statusCode: ex.Reason == "insufficient_ephemeral_storage"
+                ? StatusCodes.Status507InsufficientStorage
+                : StatusCodes.Status409Conflict);
+    }
 
     return Results.Ok(new { configured = true, runId = body.RunId });
 });
@@ -470,6 +491,40 @@ internal sealed record ConfigureRequest
     /// <c>web_fetch</c> waits out the HITL timeout under autopilot.
     /// </summary>
     public bool AutoApproveTools { get; init; }
+
+    /// <summary>Explicit run purpose. Omitted payloads preserve the existing shared-worktree behavior.</summary>
+    [JsonConverter(typeof(JsonStringEnumConverter<AgentHostPurpose>))]
+    public AgentHostPurpose Purpose { get; init; } = AgentHostPurpose.Default;
+
+    /// <summary>API-visible shared repository used only as the immutable git fetch source.</summary>
+    public string? SourceRepositoryPath { get; init; }
+
+    /// <summary>Integration branch/ref shallow-fetched from <see cref="SourceRepositoryPath"/>.</summary>
+    public string? IntegrationRef { get; init; }
+
+    /// <summary>Immutable integration commit expected at <see cref="IntegrationRef"/>.</summary>
+    public string? CommitSha { get; init; }
+
+    /// <summary>Immutable tree object expected for <see cref="CommitSha"/>.</summary>
+    public string? ExpectedTreeHash { get; init; }
+
+    /// <summary>Deterministic pod-local checkout path under the build-scratch emptyDir.</summary>
+    public string? LocalExecutionPath { get; init; }
+
+    internal AgentHostRunConfiguration ToRunConfiguration() => new(
+        RunId ?? string.Empty,
+        UserId ?? string.Empty,
+        TurnBearerToken ?? string.Empty,
+        KvUserSecretName,
+        GitHubAccessToken,
+        PreviewRunnerCredential,
+        WorkingDirectory,
+        Purpose,
+        SourceRepositoryPath,
+        IntegrationRef,
+        CommitSha,
+        ExpectedTreeHash,
+        LocalExecutionPath);
 }
 
 internal sealed record PreviewProcessStartRequest

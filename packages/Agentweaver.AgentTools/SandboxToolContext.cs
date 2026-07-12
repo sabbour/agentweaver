@@ -36,4 +36,9 @@ public sealed record SandboxToolContext(
     /// until the operator answers. Null in test/CLI contexts (ask_question returns a
     /// proceed-with-best-judgement fallback when absent).
     /// </summary>
-    Agentweaver.Domain.IQuestionGate? QuestionGate = null);
+    Agentweaver.Domain.IQuestionGate? QuestionGate = null,
+    /// <summary>
+    /// Optional single-flight gate for shell execution. Assembly Build/Test supplies a
+    /// <c>SemaphoreSlim(1,1)</c> so concurrent model tool calls cannot overlap package managers.
+    /// </summary>
+    SemaphoreSlim? ShellSemaphore = null);

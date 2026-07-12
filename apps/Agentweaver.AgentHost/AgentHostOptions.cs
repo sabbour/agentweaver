@@ -60,6 +60,18 @@ public sealed class AgentHostOptions
     /// <summary>Absolute path to the git repository root inside the workspace PVC.</summary>
     public string RepositoryPath { get; init; } = string.Empty;
 
+    /// <summary>
+    /// Disk-backed emptyDir mount used for assembly Build/Test checkouts and package caches.
+    /// Config key: <c>AgentHost:BuildScratchRoot</c>. Default: <c>/local-workspace</c>.
+    /// </summary>
+    public string BuildScratchRoot { get; init; } = Agentweaver.Domain.AssemblyBuildTestExecution.DefaultScratchRoot;
+
+    /// <summary>
+    /// Minimum free bytes required before preparing an assembly checkout. Default: 8 GiB, matching
+    /// the Kubernetes <c>build-scratch</c> emptyDir sizeLimit.
+    /// </summary>
+    public long BuildScratchMinimumFreeBytes { get; init; } = 8L * 1024 * 1024 * 1024;
+
     /// <summary>Model identifier forwarded to the Copilot SDK (e.g. <c>gpt-4o</c>).</summary>
     public string? ModelId { get; init; }
 

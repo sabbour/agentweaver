@@ -18,6 +18,7 @@ using Agentweaver.Api.Memory;
 using Agentweaver.Api.Runs;
 using Agentweaver.Api.Runs.Graph;
 using Agentweaver.Api.Sandbox;
+using Agentweaver.AgentRuntime.Workflow;
 using Agentweaver.Tests.Helpers;
 using Agentweaver.Domain;
 using Agentweaver.SandboxExec;
@@ -2125,6 +2126,66 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task RunBuildTestAsync_total_timeout_releases_retained_claim()
+    {
+        var repoPath = CreateGitRepository();
+        var worktreesBase = Path.Combine(Path.GetTempPath(), $"agentweaver-buildtest-timeout-wt-{Guid.NewGuid():N}");
+        string treeHash;
+        using (var repository = new Repository(repoPath))
+            treeHash = repository.Branches["main"].Tip.Tree.Sha;
+        var lifecycle = new HangingLaunchPodLifecycle();
+
+        try
+        {
+            var configuration = new ConfigurationBuilder()
+                .AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["Worktrees:BasePath"] = worktreesBase,
+                    ["Coordinator:AssemblyBuildTestTimeoutMinutes"] = "0.001",
+                    ["Coordinator:AssemblyBuildTestStallTimeoutMinutes"] = "1",
+                })
+                .Build();
+            var worktreeManager = new WorktreeManager(
+                configuration,
+                NullLogger<WorktreeManager>.Instance);
+            var pipeline = new CollectiveAssemblyPipeline(
+                worktreeManager,
+                null!,
+                null!,
+                null!,
+                null!,
+                null!,
+                null!,
+                null!,
+                null!,
+                NullLoggerFactory.Instance,
+                lifecycle,
+                Options.Create(new SandboxRuntimeOptions { AgentExecutionMode = "pod-per-run" }),
+                configuration);
+
+            var act = () => pipeline.RunBuildTestAsync(
+                new CollectiveBuildTestRequest(
+                    RunId.New().ToString(),
+                    ProjectId: null,
+                    repoPath,
+                    "main",
+                    treeHash,
+                    "diff",
+                    "alice"),
+                CancellationToken.None);
+
+            var exception = await act.Should().ThrowAsync<CollectiveBuildTestInfrastructureException>();
+            exception.Which.Reason.Should().Be(BuildTestTurnExecutor.WallClockTimeoutReason);
+            lifecycle.ReleaseCalls.Should().Be(1);
+        }
+        finally
+        {
+            TryDeleteDirectory(repoPath);
+            TryDeleteDirectory(worktreesBase);
+        }
+    }
+
+    [Fact]
     public async Task BuildTestRetryableInfrastructureFailure_ParksAssemblyBlocked_NotPermanentFailed()
     {
         var coordinatorRunId = RunId.New().ToString();
@@ -3253,6 +3314,29 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
 
         public Task ReleaseAgentHostPodAsync(string runId, CancellationToken ct = default) =>
             Task.CompletedTask;
+    }
+
+    private sealed class HangingLaunchPodLifecycle : IAgentHostPodLifecycle
+    {
+        public int ReleaseCalls { get; private set; }
+
+        public async Task<string> LaunchAgentHostPodAsync(string runId, CancellationToken ct = default)
+        {
+            await Task.Delay(Timeout.InfiniteTimeSpan, ct);
+            return "";
+        }
+
+        public Task<string> LaunchAgentHostPodAsync(
+            string runId,
+            string? workingDirectoryOverride,
+            CancellationToken ct = default) =>
+            LaunchAgentHostPodAsync(runId, ct);
+
+        public Task ReleaseAgentHostPodAsync(string runId, CancellationToken ct = default)
+        {
+            ReleaseCalls++;
+            return Task.CompletedTask;
+        }
     }
 
     private sealed class FakeDispatch : ICoordinatorDispatch

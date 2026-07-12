@@ -115,6 +115,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
     private IReadOnlyList<string> _registeredToolNames = [];
     private GitHubTokenScope? _tokenScope;
     private SessionConfig? _sessionConfig;
+    private SemaphoreSlim? _controlledShellSemaphore;
 
     // --- Per-run run-event emission state (reset in SetupAsync) ---
     private StringBuilder _sb = new();
@@ -209,6 +210,34 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
     /// <c>GitHubCopilotAgent</c> for a single run. Must be called before
     /// <see cref="CreateSessionCoreAsync"/> or <see cref="ExecuteStreamingLoopAsync"/>.
     /// </summary>
+    Task Workflow.IWorkflowTurnAgent.SetupAsync(
+        string workingDirectory,
+        string repositoryPath,
+        string runId,
+        string? modelId,
+        string? systemPromptContext,
+        ChannelWriter<RunEvent>? streamWriter,
+        string? projectId,
+        string? agentName,
+        string? apiBaseUrl,
+        string? apiKey,
+        CancellationToken ct,
+        string? userId) =>
+        SetupAsync(
+            workingDirectory,
+            repositoryPath,
+            runId,
+            modelId,
+            systemPromptContext,
+            streamWriter,
+            projectId,
+            agentName,
+            apiBaseUrl,
+            apiKey,
+            ct,
+            userId,
+            AgentHostPurpose.Default);
+
     public async Task SetupAsync(
         string workingDirectory,
         string repositoryPath,
@@ -221,7 +250,8 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         string? apiBaseUrl,
         string? apiKey,
         CancellationToken ct,
-        string? userId = null)
+        string? userId = null,
+        AgentHostPurpose purpose = AgentHostPurpose.Default)
     {
         _workingDirectory = workingDirectory;
         _repositoryPath = repositoryPath;
@@ -288,14 +318,27 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         var redactor = SandboxOutputRedactor.Default;
         var agentId = $"did:mesh:agentweaver:copilot:{runId}";
 
+        var controlledBuildTestShell = purpose == AgentHostPurpose.AssemblyBuildTest;
         var toolOptions = new SandboxToolOptions(
-            ShellEnabled: sandboxPolicy.ShellEnabled)
+            ShellEnabled: sandboxPolicy.ShellEnabled,
+            DefaultTimeoutMs: controlledBuildTestShell
+                ? (int)TimeSpan.FromMinutes(10).TotalMilliseconds
+                : 30_000)
         {
             AllowedRepositoryRoots = [.. sandboxPolicy.AllowedRepositoryRoots],
             DestructiveCommandPatterns = [.. sandboxPolicy.DestructiveCommandPatterns],
             RequireApprovalForAllShell = sandboxPolicy.RequireApprovalForAllShell,
             NetworkEnabled = sandboxPolicy.NetworkEnabled,
+            RejectDestructiveCommands = controlledBuildTestShell,
+            RejectBackgroundCommands = controlledBuildTestShell,
+            MaximumTimeoutMs = controlledBuildTestShell
+                ? (int)TimeSpan.FromMinutes(10).TotalMilliseconds
+                : 0,
         };
+        _controlledShellSemaphore?.Dispose();
+        _controlledShellSemaphore = controlledBuildTestShell
+            ? new SemaphoreSlim(1, 1)
+            : null;
         var toolContext = new SandboxToolContext(
             AgentId: agentId,
             WorkingDirectory: workingDirectory,
@@ -310,16 +353,31 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
             RunId: runId,
             IsCommandApproved: hash => _approvalStore.IsApproved(runId, hash),
             IsCommandDenied: hash => _approvalStore.IsDenied(runId, hash),
-            QuestionGate: _questionGate);
+            QuestionGate: _questionGate,
+            ShellSemaphore: _controlledShellSemaphore);
         _toolContext = toolContext;
 
         var sessionTools = BuildSessionConfigTools(
-            toolContext, _projectId, _agentName, _apiBaseUrl, _apiKey, _toolProviders);
+            toolContext,
+            _projectId,
+            _agentName,
+            _apiBaseUrl,
+            _apiKey,
+            _toolProviders,
+            includeControlledRunCommand: controlledBuildTestShell);
         _registeredToolNames = sessionTools.Select(t => t.Name).ToList();
 
         var sessionConfig = new SessionConfig
         {
-            OnPermissionRequest = BuildPermissionHandler(_governance, runId, workingDirectory, EmitToolCallOnce, EmitToolErrorOnce, Emit, ct),
+            OnPermissionRequest = BuildPermissionHandler(
+                _governance,
+                runId,
+                workingDirectory,
+                EmitToolCallOnce,
+                EmitToolErrorOnce,
+                Emit,
+                ct,
+                denyNativeShell: controlledBuildTestShell),
             WorkingDirectory = workingDirectory,
             EnableConfigDiscovery = false,
             Streaming = true,
@@ -1074,10 +1132,25 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         Action<string, string, object?> emitToolCallOnce,
         Action<string, string> emitToolErrorOnce,
         Action<string, object> emit,
-        CancellationToken runCt)
+        CancellationToken runCt,
+        bool denyNativeShell = false)
     {
         return (request, invocation) =>
         {
+            if (denyNativeShell && request is PermissionRequestShell)
+            {
+                var shellCallId = GetToolCallId(request) ?? Guid.NewGuid().ToString("n");
+                var (_, shellArgs) = MapToToolCall(request);
+                shellArgs["directory"] = workingDirectory;
+                const string denyReason =
+                    "Native Copilot shell is disabled for AssemblyBuildTest; use the controlled run_command tool.";
+                emitToolCallOnce(shellCallId, "run_command", shellArgs);
+                emitToolErrorOnce(shellCallId, denyReason);
+                EmitRunDegradedOnce("run_command", denyReason);
+                return Task.FromResult<PermissionDecision>(
+                    new PermissionDecisionDeniedByRules { Rules = [] });
+            }
+
             // URL fetch (web_fetch) — surface a HITL approval gate rather than silently denying.
             if (request is PermissionRequestUrl urlRequest)
             {
@@ -1417,7 +1490,8 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         string? agentName = null,
         string? apiBaseUrl = null,
         string? apiKey = null,
-        IEnumerable<IAgentRuntimeToolProvider>? toolProviders = null)
+        IEnumerable<IAgentRuntimeToolProvider>? toolProviders = null,
+        bool includeControlledRunCommand = false)
     {
         var all = SandboxToolRegistry.Build(context);
         var intentFn = all.First(f => string.Equals(f.Name, "report_intent", StringComparison.Ordinal));
@@ -1435,6 +1509,12 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         {
             var askFn = all.First(f => string.Equals(f.Name, "ask_question", StringComparison.Ordinal));
             tools.Add(new CopilotOverrideAIFunction(askFn));
+        }
+
+        if (includeControlledRunCommand)
+        {
+            var commandFn = all.First(f => string.Equals(f.Name, "run_command", StringComparison.Ordinal));
+            tools.Add(commandFn);
         }
 
         if (!string.IsNullOrEmpty(projectId) && !string.IsNullOrEmpty(agentName))
@@ -1518,5 +1598,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
             await disposableAgent.DisposeAsync().ConfigureAwait(false);
         if (_client is IAsyncDisposable disposableClient)
             await disposableClient.DisposeAsync().ConfigureAwait(false);
+        _controlledShellSemaphore?.Dispose();
+        _controlledShellSemaphore = null;
     }
 }

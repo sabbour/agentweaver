@@ -25,6 +25,40 @@ public sealed record PreviewCommandResolution(
 public sealed class PreviewCommandResolver
 {
     /// <summary>
+    /// Maps a command-discovery cwd from the API-visible source tree into the equivalent directory
+    /// in the retained pod-local checkout. Returns <see langword="null"/> for escapes/cross-volume
+    /// paths instead of executing preview outside the verified checkout.
+    /// </summary>
+    public static string? MapExecutionCwd(
+        string sourceTreeRoot,
+        string resolvedSourceCwd,
+        string executionTreeRoot)
+    {
+        if (string.IsNullOrWhiteSpace(sourceTreeRoot)
+            || string.IsNullOrWhiteSpace(resolvedSourceCwd)
+            || string.IsNullOrWhiteSpace(executionTreeRoot))
+            return null;
+
+        try
+        {
+            var sourceRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(sourceTreeRoot));
+            var sourceCwd = Path.TrimEndingDirectorySeparator(Path.GetFullPath(resolvedSourceCwd));
+            var relative = Path.GetRelativePath(sourceRoot, sourceCwd);
+            if (Path.IsPathRooted(relative)
+                || relative.Equals("..", StringComparison.Ordinal)
+                || relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal)
+                || relative.StartsWith(".." + Path.AltDirectorySeparatorChar, StringComparison.Ordinal))
+                return null;
+
+            return Path.GetFullPath(Path.Combine(executionTreeRoot, relative));
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
     /// Resolves a run command from the files under <paramref name="worktreePath"/>. Never throws:
     /// any IO/parse error degrades to <see cref="PreviewCommandResolution.Unresolved"/>.
     /// </summary>

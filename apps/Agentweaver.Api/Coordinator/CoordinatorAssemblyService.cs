@@ -1009,7 +1009,13 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
                                 WorkPlanId: workPlanId,
                                 TreeHash: aggregateTreeHash,
                                 WorktreePath: _pipeline.GetBuildTestWorktreePath(context.CoordinatorRunId),
-                                SubmittingUser: context.SubmittingUser),
+                                SubmittingUser: context.SubmittingUser,
+                                ExecutionCheckoutPath: AssemblyBuildTestExecution.IsGitObjectId(aggregateTreeHash)
+                                    ? AssemblyBuildTestExecution.GetCheckoutPath(
+                                        AssemblyBuildTestExecution.DefaultScratchRoot,
+                                        context.CoordinatorRunId,
+                                        aggregateTreeHash)
+                                    : null),
                             ct).ConfigureAwait(false);
                     }
                     catch (OperationCanceledException)

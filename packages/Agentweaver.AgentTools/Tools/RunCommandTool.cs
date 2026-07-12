@@ -13,11 +13,18 @@ internal sealed class RunCommandTool : ISandboxTool
         AIFunctionFactory.Create(
             async (
                 [Description("Shell command to execute inside the sandbox.")] string command,
-                [Description("Timeout in milliseconds (default 30000).")] int? timeout_ms,
+                [Description("Timeout in milliseconds (bounded by the runtime policy).")] int? timeout_ms = null,
                 CancellationToken ct = default) =>
             {
+                if (ctx.Options.RejectBackgroundCommands && ContainsBackgrounding(command))
+                    return "Command rejected: background/detached shell execution is not allowed.";
+
+                var destructive = IsDestructivePattern(command, ctx.Options.DestructiveCommandPatterns);
+                if (ctx.Options.RejectDestructiveCommands && destructive)
+                    return "Command rejected: destructive shell commands are not allowed in the Build/Test gate.";
+
                 // HITL gate: destructive commands require operator approval before execution.
-                if (ctx.Options.RequireApprovalForAllShell || IsDestructivePattern(command, ctx.Options.DestructiveCommandPatterns))
+                if (ctx.Options.RequireApprovalForAllShell || destructive)
                 {
                     var commandHash = ComputeCommandHash(command);
                     var requestId = commandHash[..8]; // stable prefix — same command → same requestId
@@ -68,11 +75,29 @@ internal sealed class RunCommandTool : ISandboxTool
                     return $"Command rejected by shell validator: {validatorReason}";
 
                 var fsPolicy = SandboxFsPolicyBuilder.Build(ctx.SandboxRoot, ctx.Options.AllowedRepositoryRoots);
+                var timeout = timeout_ms ?? ctx.Options.DefaultTimeoutMs;
+                if (timeout <= 0)
+                    timeout = ctx.Options.DefaultTimeoutMs;
+                if (ctx.Options.MaximumTimeoutMs > 0)
+                    timeout = Math.Min(timeout, ctx.Options.MaximumTimeoutMs);
                 var cmd = new SandboxCommand(command, ctx.WorkingDirectory, null, fsPolicy,
-                    timeout_ms ?? ctx.Options.DefaultTimeoutMs,
+                    timeout,
                     NetworkEnabled: ctx.Options.NetworkEnabled,
                     AgentweaverRunId: string.IsNullOrEmpty(ctx.RunId) ? null : ctx.RunId);
-                var result = await ctx.Executor.ExecuteAsync(cmd, ct);
+
+                if (ctx.ShellSemaphore is not null)
+                    await ctx.ShellSemaphore.WaitAsync(ct).ConfigureAwait(false);
+
+                SandboxExecResult result;
+                try
+                {
+                    result = await ctx.Executor.ExecuteAsync(cmd, ct).ConfigureAwait(false);
+                }
+                finally
+                {
+                    ctx.ShellSemaphore?.Release();
+                }
+
                 var stdout = ctx.Redactor.Redact(result.Stdout);
                 var stderr = ctx.Redactor.Redact(result.Stderr);
                 var parts = new List<string>();
@@ -109,5 +134,56 @@ internal sealed class RunCommandTool : ISandboxTool
                 p.Trim(), @"\s+", " ").ToLowerInvariant();
             return normalized.Contains(np, StringComparison.Ordinal);
         });
+    }
+
+    internal static bool ContainsBackgrounding(string command)
+    {
+        var normalized = command.Trim();
+        if (System.Text.RegularExpressions.Regex.IsMatch(
+                normalized,
+                @"(^|[\s;|])(?:nohup|disown|setsid)(?=\s|$)",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase
+                    | System.Text.RegularExpressions.RegexOptions.CultureInvariant,
+                TimeSpan.FromSeconds(1)))
+            return true;
+
+        var quote = '\0';
+        var escaped = false;
+        for (var i = 0; i < normalized.Length; i++)
+        {
+            var current = normalized[i];
+            if (escaped)
+            {
+                escaped = false;
+                continue;
+            }
+
+            if (current == '\\' && quote != '\'')
+            {
+                escaped = true;
+                continue;
+            }
+
+            if (current is '\'' or '"')
+            {
+                if (quote == '\0')
+                    quote = current;
+                else if (quote == current)
+                    quote = '\0';
+                continue;
+            }
+
+            if (current != '&' || quote != '\0')
+                continue;
+
+            var previous = i > 0 ? normalized[i - 1] : '\0';
+            var next = i + 1 < normalized.Length ? normalized[i + 1] : '\0';
+            if (previous == '&' || next == '&' || previous == '>' || next == '>')
+                continue;
+
+            return true;
+        }
+
+        return false;
     }
 }

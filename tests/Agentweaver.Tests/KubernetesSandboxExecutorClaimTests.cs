@@ -290,6 +290,52 @@ public sealed class KubernetesSandboxExecutorClaimTests
     }
 
     [Fact]
+    public async Task LaunchAgentHostPod_configure_body_carries_assembly_purpose_and_immutable_source_refs()
+    {
+        const string runId = "run-claim-assembly";
+        const string commitSha = "1111111111111111111111111111111111111111";
+        const string treeHash = "2222222222222222222222222222222222222222";
+        var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
+        var localPath = AssemblyBuildTestExecution.GetCheckoutPath(
+            AssemblyBuildTestExecution.DefaultScratchRoot,
+            runId,
+            treeHash);
+
+        var handler = new FakeKubeHandler();
+        handler.OnGet(
+            $"/apis/{SandboxClaimConventions.ApiGroup}/{SandboxClaimConventions.ApiVersion}/namespaces/agentweaver/sandboxclaims/{claimName}",
+            """{"status":{"conditions":[{"type":"Ready","status":"True"}],"sandbox":{"name":"agent-pod-1"}}}""");
+        handler.OnAny(@"^/api/v1/namespaces/agentweaver/pods/agent-pod-1$",
+            """{"kind":"Pod","metadata":{"name":"agent-pod-1"},"status":{"podIP":"10.0.0.7"}}""");
+
+        var configureHandler = new RecordingConfigureHandler();
+        var executor = NewExecutor(
+            handler,
+            new StubSubmittingUserResolver("sabbour"),
+            httpClientFactory: new StubHttpClientFactory(configureHandler));
+
+        await executor.LaunchAgentHostPodAsync(
+            runId,
+            new AgentHostLaunchContext(
+                WorkingDirectory: "/workspace/reviewer",
+                Purpose: AgentHostPurpose.AssemblyBuildTest,
+                SourceRepositoryPath: "/workspace/repository",
+                IntegrationRef: "agentweaver/integration/run-claim-assembly",
+                CommitSha: commitSha,
+                ExpectedTreeHash: treeHash,
+                LocalExecutionPath: localPath));
+
+        using var doc = JsonDocument.Parse(configureHandler.Body!);
+        var body = doc.RootElement;
+        body.GetProperty("purpose").GetString().Should().Be("AssemblyBuildTest");
+        body.GetProperty("sourceRepositoryPath").GetString().Should().Be("/workspace/repository");
+        body.GetProperty("integrationRef").GetString().Should().Be("agentweaver/integration/run-claim-assembly");
+        body.GetProperty("commitSha").GetString().Should().Be(commitSha);
+        body.GetProperty("expectedTreeHash").GetString().Should().Be(treeHash);
+        body.GetProperty("localExecutionPath").GetString().Should().Be(localPath);
+    }
+
+    [Fact]
     public async Task LaunchAgentHostPod_configure_body_carries_autoApproveTools_from_run_options()
     {
         // Bug #221: the per-run AutoApproveTools flag must ride the /configure body so the warm pod
