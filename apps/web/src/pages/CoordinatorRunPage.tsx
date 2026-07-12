@@ -4314,7 +4314,8 @@ export function CoordinatorRunPage() {
           open={artifactsPanelOpen}
           onClose={() => setArtifactsPanelOpen(false)}
           title="Changes"
-          width="min(960px, 96vw)"
+          width="100vw"
+          flushBody
         >
           <CoordinatorArtifactsPanel runId={runId} runStatus={coordRunStatus} adapter={coordAdapter} previewStatusSlot={previewStatusSlot} />
         </SlidePanel>
@@ -4325,7 +4326,8 @@ export function CoordinatorRunPage() {
           open={filesPanelOpen}
           onClose={() => setFilesPanelOpen(false)}
           title="Files"
-          width="min(960px, 96vw)"
+          width="100vw"
+          flushBody
         >
           <CoordinatorArtifactsPanel runId={runId} runStatus={coordRunStatus} adapter={coordAdapter} initialTab="files" />
         </SlidePanel>
