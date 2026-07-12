@@ -1445,15 +1445,16 @@ const useStyles = makeStyles({
   runChip: {
     display: 'inline-flex',
     alignItems: 'center',
-    gap: tokens.spacingHorizontalXS,
-    padding: `2px ${tokens.spacingHorizontalS}`,
+    gap: tokens.spacingHorizontalSNudge,
+    minHeight: '32px',
+    padding: `${tokens.spacingVerticalSNudge} ${tokens.spacingHorizontalM}`,
     borderRadius: tokens.borderRadiusCircular,
     border: `${tokens.strokeWidthThin} solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground1,
     color: tokens.colorNeutralForeground2,
     cursor: 'pointer',
-    fontSize: tokens.fontSizeBase200,
-    lineHeight: tokens.lineHeightBase200,
+    fontSize: tokens.fontSizeBase300,
+    lineHeight: tokens.lineHeightBase300,
     ':hover': { backgroundColor: tokens.colorNeutralBackground1Hover },
   },
   runChipLabel: {
@@ -3104,10 +3105,13 @@ export function CoordinatorRunPage() {
           className={styles.runChip}
           onClick={() => setPlanPanelOpen(true)}
           data-testid="run-summary-chip-plan"
-          title="Open the outcome plan"
+          title={`${planItemCount} planned ${planItemCount === 1 ? 'task' : 'tasks'} — open the plan`}
+          aria-label={`Open the plan: ${planItemCount} planned ${planItemCount === 1 ? 'task' : 'tasks'}`}
         >
           <span className={styles.runChipLabel}>Plan</span>
-          <span className={styles.runChipCount}>{planItemCount}</span>
+          <span className={styles.runChipCount}>
+            {`${planItemCount} ${planItemCount === 1 ? 'task' : 'tasks'}`}
+          </span>
         </button>,
       );
     }
