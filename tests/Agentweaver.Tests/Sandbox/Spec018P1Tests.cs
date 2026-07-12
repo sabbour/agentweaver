@@ -630,14 +630,15 @@ public sealed class Spec018RemoteAgentProxyInvariantTests
     [Fact]
     public void RemoteAgentProxy_Constructor_AcceptsExpectedParameters()
     {
-        // Constructor: ISandboxAgentEndpointResolver, IHttpClientFactory, ILoggerFactory, IAgentHostTurnTokenRegistry?
+        // Constructor: endpoint resolver, HttpClient factory, logger factory, optional turn-token
+        // registry, and worker-side streaming deadline options.
         var ctor = typeof(RemoteAgentProxy)
             .GetConstructors(BindingFlags.Public | BindingFlags.Instance)
             .Single();
 
-        ctor.GetParameters().Should().HaveCount(4,
+        ctor.GetParameters().Should().HaveCount(5,
             "the proxy must accept the endpoint resolver, HttpClient factory, logger factory, " +
-            "and optional per-run turn-token registry");
+            "optional per-run turn-token registry, and configurable worker stream deadlines");
     }
 
     [Fact]
@@ -653,5 +654,6 @@ public sealed class Spec018RemoteAgentProxyInvariantTests
         paramTypes.Should().Contain(typeof(IHttpClientFactory));
         paramTypes.Should().Contain(typeof(ILoggerFactory));
         paramTypes.Should().Contain(typeof(IAgentHostTurnTokenRegistry));
+        paramTypes.Should().Contain(typeof(RemoteAgentProxyOptions));
     }
 }

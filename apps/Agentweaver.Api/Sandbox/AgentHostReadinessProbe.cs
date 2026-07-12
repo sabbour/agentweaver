@@ -21,8 +21,8 @@ internal interface IAgentHostReadinessProbe
 
 /// <summary>
 /// <see cref="IAgentHostReadinessProbe"/> backed by the <c>a2a-sandbox-pod</c> named
-/// <see cref="HttpClient"/> — the SAME client/handler (incl. the mTLS client cert in production) the
-/// real A2A turns use, so a successful probe proves the worker can actually reach the pod.
+/// <see cref="HttpClient"/> — it shares the pod transport settings (including the production mTLS
+/// hook) with the dedicated streaming client, but retains a finite control-plane timeout.
 /// </summary>
 internal sealed class HttpAgentHostReadinessProbe : IAgentHostReadinessProbe
 {

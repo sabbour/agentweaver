@@ -206,22 +206,17 @@ internal sealed class PodLocalWorkspaceManager
             var nestedRoots = FindNestedRepositoryRoots(
                 workspace.WorkspacePath,
                 initiallyChangedPaths);
-            foreach (var nestedRoot in nestedRoots)
-            {
-                await RunGitWithEnvironmentAsync(
-                    workspace.WorkspacePath,
-                    gitEnvironment,
-                    ct,
-                    "reset",
-                    workspace.BaseCommitSha,
-                    "--",
-                    nestedRoot).ConfigureAwait(false);
-            }
-
             if (nestedRoots.Count > 0)
             {
-                _logger.LogWarning(
-                    "Run {RunId}: skipped {Count} nested git repository root(s) during local write-back: {Roots}",
+                await StageNestedRepositoryContentsAsync(
+                    workspace.WorkspacePath,
+                    runRoot,
+                    workspace.BaseCommitSha,
+                    nestedRoots,
+                    gitEnvironment,
+                    ct).ConfigureAwait(false);
+                _logger.LogInformation(
+                    "Run {RunId}: flattened {Count} nested git repository root(s) into the parent write-back without .git metadata: {Roots}",
                     workspace.RunId,
                     nestedRoots.Count,
                     string.Join(", ", nestedRoots));
@@ -597,6 +592,114 @@ internal sealed class PodLocalWorkspaceManager
         return roots.OrderBy(root => root, StringComparer.Ordinal).ToArray();
     }
 
+    private static async Task StageNestedRepositoryContentsAsync(
+        string workspacePath,
+        string runRoot,
+        string baseCommitSha,
+        IReadOnlyList<string> nestedRoots,
+        IReadOnlyDictionary<string, string?> environment,
+        CancellationToken ct)
+    {
+        var movedMetadata = new List<NestedRepositoryMetadata>();
+        Exception? failure = null;
+
+        try
+        {
+            foreach (var nestedRoot in nestedRoots)
+            {
+                ct.ThrowIfCancellationRequested();
+                var metadataPath = Path.Combine(
+                    workspacePath,
+                    nestedRoot.Replace('/', Path.DirectorySeparatorChar),
+                    ".git");
+                var backupPath = Path.Combine(
+                    runRoot,
+                    $".agentweaver-nested-git-{Guid.NewGuid():N}");
+                MoveGitMetadata(metadataPath, backupPath);
+                movedMetadata.Add(new NestedRepositoryMetadata(metadataPath, backupPath));
+
+                await RunGitWithEnvironmentAsync(
+                    workspacePath,
+                    environment,
+                    ct,
+                    "reset",
+                    baseCommitSha,
+                    "--",
+                    nestedRoot).ConfigureAwait(false);
+                await RunGitWithEnvironmentAsync(
+                    workspacePath,
+                    environment,
+                    ct,
+                    "add",
+                    "-A",
+                    "--",
+                    nestedRoot).ConfigureAwait(false);
+            }
+        }
+        catch (Exception ex)
+        {
+            failure = ex;
+        }
+
+        for (var index = movedMetadata.Count - 1; index >= 0; index--)
+        {
+            try
+            {
+                RestoreGitMetadata(movedMetadata[index]);
+            }
+            catch (Exception ex)
+            {
+                failure ??= ex;
+            }
+        }
+
+        if (failure is OperationCanceledException cancellation)
+            throw cancellation;
+
+        if (failure is not null)
+        {
+            throw new AgentHostConfigurationException(
+                "writeback_nested_repository_failed",
+                "Nested repository contents could not be safely captured without their .git metadata.",
+                failure);
+        }
+    }
+
+    private static void MoveGitMetadata(string sourcePath, string backupPath)
+    {
+        if (Directory.Exists(sourcePath))
+        {
+            Directory.Move(sourcePath, backupPath);
+            return;
+        }
+
+        if (File.Exists(sourcePath))
+        {
+            File.Move(sourcePath, backupPath);
+            return;
+        }
+
+        throw new IOException($"Nested repository metadata was not found at '{sourcePath}'.");
+    }
+
+    private static void RestoreGitMetadata(NestedRepositoryMetadata metadata)
+    {
+        if (Directory.Exists(metadata.BackupPath))
+        {
+            Directory.Move(metadata.BackupPath, metadata.OriginalPath);
+            return;
+        }
+
+        if (File.Exists(metadata.BackupPath))
+        {
+            File.Move(metadata.BackupPath, metadata.OriginalPath);
+            return;
+        }
+
+        throw new IOException(
+            $"Nested repository metadata backup was not found at '{metadata.BackupPath}'.");
+    }
+
     private static bool IsPathUnder(string path, string root)
     {
         var fullPath = Path.GetFullPath(path);
@@ -639,6 +742,8 @@ internal sealed class PodLocalWorkspaceManager
             // The execution-scratch claim is deleted with the pod; cleanup is best-effort.
         }
     }
+
+    private sealed record NestedRepositoryMetadata(string OriginalPath, string BackupPath);
 }
 
 internal sealed record PodLocalWorkspaceSpec(

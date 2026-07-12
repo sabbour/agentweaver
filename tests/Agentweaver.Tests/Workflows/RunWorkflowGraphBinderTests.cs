@@ -222,6 +222,7 @@ internal static class FakeBindings
         return new RunWorkflowBindings(
             AgentInputStorer: agentInputStorer,
             AgentBinding: agent,
+            TerminalTurnFailed: Exec("terminal-turn-failed", "terminal-turn-failed", "plumbing", "terminal", hidden: true),
             RaiBinding: rai,
             RaiRevisionAdapter: raiRevisionAdapter,
             TerminalSafetyFailed: terminalSafetyFailed,

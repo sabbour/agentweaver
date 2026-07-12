@@ -140,6 +140,54 @@ public sealed class CoordinatorChildObservationTests : IAsyncDisposable
         subtask.RecoveryGuidance.Should().NotBeNull();
     }
 
+    [Fact]
+    public async Task ObserveChild_ToolExecutionPendingHeartbeats_ResetStallWindow()
+    {
+        var stream = new SqliteRunEventStream(_streamConfig);
+        var childRunId = await SeedChildRunAsync(RunStatus.InProgress);
+        const string coord = "obs-shell-heartbeat-coord";
+        var (_, ids) = await SeedPlanAsync(coord, [(SubtaskStatus.Running, childRunId)]);
+        _streamStore.Create(coord, "owner");
+        await stream.AppendAsync(childRunId, new RunEvent(0, EventTypes.ToolExecutionPending, new
+        {
+            toolCallId = "shell-call-254",
+            commandHash = "command-hash-254",
+            elapsedSeconds = 0,
+        }));
+
+        // 1.2s stall window; heartbeats continue for 1.5s so cumulative command duration exceeds
+        // the window while every individual gap remains comfortably below it, even under parallel
+        // test-runner/database contention.
+        var sut = BuildDispatch(stream, stallTimeoutMinutes: 0.02);
+        using var loopCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var loopTask = Task.Run(
+            () => sut.RunDispatchLoopAsync(Context(coord), loopCts.Token),
+            loopCts.Token);
+
+        for (var i = 1; i <= 15; i++)
+        {
+            await stream.AppendAsync(childRunId, new RunEvent(0, EventTypes.ToolExecutionPending, new
+            {
+                toolCallId = "shell-call-254",
+                commandHash = "command-hash-254",
+                elapsedSeconds = i,
+            }));
+            await Task.Delay(100);
+        }
+        await stream.AppendAsync(childRunId, new RunEvent(
+            0,
+            EventTypes.RunAssembleReady,
+            new { raiSafetyFlagged = false }));
+        await stream.CompleteAsync(childRunId);
+
+        await loopTask;
+
+        (await GetSubtaskAsync(ids[0])).Status.Should().Be(SubtaskStatus.AssembleReady,
+            "periodic shell heartbeats keep resetting the five-minute-equivalent stall clock");
+        _streamStore.Get(coord)!.GetSnapshotSince(0).Events.Should().NotContain(
+            e => e.Type == EventTypes.CoordinatorChildStallDetected);
+    }
+
     // -----------------------------------------------------------------------
     // #212: unresolved tool-approval gate is a legitimate wait, not a stall
     // -----------------------------------------------------------------------

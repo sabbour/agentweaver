@@ -39,6 +39,13 @@ public static class EventTypes
     public const string ToolResult        = "tool.result";
     public const string ToolError         = "tool.error";
     /// <summary>
+    /// Heartbeat emitted while an approved shell command remains active. It keeps the child event
+    /// stream moving so the coordinator's stall window measures real inactivity rather than a
+    /// healthy silent command. Payload: { toolCallId, commandHash, startedAtUtc, deadlineUtc,
+    /// elapsedSeconds }.
+    /// </summary>
+    public const string ToolExecutionPending = "tool.execution_pending";
+    /// <summary>
     /// Emitted when the sandbox intercepts a tool call (e.g. web_fetch) that requires
     /// operator approval before proceeding. The run stream pauses at the permission gate
     /// until the operator grants or denies via the tool-approvals/tool-denials endpoints.

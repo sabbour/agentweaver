@@ -25,4 +25,11 @@ public interface ISandboxAgentEndpointResolver
     /// or returns <see langword="null"/> if no bound pod is registered for that run.
     /// </summary>
     Task<Uri?> TryResolveEndpointAsync(string runId, CancellationToken ct);
+
+    /// <summary>
+    /// Returns whether the run was launched as an implementation turn in a local writable
+    /// workspace and must therefore return an explicit write-back publication envelope.
+    /// </summary>
+    Task<bool> RequiresPreparedWritebackAsync(string runId, CancellationToken ct) =>
+        Task.FromResult(false);
 }

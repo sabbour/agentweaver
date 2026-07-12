@@ -198,14 +198,50 @@ internal sealed class A2ATurnBridgeAgent : DelegatingAIAgent
 
             if (_runtimeState?.WorkspaceMode == ExecutionWorkspaceMode.LocalWritable)
             {
-                var writeback = await (_workspaceManager
-                    ?? throw new InvalidOperationException(
-                        "A writable AgentHost turn requires PodLocalWorkspaceManager."))
-                    .PrepareWritebackAsync(cancellationToken)
-                    .ConfigureAwait(false);
+                PreparedWriteback? writeback = null;
+                AgentHostConfigurationException? publicationFailure = null;
+                try
+                {
+                    writeback = await (_workspaceManager
+                        ?? throw new InvalidOperationException(
+                            "A writable AgentHost turn requires PodLocalWorkspaceManager."))
+                        .PrepareWritebackAsync(cancellationToken)
+                        .ConfigureAwait(false);
+                }
+                catch (AgentHostConfigurationException ex)
+                {
+                    publicationFailure = ex;
+                }
+
+                if (publicationFailure is not null)
+                {
+                    yield return new AgentResponseUpdate(
+                        ChatRole.Assistant,
+                        new List<AIContent>
+                        {
+                            RunEventDataPartCodec.EncodeRunEvent(new RunEvent(
+                                0,
+                                EventTypes.RunFailed,
+                                new
+                                {
+                                    message = publicationFailure.Message,
+                                    errorCode = publicationFailure.Reason,
+                                    retryable = false,
+                                })),
+                        });
+                    throw new InvalidOperationException(
+                        "Pod-local write-back publication failed.",
+                        publicationFailure);
+                }
+
                 yield return new AgentResponseUpdate(
                     ChatRole.Assistant,
-                    new List<AIContent> { PreparedWritebackDataPartCodec.Encode(writeback) });
+                    new List<AIContent>
+                    {
+                        PreparedWritebackDataPartCodec.Encode(
+                            writeback ?? throw new InvalidOperationException(
+                                "Writable workspace finalization returned no publication descriptor.")),
+                    });
             }
         }
         finally

@@ -385,10 +385,9 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
             apiBaseUrl: _apiBaseUrl,
             apiKey: _apiKey,
             agentNodeCharter: agentNodeCharter,
-            // Trimmed child/revision pipeline only: a persistent post-turn commit fault is RETURNED
-            // as a typed terminal-failure output routed by the child graph's failure->terminal edge
-            // (FIX 2). The full pipeline keeps rethrowing to the watcher backstop.
-            emitTerminalFailureOutput: isChild);
+            // Root and child pipelines route structured turn failures through typed graph terminals,
+            // preserving the original machine-readable reason end-to-end.
+            emitTerminalFailureOutput: true);
 
         var mergeExecutor = new MergeExecutor(
             _mergeCoordinator,
@@ -477,17 +476,26 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
                 StepCount: input.StepCount,
                 RaiSafetyFlagged: input.ContentSafetyFlagged)));
 
-        // Child failure terminal (FIX 2): the trimmed child pipeline's graph-native failure->terminal.
-        // When a child's agent turn ends cleanly but the POST-TURN commit fails PERSISTENTLY (the
-        // executor could not clear the blocker), the executor returns an AgentTurnOutput carrying
-        // TerminalFailureReason; the conditional edge below routes it here to yield exactly ONE
-        // terminal ChildTurnFailedOutput (a VISIBLE failure, never a fabricated no-change success).
+        // Child graph-native failure terminal. Known agent/provider/transport/workspace and
+        // persistent post-turn failures carry TerminalFailureReason through this edge, yielding one
+        // typed terminal output instead of a bare executor fault.
         ExecutorBinding childTurnFailed = new VisualFunctionExecutor<AgentTurnOutput, ChildTurnFailedOutput>(
             "child-turn-failed", "child-turn-failed", "Turn failed", "assembly", "terminal", false,
             (input, ctx, ct) => new ValueTask<ChildTurnFailedOutput>(new ChildTurnFailedOutput(
                 RunId: input.RunId,
                 Reason: input.TerminalFailureReason ?? "child_turn_failed",
-                Evidence: input.TerminalFailureEvidence)));
+                Evidence: input.TerminalFailureEvidence,
+                Message: input.TerminalFailureMessage,
+                Retryable: input.TerminalFailureRetryable)));
+
+        ExecutorBinding terminalTurnFailed = new VisualFunctionExecutor<AgentTurnOutput, AgentTurnFailedOutput>(
+            "terminal-turn-failed", "terminal-turn-failed", "Turn failed", "plumbing", "terminal", true,
+            (input, ctx, ct) => new ValueTask<AgentTurnFailedOutput>(new AgentTurnFailedOutput(
+                RunId: input.RunId,
+                Reason: input.TerminalFailureReason ?? "agent_turn_failed",
+                Evidence: input.TerminalFailureEvidence,
+                Message: input.TerminalFailureMessage,
+                Retryable: input.TerminalFailureRetryable)));
 
         ExecutorBinding terminalDeclined = new VisualFunctionExecutor<WorkflowReviewDecision, DeclinedOutput>(
             "terminal-declined", "terminal-declined", "Declined", "plumbing", "terminal", true,
@@ -813,6 +821,7 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
             new RunWorkflowBindings(
                 AgentInputStorer: agentInputStorer,
                 AgentBinding: agentBinding,
+                TerminalTurnFailed: terminalTurnFailed,
                 RaiBinding: raiBinding,
                 RaiRevisionAdapter: raiRevisionAdapter,
                 TerminalSafetyFailed: terminalSafetyFailed,
@@ -922,6 +931,7 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
                 apiKey: _factory._apiKey,
                 agentNodeCharter: node.Charter,
                 agentNodePrompt: node.Prompt,
+                emitTerminalFailureOutput: true,
                 name: $"agent-turn-{node.Id}",
                 logicalNodeId: node.Id,
                 displayLabel: node.Label);

@@ -130,6 +130,17 @@ internal sealed class KubernetesPodAgentEndpointResolver : ISandboxAgentEndpoint
         }
     }
 
+    /// <inheritdoc />
+    public async Task<bool> RequiresPreparedWritebackAsync(string runId, CancellationToken ct)
+    {
+        if (_launchContextResolver is null)
+            return false;
+
+        var context = await _launchContextResolver.ResolveAsync(runId, ct).ConfigureAwait(false);
+        return context.Purpose == AgentHostPurpose.ImplementationTurn
+            && context.WorkspaceMode == ExecutionWorkspaceMode.LocalWritable;
+    }
+
     /// <summary>
     /// Launches the AgentHost pod for <paramref name="runId"/> exactly once, deduping
     /// concurrent callers. Returns the bound pod name (now registered in

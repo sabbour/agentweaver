@@ -9,6 +9,7 @@ using Agentweaver.Api.Sandbox;
 using Agentweaver.Domain;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Xunit;
@@ -47,6 +48,37 @@ public sealed class ImplementationWritebackTests : IDisposable
             PreparedWritebackDataPartCodec.Encode(expected));
 
         decoded.Should().Be(expected);
+    }
+
+    [Fact]
+    public async Task Remote_proxy_marks_absent_required_implementation_envelope_as_missing()
+    {
+        await using var proxy = CreateRemoteProxy(requiresPreparedWriteback: true);
+        await SetupProxyAsync(proxy);
+
+        var envelope = proxy.TakePreparedWritebackEnvelope();
+
+        envelope.Status.Should().Be(PreparedWritebackEnvelopeStatus.Missing);
+        envelope.Writeback.Should().BeNull();
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("{")]
+    public async Task Remote_proxy_marks_empty_or_malformed_writeback_descriptor_as_invalid(
+        string payload)
+    {
+        await using var proxy = CreateRemoteProxy(requiresPreparedWriteback: true);
+        await SetupProxyAsync(proxy);
+        var content = new DataContent(
+            System.Text.Encoding.UTF8.GetBytes(payload),
+            PreparedWritebackDataPartCodec.MediaType);
+
+        proxy.TryCapturePreparedWritebackEnvelope(content).Should().BeTrue();
+        var envelope = proxy.TakePreparedWritebackEnvelope();
+
+        envelope.Status.Should().Be(PreparedWritebackEnvelopeStatus.Invalid);
+        envelope.Writeback.Should().BeNull();
     }
 
     [Fact]
@@ -163,6 +195,93 @@ public sealed class ImplementationWritebackTests : IDisposable
     }
 
     [Fact]
+    public async Task Impl_writeback_captures_nested_repository_contents_without_git_metadata()
+    {
+        var fixture = CreateFixture();
+        var local = CreateLocalManager();
+        var prepared = await local.PrepareAsync(
+            fixture.LocalSpec,
+            CancellationToken.None);
+        var nested = Path.Combine(prepared.WorkspacePath, "nested-deliverable");
+        CreateNestedRepository(nested, "nested.txt", "nested-only result");
+
+        var writeback = await local.PrepareWritebackAsync();
+
+        writeback.HasChanges.Should().BeTrue();
+        fixture.WorktreeManager.ApplyPreparedWriteback(
+            fixture.Repository,
+            fixture.Worktree.WorktreePath,
+            fixture.Worktree.BranchName,
+            fixture.RunId,
+            writeback);
+
+        File.ReadAllText(Path.Combine(
+                fixture.Worktree.WorktreePath,
+                "nested-deliverable",
+                "nested.txt"))
+            .Should().Be("nested-only result");
+        Directory.Exists(Path.Combine(
+                fixture.Worktree.WorktreePath,
+                "nested-deliverable",
+                ".git"))
+            .Should().BeFalse();
+        File.Exists(Path.Combine(
+                fixture.Worktree.WorktreePath,
+                "nested-deliverable",
+                ".git"))
+            .Should().BeFalse();
+        Git(
+                fixture.Worktree.WorktreePath,
+                "ls-files",
+                "--stage",
+                "nested-deliverable/nested.txt")
+            .Should().StartWith("100644 ");
+
+        await local.CleanupAsync();
+    }
+
+    [Fact]
+    public async Task Impl_writeback_captures_top_level_and_nested_deliverables_together()
+    {
+        var fixture = CreateFixture();
+        var local = CreateLocalManager();
+        var prepared = await local.PrepareAsync(
+            fixture.LocalSpec,
+            CancellationToken.None);
+        File.WriteAllText(
+            Path.Combine(prepared.WorkspacePath, "top-level.txt"),
+            "top-level result");
+        var nested = Path.Combine(prepared.WorkspacePath, "nested-deliverable");
+        CreateNestedRepository(nested, "nested.txt", "nested result");
+
+        var writeback = await local.PrepareWritebackAsync();
+
+        writeback.HasChanges.Should().BeTrue();
+        writeback.ChangedPathCount.Should().Be(2);
+        fixture.WorktreeManager.ApplyPreparedWriteback(
+            fixture.Repository,
+            fixture.Worktree.WorktreePath,
+            fixture.Worktree.BranchName,
+            fixture.RunId,
+            writeback);
+
+        File.ReadAllText(Path.Combine(fixture.Worktree.WorktreePath, "top-level.txt"))
+            .Should().Be("top-level result");
+        File.ReadAllText(Path.Combine(
+                fixture.Worktree.WorktreePath,
+                "nested-deliverable",
+                "nested.txt"))
+            .Should().Be("nested result");
+        Directory.Exists(Path.Combine(
+                fixture.Worktree.WorktreePath,
+                "nested-deliverable",
+                ".git"))
+            .Should().BeFalse("nested repository metadata must never enter the parent commit");
+
+        await local.CleanupAsync();
+    }
+
+    [Fact]
     public async Task Impl_writeback_conflict_fails_with_structured_base_mismatch()
     {
         var fixture = CreateFixture();
@@ -246,6 +365,41 @@ public sealed class ImplementationWritebackTests : IDisposable
             }),
             NullLogger<PodLocalWorkspaceManager>.Instance);
 
+    private static RemoteAgentProxy CreateRemoteProxy(bool requiresPreparedWriteback) =>
+        new(
+            new FixedEndpointResolver(requiresPreparedWriteback),
+            new StubHttpClientFactory(),
+            NullLoggerFactory.Instance);
+
+    private static Task SetupProxyAsync(RemoteAgentProxy proxy) =>
+        proxy.SetupAsync(
+            workingDirectory: "/workspace",
+            repositoryPath: "/workspace",
+            runId: "implementation-run",
+            modelId: null,
+            systemPromptContext: null,
+            streamWriter: null,
+            projectId: null,
+            agentName: null,
+            apiBaseUrl: null,
+            apiKey: null,
+            ct: CancellationToken.None,
+            userId: null);
+
+    private static void CreateNestedRepository(
+        string path,
+        string fileName,
+        string content)
+    {
+        Directory.CreateDirectory(path);
+        Git(path, "init");
+        Git(path, "config", "user.name", "Nested Fixture");
+        Git(path, "config", "user.email", "nested@example.invalid");
+        File.WriteAllText(Path.Combine(path, fileName), content);
+        Git(path, "add", fileName);
+        Git(path, "commit", "-m", "nested deliverable");
+    }
+
     private static string Git(string workingDirectory, params string[] args)
     {
         using var process = new Process
@@ -314,5 +468,22 @@ public sealed class ImplementationWritebackTests : IDisposable
 
             throw new NotSupportedException(targetMethod?.Name);
         }
+    }
+
+    private sealed class FixedEndpointResolver(bool requiresPreparedWriteback)
+        : ISandboxAgentEndpointResolver
+    {
+        public Task<Uri?> TryResolveEndpointAsync(string runId, CancellationToken ct) =>
+            Task.FromResult<Uri?>(new Uri("http://localhost:65534/a2a/agent"));
+
+        public Task<bool> RequiresPreparedWritebackAsync(
+            string runId,
+            CancellationToken ct) =>
+            Task.FromResult(requiresPreparedWriteback);
+    }
+
+    private sealed class StubHttpClientFactory : IHttpClientFactory
+    {
+        public HttpClient CreateClient(string name) => new();
     }
 }
