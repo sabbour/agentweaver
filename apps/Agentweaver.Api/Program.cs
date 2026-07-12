@@ -349,6 +349,13 @@ builder.Services.AddSingleton<IAgentHostTurnTokenRegistry>(sp =>
 // AgentHost__UserId, scoping the in-pod GitHub Copilot auth to the user's Copilot-entitled token
 // instead of the installation token (which fails the first model turn).
 builder.Services.AddSingleton<IRunSubmittingUserResolver, RunStoreSubmittingUserResolver>();
+builder.Services.AddSingleton<IRunAgentHostContextResolver>(sp =>
+    new RunAgentHostContextResolver(
+        sp.GetRequiredService<Agentweaver.Api.Infrastructure.IRunStore>(),
+        sp.GetRequiredService<WorktreeManager>(),
+        builder.Configuration.GetValue(
+            "Sandbox:PodLocalWorkspace:ImplementationEnabled",
+            true)));
 builder.Services.AddSingleton<ISandboxExecutorRouter, SandboxExecutorRouter>();
 builder.Services.AddSingleton<ISandboxExecutor>(sp =>
     sp.GetRequiredService<ISandboxExecutorRouter>().Resolve());
@@ -393,10 +400,11 @@ builder.Services.AddSingleton<ISandboxExecutor>(sp =>
             // Optional: lets the resolver record a precise FailureReason (agent_quota_exceeded /
             // agent_pod_reconciler_error) on the run when a lazy pod launch fails.
             var runStore = sp.GetService<Agentweaver.Api.Infrastructure.IRunStore>();
+            var launchContextResolver = sp.GetService<IRunAgentHostContextResolver>();
             return new KubernetesPodAgentEndpointResolver(
                 k8sClient, podRegistry, ns, sandboxAgentOptions,
                 loggerFactory.CreateLogger<KubernetesPodAgentEndpointResolver>(),
-                podLifecycle, runStore);
+                podLifecycle, runStore, launchContextResolver);
         }
         catch
         {
@@ -404,18 +412,32 @@ builder.Services.AddSingleton<ISandboxExecutor>(sp =>
         }
     });
 
-    // Named HttpClient for A2A sandbox pod connections.
+    var agentHostHttpTimeout =
+        TimeSpan.TryParse(builder.Configuration["Sandbox:AgentHost:HttpTimeout"], out var configuredAgentHostTimeout) &&
+        configuredAgentHostTimeout > TimeSpan.Zero
+            ? configuredAgentHostTimeout
+            : TimeSpan.FromMinutes(2);
+
+    // Finite client for AgentHost control-plane calls (preview runner, readiness, approvals).
     // When RequireMtls=true (production, H1), attach the client-certificate handler here so the
     // worker presents its workload-bound cert on every pod connection (wiring owned by Link via
     // a mounted secret — left as the documented hook). When RequireMtls=false (PoC), no client
     // cert is configured and the worker connects over plain http.
     builder.Services.AddHttpClient("a2a-sandbox-pod")
-        .ConfigureHttpClient(c => c.Timeout = TimeSpan.FromMinutes(30))
+        .ConfigureHttpClient(c => c.Timeout = agentHostHttpTimeout)
         // Defense-in-depth for the A2A cold-start race: retry ONLY connection-refused (the AgentHost
-        // Kestrel listener has not bound :8088 yet). Safe for streaming sends — a refused connect
-        // delivers no bytes, so there is no duplicate side effect. See ConnectRefusedRetryHandler.
+        // Kestrel listener has not bound :8088 yet). See ConnectRefusedRetryHandler.
         .AddHttpMessageHandler(sp => new ConnectRefusedRetryHandler(
             logger: sp.GetRequiredService<ILoggerFactory>().CreateLogger<ConnectRefusedRetryHandler>()));
+
+    // Streaming gets a separate infinite transport timeout. RemoteAgentProxy applies configurable,
+    // linked worker-side total/read-idle deadlines, so a dead pod cannot fall through to the 4h watch loop.
+    builder.Services.AddHttpClient(RemoteAgentProxy.StreamingHttpClientName)
+        .ConfigureHttpClient(c => c.Timeout = Timeout.InfiniteTimeSpan)
+        .AddHttpMessageHandler(sp => new ConnectRefusedRetryHandler(
+            logger: sp.GetRequiredService<ILoggerFactory>().CreateLogger<ConnectRefusedRetryHandler>()));
+    builder.Services.Configure<RemoteAgentProxyOptions>(
+        builder.Configuration.GetSection("Sandbox:AgentHost:A2AStreaming"));
 
     // spec-006 decouple-preview (BLOCKER 1): AgentHost ORIGIN resolver — scheme://podIP:port with
     // NO A2A path, so the root-mounted /preview-runner/* endpoints are reachable. Distinct from the

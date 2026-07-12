@@ -94,3 +94,8 @@ Delivered shared-base refactor for Blank and From-GitHub creation dialogs: one s
 Implemented the backend dependency-base propagation fix after rubber-duck GO-WITH-CHANGES and code-review CLEAN: inclusion now trusts committed branch/tree validity instead of run.Diff, integration branches must contain satisfied dependency heads before dependent dispatch, and final assembly uses the same inclusion authority. Link included the change in local-only staging release v0.9.19-rc1 for Ahmed validation.
 
 📌 Team update (2026-07-10T05:55:00-07:00): #207 roots in 28 unbounded non-idempotent final Scribes executing in the API. The first design was rejected; Tank is locked out from revision and Morpheus owns the independent redesign. — decided by Rubber-duck and Seraph
+
+
+## 2026-07-12T06:33:29-07:00 — #187 Build & Test gate design
+
+Delivered `files/design-187.md`, proposing a shared gate runner for consistent Build & Test gate execution and policy handling. Preserved an unresolved design conflict for rubber-duck: approved-only preview activation contradicts the North Star requirement that preview be available at `awaiting_review`. Preview timing is not final until that criterion is resolved.

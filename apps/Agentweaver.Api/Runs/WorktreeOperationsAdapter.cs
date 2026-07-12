@@ -22,6 +22,21 @@ public sealed class WorktreeOperationsAdapter : IWorktreeOperations
         _streamStore = streamStore;
     }
 
+    public void ApplyPreparedWriteback(
+        string repositoryPath,
+        string worktreePath,
+        string worktreeBranch,
+        string runId,
+        PreparedWriteback writeback)
+    {
+        _worktreeManager.ApplyPreparedWriteback(
+            repositoryPath,
+            worktreePath,
+            worktreeBranch,
+            RunId.Parse(runId),
+            writeback);
+    }
+
     public string CommitChanges(string worktreePath, string runId)
     {
         return _worktreeManager.CommitChanges(worktreePath, RunId.Parse(runId));

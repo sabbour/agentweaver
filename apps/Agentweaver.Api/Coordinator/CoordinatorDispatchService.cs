@@ -2244,8 +2244,8 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
     /// <summary>
     /// Builds the workspace-sync note injected into every coordinator child task (bug #169, fixed
     /// for #197). Each subtask runs in its own AgentHost sandbox, but every sandbox operates on the
-    /// SAME shared worktree the API host provisions for the child run, and the API captures the
-    /// child's file changes automatically (WorktreeManager.CommitChanges → the run's worktree branch
+    /// isolated pod-local checkout of the child run branch, and the platform publishes the
+    /// child's file changes automatically to the authoritative shared worktree/branch
     /// <c>agentweaver/{childRunId}</c>) and merges them into the shared integration branch
     /// (<see cref="CoordinatorAssemblyService.IntegrationBranchName"/>) via
     /// RebuildDependencyBaseBranchAsync. A dependent subtask's worktree is CREATED from that
@@ -2269,8 +2269,8 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
             $"""
             ## Workspace sync — how your work is shared (READ THIS)
             You are one of several subtasks in a coordinated work plan. Each subtask runs in its own
-            sandbox, but they all operate on a SHARED workspace and the platform propagates file
-            changes between them automatically through the run's integration branch `{integrationBranch}`.
+            sandbox with an isolated local execution workspace. The platform publishes deliverables
+            to the shared run branch and propagates them automatically through `{integrationBranch}`.
 
             What this means for you:
             - Files produced by the subtasks you depend on are ALREADY present in your workspace when
@@ -2306,7 +2306,7 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         sb.AppendLine();
 
         // Bug #169 / issue #197: each subtask executes in its OWN AgentHost sandbox, but every
-        // sandbox operates on the SAME shared worktree the API host provisions for the child run.
+        // sandbox operates on an isolated pod-local checkout of the child run branch.
         // A dependent subtask's worktree is created from the run's integration branch, so prior
         // subtasks' committed files are already on disk. The API captures the child's changes and
         // merges them into the integration branch automatically — the agent must NOT run git

@@ -39,6 +39,16 @@ public sealed class AgentTurnExecutorRevisionTerminalTests
         _ => null,
         NullLogger<AgentTurnExecutor>.Instance);
 
+    private static AgentTurnExecutor NewExecutor(
+        IWorkflowTurnAgent agent,
+        IWorktreeOperations worktree,
+        bool emitTerminalFailureOutput = false) => new(
+        agent,
+        worktree,
+        _ => null,
+        NullLogger<AgentTurnExecutor>.Instance,
+        emitTerminalFailureOutput: emitTerminalFailureOutput);
+
     // Trimmed child/revision pipeline executor: a persistent post-turn commit fault is RETURNED as a
     // typed terminal-failure AgentTurnOutput (routed to child-turn-failed) instead of rethrown.
     private static AgentTurnExecutor NewChildExecutor(IWorktreeOperations worktree) => new(
@@ -72,10 +82,10 @@ public sealed class AgentTurnExecutorRevisionTerminalTests
     }
 
     [Fact]
-    public async Task PersistentCommitFailure_Rethrows_VisibleFailure_NeverFakeSuccess()
+    public async Task PersistentCommitFailure_WhenTerminalOutputDisabled_Rethrows_NeverFakeSuccess()
     {
-        // FULL pipeline (emitTerminalFailureOutput=false): every attempt throws (corrupt/unopenable
-        // repo) — must rethrow (watcher backstop terminalizes), never degrade to a no-change success.
+        // Compatibility mode (emitTerminalFailureOutput=false): every attempt throws
+        // (corrupt/unopenable repo), never degrading to a no-change success.
         var worktree = new StubWorktreeOperations
         {
             FailuresBeforeSuccess = int.MaxValue,
@@ -135,6 +145,144 @@ public sealed class AgentTurnExecutorRevisionTerminalTests
         worktree.CommitAttempts.Should().Be(1, "the happy path commits on the first attempt");
     }
 
+    [Fact]
+    public async Task PreparedWriteback_is_applied_before_existing_commit_bookkeeping()
+    {
+        var writeback = Writeback();
+        var agent = new PreparedWritebackTurnAgent(writeback);
+        var worktree = new StubWorktreeOperations
+        {
+            CommittedTreeHash = writeback.ResultTreeSha,
+        };
+        var executor = NewExecutor(agent, worktree);
+
+        var result = await executor.HandleAsync(RevisionInput(), context: null!, CancellationToken.None);
+
+        result.TreeHash.Should().Be(writeback.ResultTreeSha);
+        worktree.OperationOrder.Should().Equal("apply", "commit");
+        worktree.AppliedWriteback.Should().BeSameAs(writeback);
+        agent.TakeCalls.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task PreparedWriteback_conflict_returns_structured_child_failure()
+    {
+        var agent = new PreparedWritebackTurnAgent(Writeback());
+        var worktree = new StubWorktreeOperations
+        {
+            ApplyFailure = new WorktreeWritebackException(
+                "writeback_base_mismatch",
+                "shared branch moved"),
+        };
+        var executor = NewExecutor(agent, worktree, emitTerminalFailureOutput: true);
+
+        var result = await executor.HandleAsync(RevisionInput(), context: null!, CancellationToken.None);
+
+        result.TerminalFailureReason.Should().Be("writeback_base_mismatch");
+        result.TerminalFailureEvidence.Should().Contain("shared branch moved");
+        worktree.CommitAttempts.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task Missing_required_writeback_envelope_returns_structured_failure_without_committing()
+    {
+        var agent = new PreparedWritebackTurnAgent(
+            new PreparedWritebackEnvelope(PreparedWritebackEnvelopeStatus.Missing));
+        var worktree = new StubWorktreeOperations();
+        var executor = NewExecutor(agent, worktree, emitTerminalFailureOutput: true);
+
+        var result = await executor.HandleAsync(
+            RevisionInput(),
+            context: null!,
+            CancellationToken.None);
+
+        result.TerminalFailureReason.Should().Be("writeback_missing");
+        result.TerminalFailureMessage.Should().Contain("required write-back publication envelope");
+        result.TerminalFailureRetryable.Should().BeFalse();
+        worktree.CommitAttempts.Should().Be(0,
+            "an implementation turn without its publication envelope must never commit the unchanged shared worktree");
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("{")]
+    public async Task Malformed_or_empty_writeback_envelope_returns_structured_failure_without_committing(
+        string payload)
+    {
+        var content = new Microsoft.Extensions.AI.DataContent(
+            System.Text.Encoding.UTF8.GetBytes(payload),
+            PreparedWritebackDataPartCodec.MediaType);
+        var agent = new PreparedWritebackTurnAgent(
+            PreparedWritebackDataPartCodec.DecodeEnvelope(content));
+        var worktree = new StubWorktreeOperations();
+        var executor = NewExecutor(agent, worktree, emitTerminalFailureOutput: true);
+
+        var result = await executor.HandleAsync(
+            RevisionInput(),
+            context: null!,
+            CancellationToken.None);
+
+        result.TerminalFailureReason.Should().Be("writeback_invalid");
+        result.TerminalFailureMessage.Should().Contain("malformed or invalid");
+        result.TerminalFailureRetryable.Should().BeFalse();
+        worktree.CommitAttempts.Should().Be(0,
+            "an undecodable publication envelope must never fall through to shared-worktree commit");
+    }
+
+    private static PreparedWriteback Writeback() => new(
+        RunId: "child-revision-run",
+        SourceRef: "agentweaver/child-branch",
+        WritebackRef: "refs/agentweaver/writeback/run/nonce",
+        BaseCommitSha: new string('1', 40),
+        ResultCommitSha: new string('2', 40),
+        ResultTreeSha: new string('3', 40),
+        ChangedPathCount: 1);
+
+    [Fact]
+    public async Task StructuredAgentFailure_InChildPipeline_PreservesRealReason()
+    {
+        var worktree = new StubWorktreeOperations();
+        var executor = new AgentTurnExecutor(
+            new StructuredFailingTurnAgent(),
+            worktree,
+            _ => null,
+            NullLogger<AgentTurnExecutor>.Instance,
+            emitTerminalFailureOutput: true);
+
+        var result = await executor.HandleAsync(
+            RevisionInput(),
+            context: null!,
+            CancellationToken.None);
+
+        result.TerminalFailureReason.Should().Be("shell_execution_timeout");
+        result.TerminalFailureMessage.Should().Contain("hard deadline");
+        result.TerminalFailureRetryable.Should().BeTrue();
+        worktree.CommitAttempts.Should().Be(0,
+            "a failed agent turn must not proceed into post-turn commit bookkeeping");
+    }
+
+    [Fact]
+    public async Task StructuredAgentFailure_InRootPipeline_ReturnsTerminalFailureOutput()
+    {
+        var worktree = new StubWorktreeOperations();
+        var executor = new AgentTurnExecutor(
+            new StructuredFailingTurnAgent(),
+            worktree,
+            _ => null,
+            NullLogger<AgentTurnExecutor>.Instance,
+            emitTerminalFailureOutput: true);
+
+        var result = await executor.HandleAsync(
+            RevisionInput(),
+            context: null!,
+            CancellationToken.None);
+
+        result.TerminalFailureReason.Should().Be("shell_execution_timeout");
+        result.TerminalFailureMessage.Should().Contain("hard deadline");
+        result.TerminalFailureRetryable.Should().BeTrue();
+        worktree.CommitAttempts.Should().Be(0);
+    }
+
     private sealed class CleanTurnAgent : IWorkflowTurnAgent
     {
         public Task SetupAsync(
@@ -159,6 +307,76 @@ public sealed class AgentTurnExecutorRevisionTerminalTests
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
+    private sealed class PreparedWritebackTurnAgent :
+        IWorkflowTurnAgent,
+        IPreparedWritebackSource
+    {
+        private PreparedWritebackEnvelope _envelope;
+
+        public PreparedWritebackTurnAgent(PreparedWriteback writeback) =>
+            _envelope = new PreparedWritebackEnvelope(
+                PreparedWritebackEnvelopeStatus.Valid,
+                writeback);
+
+        public PreparedWritebackTurnAgent(PreparedWritebackEnvelope envelope) =>
+            _envelope = envelope;
+
+        public int TakeCalls { get; private set; }
+
+        public Task SetupAsync(
+            string workingDirectory,
+            string repositoryPath,
+            string runId,
+            string? modelId,
+            string? systemPromptContext,
+            ChannelWriter<RunEvent>? streamWriter,
+            string? projectId,
+            string? agentName,
+            string? apiBaseUrl,
+            string? apiKey,
+            CancellationToken ct,
+            string? userId = null) => Task.CompletedTask;
+
+        public Task<string> RunTurnAsync(string task, bool isRevision, CancellationToken ct) =>
+            Task.FromResult("Implementation completed.");
+
+        public PreparedWritebackEnvelope TakePreparedWritebackEnvelope()
+        {
+            TakeCalls++;
+            var envelope = _envelope;
+            _envelope = new PreparedWritebackEnvelope(
+                PreparedWritebackEnvelopeStatus.NotRequired);
+            return envelope;
+        }
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    private sealed class StructuredFailingTurnAgent : IWorkflowTurnAgent
+    {
+        public Task SetupAsync(
+            string workingDirectory,
+            string repositoryPath,
+            string runId,
+            string? modelId,
+            string? systemPromptContext,
+            ChannelWriter<RunEvent>? streamWriter,
+            string? projectId,
+            string? agentName,
+            string? apiBaseUrl,
+            string? apiKey,
+            CancellationToken ct,
+            string? userId = null) => Task.CompletedTask;
+
+        public Task<string> RunTurnAsync(string task, bool isRevision, CancellationToken ct) =>
+            Task.FromException<string>(new WorkflowAgentInfrastructureException(
+                "shell_execution_timeout",
+                "Shell execution exceeded its hard deadline and was terminated.",
+                isRetryable: true));
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
     private sealed class StubWorktreeOperations : IWorktreeOperations
     {
         /// <summary>Number of leading CommitChanges calls that throw before one succeeds.</summary>
@@ -169,9 +387,26 @@ public sealed class AgentTurnExecutorRevisionTerminalTests
         public int CommitAttempts { get; private set; }
         public bool GetTreeHashCalled { get; private set; }
         public int ClearLockCalls { get; private set; }
+        public WorktreeWritebackException? ApplyFailure { get; set; }
+        public PreparedWriteback? AppliedWriteback { get; private set; }
+        public List<string> OperationOrder { get; } = [];
+
+        public void ApplyPreparedWriteback(
+            string repositoryPath,
+            string worktreePath,
+            string worktreeBranch,
+            string runId,
+            PreparedWriteback writeback)
+        {
+            OperationOrder.Add("apply");
+            AppliedWriteback = writeback;
+            if (ApplyFailure is not null)
+                throw ApplyFailure;
+        }
 
         public string CommitChanges(string worktreePath, string runId)
         {
+            OperationOrder.Add("commit");
             CommitAttempts++;
             if (CommitAttempts <= FailuresBeforeSuccess)
                 throw new InvalidOperationException("simulated LibGit2 failure during post-turn commit");

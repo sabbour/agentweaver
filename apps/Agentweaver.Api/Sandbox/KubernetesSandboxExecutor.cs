@@ -852,6 +852,8 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
             launchContext.ExpectedTreeHash,
             workspaceMode = launchContext.WorkspaceMode.ToString(),
             launchContext.ScratchRoot,
+            launchContext.CommitAuthorName,
+            launchContext.CommitAuthorEmail,
             // Per-run AutoApproveTools flag (bug #221). Resolved from the API-side run-options store
             // keyed by the child runId; defaults false when the store is unavailable (unit tests).
             autoApproveTools = _runOptions?.Get(runId).AutoApproveTools ?? false,

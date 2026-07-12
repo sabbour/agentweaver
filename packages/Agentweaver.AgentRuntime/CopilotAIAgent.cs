@@ -115,7 +115,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
     private IReadOnlyList<string> _registeredToolNames = [];
     private GitHubTokenScope? _tokenScope;
     private SessionConfig? _sessionConfig;
-    private ShellExecutionTracker? _controlledShellTracker;
+    private ShellExecutionTracker? _shellExecutionTracker;
 
     // --- Per-run run-event emission state (reset in SetupAsync) ---
     private StringBuilder _sb = new();
@@ -152,17 +152,46 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
     private string? _degradedToolName;
     private string? _degradedReason;
     private int _runDegradedEmitted;
+    private int _shellTimeoutFailureEmitted;
 
     /// <summary>
     /// Inactivity watchdog window for a streaming turn. If the Copilot SDK yields no chunk within
-    /// this span, the turn is aborted (retryable) instead of hanging forever and stranding the run
-    /// in <c>in_progress</c> — see <see cref="AsyncStreamIdleTimeout"/> for the root cause. Reset on
-    /// every delivered chunk, so slow first tokens and long tool calls stay alive. Default 15 min
-    /// (well above any legitimate stream gap while still bounding a true hang); override with the
+    /// this span and no shell is active, the turn is aborted (retryable) instead of hanging forever
+    /// and stranding the run in <c>in_progress</c>. Active shells use their separate hard deadline
+    /// and heartbeat policy. Default 15 min; override with the
     /// <c>AGENTWEAVER_AGENT_TURN_IDLE_TIMEOUT_SECONDS</c> environment variable (0 disables it).
     /// Settable for tests.
     /// </summary>
     internal TimeSpan StreamIdleTimeout { get; set; } = ResolveStreamIdleTimeoutDefault();
+
+    /// <summary>
+    /// Authoritative default inactivity window inside the AgentHost pod. Worker-side transport
+    /// deadlines must remain strictly longer because they cannot observe active-shell liveness.
+    /// </summary>
+    internal static readonly TimeSpan DefaultStreamIdleTimeout = TimeSpan.FromMinutes(15);
+
+    /// <summary>
+    /// Hard wall-clock limit for an active shell. While a shell is active this replaces the normal
+    /// stream-idle window. Override with
+    /// <c>AGENTWEAVER_SHELL_EXECUTION_HARD_TIMEOUT_SECONDS</c> (0 disables the hard deadline).
+    /// </summary>
+    internal TimeSpan ShellExecutionHardTimeout { get; set; } = ResolveTimeoutDefault(
+        "AGENTWEAVER_SHELL_EXECUTION_HARD_TIMEOUT_SECONDS",
+        TimeSpan.FromMinutes(30));
+
+    /// <summary>
+    /// Total wall-clock bound for one model turn, independent of stream activity. Override with
+    /// <c>AGENTWEAVER_AGENT_TURN_TOTAL_TIMEOUT_SECONDS</c> (0 disables it).
+    /// </summary>
+    internal TimeSpan TotalTurnTimeout { get; set; } = ResolveTimeoutDefault(
+        "AGENTWEAVER_AGENT_TURN_TOTAL_TIMEOUT_SECONDS",
+        TimeSpan.FromMinutes(60));
+
+    /// <summary>Cadence for active-shell progress events. Settable for focused tests.</summary>
+    internal TimeSpan ShellHeartbeatInterval { get; set; } = TimeSpan.FromSeconds(25);
+
+    /// <summary>Test seam; production defaults to force-stopping the Copilot CLI process tree.</summary>
+    internal Func<Task>? ShellTimeoutTerminator { get; set; }
 
     /// <summary>
     /// Cadence for the <see cref="EventTypes.ToolApprovalPending"/> heartbeat emitted while the
@@ -175,10 +204,17 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
 
     private static TimeSpan ResolveStreamIdleTimeoutDefault()
     {
-        var raw = Environment.GetEnvironmentVariable("AGENTWEAVER_AGENT_TURN_IDLE_TIMEOUT_SECONDS");
+        return ResolveTimeoutDefault(
+            "AGENTWEAVER_AGENT_TURN_IDLE_TIMEOUT_SECONDS",
+            DefaultStreamIdleTimeout);
+    }
+
+    private static TimeSpan ResolveTimeoutDefault(string variableName, TimeSpan fallback)
+    {
+        var raw = Environment.GetEnvironmentVariable(variableName);
         if (int.TryParse(raw, out var seconds))
             return seconds <= 0 ? TimeSpan.Zero : TimeSpan.FromSeconds(seconds);
-        return TimeSpan.FromMinutes(15);
+        return fallback;
     }
 
     public CopilotAIAgent(
@@ -283,6 +319,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         _turnNanoAiu = 0;
         _turnModelId = null;
         _turnTimeToFirstTokenMs = null;
+        _shellTimeoutFailureEmitted = 0;
 
         _logger.LogInformation(
             "SetupAsync entered — workingDirectory={WorkingDirectory}, runId={RunId}, streamIsNull={StreamIsNull}",
@@ -335,10 +372,8 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
                 ? (int)TimeSpan.FromMinutes(10).TotalMilliseconds
                 : 0,
         };
-        _controlledShellTracker?.Dispose();
-        _controlledShellTracker = controlledBuildTestShell
-            ? new ShellExecutionTracker()
-            : null;
+        _shellExecutionTracker?.Dispose();
+        _shellExecutionTracker = new ShellExecutionTracker();
         var toolContext = new SandboxToolContext(
             AgentId: agentId,
             WorkingDirectory: workingDirectory,
@@ -354,7 +389,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
             IsCommandApproved: hash => _approvalStore.IsApproved(runId, hash),
             IsCommandDenied: hash => _approvalStore.IsDenied(runId, hash),
             QuestionGate: _questionGate,
-            ShellExecutionTracker: _controlledShellTracker);
+            ShellExecutionTracker: _shellExecutionTracker);
         _toolContext = toolContext;
 
         var sessionTools = BuildSessionConfigTools(
@@ -588,14 +623,19 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
             _runId,
             providerFailure.FailureKind,
             providerFailure.ErrorCode);
-        Emit("run.failed", new
+        EmitProviderFailure(providerFailure);
+        return providerFailure;
+    }
+
+    private void EmitProviderFailure(AgentProviderException providerFailure)
+    {
+        Emit(EventTypes.RunFailed, new
         {
             message = providerFailure.UserMessage,
             category = providerFailure.FailureKind.ToString(),
             errorCode = providerFailure.ErrorCode,
             retryable = providerFailure.IsRetryable,
         });
-        return providerFailure;
     }
 
     /// <summary>
@@ -640,6 +680,11 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
 
         using var turnActivity = StartModelTurnActivity();
         var turnStarted = Stopwatch.GetTimestamp();
+        var turnStartedAt = DateTimeOffset.UtcNow;
+        using var totalTurnCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        if (TotalTurnTimeout > TimeSpan.Zero)
+            totalTurnCts.CancelAfter(TotalTurnTimeout);
+        var turnCt = totalTurnCts.Token;
         try
         {
             var rateLimitRetryAttempt = 0;
@@ -648,22 +693,22 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
             {
                 try
                 {
-                    session = await EnsureFreshClientForAiCallAsync(session, ct).ConfigureAwait(false);
-                    await StreamTurnOnceAsync(task, session, turnStarted, ct).ConfigureAwait(false);
+                    session = await EnsureFreshClientForAiCallAsync(session, turnCt).ConfigureAwait(false);
+                    await StreamTurnOnceAsync(task, session, turnStarted, turnStartedAt, turnCt).ConfigureAwait(false);
                     break;
                 }
                 catch (Exception ex) when (GitHubCopilotClientFactory.IsUnauthorized(ex) && !unauthorizedRetried)
                 {
                     unauthorizedRetried = true;
                     _logger.LogWarning(ex, "GitHub Copilot streaming call returned 401 for run {RunId}; refreshing token and retrying once", _runId);
-                    session = await RecreateInnerAgentSessionAsync(ct).ConfigureAwait(false);
+                    session = await RecreateInnerAgentSessionAsync(turnCt).ConfigureAwait(false);
                 }
                 catch (Exception ex) when (GitHubCopilotClientFactory.IsRateLimited(ex)
                                            && GitHubCopilotClientFactory.GetRateLimitRetryDelay(rateLimitRetryAttempt + 1) is { } delay)
                 {
                     rateLimitRetryAttempt++;
                     _factory.LogAiRetry(ex, rateLimitRetryAttempt, delay, "HTTP 429/rate limit");
-                    await Task.Delay(delay, ct).ConfigureAwait(false);
+                    await Task.Delay(delay, turnCt).ConfigureAwait(false);
                 }
                 catch (Exception ex) when (IsMissingCopilotAuth(ex))
                 {
@@ -677,13 +722,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
                         "is not Copilot-entitled (likely the installation fallback). Ensure the submitting " +
                         "user is signed in and AgentHost__UserId is injected into the pod.",
                         _runId);
-                    Emit("run.failed", new
-                    {
-                        message = $"Run {_runId} has no Copilot-entitled credentials: the GitHub token available " +
-                                  "to the agent is not authorized for GitHub Copilot. Sign in the submitting user " +
-                                  "and ensure their identity is propagated to the run.",
-                    });
-                    throw new AgentProviderException(
+                    var failure = new AgentProviderException(
                         ModelSource.GitHubCopilot,
                         AgentProviderFailureKind.Authorization,
                         "github_copilot_auth_required",
@@ -692,6 +731,25 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
                         "AgentHost__UserId is injected into the pod.",
                         isRetryable: false,
                         ex);
+                    EmitProviderFailure(failure);
+                    throw failure;
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch (OperationCanceledException ex)
+                    when (totalTurnCts.IsCancellationRequested && !ct.IsCancellationRequested)
+                {
+                    var failure = new AgentProviderException(
+                        ModelSource.GitHubCopilot,
+                        AgentProviderFailureKind.ProviderUnavailable,
+                        "github_copilot_turn_timeout",
+                        $"The GitHub Copilot turn exceeded its total deadline of {TotalTurnTimeout.TotalMinutes:n0} minutes and was aborted.",
+                        isRetryable: true,
+                        ex);
+                    EmitProviderFailure(failure);
+                    throw failure;
                 }
                 catch (Exception ex)
                 {
@@ -704,13 +762,11 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
                             _runId,
                             providerFailure.FailureKind,
                             providerFailure.ErrorCode);
-                        Emit("run.failed", new
+                        if (!string.Equals(providerFailure.ErrorCode, "shell_execution_timeout", StringComparison.Ordinal) ||
+                            Volatile.Read(ref _shellTimeoutFailureEmitted) == 0)
                         {
-                            message = providerFailure.UserMessage,
-                            category = providerFailure.FailureKind.ToString(),
-                            errorCode = providerFailure.ErrorCode,
-                            retryable = providerFailure.IsRetryable,
-                        });
+                            EmitProviderFailure(providerFailure);
+                        }
                         throw providerFailure;
                     }
 
@@ -722,6 +778,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         }
         finally
         {
+            _shellExecutionTracker?.ClearObservedExecution();
             // Close any tool spans still open (e.g. a tool whose completion event never arrived
             // because the turn faulted) so no span is leaked as perpetually in-flight.
             foreach (var callId in _activeToolSpans.Keys.ToArray())
@@ -763,13 +820,29 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         return result;
     }
 
-    private async Task StreamTurnOnceAsync(string task, AgentSession session, long turnStarted, CancellationToken ct)
+    private async Task StreamTurnOnceAsync(
+        string task,
+        AgentSession session,
+        long turnStarted,
+        DateTimeOffset turnStartedAt,
+        CancellationToken ct)
     {
         if (_inner is null)
             throw new InvalidOperationException("SetupAsync must be called before ExecuteStreamingLoopAsync.");
 
         await foreach (var chunk in _inner.RunStreamingAsync(task, session, options: null, ct)
-                   .WithIdleTimeout(StreamIdleTimeout, _runId ?? "unknown", _logger, ct))
+                   .WithToolAwareWatchdog(
+                       new StreamWatchdogOptions(
+                           StreamIdleTimeout,
+                           TotalTurnTimeout,
+                           ShellHeartbeatInterval),
+                       _shellExecutionTracker,
+                       _runId ?? "unknown",
+                       _logger,
+                       EmitShellExecutionPending,
+                       HandleShellExecutionTimeoutAsync,
+                       turnStartedAt,
+                       ct))
         {
             if (chunk is null) continue;
 
@@ -825,6 +898,64 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
                         Activity.Current?.SetTag("model", usageEvent.Data.Model);
                     }
                 }
+            }
+        }
+    }
+
+    private void EmitShellExecutionPending(ShellExecutionSnapshot snapshot)
+    {
+        Emit(EventTypes.ToolExecutionPending, new
+        {
+            toolCallId = snapshot.ToolCallId,
+            commandHash = snapshot.CommandHash,
+            startedAtUtc = snapshot.StartedAt,
+            deadlineUtc = snapshot.Deadline,
+            elapsedSeconds = (DateTimeOffset.UtcNow - snapshot.StartedAt).TotalSeconds,
+        });
+    }
+
+    internal async Task HandleShellExecutionTimeoutAsync(ShellExecutionSnapshot snapshot)
+    {
+        var terminate = ShellTimeoutTerminator ?? ForceStopCopilotProcessTreeAsync;
+        try
+        {
+            await terminate().ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(
+                ex,
+                "Force-stopping the Copilot CLI process tree failed after shell deadline — runId={RunId}, toolCallId={ToolCallId}",
+                _runId,
+                snapshot.ToolCallId);
+        }
+
+        var failure = new AgentProviderException(
+            ModelSource.GitHubCopilot,
+            AgentProviderFailureKind.ProviderUnavailable,
+            "shell_execution_timeout",
+            $"Shell execution exceeded its hard deadline of {(snapshot.Deadline - snapshot.StartedAt).TotalMinutes:n0} minutes and was terminated.",
+            isRetryable: true);
+        Interlocked.Exchange(ref _shellTimeoutFailureEmitted, 1);
+        EmitProviderFailure(failure);
+    }
+
+    private async Task ForceStopCopilotProcessTreeAsync()
+    {
+        var client = _client;
+        if (client is null)
+            return;
+
+        try
+        {
+            await client.ForceStopAsync().WaitAsync(TimeSpan.FromSeconds(10)).ConfigureAwait(false);
+        }
+        finally
+        {
+            if (ReferenceEquals(_client, client))
+            {
+                _client = null;
+                _inner = null;
             }
         }
     }
@@ -1041,6 +1172,11 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
                     break;
                 }
                 var resolvedToolName = toolName.Length > 0 ? toolName : "unknown";
+                if (IsShellToolName(resolvedToolName) &&
+                    _shellExecutionTracker?.ActiveExecution is null)
+                {
+                    TrackApprovedShell(callId, callId);
+                }
                 StartToolSpan(callId, resolvedToolName);
                 EmitToolCallOnce(callId, resolvedToolName, start.Data.Arguments);
                 break;
@@ -1048,6 +1184,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
             case ToolExecutionCompleteEvent complete when complete.Data is not null:
             {
                 var callId = complete.Data.ToolCallId ?? Guid.NewGuid().ToString("n");
+                _shellExecutionTracker?.CompleteObservedExecution(callId);
                 if (_suppressedCallIds.Contains(callId))
                     break;
                 if (complete.Data.Success)
@@ -1384,6 +1521,10 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
                     emitToolErrorOnce(callId, denyReason2);
                     EmitRunDegradedOnce(toolName, denyReason2);
                 }
+                else if (request is PermissionRequestShell shell && realCallId is not null)
+                {
+                    TrackApprovedShell(realCallId, shell.FullCommandText ?? string.Empty);
+                }
 
                 return Task.FromResult<PermissionDecision>(allowed ? new PermissionDecisionApproveOnce() : new PermissionDecisionDeniedByRules { Rules = [] });
             }
@@ -1407,6 +1548,30 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
     /// </summary>
     private static string? GetToolCallId(PermissionRequest request)
         => request.GetType().GetProperty("ToolCallId")?.GetValue(request) as string;
+
+    private void TrackApprovedShell(string toolCallId, string command)
+    {
+        if (_shellExecutionTracker is null)
+            return;
+
+        var commandHash = Convert.ToHexString(
+            System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(command)))[..16]
+            .ToLowerInvariant();
+        if (!_shellExecutionTracker.TryStartObservedExecution(
+                toolCallId,
+                commandHash,
+                ShellExecutionHardTimeout))
+        {
+            _logger.LogWarning(
+                "Shell lifecycle start ignored because another shell is active — runId={RunId}, toolCallId={ToolCallId}",
+                _runId,
+                toolCallId);
+        }
+    }
+
+    private static bool IsShellToolName(string toolName) =>
+        string.Equals(toolName, "run_command", StringComparison.OrdinalIgnoreCase) ||
+        toolName.Contains("shell", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
     /// Maps a Copilot SDK <see cref="PermissionRequest"/> to an AGT tool-call
@@ -1598,7 +1763,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
             await disposableAgent.DisposeAsync().ConfigureAwait(false);
         if (_client is IAsyncDisposable disposableClient)
             await disposableClient.DisposeAsync().ConfigureAwait(false);
-        _controlledShellTracker?.Dispose();
-        _controlledShellTracker = null;
+        _shellExecutionTracker?.Dispose();
+        _shellExecutionTracker = null;
     }
 }
