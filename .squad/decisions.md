@@ -5127,3 +5127,167 @@ Validation: `npm --prefix apps/web test -- --run src/__tests__/AgentSessionPanel
 **By:** Rubber-duck, Seraph; recorded by Scribe
 **What:** The first issue #207 design is rejected. Any revision must use a terminal compare-and-swap plus outbox, explicit finalizer eligibility, durable work/attempt state, fencing, typed retries, a fair bounded cluster-wide queue, mandatory remote factories, persisted execution identity, and consistent finalizer ordering. Security controls are mandatory: tenant-scoped capabilities, fail-closed remote execution, bounded recovery, deletion cancellation/idempotency, audit redaction, and mTLS. Tank is locked out from revising #207; Morpheus owns the independent revision.
 **Why:** Ralph exposed an OOM/finalizer defect and Tank traced it to 28 unbounded, non-idempotent final Scribes executing in the API. Rubber-duck rejected the initial design as insufficiently durable, and Seraph rated the direction YELLOW pending mandatory fencing, tenancy, recovery, deletion, audit, and transport controls.
+
+
+## 2026-07-12T06:33:29-07:00: Blueprint catalog evaluation recommends a lifecycle DAG and centralized platform gates
+
+**Author:** Morpheus; recorded by Scribe  
+**Status:** PROPOSED — evaluation finding, not yet an accepted catalog redesign
+
+**Decision record:** The shipped catalog has moderate-to-high redundancy at the composition layer. Default runs achieve a strong lifecycle because coordinator decomposition patches beyond the selected workflow at runtime; the default blueprint itself does not encode the advertised lifecycle. Proposed direction: a purpose-built product-lifecycle DAG with an eight-role core roster; conditional prototype/product-marketing/security/DevOps casting; one centralized platform policy for build/test, RAI, automated review, human review, merge, and Scribe; explicit PM and AI workflows; and blueprints/groupings derived from canonical team profiles. Preserve live behavior while making ownership deterministic and reducing roster drift.
+
+**References:** `files/eval-shipped-blueprints.md`, `decisions/inbox/morpheus-blueprint-eval.md`
+
+---
+
+## 2026-07-12T06:33:29-07:00: #207 final-Scribe recovery scope remains durable, fenced, bounded, and eligibility-aware
+
+**Authors:** Coordinator, Seraph, Morpheus; consolidated by Scribe  
+**Status:** ACCEPTED SCOPE
+
+**Decision record:** #207 is frozen to remote-only final assembly execution; semantic-generation stable work identity; cluster/project bounds before construction; durable fenced attempts; exact current eligibility entry points; bounded retry, cleanup, and visible failure; and stale-effect invalidation through publication. Cancellation, deletion, or loss of eligibility invalidates every queued, claimed, running, retrying, cleanup, and replayed incarnation. Earlier process-local semaphore/concurrency-gate guidance is historical and does not supersede the accepted durable-fencing scope. Broader tenancy, universal event sealing, general revocation, cross-provider equivalence, and universal exactly-once semantics remain linked work unless implementation evidence proves direct coupling. Docs use only terse coordinator-internals/reference coverage.
+
+**Merged inputs:** `issue-207-frozen-scope-2026-07-10T07-08-00-07-00.md`, `Seraph-approve-scope-with-root-cause-coupled-stale-work-i.md`, `morpheus-bound-final-scribe-recovery-with-a-per-process-gat.md`, `link-docs-207-210.md`
+
+---
+
+## 2026-07-12T06:33:29-07:00: #210 AgentHost reaper grace uses shared claim creation time
+
+**Author:** Link; consolidated by Scribe  
+**Status:** SHIPPED
+
+**Decision record:** Protect inactive-map AgentHost claims younger than `Sandbox:Kubernetes:AgentHostClaimCreationGraceSeconds` (default 300 seconds), with effective grace floored at `AgentHostReadyTimeoutSeconds + 30 seconds`. Null or unparseable creation timestamps remain reapable. PostgreSQL/shared claim creation time is the cross-replica authority; no lease or ownership subsystem is introduced. Documentation stays in sandbox-pod reference with a short deep-dive cross-reference.
+
+**Merged inputs:** `Link-issue-210-reaper-grace-uses-shared-claim-creation-.md`, `link-docs-207-210.md`
+
+---
+
+## 2026-07-12T06:33:29-07:00: #217 Kubernetes owns sandbox admission, scheduling, queueing, and autoscaling
+
+**Authors:** Squad, Tank, Link; consolidated by Scribe  
+**Status:** SHIPPED
+
+**Decision record:** Remove the app-side pre-flight capacity/quota scheduler. Submit SandboxClaims and allow pods to remain Pending while Kubernetes schedules or autoscales. Emit the non-terminal child-run `sandbox.provisioning_pending` heartbeat while unbound; the coordinator stall detector exempts the child only while that heartbeat is latest and clears the exemption on the next real event. Keep `PendingCapacity` surfaces only for historical compatibility. ResourceQuota retains object/storage bounds rather than CPU/memory admission caps. Documentation marks old app-side capacity states as legacy.
+
+**Merged inputs:** `Squad-remove-app-side-pre-flight-capacity-gate-rely-on-k.md`, `Tank-217-removed-app-side-pre-flight-capacity-quota-sch.md`, `Link-docs-sync-for-217-documented-kubernetes-owned-pod-.md`
+
+---
+
+## 2026-07-12T06:33:29-07:00: #218 coordinator ownership uses lease heartbeat, fencing, and a per-project integration-build lock
+
+**Author:** Tank; recorded by Scribe  
+**Status:** SHIPPED
+
+**Decision record:** Renew the coordinator lease from an independent scoped heartbeat (default 30 seconds against a 120-second stale TTL), fence only when a reread proves another pod owns the lease, and cancel the per-run loop on true ownership loss. Serialize shared repository integration builds with a database-backed per-project lock, token-fenced release, and bounded acquisition/stale TTLs. Retain existing stale git-lock retry and repair a missing integration ref. Dedicated assembly heartbeat and broader follow-up remain deferred to #219.
+
+**Merged input:** `tank-fix-218-coordinator-double-dispatch-lease-heartbea.md`
+
+---
+
+## 2026-07-12T06:33:29-07:00: #221 per-run AutoApproveTools is propagated through AgentHost configuration
+
+**Author:** Tank; recorded by Scribe  
+**Status:** SHIPPED
+
+**Decision record:** Carry `AutoApproveTools` in the warm-pool AgentHost `/configure` contract and seed the pod-local run-options store before setup. Default false when no store is available. Do not propagate unused `Autopilot` data. The non-warm environment-variable launch path is deferred because it requires a new AgentHost option and pod-spec environment variable.
+
+**Merged input:** `Tank-bug-221-propagate-per-run-autoapprovetools-to-agen.md`
+
+---
+
+## 2026-07-12T06:33:29-07:00: #222 staging is scope-independent and scratch is excluded structurally
+
+**Authors:** Scribe and Coordinator; consolidated by Scribe  
+**Status:** SHIPPED PRINCIPLE
+
+**Decision record:** Commit capture stages every non-ignored worktree change, independent of scope prose or output-path classifiers. Blank projects seed a baseline `.gitignore`; nested repositories are excluded to prevent invalid gitlinks. Code owns mechanism, invariants, and safety nets; LLMs own fuzzy judgment through structured output, never prose scraping. Agent scratch belongs outside the project worktree so it is never a commit candidate by construction.
+
+**Merged inputs:** `Scribe-staging-is-scope-independent-commit-every-non-igno.md`, `Squad-Coordinator-code-vs-prompt-boundary-code-owns-mechanism-invari.md`, `Squad-Coordinator-agents-get-an-out-of-worktree-scratch-directory-en.md`
+
+---
+
+## 2026-07-12T06:33:29-07:00: #223 reviewer attribution uses structured target files and distinct lockout/re-dispatch sets
+
+**Authors:** Coordinator and Link; consolidated by Scribe  
+**Status:** SHIPPED
+
+**Decision record:** Reviewers emit structured target files. One deterministic reverse-map helper derives implicated subtasks with observable broad fallbacks. Lockout applies only to implicated authors; re-dispatch applies to implicated subtasks plus transitive dependents, with dependents re-run without lockout. Human request-changes always resets the autonomous steering budget; `HumanReviewRoundTrips` remains telemetry only and no human round-trip cap is enforced. Code owns graph expansion and fallback behavior; reviewer prose is never parsed for orchestration.
+
+**Merged inputs:** `Squad-Coordinator-223-fix-design-reviewer-emits-structured-targetfil.md`, `Squad-Coordinator-drop-defaultmaxhumanreviewroundtrips-cap-human-req.md`, `link-docs-223-capdrop.md`
+
+---
+
+## 2026-07-12T06:33:29-07:00: #225 decomposition is outcome-complete while remaining lean for simple outcomes
+
+**Authors:** Tank and Dozer; consolidated by Scribe  
+**Status:** SHIPPED
+
+**Decision record:** Coordinator decomposition must cover every lifecycle stage and deliverable implied by the desired outcome. The selected workflow is guidance, not a cap; missing earlier stages are added explicitly. Simple outcomes remain lean. Unit proof is anchored on the testable `BuildWorkflowHint` contract rather than a brittle reflection harness over a local prompt string. Documentation replaces the prior “minimum set” framing with outcome completeness.
+
+**Merged inputs:** `Tank-github-225-item-1-unit-level-proof-for-the-decompo.md`, `Dozer-docs-synced-two-internal-behavior-changes-decompos.md`
+
+---
+
+## 2026-07-12T06:33:29-07:00: #231 RAI verdicts use an authoritative machine-readable sentinel
+
+**Authors:** Neo, Smith, Dozer; consolidated by Scribe  
+**Status:** SHIPPED; REVIEWED APPROVE-WITH-NITS
+
+**Decision record:** Require the last decision line to be `VERDICT: <GREEN|YELLOW|REVISE|RED>`. When a sentinel exists, prose is never scanned; the last sentinel wins and same-line ambiguity resolves to the most severe token. Without a sentinel, only an unambiguous supported emoji may decide. One unparseable response triggers one bounded re-ask; a second unparseable response fails safe to RED with `unparseable_after_reask`. Sentinel text is excluded from human-facing rationale. Exception-path fail-open behavior remains a noted pre-existing caveat outside the returned-but-unparseable contract.
+
+**Merged inputs:** `Neo-github-231-defect-a-replace-rai-verdict-heuristic-.md`, `Smith-231-rai-sentinel-verdict-fix-approve-with-nits-all.md`, `Dozer-docs-synced-two-internal-behavior-changes-decompos.md`
+
+---
+
+## 2026-07-12T06:33:29-07:00: #233 single-eligible-agent lockout deadlocks degrade to bounded same-author re-dispatch when context exists
+
+**Authors:** Coordinator, Morpheus, Tank, Smith, Trinity; consolidated by Scribe  
+**Status:** SHIPPED; REVIEWED APPROVE-WITH-NITS
+
+**Decision record:** Split lockout deadlocks by context. With no context, retain `lockout_no_context` human escalation. With accumulated context and no eligible alternate author, degrade to same-author fresh re-dispatch without mutating lockout state, carrying prior feedback/worktree and re-running dependents without lockout. Mixed directives degrade the full target set without silently dropping work. `RecoveryAttempts` is not reset, so the existing maximum recovery budget bounds repeated revision before human escalation. Reviewer severity calibration remains separate (#225).
+
+**Merged inputs:** `coordinator-233-rubberduck.md`, `tank-233-lockout-degrade.md`, `smith-233-codereview.md`, `trinity-233-docs.md`
+
+---
+
+## 2026-07-12T06:33:29-07:00: PostgreSQL remains the durable run-event log
+
+**Author:** Coordinator; recorded by Scribe  
+**Status:** ACCEPTED
+
+**Decision record:** Keep PostgreSQL as the durable, ordered, replayable, transactional source of truth for run events. SignalR/Web PubSub may provide transient push, LISTEN/NOTIFY may reduce polling, and Event Hubs may become justified only at substantially higher scale with an outbox and durable capture. Event Grid and Service Bus do not satisfy the ordered replay contract. Producer flush defects such as #212 must be fixed at the producer rather than replacing the downstream log.
+
+**Merged input:** `Squad-Coordinator-keep-postgresql-as-the-durable-run-event-log-do-no.md`
+
+---
+
+## 2026-07-12T06:33:29-07:00: v0.9.33 reviewer fidelity and worktree provisioning use direct integration-state materialization
+
+**Authors:** Tank and Link; consolidated by Scribe  
+**Status:** SHIPPED DESIGN, TESTED
+
+**Decision record:** Provision subtask worktrees in one git-CLI step directly from the resolved integration commit, avoiding an intermediate primary-HEAD checkout and preserving case-insensitive branch resolution. Assembly RAI and rubber-duck reviewers receive a shared detached reviewer worktree containing assembled integration files, created only when changes exist and recreated before build/test to avoid mutation bleed. Existing cleanup owns the shared reviewer/build-test worktree lifecycle.
+
+**Merged inputs:** `tank-v0933-worktree-reviewer-fidelity.md`, `link-v0933-docs.md`
+
+---
+
+## 2026-07-12T06:33:29-07:00: Mid-run coordinator steering queue-to-drain wiring is verified
+
+**Author:** Trinity; recorded by Scribe  
+**Status:** VERIFIED; NO BUG FILED
+
+**Decision record:** Mid-run redirect/amend/send directives are durably queued, atomically drained at the next child boundary, and relayed into child revision handling. Deterministic tests now exercise the live dispatch-loop queue-to-drain seam. Full relayed-to-applied execution remains a heavier live-agent integration concern, but the #226-style silent-queue void is not present in the mid-run path.
+
+**Merged input:** `Trinity-mid-run-coordinator-steering-works-queue-drain-act.md`
+
+---
+
+## 2026-07-12T06:33:29-07:00: #196 documentation stays on existing approval and sandbox execution surfaces
+
+**Author:** Link; recorded by Scribe  
+**Status:** DOCUMENTATION SCOPE
+
+**Decision record:** #196 is a backend reliability correction, not a new discoverable feature. Document the public run approval/denial endpoints and the internal AgentHost return routes on existing approval, API, and sandbox-pod pages; add only the architectural sequence diagram needed to explain the missing return leg. Do not add feature pages, landing cards, navigation, screenshots, or experience surfaces.
+
+**Merged input:** `link-196-docs.md`
