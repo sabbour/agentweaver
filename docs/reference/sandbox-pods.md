@@ -59,7 +59,7 @@ turns) rather than only ad-hoc shell commands.
 | Quota | Namespace `ResourceQuota` (`k8s/quota.yaml`) bounds only **object counts** — pod count, sandbox-claim count, PVCs, and storage. It no longer caps CPU/memory: Kubernetes schedules on pod requests and the cluster autoscaler owns headroom, so a **Pending** pod waits for the pool to scale rather than being rejected on admission (issue #217). The object-count caps are **raised deliberately** via a reviewed manifest change, never a live patch. |
 | Lifetime | Bounded by the run and the claim TTL. Under the hybrid model, a pod is released on suspend and a fresh pod is re-claimed on resume; pods never persist past the run. |
 | Egress | Default-deny NetworkPolicy with a narrow allowlist (see [Security properties](#security-properties)). |
-| Storage | Mounts the **shared workspace volume** plus a dedicated disk-backed `execution-scratch` emptyDir at `/local-workspace` (`sizeLimit: 8Gi`) for pod-local execution. Assembly Build/Test and preview use the read-only policy; the writable implementation policy is reserved for #253. Existing disk-backed `tmp` and `home` emptyDirs remain separate. |
+| Storage | Mounts the **shared workspace volume** plus a dedicated disk-backed `execution-scratch` emptyDir at `/local-workspace` (`sizeLimit: 8Gi`) for pod-local execution. Assembly Build/Test and preview use `LocalReadOnly`; implementation turns use `LocalWritable` and publish through the verified Git write-back flow. Existing disk-backed `tmp` and `home` emptyDirs remain separate. |
 
 ### Orphan reaper creation grace
 
@@ -103,8 +103,8 @@ No per-run `SecretProviderClass`, cloned `SandboxTemplate`, CSI user-token volum
 | `workingDirectory` | No | Backward-compatible alias for `sharedWorkingDirectory`. It never represents a pod-local path. |
 | `previewRunnerCredential` | No | Fresh per-run bearer for authenticated pod-root control calls, including tool-approval forwarding. It is persisted using `PreviewRunnerCredential.SecretKey(runId)`; inside the pod it is stored only in AgentHost memory. |
 | `autoApproveTools` | No | Seeds the pod-local run-options store; defaults to `false`. |
-| `purpose` | No | String enum: `Default`, `AssemblyBuildTest`, or the defined-but-not-yet-wired `ImplementationTurn`. |
-| `workspaceMode` | No | String enum: `Shared` (default), `LocalReadOnly`, or `LocalWritable`. Assembly requires `LocalReadOnly`; #253 will consume `LocalWritable`. |
+| `purpose` | No | String enum: `Default`, `AssemblyBuildTest`, or `ImplementationTurn`. |
+| `workspaceMode` | No | String enum: `Shared` (default), `LocalReadOnly`, or `LocalWritable`. Assembly requires `LocalReadOnly`; implementation turns require `LocalWritable`. |
 | `sourceRepositoryPath` | Local modes | Shared repository path used as the git fetch remote. It is a source, never the execution cwd. |
 | `sourceRef` | Local modes | Branch/ref shallow-fetched from `sourceRepositoryPath`; assembly passes the integration ref. |
 | `baseCommitSha` | Local modes | Immutable commit SHA expected at `sourceRef` (40–64 hexadecimal characters). |

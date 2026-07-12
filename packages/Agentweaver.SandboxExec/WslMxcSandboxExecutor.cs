@@ -132,7 +132,8 @@ internal sealed class WslMxcSandboxExecutor : ISandboxExecutor
         var b64 = Convert.ToBase64String(Encoding.UTF8.GetBytes(command));
         // Replace broad --ro-bind /usr /usr with targeted mounts (Phase 6 alignment).
         return
-            "wd=$(pwd -P); exec bwrap" +
+            "wd=$(pwd -P); sandbox_home=\"${XDG_CACHE_HOME%/.cache}\";" +
+            " [ -n \"$sandbox_home\" ] || sandbox_home=\"$HOME\"; exec bwrap" +
             " --bind \"$wd\" /workspace" +
             " --ro-bind-try /usr/bin /usr/bin" +
             " --ro-bind-try /usr/lib /usr/lib" +
@@ -152,6 +153,7 @@ internal sealed class WslMxcSandboxExecutor : ISandboxExecutor
             " --tmpfs /tmp" +
             " --tmpfs /home" +
             " --tmpfs /root" +
+            " --setenv HOME \"$sandbox_home\"" +
             " --chdir /workspace" +
             " --unshare-pid" +
             " --unshare-user" +

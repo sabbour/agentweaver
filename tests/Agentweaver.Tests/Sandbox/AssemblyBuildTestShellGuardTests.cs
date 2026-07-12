@@ -12,6 +12,7 @@ using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
+using Xunit.Sdk;
 
 namespace Agentweaver.Tests.Sandbox;
 
@@ -141,46 +142,71 @@ public sealed class AssemblyBuildTestShellGuardTests : IDisposable
     }
 
     [Fact]
-    public async Task Controlled_run_command_runs_npm_install_with_workspace_local_cache_in_real_linux_sandbox()
+    public async Task Controlled_run_command_runs_npm_install_with_sandbox_local_home_in_real_linux_sandbox()
     {
         ISandboxExecutor realExecutor;
         if (OperatingSystem.IsLinux())
         {
-            LinuxBwrapExecutor.IsBwrapAvailable().Should().BeTrue(
-                "the AgentHost Linux image must provide the real controlled bubblewrap executor");
+            if (!LinuxBwrapExecutor.IsBwrapAvailable())
+                throw SkipException.ForSkip("bubblewrap is not available on this Linux host");
             realExecutor = new LinuxBwrapExecutor(NullLogger.Instance);
         }
         else if (OperatingSystem.IsWindows())
         {
             realExecutor = WslMxcSandboxExecutor.TryCreate(NullLogger.Instance)
-                ?? throw new InvalidOperationException(
-                    "The Windows verification environment must provide the real WSL Linux executor.");
+                ?? throw SkipException.ForSkip(
+                    "a WSL bubblewrap executor is not available on this Windows host");
             realExecutor.BackendName.Should().Be(
                 "wsl-bwrap",
                 "the cache test must exercise filesystem-confined Linux execution, not passthrough/unshare");
         }
         else
         {
-            return;
+            throw SkipException.ForSkip("the real bubblewrap E2E test requires Linux or Windows with WSL");
         }
 
         var workspace = Path.Combine(_root, "real-linux-install");
-        const string cacheRelativePath = ".agentweaver-cache/npm";
-        var cachePath = Path.Combine(workspace, ".agentweaver-cache", "npm");
-        Directory.CreateDirectory(cachePath);
+        var fixturePackage = Path.Combine(workspace, "fixture-package");
+        Directory.CreateDirectory(fixturePackage);
+        File.WriteAllText(
+            Path.Combine(fixturePackage, "package.json"),
+            """{"name":"agentweaver-cache-fixture","version":"1.0.0","main":"index.js"}""");
+        File.WriteAllText(Path.Combine(fixturePackage, "index.js"), "module.exports = 'installed';");
         File.WriteAllText(
             Path.Combine(workspace, "package.json"),
-            """{"name":"controlled-cache-test","version":"1.0.0","private":true}""");
+            """
+            {
+              "name": "controlled-cache-test",
+              "version": "1.0.0",
+              "private": true,
+              "dependencies": {
+                "agentweaver-cache-fixture": "file:./fixture-package"
+              }
+            }
+            """);
+        var sandboxVariables = new Dictionary<string, string>
+        {
+            ["HOME"] = ".agentweaver-home",
+            ["XDG_CACHE_HOME"] = ".agentweaver-home/.cache",
+            ["XDG_DATA_HOME"] = ".agentweaver-home/.local/share",
+            ["XDG_CONFIG_HOME"] = ".agentweaver-home/.config",
+        };
+        foreach (var path in sandboxVariables.Values)
+            Directory.CreateDirectory(Path.Combine(workspace, path));
 
-        var originalCache = Environment.GetEnvironmentVariable("npm_config_cache");
+        var originalValues = sandboxVariables.Keys.ToDictionary(
+            name => name,
+            Environment.GetEnvironmentVariable);
         var originalWslEnv = Environment.GetEnvironmentVariable("WSLENV");
-        Environment.SetEnvironmentVariable("npm_config_cache", cacheRelativePath);
+        foreach (var (name, value) in sandboxVariables)
+            Environment.SetEnvironmentVariable(name, value);
         if (OperatingSystem.IsWindows())
         {
             var wslVariables = (originalWslEnv ?? "")
                 .Split(':', StringSplitOptions.RemoveEmptyEntries)
                 .ToHashSet(StringComparer.Ordinal);
-            wslVariables.Add("npm_config_cache");
+            foreach (var name in sandboxVariables.Keys)
+                wslVariables.Add(name);
             Environment.SetEnvironmentVariable("WSLENV", string.Join(':', wslVariables));
         }
         try
@@ -196,21 +222,31 @@ public sealed class AssemblyBuildTestShellGuardTests : IDisposable
                 new Dictionary<string, object?>
                 {
                     ["command"] =
+                        "unset npm_config_cache NPM_CONFIG_CACHE && " +
                         "npm install --ignore-scripts --no-audit --no-fund && " +
-                        "test -w \"$npm_config_cache\" && " +
-                        "printf ok > \"$npm_config_cache/controlled-install.ok\"",
+                        "test -f node_modules/agentweaver-cache-fixture/index.js && " +
+                        "test -d \"$HOME/.npm\" && " +
+                        "find \"$HOME/.npm\" -type f -print -quit | grep -q .",
                 }));
 
             result?.ToString().Should().Contain("exit_code: 0");
-            File.ReadAllText(Path.Combine(cachePath, "controlled-install.ok")).Should().Be("ok");
+            File.ReadAllText(Path.Combine(
+                workspace, "node_modules", "agentweaver-cache-fixture", "index.js"))
+                .Should().Be("module.exports = 'installed';");
+            Directory.EnumerateFiles(
+                    Path.Combine(workspace, ".agentweaver-home", ".npm"),
+                    "*",
+                    SearchOption.AllDirectories)
+                .Should().NotBeEmpty("npm must write its cache beneath the sandbox-local HOME");
             executor.LastCommand.Should().NotBeNull();
             executor.LastCommand!.FilesystemPolicy.ReadWritePaths.Should().Contain(workspace);
             executor.LastCommand.FilesystemPolicy.ReadWritePaths.Should().ContainSingle(
-                "SandboxToolContext uses the checkout as SandboxRoot, so the workspace-local cache is covered by the sole writable root");
+                "SandboxToolContext uses the checkout as SandboxRoot, so the sandbox-local home is covered by the sole writable root");
         }
         finally
         {
-            Environment.SetEnvironmentVariable("npm_config_cache", originalCache);
+            foreach (var (name, value) in originalValues)
+                Environment.SetEnvironmentVariable(name, value);
             Environment.SetEnvironmentVariable("WSLENV", originalWslEnv);
         }
     }

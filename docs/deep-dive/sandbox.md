@@ -360,4 +360,6 @@ If rebuilding this subsystem from scratch, implement it in this order:
 
 ## See also
 
+- [Sandbox pod execution](./sandbox-pod-execution.md) - pod-local scratch workspaces, Git write-back,
+  nested-repository flattening, and the HOME/XDG cache contract.
 - [Sandbox browser preview](./sandbox-browser-preview.md) - exposing a server running inside a run's sandbox pod to the user over a public HTTPS reverse proxy (per-preview HTTPRoute -> per-run ClusterIP Service -> pod).

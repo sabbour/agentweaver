@@ -121,16 +121,14 @@ public sealed class PodLocalWorkspaceManagerTests : IDisposable
         var commitSha = Git(repository, "rev-parse", "integration");
         var treeHash = Git(repository, "rev-parse", "integration^{tree}");
         var manager = Manager();
-        var cacheVariables = new[]
+        var sandboxHomeVariables = new[]
         {
-            "npm_config_cache",
-            "YARN_CACHE_FOLDER",
-            "PNPM_HOME",
-            "PNPM_STORE_DIR",
-            "npm_config_store_dir",
+            "HOME",
             "XDG_CACHE_HOME",
+            "XDG_DATA_HOME",
+            "XDG_CONFIG_HOME",
         };
-        var originalValues = cacheVariables.ToDictionary(
+        var originalValues = sandboxHomeVariables.ToDictionary(
             name => name,
             Environment.GetEnvironmentVariable);
 
@@ -145,14 +143,17 @@ public sealed class PodLocalWorkspaceManagerTests : IDisposable
             Git(prepared.WorkspacePath, "branch", "--show-current").Should().BeEmpty(
                 "the local workspace must not use git worktree administration");
             File.Exists(Path.Combine(prepared.WorkspacePath, "package.json")).Should().BeTrue();
-            prepared.CacheRoot.Should().Be(Path.Combine(prepared.WorkspacePath, ".agentweaver-cache"));
-            foreach (var variable in cacheVariables)
-            {
-                var configuredPath = Environment.GetEnvironmentVariable(variable);
-                configuredPath.Should().NotBeNullOrWhiteSpace();
-                Path.GetFullPath(Path.Combine(prepared.WorkspacePath, configuredPath!))
-                    .Should().StartWith(prepared.CacheRoot);
-            }
+            Environment.GetEnvironmentVariable("HOME").Should().Be(".agentweaver-home");
+            Environment.GetEnvironmentVariable("XDG_CACHE_HOME")
+                .Should().Be(".agentweaver-home/.cache");
+            Environment.GetEnvironmentVariable("XDG_DATA_HOME")
+                .Should().Be(".agentweaver-home/.local/share");
+            Environment.GetEnvironmentVariable("XDG_CONFIG_HOME")
+                .Should().Be(".agentweaver-home/.config");
+            foreach (var variable in sandboxHomeVariables)
+                Directory.Exists(Path.Combine(
+                    prepared.WorkspacePath,
+                    Environment.GetEnvironmentVariable(variable)!)).Should().BeTrue();
         }
         finally
         {

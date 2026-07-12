@@ -301,68 +301,117 @@ After `/configure`, `AgentHostStartupService.ConfigureAsync` runs `SetupAsync` w
 
 #### Pod-local execution workspaces
 
-`PodLocalWorkspaceManager` is the common materialization seam for execution that must leave Azure
-Files SMB. `ExecutionWorkspaceMode` separates location and write-back policy:
+`PodLocalWorkspaceManager` is the materialization and publication seam for work that should not run
+directly on Azure Files SMB. `ExecutionWorkspaceMode` separates location from mutation policy:
 
-- `Shared` keeps the existing shared-worktree behavior.
-- `LocalReadOnly` creates a verified local checkout and rejects write-back preparation.
-- `LocalWritable` reserves the same checkout mechanism for implementation turns; issue #253 owns
-  their finalization/write-back behavior.
+- `Shared` runs against the existing PVC-backed worktree.
+- `LocalReadOnly` creates a verified pod-local checkout and refuses publication.
+- `LocalWritable` creates the same verified checkout for an implementation turn, then publishes its
+  resulting commit back to the authoritative repository.
 
-Assembly Build/Test uses `LocalReadOnly`. Its API-visible detached worktree remains on the shared
-`/workspace` PVC for command discovery and review, but dependency installation, compilation, tests,
-and preview execute from a **complete checkout** on the disk-backed `execution-scratch` emptyDir
-mounted at `/local-workspace`. This avoids Azure Files SMB metadata/delete pathologies without
-symlinking `node_modules` or writing git-worktree administration into the shared repository.
+The API-visible worktree remains on the shared `/workspace` PVC for orchestration, review, and durable
+branch state. Dependency installation, compilation, tests, preview artifacts, and implementation edits
+happen in a **complete checkout** under `/local-workspace/{run-hash}/{tree-hash}`. That root is an
+8 GiB, disk-backed `emptyDir`: it is local to the claimed pod, is not synchronized to Azure Files, and
+disappears when the pod is released. The shared repository receives changes only through the explicit
+write-back path described below.
 
 ```mermaid
 %%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
 flowchart LR
-    API["API-visible integration tree<br/>/workspace/... (SMB)"] -->|"configure: ref + SHA + tree"| Host["AgentHostStartupService"]
-    Host -->|"git init + shallow fetch"| Local["/local-workspace/{run-hash}/{tree-hash}<br/>disk-backed emptyDir"]
-    Host --> Verify{"SHA and tree match?"}
-    Verify -->|"no"| Fail["typed configure failure<br/>claim deleted"]
-    Verify -->|"yes"| Gate["Build/Test<br/>controlled run_command"]
-    Local --> Gate
-    API -->|"resolve preview command + relative cwd"| Preview["PreviewStep"]
-    Local -->|"mapped execution cwd"| Preview
+    Shared["Authoritative repository + worktree<br/>/workspace/... on Azure Files"] -->|"source ref + commit + tree"| Prepare["PodLocalWorkspaceManager<br/>git init + shallow fetch + verify"]
+    Prepare --> Scratch["Ephemeral checkout<br/>/local-workspace/{run-hash}/{tree-hash}<br/>disk-backed emptyDir"]
+    Scratch --> Mode{"Workspace mode"}
+    Mode -->|"LocalReadOnly"| Build["Build / test / preview<br/>no publication"]
+    Mode -->|"LocalWritable"| Turn["Implementation turn<br/>edits local files"]
+    Turn --> Scan["Cancellable nested-repo scan<br/>prune generated/cache paths"]
+    Scan --> Flatten["Flatten nested repos<br/>stage content, not gitlinks"]
+    Flatten --> Commit["Platform alternate index<br/>write-tree + commit-tree"]
+    Commit -->|"git push --no-force<br/>origin {commit}:{ref}"| Shared
 ```
 
-The configure payload sets `purpose: "AssemblyBuildTest"`, `workspaceMode: "LocalReadOnly"`, and
-carries `sharedWorkingDirectory`, `sourceRepositoryPath`, `sourceRef`, `baseCommitSha`,
-`expectedTreeHash`, and `scratchRoot`. The API never passes a pod-local path as an existing worktree:
-`PodLocalWorkspaceManager` derives `/local-workspace/{run-hash}/{tree-hash}` inside AgentHost,
-preflights free ephemeral space, initializes a new repository, shallow-fetches `sourceRef`, verifies
-both immutable object ids, and checks out `baseCommitSha` detached **before**
-`CopilotAIAgent.SetupAsync`. Commit or tree mismatch is fatal; AgentHost never builds a nearby
-revision. npm, Yarn, pnpm, and XDG caches are rooted under the same scratch volume. Runtime state
-exposes the resulting effective working directory for preview/control-plane consumers.
+##### Materialize and verify before execution
 
-The assembly role also changes shell discipline. Native Copilot shell requests are denied, while a
-custom `run_command` uses the existing executor with one-command-at-a-time serialization, destructive
-command rejection, background/detach rejection, and a ten-minute per-command cap. The gate has a
-20-minute total wall-clock timeout and a 12-minute no-progress watchdog by default
-(`Coordinator:AssemblyBuildTestTimeoutMinutes` and
-`Coordinator:AssemblyBuildTestStallTimeoutMinutes`). Either timeout cancels the turn, releases the
-retained AgentHost claim, and surfaces a typed infrastructure failure instead of leaving assembly
-parked forever. `ShellExecutionTracker` exposes only the active command hash, start time, and deadline
-so the separate resiliency work can add shell heartbeats/deadline coordination without changing the
-single-flight mechanism; this change does not add those heartbeats.
+The `/configure` payload carries the shared/source coordinates rather than pretending that a
+pod-local directory already exists: `sourceRepositoryPath`, `sourceRef`, `baseCommitSha`,
+`expectedTreeHash`, and `scratchRoot`. AgentHost derives the scratch path, checks free ephemeral
+capacity, initializes a repository, shallow-fetches the requested ref, and verifies both the fetched
+commit and its tree before checking out the immutable base detached. A mismatch is fatal; execution
+never proceeds on a nearby revision.
+
+Assembly Build/Test selects `LocalReadOnly`. Implementation child turns select `LocalWritable` and
+must fetch their authoritative `agentweaver/{childRunId}` branch. Both modes therefore execute away
+from SMB while retaining a precise coordinate back to the durable branch.
+
+##### Write-back is ordinary Git, not a custom transport
+
+At the end of a successful writable turn, AgentHost prepares a platform-owned alternate index from
+the immutable base, stages the final filesystem state, writes a tree, and creates a single-parent
+commit with the configured platform author identity. It then invokes Git directly with the literal
+shape:
+
+```text
+git push --no-force origin {resultCommit}:{writebackRef}
+```
+
+There is no bespoke file-copy protocol, patch transport, or force push. The command inherits the
+pod's existing Git environment and credential context; write-back does not mint, serialize, or deliver
+a second credential. In the current pod-local flow, `origin` is the shared source repository path
+delivered in `/configure`, so this publication is a normal Git repository-to-repository push rather
+than a custom network transport. The run's existing GitHub token remains available through the
+AgentHost token store for GitHub operations; the write-back path does not create a parallel token
+mechanism.
+
+The pushed ref is a unique temporary ref under the Agentweaver write-back namespace. The API side
+then validates the descriptor, commit parent, tree, and authoritative branch state before applying a
+fast-forward. If the local filesystem produced no tree change, AgentHost returns the immutable base
+and does not push a temporary ref.
+
+##### Nested repositories are flattened into content
+
+A nested checkout or submodule cannot be staged naively. Git normally records it in the parent tree
+as mode `160000` — a **gitlink** pointing at another commit — rather than recording the nested files.
+That pointer is unusable when the nested repository is only ephemeral pod state or when the receiving
+branch must contain the generated content.
+
+Before writing the result tree, AgentHost discovers nested `.git` directories and `.git` files,
+deepest first. It temporarily moves their metadata outside the workspace, removes any cached gitlink,
+stages the nested directory as ordinary files, and restores the metadata even on failure. A final
+`git ls-tree` check rejects any remaining mode-`160000` entries.
+
+The discovery walk is deliberately bounded operationally:
+
+- it checks cancellation while popping and enumerating directories;
+- it prunes `.git`, `.agentweaver-home`, `.next`, `bin`, `build`, `dist`, `node_modules`, and `obj`
+  unless that directory is itself a nested repository root;
+- it does not traverse reparse points; and
+- filesystem access failures become a typed `writeback_invalid` failure instead of silently producing
+  an incomplete tree.
+
+This keeps write-back responsive on dependency-heavy workspaces while still detecting a repository
+that an implementation turn intentionally created inside an otherwise ignored path.
+
+##### One HOME/XDG cache contract for every toolchain
+
+Each pod-local checkout gets an ignored `.agentweaver-home` directory containing:
+
+| Variable | Relative value |
+| --- | --- |
+| `HOME` | `.agentweaver-home` |
+| `XDG_CACHE_HOME` | `.agentweaver-home/.cache` |
+| `XDG_DATA_HOME` | `.agentweaver-home/.local/share` |
+| `XDG_CONFIG_HOME` | `.agentweaver-home/.config` |
+
+This tech-agnostic contract replaced the former matrix of npm-, Yarn-, and pnpm-specific variables.
+Tools that follow HOME/XDG conventions now place caches and state on the same fast scratch disk
+without every new ecosystem requiring another environment-variable exception. The directory is added
+to `.git/info/exclude`, so cache state cannot enter write-back. The WSL/bubblewrap executor also
+derives and binds the same sandbox home inside the isolated command, preserving the contract across
+the local executor boundary.
 
 Preview command discovery still reads the API-visible tree, but `PreviewStep` maps the resolved
-relative cwd into the verified local checkout. The preview therefore sees the exact `node_modules`
-and build artifacts produced by the gate.
-
-| Source | Role |
-| --- | --- |
-| `apps/Agentweaver.Api/Sandbox/IRunSubmittingUserResolver.cs` | Resolves the run's `WorktreePath` and strips coordinator suffixes so child stages inherit the parent worktree. |
-| `apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs` | Carries the shared directory plus the generalized workspace descriptor; compatibility fallback always uses the shared path. |
-| `apps/Agentweaver.AgentHost/Program.cs` | Accepts the generalized workspace contract while retaining `workingDirectory` as a shared-path compatibility alias. |
-| `apps/Agentweaver.AgentHost/AgentHostStartupService.cs` | Selects shared execution or prepares a pod-local workspace before `SetupAsync`. |
-| `apps/Agentweaver.AgentHost/PodLocalWorkspaceManager.cs` | Creates, verifies, exposes write-back preparation policy, and cleans up pod-local workspaces. |
-| `packages/Agentweaver.AgentRuntime/Workflow/BuildTestTurnExecutor.cs` | Enforces total/no-progress timeouts for the model-mediated gate. |
-| `apps/Agentweaver.Api/Coordinator/Preview/PreviewStep.cs` | Resolves from the shared tree and executes preview in the mapped local checkout cwd. |
-| `k8s/sandbox-template-agenthost.yaml` | Mounts the 8 GiB disk-backed `execution-scratch` emptyDir with a 1 GiB standby request and 8 GiB limit. |
+relative cwd into the verified local checkout. The preview therefore sees the exact dependencies and
+build artifacts produced by the gate without copying those artifacts to Azure Files.
 
 ### Node topology: the dedicated kata user pool
 
@@ -712,6 +761,22 @@ Where this lives:
 - `packages/Agentweaver.Domain/EventTypes.cs` — `SandboxProvisioningPending`.
 - `apps/Agentweaver.Api/Sandbox/AgentHostReaperService.cs`
 - `apps/Agentweaver.Api/Coordinator/CoordinatorHeartbeatService.cs`
+
+## Source
+
+| Concern | Source |
+| --- | --- |
+| Scratch checkout creation, immutable commit/tree verification | `apps/Agentweaver.AgentHost/PodLocalWorkspaceManager.cs:38-139` |
+| Alternate index, commit creation, literal non-force push | `apps/Agentweaver.AgentHost/PodLocalWorkspaceManager.cs:152-326` |
+| HOME/XDG directory creation and environment | `apps/Agentweaver.AgentHost/PodLocalWorkspaceManager.cs:459-483` |
+| Cancellable, pruned nested-repository discovery | `apps/Agentweaver.AgentHost/PodLocalWorkspaceManager.cs:575-628` |
+| Nested metadata removal, content staging, gitlink rejection | `apps/Agentweaver.AgentHost/PodLocalWorkspaceManager.cs:631-735` |
+| Writable-turn finalization after the agent response | `apps/Agentweaver.AgentHost/A2ATurnBridgeAgent.cs:198-250` |
+| Existing in-pod GitHub token store | `apps/Agentweaver.AgentHost/PodGitHubTokenStore.cs:6-49` |
+| Local-writable launch coordinates | `apps/Agentweaver.Api/Sandbox/IRunAgentHostContextResolver.cs:65-99` |
+| API-side descriptor validation and authoritative fast-forward | `apps/Agentweaver.Api/Git/WorktreeManager.cs:482-644` |
+| HOME propagation through WSL/bubblewrap | `packages/Agentweaver.SandboxExec/WslMxcSandboxExecutor.cs:130-158` |
+| Disk-backed 8 GiB `execution-scratch` emptyDir | `k8s/sandbox-template-agenthost.yaml:139-175` |
 
 ## Related reading
 
