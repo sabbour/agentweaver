@@ -299,12 +299,59 @@ At run launch, `KubernetesSandboxExecutor` generates a 256-bit turn bearer token
 
 After `/configure`, `AgentHostStartupService.ConfigureAsync` runs `SetupAsync` with that per-run working directory overriding the static `AgentHost__WorkingDirectory` env default; only then does `/healthz` return `200` and the executor registers the A2A endpoint. This establishes the invariant `SetupAsync` working directory == `Run.WorktreePath` == the path named in the run's system prompt, so files written by one sibling agent are visible to later synthesis or assembly stages. If working-directory resolution fails, launch continues and the pod falls back to the env default. The wait is bounded (default `90 s`, `1 s` interval, `5 s` per-attempt timeout) and honors the launch cancellation token. The `a2a-sandbox-pod` client still carries the connection-refused retry handler as defense-in-depth, but the normal path is: **claim warm pod → configure → health ready → first turn**.
 
+#### Assembly Build/Test uses a verified pod-local checkout
+
+Assembly Build/Test is intentionally different from implementation turns. Its API-visible detached
+worktree remains on the shared `/workspace` PVC for command discovery and review, but dependency
+installation, compilation, tests, and preview execute from a **complete checkout** on the disk-backed
+`build-scratch` emptyDir mounted at `/local-workspace`. This avoids Azure Files SMB metadata/delete
+pathologies without symlinking `node_modules` or writing git-worktree administration into the shared
+repository.
+
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
+flowchart LR
+    API["API-visible integration tree<br/>/workspace/... (SMB)"] -->|"configure: ref + SHA + tree"| Host["AgentHostStartupService"]
+    Host -->|"git init + shallow fetch"| Local["/local-workspace/{run-hash}/{tree-hash}<br/>disk-backed emptyDir"]
+    Host --> Verify{"SHA and tree match?"}
+    Verify -->|"no"| Fail["typed configure failure<br/>claim deleted"]
+    Verify -->|"yes"| Gate["Build/Test<br/>controlled run_command"]
+    Local --> Gate
+    API -->|"resolve preview command + relative cwd"| Preview["PreviewStep"]
+    Local -->|"mapped execution cwd"| Preview
+```
+
+The configure payload sets `purpose: "AssemblyBuildTest"` and carries
+`sourceRepositoryPath`, `integrationRef`, `commitSha`, `expectedTreeHash`, and
+`localExecutionPath`. `AssemblyBuildCheckoutPreparer` validates the deterministic path, preflights
+free ephemeral space, initializes a new repository, shallow-fetches the integration ref, verifies
+both immutable object ids, and checks out the commit detached **before** `CopilotAIAgent.SetupAsync`.
+Commit or tree mismatch is fatal; AgentHost never builds a nearby revision. npm, Yarn, pnpm, and XDG
+caches are rooted under the same scratch volume.
+
+The assembly role also changes shell discipline. Native Copilot shell requests are denied, while a
+custom `run_command` uses the existing executor with one-command-at-a-time serialization, destructive
+command rejection, background/detach rejection, and a ten-minute per-command cap. The gate has a
+20-minute total wall-clock timeout and a 12-minute no-progress watchdog by default
+(`Coordinator:AssemblyBuildTestTimeoutMinutes` and
+`Coordinator:AssemblyBuildTestStallTimeoutMinutes`). Either timeout cancels the turn, releases the
+retained AgentHost claim, and surfaces a typed infrastructure failure instead of leaving assembly
+parked forever.
+
+Preview command discovery still reads the API-visible tree, but `PreviewStep` maps the resolved
+relative cwd into the verified local checkout. The preview therefore sees the exact `node_modules`
+and build artifacts produced by the gate.
+
 | Source | Role |
 | --- | --- |
 | `apps/Agentweaver.Api/Sandbox/IRunSubmittingUserResolver.cs` | Resolves the run's `WorktreePath` and strips coordinator suffixes so child stages inherit the parent worktree. |
 | `apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs` | Resolves `workingDirectory` without making lookup failures fatal and includes it in the `/configure` JSON body. |
 | `apps/Agentweaver.AgentHost/Program.cs` | Accepts `workingDirectory` on `ConfigureRequest` and passes it into AgentHost startup. |
 | `apps/Agentweaver.AgentHost/AgentHostStartupService.cs` | Uses the per-run working directory for `SetupAsync` and file-tool root when warm-pool configuration supplies it. |
+| `apps/Agentweaver.AgentHost/AssemblyBuildCheckoutPreparer.cs` | Creates and verifies the assembly checkout and roots package-manager caches on build scratch. |
+| `packages/Agentweaver.AgentRuntime/Workflow/BuildTestTurnExecutor.cs` | Enforces total/no-progress timeouts for the model-mediated gate. |
+| `apps/Agentweaver.Api/Coordinator/Preview/PreviewStep.cs` | Resolves from the shared tree and executes preview in the mapped local checkout cwd. |
+| `k8s/sandbox-template-agenthost.yaml` | Mounts the 8 GiB disk-backed `build-scratch` emptyDir and declares ephemeral-storage requests/limits. |
 
 ### Node topology: the dedicated kata user pool
 

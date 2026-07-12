@@ -131,7 +131,7 @@ The Worker now runs in `pod-per-run`, so coordinator child agents execute in Age
 
 - **AgentHost pool** — `agentweaver-agent-host`, `k8s/sandbox-warmpool-agenthost.yaml`, `replicas: 2`, keeps two AgentHost pods pre-warmed for live agent turns.
 
-Warm AgentHost pods boot with no `RunId`, enter standby, and accept `POST /configure` even while not ready for A2A turns. The executor claims one warm pod, waits for the claim binding, calls `/configure` with `{ runId, userId, turnBearerToken, kvUserSecretName, workingDirectory }`, then waits for `/healthz` to become ready before sending the first `message:stream` turn. `workingDirectory` is the run's `WorktreePath`, so pod setup and file tools share the worktree path named by the system prompt. The pod lifecycle is:
+Warm AgentHost pods boot with no `RunId`, enter standby, and accept `POST /configure` even while not ready for A2A turns. The executor claims one warm pod, waits for the claim binding, calls `/configure` with run identity, credentials, purpose, and working/source revision context, then waits for `/healthz` to become ready before sending the first `message:stream` turn. Normal runs use their shared `WorktreePath`. Assembly Build/Test sends an immutable integration ref/SHA/tree contract and executes from a verified checkout on the disk-backed `/local-workspace` emptyDir; its preview maps the API-resolved relative cwd into that same checkout.
 
 ```mermaid
 %%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
