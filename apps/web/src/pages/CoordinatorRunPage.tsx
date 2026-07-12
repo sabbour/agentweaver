@@ -106,7 +106,7 @@ import type { NodeSizeHint } from '../utils/dagLayout';
 import type { Edge, Node, NodeProps } from '@xyflow/react';
 // ---------------------------------------------------------------------------
 // Subtask-card clicks open the docked agent-session panel instead of navigating away.
-const CoordPanelContext = createContext<((nodeId: string) => void) | undefined>(undefined);
+const CoordPanelContext = createContext<((nodeId: string, opts?: { closeTopology?: boolean }) => void) | undefined>(undefined);
 
 // ---------------------------------------------------------------------------
 // Topology status helpers
@@ -855,7 +855,9 @@ function SubtaskNode({ id, data, selected }: NodeProps) {
   const showNameRole = Boolean(nameRoleText) && nameRoleText !== label;
 
   const handleCardClick = useCallback(() => {
-    openPanel?.(id);
+    // "View session" closes the topology overlay and surfaces this session in the run tree,
+    // instead of leaving the topology stacked on top of the panel it just opened.
+    openPanel?.(id, { closeTopology: true });
   }, [id, openPanel]);
 
   const avatar = agentName
@@ -1973,7 +1975,7 @@ function TopologyViewportController({
         const cx = node.position.x + w / 2;
         const cy = node.position.y + h / 2;
         // Comfortable zoom-in that still reveals neighbours/edges; instant if reduced motion is set.
-        setCenter(cx, cy, { zoom: 1.6, duration: prefersReducedMotion() ? 0 : 600 });
+        setCenter(cx, cy, { zoom: 1.3, duration: prefersReducedMotion() ? 0 : 600 });
       },
       // Cinematic reverse of centerOnNode: glide back out to the whole graph (same ease/duration).
       fitAll: () => {
@@ -3175,9 +3177,15 @@ export function CoordinatorRunPage() {
   const [composerFocusSignal, setComposerFocusSignal] = useState(0);
   const lastSelectedOutcomePlanSeqRef = useRef<number | null>(null);
 
-  const openPanelForNode = useCallback((nodeId: string) => {
+  const openPanelForNode = useCallback((nodeId: string, opts?: { closeTopology?: boolean }) => {
     setPanelNodeId(nodeId);
     setSessionPanelOpen(true);
+    // Selecting a session via "View session" should surface it in the run tree immediately —
+    // close the topology overlay if it's open instead of leaving it stacked on top. Plain node
+    // clicks/selection within the topology graph itself should NOT close the topology panel.
+    if (opts?.closeTopology) {
+      setTopologyPanelOpen(false);
+    }
   }, []);
 
   // Imperative handle to the full-topology viewport (registered by TopologyViewportController inside

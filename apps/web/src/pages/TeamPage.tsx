@@ -40,13 +40,13 @@ import { SyncPanel } from '../components/SyncPanel';
 import {
   EmptyState,
   ErrorState,
-  ListRow,
   LoadingState,
   MetricRow,
   PageContainer,
   PageHeader,
   PageSection,
-  RichList,
+  Tile,
+  TileGrid,
 } from '../components/ui';
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
@@ -886,44 +886,46 @@ export function TeamPage() {
           )}
 
           {projectMembers.length > 0 && (
-            <RichList aria-label="Project agents">
+            <TileGrid aria-label="Project agents">
               {projectMembers.map((member) => (
-                <ListRow
+                <Tile
                   key={member.name}
                   media={<AgentAvatar name={member.name} size={32} isBuiltIn={member.is_built_in} isRetired={member.status === 'retired'} />}
-                  primary={member.name}
-                  primaryAside={
+                  bubble={false}
+                  badges={
                     <>
                       {member.status === 'active' && <Badge appearance="tint" color="success" size="small">Active</Badge>}
                       {member.status === 'retired' && <Badge appearance="tint" color="subtle" size="small">Retired</Badge>}
                     </>
                   }
+                  primary={member.name}
                   secondary={member.role_title}
                   onClick={() => { setSelectedMember(member); }}
                 />
               ))}
-            </RichList>
+            </TileGrid>
           )}
 
           {builtInMembers.length > 0 && (
             <PageSection title="System agents">
-              <RichList aria-label="System agents">
+              <TileGrid aria-label="System agents">
                 {builtInMembers.map((member) => (
-                  <ListRow
+                  <Tile
                     key={member.name}
                     media={<AgentAvatar name={member.name} size={32} isBuiltIn={member.is_built_in} isRetired={member.status === 'retired'} />}
-                    primary={member.name}
-                    primaryAside={
+                    bubble={false}
+                    badges={
                       <>
                         {member.status === 'active' && <Badge appearance="tint" color="success" size="small">Active</Badge>}
                         {member.status === 'retired' && <Badge appearance="tint" color="subtle" size="small">Retired</Badge>}
                       </>
                     }
+                    primary={member.name}
                     secondary={member.role_title}
                     onClick={() => { setSelectedMember(member); }}
                   />
                 ))}
-              </RichList>
+              </TileGrid>
             </PageSection>
           )}
         </>

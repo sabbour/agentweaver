@@ -35,7 +35,7 @@ import {
 } from '@fluentui/react-icons';
 import { applyBlueprintToRequest, BlueprintPanel, NO_BLUEPRINT, useBlueprintGeneration } from '../components/BlueprintPicker';
 import { GitHubIcon } from '../components/GitHubIcon';
-import { AppDialog, EmptyState, ListRow, LoadingState, PageContainer, PageHeader, RichList } from '../components/ui';
+import { AppDialog, EmptyState, LoadingState, PageContainer, PageHeader, Tile, TileGrid } from '../components/ui';
 import { GITHUB_AUTHORIZE_URL } from '../config';
 import { useProjectList } from '../hooks/useProjectList';
 import { useEffect, useState } from 'react';
@@ -773,7 +773,7 @@ function ProjectCard({ project, onOpen, highlight }: { project: Project; onOpen:
   if (!project.available) secondaryParts.push('Working directory may have moved or become inaccessible.');
 
   return (
-    <ListRow
+    <Tile
       className={highlight ? styles.cardHighlight : undefined}
       media={isGitHub ? (
         <GitHubIcon
@@ -783,16 +783,17 @@ function ProjectCard({ project, onOpen, highlight }: { project: Project; onOpen:
             : 'Connected to GitHub'}
         />
       ) : undefined}
-      primary={project.name}
-      primaryAside={
+      badges={
         <Badge appearance="tint" size="small" color={project.available ? 'success' : 'warning'}>
           {project.available ? 'Available' : 'Unavailable'}
         </Badge>
       }
+      primary={project.name}
       secondary={secondaryParts.join(' · ')}
       meta={<Badge appearance="outline" size="small">{isGitHub ? 'GitHub' : 'Blank'}</Badge>}
       actions={<Button appearance="primary" size="small" onClick={onOpen}>Open</Button>}
       actionsAlwaysVisible
+      onClick={onOpen}
     />
   );
 }
@@ -900,7 +901,7 @@ export function ProjectGalleryPage() {
       )}
 
       {!loading && projects.length > 0 && (
-        <RichList aria-label="Projects">
+        <TileGrid aria-label="Projects">
           {projects.map((p) => (
             <ProjectCard
               key={p.project_id}
@@ -909,7 +910,7 @@ export function ProjectGalleryPage() {
               highlight={p.project_id === highlightId}
             />
           ))}
-        </RichList>
+        </TileGrid>
       )}
     </PageContainer>
   );

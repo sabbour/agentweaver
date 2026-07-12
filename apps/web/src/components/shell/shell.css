@@ -389,20 +389,19 @@
 }
 
 /* --------------------------------------------------------------------------
-   Floating "Start task" pill (top-right of content panel)
-   Absolutely positioned so it stays above .aw-shell-scroll without scrolling.
-   pointer-events:none on the container so the invisible area doesn't trap clicks.
+   "Start task" pill (top-right of content panel)
+   Lives in normal flow ABOVE .aw-shell-scroll (a real row, not an overlay), so it
+   claims its own space and never sits on top of a page's own header actions —
+   it used to be position:absolute and would visually collide with PageHeader
+   action buttons that also anchor top-right (e.g. "Create from GitHub" on the
+   Projects gallery). It still never scrolls away because only .aw-shell-scroll
+   scrolls; this row is a sibling above it.
    -------------------------------------------------------------------------- */
 .aw-floating-actions {
-  position: absolute;
-  top: var(--spacingVerticalL);
-  right: var(--spacingHorizontalL);
-  z-index: 5;
-  pointer-events: none;
-}
-
-.aw-floating-actions > * {
-  pointer-events: auto;
+  display: flex;
+  justify-content: flex-end;
+  flex-shrink: 0;
+  padding: var(--spacingVerticalM) var(--spacingHorizontalXXXL) 0;
 }
 
 .aw-floating-actions .fui-Button {

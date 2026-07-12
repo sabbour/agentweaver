@@ -630,7 +630,7 @@ describe('CoordinatorRunPage — unified coordinator graph view', () => {
       const firstVisibleSubtask = document.querySelector('[data-node-type="subtask"]')!.closest('.react-flow__node') as HTMLElement;
       fireEvent.click(firstVisibleSubtask);
 
-      await waitFor(() => expect(viewport.style.transform).toContain('scale(1.6)'));
+      await waitFor(() => expect(viewport.style.transform).toContain('scale(1.3)'));
     } finally {
       window.matchMedia = originalMatchMedia;
     }
@@ -728,8 +728,8 @@ describe('CoordinatorRunPage — unified coordinator graph view', () => {
 
       fireEvent.click(nodeEl);
 
-      // The viewport tweens to the cinematic target zoom (1.6). Click-select still runs alongside it.
-      await waitFor(() => expect(viewport.style.transform).toContain('scale(1.6)'));
+      // The viewport tweens to the cinematic target zoom (1.3). Click-select still runs alongside it.
+      await waitFor(() => expect(viewport.style.transform).toContain('scale(1.3)'));
     } finally {
       window.matchMedia = originalMatchMedia;
     }
@@ -761,9 +761,9 @@ describe('CoordinatorRunPage — unified coordinator graph view', () => {
       const pane = inspector.querySelector('.react-flow__pane') as HTMLElement;
       expect(pane).toBeTruthy();
 
-      // Zoom in on a node first (scale 1.6)…
+      // Zoom in on a node first (scale 1.3)…
       fireEvent.click(nodeEl);
-      await waitFor(() => expect(viewport.style.transform).toContain('scale(1.6)'));
+      await waitFor(() => expect(viewport.style.transform).toContain('scale(1.3)'));
 
       // …then click the empty pane. The onPaneClick handler fits the whole graph back out; in jsdom
       // fitView can't measure the 0-size container, so we assert the handler is wired and harmless

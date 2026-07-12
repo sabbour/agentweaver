@@ -32,6 +32,8 @@ export type { PageSectionProps } from './PageSection';
 // Collections.
 export { RichList, ListRow } from './RichList';
 export type { RichListProps, ListRowProps } from './RichList';
+export { TileGrid, Tile } from './TileGrid';
+export type { TileGridProps, TileProps } from './TileGrid';
 
 // Metrics.
 export { MetricRow, StatTile } from './Metric';
