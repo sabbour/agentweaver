@@ -187,7 +187,7 @@ public sealed class CollectiveAssemblyPipeline : ICollectiveAssemblyPipeline
                     var commitSha = _worktreeManager.GetBranchTipCommitSha(
                         request.RepositoryPath,
                         request.IntegrationBranch);
-                    if (!AssemblyBuildTestExecution.IsGitObjectId(commitSha))
+                    if (!PodLocalExecutionWorkspace.IsGitObjectId(commitSha))
                     {
                         throw new CollectiveBuildTestInfrastructureException(
                             "assembly_integration_commit_unresolved",
@@ -195,20 +195,17 @@ public sealed class CollectiveAssemblyPipeline : ICollectiveAssemblyPipeline
                             retryable: false);
                     }
 
-                    var localExecutionPath = AssemblyBuildTestExecution.GetCheckoutPath(
-                        AssemblyBuildTestExecution.DefaultScratchRoot,
-                        request.CoordinatorRunId,
-                        request.AggregateTreeHash);
                     await _podLifecycle.LaunchAgentHostPodAsync(
                         request.CoordinatorRunId,
                         new AgentHostLaunchContext(
-                            WorkingDirectory: detachedWorktree.WorktreePath,
-                            Purpose: AgentHostPurpose.AssemblyBuildTest,
+                            SharedWorkingDirectory: detachedWorktree.WorktreePath,
                             SourceRepositoryPath: request.RepositoryPath,
-                            IntegrationRef: request.IntegrationBranch,
-                            CommitSha: commitSha,
+                            SourceRef: request.IntegrationBranch,
+                            BaseCommitSha: commitSha,
                             ExpectedTreeHash: request.AggregateTreeHash,
-                            LocalExecutionPath: localExecutionPath),
+                            WorkspaceMode: ExecutionWorkspaceMode.LocalReadOnly,
+                            Purpose: AgentHostPurpose.AssemblyBuildTest,
+                            ScratchRoot: PodLocalExecutionWorkspace.DefaultScratchRoot),
                         gateCt).ConfigureAwait(false);
                 }
                 catch (AgentHostPodReconcilerErrorException ex)

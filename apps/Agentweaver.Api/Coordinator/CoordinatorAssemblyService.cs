@@ -1010,9 +1010,9 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
                                 TreeHash: aggregateTreeHash,
                                 WorktreePath: _pipeline.GetBuildTestWorktreePath(context.CoordinatorRunId),
                                 SubmittingUser: context.SubmittingUser,
-                                ExecutionCheckoutPath: AssemblyBuildTestExecution.IsGitObjectId(aggregateTreeHash)
-                                    ? AssemblyBuildTestExecution.GetCheckoutPath(
-                                        AssemblyBuildTestExecution.DefaultScratchRoot,
+                                ExecutionWorkspacePath: PodLocalExecutionWorkspace.IsGitObjectId(aggregateTreeHash)
+                                    ? PodLocalExecutionWorkspace.GetWorkspacePath(
+                                        PodLocalExecutionWorkspace.DefaultScratchRoot,
                                         context.CoordinatorRunId,
                                         aggregateTreeHash)
                                     : null),

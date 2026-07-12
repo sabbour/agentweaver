@@ -23,10 +23,11 @@ internal sealed class RunCommandTool : ISandboxTool
                 if (ctx.Options.RejectDestructiveCommands && destructive)
                     return "Command rejected: destructive shell commands are not allowed in the Build/Test gate.";
 
+                var commandHash = ComputeCommandHash(command);
+
                 // HITL gate: destructive commands require operator approval before execution.
                 if (ctx.Options.RequireApprovalForAllShell || destructive)
                 {
-                    var commandHash = ComputeCommandHash(command);
                     var requestId = commandHash[..8]; // stable prefix — same command → same requestId
 
                     // If the operator already denied this command, refuse immediately.
@@ -85,17 +86,22 @@ internal sealed class RunCommandTool : ISandboxTool
                     NetworkEnabled: ctx.Options.NetworkEnabled,
                     AgentweaverRunId: string.IsNullOrEmpty(ctx.RunId) ? null : ctx.RunId);
 
-                if (ctx.ShellSemaphore is not null)
-                    await ctx.ShellSemaphore.WaitAsync(ct).ConfigureAwait(false);
-
+                IDisposable? executionLease = null;
                 SandboxExecResult result;
                 try
                 {
+                    if (ctx.ShellExecutionTracker is not null)
+                    {
+                        executionLease = await ctx.ShellExecutionTracker.EnterAsync(
+                            commandHash,
+                            TimeSpan.FromMilliseconds(timeout),
+                            ct).ConfigureAwait(false);
+                    }
                     result = await ctx.Executor.ExecuteAsync(cmd, ct).ConfigureAwait(false);
                 }
                 finally
                 {
-                    ctx.ShellSemaphore?.Release();
+                    executionLease?.Dispose();
                 }
 
                 var stdout = ctx.Redactor.Redact(result.Stdout);

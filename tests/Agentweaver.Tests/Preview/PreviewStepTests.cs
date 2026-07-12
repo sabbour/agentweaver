@@ -77,7 +77,7 @@ public sealed class PreviewStepTests : IDisposable
         {
             var h = new Harness(_worktree);
             await h.Step.RunAsync(
-                Request() with { ExecutionCheckoutPath = executionRoot },
+                Request() with { ExecutionWorkspacePath = executionRoot },
                 CancellationToken.None);
 
             h.PreviewRunner.LastCommand.Should().Be("npm run dev -- --host 0.0.0.0");

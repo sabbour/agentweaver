@@ -296,10 +296,6 @@ public sealed class KubernetesSandboxExecutorClaimTests
         const string commitSha = "1111111111111111111111111111111111111111";
         const string treeHash = "2222222222222222222222222222222222222222";
         var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
-        var localPath = AssemblyBuildTestExecution.GetCheckoutPath(
-            AssemblyBuildTestExecution.DefaultScratchRoot,
-            runId,
-            treeHash);
 
         var handler = new FakeKubeHandler();
         handler.OnGet(
@@ -317,22 +313,49 @@ public sealed class KubernetesSandboxExecutorClaimTests
         await executor.LaunchAgentHostPodAsync(
             runId,
             new AgentHostLaunchContext(
-                WorkingDirectory: "/workspace/reviewer",
-                Purpose: AgentHostPurpose.AssemblyBuildTest,
+                SharedWorkingDirectory: "/workspace/reviewer",
                 SourceRepositoryPath: "/workspace/repository",
-                IntegrationRef: "agentweaver/integration/run-claim-assembly",
-                CommitSha: commitSha,
+                SourceRef: "agentweaver/integration/run-claim-assembly",
+                BaseCommitSha: commitSha,
                 ExpectedTreeHash: treeHash,
-                LocalExecutionPath: localPath));
+                WorkspaceMode: ExecutionWorkspaceMode.LocalReadOnly,
+                Purpose: AgentHostPurpose.AssemblyBuildTest,
+                ScratchRoot: PodLocalExecutionWorkspace.DefaultScratchRoot));
 
         using var doc = JsonDocument.Parse(configureHandler.Body!);
         var body = doc.RootElement;
         body.GetProperty("purpose").GetString().Should().Be("AssemblyBuildTest");
+        body.GetProperty("workspaceMode").GetString().Should().Be("LocalReadOnly");
+        body.GetProperty("sharedWorkingDirectory").GetString().Should()
+            .Be(Path.GetFullPath("/workspace/reviewer"));
         body.GetProperty("sourceRepositoryPath").GetString().Should().Be("/workspace/repository");
-        body.GetProperty("integrationRef").GetString().Should().Be("agentweaver/integration/run-claim-assembly");
-        body.GetProperty("commitSha").GetString().Should().Be(commitSha);
+        body.GetProperty("sourceRef").GetString().Should().Be("agentweaver/integration/run-claim-assembly");
+        body.GetProperty("baseCommitSha").GetString().Should().Be(commitSha);
         body.GetProperty("expectedTreeHash").GetString().Should().Be(treeHash);
-        body.GetProperty("localExecutionPath").GetString().Should().Be(localPath);
+        body.GetProperty("scratchRoot").GetString().Should()
+            .Be(PodLocalExecutionWorkspace.DefaultScratchRoot);
+    }
+
+    [Fact]
+    public async Task Launch_context_compatibility_fallback_uses_shared_working_directory_only()
+    {
+        var compatibilityLifecycle = new CompatibilityAgentHostLifecycle();
+        IAgentHostPodLifecycle lifecycle = compatibilityLifecycle;
+
+        await lifecycle.LaunchAgentHostPodAsync(
+            "run-fallback",
+            new AgentHostLaunchContext(
+                SharedWorkingDirectory: "/workspace/source",
+                SourceRepositoryPath: "/workspace/repository",
+                SourceRef: "integration",
+                BaseCommitSha: new string('1', 40),
+                ExpectedTreeHash: new string('2', 40),
+                WorkspaceMode: ExecutionWorkspaceMode.LocalReadOnly,
+                Purpose: AgentHostPurpose.AssemblyBuildTest,
+                ScratchRoot: "/local-workspace"));
+
+        compatibilityLifecycle.CapturedWorkingDirectory.Should().Be("/workspace/source",
+            "the compatibility seam must never pass a pod-internal local path as an API-visible worktree");
     }
 
     [Fact]
@@ -517,5 +540,25 @@ public sealed class KubernetesSandboxExecutorClaimTests
             "cancellation must abort without waiting on any backoff delay");
         fault.MatchedRequests.Should().BeLessThanOrEqualTo(1,
             "the create must not be retried once the caller token is canceled");
+    }
+
+    private sealed class CompatibilityAgentHostLifecycle : IAgentHostPodLifecycle
+    {
+        public string? CapturedWorkingDirectory { get; private set; }
+
+        public Task<string> LaunchAgentHostPodAsync(string runId, CancellationToken ct = default) =>
+            LaunchAgentHostPodAsync(runId, workingDirectoryOverride: null, ct);
+
+        public Task<string> LaunchAgentHostPodAsync(
+            string runId,
+            string? workingDirectoryOverride,
+            CancellationToken ct = default)
+        {
+            CapturedWorkingDirectory = workingDirectoryOverride;
+            return Task.FromResult("http://agenthost");
+        }
+
+        public Task ReleaseAgentHostPodAsync(string runId, CancellationToken ct = default) =>
+            Task.CompletedTask;
     }
 }

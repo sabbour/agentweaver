@@ -40,7 +40,7 @@ internal sealed class AgentHostStartupService : IHostedService
     private readonly AgentHostOptions _options;
     private readonly AgentHostRuntimeState _runtimeState;
     private readonly IRunOptionsStore _runOptions;
-    private readonly AssemblyBuildCheckoutPreparer _checkoutPreparer;
+    private readonly PodLocalWorkspaceManager _workspaceManager;
     private readonly ILogger<AgentHostStartupService> _logger;
 
     private volatile bool _ready;
@@ -58,16 +58,16 @@ internal sealed class AgentHostStartupService : IHostedService
         AgentHostRuntimeState runtimeState,
         IRunOptionsStore runOptions,
         ILogger<AgentHostStartupService> logger,
-        AssemblyBuildCheckoutPreparer? checkoutPreparer = null)
+        PodLocalWorkspaceManager? workspaceManager = null)
     {
         _agent = agent;
         _options = options.Value;
         _runtimeState = runtimeState;
         _runOptions = runOptions;
         _logger = logger;
-        _checkoutPreparer = checkoutPreparer ?? new AssemblyBuildCheckoutPreparer(
+        _workspaceManager = workspaceManager ?? new PodLocalWorkspaceManager(
             options,
-            Microsoft.Extensions.Logging.Abstractions.NullLogger<AssemblyBuildCheckoutPreparer>.Instance);
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<PodLocalWorkspaceManager>.Instance);
     }
 
     public async Task StartAsync(CancellationToken cancellationToken)
@@ -92,7 +92,7 @@ internal sealed class AgentHostStartupService : IHostedService
                 opts.KvUserSecretName,
                 GitHubAccessToken: null,
                 PreviewRunnerCredential: null,
-                WorkingDirectory: null),
+                SharedWorkingDirectory: null),
             cancellationToken).ConfigureAwait(false);
     }
 
@@ -117,7 +117,7 @@ internal sealed class AgentHostStartupService : IHostedService
                 kvUserSecretName,
                 gitHubAccessToken,
                 PreviewRunnerCredential: null,
-                workingDirectory),
+                SharedWorkingDirectory: workingDirectory),
             autoApproveTools,
             ct).ConfigureAwait(false);
 
@@ -146,7 +146,7 @@ internal sealed class AgentHostStartupService : IHostedService
     {
         var opts = _options;
         var runId = configuration.RunId;
-        var workingDirectoryOverride = configuration.WorkingDirectory;
+        var workingDirectoryOverride = configuration.SharedWorkingDirectory;
 
         // Warm pods carry a static AgentHost__WorkingDirectory env (the /workspace mount root). The
         // per-run worktree path delivered via /configure overrides it so the pod's file-tool root
@@ -159,12 +159,22 @@ internal sealed class AgentHostStartupService : IHostedService
             ? opts.RepositoryPath
             : workingDirectoryOverride!;
 
-        if (configuration.Purpose == Agentweaver.Domain.AgentHostPurpose.AssemblyBuildTest)
+        if (configuration.WorkspaceMode != ExecutionWorkspaceMode.Shared)
         {
-            var localCheckout = await _checkoutPreparer.PrepareAsync(configuration, ct).ConfigureAwait(false);
-            workingDirectory = localCheckout;
-            repositoryPath = localCheckout;
+            var prepared = await _workspaceManager.PrepareAsync(
+                new PodLocalWorkspaceSpec(
+                    configuration.RunId,
+                    configuration.SourceRepositoryPath!,
+                    configuration.SourceRef!,
+                    configuration.BaseCommitSha!,
+                    configuration.ExpectedTreeHash!,
+                    configuration.WorkspaceMode,
+                    configuration.ScratchRoot!),
+                ct).ConfigureAwait(false);
+            workingDirectory = prepared.WorkspacePath;
+            repositoryPath = prepared.WorkspacePath;
         }
+        _runtimeState.SetEffectiveWorkingDirectory(workingDirectory);
 
         // Prepend the sandbox tool manifest (baked into the image) to the per-run system prompt
         // context so every agent knows what tools are available without probing.
@@ -233,5 +243,6 @@ internal sealed class AgentHostStartupService : IHostedService
         return sections.Count == 0 ? null : string.Join("\n\n", sections);
     }
 
-    public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+    public Task StopAsync(CancellationToken cancellationToken) =>
+        _workspaceManager.CleanupAsync(cancellationToken);
 }

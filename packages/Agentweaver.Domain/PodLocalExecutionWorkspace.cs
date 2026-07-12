@@ -12,10 +12,29 @@ public enum AgentHostPurpose
 
     /// <summary>Runs the assembly Build/Test gate and preview from a pod-local checkout.</summary>
     AssemblyBuildTest = 1,
+
+    /// <summary>
+    /// Reserved for implementation-agent turns that will use a writable pod-local checkout.
+    /// The write-back/finalization path is implemented by issue #253, not by the assembly flow.
+    /// </summary>
+    ImplementationTurn = 2,
 }
 
-/// <summary>Shared path contract for the assembly Build/Test pod-local checkout.</summary>
-public static partial class AssemblyBuildTestExecution
+/// <summary>Policy controlling where an AgentHost executes and whether local changes may be finalized.</summary>
+public enum ExecutionWorkspaceMode
+{
+    /// <summary>Use the existing shared workspace path without materializing a local checkout.</summary>
+    Shared = 0,
+
+    /// <summary>Use a verified pod-local checkout that cannot be prepared for write-back.</summary>
+    LocalReadOnly = 1,
+
+    /// <summary>Use a verified pod-local checkout whose changes may later be finalized.</summary>
+    LocalWritable = 2,
+}
+
+/// <summary>Shared deterministic path contract for pod-local execution workspaces.</summary>
+public static partial class PodLocalExecutionWorkspace
 {
     public const string DefaultScratchRoot = "/local-workspace";
 
@@ -26,7 +45,7 @@ public static partial class AssemblyBuildTestExecution
             .ToLowerInvariant();
     }
 
-    public static string GetCheckoutPath(string scratchRoot, string runId, string treeHash)
+    public static string GetWorkspacePath(string scratchRoot, string runId, string treeHash)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(scratchRoot);
         if (!IsGitObjectId(treeHash))

@@ -38,7 +38,7 @@ public sealed record SandboxToolContext(
     /// </summary>
     Agentweaver.Domain.IQuestionGate? QuestionGate = null,
     /// <summary>
-    /// Optional single-flight gate for shell execution. Assembly Build/Test supplies a
-    /// <c>SemaphoreSlim(1,1)</c> so concurrent model tool calls cannot overlap package managers.
+    /// Optional single-flight shell tracker. Assembly Build/Test supplies one so concurrent model
+    /// tool calls cannot overlap and future heartbeat/deadline policies can observe active timing.
     /// </summary>
-    SemaphoreSlim? ShellSemaphore = null);
+    ShellExecutionTracker? ShellExecutionTracker = null);

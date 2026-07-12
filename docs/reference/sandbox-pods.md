@@ -19,8 +19,8 @@ isolation model — filesystem containment, governance, executor selection, and 
 | `Sandbox:ReleasePodOnSuspend` | `true`, `false` | `true` | When `pod-per-run` is active and the workflow graph suspends on an external gate (a HITL/review `RequestPort`, or the coordinator idling while it awaits child runs), `true` checkpoints the run and **releases** the pod back to the warm pool. `false` keeps the pod warm across the suspension for low-latency resume or debugging, at the cost of held capacity. |
 | `Sandbox:Kubernetes:AgentHostClaimCreationGraceSeconds` | Positive integer seconds | `300` | Minimum age before the orphan reaper may delete an AgentHost claim that is absent from the active-run map. The effective grace is the larger of this value and `Sandbox:Kubernetes:AgentHostReadyTimeoutSeconds + 30` seconds. |
 | `AgentHost:KeyVaultUri` | URI | *(unset)* | Enables runtime Key Vault user-token fetch in warm AgentHost pods. The executor still injects this static value through the claim env because the pod needs the vault URI before `/configure` arrives. |
-| `AgentHost:BuildScratchRoot` | Absolute path | `/local-workspace` | Root of the disk-backed emptyDir used for assembly Build/Test checkouts and package caches. |
-| `AgentHost:BuildScratchMinimumFreeBytes` | Non-negative integer bytes | `8589934592` (8 GiB) | Minimum available scratch space required before AgentHost prepares an assembly checkout. Failure returns typed reason `insufficient_ephemeral_storage`. |
+| `AgentHost:ExecutionScratchRoot` | Absolute path | `/local-workspace` | Root of the disk-backed emptyDir used for pod-local execution workspaces and package caches. |
+| `AgentHost:ExecutionScratchMinimumFreeBytes` | Non-negative integer bytes | `8589934592` (8 GiB) | Minimum available scratch space required before AgentHost prepares a local workspace. Failure returns typed reason `insufficient_ephemeral_storage`. |
 | `Coordinator:AssemblyBuildTestTimeoutMinutes` | Positive number | `20` | Total assembly Build/Test wall-clock limit. Expiry cancels the gate and releases its retained AgentHost claim. |
 | `Coordinator:AssemblyBuildTestStallTimeoutMinutes` | Positive number | `12` | Maximum interval without a forwarded Build/Test run event before the stall watchdog fails the gate. |
 
@@ -51,15 +51,15 @@ turns) rather than only ad-hoc shell commands.
 | Identity | Dedicated sandbox service account; **workload identity** (federated OIDC) is the preferred path for the model credential, projecting **only** the narrowly-scoped workload-identity token volume — not the full Kubernetes API service-account token. |
 | Cluster API access | None. The pod does not automatically receive Kubernetes API credentials; the sandbox stays tokenless for the cluster API even when workload identity is enabled for the model endpoint. |
 | Provisioning | Claimed from a **warm pool** via a `SandboxClaim`; the executor waits until the claim is bound to a concrete pod. AgentHost uses the shared `agentweaver-agent-host` pool (`replicas: 2`), then receives per-run context through `POST /configure` before `/healthz` is expected to become ready. No separate per-run template or per-run warm pool is created for AgentHost. A claim that stays unbound (pod **Pending**) while Kubernetes schedules is a legitimate wait — there is no app-side capacity pre-check — surfaced on the child run's stream via `sandbox.provisioning_pending` heartbeats (issue #217). |
-| AgentHost readiness gate | Warm AgentHost pods start in standby. After binding, the executor calls `POST /configure` with run/user/token/KV secret context plus `workingDirectory`, then polls `GET {scheme}://{podIP}:8088/healthz` (bounded `Sandbox:Kubernetes:AgentHostReadyTimeoutSeconds`, default `90`s; `…ReadyPollIntervalMs`, default `1000`) before the first A2A turn. `/configure` is excluded from readiness and returns `409` if called again. The `a2a-sandbox-pod` HttpClient additionally retries connection-refused only. |
+| AgentHost readiness gate | Warm AgentHost pods start in standby. After binding, the executor calls `POST /configure` with run/user/token/KV secret context plus the workspace descriptor, then polls `GET {scheme}://{podIP}:8088/healthz` (bounded `Sandbox:Kubernetes:AgentHostReadyTimeoutSeconds`, default `90`s; `…ReadyPollIntervalMs`, default `1000`) before the first A2A turn. `/configure` is excluded from readiness and returns `409` if called again. The `a2a-sandbox-pod` HttpClient additionally retries connection-refused only. |
 | Transient API resilience | The idempotent claim create and the bind/IP polls (`WaitForBoundAsync`, `GetPodIpAsync`) retry transient Kubernetes API faults up to `MaxK8sAttempts` (3 total) with exponential backoff + jitter (`ExecuteK8sWithRetryAsync`): connection resets (`SocketException 104`/`IOException`/`HttpRequestException`), `429`/`5xx`, and `HttpClient` timeouts. `409 Conflict` is **not** treated as transient — it is attempt-aware to preserve idempotency (a retry-`409` = our own create that committed before a reset, so the claim is configured, not reused). Caller cancellation is never retried. The non-idempotent `POST /configure` is intentionally excluded (issue #230). |
 | A2A turn authentication | Run launch generates a 256-bit random turn bearer token, sends it to the claimed warm pod in `POST /configure`, and registers it in `IAgentHostTurnTokenRegistry`. `RemoteAgentProxy` sends `Authorization: Bearer {token}` on `message:stream`; each pod accepts only its configured run token. |
 | Tool-approval return path | When the API-side durable approval gate reports `Unknown`, pod-per-run mode forwards the grant/deny to the owning AgentHost pod's authenticated root endpoint so its in-memory gate can resolve. |
-| Per-pod resources | AgentHost requests `500m` CPU, `1Gi` memory, and `8Gi` ephemeral storage; limits are `2000m`, `4Gi`, and `10Gi`. |
+| Per-pod resources | AgentHost requests `500m` CPU, `1Gi` memory, and `1Gi` ephemeral storage; limits are `2000m`, `4Gi`, and `8Gi`. The lower storage request avoids reserving the full workspace budget for each warm standby replica. |
 | Quota | Namespace `ResourceQuota` (`k8s/quota.yaml`) bounds only **object counts** — pod count, sandbox-claim count, PVCs, and storage. It no longer caps CPU/memory: Kubernetes schedules on pod requests and the cluster autoscaler owns headroom, so a **Pending** pod waits for the pool to scale rather than being rejected on admission (issue #217). The object-count caps are **raised deliberately** via a reviewed manifest change, never a live patch. |
 | Lifetime | Bounded by the run and the claim TTL. Under the hybrid model, a pod is released on suspend and a fresh pod is re-claimed on resume; pods never persist past the run. |
 | Egress | Default-deny NetworkPolicy with a narrow allowlist (see [Security properties](#security-properties)). |
-| Storage | Mounts the **shared workspace volume** for normal run worktrees plus a dedicated disk-backed `build-scratch` emptyDir at `/local-workspace` (`sizeLimit: 8Gi`) for assembly Build/Test and preview. Existing disk-backed `tmp` and `home` emptyDirs remain separate. |
+| Storage | Mounts the **shared workspace volume** plus a dedicated disk-backed `execution-scratch` emptyDir at `/local-workspace` (`sizeLimit: 8Gi`) for pod-local execution. Assembly Build/Test and preview use the read-only policy; the writable implementation policy is reserved for #253. Existing disk-backed `tmp` and `home` emptyDirs remain separate. |
 
 ### Orphan reaper creation grace
 
@@ -82,7 +82,7 @@ A pod-per-run sandbox acts **as the run's signed-in user** and needs a GitHub cr
 
 1. The shared AgentHost warm pool (`agentweaver-agent-host`, `replicas: 2`) keeps pods in standby with no `RunId`.
 2. The `SandboxClaim` binds one warm pod. Static config such as `AgentHost__KeyVaultUri` is already present because the pod needs the vault URI before configuration.
-3. `KubernetesSandboxExecutor` calls `POST /configure` with `runId`, `userId`, `turnBearerToken`, `kvUserSecretName`, and `workingDirectory`.
+3. `KubernetesSandboxExecutor` calls `POST /configure` with run identity, credentials, and the shared/local workspace descriptor.
 4. `AgentHostRuntimeState.TryConfigure(...)` stores those values once.
 5. `KeyVaultUserTokenProvider` uses `SecretClient` + `DefaultAzureCredential` to fetch only `kvUserSecretName`; `KeyVaultGitHubTokenStore` serves the deserialized token to the runtime and caches it in memory for the pod lifetime.
 
@@ -99,25 +99,27 @@ No per-run `SecretProviderClass`, cloned `SandboxTemplate`, CSI user-token volum
 | `turnBearerToken` | No | Per-run bearer token required by `POST /a2a/agent/v1/message:stream`. |
 | `kvUserSecretName` | No | Key Vault secret name for the submitting user's GitHub token. |
 | `gitHubAccessToken` | No | API-pre-resolved GitHub access token; when present, the pod skips the Key Vault fetch. |
-| `workingDirectory` | No | The run's `WorktreePath` (for example `/workspace/{worktree}`), used as the AgentHost `SetupAsync` working directory and file-tool root. |
+| `sharedWorkingDirectory` | No | API-visible run worktree (for example `/workspace/{worktree}`). Used directly in `Shared` mode and retained as the source-tree coordinate in local modes. |
+| `workingDirectory` | No | Backward-compatible alias for `sharedWorkingDirectory`. It never represents a pod-local path. |
 | `previewRunnerCredential` | No | Fresh per-run bearer for authenticated pod-root control calls, including tool-approval forwarding. It is persisted using `PreviewRunnerCredential.SecretKey(runId)`; inside the pod it is stored only in AgentHost memory. |
 | `autoApproveTools` | No | Seeds the pod-local run-options store; defaults to `false`. |
-| `purpose` | No | String enum. Omitted/default preserves shared-worktree behavior; `AssemblyBuildTest` activates verified pod-local checkout and controlled-shell behavior. |
-| `sourceRepositoryPath` | Assembly only | Shared repository path used as the git fetch remote. It is a source, never the execution cwd. |
-| `integrationRef` | Assembly only | Integration branch/ref shallow-fetched from `sourceRepositoryPath`. |
-| `commitSha` | Assembly only | Immutable commit SHA expected at `integrationRef` (40–64 hexadecimal characters). |
-| `expectedTreeHash` | Assembly only | Immutable tree object expected for `commitSha` (40–64 hexadecimal characters). |
-| `localExecutionPath` | Assembly only | Deterministic `/local-workspace/{run-hash}/{tree-hash}` execution checkout. |
+| `purpose` | No | String enum: `Default`, `AssemblyBuildTest`, or the defined-but-not-yet-wired `ImplementationTurn`. |
+| `workspaceMode` | No | String enum: `Shared` (default), `LocalReadOnly`, or `LocalWritable`. Assembly requires `LocalReadOnly`; #253 will consume `LocalWritable`. |
+| `sourceRepositoryPath` | Local modes | Shared repository path used as the git fetch remote. It is a source, never the execution cwd. |
+| `sourceRef` | Local modes | Branch/ref shallow-fetched from `sourceRepositoryPath`; assembly passes the integration ref. |
+| `baseCommitSha` | Local modes | Immutable commit SHA expected at `sourceRef` (40–64 hexadecimal characters). |
+| `expectedTreeHash` | Local modes | Immutable tree object expected for `baseCommitSha` (40–64 hexadecimal characters). |
+| `scratchRoot` | Local modes | Mounted execution-scratch root. AgentHost derives the local path inside the pod as `{scratchRoot}/{run-hash}/{tree-hash}`. |
 
-`IRunSubmittingUserResolver.GetWorkingDirectoryAsync(runId)` resolves `workingDirectory` from the run row and strips coordinator suffixes such as `-coordinator-decompose`, so sibling child stages share the parent's worktree. Assembly Build/Test instead sends the explicit source contract above. AgentHost verifies the fetched commit and tree before setup, then uses `localExecutionPath` as both working directory and repository path. Preview resolves its command against the API-visible detached worktree and maps the relative cwd into this checkout.
+`IRunSubmittingUserResolver.GetWorkingDirectoryAsync(runId)` resolves the shared directory from the run row and strips coordinator suffixes such as `-coordinator-decompose`, so sibling child stages share the parent's worktree. Local execution sends the explicit source contract above. AgentHost verifies the fetched commit and tree before setup, derives the workspace path inside the pod, and exposes it as the runtime state's effective working directory. Preview resolves its command against the API-visible detached worktree and maps the relative cwd into this checkout.
 
 | `/configure` result | Meaning |
 |---|---|
 | `200` | Configuration and purpose-specific setup completed. |
 | `400` | Malformed JSON or missing `runId`. |
-| `409` | Pod was already configured, or assembly checkout preparation failed (including SHA/tree/path mismatch). |
-| `422` | Required assembly source fields were missing or invalid. |
-| `507` | `build-scratch` had less than `AgentHost:BuildScratchMinimumFreeBytes` available. |
+| `409` | Pod was already configured, or local workspace preparation failed (including SHA/tree/scratch mismatch). |
+| `422` | Required local workspace fields or purpose/mode policy were missing or invalid. |
+| `507` | `execution-scratch` had less than `AgentHost:ExecutionScratchMinimumFreeBytes` available. |
 
 ### Lifetime and cleanup
 

@@ -115,7 +115,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
     private IReadOnlyList<string> _registeredToolNames = [];
     private GitHubTokenScope? _tokenScope;
     private SessionConfig? _sessionConfig;
-    private SemaphoreSlim? _controlledShellSemaphore;
+    private ShellExecutionTracker? _controlledShellTracker;
 
     // --- Per-run run-event emission state (reset in SetupAsync) ---
     private StringBuilder _sb = new();
@@ -335,9 +335,9 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
                 ? (int)TimeSpan.FromMinutes(10).TotalMilliseconds
                 : 0,
         };
-        _controlledShellSemaphore?.Dispose();
-        _controlledShellSemaphore = controlledBuildTestShell
-            ? new SemaphoreSlim(1, 1)
+        _controlledShellTracker?.Dispose();
+        _controlledShellTracker = controlledBuildTestShell
+            ? new ShellExecutionTracker()
             : null;
         var toolContext = new SandboxToolContext(
             AgentId: agentId,
@@ -354,7 +354,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
             IsCommandApproved: hash => _approvalStore.IsApproved(runId, hash),
             IsCommandDenied: hash => _approvalStore.IsDenied(runId, hash),
             QuestionGate: _questionGate,
-            ShellSemaphore: _controlledShellSemaphore);
+            ShellExecutionTracker: _controlledShellTracker);
         _toolContext = toolContext;
 
         var sessionTools = BuildSessionConfigTools(
@@ -1598,7 +1598,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
             await disposableAgent.DisposeAsync().ConfigureAwait(false);
         if (_client is IAsyncDisposable disposableClient)
             await disposableClient.DisposeAsync().ConfigureAwait(false);
-        _controlledShellSemaphore?.Dispose();
-        _controlledShellSemaphore = null;
+        _controlledShellTracker?.Dispose();
+        _controlledShellTracker = null;
     }
 }

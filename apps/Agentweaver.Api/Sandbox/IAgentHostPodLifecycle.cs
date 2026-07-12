@@ -35,8 +35,7 @@ public interface IAgentHostPodLifecycle
 
     /// <summary>
     /// Provisions an AgentHost pod for <paramref name="runId"/> and configures it with an explicit
-    /// working directory instead of the run row's default worktree. Used by assembly Build/Test,
-    /// whose live preview must run from a detached integration worktree.
+    /// shared working directory instead of the run row's default worktree.
     /// </summary>
     Task<string> LaunchAgentHostPodAsync(
         string runId,
@@ -46,13 +45,14 @@ public interface IAgentHostPodLifecycle
     /// <summary>
     /// Provisions an AgentHost with an explicit purpose and immutable source revision. The default
     /// implementation preserves compatibility for lifecycle fakes/providers that only understand a
-    /// working-directory override.
+    /// shared working-directory override. Pod-local paths are created inside AgentHost and must never
+    /// be treated as API-visible worktrees by this fallback.
     /// </summary>
     Task<string> LaunchAgentHostPodAsync(
         string runId,
         AgentHostLaunchContext context,
         CancellationToken ct = default) =>
-        LaunchAgentHostPodAsync(runId, context.LocalExecutionPath ?? context.WorkingDirectory, ct);
+        LaunchAgentHostPodAsync(runId, context.SharedWorkingDirectory, ct);
 
     /// <summary>
     /// Releases the AgentHost pod for the given run by deleting its
@@ -64,10 +64,11 @@ public interface IAgentHostPodLifecycle
 
 /// <summary>Run-scoped inputs delivered to the warm AgentHost through <c>POST /configure</c>.</summary>
 public sealed record AgentHostLaunchContext(
-    string? WorkingDirectory,
-    Agentweaver.Domain.AgentHostPurpose Purpose = Agentweaver.Domain.AgentHostPurpose.Default,
+    string? SharedWorkingDirectory,
     string? SourceRepositoryPath = null,
-    string? IntegrationRef = null,
-    string? CommitSha = null,
+    string? SourceRef = null,
+    string? BaseCommitSha = null,
     string? ExpectedTreeHash = null,
-    string? LocalExecutionPath = null);
+    Agentweaver.Domain.ExecutionWorkspaceMode WorkspaceMode = Agentweaver.Domain.ExecutionWorkspaceMode.Shared,
+    Agentweaver.Domain.AgentHostPurpose Purpose = Agentweaver.Domain.AgentHostPurpose.Default,
+    string? ScratchRoot = null);

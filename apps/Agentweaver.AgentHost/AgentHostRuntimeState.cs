@@ -33,11 +33,19 @@ internal sealed class AgentHostRuntimeState
     public string UserId { get; private set; } = string.Empty;
     public string TurnBearerToken { get; private set; } = string.Empty;
     public AgentHostPurpose Purpose { get; private set; } = AgentHostPurpose.Default;
+    public ExecutionWorkspaceMode WorkspaceMode { get; private set; } = ExecutionWorkspaceMode.Shared;
+    public string? SharedWorkingDirectory { get; private set; }
     public string? SourceRepositoryPath { get; private set; }
-    public string? IntegrationRef { get; private set; }
-    public string? CommitSha { get; private set; }
+    public string? SourceRef { get; private set; }
+    public string? BaseCommitSha { get; private set; }
     public string? ExpectedTreeHash { get; private set; }
-    public string? LocalExecutionPath { get; private set; }
+    public string? ScratchRoot { get; private set; }
+
+    /// <summary>
+    /// Effective repository/tool root after workspace preparation. For shared execution this is the
+    /// shared worktree; for local execution it is the checkout created inside the pod.
+    /// </summary>
+    public string? EffectiveWorkingDirectory { get; private set; }
 
     /// <summary>
     /// Per-run preview-runner credential (spec-006 decouple-preview, BLOCKER A). Delivered in-memory
@@ -75,11 +83,14 @@ internal sealed class AgentHostRuntimeState
         KvUserSecretName = options.KvUserSecretName;
         GitHubAccessToken = null; // not available on env-var launch path
         Purpose = AgentHostPurpose.Default;
+        WorkspaceMode = ExecutionWorkspaceMode.Shared;
+        SharedWorkingDirectory = options.WorkingDirectory;
         SourceRepositoryPath = null;
-        IntegrationRef = null;
-        CommitSha = null;
+        SourceRef = null;
+        BaseCommitSha = null;
         ExpectedTreeHash = null;
-        LocalExecutionPath = null;
+        ScratchRoot = null;
+        EffectiveWorkingDirectory = options.WorkingDirectory;
     }
 
     /// <summary>
@@ -94,7 +105,7 @@ internal sealed class AgentHostRuntimeState
             kvUserSecretName,
             gitHubAccessToken,
             previewRunnerCredential,
-            WorkingDirectory: null));
+            SharedWorkingDirectory: null));
 
     /// <summary>Atomically applies the complete run-scoped warm-pod configuration.</summary>
     public bool TryConfigure(AgentHostRunConfiguration configuration)
@@ -113,13 +124,19 @@ internal sealed class AgentHostRuntimeState
             ? null
             : configuration.GitHubAccessToken;
         Purpose = configuration.Purpose;
+        WorkspaceMode = configuration.WorkspaceMode;
+        SharedWorkingDirectory = configuration.SharedWorkingDirectory;
         SourceRepositoryPath = configuration.SourceRepositoryPath;
-        IntegrationRef = configuration.IntegrationRef;
-        CommitSha = configuration.CommitSha;
+        SourceRef = configuration.SourceRef;
+        BaseCommitSha = configuration.BaseCommitSha;
         ExpectedTreeHash = configuration.ExpectedTreeHash;
-        LocalExecutionPath = configuration.LocalExecutionPath;
+        ScratchRoot = configuration.ScratchRoot;
+        EffectiveWorkingDirectory = configuration.SharedWorkingDirectory;
         return true;
     }
+
+    public void SetEffectiveWorkingDirectory(string workingDirectory) =>
+        EffectiveWorkingDirectory = workingDirectory;
 }
 
 /// <summary>Complete one-time configuration delivered to a warm AgentHost pod.</summary>
@@ -130,10 +147,11 @@ internal sealed record AgentHostRunConfiguration(
     string? KvUserSecretName,
     string? GitHubAccessToken,
     string? PreviewRunnerCredential,
-    string? WorkingDirectory,
+    string? SharedWorkingDirectory,
     AgentHostPurpose Purpose = AgentHostPurpose.Default,
     string? SourceRepositoryPath = null,
-    string? IntegrationRef = null,
-    string? CommitSha = null,
+    string? SourceRef = null,
+    string? BaseCommitSha = null,
     string? ExpectedTreeHash = null,
-    string? LocalExecutionPath = null);
+    ExecutionWorkspaceMode WorkspaceMode = ExecutionWorkspaceMode.Shared,
+    string? ScratchRoot = null);

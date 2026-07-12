@@ -333,7 +333,7 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
 
     /// <inheritdoc/>
     public Task<string> LaunchAgentHostPodAsync(string runId, CancellationToken ct = default) =>
-        LaunchAgentHostPodAsync(runId, new AgentHostLaunchContext(WorkingDirectory: null), ct);
+        LaunchAgentHostPodAsync(runId, new AgentHostLaunchContext(SharedWorkingDirectory: null), ct);
 
     /// <inheritdoc/>
     public Task<string> LaunchAgentHostPodAsync(
@@ -342,7 +342,7 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
         CancellationToken ct = default) =>
         LaunchAgentHostPodAsync(
             runId,
-            new AgentHostLaunchContext(WorkingDirectory: workingDirectoryOverride),
+            new AgentHostLaunchContext(SharedWorkingDirectory: workingDirectoryOverride),
             ct);
 
     /// <inheritdoc/>
@@ -352,10 +352,9 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
         CancellationToken ct = default)
     {
         var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
-        var executionDirectory = launchContext.LocalExecutionPath ?? launchContext.WorkingDirectory;
-        var requestedWorkingDirectory = string.IsNullOrWhiteSpace(executionDirectory)
+        var requestedWorkingDirectory = string.IsNullOrWhiteSpace(launchContext.SharedWorkingDirectory)
             ? null
-            : Path.GetFullPath(executionDirectory);
+            : Path.GetFullPath(launchContext.SharedWorkingDirectory);
 
         _logger.LogInformation(
             "KubernetesSandboxExecutor: launching AgentHost pod for run {RunId} via claim {Claim}",
@@ -388,11 +387,12 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
             claimCreated = await CreateAgentHostClaimAsync(
                 claimName, _options.AgentHostWarmPoolRef, requestedWorkingDirectory, runId, ct).ConfigureAwait(false);
 
-            if (!claimCreated && launchContext.Purpose == AgentHostPurpose.AssemblyBuildTest)
+            if (!claimCreated && launchContext.WorkspaceMode != ExecutionWorkspaceMode.Shared)
             {
                 _logger.LogInformation(
-                    "KubernetesSandboxExecutor: recreating existing AgentHost claim {Claim} for immutable AssemblyBuildTest configuration.",
-                    claimName);
+                    "KubernetesSandboxExecutor: recreating existing AgentHost claim {Claim} for immutable pod-local workspace configuration (mode={Mode}).",
+                    claimName,
+                    launchContext.WorkspaceMode);
                 await DeleteClaimAsync(claimName).ConfigureAwait(false);
                 _podRegistry?.Unregister(runId);
                 _turnTokenRegistry?.UnregisterTurnToken(runId);
@@ -402,7 +402,7 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
                 if (!claimCreated)
                 {
                     throw new InvalidOperationException(
-                        $"AgentHost claim '{claimName}' was deleted for immutable AssemblyBuildTest configuration, " +
+                        $"AgentHost claim '{claimName}' was deleted for immutable pod-local workspace configuration, " +
                         "but the replacement create still conflicted.");
                 }
             }
@@ -484,8 +484,8 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
 
             // Warm-pool deferred /configure: inject the per-run RunId/UserId/TurnBearerToken and the
             // KV secret name into the already-warm pod, which then runs SetupAsync and becomes ready.
-            // Normal roles use the shared orchestration worktree. AssemblyBuildTest carries immutable
-            // source refs and uses its deterministic /local-workspace checkout as the effective root.
+            // Normal roles use the shared orchestration worktree. Local workspace modes carry
+            // immutable source refs; AgentHost creates their effective root inside execution-scratch.
             if (claimCreated)
             {
                 await CallAgentHostConfigureAsync(
@@ -808,7 +808,7 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
     /// </summary>
     private async Task CallAgentHostConfigureAsync(
         string podIp, int port, string runId, string userId, string turnBearerToken,
-        string kvUserSecretName, string? gitHubAccessToken, string? workingDirectory,
+        string kvUserSecretName, string? gitHubAccessToken, string? sharedWorkingDirectory,
         AgentHostLaunchContext launchContext,
         CancellationToken ct)
     {
@@ -838,14 +838,18 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
             turnBearerToken,
             kvUserSecretName,
             gitHubAccessToken,
-            workingDirectory,
+            // Keep the legacy property during rolling upgrades; new AgentHosts prefer the explicit
+            // sharedWorkingDirectory descriptor and create any local workspace inside the pod.
+            workingDirectory = sharedWorkingDirectory,
+            sharedWorkingDirectory,
             previewRunnerCredential,
             purpose = launchContext.Purpose.ToString(),
             launchContext.SourceRepositoryPath,
-            launchContext.IntegrationRef,
-            launchContext.CommitSha,
+            launchContext.SourceRef,
+            launchContext.BaseCommitSha,
             launchContext.ExpectedTreeHash,
-            launchContext.LocalExecutionPath,
+            workspaceMode = launchContext.WorkspaceMode.ToString(),
+            launchContext.ScratchRoot,
             // Per-run AutoApproveTools flag (bug #221). Resolved from the API-side run-options store
             // keyed by the child runId; defaults false when the store is unavailable (unit tests).
             autoApproveTools = _runOptions?.Get(runId).AutoApproveTools ?? false,

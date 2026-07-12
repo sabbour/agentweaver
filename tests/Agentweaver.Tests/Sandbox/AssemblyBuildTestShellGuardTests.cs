@@ -67,6 +67,7 @@ public sealed class AssemblyBuildTestShellGuardTests : IDisposable
     public void Assembly_session_registers_controlled_run_command_custom_tool()
     {
         var executor = SandboxExecutorFactory.CreatePassthrough();
+        using var tracker = new ShellExecutionTracker();
         var context = new SandboxToolContext(
             AgentId: "agent",
             WorkingDirectory: _root,
@@ -82,7 +83,7 @@ public sealed class AssemblyBuildTestShellGuardTests : IDisposable
                 MaximumTimeoutMs = 600_000,
             },
             Logger: NullLogger.Instance,
-            ShellSemaphore: new SemaphoreSlim(1, 1));
+            ShellExecutionTracker: tracker);
 
         var tools = CopilotAIAgent.BuildSessionConfigTools(
             context,
@@ -99,8 +100,8 @@ public sealed class AssemblyBuildTestShellGuardTests : IDisposable
     public async Task Controlled_run_command_rejects_backgrounding_and_destructive_commands(string command)
     {
         var executor = new CountingExecutor();
-        using var semaphore = new SemaphoreSlim(1, 1);
-        var context = BuildContext(executor, semaphore);
+        using var tracker = new ShellExecutionTracker();
+        var context = BuildContext(executor, tracker);
         var tool = CopilotAIAgent.BuildSessionConfigTools(
             context,
             includeControlledRunCommand: true).Single(t => t.Name == "run_command");
@@ -116,15 +117,17 @@ public sealed class AssemblyBuildTestShellGuardTests : IDisposable
     public async Task Controlled_run_command_serializes_concurrent_invocations()
     {
         var executor = new CountingExecutor(blockFirstCall: true);
-        using var semaphore = new SemaphoreSlim(1, 1);
+        using var tracker = new ShellExecutionTracker();
         var tool = CopilotAIAgent.BuildSessionConfigTools(
-            BuildContext(executor, semaphore),
+            BuildContext(executor, tracker),
             includeControlledRunCommand: true).Single(t => t.Name == "run_command");
         var args = new AIFunctionArguments(
             new Dictionary<string, object?> { ["command"] = "dotnet test" });
 
         var first = tool.InvokeAsync(args).AsTask();
         await executor.FirstCallStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        tracker.ActiveExecution.Should().NotBeNull();
+        tracker.ActiveExecution!.Deadline.Should().BeAfter(tracker.ActiveExecution.StartedAt);
         var second = tool.InvokeAsync(args).AsTask();
         await Task.Delay(50);
         executor.ExecuteCalls.Should().Be(1);
@@ -134,6 +137,7 @@ public sealed class AssemblyBuildTestShellGuardTests : IDisposable
 
         executor.ExecuteCalls.Should().Be(2);
         executor.MaxConcurrent.Should().Be(1);
+        tracker.ActiveExecution.Should().BeNull();
     }
 
     private static CopilotAIAgent BuildAgent(ISandboxExecutor executor)
@@ -152,7 +156,7 @@ public sealed class AssemblyBuildTestShellGuardTests : IDisposable
             NullLogger<CopilotAIAgent>.Instance);
     }
 
-    private SandboxToolContext BuildContext(ISandboxExecutor executor, SemaphoreSlim semaphore) =>
+    private SandboxToolContext BuildContext(ISandboxExecutor executor, ShellExecutionTracker tracker) =>
         new(
             AgentId: "agent",
             WorkingDirectory: _root,
@@ -169,7 +173,7 @@ public sealed class AssemblyBuildTestShellGuardTests : IDisposable
                 MaximumTimeoutMs = 600_000,
             },
             Logger: NullLogger.Instance,
-            ShellSemaphore: semaphore);
+            ShellExecutionTracker: tracker);
 
     private sealed class CountingExecutor(bool blockFirstCall = false) : ISandboxExecutor
     {

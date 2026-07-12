@@ -15,12 +15,13 @@ public sealed record PreviewStepRequest(
     string TreeHash,
     string WorktreePath,
     string SubmittingUser,
-    string? ExecutionCheckoutPath = null);
+    string? ExecutionWorkspacePath = null);
 
 /// <summary>
 /// Deterministic, platform-owned live-preview step (spec-006 decouple-preview). Runs AFTER Build&amp;Test
-/// returns (ANY verdict) and BEFORE the authored gate decision, on the SAME retained coordinator pod +
-/// detached worktree. It drives the AgentHost <c>/preview-runner/*</c> lifecycle (start process →
+/// returns (ANY verdict) and BEFORE the authored gate decision, on the SAME retained coordinator pod.
+/// Command discovery reads the API-visible tree while execution may use its mapped local workspace.
+/// It drives the AgentHost <c>/preview-runner/*</c> lifecycle (start process →
 /// observe ACTUAL bound port → register through <see cref="AgentPreviewGate"/>) with NO model turn, and
 /// is the SINGLE emitter of the terminal <c>preview_ready</c>/<c>preview_failed</c> outcome per
 /// <c>{runId, workPlanId, treeHash}</c>. A preview failure NEVER blocks human review — it emits
@@ -104,18 +105,18 @@ public sealed class PreviewStep
             EmitStartRequested(request, resolution.Source);
 
             var sourceCwd = resolution.Cwd ?? request.WorktreePath;
-            var executionCwd = string.IsNullOrWhiteSpace(request.ExecutionCheckoutPath)
+            var executionCwd = string.IsNullOrWhiteSpace(request.ExecutionWorkspacePath)
                 ? sourceCwd
                 : PreviewCommandResolver.MapExecutionCwd(
                     request.WorktreePath,
                     sourceCwd,
-                    request.ExecutionCheckoutPath!);
+                    request.ExecutionWorkspacePath!);
             if (string.IsNullOrWhiteSpace(executionCwd))
             {
                 EmitFailed(
                     request,
                     "preview_cwd_mapping_invalid",
-                    "Resolved preview working directory was outside the API-visible assembly source tree.");
+                    "Resolved preview working directory was outside the API-visible source tree.");
                 return;
             }
 
