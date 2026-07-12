@@ -1,5 +1,7 @@
 namespace Agentweaver.AgentHost;
 
+using Agentweaver.Domain;
+
 /// <summary>
 /// Mutable, process-wide runtime state for the AgentHost pod. <see cref="AgentHostOptions"/> is
 /// <c>init</c>-only (immutable, bound from config/env at startup); this holder carries the per-run
@@ -30,6 +32,20 @@ internal sealed class AgentHostRuntimeState
     public string RunId { get; private set; } = string.Empty;
     public string UserId { get; private set; } = string.Empty;
     public string TurnBearerToken { get; private set; } = string.Empty;
+    public AgentHostPurpose Purpose { get; private set; } = AgentHostPurpose.Default;
+    public ExecutionWorkspaceMode WorkspaceMode { get; private set; } = ExecutionWorkspaceMode.Shared;
+    public string? SharedWorkingDirectory { get; private set; }
+    public string? SourceRepositoryPath { get; private set; }
+    public string? SourceRef { get; private set; }
+    public string? BaseCommitSha { get; private set; }
+    public string? ExpectedTreeHash { get; private set; }
+    public string? ScratchRoot { get; private set; }
+
+    /// <summary>
+    /// Effective repository/tool root after workspace preparation. For shared execution this is the
+    /// shared worktree; for local execution it is the checkout created inside the pod.
+    /// </summary>
+    public string? EffectiveWorkingDirectory { get; private set; }
 
     /// <summary>
     /// Per-run preview-runner credential (spec-006 decouple-preview, BLOCKER A). Delivered in-memory
@@ -66,6 +82,15 @@ internal sealed class AgentHostRuntimeState
         PreviewRunnerCredential = string.Empty; // not available on env-var launch path
         KvUserSecretName = options.KvUserSecretName;
         GitHubAccessToken = null; // not available on env-var launch path
+        Purpose = AgentHostPurpose.Default;
+        WorkspaceMode = ExecutionWorkspaceMode.Shared;
+        SharedWorkingDirectory = options.WorkingDirectory;
+        SourceRepositoryPath = null;
+        SourceRef = null;
+        BaseCommitSha = null;
+        ExpectedTreeHash = null;
+        ScratchRoot = null;
+        EffectiveWorkingDirectory = options.WorkingDirectory;
     }
 
     /// <summary>
@@ -73,16 +98,60 @@ internal sealed class AgentHostRuntimeState
     /// when the pod was already configured (one-time semantics → caller returns 409).
     /// </summary>
     public bool TryConfigure(string runId, string userId, string turnBearerToken, string? kvUserSecretName, string? gitHubAccessToken, string? previewRunnerCredential = null)
+        => TryConfigure(new AgentHostRunConfiguration(
+            runId,
+            userId,
+            turnBearerToken,
+            kvUserSecretName,
+            gitHubAccessToken,
+            previewRunnerCredential,
+            SharedWorkingDirectory: null));
+
+    /// <summary>Atomically applies the complete run-scoped warm-pod configuration.</summary>
+    public bool TryConfigure(AgentHostRunConfiguration configuration)
     {
         if (Interlocked.CompareExchange(ref _configured, 1, 0) != 0)
             return false;
 
-        RunId = runId ?? string.Empty;
-        UserId = userId ?? string.Empty;
-        TurnBearerToken = turnBearerToken ?? string.Empty;
-        PreviewRunnerCredential = previewRunnerCredential ?? string.Empty;
-        KvUserSecretName = string.IsNullOrWhiteSpace(kvUserSecretName) ? null : kvUserSecretName;
-        GitHubAccessToken = string.IsNullOrWhiteSpace(gitHubAccessToken) ? null : gitHubAccessToken;
+        RunId = configuration.RunId ?? string.Empty;
+        UserId = configuration.UserId ?? string.Empty;
+        TurnBearerToken = configuration.TurnBearerToken ?? string.Empty;
+        PreviewRunnerCredential = configuration.PreviewRunnerCredential ?? string.Empty;
+        KvUserSecretName = string.IsNullOrWhiteSpace(configuration.KvUserSecretName)
+            ? null
+            : configuration.KvUserSecretName;
+        GitHubAccessToken = string.IsNullOrWhiteSpace(configuration.GitHubAccessToken)
+            ? null
+            : configuration.GitHubAccessToken;
+        Purpose = configuration.Purpose;
+        WorkspaceMode = configuration.WorkspaceMode;
+        SharedWorkingDirectory = configuration.SharedWorkingDirectory;
+        SourceRepositoryPath = configuration.SourceRepositoryPath;
+        SourceRef = configuration.SourceRef;
+        BaseCommitSha = configuration.BaseCommitSha;
+        ExpectedTreeHash = configuration.ExpectedTreeHash;
+        ScratchRoot = configuration.ScratchRoot;
+        EffectiveWorkingDirectory = configuration.SharedWorkingDirectory;
         return true;
     }
+
+    public void SetEffectiveWorkingDirectory(string workingDirectory) =>
+        EffectiveWorkingDirectory = workingDirectory;
 }
+
+/// <summary>Complete one-time configuration delivered to a warm AgentHost pod.</summary>
+internal sealed record AgentHostRunConfiguration(
+    string RunId,
+    string UserId,
+    string TurnBearerToken,
+    string? KvUserSecretName,
+    string? GitHubAccessToken,
+    string? PreviewRunnerCredential,
+    string? SharedWorkingDirectory,
+    AgentHostPurpose Purpose = AgentHostPurpose.Default,
+    string? SourceRepositoryPath = null,
+    string? SourceRef = null,
+    string? BaseCommitSha = null,
+    string? ExpectedTreeHash = null,
+    ExecutionWorkspaceMode WorkspaceMode = ExecutionWorkspaceMode.Shared,
+    string? ScratchRoot = null);

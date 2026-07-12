@@ -14,12 +14,14 @@ public sealed record PreviewStepRequest(
     int WorkPlanId,
     string TreeHash,
     string WorktreePath,
-    string SubmittingUser);
+    string SubmittingUser,
+    string? ExecutionWorkspacePath = null);
 
 /// <summary>
 /// Deterministic, platform-owned live-preview step (spec-006 decouple-preview). Runs AFTER Build&amp;Test
-/// returns (ANY verdict) and BEFORE the authored gate decision, on the SAME retained coordinator pod +
-/// detached worktree. It drives the AgentHost <c>/preview-runner/*</c> lifecycle (start process →
+/// returns (ANY verdict) and BEFORE the authored gate decision, on the SAME retained coordinator pod.
+/// Command discovery reads the API-visible tree while execution may use its mapped local workspace.
+/// It drives the AgentHost <c>/preview-runner/*</c> lifecycle (start process →
 /// observe ACTUAL bound port → register through <see cref="AgentPreviewGate"/>) with NO model turn, and
 /// is the SINGLE emitter of the terminal <c>preview_ready</c>/<c>preview_failed</c> outcome per
 /// <c>{runId, workPlanId, treeHash}</c>. A preview failure NEVER blocks human review — it emits
@@ -39,6 +41,7 @@ public sealed class PreviewStep
     private readonly RunStreamStore _streamStore;
     private readonly SandboxRuntimeOptions _sandboxRuntime;
     private readonly ILogger<PreviewStep> _logger;
+    private readonly IPodNameRegistry? _podRegistry;
 
     public PreviewStep(
         ISandboxPreviewService previewService,
@@ -49,7 +52,8 @@ public sealed class PreviewStep
         RunStreamStore streamStore,
         SandboxRuntimeOptions sandboxRuntime,
         ILogger<PreviewStep> logger,
-        Agentweaver.Api.Auth.ISecretStore? secretStore = null)
+        Agentweaver.Api.Auth.ISecretStore? secretStore = null,
+        IPodNameRegistry? podRegistry = null)
     {
         _previewService = previewService;
         _previewGate = previewGate;
@@ -60,6 +64,7 @@ public sealed class PreviewStep
         _sandboxRuntime = sandboxRuntime;
         _logger = logger;
         _secretStore = secretStore;
+        _podRegistry = podRegistry;
     }
 
     /// <summary>
@@ -102,6 +107,25 @@ public sealed class PreviewStep
 
             EmitStartRequested(request, resolution.Source);
 
+            var sourceCwd = resolution.Cwd ?? request.WorktreePath;
+            var executionWorkspacePath = string.IsNullOrWhiteSpace(request.ExecutionWorkspacePath)
+                ? _podRegistry?.TryGetEffectiveWorkingDirectory(runId)
+                : request.ExecutionWorkspacePath;
+            var executionCwd = string.IsNullOrWhiteSpace(executionWorkspacePath)
+                ? sourceCwd
+                : PreviewCommandResolver.MapExecutionCwd(
+                    request.WorktreePath,
+                    sourceCwd,
+                    executionWorkspacePath!);
+            if (string.IsNullOrWhiteSpace(executionCwd))
+            {
+                EmitFailed(
+                    request,
+                    "preview_cwd_mapping_invalid",
+                    "Resolved preview working directory was outside the API-visible source tree.");
+                return;
+            }
+
             // 4. Bearer: same-process affinity uses the run's turn token; fall back to the per-run
             //    preview-runner credential from the run secret store for a cross-replica reconcile.
             var bearer = await ResolveBearerAsync(runId, ct).ConfigureAwait(false);
@@ -114,7 +138,7 @@ public sealed class PreviewStep
             try
             {
                 started = await _httpClient.StartProcessAsync(
-                    runId, bearer, resolution.Command!, resolution.Cwd ?? request.WorktreePath,
+                    runId, bearer, resolution.Command!, executionCwd,
                     request.WorkPlanId, request.TreeHash, ct).ConfigureAwait(false);
             }
             catch (PreviewRunnerHttpException ex) when (ex.Reason == "preview_runner_unauthorized")

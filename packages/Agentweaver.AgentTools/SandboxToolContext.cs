@@ -36,4 +36,9 @@ public sealed record SandboxToolContext(
     /// until the operator answers. Null in test/CLI contexts (ask_question returns a
     /// proceed-with-best-judgement fallback when absent).
     /// </summary>
-    Agentweaver.Domain.IQuestionGate? QuestionGate = null);
+    Agentweaver.Domain.IQuestionGate? QuestionGate = null,
+    /// <summary>
+    /// Optional single-flight shell tracker. Assembly Build/Test supplies one so concurrent model
+    /// tool calls cannot overlap and future heartbeat/deadline policies can observe active timing.
+    /// </summary>
+    ShellExecutionTracker? ShellExecutionTracker = null);

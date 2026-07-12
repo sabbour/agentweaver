@@ -1,0 +1,352 @@
+using Agentweaver.AgentRuntime;
+using Agentweaver.AgentRuntime.Providers;
+using Agentweaver.AgentTools;
+using Agentweaver.Domain;
+using Agentweaver.SandboxExec;
+using Agentweaver.SandboxFs;
+using Agentweaver.Tests.Helpers;
+using FluentAssertions;
+using GitHub.Copilot;
+using GitHub.Copilot.Rpc;
+using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging.Abstractions;
+using Xunit;
+
+namespace Agentweaver.Tests.Sandbox;
+
+public sealed class AssemblyBuildTestShellGuardTests : IDisposable
+{
+    private readonly string _root = Path.Combine(
+        AppContext.BaseDirectory,
+        ".assembly-shell-tests",
+        Guid.NewGuid().ToString("n"));
+
+    public AssemblyBuildTestShellGuardTests() => Directory.CreateDirectory(_root);
+
+    [Fact]
+    public async Task Native_shell_is_denied_for_assembly_build_test()
+    {
+        var executor = SandboxExecutorFactory.CreatePassthrough();
+        using var governance = SandboxGovernance.Create(
+            _root,
+            "run-1",
+            executor,
+            SandboxPolicy.Default(_root),
+            NullLogger.Instance);
+        var agent = BuildAgent(executor);
+        var errors = new List<string>();
+        var handler = agent.BuildPermissionHandler(
+            governance,
+            runId: "run-1",
+            workingDirectory: _root,
+            emitToolCallOnce: (_, _, _) => { },
+            emitToolErrorOnce: (_, message) => errors.Add(message),
+            emit: (_, _) => { },
+            runCt: CancellationToken.None,
+            denyNativeShell: true);
+
+        var result = await handler(
+            new PermissionRequestShell
+            {
+                FullCommandText = "npm ci",
+                Intention = "build",
+                Commands = [],
+                HasWriteFileRedirection = false,
+                PossiblePaths = [],
+                PossibleUrls = [],
+                CanOfferSessionApproval = false,
+            },
+            new PermissionInvocation());
+
+        result.Should().BeOfType<PermissionDecisionDeniedByRules>();
+        errors.Should().ContainSingle().Which.Should().Contain("controlled run_command");
+    }
+
+    [Fact]
+    public void Assembly_session_registers_controlled_run_command_custom_tool()
+    {
+        var executor = SandboxExecutorFactory.CreatePassthrough();
+        using var tracker = new ShellExecutionTracker();
+        var context = new SandboxToolContext(
+            AgentId: "agent",
+            WorkingDirectory: _root,
+            SandboxRoot: _root,
+            Executor: executor,
+            FileTools: new SandboxedFileTools(_root),
+            SearchTools: new SandboxedSearchTools(_root),
+            Redactor: SandboxOutputRedactor.Default,
+            Options: new SandboxToolOptions(ShellEnabled: true)
+            {
+                RejectBackgroundCommands = true,
+                RejectDestructiveCommands = true,
+                MaximumTimeoutMs = 600_000,
+            },
+            Logger: NullLogger.Instance,
+            ShellExecutionTracker: tracker);
+
+        var tools = CopilotAIAgent.BuildSessionConfigTools(
+            context,
+            includeControlledRunCommand: true);
+
+        tools.Select(t => t.Name).Should().Contain("run_command");
+    }
+
+    [Theory]
+    [InlineData("npm test &")]
+    [InlineData("nohup npm test")]
+    [InlineData("setsid npm test")]
+    [InlineData("rm -rf node_modules")]
+    public async Task Controlled_run_command_rejects_backgrounding_and_destructive_commands(string command)
+    {
+        var executor = new CountingExecutor();
+        using var tracker = new ShellExecutionTracker();
+        var context = BuildContext(executor, tracker);
+        var tool = CopilotAIAgent.BuildSessionConfigTools(
+            context,
+            includeControlledRunCommand: true).Single(t => t.Name == "run_command");
+
+        var result = await tool.InvokeAsync(new AIFunctionArguments(
+            new Dictionary<string, object?> { ["command"] = command }));
+
+        result?.ToString().Should().Contain("rejected");
+        executor.ExecuteCalls.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task Controlled_run_command_serializes_concurrent_invocations()
+    {
+        var executor = new CountingExecutor(blockFirstCall: true);
+        using var tracker = new ShellExecutionTracker();
+        var tool = CopilotAIAgent.BuildSessionConfigTools(
+            BuildContext(executor, tracker),
+            includeControlledRunCommand: true).Single(t => t.Name == "run_command");
+        var args = new AIFunctionArguments(
+            new Dictionary<string, object?> { ["command"] = "dotnet test" });
+
+        var first = tool.InvokeAsync(args).AsTask();
+        await executor.FirstCallStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        tracker.ActiveExecution.Should().NotBeNull();
+        tracker.ActiveExecution!.Deadline.Should().BeAfter(tracker.ActiveExecution.StartedAt);
+        var second = tool.InvokeAsync(args).AsTask();
+        await Task.Delay(50);
+        executor.ExecuteCalls.Should().Be(1);
+
+        executor.ReleaseFirstCall.TrySetResult();
+        await Task.WhenAll(first, second);
+
+        executor.ExecuteCalls.Should().Be(2);
+        executor.MaxConcurrent.Should().Be(1);
+        tracker.ActiveExecution.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task Controlled_run_command_runs_npm_install_with_workspace_local_cache_in_real_linux_sandbox()
+    {
+        ISandboxExecutor realExecutor;
+        if (OperatingSystem.IsLinux())
+        {
+            LinuxBwrapExecutor.IsBwrapAvailable().Should().BeTrue(
+                "the AgentHost Linux image must provide the real controlled bubblewrap executor");
+            realExecutor = new LinuxBwrapExecutor(NullLogger.Instance);
+        }
+        else if (OperatingSystem.IsWindows())
+        {
+            realExecutor = WslMxcSandboxExecutor.TryCreate(NullLogger.Instance)
+                ?? throw new InvalidOperationException(
+                    "The Windows verification environment must provide the real WSL Linux executor.");
+            realExecutor.BackendName.Should().Be(
+                "wsl-bwrap",
+                "the cache test must exercise filesystem-confined Linux execution, not passthrough/unshare");
+        }
+        else
+        {
+            return;
+        }
+
+        var workspace = Path.Combine(_root, "real-linux-install");
+        const string cacheRelativePath = ".agentweaver-cache/npm";
+        var cachePath = Path.Combine(workspace, ".agentweaver-cache", "npm");
+        Directory.CreateDirectory(cachePath);
+        File.WriteAllText(
+            Path.Combine(workspace, "package.json"),
+            """{"name":"controlled-cache-test","version":"1.0.0","private":true}""");
+
+        var originalCache = Environment.GetEnvironmentVariable("npm_config_cache");
+        var originalWslEnv = Environment.GetEnvironmentVariable("WSLENV");
+        Environment.SetEnvironmentVariable("npm_config_cache", cacheRelativePath);
+        if (OperatingSystem.IsWindows())
+        {
+            var wslVariables = (originalWslEnv ?? "")
+                .Split(':', StringSplitOptions.RemoveEmptyEntries)
+                .ToHashSet(StringComparer.Ordinal);
+            wslVariables.Add("npm_config_cache");
+            Environment.SetEnvironmentVariable("WSLENV", string.Join(':', wslVariables));
+        }
+        try
+        {
+            var executor = new RecordingExecutor(realExecutor);
+            using var tracker = new ShellExecutionTracker();
+            var context = BuildContext(executor, tracker, workspace);
+            var tool = CopilotAIAgent.BuildSessionConfigTools(
+                context,
+                includeControlledRunCommand: true).Single(t => t.Name == "run_command");
+
+            var result = await tool.InvokeAsync(new AIFunctionArguments(
+                new Dictionary<string, object?>
+                {
+                    ["command"] =
+                        "npm install --ignore-scripts --no-audit --no-fund && " +
+                        "test -w \"$npm_config_cache\" && " +
+                        "printf ok > \"$npm_config_cache/controlled-install.ok\"",
+                }));
+
+            result?.ToString().Should().Contain("exit_code: 0");
+            File.ReadAllText(Path.Combine(cachePath, "controlled-install.ok")).Should().Be("ok");
+            executor.LastCommand.Should().NotBeNull();
+            executor.LastCommand!.FilesystemPolicy.ReadWritePaths.Should().Contain(workspace);
+            executor.LastCommand.FilesystemPolicy.ReadWritePaths.Should().ContainSingle(
+                "SandboxToolContext uses the checkout as SandboxRoot, so the workspace-local cache is covered by the sole writable root");
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("npm_config_cache", originalCache);
+            Environment.SetEnvironmentVariable("WSLENV", originalWslEnv);
+        }
+    }
+
+    private static CopilotAIAgent BuildAgent(ISandboxExecutor executor)
+    {
+        var factory = new GitHubCopilotClientFactory(
+            new ConfigurationBuilder().Build(),
+            new NullGitHubTokenStore(),
+            new FixedInstallationScopeStub());
+        return new CopilotAIAgent(
+            factory,
+            new FixedInstallationScopeStub(),
+            executor,
+            new StubPolicyStore(),
+            new InMemoryShellApprovalStore(),
+            new InMemoryToolApprovalGate(),
+            NullLogger<CopilotAIAgent>.Instance);
+    }
+
+    private SandboxToolContext BuildContext(
+        ISandboxExecutor executor,
+        ShellExecutionTracker tracker,
+        string? workspace = null) =>
+        new(
+            AgentId: "agent",
+            WorkingDirectory: workspace ?? _root,
+            SandboxRoot: workspace ?? _root,
+            Executor: executor,
+            FileTools: new SandboxedFileTools(workspace ?? _root),
+            SearchTools: new SandboxedSearchTools(workspace ?? _root),
+            Redactor: SandboxOutputRedactor.Default,
+            Options: new SandboxToolOptions(ShellEnabled: true, DefaultTimeoutMs: 600_000)
+            {
+                DestructiveCommandPatterns = ["rm -rf"],
+                RejectBackgroundCommands = true,
+                RejectDestructiveCommands = true,
+                MaximumTimeoutMs = 600_000,
+            },
+            Logger: NullLogger.Instance,
+            ShellExecutionTracker: tracker);
+
+    private sealed class RecordingExecutor(ISandboxExecutor inner) : ISandboxExecutor
+    {
+        public SandboxCommand? LastCommand { get; private set; }
+        public bool IsRealIsolation => inner.IsRealIsolation;
+        public string BackendName => inner.BackendName;
+        public string SelectionReason => inner.SelectionReason;
+        public bool HasNetworkWarning => inner.HasNetworkWarning;
+        public string? NetworkWarningMessage => inner.NetworkWarningMessage;
+
+        public Task<SandboxExecResult> ExecuteAsync(
+            SandboxCommand command,
+            CancellationToken ct = default)
+        {
+            LastCommand = command;
+            return inner.ExecuteAsync(command, ct);
+        }
+
+        public IAsyncEnumerable<SandboxOutputChunk> StreamAsync(
+            SandboxCommand command,
+            CancellationToken ct = default)
+        {
+            LastCommand = command;
+            return inner.StreamAsync(command, ct);
+        }
+    }
+
+    private sealed class CountingExecutor(bool blockFirstCall = false) : ISandboxExecutor
+    {
+        private int _active;
+        private int _executeCalls;
+        private int _maxConcurrent;
+
+        public bool IsRealIsolation => false;
+        public string BackendName => "direct";
+        public string SelectionReason => "test";
+        public bool HasNetworkWarning => false;
+        public string? NetworkWarningMessage => null;
+        public int ExecuteCalls => Volatile.Read(ref _executeCalls);
+        public int MaxConcurrent => Volatile.Read(ref _maxConcurrent);
+        public TaskCompletionSource FirstCallStarted { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource ReleaseFirstCall { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public async Task<SandboxExecResult> ExecuteAsync(
+            SandboxCommand command,
+            CancellationToken ct = default)
+        {
+            var call = Interlocked.Increment(ref _executeCalls);
+            var active = Interlocked.Increment(ref _active);
+            InterlockedExtensions.Max(ref _maxConcurrent, active);
+            try
+            {
+                if (call == 1)
+                {
+                    FirstCallStarted.TrySetResult();
+                    if (blockFirstCall)
+                        await ReleaseFirstCall.Task.WaitAsync(ct);
+                }
+
+                return new SandboxExecResult(0, "ok", "", TimedOut: false, OutputTruncated: false);
+            }
+            finally
+            {
+                Interlocked.Decrement(ref _active);
+            }
+        }
+
+        public async IAsyncEnumerable<SandboxOutputChunk> StreamAsync(
+            SandboxCommand command,
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+        {
+            var result = await ExecuteAsync(command, ct);
+            yield return new SandboxOutputChunk(SandboxOutputStream.Stdout, result.Stdout);
+        }
+    }
+
+    private static class InterlockedExtensions
+    {
+        public static void Max(ref int location, int value)
+        {
+            var current = Volatile.Read(ref location);
+            while (current < value)
+            {
+                var observed = Interlocked.CompareExchange(ref location, value, current);
+                if (observed == current)
+                    return;
+                current = observed;
+            }
+        }
+    }
+
+    public void Dispose()
+    {
+        try { Directory.Delete(_root, recursive: true); } catch { }
+    }
+}

@@ -8,6 +8,7 @@ using Agentweaver.Api.Runs;
 using Agentweaver.Api.Sandbox;
 using Agentweaver.Domain;
 using Agentweaver.SandboxExec;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Options;
 
 namespace Agentweaver.Api.Coordinator;
@@ -41,6 +42,8 @@ public sealed class CollectiveAssemblyPipeline : ICollectiveAssemblyPipeline
     private readonly IToolApprovalGate _toolApprovalGate;
     private readonly IAgentHostPodLifecycle? _podLifecycle;
     private readonly SandboxRuntimeOptions _sandboxRuntime;
+    private readonly TimeSpan _buildTestTotalTimeout;
+    private readonly TimeSpan _buildTestStallTimeout;
     private readonly ILoggerFactory _loggerFactory;
     private readonly ILogger<CollectiveAssemblyPipeline> _logger;
 
@@ -56,7 +59,8 @@ public sealed class CollectiveAssemblyPipeline : ICollectiveAssemblyPipeline
         IToolApprovalGate toolApprovalGate,
         ILoggerFactory loggerFactory,
         IAgentHostPodLifecycle? podLifecycle = null,
-        IOptions<SandboxRuntimeOptions>? sandboxRuntime = null)
+        IOptions<SandboxRuntimeOptions>? sandboxRuntime = null,
+        IConfiguration? configuration = null)
     {
         _worktreeManager = worktreeManager;
         _mergeLock = mergeLock;
@@ -69,6 +73,12 @@ public sealed class CollectiveAssemblyPipeline : ICollectiveAssemblyPipeline
         _toolApprovalGate = toolApprovalGate;
         _podLifecycle = podLifecycle;
         _sandboxRuntime = sandboxRuntime?.Value ?? new SandboxRuntimeOptions();
+        _buildTestTotalTimeout = TimeSpan.FromMinutes(Math.Max(
+            0.01,
+            configuration?.GetValue("Coordinator:AssemblyBuildTestTimeoutMinutes", 20.0) ?? 20.0));
+        _buildTestStallTimeout = TimeSpan.FromMinutes(Math.Max(
+            0.01,
+            configuration?.GetValue("Coordinator:AssemblyBuildTestStallTimeoutMinutes", 12.0) ?? 12.0));
         _loggerFactory = loggerFactory;
         _logger = loggerFactory.CreateLogger<CollectiveAssemblyPipeline>();
     }
@@ -151,6 +161,9 @@ public sealed class CollectiveAssemblyPipeline : ICollectiveAssemblyPipeline
 
     public async Task<CollectiveGateDecision> RunBuildTestAsync(CollectiveBuildTestRequest request, CancellationToken ct)
     {
+        using var gateCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        gateCts.CancelAfter(_buildTestTotalTimeout);
+        var gateCt = gateCts.Token;
         WorktreeInfo? detachedWorktree = null;
         try
         {
@@ -171,8 +184,29 @@ public sealed class CollectiveAssemblyPipeline : ICollectiveAssemblyPipeline
 
                 try
                 {
+                    var commitSha = _worktreeManager.GetBranchTipCommitSha(
+                        request.RepositoryPath,
+                        request.IntegrationBranch);
+                    if (!PodLocalExecutionWorkspace.IsGitObjectId(commitSha))
+                    {
+                        throw new CollectiveBuildTestInfrastructureException(
+                            "assembly_integration_commit_unresolved",
+                            $"Could not resolve immutable commit SHA for integration ref '{request.IntegrationBranch}'.",
+                            retryable: false);
+                    }
+
                     await _podLifecycle.LaunchAgentHostPodAsync(
-                        request.CoordinatorRunId, detachedWorktree.WorktreePath, ct).ConfigureAwait(false);
+                        request.CoordinatorRunId,
+                        new AgentHostLaunchContext(
+                            SharedWorkingDirectory: detachedWorktree.WorktreePath,
+                            SourceRepositoryPath: request.RepositoryPath,
+                            SourceRef: request.IntegrationBranch,
+                            BaseCommitSha: commitSha,
+                            ExpectedTreeHash: request.AggregateTreeHash,
+                            WorkspaceMode: ExecutionWorkspaceMode.LocalReadOnly,
+                            Purpose: AgentHostPurpose.AssemblyBuildTest,
+                            ScratchRoot: PodLocalExecutionWorkspace.DefaultScratchRoot),
+                        gateCt).ConfigureAwait(false);
                 }
                 catch (AgentHostPodReconcilerErrorException ex)
                 {
@@ -181,6 +215,18 @@ public sealed class CollectiveAssemblyPipeline : ICollectiveAssemblyPipeline
                         ex.Message,
                         retryable: false,
                         ex);
+                }
+                catch (AgentHostConfigureException ex)
+                {
+                    throw new CollectiveBuildTestInfrastructureException(
+                        ex.Reason,
+                        ex.Message,
+                        retryable: ex.StatusCode == StatusCodes.Status507InsufficientStorage,
+                        ex);
+                }
+                catch (CollectiveBuildTestInfrastructureException)
+                {
+                    throw;
                 }
                 catch (InvalidOperationException ex) when (
                     ex.Message.Contains("submitting user", StringComparison.OrdinalIgnoreCase))
@@ -217,7 +263,9 @@ public sealed class CollectiveAssemblyPipeline : ICollectiveAssemblyPipeline
                 agentId: request.AgentId,
                 projectId: request.ProjectId,
                 apiBaseUrl: _workflowFactory.ApiBaseUrl,
-                apiKey: _workflowFactory.ApiKey);
+                apiKey: _workflowFactory.ApiKey,
+                totalTimeout: _buildTestTotalTimeout,
+                stallTimeout: _buildTestStallTimeout);
 
             var input = new AgentTurnOutput(
                 RunId: request.CoordinatorRunId,
@@ -233,19 +281,40 @@ public sealed class CollectiveAssemblyPipeline : ICollectiveAssemblyPipeline
                 ProjectId: request.ProjectId,
                 AgentName: request.AgentId);
 
-            var decision = await buildTest.HandleAsync(input, NoOpWorkflowContext.Instance, ct).ConfigureAwait(false);
+            var decision = await buildTest.HandleAsync(input, NoOpWorkflowContext.Instance, gateCt).ConfigureAwait(false);
             // spec-006 §3.3: do NOT remove the worktree here — the deterministic PreviewStep needs it as
             // its cwd. All worktree/pod teardown is deferred to CleanupBuildTestResourcesAsync.
             return new CollectiveGateDecision(decision.Approved, decision.RequestChanges, decision.Feedback, decision.TargetFiles);
         }
         catch (WorkflowAgentInfrastructureException ex)
         {
+            if (ex.Reason is BuildTestTurnExecutor.WallClockTimeoutReason
+                or BuildTestTurnExecutor.StallTimeoutReason)
+            {
+                await CleanupBuildTestResourcesAsync(
+                    request.CoordinatorRunId,
+                    request.RepositoryPath,
+                    CancellationToken.None).ConfigureAwait(false);
+            }
+
             _logger.LogWarning(ex,
                 "Collective Build/Test: workflow agent infrastructure failure for coordinator run {RunId}: {Reason}: {Message}",
                 request.CoordinatorRunId, ex.Reason, ex.Message);
             throw new CollectiveBuildTestInfrastructureException(
                 ex.Reason,
                 ex.Message,
+                retryable: true,
+                ex);
+        }
+        catch (OperationCanceledException ex) when (!ct.IsCancellationRequested)
+        {
+            await CleanupBuildTestResourcesAsync(
+                request.CoordinatorRunId,
+                request.RepositoryPath,
+                CancellationToken.None).ConfigureAwait(false);
+            throw new CollectiveBuildTestInfrastructureException(
+                BuildTestTurnExecutor.WallClockTimeoutReason,
+                $"Collective Build/Test exceeded its total wall-clock timeout of {_buildTestTotalTimeout}.",
                 retryable: true,
                 ex);
         }

@@ -295,16 +295,74 @@ they are waiting for `/configure`. This lets
 and Copilot SDK host are already warm, but no run context is required until a claim binds. With the
 Worker now in `pod-per-run`, those two standby pods are the hot path for coordinator child turns.
 
-At run launch, `KubernetesSandboxExecutor` generates a 256-bit turn bearer token, resolves the run owner's Key Vault secret name, resolves the run's shared orchestration worktree path, reads the run's `AutoApproveTools` option from the API-side `IRunOptionsStore`, and calls `POST {scheme}://{podIP}:8088/configure` with `runId`, `userId`, `turnBearerToken`, `kvUserSecretName`, `workingDirectory`, and `autoApproveTools`. The `workingDirectory` value is `Run.WorktreePath` (for example `/workspace/{worktree}`); coordinator sub-run ids such as `-coordinator-decompose` resolve back to the parent run so child stages inherit the same shared worktree. `autoApproveTools` propagates the per-run auto-approve flag so the warm pod — which boots a fresh `IRunOptionsStore` defaulting to `false` — honors run-level auto-approve at its HITL gate; without it, every `web_fetch` in a `pod-per-run` autopilot run would stall the 5-minute approval gate and auto-deny (issue #221). `/configure` is one-time (`409` after the first successful call), returns `400` when `runId` is missing, is excluded from the readiness gate, and is intentionally not protected by the turn token because it delivers that token. NetworkPolicy limiting AgentHost ingress to API/worker pods is the guard.
+At run launch, `KubernetesSandboxExecutor` generates a 256-bit turn bearer token, resolves the run owner's Key Vault secret name, resolves the run's shared orchestration worktree path, reads the run's `AutoApproveTools` option from the API-side `IRunOptionsStore`, and calls `POST {scheme}://{podIP}:8088/configure` with `runId`, `userId`, `turnBearerToken`, `kvUserSecretName`, `sharedWorkingDirectory`, and `autoApproveTools`. The legacy `workingDirectory` property is sent as a rolling-upgrade alias and always carries the same API-visible shared path. Coordinator sub-run ids such as `-coordinator-decompose` resolve back to the parent run so child stages inherit the same shared worktree. `autoApproveTools` propagates the per-run auto-approve flag so the warm pod — which boots a fresh `IRunOptionsStore` defaulting to `false` — honors run-level auto-approve at its HITL gate; without it, every `web_fetch` in a `pod-per-run` autopilot run would stall the 5-minute approval gate and auto-deny (issue #221). `/configure` is one-time (`409` after the first successful call), returns `400` when `runId` is missing, is excluded from the readiness gate, and is intentionally not protected by the turn token because it delivers that token. NetworkPolicy limiting AgentHost ingress to API/worker pods is the guard.
 
 After `/configure`, `AgentHostStartupService.ConfigureAsync` runs `SetupAsync` with that per-run working directory overriding the static `AgentHost__WorkingDirectory` env default; only then does `/healthz` return `200` and the executor registers the A2A endpoint. This establishes the invariant `SetupAsync` working directory == `Run.WorktreePath` == the path named in the run's system prompt, so files written by one sibling agent are visible to later synthesis or assembly stages. If working-directory resolution fails, launch continues and the pod falls back to the env default. The wait is bounded (default `90 s`, `1 s` interval, `5 s` per-attempt timeout) and honors the launch cancellation token. The `a2a-sandbox-pod` client still carries the connection-refused retry handler as defense-in-depth, but the normal path is: **claim warm pod → configure → health ready → first turn**.
+
+#### Pod-local execution workspaces
+
+`PodLocalWorkspaceManager` is the common materialization seam for execution that must leave Azure
+Files SMB. `ExecutionWorkspaceMode` separates location and write-back policy:
+
+- `Shared` keeps the existing shared-worktree behavior.
+- `LocalReadOnly` creates a verified local checkout and rejects write-back preparation.
+- `LocalWritable` reserves the same checkout mechanism for implementation turns; issue #253 owns
+  their finalization/write-back behavior.
+
+Assembly Build/Test uses `LocalReadOnly`. Its API-visible detached worktree remains on the shared
+`/workspace` PVC for command discovery and review, but dependency installation, compilation, tests,
+and preview execute from a **complete checkout** on the disk-backed `execution-scratch` emptyDir
+mounted at `/local-workspace`. This avoids Azure Files SMB metadata/delete pathologies without
+symlinking `node_modules` or writing git-worktree administration into the shared repository.
+
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
+flowchart LR
+    API["API-visible integration tree<br/>/workspace/... (SMB)"] -->|"configure: ref + SHA + tree"| Host["AgentHostStartupService"]
+    Host -->|"git init + shallow fetch"| Local["/local-workspace/{run-hash}/{tree-hash}<br/>disk-backed emptyDir"]
+    Host --> Verify{"SHA and tree match?"}
+    Verify -->|"no"| Fail["typed configure failure<br/>claim deleted"]
+    Verify -->|"yes"| Gate["Build/Test<br/>controlled run_command"]
+    Local --> Gate
+    API -->|"resolve preview command + relative cwd"| Preview["PreviewStep"]
+    Local -->|"mapped execution cwd"| Preview
+```
+
+The configure payload sets `purpose: "AssemblyBuildTest"`, `workspaceMode: "LocalReadOnly"`, and
+carries `sharedWorkingDirectory`, `sourceRepositoryPath`, `sourceRef`, `baseCommitSha`,
+`expectedTreeHash`, and `scratchRoot`. The API never passes a pod-local path as an existing worktree:
+`PodLocalWorkspaceManager` derives `/local-workspace/{run-hash}/{tree-hash}` inside AgentHost,
+preflights free ephemeral space, initializes a new repository, shallow-fetches `sourceRef`, verifies
+both immutable object ids, and checks out `baseCommitSha` detached **before**
+`CopilotAIAgent.SetupAsync`. Commit or tree mismatch is fatal; AgentHost never builds a nearby
+revision. npm, Yarn, pnpm, and XDG caches are rooted under the same scratch volume. Runtime state
+exposes the resulting effective working directory for preview/control-plane consumers.
+
+The assembly role also changes shell discipline. Native Copilot shell requests are denied, while a
+custom `run_command` uses the existing executor with one-command-at-a-time serialization, destructive
+command rejection, background/detach rejection, and a ten-minute per-command cap. The gate has a
+20-minute total wall-clock timeout and a 12-minute no-progress watchdog by default
+(`Coordinator:AssemblyBuildTestTimeoutMinutes` and
+`Coordinator:AssemblyBuildTestStallTimeoutMinutes`). Either timeout cancels the turn, releases the
+retained AgentHost claim, and surfaces a typed infrastructure failure instead of leaving assembly
+parked forever. `ShellExecutionTracker` exposes only the active command hash, start time, and deadline
+so the separate resiliency work can add shell heartbeats/deadline coordination without changing the
+single-flight mechanism; this change does not add those heartbeats.
+
+Preview command discovery still reads the API-visible tree, but `PreviewStep` maps the resolved
+relative cwd into the verified local checkout. The preview therefore sees the exact `node_modules`
+and build artifacts produced by the gate.
 
 | Source | Role |
 | --- | --- |
 | `apps/Agentweaver.Api/Sandbox/IRunSubmittingUserResolver.cs` | Resolves the run's `WorktreePath` and strips coordinator suffixes so child stages inherit the parent worktree. |
-| `apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs` | Resolves `workingDirectory` without making lookup failures fatal and includes it in the `/configure` JSON body. |
-| `apps/Agentweaver.AgentHost/Program.cs` | Accepts `workingDirectory` on `ConfigureRequest` and passes it into AgentHost startup. |
-| `apps/Agentweaver.AgentHost/AgentHostStartupService.cs` | Uses the per-run working directory for `SetupAsync` and file-tool root when warm-pool configuration supplies it. |
+| `apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs` | Carries the shared directory plus the generalized workspace descriptor; compatibility fallback always uses the shared path. |
+| `apps/Agentweaver.AgentHost/Program.cs` | Accepts the generalized workspace contract while retaining `workingDirectory` as a shared-path compatibility alias. |
+| `apps/Agentweaver.AgentHost/AgentHostStartupService.cs` | Selects shared execution or prepares a pod-local workspace before `SetupAsync`. |
+| `apps/Agentweaver.AgentHost/PodLocalWorkspaceManager.cs` | Creates, verifies, exposes write-back preparation policy, and cleans up pod-local workspaces. |
+| `packages/Agentweaver.AgentRuntime/Workflow/BuildTestTurnExecutor.cs` | Enforces total/no-progress timeouts for the model-mediated gate. |
+| `apps/Agentweaver.Api/Coordinator/Preview/PreviewStep.cs` | Resolves from the shared tree and executes preview in the mapped local checkout cwd. |
+| `k8s/sandbox-template-agenthost.yaml` | Mounts the 8 GiB disk-backed `execution-scratch` emptyDir with a 1 GiB standby request and 8 GiB limit. |
 
 ### Node topology: the dedicated kata user pool
 

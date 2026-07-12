@@ -137,6 +137,7 @@ internal sealed class WslMxcSandboxExecutor : ISandboxExecutor
             " --ro-bind-try /usr/bin /usr/bin" +
             " --ro-bind-try /usr/lib /usr/lib" +
             " --ro-bind-try /usr/lib64 /usr/lib64" +
+            " --ro-bind-try /usr/share/nodejs /usr/share/nodejs" +
             " --ro-bind-try /usr/local/bin /usr/local/bin" +
             " --ro-bind-try /usr/local/lib /usr/local/lib" +
             " --ro-bind-try /etc/resolv.conf /etc/resolv.conf" +

@@ -170,6 +170,38 @@ public sealed class BuildTestWorkflowTests
     }
 
     [Fact]
+    public async Task BuildTestExecutor_total_wall_clock_timeout_fails_instead_of_livelocking()
+    {
+        var executor = new BuildTestTurnExecutor(
+            new GitHubCopilotClientFactory(new ConfigurationBuilder().Build(), new NullGitHubTokenStore(), new FixedInstallationScopeStub()),
+            new FixedInstallationScopeStub(),
+            new PassthroughExecutor("test"),
+            new StubPolicyStore(),
+            new InMemoryShellApprovalStore(),
+            new InMemoryToolApprovalGate(),
+            NullLoggerFactory.Instance,
+            agentFactory: new HangingBuildTestAgentFactory(),
+            totalTimeout: TimeSpan.FromMilliseconds(50),
+            stallTimeout: TimeSpan.FromSeconds(5));
+
+        var act = () => executor.HandleAsync(new AgentTurnOutput(
+            RunId: "build-test-timeout",
+            TreeHash: "tree",
+            Diff: "diff",
+            StepCount: 0,
+            WorktreePath: AppContext.BaseDirectory,
+            WorktreeBranch: "integration",
+            RepositoryPath: AppContext.BaseDirectory,
+            OriginatingBranch: "main",
+            ContentSafetyFlagged: false),
+            context: null!,
+            CancellationToken.None).AsTask();
+
+        var exception = await act.Should().ThrowAsync<WorkflowAgentInfrastructureException>();
+        exception.Which.Reason.Should().Be(BuildTestTurnExecutor.WallClockTimeoutReason);
+    }
+
+    [Fact]
     public void BuildTestVerdictParser_AcceptsCurlPrefixedApprovedVerdict()
     {
         var parsed = BuildTestTurnExecutor.TryParseVerdict(
@@ -241,3 +273,36 @@ internal sealed class CapturingWorkflowTurnAgent : IWorkflowTurnAgent
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;
 }
 
+internal sealed class HangingBuildTestAgentFactory : IWorkflowAgentFactory
+{
+    public IWorkflowTurnAgent CreateWorkerAgent() => new HangingBuildTestAgent();
+    public IWorkflowTurnAgent CreateRaiAgent() => new HangingBuildTestAgent();
+    public IWorkflowTurnAgent CreateRubberduckAgent() => new HangingBuildTestAgent();
+    public IWorkflowTurnAgent CreateBuildTestAgent() => new HangingBuildTestAgent();
+    public IWorkflowTurnAgent CreateScribeAgent() => new HangingBuildTestAgent();
+}
+
+internal sealed class HangingBuildTestAgent : IWorkflowTurnAgent
+{
+    public Task SetupAsync(
+        string workingDirectory,
+        string repositoryPath,
+        string runId,
+        string? modelId,
+        string? systemPromptContext,
+        ChannelWriter<RunEvent>? streamWriter,
+        string? projectId,
+        string? agentName,
+        string? apiBaseUrl,
+        string? apiKey,
+        CancellationToken ct,
+        string? userId = null) => Task.CompletedTask;
+
+    public async Task<string> RunTurnAsync(string task, bool isRevision, CancellationToken ct)
+    {
+        await Task.Delay(Timeout.InfiniteTimeSpan, ct);
+        return "";
+    }
+
+    public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+}

@@ -1009,7 +1009,9 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
                                 WorkPlanId: workPlanId,
                                 TreeHash: aggregateTreeHash,
                                 WorktreePath: _pipeline.GetBuildTestWorktreePath(context.CoordinatorRunId),
-                                SubmittingUser: context.SubmittingUser),
+                                SubmittingUser: context.SubmittingUser,
+                                ExecutionWorkspacePath: _podRegistry?.TryGetEffectiveWorkingDirectory(
+                                    context.CoordinatorRunId)),
                             ct).ConfigureAwait(false);
                     }
                     catch (OperationCanceledException)

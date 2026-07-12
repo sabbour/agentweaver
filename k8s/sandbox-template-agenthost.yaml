@@ -138,12 +138,19 @@ spec:
             requests:
               memory: "1Gi"
               cpu: "500m"
+              # Warm replicas reserve modest capacity; active workspaces can grow to the 8Gi limit.
+              ephemeral-storage: "1Gi"
             limits:
               memory: "4Gi"
               cpu: "2000m"
+              ephemeral-storage: "8Gi"
           volumeMounts:
             - name: workspace
               mountPath: /workspace
+            # Disk-backed scratch for pod-local execution + preview. Keep this off tmpfs: Node/Next
+            # already needs the container's 4Gi memory budget.
+            - name: execution-scratch
+              mountPath: /local-workspace
             - name: tmp
               mountPath: /tmp
             # Writable HOME (CopilotClient / git config + caches).
@@ -161,6 +168,11 @@ spec:
         - name: workspace
           persistentVolumeClaim:
             claimName: agentweaver-workspace
+        - name: execution-scratch
+          emptyDir:
+            # Initial measured budget for a checkout, node_modules/.next, and package caches.
+            # Revisit from scratch-usage telemetry before increasing.
+            sizeLimit: "8Gi"
         - name: tmp
           emptyDir: {}
         - name: home

@@ -1,4 +1,5 @@
 using System.Net;
+using System.Text.Json.Serialization;
 using Agentweaver.AgentHost;
 using Agentweaver.AgentRuntime;
 using Agentweaver.AgentRuntime.Providers;
@@ -24,6 +25,7 @@ builder.Services.Configure<AgentHostOptions>(builder.Configuration.GetSection("A
 // carries RunId/UserId/TurnBearerToken/KvUserSecretName delivered later via POST /configure
 // (warm pool) or seeded from options at startup (env-var launch).
 builder.Services.AddSingleton<AgentHostRuntimeState>();
+builder.Services.AddSingleton<PodLocalWorkspaceManager>();
 builder.Services.Configure<PreviewRunnerOptions>(builder.Configuration.GetSection("AgentHost:PreviewRunner"));
 
 // ── A2A listener: mTLS (production default) vs plain HTTP (PoC) ─────────────────
@@ -219,18 +221,42 @@ app.MapPost("/configure", async (HttpContext ctx) =>
     if (body is null || string.IsNullOrWhiteSpace(body.RunId))
         return Results.BadRequest("runId is required");
 
+    var configuration = body.ToRunConfiguration();
+    try
+    {
+        PodLocalWorkspaceManager.ValidateConfiguration(configuration);
+    }
+    catch (AgentHostConfigurationException ex)
+    {
+        return Results.Json(
+            new { error = ex.Reason, message = ex.Message },
+            statusCode: StatusCodes.Status422UnprocessableEntity);
+    }
+
     // Interlocked one-time gate (inside TryConfigure): first caller wins, the rest get 409.
-    if (!runtimeState.TryConfigure(
-            body.RunId, body.UserId ?? string.Empty, body.TurnBearerToken ?? string.Empty,
-            body.KvUserSecretName, body.GitHubAccessToken, body.PreviewRunnerCredential))
+    if (!runtimeState.TryConfigure(configuration))
         return Results.Conflict("Already configured");
 
-    await startup.ConfigureAsync(
-        body.RunId, body.UserId ?? string.Empty, body.TurnBearerToken ?? string.Empty,
-        body.KvUserSecretName, body.GitHubAccessToken, body.WorkingDirectory,
-        body.AutoApproveTools, ctx.RequestAborted).ConfigureAwait(false);
+    try
+    {
+        await startup.ConfigureAsync(configuration, body.AutoApproveTools, ctx.RequestAborted)
+            .ConfigureAwait(false);
+    }
+    catch (AgentHostConfigurationException ex)
+    {
+        return Results.Json(
+            new { error = ex.Reason, message = ex.Message },
+            statusCode: ex.Reason == "insufficient_ephemeral_storage"
+                ? StatusCodes.Status507InsufficientStorage
+                : StatusCodes.Status409Conflict);
+    }
 
-    return Results.Ok(new { configured = true, runId = body.RunId });
+    return Results.Ok(new
+    {
+        configured = true,
+        runId = body.RunId,
+        effectiveWorkingDirectory = runtimeState.EffectiveWorkingDirectory,
+    });
 });
 
 // ── A2A bearer auth gates ─────────────────────────────────────────────────────
@@ -460,6 +486,12 @@ internal sealed record ConfigureRequest
     /// warm pod serving a run of the same parent rooted at the SAME directory the run's system prompt
     /// references, so files produced by one stage are visible to the next.
     /// </summary>
+    public string? SharedWorkingDirectory { get; init; }
+
+    /// <summary>
+    /// Backward-compatible alias for callers predating the explicit workspace descriptor.
+    /// New callers should send <see cref="SharedWorkingDirectory"/>.
+    /// </summary>
     public string? WorkingDirectory { get; init; }
 
     /// <summary>
@@ -470,6 +502,45 @@ internal sealed record ConfigureRequest
     /// <c>web_fetch</c> waits out the HITL timeout under autopilot.
     /// </summary>
     public bool AutoApproveTools { get; init; }
+
+    /// <summary>Explicit run purpose. Omitted payloads preserve the existing shared-worktree behavior.</summary>
+    [JsonConverter(typeof(JsonStringEnumConverter<AgentHostPurpose>))]
+    public AgentHostPurpose Purpose { get; init; } = AgentHostPurpose.Default;
+
+    /// <summary>API-visible shared repository used only as the immutable git fetch source.</summary>
+    public string? SourceRepositoryPath { get; init; }
+
+    /// <summary>Branch/ref shallow-fetched from <see cref="SourceRepositoryPath"/>.</summary>
+    public string? SourceRef { get; init; }
+
+    /// <summary>Immutable commit expected at <see cref="SourceRef"/>.</summary>
+    public string? BaseCommitSha { get; init; }
+
+    /// <summary>Immutable tree object expected for <see cref="BaseCommitSha"/>.</summary>
+    public string? ExpectedTreeHash { get; init; }
+
+    /// <summary>Shared versus pod-local execution and write-back policy.</summary>
+    [JsonConverter(typeof(JsonStringEnumConverter<ExecutionWorkspaceMode>))]
+    public ExecutionWorkspaceMode WorkspaceMode { get; init; } = ExecutionWorkspaceMode.Shared;
+
+    /// <summary>Root of the execution-scratch emptyDir where the pod creates local workspaces.</summary>
+    public string? ScratchRoot { get; init; }
+
+    internal AgentHostRunConfiguration ToRunConfiguration() => new(
+        RunId ?? string.Empty,
+        UserId ?? string.Empty,
+        TurnBearerToken ?? string.Empty,
+        KvUserSecretName,
+        GitHubAccessToken,
+        PreviewRunnerCredential,
+        SharedWorkingDirectory ?? WorkingDirectory,
+        Purpose,
+        SourceRepositoryPath,
+        SourceRef,
+        BaseCommitSha,
+        ExpectedTreeHash,
+        WorkspaceMode,
+        ScratchRoot);
 }
 
 internal sealed record PreviewProcessStartRequest

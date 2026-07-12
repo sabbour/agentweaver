@@ -40,4 +40,16 @@ public interface IPodNameRegistry
     /// <see langword="null"/> if the pod has not been launched or has been released.
     /// </summary>
     string? TryGetAgentEndpoint(string runId);
+
+    /// <summary>
+    /// Registers the working directory actually selected by AgentHost after <c>/configure</c>.
+    /// Pod-local modes return their checkout path; shared/compatibility providers may omit it.
+    /// </summary>
+    void RegisterEffectiveWorkingDirectory(string runId, string workingDirectory) { }
+
+    /// <summary>
+    /// Returns the AgentHost-selected working directory, or <see langword="null"/> when the
+    /// lifecycle provider did not report one.
+    /// </summary>
+    string? TryGetEffectiveWorkingDirectory(string runId) => null;
 }
