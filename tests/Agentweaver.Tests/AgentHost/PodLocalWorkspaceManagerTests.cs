@@ -146,8 +146,14 @@ public sealed class PodLocalWorkspaceManagerTests : IDisposable
             Git(prepared.WorkspacePath, "branch", "--show-current").Should().BeEmpty(
                 "the local workspace must not use git worktree administration");
             File.Exists(Path.Combine(prepared.WorkspacePath, "package.json")).Should().BeTrue();
-            Environment.GetEnvironmentVariable("npm_config_cache").Should().StartWith(
-                Directory.GetParent(prepared.WorkspacePath)!.FullName);
+            prepared.CacheRoot.Should().Be(Path.Combine(prepared.WorkspacePath, ".agentweaver-cache"));
+            foreach (var variable in cacheVariables)
+            {
+                var configuredPath = Environment.GetEnvironmentVariable(variable);
+                configuredPath.Should().NotBeNullOrWhiteSpace();
+                Path.GetFullPath(Path.Combine(prepared.WorkspacePath, configuredPath!))
+                    .Should().StartWith(prepared.CacheRoot);
+            }
         }
         finally
         {

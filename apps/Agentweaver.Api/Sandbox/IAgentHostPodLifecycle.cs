@@ -46,7 +46,8 @@ public interface IAgentHostPodLifecycle
     /// Provisions an AgentHost with an explicit purpose and immutable source revision. The default
     /// implementation preserves compatibility for lifecycle fakes/providers that only understand a
     /// shared working-directory override. Pod-local paths are created inside AgentHost and must never
-    /// be treated as API-visible worktrees by this fallback.
+    /// be treated as API-visible worktrees by this fallback. Compatibility providers do not report an
+    /// effective pod-local path, so preview continues from <see cref="AgentHostLaunchContext.SharedWorkingDirectory"/>.
     /// </summary>
     Task<string> LaunchAgentHostPodAsync(
         string runId,

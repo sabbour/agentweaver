@@ -41,6 +41,7 @@ public sealed class PreviewStep
     private readonly RunStreamStore _streamStore;
     private readonly SandboxRuntimeOptions _sandboxRuntime;
     private readonly ILogger<PreviewStep> _logger;
+    private readonly IPodNameRegistry? _podRegistry;
 
     public PreviewStep(
         ISandboxPreviewService previewService,
@@ -51,7 +52,8 @@ public sealed class PreviewStep
         RunStreamStore streamStore,
         SandboxRuntimeOptions sandboxRuntime,
         ILogger<PreviewStep> logger,
-        Agentweaver.Api.Auth.ISecretStore? secretStore = null)
+        Agentweaver.Api.Auth.ISecretStore? secretStore = null,
+        IPodNameRegistry? podRegistry = null)
     {
         _previewService = previewService;
         _previewGate = previewGate;
@@ -62,6 +64,7 @@ public sealed class PreviewStep
         _sandboxRuntime = sandboxRuntime;
         _logger = logger;
         _secretStore = secretStore;
+        _podRegistry = podRegistry;
     }
 
     /// <summary>
@@ -105,12 +108,15 @@ public sealed class PreviewStep
             EmitStartRequested(request, resolution.Source);
 
             var sourceCwd = resolution.Cwd ?? request.WorktreePath;
-            var executionCwd = string.IsNullOrWhiteSpace(request.ExecutionWorkspacePath)
+            var executionWorkspacePath = string.IsNullOrWhiteSpace(request.ExecutionWorkspacePath)
+                ? _podRegistry?.TryGetEffectiveWorkingDirectory(runId)
+                : request.ExecutionWorkspacePath;
+            var executionCwd = string.IsNullOrWhiteSpace(executionWorkspacePath)
                 ? sourceCwd
                 : PreviewCommandResolver.MapExecutionCwd(
                     request.WorktreePath,
                     sourceCwd,
-                    request.ExecutionWorkspacePath!);
+                    executionWorkspacePath!);
             if (string.IsNullOrWhiteSpace(executionCwd))
             {
                 EmitFailed(

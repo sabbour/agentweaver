@@ -75,10 +75,10 @@ public sealed class PreviewStepTests : IDisposable
 
         try
         {
-            var h = new Harness(_worktree);
-            await h.Step.RunAsync(
-                Request() with { ExecutionWorkspacePath = executionRoot },
-                CancellationToken.None);
+            var podRegistry = new PodNameRegistry();
+            podRegistry.RegisterEffectiveWorkingDirectory(RunId, executionRoot);
+            var h = new Harness(_worktree, podRegistry: podRegistry);
+            await h.Step.RunAsync(Request(), CancellationToken.None);
 
             h.PreviewRunner.LastCommand.Should().Be("npm run dev -- --host 0.0.0.0");
             h.PreviewRunner.LastCwd.Should().Be(Path.Combine(executionRoot, "frontend"));
@@ -87,6 +87,23 @@ public sealed class PreviewStepTests : IDisposable
         {
             try { Directory.Delete(executionRoot, recursive: true); } catch { }
         }
+    }
+
+    [Fact]
+    public async Task Preview_without_reported_effective_workspace_falls_back_to_shared_source_directory()
+    {
+        File.Delete(Path.Combine(_worktree, "package.json"));
+        var sourceFrontend = Path.Combine(_worktree, "frontend");
+        Directory.CreateDirectory(sourceFrontend);
+        File.WriteAllText(
+            Path.Combine(sourceFrontend, "package.json"),
+            """{ "scripts": { "dev": "vite" } }""");
+
+        var h = new Harness(_worktree, podRegistry: new PodNameRegistry());
+
+        await h.Step.RunAsync(Request(), CancellationToken.None);
+
+        h.PreviewRunner.LastCwd.Should().Be(sourceFrontend);
     }
 
     // ── Infra off → skipped, never failed ───────────────────────────────────────────────
@@ -342,7 +359,11 @@ public sealed class PreviewStepTests : IDisposable
         public readonly InMemoryToolApprovalGate ApprovalGate = new();
         public readonly PreviewStep Step;
 
-        public Harness(string worktree, bool podPerRun = true, bool autoApprove = true)
+        public Harness(
+            string worktree,
+            bool podPerRun = true,
+            bool autoApprove = true,
+            IPodNameRegistry? podRegistry = null)
         {
             Streams.Create(RunId, "owner");
             var runtime = new SandboxRuntimeOptions
@@ -362,7 +383,8 @@ public sealed class PreviewStepTests : IDisposable
                 Streams,
                 runtime,
                 NullLogger<PreviewStep>.Instance,
-                secretStore: null);
+                secretStore: null,
+                podRegistry: podRegistry);
         }
 
         public IReadOnlyList<string> Types() =>

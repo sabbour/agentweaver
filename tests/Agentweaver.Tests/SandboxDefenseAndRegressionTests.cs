@@ -68,6 +68,7 @@ public sealed class BubblewrapSandboxCommandTests
             "broad /usr mount replaced by targeted --ro-bind-try for bin/lib dirs");
         payload.Should().Contain("--ro-bind-try /usr/bin /usr/bin");
         payload.Should().Contain("--ro-bind-try /usr/lib /usr/lib");
+        payload.Should().Contain("--ro-bind-try /usr/share/nodejs /usr/share/nodejs");
     }
 
     [Theory]

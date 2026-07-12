@@ -263,11 +263,8 @@ internal sealed class PodLocalWorkspaceManager
 
     private static string ConfigurePackageCaches(string workspacePath)
     {
-        var workspaceParent = Directory.GetParent(workspacePath)?.FullName
-            ?? throw new AgentHostConfigurationException(
-                "workspace_path_invalid",
-                "The pod-local workspace path has no parent for package caches.");
-        var cacheRoot = Path.Combine(workspaceParent, "cache", Path.GetFileName(workspacePath));
+        const string cacheDirectory = ".agentweaver-cache";
+        var cacheRoot = Path.Combine(workspacePath, cacheDirectory);
         var npm = Path.Combine(cacheRoot, "npm");
         var yarn = Path.Combine(cacheRoot, "yarn");
         var pnpmHome = Path.Combine(cacheRoot, "pnpm", "home");
@@ -277,12 +274,12 @@ internal sealed class PodLocalWorkspaceManager
         foreach (var path in new[] { npm, yarn, pnpmHome, pnpmStore, xdg })
             Directory.CreateDirectory(path);
 
-        Environment.SetEnvironmentVariable("npm_config_cache", npm);
-        Environment.SetEnvironmentVariable("YARN_CACHE_FOLDER", yarn);
-        Environment.SetEnvironmentVariable("PNPM_HOME", pnpmHome);
-        Environment.SetEnvironmentVariable("PNPM_STORE_DIR", pnpmStore);
-        Environment.SetEnvironmentVariable("npm_config_store_dir", pnpmStore);
-        Environment.SetEnvironmentVariable("XDG_CACHE_HOME", xdg);
+        Environment.SetEnvironmentVariable("npm_config_cache", $"{cacheDirectory}/npm");
+        Environment.SetEnvironmentVariable("YARN_CACHE_FOLDER", $"{cacheDirectory}/yarn");
+        Environment.SetEnvironmentVariable("PNPM_HOME", $"{cacheDirectory}/pnpm/home");
+        Environment.SetEnvironmentVariable("PNPM_STORE_DIR", $"{cacheDirectory}/pnpm/store");
+        Environment.SetEnvironmentVariable("npm_config_store_dir", $"{cacheDirectory}/pnpm/store");
+        Environment.SetEnvironmentVariable("XDG_CACHE_HOME", $"{cacheDirectory}/xdg");
         return cacheRoot;
     }
 

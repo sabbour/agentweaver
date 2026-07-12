@@ -11,6 +11,7 @@ public sealed class PodNameRegistry : IPodNameRegistry, IAgentHostTurnTokenRegis
 {
     private readonly ConcurrentDictionary<string, string> _map = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, string> _agentEndpoints = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, string> _effectiveWorkingDirectories = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, string> _turnTokens = new(StringComparer.Ordinal);
     private readonly IExecutionPodNameStore? _executionPods;
 
@@ -29,6 +30,7 @@ public sealed class PodNameRegistry : IPodNameRegistry, IAgentHostTurnTokenRegis
     {
         _map.TryRemove(runId, out _);
         _agentEndpoints.TryRemove(runId, out _);
+        _effectiveWorkingDirectories.TryRemove(runId, out _);
         _turnTokens.TryRemove(runId, out _);
     }
 
@@ -51,6 +53,12 @@ public sealed class PodNameRegistry : IPodNameRegistry, IAgentHostTurnTokenRegis
 
     public string? TryGetAgentEndpoint(string runId) =>
         _agentEndpoints.TryGetValue(runId, out var url) ? url : null;
+
+    public void RegisterEffectiveWorkingDirectory(string runId, string workingDirectory) =>
+        _effectiveWorkingDirectories[runId] = workingDirectory;
+
+    public string? TryGetEffectiveWorkingDirectory(string runId) =>
+        _effectiveWorkingDirectories.TryGetValue(runId, out var path) ? path : null;
 
     public void RegisterTurnToken(string runId, string token) =>
         _turnTokens[runId] = token;

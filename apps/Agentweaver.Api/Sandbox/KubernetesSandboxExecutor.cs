@@ -488,13 +488,15 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
             // immutable source refs; AgentHost creates their effective root inside execution-scratch.
             if (claimCreated)
             {
-                await CallAgentHostConfigureAsync(
+                var effectiveWorkingDirectory = await CallAgentHostConfigureAsync(
                     podIp, _options.AgentHostPort, runId, submittingUser, turnToken, kvUserSecretName,
                     await ResolveGitHubAccessTokenAsync(submittingUser, ct).ConfigureAwait(false),
                     requestedWorkingDirectory ?? await ResolveWorkingDirectoryAsync(runId, ct).ConfigureAwait(false),
                     launchContext,
                     ct)
                     .ConfigureAwait(false);
+                if (!string.IsNullOrWhiteSpace(effectiveWorkingDirectory))
+                    _podRegistry?.RegisterEffectiveWorkingDirectory(runId, effectiveWorkingDirectory);
             }
             else
             {
@@ -806,7 +808,7 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
     /// (which is itself delivered here). Idempotency: a second call returns 409 and is treated as a
     /// hard launch failure.
     /// </summary>
-    private async Task CallAgentHostConfigureAsync(
+    private async Task<string?> CallAgentHostConfigureAsync(
         string podIp, int port, string runId, string userId, string turnBearerToken,
         string kvUserSecretName, string? gitHubAccessToken, string? sharedWorkingDirectory,
         AgentHostLaunchContext launchContext,
@@ -819,7 +821,7 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
             _logger.LogWarning(
                 "KubernetesSandboxExecutor: no IHttpClientFactory — skipping /configure for run {RunId}.",
                 runId);
-            return;
+            return null;
         }
 
         var scheme = AgentHostEndpoint.Scheme(_options.RequireMtls);
@@ -863,10 +865,10 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
         using var response = await client
             .PostAsJsonAsync(configureUrl, body, ct)
             .ConfigureAwait(false);
+        var detail = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
 
         if (!response.IsSuccessStatusCode)
         {
-            var detail = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
             var reason = "agenthost_configure_failed";
             try
             {
@@ -886,6 +888,29 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
                 $"AgentHost /configure for run '{runId}' failed: HTTP {(int)response.StatusCode} {detail}",
                 (int)response.StatusCode);
         }
+
+        if (string.IsNullOrWhiteSpace(detail))
+            return null;
+
+        try
+        {
+            using var document = JsonDocument.Parse(detail);
+            if (document.RootElement.TryGetProperty("effectiveWorkingDirectory", out var path)
+                && path.ValueKind == JsonValueKind.String
+                && !string.IsNullOrWhiteSpace(path.GetString()))
+            {
+                return path.GetString();
+            }
+        }
+        catch (JsonException ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "KubernetesSandboxExecutor: AgentHost /configure for run {RunId} returned an invalid success body; preview will use the shared working directory.",
+                runId);
+        }
+
+        return null;
     }
 
     /// <summary>

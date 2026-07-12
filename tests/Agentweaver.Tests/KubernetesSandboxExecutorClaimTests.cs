@@ -48,9 +48,10 @@ public sealed class KubernetesSandboxExecutorClaimTests
 
     private static KubernetesSandboxExecutor NewExecutor(
         FakeKubeHandler handler, IRunSubmittingUserResolver submittingUserResolver,
-        IHttpClientFactory? httpClientFactory = null, IRunOptionsStore? runOptions = null) =>
+        IHttpClientFactory? httpClientFactory = null, IRunOptionsStore? runOptions = null,
+        IPodNameRegistry? podRegistry = null) =>
         new(ClientFor(handler), Options(), NullLogger<KubernetesSandboxExecutor>.Instance,
-            podRegistry: null, readinessProbe: null, submittingUserResolver: submittingUserResolver,
+            podRegistry: podRegistry, readinessProbe: null, submittingUserResolver: submittingUserResolver,
             httpClientFactory: httpClientFactory, runOptions: runOptions);
 
     private sealed class StubSubmittingUserResolver : IRunSubmittingUserResolver
@@ -66,6 +67,13 @@ public sealed class KubernetesSandboxExecutorClaimTests
     // Records the /configure POST so the warm-pool deferred-config contract can be asserted.
     private sealed class RecordingConfigureHandler : HttpMessageHandler
     {
+        private readonly string _responseBody;
+
+        public RecordingConfigureHandler(string responseBody = """{"configured":true}""")
+        {
+            _responseBody = responseBody;
+        }
+
         public string? RequestUri { get; private set; }
         public string? Body { get; private set; }
 
@@ -78,7 +86,7 @@ public sealed class KubernetesSandboxExecutorClaimTests
                 : await request.Content.ReadAsStringAsync(cancellationToken);
             return new HttpResponseMessage(System.Net.HttpStatusCode.OK)
             {
-                Content = new StringContent("{\"configured\":true}"),
+                Content = new StringContent(_responseBody),
             };
         }
     }
@@ -334,6 +342,44 @@ public sealed class KubernetesSandboxExecutorClaimTests
         body.GetProperty("expectedTreeHash").GetString().Should().Be(treeHash);
         body.GetProperty("scratchRoot").GetString().Should()
             .Be(PodLocalExecutionWorkspace.DefaultScratchRoot);
+    }
+
+    [Fact]
+    public async Task LaunchAgentHostPod_persists_effective_working_directory_from_configure_success()
+    {
+        const string runId = "run-claim-effective-workspace";
+        const string effectiveWorkingDirectory = "/local-workspace/run-claim-effective-workspace/actual-tree";
+        var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
+
+        var handler = new FakeKubeHandler();
+        handler.OnGet(
+            $"/apis/{SandboxClaimConventions.ApiGroup}/{SandboxClaimConventions.ApiVersion}/namespaces/agentweaver/sandboxclaims/{claimName}",
+            """{"status":{"conditions":[{"type":"Ready","status":"True"}],"sandbox":{"name":"agent-pod-1"}}}""");
+        handler.OnAny(@"^/api/v1/namespaces/agentweaver/pods/agent-pod-1$",
+            """{"kind":"Pod","metadata":{"name":"agent-pod-1"},"status":{"podIP":"10.0.0.7"}}""");
+
+        var podRegistry = new PodNameRegistry();
+        var configureHandler = new RecordingConfigureHandler(
+            $$"""{"configured":true,"effectiveWorkingDirectory":"{{effectiveWorkingDirectory}}"}""");
+        var executor = NewExecutor(
+            handler,
+            new StubSubmittingUserResolver("sabbour"),
+            httpClientFactory: new StubHttpClientFactory(configureHandler),
+            podRegistry: podRegistry);
+
+        await executor.LaunchAgentHostPodAsync(
+            runId,
+            new AgentHostLaunchContext(
+                SharedWorkingDirectory: "/workspace/reviewer",
+                SourceRepositoryPath: "/workspace/repository",
+                SourceRef: "agentweaver/integration/run-claim-effective-workspace",
+                BaseCommitSha: new string('1', 40),
+                ExpectedTreeHash: new string('2', 40),
+                WorkspaceMode: ExecutionWorkspaceMode.LocalReadOnly,
+                Purpose: AgentHostPurpose.AssemblyBuildTest,
+                ScratchRoot: PodLocalExecutionWorkspace.DefaultScratchRoot));
+
+        podRegistry.TryGetEffectiveWorkingDirectory(runId).Should().Be(effectiveWorkingDirectory);
     }
 
     [Fact]

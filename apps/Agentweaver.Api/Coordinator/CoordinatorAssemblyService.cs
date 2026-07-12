@@ -1010,12 +1010,8 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
                                 TreeHash: aggregateTreeHash,
                                 WorktreePath: _pipeline.GetBuildTestWorktreePath(context.CoordinatorRunId),
                                 SubmittingUser: context.SubmittingUser,
-                                ExecutionWorkspacePath: PodLocalExecutionWorkspace.IsGitObjectId(aggregateTreeHash)
-                                    ? PodLocalExecutionWorkspace.GetWorkspacePath(
-                                        PodLocalExecutionWorkspace.DefaultScratchRoot,
-                                        context.CoordinatorRunId,
-                                        aggregateTreeHash)
-                                    : null),
+                                ExecutionWorkspacePath: _podRegistry?.TryGetEffectiveWorkingDirectory(
+                                    context.CoordinatorRunId)),
                             ct).ConfigureAwait(false);
                     }
                     catch (OperationCanceledException)

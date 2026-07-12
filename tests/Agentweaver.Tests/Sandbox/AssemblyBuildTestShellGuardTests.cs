@@ -140,6 +140,81 @@ public sealed class AssemblyBuildTestShellGuardTests : IDisposable
         tracker.ActiveExecution.Should().BeNull();
     }
 
+    [Fact]
+    public async Task Controlled_run_command_runs_npm_install_with_workspace_local_cache_in_real_linux_sandbox()
+    {
+        ISandboxExecutor realExecutor;
+        if (OperatingSystem.IsLinux())
+        {
+            LinuxBwrapExecutor.IsBwrapAvailable().Should().BeTrue(
+                "the AgentHost Linux image must provide the real controlled bubblewrap executor");
+            realExecutor = new LinuxBwrapExecutor(NullLogger.Instance);
+        }
+        else if (OperatingSystem.IsWindows())
+        {
+            realExecutor = WslMxcSandboxExecutor.TryCreate(NullLogger.Instance)
+                ?? throw new InvalidOperationException(
+                    "The Windows verification environment must provide the real WSL Linux executor.");
+            realExecutor.BackendName.Should().Be(
+                "wsl-bwrap",
+                "the cache test must exercise filesystem-confined Linux execution, not passthrough/unshare");
+        }
+        else
+        {
+            return;
+        }
+
+        var workspace = Path.Combine(_root, "real-linux-install");
+        const string cacheRelativePath = ".agentweaver-cache/npm";
+        var cachePath = Path.Combine(workspace, ".agentweaver-cache", "npm");
+        Directory.CreateDirectory(cachePath);
+        File.WriteAllText(
+            Path.Combine(workspace, "package.json"),
+            """{"name":"controlled-cache-test","version":"1.0.0","private":true}""");
+
+        var originalCache = Environment.GetEnvironmentVariable("npm_config_cache");
+        var originalWslEnv = Environment.GetEnvironmentVariable("WSLENV");
+        Environment.SetEnvironmentVariable("npm_config_cache", cacheRelativePath);
+        if (OperatingSystem.IsWindows())
+        {
+            var wslVariables = (originalWslEnv ?? "")
+                .Split(':', StringSplitOptions.RemoveEmptyEntries)
+                .ToHashSet(StringComparer.Ordinal);
+            wslVariables.Add("npm_config_cache");
+            Environment.SetEnvironmentVariable("WSLENV", string.Join(':', wslVariables));
+        }
+        try
+        {
+            var executor = new RecordingExecutor(realExecutor);
+            using var tracker = new ShellExecutionTracker();
+            var context = BuildContext(executor, tracker, workspace);
+            var tool = CopilotAIAgent.BuildSessionConfigTools(
+                context,
+                includeControlledRunCommand: true).Single(t => t.Name == "run_command");
+
+            var result = await tool.InvokeAsync(new AIFunctionArguments(
+                new Dictionary<string, object?>
+                {
+                    ["command"] =
+                        "npm install --ignore-scripts --no-audit --no-fund && " +
+                        "test -w \"$npm_config_cache\" && " +
+                        "printf ok > \"$npm_config_cache/controlled-install.ok\"",
+                }));
+
+            result?.ToString().Should().Contain("exit_code: 0");
+            File.ReadAllText(Path.Combine(cachePath, "controlled-install.ok")).Should().Be("ok");
+            executor.LastCommand.Should().NotBeNull();
+            executor.LastCommand!.FilesystemPolicy.ReadWritePaths.Should().Contain(workspace);
+            executor.LastCommand.FilesystemPolicy.ReadWritePaths.Should().ContainSingle(
+                "SandboxToolContext uses the checkout as SandboxRoot, so the workspace-local cache is covered by the sole writable root");
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("npm_config_cache", originalCache);
+            Environment.SetEnvironmentVariable("WSLENV", originalWslEnv);
+        }
+    }
+
     private static CopilotAIAgent BuildAgent(ISandboxExecutor executor)
     {
         var factory = new GitHubCopilotClientFactory(
@@ -156,14 +231,17 @@ public sealed class AssemblyBuildTestShellGuardTests : IDisposable
             NullLogger<CopilotAIAgent>.Instance);
     }
 
-    private SandboxToolContext BuildContext(ISandboxExecutor executor, ShellExecutionTracker tracker) =>
+    private SandboxToolContext BuildContext(
+        ISandboxExecutor executor,
+        ShellExecutionTracker tracker,
+        string? workspace = null) =>
         new(
             AgentId: "agent",
-            WorkingDirectory: _root,
-            SandboxRoot: _root,
+            WorkingDirectory: workspace ?? _root,
+            SandboxRoot: workspace ?? _root,
             Executor: executor,
-            FileTools: new SandboxedFileTools(_root),
-            SearchTools: new SandboxedSearchTools(_root),
+            FileTools: new SandboxedFileTools(workspace ?? _root),
+            SearchTools: new SandboxedSearchTools(workspace ?? _root),
             Redactor: SandboxOutputRedactor.Default,
             Options: new SandboxToolOptions(ShellEnabled: true, DefaultTimeoutMs: 600_000)
             {
@@ -174,6 +252,32 @@ public sealed class AssemblyBuildTestShellGuardTests : IDisposable
             },
             Logger: NullLogger.Instance,
             ShellExecutionTracker: tracker);
+
+    private sealed class RecordingExecutor(ISandboxExecutor inner) : ISandboxExecutor
+    {
+        public SandboxCommand? LastCommand { get; private set; }
+        public bool IsRealIsolation => inner.IsRealIsolation;
+        public string BackendName => inner.BackendName;
+        public string SelectionReason => inner.SelectionReason;
+        public bool HasNetworkWarning => inner.HasNetworkWarning;
+        public string? NetworkWarningMessage => inner.NetworkWarningMessage;
+
+        public Task<SandboxExecResult> ExecuteAsync(
+            SandboxCommand command,
+            CancellationToken ct = default)
+        {
+            LastCommand = command;
+            return inner.ExecuteAsync(command, ct);
+        }
+
+        public IAsyncEnumerable<SandboxOutputChunk> StreamAsync(
+            SandboxCommand command,
+            CancellationToken ct = default)
+        {
+            LastCommand = command;
+            return inner.StreamAsync(command, ct);
+        }
+    }
 
     private sealed class CountingExecutor(bool blockFirstCall = false) : ISandboxExecutor
     {
