@@ -2,7 +2,7 @@
   "id": "ux-designer",
   "title": "UX Designer",
   "summary": "Designs the interaction, structure, and visual system of the product so it is usable, accessible, and coherent.",
-  "default_model": "claude-sonnet-4.6",
+  "default_model": "claude-sonnet-5",
   "capabilities": [
     "interaction-design",
     "information-architecture",

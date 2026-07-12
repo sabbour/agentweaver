@@ -302,7 +302,7 @@ Model selection is fixed to GitHub Copilot on this path. A non-empty **run model
 1. if the run carries a model pin (explicit request `modelId`, else the project default), use it for every subtask;
 2. otherwise use the assigned role's default model;
 3. otherwise use a catalog role default;
-4. otherwise use the configured Copilot default.
+4. otherwise use the configured Copilot default (`CoordinatorModelDefaults.DefaultCopilotModel = "claude-sonnet-4.6"`, overridable via `Providers:GitHubCopilot:Model`; the stale hardcoded `gpt-4o` last-resort was removed in issue #238).
 
 Because the pin wins uniformly, setting a project default (or passing an explicit `modelId`) disables per-role model differentiation for that run; leave the pin unset for mixed per-role models. The same precedence is honored when a reviewer rejection rotates a subtask to a different eligible author — the pin is preserved across the rotation rather than falling back to the rotated author's role default.
 

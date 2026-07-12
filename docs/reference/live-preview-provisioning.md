@@ -48,7 +48,7 @@ Auth accepts either the per-run turn bearer token or the per-run preview-runner 
 | Reason | Meaning |
 | --- | --- |
 | `preview_infra_unavailable` | Pod-per-run or Gateway preview infrastructure cannot produce a reachable URL. |
-| `preview_command_unresolved` | The deterministic command resolver could not find how to run the app. |
+| `preview_command_unresolved` | The deterministic command resolver could not find how to run the app. The resolver tries the worktree root first, then probes conventional subdirectories (`client`, `app/client`, `frontend`, `web`, `app`, `src/client`) in that order; server/API/backend directories are not probed. |
 | `preview_runner_unauthorized` | AgentHost rejected the preview-runner credential. |
 | `process_exited` | Preview process could not start. |
 | `process_exited:exit={code}` | Preview process started but exited before a healthy port was observed. |

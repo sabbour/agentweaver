@@ -2,7 +2,7 @@
   "id": "editor",
   "title": "Editor",
   "summary": "Reviews and refines written content for clarity, accuracy, and consistency.",
-  "default_model": "claude-sonnet-4.6",
+  "default_model": "claude-sonnet-5",
   "capabilities": [
     "copy-editing",
     "style-consistency",

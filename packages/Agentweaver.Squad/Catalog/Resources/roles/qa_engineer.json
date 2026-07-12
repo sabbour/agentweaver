@@ -2,7 +2,7 @@
   "id": "qa-engineer",
   "title": "QA Engineer",
   "summary": "Designs and executes tests to verify quality, prevent regressions, and diagnoses and fixes assigned defects.",
-  "default_model": "claude-sonnet-4.6",
+  "default_model": "claude-sonnet-5",
   "capabilities": [
     "test-design",
     "regression-testing",

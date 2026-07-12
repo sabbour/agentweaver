@@ -1996,7 +1996,7 @@ The run's event stream is held in memory by `RunStreamStore` and is not persiste
 | --- | --- | --- |
 | `Providers:GitHubCopilot:ApiKey` | none | GitHub Copilot provider credential |
 | `Providers:GitHubCopilot:Endpoint` | `https://api.githubcopilot.com` | GitHub Copilot base URL |
-| `Providers:GitHubCopilot:Model` | `gpt-4o` | GitHub Copilot model name |
+| `Providers:GitHubCopilot:Model` | `claude-sonnet-4.6` | GitHub Copilot model name |
 | `Providers:GitHubCopilot:RuntimeCliPath` | `""` (empty) | Optional explicit path to the native Copilot CLI binary; empty means use the SDK's auto-resolved runtime. Env fallbacks (in order): `AGENTWEAVER_COPILOT_CLI_PATH`, `COPILOT_CLI_PATH`. Grounded in `packages/Agentweaver.AgentRuntime/Providers/GitHubCopilotClientFactory.cs:50`. See [Configuration](/guide/configuration#provider-settings). |
 | `Generation:Model` | `gpt-5.4` | Global fallback for blueprint, workflow, and coordinator outcome-spec generation. |
 | `Generation:BlueprintModel` | `Generation:Model` | Optional global fallback when a project has no `blueprint_generation_model`. |

@@ -10,7 +10,7 @@ namespace Agentweaver.Api.Generation;
 public sealed class GenerationModelOptions
 {
     public const string SectionName = "Generation";
-    public const string DefaultModel = "gpt-5.4";
+    public const string DefaultModel = "gpt-5.6-sol";
 
     private static readonly Regex AllowedModelRegex =
         new("^(gpt|claude|o)[a-z0-9._-]*$", RegexOptions.IgnoreCase | RegexOptions.Compiled);

@@ -2,7 +2,7 @@
   "id": "backend-engineer",
   "title": "Backend Engineer",
   "summary": "Builds and maintains server-side APIs, data models, and business logic.",
-  "default_model": "claude-sonnet-4.6",
+  "default_model": "claude-sonnet-5",
   "capabilities": [
     "api-design",
     "data-modeling",

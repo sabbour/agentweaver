@@ -18,6 +18,13 @@ Expand or collapse rows to follow the transaction. Select a span to inspect even
 status, operation name, model, token usage, or tool name. If Application Insights has not produced
 trace data for the run yet, the panel shows an empty state.
 
+## Troubleshooting empty traces
+
+An empty `spans` collection can mean that Application Insights has not produced trace data yet.
+If the trace query itself fails, the run-traces API response instead includes a non-null
+`queryError` value. The API also writes an Error-level log containing the query context and the
+truncated failing KQL, so operators can distinguish a query failure from a genuinely empty trace.
+
 ![Observability Traces page listing recent coordinator runs](/screenshots/observability-traces.png)
 
 > 📸 **Screenshot — `observability-traces.png`**
@@ -40,6 +47,7 @@ trace data for the run yet, the panel shows an empty state.
 | Trace DTO | `apps/Agentweaver.Api/Metrics/MetricsDtos.cs:133` |
 | Trace endpoint | `apps/Agentweaver.Api/Endpoints/MetricsEndpoints.cs:130` |
 | AppInsights trace query and span classification | `apps/Agentweaver.Api/Metrics/AppInsightsMetricsService.cs:522` |
+| Trace-query error response and Error-level logging | `apps/Agentweaver.Api/Metrics/AppInsightsMetricsService.cs:585`, `apps/Agentweaver.Api/Metrics/AppInsightsMetricsService.cs:662` |
 
 ## See also
 

@@ -169,11 +169,26 @@ The selected workflow is not only recorded for display: it becomes prompt contex
 
 After confirmation, the coordinator decomposes the spec into a **work plan**: a set of subtasks plus the dependency edges between them. Each subtask carries an assigned roster agent (selected for role fit), a selected model (within the GitHub Copilot provider), a `phase`, an `isolation`, and a status. The plan is persisted to the memory store and emitted as `coordinator.work_plan`. Subagents read the confirmed spec and plan from the memory store; the coordinator does not introduce a parallel store. Read it over HTTP with `GET /api/runs/{id}/work-plan` or over MCP with `coordinator_work_plan_get`.
 
-**Model selection precedence (per subtask).** A non-empty **run model pin** — the run's explicit `modelId` on `POST /api/projects/{id}/orchestrations`, or (when no explicit id is passed) the project's GitHub Copilot default — is selected for **every** subtask regardless of complexity; otherwise the subtask uses its assigned role's default model, then a catalog role default, then the configured Copilot default. The same precedence is preserved when a reviewer rejection rotates a subtask to a different eligible author (the pin wins over the rotated author's role default).
+**Model selection precedence (per subtask).** A non-empty **run model pin** — the run's explicit `modelId` on `POST /api/projects/{id}/orchestrations`, or (when no explicit id is passed) the project's GitHub Copilot default — is selected for **every** subtask regardless of complexity; otherwise the subtask uses its assigned role's default model, then a catalog role default, then the configured Copilot default. The configured Copilot default is `CoordinatorModelDefaults.DefaultCopilotModel = "claude-sonnet-4.6"` (`apps/Agentweaver.Api/Coordinator/CoordinatorModelDefaults.cs`), overridable via the `Providers:GitHubCopilot:Model` config key. The stale hardcoded `gpt-4o` last-resort fallback was removed; the constant is the single source of truth for the last-resort default. The same precedence is preserved when a reviewer rejection rotates a subtask to a different eligible author (the pin wins over the rotated author's role default).
 
 ::: warning Behavior change
 A non-empty run model pin now pins **all** subtasks (previously only high-complexity subtasks adopted the run's explicit model). Two consequences follow: (a) a well-formed but nonexistent pinned model id now affects **every** subtask (not just high-complexity ones); and (b) setting a project GitHub Copilot default disables per-role model differentiation for that project's runs — leave both the explicit `modelId` and the project default unset if you want subtasks to use their individual role-default models.
 :::
+
+#### Run model pin: UI behaviour
+
+In **Project Settings → Default run model**, the field is free-text. Leaving it **empty** means "Auto (coordinator picks)" — the coordinator selects a model per task using per-role defaults; subtasks may use different models. Entering a model id pins every subtask in every run for this project to that single model.
+
+#### Model catalog (current)
+
+Model ids are free-text passthrough to the GitHub Copilot CLI. They are validated only by a permissive prefix regex (`^(gpt|claude|o)...`) — there is no hardcoded allowlist, so new models become available as GitHub Copilot publishes them without a server update. The currently documented catalog:
+
+| Family | Model ids |
+|---|---|
+| OpenAI GPT | `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5`, `gpt-5.4`, `gpt-5.3-codex`, `gpt-5.4-mini`, `gpt-5-mini` |
+| Claude | `claude-opus-4.8`, `claude-opus-4.7`, `claude-opus-4.6`, `claude-sonnet-5`, `claude-sonnet-4.6`, `claude-sonnet-4.5`, `claude-haiku-4.5` |
+
+A well-formed but unavailable id at runtime causes a classified provider error (`AgentProviderException`, kind `UnavailableModel`). The coordinator's last-resort default is `claude-sonnet-4.6`.
 
 The `WorkPlan` row also carries **`CoordinatorPodId`**, the distributed lease owner for
 `dispatching`. When a pod starts or re-arms dispatch, it atomically stamps this field and refreshes

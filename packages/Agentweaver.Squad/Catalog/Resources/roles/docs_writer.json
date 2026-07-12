@@ -2,7 +2,7 @@
   "id": "docs-writer",
   "title": "Docs Writer",
   "summary": "Produces and maintains reference documentation, feature docs, user guides, and release notes for users and contributors.",
-  "default_model": "claude-sonnet-4.6",
+  "default_model": "claude-sonnet-5",
   "capabilities": [
     "technical-writing",
     "example-authoring",

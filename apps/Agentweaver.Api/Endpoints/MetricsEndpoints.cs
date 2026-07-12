@@ -119,8 +119,23 @@ public static class MetricsEndpoints
             if (run is null) return Results.NotFound();
             if (!EndpointHelpers.IsOwner(httpContext, run)) return Results.StatusCode(StatusCodes.Status403Forbidden);
 
+            var agentNameByRunId = new Dictionary<string, string?>(StringComparer.Ordinal)
+            {
+                [run.Id.ToString()] = run.AgentName,
+            };
+            if (run.ParentRunId is null)
+            {
+                var children = await runStore.GetRunsByParentAsync(run.Id.ToString(), ct).ConfigureAwait(false);
+                foreach (var child in children)
+                    agentNameByRunId[child.Id.ToString()] = child.AgentName;
+            }
+
             var projectId = run.ProjectId?.ToString();
-            var appInsights = await metrics.GetRunAgentTokenBreakdownAsync(id, projectId, ct).ConfigureAwait(false);
+            var appInsights = await metrics.GetRunAgentTokenBreakdownAsync(
+                id,
+                projectId,
+                agentNameByRunId,
+                ct).ConfigureAwait(false);
             if (appInsights.HasAgentData)
                 return Results.Ok(appInsights);
 

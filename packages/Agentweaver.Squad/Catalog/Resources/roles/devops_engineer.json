@@ -2,7 +2,7 @@
   "id": "devops-engineer",
   "title": "DevOps Engineer",
   "summary": "Owns build, deployment, and infrastructure reliability so software ships and runs predictably.",
-  "default_model": "claude-sonnet-4.6",
+  "default_model": "claude-sonnet-5",
   "capabilities": [
     "ci-cd-automation",
     "infrastructure-as-code",

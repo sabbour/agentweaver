@@ -35,73 +35,100 @@ public sealed class PreviewCommandResolver
 
         try
         {
-            // 1. Node package.json scripts (dev > start > preview > serve), with framework binds.
-            var packageJson = Path.Combine(worktreePath, "package.json");
-            if (File.Exists(packageJson))
+            var rootResult = TryResolveDirectory(worktreePath);
+            if (rootResult is not null)
+                return rootResult;
+
+            foreach (var rel in new[] { "client", "app/client", "frontend", "web", "app", "src/client" })
             {
-                var node = ResolveFromPackageJson(packageJson, worktreePath);
-                if (node is not null)
-                    return node;
+                var candidate = Path.Combine(worktreePath, rel.Replace('/', Path.DirectorySeparatorChar));
+                if (!Directory.Exists(candidate))
+                    continue;
+
+                var nested = TryResolveDirectory(candidate);
+                if (nested is not null)
+                    return nested;
             }
-
-            // 2. ASP.NET / .NET single project. Bind all-interfaces on an OS-assigned port (":0");
-            //    Kestrel logs the actual port, which the AgentHost observes.
-            var csproj = Directory.EnumerateFiles(worktreePath, "*.csproj", SearchOption.TopDirectoryOnly).FirstOrDefault();
-            if (csproj is not null)
-            {
-                const string url = "http://0.0.0.0:0";
-                return new PreviewCommandResolution(
-                    true,
-                    $"ASPNETCORE_URLS={url} dotnet run --urls {url}",
-                    worktreePath,
-                    "csproj");
-            }
-
-            // 3. Dockerfile CMD/ENTRYPOINT (containers bind 0.0.0.0 by convention → bind_uncertain).
-            var dockerfile = Path.Combine(worktreePath, "Dockerfile");
-            if (File.Exists(dockerfile))
-            {
-                var cmd = ResolveFromDockerfile(dockerfile);
-                if (cmd is not null)
-                    return new PreviewCommandResolution(true, cmd, worktreePath, "dockerfile", BindUncertain: true);
-            }
-
-            // 4. Makefile run/serve/dev target.
-            var makefile = new[] { "Makefile", "makefile" }
-                .Select(f => Path.Combine(worktreePath, f))
-                .FirstOrDefault(File.Exists);
-            if (makefile is not null)
-            {
-                var target = ResolveMakefileTarget(makefile);
-                if (target is not null)
-                    return new PreviewCommandResolution(true, $"make {target}", worktreePath, "makefile", BindUncertain: true);
-            }
-
-            // 5. Single Python entrypoint.
-            if (File.Exists(Path.Combine(worktreePath, "app.py")))
-                return new PreviewCommandResolution(
-                    true, "python app.py --host 0.0.0.0", worktreePath, "python-app", BindUncertain: true);
-            if (File.Exists(Path.Combine(worktreePath, "main.py")))
-                return new PreviewCommandResolution(
-                    true, "python main.py --host 0.0.0.0", worktreePath, "python-main", BindUncertain: true);
-
-            // 6. Single Go entrypoint.
-            if (File.Exists(Path.Combine(worktreePath, "main.go")))
-                return new PreviewCommandResolution(true, "go run .", worktreePath, "go", BindUncertain: true);
-
-            // 7. Single Node server file.
-            if (File.Exists(Path.Combine(worktreePath, "server.js")))
-                return new PreviewCommandResolution(
-                    true, "HOST=0.0.0.0 node server.js", worktreePath, "node-server");
-            if (File.Exists(Path.Combine(worktreePath, "index.js")))
-                return new PreviewCommandResolution(
-                    true, "HOST=0.0.0.0 node index.js", worktreePath, "node-index");
 
             return PreviewCommandResolution.Unresolved(worktreePath);
         }
         catch
         {
             return PreviewCommandResolution.Unresolved(worktreePath);
+        }
+    }
+
+    private static PreviewCommandResolution? TryResolveDirectory(string dir)
+    {
+        try
+        {
+            // 1. Node package.json scripts (dev > start > preview > serve), with framework binds.
+            var packageJson = Path.Combine(dir, "package.json");
+            if (File.Exists(packageJson))
+            {
+                var node = ResolveFromPackageJson(packageJson, dir);
+                if (node is not null)
+                    return node;
+            }
+
+            // 2. ASP.NET / .NET single project. Bind all-interfaces on an OS-assigned port (":0");
+            //    Kestrel logs the actual port, which the AgentHost observes.
+            var csproj = Directory.EnumerateFiles(dir, "*.csproj", SearchOption.TopDirectoryOnly).FirstOrDefault();
+            if (csproj is not null)
+            {
+                const string url = "http://0.0.0.0:0";
+                return new PreviewCommandResolution(
+                    true,
+                    $"ASPNETCORE_URLS={url} dotnet run --urls {url}",
+                    dir,
+                    "csproj");
+            }
+
+            // 3. Dockerfile CMD/ENTRYPOINT (containers bind 0.0.0.0 by convention → bind_uncertain).
+            var dockerfile = Path.Combine(dir, "Dockerfile");
+            if (File.Exists(dockerfile))
+            {
+                var cmd = ResolveFromDockerfile(dockerfile);
+                if (cmd is not null)
+                    return new PreviewCommandResolution(true, cmd, dir, "dockerfile", BindUncertain: true);
+            }
+
+            // 4. Makefile run/serve/dev target.
+            var makefile = new[] { "Makefile", "makefile" }
+                .Select(f => Path.Combine(dir, f))
+                .FirstOrDefault(File.Exists);
+            if (makefile is not null)
+            {
+                var target = ResolveMakefileTarget(makefile);
+                if (target is not null)
+                    return new PreviewCommandResolution(true, $"make {target}", dir, "makefile", BindUncertain: true);
+            }
+
+            // 5. Single Python entrypoint.
+            if (File.Exists(Path.Combine(dir, "app.py")))
+                return new PreviewCommandResolution(
+                    true, "python app.py --host 0.0.0.0", dir, "python-app", BindUncertain: true);
+            if (File.Exists(Path.Combine(dir, "main.py")))
+                return new PreviewCommandResolution(
+                    true, "python main.py --host 0.0.0.0", dir, "python-main", BindUncertain: true);
+
+            // 6. Single Go entrypoint.
+            if (File.Exists(Path.Combine(dir, "main.go")))
+                return new PreviewCommandResolution(true, "go run .", dir, "go", BindUncertain: true);
+
+            // 7. Single Node server file.
+            if (File.Exists(Path.Combine(dir, "server.js")))
+                return new PreviewCommandResolution(
+                    true, "HOST=0.0.0.0 node server.js", dir, "node-server");
+            if (File.Exists(Path.Combine(dir, "index.js")))
+                return new PreviewCommandResolution(
+                    true, "HOST=0.0.0.0 node index.js", dir, "node-index");
+
+            return null;
+        }
+        catch
+        {
+            return null;
         }
     }
 

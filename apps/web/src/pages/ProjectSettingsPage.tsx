@@ -516,7 +516,7 @@ export function ProjectSettingsPage() {
                 <AzureSurface className={styles.subBlock}>
                   <Title3>Default run model</Title3>
                   <Field label="GitHub Copilot model">
-                    <Input value={copilotModel} onChange={(_, v) => setCopilotModel(v.value)} placeholder="e.g. gpt-4o" />
+                    <Input value={copilotModel} onChange={(_, v) => setCopilotModel(v.value)} placeholder="Auto (coordinator picks) — e.g. claude-sonnet-4.6" />
                   </Field>
                   <div className={styles.actions}>
                     <Button appearance="primary" disabled={savingModel} onClick={() => void handleSaveModel()}>

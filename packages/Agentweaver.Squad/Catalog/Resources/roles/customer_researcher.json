@@ -2,7 +2,7 @@
   "id": "customer-researcher",
   "title": "Customer Researcher",
   "summary": "Gathers and synthesizes customer signals to inform the product.",
-  "default_model": "claude-sonnet-4.6",
+  "default_model": "claude-sonnet-5",
   "capabilities": [
     "user-research",
     "signal-synthesis",

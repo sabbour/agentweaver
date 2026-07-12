@@ -78,7 +78,7 @@ public sealed class CoordinatorOrchestratorExecutor
         _scopeFactory = scopeFactory;
         _loggerFactory = loggerFactory;
         _logger = loggerFactory.CreateLogger<CoordinatorOrchestratorExecutor>();
-        _defaultCopilotModel = string.IsNullOrWhiteSpace(defaultCopilotModel) ? "gpt-4o" : defaultCopilotModel;
+        _defaultCopilotModel = string.IsNullOrWhiteSpace(defaultCopilotModel) ? CoordinatorModelDefaults.DefaultCopilotModel : defaultCopilotModel;
         _apiBaseUrl = apiBaseUrl;
         _apiKey = apiKey;
     }

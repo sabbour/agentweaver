@@ -2,7 +2,7 @@
   "id": "writer",
   "title": "Writer",
   "summary": "Produces clear, accurate written content for the intended audience.",
-  "default_model": "claude-sonnet-4.6",
+  "default_model": "claude-sonnet-5",
   "capabilities": [
     "content-drafting",
     "narrative-structure",

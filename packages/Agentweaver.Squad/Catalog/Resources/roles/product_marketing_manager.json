@@ -2,7 +2,7 @@
   "id": "product-marketing-manager",
   "title": "Product Marketing Manager",
   "summary": "Owns positioning, messaging, and release communication that connect the product to its audience.",
-  "default_model": "claude-sonnet-4.6",
+  "default_model": "claude-sonnet-5",
   "capabilities": [
     "positioning-and-messaging",
     "go-to-market-planning",
