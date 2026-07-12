@@ -3,7 +3,10 @@
 FROM node:22-alpine AS web-build
 WORKDIR /app
 COPY apps/web/package.json apps/web/package-lock.json* ./
-RUN npm ci
+# --legacy-peer-deps: internal @1js/fluentai-family packages carry mutually
+# conflicting @fluentui/react-icons peer ranges (e.g. ^2.0.324 vs ^2.0.332) that
+# cannot be satisfied by any single pin; the resolved tree builds and runs fine.
+RUN npm ci --legacy-peer-deps
 COPY apps/web/ .
 RUN unset VITE_API_URL VITE_API_KEY; npm run build
 
