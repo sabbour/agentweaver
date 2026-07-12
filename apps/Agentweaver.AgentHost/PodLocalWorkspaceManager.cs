@@ -11,6 +11,23 @@ namespace Agentweaver.AgentHost;
 /// </summary>
 internal sealed class PodLocalWorkspaceManager
 {
+    private const string PackageCacheDirectoryName = ".agentweaver-cache";
+
+    private static readonly HashSet<string> NestedRepositoryScanExcludedDirectories = new(
+        [
+            PackageCacheDirectoryName,
+            ".git",
+            ".next",
+            "bin",
+            "build",
+            "dist",
+            "node_modules",
+            "obj",
+        ],
+        OperatingSystem.IsWindows()
+            ? StringComparer.OrdinalIgnoreCase
+            : StringComparer.Ordinal);
+
     private readonly AgentHostOptions _options;
     private readonly ILogger<PodLocalWorkspaceManager> _logger;
     private PreparedWorkspace? _preparedWorkspace;
@@ -198,7 +215,7 @@ internal sealed class PodLocalWorkspaceManager
                 "--",
                 ".").ConfigureAwait(false);
 
-            var nestedRoots = FindNestedRepositoryRoots(workspace.WorkspacePath);
+            var nestedRoots = FindNestedRepositoryRoots(workspace.WorkspacePath, ct);
             if (nestedRoots.Count > 0)
             {
                 await StageNestedRepositoryContentsAsync(
@@ -443,10 +460,9 @@ internal sealed class PodLocalWorkspaceManager
 
     private static string ConfigurePackageCaches(string workspacePath)
     {
-        const string cacheDirectory = ".agentweaver-cache";
         var excludePath = Path.Combine(workspacePath, ".git", "info", "exclude");
         Directory.CreateDirectory(Path.GetDirectoryName(excludePath)!);
-        var excludeEntry = $"/{cacheDirectory}/";
+        var excludeEntry = $"/{PackageCacheDirectoryName}/";
         var existingExcludes = File.Exists(excludePath) ? File.ReadAllText(excludePath) : string.Empty;
         if (!existingExcludes
             .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
@@ -455,7 +471,7 @@ internal sealed class PodLocalWorkspaceManager
             File.AppendAllText(excludePath, excludeEntry + Environment.NewLine);
         }
 
-        var cacheRoot = Path.Combine(workspacePath, cacheDirectory);
+        var cacheRoot = Path.Combine(workspacePath, PackageCacheDirectoryName);
         var npm = Path.Combine(cacheRoot, "npm");
         var yarn = Path.Combine(cacheRoot, "yarn");
         var pnpmHome = Path.Combine(cacheRoot, "pnpm", "home");
@@ -465,12 +481,12 @@ internal sealed class PodLocalWorkspaceManager
         foreach (var path in new[] { npm, yarn, pnpmHome, pnpmStore, xdg })
             Directory.CreateDirectory(path);
 
-        Environment.SetEnvironmentVariable("npm_config_cache", $"{cacheDirectory}/npm");
-        Environment.SetEnvironmentVariable("YARN_CACHE_FOLDER", $"{cacheDirectory}/yarn");
-        Environment.SetEnvironmentVariable("PNPM_HOME", $"{cacheDirectory}/pnpm/home");
-        Environment.SetEnvironmentVariable("PNPM_STORE_DIR", $"{cacheDirectory}/pnpm/store");
-        Environment.SetEnvironmentVariable("npm_config_store_dir", $"{cacheDirectory}/pnpm/store");
-        Environment.SetEnvironmentVariable("XDG_CACHE_HOME", $"{cacheDirectory}/xdg");
+        Environment.SetEnvironmentVariable("npm_config_cache", $"{PackageCacheDirectoryName}/npm");
+        Environment.SetEnvironmentVariable("YARN_CACHE_FOLDER", $"{PackageCacheDirectoryName}/yarn");
+        Environment.SetEnvironmentVariable("PNPM_HOME", $"{PackageCacheDirectoryName}/pnpm/home");
+        Environment.SetEnvironmentVariable("PNPM_STORE_DIR", $"{PackageCacheDirectoryName}/pnpm/store");
+        Environment.SetEnvironmentVariable("npm_config_store_dir", $"{PackageCacheDirectoryName}/pnpm/store");
+        Environment.SetEnvironmentVariable("XDG_CACHE_HOME", $"{PackageCacheDirectoryName}/xdg");
         return cacheRoot;
     }
 
@@ -563,7 +579,10 @@ internal sealed class PodLocalWorkspaceManager
             .ToArray();
     }
 
-    private static IReadOnlyList<string> FindNestedRepositoryRoots(string workspacePath)
+    internal static IReadOnlyList<string> FindNestedRepositoryRoots(
+        string workspacePath,
+        CancellationToken ct,
+        Action<string>? onDirectoryVisited = null)
     {
         var roots = new List<string>();
         var pending = new Stack<string>();
@@ -573,7 +592,9 @@ internal sealed class PodLocalWorkspaceManager
         {
             while (pending.Count > 0)
             {
+                ct.ThrowIfCancellationRequested();
                 var directory = pending.Pop();
+                onDirectoryVisited?.Invoke(directory);
                 if (!PathEquals(directory, workspacePath))
                 {
                     var metadataPath = Path.Combine(directory, ".git");
@@ -586,15 +607,9 @@ internal sealed class PodLocalWorkspaceManager
 
                 foreach (var child in Directory.EnumerateDirectories(directory))
                 {
-                    if (string.Equals(
-                            Path.GetFileName(child),
-                            ".git",
-                            OperatingSystem.IsWindows()
-                                ? StringComparison.OrdinalIgnoreCase
-                                : StringComparison.Ordinal))
-                    {
+                    ct.ThrowIfCancellationRequested();
+                    if (NestedRepositoryScanExcludedDirectories.Contains(Path.GetFileName(child)))
                         continue;
-                    }
 
                     if ((File.GetAttributes(child) & FileAttributes.ReparsePoint) == 0)
                         pending.Push(child);

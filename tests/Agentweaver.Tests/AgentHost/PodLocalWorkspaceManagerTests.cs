@@ -213,6 +213,56 @@ public sealed class PodLocalWorkspaceManagerTests : IDisposable
         await manager.CleanupAsync();
     }
 
+    [Fact]
+    public void FindNestedRepositoryRoots_prunes_ignored_trees_and_finds_normal_nested_repo()
+    {
+        var workspace = Path.Combine(_root, "scan-workspace");
+        var ignoredRoot = Path.Combine(workspace, "node_modules");
+        var ignoredDirectory = ignoredRoot;
+        Directory.CreateDirectory(workspace);
+        for (var index = 0; index < 100; index++)
+        {
+            ignoredDirectory = Path.Combine(ignoredDirectory, $"level-{index}");
+            Directory.CreateDirectory(ignoredDirectory);
+        }
+        Directory.CreateDirectory(Path.Combine(ignoredDirectory, ".git"));
+
+        var nestedRepository = Path.Combine(workspace, "src", "nested-deliverable");
+        Directory.CreateDirectory(Path.Combine(nestedRepository, ".git"));
+        var visitedDirectories = new List<string>();
+
+        var roots = PodLocalWorkspaceManager.FindNestedRepositoryRoots(
+            workspace,
+            CancellationToken.None,
+            visitedDirectories.Add);
+
+        roots.Should().Equal("src/nested-deliverable");
+        visitedDirectories.Should().HaveCount(3);
+        visitedDirectories.Should().NotContain(path => path.StartsWith(
+            ignoredRoot + Path.DirectorySeparatorChar,
+            OperatingSystem.IsWindows()
+                ? StringComparison.OrdinalIgnoreCase
+                : StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void FindNestedRepositoryRoots_honors_cancellation_before_traversal()
+    {
+        var workspace = Path.Combine(_root, "cancelled-scan-workspace");
+        Directory.CreateDirectory(workspace);
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+        var visitedDirectoryCount = 0;
+
+        var act = () => PodLocalWorkspaceManager.FindNestedRepositoryRoots(
+            workspace,
+            cancellation.Token,
+            _ => visitedDirectoryCount++);
+
+        act.Should().Throw<OperationCanceledException>();
+        visitedDirectoryCount.Should().Be(0);
+    }
+
     private PodLocalWorkspaceManager Manager() =>
         new(
             Options.Create(new AgentHostOptions
