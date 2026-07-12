@@ -1,4 +1,4 @@
-import { layoutDagBalancedGrid, layoutDagColumns, NODE_H, NODE_W } from '../utils/dagLayout';
+import { layoutDagBalancedGrid, layoutDagColumns, layoutDagStaircase, NODE_H, NODE_W } from '../utils/dagLayout';
 import { describe, expect, it } from 'vitest';
 import type { NodeSizeHint } from '../utils/dagLayout';
 import type { Edge, Node } from '@xyflow/react';
@@ -174,6 +174,172 @@ describe('layoutDagBalancedGrid', () => {
           a.position.y + ah.height <= b.position.y ||
           b.position.y + bh.height <= a.position.y;
         expect(separated).toBe(true);
+      }
+    }
+  });
+});
+
+describe('layoutDagStaircase', () => {
+  const SEP = { rankSep: 64, nodeSep: 28 };
+
+  const bbox = (laid: Node[], hints: Record<string, NodeSizeHint>) => {
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const n of laid) {
+      const h = hints[n.id];
+      minX = Math.min(minX, n.position.x);
+      minY = Math.min(minY, n.position.y);
+      maxX = Math.max(maxX, n.position.x + h.width);
+      maxY = Math.max(maxY, n.position.y + h.height);
+    }
+    return { width: maxX - minX, height: maxY - minY };
+  };
+
+  const SPINE = ['coordinator', 'outcome', 'work', 'rai', 'review', 'merge', 'scribe'];
+
+  it('is deterministic — repeated layout of identical input yields identical coordinates (Tidy)', () => {
+    const { nodes, edges, hints } = coordinatorWithSubtasks(3);
+    const snap = (laid: Node[]) => laid.map((n) => ({ id: n.id, x: n.position.x, y: n.position.y }));
+    const a = layoutDagStaircase(nodes, edges, { rankdir: 'LR', ...SEP, targetAspect: 1.35, minStepRanks: 3 }, hints);
+    const b = layoutDagStaircase(nodes, edges, { rankdir: 'LR', ...SEP, targetAspect: 1.35, minStepRanks: 3 }, hints);
+    const c = layoutDagStaircase(nodes, edges, { rankdir: 'LR', ...SEP, targetAspect: 1.35, minStepRanks: 3 }, hints);
+    expect(snap(b)).toEqual(snap(a));
+    expect(snap(c)).toEqual(snap(a));
+  });
+
+  it('preserves the input (descriptor emission) order in the returned nodes, independent of layout', () => {
+    const { nodes, edges, hints } = coordinatorWithSubtasks(3);
+    for (const rankdir of ['LR', 'TB'] as const) {
+      const laid = layoutDagStaircase(nodes, edges, { rankdir, ...SEP, minStepRanks: 3 }, hints);
+      // The run tree derives its order from this array; layout must never reorder it.
+      expect(laid.map((n) => n.id)).toEqual(nodes.map((n) => n.id));
+    }
+  });
+
+  it('yields a fixed dependency spine order for a fixed fixture', () => {
+    const { nodes, edges, hints } = coordinatorWithSubtasks(3);
+    const laid = layoutDagStaircase(nodes, edges, { rankdir: 'LR', ...SEP, minStepRanks: 3 }, hints);
+    // Sorting the spine nodes by primary axis (X in LR) must reproduce the real dependency order.
+    const spineOrder = laid
+      .filter((n) => SPINE.includes(n.id))
+      .slice()
+      .sort((a, b) => a.position.x - b.position.x)
+      .map((n) => n.id);
+    expect(spineOrder).toEqual(SPINE);
+  });
+
+  it('holds 2+ nodes per stair tread (chunky staircase, not a 1-node-per-step diagonal)', () => {
+    // 3 subtasks ⇒ 8 ranks. With STAIR_RUN=2 the spine forms 2-node treads that share a row before
+    // stepping down, so the number of distinct rows is well below the number of spine nodes.
+    const { nodes, edges, hints } = coordinatorWithSubtasks(3);
+    const laid = layoutDagStaircase(nodes, edges, { rankdir: 'LR', ...SEP, minStepRanks: 3 }, hints);
+    const byId = new Map(laid.map((n) => [n.id, n]));
+
+    const rows = SPINE.map((id) => rounded(byId.get(id)!.position.y));
+    const distinctRows = new Set(rows).size;
+    // A pure 1-per-step diagonal would put every spine node on its own row (distinctRows === length).
+    expect(distinctRows).toBeLessThan(SPINE.length);
+    expect(distinctRows).toBeGreaterThan(1); // still uses height (multiple treads)
+
+    // The first tread groups the first two ranks on the same row (advancing right, no step yet).
+    expect(rounded(byId.get('coordinator')!.position.y)).toBe(rounded(byId.get('outcome')!.position.y));
+    expect(byId.get('outcome')!.position.x).toBeGreaterThan(byId.get('coordinator')!.position.x);
+  });
+
+  it('cascades a long linear spine as an alternating orthogonal stair, using both dimensions (LR)', () => {
+    // 3 subtasks ⇒ 8 ranks (coordinator, outcome, work, [subtasks], rai, review, merge, scribe).
+    const { nodes, edges, hints } = coordinatorWithSubtasks(3);
+    const laid = layoutDagStaircase(nodes, edges, { rankdir: 'LR', ...SEP, targetAspect: 1.35, minStepRanks: 3 }, hints);
+    const byId = new Map(laid.map((n) => [n.id, n]));
+
+    const xs = SPINE.map((id) => byId.get(id)!.position.x);
+    const ys = SPINE.map((id) => byId.get(id)!.position.y);
+    // Monotonic non-decreasing on BOTH axes, and every step advances at least one axis (forward
+    // progress, never reversing). The alternating stair steps right OR down each step — not both.
+    for (let i = 1; i < SPINE.length; i += 1) {
+      expect(xs[i]).toBeGreaterThanOrEqual(xs[i - 1]);
+      expect(ys[i]).toBeGreaterThanOrEqual(ys[i - 1]);
+      expect(xs[i] > xs[i - 1] || ys[i] > ys[i - 1]).toBe(true);
+    }
+    // Both dimensions are actually used (distinct columns AND distinct rows along the spine).
+    expect(new Set(xs).size).toBeGreaterThan(1);
+    expect(new Set(ys).size).toBeGreaterThan(1);
+
+    // It must actually use height (many node rows tall, not a flat line).
+    const { height } = bbox(laid, hints);
+    expect(height).toBeGreaterThan(3 * 130);
+  });
+
+  it('keeps true parallel branches fanned out within their rank', () => {
+    const { nodes, edges, hints } = coordinatorWithSubtasks(3);
+    const laid = layoutDagStaircase(nodes, edges, { rankdir: 'LR', ...SEP, minStepRanks: 3 }, hints);
+    const byId = new Map(laid.map((n) => [n.id, n]));
+    const subs = ['subtask-1', 'subtask-2', 'subtask-3'].map((id) => byId.get(id)!);
+
+    // Parallel subtasks share one column (primary X) but spread on the cross axis (distinct Y).
+    const xs = new Set(subs.map((n) => rounded(n.position.x)));
+    const ys = new Set(subs.map((n) => rounded(n.position.y)));
+    expect(xs.size).toBe(1);
+    expect(ys.size).toBe(3);
+  });
+
+  it('leaves a short chain as a straight line (no stepping)', () => {
+    const nodes: Node[] = [makeNode('coordinator'), makeNode('outcome'), makeNode('work')];
+    const edges: Edge[] = [makeEdge('coordinator', 'outcome'), makeEdge('outcome', 'work')];
+    const hints = Object.fromEntries(nodes.map((n) => [n.id, { width: 250, height: 80 }]));
+
+    const laid = layoutDagStaircase(nodes, edges, { rankdir: 'LR', ...SEP, minStepRanks: 3 }, hints);
+    // All three single-node ranks share one row (no cascade for a short chain).
+    const ys = new Set(laid.map((n) => rounded(n.position.y)));
+    expect(ys.size).toBe(1);
+  });
+
+  it('transposes for the vertical (TB) orientation — an alternating stair down then right', () => {
+    const { nodes, edges, hints } = coordinatorWithSubtasks(3);
+    const laid = layoutDagStaircase(nodes, edges, { rankdir: 'TB', ...SEP, targetAspect: 1.35, minStepRanks: 3 }, hints);
+    const byId = new Map(laid.map((n) => [n.id, n]));
+
+    // In TB the primary axis is vertical (Y advances down) and the step spreads across X (right); the
+    // alternation moves down OR right each step, so assert non-decreasing + forward progress on both.
+    const xs = SPINE.map((id) => byId.get(id)!.position.x);
+    const ys = SPINE.map((id) => byId.get(id)!.position.y);
+    for (let i = 1; i < SPINE.length; i += 1) {
+      expect(xs[i]).toBeGreaterThanOrEqual(xs[i - 1]);
+      expect(ys[i]).toBeGreaterThanOrEqual(ys[i - 1]);
+      expect(xs[i] > xs[i - 1] || ys[i] > ys[i - 1]).toBe(true);
+    }
+    expect(new Set(xs).size).toBeGreaterThan(1);
+    expect(new Set(ys).size).toBeGreaterThan(1);
+  });
+
+  it('never produces negative coordinates', () => {
+    const { nodes, edges, hints } = coordinatorWithSubtasks(4);
+    for (const rankdir of ['LR', 'TB'] as const) {
+      const laid = layoutDagStaircase(nodes, edges, { rankdir, ...SEP, minStepRanks: 3 }, hints);
+      for (const n of laid) {
+        expect(n.position.x).toBeGreaterThanOrEqual(0);
+        expect(n.position.y).toBeGreaterThanOrEqual(0);
+      }
+    }
+  });
+
+  it('never emits NaN/Infinity/negative coords even for poisoned options', () => {
+    const { nodes, edges, hints } = coordinatorWithSubtasks(3);
+    const poisons = [
+      { targetAspect: 0 },
+      { targetAspect: -3 },
+      { targetAspect: Number.NaN },
+      { targetAspect: Number.POSITIVE_INFINITY },
+      { stepOffset: Number.NaN },
+      { stepOffset: -500 },
+      { stepOffset: Number.POSITIVE_INFINITY },
+    ];
+    for (const extra of poisons) {
+      const laid = layoutDagStaircase(nodes, edges, { rankdir: 'LR', ...SEP, minStepRanks: 3, ...extra }, hints);
+      for (const n of laid) {
+        expect(Number.isFinite(n.position.x)).toBe(true);
+        expect(Number.isFinite(n.position.y)).toBe(true);
+        expect(n.position.x).toBeGreaterThanOrEqual(0);
+        expect(n.position.y).toBeGreaterThanOrEqual(0);
       }
     }
   });

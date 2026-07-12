@@ -4,6 +4,20 @@ export const NODE_W = 200;
 export const NODE_H = 145;
 export const DAG_NODE_SEP = 96;
 
+// Compact "pill" node dimensions for the coordinator topology DAG. Every node (subtask or gate)
+// renders at this fixed size so dagre can pack a real, data-driven dependency graph tightly.
+// COMPACT_CARD_H is the height of the card box itself; COMPACT_NODE_H additionally reserves room
+// for the model-name caption that renders just BELOW the card (outside its border), so dagre keeps
+// vertical/rank spacing that accounts for the caption.
+export const COMPACT_NODE_W = 250;
+export const COMPACT_CARD_H = 58;
+export const COMPACT_NODE_H = 80;
+
+// Stair tread length: how many nodes advance along the SAME row (LR) / column (TB) before the stair
+// steps down/right to the next tread. A value of 2 keeps chunky, clearly-horizontal treads (instead of
+// stepping after every single node → a fine 45° diagonal) while still packing into a square-ish box.
+export const STAIR_RUN = 2;
+
 // Per-node-type layout dimensions. Keep in sync with WorkflowGraphPanel card widths.
 export const NODE_TYPE_W: Record<string, number> = {
   agent:    220,
@@ -44,6 +58,15 @@ export interface BalancedGridLayoutOpts extends LayoutOpts {
   viewportHeight?: number;
   minColumns?: number;
   maxColumns?: number;
+}
+
+export interface StaircaseLayoutOpts extends LayoutOpts {
+  /** Desired width/height of the graph bounding box (matches the panel's aspect). */
+  targetAspect?: number;
+  /** Only cascade (step) when the rank count exceeds this; short chains stay a straight line. */
+  minStepRanks?: number;
+  /** Explicit cross-axis offset added per rank. When omitted it's derived from targetAspect. */
+  stepOffset?: number;
 }
 
 export interface NodeSizeHint {
@@ -445,8 +468,8 @@ export function layoutDagColumns(
     byRank.get(key)!.push(n.id);
   }
 
-  const LANE_GAP = 72; // gap between successive ranks (columns for LR, rows for TB)
-  const CROSS_GAP = 40; // gap between stacked cards within a rank
+  const LANE_GAP = opts.rankSep ?? 72; // gap between successive ranks (columns for LR, rows for TB)
+  const CROSS_GAP = opts.nodeSep ?? 40; // gap between stacked cards within a rank
   const MARGIN = 24;
 
   const posMap = new Map<string, { x: number; y: number }>();
@@ -520,6 +543,167 @@ export function layoutDagColumns(
     return {
       ...n,
       position: posMap.get(n.id) ?? n.position,
+      initialWidth: hint?.width ?? NODE_W,
+      initialHeight: hint?.height ?? NODE_H,
+    };
+  });
+}
+
+/**
+ * Staircase (stepped / monotonic diagonal) DAG layout for long, mostly-linear runs.
+ *
+ * A pure LR row (Coordinator → Outcome → Work plan → subagents → RAI → Review → Merge → Scribe)
+ * overflows width while leaving the panel's height empty; once fit-to-view scales that wide-and-short
+ * shape down, the nodes become unreadably small. This layout keeps dagre's data-driven rank + ordering
+ * (so true parallel branches still fan out within a rank) but walks the ranks as an ALTERNATING
+ * orthogonal stair so the sequence uses BOTH dimensions and packs into a square-ish box.
+ *
+ * Rather than a uniform 45° diagonal (which leaves two large empty triangles), each step advances only
+ * ONE axis, alternating: odd steps advance the primary axis, even steps advance the cross axis. The flow
+ * is monotonic — both axes only ever increase, so it always progresses one way (never wraps/reverses):
+ *   • `rankdir: 'LR'` — right, down, right, down… (primary axis = X): the spine steps right, then down,
+ *     then right, then down, descending to the right in a compact staircase.
+ *   • `rankdir: 'TB'` — down, right, down, right… (primary axis = Y): mirrored, descending down-right.
+ *
+ * Every column hosts at most two ranks (a right-arrival and the following down-departure), separated by
+ * a cross advance sized to clear the previous rank's full sibling stack, so ranks can never collide.
+ */
+export function layoutDagStaircase(
+  nodes: Node[],
+  edges: Edge[],
+  opts: StaircaseLayoutOpts = {},
+  nodeSizeHints?: Record<string, NodeSizeHint>,
+): Node[] {
+  if (nodes.length === 0) return nodes;
+
+  const rankdir = opts.rankdir ?? 'LR';
+  const horizontal = rankdir !== 'TB'; // LR ⇒ primary axis is X (spine runs left→right)
+
+  // 1. Dagre determines the rank (depth) of every node and the cross-axis ordering within a rank.
+  const g = new Dagre.graphlib.Graph();
+  g.setGraph({
+    rankdir,
+    ranksep: opts.rankSep ?? 80,
+    nodesep: opts.nodeSep ?? 40,
+    marginx: 24,
+    marginy: 24,
+  });
+  g.setDefaultEdgeLabel(() => ({}));
+  for (const n of nodes) {
+    const hint = nodeSizeHints?.[n.id];
+    g.setNode(n.id, { width: hint?.width ?? NODE_W, height: hint?.height ?? NODE_H });
+  }
+  for (const e of edges) {
+    g.setEdge(e.source, e.target);
+  }
+  Dagre.layout(g);
+
+  const primaryOf = (id: string) => (horizontal ? g.node(id).x : g.node(id).y);
+  const crossOf = (id: string) => (horizontal ? g.node(id).y : g.node(id).x);
+
+  // Node size projected onto the primary axis (advances rank-to-rank) and the cross axis (stacks
+  // parallel nodes within a rank).
+  const primarySize = (id: string) => {
+    const hint = nodeSizeHints?.[id];
+    return horizontal ? (hint?.width ?? NODE_W) : (hint?.height ?? NODE_H);
+  };
+  const crossSize = (id: string) => {
+    const hint = nodeSizeHints?.[id];
+    return horizontal ? (hint?.height ?? NODE_H) : (hint?.width ?? NODE_W);
+  };
+
+  // Stable emission index (the descriptor's declared node order) drives a deterministic tie-break so
+  // repeated layouts (e.g. Tidy) never reshuffle siblings that share a rank/cross coordinate.
+  const emissionIndex = new Map<string, number>();
+  nodes.forEach((n, i) => emissionIndex.set(n.id, i));
+
+  // 2. Group nodes by dagre rank; order within a rank by cross coordinate, then by emission index so
+  //    identical input always yields identical ordering (independent of Array.sort stability).
+  const byRank = new Map<number, string[]>();
+  for (const n of nodes) {
+    const key = Math.round(primaryOf(n.id));
+    if (!byRank.has(key)) byRank.set(key, []);
+    byRank.get(key)!.push(n.id);
+  }
+  const rankKeys = [...byRank.keys()].sort((a, b) => a - b);
+  for (const key of rankKeys) {
+    byRank.get(key)!.sort((a, b) => {
+      const dc = crossOf(a) - crossOf(b);
+      if (Math.abs(dc) > 0.5) return dc;
+      return (emissionIndex.get(a) ?? 0) - (emissionIndex.get(b) ?? 0);
+    });
+  }
+  const ranks = rankKeys.map((key) => byRank.get(key)!);
+  const R = ranks.length;
+
+  const laneGap = opts.rankSep ?? 72;   // primary-axis gap between successive ranks
+  const crossGap = opts.nodeSep ?? 40;  // cross-axis gap between stacked parallel nodes
+  const MARGIN = 24;
+
+  // Uniform primary pitch keeps successive ranks (and the diagonal edges between them) even.
+  const colPitch = ranks.reduce(
+    (max, ids) => Math.max(max, ids.reduce((m, id) => Math.max(m, primarySize(id)), 0)),
+    0,
+  ) + laneGap;
+
+  const rankCrossExtent = (ids: string[]) =>
+    ids.reduce((sum, id) => sum + crossSize(id), 0) + Math.max(0, ids.length - 1) * crossGap;
+  const maxRankCross = ranks.reduce((m, ids) => Math.max(m, rankCrossExtent(ids)), 0);
+
+  // Normalize public options so a caller can never poison coordinates: targetAspect must be positive
+  // & finite, and an explicit stepOffset is coerced to a finite value and clamped to [0, ceil].
+  const rawAspect = opts.targetAspect ?? 1.4;
+  const targetAspect = Number.isFinite(rawAspect) && rawAspect > 0 ? rawAspect : 1.4;
+  void targetAspect; // retained for API compatibility; the orthogonal stair is self-distributing
+  const minStepRanks = opts.minStepRanks ?? 3;
+  const stepCeil = maxRankCross + crossGap; // don't out-run a full rank stack per step
+
+  // 3. Optional explicit cross-advance floor. Short chains stay a straight line (all right steps).
+  const straight = R <= minStepRanks;
+  const explicitStep =
+    opts.stepOffset != null
+      ? Math.round(
+          Math.min(stepCeil, Math.max(0, Number.isFinite(opts.stepOffset) ? opts.stepOffset : 0)),
+        )
+      : 0;
+
+  // 4. Alternating orthogonal stair with chunky treads. Advance the primary axis (→ right) for a run of
+  //    STAIR_RUN successive ranks (one tread), then take a single cross-axis step (↓ down) to the next
+  //    tread, and repeat. This holds 2+ nodes per row instead of stepping after every node, while both
+  //    axes still accumulate monotonically (never decrease) and parallel siblings fan out on the cross
+  //    axis at their shared rank. A down step clears the previous rank's full sibling stack, and because
+  //    the down step keeps the primary column, each column hosts at most a right-arrival + a down-
+  //    departure (separated by that clearance), so ranks can never collide.
+  const run = Math.max(1, STAIR_RUN);
+  const positions = new Map<string, { x: number; y: number }>();
+  let primaryPos = MARGIN;
+  let crossPos = MARGIN;
+  for (let rankIndex = 0; rankIndex < R; rankIndex += 1) {
+    if (rankIndex > 0) {
+      // Step down only when starting a new tread (every `run` ranks); otherwise advance along the tread.
+      const advancePrimary = straight || rankIndex % run !== 0;
+      if (advancePrimary) {
+        primaryPos += colPitch;
+      } else {
+        const prevExtent = rankCrossExtent(ranks[rankIndex - 1]);
+        crossPos += Math.max(prevExtent + crossGap, explicitStep);
+      }
+    }
+    const ids = ranks[rankIndex];
+    let cross = crossPos;
+    for (const id of ids) {
+      const x = horizontal ? primaryPos : cross;
+      const y = horizontal ? cross : primaryPos;
+      positions.set(id, { x: Math.round(x), y: Math.round(y) });
+      cross += crossSize(id) + crossGap;
+    }
+  }
+
+  return nodes.map((n) => {
+    const hint = nodeSizeHints?.[n.id];
+    return {
+      ...n,
+      position: positions.get(n.id) ?? n.position,
       initialWidth: hint?.width ?? NODE_W,
       initialHeight: hint?.height ?? NODE_H,
     };

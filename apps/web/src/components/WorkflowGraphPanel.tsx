@@ -5,6 +5,9 @@ import {
   mergeClasses,
   MessageBar,
   MessageBarBody,
+  Popover,
+  PopoverSurface,
+  PopoverTrigger,
   Spinner,
   Text,
   tokens,
@@ -12,6 +15,8 @@ import {
 import { formatModelLabel } from '../utils/agentIdentity';
 import {
   buildSteppedConnectorRoute,
+  COMPACT_CARD_H,
+  COMPACT_NODE_W,
   DAG_NODE_SEP,
   layoutDag,
   NODE_TYPE_W,
@@ -39,7 +44,8 @@ import {
   SubtractCircleRegular,
 } from '@fluentui/react-icons';
 import type { FluentIcon } from '@fluentui/react-icons';
-import { createContext, useContext, useEffect, useMemo, useState } from 'react';
+import { cloneElement, createContext, Fragment, useContext, useEffect, useMemo, useState } from 'react';
+import type { FocusEvent as ReactFocusEvent, ReactElement, ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import {
   EdgeLabelRenderer,
@@ -193,16 +199,16 @@ export const useNodeStyles = makeStyles({
     borderRadius: '8px',
     cursor: 'default',
   },
-  // Colored top-accent strip keyed to status (mockup look). Sits flush with the
-  // card's rounded top corners.
+  // Colored top-accent strip keyed to status. A thin 2px line flush with the card's rounded
+  // top corners — retires the heavier accent bar.
   accentBar: {
     position: 'absolute',
     top: 0,
     left: 0,
     right: 0,
-    height: '3px',
-    borderTopLeftRadius: '8px',
-    borderTopRightRadius: '8px',
+    height: '2px',
+    borderTopLeftRadius: tokens.borderRadiusMedium,
+    borderTopRightRadius: tokens.borderRadiusMedium,
     pointerEvents: 'none',
   },
   accentPending:   { backgroundColor: tokens.colorNeutralStroke2 },
@@ -403,6 +409,174 @@ export const useNodeStyles = makeStyles({
     gap: '6px',
     marginTop: tokens.spacingVerticalXS,
   },
+
+  // -------------------------------------------------------------------------
+  // Compact "pill" node — a fixed, legible DAG node. The wrapper stacks the card
+  // and a model-name caption that renders just below the card border (outside the
+  // card box), mirroring Copilot Studio. The card face shows an avatar, a title
+  // (+ AI credits), and a muted "Name (Role)" line. Status is conveyed by the 2px
+  // top accent + aria-label; richer detail lives in the hover popover.
+  // -------------------------------------------------------------------------
+  pillWrap: {
+    boxSizing: 'border-box',
+    width: `${COMPACT_NODE_W}px`,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '2px',
+  },
+  pill: {
+    boxSizing: 'border-box',
+    width: '100%',
+    minHeight: `${COMPACT_CARD_H}px`,
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalS,
+    padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM}`,
+    position: 'relative',
+    backgroundColor: tokens.colorNeutralBackground1,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusMedium,
+    cursor: 'pointer',
+    transitionProperty: 'box-shadow, transform, border-color',
+    transitionDuration: tokens.durationFaster,
+    transitionTimingFunction: tokens.curveEasyEase,
+    ':hover': {
+      boxShadow: tokens.shadow8,
+      transform: 'translateY(-1px)',
+      border: `1px solid ${tokens.colorNeutralStroke1}`,
+    },
+    '@media (prefers-reduced-motion: reduce)': {
+      transitionProperty: 'none',
+      ':hover': { transform: 'none' },
+    },
+  },
+  pillSelected: {
+    border: `1px solid ${tokens.colorNeutralStroke1}`,
+    boxShadow: `0 0 0 1.5px ${tokens.colorNeutralStroke1}, ${tokens.shadow4}`,
+  },
+  pillPlanned: {
+    border: `1px dashed ${tokens.colorNeutralStroke2}`,
+    opacity: 0.7,
+  },
+  pillIcon: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    color: tokens.colorNeutralForeground2,
+    flexShrink: 0,
+  },
+  pillBody: {
+    display: 'flex',
+    flexDirection: 'column',
+    minWidth: 0,
+    flex: 1,
+    gap: '1px',
+  },
+  pillTitleRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXS,
+    minWidth: 0,
+  },
+  pillTitle: {
+    flex: 1,
+    minWidth: 0,
+    fontWeight: tokens.fontWeightSemibold,
+    fontSize: tokens.fontSizeBase300,
+    lineHeight: tokens.lineHeightBase300,
+    color: tokens.colorNeutralForeground1,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  },
+  pillCredits: {
+    flexShrink: 0,
+    display: 'inline-flex',
+    alignItems: 'center',
+  },
+  pillNameRole: {
+    fontSize: tokens.fontSizeBase200,
+    lineHeight: tokens.lineHeightBase200,
+    color: tokens.colorNeutralForeground3,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  },
+  pillSub: {
+    fontSize: tokens.fontSizeBase100,
+    color: tokens.colorNeutralForeground3,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  },
+  pillModelCaption: {
+    fontFamily: tokens.fontFamilyMonospace,
+    fontSize: tokens.fontSizeBase100,
+    lineHeight: tokens.lineHeightBase100,
+    color: tokens.colorNeutralForeground3,
+    paddingLeft: tokens.spacingHorizontalXS,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  },
+
+  // Detail popover surface (metadata that used to crowd the card face).
+  detailSurface: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalS,
+    minWidth: '240px',
+    maxWidth: '320px',
+  },
+  detailHeader: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalS,
+  },
+  detailHeaderText: {
+    display: 'flex',
+    flexDirection: 'column',
+    minWidth: 0,
+  },
+  detailTitle: {
+    fontWeight: tokens.fontWeightSemibold,
+    fontSize: tokens.fontSizeBase300,
+    color: tokens.colorNeutralForeground1,
+  },
+  detailRole: {
+    fontSize: tokens.fontSizeBase200,
+    color: tokens.colorNeutralForeground3,
+  },
+  detailRows: {
+    display: 'grid',
+    gridTemplateColumns: 'auto 1fr',
+    columnGap: tokens.spacingHorizontalM,
+    rowGap: tokens.spacingVerticalXXS,
+    alignItems: 'baseline',
+  },
+  detailLabel: {
+    fontSize: tokens.fontSizeBase200,
+    color: tokens.colorNeutralForeground3,
+    whiteSpace: 'nowrap',
+  },
+  detailValue: {
+    fontSize: tokens.fontSizeBase200,
+    color: tokens.colorNeutralForeground1,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    minWidth: 0,
+  },
+  detailValueMono: {
+    fontFamily: tokens.fontFamilyMonospace,
+    fontSize: tokens.fontSizeBase100,
+  },
+  detailActions: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalXS,
+    '& button': { width: '100%' },
+    '& a': { width: '100%' },
+  },
 });
 
 // ---------------------------------------------------------------------------
@@ -556,8 +730,95 @@ export function statusDescription(key: string, status: StepStatus): string | nul
 }
 
 // ---------------------------------------------------------------------------
-// WorkflowNode — generic card component.
-// node_type drives width/shape class; role drives icon and colour.
+// NodeDetailPopover — supplementary metadata for a compact pill node.
+// Opens on hover/focus (click still selects the node via the graph's onNodeClick),
+// showing the full agent/model/phase/status/duration/credits/pod detail that no
+// longer crowds the small node face.
+// ---------------------------------------------------------------------------
+
+export interface NodeDetailRow {
+  label: string;
+  value: ReactNode;
+  mono?: boolean;
+}
+
+export function NodeDetailPopover({
+  title,
+  roleText,
+  Icon,
+  avatar,
+  rows,
+  actions,
+  children,
+}: {
+  title: string;
+  roleText?: string;
+  Icon: FluentIcon;
+  avatar?: ReactNode;
+  rows: NodeDetailRow[];
+  actions?: ReactNode;
+  children: ReactElement;
+}) {
+  const s = useNodeStyles();
+  const [open, setOpen] = useState(false);
+  const visibleRows = rows.filter((r) => r.value !== undefined && r.value !== null && r.value !== '');
+
+  // Open on FOCUS as well as hover so keyboard users reach the metadata (the visible status chip was
+  // removed from the face). onFocus/onBlur bubble from the focusable pill inside `children`; closing
+  // only when focus actually leaves the pill keeps click/Enter = select working. Cloning the child
+  // (instead of adding a wrapper) preserves the trigger's box geometry so hover still works.
+  const triggerChild = cloneElement(children, {
+    onFocus: (event: ReactFocusEvent<HTMLElement>) => {
+      (children.props as { onFocus?: (e: ReactFocusEvent<HTMLElement>) => void }).onFocus?.(event);
+      setOpen(true);
+    },
+    onBlur: (event: ReactFocusEvent<HTMLElement>) => {
+      (children.props as { onBlur?: (e: ReactFocusEvent<HTMLElement>) => void }).onBlur?.(event);
+      const related = event.relatedTarget;
+      if (!(related instanceof globalThis.Node) || !event.currentTarget.contains(related)) setOpen(false);
+    },
+  } as Partial<typeof children.props>);
+
+  return (
+    <Popover
+      open={open}
+      onOpenChange={(_, d) => setOpen(d.open)}
+      openOnHover
+      mouseLeaveDelay={200}
+      withArrow
+      positioning="above"
+      trapFocus={false}
+    >
+      <PopoverTrigger disableButtonEnhancement>{triggerChild}</PopoverTrigger>
+      <PopoverSurface className={mergeClasses(s.detailSurface, 'nopan', 'nodrag')}>
+        <div className={s.detailHeader}>
+          <span className={s.pillIcon} aria-hidden="true">{avatar ?? <Icon fontSize={22} />}</span>
+          <div className={s.detailHeaderText}>
+            <span className={s.detailTitle}>{title}</span>
+            {roleText && <span className={s.detailRole}>{roleText}</span>}
+          </div>
+        </div>
+        {visibleRows.length > 0 && (
+          <div className={s.detailRows}>
+            {visibleRows.map((r, i) => (
+              <Fragment key={`${r.label}-${i}`}>
+                <span className={s.detailLabel}>{r.label}</span>
+                <span className={mergeClasses(s.detailValue, r.mono ? s.detailValueMono : undefined)}>{r.value}</span>
+              </Fragment>
+            ))}
+          </div>
+        )}
+        {actions && <div className={mergeClasses(s.detailActions, 'nopan', 'nodrag')}>{actions}</div>}
+      </PopoverSurface>
+    </Popover>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// WorkflowNode — compact pill node.
+// node_type drives the data-node-type attribute; role drives icon and colour.
+// The face shows an avatar/icon, a one-line title, an optional live status line,
+// and a single status pill. All richer detail lives in the hover popover.
 // ---------------------------------------------------------------------------
 
 export function WorkflowNode({ data, selected }: NodeProps) {
@@ -600,23 +861,12 @@ export function WorkflowNode({ data, selected }: NodeProps) {
   const isActive       = effectiveStatus === 'started' && key !== 'review';
   const isHumanWaiting = key === 'review' && effectiveStatus === 'started';
 
-  // Pick node-type-specific width class (planned nodes keep default width)
-  const widthClass = isPlanned
-    ? s.cardDefault
-    : nodeType === 'agent'    ? s.cardAgent
-    : nodeType === 'gate'     ? s.cardGate
-    : nodeType === 'action'   ? s.cardAction
-    : nodeType === 'terminal' ? s.cardTerminal
-    : nodeType === 'subtask'  ? s.cardSubtask
-    :                           s.cardDefault;
-
-  const cardClass = mergeClasses(
-    s.card,
-    widthClass,
+  const pillClass = mergeClasses(
+    s.pill,
     isActive        ? s.cardActive         : undefined,
     isHumanWaiting  ? s.cardActionRequired : undefined,
-    isPlanned       ? s.cardPlanned        : undefined,
-    selected        ? s.cardSelected       : undefined,
+    isPlanned       ? s.pillPlanned        : undefined,
+    selected        ? s.pillSelected       : undefined,
   );
 
   const handleStyle: React.CSSProperties = { opacity: 0, pointerEvents: 'none' };
@@ -628,18 +878,84 @@ export function WorkflowNode({ data, selected }: NodeProps) {
   const subText    = degradedReason ?? ((key === 'agent' && effectiveStatus === 'started' && intent) ? intent : (message ?? rawSubText));
   const roleText   = key === 'agent' ? (agentRoleTitle ?? def.roleDescription) : def.roleDescription;
   const coordinatorClickable = key === 'coordinator' && !isPlanned && Boolean(openSession);
+  const statusText = isPlanned ? 'Planned' : isHumanWaiting ? 'Awaiting' : statusLabel(effectiveStatus);
 
-  return (
+  const avatar = key === 'agent' && agentName
+    ? <AgentAvatar name={agentName as string} size={26} circle badgeIcon={Icon} badgeTitle={roleText} />
+    : <Icon fontSize={20} />;
+
+  // "Name (Role)" face line. Agents show "Deckard (Lead Researcher)"; gate/system nodes fall back to
+  // their role/system name. Hidden when it would merely repeat the title.
+  const nameRoleText = key === 'agent' && agentName
+    ? `${agentName as string} (${roleText})`
+    : roleText;
+  const showNameRole = Boolean(nameRoleText) && nameRoleText !== label;
+  // Model caption rendered BELOW the card (only for agent nodes that have a model).
+  const modelCaption = key === 'agent' && modelId ? formatModelLabel(modelId as string) : undefined;
+  const hasCredits = totalNanoAiu != null || totalTokens != null;
+
+  const rows: NodeDetailRow[] = [
+    { label: 'Status', value: statusText },
+    { label: 'Role', value: roleText },
+    ...(agentName ? [{ label: 'Agent', value: agentName as string }] : []),
+    ...(modelId && key === 'agent' ? [{ label: 'Model', value: formatModelLabel(modelId as string), mono: true }] : []),
+    ...(startedAt !== undefined ? [{ label: 'Duration', value: <ElapsedTimer startedAt={startedAt} completedAt={completedAt} /> }] : []),
+    ...(nodeExecutionPodName ? [{ label: 'Pod', value: nodeExecutionPodName as string, mono: true }] : []),
+    ...((totalNanoAiu != null || totalTokens != null)
+      ? [{ label: 'Credits', value: <AiCredits totalNanoAiu={totalNanoAiu as number | null | undefined} totalTokens={totalTokens as number | null | undefined} /> }]
+      : []),
+  ];
+
+  const actions = (
     <>
-      <PodIndicator podName={nodeExecutionPodName as string | null | undefined} />
+      {key === 'coordinator' && !isPlanned && openSession && (
+        <Button appearance="outline" size="small" onClick={() => openSession()}>View session</Button>
+      )}
+      {key === 'agent' && !isPlanned && (
+        <Button appearance="outline" size="small" onClick={() => openModal?.(executionId as string)}>View execution</Button>
+      )}
+      {key === 'rai' && !isPlanned && (status === 'started' || status === 'completed' || status === 'failed' || status === 'revise') && (
+        <Button appearance="outline" size="small" onClick={() => openModal?.(`${executionId as string}-rai`)}>View execution</Button>
+      )}
+      {key === 'scribe' && !isPlanned && (
+        <>
+          {(status === 'started' || status === 'completed' || status === 'failed') && startedAt !== undefined && (
+            <Button appearance="outline" size="small" onClick={() => openModal?.(`${executionId as string}-scribe`)}>View execution</Button>
+          )}
+          <Link to={`/projects/${projectId as string}/memories`} style={{ textDecoration: 'none' }}>
+            <Button appearance="outline" size="small">View memories</Button>
+          </Link>
+        </>
+      )}
+      {key === 'merge' && !isPlanned && status === 'completed' && (
+        <Button appearance="outline" size="small" icon={<FolderRegular />} onClick={() => (browseFiles ?? openModal)?.(executionId as string)}>Browse files</Button>
+      )}
+      {key === 'review' && !isPlanned && status === 'started' && (
+        <Button appearance="primary" size="small" onClick={() => openModal?.(executionId as string)}>Review now</Button>
+      )}
+      {key === 'review' && !isPlanned && (status === 'completed' || status === 'revise') && reviewedBy && (
+        <div className={s.reviewerRow}>
+          <img
+            src={`https://github.com/${reviewedBy as string}.png?size=28`}
+            style={{ width: 24, height: 24, borderRadius: '50%', border: `2px solid ${tokens.colorNeutralStroke1}` }}
+            alt={reviewedBy as string}
+          />
+          <Text size={200} style={{ color: tokens.colorNeutralForeground2 }}>{reviewedBy as string}</Text>
+        </div>
+      )}
+    </>
+  );
+
+  const face = (
+    <div className={s.pillWrap}>
       <div
-        className={cardClass}
+        className={pillClass}
         role="article"
         aria-label={`${label}: ${statusLabel(effectiveStatus)}`}
         aria-current={selected ? 'true' : undefined}
         data-node-type={nodeType ?? 'default'}
         data-testid={coordinatorClickable ? 'coordinator-card' : undefined}
-        tabIndex={coordinatorClickable ? 0 : undefined}
+        tabIndex={0}
         onClick={coordinatorClickable ? () => openSession?.() : undefined}
         onKeyDown={coordinatorClickable ? (e) => {
           if (e.key === 'Enter' || e.key === ' ') {
@@ -647,151 +963,64 @@ export function WorkflowNode({ data, selected }: NodeProps) {
             openSession?.();
           }
         } : undefined}
-        style={coordinatorClickable ? { cursor: 'pointer' } : undefined}
       >
-      {dir === 'GRID' ? (
-        <>
-          <Handle id="target-left" type="target" position={Position.Left} style={handleStyle} />
-          <Handle id="target-right" type="target" position={Position.Right} style={handleStyle} />
-          <Handle id="target-top" type="target" position={Position.Top} style={handleStyle} />
-          <Handle id="target-bottom" type="target" position={Position.Bottom} style={handleStyle} />
-          <Handle id="source-left" type="source" position={Position.Left} style={handleStyle} />
-          <Handle id="source-right" type="source" position={Position.Right} style={handleStyle} />
-          <Handle id="source-top" type="source" position={Position.Top} style={handleStyle} />
-          <Handle id="source-bottom" type="source" position={Position.Bottom} style={handleStyle} />
-        </>
-      ) : (
-        <>
-          <Handle type="target" position={targetPos} style={handleStyle} />
-          <Handle type="source" position={sourcePos} style={handleStyle} />
-        </>
-      )}
+        {dir === 'GRID' ? (
+          <>
+            <Handle id="target-left" type="target" position={Position.Left} style={handleStyle} />
+            <Handle id="target-right" type="target" position={Position.Right} style={handleStyle} />
+            <Handle id="target-top" type="target" position={Position.Top} style={handleStyle} />
+            <Handle id="target-bottom" type="target" position={Position.Bottom} style={handleStyle} />
+            <Handle id="source-left" type="source" position={Position.Left} style={handleStyle} />
+            <Handle id="source-right" type="source" position={Position.Right} style={handleStyle} />
+            <Handle id="source-top" type="source" position={Position.Top} style={handleStyle} />
+            <Handle id="source-bottom" type="source" position={Position.Bottom} style={handleStyle} />
+          </>
+        ) : (
+          <>
+            <Handle type="target" position={targetPos} style={handleStyle} />
+            <Handle type="source" position={sourcePos} style={handleStyle} />
+          </>
+        )}
 
-      <span
-        className={`${s.accentBar} ${accentClass(s, effectiveStatus, { isPlanned: !!isPlanned, isAwaiting: isHumanWaiting })}`}
-        aria-hidden="true"
-      />
-
-      {hasPendingApproval && status === 'started' && (
-        <div
-          className={s.approvalBadge}
-          role="img"
-          aria-label="Tool approval required"
-          title="Tool approval required"
-        >
-          <ShieldKeyholeRegular fontSize={12} aria-hidden="true" />
-        </div>
-      )}
-
-      <div className={s.cardHeader}>
-        <StatusBadge
-          status={effectiveStatus}
-          isAwaiting={isHumanWaiting}
-          isPlanned={!!isPlanned}
-          label={key === 'agent' && effectiveStatus === 'revise' ? 'Incomplete' : undefined}
+        <span
+          className={`${s.accentBar} ${accentClass(s, effectiveStatus, { isPlanned: !!isPlanned, isAwaiting: isHumanWaiting })}`}
+          aria-hidden="true"
         />
-        <AiCredits totalNanoAiu={totalNanoAiu as number | null | undefined} totalTokens={totalTokens as number | null | undefined} />
+
+        {hasPendingApproval && status === 'started' && (
+          <div className={s.approvalBadge} role="img" aria-label="Tool approval required" title="Tool approval required">
+            <ShieldKeyholeRegular fontSize={12} aria-hidden="true" />
+          </div>
+        )}
+
+        <span className={s.pillIcon} aria-hidden="true">{avatar}</span>
+        <div className={s.pillBody}>
+          <div className={s.pillTitleRow}>
+            <span className={s.pillTitle}>{label}</span>
+            {hasCredits && (
+              <span className={s.pillCredits}>
+                <AiCredits totalNanoAiu={totalNanoAiu as number | null | undefined} totalTokens={totalTokens as number | null | undefined} />
+              </span>
+            )}
+          </div>
+          {showNameRole && <span className={s.pillNameRole}>{nameRoleText}</span>}
+          {subText && <span className={s.pillSub}>{subText}</span>}
+        </div>
       </div>
-
-      <div className={s.cardMain}>
-        <span className={s.cardIcon} aria-hidden="true">
-          {key === 'agent' && agentName
-            ? <AgentAvatar name={agentName as string} size={28} circle badgeIcon={Icon} badgeTitle={roleText} />
-            : <Icon fontSize={22} />}
-        </span>
-        <div className={s.cardTitleGroup}>
-          <span className={s.cardTitle}>{label}</span>
-          <span className={s.cardRole}>{roleText}</span>
-          {agentName && <span className={s.cardSubText}>{agentName as string}</span>}
-          {modelId && key === 'agent' && <span className={s.cardModel}>{formatModelLabel(modelId as string)}</span>}
-          {subText && <span className={s.cardSubText}>{subText}</span>}
-        </div>
-      </div>
-
-      {key === 'coordinator' && !isPlanned && openSession && (
-        <div
-          className={mergeClasses(s.cardActions, 'nopan', 'nodrag')}
-          style={{ fontSize: 'var(--fontSizeBase100)', color: 'var(--colorNeutralForeground3)', cursor: 'pointer' }}
-          role="button"
-          tabIndex={0}
-          onClick={(e) => {
-            e.stopPropagation();
-            openSession();
-          }}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' || e.key === ' ') {
-              e.preventDefault();
-              e.stopPropagation();
-              openSession();
-            }
-          }}
-          aria-label="View coordinator session"
-        >
-          View session ↗
-        </div>
-      )}
-      {key === 'agent' && !isPlanned && (
-        <div className={mergeClasses(s.cardActions, 'nopan', 'nodrag')}>
-          <Button appearance="outline" size="small" onClick={() => openModal?.(executionId as string)}>
-            View execution
-          </Button>
-        </div>
-      )}
-      {key === 'rai' && !isPlanned && (status === 'started' || status === 'completed' || status === 'failed' || status === 'revise') && (
-        <div className={mergeClasses(s.cardActions, 'nopan', 'nodrag')}>
-          <Button appearance="outline" size="small" onClick={() => openModal?.(`${executionId as string}-rai`)}>
-            View execution
-          </Button>
-        </div>
-      )}
-      {key === 'scribe' && !isPlanned && (
-        <div className={mergeClasses(s.cardActions, 'nopan', 'nodrag')}>
-          {(status === 'started' || status === 'completed' || status === 'failed') && startedAt !== undefined && (
-            <Button appearance="outline" size="small" onClick={() => openModal?.(`${executionId as string}-scribe`)}>
-              View execution
-            </Button>
-          )}
-          <Link to={`/projects/${projectId as string}/memories`} style={{ textDecoration: 'none' }}>
-            <Button appearance="outline" size="small">View memories</Button>
-          </Link>
-        </div>
-      )}
-      {key === 'merge' && !isPlanned && status === 'completed' && (
-        <div className={mergeClasses(s.cardActions, 'nopan', 'nodrag')}>
-          <Button appearance="outline" size="small" icon={<FolderRegular />} onClick={() => (browseFiles ?? openModal)?.(executionId as string)}>
-            Browse files
-          </Button>
-        </div>
-      )}
-      {key === 'review' && !isPlanned && status === 'started' && (
-        <div className={mergeClasses(s.cardActions, 'nopan', 'nodrag')}>
-          <Button appearance="primary" size="small" onClick={() => openModal?.(executionId as string)}>
-            Review now
-          </Button>
-        </div>
-      )}
-      {key === 'review' && !isPlanned && (status === 'completed' || status === 'revise') && reviewedBy && (
-        <div className={mergeClasses(s.reviewerRow, 'nopan', 'nodrag')}>
-          <img
-            src={`https://github.com/${reviewedBy as string}.png?size=28`}
-            style={{ width: 28, height: 28, borderRadius: '50%', border: `2px solid ${tokens.colorNeutralStroke1}` }}
-            alt={reviewedBy as string}
-          />
-          <Text size={200} style={{ color: tokens.colorNeutralForeground2 }}>{reviewedBy as string}</Text>
-        </div>
-      )}
-
-      {startedAt !== undefined && (
-        <div className={s.cardFooter}>
-          <span className={s.cardTimer}>
-            <ElapsedTimer startedAt={startedAt} completedAt={completedAt} />
-          </span>
-        </div>
-      )}
+      {modelCaption && <span className={s.pillModelCaption} title={modelCaption}>{modelCaption}</span>}
     </div>
+  );
+
+  return (
+    <>
+      <PodIndicator podName={nodeExecutionPodName as string | null | undefined} />
+      <NodeDetailPopover title={label} roleText={roleText} Icon={Icon} avatar={avatar} rows={rows} actions={actions}>
+        {face}
+      </NodeDetailPopover>
     </>
   );
 }
+
 
 /** ReactFlow node types map for workflow nodes. Spread or use directly. */
 export const workflowNodeTypes = { workflow: WorkflowNode };

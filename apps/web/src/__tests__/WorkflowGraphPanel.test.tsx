@@ -152,14 +152,13 @@ describe('WorkflowNode — node_type drives data-node-type attribute', () => {
       } satisfies WorkflowNodeData,
     }];
     render(<Wrapper nodes={nodes} />);
-    // Planned nodes render the "Planned" badge text
+    // Planned state is now conveyed structurally (dashed pill + aria-label), not a visible
+    // "Planned" badge on the compact node face. Assert the node rendered and preserved its type.
     await waitFor(
-      () => expect(document.body.textContent).toContain('Planned'),
+      () => expect(document.body.innerHTML).toContain('data-node-type="gate"'),
       { timeout: 4000 },
     );
-    // Even though nodeType=gate, isPlanned=true forces cardDefault width class
-    // (the data-node-type attribute still reflects the nodeType for structural info)
-    expect(document.body.innerHTML).toContain('data-node-type="gate"');
+    expect(document.body.textContent).toContain('RAI Review');
   });
 });
 

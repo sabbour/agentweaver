@@ -238,9 +238,9 @@ describe('CoordinatorRunPage — unified coordinator graph view', () => {
       { timeout: 4000 },
     );
 
-    // Planned nodes show a "Planned" status badge (from StatusBadge with isPlanned=true).
-    const text = inspector.textContent ?? '';
-    expect(text).toContain('Planned');
+    // Planned state is now conveyed by the dashed pill + the node's aria-label (": Pending"),
+    // not a visible "Planned" badge on the compact face.
+    expect(screen.getByRole('article', { name: 'RAI Review: Pending' })).toBeTruthy();
 
     // Planned nodes carry data-node-type attributes in the rendered HTML.
     const html = inspector.innerHTML;
@@ -298,10 +298,12 @@ describe('CoordinatorRunPage — unified coordinator graph view', () => {
       () => expect(document.body.textContent).toContain(reason),
       { timeout: 4000 },
     );
-    expect(screen.getByRole('article', { name: 'RAI Review: Pending' }).textContent).toContain('Planned');
-    expect(screen.getByRole('article', { name: 'Human Review: Pending' }).textContent).toContain('Planned');
-    expect(screen.getByRole('article', { name: 'Merge: Pending' }).textContent).toContain('Planned');
-    expect(screen.getByRole('article', { name: 'Scribe: Pending' }).textContent).toContain('Planned');
+    // Planned gates keep their ": Pending" aria-label (dashed pill conveys the planned state);
+    // getByRole throws if the article is missing, so presence is the assertion.
+    expect(screen.getByRole('article', { name: 'RAI Review: Pending' })).toBeTruthy();
+    expect(screen.getByRole('article', { name: 'Human Review: Pending' })).toBeTruthy();
+    expect(screen.getByRole('article', { name: 'Merge: Pending' })).toBeTruthy();
+    expect(screen.getByRole('article', { name: 'Scribe: Pending' })).toBeTruthy();
     expect(screen.queryByRole('article', { name: 'Merge: Failed' })).toBeNull();
   });
 
@@ -377,8 +379,32 @@ describe('CoordinatorRunPage — unified coordinator graph view', () => {
     const rows = new Set(positions.map((pos) => pos.y));
     const columns = new Set(positions.map((pos) => pos.x));
 
+    // The staircase distributes the run across BOTH axes (not a single column stack, not a single
+    // horizontal row): successive ranks step down-right, so there are multiple columns AND rows.
     expect(columns.size).toBeGreaterThan(1);
-    expect(rows.size).toBeLessThan(graphNodes.length - 1);
+    expect(rows.size).toBeGreaterThan(1);
+  });
+
+  it('keeps the run tree order completely stable when the graph orientation changes (LR ⇄ TB)', async () => {
+    render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    const inspector = await openTopologyInspector();
+    await waitFor(() => expect(inspector.textContent).toContain('Scribe'), { timeout: 4000 });
+
+    const treeOrder = () =>
+      screen.getAllByRole('treeitem').map((el) => el.getAttribute('aria-label') ?? el.textContent ?? '');
+    const before = treeOrder();
+    expect(before.length).toBeGreaterThan(2);
+
+    // Switch to vertical (TB): rank now advances on Y, siblings on X. The run tree is derived from
+    // dependency/emission order, so its order/structure must be byte-identical.
+    const switchBtn = screen.getByRole('button', { name: /Switch orientation/i });
+    fireEvent.click(switchBtn);
+    expect(treeOrder()).toEqual(before);
+
+    // Back to horizontal (LR) — still identical.
+    fireEvent.click(switchBtn);
+    expect(treeOrder()).toEqual(before);
   });
 
   it('renders from REST descriptor even when SSE stream is done (finished coordinator runs)', async () => {

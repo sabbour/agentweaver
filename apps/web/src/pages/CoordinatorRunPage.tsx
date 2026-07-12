@@ -2,7 +2,6 @@ import '@xyflow/react/dist/style.css';
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
 import { formatApiError, formatApiErrorMessage } from '../api/errors';
-import { useRunStream } from '../api/sse';
 import {
   Button,
   Dialog,
@@ -31,7 +30,6 @@ import { AgentStepList } from '../components/ui/agentic';
 import type { AgentArtifact, AgentStep } from '../components/ui/agentic';
 import { AgentAvatar } from '../components/AgentAvatar';
 import { AgentSessionPanel } from '../components/AgentSessionPanel';
-import { useCtrlScrollZoom, ZoomControls } from '../components/board/useCtrlScrollZoom';
 import { CoordinatorArtifactsPanel } from '../components/CoordinatorArtifactsPanel';
 import { AiCredits } from '../components/AiCredits';
 import { OutcomePlanPanel } from '../components/OutcomePlanPanel';
@@ -48,8 +46,8 @@ import {
   forwardEdge,
   iconForRole,
   loopbackEdge,
+  NodeDetailPopover,
   roleDescForRole,
-  StatusBadge,
   useNodeStyles,
   workflowEdgeTypes,
   workflowNodeTypes,
@@ -57,10 +55,13 @@ import {
 import { useSeededRunStream } from '../hooks/useSeededRunStream';
 import { buildTopologyState, initialTopologyState, seedTopologyFromWorkPlan } from '../state/topologyReducer';
 import { formatModelLabel } from '../utils/agentIdentity';
-import { layoutDagColumns, NODE_H, NODE_TYPE_H, NODE_TYPE_W, NODE_W } from '../utils/dagLayout';
+import { layoutDagStaircase, COMPACT_NODE_H, COMPACT_NODE_W } from '../utils/dagLayout';
 import {
+  ArrowAutofitHeightRegular,
+  ArrowAutofitWidthRegular,
   ArrowRepeatAllRegular,
   BotRegular,
+  BroomRegular,
   CheckmarkRegular,
   CircleRegular,
   ClockRegular,
@@ -72,8 +73,11 @@ import {
   OpenRegular,
   PanelLeftContractRegular,
   PanelLeftExpandRegular,
+  ScaleFitRegular,
+  ZoomInRegular,
+  ZoomOutRegular,
 } from '@fluentui/react-icons';
-import { Handle, MiniMap, Position, ReactFlow } from '@xyflow/react';
+import { Handle, MiniMap, Position, ReactFlow, ReactFlowProvider, useReactFlow, useStore } from '@xyflow/react';
 import {
   createContext,
   useCallback,
@@ -95,18 +99,12 @@ import type {
   WorkPlanResponse,
 } from '../api/types';
 import type { RunSessionTree } from '../components/AgentSessionPanel';
-import type { ExecutorDef, ExecutorState, StepStatus, WorkflowNodeData } from '../components/WorkflowGraphPanel';
+import type { ExecutorDef, ExecutorState, NodeDetailRow, StepStatus, WorkflowNodeData } from '../components/WorkflowGraphPanel';
 import type { ArtifactBrowserAdapter } from '../hooks/useArtifactBrowser';
 import type { CoordinatorTopologyState, TopologyNodeState } from '../state/topologyReducer';
 import type { NodeSizeHint } from '../utils/dagLayout';
-import type { FluentIcon } from '@fluentui/react-icons';
 import type { Edge, Node, NodeProps } from '@xyflow/react';
 // ---------------------------------------------------------------------------
-// Subtask pipeline expansion is controlled at the page level so the graph container height can grow
-// to fit expanded child pipelines (instead of clipping them inside the fixed-height canvas).
-interface CoordExpandValue { expanded: Set<string>; toggle: (key: string) => void; }
-const CoordExpandContext = createContext<CoordExpandValue | undefined>(undefined);
-
 // Subtask-card clicks open the docked agent-session panel instead of navigating away.
 const CoordPanelContext = createContext<((nodeId: string) => void) | undefined>(undefined);
 
@@ -139,10 +137,9 @@ function topoStatusToStepStatus(status: string): StepStatus {
 }
 
 function graphNodeSize(node: Node): { width: number; height: number } {
-  const nt = (node.data as { nodeType?: string } | undefined)?.nodeType;
   return {
-    width: node.measured?.width ?? node.initialWidth ?? NODE_TYPE_W[nt ?? ''] ?? NODE_W,
-    height: node.measured?.height ?? node.initialHeight ?? NODE_TYPE_H[nt ?? ''] ?? NODE_H,
+    width: node.measured?.width ?? node.initialWidth ?? COMPACT_NODE_W,
+    height: node.measured?.height ?? node.initialHeight ?? COMPACT_NODE_H,
   };
 }
 
@@ -184,12 +181,26 @@ function routeGridEdges(edges: Edge[], nodes: Node[]): Edge[] {
       };
     }
     if (edge.type !== 'spine') return edge;
-    const forward = targetCenter.x >= sourceCenter.x;
+    // Pick the dominant axis so the connector leaves/enters on the correct side in BOTH the
+    // horizontal (LR) and vertical (TB) layouts. Horizontal-dominant → left/right handles;
+    // vertical-dominant → top/bottom handles.
+    const dx = targetCenter.x - sourceCenter.x;
+    const dy = targetCenter.y - sourceCenter.y;
+    if (Math.abs(dx) >= Math.abs(dy)) {
+      const forward = dx >= 0;
+      return {
+        ...edge,
+        sourceHandle: forward ? 'source-right' : 'source-left',
+        targetHandle: forward ? 'target-left' : 'target-right',
+        data: { ...(edge.data ?? {}), flowDirection: 'horizontal' },
+      };
+    }
+    const down = dy >= 0;
     return {
       ...edge,
-      sourceHandle: forward ? 'source-right' : 'source-left',
-      targetHandle: forward ? 'target-left' : 'target-right',
-      data: { ...(edge.data ?? {}), flowDirection: 'horizontal' },
+      sourceHandle: down ? 'source-bottom' : 'source-top',
+      targetHandle: down ? 'target-top' : 'target-bottom',
+      data: { ...(edge.data ?? {}), flowDirection: 'vertical' },
     };
   });
 }
@@ -641,18 +652,6 @@ function useTickingNow(active: boolean): number {
   return now;
 }
 
-function AggregateElapsed({ states }: { states: Record<string, ExecutorState> }) {
-  const hasRunning = Object.values(states).some((st) => st.startedAt !== undefined && st.completedAt === undefined);
-  const now = useTickingNow(hasRunning);
-  let total = 0;
-  for (const st of Object.values(states)) {
-    if (st.startedAt === undefined) continue;
-    total += Math.max(0, (st.completedAt ?? now) - st.startedAt);
-  }
-  if (total <= 0) return null;
-  return <span aria-label="Total child elapsed">{fmtTotal(total)}</span>;
-}
-
 // ---------------------------------------------------------------------------
 // Subtask node data + custom React Flow node
 // ---------------------------------------------------------------------------
@@ -678,175 +677,68 @@ interface SubtaskNodeData extends Record<string, unknown> {
   dir?: 'LR' | 'TB' | 'GRID';
 }
 
-// Vertical space (px) a subtask node reserves below its body when its child pipeline is expanded,
-// so dagre spaces sibling subtasks apart instead of letting the expansion overlap neighbours.
-const EXPANDED_PIPELINE_RESERVE = 188;
-
-// Dagre's nodesep is the vertical gap between sibling nodes in LR layout. Subtask cards can be
-// taller than the generic hints because their titles/metadata wrap, so keep a generous separation
-// for fan-out columns.
-const COORDINATOR_GRAPH_NODE_SEP = 96;
-
-// Renders column depth labels (L0 Coordinator, L1 Research…) inside the React Flow canvas
-// using ViewportPortal so they pan/zoom with the graph and stay aligned over each column.
-// A compact pipeline step row rendered inline inside a SubtaskNode expansion panel. Laid out as a
-// narrow VERTICAL strip (icon + label/role + status/timer) so the expansion stays within the card
-// width and only grows downward — avoiding the horizontal overflow that overlapped neighbour nodes.
-// Does not use React Flow Handles (rendered outside a ReactFlow canvas).
-function ChildStepRow({ def, state, isLast }: { def: ExecutorDef; state: ExecutorState; isLast: boolean }) {
-  const { key, label, Icon } = def;
-  const { status, startedAt, completedAt } = state;
-  return (
-    <div
-      style={{ display: 'flex', flexDirection: 'column', alignItems: 'stretch' }}
-      data-testid={`child-node-${key}`}
-    >
-      <div
-        role="article"
-        aria-label={`${label}: ${status}`}
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 8,
-          padding: '6px 8px',
-          border: '1px solid var(--colorNeutralStroke2)',
-          borderRadius: 6,
-          background: status === 'started'
-            ? 'var(--colorBrandBackground2)'
-            : 'var(--colorNeutralBackground1)',
-        }}
-      >
-        <span aria-hidden="true" style={{ display: 'inline-flex', color: 'var(--colorNeutralForeground3)', flexShrink: 0 }}>
-          <Icon fontSize={16} />
-        </span>
-        <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0, flex: 1 }}>
-          <span style={{ fontSize: 'var(--fontSizeBase200)', fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-            {label}
-          </span>
-          <span style={{ fontSize: 'var(--fontSizeBase100)', color: 'var(--colorNeutralForeground3)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-            {def.roleDescription}
-          </span>
-        </div>
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 2, flexShrink: 0 }}>
-          <StatusBadge status={status} />
-          {startedAt !== undefined && (
-            <span style={{ fontSize: 'var(--fontSizeBase100)', color: 'var(--colorNeutralForeground3)' }}>
-              <ElapsedTimer startedAt={startedAt} completedAt={completedAt} />
-            </span>
-          )}
-        </div>
-      </div>
-      {!isLast && (
-        <span aria-hidden="true" style={{ alignSelf: 'center', color: 'var(--colorNeutralForeground4)', lineHeight: 1, fontSize: 12, height: 14, display: 'flex', alignItems: 'center' }}>
-          ↓
-        </span>
-      )}
-    </div>
-  );
-}
+// Dagre separations for the compact coordinator DAG. Small pill nodes pack tightly: ranks
+// (columns in the LR layout) sit COORD_GRAPH_RANK_SEP apart, and parallel siblings within a
+// rank stack COORD_GRAPH_NODE_SEP apart. Independent subtasks land at the same dagre rank
+// (parallel); dependents chain into later ranks — all derived from the real graph edges.
+const COORD_GRAPH_RANK_SEP = 64;
+const COORD_GRAPH_NODE_SEP = 28;
 
 function SubtaskNode({ id, data, selected }: NodeProps) {
   const s = useNodeStyles();
   const d = data as SubtaskNodeData;
-  const expandCtx = useContext(CoordExpandContext);
   const openPanel = useContext(CoordPanelContext);
-  const expanded = expandCtx?.expanded.has(id) ?? false;
-  const [childDescriptor, setChildDescriptor] = useState<GraphDescriptor | null>(null);
-  const [childDescriptorError, setChildDescriptorError] = useState<string | null>(null);
   const handleStyle: React.CSSProperties = { opacity: 0, pointerEvents: 'none' };
 
-  // Fetch the child run's graph descriptor only when expanded.
-  useEffect(() => {
-    if (!expanded || !d.childRunId) {
-      queueMicrotask(() => setChildDescriptorError(null));
-      return;
-    }
-    let cancelled = false;
-    queueMicrotask(() => setChildDescriptorError(null));
-    apiClient.getRunGraph(d.childRunId as string)
-      .then((desc) => {
-        if (!cancelled) {
-          setChildDescriptor(desc);
-          setChildDescriptorError(null);
-        }
-      })
-      .catch((err) => {
-        if (!cancelled) setChildDescriptorError(formatApiErrorMessage(err, 'Child pipeline is not available yet.'));
-      });
-    return () => { cancelled = true; };
-  }, [expanded, d.childRunId]);
-
-  // Subscribe to the child run's live SSE events only while expanded; tear down on collapse.
-  const childStreamRunId = expanded && d.childRunId ? (d.childRunId as string) : '';
-  const { events: childEvents } = useRunStream(childStreamRunId);
-
-  const childFallbackNow = useTickingNow(childEvents.some((evt) => evt.type === 'workflow.step' && String(evt.payload['status'] ?? 'started') === 'started'));
-
-  // Map workflow.step events from the child run to executor states.
-  const childStepStates = useMemo<Record<string, ExecutorState>>(() => {
-    const map: Record<string, ExecutorState> = {};
-    for (const evt of childEvents) {
-      if (evt.type === 'workflow.step') {
-        const step      = String(evt.payload['step'] ?? '');
-        const evtStatus = String(evt.payload['status'] ?? 'started') as StepStatus;
-        const tsStr     = evt.payload['timestamp_utc'] != null ? String(evt.payload['timestamp_utc']) : undefined;
-        const tsMs      = tsStr ? new Date(tsStr).getTime() : NaN;
-        const evtMsg    = evt.payload['message'] != null ? String(evt.payload['message']) : undefined;
-        const prev      = map[step];
-        map[step] = {
-          status:      evtStatus,
-          agentName:   prev?.agentName,
-          message:     evtMsg,
-          startedAt:   evtStatus === 'started' ? (!isNaN(tsMs) ? tsMs : undefined) : prev?.startedAt,
-          completedAt: evtStatus !== 'started' && !isNaN(tsMs) ? tsMs : prev?.completedAt,
-        };
-      } else if (evt.type === 'run.assemble_ready' || evt.type === 'subtask.assemble_ready') {
-        const tsStr = evt.payload['timestamp_utc'] != null ? String(evt.payload['timestamp_utc']) : undefined;
-        const tsMs  = tsStr ? new Date(tsStr).getTime() : NaN;
-        map['assemble-ready'] = { status: 'completed', completedAt: !isNaN(tsMs) ? tsMs : childFallbackNow };
-      }
-    }
-    return map;
-  }, [childEvents, childFallbackNow]);
-
-  // Build the ordered list of child pipeline nodes from the descriptor when available. Avoid
-  // painting a fake success pipeline when the child graph fetch fails.
-  const childNodes = useMemo<Array<{ def: ExecutorDef; state: ExecutorState }>>(() => {
-    const defs = childDescriptor
-      ? childDescriptor.nodes.map((n) => ({
-          key:             n.id,
-          label:           n.label,
-          roleDescription: roleDescForRole(n.role),
-          Icon:            iconForRole(n.role),
-        }))
-      : [];
-    return defs.map((def) => ({
-      def,
-      state: childStepStates[def.key] ?? { status: 'pending' },
-    }));
-  }, [childDescriptor, childStepStates]);
-
-  const stepStatus = topoStatusToStepStatus(d.topoStatus as string);
-  const statusLabel = topoStatusToLabel(d.topoStatus as string);
-  const podName = d.executionPodName as string | null | undefined;
+  const stepStatus  = topoStatusToStepStatus(d.topoStatus as string);
+  const statusLbl   = topoStatusToLabel(d.topoStatus as string);
+  const podName     = d.executionPodName as string | null | undefined;
+  const roleTitle   = (d.agentRole as string | undefined) ?? 'Subtask Agent';
+  const label       = d.label as string;
+  const agentName   = d.agent as string | undefined;
+  const modelCaption = d.model ? formatModelLabel(d.model as string) : undefined;
+  const hasCredits  = d.totalNanoAiu != null || d.totalTokens != null;
+  const nameRoleText = agentName ? `${agentName} (${roleTitle})` : roleTitle;
+  const showNameRole = Boolean(nameRoleText) && nameRoleText !== label;
 
   const handleCardClick = useCallback(() => {
     openPanel?.(id);
   }, [id, openPanel]);
 
-  return (
-    <>
-      <Tooltip
-        content={podName ? `Pod: ${podName}` : ''}
-        relationship="description"
-        positioning="above"
-        withArrow
-      >
+  const avatar = agentName
+    ? <AgentAvatar name={agentName} size={26} circle badgeIcon={BotRegular} badgeTitle={roleTitle} />
+    : <BotRegular fontSize={20} />;
+
+  const rows: NodeDetailRow[] = [
+    { label: 'Status', value: statusLbl },
+    { label: 'Role', value: roleTitle },
+    ...(agentName ? [{ label: 'Agent', value: agentName }] : []),
+    ...(d.model ? [{ label: 'Model', value: formatModelLabel(d.model as string), mono: true }] : []),
+    ...(d.phase ? [{ label: 'Phase', value: d.phase as string }] : []),
+    ...(d.startedAt !== undefined
+      ? [{ label: 'Duration', value: <ElapsedTimer startedAt={d.startedAt as number} completedAt={d.completedAt as number | undefined} /> }]
+      : []),
+    ...(podName ? [{ label: 'Pod', value: podName, mono: true }] : []),
+    ...((d.totalNanoAiu != null || d.totalTokens != null)
+      ? [{ label: 'Credits', value: <AiCredits totalNanoAiu={d.totalNanoAiu as number | null | undefined} totalTokens={d.totalTokens as number | null | undefined} /> }]
+      : []),
+  ];
+
+  const actions = d.childRunId
+    ? <Button appearance="outline" size="small" onClick={handleCardClick}>View session</Button>
+    : undefined;
+
+  const face = (
+    <div className={s.pillWrap}>
       <div
-        className={`${s.card} ${s.cardSubtask}${stepStatus === 'started' ? ` ${s.cardActive}` : ''}${selected ? ` ${s.cardSelected}` : ''}`}
+        className={mergeClasses(
+          s.pill,
+          stepStatus === 'started' ? s.cardActive : undefined,
+          selected ? s.pillSelected : undefined,
+        )}
         data-node-type="subtask"
         role="article"
-        aria-label={`${d.label as string}: ${d.topoStatus as string}`}
+        aria-label={`${label}: ${statusLbl}`}
         aria-current={selected ? 'true' : undefined}
         onClick={handleCardClick}
         onKeyDown={(event) => {
@@ -856,94 +748,48 @@ function SubtaskNode({ id, data, selected }: NodeProps) {
           }
         }}
         tabIndex={0}
-        style={{ cursor: 'pointer' }}
       >
-      {d.dir === 'GRID' ? (
-        <>
-          <Handle id="target-left" type="target" position={Position.Left} style={handleStyle} />
-          <Handle id="target-right" type="target" position={Position.Right} style={handleStyle} />
-          <Handle id="target-top" type="target" position={Position.Top} style={handleStyle} />
-          <Handle id="target-bottom" type="target" position={Position.Bottom} style={handleStyle} />
-          <Handle id="source-left" type="source" position={Position.Left} style={handleStyle} />
-          <Handle id="source-right" type="source" position={Position.Right} style={handleStyle} />
-          <Handle id="source-top" type="source" position={Position.Top} style={handleStyle} />
-          <Handle id="source-bottom" type="source" position={Position.Bottom} style={handleStyle} />
-        </>
-      ) : (
-        <>
-          <Handle type="target" position={d.dir === 'TB' ? Position.Top : Position.Left} style={handleStyle} />
-          <Handle type="source" position={d.dir === 'TB' ? Position.Bottom : Position.Right} style={handleStyle} />
-        </>
-      )}
+        {d.dir === 'GRID' ? (
+          <>
+            <Handle id="target-left" type="target" position={Position.Left} style={handleStyle} />
+            <Handle id="target-right" type="target" position={Position.Right} style={handleStyle} />
+            <Handle id="target-top" type="target" position={Position.Top} style={handleStyle} />
+            <Handle id="target-bottom" type="target" position={Position.Bottom} style={handleStyle} />
+            <Handle id="source-left" type="source" position={Position.Left} style={handleStyle} />
+            <Handle id="source-right" type="source" position={Position.Right} style={handleStyle} />
+            <Handle id="source-top" type="source" position={Position.Top} style={handleStyle} />
+            <Handle id="source-bottom" type="source" position={Position.Bottom} style={handleStyle} />
+          </>
+        ) : (
+          <>
+            <Handle type="target" position={d.dir === 'TB' ? Position.Top : Position.Left} style={handleStyle} />
+            <Handle type="source" position={d.dir === 'TB' ? Position.Bottom : Position.Right} style={handleStyle} />
+          </>
+        )}
 
-      <span className={`${s.accentBar} ${accentClass(s, stepStatus)}`} aria-hidden="true" />
+        <span className={`${s.accentBar} ${accentClass(s, stepStatus)}`} aria-hidden="true" />
 
-      {/* Top row: status chip left, cost right */}
-      <div className={s.cardHeader}>
-        <StatusBadge status={stepStatus} label={statusLabel} />
-        <AiCredits totalNanoAiu={d.totalNanoAiu as number | null | undefined} totalTokens={d.totalTokens as number | null | undefined} />
-      </div>
-
-      <div className={s.cardMain}>
-        <span className={s.cardIcon} aria-hidden="true">
-          {d.agent
-            ? <AgentAvatar name={d.agent as string} size={28} circle badgeIcon={d.Icon as FluentIcon} badgeTitle={(d.agentRole as string | undefined) ?? 'Subtask Agent'} />
-            : <BotRegular fontSize={22} />}
-        </span>
-        <div className={s.cardTitleGroup}>
-          <span className={s.cardTitle}>{d.label as string}</span>
-          <span className={s.cardRole}>{(d.agentRole as string | undefined) ?? 'Subtask Agent'}</span>
-          {d.agent && <span className={s.cardSubText}>{d.agent as string}</span>}
-          {d.model && <span className={s.cardModel}>{formatModelLabel(d.model as string)}</span>}
-          {d.phase && <span className={s.cardSubText}>{d.phase as string}</span>}
+        <span className={s.pillIcon} aria-hidden="true">{avatar}</span>
+        <div className={s.pillBody}>
+          <div className={s.pillTitleRow}>
+            <span className={s.pillTitle}>{label}</span>
+            {hasCredits && (
+              <span className={s.pillCredits}>
+                <AiCredits totalNanoAiu={d.totalNanoAiu as number | null | undefined} totalTokens={d.totalTokens as number | null | undefined} />
+              </span>
+            )}
+          </div>
+          {showNameRole && <span className={s.pillNameRole}>{nameRoleText}</span>}
         </div>
       </div>
-
-      {/* Inline child pipeline — compact vertical strip of step rows. Stays within the card width
-          (grows only downward) so the expansion never overflows into neighbouring subtask columns. */}
-      {expanded && (
-        <div
-          className="nopan nodrag"
-          style={{
-            marginTop: 10,
-            display: 'flex',
-            flexDirection: 'column',
-            gap: 0,
-          }}
-        >
-          {childDescriptorError ? (
-            <Text style={{ color: tokens.colorNeutralForeground2, lineHeight: tokens.lineHeightBase300 }}>{childDescriptorError}</Text>
-          ) : !d.childRunId ? (
-            <Text style={{ color: tokens.colorNeutralForeground2, lineHeight: tokens.lineHeightBase300 }}>Child run has not been dispatched yet.</Text>
-          ) : childNodes.length === 0 ? (
-            <Text style={{ color: tokens.colorNeutralForeground2, lineHeight: tokens.lineHeightBase300 }}>Child pipeline has not been emitted yet.</Text>
-          ) : childNodes.map((node, i) => (
-              <ChildStepRow
-                key={node.def.key}
-                def={node.def}
-                state={node.state}
-                isLast={i === childNodes.length - 1}
-              />
-            ))}
-        </div>
-      )}
-
-      {d.startedAt !== undefined ? (
-        <div className={s.cardFooter}>
-          <span className={s.cardTimer}>
-            <ElapsedTimer startedAt={d.startedAt as number} completedAt={d.completedAt as number | undefined} />
-          </span>
-        </div>
-      ) : (expanded && Object.keys(childStepStates).length > 0 && (
-        <div className={s.cardFooter}>
-          <span className={s.cardTimer}>
-            <AggregateElapsed states={childStepStates} />
-          </span>
-        </div>
-      ))}
+      {modelCaption && <span className={s.pillModelCaption} title={modelCaption}>{modelCaption}</span>}
     </div>
-      </Tooltip>
-    </>
+  );
+
+  return (
+    <NodeDetailPopover title={label} roleText={roleTitle} Icon={BotRegular} avatar={avatar} rows={rows} actions={actions}>
+      {face}
+    </NodeDetailPopover>
   );
 }
 
@@ -1580,7 +1426,9 @@ const useStyles = makeStyles({
     borderRadius: '8px',
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground1,
-    overflow: 'auto',
+    overflow: 'hidden',
+    position: 'relative',
+    display: 'flex',
     '& .react-flow__renderer': { borderRadius: '8px' },
     '& .react-flow__minimap': {
       opacity: 0,
@@ -1760,6 +1608,81 @@ function graphEmptyCopy(
   };
 }
 
+const useTopologyToolbarStyles = makeStyles({
+  bar: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXXS,
+    alignSelf: 'flex-start',
+    padding: tokens.spacingHorizontalXXS,
+    marginBottom: tokens.spacingVerticalXS,
+    backgroundColor: tokens.colorNeutralBackground1,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusMedium,
+    boxShadow: tokens.shadow2,
+  },
+  readout: {
+    minWidth: '44px',
+    textAlign: 'center',
+    fontSize: tokens.fontSizeBase200,
+    color: tokens.colorNeutralForeground3,
+    fontVariantNumeric: 'tabular-nums',
+  },
+  divider: {
+    width: '1px',
+    alignSelf: 'stretch',
+    marginTop: '3px',
+    marginBottom: '3px',
+    marginLeft: tokens.spacingHorizontalXXS,
+    marginRight: tokens.spacingHorizontalXXS,
+    backgroundColor: tokens.colorNeutralStroke2,
+  },
+});
+
+interface TopologyToolbarProps {
+  orientation: 'LR' | 'TB';
+  onToggleOrientation: () => void;
+  onTidy: () => void;
+  fitPadding: number;
+}
+
+// Copilot Studio-style control bar for the topology overlay. Lives inside a ReactFlowProvider so it
+// can drive the shared viewport (zoom in/out, fit) natively. Tidy re-runs the dagre layout and
+// re-fits; Switch orientation toggles LR/TB rank direction (both re-fit on next render via the
+// keyed ReactFlow remount + its fitView prop).
+function TopologyToolbar({ orientation, onToggleOrientation, onTidy, fitPadding }: TopologyToolbarProps) {
+  const toolbarStyles = useTopologyToolbarStyles();
+  const { zoomIn, zoomOut, fitView } = useReactFlow();
+  const zoom = useStore((s) => s.transform[2]);
+  const zoomPct = Math.round((zoom ?? 1) * 100);
+  return (
+    <div className={toolbarStyles.bar} role="toolbar" aria-label="Topology graph controls" data-testid="topology-toolbar">
+      <Tooltip content="Zoom out" relationship="label" withArrow>
+        <Button appearance="subtle" size="small" icon={<ZoomOutRegular />} onClick={() => zoomOut({ duration: 200 })} />
+      </Tooltip>
+      <Text className={toolbarStyles.readout} aria-hidden>{zoomPct}%</Text>
+      <Tooltip content="Zoom in" relationship="label" withArrow>
+        <Button appearance="subtle" size="small" icon={<ZoomInRegular />} onClick={() => zoomIn({ duration: 200 })} />
+      </Tooltip>
+      <span className={toolbarStyles.divider} aria-hidden />
+      <Tooltip content="Fit to view" relationship="label" withArrow>
+        <Button appearance="subtle" size="small" icon={<ScaleFitRegular />} onClick={() => fitView({ padding: fitPadding, duration: 200 })} />
+      </Tooltip>
+      <Tooltip content="Tidy" relationship="label" withArrow>
+        <Button appearance="subtle" size="small" icon={<BroomRegular />} onClick={onTidy} />
+      </Tooltip>
+      <Tooltip content="Switch orientation" relationship="label" withArrow>
+        <Button
+          appearance="subtle"
+          size="small"
+          icon={orientation === 'LR' ? <ArrowAutofitHeightRegular /> : <ArrowAutofitWidthRegular />}
+          onClick={onToggleOrientation}
+        />
+      </Tooltip>
+    </div>
+  );
+}
+
 export function CoordinatorRunPage() {
   const styles = useStyles();
   const { projectId, runId } = useParams<{ projectId: string; runId: string }>();
@@ -1786,28 +1709,11 @@ export function CoordinatorRunPage() {
     reconnect: reconnectStream,
   } = useSeededRunStream(runId ?? '', runLevelStatus);
 
-  // Ctrl+Scroll zoom for the orchestration graph.
-  const { zoom, zoomIn, zoomOut, resetZoom, viewportRef, maxZoom } = useCtrlScrollZoom({ maxZoom: 2 });
-
-  // Responsive DAG reflow: observe the graph viewport so the topology can choose
-  // an appropriate row/column count instead of relying on a giant CSS scale.
-  const [dagScrollNode, setDagScrollNode] = useState<HTMLElement | null>(null);
-  const [dagContainerSize, setDagContainerSize] = useState({ width: 0, height: 0 });
-  const setDagViewportRef = useCallback((node: HTMLElement | null) => {
-    viewportRef(node);
-    setDagScrollNode(node);
-    if (node) setDagContainerSize({ width: node.clientWidth, height: node.clientHeight });
-  }, [viewportRef]);
-  useEffect(() => {
-    if (!dagScrollNode || typeof ResizeObserver === 'undefined') return;
-    const ro = new ResizeObserver((entries) => {
-      for (const entry of entries) {
-        setDagContainerSize({ width: entry.contentRect.width, height: entry.contentRect.height });
-      }
-    });
-    ro.observe(dagScrollNode);
-    return () => ro.disconnect();
-  }, [dagScrollNode]);
+  // Topology graph orientation (dagre rank direction). LR = horizontal (default), TB = vertical.
+  // The toolbar's "Switch orientation" toggles this and re-fits the view.
+  const [graphOrientation, setGraphOrientation] = useState<'LR' | 'TB'>('LR');
+  // Bumped by "Tidy" to force a fresh dagre layout + re-fit even when inputs are unchanged.
+  const [tidyNonce, setTidyNonce] = useState(0);
 
   // REST seed: coordinator GraphDescriptor (GET /api/runs/{id}/graph, coordinator variant).
   const [restDescriptor, setRestDescriptor] = useState<GraphDescriptor | null>(null);
@@ -2316,20 +2222,6 @@ export function CoordinatorRunPage() {
     }
     return map;
   }, [events]);
-  // reserve room for expanded child pipelines and the container can grow to fit them.
-  const [expandedKeys, setExpandedKeys] = useState<Set<string>>(new Set());
-  const toggleExpand = useCallback((key: string) => {
-    setExpandedKeys((prev) => {
-      const next = new Set(prev);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
-      return next;
-    });
-  }, []);
-  const expandValue = useMemo<CoordExpandValue>(
-    () => ({ expanded: expandedKeys, toggle: toggleExpand }),
-    [expandedKeys, toggleExpand],
-  );
 
   // Which coordinator loopback arc (if any) is currently "lit" blue: the review->coordinator
   // "Request changes" arc while a human-review request-changes wave is re-dispatching, or the
@@ -2399,15 +2291,11 @@ export function CoordinatorRunPage() {
     const nodeSizeHints: Record<string, NodeSizeHint> = {};
     const raw: Node[] = planningDescriptor.nodes.map((node) => {
       const nt = node.node_type;
-      // Subtask cards render taller than the generic hint (multi-line title + role + agent + model +
-      // phase + the Expand-pipeline / View-run buttons), so reserve a generous base height to keep
-      // sibling fan-out cards from overlapping. Expanded cards reserve extra room for the inline
-      // child pipeline so the expansion pushes neighbours apart instead of overlapping them.
-      const subtaskExpanded = nt === 'subtask' && expandedKeys.has(node.id);
-      const baseHeight = nt === 'subtask' ? 244 : (NODE_TYPE_H[nt ?? ''] ?? NODE_H);
+      // Every coordinator node now renders as a compact fixed-size pill (~210x60); feed dagre those
+      // dimensions so ranks pack tightly regardless of node type.
       nodeSizeHints[node.id] = {
-        width:  NODE_TYPE_W[nt ?? ''] ?? NODE_W,
-        height: baseHeight + (subtaskExpanded ? EXPANDED_PIPELINE_RESERVE : 0),
+        width:  COMPACT_NODE_W,
+        height: COMPACT_NODE_H,
       };
 
       const planned = node.kind === 'planned';
@@ -2541,13 +2429,18 @@ export function CoordinatorRunPage() {
       };
     });
 
-    const laidOutNodes = layoutDagColumns(
+    const laidOutNodes = layoutDagStaircase(
       raw,
       fwdEdges,
       {
-        rankdir: 'LR',
-        rankSep: 96,
-        nodeSep: COORDINATOR_GRAPH_NODE_SEP,
+        rankdir: graphOrientation,
+        rankSep: COORD_GRAPH_RANK_SEP,
+        nodeSep: COORD_GRAPH_NODE_SEP,
+        // Cascade the long mostly-linear spine diagonally so the run uses the panel's height (not
+        // just its width). True parallel ranks still fan out; the sequence steps consistently one
+        // way (LR ⇒ down-right, TB ⇒ down-right) and never reverses.
+        targetAspect: 1.35,
+        minStepRanks: 3,
       },
       nodeSizeHints,
     );
@@ -2555,7 +2448,7 @@ export function CoordinatorRunPage() {
       rfNodes:      laidOutNodes,
       displayEdges: routeGridEdges(allEdges, laidOutNodes),
     };
-  }, [planningDescriptor, topology, projectId, runId, coordNodeStatusOverride, orch.phase, subtaskTiming, assemblyTiming, roleByAgent, expandedKeys, latestOutcomePlanDraftingEvent, latestOutcomePlanEvent, specConfirmed, workPlanSeen, coordStatusField]);
+  }, [planningDescriptor, topology, projectId, runId, coordNodeStatusOverride, orch.phase, subtaskTiming, assemblyTiming, roleByAgent, latestOutcomePlanDraftingEvent, latestOutcomePlanEvent, specConfirmed, workPlanSeen, coordStatusField, graphOrientation, tidyNonce]);
 
   const hasSubtaskNodes = useMemo(
     () => (planningDescriptor?.nodes ?? []).some((n) => n.node_type === 'subtask'),
@@ -2628,12 +2521,11 @@ export function CoordinatorRunPage() {
       };
     }
 
-    // Reading-order rank derived from the graph's rank axis. The run graph lays out
-    // left-to-right (LR), so successive ranks increase in X. This rank only informs the
-    // sibling reading order below; the tree row indent comes from real nesting depth
-    // (see flattenRunTree), not from this value.
-    const xValues = [...new Set(candidates.map((node) => Math.round(node.position.x ?? 0)))].sort((a, b) => a - b);
-    const depthByRank = new Map<number, number>(xValues.map((x, index) => [x, index]));
+    // Sibling reading order is derived from the descriptor's emission order — the same dependency
+    // order the graph ranks by — NOT from graph POSITION. This keeps the run tree order/structure
+    // completely independent of the graph layout: LR/TB orientation, tidy, and fit never reorder it.
+    const orderIndex = new Map<string, number>();
+    candidates.forEach((node, index) => orderIndex.set(node.id, index));
 
     const sessionMeta = new Map<string, {
       nodeId: string;
@@ -2644,16 +2536,12 @@ export function CoordinatorRunPage() {
       childRunId?: string;
       startedAt?: number;
       completedAt?: number;
-      depth: number;
-      x: number;
-      y: number;
+      order: number;
       isCoordinator: boolean;
     }>();
 
     for (const node of candidates) {
-      const x = Math.round(node.position.x ?? 0);
-      const y = Math.round(node.position.y ?? 0);
-      const depth = depthByRank.get(x) ?? 0;
+      const order = orderIndex.get(node.id) ?? 0;
       if (node.type === 'subtask') {
         const data = node.data as SubtaskNodeData;
         sessionMeta.set(node.id, {
@@ -2665,9 +2553,7 @@ export function CoordinatorRunPage() {
           childRunId: data.childRunId,
           startedAt: data.startedAt,
           completedAt: data.completedAt,
-          depth,
-          x,
-          y,
+          order,
           isCoordinator: false,
         });
       } else {
@@ -2696,9 +2582,7 @@ export function CoordinatorRunPage() {
           // Assembly/workflow stages carry their own sub-run id so selecting RAI / Human Review /
           // Scribe streams the real sub-run instead of falling through to an empty scope.
           childRunId: isCoordinatorNode ? undefined : data.childRunId,
-          depth,
-          x,
-          y,
+          order,
           isCoordinator: isCoordinatorNode,
         });
       }
@@ -2727,11 +2611,7 @@ export function CoordinatorRunPage() {
     const buildTree = (nodeId: string): RunSessionTree => {
       const meta = sessionMeta.get(nodeId)!;
       const children = [...(childIdsByParent.get(nodeId) ?? [])]
-        .sort((a, b) => {
-          const childA = sessionMeta.get(a)!;
-          const childB = sessionMeta.get(b)!;
-          return (childA.depth - childB.depth) || (childA.y - childB.y) || (childA.x - childB.x);
-        })
+        .sort((a, b) => sessionMeta.get(a)!.order - sessionMeta.get(b)!.order)
         .map((childId) => buildTree(childId));
       return {
         nodeId: meta.nodeId,
@@ -2743,7 +2623,8 @@ export function CoordinatorRunPage() {
         startedAt: meta.startedAt,
         completedAt: meta.completedAt,
         children,
-        depth: meta.depth,
+        // Row indent depth is recomputed from real nesting by flattenRunTree; this seed is unused.
+        depth: 0,
       };
     };
 
@@ -2883,6 +2764,18 @@ export function CoordinatorRunPage() {
     [displayNodes, selectedGraphNodeId],
   );
 
+  // A compact signature of the laid-out geometry (node ids + rounded positions + edge endpoints).
+  // Folded into the ReactFlow remount key so fitView re-runs whenever the layout bounds change —
+  // even when the node/edge COUNTS stay the same (e.g. positions shift, ids/edges swap on a status
+  // change). Rounding keeps it stable against sub-pixel jitter.
+  const layoutSignature = useMemo(() => {
+    let h = 5381;
+    const mix = (str: string) => { for (let i = 0; i < str.length; i += 1) h = ((h << 5) + h + str.charCodeAt(i)) | 0; };
+    for (const n of displayNodes) mix(`${n.id}:${Math.round(n.position.x)},${Math.round(n.position.y)};`);
+    for (const e of displayEdges2) mix(`${e.source}>${e.target}|`);
+    return (h >>> 0).toString(36);
+  }, [displayNodes, displayEdges2]);
+
   // Merge "Browse files": route to the project Workspace with the coordinator integration branch
   // selected, so refresh/back preserve the browsed ref and the user lands in the WORK section.
   const browseAssemblyFiles = useCallback(() => {
@@ -3001,65 +2894,6 @@ export function CoordinatorRunPage() {
   const isStreaming     = streamStatus === 'streaming';
   const hasGraph        = rfNodes.length > 0;
   const isRetryable     = viewState.canRetry;
-  // Auto-size the graph band to its content so it grows as subtask pipelines expand, instead of a
-  // fixed height that clips tall fan-outs (horizontal LR layout still varies in height per rank).
-  const graphHeight = useMemo(() => {
-    if (rfNodes.length === 0) return 200;
-    let minY = Infinity;
-    let maxY = -Infinity;
-    for (const n of rfNodes) {
-      const nt = (n.data as { nodeType?: string } | undefined)?.nodeType;
-      // Mirror the layout size hints: subtask cards reserve a taller base, plus the inline-pipeline
-      // reserve when expanded, so the band grows to exactly contain the (possibly expanded) cards.
-      const base = nt === 'subtask' ? 244 : (NODE_TYPE_H[nt ?? ''] ?? NODE_H);
-      const h = base + (nt === 'subtask' && expandedKeys.has(n.id) ? EXPANDED_PIPELINE_RESERVE : 0);
-      minY = Math.min(minY, n.position.y);
-      maxY = Math.max(maxY, n.position.y + h);
-    }
-    // Loopback arcs (e.g. "RAI flags" above, "Request changes" below) route ~ARC_GAP(40)px plus a
-    // label outside the node box on each side. Reserve headroom so fitView leaves room for them
-    // instead of clipping the arcs/labels at the band edges.
-    const hasLoopback = displayEdges.some((e) => e.type === 'loopback');
-    const loopHeadroom = hasLoopback ? 132 : 0;
-    return Math.max(180, maxY - minY + 56 + loopHeadroom);
-  }, [rfNodes, expandedKeys, displayEdges]);
-
-  const graphViewport = useMemo(() => {
-    if (displayNodes.length === 0) {
-      return {
-        width: '100%',
-        height: graphHeight,
-        defaultViewport: { x: 0, y: 0, zoom: 1 },
-      };
-    }
-    const paddingX = 64;
-    const paddingTop = displayEdges2.some((e) => e.type === 'loopback') ? 132 : 64;
-    const paddingBottom = 64;
-    let minX = Infinity;
-    let minY = Infinity;
-    let maxX = -Infinity;
-    let maxY = -Infinity;
-    for (const node of displayNodes) {
-      const size = graphNodeSize(node);
-      minX = Math.min(minX, node.position.x);
-      minY = Math.min(minY, node.position.y);
-      maxX = Math.max(maxX, node.position.x + size.width);
-      maxY = Math.max(maxY, node.position.y + size.height);
-    }
-    const width = Math.max(dagContainerSize.width || 640, maxX - minX + paddingX * 2);
-    const height = Math.max(graphHeight, maxY - minY + paddingTop + paddingBottom);
-    return {
-      width,
-      height,
-      defaultViewport: {
-        x: paddingX - minX,
-        y: paddingTop - minY,
-        zoom: 1,
-      },
-    };
-  }, [displayNodes, displayEdges2, graphHeight, dagContainerSize.width]);
-
-  const effectiveGraphZoom = zoom;
   // The toggle/stop endpoints 409 on a non-active run, so only offer them while the run is live.
   const coordActive     = viewState.canStop;
 
@@ -3322,31 +3156,34 @@ export function CoordinatorRunPage() {
         <BrowseFilesContext.Provider value={browseAssemblyFiles}>
         <ActiveEdgeContext.Provider value={activeLoopbackId}>
         <CoordinatorSessionContext.Provider value={() => openPanelForNode('coordinator')}>
-        <CoordExpandContext.Provider value={expandValue}>
         <CoordPanelContext.Provider value={openPanelForNode}>
-          <ZoomControls zoom={zoom} onZoomIn={zoomIn} onZoomOut={zoomOut} onFit={resetZoom} maxZoom={maxZoom} />
+          <ReactFlowProvider>
+          <TopologyToolbar
+            orientation={graphOrientation}
+            onToggleOrientation={() => setGraphOrientation((o) => (o === 'LR' ? 'TB' : 'LR'))}
+            onTidy={() => setTidyNonce((n) => n + 1)}
+            fitPadding={0.14}
+          />
           <div
             className={`${styles.dagContainer} ${styles.topologyDag}`}
-            ref={setDagViewportRef}
-            style={{ overflow: 'auto' }}
             role="region"
             data-testid="topology-scroll-container"
             data-graph-scroll="owned"
             data-pan-enabled="true"
-            data-scroll-mode="auto"
             tabIndex={0}
-            aria-label="Scrollable topology graph. Drag or scroll to inspect the execution flow."
+            aria-label="Topology graph. Drag to pan; use the toolbar or ctrl+scroll to zoom."
           >
-            <div data-testid="topology-graph-canvas" style={{ zoom: effectiveGraphZoom, width: graphViewport.width, height: graphViewport.height }}>
+            <div data-testid="topology-graph-canvas" style={{ width: '100%', height: '100%' }}>
               <ReactFlow
-                key={`${displayNodes.length}:${displayEdges2.length}:${graphHeight}:${dagContainerSize.width}:${dagContainerSize.height}:${[...expandedKeys].sort().join(',')}`}
+                key={`${graphOrientation}:${displayNodes.length}:${displayEdges2.length}:${tidyNonce}:${layoutSignature}`}
                 nodes={linkedDisplayNodes}
                 edges={displayEdges2}
                 nodeTypes={coordinatorNodeTypes}
                 edgeTypes={workflowEdgeTypes}
-                defaultViewport={graphViewport.defaultViewport}
-                minZoom={1}
-                maxZoom={1}
+                fitView
+                fitViewOptions={{ padding: 0.14 }}
+                minZoom={0.2}
+                maxZoom={2}
                 nodesDraggable={false}
                 nodesConnectable={false}
                 nodesFocusable={false}
@@ -3354,10 +3191,10 @@ export function CoordinatorRunPage() {
                 panOnScroll
                 preventScrolling={false}
                 zoomOnScroll={false}
-                zoomOnPinch={false}
+                zoomOnPinch
                 zoomOnDoubleClick={false}
                 panOnDrag
-                style={{ width: graphViewport.width, height: graphViewport.height }}
+                style={{ width: '100%', height: '100%' }}
                 onNodeClick={(_, node) => openPanelForNode(node.id)}
                 proOptions={{ hideAttribution: true }}
               >
@@ -3391,9 +3228,9 @@ export function CoordinatorRunPage() {
               </ReactFlow>
             </div>
           </div>
+          </ReactFlowProvider>
           {inSpecAuthoring && <Text className={styles.hint}>The execution pipeline appears once you confirm the Outcome plan.</Text>}
         </CoordPanelContext.Provider>
-        </CoordExpandContext.Provider>
         </CoordinatorSessionContext.Provider>
         </ActiveEdgeContext.Provider>
         </BrowseFilesContext.Provider>
@@ -3735,7 +3572,6 @@ export function CoordinatorRunPage() {
                     <BrowseFilesContext.Provider value={browseAssemblyFiles}>
                     <ActiveEdgeContext.Provider value={activeLoopbackId}>
                     <CoordinatorSessionContext.Provider value={() => openPanelForNode('coordinator')}>
-                    <CoordExpandContext.Provider value={expandValue}>
                     <CoordPanelContext.Provider value={openPanelForNode}>
                       <ReactFlow
                         nodes={linkedDisplayNodes}
@@ -3776,7 +3612,6 @@ export function CoordinatorRunPage() {
                         />
                       </ReactFlow>
                     </CoordPanelContext.Provider>
-                    </CoordExpandContext.Provider>
                     </CoordinatorSessionContext.Provider>
                     </ActiveEdgeContext.Provider>
                     </BrowseFilesContext.Provider>

@@ -138,7 +138,6 @@ describe('CoordinatorRunPage operator console redesign', () => {
     await waitFor(() => expect(screen.getByRole('link', { name: 'Silver Pancake' })).toBeTruthy(), { timeout: 4000 });
     const topologyScroller = screen.getByTestId('topology-scroll-container');
     expect(topologyScroller.getAttribute('data-pan-enabled')).toBe('true');
-    expect(topologyScroller.getAttribute('data-scroll-mode')).toBe('auto');
 
     // The composer for steering the coordinator lives inline in the Messages surface and hosts the toggles.
     expect(screen.getByPlaceholderText('Message coordinator...')).toBeTruthy();
