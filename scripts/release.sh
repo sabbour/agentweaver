@@ -343,17 +343,18 @@ echo "==> Processing images for ${NEW_TAG} (previous: ${LAST_TAG:-none})..."
 PIDS=()
 JOBS=()
 
+if [[ "${DRY_RUN}" != "true" ]] && { [[ -z "${LAST_TAG}" ]] || image_changed_since_tag "${IMAGE_PATHS[agentweaver-frontend]}"; }; then
+  # All images share the repo root as the ACR build context, so move frontend
+  # node_modules out of that context before any parallel az acr build starts.
+  prepare_frontend_dist
+fi
+
 for IMAGE in "agentweaver-api" "agentweaver-frontend" "agentweaver-mcp" "agentweaver-agent-host"; do
   DOCKERFILE="${IMAGE_DOCKERFILES[$IMAGE]}"
   PATHS="${IMAGE_PATHS[$IMAGE]}"
 
   if [[ -z "${LAST_TAG}" ]] || image_changed_since_tag "${PATHS}"; then
     echo "  [build]  ${IMAGE} (changed)"
-    if [[ "${IMAGE}" == "agentweaver-frontend" ]]; then
-      if [[ "${DRY_RUN}" != "true" ]]; then
-        prepare_frontend_dist
-      fi
-    fi
     run az acr build \
       --registry "${ACR_NAME}" \
       --resource-group "${RESOURCE_GROUP}" \

@@ -235,10 +235,6 @@ build_image() {
   local tag="$2"
   local dockerfile="$3"
 
-  if [[ "${image}" == "agentweaver-frontend" ]]; then
-    prepare_frontend_dist
-  fi
-
   echo "--- Building ${image}:${tag} (${dockerfile}) ---"
   az acr build \
     --registry "${ACR_NAME}" \
@@ -303,11 +299,24 @@ COMMON_DOTNET_PATHS=(
 PIDS=()
 JOBS=()
 
+API_DEPLOYED_TAG="$(current_deployment_tag agentweaver-api)"
+FRONTEND_DEPLOYED_TAG="$(current_deployment_tag agentweaver-frontend)"
+MCP_DEPLOYED_TAG="$(current_deployment_tag agentweaver-mcp)"
+AGENTHOST_DEPLOYED_TAG="$(current_agenthost_tag)"
+
+FRONTEND_SOURCE_TAG="${PREVIOUS_IMAGE_TAG:-${FRONTEND_DEPLOYED_TAG}}"
+if [[ "${FORCE_REBUILD:-false}" == "true" || -z "${FRONTEND_SOURCE_TAG}" ]] || \
+  paths_changed "${FRONTEND_SOURCE_TAG}" "${TARGET_GIT_REF}" "apps/web" "apps/Agentweaver.Web"; then
+  # All images share the repo root as the ACR build context, so move frontend
+  # node_modules out of that context before any parallel az acr build starts.
+  prepare_frontend_dist
+fi
+
 schedule_image \
   "agentweaver-api" \
   "${IMAGE_TAG}" \
   "apps/Agentweaver.Api/Dockerfile" \
-  "$(current_deployment_tag agentweaver-api)" \
+  "${API_DEPLOYED_TAG}" \
   "${COMMON_DOTNET_PATHS[@]}" \
   "apps/Agentweaver.Api"
 
@@ -315,7 +324,7 @@ schedule_image \
   "agentweaver-frontend" \
   "${IMAGE_TAG}" \
   "apps/web/Dockerfile" \
-  "$(current_deployment_tag agentweaver-frontend)" \
+  "${FRONTEND_DEPLOYED_TAG}" \
   "apps/web" \
   "apps/Agentweaver.Web"
 
@@ -323,7 +332,7 @@ schedule_image \
   "agentweaver-mcp" \
   "${IMAGE_TAG}" \
   "apps/Agentweaver.Mcp/Dockerfile" \
-  "$(current_deployment_tag agentweaver-mcp)" \
+  "${MCP_DEPLOYED_TAG}" \
   "${COMMON_DOTNET_PATHS[@]}" \
   "apps/Agentweaver.Mcp"
 
@@ -331,7 +340,7 @@ schedule_image \
   "agentweaver-agent-host" \
   "${AGENTHOST_IMAGE_TAG}" \
   "apps/Agentweaver.AgentHost/Dockerfile" \
-  "$(current_agenthost_tag)" \
+  "${AGENTHOST_DEPLOYED_TAG}" \
   "${COMMON_DOTNET_PATHS[@]}" \
   "apps/Agentweaver.AgentHost"
 
