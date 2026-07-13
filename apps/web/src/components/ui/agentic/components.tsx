@@ -56,6 +56,7 @@ export interface ApprovalGateProps {
   disclaimer?: ReactNode;
   approveLabel?: ReactNode;
   denyLabel?: ReactNode;
+  additionalActions?: ReactNode;
   onApprove?: (stepId: string) => void;
   onDeny?: (stepId: string) => void;
 }
@@ -67,6 +68,7 @@ export function ApprovalGate({
   disclaimer,
   approveLabel = 'Approve',
   denyLabel = 'Deny',
+  additionalActions,
   onApprove,
   onDeny,
 }: ApprovalGateProps) {
@@ -86,6 +88,7 @@ export function ApprovalGate({
         <Button appearance="primary" onClick={() => onApprove?.(stepId)}>
           {approveLabel}
         </Button>
+        {additionalActions}
         <Button appearance="secondary" onClick={() => onDeny?.(stepId)}>
           {denyLabel}
         </Button>

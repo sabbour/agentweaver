@@ -108,6 +108,8 @@ describe('AgentSessionPanel', () => {
     // not the legacy lifecycle card.
     expect(screen.getByTestId('session-approval-gate')).toBeDefined();
     expect(screen.getByRole('region', { name: 'Approval required' })).toBeDefined();
+    expect(screen.getByRole('button', { name: 'Allow for session' })).toBeDefined();
+    expect(screen.getByRole('button', { name: 'Always allow' })).toBeDefined();
     await userEvent.click(screen.getByRole('button', { name: 'Allow once' }));
 
     expect(vi.mocked(apiClient.approveTool)).toHaveBeenCalledWith('child-run-1', 'approval-1', 'once');

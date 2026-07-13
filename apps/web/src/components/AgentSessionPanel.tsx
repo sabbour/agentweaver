@@ -743,6 +743,7 @@ export interface RunSessionTree {
   childRunId?: string;
   startedAt?: number;
   completedAt?: number;
+  pendingApprovalCount?: number;
   children: RunSessionTree[];
   depth: number;
 }
@@ -2084,7 +2085,7 @@ export function AgentSessionPanel({
                     runStatus={runDetail?.status ?? undefined}
                     onReconnect={onCoordinatorFollowUp}
                     onClarifyPlan={focusOutcomePlanClarification}
-                    clarificationSent={selectedItem.status === 'needs_clarification'}
+                    clarificationSent={selectedItem.status === 'revising'}
                     dispatched={outcomePlanDispatched}
                   />
                 ) : (
@@ -2278,12 +2279,12 @@ function InThreadApprovalGate({
     }
   };
 
-  const handleApprove = () => {
+  const handleApprove = (scope: 'once' | 'run' | 'always' = 'once') => {
     void settle(
       () => (isShell
         ? apiClient.approveShell(targetRunId, commandHash)
-        : apiClient.approveTool(targetRunId, requestId, 'once')),
-      'once',
+        : apiClient.approveTool(targetRunId, requestId, scope)),
+      scope,
     );
   };
   const handleDeny = () => {
@@ -2326,7 +2327,17 @@ function InThreadApprovalGate({
         riskText={riskText}
         approveLabel="Allow once"
         denyLabel="Deny"
-        onApprove={handleApprove}
+        additionalActions={!isShell ? (
+          <>
+            <Button appearance="secondary" size="small" disabled={busy || !targetRunId} onClick={() => handleApprove('run')}>
+              Allow for session
+            </Button>
+            <Button appearance="secondary" size="small" disabled={busy || !targetRunId} onClick={() => handleApprove('always')}>
+              Always allow
+            </Button>
+          </>
+        ) : undefined}
+        onApprove={() => handleApprove()}
         onDeny={handleDeny}
       />
       {actionError && (

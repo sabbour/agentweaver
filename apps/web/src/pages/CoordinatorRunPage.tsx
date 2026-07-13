@@ -112,6 +112,25 @@ const CoordPanelContext = createContext<((nodeId: string, opts?: { closeTopology
 // Topology status helpers
 // ---------------------------------------------------------------------------
 
+function pendingApprovalsByRun(events: RunStreamEvent[], coordinatorRunId: string): Map<string, number> {
+  const pending = new Map<string, string>();
+  for (const event of events) {
+    const requestId = String(event.payload.requestId ?? event.payload.request_id ?? event.payload.commandHash ?? event.payload.command_hash ?? '');
+    if (!requestId) continue;
+    const childRunId = String(event.payload.childRunId ?? event.payload.child_run_id ?? '');
+    const targetRunId = childRunId || coordinatorRunId;
+    const key = `${targetRunId}:${requestId}`;
+    if (event.type === 'tool.approval_required' || event.type === 'shell.approval_required' || event.type === 'coordinator.child_approval_required') {
+      pending.set(key, targetRunId);
+    } else if (event.type === 'tool.approval_resolved' || event.type === 'coordinator.child_approval_resolved') {
+      pending.delete(key);
+    }
+  }
+  const counts = new Map<string, number>();
+  for (const targetRunId of pending.values()) counts.set(targetRunId, (counts.get(targetRunId) ?? 0) + 1);
+  return counts;
+}
+
 function topoStatusToStepStatus(status: string): StepStatus {
   switch (status) {
     case 'revising':
@@ -2931,6 +2950,7 @@ export function CoordinatorRunPage() {
   }, [inSpecAuthoring, rfNodes, displayEdges, assemblyNodeIds]);
 
   const [outcomePlanClarifying, setOutcomePlanClarifying] = useState(false);
+  const pendingApprovalCounts = useMemo(() => pendingApprovalsByRun(events, runId ?? ''), [events, runId]);
 
   useEffect(() => {
     if (latestOutcomePlanEvent) queueMicrotask(() => setOutcomePlanClarifying(false));
@@ -2987,6 +3007,7 @@ export function CoordinatorRunPage() {
       childRunId?: string;
       startedAt?: number;
       completedAt?: number;
+      pendingApprovalCount?: number;
       order: number;
       x: number;
       y: number;
@@ -3008,6 +3029,7 @@ export function CoordinatorRunPage() {
           childRunId: data.childRunId,
           startedAt: data.startedAt,
           completedAt: data.completedAt,
+          pendingApprovalCount: data.childRunId ? pendingApprovalCounts.get(data.childRunId) : 0,
           order,
           x: node.position.x,
           y: node.position.y,
@@ -3020,7 +3042,7 @@ export function CoordinatorRunPage() {
         const roleKey = data.def.key;
         const status =
           roleKey === 'outcome_plan'
-            ? (outcomePlanClarifying && !specConfirmed ? 'needs_clarification' : specConfirmed ? 'confirmed' : latestOutcomePlanEvent ? 'awaiting_confirmation' : outcomePlanDraftingActive ? 'drafting_outcome' : 'pending')
+            ? (outcomePlanClarifying && !specConfirmed ? 'revising' : specConfirmed ? 'confirmed' : latestOutcomePlanEvent ? 'awaiting_confirmation' : outcomePlanDraftingActive ? 'drafting_outcome' : 'pending')
             : roleKey === 'work_plan'
               ? (workPlanSeen ? 'completed' : 'pending')
               : roleKey === 'review' && orch.phase === 'in_review' && !viewState.terminal
@@ -3046,6 +3068,7 @@ export function CoordinatorRunPage() {
           childRunId: isCoordinatorNode ? undefined : data.childRunId,
           startedAt: data.state.startedAt,
           completedAt: data.state.completedAt,
+          pendingApprovalCount: isCoordinatorNode ? pendingApprovalCounts.get(runId ?? '') : (data.childRunId ? pendingApprovalCounts.get(data.childRunId) : 0),
           order,
           x: node.position.x,
           y: node.position.y,
@@ -3090,6 +3113,7 @@ export function CoordinatorRunPage() {
         childRunId: meta.childRunId,
         startedAt: meta.startedAt,
         completedAt: meta.completedAt,
+        pendingApprovalCount: meta.pendingApprovalCount,
         children,
         // Row indent depth is recomputed from real nesting by flattenRunTree; this seed is unused.
         depth: 0,
@@ -3101,7 +3125,7 @@ export function CoordinatorRunPage() {
       sessionNodeIds: new Set(sessionMeta.keys()),
       defaultSessionNodeId: rootMeta.nodeId,
     };
-  }, [displayNodes, latestOutcomePlanEvent, orch.phase, outcomePlanClarifying, outcomePlanDraftingActive, specConfirmed, viewState.terminal, workPlanSeen]);
+  }, [displayNodes, latestOutcomePlanEvent, orch.phase, outcomePlanClarifying, outcomePlanDraftingActive, pendingApprovalCounts, runId, specConfirmed, viewState.terminal, workPlanSeen]);
 
   const flatSessionTree = useMemo(() => flattenRunTree(sessionTree), [sessionTree]);
   const taskRows = flatSessionTree.filter((node) => node.nodeId !== defaultSessionNodeId);
@@ -3862,6 +3886,12 @@ export function CoordinatorRunPage() {
               {identityText ? (
                 <span className={styles.treeIdentity} title={identityText}>{`\u00b7 ${identityText}`}</span>
               ) : null}
+              {(item.pendingApprovalCount ?? 0) > 0 && (
+                <span className={mergeClasses(styles.treeStatusText, styles.stateTextInput)} data-testid="run-tree-pending-approval">
+                  <span className={styles.treeStatusDot} aria-hidden="true" />
+                  {item.pendingApprovalCount} approval{item.pendingApprovalCount === 1 ? '' : 's'} needed
+                </span>
+              )}
             </span>
           </span>
         </span>
