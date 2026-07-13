@@ -747,6 +747,12 @@ namespace Agentweaver.Api.Migrations
                         .IsRequired()
                         .HasColumnType("TEXT");
 
+                    b.Property<int>("InfrastructureRetryCount")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTimeOffset?>("InfrastructureRetryEligibleAt")
+                        .HasColumnType("TEXT");
+
                     b.Property<int?>("LastResetAttempt")
                         .HasColumnType("INTEGER");
 

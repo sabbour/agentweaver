@@ -60,6 +60,20 @@ public sealed class Subtask
     /// </summary>
     public int RecoveryAttempts { get; set; }
 
+    /// <summary>
+    /// Number of fresh child runs automatically dispatched after a child terminated with an
+    /// infrastructure failure explicitly marked <c>retryable: true</c>. Kept separate from steering
+    /// recovery and reviewer lockout state so infrastructure resilience cannot alter those protocols.
+    /// </summary>
+    public int InfrastructureRetryCount { get; set; }
+
+    /// <summary>
+    /// Earliest UTC time at which the dispatch frontier may launch the next infrastructure retry.
+    /// Persisted so coordinator restarts and replica failover preserve exponential backoff instead of
+    /// recreating an immediate retry storm.
+    /// </summary>
+    public DateTimeOffset? InfrastructureRetryEligibleAt { get; set; }
+
     // ── UNIFIED AUTONOMOUS STEERING (rev8) — additive, nullable ─────────────────────────────────
     /// <summary>The steering directive id that last reset this subtask via a conscious fresh dispatch
     /// (direction B). Together with <see cref="LastResetAttempt"/> this is the durable

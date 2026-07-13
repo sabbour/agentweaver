@@ -123,6 +123,7 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
     /// <c>Coordinator:IntegrationBuildLockAcquireTimeoutSeconds</c> (default 120 s).
     /// </summary>
     private readonly TimeSpan _integrationBuildLockTimeout;
+    private readonly (TimeSpan Min, TimeSpan Max)[] _infrastructureRetryBackoffs;
 
     /// <summary>Pod name / hostname used as the distributed lease owner identity.</summary>
     private readonly string _myPodId;
@@ -178,10 +179,18 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         var lockTimeoutSecs = configuration?.GetValue("Coordinator:IntegrationBuildLockAcquireTimeoutSeconds", 120) ?? 120;
         _integrationBuildLockTimeout = TimeSpan.FromSeconds(Math.Max(1, lockTimeoutSecs));
 
+        _infrastructureRetryBackoffs =
+        [
+            ReadRetryBackoff(configuration, attempt: 1, defaultMinSeconds: 30, defaultMaxSeconds: 60),
+            ReadRetryBackoff(configuration, attempt: 2, defaultMinSeconds: 120, defaultMaxSeconds: 240),
+        ];
+
         _myPodId = configuration?.GetValue<string>("App:PodId")
                    ?? Environment.GetEnvironmentVariable("HOSTNAME")
                    ?? Environment.MachineName;
     }
+
+    internal Func<Run, CancellationToken, Task>? StartChildRunOverride { get; set; }
 
     /// <summary>
     /// Launches dispatch + observe for a confirmed coordinator run on a supervised background task
@@ -358,6 +367,9 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
                 if (inFlight.ContainsKey(subtaskId))
                     continue;
 
+                if (!await IsInfrastructureRetryEligibleAsync(subtaskId, ct).ConfigureAwait(false))
+                    continue;
+
                 // If any in-flight subtask conflicts with this one (overlapping or undeclared file
                 // paths), defer it: running them concurrently on the shared worktree would clobber
                 // each other's files. It will be dispatched in the next iteration after a slot frees.
@@ -387,6 +399,18 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
                 if (coordinatorStopped)
                     return;
 
+                var delayedUntil = await GetNextRetryEligibilityAsync(
+                    workPlanId.Value,
+                    SubtaskFrontier.ReadyPending(statusById, edges),
+                    ct).ConfigureAwait(false);
+                if (delayedUntil is { } eligibleAt)
+                {
+                    var delay = eligibleAt - DateTimeOffset.UtcNow;
+                    if (delay > TimeSpan.Zero)
+                        await Task.Delay(delay, ct).ConfigureAwait(false);
+                    continue;
+                }
+
                 break; // quiescent: nothing running and no ready frontier (all terminal or blocked)
             }
 
@@ -413,6 +437,27 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
                 await PropagateBlockedDependentsAsync(
                     context, workPlanId.Value, result.SubtaskId, "dependency_stalled", SubtaskStatus.Blocked, statusById, edges, seq, ct)
                     .ConfigureAwait(false);
+                continue;
+            }
+
+            // A child-level infrastructure/provider failure explicitly classified retryable is not a
+            // reviewer rejection and must not permanently fail the subtask on the first transient.
+            // Detach the failed child and let the frontier launch a fresh child, bounded by a separate
+            // per-subtask budget so repeated infrastructure failures still reach the existing terminal
+            // failed/assembly-blocked behavior.
+            if (!coordinatorStopped
+                && result.Outcome == ChildOutcome.Failed
+                && result.Retryable
+                && await TryRedispatchRetryableFailureAsync(
+                    context,
+                    workPlanId.Value,
+                    result.SubtaskId,
+                    result.ChildRunId,
+                    result.FailureReason,
+                    result.FailureMessage,
+                    statusById,
+                    ct).ConfigureAwait(false))
+            {
                 continue;
             }
 
@@ -784,7 +829,8 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
 
         try
         {
-            await _orchestrator.StartChildRunAsync(childRun, ct).ConfigureAwait(false);
+            await (StartChildRunOverride?.Invoke(childRun, ct)
+                ?? _orchestrator.StartChildRunAsync(childRun, ct)).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -862,6 +908,150 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
             await PropagateBlockedDependentsAsync(
                 context, workPlanId, result.SubtaskId, reason, SubtaskStatus.Failed, statusById, edges, seq, ct).ConfigureAwait(false);
         }
+    }
+
+    internal const int MaxInfrastructureRetries = 2;
+
+    /// <summary>
+    /// Requeues a child subtask after a terminal failure explicitly marked retryable by the child run.
+    /// The old child remains terminal and its pod is released; the subtask is reset to pending with a
+    /// persisted exponential-backoff deadline so normal dispatch later creates a fresh child run.
+    /// <see cref="RunOrchestrator.StartChildRunAsync"/> provisions that new run ID from the integration
+    /// base in a new worktree, so a timed-out shell session is never resumed and its uncommitted
+    /// side-effects cannot enter the retry workspace. Reviewer rejection/lockout fields are untouched.
+    /// </summary>
+    internal async Task<bool> TryRedispatchRetryableFailureAsync(
+        CoordinatorDispatchContext context,
+        int workPlanId,
+        int subtaskId,
+        string childRunId,
+        string? failureReason,
+        string? failureMessage,
+        Dictionary<int, string> statusById,
+        CancellationToken ct)
+    {
+        int attempt;
+        DateTimeOffset eligibleAt;
+        using (var scope = _scopeFactory.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var row = await db.Subtasks.FirstOrDefaultAsync(s => s.Id == subtaskId, ct).ConfigureAwait(false);
+            if (row is null || row.InfrastructureRetryCount >= MaxInfrastructureRetries)
+                return false;
+
+            if (!string.IsNullOrEmpty(childRunId))
+                row.PriorChildRunId = childRunId;
+            row.Status = SubtaskStatus.Pending;
+            row.ChildRunId = null;
+            row.InfrastructureRetryCount = Math.Min(
+                row.InfrastructureRetryCount + 1, MaxInfrastructureRetries);
+            attempt = row.InfrastructureRetryCount;
+            eligibleAt = DateTimeOffset.UtcNow + CalculateInfrastructureRetryBackoff(attempt);
+            row.InfrastructureRetryEligibleAt = eligibleAt;
+
+            var reason = string.IsNullOrWhiteSpace(failureReason)
+                ? "retryable_infrastructure_failure"
+                : failureReason;
+            row.RecoveryGuidance =
+                $"Prior child run {childRunId} ended with retryable infrastructure failure '{reason}'. " +
+                $"Automatic retry {attempt} of {MaxInfrastructureRetries} is eligible after {eligibleAt:O}. " +
+                "A fresh child run will start in a new worktree from the integration base; the timed-out " +
+                "shell session and its uncommitted workspace are not resumed.";
+            row.UpdatedAt = DateTimeOffset.UtcNow;
+            await db.SaveChangesAsync(ct).ConfigureAwait(false);
+        }
+
+        statusById[subtaskId] = SubtaskStatus.Pending;
+        await ReleaseAgentHostPodSafeAsync(childRunId, ct).ConfigureAwait(false);
+        var normalizedReason = string.IsNullOrWhiteSpace(failureReason)
+            ? "retryable_infrastructure_failure"
+            : failureReason;
+
+        _streamStore.Get(context.CoordinatorRunId)?.RecordNext(
+            EventTypes.CoordinatorSubtaskRedispatched,
+            new
+            {
+                subtaskId,
+                priorChildRunId = childRunId,
+                attempt,
+                maxAttempts = MaxInfrastructureRetries,
+                reason = "retryable_infrastructure_failure",
+                infrastructureReason = normalizedReason,
+                message = failureMessage,
+                eligibleAtUtc = eligibleAt.ToString("O"),
+                timestamp_utc = DateTimeOffset.UtcNow.ToString("O"),
+            });
+
+        _logger.LogWarning(
+            "Coordinator dispatch: automatic retry {Attempt} of {Max} for subtask {SubtaskId} " +
+            "due to retryable infra failure {Reason}: {Message}; prior child {ChildRunId} released; " +
+            "next attempt eligible at {EligibleAt}",
+            attempt,
+            MaxInfrastructureRetries,
+            subtaskId,
+            normalizedReason,
+            failureMessage ?? "<no message>",
+            childRunId,
+            eligibleAt);
+
+        return true;
+    }
+
+    internal TimeSpan CalculateInfrastructureRetryBackoff(int attempt)
+    {
+        var index = Math.Clamp(attempt, 1, _infrastructureRetryBackoffs.Length) - 1;
+        var (min, max) = _infrastructureRetryBackoffs[index];
+        if (max <= min)
+            return min;
+
+        return min + TimeSpan.FromMilliseconds(
+            Random.Shared.NextDouble() * (max - min).TotalMilliseconds);
+    }
+
+    private static (TimeSpan Min, TimeSpan Max) ReadRetryBackoff(
+        IConfiguration? configuration,
+        int attempt,
+        double defaultMinSeconds,
+        double defaultMaxSeconds)
+    {
+        var minSeconds = Math.Max(0, configuration?.GetValue(
+            $"Coordinator:InfrastructureRetryAttempt{attempt}MinSeconds", defaultMinSeconds)
+            ?? defaultMinSeconds);
+        var maxSeconds = Math.Max(minSeconds, configuration?.GetValue(
+            $"Coordinator:InfrastructureRetryAttempt{attempt}MaxSeconds", defaultMaxSeconds)
+            ?? defaultMaxSeconds);
+        return (TimeSpan.FromSeconds(minSeconds), TimeSpan.FromSeconds(maxSeconds));
+    }
+
+    private async Task<bool> IsInfrastructureRetryEligibleAsync(int subtaskId, CancellationToken ct)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var eligibleAt = await db.Subtasks.AsNoTracking()
+            .Where(s => s.Id == subtaskId)
+            .Select(s => s.InfrastructureRetryEligibleAt)
+            .FirstOrDefaultAsync(ct)
+            .ConfigureAwait(false);
+        return eligibleAt is null || eligibleAt <= DateTimeOffset.UtcNow;
+    }
+
+    private async Task<DateTimeOffset?> GetNextRetryEligibilityAsync(
+        int workPlanId,
+        IEnumerable<int> readySubtaskIds,
+        CancellationToken ct)
+    {
+        var ids = readySubtaskIds.ToArray();
+        if (ids.Length == 0)
+            return null;
+
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        return await db.Subtasks.AsNoTracking()
+            .Where(s => s.WorkPlanId == workPlanId
+                && ids.Contains(s.Id)
+                && s.InfrastructureRetryEligibleAt > DateTimeOffset.UtcNow)
+            .MinAsync(s => s.InfrastructureRetryEligibleAt, ct)
+            .ConfigureAwait(false);
     }
 
     /// <summary>
@@ -1527,7 +1717,17 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
     {
         // Fast path: child already reached a terminal state before observation begins.
         if (await TryResolveFromStoreAsync(childRunId, ct).ConfigureAwait(false) is { } alreadyDone)
-            return new ChildResult(subtaskId, childRunId, alreadyDone);
+        {
+            if (alreadyDone != ChildOutcome.Failed)
+                return new ChildResult(subtaskId, childRunId, alreadyDone);
+
+            // A failed run's retryability lives on its RunFailed payload, not the Run row. Prefer
+            // durable event replay below when available; legacy/no-stream harnesses fall back to the
+            // persisted RunEvents table so recovery does not silently discard retryable:true.
+            if (_eventStream is null)
+                return await ResolveFailedChildFromPersistedEventAsync(subtaskId, childRunId, ct)
+                    .ConfigureAwait(false);
+        }
 
         // When IRunEventStream is available use the push-based path; otherwise fall back to the
         // legacy RunStreamStore snapshot+poll path so existing tests that do not inject the stream
@@ -1573,7 +1773,7 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
                 stallCts.CancelAfter(_stallTimeout);
 
             bool receivedEvent = false;
-            ChildOutcome? terminalOutcome = null;
+            ChildTerminal? terminal = null;
 
             try
             {
@@ -1606,9 +1806,9 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
                     // and can never latch — mirrors the #212 approval-gate guard above.
                     provisioningPending = evt.Type == EventTypes.SandboxProvisioningPending;
 
-                    if (TryMapTerminalEvent(evt, out var outcome))
+                    if (TryMapTerminalEvent(evt, out var mapped))
                     {
-                        terminalOutcome = outcome;
+                        terminal = mapped;
                         break;
                     }
 
@@ -1680,8 +1880,8 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
                 return new ChildResult(subtaskId, childRunId, ChildOutcome.Stalled, DateTimeOffset.UtcNow);
             }
 
-            if (terminalOutcome.HasValue)
-                return new ChildResult(subtaskId, childRunId, terminalOutcome.Value);
+            if (terminal is not null)
+                return terminal.ToResult(subtaskId, childRunId);
 
             if (!receivedEvent)
             {
@@ -1733,8 +1933,8 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
                 BubbleChildInteraction(coordinatorRunId, subtaskId, childRunId, evt);
                 if (IsPartialOutputEvent(evt))
                     lastPartialOutput = evt.Payload;
-                if (TryMapTerminalEvent(evt, out var outcome))
-                    return new ChildResult(subtaskId, childRunId, outcome);
+                if (TryMapTerminalEvent(evt, out var terminal))
+                    return terminal.ToResult(subtaskId, childRunId);
             }
 
             if (snapshot.IsCompleted)
@@ -1988,29 +2188,69 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         return edges;
     }
 
-    private static bool TryMapTerminalEvent(RunEvent evt, out ChildOutcome outcome)
+    private static bool TryMapTerminalEvent(RunEvent evt, out ChildTerminal terminal)
     {
         switch (evt.Type)
         {
             case EventTypes.RunAssembleReady:
-                outcome = ReadBool(evt.Payload, "raiSafetyFlagged")
-                    ? ChildOutcome.RaiFlagged
-                    : ChildOutcome.AssembleReady;
+                terminal = new ChildTerminal(
+                    ReadBool(evt.Payload, "raiSafetyFlagged")
+                        ? ChildOutcome.RaiFlagged
+                        : ChildOutcome.AssembleReady);
                 return true;
             case EventTypes.RunFailed:
-                outcome = string.Equals(ReadString(evt.Payload, "reason"), "content_safety", StringComparison.Ordinal)
-                    ? ChildOutcome.RaiFlagged
-                    : ChildOutcome.Failed;
+                var reason = ReadString(evt.Payload, "reason") ?? ReadString(evt.Payload, "errorCode");
+                terminal = new ChildTerminal(
+                    string.Equals(reason, "content_safety", StringComparison.Ordinal)
+                        ? ChildOutcome.RaiFlagged
+                        : ChildOutcome.Failed,
+                    Retryable: ReadNullableBool(evt.Payload, "retryable") == true,
+                    FailureReason: reason,
+                    FailureMessage: ReadString(evt.Payload, "message"));
                 return true;
             case EventTypes.RunCancelled:
-                outcome = ChildOutcome.Failed;
+                terminal = new ChildTerminal(ChildOutcome.Failed);
                 return true;
             case EventTypes.RunCompleted:
-                outcome = ChildOutcome.Completed;
+                terminal = new ChildTerminal(ChildOutcome.Completed);
                 return true;
             default:
-                outcome = default;
+                terminal = default!;
                 return false;
+        }
+    }
+
+    private async Task<ChildResult> ResolveFailedChildFromPersistedEventAsync(
+        int subtaskId,
+        string childRunId,
+        CancellationToken ct)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var payloadJson = await db.RunEvents.AsNoTracking()
+            .Where(e => e.RunId == childRunId && e.EventType == EventTypes.RunFailed)
+            .OrderByDescending(e => e.Sequence)
+            .Select(e => e.PayloadJson)
+            .FirstOrDefaultAsync(ct)
+            .ConfigureAwait(false);
+
+        if (string.IsNullOrWhiteSpace(payloadJson))
+            return new ChildResult(subtaskId, childRunId, ChildOutcome.Failed);
+
+        try
+        {
+            using var document = JsonDocument.Parse(payloadJson);
+            var terminal = new ChildTerminal(
+                ChildOutcome.Failed,
+                Retryable: ReadNullableBool(document.RootElement, "retryable") == true,
+                FailureReason: ReadString(document.RootElement, "reason")
+                    ?? ReadString(document.RootElement, "errorCode"),
+                FailureMessage: ReadString(document.RootElement, "message"));
+            return terminal.ToResult(subtaskId, childRunId);
+        }
+        catch (JsonException)
+        {
+            return new ChildResult(subtaskId, childRunId, ChildOutcome.Failed);
         }
     }
 
@@ -2446,9 +2686,26 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
             && v.ValueKind == JsonValueKind.True;
     }
 
+    private static bool? ReadNullableBool(object payload, string property)
+    {
+        var el = payload is JsonElement jsonElement
+            ? jsonElement
+            : JsonSerializer.SerializeToElement(payload);
+        if (el.ValueKind != JsonValueKind.Object || !el.TryGetProperty(property, out var value))
+            return null;
+        return value.ValueKind switch
+        {
+            JsonValueKind.True => true,
+            JsonValueKind.False => false,
+            _ => null,
+        };
+    }
+
     private static string? ReadString(object payload, string property)
     {
-        var el = JsonSerializer.SerializeToElement(payload);
+        var el = payload is JsonElement jsonElement
+            ? jsonElement
+            : JsonSerializer.SerializeToElement(payload);
         return el.ValueKind == JsonValueKind.Object && el.TryGetProperty(property, out var v) && v.ValueKind == JsonValueKind.String
             ? v.GetString()
             : null;
@@ -2456,7 +2713,25 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
 
     private enum ChildOutcome { AssembleReady, RaiFlagged, Completed, Failed, Stalled }
 
-    private sealed record ChildResult(int SubtaskId, string ChildRunId, ChildOutcome Outcome, DateTimeOffset? StaleSince = null);
+    private sealed record ChildTerminal(
+        ChildOutcome Outcome,
+        bool Retryable = false,
+        string? FailureReason = null,
+        string? FailureMessage = null)
+    {
+        public ChildResult ToResult(int subtaskId, string childRunId) =>
+            new(subtaskId, childRunId, Outcome, Retryable: Retryable,
+                FailureReason: FailureReason, FailureMessage: FailureMessage);
+    }
+
+    private sealed record ChildResult(
+        int SubtaskId,
+        string ChildRunId,
+        ChildOutcome Outcome,
+        DateTimeOffset? StaleSince = null,
+        bool Retryable = false,
+        string? FailureReason = null,
+        string? FailureMessage = null);
 
     /// <summary>Monotonic topology sequence: snapshot is <c>Current</c> (0), each delta is <c>Next()</c>.</summary>
     internal sealed class SeqCounter
