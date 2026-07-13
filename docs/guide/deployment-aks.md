@@ -76,6 +76,12 @@ bash scripts/aks/40-verify.sh
 
 `install.sh --aks` runs the same sequence and also carries `TENANT_ID` and `IDENTITY_CLIENT_ID` between steps.
 
+Before running `20-build-push-images.sh`, refresh the frontend Azure Artifacts credential if needed:
+
+```bash
+npx vsts-npm-auth -config apps/web/.npmrc -F
+```
+
 ## What the scripts deploy
 
 - AKS cluster with `apppool` for app workloads and `katapool` for Kata-isolated AgentHost pods.
@@ -118,11 +124,14 @@ kubectl describe sandboxwarmpool agentweaver-agent-host -n agentweaver
 ## Redeploy
 
 ```bash
+npx vsts-npm-auth -config apps/web/.npmrc -F
 export IMAGE_TAG=$(git rev-parse --short HEAD)
 bash scripts/aks/20-build-push-images.sh
 bash scripts/aks/30-deploy.sh
 bash scripts/aks/40-verify.sh
 ```
+
+`20-build-push-images.sh` reuses the 1JS feed password from your user `~/.npmrc` (or `AZURE_ARTIFACTS_NPM_PASSWORD_B64`, if set) and passes it to the frontend `az acr build` as a secret build arg so the token is not retained in the published image layers.
 
 Or in one command:
 

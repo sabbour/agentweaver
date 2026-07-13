@@ -109,16 +109,44 @@ paths_changed() {
   ! git diff --quiet "${old_ref}" "${new_ref}" -- "$@"
 }
 
+frontend_npm_password_b64() {
+  if [[ -n "${AZURE_ARTIFACTS_NPM_PASSWORD_B64:-}" ]]; then
+    printf '%s' "${AZURE_ARTIFACTS_NPM_PASSWORD_B64}"
+    return 0
+  fi
+
+  local npmrc_path="${HOME:-}/.npmrc"
+  if [[ -f "${npmrc_path}" ]]; then
+    grep -E -m1 '^//pkgs\.dev\.azure\.com/office/Office/_packaging/1JS/npm(/registry)?/:_password=' "${npmrc_path}" \
+      | sed 's/^[^=]*=//' || true
+  fi
+}
+
 build_image() {
   local image="$1"
   local tag="$2"
   local dockerfile="$3"
+  local extra_args=()
+
+  if [[ "${image}" == "agentweaver-frontend" ]]; then
+    local npm_password_b64=""
+    npm_password_b64="$(frontend_npm_password_b64)"
+    if [[ -z "${npm_password_b64}" ]]; then
+      echo "ERROR: missing Azure Artifacts npm credentials for apps/web." >&2
+      echo "  Run 'npx vsts-npm-auth -config apps/web/.npmrc -F' to refresh ~/.npmrc," >&2
+      echo "  or export AZURE_ARTIFACTS_NPM_PASSWORD_B64 with the base64 PAT value." >&2
+      return 1
+    fi
+    extra_args=(--secret-build-arg "AZURE_ARTIFACTS_NPM_PASSWORD_B64=${npm_password_b64}")
+  fi
+
   echo "--- Building ${image}:${tag} (${dockerfile}) ---"
   az acr build \
     --registry "${ACR_NAME}" \
     --resource-group "${RESOURCE_GROUP}" \
     --image "${image}:${tag}" \
     --file "${dockerfile}" \
+    "${extra_args[@]}" \
     --output none \
     .
   echo "  [built]  ${ACR_LOGIN_SERVER}/${image}:${tag}"

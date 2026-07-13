@@ -5,16 +5,31 @@ FROM node:22-alpine AS web-build
 WORKDIR /app
 COPY apps/web/package.json apps/web/package-lock.json* apps/web/.npmrc ./
 # The 1JS FluentAI packages resolve from a private Azure Artifacts feed (see
-# apps/web/.npmrc) that requires auth. Pass it as a BuildKit secret (never
-# baked into an image layer): docker build --secret id=npmrc,src=<path-to-.npmrc-with-token>
-# e.g. `az artifacts universal ...` / `vsts-npm-auth -config apps/web/.npmrc -F` writes a
-# user-scoped .npmrc with the token locally; point --secret at that file.
+# apps/web/.npmrc) that requires auth. ACR Tasks does not support BuildKit
+# `RUN --mount`, so the build injects the base64-encoded PAT via
+# `--secret-build-arg AZURE_ARTIFACTS_NPM_PASSWORD_B64=...`, writes a temporary
+# npmrc only for `npm ci`, then deletes it before the layer is committed.
 # --legacy-peer-deps: internal @1js/fluentai-family packages carry mutually
 # conflicting @fluentui/react-icons peer ranges (e.g. ^2.0.324 vs ^2.0.332) that
 # cannot be satisfied by any single pin; the resolved tree builds and runs fine.
-RUN --mount=type=secret,id=npmrc,target=/root/.npmrc,required=false \
-    if [ -s /root/.npmrc ]; then cat /root/.npmrc >> .npmrc; fi && \
-    npm ci --legacy-peer-deps --userconfig ./.npmrc
+ARG AZURE_ARTIFACTS_NPM_PASSWORD_B64
+RUN set -eu; \
+    if [ -z "${AZURE_ARTIFACTS_NPM_PASSWORD_B64:-}" ]; then \
+      echo "AZURE_ARTIFACTS_NPM_PASSWORD_B64 build arg is required for the 1JS Azure Artifacts feed." >&2; \
+      exit 1; \
+    fi; \
+    cp .npmrc .npmrc.build; \
+    printf '%s\n' \
+      '; begin auth token' \
+      '//pkgs.dev.azure.com/office/Office/_packaging/1JS/npm/registry/:username=agentweaver' \
+      "//pkgs.dev.azure.com/office/Office/_packaging/1JS/npm/registry/:_password=${AZURE_ARTIFACTS_NPM_PASSWORD_B64}" \
+      '//pkgs.dev.azure.com/office/Office/_packaging/1JS/npm/registry/:email=npm requires email to be set but does not use the value' \
+      '//pkgs.dev.azure.com/office/Office/_packaging/1JS/npm/:username=agentweaver' \
+      "//pkgs.dev.azure.com/office/Office/_packaging/1JS/npm/:_password=${AZURE_ARTIFACTS_NPM_PASSWORD_B64}" \
+      '//pkgs.dev.azure.com/office/Office/_packaging/1JS/npm/:email=npm requires email to be set but does not use the value' \
+      '; end auth token' >> .npmrc.build; \
+    npm ci --legacy-peer-deps --userconfig ./.npmrc.build; \
+    rm -f .npmrc.build
 COPY apps/web/ .
 RUN unset VITE_API_URL VITE_API_KEY; npm run build
 
