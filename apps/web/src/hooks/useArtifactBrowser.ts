@@ -209,7 +209,9 @@ export function useArtifactBrowser(
     };
   }, [runId, activeFilter, isLive, adapter]);
 
-  // Fetch workspace files when the Files tab is active.
+  // Fetch workspace files when the Files tab is active, and keep polling while the run
+  // is live (#280) — previously this was a one-time fetch on tab-open, so newly created
+  // files never showed up until the tab was closed and reopened.
   useEffect(() => {
     if (activeTab !== 'files') return;
     if (!runId) {
@@ -220,25 +222,40 @@ export function useArtifactBrowser(
     }
 
     let active = true;
+    let workspaceIntervalId: ReturnType<typeof setInterval> | undefined;
 
-    (adapter?.getWorkspace ?? apiClient.getRunWorkspace.bind(apiClient))(runId)
-      .then((data) => {
-        if (active) {
-          setWorkspaceFiles(data);
-          setWorkspaceLoading(false);
-        }
-      })
-      .catch((err: unknown) => {
-        if (active) {
-          setWorkspaceError(extractErrorMessage(err));
-          setWorkspaceLoading(false);
-        }
-      });
+    const doFetch = () => {
+      (adapter?.getWorkspace ?? apiClient.getRunWorkspace.bind(apiClient))(runId)
+        .then((data) => {
+          if (active) {
+            setWorkspaceFiles(data);
+            setWorkspaceError(null);
+            setWorkspaceLoading(false);
+          }
+        })
+        .catch((err: unknown) => {
+          if (active) {
+            setWorkspaceError(extractErrorMessage(err));
+            setWorkspaceLoading(false);
+          }
+        });
+    };
 
+    doFetch();
+
+    if (!isLive) {
+      return () => {
+        active = false;
+      };
+    }
+
+    // eslint-disable-next-line prefer-const
+    workspaceIntervalId = setInterval(doFetch, POLL_INTERVAL_MS);
     return () => {
       active = false;
+      clearInterval(workspaceIntervalId);
     };
-  }, [runId, activeTab, adapter]);
+  }, [runId, activeTab, adapter, isLive]);
 
   // Fetch diff when selected file changes (only for changed files).
   // Loading state is reset in the file selection handler, not here.

@@ -256,6 +256,17 @@ const useStyles = makeStyles({
     paddingLeft: tokens.spacingHorizontalXS,
     fontStyle: 'italic',
   },
+  outputScroll: {
+    maxHeight: '260px',
+    overflow: 'auto',
+    margin: 0,
+    padding: tokens.spacingVerticalS,
+    fontFamily: tokens.fontFamilyMonospace,
+    fontSize: tokens.fontSizeBase200,
+    lineHeight: tokens.lineHeightBase200,
+    whiteSpace: 'pre-wrap',
+    wordBreak: 'break-word',
+  },
   message: {
     color: tokens.colorNeutralForeground1,
     fontSize: tokens.fontSizeBase300,
@@ -332,10 +343,21 @@ function ToolResultState({ status }: { status: RunTimelineTool['status'] }) {
   );
 }
 
-/** Read-only inline diff card for an expanded edit row. Warm-monochrome, no side stripes. */
+/** Read-only inline card for an expanded tool row: unified diff for edits, or raw output text
+ *  for any other tool call that returned content (#299). Warm-monochrome, no side stripes. */
 function ToolDiffCard({ tool }: { tool: RunTimelineTool }) {
   const styles = useStyles();
-  if (!tool.diff) return null;
+  if (!tool.diff) {
+    if (!tool.resultContent) return null;
+    return (
+      <div className={styles.diffCard} data-testid="timeline-tool-output">
+        <div className={styles.diffHeader}>
+          <span>{tool.title}</span>
+        </div>
+        <pre className={styles.outputScroll}>{tool.resultContent}</pre>
+      </div>
+    );
+  }
   const lines = tool.diff.split('\n');
   let added = 0;
   let removed = 0;
@@ -391,7 +413,7 @@ function ToolDiffCard({ tool }: { tool: RunTimelineTool }) {
 function ToolRow({ tool }: { tool: RunTimelineTool }) {
   const styles = useStyles();
   const [expanded, setExpanded] = useState(false);
-  const canExpand = Boolean(tool.expandable && tool.diff);
+  const canExpand = Boolean(tool.expandable && (tool.diff || tool.resultContent));
 
   const rowInner = (
     <>

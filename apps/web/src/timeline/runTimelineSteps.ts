@@ -350,7 +350,19 @@ function closeStep(step: RunTimelineStep): void {
  */
 export function buildRunTimeline(
   events: readonly RunStreamEvent[],
-  options?: { stripSerializedWorkPlan?: boolean },
+  options?: {
+    stripSerializedWorkPlan?: boolean;
+    /**
+     * When true, close every still-open step (settling any 'running' tool to 'complete')
+     * even though no agent.turn.end / run.completed|failed|error was ever observed (#299).
+     * The run can leave a turn open without one of those events — e.g. a coordinator
+     * stall/redispatch, a review gate, or a block — so a tool call started just before
+     * that transition would otherwise show a perpetual spinner. Callers should pass the
+     * CURRENT run status here (true whenever the run is no longer actively streaming),
+     * not just derive it from the events already folded into this call.
+     */
+    forceCloseIfInactive?: boolean;
+  },
 ): RunTimelineModel {
   // The serialized work-plan replacement is only meaningful on the coordinator run stream, where the
   // decompose agent's raw JSON array actually originates. Defaults on so existing callers/tests keep
@@ -474,6 +486,10 @@ export function buildRunTimeline(
           if (diff) applyEditDiff(tool, diff);
         } else {
           tool.resultMeta = deriveResultMeta(tool.category, content);
+          // Non-edit tool calls carried a result but had no way to be expanded to view
+          // it — only edit rows with a diff were clickable. Any tool with real output
+          // is now expandable so its output can be inspected inline (#299).
+          if (content.trim().length > 0) tool.expandable = true;
         }
         break;
       }
@@ -578,6 +594,15 @@ export function buildRunTimeline(
 
       default:
         break;
+    }
+  }
+
+  // The run is no longer actively streaming (parked/blocked/awaiting review/terminal) but
+  // no in-stream event closed the last open step — settle it now instead of leaving a
+  // perpetual "running" spinner on its tool calls (#299).
+  if (options?.forceCloseIfInactive) {
+    for (const step of steps) {
+      if (step.active) closeStep(step);
     }
   }
 

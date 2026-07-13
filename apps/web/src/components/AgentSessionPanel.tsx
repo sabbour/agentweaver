@@ -830,6 +830,13 @@ function mergeRunEvents(seed: RunStreamEvent[], live: RunStreamEvent[]): RunStre
   return sharedMergeRunEvents(seed, live, { sort: true });
 }
 
+// Background run-status refresh cadence (#280) and the statuses at which it's safe to
+// stop polling — these are genuinely final and cannot transition back to an active state.
+const RUN_DETAIL_POLL_INTERVAL_MS = 4000;
+const RUN_DETAIL_POLL_TERMINAL_STATUSES = new Set([
+  'completed', 'failed', 'merged', 'declined', 'merge_failed', 'cancelled', 'stopped',
+]);
+
 function readString(payload: Record<string, unknown>, keys: string[]): string | undefined {
   for (const key of keys) {
     const value = payload[key];
@@ -1608,6 +1615,39 @@ function buildCoordinatorTurns(events: RunStreamEvent[]): ConversationTurn[] {
   return turns.length > 0 ? turns : buildTurns(events);
 }
 
+/**
+ * Project the coordinator's narrated activity rows (dispatch/completion/block decisions,
+ * built by buildCoordinatorTurns above) into standalone synthetic Timeline steps so they can
+ * be interleaved with the intent-driven steps from buildRunTimeline by sequence (#286).
+ */
+function coordinatorNarrationSteps(turns: ConversationTurn[]): RunTimelineStep[] {
+  const steps: RunTimelineStep[] = [];
+  for (const turn of turns) {
+    for (const row of turn.rows) {
+      // Only genuine coordinator-lifecycle narration rows (built by buildCoordinatorTurns'
+      // `activity-${sequence}` keys) belong here — buildTurns' `intent-${sequence}` rows use
+      // the SAME 'activity' role for reported agent.intents, which buildRunTimeline already
+      // renders as its own steps; pulling those in too would duplicate every intent (#286).
+      if (row.role !== 'activity' || !row.key.startsWith('activity-')) continue;
+      const sequenceMatch = /-(\d+)$/.exec(row.key);
+      const sequence = sequenceMatch ? Number(sequenceMatch[1]) : 0;
+      const message = { messageId: row.key, text: row.content, streaming: false };
+      steps.push({
+        id: `coord-narration-${row.key}`,
+        intent: 'Coordinator',
+        status: 'complete',
+        active: false,
+        synthetic: true,
+        tools: [],
+        messages: [message],
+        children: [{ kind: 'message', message }],
+        sequence,
+      });
+    }
+  }
+  return steps;
+}
+
 function flattenTree(
   nodes: RunSessionTree[],
   coordinatorNodeId: string | null,
@@ -1662,6 +1702,13 @@ export function AgentSessionPanel({
   const [followUpBusy, setFollowUpBusy] = useState(false);
   const [followUpError, setFollowUpError] = useState<string | null>(null);
   const [followUpNotice, setFollowUpNotice] = useState<string | null>(null);
+  // Per-run cache of last-known merged events/runDetail (#287). Switching the selected
+  // node used to synchronously blank seedEvents while useRunStream also reset its own
+  // buffer, leaving a genuinely blank pane until fresh data arrived — even when we'd
+  // already viewed that same run earlier in this session. Keyed by runId so we only ever
+  // restore a node's OWN prior state, never another node's, and a true first-ever view
+  // still falls through to the existing loading skeleton.
+  const lastKnownByRunRef = useRef<Map<string, { events: RunStreamEvent[]; runDetail: typeof runDetail }>>(new Map());
 
   const coordinatorNodeId = tree[0]?.nodeId ?? null;
   const flatTree = useMemo(
@@ -1728,6 +1775,13 @@ export function AgentSessionPanel({
 
   const { events: liveEvents } = useRunStream(open && canBrowseSelectedRun ? selectedRunId : '');
   const events = useMemo(() => mergeRunEvents(seedEvents, liveEvents), [seedEvents, liveEvents]);
+
+  // Persist the latest merged events/runDetail for this run so a later re-select of the
+  // same node can restore them instantly instead of flashing blank (#287).
+  useEffect(() => {
+    if (!selectedRunId) return;
+    lastKnownByRunRef.current.set(selectedRunId, { events, runDetail });
+  }, [selectedRunId, events, runDetail]);
   const selectedRaiVerdict = useMemo(
     () => (isRaiNode(selectedItem) ? latestRaiVerdict(events) : null),
     [events, selectedItem],
@@ -1744,20 +1798,39 @@ export function AgentSessionPanel({
   // empty-state fallback all derive from the SAME `turns` for assembly aggregate /
   // coordinator scopes so they can never disagree (e.g. render assembly activity while
   // also showing "No streamed messages yet").
+  //
+  // The run may leave a turn "open" (no agent.turn.end / run.completed|failed|error) while
+  // it's actually parked/blocked/awaiting review or otherwise no longer streaming — force
+  // any such open step closed so its tool calls don't show a perpetual spinner (#299).
+  const isRunTimelineInactive = Boolean(runDetail) && runDetail?.status !== 'in_progress';
   const timelineModel = useMemo(
     () => {
       if (selectedIsAssemblyAggregate) {
         return turnsToTimelineModel(turns, events.length);
       }
       if (selectedItem?.isCoordinator || selectedItem?.nodeId === 'work-plan') {
-        const model = buildRunTimeline(events, { stripSerializedWorkPlan: true });
-        return model.steps.length > 0 ? model : turnsToTimelineModel(turns, events.length);
+        const model = buildRunTimeline(events, {
+          stripSerializedWorkPlan: true,
+          forceCloseIfInactive: isRunTimelineInactive,
+        });
+        if (model.steps.length === 0) return turnsToTimelineModel(turns, events.length);
+        // Interleave the coordinator's dispatch/completion/block narration (from
+        // buildCoordinatorTurns, already computed as `turns` for this scope) alongside the
+        // intent-driven steps instead of dropping it whenever buildRunTimeline has ANY
+        // content — otherwise lifecycle decisions never show up in Messages (#286).
+        const narrationSteps = coordinatorNarrationSteps(turns);
+        if (narrationSteps.length === 0) return model;
+        return {
+          ...model,
+          steps: [...model.steps, ...narrationSteps].sort((a, b) => a.sequence - b.sequence),
+        };
       }
       return buildRunTimeline(events, {
         stripSerializedWorkPlan: false,
+        forceCloseIfInactive: isRunTimelineInactive,
       });
     },
-    [events, selectedItem?.isCoordinator, selectedItem?.nodeId, selectedIsAssemblyAggregate, turns],
+    [events, selectedItem?.isCoordinator, selectedItem?.nodeId, selectedIsAssemblyAggregate, turns, isRunTimelineInactive],
   );
   const timelineApprovals = useMemo(
     () => turns.flatMap((turn) => turn.approvals),
@@ -1788,7 +1861,13 @@ export function AgentSessionPanel({
   }, [open, onClose]);
 
   useEffect(() => {
-    setSeedEvents([]);
+    const cached = selectedRunId ? lastKnownByRunRef.current.get(selectedRunId) : undefined;
+    if (cached) {
+      setSeedEvents(cached.events);
+      setRunDetail(cached.runDetail);
+    } else {
+      setSeedEvents([]);
+    }
     setFollowUpError(null);
     setFollowUpNotice(null);
   }, [selectedRunId]);
@@ -1829,6 +1908,7 @@ export function AgentSessionPanel({
       return;
     }
     let cancelled = false;
+    let intervalId: ReturnType<typeof setInterval> | undefined;
     setRunDetailLoading(true);
     setRunDetailError(null);
     apiClient.getRun(selectedRunId)
@@ -1858,8 +1938,29 @@ export function AgentSessionPanel({
       .finally(() => {
         if (!cancelled) setRunDetailLoading(false);
       });
+
+    // Refresh the run's status in the background while the pane is open (#280). The
+    // fetch above is a one-shot snapshot taken when the pane opens/switches run — without
+    // this poll, `runDetail.status` (which drives useArtifactBrowser's Changes/Files
+    // polling via the `isLive` gate) never advances from e.g. "queued" to "in_progress",
+    // so Changes/Files can show "None" for the whole lifetime of an actively-running
+    // subtask. Polling stops once the run reaches a truly terminal status.
+    // eslint-disable-next-line prefer-const
+    intervalId = setInterval(() => {
+      apiClient.getRun(selectedRunId)
+        .then((detail) => {
+          if (cancelled) return;
+          setRunDetail(detail);
+          if (RUN_DETAIL_POLL_TERMINAL_STATUSES.has(detail.status)) {
+            clearInterval(intervalId);
+          }
+        })
+        .catch(() => {});
+    }, RUN_DETAIL_POLL_INTERVAL_MS);
+
     return () => {
       cancelled = true;
+      clearInterval(intervalId);
     };
   }, [open, selectedRunId, canBrowseSelectedRun]);
 
