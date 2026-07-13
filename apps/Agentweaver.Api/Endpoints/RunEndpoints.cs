@@ -1578,8 +1578,6 @@ app.MapPost("/api/runs/{id}/tool-approvals", async (
     var run = await runStore.GetAsync(runId, ct);
     if (run is null) return Results.NotFound();
     if (!EndpointHelpers.IsOwner(httpContext, run)) return Results.StatusCode(StatusCodes.Status403Forbidden);
-    if (run.Status != RunStatus.InProgress)
-        return Results.Conflict(new { error = "Run is not active." });
 
     var approvalScope = body.Scope switch {
         "run" => ApprovalScope.Run,
@@ -1593,6 +1591,16 @@ app.MapPost("/api/runs/{id}/tool-approvals", async (
     // on the owning run instead of 404ing on the parent (recurrence of #196).
     var targetRunId = await EndpointHelpers.ResolveApprovalOwningRunIdAsync(
         id, run, body.RequestId, approvalGate, runStore, ct, scopeFactory) ?? id;
+
+    // A coordinator can leave InProgress while a child still waits for this approval.
+    // The owning run, rather than the posted parent run, determines whether the request is stale.
+    var targetRun = targetRunId == id
+        ? run
+        : await runStore.GetAsync(RunId.Parse(targetRunId), ct);
+    if (targetRun is null
+        || EndpointHelpers.IsTerminal(targetRun.Status)
+        || targetRun.Status == RunStatus.AssembleReady)
+        return Results.Conflict(new { error = "Run is not active." });
 
     var resolved = await approvalGate.GrantAsync(targetRunId, body.RequestId, approvalScope);
     if (!resolved)
