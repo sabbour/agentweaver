@@ -21,8 +21,12 @@ public sealed record PreviewRunnerHealthResult(string SessionId, int Port, bool 
 /// <summary>Typed error surfaced when a preview-runner HTTP call fails or is unauthorized.</summary>
 public sealed class PreviewRunnerHttpException : Exception
 {
-    public PreviewRunnerHttpException(string reason, string message, HttpStatusCode? status = null)
-        : base(message)
+    public PreviewRunnerHttpException(
+        string reason,
+        string message,
+        HttpStatusCode? status = null,
+        Exception? innerException = null)
+        : base(message, innerException)
     {
         Reason = reason;
         StatusCode = status;
@@ -130,7 +134,20 @@ public sealed class PreviewRunnerHttpClient : IPreviewRunnerHttpClient
 
     private async Task<string> ResolveOriginOrThrowAsync(string runId, CancellationToken ct)
     {
-        var origin = await _originResolver.TryResolveOriginAsync(runId, ct).ConfigureAwait(false);
+        string? origin;
+        try
+        {
+            origin = await _originResolver.TryResolveOriginAsync(runId, ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException ex) when (!ct.IsCancellationRequested)
+        {
+            ct.ThrowIfCancellationRequested();
+            throw new PreviewRunnerHttpException(
+                "preview_origin_lookup_timeout",
+                $"Timed out resolving the AgentHost pod origin for run '{runId}'.",
+                innerException: ex);
+        }
+
         if (string.IsNullOrEmpty(origin))
             throw new PreviewRunnerHttpException(
                 "agenthost_unreachable", $"No reachable AgentHost pod origin for run '{runId}'.");
@@ -151,6 +168,14 @@ public sealed class PreviewRunnerHttpClient : IPreviewRunnerHttpClient
         try
         {
             resp = await client.SendAsync(request, ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException ex) when (!ct.IsCancellationRequested)
+        {
+            ct.ThrowIfCancellationRequested();
+            throw new PreviewRunnerHttpException(
+                "preview_runner_timeout",
+                $"preview-runner call to {method} timed out.",
+                innerException: ex);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {

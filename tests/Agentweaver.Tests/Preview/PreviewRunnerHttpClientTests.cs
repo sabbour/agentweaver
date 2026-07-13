@@ -96,10 +96,52 @@ public sealed class PreviewRunnerHttpClientTests
         ex.Which.Reason.Should().Be("preview_runner_unauthorized");
     }
 
-    private static PreviewRunnerHttpClient CreateClient(HttpMessageHandler handler)
+    [Fact]
+    public async Task OriginLookupTimeout_IsTyped_WhileCallerCancellationPropagates()
+    {
+        var timeoutClient = CreateClient(
+            new CapturingHandler("""{ "session_id": "unused", "pid": 0 }"""),
+            new ThrowingOriginResolver(_ => Task.FromException<string?>(new TaskCanceledException("lookup timeout"))));
+
+        var timeout = () => timeoutClient.StartProcessAsync(
+            "run-1", null, "npm run dev", "/workspace", null, null, CancellationToken.None);
+        (await timeout.Should().ThrowAsync<PreviewRunnerHttpException>())
+            .Which.Reason.Should().Be("preview_origin_lookup_timeout");
+
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+        var canceledClient = CreateClient(
+            new CapturingHandler("""{ "session_id": "unused", "pid": 0 }"""),
+            new ThrowingOriginResolver(ct => Task.FromCanceled<string?>(ct)));
+
+        var canceled = () => canceledClient.StartProcessAsync(
+            "run-1", null, "npm run dev", "/workspace", null, null, cts.Token);
+        await canceled.Should().ThrowAsync<OperationCanceledException>();
+    }
+
+    [Fact]
+    public async Task RunnerTimeout_IsTyped_WhileCallerCancellationPropagates()
+    {
+        var timeoutClient = CreateClient(new CancelingHandler());
+        var timeout = () => timeoutClient.StartProcessAsync(
+            "run-1", null, "npm run dev", "/workspace", null, null, CancellationToken.None);
+        (await timeout.Should().ThrowAsync<PreviewRunnerHttpException>())
+            .Which.Reason.Should().Be("preview_runner_timeout");
+
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+        var canceledClient = CreateClient(new CancelingHandler());
+        var canceled = () => canceledClient.StartProcessAsync(
+            "run-1", null, "npm run dev", "/workspace", null, null, cts.Token);
+        await canceled.Should().ThrowAsync<OperationCanceledException>();
+    }
+
+    private static PreviewRunnerHttpClient CreateClient(
+        HttpMessageHandler handler,
+        IAgentHostOriginResolver? originResolver = null)
     {
         var factory = new StubHttpClientFactory(handler);
-        var origin = new StubOriginResolver(Origin);
+        var origin = originResolver ?? new StubOriginResolver(Origin);
         return new PreviewRunnerHttpClient(factory, origin, NullLogger<PreviewRunnerHttpClient>.Instance);
     }
 
@@ -107,6 +149,12 @@ public sealed class PreviewRunnerHttpClientTests
     {
         public Task<string?> TryResolveOriginAsync(string runId, CancellationToken ct) =>
             Task.FromResult<string?>(origin);
+    }
+
+    private sealed class ThrowingOriginResolver(
+        Func<CancellationToken, Task<string?>> behavior) : IAgentHostOriginResolver
+    {
+        public Task<string?> TryResolveOriginAsync(string runId, CancellationToken ct) => behavior(ct);
     }
 
     private sealed class StubHttpClientFactory(HttpMessageHandler handler) : IHttpClientFactory
@@ -131,5 +179,14 @@ public sealed class PreviewRunnerHttpClientTests
                 Content = new StringContent(responseJson, Encoding.UTF8, "application/json"),
             });
         }
+    }
+
+    private sealed class CancelingHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken ct) =>
+            ct.IsCancellationRequested
+                ? Task.FromCanceled<HttpResponseMessage>(ct)
+                : Task.FromException<HttpResponseMessage>(new TaskCanceledException("client timeout"));
     }
 }
