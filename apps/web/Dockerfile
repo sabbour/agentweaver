@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 # Stage 1: Build React SPA
 # Build context must be the repo root so both apps/web/ and apps/Agentweaver.Web/ are accessible.
 FROM node:22-alpine AS web-build
