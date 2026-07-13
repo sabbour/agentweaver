@@ -146,6 +146,11 @@ public sealed class PreviewStep
                 EmitFailed(request, "preview_runner_unauthorized", "AgentHost rejected the preview-runner credential.");
                 return;
             }
+            catch (PreviewRunnerHttpException ex) when (ex.Reason == "preview_origin_lookup_timeout")
+            {
+                EmitFailed(request, ex.Reason, ex.Message);
+                return;
+            }
             catch (PreviewRunnerHttpException ex)
             {
                 EmitFailed(request, "process_exited", $"Failed to start preview process: {ex.Message}");
@@ -220,9 +225,16 @@ public sealed class PreviewStep
             await TryStopProcessAsync(runId, bearer, started.SessionId, failReason, ct).ConfigureAwait(false);
             EmitFailed(request, failReason, registration.Message ?? "Preview registration failed.");
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
             throw;
+        }
+        catch (OperationCanceledException ex)
+        {
+            ct.ThrowIfCancellationRequested();
+            _logger.LogWarning(ex,
+                "PreviewStep: internal timeout for run {RunId}; emitting preview_failed", runId);
+            EmitFailed(request, "preview_internal_timeout", "Preview step timed out internally.");
         }
         catch (Exception ex)
         {

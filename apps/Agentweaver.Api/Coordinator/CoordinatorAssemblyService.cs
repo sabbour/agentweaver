@@ -222,6 +222,30 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         return buildTest.Approved || buildTest.RequestChanges;
     }
 
+    internal static async Task RunPreviewStepDefensivelyAsync(
+        Func<Task> runPreview,
+        string runId,
+        ILogger logger,
+        CancellationToken ct)
+    {
+        try
+        {
+            await runPreview().ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            // PreviewStep self-contains preview failures; any leaked non-caller cancellation or other
+            // error must still never block human review.
+            logger.LogWarning(ex,
+                "Deterministic preview step threw for coordinator run {RunId}; proceeding with review.",
+                runId);
+        }
+    }
+
     /// <summary>
     /// Returns true when two subtasks are likely to conflict in the shared orchestration worktree
     /// and must therefore run serially rather than in parallel.
@@ -1003,9 +1027,8 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
                 // Skipped on a DECLINED verdict (see ShouldRunDeterministicPreviewStep).
                 if (ShouldRunDeterministicPreviewStep(_previewStep is not null, buildTest))
                 {
-                    try
-                    {
-                        await _previewStep!.RunAsync(
+                    await RunPreviewStepDefensivelyAsync(
+                        () => _previewStep!.RunAsync(
                             new Preview.PreviewStepRequest(
                                 RunId: context.CoordinatorRunId,
                                 WorkPlanId: workPlanId,
@@ -1014,20 +1037,10 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
                                 SubmittingUser: context.SubmittingUser,
                                 ExecutionWorkspacePath: _podRegistry?.TryGetEffectiveWorkingDirectory(
                                     context.CoordinatorRunId)),
-                            ct).ConfigureAwait(false);
-                    }
-                    catch (OperationCanceledException)
-                    {
-                        throw;
-                    }
-                    catch (Exception ex)
-                    {
-                        // Defensive: PreviewStep already self-contains preview failures; a leak here must
-                        // still never block human review.
-                        _logger.LogWarning(ex,
-                            "Deterministic preview step threw for coordinator run {RunId}; proceeding with review.",
-                            context.CoordinatorRunId);
-                    }
+                            ct),
+                        context.CoordinatorRunId,
+                        _logger,
+                        ct).ConfigureAwait(false);
                 }
 
                 var previewOutcome = await EnsureFinalPreviewOutcomeBeforeApprovalAsync(

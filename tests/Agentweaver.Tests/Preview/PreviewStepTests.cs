@@ -160,6 +160,46 @@ public sealed class PreviewStepTests : IDisposable
     }
 
     [Fact]
+    public async Task OriginLookupTimeout_PreservesTypedReason()
+    {
+        var h = new Harness(_worktree);
+        h.PreviewRunner.StartBehavior =
+            () => throw new PreviewRunnerHttpException("preview_origin_lookup_timeout", "timed out");
+
+        await h.Step.RunAsync(Request(), CancellationToken.None);
+
+        Str(h.Single(EventTypes.SandboxPreviewFailed), "reason")
+            .Should().Be("preview_origin_lookup_timeout");
+    }
+
+    [Fact]
+    public async Task UnrelatedCancellation_EmitsSingleInternalTimeout_AndCompletes()
+    {
+        var h = new Harness(_worktree);
+        h.PreviewRunner.StartBehavior = () => throw new TaskCanceledException("internal timeout");
+
+        await h.Step.RunAsync(Request(), CancellationToken.None);
+
+        var failures = h.All(EventTypes.SandboxPreviewFailed);
+        failures.Should().ContainSingle();
+        Str(failures[0], "reason").Should().Be("preview_internal_timeout");
+    }
+
+    [Fact]
+    public async Task CallerCancellation_Rethrows_WithoutTerminalFailure()
+    {
+        var h = new Harness(_worktree);
+        h.PreviewRunner.StartBehavior = () => throw new TaskCanceledException("caller canceled");
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        var act = () => h.Step.RunAsync(Request(), cts.Token);
+
+        await act.Should().ThrowAsync<OperationCanceledException>();
+        h.TerminalKinds().Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task Unauthorized_EmitsUnauthorized_AndProceeds()
     {
         var h = new Harness(_worktree);
@@ -180,6 +220,20 @@ public sealed class PreviewStepTests : IDisposable
 
         await h.Step.RunAsync(Request(), CancellationToken.None);
 
+        Str(h.Single(EventTypes.SandboxPreviewFailed), "reason").Should().Be("port_not_found");
+    }
+
+    [Fact]
+    public async Task ObserveTimeout_AfterStart_StopsOnce_AndEmitsSingleFailure()
+    {
+        var h = new Harness(_worktree);
+        h.PreviewRunner.ObserveBehavior =
+            () => throw new PreviewRunnerHttpException("preview_runner_timeout", "timed out");
+
+        await h.Step.RunAsync(Request(), CancellationToken.None);
+
+        h.PreviewRunner.StopCalls.Should().Be(1);
+        h.All(EventTypes.SandboxPreviewFailed).Should().ContainSingle();
         Str(h.Single(EventTypes.SandboxPreviewFailed), "reason").Should().Be("port_not_found");
     }
 
