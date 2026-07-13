@@ -21,7 +21,9 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-trap cleanup_frontend_npmrc_build EXIT
+FRONTEND_NODE_MODULES_DIR="${REPO_ROOT}/apps/web/node_modules"
+FRONTEND_NODE_MODULES_BACKUP_DIR="${REPO_ROOT}.frontend-node_modules.$$"
+trap cleanup_frontend_build_artifacts EXIT
 
 # ---------------------------------------------------------------------------
 # Help
@@ -261,6 +263,30 @@ cleanup_frontend_npmrc_build() {
   rm -f "${REPO_ROOT}/apps/web/.npmrc.build"
 }
 
+stash_frontend_node_modules_outside_acr_context() {
+  if [[ ! -d "${FRONTEND_NODE_MODULES_DIR}" ]]; then
+    return 0
+  fi
+
+  rm -rf "${FRONTEND_NODE_MODULES_BACKUP_DIR}"
+  mv "${FRONTEND_NODE_MODULES_DIR}" "${FRONTEND_NODE_MODULES_BACKUP_DIR}"
+  echo "  [frontend] Temporarily moved node_modules out of the ACR build context"
+}
+
+restore_frontend_node_modules() {
+  if [[ ! -e "${FRONTEND_NODE_MODULES_BACKUP_DIR}" ]]; then
+    return 0
+  fi
+
+  rm -rf "${FRONTEND_NODE_MODULES_DIR}"
+  mv "${FRONTEND_NODE_MODULES_BACKUP_DIR}" "${FRONTEND_NODE_MODULES_DIR}"
+}
+
+cleanup_frontend_build_artifacts() {
+  cleanup_frontend_npmrc_build
+  restore_frontend_node_modules
+}
+
 run_frontend_npm_credential_provider() {
   local uname_s
   uname_s="$(uname -s 2>/dev/null || echo unknown)"
@@ -302,6 +328,11 @@ prepare_frontend_dist() {
     unset VITE_API_URL VITE_API_KEY
     npm run build
   )
+
+  cleanup_frontend_npmrc_build
+  # Keep prebuilt dist/ but move node_modules out of the repo before az acr build:
+  # az's context tar step can choke on broken symlinks even when .dockerignore excludes them.
+  stash_frontend_node_modules_outside_acr_context
 }
 
 # ---------------------------------------------------------------------------

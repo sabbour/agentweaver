@@ -17,6 +17,7 @@
 
 # Node
 node_modules
+**/.npmrc.build
 # .NET build artifacts (but not checked-in native binaries)
 **/bin/Debug
 **/bin/Release
