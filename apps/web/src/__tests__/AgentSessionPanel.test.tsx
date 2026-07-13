@@ -13,6 +13,7 @@ import {
   vi,
 } from 'vitest';
 import type { RunStreamEvent } from '../api/sse';
+import type { RunDetail } from '../api/types';
 import type { RunSessionTree } from '../components/AgentSessionPanel';
 import type { ReactNode } from 'react';
 let currentEvents: RunStreamEvent[] = [];
@@ -1160,5 +1161,105 @@ describe('AgentSessionPanel', () => {
     expect(vi.mocked(apiClient.getRun)).not.toHaveBeenCalled();
     expect(vi.mocked(apiClient.getRunFiles)).not.toHaveBeenCalled();
     expect(vi.mocked(apiClient.getRunWorkspace)).not.toHaveBeenCalled();
+  });
+
+  it('shows a loading state, not the prior run events, on a first-time run selection', async () => {
+    const twoRunTree: RunSessionTree[] = [{
+      ...tree[0],
+      children: [
+        tree[0].children[0],
+        {
+          nodeId: 'subtask-2',
+          label: 'Subtask 2',
+          agentName: 'Worker',
+          agentRole: 'Researcher',
+          status: 'running',
+          childRunId: 'child-run-2',
+          depth: 1,
+          children: [],
+        },
+      ],
+    }];
+    const makeRunDetail = (runId: string, status: RunDetail['status']): RunDetail => ({
+      run_id: runId,
+      status,
+      model_source: 'github-copilot',
+      started_at: new Date().toISOString(),
+      ended_at: null,
+      result: null,
+      diff: null,
+      step_count: 0,
+      tree_hash: null,
+    });
+    let resolveSecondRun: (value: RunDetail) => void;
+    const secondRun = new Promise<RunDetail>((resolve) => {
+      resolveSecondRun = resolve;
+    });
+    vi.mocked(apiClient.getRun).mockImplementation((runId) => (
+      runId === 'child-run-2'
+        ? secondRun
+        : Promise.resolve(makeRunDetail('child-run-1', 'completed'))
+    ));
+    vi.mocked(apiClient.getRunEvents).mockResolvedValue([
+      { sequence: 1, type: 'agent.message', payload: { content: 'First run only' } },
+    ]);
+
+    const props = {
+      open: true,
+      onClose: vi.fn(),
+      tree: twoRunTree,
+      onSelectNode: vi.fn(),
+      coordinatorRunId: 'coord-run-1',
+      projectId: 'p1',
+    };
+    const { rerender } = render(
+      <Wrapper><AgentSessionPanel {...props} selectedNodeId="subtask-1" /></Wrapper>,
+    );
+    expect(await screen.findByText('First run only')).toBeDefined();
+
+    currentEvents = [];
+    rerender(<Wrapper><AgentSessionPanel {...props} selectedNodeId="subtask-2" /></Wrapper>);
+
+    expect(await screen.findByText('Loading session details...')).toBeDefined();
+    expect(screen.queryByText('First run only')).toBeNull();
+    resolveSecondRun!(makeRunDetail('child-run-2', 'in_progress'));
+  });
+
+  it('stops status polling when a child run reaches assemble_ready', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.mocked(apiClient.getRun).mockResolvedValue({
+        run_id: 'child-run-1',
+        status: 'assemble_ready',
+        model_source: 'github-copilot',
+        started_at: new Date().toISOString(),
+        ended_at: null,
+        result: null,
+        diff: null,
+        step_count: 0,
+        tree_hash: null,
+      });
+
+      render(
+        <Wrapper>
+          <AgentSessionPanel
+            open
+            onClose={vi.fn()}
+            tree={tree}
+            selectedNodeId="subtask-1"
+            onSelectNode={vi.fn()}
+            coordinatorRunId="coord-run-1"
+            projectId="p1"
+          />
+        </Wrapper>,
+      );
+
+      await vi.advanceTimersByTimeAsync(4000);
+      expect(vi.mocked(apiClient.getRun)).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(8000);
+      expect(vi.mocked(apiClient.getRun)).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

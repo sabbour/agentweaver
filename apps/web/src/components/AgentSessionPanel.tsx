@@ -834,8 +834,9 @@ function mergeRunEvents(seed: RunStreamEvent[], live: RunStreamEvent[]): RunStre
 // stop polling — these are genuinely final and cannot transition back to an active state.
 const RUN_DETAIL_POLL_INTERVAL_MS = 4000;
 const RUN_DETAIL_POLL_TERMINAL_STATUSES = new Set([
-  'completed', 'failed', 'merged', 'declined', 'merge_failed', 'cancelled', 'stopped',
+  'completed', 'failed', 'merged', 'declined', 'merge_failed', 'assemble_ready',
 ]);
+const LAST_KNOWN_RUN_CACHE_LIMIT = 20;
 
 function readString(payload: Record<string, unknown>, keys: string[]): string | undefined {
   for (const key of keys) {
@@ -1709,6 +1710,9 @@ export function AgentSessionPanel({
   // restore a node's OWN prior state, never another node's, and a true first-ever view
   // still falls through to the existing loading skeleton.
   const lastKnownByRunRef = useRef<Map<string, { events: RunStreamEvent[]; runDetail: typeof runDetail }>>(new Map());
+  // `events` and `runDetail` update asynchronously when the selected run changes. Keep
+  // the old run's data out of the new run's cache until this run's fetch has settled.
+  const settledRunIdRef = useRef('');
 
   const coordinatorNodeId = tree[0]?.nodeId ?? null;
   const flatTree = useMemo(
@@ -1776,11 +1780,20 @@ export function AgentSessionPanel({
   const { events: liveEvents } = useRunStream(open && canBrowseSelectedRun ? selectedRunId : '');
   const events = useMemo(() => mergeRunEvents(seedEvents, liveEvents), [seedEvents, liveEvents]);
 
+  useEffect(() => {
+    settledRunIdRef.current = '';
+  }, [selectedRunId]);
+
   // Persist the latest merged events/runDetail for this run so a later re-select of the
   // same node can restore them instantly instead of flashing blank (#287).
   useEffect(() => {
-    if (!selectedRunId) return;
-    lastKnownByRunRef.current.set(selectedRunId, { events, runDetail });
+    if (!selectedRunId || settledRunIdRef.current !== selectedRunId) return;
+    const cache = lastKnownByRunRef.current;
+    cache.delete(selectedRunId);
+    cache.set(selectedRunId, { events, runDetail });
+    while (cache.size > LAST_KNOWN_RUN_CACHE_LIMIT) {
+      cache.delete(cache.keys().next().value!);
+    }
   }, [selectedRunId, events, runDetail]);
   const selectedRaiVerdict = useMemo(
     () => (isRaiNode(selectedItem) ? latestRaiVerdict(events) : null),
@@ -1863,10 +1876,14 @@ export function AgentSessionPanel({
   useEffect(() => {
     const cached = selectedRunId ? lastKnownByRunRef.current.get(selectedRunId) : undefined;
     if (cached) {
+      // Move restored entries to the back so this bounded cache retains recent selections.
+      lastKnownByRunRef.current.delete(selectedRunId);
+      lastKnownByRunRef.current.set(selectedRunId, cached);
       setSeedEvents(cached.events);
       setRunDetail(cached.runDetail);
     } else {
       setSeedEvents([]);
+      setRunDetail(null);
     }
     setFollowUpError(null);
     setFollowUpNotice(null);
@@ -1917,6 +1934,7 @@ export function AgentSessionPanel({
         setRunDetail(detail);
         if (!SEED_STATUSES.has(detail.status)) {
           setSeedEvents([]);
+          settledRunIdRef.current = selectedRunId;
           return;
         }
         return apiClient.getRunEvents(selectedRunId)
@@ -1928,7 +1946,12 @@ export function AgentSessionPanel({
               payload: event.payload,
             })));
           })
-          .catch(() => {});
+          .catch(() => {
+            if (!cancelled) setSeedEvents([]);
+          })
+          .finally(() => {
+            if (!cancelled) settledRunIdRef.current = selectedRunId;
+          });
       })
       .catch((err: unknown) => {
         if (cancelled) return;
