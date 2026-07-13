@@ -1667,13 +1667,21 @@ app.MapPost("/api/runs/{id}/tool-denials", async (
     var run = await runStore.GetAsync(runId, ct);
     if (run is null) return Results.NotFound();
     if (!EndpointHelpers.IsOwner(httpContext, run)) return Results.StatusCode(StatusCodes.Status403Forbidden);
-    if (run.Status != RunStatus.InProgress)
-        return Results.Conflict(new { error = "Run is not active." });
 
     // Same owning-run resolution as tool-approvals: deny must land on the child subtask run that
     // raised the tool call, not the parent coordinator run the operator is viewing (#196).
     var targetRunId = await EndpointHelpers.ResolveApprovalOwningRunIdAsync(
         id, run, body.RequestId, approvalGate, runStore, ct, scopeFactory) ?? id;
+
+    // A coordinator can leave InProgress while a child still waits for this approval.
+    // The owning run, rather than the posted parent run, determines whether the request is stale.
+    var targetRun = targetRunId == id
+        ? run
+        : await runStore.GetAsync(RunId.Parse(targetRunId), ct);
+    if (targetRun is null
+        || EndpointHelpers.IsTerminal(targetRun.Status)
+        || targetRun.Status == RunStatus.AssembleReady)
+        return Results.Conflict(new { error = "Run is not active." });
 
     var resolved = approvalGate.Deny(targetRunId, body.RequestId);
     if (!resolved)

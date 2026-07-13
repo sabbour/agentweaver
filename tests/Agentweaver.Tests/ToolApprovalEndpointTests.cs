@@ -64,6 +64,58 @@ public sealed class ToolApprovalEndpointTests
         (await pendingApproval.WaitAsync(TimeSpan.FromSeconds(5))).Should().BeFalse();
     }
 
+    [Fact]
+    public async Task Deny_PendingChildApproval_Succeeds_WhenCoordinatorIsTerminal()
+    {
+        using var factory = new AgentweaverWebApplicationFactory();
+        using var client = CreateAuthenticatedClient(factory);
+        var runStore = factory.Services.GetRequiredService<IRunStore>();
+        var approvalGate = factory.Services.GetRequiredService<IToolApprovalGate>();
+
+        var coordinatorId = RunId.New();
+        var childId = RunId.New();
+        await InsertRunAsync(runStore, coordinatorId, RunStatus.Failed);
+        await InsertRunAsync(runStore, childId, RunStatus.InProgress, coordinatorId.ToString());
+
+        const string requestId = "pending-child-denial";
+        var pendingApproval = approvalGate.WaitForApprovalAsync(
+            childId.ToString(), requestId, "web_fetch", "https://example.com",
+            TimeSpan.FromMinutes(1), CancellationToken.None);
+
+        var response = await client.PostAsJsonAsync(
+            $"/api/runs/{coordinatorId}/tool-denials",
+            new { request_id = requestId, scope = "once" });
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        (await pendingApproval.WaitAsync(TimeSpan.FromSeconds(5))).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task Deny_PendingApprovalOnTerminalOwningRun_ReturnsConflict()
+    {
+        using var factory = new AgentweaverWebApplicationFactory();
+        using var client = CreateAuthenticatedClient(factory);
+        var runStore = factory.Services.GetRequiredService<IRunStore>();
+        var approvalGate = factory.Services.GetRequiredService<IToolApprovalGate>();
+
+        var runId = RunId.New();
+        await InsertRunAsync(runStore, runId, RunStatus.Failed);
+
+        const string requestId = "stale-terminal-denial";
+        var pendingApproval = approvalGate.WaitForApprovalAsync(
+            runId.ToString(), requestId, "web_fetch", "https://example.com",
+            TimeSpan.FromMinutes(1), CancellationToken.None);
+
+        var response = await client.PostAsJsonAsync(
+            $"/api/runs/{runId}/tool-denials",
+            new { request_id = requestId, scope = "once" });
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+
+        approvalGate.Deny(runId.ToString(), requestId).Should().BeTrue();
+        (await pendingApproval.WaitAsync(TimeSpan.FromSeconds(5))).Should().BeFalse();
+    }
+
     private static HttpClient CreateAuthenticatedClient(AgentweaverWebApplicationFactory factory)
     {
         var client = factory.CreateClient();
