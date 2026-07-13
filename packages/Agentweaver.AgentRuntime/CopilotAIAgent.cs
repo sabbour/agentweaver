@@ -1285,7 +1285,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
                 emitToolErrorOnce(shellCallId, denyReason);
                 EmitRunDegradedOnce("run_command", denyReason);
                 return Task.FromResult<PermissionDecision>(
-                    new PermissionDecisionDeniedByRules { Rules = [] });
+                    PermissionDecision.Reject(denyReason));
             }
 
             // URL fetch (web_fetch) — surface a HITL approval gate rather than silently denying.
@@ -1362,9 +1362,10 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
 
                 if (!approved)
                 {
-                    emitToolErrorOnce(urlCallId, "URL fetch was denied by the operator.");
+                    const string denyReason = "URL fetch was denied by the operator.";
+                    emitToolErrorOnce(urlCallId, denyReason);
                     _logger.LogInformation("Tool HITL denied — requestId={RequestId} runId={RunId}", displayId, runId);
-                    return Task.FromResult<PermissionDecision>(new PermissionDecisionDeniedInteractivelyByUser());
+                    return Task.FromResult(PermissionDecision.Reject(denyReason));
                 }
 
                 _logger.LogInformation("Tool HITL approved — requestId={RequestId} runId={RunId}", displayId, runId);
@@ -1469,9 +1470,10 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
                         var denyReason = reason ?? "Operation denied by sandbox policy.";
                         emitToolErrorOnce(customCallId, denyReason);
                         EmitRunDegradedOnce(toolName, denyReason);
+                        return Task.FromResult(PermissionDecision.Reject(denyReason));
                     }
 
-                    return Task.FromResult<PermissionDecision>(allowed ? new PermissionDecisionApproveOnce() : new PermissionDecisionDeniedByRules { Rules = [] });
+                    return Task.FromResult<PermissionDecision>(PermissionDecision.ApproveOnce());
                 }
                 catch (Exception ex)
                 {
@@ -1482,7 +1484,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
                     var failReason = "Operation denied: internal error evaluating sandbox policy.";
                     emitToolErrorOnce(customCallId, failReason);
                     EmitRunDegradedOnce(toolName, failReason);
-                    return Task.FromResult<PermissionDecision>(new PermissionDecisionDeniedByRules { Rules = [] });
+                    return Task.FromResult(PermissionDecision.Reject(failReason));
                 }
             }
 
@@ -1520,13 +1522,14 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
                     emitToolCallOnce(callId, toolName, args);
                     emitToolErrorOnce(callId, denyReason2);
                     EmitRunDegradedOnce(toolName, denyReason2);
+                    return Task.FromResult(PermissionDecision.Reject(denyReason2));
                 }
                 else if (request is PermissionRequestShell shell && realCallId is not null)
                 {
                     TrackApprovedShell(realCallId, shell.FullCommandText ?? string.Empty);
                 }
 
-                return Task.FromResult<PermissionDecision>(allowed ? new PermissionDecisionApproveOnce() : new PermissionDecisionDeniedByRules { Rules = [] });
+                return Task.FromResult<PermissionDecision>(PermissionDecision.ApproveOnce());
             }
             catch (Exception ex)
             {
@@ -1536,7 +1539,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
                 emitToolCallOnce(callId, request.Kind ?? "unknown", null);
                 emitToolErrorOnce(callId, failReason2);
                 EmitRunDegradedOnce(request.Kind ?? "unknown", failReason2);
-                return Task.FromResult<PermissionDecision>(new PermissionDecisionDeniedByRules { Rules = [] });
+                return Task.FromResult(PermissionDecision.Reject(failReason2));
             }
         };
     }

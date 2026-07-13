@@ -60,8 +60,10 @@ public sealed class AssemblyBuildTestShellGuardTests : IDisposable
             },
             new PermissionInvocation());
 
-        result.Should().BeOfType<PermissionDecisionDeniedByRules>();
-        errors.Should().ContainSingle().Which.Should().Contain("controlled run_command");
+        var rejected = result.Should().BeOfType<PermissionDecisionReject>().Subject;
+        rejected.Feedback.Should().Be(
+            "Native Copilot shell is disabled for AssemblyBuildTest; use the controlled run_command tool.");
+        errors.Should().ContainSingle().Which.Should().Be(rejected.Feedback);
     }
 
     [Fact]

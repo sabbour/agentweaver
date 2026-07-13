@@ -593,9 +593,10 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
 
                 if (!approved)
                 {
-                    emitToolErrorOnce(urlCallId, "URL fetch was denied by the operator.");
+                    const string denyReason = "URL fetch was denied by the operator.";
+                    emitToolErrorOnce(urlCallId, denyReason);
                     _logger.LogInformation("Tool HITL denied — requestId={RequestId} runId={RunId}", displayId, runId);
-                    return Task.FromResult<PermissionDecision>(new PermissionDecisionDeniedInteractivelyByUser());
+                    return Task.FromResult(PermissionDecision.Reject(denyReason));
                 }
 
                 _logger.LogInformation("Tool HITL approved — requestId={RequestId} runId={RunId}", displayId, runId);
@@ -685,9 +686,10 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
                         var denyReason = reason ?? "Operation denied by sandbox policy.";
                         emitToolErrorOnce(customCallId, denyReason);
                         emit(EventTypes.RunDegraded, new { toolName, reason = denyReason });
+                        return Task.FromResult(PermissionDecision.Reject(denyReason));
                     }
 
-                    return Task.FromResult<PermissionDecision>(allowed ? new PermissionDecisionApproveOnce() : new PermissionDecisionDeniedByRules { Rules = [] });
+                    return Task.FromResult<PermissionDecision>(PermissionDecision.ApproveOnce());
                 }
                 catch (Exception ex)
                 {
@@ -698,7 +700,7 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
                     var failReason = "Operation denied: internal error evaluating sandbox policy.";
                     emitToolErrorOnce(customCallId, failReason);
                     emit(EventTypes.RunDegraded, new { toolName, reason = failReason });
-                    return Task.FromResult<PermissionDecision>(new PermissionDecisionDeniedByRules { Rules = [] });
+                    return Task.FromResult(PermissionDecision.Reject(failReason));
                 }
             }
 
@@ -742,9 +744,10 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
                     emitToolCallOnce(callId, toolName, args);
                     emitToolErrorOnce(callId, denyReason2);
                     emit(EventTypes.RunDegraded, new { toolName, reason = denyReason2 });
+                    return Task.FromResult(PermissionDecision.Reject(denyReason2));
                 }
 
-                return Task.FromResult<PermissionDecision>(allowed ? new PermissionDecisionApproveOnce() : new PermissionDecisionDeniedByRules { Rules = [] });
+                return Task.FromResult<PermissionDecision>(PermissionDecision.ApproveOnce());
             }
             catch (Exception ex)
             {
@@ -754,7 +757,7 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
                 emitToolCallOnce(callId, request.Kind ?? "unknown", null);
                 emitToolErrorOnce(callId, failReason2);
                 emit(EventTypes.RunDegraded, new { toolName = request.Kind ?? "unknown", reason = failReason2 });
-                return Task.FromResult<PermissionDecision>(new PermissionDecisionDeniedByRules { Rules = [] });
+                return Task.FromResult(PermissionDecision.Reject(failReason2));
             }
         };
     }
