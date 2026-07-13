@@ -4,6 +4,7 @@ import {
   Button,
   MessageBar,
   MessageBarBody,
+  MessageBarTitle,
   Spinner,
   Text,
   makeStyles,
@@ -297,6 +298,10 @@ const useStyles = makeStyles({
   metaText: {
     fontSize: tokens.fontSizeBase100,
     color: tokens.colorNeutralForeground3,
+  },
+  failureBanner: {
+    marginTop: tokens.spacingVerticalXS,
+    maxWidth: '520px',
   },
   headerActions: {
     display: 'flex',
@@ -1651,7 +1656,7 @@ export function AgentSessionPanel({
   const [seedEvents, setSeedEvents] = useState<RunStreamEvent[]>([]);
   const [runDetailLoading, setRunDetailLoading] = useState(false);
   const [runDetailError, setRunDetailError] = useState<string | null>(null);
-  const [runDetail, setRunDetail] = useState<{ started_at?: string | null; ended_at?: string | null; status?: string | null } | null>(null);
+  const [runDetail, setRunDetail] = useState<{ started_at?: string | null; ended_at?: string | null; status?: string | null; result?: string | null } | null>(null);
   const [followUp, setFollowUp] = useState('');
   const [followUpBusy, setFollowUpBusy] = useState(false);
   const [followUpError, setFollowUpError] = useState<string | null>(null);
@@ -1687,6 +1692,17 @@ export function AgentSessionPanel({
   const selectedRunUnavailableReason = selectedItem && !isCoordinatorAggregate && !selectedItem.childRunId
     ? 'This planned task has not been dispatched yet. Changes and files become available after the coordinator starts the child run.'
     : null;
+
+  // Failed/merge-failed runs show a status chip but otherwise give no indication of what went
+  // wrong or whether anything can be done about it. Surface the backend-recorded failure detail
+  // (RunDetail.result) plus a clear, scope-aware statement of retryability: only the top-level
+  // coordinator run is independently retryable (via the page header's Retry action) — child runs
+  // are always retried THROUGH the coordinator, never on their own (see RunEndpoints /retry).
+  const isFailedRunStatus = selectedItem?.status === 'failed' || selectedItem?.status === 'merge_failed';
+  const failureReason = isFailedRunStatus ? (runDetail?.result ?? '').trim() : '';
+  const failureRetryHint = selectedItem?.isCoordinator
+    ? 'Retry from the run header above to relaunch this work.'
+    : "This step can't be retried on its own — retrying the coordinator run will relaunch it.";
 
   // Reuse the shared artifact browser hook so the Changes tab renders the dense changed-files list
   // and the Files tab renders the full workspace FOLDER TREE (getRunWorkspace / assembly workspace),
@@ -2015,6 +2031,16 @@ export function AgentSessionPanel({
                   {formatStartedMeta(runDetail?.started_at ?? undefined, runDetail?.status ?? selectedItem.status)}
                   {runDetailError ? ' · Metadata unavailable' : ''}
                 </Text>
+                {isFailedRunStatus && !runDetailLoading && (
+                  <MessageBar intent="error" className={styles.failureBanner}>
+                    <MessageBarBody>
+                      <MessageBarTitle>
+                        {failureReason || 'No failure detail was recorded for this run.'}
+                      </MessageBarTitle>
+                      {failureRetryHint}
+                    </MessageBarBody>
+                  </MessageBar>
+                )}
               </div>
               <div className={styles.headerActions}>
                 {/* Docked (merged single-surface) layout always has a selection, so there is no

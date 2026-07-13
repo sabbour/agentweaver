@@ -4,9 +4,10 @@ import { AgentMessageBubble } from './AgentMessageBubble';
 import { LifecycleEventCard } from './LifecycleEventCard';
 import { ToolCallCard } from './ToolCallCard';
 import { makeStyles,
+  mergeClasses,
   tokens,
 } from '@fluentui/react-components';
-import { ChevronDownRegular, ChevronRightRegular } from '@fluentui/react-icons';
+import { ChevronDownRegular, ChevronRightRegular, ErrorCircleFilled, WarningFilled } from '@fluentui/react-icons';
 import { memo, useState } from 'react';
 import type { StreamStatus } from '../api/sse';
 import type { AgentMessageItem, ApprovalRequestItem, ToolCallItem, TurnGroupItem, TurnStep } from '../timeline/types';
@@ -47,6 +48,18 @@ const useStyles = makeStyles({
     color: tokens.colorNeutralForeground4,
     fontSize: tokens.fontSizeBase100,
     flexShrink: 0,
+  },
+  clusterStatusIcon: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    fontSize: tokens.fontSizeBase200,
+    flexShrink: 0,
+  },
+  clusterErrorIcon: {
+    color: tokens.colorPaletteRedForeground1,
+  },
+  clusterWarningIcon: {
+    color: tokens.colorPaletteYellowForeground1,
   },
   toolsList: {
     display: 'flex',
@@ -96,11 +109,55 @@ function splitClusters(steps: TurnStep[]): Cluster[] {
 
 /** Returns true if any step in the cluster has an error or a non-zero exit code. */
 function hasClusterErrors(cluster: ToolCluster): boolean {
-  return cluster.steps.some(s =>
-    s.error != null ||
-    (s.result?.content?.match(/^exit_code:\s*(-?\d+)/m)?.[1] !== undefined &&
-     s.result.content.match(/^exit_code:\s*(-?\d+)/m)?.[1] !== '0')
-  );
+  return clusterErrorSeverity(cluster) !== null;
+}
+
+/**
+ * Classifies the worst-case outcome across a tool cluster so a collapsed
+ * "Used N tools" header can still surface unrecoverable failures without
+ * requiring the user to expand every group to find out which one failed.
+ * - 'error': at least one tool call failed outright (non-sandbox error).
+ * - 'warning': a sandbox violation or a non-zero exit code was recovered from.
+ * - null: no issues detected.
+ */
+function clusterErrorSeverity(cluster: ToolCluster): 'error' | 'warning' | null {
+  let sawWarning = false;
+  for (const s of cluster.steps) {
+    if (s.error != null) {
+      if (!s.error.isSandboxViolation) return 'error';
+      sawWarning = true;
+      continue;
+    }
+    const exitMatch = s.result?.content?.match(/^exit_code:\s*(-?\d+)/m);
+    if (exitMatch && exitMatch[1] !== '0') sawWarning = true;
+  }
+  return sawWarning ? 'warning' : null;
+}
+
+interface ClusterStatusIconProps {
+  severity: 'error' | 'warning' | null;
+}
+
+/** Small status icon shown next to a tool-cluster toggle, visible even while collapsed. */
+function ClusterStatusIcon({ severity }: ClusterStatusIconProps) {
+  const styles = useStyles();
+  if (severity === 'error') {
+    return (
+      <ErrorCircleFilled
+        className={mergeClasses(styles.clusterStatusIcon, styles.clusterErrorIcon)}
+        aria-label="Tool failed"
+      />
+    );
+  }
+  if (severity === 'warning') {
+    return (
+      <WarningFilled
+        className={mergeClasses(styles.clusterStatusIcon, styles.clusterWarningIcon)}
+        aria-label="Tool needs attention"
+      />
+    );
+  }
+  return null;
 }
 
 interface ToolClusterRowProps {
@@ -113,6 +170,7 @@ const ToolClusterRow = memo(function ToolClusterRow({ cluster, defaultExpanded, 
   const styles = useStyles();
   const [expanded, setExpanded] = useState(defaultExpanded);
   const n = cluster.steps.length;
+  const severity = clusterErrorSeverity(cluster);
 
   return (
     <>
@@ -127,6 +185,7 @@ const ToolClusterRow = memo(function ToolClusterRow({ cluster, defaultExpanded, 
         <Text size={100} style={{ color: 'inherit' }}>
           Used {n} tool{n === 1 ? '' : 's'}
         </Text>
+        <ClusterStatusIcon severity={severity} />
       </button>
       {expanded && (
         <div className={styles.toolsList}>
@@ -171,6 +230,7 @@ const HeaderedClusterRow = memo(function HeaderedClusterRow({
   const [expanded, setExpanded] = useState(defaultExpanded);
   const toggle = () => setExpanded(e => !e);
   const n = cluster.steps.length;
+  const severity = clusterErrorSeverity(cluster);
 
   const chevron = expanded
     ? <ChevronDownRegular className={styles.chevron} aria-hidden="true" />
@@ -190,6 +250,7 @@ const HeaderedClusterRow = memo(function HeaderedClusterRow({
         <Text size={100} style={{ color: 'inherit' }}>
           {(headerStep as ToolCallItem).humanTitle}
         </Text>
+        <ClusterStatusIcon severity={severity} />
       </button>
     );
   } else {
@@ -212,6 +273,7 @@ const HeaderedClusterRow = memo(function HeaderedClusterRow({
           <Text size={100} style={{ color: 'inherit' }}>
             Used {n} tool{n === 1 ? '' : 's'}
           </Text>
+          <ClusterStatusIcon severity={severity} />
         </button>
       </>
     );
