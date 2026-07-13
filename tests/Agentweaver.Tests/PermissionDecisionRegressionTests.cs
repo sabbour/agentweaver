@@ -8,6 +8,7 @@ using GitHub.Copilot;
 using GitHub.Copilot.Rpc;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
+using System.Text.Json;
 
 namespace Agentweaver.Tests.Runtime;
 
@@ -222,6 +223,14 @@ public sealed class PermissionDecisionRegressionTests : IDisposable
         var rejected = result.Should().BeOfType<PermissionDecisionReject>().Subject;
         rejected.Kind.Should().Be("reject");
         rejected.Feedback.Should().Be(feedback);
+
+        var payload = JsonSerializer.Serialize(result);
+        using var document = JsonDocument.Parse(payload);
+        var root = document.RootElement;
+
+        root.GetProperty("kind").GetString().Should().Be("reject");
+        root.GetProperty("feedback").GetString().Should().Be(feedback);
+        root.GetProperty("feedback").GetString().Should().NotBeNullOrWhiteSpace();
     }
 
     public void Dispose()
