@@ -44,6 +44,16 @@ public sealed class SandboxPolicyBackend : IExternalPolicyBackend
     };
 
     /// <summary>
+    /// Preview tools supervised by PreviewRunner. Starting a preview additionally requires
+    /// working-directory containment; the remaining tools operate on session-scoped state.
+    /// </summary>
+    private static readonly HashSet<string> KnownPreviewTools = new(StringComparer.Ordinal)
+    {
+        "start_preview_process", "stop_preview_process",
+        "observe_bound_port", "health_check",
+    };
+
+    /// <summary>
     /// Known argument keys that may carry a filesystem path.
     /// Design rule (Seraph Y-2): ALL sandboxed file-tool functions MUST use
     /// one of these keys.
@@ -68,7 +78,8 @@ public sealed class SandboxPolicyBackend : IExternalPolicyBackend
             // Seraph Y-1: unrecognized/null tool names → denied
             if (toolName is null ||
                 (!KnownFileTools.Contains(toolName) && !KnownSearchTools.Contains(toolName) &&
-                 !KnownShellTools.Contains(toolName) && !KnownPreValidatedTools.Contains(toolName)))
+                 !KnownShellTools.Contains(toolName) && !KnownPreviewTools.Contains(toolName) &&
+                 !KnownPreValidatedTools.Contains(toolName)))
             {
                 return new ExternalPolicyDecision
                 {
@@ -101,6 +112,37 @@ public sealed class SandboxPolicyBackend : IExternalPolicyBackend
                     Allowed = true,
                     Reason = "Pre-validated tool allowed (internal path validation or no filesystem action).",
                     EvaluationMs = sw.Elapsed.TotalMilliseconds,
+                };
+            }
+
+            if (KnownPreviewTools.Contains(toolName))
+            {
+                if (!string.Equals(toolName, "start_preview_process", StringComparison.Ordinal))
+                {
+                    return new ExternalPolicyDecision
+                    {
+                        Backend = Name,
+                        Allowed = true,
+                        Reason = "Session-scoped preview tool allowed.",
+                        EvaluationMs = sw.Elapsed.TotalMilliseconds,
+                    };
+                }
+
+                string? cwd = null;
+                if (context.TryGetValue("cwd", out var cwdValue))
+                    cwd = CoercePathValue(cwdValue);
+
+                var resolvedCwd = string.IsNullOrWhiteSpace(cwd)
+                    ? _sandboxRoot
+                    : SandboxPathValidator.ValidateAndResolve(cwd, _sandboxRoot);
+
+                return new ExternalPolicyDecision
+                {
+                    Backend = Name,
+                    Allowed = true,
+                    Reason = "Preview working directory is within sandbox boundary.",
+                    EvaluationMs = sw.Elapsed.TotalMilliseconds,
+                    Metadata = new Dictionary<string, object> { ["resolved_directory"] = resolvedCwd },
                 };
             }
 

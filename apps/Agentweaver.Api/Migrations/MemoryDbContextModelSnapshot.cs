@@ -743,8 +743,18 @@ namespace Agentweaver.Api.Migrations
                     b.Property<DateTimeOffset>("CreatedAt")
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("DeclaredOutputPathsJson")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
                     b.Property<string>("IsolationStrategy")
                         .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("InfrastructureRetryCount")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTimeOffset?>("InfrastructureRetryEligibleAt")
                         .HasColumnType("TEXT");
 
                     b.Property<int?>("LastResetAttempt")

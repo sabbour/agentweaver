@@ -7,11 +7,13 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using Agentweaver.Api.Coordinator;
 using Agentweaver.Api.Git;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Memory;
 using Agentweaver.Api.Runs;
+using Agentweaver.Api.Sandbox;
 using Agentweaver.Domain;
 using Agentweaver.Tests.Helpers;
 using Run = Agentweaver.Domain.Run;
@@ -531,6 +533,203 @@ public sealed class StallCascadeAndLockRetryTests : IAsyncDisposable
         _assembly.Started.Should().Be(1, "the exhausted run dead-ends and hands off (assembly then blocks)");
     }
 
+    [Fact]
+    public async Task RetryableInfrastructureFailure_RedispatchesFreshChild_ThenCanSucceed()
+    {
+        var stream = new SqliteRunEventStream(_streamConfig);
+        const string coord = "infra-retry-success-coord";
+        var failedChild = await SeedChildRunAsync(RunStatus.InProgress);
+        var (_, ids) = await SeedPlanAsync(coord, [(SubtaskStatus.Running, failedChild)]);
+        _streamStore.Create(coord, "owner");
+
+        await stream.AppendAsync(failedChild, new RunEvent(0, EventTypes.RunFailed, new
+        {
+            reason = "shell_execution_timeout",
+            message = "Shell execution exceeded its hard deadline of 30 minutes and was terminated.",
+            retryable = true,
+        }));
+        await stream.CompleteAsync(failedChild);
+        await _runStore.UpdateStatusAsync(
+            RunId.Parse(failedChild), RunStatus.Failed, DateTimeOffset.UtcNow);
+
+        var sut = BuildDispatch(stream);
+        string? successfulChild = null;
+        sut.StartChildRunOverride = async (run, ct) =>
+        {
+            successfulChild = run.Id.ToString();
+            await _runStore.InsertAsync(run, ct);
+            await stream.AppendAsync(successfulChild, new RunEvent(
+                0, EventTypes.RunAssembleReady, new { raiSafetyFlagged = false }), ct);
+            await stream.CompleteAsync(successfulChild, ct);
+        };
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        await sut.RunDispatchLoopAsync(Context(coord), cts.Token);
+
+        successfulChild.Should().NotBeNull();
+        successfulChild.Should().NotBe(failedChild,
+            "an infrastructure retry must call StartChildRunAsync with a genuinely fresh run id");
+        var row = await GetSubtaskAsync(ids[0]);
+        row.Status.Should().Be(SubtaskStatus.AssembleReady);
+        row.ChildRunId.Should().Be(successfulChild);
+        row.PriorChildRunId.Should().Be(failedChild);
+        row.InfrastructureRetryCount.Should().Be(1);
+        row.InfrastructureRetryEligibleAt.Should().NotBeNull();
+        _assembly.Started.Should().Be(1);
+
+        var retry = _streamStore.Get(coord)!.GetSnapshotSince(0).Events
+            .Single(e => e.Type == EventTypes.CoordinatorSubtaskRedispatched);
+        var payload = System.Text.Json.JsonSerializer.SerializeToNode(retry.Payload)!.AsObject();
+        payload["attempt"]!.GetValue<int>().Should().Be(1);
+        payload["maxAttempts"]!.GetValue<int>().Should()
+            .Be(CoordinatorDispatchService.MaxInfrastructureRetries);
+        payload["infrastructureReason"]!.GetValue<string>().Should()
+            .Be("shell_execution_timeout");
+    }
+
+    [Theory]
+    [InlineData(1, 30, 60)]
+    [InlineData(2, 120, 240)]
+    public async Task RetryableInfrastructureFailure_PersistsExponentialBackoffWithJitter(
+        int attempt,
+        int minimumSeconds,
+        int maximumSeconds)
+    {
+        var stream = new SqliteRunEventStream(_streamConfig);
+        var coord = $"infra-backoff-{attempt}";
+        var child = await SeedChildRunAsync(RunStatus.Failed);
+        var (planId, ids) = await SeedPlanAsync(coord, [(SubtaskStatus.Running, child)]);
+        _streamStore.Create(coord, "owner");
+        await SetInfrastructureRetryCountAsync(ids[0], attempt - 1);
+
+        var sut = BuildDispatch(stream, instantRetryBackoff: false);
+        var before = DateTimeOffset.UtcNow;
+        var retried = await sut.TryRedispatchRetryableFailureAsync(
+            Context(coord), planId, ids[0], child, "shell_execution_timeout", "deadline",
+            new Dictionary<int, string> { [ids[0]] = SubtaskStatus.Running }, default);
+        var after = DateTimeOffset.UtcNow;
+
+        retried.Should().BeTrue();
+        var row = await GetSubtaskAsync(ids[0]);
+        row.InfrastructureRetryEligibleAt.Should().NotBeNull();
+        row.InfrastructureRetryEligibleAt!.Value.Should().BeOnOrAfter(before.AddSeconds(minimumSeconds));
+        row.InfrastructureRetryEligibleAt.Value.Should().BeOnOrBefore(after.AddSeconds(maximumSeconds));
+    }
+
+    [Fact]
+    public async Task RetryableInfrastructureFailure_ReleasesOldAgentHostPodBeforeFreshDispatch()
+    {
+        var stream = new SqliteRunEventStream(_streamConfig);
+        const string coord = "infra-retry-pod-release";
+        var failedChild = await SeedChildRunAsync(RunStatus.Failed);
+        var (planId, ids) = await SeedPlanAsync(coord, [(SubtaskStatus.Running, failedChild)]);
+        _streamStore.Create(coord, "owner");
+        var lifecycle = new RecordingPodLifecycle();
+
+        var sut = BuildDispatch(stream, podLifecycle: lifecycle);
+        var retried = await sut.TryRedispatchRetryableFailureAsync(
+            Context(coord), planId, ids[0], failedChild, "shell_execution_timeout", "deadline",
+            new Dictionary<int, string> { [ids[0]] = SubtaskStatus.Running }, default);
+
+        retried.Should().BeTrue();
+        lifecycle.Released.Should().Equal(failedChild);
+    }
+
+    [Fact]
+    public async Task RetryableInfrastructureFailure_StopsAtBudget_ThenUsesExistingTerminalFailure()
+    {
+        var stream = new SqliteRunEventStream(_streamConfig);
+        const string coord = "infra-retry-exhausted-coord";
+        var firstChild = await SeedChildRunAsync(RunStatus.Failed);
+        var (planId, ids) = await SeedPlanAsync(coord, [(SubtaskStatus.Running, firstChild)]);
+        _streamStore.Create(coord, "owner");
+
+        var sut = BuildDispatch(stream);
+        var statusById = new Dictionary<int, string> { [ids[0]] = SubtaskStatus.Running };
+
+        var currentChild = firstChild;
+        for (var attempt = 1; attempt <= CoordinatorDispatchService.MaxInfrastructureRetries; attempt++)
+        {
+            var retried = await sut.TryRedispatchRetryableFailureAsync(
+                Context(coord),
+                planId,
+                ids[0],
+                currentChild,
+                "a2a_transport_failure",
+                "Connection reset by peer.",
+                statusById,
+                default);
+            retried.Should().BeTrue();
+
+            var row = await GetSubtaskAsync(ids[0]);
+            row.Status.Should().Be(SubtaskStatus.Pending);
+            row.InfrastructureRetryCount.Should().Be(attempt);
+
+            currentChild = await SeedChildRunAsync(RunStatus.InProgress);
+            await SetSubtaskRunningWithChildAsync(ids[0], currentChild);
+            statusById[ids[0]] = SubtaskStatus.Running;
+        }
+
+        await stream.AppendAsync(currentChild, new RunEvent(0, EventTypes.RunFailed, new
+        {
+            reason = "a2a_transport_failure",
+            message = "Connection reset by peer.",
+            retryable = true,
+        }));
+        await stream.CompleteAsync(currentChild);
+        await _runStore.UpdateStatusAsync(
+            RunId.Parse(currentChild), RunStatus.Failed, DateTimeOffset.UtcNow);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        await sut.RunDispatchLoopAsync(Context(coord), cts.Token);
+
+        var final = await GetSubtaskAsync(ids[0]);
+        final.Status.Should().Be(SubtaskStatus.Failed);
+        final.InfrastructureRetryCount.Should().Be(
+            CoordinatorDispatchService.MaxInfrastructureRetries);
+        _streamStore.Get(coord)!.GetSnapshotSince(0).Events
+            .Count(e => e.Type == EventTypes.CoordinatorSubtaskRedispatched)
+            .Should().Be(CoordinatorDispatchService.MaxInfrastructureRetries);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(null)]
+    public async Task UnretryableOrUnspecifiedFailure_IsNotRedispatched(bool? retryable)
+    {
+        var stream = new SqliteRunEventStream(_streamConfig);
+        var coord = $"infra-no-retry-{retryable?.ToString() ?? "missing"}";
+        var child = await SeedChildRunAsync(RunStatus.InProgress);
+        var (_, ids) = await SeedPlanAsync(coord, [(SubtaskStatus.Running, child)]);
+        _streamStore.Create(coord, "owner");
+
+        object payload = retryable.HasValue
+            ? new
+            {
+                reason = "invalid_request",
+                message = "The request is not retryable.",
+                retryable = retryable.Value,
+            }
+            : new
+            {
+                reason = "invalid_request",
+                message = "The request is not retryable.",
+            };
+        await stream.AppendAsync(child, new RunEvent(0, EventTypes.RunFailed, payload));
+        await stream.CompleteAsync(child);
+        await _runStore.UpdateStatusAsync(RunId.Parse(child), RunStatus.Failed, DateTimeOffset.UtcNow);
+
+        var sut = BuildDispatch(stream);
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        await sut.RunDispatchLoopAsync(Context(coord), cts.Token);
+
+        var row = await GetSubtaskAsync(ids[0]);
+        row.Status.Should().Be(SubtaskStatus.Failed);
+        row.InfrastructureRetryCount.Should().Be(0);
+        _streamStore.Get(coord)!.GetSnapshotSince(0).Events
+            .Should().NotContain(e => e.Type == EventTypes.CoordinatorSubtaskRedispatched);
+    }
+
     // -----------------------------------------------------------------------
     // Harness
     // -----------------------------------------------------------------------
@@ -544,6 +743,15 @@ public sealed class StallCascadeAndLockRetryTests : IAsyncDisposable
         var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
         var row = await db.Subtasks.FirstAsync(s => s.Id == subtaskId);
         row.RecoveryAttempts = attempts;
+        await db.SaveChangesAsync();
+    }
+
+    private async Task SetInfrastructureRetryCountAsync(int subtaskId, int attempts)
+    {
+        using var scope = _provider.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var row = await db.Subtasks.FirstAsync(s => s.Id == subtaskId);
+        row.InfrastructureRetryCount = attempts;
         await db.SaveChangesAsync();
     }
 
@@ -589,13 +797,22 @@ public sealed class StallCascadeAndLockRetryTests : IAsyncDisposable
         return id.ToString();
     }
 
-    private CoordinatorDispatchService BuildDispatch(IRunEventStream eventStream, double stallTimeoutMinutes = 5)
+    private CoordinatorDispatchService BuildDispatch(
+        IRunEventStream eventStream,
+        double stallTimeoutMinutes = 5,
+        bool instantRetryBackoff = true,
+        IAgentHostPodLifecycle? podLifecycle = null)
     {
+        var retrySeconds = instantRetryBackoff ? "0" : null;
         var config = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
                 ["Coordinator:SubtaskStallTimeoutMinutes"] =
                     stallTimeoutMinutes.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                ["Coordinator:InfrastructureRetryAttempt1MinSeconds"] = retrySeconds,
+                ["Coordinator:InfrastructureRetryAttempt1MaxSeconds"] = retrySeconds,
+                ["Coordinator:InfrastructureRetryAttempt2MinSeconds"] = retrySeconds,
+                ["Coordinator:InfrastructureRetryAttempt2MaxSeconds"] = retrySeconds,
             })
             .Build();
 
@@ -608,7 +825,12 @@ public sealed class StallCascadeAndLockRetryTests : IAsyncDisposable
             _runStore, _streamStore, orchestrator, null!, new CoordinatorSteeringQueue(_scopeFactory), _assembly,
             _scopeFactory, new TestHostApplicationLifetime(),
             NullLogger<CoordinatorDispatchService>.Instance,
-            runOptions: null, autopilot: null, configuration: config, eventStream: eventStream);
+            runOptions: null, autopilot: null, configuration: config, eventStream: eventStream,
+            podLifecycle: podLifecycle,
+            sandboxRuntime: Options.Create(new SandboxRuntimeOptions
+            {
+                AgentExecutionMode = podLifecycle is null ? "in-api" : "pod-per-run",
+            }));
     }
 
     private static CoordinatorDispatchContext Context(string coord) =>
@@ -836,5 +1058,25 @@ public sealed class StallCascadeAndLockRetryTests : IAsyncDisposable
         public CancellationToken ApplicationStopping => CancellationToken.None;
         public CancellationToken ApplicationStopped => CancellationToken.None;
         public void StopApplication() { }
+    }
+
+    private sealed class RecordingPodLifecycle : IAgentHostPodLifecycle
+    {
+        public List<string> Released { get; } = [];
+
+        public Task<string> LaunchAgentHostPodAsync(string runId, CancellationToken ct = default) =>
+            Task.FromResult("http://fake-agent-host");
+
+        public Task<string> LaunchAgentHostPodAsync(
+            string runId,
+            string? workingDirectoryOverride,
+            CancellationToken ct = default) =>
+            Task.FromResult("http://fake-agent-host");
+
+        public Task ReleaseAgentHostPodAsync(string runId, CancellationToken ct = default)
+        {
+            Released.Add(runId);
+            return Task.CompletedTask;
+        }
     }
 }

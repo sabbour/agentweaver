@@ -87,7 +87,22 @@ internal static class CoordinatorAssemblyReviewPersistence
             existing.UpdatedAt = now;
         }
 
-        await db.SaveChangesAsync(ct).ConfigureAwait(false);
+        try
+        {
+            await db.SaveChangesAsync(ct).ConfigureAwait(false);
+        }
+        catch (DbUpdateConcurrencyException) when (existing is not null)
+        {
+            // A locally accepted decision wakes the assembly loop immediately. It may consume the
+            // decision and clear the durable gate before this best-effort mirror update commits.
+            // Once cleared, the decision has already been processed and must not be reinserted.
+            var gateStillExists = await db.AssemblyReviews
+                .AsNoTracking()
+                .AnyAsync(r => r.CoordinatorRunId == coordinatorRunId, CancellationToken.None)
+                .ConfigureAwait(false);
+            if (gateStillExists)
+                throw;
+        }
         return true;
     }
 

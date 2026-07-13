@@ -54,13 +54,18 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
 
     public CoordinatorAssemblyServiceTests()
     {
-        _memoryConn = new SqliteConnection("DataSource=:memory:");
+        var memoryConnectionString =
+            $"Data Source=agentweaver-assembly-{Guid.NewGuid():N};Mode=Memory;Cache=Shared";
+        _memoryConn = new SqliteConnection(memoryConnectionString);
         _memoryConn.Open();
         _runDb = TestSqliteDb.CreateAsync().GetAwaiter().GetResult();
         _runStore = new SqliteRunStore(_runDb.Db);
 
         var services = new ServiceCollection();
-        services.AddDbContext<MemoryDbContext>(o => o.UseSqlite(_memoryConn));
+        // Keep one anchor connection open so the in-memory database survives, but give every scoped
+        // DbContext its own connection. Sharing one SqliteConnection across the concurrently running
+        // assembly loop, steering request, and deferred-review poller made this fixture order-dependent.
+        services.AddDbContext<MemoryDbContext>(o => o.UseSqlite(memoryConnectionString));
         services.AddSingleton<ICoordinatorDispatch>(_dispatch);
         services.AddSingleton<IRunStore>(_runStore);
         // The assembly service resolves CoordinatorSteeringDecider (and its CoordinatorSteeringService
