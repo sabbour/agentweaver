@@ -78,7 +78,6 @@ if [[ "${BUMP}" != "major" && "${BUMP}" != "minor" && "${BUMP}" != "patch" ]]; t
 fi
 
 DRY_RUN="${DRY_RUN:-false}"
-trap cleanup_frontend_npmrc_build EXIT
 run() {
   if [[ "${DRY_RUN}" == "true" ]]; then
     echo "[dry-run] $*"
@@ -202,6 +201,8 @@ IMAGE_DOCKERFILES["agentweaver-frontend"]="apps/web/Dockerfile"
 IMAGE_DOCKERFILES["agentweaver-mcp"]="apps/Agentweaver.Mcp/Dockerfile"
 IMAGE_DOCKERFILES["agentweaver-agent-host"]="apps/Agentweaver.AgentHost/Dockerfile"
 
+FRONTEND_NPM_FEED_ENDPOINT="https://pkgs.dev.azure.com/office/Office/_packaging/1JS/npm/registry/"
+
 # Source variables to get ACR_NAME etc.
 # shellcheck source=aks/00-variables.sh
 source "${SCRIPT_DIR}/aks/00-variables.sh"
@@ -215,34 +216,52 @@ image_changed_since_tag() {
   return 0  # changed
 }
 
-frontend_npm_userconfig() {
-  local home_npmrc="${HOME:-}/.npmrc"
-  if [[ -n "${AZURE_ARTIFACTS_NPM_PASSWORD_B64:-}" ]]; then
-    local build_npmrc="${REPO_ROOT}/apps/web/.npmrc.build"
-    cp "${REPO_ROOT}/apps/web/.npmrc" "${build_npmrc}"
-    printf '%s\n' \
-      '; begin auth token' \
-      '//pkgs.dev.azure.com/office/Office/_packaging/1JS/npm/registry/:username=agentweaver' \
-      "//pkgs.dev.azure.com/office/Office/_packaging/1JS/npm/registry/:_password=${AZURE_ARTIFACTS_NPM_PASSWORD_B64}" \
-      '//pkgs.dev.azure.com/office/Office/_packaging/1JS/npm/registry/:email=npm requires email to be set but does not use the value' \
-      '//pkgs.dev.azure.com/office/Office/_packaging/1JS/npm/:username=agentweaver' \
-      "//pkgs.dev.azure.com/office/Office/_packaging/1JS/npm/:_password=${AZURE_ARTIFACTS_NPM_PASSWORD_B64}" \
-      '//pkgs.dev.azure.com/office/Office/_packaging/1JS/npm/:email=npm requires email to be set but does not use the value' \
-      '; end auth token' >> "${build_npmrc}"
-    printf '%s' "${build_npmrc}"
+frontend_npm_pat() {
+  if [[ -n "${AZURE_ARTIFACTS_NPM_PAT:-}" ]]; then
+    printf '%s' "${AZURE_ARTIFACTS_NPM_PAT}"
     return 0
   fi
 
-  if [[ -f "${home_npmrc}" ]] && grep -q -E '^//pkgs\.dev\.azure\.com/office/Office/_packaging/1JS/npm(/registry)?/:_password=' "${home_npmrc}"; then
-    printf '%s' "${home_npmrc}"
+  if [[ -n "${AZURE_ARTIFACTS_NPM_PASSWORD_B64:-}" ]]; then
+    node -e "process.stdout.write(Buffer.from(process.argv[1], 'base64').toString('utf8'))" "${AZURE_ARTIFACTS_NPM_PASSWORD_B64}"
     return 0
   fi
 
   return 1
 }
 
-cleanup_frontend_npmrc_build() {
-  rm -f "${REPO_ROOT}/apps/web/.npmrc.build"
+frontend_npm_export_credprovider_env() {
+  local frontend_pat=""
+  if ! frontend_pat="$(frontend_npm_pat 2>/dev/null)"; then
+    return 1
+  fi
+
+  local endpoint_credentials=""
+  endpoint_credentials="$(node -e "const endpoint = process.argv[1]; const password = process.argv[2]; process.stdout.write(JSON.stringify({ endpointCredentials: [{ endpoint, username: 'agentweaver', password }] }));" "${FRONTEND_NPM_FEED_ENDPOINT}" "${frontend_pat}")"
+  export ARTIFACTS_CREDENTIALPROVIDER_EXTERNAL_FEED_ENDPOINTS="${endpoint_credentials}"
+  export VSS_NUGET_EXTERNAL_FEED_ENDPOINTS="${endpoint_credentials}"
+}
+
+run_frontend_npm_credential_provider() {
+  frontend_npm_export_credprovider_env || true
+
+  if command -v artifacts-npm-credprovider >/dev/null 2>&1; then
+    artifacts-npm-credprovider
+    return 0
+  fi
+
+  if npm_config_registry=https://registry.npmjs.org npx --yes artifacts-npm-credprovider --version >/dev/null 2>&1; then
+    npm_config_registry=https://registry.npmjs.org npx --yes artifacts-npm-credprovider
+    return 0
+  fi
+
+  if [[ -n "${ARTIFACTS_CREDENTIALPROVIDER_EXTERNAL_FEED_ENDPOINTS:-}" || -n "${VSS_NUGET_EXTERNAL_FEED_ENDPOINTS:-}" ]]; then
+    echo "ERROR: artifacts-npm-credprovider is not available in PATH or via npx." >&2
+    echo "  Install the credential provider or clear the PAT env vars and authenticate interactively." >&2
+    return 1
+  fi
+
+  npm_config_registry=https://registry.npmjs.org npx --yes ado-npm-auth -c "${REPO_ROOT}/apps/web/.npmrc"
 }
 
 prepare_frontend_dist() {
@@ -251,22 +270,14 @@ prepare_frontend_dist() {
     exit 1
   fi
 
-  local userconfig=""
-  if ! userconfig="$(frontend_npm_userconfig)"; then
-    echo "ERROR: missing Azure Artifacts npm credentials for apps/web." >&2
-    echo "  Run 'npx vsts-npm-auth -config apps/web/.npmrc -F' to refresh ~/.npmrc," >&2
-    echo "  or export AZURE_ARTIFACTS_NPM_PASSWORD_B64 with the base64 PAT value." >&2
-    exit 1
-  fi
-
   echo "  [frontend] Building local dist/ before az acr build"
   (
     cd "${REPO_ROOT}/apps/web"
-    NPM_CONFIG_USERCONFIG="${userconfig}" npm ci --legacy-peer-deps
+    run_frontend_npm_credential_provider
+    npm ci --legacy-peer-deps
     unset VITE_API_URL VITE_API_KEY
     npm run build
   )
-  cleanup_frontend_npmrc_build
 }
 
 # ---------------------------------------------------------------------------

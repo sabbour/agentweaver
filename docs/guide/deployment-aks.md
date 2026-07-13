@@ -76,11 +76,13 @@ bash scripts/aks/40-verify.sh
 
 `install.sh --aks` runs the same sequence and also carries `TENANT_ID` and `IDENTITY_CLIENT_ID` between steps.
 
-Before running `20-build-push-images.sh`, refresh the frontend Azure Artifacts credential if needed:
+Before running `20-build-push-images.sh`, make sure the frontend Azure Artifacts credential provider can resolve the 1JS feed:
 
 ```bash
-npx vsts-npm-auth -config apps/web/.npmrc -F
+npx artifacts-npm-credprovider
 ```
+
+If you have the Microsoft `ado-npm-auth` helper instead of `artifacts-npm-credprovider`, the scripts fall back to it automatically for local interactive/device-code refreshes.
 
 ## What the scripts deploy
 
@@ -124,14 +126,14 @@ kubectl describe sandboxwarmpool agentweaver-agent-host -n agentweaver
 ## Redeploy
 
 ```bash
-npx vsts-npm-auth -config apps/web/.npmrc -F
+npx artifacts-npm-credprovider
 export IMAGE_TAG=$(git rev-parse --short HEAD)
 bash scripts/aks/20-build-push-images.sh
 bash scripts/aks/30-deploy.sh
 bash scripts/aks/40-verify.sh
 ```
 
-`20-build-push-images.sh` builds `apps/web/dist` locally with your 1JS feed credential from `~/.npmrc` (or a temporary ignored `.npmrc.build` synthesized from `AZURE_ARTIFACTS_NPM_PASSWORD_B64`), then uploads only the compiled frontend assets to `az acr build`. The npm token never enters the Docker build context, image layers, image history, or ACR build logs.
+`20-build-push-images.sh` builds `apps/web/dist` locally before `az acr build`, then uploads only the compiled frontend assets. For local development it invokes the Azure Artifacts npm credential provider before `npm ci`, so existing cached/device-code auth keeps working without committing feed secrets. For unattended builds, export `AZURE_ARTIFACTS_NPM_PAT` (preferred) or `AZURE_ARTIFACTS_NPM_PASSWORD_B64`; the scripts translate that into the documented `ARTIFACTS_CREDENTIALPROVIDER_EXTERNAL_FEED_ENDPOINTS` / `VSS_NUGET_EXTERNAL_FEED_ENDPOINTS` JSON contract instead of writing a temporary `.npmrc`.
 
 Or in one command:
 
