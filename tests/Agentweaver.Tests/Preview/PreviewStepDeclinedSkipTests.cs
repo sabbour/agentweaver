@@ -1,4 +1,5 @@
 using Agentweaver.Api.Coordinator;
+using Microsoft.Extensions.Logging.Abstractions;
 using FluentAssertions;
 
 namespace Agentweaver.Tests.Preview;
@@ -14,6 +15,26 @@ namespace Agentweaver.Tests.Preview;
 /// </summary>
 public sealed class PreviewStepDeclinedSkipTests
 {
+    [Fact]
+    public async Task CoordinatorBoundary_SwallowsInternalCancellation_ButPropagatesCallerCancellation()
+    {
+        await CoordinatorAssemblyService.RunPreviewStepDefensivelyAsync(
+            () => Task.FromException(new TaskCanceledException("internal timeout")),
+            "run-1",
+            NullLogger.Instance,
+            CancellationToken.None);
+
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+        var canceled = () => CoordinatorAssemblyService.RunPreviewStepDefensivelyAsync(
+            () => Task.FromCanceled(cts.Token),
+            "run-1",
+            NullLogger.Instance,
+            cts.Token);
+
+        await canceled.Should().ThrowAsync<OperationCanceledException>();
+    }
+
     private static readonly CollectiveGateDecision Approved = new(Approved: true, RequestChanges: false, Feedback: null);
     private static readonly CollectiveGateDecision RequestChanges = new(Approved: false, RequestChanges: true, Feedback: "fix");
     private static readonly CollectiveGateDecision Declined = new(Approved: false, RequestChanges: false, Feedback: null);
