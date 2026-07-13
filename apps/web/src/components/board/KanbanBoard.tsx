@@ -71,6 +71,7 @@ const useStyles = makeStyles({
     flexDirection: 'row',
     flexWrap: 'wrap',
     alignItems: 'center',
+    alignContent: 'center',
     gap: tokens.spacingHorizontalS,
     justifyContent: 'flex-end',
   },
