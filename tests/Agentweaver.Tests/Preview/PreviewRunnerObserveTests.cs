@@ -1,5 +1,6 @@
 extern alias agenthost;
 
+using System.Diagnostics;
 using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
@@ -7,6 +8,15 @@ using PreviewRunner = agenthost::Agentweaver.AgentHost.PreviewRunner;
 using PreviewRunnerOptions = agenthost::Agentweaver.AgentHost.PreviewRunnerOptions;
 
 namespace Agentweaver.Tests.Preview;
+
+public sealed class LinuxFactAttribute : FactAttribute
+{
+    public LinuxFactAttribute()
+    {
+        if (!OperatingSystem.IsLinux())
+            Skip = "real /proc process-tree coverage requires Linux";
+    }
+}
 
 /// <summary>
 /// AgentHost preview port-discovery + legible-failure coverage (4th preview blocker, run 4d74955a):
@@ -66,6 +76,17 @@ public sealed class PreviewRunnerObserveTests
             "  sl  local_address rem_address   st ...\n").Should().BeEmpty();
     }
 
+    [Fact]
+    public void ParseProcStat_ExtractsStartTime_WhenCommandContainsSpacesAndParentheses()
+    {
+        var stat = "123 (preview worker (child)) S "
+            + string.Join(' ', Enumerable.Repeat("0", 18))
+            + " 987654 0 0\n";
+
+        PreviewRunner.TryParseProcessStartTime(stat, out var startTime).Should().BeTrue();
+        startTime.Should().Be(987654);
+    }
+
     // ── PART B: legible unhealthy observation (never throw / opaque 500) ──────────
 
     [Fact]
@@ -106,4 +127,143 @@ public sealed class PreviewRunnerObserveTests
         observation.Port.Should().Be(0);
         observation.Reason.Should().StartWith("process_exited:");
     }
+
+    [LinuxFact]
+    public async Task ObserveBoundPort_LinuxProcessTree_FindsDescendantAndRejectsUnrelatedAndExitedPid()
+    {
+        await RequireNodeAsync();
+
+        var fixtureDirectory = Path.Combine(
+            AppContext.BaseDirectory,
+            $"preview-proc-e2e-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(fixtureDirectory);
+        var serverScript = Path.Combine(fixtureDirectory, "server.js");
+        var parentScript = Path.Combine(fixtureDirectory, "parent.js");
+        await File.WriteAllTextAsync(serverScript, """
+            const http = require('http');
+            const server = http.createServer((request, response) => {
+              response.writeHead(200, { 'Content-Type': 'text/plain' });
+              response.end('ok');
+            });
+            server.listen(0, '127.0.0.1', () => {
+              console.log(`PORT=${server.address().port}`);
+            });
+            const shutdown = () => server.close(() => process.exit(0));
+            process.on('SIGTERM', shutdown);
+            process.on('SIGINT', shutdown);
+            """);
+        await File.WriteAllTextAsync(parentScript, """
+            const { spawn } = require('child_process');
+            const child = spawn(process.execPath, [process.argv[2]], { stdio: 'inherit' });
+            const shutdown = () => {
+              child.kill('SIGTERM');
+              process.exit(0);
+            };
+            process.on('SIGTERM', shutdown);
+            process.on('SIGINT', shutdown);
+            setInterval(() => {}, 1000);
+            """);
+
+        using var unrelated = StartNodeProcess(serverScript, fixtureDirectory);
+        var unrelatedOutput = await unrelated.StandardOutput.ReadLineAsync()
+            .WaitAsync(TimeSpan.FromSeconds(10));
+        unrelatedOutput.Should().StartWith("PORT=");
+        var unrelatedPort = int.Parse(unrelatedOutput!["PORT=".Length..]);
+
+        var runner = NewRunner();
+        var command = $"node {QuoteForPosixShell(parentScript)} {QuoteForPosixShell(serverScript)}";
+        var started = await runner.StartPreviewProcessAsync(
+            command, fixtureDirectory, "run-linux-proc-tree", null, null, CancellationToken.None);
+        var rootIdentity = PreviewRunner.CaptureProcessIdentityForTest(started.Pid);
+        rootIdentity.StartTime.Should().NotBeNull();
+
+        try
+        {
+            var portsForReusedIdentity =
+                await PreviewRunner.SnapshotProcessTreeListeningPortsForTestAsync(
+                    rootIdentity.Pid, rootIdentity.StartTime!.Value + 1, CancellationToken.None);
+            portsForReusedIdentity.Should().BeEmpty(
+                "the same PID with a different start time represents a different process");
+
+            var observation = await runner.ObserveBoundPortAsync(
+                started.SessionId, TimeSpan.FromSeconds(10), "/", CancellationToken.None);
+
+            observation.Healthy.Should().BeTrue();
+            observation.AppPort.Should().BePositive();
+            observation.AppPort.Should().NotBe(unrelatedPort,
+                "a socket owned by a process outside the preview process tree must not be attributed");
+        }
+        finally
+        {
+            await runner.StopPreviewProcessAsync(
+                started.SessionId, "test_cleanup", CancellationToken.None);
+            await StopProcessAsync(unrelated);
+            Directory.Delete(fixtureDirectory, recursive: true);
+        }
+
+        var portsAfterExit = await PreviewRunner.SnapshotProcessTreeListeningPortsForTestAsync(
+            rootIdentity.Pid, rootIdentity.StartTime, CancellationToken.None);
+        portsAfterExit.Should().BeEmpty(
+            "fds must not be trusted after the captured process identity exits or its PID is reused");
+    }
+
+    private static async Task RequireNodeAsync()
+    {
+        using var process = new Process
+        {
+            StartInfo = new ProcessStartInfo
+            {
+                FileName = "node",
+                ArgumentList = { "--version" },
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+            },
+        };
+
+        try
+        {
+            process.Start();
+            await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        }
+        catch
+        {
+            throw new InvalidOperationException(
+                "node is required for the Linux /proc process-tree E2E test");
+        }
+
+        if (process.ExitCode != 0)
+            throw new InvalidOperationException(
+                "node is required for the Linux /proc process-tree E2E test");
+    }
+
+    private static Process StartNodeProcess(string script, string workingDirectory)
+    {
+        var process = new Process
+        {
+            StartInfo = new ProcessStartInfo
+            {
+                FileName = "node",
+                WorkingDirectory = workingDirectory,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+            },
+        };
+        process.StartInfo.ArgumentList.Add(script);
+        process.Start();
+        return process;
+    }
+
+    private static async Task StopProcessAsync(Process process)
+    {
+        if (process.HasExited)
+            return;
+
+        process.Kill(entireProcessTree: true);
+        await process.WaitForExitAsync();
+    }
+
+    private static string QuoteForPosixShell(string value)
+        => $"'{value.Replace("'", "'\"'\"'", StringComparison.Ordinal)}'";
 }

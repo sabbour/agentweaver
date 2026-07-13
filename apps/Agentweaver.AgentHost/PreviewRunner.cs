@@ -8,6 +8,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using Agentweaver.AgentRuntime;
 using Agentweaver.AgentTools;
+using Agentweaver.SandboxFs;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -19,6 +20,7 @@ internal sealed class PreviewRunnerOptions
 {
     public int RingBufferLines { get; init; } = 500;
     public int ObserveTimeoutSeconds { get; init; } = 60;
+    public int MaxObserveTimeoutSeconds { get; init; } = 120;
     public int HealthTimeoutSeconds { get; init; } = 2;
     public int StopGraceSeconds { get; init; } = 5;
     public int IdleTimeoutMinutes { get; init; } = 30;
@@ -101,9 +103,12 @@ internal sealed class PreviewRunnerToolProvider(IPreviewRunner runner) : IAgentR
                 [Description("Optional assembly tree hash for metadata correlation.")] string? tree_hash = null,
                 CancellationToken ct = default) =>
             {
+                var resolvedCwd = string.IsNullOrWhiteSpace(cwd)
+                    ? context.WorkingDirectory
+                    : SandboxPathValidator.ValidateAndResolve(cwd, context.WorkingDirectory);
                 var result = await runner.StartPreviewProcessAsync(
                     command,
-                    string.IsNullOrWhiteSpace(cwd) ? context.WorkingDirectory : cwd!,
+                    resolvedCwd,
                     context.RunId,
                     work_plan_id,
                     tree_hash,
@@ -122,7 +127,7 @@ internal sealed class PreviewRunnerToolProvider(IPreviewRunner runner) : IAgentR
             {
                 var observed = await runner.ObserveBoundPortAsync(
                     session_id,
-                    TimeSpan.FromSeconds(Math.Max(1, timeout_seconds ?? 60)),
+                    TimeSpan.FromSeconds(Math.Clamp(timeout_seconds ?? 60, 1, 120)),
                     "/",
                     ct).ConfigureAwait(false);
 
@@ -132,7 +137,7 @@ internal sealed class PreviewRunnerToolProvider(IPreviewRunner runner) : IAgentR
                 return $"bound_port_observed: session_id={observed.SessionId}, port={observed.Port}, app_port={observed.AppPort}, healthy={observed.Healthy}, reason={observed.Reason ?? "n/a"}, evidence={observed.Evidence}, health={observed.HealthEvidence}. {nextStep}";
             },
             "observe_bound_port",
-            "Observe the actual port the supervised preview process bound to. Parses stdout/stderr and falls back to socket diff; verifies HTTP before returning.");
+            "Observe the actual port the supervised preview process tree owns. Cross-references PID-owned socket inodes with /proc TCP tables and verifies HTTP before returning.");
 
         yield return AIFunctionFactory.Create(
             async (
@@ -173,9 +178,6 @@ internal sealed class PreviewRunner : BackgroundService, IPreviewRunner
         new(@"\bNow\s+listening\s+on:\s*https?://(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[[^\]]+\]|[^:\s/]+):(?<port>\d{2,5})\b", RegexOptions.IgnoreCase | RegexOptions.Compiled),
     ];
 
-    private static readonly Regex SsPortPattern =
-        new(@"\bLISTEN\s+\d+\s+\d+\s+(?<addr>\S+):(?<port>\d{2,5})\b", RegexOptions.IgnoreCase | RegexOptions.Compiled);
-
     // Kernel socket tables (Linux). tcp6 is required: node's server.listen(port) binds ::(IPv6-any)
     // on dual-stack Linux, so the listening socket lands in tcp6, not tcp.
     private static readonly string[] ProcNetTcpFiles = ["/proc/net/tcp", "/proc/net/tcp6"];
@@ -207,11 +209,15 @@ internal sealed class PreviewRunner : BackgroundService, IPreviewRunner
         if (string.IsNullOrWhiteSpace(cwd))
             throw new ArgumentException("Preview working directory is required.", nameof(cwd));
 
-        var fullCwd = Path.GetFullPath(cwd);
+        var sandboxRoot = _runtimeState?.EffectiveWorkingDirectory;
+        var fullCwd = string.IsNullOrWhiteSpace(sandboxRoot)
+            ? Path.GetFullPath(cwd)
+            : Path.IsPathRooted(cwd)
+                ? SandboxPathValidator.ValidateAbsoluteContained(cwd, sandboxRoot)
+                : SandboxPathValidator.ValidateAndResolve(cwd, sandboxRoot);
         if (!Directory.Exists(fullCwd))
             throw new DirectoryNotFoundException($"Preview working directory does not exist: {fullCwd}");
 
-        var beforePorts = await SnapshotListeningPortsAsync(ct).ConfigureAwait(false);
         var sessionId = Guid.NewGuid().ToString("n")[..12];
         var process = BuildProcess(command, fullCwd);
         ScrubChildEnvironment(process.StartInfo);
@@ -222,7 +228,6 @@ internal sealed class PreviewRunner : BackgroundService, IPreviewRunner
             treeHash,
             command,
             fullCwd,
-            beforePorts,
             new RingBuffer(_options.RingBufferLines),
             _clock.GetUtcNow());
 
@@ -240,7 +245,7 @@ internal sealed class PreviewRunner : BackgroundService, IPreviewRunner
         {
             if (!process.Start())
                 throw new InvalidOperationException("Preview process did not start.");
-            state.AttachProcess(process);
+            state.AttachProcess(process, CaptureProcessIdentity(process.Id));
             process.BeginOutputReadLine();
             process.BeginErrorReadLine();
         }
@@ -270,7 +275,12 @@ internal sealed class PreviewRunner : BackgroundService, IPreviewRunner
         CancellationToken ct = default)
     {
         var state = GetSession(sessionId);
-        var deadline = _clock.GetUtcNow() + (timeout ?? TimeSpan.FromSeconds(_options.ObserveTimeoutSeconds));
+        var requestedTimeout = timeout ?? TimeSpan.FromSeconds(_options.ObserveTimeoutSeconds);
+        var effectiveTimeout = TimeSpan.FromSeconds(Math.Clamp(
+            requestedTimeout.TotalSeconds,
+            1,
+            Math.Max(1, _options.MaxObserveTimeoutSeconds)));
+        var deadline = _clock.GetUtcNow() + effectiveTimeout;
         Exception? lastHealthFailure = null;
 
         while (_clock.GetUtcNow() < deadline)
@@ -288,9 +298,13 @@ internal sealed class PreviewRunner : BackgroundService, IPreviewRunner
                     0,
                     $"process_exited:exit={state.ExitCode}");
 
-            foreach (var (port, evidence) in CandidatePortsFromLogs(state.Buffer.SnapshotLines()))
+            var sessionCandidates = await SnapshotProcessTreeListeningPortsAsync(state.RootIdentity, ct)
+                .ConfigureAwait(false);
+
+            foreach (var (port, evidence) in CandidatePortsFromLogs(state.Buffer.SnapshotLines())
+                         .Where(candidate => sessionCandidates.Contains(candidate.Port)))
             {
-                var health = await HealthCheckAsync(sessionId, port, healthPath, ct).ConfigureAwait(false);
+                var health = await ProbeHealthAsync(sessionId, port, healthPath, ct).ConfigureAwait(false);
                 if (health.Healthy)
                 {
                     state.MarkPort(port);
@@ -300,13 +314,12 @@ internal sealed class PreviewRunner : BackgroundService, IPreviewRunner
                 lastHealthFailure = new InvalidOperationException(health.Evidence);
             }
 
-            var afterPorts = await SnapshotListeningPortsAsync(ct).ConfigureAwait(false);
-            foreach (var port in afterPorts.Except(state.BaselinePorts).OrderBy(p => p))
+            foreach (var port in sessionCandidates)
             {
-                var health = await HealthCheckAsync(sessionId, port, healthPath, ct).ConfigureAwait(false);
+                var health = await ProbeHealthAsync(sessionId, port, healthPath, ct).ConfigureAwait(false);
                 if (health.Healthy)
                 {
-                    var evidence = $"socket_diff:/proc/net/tcp{{,6}} reported new listening port {port}";
+                    var evidence = $"process_tree_socket:/proc reported PID-owned listening port {port}";
                     state.MarkPort(port);
                     return await BuildForwardedObservationAsync(state, port, evidence, health.Evidence, healthPath, ct)
                         .ConfigureAwait(false);
@@ -323,7 +336,7 @@ internal sealed class PreviewRunner : BackgroundService, IPreviewRunner
             $"no_listening_port_discovered: last_health_failure={lastHealthFailure?.Message ?? "none"}; " +
             $"logs={state.Buffer.SnapshotText(20)}",
             false,
-            $"Timed out after {(timeout ?? TimeSpan.FromSeconds(_options.ObserveTimeoutSeconds)).TotalSeconds:0}s " +
+            $"Timed out after {effectiveTimeout.TotalSeconds:0}s " +
             $"waiting for preview process {sessionId} to expose a healthy HTTP port.",
             0,
             "no_listening_port_discovered");
@@ -366,7 +379,7 @@ internal sealed class PreviewRunner : BackgroundService, IPreviewRunner
 
         var publicPort = forwarder.PublicPort;
 
-        var forwardedHealth = await HealthCheckAsync(state.SessionId, publicPort, healthPath, ct).ConfigureAwait(false);
+        var forwardedHealth = await ProbeHealthAsync(state.SessionId, publicPort, healthPath, ct).ConfigureAwait(false);
         var forwardEvidence = $"forwarder:0.0.0.0:{publicPort}->127.0.0.1:{appPort}; app_evidence={appEvidence}";
 
         if (!forwardedHealth.Healthy)
@@ -399,6 +412,28 @@ internal sealed class PreviewRunner : BackgroundService, IPreviewRunner
     {
         var state = GetSession(sessionId);
         state.Touch(_clock.GetUtcNow());
+        if (state.HasExited)
+            throw new InvalidOperationException(
+                $"Preview session {sessionId} has exited; its ports are no longer attributable.");
+
+        if (!state.TryGetAttributedAppPort(port, out var appPort))
+            throw new InvalidOperationException(
+                $"Port {port} is not attributed to preview session {sessionId}.");
+
+        var ownedPorts = await SnapshotProcessTreeListeningPortsAsync(state.RootIdentity, ct).ConfigureAwait(false);
+        if (!ownedPorts.Contains(appPort))
+            throw new InvalidOperationException(
+                $"Port {port} is no longer owned by preview session {sessionId}'s process tree.");
+
+        return await ProbeHealthAsync(sessionId, port, path, ct).ConfigureAwait(false);
+    }
+
+    private async Task<PreviewHealthResult> ProbeHealthAsync(
+        string sessionId,
+        int port,
+        string path,
+        CancellationToken ct)
+    {
         if (port is <= 0 or > 65535)
             throw new ArgumentOutOfRangeException(nameof(port), "Port must be between 1 and 65535.");
 
@@ -623,18 +658,18 @@ internal sealed class PreviewRunner : BackgroundService, IPreviewRunner
         }
     }
 
-    private static async Task<HashSet<int>> SnapshotListeningPortsAsync(CancellationToken ct)
+    private static async Task<HashSet<int>> SnapshotProcessTreeListeningPortsAsync(
+        ProcessIdentity rootIdentity,
+        CancellationToken ct)
     {
         if (OperatingSystem.IsWindows())
             return [];
 
-        var ports = new HashSet<int>();
+        var socketInodes = await SnapshotProcessTreeSocketInodesAsync(rootIdentity, ct).ConfigureAwait(false);
+        if (socketInodes.Count == 0)
+            return [];
 
-        // PRIMARY, dependency-free source: parse /proc/net/tcp AND /proc/net/tcp6 directly.
-        // These files are namespace-local and always present on Linux — no external binary (ss)
-        // required. node's server.listen(port) binds :: (IPv6-any) on dual-stack Linux, so the
-        // listening socket appears in /proc/net/tcp6, NOT /proc/net/tcp — BOTH must be read or the
-        // app's port is missed.
+        var procNetContents = new List<string>(ProcNetTcpFiles.Length);
         foreach (var procFile in ProcNetTcpFiles)
         {
             try
@@ -642,20 +677,15 @@ internal sealed class PreviewRunner : BackgroundService, IPreviewRunner
                 if (!File.Exists(procFile))
                     continue;
                 var contents = await File.ReadAllTextAsync(procFile, ct).ConfigureAwait(false);
-                ports.UnionWith(ParseListeningPortsFromProcNet(contents));
+                procNetContents.Add(contents);
             }
-            catch (Exception ex) when (ex is not OperationCanceledException)
+            catch (Exception) when (!ct.IsCancellationRequested)
             {
-                // Best-effort: a transient /proc read error must not abort discovery — the optional
-                // ss fallback (below) and subsequent poll iterations still get a chance.
+                // A transient /proc read race is retried on the next observation poll.
             }
         }
 
-        // OPTIONAL redundancy: ss, ONLY if the binary is present. /proc above is authoritative; ss is
-        // absent from the AgentHost image, so this is a no-op there by design.
-        await TryUnionSsListeningPortsAsync(ports, ct).ConfigureAwait(false);
-
-        return ports;
+        return SelectOwnedListeningPorts(socketInodes, procNetContents);
     }
 
     /// <summary>
@@ -665,20 +695,47 @@ internal sealed class PreviewRunner : BackgroundService, IPreviewRunner
     /// field[3] = <c>st</c> (connection-state hex). Kept static + filesystem-free so it is unit-testable.
     /// </summary>
     internal static HashSet<int> ParseListeningPortsFromProcNet(string procNetContents)
+        => ParseListeningSocketPortsFromProcNet(procNetContents).Values.ToHashSet();
+
+    /// <summary>
+    /// Cross-references socket inodes owned by one supervised process tree with LISTEN entries from
+    /// the namespace-wide kernel TCP tables. Unrelated processes' sockets are excluded even if they
+    /// start listening during this session's observation window.
+    /// </summary>
+    internal static HashSet<int> SelectOwnedListeningPorts(
+        IEnumerable<ulong> ownedSocketInodes,
+        IEnumerable<string> procNetContents)
     {
+        var owned = ownedSocketInodes.ToHashSet();
         var ports = new HashSet<int>();
-        if (string.IsNullOrEmpty(procNetContents))
+        if (owned.Count == 0)
             return ports;
 
+        foreach (var contents in procNetContents)
+        {
+            foreach (var (inode, port) in ParseListeningSocketPortsFromProcNet(contents))
+            {
+                if (owned.Contains(inode))
+                    ports.Add(port);
+            }
+        }
+
+        return ports;
+    }
+
+    private static Dictionary<ulong, int> ParseListeningSocketPortsFromProcNet(string procNetContents)
+    {
+        var sockets = new Dictionary<ulong, int>();
+        if (string.IsNullOrEmpty(procNetContents))
+            return sockets;
+
         var lines = procNetContents.Split('\n');
-        // Skip the header line (index 0).
         for (var i = 1; i < lines.Length; i++)
         {
             var fields = lines[i].Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
-            if (fields.Length < 4)
+            if (fields.Length < 10)
                 continue;
 
-            // st == "0A" is TCP_LISTEN. Non-LISTEN rows (e.g. "01" ESTABLISHED) are ignored.
             if (!string.Equals(fields[3], "0A", StringComparison.OrdinalIgnoreCase))
                 continue;
 
@@ -689,56 +746,194 @@ internal sealed class PreviewRunner : BackgroundService, IPreviewRunner
 
             var hexPort = local[(colon + 1)..];
             if (int.TryParse(hexPort, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var port)
-                && port is > 0 and <= 65535)
+                && port is > 0 and <= 65535
+                && ulong.TryParse(fields[9], NumberStyles.None, CultureInfo.InvariantCulture, out var inode))
             {
-                ports.Add(port);
+                sockets[inode] = port;
             }
         }
 
-        return ports;
+        return sockets;
     }
 
-    private static async Task TryUnionSsListeningPortsAsync(HashSet<int> ports, CancellationToken ct)
+    private static async Task<HashSet<ulong>> SnapshotProcessTreeSocketInodesAsync(
+        ProcessIdentity rootIdentity,
+        CancellationToken ct)
     {
-        var ssPath = File.Exists("/usr/bin/ss") ? "/usr/bin/ss"
-            : File.Exists("/bin/ss") ? "/bin/ss"
-            : null;
-        if (ssPath is null)
-            return;
+        var socketInodes = new HashSet<ulong>();
+        var visited = new HashSet<ProcessIdentity>();
+        var pending = new Queue<ProcessIdentity>();
+        pending.Enqueue(rootIdentity);
+
+        while (pending.TryDequeue(out var identity))
+        {
+            ct.ThrowIfCancellationRequested();
+            if (!visited.Add(identity) || !IsCurrentProcessIdentity(identity))
+                continue;
+
+            var childIdentities = new List<ProcessIdentity>();
+            try
+            {
+                var taskDirectory = $"/proc/{identity.Pid}/task";
+                if (Directory.Exists(taskDirectory))
+                {
+                    foreach (var threadDirectory in Directory.EnumerateDirectories(taskDirectory))
+                    {
+                        var childrenPath = Path.Combine(threadDirectory, "children");
+                        if (!File.Exists(childrenPath))
+                            continue;
+
+                        var children = await File.ReadAllTextAsync(childrenPath, ct).ConfigureAwait(false);
+                        foreach (var token in children.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries))
+                        {
+                            if (int.TryParse(token, NumberStyles.None, CultureInfo.InvariantCulture, out var childPid)
+                                && TryCaptureProcessIdentity(childPid, out var childIdentity))
+                            {
+                                childIdentities.Add(childIdentity);
+                            }
+                        }
+                    }
+                }
+            }
+            catch (Exception) when (!ct.IsCancellationRequested)
+            {
+                // The process may exit or fork while /proc is being traversed; the next poll retries.
+            }
+
+            var processSocketInodes = new HashSet<ulong>();
+            try
+            {
+                var fdDirectory = $"/proc/{identity.Pid}/fd";
+                if (!Directory.Exists(fdDirectory))
+                    continue;
+
+                foreach (var fdPath in Directory.EnumerateFileSystemEntries(fdDirectory))
+                {
+                    ct.ThrowIfCancellationRequested();
+                    string? target;
+                    try
+                    {
+                        target = new FileInfo(fdPath).LinkTarget;
+                    }
+                    catch
+                    {
+                        continue;
+                    }
+
+                    if (TryParseSocketInode(target, out var inode))
+                        processSocketInodes.Add(inode);
+                }
+            }
+            catch (Exception) when (!ct.IsCancellationRequested)
+            {
+                // File descriptors are inherently racy; a later poll observes stable sockets.
+            }
+
+            // Re-check after reading children and fds. If the process exited and Linux recycled its
+            // PID during either enumeration, none of that data belongs to the supervised process.
+            if (!IsCurrentProcessIdentity(identity))
+                continue;
+
+            socketInodes.UnionWith(processSocketInodes);
+            foreach (var childIdentity in childIdentities)
+                pending.Enqueue(childIdentity);
+        }
+
+        return socketInodes;
+    }
+
+    private static ProcessIdentity CaptureProcessIdentity(int pid)
+        => TryCaptureProcessIdentity(pid, out var identity)
+            ? identity
+            : new ProcessIdentity(pid, null);
+
+    private static bool TryCaptureProcessIdentity(int pid, out ProcessIdentity identity)
+    {
+        identity = default;
+        if (!OperatingSystem.IsLinux())
+        {
+            identity = new ProcessIdentity(pid, null);
+            return true;
+        }
 
         try
         {
-            var psi = new ProcessStartInfo
+            var stat = File.ReadAllText($"/proc/{pid}/stat");
+            if (TryParseProcessStartTime(stat, out var startTime))
             {
-                FileName = ssPath,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-            };
-            psi.ArgumentList.Add("-ltnp");
-
-            using var process = Process.Start(psi);
-            if (process is null)
-                return;
-            var output = await process.StandardOutput.ReadToEndAsync(ct).ConfigureAwait(false);
-            await process.WaitForExitAsync(ct).ConfigureAwait(false);
-
-            foreach (var line in output.Split('\n'))
-            {
-                var match = SsPortPattern.Match(line);
-                if (match.Success &&
-                    int.TryParse(match.Groups["port"].Value, out var port) &&
-                    port is > 0 and <= 65535)
-                {
-                    ports.Add(port);
-                }
+                identity = new ProcessIdentity(pid, startTime);
+                return true;
             }
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        catch
         {
-            // ss is optional redundancy; failures are non-fatal (/proc is authoritative).
+            // The process may have exited before its identity could be captured.
         }
+
+        return false;
+    }
+
+    private static bool IsCurrentProcessIdentity(ProcessIdentity identity)
+    {
+        if (!OperatingSystem.IsLinux())
+            return true;
+        if (identity.StartTime is not { } expectedStartTime)
+            return false;
+
+        try
+        {
+            var stat = File.ReadAllText($"/proc/{identity.Pid}/stat");
+            return TryParseProcessStartTime(stat, out var currentStartTime)
+                && currentStartTime == expectedStartTime;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    internal static bool TryParseProcessStartTime(string statContents, out ulong startTime)
+    {
+        startTime = 0;
+        var commandEnd = statContents.LastIndexOf(')');
+        if (commandEnd < 0 || commandEnd + 2 >= statContents.Length)
+            return false;
+
+        // After "(comm)", tokens begin at field 3 (state); starttime is field 22.
+        var fields = statContents[(commandEnd + 1)..]
+            .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+        return fields.Length > 19
+            && ulong.TryParse(fields[19], NumberStyles.None, CultureInfo.InvariantCulture, out startTime);
+    }
+
+    internal static (int Pid, ulong? StartTime) CaptureProcessIdentityForTest(int pid)
+    {
+        var identity = CaptureProcessIdentity(pid);
+        return (identity.Pid, identity.StartTime);
+    }
+
+    internal static Task<HashSet<int>> SnapshotProcessTreeListeningPortsForTestAsync(
+        int pid,
+        ulong? startTime,
+        CancellationToken ct)
+        => SnapshotProcessTreeListeningPortsAsync(new ProcessIdentity(pid, startTime), ct);
+
+    private static bool TryParseSocketInode(string? linkTarget, out ulong inode)
+    {
+        const string prefix = "socket:[";
+        inode = 0;
+        if (linkTarget is null ||
+            !linkTarget.StartsWith(prefix, StringComparison.Ordinal) ||
+            !linkTarget.EndsWith(']'))
+        {
+            return false;
+        }
+
+        return ulong.TryParse(
+            linkTarget.AsSpan(prefix.Length, linkTarget.Length - prefix.Length - 1),
+            NumberStyles.None,
+            CultureInfo.InvariantCulture,
+            out inode);
     }
 
     private async Task StopProcessTreeAsync(Process process, TimeSpan grace, CancellationToken ct)
@@ -804,10 +999,13 @@ internal sealed class PreviewRunner : BackgroundService, IPreviewRunner
         catch { return -1; }
     }
 
+    private readonly record struct ProcessIdentity(int Pid, ulong? StartTime);
+
     private sealed class PreviewProcessState : IDisposable
     {
         private int _exited;
         private readonly object _forwarderLock = new();
+        private readonly object _portsLock = new();
         private TcpPortForwarder? _forwarder;
 
         public PreviewProcessState(
@@ -817,7 +1015,6 @@ internal sealed class PreviewRunner : BackgroundService, IPreviewRunner
             string? treeHash,
             string command,
             string workingDirectory,
-            HashSet<int> baselinePorts,
             RingBuffer buffer,
             DateTimeOffset startedAt)
         {
@@ -827,7 +1024,6 @@ internal sealed class PreviewRunner : BackgroundService, IPreviewRunner
             TreeHash = treeHash;
             Command = command;
             WorkingDirectory = workingDirectory;
-            BaselinePorts = baselinePorts;
             Buffer = buffer;
             StartedAt = startedAt;
             LastTouchedAt = startedAt;
@@ -839,18 +1035,50 @@ internal sealed class PreviewRunner : BackgroundService, IPreviewRunner
         public string? TreeHash { get; }
         public string Command { get; }
         public string WorkingDirectory { get; }
-        public HashSet<int> BaselinePorts { get; }
         public RingBuffer Buffer { get; }
         public DateTimeOffset StartedAt { get; }
         public DateTimeOffset LastTouchedAt { get; private set; }
         public Process? Process { get; private set; }
         public int? ExitCode { get; private set; }
         public int? ObservedPort { get; private set; }
+        public ProcessIdentity RootIdentity { get; private set; }
         public bool HasExited => Volatile.Read(ref _exited) == 1;
 
-        public void AttachProcess(Process process) => Process = process;
+        public void AttachProcess(Process process, ProcessIdentity rootIdentity)
+        {
+            Process = process;
+            RootIdentity = rootIdentity;
+        }
         public void Touch(DateTimeOffset now) => LastTouchedAt = now;
-        public void MarkPort(int port) => ObservedPort = port;
+        public void MarkPort(int port)
+        {
+            lock (_portsLock)
+                ObservedPort = port;
+        }
+
+        public bool TryGetAttributedAppPort(int requestedPort, out int appPort)
+        {
+            lock (_portsLock)
+            {
+                if (ObservedPort == requestedPort)
+                {
+                    appPort = requestedPort;
+                    return true;
+                }
+            }
+
+            lock (_forwarderLock)
+            {
+                if (_forwarder?.PublicPort == requestedPort)
+                {
+                    appPort = _forwarder.AppPort;
+                    return true;
+                }
+            }
+
+            appPort = 0;
+            return false;
+        }
 
         /// <summary>
         /// Idempotently starts (or returns the existing) pod-local TCP forwarder fronting
