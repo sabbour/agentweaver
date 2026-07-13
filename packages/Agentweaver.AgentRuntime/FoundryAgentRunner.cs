@@ -18,6 +18,9 @@ public sealed class FoundryAgentRunner : IAgentRunner
 
         Call report_intent(intent) before each major step to describe what you are about to do.
         report_intent does NOT write files — always follow it with the actual tool call in the same response.
+        Batch related work into the fewest practical tool-calling turns. Use one report_intent for
+        a cohesive batch (for example, several small related components or files), then make all
+        related tool calls before reporting the next intent; do not narrate each micro-step.
 
         Work step by step. Do not produce a final summary until ALL writes are done.
 

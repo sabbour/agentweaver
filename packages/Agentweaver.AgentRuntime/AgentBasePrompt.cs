@@ -43,6 +43,9 @@ internal static class AgentBasePrompt
           submit_decision, instead of writing them to files.
 
         Call report_intent(intent) before each major step.
+        Batch related work into the fewest practical tool-calling turns. Use one report_intent for
+        a cohesive batch (for example, several small related components or files), then make all
+        related tool calls before reporting the next intent; do not narrate each micro-step.
         Call report_outcome(achieved, reason) as your final tool call.
 
         PREVIEWABLE DELIVERY
