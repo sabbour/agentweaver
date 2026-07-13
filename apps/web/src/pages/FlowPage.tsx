@@ -15,6 +15,7 @@ import { ArrowSyncRegular } from '@fluentui/react-icons';
 import { AgentAvatar } from '../components/AgentAvatar';
 import { RefreshCountdown } from '../hooks/useRefreshCountdown';
 import {
+  AppCard,
   EmptyState,
   PageContainer,
   PageHeader,
@@ -57,11 +58,14 @@ const useStyles = makeStyles({
     display: 'grid',
     gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))',
     gap: tokens.spacingHorizontalL,
+    alignItems: 'stretch',
   },
   card: {
     display: 'flex',
     flexDirection: 'column',
-    gap: tokens.spacingVerticalS,
+    gap: tokens.spacingVerticalM,
+    height: '100%',
+    minWidth: 0,
   },
   cardHeader: {
     display: 'flex',
@@ -78,13 +82,21 @@ const useStyles = makeStyles({
     alignItems: 'center',
     flexWrap: 'wrap',
   },
-  titles: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalXXS,
+  // Task preview line — clamped to 2 lines so a long/raw goal string can never blow
+  // out card height or repeat identically across every agent's tile unbounded.
+  taskPreview: {
     margin: 0,
-    paddingLeft: tokens.spacingHorizontalL,
     color: tokens.colorNeutralForeground2,
+    fontSize: tokens.fontSizeBase200,
+    lineHeight: tokens.lineHeightBase200,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    display: '-webkit-box',
+    WebkitLineClamp: 2,
+    WebkitBoxOrient: 'vertical',
+  },
+  moreCount: {
+    color: tokens.colorNeutralForeground3,
     fontSize: tokens.fontSizeBase200,
   },
   orchestrations: {
@@ -103,6 +115,9 @@ const useStyles = makeStyles({
     fontWeight: tokens.fontWeightSemibold,
     fontSize: tokens.fontSizeBase200,
     color: tokens.colorNeutralForeground1,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
   },
   orchestrationBadges: {
     display: 'flex',
@@ -114,6 +129,7 @@ const useStyles = makeStyles({
     display: 'flex',
     gap: tokens.spacingHorizontalS,
     flexWrap: 'wrap',
+    marginTop: 'auto',
   },
   runLink: {
     color: tokens.colorNeutralForeground1,
@@ -217,11 +233,31 @@ function formatEndedAt(run: WorkflowRunDto): string {
   return new Date(timestamp).toLocaleString();
 }
 
+// Renders up to 2 sample task titles, clamped to 2 lines each, with a "+N more" tail
+// instead of an unbounded raw list — long/duplicate goal strings from thin backend
+// data can never blow out card height this way.
+function TaskPreview({ titles, styles }: { titles: string[]; styles: ReturnType<typeof useStyles> }) {
+  if (titles.length === 0) return null;
+  const visible = titles.slice(0, 2);
+  const extra = titles.length - visible.length;
+  return (
+    <>
+      {visible.map((title, i) => (
+        <p key={i} className={styles.taskPreview} title={title}>{title}</p>
+      ))}
+      {extra > 0 && <span className={styles.moreCount}>+{extra} more task{extra === 1 ? '' : 's'}</span>}
+    </>
+  );
+}
+
 function AgentCard({ agent, projectId }: { agent: AgentQueueItem; projectId: string }) {
   const styles = useStyles();
   const hasGroups = agent.orchestrations && agent.orchestrations.length > 0;
+  // Per-orchestration badges only earn their place once there's more than one group —
+  // with a single orchestration they just repeat the card-level totals above.
+  const showOrchestrationBadges = agent.orchestrations.length > 1;
   return (
-    <div className={styles.card}>
+    <AppCard className={styles.card}>
       <div className={styles.cardHeader}>
         <AgentAvatar name={agent.agentName} size={24} />
         <span className={styles.agentName}>{agent.agentName}</span>
@@ -241,22 +277,18 @@ function AgentCard({ agent, projectId }: { agent: AgentQueueItem; projectId: str
         <div className={styles.orchestrations}>
           {agent.orchestrations.map((orch) => (
             <div key={orch.runId} className={styles.orchestrationGroup}>
-              <span className={styles.orchestrationTitle}>
+              <span className={styles.orchestrationTitle} title={orch.title ?? undefined}>
                 {orch.title ?? `Orchestration ${orch.runId.slice(0, 8)}`}
               </span>
-              <div className={styles.orchestrationBadges}>
-                {orch.active > 0 && <Badge appearance="tint" color="subtle">{orch.active} active</Badge>}
-                {orch.queued > 0 && <Badge appearance="tint" color="subtle">{orch.queued} queued</Badge>}
-                {orch.blocked > 0 && <Badge appearance="tint" color="danger">{orch.blocked} blocked</Badge>}
-                {orch.done > 0 && <Badge appearance="tint" color="success">{orch.done} done</Badge>}
-              </div>
-              {orch.sampleTitles && orch.sampleTitles.length > 0 && (
-                <ul className={styles.titles}>
-                  {orch.sampleTitles.map((title, i) => (
-                    <li key={i}>{title}</li>
-                  ))}
-                </ul>
+              {showOrchestrationBadges && (
+                <div className={styles.orchestrationBadges}>
+                  {orch.active > 0 && <Badge appearance="tint" color="subtle">{orch.active} active</Badge>}
+                  {orch.queued > 0 && <Badge appearance="tint" color="subtle">{orch.queued} queued</Badge>}
+                  {orch.blocked > 0 && <Badge appearance="tint" color="danger">{orch.blocked} blocked</Badge>}
+                  {orch.done > 0 && <Badge appearance="tint" color="success">{orch.done} done</Badge>}
+                </div>
               )}
+              {orch.sampleTitles && <TaskPreview titles={orch.sampleTitles} styles={styles} />}
               <Link
                 to={`/projects/${projectId}/orchestrations/${orch.runId}`}
                 className={styles.runLink}
@@ -268,13 +300,7 @@ function AgentCard({ agent, projectId }: { agent: AgentQueueItem; projectId: str
         </div>
       ) : (
         <>
-          {agent.sampleTitles && agent.sampleTitles.length > 0 && (
-            <ul className={styles.titles}>
-              {agent.sampleTitles.map((title, i) => (
-                <li key={i}>{title}</li>
-              ))}
-            </ul>
-          )}
+          {agent.sampleTitles && <TaskPreview titles={agent.sampleTitles} styles={styles} />}
 
           {agent.runIds && agent.runIds.length > 0 && (
             <div className={styles.runLinks}>
@@ -291,7 +317,7 @@ function AgentCard({ agent, projectId }: { agent: AgentQueueItem; projectId: str
           )}
         </>
       )}
-    </div>
+    </AppCard>
   );
 }
 
