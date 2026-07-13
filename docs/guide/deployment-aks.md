@@ -131,7 +131,7 @@ bash scripts/aks/30-deploy.sh
 bash scripts/aks/40-verify.sh
 ```
 
-`20-build-push-images.sh` reuses the 1JS feed password from your user `~/.npmrc` (or `AZURE_ARTIFACTS_NPM_PASSWORD_B64`, if set) and passes it to the frontend `az acr build` as a secret build arg so the token is not retained in the published image layers.
+`20-build-push-images.sh` builds `apps/web/dist` locally with your 1JS feed credential from `~/.npmrc` (or a temporary ignored `.npmrc.build` synthesized from `AZURE_ARTIFACTS_NPM_PASSWORD_B64`), then uploads only the compiled frontend assets to `az acr build`. The npm token never enters the Docker build context, image layers, image history, or ACR build logs.
 
 Or in one command:
 

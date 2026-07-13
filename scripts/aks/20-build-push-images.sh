@@ -72,6 +72,7 @@ echo "    - Set FORCE_REBUILD=true to rebuild every image."
 echo ""
 
 cd "${REPO_ROOT}"
+trap cleanup_frontend_npmrc_build EXIT
 
 current_deployment_tag() {
   local deployment="$1"
@@ -109,35 +110,67 @@ paths_changed() {
   ! git diff --quiet "${old_ref}" "${new_ref}" -- "$@"
 }
 
-frontend_npm_password_b64() {
+frontend_npm_userconfig() {
+  local home_npmrc="${HOME:-}/.npmrc"
   if [[ -n "${AZURE_ARTIFACTS_NPM_PASSWORD_B64:-}" ]]; then
-    printf '%s' "${AZURE_ARTIFACTS_NPM_PASSWORD_B64}"
+    local build_npmrc="${REPO_ROOT}/apps/web/.npmrc.build"
+    cp "${REPO_ROOT}/apps/web/.npmrc" "${build_npmrc}"
+    printf '%s\n' \
+      '; begin auth token' \
+      '//pkgs.dev.azure.com/office/Office/_packaging/1JS/npm/registry/:username=agentweaver' \
+      "//pkgs.dev.azure.com/office/Office/_packaging/1JS/npm/registry/:_password=${AZURE_ARTIFACTS_NPM_PASSWORD_B64}" \
+      '//pkgs.dev.azure.com/office/Office/_packaging/1JS/npm/registry/:email=npm requires email to be set but does not use the value' \
+      '//pkgs.dev.azure.com/office/Office/_packaging/1JS/npm/:username=agentweaver' \
+      "//pkgs.dev.azure.com/office/Office/_packaging/1JS/npm/:_password=${AZURE_ARTIFACTS_NPM_PASSWORD_B64}" \
+      '//pkgs.dev.azure.com/office/Office/_packaging/1JS/npm/:email=npm requires email to be set but does not use the value' \
+      '; end auth token' >> "${build_npmrc}"
+    printf '%s' "${build_npmrc}"
     return 0
   fi
 
-  local npmrc_path="${HOME:-}/.npmrc"
-  if [[ -f "${npmrc_path}" ]]; then
-    grep -E -m1 '^//pkgs\.dev\.azure\.com/office/Office/_packaging/1JS/npm(/registry)?/:_password=' "${npmrc_path}" \
-      | sed 's/^[^=]*=//' || true
+  if [[ -f "${home_npmrc}" ]] && grep -q -E '^//pkgs\.dev\.azure\.com/office/Office/_packaging/1JS/npm(/registry)?/:_password=' "${home_npmrc}"; then
+    printf '%s' "${home_npmrc}"
+    return 0
   fi
+
+  return 1
+}
+
+cleanup_frontend_npmrc_build() {
+  rm -f "${REPO_ROOT}/apps/web/.npmrc.build"
+}
+
+prepare_frontend_dist() {
+  if ! command -v npm >/dev/null 2>&1; then
+    echo "ERROR: npm is required to build apps/web before az acr build." >&2
+    return 1
+  fi
+
+  local userconfig=""
+  if ! userconfig="$(frontend_npm_userconfig)"; then
+    echo "ERROR: missing Azure Artifacts npm credentials for apps/web." >&2
+    echo "  Run 'npx vsts-npm-auth -config apps/web/.npmrc -F' to refresh ~/.npmrc," >&2
+    echo "  or export AZURE_ARTIFACTS_NPM_PASSWORD_B64 with the base64 PAT value." >&2
+    return 1
+  fi
+
+  echo "--- Building local frontend assets for agentweaver-frontend ---"
+  (
+    cd "${REPO_ROOT}/apps/web"
+    NPM_CONFIG_USERCONFIG="${userconfig}" npm ci --legacy-peer-deps
+    unset VITE_API_URL VITE_API_KEY
+    npm run build
+  )
+  cleanup_frontend_npmrc_build
 }
 
 build_image() {
   local image="$1"
   local tag="$2"
   local dockerfile="$3"
-  local extra_args=()
 
   if [[ "${image}" == "agentweaver-frontend" ]]; then
-    local npm_password_b64=""
-    npm_password_b64="$(frontend_npm_password_b64)"
-    if [[ -z "${npm_password_b64}" ]]; then
-      echo "ERROR: missing Azure Artifacts npm credentials for apps/web." >&2
-      echo "  Run 'npx vsts-npm-auth -config apps/web/.npmrc -F' to refresh ~/.npmrc," >&2
-      echo "  or export AZURE_ARTIFACTS_NPM_PASSWORD_B64 with the base64 PAT value." >&2
-      return 1
-    fi
-    extra_args=(--secret-build-arg "AZURE_ARTIFACTS_NPM_PASSWORD_B64=${npm_password_b64}")
+    prepare_frontend_dist
   fi
 
   echo "--- Building ${image}:${tag} (${dockerfile}) ---"
@@ -146,7 +179,6 @@ build_image() {
     --resource-group "${RESOURCE_GROUP}" \
     --image "${image}:${tag}" \
     --file "${dockerfile}" \
-    "${extra_args[@]}" \
     --output none \
     .
   echo "  [built]  ${ACR_LOGIN_SERVER}/${image}:${tag}"

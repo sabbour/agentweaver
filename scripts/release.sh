@@ -78,6 +78,7 @@ if [[ "${BUMP}" != "major" && "${BUMP}" != "minor" && "${BUMP}" != "patch" ]]; t
 fi
 
 DRY_RUN="${DRY_RUN:-false}"
+trap cleanup_frontend_npmrc_build EXIT
 run() {
   if [[ "${DRY_RUN}" == "true" ]]; then
     echo "[dry-run] $*"
@@ -214,6 +215,60 @@ image_changed_since_tag() {
   return 0  # changed
 }
 
+frontend_npm_userconfig() {
+  local home_npmrc="${HOME:-}/.npmrc"
+  if [[ -n "${AZURE_ARTIFACTS_NPM_PASSWORD_B64:-}" ]]; then
+    local build_npmrc="${REPO_ROOT}/apps/web/.npmrc.build"
+    cp "${REPO_ROOT}/apps/web/.npmrc" "${build_npmrc}"
+    printf '%s\n' \
+      '; begin auth token' \
+      '//pkgs.dev.azure.com/office/Office/_packaging/1JS/npm/registry/:username=agentweaver' \
+      "//pkgs.dev.azure.com/office/Office/_packaging/1JS/npm/registry/:_password=${AZURE_ARTIFACTS_NPM_PASSWORD_B64}" \
+      '//pkgs.dev.azure.com/office/Office/_packaging/1JS/npm/registry/:email=npm requires email to be set but does not use the value' \
+      '//pkgs.dev.azure.com/office/Office/_packaging/1JS/npm/:username=agentweaver' \
+      "//pkgs.dev.azure.com/office/Office/_packaging/1JS/npm/:_password=${AZURE_ARTIFACTS_NPM_PASSWORD_B64}" \
+      '//pkgs.dev.azure.com/office/Office/_packaging/1JS/npm/:email=npm requires email to be set but does not use the value' \
+      '; end auth token' >> "${build_npmrc}"
+    printf '%s' "${build_npmrc}"
+    return 0
+  fi
+
+  if [[ -f "${home_npmrc}" ]] && grep -q -E '^//pkgs\.dev\.azure\.com/office/Office/_packaging/1JS/npm(/registry)?/:_password=' "${home_npmrc}"; then
+    printf '%s' "${home_npmrc}"
+    return 0
+  fi
+
+  return 1
+}
+
+cleanup_frontend_npmrc_build() {
+  rm -f "${REPO_ROOT}/apps/web/.npmrc.build"
+}
+
+prepare_frontend_dist() {
+  if ! command -v npm >/dev/null 2>&1; then
+    echo "ERROR: npm is required to build apps/web before az acr build." >&2
+    exit 1
+  fi
+
+  local userconfig=""
+  if ! userconfig="$(frontend_npm_userconfig)"; then
+    echo "ERROR: missing Azure Artifacts npm credentials for apps/web." >&2
+    echo "  Run 'npx vsts-npm-auth -config apps/web/.npmrc -F' to refresh ~/.npmrc," >&2
+    echo "  or export AZURE_ARTIFACTS_NPM_PASSWORD_B64 with the base64 PAT value." >&2
+    exit 1
+  fi
+
+  echo "  [frontend] Building local dist/ before az acr build"
+  (
+    cd "${REPO_ROOT}/apps/web"
+    NPM_CONFIG_USERCONFIG="${userconfig}" npm ci --legacy-peer-deps
+    unset VITE_API_URL VITE_API_KEY
+    npm run build
+  )
+  cleanup_frontend_npmrc_build
+}
+
 # ---------------------------------------------------------------------------
 # 8 & 9. Build changed images / retag unchanged images
 # ---------------------------------------------------------------------------
@@ -228,6 +283,11 @@ for IMAGE in "agentweaver-api" "agentweaver-frontend" "agentweaver-mcp" "agentwe
 
   if [[ -z "${LAST_TAG}" ]] || image_changed_since_tag "${PATHS}"; then
     echo "  [build]  ${IMAGE} (changed)"
+    if [[ "${IMAGE}" == "agentweaver-frontend" ]]; then
+      if [[ "${DRY_RUN}" != "true" ]]; then
+        prepare_frontend_dist
+      fi
+    fi
     run az acr build \
       --registry "${ACR_NAME}" \
       --resource-group "${RESOURCE_GROUP}" \
