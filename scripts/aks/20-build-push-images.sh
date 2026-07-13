@@ -55,6 +55,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 # shellcheck source=00-variables.sh
 source "${SCRIPT_DIR}/00-variables.sh"
+trap cleanup_frontend_npmrc_build EXIT
 
 TARGET_GIT_REF="${TARGET_GIT_REF:-${IMAGE_TAG}}"
 
@@ -72,8 +73,6 @@ echo "    - Set FORCE_REBUILD=true to rebuild every image."
 echo ""
 
 cd "${REPO_ROOT}"
-
-FRONTEND_NPM_FEED_ENDPOINT="https://pkgs.dev.azure.com/office/Office/_packaging/1JS/npm/registry/"
 
 current_deployment_tag() {
   local deployment="$1"
@@ -111,48 +110,62 @@ paths_changed() {
   ! git diff --quiet "${old_ref}" "${new_ref}" -- "$@"
 }
 
-frontend_npm_pat() {
-  if [[ -n "${AZURE_ARTIFACTS_NPM_PAT:-}" ]]; then
-    printf '%s' "${AZURE_ARTIFACTS_NPM_PAT}"
+frontend_npm_password_b64() {
+  if [[ -n "${AZURE_ARTIFACTS_NPM_PASSWORD_B64:-}" ]]; then
+    printf '%s' "${AZURE_ARTIFACTS_NPM_PASSWORD_B64}"
     return 0
   fi
 
-  if [[ -n "${AZURE_ARTIFACTS_NPM_PASSWORD_B64:-}" ]]; then
-    node -e "process.stdout.write(Buffer.from(process.argv[1], 'base64').toString('utf8'))" "${AZURE_ARTIFACTS_NPM_PASSWORD_B64}"
+  if [[ -n "${AZURE_ARTIFACTS_NPM_PAT:-}" ]]; then
+    node -e "process.stdout.write(Buffer.from(process.argv[1], 'utf8').toString('base64'))" "${AZURE_ARTIFACTS_NPM_PAT}"
     return 0
   fi
 
   return 1
 }
 
-frontend_npm_export_credprovider_env() {
-  local frontend_pat=""
-  if ! frontend_pat="$(frontend_npm_pat 2>/dev/null)"; then
-    return 1
+frontend_npm_userconfig() {
+  local home_npmrc="${HOME:-}/.npmrc"
+  local build_npmrc="${REPO_ROOT}/apps/web/.npmrc.build"
+  local password_b64=""
+
+  if password_b64="$(frontend_npm_password_b64 2>/dev/null)"; then
+    cp "${REPO_ROOT}/apps/web/.npmrc" "${build_npmrc}"
+    printf '%s\n' \
+      '; begin auth token' \
+      '//pkgs.dev.azure.com/office/Office/_packaging/1JS/npm/registry/:username=agentweaver' \
+      "//pkgs.dev.azure.com/office/Office/_packaging/1JS/npm/registry/:_password=${password_b64}" \
+      '//pkgs.dev.azure.com/office/Office/_packaging/1JS/npm/registry/:email=npm requires email to be set but does not use the value' \
+      '//pkgs.dev.azure.com/office/Office/_packaging/1JS/npm/:username=agentweaver' \
+      "//pkgs.dev.azure.com/office/Office/_packaging/1JS/npm/:_password=${password_b64}" \
+      '//pkgs.dev.azure.com/office/Office/_packaging/1JS/npm/:email=npm requires email to be set but does not use the value' \
+      '; end auth token' >> "${build_npmrc}"
+    printf '%s' "${build_npmrc}"
+    return 0
   fi
 
-  local endpoint_credentials=""
-  endpoint_credentials="$(node -e "const endpoint = process.argv[1]; const password = process.argv[2]; process.stdout.write(JSON.stringify({ endpointCredentials: [{ endpoint, username: 'agentweaver', password }] }));" "${FRONTEND_NPM_FEED_ENDPOINT}" "${frontend_pat}")"
-  export ARTIFACTS_CREDENTIALPROVIDER_EXTERNAL_FEED_ENDPOINTS="${endpoint_credentials}"
-  export VSS_NUGET_EXTERNAL_FEED_ENDPOINTS="${endpoint_credentials}"
+  if [[ -f "${home_npmrc}" ]] && grep -q -E '^//pkgs\.dev\.azure\.com/office/Office/_packaging/1JS/npm(/registry)?/:_password=' "${home_npmrc}"; then
+    printf '%s' "${home_npmrc}"
+    return 0
+  fi
+
+  return 1
+}
+
+cleanup_frontend_npmrc_build() {
+  rm -f "${REPO_ROOT}/apps/web/.npmrc.build"
 }
 
 run_frontend_npm_credential_provider() {
-  frontend_npm_export_credprovider_env || true
-
-  if command -v artifacts-npm-credprovider >/dev/null 2>&1; then
-    artifacts-npm-credprovider
-    return 0
-  fi
-
-  if npm_config_registry=https://registry.npmjs.org npx --yes artifacts-npm-credprovider --version >/dev/null 2>&1; then
-    npm_config_registry=https://registry.npmjs.org npx --yes artifacts-npm-credprovider
-    return 0
-  fi
-
-  if [[ -n "${ARTIFACTS_CREDENTIALPROVIDER_EXTERNAL_FEED_ENDPOINTS:-}" || -n "${VSS_NUGET_EXTERNAL_FEED_ENDPOINTS:-}" ]]; then
-    echo "ERROR: artifacts-npm-credprovider is not available in PATH or via npx." >&2
-    echo "  Install the credential provider or clear the PAT env vars and authenticate interactively." >&2
+  local uname_s
+  uname_s="$(uname -s 2>/dev/null || echo unknown)"
+  if [[ "${uname_s}" == "Linux" ]]; then
+    echo "ERROR: interactive frontend feed auth is currently unavailable on Linux/WSL in this script." >&2
+    echo "  The ado-npm-auth fallback bundles artifacts-credprovider v1.4.1 but requests a RID-specific" >&2
+    echo "  Microsoft.Net8.<rid>.NuGet.CredentialProvider.tar.gz asset that GitHub serves as a non-gzip error page." >&2
+    echo "  That is why previous runs ended with 'gzip: stdin: not in gzip format'." >&2
+    echo "  Export AZURE_ARTIFACTS_NPM_PAT (preferred), AZURE_ARTIFACTS_NPM_PASSWORD_B64, or refresh ~/.npmrc" >&2
+    echo "  with a valid 1JS feed token before rerunning the build." >&2
     return 1
   fi
 
@@ -166,10 +179,21 @@ prepare_frontend_dist() {
   fi
 
   echo "--- Building local frontend assets for agentweaver-frontend ---"
+  local userconfig=""
+  if userconfig="$(frontend_npm_userconfig 2>/dev/null)"; then
+    echo "  [frontend] Using PAT-backed npm userconfig outside the Docker context"
+  else
+    echo "  [frontend] No PAT-backed npm userconfig found; attempting interactive auth helper"
+  fi
+
   (
     cd "${REPO_ROOT}/apps/web"
-    run_frontend_npm_credential_provider
-    npm ci --legacy-peer-deps
+    if [[ -n "${userconfig}" ]]; then
+      NPM_CONFIG_USERCONFIG="${userconfig}" npm ci --legacy-peer-deps
+    else
+      run_frontend_npm_credential_provider
+      npm ci --legacy-peer-deps
+    fi
     unset VITE_API_URL VITE_API_KEY
     npm run build
   )
@@ -280,19 +304,68 @@ schedule_image \
   "${COMMON_DOTNET_PATHS[@]}" \
   "apps/Agentweaver.AgentHost"
 
+terminate_remaining_jobs() {
+  local failed_pid="$1"
+  local i
+  for i in "${!PIDS[@]}"; do
+    local pid="${PIDS[$i]}"
+    if [[ "${pid}" == "${failed_pid}" ]]; then
+      continue
+    fi
+    if kill -0 "${pid}" 2>/dev/null; then
+      echo "  [STOP] ${JOBS[$i]}" >&2
+      kill "${pid}" 2>/dev/null || true
+    fi
+  done
+
+  for i in "${!PIDS[@]}"; do
+    local pid="${PIDS[$i]}"
+    if [[ "${pid}" == "${failed_pid}" ]]; then
+      continue
+    fi
+    wait "${pid}" 2>/dev/null || true
+  done
+}
+
+wait_for_image_jobs() {
+  local pending_pids=("${PIDS[@]}")
+  local pending_jobs=("${JOBS[@]}")
+  local next_pids=()
+  local next_jobs=()
+  local i
+
+  while [[ "${#pending_pids[@]}" -gt 0 ]]; do
+    next_pids=()
+    next_jobs=()
+    for i in "${!pending_pids[@]}"; do
+      local pid="${pending_pids[$i]}"
+      local job="${pending_jobs[$i]}"
+      if kill -0 "${pid}" 2>/dev/null; then
+        next_pids+=("${pid}")
+        next_jobs+=("${job}")
+        continue
+      fi
+
+      if wait "${pid}"; then
+        echo "  [OK] ${job}"
+      else
+        echo "  [FAIL] ${job}" >&2
+        terminate_remaining_jobs "${pid}"
+        return 1
+      fi
+    done
+
+    pending_pids=("${next_pids[@]}")
+    pending_jobs=("${next_jobs[@]}")
+    if [[ "${#pending_pids[@]}" -gt 0 ]]; then
+      sleep 1
+    fi
+  done
+}
+
 echo ""
 echo "Waiting for image jobs to finish..."
-FAILED=0
-for i in "${!PIDS[@]}"; do
-  if wait "${PIDS[$i]}"; then
-    echo "  [OK] ${JOBS[$i]}"
-  else
-    echo "  [FAIL] ${JOBS[$i]}" >&2
-    FAILED=1
-  fi
-done
-
-if [[ "${FAILED}" -ne 0 ]]; then
+if ! wait_for_image_jobs; then
   echo "ERROR: one or more image jobs failed." >&2
   exit 1
 fi

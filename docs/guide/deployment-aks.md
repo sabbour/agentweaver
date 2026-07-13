@@ -76,13 +76,7 @@ bash scripts/aks/40-verify.sh
 
 `install.sh --aks` runs the same sequence and also carries `TENANT_ID` and `IDENTITY_CLIENT_ID` between steps.
 
-Before running `20-build-push-images.sh`, make sure the frontend Azure Artifacts credential provider can resolve the 1JS feed:
-
-```bash
-npx artifacts-npm-credprovider
-```
-
-If you have the Microsoft `ado-npm-auth` helper instead of `artifacts-npm-credprovider`, the scripts fall back to it automatically for local interactive/device-code refreshes.
+Before running `20-build-push-images.sh`, make sure the frontend can authenticate to the 1JS Azure Artifacts feed. The safest non-interactive path is to export `AZURE_ARTIFACTS_NPM_PAT` (preferred) or `AZURE_ARTIFACTS_NPM_PASSWORD_B64`; otherwise the scripts reuse a valid `~/.npmrc` and only then fall back to interactive helper flows on supported hosts.
 
 ## What the scripts deploy
 
@@ -126,14 +120,13 @@ kubectl describe sandboxwarmpool agentweaver-agent-host -n agentweaver
 ## Redeploy
 
 ```bash
-npx artifacts-npm-credprovider
 export IMAGE_TAG=$(git rev-parse --short HEAD)
 bash scripts/aks/20-build-push-images.sh
 bash scripts/aks/30-deploy.sh
 bash scripts/aks/40-verify.sh
 ```
 
-`20-build-push-images.sh` builds `apps/web/dist` locally before `az acr build`, then uploads only the compiled frontend assets. For local development it invokes the Azure Artifacts npm credential provider before `npm ci`, so existing cached/device-code auth keeps working without committing feed secrets. For unattended builds, export `AZURE_ARTIFACTS_NPM_PAT` (preferred) or `AZURE_ARTIFACTS_NPM_PASSWORD_B64`; the scripts translate that into the documented `ARTIFACTS_CREDENTIALPROVIDER_EXTERNAL_FEED_ENDPOINTS` / `VSS_NUGET_EXTERNAL_FEED_ENDPOINTS` JSON contract instead of writing a temporary `.npmrc`.
+`20-build-push-images.sh` builds `apps/web/dist` locally before `az acr build`, then uploads only the compiled frontend assets. For unattended builds, export `AZURE_ARTIFACTS_NPM_PAT` (preferred) or `AZURE_ARTIFACTS_NPM_PASSWORD_B64`; the scripts turn that into a temporary host-side `.npmrc.build` used only for `npm ci`, then delete it on exit so feed secrets never enter Docker layers. If those env vars are absent, the scripts fall back to existing `~/.npmrc` auth and only then to interactive helper flows on supported hosts.
 
 Or in one command:
 
