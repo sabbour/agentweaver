@@ -228,8 +228,8 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
     ///
     /// <para>Conflict rules (conservative-by-default):</para>
     /// <list type="bullet">
-    /// <item>If either subtask declares no file-path tokens in its <see cref="Subtask.Scope"/>,
-    ///   the scope is undeclared and they are assumed to conflict (safe default).</item>
+    /// <item>If either subtask has no structured <see cref="Subtask.DeclaredOutputPathsJson"/>
+    ///   entries, its outputs are undeclared and the pair is assumed to conflict (safe default).</item>
     /// <item>If both declare file-path tokens, they conflict when any token from one subtask
     ///   suffix-matches or filename-matches a token from the other (see
     ///   <see cref="FilesMatchPublic"/>).</item>
@@ -243,10 +243,12 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         // NOTE: IsolationStrategy ("shared" vs "worktree") has NO runtime enforcement — all child
         // runs share a single worktree (see RunOrchestrator.StartChildRunAsync). A subtask labeled
         // "shared" can therefore still write files and clobber a sibling. We deliberately do NOT
-        // short-circuit on isolation here; every pair flows through token-based filename matching so
+        // short-circuit on isolation here; every pair flows through structured output matching so
         // mislabeled writers are still scheduled serially when their declared outputs overlap.
-        var files1 = AssemblyPlanning.ExtractFileTokens(subtask1.Scope);
-        var files2 = AssemblyPlanning.ExtractFileTokens(subtask2.Scope);
+        var files1 = CoordinatorOrchestratorExecutor.DeserializeDeclaredOutputPaths(
+            subtask1.DeclaredOutputPathsJson);
+        var files2 = CoordinatorOrchestratorExecutor.DeserializeDeclaredOutputPaths(
+            subtask2.DeclaredOutputPathsJson);
 
         // Either subtask has no declared paths → conservatively treat as conflicting.
         if (files1.Count == 0 || files2.Count == 0)
@@ -2605,7 +2607,7 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
                 AgentName = choice.AgentName,
                 ModelId = choice.SelectedModelId,
                 AgentCharter = choice.AgentCharter,
-                Task = BuildCanonicalSubtaskTask(subtask),
+                Task = CoordinatorDispatchService.BuildCanonicalSubtaskTask(subtask),
                 Status = RunStatus.InProgress,
                 StartedAt = DateTimeOffset.UtcNow,
                 EndedAt = null,
@@ -2662,19 +2664,6 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
             string.Join(",", targetIds.Except(freshFallbackIds)),
             string.Join(",", freshFallbackIds));
     }
-
-    /// <summary>
-    /// The GUIDANCE-FREE canonical task text for a subtask, derived solely from its
-    /// <see cref="Subtask"/> definition (<c>Title</c> + <c>Scope</c>) — matching the base composed by
-    /// <c>CoordinatorDispatchService.ComposeChildTaskAsync</c> before any recovery guidance is appended.
-    /// Used as the handoff base <see cref="Run.Task"/> so the ONLY guidance present on the new agent's
-    /// task is the single <see cref="AccumulatedReviewFeedback.RenderedGuidance"/> the handoff appends —
-    /// never a prior handoff child's already-embedded guidance (which would compound each rotation).
-    /// </summary>
-    private static string BuildCanonicalSubtaskTask(Subtask subtask) =>
-        string.IsNullOrWhiteSpace(subtask.Scope)
-            ? subtask.Title
-            : $"{subtask.Title}\n\n{subtask.Scope}";
 
     /// <summary>
     /// Points a lockout-rotated subtask at its NEW handoff child run: sets

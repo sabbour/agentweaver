@@ -17,10 +17,16 @@ public sealed class Subtask
     /// <c>Agentweaver.AgentRuntime.RunOrchestrator.StartChildRunAsync</c>). "shared" does NOT mean the
     /// subtask is sandboxed or that it won't write files; it merely signals the subtask reads from
     /// shared context rather than owning its workspace. Because there is no isolation in practice,
-    /// every subtask (regardless of this value) must declare its output filenames in <see cref="Scope"/>
-    /// so <c>CoordinatorAssemblyService.DoSubtasksConflict</c> can serialize colliding writers.
+    /// every subtask (regardless of this value) must declare its output filenames in
+    /// <see cref="DeclaredOutputPathsJson"/> so colliding writers can be serialized.
     /// </summary>
     public required string IsolationStrategy { get; set; } // worktree | shared
+    /// <summary>
+    /// JSON array of repository-relative output paths authored by the coordinator during
+    /// decomposition. This is authoritative metadata; paths mentioned only in <see cref="Scope"/>
+    /// are never inferred to be outputs.
+    /// </summary>
+    public string DeclaredOutputPathsJson { get; set; } = "[]";
     public required string Status { get; set; }            // pending | dispatched | running | rai_flagged | assemble_ready | completed | failed
     public string? ChildRunId { get; set; }
     public string? LockedOutAgents { get; set; }

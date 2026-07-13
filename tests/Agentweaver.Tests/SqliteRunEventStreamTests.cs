@@ -237,33 +237,25 @@ public sealed class SqliteRunEventStreamTests : IDisposable
     {
         var runId = "run-retryable-blocked-live";
         var stream = new SqliteRunEventStream(_config);
-        var received = new ConcurrentQueue<RunEvent>();
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-        var consume = Task.Run(async () =>
-        {
-            await foreach (var evt in stream.SubscribeAsync(runId, 0, cts.Token))
-            {
-                received.Enqueue(evt);
-                if (evt.Type == EventTypes.CoordinatorRecovered)
-                    break;
-            }
-        }, cts.Token);
+        await using var subscription = stream.SubscribeAsync(runId, 0, cts.Token)
+            .GetAsyncEnumerator(cts.Token);
 
+        var blockedMove = subscription.MoveNextAsync().AsTask();
         await stream.AppendAsync(runId, new RunEvent(1, EventTypes.CoordinatorAssemblyBlocked, new
         {
             reason = "build_test_infra_agenthost_launch_failed",
             retryable = true,
         }));
-        await WaitUntilAsync(() => received.Any(e => e.Type == EventTypes.CoordinatorAssemblyBlocked),
-            TimeSpan.FromSeconds(5), "subscriber should receive the live blocked event");
-        consume.IsCompleted.Should().BeFalse("live retryable assembly_blocked must not close the stream");
+        (await blockedMove).Should().BeTrue();
+        subscription.Current.Type.Should().Be(EventTypes.CoordinatorAssemblyBlocked);
 
+        var recoveredMove = subscription.MoveNextAsync().AsTask();
+        recoveredMove.IsCompleted.Should().BeFalse(
+            "live retryable assembly_blocked must not close the stream");
         await stream.AppendAsync(runId, new RunEvent(2, EventTypes.CoordinatorRecovered, new { reason = "rearmed" }));
-        await consume;
-
-        received.Select(e => e.Type).Should().ContainInOrder(
-            EventTypes.CoordinatorAssemblyBlocked,
-            EventTypes.CoordinatorRecovered);
+        (await recoveredMove).Should().BeTrue();
+        subscription.Current.Type.Should().Be(EventTypes.CoordinatorRecovered);
     }
 
     [Fact]

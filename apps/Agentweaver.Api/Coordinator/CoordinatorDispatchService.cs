@@ -300,7 +300,7 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
 
         var inFlight = new Dictionary<int, Task<ChildResult>>();
 
-        // Build a per-id lookup so DoSubtasksConflict can inspect Scope without a DB round-trip.
+        // Build a per-id lookup so DoSubtasksConflict can inspect structured outputs without a DB round-trip.
         var subtasksById = subtasks.ToDictionary(s => s.Id);
 
         // RECOVERY-AWARE RE-ARM. A re-armed loop (reconciler sweep, startup recovery, or a manual
@@ -2147,24 +2147,7 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         CancellationToken ct)
     {
         var existing = edges.ToHashSet();
-        var additions = new List<(int SubtaskId, int DependsOnSubtaskId)>();
-        var byOutput = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-
-        foreach (var subtask in subtasks.OrderBy(s => s.Id))
-        {
-            foreach (var output in AssemblyPlanning.ExtractFileTokens(subtask.Scope))
-            {
-                if (!byOutput.TryGetValue(output, out var owner))
-                {
-                    byOutput[output] = subtask.Id;
-                    continue;
-                }
-
-                var edge = (subtask.Id, owner);
-                if (subtask.Id != owner && !existing.Contains(edge) && !additions.Contains(edge))
-                    additions.Add(edge);
-            }
-        }
+        var additions = FindDeclaredOutputConflictEdges(subtasks, existing);
 
         if (additions.Count == 0)
             return edges;
@@ -2186,6 +2169,32 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
             "Coordinator dispatch: serialized {Count} output-file conflict(s) in work plan {WorkPlanId}",
             additions.Count, workPlanId);
         return edges;
+    }
+
+    internal static List<(int SubtaskId, int DependsOnSubtaskId)> FindDeclaredOutputConflictEdges(
+        IReadOnlyList<Subtask> subtasks,
+        IReadOnlySet<(int, int)> existing)
+    {
+        var additions = new List<(int SubtaskId, int DependsOnSubtaskId)>();
+        var byOutput = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var subtask in subtasks.OrderBy(s => s.Id))
+        {
+            foreach (var output in CoordinatorOrchestratorExecutor.DeserializeDeclaredOutputPaths(
+                         subtask.DeclaredOutputPathsJson))
+            {
+                if (!byOutput.TryGetValue(output, out var owner))
+                {
+                    byOutput[output] = subtask.Id;
+                    continue;
+                }
+
+                var edge = (subtask.Id, owner);
+                if (subtask.Id != owner && !existing.Contains(edge) && !additions.Contains(edge))
+                    additions.Add(edge);
+            }
+        }
+        return additions;
     }
 
     private static bool TryMapTerminalEvent(RunEvent evt, out ChildTerminal terminal)
@@ -2514,8 +2523,13 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
 
             What this means for you:
             - Files produced by the subtasks you depend on are ALREADY present in your workspace when
-              you start — just read them like any other file (e.g. open `research-domain.md`). If a
-              file an upstream subtask was supposed to create is missing, treat that as a real error:
+              you start — just read them like any other file.
+            - For an upstream planning artifact, accept either notation (`research-domain.md` or
+              `docs/planning/research-domain.md`). Take its filename and check
+              `docs/planning/<filename>` first. If it is not there, fall back to `<filename>` at the
+              repository root. This fallback is required for work produced by runs started before
+              the planning-folder convention was introduced.
+            - Only if the upstream artifact is absent from BOTH locations, treat it as a real error:
               report it via your outcome and do NOT silently substitute the parent task's goal text
               for the missing artifact.
             - Your own file changes are captured and published automatically after your turn. You do
@@ -2534,9 +2548,7 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         Subtask subtask,
         CancellationToken ct)
     {
-        var baseTask = string.IsNullOrWhiteSpace(subtask.Scope)
-            ? subtask.Title
-            : $"{subtask.Title}\n\n{subtask.Scope}";
+        var baseTask = BuildCanonicalSubtaskTask(subtask);
 
         if (!string.IsNullOrWhiteSpace(subtask.RecoveryGuidance))
             baseTask = $"{baseTask}\n\n{subtask.RecoveryGuidance}";
@@ -2625,6 +2637,48 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         }
 
         return sb.ToString();
+    }
+
+    /// <summary>
+    /// Builds the guidance-free task text shared by initial dispatch and lockout handoff. Planning
+    /// subtasks receive the repository-wide location convention for prose deliverables.
+    /// </summary>
+    internal static string BuildCanonicalSubtaskTask(Subtask subtask)
+    {
+        var task = string.IsNullOrWhiteSpace(subtask.Scope)
+            ? subtask.Title
+            : $"{subtask.Title}\n\n{subtask.Scope}";
+        var declaredOutputs = CoordinatorOrchestratorExecutor.DeserializeDeclaredOutputPaths(
+            subtask.DeclaredOutputPathsJson);
+
+        if (declaredOutputs.Count > 0)
+        {
+            task +=
+                $"""
+
+                ## Declared output paths
+                The coordinator authoritatively declared these output files:
+                {string.Join("\n", declaredOutputs.Select(path => $"- `{path}`"))}
+
+                Create or modify outputs at exactly those repository-relative paths. Any other path
+                mentioned in the task prose is an input/reference and must not be relocated.
+                """;
+        }
+
+        if (!string.Equals(subtask.Phase, "planning", StringComparison.OrdinalIgnoreCase))
+            return task;
+
+        return
+            $"""
+            {task}
+
+            ## Planning deliverable location
+            Place prose and Markdown deliverables under `docs/planning/` (create it if needed), not
+            at the repository root. The structured declared-output list above is authoritative when
+            present; paths that appear only in prose are inputs/references and remain exactly as
+            written. If no outputs were declared, still apply this folder convention to planning
+            prose you create.
+            """;
     }
 
     private async Task<string?> CompletionSummaryAsync(Subtask subtask, CancellationToken ct)

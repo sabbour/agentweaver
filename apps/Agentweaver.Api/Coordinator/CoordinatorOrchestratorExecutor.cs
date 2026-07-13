@@ -43,6 +43,22 @@ public sealed class CoordinatorOrchestratorExecutor
     private const string CoordinatorAgentName = "Coordinator";
     private const int DecompositionModelLimitTokens = 120_000;
     private const double DecompositionPromptBudgetRatio = 0.80;
+    internal const string PlanningPhaseGuidance =
+        """Research, market-analysis, business-plan, launch-marketing/marketing-plan, user-stories, PRD/product-requirements, and design-spec subtasks MUST use "phase": "planning".""";
+    internal const string DeclaredOutputPathsGuidance =
+        "\"declared_output_paths\": array of repository-relative files this subtask will create or modify. Include outputs only; never include files that are merely read, consulted, referenced, or used as inputs.";
+    private static readonly Regex PlanningDeliverableKeyword = new(
+        @"\b(?:research|market[\s_-]+analysis|market[\s_-]+research|business[\s_-]+plan|launch[\s_-]+marketing(?:[\s_-]+plan)?|marketing[\s_-]+plan|user[\s_-]+stor(?:y|ies)|prd|product[\s_-]+requirements(?:[\s_-]+document)?|design[\s_-]+spec(?:ification)?|requirements[\s_-]+document)\b",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex PlanningDeliverableProducer = new(
+        @"\b(?:(?:write|draft|create|produce|author|prepare|define|develop|document|revise|update)\s+(?:an?\s+|the\s+)?(?:research|market[\s_-]+analysis|market[\s_-]+research|business[\s_-]+plan|launch[\s_-]+marketing(?:[\s_-]+plan)?|marketing[\s_-]+plan|user[\s_-]+stor(?:y|ies)|prd|product[\s_-]+requirements(?:[\s_-]+document)?|design[\s_-]+spec(?:ification)?|requirements[\s_-]+document)|(?:conduct|perform)\s+(?:an?\s+|the\s+)?research)\b",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex PlanningResearchImperative = new(
+        @"^\s*(?:research|investigate|analyze)\b",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex DeterministicDeclaredOutput = new(
+        @"\b(?:write|create|produce|author|draft|revise|update|modify|output(?:\s+is)?|deliverable(?:\s+is)?)\s+(?:an?\s+|the\s+)?(?<path>(?:[\w.-]+/)*[\w.-]+\.[A-Za-z0-9]+)\b",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private const string CoordinatorMetaToolsRuntimeNote =
         """
 
@@ -121,6 +137,7 @@ public sealed class CoordinatorOrchestratorExecutor
 
         var drafts = await DecomposeWithModelAsync(input, spec, selectedWorkflow, ct).ConfigureAwait(false)
                      ?? DecomposeDeterministic(spec);
+        drafts = drafts.Select(NormalizePlanningDraft).ToList();
         var originalDraftCount = drafts.Count;
         drafts = drafts
             .Where(d => IsDispatchable(d.Title, d.Role, d.Role))
@@ -133,7 +150,7 @@ public sealed class CoordinatorOrchestratorExecutor
                 input.RunId);
         }
         if (drafts.Count == 0)
-            drafts = DecomposeDeterministic(spec);
+            drafts = DecomposeDeterministic(spec).Select(NormalizePlanningDraft).ToList();
 
         var (drafts2, cycleNote) = BreakCycles(drafts);
         drafts = drafts2;
@@ -459,9 +476,12 @@ public sealed class CoordinatorOrchestratorExecutor
                 Respond with ONLY a single JSON array (no prose, no code fences). Each element:
                 - "title": string. A short imperative subtask title.
                 - "scope": string. The exact context/files the subagent should read AND the specific
-                  output file(s) it must write (e.g. "research-destination.md"). Every subtask that
-                  produces a file MUST declare a unique output filename here — two parallel subtasks
-                  MUST NOT write to the same file or they will conflict.
+                  work it must perform. Paths in this prose are descriptive and are NOT used to infer
+                  outputs.
+                - {{DeclaredOutputPathsGuidance}} Every subtask that produces a file MUST list it
+                  here. Two parallel subtasks MUST NOT declare the same output path. For "planning"
+                  subtasks, place prose/Markdown deliverables under "docs/planning/" and declare the
+                  full path here (e.g. "docs/planning/research-destination.md").
                 - "role": string. The role for this subtask. PREFER an exact catalog/roster role id
                   when one fits adequately. Only define a bespoke role when no catalog role covers the
                   function well enough.
@@ -470,12 +490,13 @@ public sealed class CoordinatorOrchestratorExecutor
                   and how it should approach its work. Leave null when using a catalog role.
                 - "complexity": one of "low" | "medium" | "high".
                 - "phase": one of "none" | "planning" | "execution" | "validation".
+                  {{PlanningPhaseGuidance}}
                 - "isolation": one of "worktree" | "shared". This is an ADVISORY hint about whether a
                   subtask primarily reads from shared context vs. owns its workspace — it is NOT a
                   sandbox: all subtasks share one worktree at runtime. Use "shared" for subtasks that
                   read/research from shared context, "worktree" for the primary file producers. EITHER
-                  way, every subtask that writes a file MUST declare a unique output filename in
-                  "scope" so collision detection can schedule overlapping writers serially.
+                  way, every subtask that writes a file MUST list it in "declared_output_paths" so
+                  collision detection can schedule overlapping writers serially.
                 - "depends_on": array of 1-based indices of other subtasks in THIS array that must
                   complete first (empty if none).
 
@@ -609,6 +630,18 @@ public sealed class CoordinatorOrchestratorExecutor
                     }
                 }
 
+                var declaredOutputPaths = new List<string>();
+                if (el.TryGetProperty("declared_output_paths", out var outputs)
+                    && outputs.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var output in outputs.EnumerateArray())
+                    {
+                        if (output.ValueKind == JsonValueKind.String
+                            && !string.IsNullOrWhiteSpace(output.GetString()))
+                            declaredOutputPaths.Add(output.GetString()!);
+                    }
+                }
+
                 valid.Add((originalIndex, new SubtaskDraft(
                     title!.Trim(),
                     scope!.Trim(),
@@ -617,7 +650,8 @@ public sealed class CoordinatorOrchestratorExecutor
                     NormalizePhase(Read("phase")),
                     NormalizeIsolation(Read("isolation")),
                     dependsOn,
-                    NormalizeCharter(Read("charter")))));
+                    NormalizeCharter(Read("charter")),
+                    declaredOutputPaths)));
             }
 
             if (valid.Count == 0) return false;
@@ -659,7 +693,8 @@ public sealed class CoordinatorOrchestratorExecutor
 
     /// <summary>
     /// Deterministic, never-failing decomposition used when the model is unavailable or returns
-    /// unparseable output. Yields a single execution subtask covering the whole spec, so the
+    /// unparseable output. Yields a single subtask covering the whole spec, with planning/prose
+    /// deliverables classified deterministically so the
     /// decompose -> select -> persist path works fully offline.
     /// </summary>
     private static List<SubtaskDraft> DecomposeDeterministic(OutcomeSpec spec)
@@ -669,6 +704,8 @@ public sealed class CoordinatorOrchestratorExecutor
             .Append(spec.DesiredOutcome)
             .Append(" Scope: ").Append(spec.Scope)
             .ToString();
+        var phase = InferSubtaskPhase("Deliver the confirmed outcome", scope, "none");
+        var declaredOutputPaths = InferDeterministicDeclaredOutputPaths(scope, phase);
 
         return
         [
@@ -677,10 +714,92 @@ public sealed class CoordinatorOrchestratorExecutor
                 Scope: scope,
                 Role: "core-implementer",
                 Complexity: "medium",
-                Phase: "execution",
+                Phase: phase,
                 Isolation: "worktree",
-                DependsOn: [])
+                DependsOn: [],
+                DeclaredOutputPaths: declaredOutputPaths)
         ];
+    }
+
+    private static SubtaskDraft NormalizePlanningDraft(SubtaskDraft draft)
+    {
+        var phase = InferSubtaskPhase(draft.Title, draft.Scope, draft.Phase);
+        return draft with
+        {
+            Phase = phase,
+            DeclaredOutputPaths = CanonicalizeDeclaredOutputPaths(draft.DeclaredOutputPaths, phase),
+        };
+    }
+
+    internal static string InferSubtaskPhase(string title, string scope, string? phase)
+    {
+        var normalized = NormalizePhase(phase);
+        // A supplied phase is structural decomposition metadata. Trust it; producer-phrase
+        // heuristics are only a fallback for omitted/invalid ("none") phase metadata.
+        if (!string.Equals(normalized, "none", StringComparison.Ordinal))
+            return normalized;
+
+        var text = $"{title}\n{scope}";
+        var producesPlanningDeliverable =
+            PlanningDeliverableProducer.IsMatch(text)
+            || (PlanningResearchImperative.IsMatch(title) && PlanningDeliverableKeyword.IsMatch(text));
+        return producesPlanningDeliverable ? "planning" : normalized;
+    }
+
+    internal static IReadOnlyList<string> InferDeterministicDeclaredOutputPaths(
+        string text,
+        string? phase)
+    {
+        var paths = DeterministicDeclaredOutput.Matches(text)
+            .Select(match => match.Groups["path"].Value);
+        return CanonicalizeDeclaredOutputPaths(paths, phase);
+    }
+
+    internal static IReadOnlyList<string> CanonicalizeDeclaredOutputPaths(
+        IEnumerable<string>? paths,
+        string? phase)
+    {
+        var outputs = new List<string>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var rawPath in paths ?? [])
+        {
+            var path = rawPath.Trim().Replace('\\', '/').TrimStart('/');
+            if (path.Length == 0)
+                continue;
+
+            if (string.Equals(phase, "planning", StringComparison.OrdinalIgnoreCase)
+                && !path.Contains('/')
+                && (path.EndsWith(".md", StringComparison.OrdinalIgnoreCase)
+                    || path.EndsWith(".markdown", StringComparison.OrdinalIgnoreCase)))
+                path = $"docs/planning/{path}";
+
+            if (seen.Add(path))
+                outputs.Add(path);
+        }
+
+        return outputs;
+    }
+
+    internal static string SerializeDeclaredOutputPaths(IEnumerable<string>? paths) =>
+        JsonSerializer.Serialize(paths ?? []);
+
+    internal static IReadOnlyList<string> DeserializeDeclaredOutputPaths(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json))
+            return [];
+        try
+        {
+            var paths = JsonSerializer.Deserialize<List<string?>>(json);
+            return paths?
+                .Where(static path => !string.IsNullOrWhiteSpace(path))
+                .Select(static path => path!)
+                .ToList()
+                ?? [];
+        }
+        catch (JsonException)
+        {
+            return [];
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -1120,6 +1239,7 @@ public sealed class CoordinatorOrchestratorExecutor
                 SelectedModelId = a.SelectedModelId,
                 Phase = a.Draft.Phase,
                 IsolationStrategy = a.Draft.Isolation,
+                DeclaredOutputPathsJson = SerializeDeclaredOutputPaths(a.Draft.DeclaredOutputPaths),
                 Status = "pending",
                 AgentCharter = a.Draft.Charter,
                 CreatedAt = now,
@@ -1253,7 +1373,8 @@ public sealed class CoordinatorOrchestratorExecutor
         string Phase,
         string Isolation,
         IReadOnlyList<int> DependsOn,
-        string? Charter = null);
+        string? Charter = null,
+        IReadOnlyList<string>? DeclaredOutputPaths = null);
 
     private sealed record AssignedSubtask(SubtaskDraft Draft, string AgentName, string SelectedModelId);
 

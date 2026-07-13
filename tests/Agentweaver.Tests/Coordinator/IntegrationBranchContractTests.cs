@@ -83,4 +83,25 @@ public sealed class IntegrationBranchContractTests
         contract.Should().ContainEquivalentOf("real error");
         contract.Should().ContainEquivalentOf("NOT silently substitute");
     }
+
+    [Theory]
+    [InlineData("research-domain.md", "docs/planning/research-domain.md")]
+    [InlineData("research-domain.md", "research-domain.md")]
+    [InlineData("docs/planning/research-domain.md", "docs/planning/research-domain.md")]
+    [InlineData("docs/planning/research-domain.md", "research-domain.md")]
+    public void Contract_FindsPlanningArtifactAcrossLegacyAndCanonicalLocations(
+        string upstreamNote,
+        string actualLocation)
+    {
+        var subtask = MakeSubtask(4, $"Read {upstreamNote} and implement its requirements.");
+        var task = $"{subtask.Title}\n\n{subtask.Scope}\n\n{CoordinatorDispatchService.BuildIntegrationBranchContract(
+            MakeContext("coord-live", "main"), subtask)}";
+
+        task.Should().Contain(upstreamNote);
+        task.Should().Contain("absent from BOTH locations");
+        if (actualLocation.StartsWith("docs/planning/", StringComparison.Ordinal))
+            task.Should().Contain("`docs/planning/<filename>` first");
+        else
+            task.Should().Contain("fall back to `<filename>`");
+    }
 }

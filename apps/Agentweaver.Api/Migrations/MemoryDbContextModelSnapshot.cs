@@ -743,6 +743,10 @@ namespace Agentweaver.Api.Migrations
                     b.Property<DateTimeOffset>("CreatedAt")
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("DeclaredOutputPathsJson")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
                     b.Property<string>("IsolationStrategy")
                         .IsRequired()
                         .HasColumnType("TEXT");
