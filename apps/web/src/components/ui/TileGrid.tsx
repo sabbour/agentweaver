@@ -9,7 +9,7 @@
  */
 
 import { makeStyles, mergeClasses, tokens } from '@fluentui/react-components';
-import type { ElementType, ReactNode } from 'react';
+import type { KeyboardEvent, ReactNode } from 'react';
 import { AppCard } from './AppCard';
 import { Body, Label } from './typography';
 
@@ -38,6 +38,10 @@ export function TileGrid({ children, className, ...rest }: TileGridProps) {
 }
 
 const useTileStyles = makeStyles({
+  item: {
+    minWidth: 0,
+    height: '100%',
+  },
   root: {
     display: 'flex',
     flexDirection: 'column',
@@ -45,6 +49,8 @@ const useTileStyles = makeStyles({
     height: '100%',
     minWidth: 0,
     textAlign: 'left',
+  },
+  interactive: {
     cursor: 'pointer',
     transitionProperty: 'transform, box-shadow, border-color, background-color',
     transitionDuration: '150ms',
@@ -163,7 +169,6 @@ export interface TileProps {
   /** Keep actions always visible instead of hover-revealing them. */
   actionsAlwaysVisible?: boolean;
   onClick?: () => void;
-  as?: ElementType;
   className?: string;
   [key: string]: unknown;
 }
@@ -178,50 +183,51 @@ export function Tile({
   actions,
   actionsAlwaysVisible = false,
   onClick,
-  as,
   className,
   ...rest
 }: TileProps) {
   const styles = useTileStyles();
-  const Root: ElementType = as ?? (onClick ? 'button' : 'div');
-
-  const rootProps: Record<string, unknown> = {
-    role: 'listitem',
-    className: undefined,
-    ...rest,
+  const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (!onClick) return;
+    if (event.key !== 'Enter' && event.key !== ' ') return;
+    event.preventDefault();
+    onClick();
   };
-  if (onClick) rootProps.onClick = onClick;
-  if (Root === 'button') rootProps.type = 'button';
 
   return (
-    <AppCard
-      as={Root}
-      interactive
-      className={mergeClasses(styles.root, className)}
-      {...rootProps}
-    >
-      <div className={styles.top}>
-        {media && (
-          <span className={mergeClasses(styles.media, bubble && styles.mediaBubble)}>{media}</span>
-        )}
-        {badges && <span className={styles.badgeRow}>{badges}</span>}
-      </div>
-      <div className={styles.text}>
-        <Body as="span" className={styles.primary}>{primary}</Body>
-        {secondary && (
-          <Label as="span" tone="muted" className={styles.secondary}>{secondary}</Label>
-        )}
-      </div>
-      {(meta || actions) && (
-        <div className={styles.footer}>
-          {meta && <span className={styles.meta}>{meta}</span>}
-          {actions && (
-            <span className={mergeClasses(styles.actions, actionsAlwaysVisible && styles.actionsVisible)}>
-              {actions}
-            </span>
+    <div role="listitem" className={styles.item}>
+      <AppCard
+        interactive={Boolean(onClick)}
+        className={mergeClasses(styles.root, onClick && styles.interactive, className)}
+        onClick={onClick}
+        onKeyDown={onClick ? handleKeyDown : undefined}
+        role={onClick ? 'button' : undefined}
+        tabIndex={onClick ? 0 : undefined}
+        {...rest}
+      >
+        <div className={styles.top}>
+          {media && (
+            <span className={mergeClasses(styles.media, bubble && styles.mediaBubble)}>{media}</span>
+          )}
+          {badges && <span className={styles.badgeRow}>{badges}</span>}
+        </div>
+        <div className={styles.text}>
+          <Body as="span" className={styles.primary}>{primary}</Body>
+          {secondary && (
+            <Label as="span" tone="muted" className={styles.secondary}>{secondary}</Label>
           )}
         </div>
-      )}
-    </AppCard>
+        {(meta || actions) && (
+          <div className={styles.footer}>
+            {meta && <span className={styles.meta}>{meta}</span>}
+            {actions && (
+              <span className={mergeClasses(styles.actions, actionsAlwaysVisible && styles.actionsVisible)}>
+                {actions}
+              </span>
+            )}
+          </div>
+        )}
+      </AppCard>
+    </div>
   );
 }
