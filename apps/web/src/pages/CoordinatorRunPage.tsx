@@ -854,9 +854,19 @@ function SubtaskNode({ id, data, selected }: NodeProps) {
   const nameRoleText = agentName ? `${agentName} (${roleTitle})` : roleTitle;
   const showNameRole = Boolean(nameRoleText) && nameRoleText !== label;
 
-  const handleCardClick = useCallback(() => {
+  const handleSelectNode = useCallback(() => {
+    // Clicking/selecting the node face itself (to zoom onto it in the topology) must NOT close
+    // the topology overlay — only the explicit "View session" action does that. This handler
+    // backs both the pill's own click/keyboard activation and bubbles up into the graph's
+    // onNodeClick (which drives the cinematic pan+zoom), so it stays a no-close open.
+    openPanel?.(id);
+  }, [id, openPanel]);
+
+  const handleViewSessionClick = useCallback((event: React.MouseEvent) => {
+    // Stop the click from also reaching the pill's own onClick / the graph's onNodeClick —
     // "View session" closes the topology overlay and surfaces this session in the run tree,
     // instead of leaving the topology stacked on top of the panel it just opened.
+    event.stopPropagation();
     openPanel?.(id, { closeTopology: true });
   }, [id, openPanel]);
 
@@ -880,7 +890,7 @@ function SubtaskNode({ id, data, selected }: NodeProps) {
   ];
 
   const actions = d.childRunId
-    ? <Button appearance="outline" size="small" onClick={handleCardClick}>View session</Button>
+    ? <Button appearance="outline" size="small" onClick={handleViewSessionClick}>View session</Button>
     : undefined;
 
   const face = (
@@ -896,11 +906,11 @@ function SubtaskNode({ id, data, selected }: NodeProps) {
         role="article"
         aria-label={`${label}: ${statusLbl}`}
         aria-current={selected ? 'true' : undefined}
-        onClick={handleCardClick}
+        onClick={handleSelectNode}
         onKeyDown={(event) => {
           if (event.key === 'Enter' || event.key === ' ') {
             event.preventDefault();
-            handleCardClick();
+            handleSelectNode();
           }
         }}
         tabIndex={0}
@@ -3680,7 +3690,7 @@ export function CoordinatorRunPage() {
         <ExecutionModalContext.Provider value={viewAssemblyExecution}>
         <BrowseFilesContext.Provider value={browseAssemblyFiles}>
         <ActiveEdgeContext.Provider value={activeLoopbackId}>
-        <CoordinatorSessionContext.Provider value={() => openPanelForNode('coordinator')}>
+        <CoordinatorSessionContext.Provider value={(opts) => openPanelForNode('coordinator', opts)}>
         <CoordPanelContext.Provider value={openPanelForNode}>
           <ReactFlowProvider>
           <TopologyToolbar
@@ -4163,7 +4173,7 @@ export function CoordinatorRunPage() {
                     <ExecutionModalContext.Provider value={viewAssemblyExecution}>
                     <BrowseFilesContext.Provider value={browseAssemblyFiles}>
                     <ActiveEdgeContext.Provider value={activeLoopbackId}>
-                    <CoordinatorSessionContext.Provider value={() => openPanelForNode('coordinator')}>
+                    <CoordinatorSessionContext.Provider value={(opts) => openPanelForNode('coordinator', opts)}>
                     <CoordPanelContext.Provider value={openPanelForNode}>
                       <ReactFlow
                         nodes={linkedDisplayNodes}

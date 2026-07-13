@@ -141,7 +141,7 @@ export const ExecutionModalContext = createContext<((executionId: string) => voi
 export const ActiveEdgeContext = createContext<string | undefined>(undefined);
 
 /** CoordinatorRunPage: open/scroll to the all-up orchestration session panel. */
-export const CoordinatorSessionContext = createContext<(() => void) | undefined>(undefined);
+export const CoordinatorSessionContext = createContext<((opts?: { closeTopology?: boolean }) => void) | undefined>(undefined);
 
 /**
  * CoordinatorRunPage: the Merge stage's "Browse files" opens the assembled filesystem in the
@@ -950,7 +950,18 @@ export function WorkflowNode({ data, selected }: NodeProps) {
   const actions = (
     <>
       {key === 'coordinator' && !isPlanned && openSession && (
-        <Button appearance="outline" size="small" onClick={() => openSession()}>View session</Button>
+        <Button
+          appearance="outline"
+          size="small"
+          onClick={(event) => {
+            // Stop the click from also reaching the pill's own onClick / the graph's onNodeClick —
+            // "View session" closes the topology overlay, unlike a plain click on the node face.
+            event.stopPropagation();
+            openSession({ closeTopology: true });
+          }}
+        >
+          View session
+        </Button>
       )}
       {key === 'agent' && !isPlanned && (
         <Button appearance="outline" size="small" onClick={() => openModal?.(executionId as string)}>View execution</Button>
