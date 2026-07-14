@@ -353,9 +353,15 @@ builder.Services.AddSingleton<IRunAgentHostContextResolver>(sp =>
     new RunAgentHostContextResolver(
         sp.GetRequiredService<Agentweaver.Api.Infrastructure.IRunStore>(),
         sp.GetRequiredService<WorktreeManager>(),
+        // #256 follow-up: default OFF. A prior rejected write-back implementation shipped to
+        // production with this defaulted to true and broke every subtask (writeback_missing).
+        // The reviewed fix (#253, 6-round chain, Seraph-approved) is now on main, but this stays
+        // opt-in by default so a future redeploy that drops the explicit k8s env override
+        // (Sandbox__PodLocalWorkspace__ImplementationEnabled) fails safe instead of silently
+        // re-enabling pod-local write-back.
         builder.Configuration.GetValue(
             "Sandbox:PodLocalWorkspace:ImplementationEnabled",
-            true)));
+            false)));
 builder.Services.AddSingleton<ISandboxExecutorRouter, SandboxExecutorRouter>();
 builder.Services.AddSingleton<ISandboxExecutor>(sp =>
     sp.GetRequiredService<ISandboxExecutorRouter>().Resolve());
