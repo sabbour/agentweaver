@@ -43,6 +43,19 @@ The coordinator (Squad) approves issue closure, priority, and scope changes only
 
 ---
 
+## Staging Environment Recovery
+
+If you encounter **weird/unexplainable DNS resolution errors or catastrophic-looking failures** (broad, previously-working surfaces suddenly failing), this is likely the periodic staging resource-group deletion, not a real regression.
+
+1. Verify you're on the correct Azure subscription (`AKS INT/Staging Test`, `26fe00f8-9173-4872-9134-bb1d2e00343a`).
+2. Check whether `agentweaver-rg` still exists.
+3. **If it's gone, you have standing authority to recreate the environment** and proceed — no need to ask first.
+4. Recreating means a new ingress hostname, so:
+   - The user (@sabbour) will need to update the GitHub OAuth App callback URL manually — flag this to them.
+   - This does **not** block API/bearer-token-based testing — the harness can resume immediately once the new environment is up, using the new base URL.
+
+---
+
 ## Workstream 1: LLM-Powered E2E Test Harness
 
 **Design principle:** the harness itself should be LLM-driven — generating scenario prompts, launching runs, interpreting events/logs, and judging suitability — not a static script of fixed inputs.
