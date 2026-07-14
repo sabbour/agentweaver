@@ -711,43 +711,60 @@ are folded below. **These guardrails are hard prerequisites — implementation
 
 ### 1. Mandatory target-host allowlist (BLOCKING — Finding 1)
 
-**The gap.** "Runs against staging" is today only **prose convention**, not an enforced
-boundary. The one existing guard, `checkInsecureAllowed()` in `run-persona.mjs:56-74`, only
-fires when `--insecure` is **also** passed — it blocks disabling TLS verification against
-prod, but does **nothing** to stop a valid `--base-url`/`--target <prod-host>` with a valid
-cert and a valid token. Since personas **approve real gates and advance the real DAG** (not
-just read data), an operator typo, a bad `AGENTWEAVER_BASE_URL`/`--target` default, or a
-compromised CI variable could let the LLM judge approve/deny real tool/shell/DAG gates
-against **production** with no host check stopping it. Deny-by-default in
-`makeDefaultJudge()` protects against *judge* failure, not against *target-selection* failure.
+**The gap — and what it is NOT.** "Runs against staging" is today only **prose convention**,
+not an enforced boundary. The one existing guard, `checkInsecureAllowed()` in
+`run-persona.mjs:56-74`, only fires when `--insecure` is **also** passed — it blocks disabling
+TLS verification against prod, but does **nothing** to stop a valid `--base-url`/`--target
+<prod-host>` with a valid cert and a valid token. The blast-radius risk this finding controls is
+**which Agentweaver deployment the harness process points at** — an operator typo, a bad
+`AGENTWEAVER_BASE_URL`/`--target` default, or a compromised CI variable could aim a whole harness
+run (and its judge's approve/deny decisions) at a **production** Agentweaver deployment, causing
+real gate progression against prod. Deny-by-default in `makeDefaultJudge()` protects against
+*judge* failure, not against *target-selection* failure.
+
+> **Scope of this finding (Ahmed's clarification, 2026-07-14).** This is **not** about denying
+> the persona's judge the ability to approve tool/shell/gate actions. Agentweaver itself runs
+> each coding/triage agent inside its **own Kubernetes sandbox**, so a tool/shell/gate action the
+> judge approves — which Agentweaver then executes on behalf of the agent-under-test via its own
+> API/MCP/UI surfaces — is **already contained** in that sandbox; it is **not** a bare-host shell
+> escape. Approving those in-sandbox actions is **acceptable and expected** — it is exactly what
+> the deep gate-review scenarios must exercise, and denying them by default would make the harness
+> unable to test real approval-gate flows. The single blast-radius control that matters here is the
+> **outbound target host**: never let a harness run (or an approval decision) act against a
+> **production** Agentweaver deployment. Staging/localhost only, with an explicit `--allow-prod`
+> escape hatch.
 
 **Required guardrail (named, testable — do NOT leave implicit in "staging" prose):**
 
 - A **shared, unconditional target-host allowlist** — a new `scripts/harness-shared/target-guard.mjs`
   (or in the shared layer all three harnesses consume) — that refuses to run against any host
   that is not `*.staging.*` / `localhost` / `127.0.0.1`. It applies **regardless of
-  `--insecure`** (unlike `checkInsecureAllowed`, which is TLS-specific and opt-in).
+  `--insecure`** (unlike `checkInsecureAllowed`, which is TLS-specific and opt-in). This governs
+  the **harness's own outbound target**, i.e. which Agentweaver deployment it drives — it does
+  **not** restrict what the sandboxed agent-under-test may do once a gate is approved.
 - **Enforced at client/transport construction, not CLI arg parsing.** The check must live where
   the gate-execution path cannot bypass it — the `AgentweaverClient` constructor (`lib/client.mjs`),
   before any request is issued (and the MCP `tools/call` / Playwright browser-context
   construction on the other surfaces). A scenario/adapter bug that routes around CLI parsing
   must **still** hit the guard. Concretely: `AgentweaverClient` throws on construction if
   `baseUrl`'s host is not allowlisted, so `executeApprovalDecision()` can never POST an
-  approve/deny to a non-staging host.
+  approve/deny to a non-staging **deployment**.
 - **Escape hatch is deliberately awkward.** Production may only be targeted with an explicit
   `--allow-prod` flag **that itself requires a second distinct confirmation flag**
   (`--i-understand-this-targets-production` or equivalent) — and this is a **different** flag
   from the existing `--allow-insecure-prod` (which governs TLS only). No single-flag path to prod.
 - **Guardrail applies to the whole execution path**, full stop: no gate execution, no
-  `resolve-approval`, no deeper-rung `confirm`, against a non-allowlisted host.
-- **Cap approval scope, deterministically (Seraph §1).** The shipped contract permits approval
-  scopes `once | run | tool | always`. Harness approvals are **capped to `once`** — the
-  execution layer **rejects `run`, `tool`, and `always`** regardless of what the judge returns,
-  so no harness approval can leave durable standing authority behind. **Shell approvals are
-  denied by default**; if a scenario genuinely needs one, only a narrowly enumerated command
-  allowlist is permitted — never arbitrary shell text on the strength of an LLM verdict. These
-  caps are policy, enforced in `executeApprovalDecision()` **after** the judge decides, not a
-  prompt instruction the judge could be talked out of.
+  `resolve-approval`, no deeper-rung `confirm`, against a non-allowlisted **deployment host**.
+- **Approval scope is a policy knob, not a hard denial (revised per Ahmed's clarification).**
+  Because the approved action runs inside Agentweaver's own sandbox, the harness does **not**
+  deny `run`/`tool`/`always` scopes or shell approvals by default — doing so would block the very
+  gate-review scenarios this harness exists to test. The judge may approve them. What the harness
+  **does** keep is: (a) the standing deny-by-default on *malformed/uncertain* judge output
+  (`normalizeDecision` → `defer`), and (b) the independent in-scope check from
+  [§2 defense-in-depth](#2-prompt-injection-threat-model--untrusted-content-delimiting-blocking--finding-2)
+  so an *injected* approval still can't slip through. Durable scopes (`always`/`tool`) remain a
+  *configurable* per-scenario cap for hygiene (so a test doesn't leave standing authority in
+  staging), not an unconditional refusal.
 - **Unit test required**, mirroring the existing `checkInsecureAllowed` test in
   `test/priya-checks.test.mjs`: assert the guard rejects a prod host, accepts staging/localhost,
   rejects prod even with `--insecure`, and only permits prod with the explicit double-confirm
