@@ -240,6 +240,64 @@ of running three harnesses); lower maintenance (methodology written/tested once)
 nuance preserved in short appendices without forking the core. This is identical to the
 reasoning in Trinity's and Morpheus's specs.
 
+### 2a. Judge execution boundary — how `core.mjs` actually gets a verdict from a model
+
+> **Honest current state.** Today `lib/judge.mjs` is a **prompt assembler only** — it
+> writes a prompt to stdout/`--out` and a **human (or this Copilot session) manually feeds
+> it to an LLM** and pastes the JSON verdict back. There is **no automated execution
+> boundary** in the shipped code. The design below is the wrapper that must be **built**
+> during the rewrite so `core.mjs` can be "invoked automatically"; the earlier claim that a
+> verdict is produced automatically is otherwise a gap. This wrapper (`harness-judge/run-judge.mjs`)
+> is part of the shared judge and is the single place any surface's harness gets a verdict.
+
+The execution boundary is a thin, explicit contract — it does **not** bake a model SDK into
+the judge:
+
+- **Who invokes the model — a pluggable external command, mirroring the shipped
+  `approval-judge` precedent.** `lib/approval-judge.mjs` already established this pattern
+  for in-the-loop gates: a pluggable judge that is a **mock in tests**, an **LLM CLI via an
+  env var** (`AGENTWEAVER_APPROVAL_JUDGE_CMD`), or an explicit human decision. The end-of-run
+  judge reuses it: `AGENTWEAVER_JUDGE_CMD` names the command that renders a verdict (e.g.
+  shelling out to the `copilot` CLI, `claude -p`, or any model CLI/provider script). The
+  harness itself calls **no** model API directly and hard-codes **no** provider — the
+  provider/model choice lives entirely in that command, so a run can target whatever model
+  Ahmed/CI has authenticated.
+- **Input / output protocol (exact contract).** The command receives the **assembled
+  prompt on STDIN** and must print the **machine-readable verdict on STDOUT** — a fenced
+  ```` ```json ```` block or bare JSON, parsed exactly like `parseDecisionText` in
+  `approval-judge.mjs`. Prompt in → verdict JSON out; nothing else on stdout is contractual.
+- **Timeout + retry.** The judge call runs under an explicit wall-clock timeout
+  (default ~120s, `--judge-timeout`/env override). On a transient failure (non-zero exit,
+  empty stdout, unparseable JSON) it retries a small bounded number of times (default 1
+  retry) with backoff, then falls through to the fallback below. No unbounded hangs.
+- **Credential handling.** Credentials belong to the **judge command's own tool** (e.g. the
+  `copilot`/`claude` CLI's existing auth), never to the harness. The harness passes **no**
+  keys on argv or env of its own, logs no token, and — like the bearer-token rule — never
+  writes credentials into a verdict or finding. This keeps the model credential entirely
+  outside the harness surface.
+- **Output validation against `verdict-schema.mjs`.** Whatever the command returns is
+  validated with the shared `validateVerdict()` (the same function `meta-aggregate.mjs`
+  already applies): `schema` must equal `agentweaver.persona-judge-verdict/v1`, and the
+  required `p0`/`p1`/`pushback`/`frustration`/`findings`/`cannotDetermine` (and the join-key
+  fields from [§3](#3-verdict-schema--p0-p1-and-a-required-frustration-dimension)) must be
+  present and well-typed. A structurally invalid verdict is treated as a judge **failure**,
+  not accepted.
+- **Explicit fallback — never a silent gap.** If the judge call fails, times out, retries
+  out, or returns an invalid verdict, the wrapper **emits a well-formed verdict marked
+  unresolved** rather than dropping the run: `p0.verdict` and `p1.verdict` = `CANNOT_DETERMINE`,
+  `frustration.level = "unknown"` (with an empty `signals` array), and a `judgeError`
+  block capturing the cause (`timeout | nonzero_exit | unparseable | schema_invalid`), the
+  exit code, and a stderr tail. This verdict still carries the full join-key tuple so
+  meta-aggregate counts it as an **explicit non-verdict** (surfaced in the rollup), never an
+  absent row that silently shrinks the batch. (`frustration.level` therefore gains
+  `"unknown"` as an allowed value **only** for this judge-error path; a real judged run never
+  uses it.)
+
+This makes "core.mjs is invoked automatically" concrete: `run-judge.mjs` assembles the
+prompt via `core.mjs`, executes the pluggable judge command under timeout/retry, validates
+the result against `verdict-schema.mjs`, and writes either the real verdict or the
+fallback `CANNOT_DETERMINE`/`judgeError` verdict — deterministically, with no silent holes.
+
 ### 3. Verdict schema — P0, P1, AND a required frustration dimension
 
 Judging is not just pass/fail. The canonical `agentweaver.persona-judge-verdict/v1` schema
@@ -255,6 +313,17 @@ API-vs-UI-vs-MCP for the same persona in meta-aggregation.
   "schema": "agentweaver.persona-judge-verdict/v1",
   "persona": "jordan",
   "surface": "api",                       // api | ui | mcp — which harness produced the evidence
+
+  // ---- REQUIRED join-key tuple (see §3a) — how verdicts are safely correlated ----
+  "batchId": "batch-2026-07-14T18-20-00Z-ab12",  // one combined-launcher sweep across all 3 surfaces
+  "scenarioId": "jordan-blank-to-plan",   // canonical scenario identity (NOT the free-text title)
+  "inputSeed": "seed-9f3c…",              // the scenario's input seed — makes "same scenario" reproducible
+  "adapterVersion": "api@3",              // surface adapter (surfaces/jordan.api.md) version that drove it
+  "personaCoreVersion": "jordan@2",       // persona core (personas/jordan.md) version
+  "targetRevision": "agentweaver@v0.9.52+sha", // deployment/revision under test — stale deploys never compared
+  "runId": "run_01J…",                    // fresh per run — diagnostic correlation only, NOT a repro handle
+  "at": "2026-07-14T18:22:41Z",           // run timestamp
+
   "p0": { "verdict": "PASS | FAIL", "evidence": "..." },
   "p1": { "verdict": "PASS | PARTIAL | FAIL", "evidence": "...", "criteriaCoverage": [ ] },
   "frustration": {                         // REQUIRED — emotional/UX assessment from evidence
@@ -295,6 +364,39 @@ API-vs-UI-vs-MCP for the same persona in meta-aggregation.
   browser-experience defect with a working backend; a persona frustrated on **every**
   surface points at a core product/model problem.
 
+### 3a. Cross-surface join key — meta-aggregate MUST NOT blindly pool a directory
+
+**The blocking gap:** cross-surface aggregation is the entire point of three harnesses, but
+the current `lib/meta-aggregate.mjs` has **no reliable join key** — its `collectVerdictPaths`
+reads **every** `*.json` in a directory and `aggregate()` pools them all, keying findings
+only by free-text title/issue. So two runs that merely share a persona *name* (different
+scenario, different deployment, different day) get compared as if they were the same thing,
+and a stale verdict from an old deploy silently contaminates the rollup. That is unsafe and
+must be fixed as part of promoting `meta-aggregate.mjs` into `harness-judge/`.
+
+**Required — every verdict carries an explicit join-key tuple** (shown in the schema above),
+and meta-aggregate compares **only** verdicts that share the right slice of it:
+
+| Field | Meaning | Why it's required for a correct join |
+|---|---|---|
+| `batchId` | One combined-launcher sweep that fanned the same scenario set across all 3 surfaces | The launcher stamps it once; it is what ties an API + UI + MCP run of the same scenario together as "one comparison". |
+| `scenarioId` | Canonical scenario identity (stable id, **not** the human title) | "Same scenario" must be identity, not a same-named coincidence. |
+| `inputSeed` | The scenario's input seed | Two runs are only comparable if driven from the same seed; also the repro handle (§ repro manifest). |
+| `adapterVersion` / `personaCoreVersion` | Which surface adapter + persona core drove it | A persona/adapter edit changes behavior; comparing across versions is apples-to-oranges unless recorded. |
+| `targetRevision` | Deployment/revision under test | Verdicts from **different deploys must never be pooled** — a fix on one revision would look like a regression on another. |
+| `surface` | api / ui / mcp | The axis being compared; also guards against comparing two API runs as if cross-surface. |
+| `runId` + `at` | Fresh per run | Identity/ordering of an individual run (diagnostic only — see repro manifest). |
+
+**Rule for `meta-aggregate.mjs`:** it MUST group by `(batchId, scenarioId)` (optionally
+scoped to a single `targetRevision`) and aggregate **only within a group** — never pool all
+verdicts found in a shared directory. Verdicts missing the join-key tuple are **rejected by
+`validateVerdict()`** (the tuple becomes required schema), not silently included. The
+cross-surface "did Jordan behave consistently across API vs UI vs MCP" rollup is then a
+well-defined join over `surface` **within** one `(batchId, scenarioId)` group, instead of a
+best-effort pool. This is a **shared-layer** requirement — it lives in the shared
+`harness-judge/verdict-schema.mjs` + `meta-aggregate.mjs` and is therefore canonical for all
+three harnesses; Trinity's and Morpheus's docs reference this section rather than re-deriving it.
+
 ### Judge evidence sources (applies to the shared judge)
 
 The judge must not reason from the raw transcript **alone** — it cross-references what an
@@ -334,6 +436,49 @@ relies on **all** of:
   Log pulls remain **best-effort**: if App Insights/kubectl are unavailable, the judge
   proceeds on transcript + response evidence and marks unverifiable claims
   `CANNOT_DETERMINE` rather than guessing.
+
+### Repro manifest — a finding's verification rerun is a FRESH run, not a replay
+
+A subtle but blocking gap: when Squad calls the harness back to **verify a fix**, the only
+correct action is to launch a **new run against the current deployment** — but a bare
+`run_id`/`trace_id` cannot recreate the original conditions. Those ids are **diagnostic
+correlation only** (they point at App Insights/kubectl logs for the *original* run); they
+are **not** something that can be literally re-executed, and nothing in a raw `run_id`
+preserves the prompt/model version, scenario seed, target revision, config, or fixture
+state that produced the behavior.
+
+So every finding/issue the harness files carries an immutable **repro manifest** captured at
+the moment of the run — the exact inputs needed to launch a byte-for-byte-conditions FRESH
+verification run later:
+
+```jsonc
+"reproManifest": {
+  "scenarioId": "jordan-blank-to-plan",
+  "inputSeed": "seed-9f3c…",              // deterministic scenario input
+  "adapterVersion": "api@3",              // surface adapter that drove it
+  "personaCoreVersion": "jordan@2",       // persona core version
+  "targetRevision": "agentweaver@v0.9.52+sha",  // the deploy it was observed on
+  "harnessRevision": "api-harness@<sha>", // harness code version
+  "judgeModel": "<the AGENTWEAVER_JUDGE_CMD model/version used>",
+  "config": { "rung": "scoping | deep", "flags": ["--drive-approvals", "…"] },
+  "fixtureState": "<any setup/seed data or a ref to it>"
+}
+```
+
+- **Verification = re-launch from the manifest, not replay of a `run_id`.** When Squad
+  re-invokes the harness on a finding, it reads `reproManifest`, launches a **fresh** run
+  (new `run_id`, new timestamp) against the **current** deployment using the same
+  `scenarioId` + `inputSeed` + persona/adapter versions, and compares the new verdict to the
+  original. The original `run_id`/`trace_id` are attached only as **correlation** to the
+  first observation's logs.
+- **Why each field is needed:** without `inputSeed` the scenario isn't reproducible; without
+  `targetRevision`/`harnessRevision`/`judgeModel` a "still repros?" answer is ambiguous
+  (did the platform change, the harness change, or the judge model change?); without
+  `fixtureState` a data-dependent scenario can't be recreated.
+- This manifest is the **same tuple** the verdict join-key (§3a) records, plus the
+  harness/judge-model/config/fixture provenance — captured once and threaded from finding →
+  issue → verification. It is a **shared-layer** contract (all three harnesses emit it), so a
+  fix verified on one surface can be re-driven identically.
 
 ### Driver-must-not-debug boundary
 
@@ -517,6 +662,19 @@ sections already describe `approve / request-changes` (UI) and `approve / reques
 defer` (MCP) — i.e., their specs assume a request-changes path the shared driver layer does
 not yet have.
 
+> **REQUIRED PREREQUISITE — this is a blocking dependency, not just a documented gap.**
+> Implementing `request-changes` support — a new decision in the shared approval driver
+> (`approve | deny | defer | request-changes`) **plus** the backend/decision-schema support
+> that carries the persona's reason into a `run_review`-style request-changes endpoint and
+> loops the run back to the implementation node — is a **hard prerequisite that must be
+> sequenced BEFORE any deep gate-review scenario that depends on it can run in ANY of the
+> three harnesses** (API, UI, and MCP all assume it). Until it lands: (a) the shared driver
+> layer cannot exercise the request-changes path, and (b) UI/MCP scenarios written against
+> `approve / request-changes` are **blocked**, not merely degraded. The [rollout plan](#rollout--migration-plan)
+> therefore lists this as an explicit upstream dependency that gates those scenarios; it is
+> owned on the shared-driver side and must be reconciled across all three specs before the
+> deep-rung gate-review scenarios are scheduled.
+
 > **Scope boundary — do NOT over-index on this (functional correctness, not output
 > grading).** The goal of persona gate-review is **not** to make the persona a **quality
 > bar** for Agentweaver's generated output — we are **not** demanding perfect code or design
@@ -683,6 +841,49 @@ locked** so the shared package shapes are final before any extraction. It must b
 collides extracting the same shared `scripts/persona-briefs/` + `scripts/harness-judge/` packages
 simultaneously (see the coordination note at the end of this section).
 
+**Honest audit — this is a COMPATIBILITY migration, not an import re-point.** Reading the
+actual shipped code (`scripts/persona-harness/run-persona.mjs`, `lib/judge.mjs`,
+`lib/meta-aggregate.mjs`), the current harness is **not** in the shape this spec's shared
+layer assumes, so several previous phrasings understated the work. `scripts/api-harness/`
+**does not exist yet** (the directory is still `scripts/persona-harness/`), and the current
+code differs from the target on every seam:
+
+| Concern | Current shipped reality | Target (this spec) | Migration work |
+|---|---|---|---|
+| **CLI surface** | `run-persona.mjs --scenario <name> --base-url <url>` drives **fixed scenario modules** in `scenarios/*.mjs`; no persona/target/seed flags | a persona-driven CLI: `--persona <core>`, `--target <url>`, `--scenario <id>`, `--seed <s>`, `--rung scoping\|deep`, `--batch-id`, `--out` | **design + build a new CLI**; the fixed `scenarios/*.mjs` become fallbacks, not the entry axis |
+| **Persona source** | `run-persona.mjs` loads personas from `specs/personas/<file>`; `lib/judge.mjs` separately reads `briefs/<name>.md` — the code **straddles two sources** today | one source: `scripts/persona-briefs/personas/*.md` cores + `surfaces/*.api.md` adapters | reconcile the two current sources into the cores+adapters format; port the `specs/personas` "Success/Failure" criteria into cores |
+| **Transcript shape** | `run-persona.mjs` emits a **finding** (`evidence`+`apiCalls`+`judgeInputs`); `lib/judge.mjs` expects a **transcript** with `.turns`/`.brief`/`.model` (the agent-driver shape) — the two do **not** currently match | one normalized EVIDENCE shape the `adapters/api.mjs` produces and `core.mjs` consumes | write `adapters/api.mjs` to normalize the API run into the shared evidence shape; unify the two divergent shapes |
+| **Verdict/finding schema** | `run-persona.mjs` emits `agentweaver.persona-finding/v2` (with `judgment: null`); `lib/judge.mjs` templates `agentweaver.persona-judge-verdict/v1`; **no `frustration`, no join-key tuple** | `agentweaver.persona-judge-verdict/v1` **plus** required `frustration` + join-key tuple (§3/§3a) | add fields to the schema; map `persona-finding/v2` → the enriched verdict; update `validateVerdict()` |
+| **Judge execution** | `lib/judge.mjs` **only assembles a prompt** — a human feeds it to a model manually (no automated call) | `harness-judge/run-judge.mjs` executes a pluggable judge command under timeout/retry (§2a) | build the execution wrapper (§2a) — genuinely new code, not a move |
+| **Meta-aggregate join** | `lib/meta-aggregate.mjs` **pools every `*.json` in a dir**, keyed by title only | group strictly by `(batchId, scenarioId[, targetRevision])` (§3a) | rewrite `collectVerdictPaths`/`aggregate` to require + group by the join key |
+
+**Old → new format mappings to define (and honor during transition):**
+`agentweaver.persona-finding/v2` → `agentweaver.persona-judge-verdict/v1` (+`frustration`,
++join-key); `specs/personas/*.md` + `scenarios/*.mjs` → `persona-briefs/personas/*.md` cores
++ `surfaces/*.api.md` adapters (+ a `scenarioId` registry); the divergent finding/transcript
+shapes → one normalized evidence shape.
+
+**Test-porting plan.** The current suite (`test/{judge,meta-aggregate?,approvals,approval-judge,agent-driver-tools,generation-checks,generate-brief,priya-checks,runner-approvals}.test.mjs`)
+is pinned to the **old** shapes (e.g. `judge.test.mjs` asserts the transcript/brief shape,
+meta-aggregate tests assume dir-pooling). Each must be **ported**, not deleted: judge/verdict
+tests move with `core.mjs`/`verdict-schema.mjs` into `harness-judge/test/` and are updated for
+the new schema; meta-aggregate tests gain join-key grouping cases; approval/agent-driver/client
+tests stay with the surviving API driver. Budget explicit test-migration work — the green
+"62/62" today does **not** transfer for free.
+
+**Package rename/move sequence (so nothing breaks mid-flight):** (1) create the empty shared
+`persona-briefs/` + `harness-judge/` packages; (2) `git mv scripts/persona-harness/ scripts/api-harness/`
+as one rename commit (keeps history); (3) move the extracted files into the shared packages
+and re-point imports; (4) port tests; (5) delete dead local copies **only after** the shared
+packages are green.
+
+**Compatibility shim during transition — yes, a temporary one is warranted.** Because the
+live API track must keep running (Phase 1), keep a **thin local shim** (e.g.
+`lib/judge.mjs` re-exporting from `harness-judge/core.mjs`, and a `persona-finding/v2` →
+verdict adapter) so existing invocations and any in-flight verdicts keep working while
+callers migrate. The shim is explicitly **temporary** and removed once all callers use the
+shared packages directly — it exists to avoid a flag-day cutover, not as a permanent layer.
+
 **Concretely, what changes to `scripts/api-harness/` to move from "today's local
 `briefs/` + `lib/judge.mjs`" to "consumes shared `scripts/persona-briefs/` +
 `scripts/harness-judge/`".** This is a **spec of the rewrite/migration** — the refactor
@@ -702,21 +903,32 @@ edits yet. This phase is purely "don't break what works while the others scaffol
 Once the inconsistencies are reconciled, one coordinated change that **extracts** persona-authoring
 and judging out of the API package and rewrites what remains into a thin API driver:
 
-1. **Move personas.** `briefs/{jordan,maya,priya}.md` → `scripts/persona-briefs/personas/`
-   (core) + `scripts/persona-briefs/surfaces/{jordan,maya,priya}.api.md` (adapters); peel
-   REST phrasing into the adapters (see [§1 migration](#1-shared-persona--brief-format--define-personas-once-surface-agnostically)).
-2. **Promote the judge.** `lib/judge.mjs` → `harness-judge/core.mjs` +
-   `verdict-schema.mjs`; `lib/meta-aggregate.mjs` → `harness-judge/meta-aggregate.mjs`;
-   add `harness-judge/adapters/api.mjs` (normalizer for the API transcript shape) and
-   split `JUDGE.md` into the surface-neutral core + `JUDGE.api.md` appendix; add the
-   **required `frustration`** field to the verdict schema.
+1. **Move + reconcile personas.** Reconcile today's **two** persona sources
+   (`specs/personas/*.md` used by `run-persona.mjs` and `briefs/*.md` used by `judge.mjs`)
+   into `scripts/persona-briefs/personas/` (core) + `scripts/persona-briefs/surfaces/{jordan,maya,priya}.api.md`
+   (adapters); peel REST phrasing into the adapters (see [§1 migration](#1-shared-persona--brief-format--define-personas-once-surface-agnostically)),
+   and register a stable `scenarioId` for each scenario.
+2. **Promote + rewrite the judge.** `lib/judge.mjs` → `harness-judge/core.mjs` +
+   `verdict-schema.mjs`; `lib/meta-aggregate.mjs` → `harness-judge/meta-aggregate.mjs`
+   (**rewritten** to require + group by the join key, not dir-pool); add
+   `harness-judge/adapters/api.mjs` (normalizes the API run — which today emits
+   `persona-finding/v2` — into the shared evidence shape) and
+   `harness-judge/run-judge.mjs` (the execution wrapper, §2a); split `JUDGE.md` into the
+   surface-neutral core + `JUDGE.api.md` appendix; add the **required `frustration`** field
+   and the **join-key tuple** to the verdict schema.
 3. **Generalize the generator.** `lib/generate-brief.mjs` → `persona-briefs/generate-core.mjs`.
-4. **Re-point imports.** `agent-driver/tools.mjs` resolves briefs via
-   `persona-briefs/index.mjs` (not local `BRIEFS_DIR`); the runner/judge path imports
-   `harness-judge/core.mjs` + `meta-aggregate.mjs`. **No driver logic changes** — only
-   resolution/import paths.
-5. **Verdicts to the shared pool.** Point the API harness's `verdicts/` at the shared pool
-   so API runs meta-aggregate together with UI + MCP runs.
+4. **Build the new persona-driven CLI + re-point (NOT a no-op).** Replace the
+   `--scenario`-only entry point with the persona-driven CLI (`--persona/--target/--scenario/--seed/--batch-id`),
+   emit the join-key tuple + `reproManifest` per run, and resolve personas via
+   `persona-briefs/index.mjs` (not `specs/personas` / local `BRIEFS_DIR`); the judge path
+   calls `harness-judge/run-judge.mjs`. **This is real driver work** — the entry-point,
+   evidence-normalization, and schema-emission all change. (Do **not** describe this as
+   "only import paths.")
+5. **Verdicts to the shared pool, keyed.** Point the API harness's verdicts at the shared
+   pool **stamped with `batchId`/`scenarioId`/`targetRevision`** so meta-aggregate groups API
+   with UI + MCP runs of the **same** scenario/batch — never a blind directory pool.
+6. **Port the test suite** to the new shapes (see the test-porting plan above) and remove the
+   temporary compatibility shim once the shared packages are green.
 
 **Phase 3 — parallelism hardening (independent, can precede or follow Phase 2).**
 Parameterize the single `session.current.json` path into a per-`sessionId` session file
@@ -727,6 +939,17 @@ core + API evidence adapter, meta-aggregate across the batch (mixing API + UI + 
 verdicts, including the cross-surface "did Jordan behave consistently across surfaces"
 rollup), and file findings with the standing discipline (re-confirm reproduces, cross-ref
 logs, fix → deploy → live-validate before closing).
+
+**Blocking upstream dependency — `request-changes` support gates the deep gate-review
+scenarios.** Per [§4](#4-human-like-gate-review-behavior-persona-acts-like-a-real-operator),
+the shipped approval driver only does `approve | deny | defer`; the deep-rung gate-review
+scenarios (API, UI, and MCP) that exercise the request-changes loop **cannot run** until the
+shared driver gains a `request-changes` decision **and** the backend/decision-schema support
+that carries the persona's reason into a `run_review`-style request-changes endpoint and
+loops the run back. This is a **hard prerequisite**, sequenced **before** those specific
+scenarios in **all three** harnesses — not a nice-to-have. It is owned on the shared-driver
+side and must be reconciled across the three specs; the scoping-rung and non-gate scenarios
+are unaffected and proceed independently.
 
 **Coordination with Trinity's and Morpheus's rollouts (so the three don't collide when the
 shared packages are extracted).** All three rollout plans independently reached the same
