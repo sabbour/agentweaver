@@ -469,6 +469,58 @@ public sealed class CoordinatorOutcomeSpecTests : IDisposable
     }
 
     // =========================================================================
+    // Regression (#315): a revision must carry the already-reviewed prior draft forward to the
+    // drafter so its established requirements are preserved instead of being silently re-generated
+    // (and potentially regressed) from goal + feedback alone. The first draft must NOT receive a
+    // prior draft; the revision MUST receive one that mirrors the persisted awaiting_confirmation
+    // spec.
+    // =========================================================================
+    [Fact]
+    public async Task Revise_CarriesPriorDraftForwardToDrafter_ToPreserveEstablishedRequirements()
+    {
+        var projectId = await CreateProjectAsync();
+        var runId = await StartOrchestrationAsync(
+            projectId, "Build and publish the image to an Azure-accessible registry, then smoke-test it live");
+        await WaitForGateAsync(runId);
+
+        var drafter = _factory.Services.GetRequiredService<ICoordinatorSpecDrafter>()
+            .Should().BeOfType<FakeCoordinatorSpecDrafter>().Subject;
+
+        // The FIRST draft is not a revision: no prior draft, no feedback.
+        drafter.LastInput.Should().NotBeNull();
+        drafter.LastInput!.PriorDraft.Should().BeNull("the first draft has no established prior draft to preserve");
+        drafter.LastInput!.ReviseFeedback.Should().BeNullOrEmpty();
+
+        // Capture the established (prior) draft the human reviewed before pushing back.
+        var priorSpec = await GetOutcomeSpecAsync(_owner, runId);
+        priorSpec.Should().NotBeNull();
+        priorSpec!.Status.Should().Be("awaiting_confirmation");
+
+        const string feedback = "The smoke-test proof is too vague; require a concrete verification command";
+        var reviseResp = await _owner.PostAsJsonAsync(
+            $"/api/runs/{runId}/outcome-spec/revise", new { feedback });
+        reviseResp.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        // Re-drafts and re-suspends at a fresh gate.
+        await PollOutcomeSpecUntilAsync(
+            runId,
+            s => s.Status == "awaiting_confirmation"
+                 && s.ClarifyingQuestions != null
+                 && s.ClarifyingQuestions.Contains(feedback, StringComparison.Ordinal));
+        await WaitForGateAsync(runId);
+
+        // The REVISION carried the prior draft forward verbatim, so the drafter can lock the
+        // already-established requirements (e.g. "publish ... to an Azure-accessible registry")
+        // as invariants rather than regenerating them from scratch.
+        drafter.LastInput!.ReviseFeedback.Should().Be(feedback);
+        drafter.LastInput!.PriorDraft.Should().NotBeNull(
+            "a revision must carry the already-reviewed prior draft forward (#315)");
+        drafter.LastInput!.PriorDraft!.DesiredOutcome.Should().Be(priorSpec.DesiredOutcome);
+        drafter.LastInput!.PriorDraft!.Scope.Should().Be(priorSpec.Scope);
+        drafter.LastInput!.PriorDraft!.Assumptions.Should().Be(priorSpec.Assumptions);
+    }
+
+    // =========================================================================
     // Owner-scoping: a non-owner cannot read, confirm, or revise another user's run.
     // =========================================================================
     [Fact]
