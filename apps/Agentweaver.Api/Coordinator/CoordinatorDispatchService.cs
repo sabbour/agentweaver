@@ -1821,6 +1821,29 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
                 if (await TryResolveFromStoreAsync(childRunId, ct).ConfigureAwait(false) is { } resolved)
                     return new ChildResult(subtaskId, childRunId, resolved);
 
+                // #317 — Completion-signal race: the child's terminal event (RunAssembleReady /
+                // RunCompleted / RunFailed / RunCancelled) is written DURABLY to the RunEvents log
+                // before it is acknowledged (IRunEventStream.AppendAsync), but the live subscription
+                // only polls that log every ~250ms and the Run row's status update lags behind the
+                // durable event. If the child finished its real work in the narrow window between the
+                // last poll and the stall TTL firing, that terminal event is sitting on disk yet was
+                // never yielded to this loop AND is not yet reflected in the Run row — so the store
+                // check above returns null and we would wrongly declare agent_stall_timeout, killing a
+                // child that already completed (and burning a bounded retry slot, #241). Re-read the
+                // authoritative durable event log from our cursor for a just-arrived terminal event
+                // BEFORE finalizing the kill; if present, honor the real outcome instead of stalling.
+                if (await TryResolveTerminalFromEventLogAsync(subtaskId, childRunId, lastSeq, ct)
+                    .ConfigureAwait(false) is { } fromEventLog)
+                {
+                    _logger.LogInformation(
+                        "Coordinator observation: child {ChildRunId} (subtask {SubtaskId}) stall TTL " +
+                        "({Timeout}) elapsed, but a terminal event ({Outcome}) had already been durably " +
+                        "recorded past sequence {LastSeq} — honoring the real completion instead of " +
+                        "declaring agent_stall_timeout (#317)",
+                        childRunId, subtaskId, _stallTimeout, fromEventLog.Outcome, lastSeq);
+                    return fromEventLog;
+                }
+
                 // Defense-in-depth (#212): a child blocked on an unresolved tool-approval gate is a
                 // legitimate human-paced wait, not a stall. While the most recent observed
                 // interaction is an unresolved tool.approval_required (only tool.approval_pending
@@ -2299,6 +2322,50 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
             RunStatus.MergeFailed => ChildOutcome.Failed,
             _ => null, // still in progress
         };
+    }
+
+    /// <summary>
+    /// #317 — Authoritative durable re-check for a late-arriving completion signal, consulted by the
+    /// stall watchdog just before it would declare <c>agent_stall_timeout</c>. Unlike
+    /// <see cref="TryResolveFromStoreAsync"/> (which reads the Run row status that can lag), this
+    /// reads the child's durable <c>RunEvents</c> log directly from <paramref name="fromSequence"/>
+    /// — the same log <see cref="IRunEventStream.AppendAsync"/> writes to durably BEFORE
+    /// acknowledging a terminal event. If the child had already emitted a terminal event
+    /// (RunAssembleReady / RunCompleted / RunFailed / RunCancelled) that raced in during the poll /
+    /// stall-TTL window, it is resolved to the real <see cref="ChildResult"/> here (mapped identically
+    /// to the live path via <see cref="TryMapTerminalEvent"/>); otherwise returns <c>null</c> and the
+    /// caller proceeds with genuine stall handling. Best-effort: a corrupt/absent payload is skipped.
+    /// </summary>
+    private async Task<ChildResult?> TryResolveTerminalFromEventLogAsync(
+        int subtaskId, string childRunId, int fromSequence, CancellationToken ct)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var rows = await db.RunEvents.AsNoTracking()
+            .Where(e => e.RunId == childRunId && e.Sequence > fromSequence)
+            .OrderBy(e => e.Sequence)
+            .Select(e => new { e.Sequence, e.EventType, e.PayloadJson })
+            .ToListAsync(ct).ConfigureAwait(false);
+
+        foreach (var row in rows)
+        {
+            object payload;
+            try
+            {
+                payload = string.IsNullOrWhiteSpace(row.PayloadJson)
+                    ? new { }
+                    : JsonSerializer.Deserialize<JsonElement>(row.PayloadJson);
+            }
+            catch (JsonException)
+            {
+                continue;
+            }
+
+            if (TryMapTerminalEvent(new RunEvent(row.Sequence, row.EventType, payload), out var terminal))
+                return terminal.ToResult(subtaskId, childRunId);
+        }
+
+        return null;
     }
 
 
