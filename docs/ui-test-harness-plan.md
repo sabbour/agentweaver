@@ -48,8 +48,8 @@ the same product through a different surface:
 | Harness | Surface | Drives via | Directory |
 |---|---|---|---|
 | **API harness** (exists) | Backend REST lifecycle | bearer-token HTTP calls | `scripts/persona-harness/` |
-| **UI harness** (this spec) | Web UI | Playwright browser | `scripts/ui-persona-harness/` |
-| **MCP harness** (Morpheus, in parallel) | MCP protocol / tool-call surface | MCP client | `scripts/mcp-persona-harness/` (Morpheus's spec) |
+| **UI harness** (this spec) | Web UI | Playwright browser | `scripts/ui-harness/` |
+| **MCP harness** (Morpheus, in parallel) | MCP protocol / tool-call surface | MCP client | `scripts/mcp-harness/` (Morpheus's spec) |
 
 Per Ahmed's explicit requirement, **all three must share common personas and must be
 judgeable through a common judging model** — a persona (Jordan, Maya, Priya, …) is
@@ -61,7 +61,7 @@ that shared layer; Morpheus's MCP spec references the same layer.
 This UI harness is therefore **one of three consumers of a shared persona + judge
 layer**, not a standalone extension of the API harness.
 
-**Decision: a new sibling directory `scripts/ui-persona-harness/` that consumes a
+**Decision: a new sibling directory `scripts/ui-harness/` that consumes a
 shared persona-brief package and a shared judge core (below), rather than folding
 Playwright into the API harness or forking its briefs/judge.**
 
@@ -695,7 +695,7 @@ Flow:
    hand in that visible browser.
 2. **Persist `storageState`.** On confirmation, the harness writes Playwright's
    `storageState` (cookies + localStorage) to a **git-ignored, gitignored, local**
-   path (`scripts/ui-persona-harness/.auth/staging.storageState.json`). This file
+   path (`scripts/ui-harness/.auth/staging.storageState.json`). This file
    is a credential — it is never committed, never logged, never attached to a
    finding, and lives only on the operator's machine.
 3. **Reuse on every subsequent run.** The LLM-in-the-loop driver and any scenario
@@ -717,16 +717,13 @@ assuming it away.
 
 ## Directory / file layout
 
-A sibling of `scripts/persona-harness/`, reusing its shared modules:
-
-```
 A sibling of `scripts/persona-harness/` that **consumes the shared persona and judge
 packages** (it ships no copied personas and no copied judge logic):
 
 ```
 scripts/persona-briefs/          SHARED — persona cores + per-surface adapters (all three harnesses)
 scripts/harness-judge/           SHARED — judge core + canonical verdict schema + meta-aggregate + evidence adapters
-scripts/ui-persona-harness/      THIS harness (UI-specific driver + evidence only)
+scripts/ui-harness/      THIS harness (UI-specific driver + evidence only)
   README.md                    Mirrors the API harness README: why UI-driven, driver/judge split, auth flow
   package.json                 Declares @playwright/test; depends on ../persona-briefs + ../harness-judge; `npm test`
   playwright.config.ts         Chromium project, storageState wiring, headless default, headful `login` override
@@ -808,7 +805,7 @@ The harness is designed so multiple agents can build it concurrently, and so tha
 (read-only import reference only until that track stabilizes).
 
 **Phase 0 — scaffolding + auth (Trinity, first).**
-Stand up `scripts/ui-persona-harness/` skeleton, `playwright.config.ts`, the
+Stand up `scripts/ui-harness/` skeleton, `playwright.config.ts`, the
 headful `login` → `storageState` flow (`lib/auth.mjs`), and prove one round trip:
 manual login once, then a headless run that loads the deployed app authenticated and
 captures a DOM snapshot + screenshot + console/network log for a single navigation.

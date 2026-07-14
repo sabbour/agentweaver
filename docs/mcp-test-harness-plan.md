@@ -5,10 +5,16 @@ _Last updated: 2026-07-14 — author: Morpheus (Runtime Engineer)_
 > **Status: design spec only.** No code in this plan is built yet. This document
 > specifies a **third** persona-driven validation harness — the **MCP harness** —
 > that sits alongside the existing **API harness** (`scripts/persona-harness/`,
-> being extended by Tank) and the planned **Playwright UI harness** (spec'd by
-> Trinity in `docs/ui-test-harness-plan.md`). All three drive the **same personas**
-> through **different surfaces** and feed a **shared judge**. See
+> being extended by Tank and renamed to `scripts/api-harness/` under the naming
+> convention below) and the planned **Playwright UI harness** (`scripts/ui-harness/`,
+> spec'd by Trinity in `docs/ui-test-harness-plan.md`). All three drive the **same
+> personas** through **different surfaces** and feed a **shared judge**. See
 > [Cross-Harness Shared Layer](#cross-harness-shared-layer).
+>
+> **Naming convention:** harnesses are named `{surface}-harness` (`api-harness`,
+> `ui-harness`, `mcp-harness`) — by the **surface** they test, not by the fact that
+> they use personas. Persona generation/authoring is an orthogonal concern that lives
+> **exclusively** in the shared `scripts/persona-briefs/` package all three consume.
 
 ## The full vision — a self-improvement feedback loop, not three test suites
 
@@ -221,7 +227,8 @@ Investigated in `McpBearerTokenMiddleware.cs` + `AgentweaverApiClient.cs` +
 
 The MCP harness reuses the API harness's proven shape (`briefs/` → LLM-in-the-loop
 driver → verbatim transcript → separate judge) with the surface swapped from REST to
-MCP. It is a **new, sibling** harness, not a modification of `scripts/persona-harness/`.
+MCP. It is a **new, sibling** harness, not a modification of the API harness
+(`scripts/persona-harness/`, renaming to `scripts/api-harness/`).
 
 ### 1. How a persona brief drives MCP tool calls, turn by turn
 
@@ -417,11 +424,12 @@ same digest shape the shared judge consumes. No MCP-specific verdict schema.
 
 ## Directory / File Layout Proposal
 
-A **new sibling** package — nothing under `scripts/persona-harness/` is modified
-(Tank owns those files). Proposed root: **`scripts/mcp-persona-harness/`**.
+A **new sibling** package — nothing under the API harness's current
+`scripts/persona-harness/` is modified (Tank owns those files; it is renaming to
+`scripts/api-harness/`). Proposed root: **`scripts/mcp-harness/`**.
 
 ```
-scripts/mcp-persona-harness/
+scripts/mcp-harness/
   package.json                 # Node ESM, "type":"module"; dep: @modelcontextprotocol/sdk
   README.md                    # what it is, how to run, the two rungs, the two targets
   JUDGE.md                     # MCP-specific judge ADDENDUM only — points at the SHARED
@@ -519,7 +527,7 @@ scripts/persona-briefs/            # shared, surface-agnostic — the single sou
     verdict-schema.mjs       # agentweaver.persona-judge-verdict/v1 (canonical, shared)
     assemble.mjs             # judge-prompt assembler core (surface-agnostic)
     meta-aggregate.mjs       # cross-run + CROSS-SURFACE aggregation
-  package.json               # imported by persona-harness, ui-persona-harness, mcp-persona-harness
+  package.json               # imported by api-harness, ui-harness, mcp-harness
 ```
 
 Each brief is written **surface-neutrally**: it states *what the persona wants* and
