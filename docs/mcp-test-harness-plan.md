@@ -10,6 +10,39 @@ _Last updated: 2026-07-14 — author: Morpheus (Runtime Engineer)_
 > through **different surfaces** and feed a **shared judge**. See
 > [Cross-Harness Shared Layer](#cross-harness-shared-layer).
 
+## The full vision — a self-improvement feedback loop, not three test suites
+
+The three harnesses are **not** independent test suites. Together they form a
+**self-improvement feedback loop** whose purpose is to **replace manual bug-hunting** —
+today's loop of Ahmed launching the app and reporting bugs, or the coordinator running
+ad hoc API calls that have to be re-described each session. To make that loop
+autonomous, **all three stages of the pipeline must be LLM/model-driven**, not just the
+middle one:
+
+1. **Persona generation** (the *inputs*) — personas must be **LLM-generatable on
+   demand** (new Jobs-To-Be-Done variations), not limited to the hand-authored
+   jordan/maya/priya set. See
+   [Shared persona / brief format](#1-shared-persona--brief-format--define-personas-once-surface-agnostically).
+2. **Persona behavior** (the *driving*) — already covered by this harness's
+   LLM-in-the-loop MCP tool-call selection (a fresh LLM decides each turn live from
+   real tool results). See [Architecture](#architecture).
+3. **Judging** (the *evaluation*) — the shared judge must render more than P0/P1
+   pass/fail; it must also assess a **frustration level** (an emotional/UX signal) from
+   the transcript evidence. See
+   [Judge architecture](#2-judge-architecture--recommendation-one-shared-judge-core--thin-mcp-evidence-adapter-option-a).
+
+**Division of responsibility across the three surfaces.** The **API harness** tests
+core backend functionality **in isolation** — it is the **ground-truth layer** (did the
+orchestration mechanically do the right thing, independent of any client's ergonomics).
+The **MCP and UI harnesses** primarily test the **experience layer** — is the platform
+**usable, discoverable, and non-frustrating** for an MCP client (or a browser user),
+not merely "did the JSON-RPC call succeed." When an MCP/UI harness surfaces a
+usability/design problem, it is **cross-referenced against the API harness's findings
+for the same persona/scenario** to determine whether it traces back to a real
+API/backend defect (a ground-truth failure) or is purely an experience-layer issue
+living in the MCP/UI surface itself. This cross-reference is exactly what the **shared
+verdict schema + cross-surface meta-aggregation** (Option (a)) makes possible.
+
 ---
 
 ## Goal
@@ -404,8 +437,11 @@ import**:
 scripts/persona-briefs/            # shared, surface-agnostic — the single source of truth
   briefs/
     jordan.md   maya.md   priya.md   …   # goals, constraints, voice, MANDATORY ≥2 pushback
+  generate/
+    generate-brief.mjs       # LLM-driven brief GENERATOR — synthesize a new brief on demand
+    brief-schema.mjs         # the surface-agnostic brief contract every generated brief must satisfy
   judge/
-    JUDGE.md                 # the shared P0 / P1 / CANNOT_DETERMINE playbook (surface-neutral core)
+    JUDGE.md                 # the shared P0 / P1 / CANNOT_DETERMINE + FRUSTRATION playbook (surface-neutral core)
     verdict-schema.mjs       # agentweaver.persona-judge-verdict/v1 (canonical, shared)
     assemble.mjs             # judge-prompt assembler core (surface-agnostic)
     meta-aggregate.mjs       # cross-run + CROSS-SURFACE aggregation
@@ -419,6 +455,22 @@ is taken* to the harness. The MCP harness reads `jordan.md` and drives it via
 `jordan.md` via `revise-spec` REST calls; the UI harness drives it via browser DOM
 actions. A tiny **surface adapter** in each harness maps the abstract levers
 ("propose", "inspect draft", "push back", "confirm") onto its concrete surface.
+
+**The shared package must support LLM-generated briefs, not just store hand-written
+ones** (pipeline stage 1 of the self-improvement loop). `generate/generate-brief.mjs` is
+an **LLM-driven generator**: given a seed (a JTBD theme, a target discipline, a
+capability/seam to stress, or "a plausible new-user variation of Jordan"), it prompts a
+model to synthesize a **new surface-agnostic brief** — a fresh persona with its own
+goals, constraints, voice, and the mandatory ≥2-pushback instruction — conforming to
+`brief-schema.mjs`. Generated briefs are the same shape as the hand-authored ones, so
+**all three harnesses drive them with zero code changes**; the hand-authored
+jordan/maya/priya set becomes the seed/exemplar corpus, not the ceiling. Generated
+briefs may be persisted into `briefs/` (promoted after they prove useful) or driven
+ephemerally for a single exploratory session. This keeps the harness fleet from
+replaying the same three personas forever and lets it **probe the space of realistic
+user intents autonomously** — the whole point of replacing manual bug-hunting. (An
+existing `lib/generate-brief.mjs` already lives in the API harness as a starting point;
+Phase 2 folds/generalizes it into the shared `generate/` module.)
 
 - The authored `specs/personas/*.md` criteria stay where they are; the shared
   `assemble.mjs` resolves them exactly as `lib/judge.mjs` does today (parse the
@@ -474,11 +526,54 @@ shape. **Not** a separate MCP judge.
    no separate judge needed, just the MCP evidence adapter feeding the raw error +
    the #129 rubric (carried in the MCP `JUDGE.md` addendum) into the shared prompt.
 
+**Required schema addition — a `frustration` dimension (pipeline stage 3).** The
+shared verdict schema must carry more than pass/fail; it must include a **frustration
+level** as a **required field alongside `p0` and `p1`** — an emotional/UX assessment the
+judge makes **from the transcript evidence**, capturing how frustrating the experience
+would have been for the persona regardless of whether the run mechanically succeeded. A
+run can be **P0-green and P1-PASS yet deeply frustrating** (the persona got there, but
+only after fighting the surface) — that frustration is precisely the usability signal
+the MCP and UI harnesses exist to surface, and it must not be lost in a binary verdict.
+The canonical `agentweaver.persona-judge-verdict/v1` schema therefore extends to:
+
+```jsonc
+{
+  "p0": { "verdict": "PASS | FAIL", ... },     // objective mechanics (unchanged)
+  "p1": { "verdict": "PASS | PARTIAL | FAIL", ... },  // content quality (unchanged)
+  "frustration": {                              // REQUIRED — emotional/UX assessment
+    "level": "none | low | moderate | high | abandoned",  // ordinal, judge-assigned
+    "evidence": "<transcript turn refs + one-line rationale>",
+    "signals": [ "<the specific frustration signals observed>" ]
+  },
+  "pushback": { ... }, "cannotDetermine": [ ... ], "findings": [ ... ]
+}
+```
+
+Because the field is **shared**, frustration is directly comparable across API/UI/MCP
+for the same persona in `meta-aggregate.mjs` (e.g. "the same scenario is `low` via REST
+but `high` via MCP" localizes a purely experience-layer defect). **For MCP
+specifically, the frustration signals the judge should look for include:** excessive
+retry / error-recovery turns (repeated `-32001` → `diagnostics_get` → retry loops); the
+persona **abandoning a tool-call sequence** or backing out of a workflow; repeated
+clarification requests or re-`get`-ing state because a prior result was unclear; a high
+ratio of `isError:true` turns or non-actionable errors (#129) forcing guesswork; long
+`run_watch` hangs with no explanation (#128); and the persona having to chain many tools
+where one path should exist (the multi-call baseline #130's `run_task` is meant to
+collapse). The API-harness adapter maps the equivalent signals from HTTP evidence and
+the UI adapter from DOM/interaction evidence, so the ordinal is meaningfully comparable
+across surfaces. The `JUDGE.md` core documents the frustration rubric; the MCP `JUDGE.md`
+addendum lists the MCP-specific signal catalog above. The driver still assigns **no**
+frustration itself — like P1, it is a subjective call the judge renders from captured
+evidence.
+
 **What's MCP-specific (the thin adapter), and only this:**
 - `lib/evidence-adapter.mjs` maps `agentweaver.mcp-transcript/v1` turns →
-  the shared digest (`{kind, intent, composition, httpStatus→protocolStatus, …}`);
+  the shared digest (`{kind, intent, composition, httpStatus→protocolStatus, …}`), and
+  surfaces the MCP frustration signals (retry loops, abandonment, `isError` ratio) for
+  the judge to weigh;
 - the MCP `JUDGE.md` **addendum** documents the extra evidence fields (`isError`,
-  `protocolErrorCode`, tool-loop trace) and the #129 actionable-error rubric;
+  `protocolErrorCode`, tool-loop trace), the #129 actionable-error rubric, and the
+  MCP-specific frustration-signal catalog;
 - the shared `assemble.mjs` gains a small `surface` parameter (`api|ui|mcp`) so the
   prompt preamble names the surface, but the **method, schema, and taxonomy are
   identical**.
