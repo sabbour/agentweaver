@@ -39,6 +39,35 @@ function isPlainObject(v) {
   return !!v && typeof v === 'object' && !Array.isArray(v);
 }
 
+function validateFinding(finding) {
+  const errors = [];
+  if (!isPlainObject(finding)) {
+    return { ok: false, errors: ['finding must be an object'] };
+  }
+  if (typeof finding.title !== 'string' || !finding.title.trim()) {
+    errors.push('finding.title must be a non-empty string');
+  }
+  if (typeof finding.kind !== 'string' || !finding.kind.trim()) {
+    errors.push('finding.kind must be a non-empty string');
+  }
+  return { ok: errors.length === 0, errors };
+}
+
+function sanitizeVerdictFindings(verdict, opts = {}) {
+  const warn = opts.warn ?? (() => {});
+  const source = opts.source ?? verdict.persona ?? verdict.transcript ?? 'unknown';
+  const findings = [];
+  for (const [idx, finding] of (verdict.findings ?? []).entries()) {
+    const validation = validateFinding(finding);
+    if (!validation.ok) {
+      warn(`skip ${source}: findings[${idx}] malformed (${validation.errors.join('; ')})`);
+      continue;
+    }
+    findings.push(finding);
+  }
+  return { ...verdict, findings };
+}
+
 export function validateVerdict(verdict) {
   const errors = [];
   if (!isPlainObject(verdict)) {
@@ -72,14 +101,15 @@ export function validateVerdict(verdict) {
  * Pure + deterministic — unit-testable without disk.
  * @param {any[]} verdicts
  */
-export function aggregate(verdicts) {
-  const runs = verdicts.length;
+export function aggregate(verdicts, opts = {}) {
   const personaOf = (v) => v.persona ?? v.transcript ?? 'unknown';
+  const sanitizedVerdicts = verdicts.map((v) => sanitizeVerdictFindings(v, { warn: opts.warn, source: personaOf(v) }));
+  const runs = sanitizedVerdicts.length;
 
   // ---- P0 objective tally ----
   const p0Failures = [];
   const p0Passes = [];
-  for (const v of verdicts) {
+  for (const v of sanitizedVerdicts) {
     const verdict = String(v.p0?.verdict ?? '').toUpperCase();
     if (verdict.startsWith('FAIL')) p0Failures.push({ persona: personaOf(v), evidence: v.p0?.evidence ?? null });
     else if (verdict.startsWith('PASS')) p0Passes.push(personaOf(v));
@@ -87,11 +117,11 @@ export function aggregate(verdicts) {
 
   // ---- P0 invariants: mechanics true in EVERY run ----
   const mechanicKeys = new Set();
-  for (const v of verdicts) for (const k of Object.keys(v.p0?.mechanics ?? {})) mechanicKeys.add(k);
+  for (const v of sanitizedVerdicts) for (const k of Object.keys(v.p0?.mechanics ?? {})) mechanicKeys.add(k);
   const invariants = [];
   const mechanicDivergences = [];
   for (const k of mechanicKeys) {
-    const vals = verdicts.map((v) => ({ persona: personaOf(v), val: v.p0?.mechanics?.[k] }));
+    const vals = sanitizedVerdicts.map((v) => ({ persona: personaOf(v), val: v.p0?.mechanics?.[k] }));
     const present = vals.filter((x) => x.val !== undefined);
     if (present.length === 0) continue;
     const allTrue = present.every((x) => truthy(x.val));
@@ -102,7 +132,7 @@ export function aggregate(verdicts) {
 
   // ---- P1 subjective tally + divergence ----
   const p1 = { PASS: [], PARTIAL: [], FAIL: [] };
-  for (const v of verdicts) {
+  for (const v of sanitizedVerdicts) {
     const verdict = String(v.p1?.verdict ?? '').toUpperCase();
     if (p1[verdict]) p1[verdict].push(personaOf(v));
   }
@@ -110,7 +140,7 @@ export function aggregate(verdicts) {
 
   // ---- findings cross-reference (recurring across personas) ----
   const groups = new Map();
-  for (const v of verdicts) {
+  for (const v of sanitizedVerdicts) {
     for (const f of v.findings ?? []) {
       const key = findingKey(f);
       if (!groups.has(key)) groups.set(key, { key, title: f.title, kind: f.kind, relatedIssue: f.relatedIssue ?? null, personas: new Set(), markedRecurring: false, evidence: [] });
@@ -135,17 +165,17 @@ export function aggregate(verdicts) {
   const drift = allFindings.filter((f) => /drift/i.test(String(f.kind)));
 
   // ---- pushback requirement ----
-  const pushback = verdicts.map((v) => ({ persona: personaOf(v), count: v.pushback?.count ?? null, requirementMet: v.pushback?.requirementMet ?? null }));
+  const pushback = sanitizedVerdicts.map((v) => ({ persona: personaOf(v), count: v.pushback?.count ?? null, requirementMet: v.pushback?.requirementMet ?? null }));
   const pushbackRequirementMetAll = pushback.every((p) => truthy(p.requirementMet) || (typeof p.count === 'number' && p.count >= 2));
 
   // ---- cannot-determine union ----
   const cannotDetermine = [];
-  for (const v of verdicts) for (const c of v.cannotDetermine ?? []) if (c) cannotDetermine.push({ persona: personaOf(v), item: c });
+  for (const v of sanitizedVerdicts) for (const c of v.cannotDetermine ?? []) if (c) cannotDetermine.push({ persona: personaOf(v), item: c });
 
   return {
     schema: 'agentweaver.persona-meta-aggregate/v1',
     runs,
-    personas: verdicts.map(personaOf),
+    personas: sanitizedVerdicts.map(personaOf),
     p0: { passes: p0Passes, failures: p0Failures, allGreen: p0Failures.length === 0 && p0Passes.length === runs },
     invariants,
     divergences: {
@@ -230,7 +260,7 @@ export function loadVerdicts(paths, opts = {}) {
       warn(`skip ${p}: non-conforming verdict (${validation.errors.join('; ')})`);
       continue;
     }
-    verdicts.push(parsed);
+    verdicts.push(sanitizeVerdictFindings(parsed, { warn, source: p }));
   }
   return verdicts;
 }

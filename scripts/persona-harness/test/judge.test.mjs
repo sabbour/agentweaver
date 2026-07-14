@@ -194,6 +194,38 @@ test('aggregate computes invariants, recurring #315, capability gaps and pushbac
   assert.equal(agg.cannotDetermine.length, 1);
 });
 
+test('aggregate skips malformed findings entries with warnings instead of crashing', () => {
+  const warnings = [];
+  const agg = aggregate([
+    {
+      ...verdicts[0],
+      persona: 'trinity',
+      findings: [
+        null,
+        {},
+        'a string',
+        { title: 'Valid recurring regression', kind: 'P1', relatedIssue: '#999', recurring: true },
+      ],
+    },
+    {
+      ...verdicts[1],
+      persona: 'neo',
+      findings: [
+        { title: 'Valid recurring regression from another persona', kind: 'P1', relatedIssue: '#999' },
+      ],
+    },
+  ], { warn: (message) => warnings.push(message) });
+
+  assert.equal(warnings.length, 3);
+  assert.match(warnings[0], /trinity: findings\[0\] malformed/i);
+  assert.match(warnings[1], /trinity: findings\[1\] malformed/i);
+  assert.match(warnings[2], /trinity: findings\[2\] malformed/i);
+  assert.equal(agg.runs, 2);
+  assert.equal(agg.recurringFindings.length, 1);
+  assert.equal(agg.recurringFindings[0].relatedIssue, '#999');
+  assert.deepEqual(agg.recurringFindings[0].personas.sort(), ['neo', 'trinity']);
+});
+
 test('renderRollup produces a readable batch report citing the recurring finding', () => {
   const text = renderRollup(aggregate(verdicts));
   assert.match(text, /BATCH: 3 run\(s\)/);
@@ -225,6 +257,46 @@ test('meta-aggregate CLI skips non-conforming JSON with a warning and excludes i
     const agg = JSON.parse(fs.readFileSync(rollupOut, 'utf8'));
     assert.equal(agg.runs, 1);
     assert.deepEqual(agg.personas, ['priya']);
+  } finally {
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  }
+});
+
+test('meta-aggregate CLI skips malformed findings entries but keeps the verdict file', () => {
+  const tmpRoot = fs.mkdtempSync(path.join(process.cwd(), '.meta-aggregate-test-'));
+  const verdictDir = path.join(tmpRoot, 'verdicts');
+  fs.mkdirSync(verdictDir, { recursive: true });
+
+  const malformedPath = path.join(verdictDir, 'trinity.json');
+  const validPath = path.join(verdictDir, 'neo.json');
+  const rollupOut = path.join(tmpRoot, 'aggregate.json');
+  fs.writeFileSync(malformedPath, JSON.stringify({
+    ...verdicts[0],
+    persona: 'trinity',
+    findings: [null, {}, 'a string', { title: 'Shared regression', kind: 'P1', relatedIssue: '#777' }],
+  }, null, 2), 'utf8');
+  fs.writeFileSync(validPath, JSON.stringify({
+    ...verdicts[1],
+    persona: 'neo',
+    findings: [{ title: 'Same shared regression', kind: 'P1', relatedIssue: '#777' }],
+  }, null, 2), 'utf8');
+
+  const cli = spawnSync(
+    process.execPath,
+    [path.join(process.cwd(), 'lib', 'meta-aggregate.mjs'), verdictDir, '--json', rollupOut],
+    { cwd: process.cwd(), encoding: 'utf8' },
+  );
+
+  try {
+    assert.equal(cli.status, 0, `stderr:\n${cli.stderr}\nstdout:\n${cli.stdout}`);
+    assert.match(cli.stderr, /skip .*trinity\.json: findings\[0\] malformed/i);
+    assert.match(cli.stderr, /skip .*trinity\.json: findings\[1\] malformed/i);
+    assert.match(cli.stderr, /skip .*trinity\.json: findings\[2\] malformed/i);
+    const agg = JSON.parse(fs.readFileSync(rollupOut, 'utf8'));
+    assert.equal(agg.runs, 2);
+    assert.deepEqual(agg.personas.sort(), ['neo', 'trinity']);
+    assert.equal(agg.recurringFindings.length, 1);
+    assert.equal(agg.recurringFindings[0].relatedIssue, '#777');
   } finally {
     fs.rmSync(tmpRoot, { recursive: true, force: true });
   }
