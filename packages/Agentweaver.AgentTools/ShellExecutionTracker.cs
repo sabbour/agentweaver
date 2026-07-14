@@ -8,7 +8,8 @@ public sealed record ShellExecutionSnapshot(
     string ToolCallId,
     string CommandHash,
     DateTimeOffset StartedAt,
-    DateTimeOffset Deadline);
+    DateTimeOffset Deadline,
+    long Generation = 0);
 
 /// <summary>Atomic observation used by watchdogs to wait for active-shell lifecycle changes.</summary>
 public sealed record ShellExecutionObservation(
@@ -21,11 +22,21 @@ public sealed record ShellExecutionObservation(
 /// </summary>
 public sealed class ShellExecutionTracker : IDisposable
 {
+    public enum ObservedExecutionState
+    {
+        Idle,
+        Running,
+        Terminating,
+        Fenced,
+    }
+
     private readonly SemaphoreSlim _singleFlight = new(1, 1);
     private readonly object _sync = new();
     private ShellExecutionSnapshot? _activeExecution;
     private bool _activeExecutionOwnsSingleFlight;
     private long _version;
+    private long _observedGeneration;
+    private ObservedExecutionState _observedState;
     private TaskCompletionSource _changed =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
     private bool _disposed;
@@ -37,6 +48,26 @@ public sealed class ShellExecutionTracker : IDisposable
             lock (_sync)
                 return _activeExecution;
         }
+    }
+
+    /// <summary>
+    /// Starts a new SDK-owned turn generation. Lifecycle callbacks from previous generations are
+    /// rejected rather than being allowed to mutate this turn's shell slot.
+    /// </summary>
+    public long BeginObservedTurn()
+    {
+        TaskCompletionSource changed;
+        lock (_sync)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            _observedGeneration++;
+            _activeExecution = null;
+            _activeExecutionOwnsSingleFlight = false;
+            _observedState = ObservedExecutionState.Idle;
+            changed = AdvanceVersionLocked();
+        }
+        changed.TrySetResult();
+        return _observedGeneration;
     }
 
     public async Task<IDisposable> EnterAsync(
@@ -76,13 +107,26 @@ public sealed class ShellExecutionTracker : IDisposable
         string toolCallId,
         string commandHash,
         TimeSpan hardTimeout)
+        => TryStartObservedExecution(toolCallId, commandHash, hardTimeout, _observedGeneration);
+
+    /// <summary>Starts a shell only when its callback belongs to the current, unfenced turn.</summary>
+    public bool TryStartObservedExecution(
+        string toolCallId,
+        string commandHash,
+        TimeSpan hardTimeout,
+        long generation)
     {
         TaskCompletionSource? changed = null;
         lock (_sync)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
+            if (generation != _observedGeneration || _observedState == ObservedExecutionState.Fenced ||
+                _observedState == ObservedExecutionState.Terminating)
+                return false;
             if (_activeExecution is not null)
-                return string.Equals(_activeExecution.ToolCallId, toolCallId, StringComparison.Ordinal);
+                return _observedState == ObservedExecutionState.Running &&
+                       string.Equals(_activeExecution.ToolCallId, toolCallId, StringComparison.Ordinal) &&
+                       _activeExecution.Generation == generation;
 
             var startedAt = DateTimeOffset.UtcNow;
             var deadline = hardTimeout > TimeSpan.Zero
@@ -92,8 +136,10 @@ public sealed class ShellExecutionTracker : IDisposable
                 toolCallId,
                 commandHash,
                 startedAt,
-                deadline);
+                deadline,
+                generation);
             _activeExecutionOwnsSingleFlight = false;
+            _observedState = ObservedExecutionState.Running;
             changed = AdvanceVersionLocked();
         }
         changed.TrySetResult();
@@ -102,18 +148,26 @@ public sealed class ShellExecutionTracker : IDisposable
 
     /// <summary>Completes an SDK-owned shell when its matching tool lifecycle event arrives.</summary>
     public bool CompleteObservedExecution(string toolCallId)
+        => CompleteObservedExecution(toolCallId, _observedGeneration);
+
+    /// <summary>Completes only the matching running generation.</summary>
+    public bool CompleteObservedExecution(string toolCallId, long generation)
     {
         TaskCompletionSource? changed = null;
         lock (_sync)
         {
-            if (_activeExecution is null ||
+            if (generation != _observedGeneration ||
+                _observedState != ObservedExecutionState.Running ||
+                _activeExecution is null ||
                 _activeExecutionOwnsSingleFlight ||
-                !string.Equals(_activeExecution.ToolCallId, toolCallId, StringComparison.Ordinal))
+                !string.Equals(_activeExecution.ToolCallId, toolCallId, StringComparison.Ordinal) ||
+                _activeExecution.Generation != generation)
             {
                 return false;
             }
 
             _activeExecution = null;
+            _observedState = ObservedExecutionState.Idle;
             changed = AdvanceVersionLocked();
         }
         changed.TrySetResult();
@@ -140,19 +194,79 @@ public sealed class ShellExecutionTracker : IDisposable
         return changed.WaitAsync(ct);
     }
 
-    /// <summary>Clears an SDK-owned observation after a faulted/cancelled turn.</summary>
-    public void ClearObservedExecution()
+    /// <summary>
+    /// Marks a matching shell as terminating. A second shell cannot start until it is fenced.
+    /// </summary>
+    public bool TryBeginObservedTermination(ShellExecutionSnapshot snapshot)
     {
         TaskCompletionSource? changed = null;
         lock (_sync)
         {
-            if (_activeExecution is null || _activeExecutionOwnsSingleFlight)
+            if (!MatchesObservedExecutionLocked(snapshot) ||
+                _observedState != ObservedExecutionState.Running)
+                return false;
+
+            _observedState = ObservedExecutionState.Terminating;
+            changed = AdvanceVersionLocked();
+        }
+        changed.TrySetResult();
+        return true;
+    }
+
+    /// <summary>
+    /// Releases a terminated shell slot while fencing its generation so late SDK callbacks cannot
+    /// re-arm the tracker. A subsequent <see cref="BeginObservedTurn"/> opens a new generation.
+    /// </summary>
+    public bool FenceObservedExecution(ShellExecutionSnapshot snapshot)
+    {
+        TaskCompletionSource? changed = null;
+        lock (_sync)
+        {
+            if (!MatchesObservedExecutionLocked(snapshot))
+                return false;
+
+            _activeExecution = null;
+            _observedState = ObservedExecutionState.Fenced;
+            changed = AdvanceVersionLocked();
+        }
+        changed.TrySetResult();
+        return true;
+    }
+
+    /// <summary>Reports whether callbacks for the supplied generation are permanently fenced.</summary>
+    public bool IsObservedGenerationFenced(long generation)
+    {
+        lock (_sync)
+            return generation == _observedGeneration && _observedState == ObservedExecutionState.Fenced;
+    }
+
+    /// <summary>Clears a matching SDK-owned observation after a faulted/cancelled turn.</summary>
+    public void ClearObservedExecution(long generation)
+    {
+        TaskCompletionSource? changed = null;
+        lock (_sync)
+        {
+            if (generation != _observedGeneration || _activeExecution is null ||
+                _activeExecutionOwnsSingleFlight || _activeExecution.Generation != generation)
                 return;
             _activeExecution = null;
+            _observedState = ObservedExecutionState.Idle;
             changed = AdvanceVersionLocked();
         }
         changed.TrySetResult();
     }
+
+    /// <summary>Clears the current observed generation for legacy callers.</summary>
+    public void ClearObservedExecution() => ClearObservedExecution(_observedGeneration);
+
+    private bool MatchesObservedExecutionLocked(ShellExecutionSnapshot snapshot) =>
+        _activeExecution is not null &&
+        !_activeExecutionOwnsSingleFlight &&
+        _activeExecution.Generation == snapshot.Generation &&
+        _activeExecution.Generation == _observedGeneration &&
+        string.Equals(_activeExecution.ToolCallId, snapshot.ToolCallId, StringComparison.Ordinal) &&
+        string.Equals(_activeExecution.CommandHash, snapshot.CommandHash, StringComparison.Ordinal) &&
+        _activeExecution.StartedAt == snapshot.StartedAt;
 
     private void Exit(ShellExecutionSnapshot snapshot)
     {
@@ -163,6 +277,7 @@ public sealed class ShellExecutionTracker : IDisposable
             {
                 _activeExecution = null;
                 _activeExecutionOwnsSingleFlight = false;
+                _observedState = ObservedExecutionState.Idle;
                 changed = AdvanceVersionLocked();
             }
         }
@@ -180,6 +295,7 @@ public sealed class ShellExecutionTracker : IDisposable
             _disposed = true;
             _activeExecution = null;
             _activeExecutionOwnsSingleFlight = false;
+            _observedState = ObservedExecutionState.Fenced;
             changed = AdvanceVersionLocked();
         }
         changed.TrySetResult();

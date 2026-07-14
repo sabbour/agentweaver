@@ -69,6 +69,11 @@ internal sealed class A2ATurnBridgeAgent : DelegatingAIAgent
     private readonly PodLocalWorkspaceManager? _workspaceManager;
     private readonly AgentHostRuntimeState? _runtimeState;
     private readonly ILogger<A2ATurnBridgeAgent> _logger;
+    private readonly TimeSpan _turnDrainTimeout;
+    private readonly TimeSpan _forcedCleanupTimeout;
+
+    internal static readonly TimeSpan DefaultTurnDrainTimeout = TimeSpan.FromSeconds(10);
+    internal static readonly TimeSpan DefaultForcedCleanupTimeout = TimeSpan.FromSeconds(5);
 
     /// <summary>
     /// Reports the registered MAF agent name. <see cref="DelegatingAIAgent"/> otherwise forwards
@@ -106,13 +111,17 @@ internal sealed class A2ATurnBridgeAgent : DelegatingAIAgent
         IPodTurnRunner runner,
         PodLocalWorkspaceManager? workspaceManager,
         AgentHostRuntimeState? runtimeState,
-        ILogger<A2ATurnBridgeAgent> logger)
+        ILogger<A2ATurnBridgeAgent> logger,
+        TimeSpan? turnDrainTimeout = null,
+        TimeSpan? forcedCleanupTimeout = null)
         : base(inner)
     {
         _runner = runner ?? throw new ArgumentNullException(nameof(runner));
         _workspaceManager = workspaceManager;
         _runtimeState = runtimeState;
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        _turnDrainTimeout = turnDrainTimeout ?? DefaultTurnDrainTimeout;
+        _forcedCleanupTimeout = forcedCleanupTimeout ?? DefaultForcedCleanupTimeout;
     }
 
     /// <inheritdoc />
@@ -163,13 +172,14 @@ internal sealed class A2ATurnBridgeAgent : DelegatingAIAgent
             SingleWriter = false,
         });
 
+        using var turnCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         _runner.SetTurnStreamWriter(channel.Writer);
 
         var turnTask = Task.Run(async () =>
         {
             try
             {
-                return await _runner.RunTurnAsync(task, isRevision, cancellationToken)
+                return await _runner.RunTurnAsync(task, isRevision, turnCts.Token)
                     .ConfigureAwait(false);
             }
             finally
@@ -246,9 +256,35 @@ internal sealed class A2ATurnBridgeAgent : DelegatingAIAgent
         }
         finally
         {
+            if (!turnTask.IsCompleted)
+            {
+                turnCts.Cancel();
+                var drained = await WaitForCompletionAsync(turnTask, _turnDrainTimeout).ConfigureAwait(false);
+                if (!drained)
+                {
+                    try
+                    {
+                        await _runner.ForceStopTurnAsync().ConfigureAwait(false);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "A2A bridge force-stop failed while draining a cancelled turn.");
+                    }
+
+                    drained = await WaitForCompletionAsync(turnTask, _forcedCleanupTimeout).ConfigureAwait(false);
+                    if (!drained)
+                    {
+                        _logger.LogWarning(
+                            "detached_turn — A2A stream ended while its turn remained active after cancellation and force-stop.");
+                    }
+                }
+            }
             _runner.SetTurnStreamWriter(null);
         }
     }
+
+    private static async Task<bool> WaitForCompletionAsync(Task turnTask, TimeSpan timeout) =>
+        ReferenceEquals(await Task.WhenAny(turnTask, Task.Delay(timeout)).ConfigureAwait(false), turnTask);
 
     /// <summary>
     /// Extracts the task text and per-turn <c>isRevision</c> flag from the inbound A2A message

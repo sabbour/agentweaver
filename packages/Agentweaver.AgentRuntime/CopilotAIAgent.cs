@@ -153,6 +153,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
     private string? _degradedReason;
     private int _runDegradedEmitted;
     private int _shellTimeoutFailureEmitted;
+    private long _shellExecutionGeneration;
 
     /// <summary>
     /// Inactivity watchdog window for a streaming turn. If the Copilot SDK yields no chunk within
@@ -192,6 +193,11 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
 
     /// <summary>Test seam; production defaults to force-stopping the Copilot CLI process tree.</summary>
     internal Func<Task>? ShellTimeoutTerminator { get; set; }
+    internal ShellExecutionTracker? ShellExecutionTrackerForTesting
+    {
+        get => _shellExecutionTracker;
+        set => _shellExecutionTracker = value;
+    }
 
     /// <summary>
     /// Cadence for the <see cref="EventTypes.ToolApprovalPending"/> heartbeat emitted while the
@@ -685,6 +691,8 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         if (TotalTurnTimeout > TimeSpan.Zero)
             totalTurnCts.CancelAfter(TotalTurnTimeout);
         var turnCt = totalTurnCts.Token;
+        var shellExecutionGeneration = _shellExecutionTracker?.BeginObservedTurn() ?? 0;
+        _shellExecutionGeneration = shellExecutionGeneration;
         try
         {
             var rateLimitRetryAttempt = 0;
@@ -778,7 +786,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         }
         finally
         {
-            _shellExecutionTracker?.ClearObservedExecution();
+            _shellExecutionTracker?.ClearObservedExecution(shellExecutionGeneration);
             // Close any tool spans still open (e.g. a tool whose completion event never arrived
             // because the turn faulted) so no span is leaked as perpetually in-flight.
             foreach (var callId in _activeToolSpans.Keys.ToArray())
@@ -916,6 +924,17 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
 
     internal async Task HandleShellExecutionTimeoutAsync(ShellExecutionSnapshot snapshot)
     {
+        var tracker = _shellExecutionTracker;
+        if (tracker is not null && !tracker.TryBeginObservedTermination(snapshot))
+        {
+            _logger.LogWarning(
+                "shell_lifecycle_stale_generation — timeout ignored because the shell slot no longer matches; runId={RunId}, toolCallId={ToolCallId}, generation={Generation}",
+                _runId,
+                snapshot.ToolCallId,
+                snapshot.Generation);
+            return;
+        }
+
         var terminate = ShellTimeoutTerminator ?? ForceStopCopilotProcessTreeAsync;
         try
         {
@@ -929,6 +948,17 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
                 _runId,
                 snapshot.ToolCallId);
         }
+        finally
+        {
+            if (tracker is not null && !tracker.FenceObservedExecution(snapshot))
+            {
+                _logger.LogWarning(
+                    "shell_lifecycle_stale_generation — timeout cleanup did not match an active shell; runId={RunId}, toolCallId={ToolCallId}, generation={Generation}",
+                    _runId,
+                    snapshot.ToolCallId,
+                    snapshot.Generation);
+            }
+        }
 
         var failure = new AgentProviderException(
             ModelSource.GitHubCopilot,
@@ -940,7 +970,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         EmitProviderFailure(failure);
     }
 
-    private async Task ForceStopCopilotProcessTreeAsync()
+    public async Task ForceStopCopilotProcessTreeAsync()
     {
         var client = _client;
         if (client is null)
@@ -1184,7 +1214,16 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
             case ToolExecutionCompleteEvent complete when complete.Data is not null:
             {
                 var callId = complete.Data.ToolCallId ?? Guid.NewGuid().ToString("n");
-                _shellExecutionTracker?.CompleteObservedExecution(callId);
+                if (_shellExecutionTracker is { } tracker &&
+                    !tracker.CompleteObservedExecution(callId, _shellExecutionGeneration) &&
+                    tracker.IsObservedGenerationFenced(_shellExecutionGeneration))
+                {
+                    _logger.LogWarning(
+                        "shell_lifecycle_stale_generation — completion ignored for a fenced shell generation; runId={RunId}, toolCallId={ToolCallId}, generation={Generation}",
+                        _runId,
+                        callId,
+                        _shellExecutionGeneration);
+                }
                 if (_suppressedCallIds.Contains(callId))
                     break;
                 if (complete.Data.Success)
@@ -1563,12 +1602,14 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         if (!_shellExecutionTracker.TryStartObservedExecution(
                 toolCallId,
                 commandHash,
-                ShellExecutionHardTimeout))
+                ShellExecutionHardTimeout,
+                _shellExecutionGeneration))
         {
             _logger.LogWarning(
-                "Shell lifecycle start ignored because another shell is active — runId={RunId}, toolCallId={ToolCallId}",
+                "shell_lifecycle_stale_generation — shell start ignored because another shell is active or the generation is fenced; runId={RunId}, toolCallId={ToolCallId}, generation={Generation}",
                 _runId,
-                toolCallId);
+                toolCallId,
+                _shellExecutionGeneration);
         }
     }
 

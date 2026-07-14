@@ -79,10 +79,55 @@ public sealed class A2ATurnBridgeAgentTests
             _writer!.TryWrite(EventToEmit);
             return Task.FromResult(ReturnText);
         }
+
+        public Task ForceStopTurnAsync() => Task.CompletedTask;
     }
 
     private static A2ATurnBridgeAgent CreateBridge(FakeTurnRunner runner) =>
         new(new NoOpInnerAgent(), runner, NullLogger<A2ATurnBridgeAgent>.Instance);
+
+    private sealed class CancellableTurnRunner : IPodTurnRunner
+    {
+        public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public bool CancellationObserved { get; private set; }
+
+        public void SetTurnStreamWriter(ChannelWriter<RunEvent>? streamWriter) { }
+        public async Task<string> RunTurnAsync(string task, bool isRevision, CancellationToken cancellationToken)
+        {
+            Started.TrySetResult();
+            try
+            {
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+                return "";
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                CancellationObserved = true;
+                throw;
+            }
+        }
+        public Task ForceStopTurnAsync() => Task.CompletedTask;
+    }
+
+    private sealed class CancellationIgnoringTurnRunner : IPodTurnRunner
+    {
+        private readonly TaskCompletionSource<string> _completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public bool ForceStopped { get; private set; }
+
+        public void SetTurnStreamWriter(ChannelWriter<RunEvent>? streamWriter) { }
+        public Task<string> RunTurnAsync(string task, bool isRevision, CancellationToken cancellationToken)
+        {
+            Started.TrySetResult();
+            return _completion.Task;
+        }
+        public Task ForceStopTurnAsync()
+        {
+            ForceStopped = true;
+            _completion.TrySetResult("");
+            return Task.CompletedTask;
+        }
+    }
 
     [Fact]
     public void ExtractTurn_DecodesIsRevisionAndTask_FromSetupDataPart()
@@ -163,6 +208,40 @@ public sealed class A2ATurnBridgeAgentTests
         }
 
         updates.Any(u => u.Text == "all done").Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task StreamTurnAsync_ConsumerCancellation_CancelsAndJoinsTurn()
+    {
+        var runner = new CancellableTurnRunner();
+        var bridge = new A2ATurnBridgeAgent(
+            new NoOpInnerAgent(), runner, workspaceManager: null, runtimeState: null,
+            NullLogger<A2ATurnBridgeAgent>.Instance, TimeSpan.FromMilliseconds(100), TimeSpan.FromMilliseconds(100));
+        using var cts = new CancellationTokenSource();
+        await using var enumerator = bridge.StreamTurnAsync(BuildTurnMessage("go", false), cts.Token).GetAsyncEnumerator();
+        var move = enumerator.MoveNextAsync().AsTask();
+        await runner.Started.Task;
+
+        cts.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => move);
+        runner.CancellationObserved.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task StreamTurnAsync_CancellationIgnoringTurn_IsForceStoppedAfterDrainBound()
+    {
+        var runner = new CancellationIgnoringTurnRunner();
+        var bridge = new A2ATurnBridgeAgent(
+            new NoOpInnerAgent(), runner, workspaceManager: null, runtimeState: null,
+            NullLogger<A2ATurnBridgeAgent>.Instance, TimeSpan.FromMilliseconds(10), TimeSpan.FromMilliseconds(100));
+        using var cts = new CancellationTokenSource();
+        await using var enumerator = bridge.StreamTurnAsync(BuildTurnMessage("go", false), cts.Token).GetAsyncEnumerator();
+        var move = enumerator.MoveNextAsync().AsTask();
+        await runner.Started.Task;
+
+        cts.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => move);
+        runner.ForceStopped.Should().BeTrue();
     }
 
     [Theory]

@@ -17,6 +17,9 @@ internal interface IPodTurnRunner
 
     /// <summary>Runs a single agent turn, returning the accumulated assistant text.</summary>
     Task<string> RunTurnAsync(string task, bool isRevision, CancellationToken cancellationToken);
+
+    /// <summary>Stops a turn that did not honor its cancellation token within the bridge drain bound.</summary>
+    Task ForceStopTurnAsync() => Task.CompletedTask;
 }
 
 /// <summary>
@@ -35,4 +38,6 @@ internal sealed class CopilotPodTurnRunner : IPodTurnRunner
 
     public Task<string> RunTurnAsync(string task, bool isRevision, CancellationToken cancellationToken) =>
         _agent.RunTurnAsync(task, isRevision, cancellationToken);
+
+    public Task ForceStopTurnAsync() => _agent.ForceStopCopilotProcessTreeAsync();
 }
