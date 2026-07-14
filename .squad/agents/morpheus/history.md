@@ -51,3 +51,7 @@ Flakiness-recheck pass completed; confirmed BookClub/TrailMix regression tied to
 
 ## 2026-07-14T15:15:00Z — Release-wave confirmations
 Morpheus's #175 investigation confirmed the workflow-save bug was already fixed/live, #240 stayed deferred to the bigger resilience architecture, and the #311 fast-follow consolidation note fed the reserved-role ship record.
+
+
+## 2026-07-14T10:56:00-07:00 - MCP test harness design spec
+Authored docs/mcp-test-harness-plan.md (committed 9dc223a9): a third persona-driven validation harness for Agentweaver's MCP surface (90 tools, RFC-9728 OAuth + GitHub-token passthrough, stdio+streamable-HTTP transports), mirroring the API harness's brief-driven/LLM-in-the-loop/driver-only architecture with MCP tool calls as turns. Investigated the real surface in apps/Agentweaver.Mcp and epic #295 (#128/#129/#130/#131/#201). Cross-Harness Shared Layer recommends ONE shared judge core + thin MCP evidence adapter (option a, justified by cross-surface meta-aggregation and the already-surface-agnostic persona-judge-verdict/v1 schema) and a shared scripts/persona-briefs/ package for all three harnesses. Non-interfering rollout (new scripts/mcp-persona-harness/ sibling; shared-package extraction deferred to a safe checkpoint, no edits to Tank's or Trinity's in-flight files). Decision recorded for reconciliation with Trinity's parallel UI recommendation.
