@@ -29,6 +29,20 @@ The coordinator (Squad) approves issue closure, priority, and scope changes only
 
 ---
 
+## Operating Rules (standing, apply to all workstreams)
+
+- **Always trigger the Squad agent** — never work inline; route every scenario/fix/triage task through Squad's dispatch mechanism.
+- **Use Fleet to parallelize as much as possible** — fan out independent scenarios/issues concurrently rather than serializing.
+- **Never work on an issue without first validating it's not stale** — re-confirm it still reproduces against current `main`/staging before touching it.
+- **Never take shortcuts.** Root-cause fixes only, no symptom-plastering.
+- **Don't scope creep** — stay within the requested task; flag adjacent issues rather than silently expanding scope.
+- **Model assignment:**
+  - **Planning, design, complex debugging** → `gpt-5.6-sol` and `claude-opus-4.8`.
+  - **Scoped implementation work** → `gpt-5.6-terra` and `claude-sonnet-5`.
+- **Periodically trigger Scribe** to store decisions and perform memory hygiene (dedup, archive stale entries) — don't let this lapse during long harness/triage runs.
+
+---
+
 ## Workstream 1: LLM-Powered E2E Test Harness
 
 **Design principle:** the harness itself should be LLM-driven — generating scenario prompts, launching runs, interpreting events/logs, and judging suitability — not a static script of fixed inputs.
