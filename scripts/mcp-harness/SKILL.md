@@ -39,7 +39,14 @@ implemented by the current smoke entry point.
 `--target stdio` spawns a local subprocess (`--server-command`/`--server-args`)
 and has no network target — the host allowlist in `target-guard.mjs` (and the
 `--allow-prod`/`--i-understand-prod` requirement) only applies to the HTTP
-transport, where `--target` is a real base URL.
+transport, where `--target` is a real base URL that **must include the `/mcp`
+path suffix** (e.g. `https://<host>/mcp`; the bare origin is not the endpoint).
+
+HTTP transport also requires **OAuth**: the Agentweaver MCP server rejects
+unauthenticated requests, so `--token`/`AGENTWEAVER_TOKEN` must be a valid
+OAuth-derived bearer token (obtained via the app's own sign-in flow, or
+`gh auth token` where that identity is trusted), not an arbitrary string.
+Stdio transport has no such requirement.
 
 On success, the command emits JSON headed by `DRIVE+CAPTURE OK`, including the
 run ID, terminal status, artifact count, and compatibility report. A non-zero
