@@ -114,3 +114,31 @@ Coordinator acted on the pass-3 closure-discipline finding: #311/#208/#312/#247/
 
 ## 2026-07-14T15:15:00Z — Release-readiness + pass-4 triage folded into ship
 Seraph's release compile and triage pass #4 became part of the v0.9.50-rc1 ship record: #314 was treated as a P2 bundle item, while #97/#108/#200/#246/#271 stayed explicitly open as architecture-level work.
+
+
+## 2026-07-14 Session: Pre-Implementation Security Review (3-Harness Design)
+
+**Review Scope:** docs/api/ui/mcp-test-harness-plan.md, approval-driving implementation (b4ac1104), .squad/ceremonies.md harness-related sections.
+
+**Verdict:** 2 🔴 blocking findings (design-level, non-large, pre-req for build start); 3 🟡 advisory findings (fold in during implementation).
+
+**Blocking Findings:** (1) No hard target-host allowlist — approval-gate execution has zero host check; suggested fix: mandatory allowlist at client construction. (2) No prompt-injection threat model — LLM input built from live content (MCP tool descriptions, DOM, API errors); suggested fix: untrusted-content delimiters + system instruction + defense-in-depth for approval-gate mutations + test scenario.
+
+**Positive Findings:** approval-judge.mjs deny-by-default posture correct; credential hygiene notes correct; checkInsecureAllowed good prior art; Harness GitHub-authority boundary enforced by code (no mutation paths).
+
+**Next:** Await Tank/Trinity/Coordinator coordination to address findings in specs before implementation phase begins.
+
+
+---
+
+## 2026-07-14: Fleet-Mode Harness Build Wave — Security Review & Blocking Findings Resolution
+
+**Wave:** Full fleet-mode harness infrastructure implementation (API/UI/MCP + shared + security review)
+
+**Contribution:** Completed comprehensive pre-implementation security review of three-harness fleet architecture. Identified 5 major findings: (1) Sandbox/approval-driving (🔴 BLOCKING) — no deterministic policy-enforcement layer; (2) Credential handling (🟡 Advisory) — ambient token exposure risk; (3) Prompt-injection surface (🔴 BLOCKING) — untrusted tool descriptions + API responses fed to LLM without boundary; (4) Squad↔Harness trust boundary (🟡 Advisory) — no provenance validation before issue actions; (5) Governance/authority expansion (🔴 BLOCKING) — LLM agent with latent GitHub authority.
+
+**Outcome:** All 5 findings documented with required fixes. Findings 1, 3, 5 RESOLVED in design by Tank (API), Trinity (UI), Morpheus (MCP) in lockstep: target-guard.mjs mandatory allowlist (staging/localhost only, `--allow-prod` + confirmation escape hatch); untrusted-data delimiters in all prompts; judge NOT sole authority with in-scope downgrade-to-defer validation; Harness agent with zero GitHub tools/credentials + no permission to modify scope. Findings 2, 4 documented as advisory with implementation deferred to security-hardening phase.
+
+**Coordination:** Direct feedback to Tank/Trinity/Morpheus for lockstep spec fold-ins. Ahmed's sandbox-architecture clarification narrowed Finding 1 from "deny all tool/shell approvals" to "allow sandboxed approvals but enforce deployment allowlist" — aligns with Agentweaver's own Kubernetes isolation.
+
+**Follow-ups:** Append-only audit trail integration. Hostile-content self-test scenarios (approval injection, scope escalation, GitHub access attempts). Credential isolation architectural review. Live-staging E2E validation of all guardrails + injection resistance.

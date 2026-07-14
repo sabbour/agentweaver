@@ -177,3 +177,27 @@ Investigated #271 retry-resume gap; confirmed real, deferred fixing it (existing
 
 ## 2026-07-14T15:15:00Z — #246 / #261 / #97 release-wave closeout
 Trinity supplied the P0-A worktree reattach for #246, the final mixed-array fail-closed #261 fix, and the #97 code+live verification summary, then closed the loop with a full validation sweep and a fresh release-readiness snapshot.
+
+
+## 2026-07-14 Session: 3-Harness Design Spec & Orchestrator Agent
+
+**Major Deliverable:** docs/ui-test-harness-plan.md (full design spec); authored Playwright-driven UI harness as sibling to API/MCP; added Combined Launcher Skill spec (4th orchestrator skill spawning all 3 harnesses in parallel + meta-aggregate); authored Harness Agent top-level Copilot CLI orchestrator (.github/agents/harness.agent.md); established Squad↔Harness GitHub-only trust boundary. Spec-only; no code yet.
+
+**Reconciliation:** Converged on shared-layer naming (scripts/harness-judge/ separate, scripts/persona-briefs/personas/ + surfaces/ structure, scripts/ui-harness/ naming).
+
+**Next:** Phase 1 parallel work — Trinity UI auth + driver scaffolding; Smith scenario/brief design; await Tank's Phase 2 checkpoint before extraction.
+
+
+---
+
+## 2026-07-14: Fleet-Mode Harness Build Wave — UI Harness, Harness Agent & Cross-Harness Orchestration
+
+**Wave:** Full fleet-mode harness infrastructure implementation (API/UI/MCP + shared + security review)
+
+**Contribution:** Led UI harness track: built scripts/ui-harness as Playwright-driven evidence driver with guarded browser contexts, headful login-once strategy, and concurrent context isolation. Created Harness orchestrator agent (.github/agents/harness.agent.md) with zero GitHub authority (bash-only, no credentials) + versioned verdict schema (agentweaver.persona-judge-verdict/v1) with targetRevision/scenarioId/reproManifest/timestamps/artifacts/hashes for Squad validation. Built combined-harness launcher for parallel API/UI/MCP execution with shared metadata injection. Folded Seraph's pre-implementation security findings (1-5) into UI harness spec + Harness agent governance model. Added judge sanitization (malformed findings defense) + skill descriptions optimization (<200 chars for focused triggering).
+
+**Outcome:** UI harness + Harness agent + combined launcher production-ready; verdict schema versioning + tamper-evident artifacts + append-only run manifest implemented. Judge sanitization tests 34/34 passing. Ready for staging E2E on Playwright UI flows + approval gates + hostile-content injection resistance.
+
+**Coordination:** Lockstep with Tank (API) and Morpheus (MCP) on all security fold-ins and shared artifacts. Ahmed's sandbox-architecture clarification on Finding 1 scope.
+
+**Follow-ups:** Live-staging E2E on actual Agentweaver UI + approval-gate flows. Log cross-reference capture (kubectl + App Insights correlation by run_id). Hostile-content self-test (injected DOM instructions; verify driver/judge don't follow). Credential isolation advisory (per-surface short-lived identities, judge without shell).

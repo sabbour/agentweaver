@@ -126,3 +126,27 @@ Tank's brief-driven persona harness pivot was validated across Priya/Jordan/Maya
 
 ## 2026-07-14T10:37:40-07:00 — Persona harness: judge-gated API approval driving (#1)
 Closed the harness gap where runs stalled waiting on approvals: added a DETECT->JUDGE->EXECUTE loop that drives tool/shell/coordinator-child approval gates via the real API only after a judge decides. New lib/approvals.mjs (deterministic gate detection off the run events feed) + lib/approval-judge.mjs (narrow in-the-loop approve/deny/defer judge contract, pluggable judge, default DEFER), new check-approvals/resolve-approval driver commands, optional driveApprovals runner hook (OFF by default), and full audit trail (turn.approval + evidence.approvalDecisions). Driver-only boundary preserved: zero heuristic judgment in the driver. 62/62 tests pass (22 new). Backend gap: /api/notifications tool_approval type still reserved/unemitted (#247 fast-follow) — used the events feed instead; no backend change needed. Committed to main b4ac1104; decision recorded.
+
+
+## 2026-07-14 Session: 3-Harness Design Spec & Implementation Kickoff
+
+**Major Deliverable:** docs/api-test-harness-plan.md (full design spec, all 9 sections); reconciled 5 shared-layer naming conflicts with Trinity/Morpheus; authored GitHub Copilot CLI Skill two-file design; implemented approval-driving for API harness (b4ac1104, 62/62 tests). Spec-only; no refactoring yet. Phase 2 extraction coordinated at safe checkpoint.
+
+**Blocking security findings (Seraph):** Target-host allowlist hardening + prompt-injection threat model — design-level fixes pre-req for implementation start.
+
+**Next:** Address Seraph findings in specs; Phase 1 parallel scaffolding (Trinity UI auth, Morpheus MCP client, Smith persona generation); Phase 2 single coordinated extraction by Tank.
+
+
+---
+
+## 2026-07-14: Fleet-Mode Harness Build Wave — API Harness & Security Integration
+
+**Wave:** Full fleet-mode harness infrastructure implementation (API/UI/MCP + shared + security review)
+
+**Contribution:** Led API harness track: migrated scripts/persona-harness to scripts/api-harness, wired shared persona-briefs + harness-judge, added request-changes approval decision semantics, fixed #318 fixture drift. Folded Seraph's pre-implementation security findings (1-5) into API harness spec: target-host allowlist (unconditional at AgentweaverClient construction), prompt-injection threat model (untrusted delimiters + judge-not-sole-authority validation), credential isolation advisory, Squad trust boundary (verdict schema versioning), and governance guardrails (zero GitHub tools/credentials in Harness agent scope).
+
+**Outcome:** API harness driver + security guardrails complete; npm tests 46/46 passing (including request-changes gate flow). #318 migrator fixture drift fixed (2/2 tests passing). Ready for staging E2E on approval-gate flows + request-changes feedback loops.
+
+**Coordination:** Lockstep with Trinity (UI) and Morpheus (MCP) on two-file skill structure, target-guard.mjs shared implementation, untrusted-delimiter contract, and verdict schema versioning.
+
+**Follow-ups:** Live-staging E2E on actual Agentweaver API gateway + approval decision flows. Hostile-content self-test (injected approve in API event body; verify driver/judge don't follow it). Credential isolation architectural review before deep runs.

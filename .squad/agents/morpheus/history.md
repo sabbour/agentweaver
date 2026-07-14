@@ -55,3 +55,27 @@ Morpheus's #175 investigation confirmed the workflow-save bug was already fixed/
 
 ## 2026-07-14T10:56:00-07:00 - MCP test harness design spec
 Authored docs/mcp-test-harness-plan.md (committed 9dc223a9): a third persona-driven validation harness for Agentweaver's MCP surface (90 tools, RFC-9728 OAuth + GitHub-token passthrough, stdio+streamable-HTTP transports), mirroring the API harness's brief-driven/LLM-in-the-loop/driver-only architecture with MCP tool calls as turns. Investigated the real surface in apps/Agentweaver.Mcp and epic #295 (#128/#129/#130/#131/#201). Cross-Harness Shared Layer recommends ONE shared judge core + thin MCP evidence adapter (option a, justified by cross-surface meta-aggregation and the already-surface-agnostic persona-judge-verdict/v1 schema) and a shared scripts/persona-briefs/ package for all three harnesses. Non-interfering rollout (new scripts/mcp-persona-harness/ sibling; shared-package extraction deferred to a safe checkpoint, no edits to Tank's or Trinity's in-flight files). Decision recorded for reconciliation with Trinity's parallel UI recommendation.
+
+
+## 2026-07-14 Session: 3-Harness Design Spec (MCP Surface)
+
+**Major Deliverable:** docs/mcp-test-harness-plan.md (full design spec); grounded MCP surface investigation (90 tools / 14 categories, OAuth auth flow, lever mapping vs API harness); recommended shared judge core + thin MCP evidence adapter (agentweaver.mcp-transcript/v1 evidence schema); aligned naming (scripts/mcp-harness/) and shared-layer structure with Tank/Trinity per Coordinator reconciliation.
+
+**Security review:** Participated in Seraph gate; flagged blocking design findings (target-host allowlist, prompt-injection) on all three harnesses equally.
+
+**Next:** Phase 1 parallel work — Morpheus MCP client scaffolding (minimal @modelcontextprotocol/sdk), stdio/http target support; await Tank's Phase 2 checkpoint before shared-package extraction.
+
+
+---
+
+## 2026-07-14: Fleet-Mode Harness Build Wave — Runtime Fixes & MCP Harness Design
+
+**Wave:** Full fleet-mode harness infrastructure implementation (API/UI/MCP + shared + security review)
+
+**Contribution:** Completed 7 runtime bugfixes (#240, #242, #267, #314, #315, #317, #318) + 4 harness design entries (MCP harness skill structure, live discovery + capability contract, shared judge verdict joins, security guardrails fold-in from Seraph pre-implementation review).
+
+**Outcome:** All runtime fixes have code + regression tests green; E2E staging verification still required on 4 issues. MCP harness ready for live discovery integration + protocol E2E. Seraph security findings 1, 3, 5 folded into MCP spec (target-guard, untrusted delimiters, zero GitHub tools); findings 2, 4 documented as advisory/resolved via versioning.
+
+**Coordination:** Lockstep with Tank (API) and Trinity (UI) on two-file skill structure, target-guard implementation, untrusted-delimiter contract, and verdict schema versioning. Ahmed's sandbox-architecture clarification narrows Finding 1 scope to deployment allowlist, not tool-execution scopes.
+
+**Follow-ups:** Live-staging E2E required on all 4 open runtime issues. MCP protocol end-to-end test + hostile-content injection resistance scenario.
