@@ -58,6 +58,11 @@ builder.Services.ConfigureHttpJsonOptions(options =>
     options.SerializerOptions.Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping;
 });
 
+// spec-006 (api-harness): built-in OpenAPI document generation (net10.0 supports AddOpenApi/
+// MapOpenApi natively, no Swashbuckle needed). Registered unconditionally — not gated on
+// IsDevelopment — because the harness needs to discover the same contract in staging as locally.
+builder.Services.AddOpenApi();
+
 builder.Services.AddOptions<GenerationModelOptions>()
     .Bind(builder.Configuration.GetSection(GenerationModelOptions.SectionName))
     .Validate(GenerationModelOptions.IsValid,
@@ -913,6 +918,13 @@ else
     app.UseRateLimiter();
     app.UseMiddleware<GitHubTokenAuthMiddleware>();
     app.UseMiddleware<GitHubOrgAuthorizationMiddleware>();
+
+    // spec-006 (api-harness): serves the OpenAPI document at /openapi/v1.json describing every
+    // minimal-API route mapped below (request/response shapes included), so the LLM-driven curl
+    // harness can discover the contract instead of relying on hand-wrapped SDK-style subcommands.
+    // Exempt from GitHub org auth (see GitHubOrgAuthorizationMiddleware.ExemptPrefixes) since it is
+    // pure endpoint/schema metadata, not live data.
+    app.MapOpenApi();
 
     app.MapRunEndpoints();
     app.MapProjectEndpoints();

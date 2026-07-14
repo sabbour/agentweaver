@@ -37,6 +37,9 @@ public sealed class GitHubOrgAuthorizationMiddleware
         // reachable without a GitHub token (the flow is how a token is obtained in the first place).
         "/oauth",
         "/.well-known",
+        // OpenAPI contract (spec-006 api-harness): pure endpoint/schema metadata, no live data —
+        // the LLM-driven curl harness needs to fetch this before it has authenticated.
+        "/openapi",
     ];
 
     public GitHubOrgAuthorizationMiddleware(
