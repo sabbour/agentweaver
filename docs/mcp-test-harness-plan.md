@@ -251,6 +251,42 @@ MCP. It is a **new, sibling** harness, not a modification of `scripts/persona-ha
     approving** rule carried over from the E2E plan) → completion → artifacts
     (`run_show_artifacts` / `run_get_file`). Behind an explicit `--deep` flag.
 
+**Persona-realistic gate review (when NOT auto-approved).** A real human operator does
+not fire-and-forget a run and only check the final status — they engage with the gates
+Agentweaver raises. So when the deeper rung runs **without** auto-approve, the persona
+must **actually validate gate content before deciding** — read the diff / work plan /
+review output / preview at that gate through the persona's JTBD lens — rather than
+blindly approving every time. This follows the **same DETECT → JUDGE → EXECUTE pattern
+Tank already built for the API harness** (judge-gated approval driving, commit
+`b4ac1104`): the driver structurally **detects** the pending gate (from the events feed
+/ tool results: `tool.approval_required`, `coordinator.child_approval_required`,
+`shell.approval_required`, or a `run_review`-eligible state) and **packages that one
+gate's evidence**; the driver's **LLM (acting as the persona)** decides
+**approve / request-changes / defer** based on what it is shown; the driver then
+**executes** exactly that decision against the real MCP tools (`run_review`, the
+tool/shell approval/denial tools). This is fully consistent with the driver-not-debug
+boundary: the LLM is **reacting as a user would to what it's shown**, not diagnosing
+platform internals or root-causing a bug.
+
+Beyond binary approve/reject, the persona should also exercise **human-review-style
+feedback** where the gate supports it — e.g. request changes with a short note ("this
+also needs to handle X") via `coordinator_steer` / the review request-changes path —
+because that is a real interaction pattern Agentweaver supports and the harness should
+drive it, not just the two-button path.
+
+> **Scope boundary — do NOT over-index on this (functional correctness, not output
+> grading).** The point of persona gate-review is to exercise the **mechanism** end to
+> end — does approve / request-changes / defer actually work, does the run progress
+> correctly through the DAG afterward, do notifications fire, does a requested change
+> re-enter the right stage — **not** to make the persona a quality bar for the agents'
+> generated code/design. The persona's review feedback stays **realistic-but-lightweight**
+> (enough to meaningfully drive the request-changes path once or twice), never an
+> elaborate code-review rubric demanding perfect output. Correspondingly, the **judge**
+> criteria for these turns stay on **"did the platform mechanics work"** (P0) — *not*
+> "was the AI's output good." (Output quality is still judged as P1 for the drafted
+> spec, but gate-review turns specifically test functional correctness of the gating
+> machinery.)
+
 ### 2. MCP transport client
 
 The harness needs a minimal **MCP client** (not the full backend). Two supported
