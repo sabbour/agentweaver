@@ -24,3 +24,7 @@ Use the actual commands in that contract. Capture the output path, inspect the
 verdict/transcript JSON, and report the outcome with its evidence path and whether
 it is pass, fail, or inconclusive. Do not claim that a zero driver exit establishes
 subjective output quality.
+
+Before running, check `scripts/harness-shared/learnings.md` (surface: `api` or `all`)
+for already-known bugs, environment facts, and scenario-design notes so they aren't
+rediscovered from source each run.

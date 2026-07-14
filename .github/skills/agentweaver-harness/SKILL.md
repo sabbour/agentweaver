@@ -21,3 +21,7 @@ its canonical verdict into the isolated verdict directory.
 
 Use `api-harness`, `ui-harness`, or `mcp-harness` instead for targeted investigation
 of one surface. This launcher does not recreate any surface driver or judging logic.
+
+Before running, check `scripts/harness-shared/learnings.md` (surface: `all`, plus
+each selected surface) for already-known bugs, environment facts, and
+scenario-design notes so they aren't rediscovered from source each run.

@@ -5,8 +5,8 @@ import { assembleCoreGenerationPrompt } from '../generate-core.mjs';
 import { assembleAdapterGenerationPrompt } from '../generate-adapter.mjs';
 
 test('lists shared cores and filters them by available adapter', async () => {
-  assert.deepEqual(await listPersonas(), ['jordan', 'maya', 'priya']);
-  assert.deepEqual(await listPersonas({ surface: 'api' }), ['jordan', 'maya', 'priya']);
+  assert.deepEqual(await listPersonas(), ['jordan', 'lena', 'maya', 'priya']);
+  assert.deepEqual(await listPersonas({ surface: 'api' }), ['jordan', 'lena', 'maya', 'priya']);
   assert.deepEqual(await listPersonas({ surface: 'ui' }), ['jordan', 'maya', 'priya']);
 });
 

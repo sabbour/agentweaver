@@ -1,0 +1,37 @@
+{
+  "generatedNote": "Hand-curated index of persona cores + surface adapters. Add an entry only when a new persona/adapter is reviewed and saved; keep tags terse and keyword-rich for find-similar.mjs matching.",
+  "entries": [
+    {
+      "id": "jordan",
+      "description": "Greenfield product developer taking a blank app idea through a coordinated, reviewable plan to delivery and live verification.",
+      "tags": ["greenfield", "product", "developer", "coordinator", "deployment", "delivery", "verification", "scaffold", "cloud", "container", "multi-agent-plan"],
+      "surfaces": ["api", "ui", "mcp"],
+      "runsToCompletion": false,
+      "stopsAt": "outcome-spec / plan-review confirmation gate (never confirms execution)"
+    },
+    {
+      "id": "maya",
+      "description": "Product-marketing strategist producing a sourced, confidence-rated Q3 competitive brief from scattered inputs.",
+      "tags": ["marketing", "competitive-analysis", "strategy", "brief", "business", "confidence", "sources", "segments", "audience"],
+      "surfaces": ["api", "ui", "mcp"],
+      "runsToCompletion": false,
+      "stopsAt": "outcome-spec / plan-review confirmation gate (never confirms execution)"
+    },
+    {
+      "id": "priya",
+      "description": "Customer support lead triaging a messy ticket queue: grouping, severity, duplicates, missing info, and ownership recommendations.",
+      "tags": ["support", "ticket", "triage", "severity", "customer", "queue", "escalation", "duplicates"],
+      "surfaces": ["api", "ui", "mcp"],
+      "runsToCompletion": false,
+      "stopsAt": "outcome-spec / plan-review confirmation gate (never confirms execution) — see learnings.md scenario-design-note for the api adapter"
+    },
+    {
+      "id": "lena",
+      "description": "Delivery team lead checking whether an existing reusable team blueprint fits a new initiative, drafting one if not, and verifying the assembled roster matches what was promised.",
+      "tags": ["blueprint", "team-composition", "roster", "reuse", "catalog", "delivery-lead", "validation", "project-team"],
+      "surfaces": ["api"],
+      "runsToCompletion": false,
+      "stopsAt": "after assembling a project team from a chosen blueprint and comparing its roster to the blueprint's promised roles; never submits a goal or starts orchestration"
+    }
+  ]
+}
