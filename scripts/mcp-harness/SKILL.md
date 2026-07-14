@@ -20,11 +20,26 @@ npm --prefix scripts/mcp-harness run smoke -- `
   --project-id <id>
 ```
 
+List the built-in MCP scenario starters:
+
+```powershell
+node scripts/mcp-harness/smoke/mcp-cli-smoke.mjs --list
+```
+
+That prints JSON with the current reviewed persona IDs that have MCP adapters. The
+implemented runner is still the smoke path above; for cross-surface scenario discovery
+or generation, read `scripts/persona-briefs/SKILL.md`.
+
 The smoke command supports `--target stdio|http`, `--token`, `--project-id`,
 `--goal`, `--timeout-ms`, and `--poll-ms`. For a production target, provide
 both `--allow-prod` and `--i-understand-prod`. Do not claim support for
-persona, scenario, verdict, or judge CLI flags: those are not implemented by
-the current smoke entry point.
+persona, direct scenario execution, verdict, or judge CLI flags: those are not
+implemented by the current smoke entry point.
+
+`--target stdio` spawns a local subprocess (`--server-command`/`--server-args`)
+and has no network target — the host allowlist in `target-guard.mjs` (and the
+`--allow-prod`/`--i-understand-prod` requirement) only applies to the HTTP
+transport, where `--target` is a real base URL.
 
 On success, the command emits JSON headed by `DRIVE+CAPTURE OK`, including the
 run ID, terminal status, artifact count, and compatibility report. A non-zero
