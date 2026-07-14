@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using System.Runtime.ExceptionServices;
 using System.Text;
 using System.Threading.Channels;
 using Agentweaver.AgentRuntime;
@@ -190,17 +191,76 @@ internal sealed class A2ATurnBridgeAgent : DelegatingAIAgent
 
         try
         {
+            // Track whether the pod turn already surfaced a structured terminal reason. The worker
+            // (RemoteAgentProxy) only surfaces a failure when the A2A stream ends abnormally (the
+            // SDK throws NotSupportedException "Received: None" on the truncated stream — #267); it
+            // recovers the reason from the last RunFailed event it observed. If the turn aborts
+            // WITHOUT emitting one, the worker is left with a bare, context-free "Received: None"
+            // that it can only classify as a2a_protocol_event_unsupported. We guarantee a structured
+            // terminal below so pod-side failures always carry a real errorCode.
+            var sawTerminalFailure = false;
+
             await foreach (var runEvent in channel.Reader
                 .ReadAllAsync(cancellationToken)
                 .ConfigureAwait(false))
             {
+                if (string.Equals(runEvent.Type, EventTypes.RunFailed, StringComparison.Ordinal))
+                {
+                    sawTerminalFailure = true;
+                }
+
                 yield return new AgentResponseUpdate(
                     ChatRole.Assistant,
                     new List<AIContent> { RunEventDataPartCodec.EncodeRunEvent(runEvent) });
             }
 
             // Surface the accumulated assistant text and propagate any turn exception.
-            var responseText = await turnTask.ConfigureAwait(false);
+            string responseText;
+            ExceptionDispatchInfo? turnFailure = null;
+            try
+            {
+                responseText = await turnTask.ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                turnFailure = ExceptionDispatchInfo.Capture(ex);
+                responseText = string.Empty;
+            }
+
+            if (turnFailure is not null)
+            {
+                // #267 root-cause guard: the pod turn threw without a structured RunFailed reaching
+                // the worker. Emit a synthetic structured terminal so the worker recovers a real
+                // errorCode instead of the misleading, context-free a2a_protocol_event_unsupported.
+                // The exception is still propagated (rethrown) so the stream terminates abnormally,
+                // exactly as before — only the diagnosis carried to the worker is improved.
+                if (!sawTerminalFailure)
+                {
+                    _logger.LogWarning(
+                        turnFailure.SourceException,
+                        "A2ATurnBridgeAgent: turn aborted without a structured RunFailed; emitting " +
+                        "synthetic agent_turn_internal_error terminal so the worker avoids a bare " +
+                        "'Received: None' classification (#267).");
+
+                    yield return new AgentResponseUpdate(
+                        ChatRole.Assistant,
+                        new List<AIContent>
+                        {
+                            RunEventDataPartCodec.EncodeRunEvent(new RunEvent(
+                                0,
+                                EventTypes.RunFailed,
+                                new
+                                {
+                                    message = turnFailure.SourceException.Message,
+                                    errorCode = "agent_turn_internal_error",
+                                    retryable = true,
+                                })),
+                        });
+                }
+
+                turnFailure.Throw();
+            }
+
             if (!string.IsNullOrEmpty(responseText))
             {
                 yield return new AgentResponseUpdate(ChatRole.Assistant, responseText);
