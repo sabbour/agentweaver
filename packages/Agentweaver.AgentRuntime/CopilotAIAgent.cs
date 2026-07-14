@@ -842,7 +842,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
             timeToFirstTokenMs = _turnTimeToFirstTokenMs
         });
 
-        Emit("agent.turn.end", new { turnId = "0" });
+        Emit(EventTypes.AgentTurnEnd, new { turnId = "0" });
 
         if (_suppressedCallIds.Count > 0)
             _logger.LogInformation("Suppressed {Count} SDK-internal tool events", _suppressedCallIds.Count);

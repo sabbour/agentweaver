@@ -233,7 +233,7 @@ public sealed class FoundryAgentRunner : IAgentRunner
 
             if (calls.Count == 0)
             {
-                Emit("agent.turn.end", new { turnId = turn.ToString() });
+                Emit(EventTypes.AgentTurnEnd, new { turnId = turn.ToString() });
                 completedNormally = true;
                 break;
             }
@@ -331,7 +331,7 @@ public sealed class FoundryAgentRunner : IAgentRunner
             }
 
             messages.Add(new ChatMessage(ChatRole.Tool, toolResults));
-            Emit("agent.turn.end", new { turnId = turn.ToString() });
+            Emit(EventTypes.AgentTurnEnd, new { turnId = turn.ToString() });
         }
 
         if (!completedNormally)
