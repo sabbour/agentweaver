@@ -27,6 +27,9 @@
 //   node tools.mjs list-blueprints --thought "..."
 //   node tools.mjs create-project  --blueprint <id> --thought "..."
 //   node tools.mjs get-team        --thought "..."
+//   node tools.mjs generate-blueprint --description "<team description>" [--target-repository <repo>] --thought "..."
+//   node tools.mjs validate-blueprint [--blueprint-file <path> | --blueprint '<json>'] --thought "..."
+//                                     # defaults to the last generate-blueprint result if omitted
 //   node tools.mjs submit-goal     --goal "<messy batch>" --thought "..."
 //   node tools.mjs get-spec        --thought "..."
 //   node tools.mjs revise-spec     --feedback "<pushback>" --thought "..."   # the pushback lever
@@ -379,6 +382,45 @@ const COMMANDS = {
     await recordTurn(session, { actor: 'persona', thought: args.thought, action: 'get-team', apiCall: res });
     const members = (res.responseBody?.members ?? []).map((m) => ({ name: m.name, role: m.role ?? m.id }));
     print({ status: res.status, memberCount: members.length, members });
+  },
+
+  async 'generate-blueprint'(args) {
+    const session = await loadSession();
+    if (!args.description) throw new Error('--description is required');
+    const client = newClient(session, resolveToken(args.token));
+    const res = await client.post('/api/blueprints/generate', {
+      description: String(args.description),
+      project_id: args['project-id'] ?? session.projectId ?? null,
+      target_repository: args['target-repository'] ?? null,
+    });
+    // Stash the generated blueprint so a subsequent validate-blueprint call (with no
+    // --blueprint given) can validate exactly what was just generated.
+    session.lastGeneratedBlueprint = res.responseBody?.blueprint ?? null;
+    await recordTurn(session, { actor: 'persona', thought: args.thought, action: 'generate-blueprint', apiCall: res });
+    print({
+      status: res.status,
+      blueprint: res.responseBody?.blueprint ?? null,
+      generatedWorkflowYaml: res.responseBody?.generated_workflow_yaml ?? null,
+      warnings: res.responseBody?.warnings ?? [],
+    });
+  },
+
+  async 'validate-blueprint'(args) {
+    const session = await loadSession();
+    const client = newClient(session, resolveToken(args.token));
+    let blueprint;
+    if (args['blueprint-file']) {
+      blueprint = JSON.parse(await readFile(args['blueprint-file'], 'utf8'));
+    } else if (args.blueprint) {
+      blueprint = JSON.parse(String(args.blueprint));
+    } else if (session.lastGeneratedBlueprint) {
+      blueprint = session.lastGeneratedBlueprint;
+    } else {
+      throw new Error('--blueprint-file <path> or --blueprint <json> is required (or call generate-blueprint first)');
+    }
+    const res = await client.post('/api/blueprints/validate', { blueprint });
+    await recordTurn(session, { actor: 'persona', thought: args.thought, action: 'validate-blueprint', apiCall: res });
+    print({ status: res.status, valid: res.responseBody?.valid ?? null, errors: res.responseBody?.errors ?? [] });
   },
 
   async 'submit-goal'(args) {

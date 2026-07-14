@@ -78,8 +78,13 @@ node scripts/api-harness/agent-driver/tools.mjs get-spec --thought "I am checkin
 node scripts/api-harness/agent-driver/tools.mjs finish --summary "Exploratory API investigation complete." --session $session
 ```
 
-Available follow-up commands are `get-team`, `revise-spec`, `get-events`,
-`check-approvals`, and `resolve-approval`. `resolve-approval` can make a judged
+Available follow-up commands are `get-team`, `generate-blueprint`,
+`validate-blueprint`, `revise-spec`, `get-events`, `check-approvals`, and
+`resolve-approval`. `generate-blueprint` drafts a blueprint from a natural
+language description (`--description`) and `validate-blueprint` checks a
+blueprint (`--blueprint-file <path>`, `--blueprint '<json>'`, or the last
+generated blueprint if omitted) against the schema and role constraints.
+`resolve-approval` can make a judged
 `approve`, `deny`, `defer`, or `request-changes` decision; provide `--decision`,
 `--reason`, and (for requested changes) `--feedback`, or configure an external
 judge with `--judge-cmd`. Do not blindly approve a gate. The default scoping flow
