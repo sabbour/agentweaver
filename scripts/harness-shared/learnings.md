@@ -117,3 +117,25 @@ for the `runsToCompletion` flag recorded per persona/surface pair.
 - status: open
 
 AGENTWEAVER_JUDGE_CMD (consumed by scripts/harness-judge/core.mjs's makeDefaultJudge()/makeCommandJudge()) has never been configured anywhere in this repo or environment, so every harness run to date (including live smoke runs) only ever produced the safe CANNOT_DETERMINE fallback verdict -- the judge's core evaluative step never actually ran. The fix is agent-native, not a subprocess wrapper: a new custom agent .github/agents/judge.agent.md ('Judge', tools: []) is a pure text-in/text-out reasoner with no file/shell/network access and no ability to act on anything in the (possibly untrusted/adversarial) evidence it judges -- sandboxing comes from the platform's own custom-agent tool scoping, not from manually verified CLI lockdown flags on a nested process. When running as the Harness agent: (1) build the prompt with 'node scripts/harness-judge/core.mjs <evidence.json> --prompt-out <prompt.txt>' (this works standalone, no judge command required); (2) dispatch it synchronously via the task tool with agent_type: 'Judge'; (3) parse/validate/persist the response with the new scripts/harness-judge/save-verdict.mjs (parse+validate+write only, no subprocess judge). Verified end-to-end via 'copilot --agent judge' with a real evidence fixture: produced a real, schema-valid PASS/PASS verdict (not CANNOT_DETERMINE), confirmed against verdict-schema.mjs's validateVerdict. AGENTWEAVER_JUDGE_CMD remains a secondary path only for headless/CI contexts with no agent session to dispatch a task call from.
+
+---
+
+## priya-ticket-triage api deterministic driver never calls revise-spec, so P1 pushback criterion predictably FAILs
+
+- date: 2026-07-14
+- category: scenario-design-note
+- surface: api
+- status: open
+
+The built-in priya-ticket-triage API scenario's deterministic driver (run-persona.mjs) only submits the goal and polls run/outcome-spec/events/metrics; it has no logic to call revise-spec or raise objections. The priya persona core mandates >=2 grounded pushbacks. A real judge (dispatched via the Judge subagent) will correctly mark P1 as FAIL for missing mandatory pushback on every run of this deterministic scenario, even though P0 platform mechanics pass cleanly. This is expected given the current driver's scope (it exercises submit->draft->settle, not the pushback/revise loop) -- not a platform regression. If pushback coverage is needed, drive the scenario via the exploratory agent-driver tools (revise-spec) instead of the deterministic CLI scenario.
+
+---
+
+## API harness: persona scenarios are driven dynamically, not fixed scripts or curated subcommands
+
+- date: 2026-07-14
+- category: scenario-design-note
+- surface: api
+- status: open
+
+scripts/api-harness/scenarios/*.mjs (fixed per-persona step sequences) and agent-driver/tools.mjs (curated named subcommands like submit-goal/revise-spec/get-spec) were both retired. Do NOT re-add either pattern. Every persona scenario (Priya, Jordan, ...) is now driven via scripts/api-harness/drive.mjs: init (session/auth), spec (fetch live OpenAPI doc, /openapi/v1.json), call --method/--path/--body/--thought (the one generic action primitive), check-approvals/resolve-approval (kept as named commands ONLY because they encode a safety invariant -- never blind-approve -- not because approvals are curated business logic), finish. This exists because a fixed script structurally cannot issue grounded pushback/objections or poll-then-adapt behavior -- exactly what personas like Priya require, and what caused a P1 FAIL when Ahmed ran the old fixed priya-ticket-triage scenario. run-persona.mjs now ONLY drives generated-artifacts-seam (a deterministic structural generator-conformance check with no persona/pushback dimension -- intentionally still fixed). See decision Morpheus-harness-dropped-fixed-per-scenario-scripts-entirely for full rationale.

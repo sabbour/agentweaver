@@ -1,7 +1,8 @@
 // Generated-artifact SEAM driver (issue #1 expansion, requirement 2).
 //
-// Where the persona runner (lib/runner.mjs) judges a *product outcome* (a drafted
-// plan), this driver targets the GENERATION SEAMS themselves: it asks the product to
+// Where a dynamically-driven persona run (see ../drive.mjs) judges a *product
+// outcome* (a drafted plan), this driver targets the GENERATION SEAMS themselves:
+// it asks the product to
 // generate blueprints and workflows, then asserts the generated artifacts are
 // STRUCTURALLY CORRECT using the same rules the backend enforces (lib/generation-checks.mjs).
 //

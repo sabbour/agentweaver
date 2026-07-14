@@ -45,8 +45,14 @@ function replaceTokens(part, tokens) {
 
 export function buildCommands(args, tokens) {
   const configured = {
+    // Default targets the one remaining fixed, one-shot API check: the structural
+    // generation-seam conformance test (no persona/pushback dimension, so it fits
+    // this launcher's single-child-process-per-surface model). A dynamically-
+    // driven persona scenario (drive.mjs) is a multi-turn LLM-in-the-loop session,
+    // not a one-shot command — pass an explicit `--api-command` that wraps your
+    // own driving session if you need a persona scenario in a cross-surface sweep.
     api: commandFromJson(args['api-command'], 'api-command') ?? [
-      'node', 'scripts/api-harness/run-persona.mjs', '--scenario', '{scenarioId}',
+      'node', 'scripts/api-harness/run-persona.mjs', '--scenario', 'generated-artifacts-seam',
       '--batch-id', '{batchId}', '--out', '{verdictDir}/api.json',
     ],
     ui: commandFromJson(args['ui-command'], 'ui-command'),

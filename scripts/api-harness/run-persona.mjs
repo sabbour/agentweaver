@@ -1,11 +1,21 @@
 #!/usr/bin/env node
-// Persona-driven API E2E harness — CLI entry point.
+// Generated-artifact SEAM checker — CLI entry point.
 //
-// Runs ONE persona scenario end-to-end against a running Agentweaver instance
-// using only REST API calls (no browser), and reports pass/fail with evidence.
+// NOTE: this file NO LONGER drives persona scenarios. Persona-behavior scenarios
+// (Priya, Jordan, ...) are driven dynamically via `drive.mjs` — a driving LLM
+// issues live API calls guided by a persona-brief + the OpenAPI spec, deciding
+// every next action (including pushback/objections) itself, rather than replaying
+// a fixed step sequence. See drive.mjs's header and .github/agents/harness.agent.md.
+//
+// This file remains the entry point ONLY for `scenarios/generated-artifacts-seam.mjs`
+// (kind: 'generation-seam') — a deterministic STRUCTURAL conformance check of the
+// blueprint/workflow GENERATORS themselves (reserved-role leaks, dangling edges,
+// backend-guard round-trips). That is not a persona-behavior simulation and has no
+// pushback/adaptive dimension, so it is intentionally NOT part of the fixed-script
+// rigidity this pivot removes — it stays a fixed, deterministic regression check.
 //
 // Usage:
-//   node run-persona.mjs --scenario priya-ticket-triage \
+//   node run-persona.mjs --scenario generated-artifacts-seam \
 //     --base-url https://agentweaver.<zone>.westus2.staging.aksapp.io [--insecure]
 //
 //   Token resolution order: --token <t>  >  $AGENTWEAVER_TOKEN  >  `gh auth token`.
@@ -26,7 +36,6 @@ import { dirname, join } from 'node:path';
 import { readdir, writeFile } from 'node:fs/promises';
 
 import { AgentweaverClient } from './lib/client.mjs';
-import { driveScenario } from './lib/runner.mjs';
 import { runGenerationSeams } from './lib/seams.mjs';
 import { summarizeProjectMetrics } from './lib/metrics.mjs';
 import { writeFinding, printReport } from './lib/reporter.mjs';
@@ -137,24 +146,25 @@ async function main() {
     return 2;
   }
 
-  const personaId = args.persona ?? scenario.id.split('-')[0];
-  const sharedPersona = await loadPersona(personaId, 'api');
-  const persona = {
-    title: sharedPersona.name,
-    raw: sharedPersona.text,
-    scenarios: [],
-    failureSignals: [],
-  };
-  const kind = scenario.kind ?? 'persona-scoping';
+  const kind = scenario.kind ?? null;
+  if (kind !== 'generation-seam') {
+    console.error(
+      `error: run-persona.mjs only drives kind: 'generation-seam' scenarios (structural generator ` +
+      `checks). Persona-behavior scenarios (Priya, Jordan, ...) are no longer fixed scripts — drive ` +
+      `them dynamically via 'node drive.mjs init/spec/call/...' guided by a persona brief. See ` +
+      `.github/agents/harness.agent.md.`,
+    );
+    return 2;
+  }
+
+  const personaId = args.persona ?? scenario.personaFile?.replace(/\.md$/, '') ?? scenario.id.split('-')[0];
+  const sharedPersona = await loadPersona(personaId, 'api').catch(() => null);
+  const personaTitle = sharedPersona?.name ?? scenario.personaScenario ?? scenario.title;
 
   console.log(`Driving "${scenario.title}"`);
-  console.log(`  persona : ${persona.title}`);
+  console.log(`  persona : ${personaTitle}`);
   console.log(`  target  : ${baseUrl}`);
-  console.log(
-    `  mode    : ${kind === 'generation-seam'
-      ? 'API-only (no browser), generated-artifact seam validation'
-      : 'API-only (no browser), start_mode=defineOutcome'}`,
-  );
+  console.log('  mode    : API-only (no browser), generated-artifact seam validation');
 
   const client = new AgentweaverClient({
     baseUrl, token, insecure: args.insecure, allowProd: args.allowProd, confirmProduction: args.confirmProduction,
@@ -162,42 +172,13 @@ async function main() {
 
   let result;
   try {
-    result =
-      kind === 'generation-seam'
-        ? await runGenerationSeams(client, scenario, { keep: args.keep })
-        : await driveScenario(client, scenario, persona, {
-            timeoutMs: args.timeoutMs,
-            keep: args.keep,
-          });
+    result = await runGenerationSeams(client, scenario, { keep: args.keep });
   } catch (err) {
     console.error(`error: scenario driver threw: ${err.stack ?? err}`);
     return 2;
   }
 
-  const evidence =
-    kind === 'generation-seam'
-      ? result.evidence
-      : {
-          projectId: result.evidence.projectId,
-          runId: result.evidence.runId,
-          runStatus: result.evidence.runStatus,
-          outcomeSpecSettled: result.evidence.outcomeSpecSettled ?? false,
-          submittedGoal: result.evidence.submittedGoal ?? null,
-          // FULL team object verbatim (a judge may inspect roles/instructions).
-          team: result.evidence.team,
-          teamMembers: Array.isArray(result.evidence.team?.members)
-            ? result.evidence.team.members.map((m) => m.name ?? m.role ?? m.id)
-            : [],
-          // FULL outcome spec verbatim — the primary artifact the judge assesses.
-          outcomeSpec: result.evidence.outcomeSpec,
-          // FULL event stream verbatim (not a {sequence,type} projection) so the
-          // judge can see everything that happened, plus a convenience count.
-          events: result.evidence.events,
-          eventTypeCounts: countBy(result.evidence.eventTypes ?? [], (e) => e.type),
-          // Audit trail of any judged approval gate driven during the run (empty on
-          // scoping-rung runs, which suspend before any tool/shell gate is raised).
-          approvalDecisions: result.evidence.approvalDecisions ?? [],
-        };
+  const evidence = result.evidence;
 
   // Performance/cost metrics (requirement 4) — reuse the dashboard's own endpoint.
   // Fetch BEFORE cleanup deletes the project. Never fails the scenario.
@@ -211,11 +192,11 @@ async function main() {
     }
   }
 
-  // Objective, deterministic driver checks (P0 platform-correctness for scoping
-  // runs; structural validation for seams). These are the ONLY things the driver
-  // decides. Subjective output quality is deferred to a separate LLM judge.
-  const platformChecks = kind === 'generation-seam' ? result.checks : result.platformChecks;
-  const platformPass = kind === 'generation-seam' ? result.pass : result.platformPass;
+  // Objective, deterministic driver checks (structural validation for seams).
+  // These are the ONLY things the driver decides. Subjective output quality is
+  // deferred to a separate LLM judge.
+  const platformChecks = result.checks;
+  const platformPass = result.pass;
   const inconclusive = result.inconclusive ?? false;
 
   // The matching persona scenario's authored acceptance criteria + failure signals,
@@ -226,9 +207,9 @@ async function main() {
     target: baseUrl,
     kind,
     persona: {
-      title: persona.title,
-      coreVersion: sharedPersona.version,
-      adapterVersion: sharedPersona.adapter.version,
+      title: personaTitle,
+      coreVersion: sharedPersona?.version ?? null,
+      adapterVersion: sharedPersona?.adapter?.version ?? null,
     },
     scenario: {
       id: scenario.id,
@@ -251,13 +232,13 @@ async function main() {
 
     // Everything a downstream judge needs to render the verdict WITHOUT re-running.
     judgeInputs: {
-      personaTitle: persona.title,
-      personaCore: sharedPersona.content,
-      surfaceAdapter: sharedPersona.adapter.content,
+      personaTitle,
+      personaCore: sharedPersona?.content ?? null,
+      surfaceAdapter: sharedPersona?.adapter?.content ?? null,
       scenarioName: scenario.personaScenario,
       submittedGoal: result.evidence.submittedGoal ?? null,
-      successCriteria: sharedPersona.content,
-      scenarioSpec: sharedPersona.adapter.content,
+      successCriteria: sharedPersona?.content ?? null,
+      scenarioSpec: sharedPersona?.adapter?.content ?? null,
       failureSignals: [],
       judgeContext: result.judgeContext ?? null,
       taxonomy: {
@@ -283,20 +264,20 @@ async function main() {
     batchId: args.batchId ?? `api-${stamp}`,
     scenarioId: args.scenario,
     inputSeed: args.seed ?? args.scenario,
-    adapterVersion: sharedPersona.adapter.version,
-    personaCoreVersion: sharedPersona.version,
+    adapterVersion: sharedPersona?.adapter?.version ?? null,
+    personaCoreVersion: sharedPersona?.version ?? null,
     targetRevision: args.targetRevision ?? baseUrl,
     runId: result.evidence.runId ?? `harness-${stamp}`,
     timestamp: finding.generatedAt,
-    persona: sharedPersona.name,
+    persona: sharedPersona?.name ?? personaTitle,
   };
   const normalizedEvidence = adaptApiEvidence({
     metadata,
     persona: {
-      name: sharedPersona.name,
-      briefText: sharedPersona.content,
-      surfaceAdapterText: sharedPersona.adapter.content,
-      authoredCriteriaText: sharedPersona.content,
+      name: sharedPersona?.name ?? personaTitle,
+      briefText: sharedPersona?.content ?? null,
+      surfaceAdapterText: sharedPersona?.adapter?.content ?? null,
+      authoredCriteriaText: sharedPersona?.content ?? null,
     },
     turns: client.calls.map((call, n) => ({
       n: n + 1,
@@ -323,11 +304,7 @@ async function main() {
 
   await result.cleanup();
   if (!args.keep) {
-    console.log(
-      kind === 'generation-seam'
-        ? 'Cleaned up throwaway project (pass --keep to retain).'
-        : 'Cleaned up project + run (pass --keep to retain).',
-    );
+    console.log('Cleaned up throwaway project (pass --keep to retain).');
   }
 
   // Exit 3 = inconclusive (e.g. the generator's model provider was unavailable, so the
@@ -336,15 +313,6 @@ async function main() {
   return platformPass ? 0 : 1;
 }
 
-/** Count occurrences keyed by a selector, returned as a plain object. */
-function countBy(arr, keyFn) {
-  const out = {};
-  for (const item of arr) {
-    const k = keyFn(item);
-    out[k] = (out[k] ?? 0) + 1;
-  }
-  return out;
-}
 // Only run the CLI when executed directly — importing this module (e.g. from
 // tests, to reuse checkInsecureAllowed) must not trigger main() or process.exit.
 if (import.meta.url === `file://${process.argv[1]}` || import.meta.url === pathToFileURL(process.argv[1]).href) {

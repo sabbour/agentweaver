@@ -9,44 +9,87 @@ Run all commands below from the repository root. The harness requires Node 18 or
 newer. It resolves an access token from `--token`, then `AGENTWEAVER_TOKEN`, then
 `gh auth token`.
 
-## Deterministic persona scenario
+## Driving a persona scenario (the only way — dynamic, no fixed scripts)
 
-List the built-in scenarios:
+There is no curated list of named scenario subcommands and no per-persona fixed
+step sequence. A driving LLM (Harness itself, or a sub-agent it dispatches) is
+handed ONLY a persona brief — `scripts/persona-briefs/personas/<id>.md` +
+`scripts/persona-briefs/surfaces/<id>.api.md` — and decides every next action live
+by issuing raw method/path/body calls against the real API, guided by the API's
+OpenAPI/Swagger document. This is what lets the driver push back, poll events, and
+adapt — a fixed script structurally cannot.
 
 ```powershell
-node scripts/api-harness/run-persona.mjs --list
+$session = "scripts/api-harness/priya-live.session.json"
+node scripts/api-harness/drive.mjs init --brief priya --base-url https://agentweaver.example.staging.example --session $session
+node scripts/api-harness/drive.mjs spec --session $session
+node scripts/api-harness/drive.mjs call --method GET --path /api/blueprints --thought "I need a starting template." --session $session
+node scripts/api-harness/drive.mjs call --method POST --path /api/projects --body '{"name":"...","origin":"blank","working_directory":"...","blueprint_id":"..."}' --thought "This blueprint fits the requested workflow." --session $session
+node scripts/api-harness/drive.mjs call --method POST --path /api/projects/<id>/orchestrations --body '{"goal":"...","start_mode":"defineOutcome"}' --thought "Submitting the persona's request." --session $session
+node scripts/api-harness/drive.mjs call --method GET --path /api/runs/<runId>/outcome-spec --thought "Checking the proposed outcome." --session $session
+node scripts/api-harness/drive.mjs finish --summary "Persona investigation complete." --session $session
 ```
 
-Run one scenario and save its verdict at a known location:
+`init` prints the persona brief text and verifies auth. `spec` fetches (and
+caches) the live OpenAPI document at `/openapi/v1.json` (falling back to
+`/swagger/v1/swagger.json`, then reporting plainly if neither is served) so the
+driving LLM knows what endpoints/shapes exist instead of guessing. `call` is the
+one generic action primitive — arbitrary method/path/body — and records every
+turn (with `--thought`, the persona's live reasoning) verbatim into the session
+transcript. Two commands remain distinct, NAMED actions rather than folded into
+`call`, because they encode a safety invariant rather than curated business logic:
+
+- `check-approvals --thought "..."` — detect pending approval gates (tool/shell/
+  coordinator-child) from the real events feed. Pure detection, no judgment.
+- `resolve-approval --thought "..." [--request-id <id> | --command-hash <h>] [--all]
+  [--decision approve|deny|defer|request-changes] [--scope once|run|tool|always]
+  [--reason "..."] [--feedback "..."] [--judge-cmd "<llm cli>"]` — DETECT -> JUDGE ->
+  EXECUTE. Do not blindly approve a gate; the default judge always defers.
+
+`finish` prints a transcript path under `scripts/api-harness/transcripts/`, computes
+a generic P0 mechanics check (did every recorded call succeed — no
+pushback-counting or other business-specific heuristics), and cleans up the
+throwaway project unless `--keep` is supplied. Use a unique `--session` path (or
+set `AGENTWEAVER_HARNESS_SESSION`) whenever sessions may run concurrently.
+
+## Generation-seam structural check (fixed, not a persona scenario)
+
+`generated-artifacts-seam` is the one remaining fixed script, and deliberately so:
+it asserts the blueprint/workflow GENERATORS are structurally correct (reserved-
+role leaks, dangling edges, backend-guard round-trips) — a deterministic
+regression check with no persona behavior or pushback dimension, not something a
+driving LLM needs to interpret live.
 
 ```powershell
 node scripts/api-harness/run-persona.mjs `
-  --scenario priya-ticket-triage `
-  --persona priya `
+  --scenario generated-artifacts-seam `
   --target https://agentweaver.example.staging.example `
   --token $env:AGENTWEAVER_TOKEN `
   --batch-id api-validation-001 `
-  --seed priya-ticket-triage `
-  --out scripts/api-harness/verdicts/priya-ticket-triage.json
+  --seed generated-artifacts-seam `
+  --out scripts/api-harness/verdicts/generated-artifacts-seam.json
 ```
 
-`--target` and `--base-url` are aliases. `--scenario` is required except with
-`--list`; `--persona` otherwise defaults from the scenario name. The driver writes
-a finding under `scripts/api-harness/findings/` and a verdict under
-`scripts/api-harness/verdicts/` (or `--out`) and prints both paths. Read the
-verdict JSON and report its verdict and evidence references; do not treat a zero
-driver exit as a subjective quality pass.
+`--target` and `--base-url` are aliases. The driver writes a finding under
+`scripts/api-harness/findings/` and a verdict under `scripts/api-harness/verdicts/`
+(or `--out`) and prints both paths. Read the verdict JSON and report its verdict
+and evidence references; do not treat a zero driver exit as a subjective quality
+pass.
 
 ### Re-test from a repro manifest
 
-A repro manifest describes a **fresh** comparison run, not a replay of its old
-`runId` or `traceId`. Map its `scenarioId`, `inputSeed`, `targetRevision`, and
-configuration into a new invocation:
+A repro manifest describes a **fresh** comparison run, not a byte-identical replay
+of its old `runId`/`traceId` — and, for a dynamically-driven persona scenario, not a
+literal replay of its prior turn sequence either. "Comparability" means: the same
+persona-brief version + the same seed + the same target-revision, re-driven fresh
+(the LLM still decides steps live each time). Map `scenarioId`, `inputSeed`,
+`targetRevision`, and configuration into a new invocation — for the seam check,
+into `run-persona.mjs`; for a persona scenario, into a fresh `drive.mjs init` with
+the same `--brief` against the new target:
 
 ```powershell
 node scripts/api-harness/run-persona.mjs `
-  --scenario <reproManifest.scenarioId> `
-  --seed <reproManifest.inputSeed> `
+  --scenario generated-artifacts-seam `
   --target <current-target-url> `
   --target-revision <current-target-revision> `
   --batch-id <new-comparison-batch> `
@@ -59,50 +102,19 @@ then compare the new verdict with the old one. `adapterVersion`,
 `personaCoreVersion`, `harnessRevision`, judge model, and fixture state are not
 override flags: verify that the checked-out harness, configured judge, and fixture
 state match the manifest before calling a rerun comparable. Report any mismatch
-instead of presenting the result as a like-for-like reproduction.
-
-## Exploratory persona driving
-
-For a free-text or emergent investigation, use the discrete driver commands rather
-than inventing raw REST requests. Give every action a `--thought`, use a unique
-`--session` path when sessions may run concurrently, and finish the session so its
-transcript is persisted:
-
-```powershell
-$session = "scripts/api-harness/agent-driver/priya-exploratory.session.json"
-node scripts/api-harness/agent-driver/tools.mjs init --brief priya --base-url https://agentweaver.example.staging.example --session $session
-node scripts/api-harness/agent-driver/tools.mjs list-blueprints --thought "I need a starting template." --session $session
-node scripts/api-harness/agent-driver/tools.mjs create-project --blueprint <blueprint-id> --thought "This blueprint fits the requested workflow." --session $session
-node scripts/api-harness/agent-driver/tools.mjs submit-goal --goal "<persona's free-text request>" --thought "I am submitting the user's request as Priya." --session $session
-node scripts/api-harness/agent-driver/tools.mjs get-spec --thought "I am checking the proposed outcome." --session $session
-node scripts/api-harness/agent-driver/tools.mjs finish --summary "Exploratory API investigation complete." --session $session
-```
-
-Available follow-up commands are `get-team`, `generate-blueprint`,
-`validate-blueprint`, `revise-spec`, `get-events`, `check-approvals`, and
-`resolve-approval`. `generate-blueprint` drafts a blueprint from a natural
-language description (`--description`) and `validate-blueprint` checks a
-blueprint (`--blueprint-file <path>`, `--blueprint '<json>'`, or the last
-generated blueprint if omitted) against the schema and role constraints.
-`resolve-approval` can make a judged
-`approve`, `deny`, `defer`, or `request-changes` decision; provide `--decision`,
-`--reason`, and (for requested changes) `--feedback`, or configure an external
-judge with `--judge-cmd`. Do not blindly approve a gate. The default scoping flow
-does not confirm or execute work. `finish` prints a transcript path under
-`scripts/api-harness/transcripts/` and cleans up the throwaway project unless
-`--keep` is supplied.
+instead of presenting the result as a like-for-like reproduction. Do NOT expect two
+dynamic persona runs of the same brief to be byte-identical turn-for-turn — only
+intent-comparable; the driving LLM may take a different but equally valid path
+each time.
 
 ## Options and safety
 
-- `--timeout <seconds>` sets the scenario or polling timeout; `--keep` retains the
+- `--timeout <seconds>` sets the seam-check or polling timeout; `--keep` retains the
   throwaway resources.
 - `--insecure` disables TLS verification only for localhost/staging targets. It
   needs `--allow-insecure-prod` for non-staging targets.
 - Targets are limited to localhost or staging by default. Production requires both
   `--allow-prod` and `--i-understand-this-targets-production`.
-- `--rung <value>` is accepted and recorded by the scenario CLI, but the current
-  runner's behavior is defined by its selected scenario; do not assume it enables
-  deeper approval driving.
 
 Exit codes for `run-persona.mjs`: `0` means deterministic driver checks passed and
 evidence was captured, `1` means a deterministic check failed, `2` is setup or
