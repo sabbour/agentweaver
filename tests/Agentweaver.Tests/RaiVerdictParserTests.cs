@@ -359,6 +359,82 @@ public sealed class RaiVerdictParserTests
         JsonProperty(verdict.Payload, "verdict").Should().Be("green");
     }
 
+    // ---- HandleAsync integration: raw JSON responses must never leak into the rationale --
+
+    [Fact]
+    public async Task HandleAsync_RawJsonResponseWithSentinel_DoesNotLeakJsonAsRationale()
+    {
+        // Reproduces the reported bug: the reviewer's response starts with a JSON-shaped blob
+        // (e.g. it echoed a structured work-plan/diff back) instead of a prose explanation, but
+        // still ends with a valid VERDICT: sentinel — no re-ask is needed, so ExtractRationale runs
+        // on this raw response. The naive "first non-blank line" fallback used to surface the raw
+        // JSON verbatim as the human-facing rationale; it must now fall back to a safe default.
+        var parent = Channel.CreateUnbounded<RunEvent>();
+        var sub = Channel.CreateUnbounded<RunEvent>();
+        var factory = new ScriptedRaiAgentFactory(
+            "[{\"title\":\"Analyze and classify the five support tickets\",\"scope\":\"Working from the raw ticket queue\"}]\n" +
+            "VERDICT: GREEN");
+        var executor = BuildExecutor(parent, sub, factory);
+
+        var result = await executor.HandleAsync(new AgentTurnOutput(
+            RunId: "rai-json-leak-run",
+            TreeHash: "tree",
+            Diff: "diff --git a/plan.json b/plan.json\n+[{\"title\":\"Analyze tickets\"}]",
+            StepCount: 1,
+            WorktreePath: AppContext.BaseDirectory,
+            WorktreeBranch: "agent/rai-json-leak-run",
+            RepositoryPath: AppContext.BaseDirectory,
+            OriginatingBranch: "main",
+            ContentSafetyFlagged: false),
+            context: null!,
+            CancellationToken.None);
+
+        result.ContentSafetyFlagged.Should().BeFalse("the sentinel parsed cleanly as GREEN");
+
+        var verdict = Drain(parent.Reader).Single(e => e.Type == EventTypes.RaiVerdict);
+        JsonProperty(verdict.Payload, "verdict").Should().Be("green");
+        var rationale = JsonProperty(verdict.Payload, "rationale");
+        rationale.Should().NotBeNullOrEmpty();
+        rationale.Should().NotContain("{", "raw JSON must never be surfaced verbatim as a human-facing rationale");
+        rationale.Should().NotContain("support tickets", "the raw echoed payload text must not leak through");
+    }
+
+    [Fact]
+    public async Task HandleAsync_UnparseableJsonThenSentinel_RecoversViaReask_DoesNotLeakJsonAsRationale()
+    {
+        // Same JSON-leak scenario, but this time the first turn has NO sentinel at all (so the
+        // bounded re-ask fires) and EmitVerdict is still passed the ORIGINAL (non-conforming, raw
+        // JSON) response for rationale extraction — this must not leak the JSON either.
+        var parent = Channel.CreateUnbounded<RunEvent>();
+        var sub = Channel.CreateUnbounded<RunEvent>();
+        var factory = new ScriptedRaiAgentFactory(
+            "[{\"title\":\"Analyze and classify the five support tickets\",\"scope\":\"raw ticket queue\"}]", // no sentinel
+            "VERDICT: GREEN"); // re-ask recovers the verdict
+        var executor = BuildExecutor(parent, sub, factory);
+
+        var result = await executor.HandleAsync(new AgentTurnOutput(
+            RunId: "rai-json-leak-reask-run",
+            TreeHash: "tree",
+            Diff: "diff --git a/plan.json b/plan.json\n+[{\"title\":\"Analyze tickets\"}]",
+            StepCount: 1,
+            WorktreePath: AppContext.BaseDirectory,
+            WorktreeBranch: "agent/rai-json-leak-reask-run",
+            RepositoryPath: AppContext.BaseDirectory,
+            OriginatingBranch: "main",
+            ContentSafetyFlagged: false),
+            context: null!,
+            CancellationToken.None);
+
+        result.ContentSafetyFlagged.Should().BeFalse("the bounded re-ask recovered a GREEN sentinel");
+
+        var verdict = Drain(parent.Reader).Single(e => e.Type == EventTypes.RaiVerdict);
+        JsonProperty(verdict.Payload, "verdict").Should().Be("green");
+        var rationale = JsonProperty(verdict.Payload, "rationale");
+        rationale.Should().NotBeNullOrEmpty();
+        rationale.Should().NotContain("{", "raw JSON must never be surfaced verbatim as a human-facing rationale");
+        rationale.Should().NotContain("support tickets", "the raw echoed payload text must not leak through");
+    }
+
     // ---- helpers -------------------------------------------------------------------------
 
     private static RaiTurnExecutor BuildExecutor(

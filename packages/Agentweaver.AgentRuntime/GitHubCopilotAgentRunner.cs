@@ -471,7 +471,7 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
             throw;
         }
 
-        Emit("agent.turn.end", new { turnId = "0" });
+        Emit(EventTypes.AgentTurnEnd, new { turnId = "0" });
 
         if (suppressedCallIds.Count > 0)
             _logger.LogInformation("Suppressed {Count} SDK-internal tool events", suppressedCallIds.Count);

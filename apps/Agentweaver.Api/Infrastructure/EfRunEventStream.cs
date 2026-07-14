@@ -141,6 +141,9 @@ public sealed class EfRunEventStream : IRunEventStream
     private async Task<int> WriteThroughAsync(string runId, RunEvent evt, CancellationToken ct)
     {
         var payloadJson = JsonSerializer.Serialize(evt.Payload);
+        // Prefer the event's own TimestampUtc (stamped by RunStreamStore.RecordNext/Record) over
+        // DateTime.UtcNow so CreatedAt reflects "when it happened", not "when it was persisted".
+        var timestampUtc = evt.TimestampUtc == default ? DateTimeOffset.UtcNow : evt.TimestampUtc;
 
         for (var attempt = 0; attempt < MaxSequenceRetries; attempt++)
         {
@@ -180,7 +183,7 @@ public sealed class EfRunEventStream : IRunEventStream
                     Sequence = sequence,
                     EventType = evt.Type,
                     PayloadJson = payloadJson,
-                    CreatedAt = DateTime.UtcNow,
+                    CreatedAt = timestampUtc.UtcDateTime,
                 });
 
                 await db.SaveChangesAsync(ct).ConfigureAwait(false);
@@ -213,7 +216,10 @@ public sealed class EfRunEventStream : IRunEventStream
         foreach (var row in rows)
         {
             var payload = DeserializePayload(runId, row.Sequence, row.EventType, row.PayloadJson);
-            yield return new RunEvent(row.Sequence, row.EventType, payload);
+            // Restore the persisted append-time timestamp so a replayed run's timeline matches
+            // when the event actually happened, not the moment of replay.
+            var createdAtUtc = DateTime.SpecifyKind(row.CreatedAt, DateTimeKind.Utc);
+            yield return new RunEvent(row.Sequence, row.EventType, payload, new DateTimeOffset(createdAtUtc));
         }
     }
 

@@ -83,7 +83,7 @@ public sealed class A2ATurnBridgeAgentTests
         public Task ForceStopTurnAsync() => Task.CompletedTask;
     }
 
-    private static A2ATurnBridgeAgent CreateBridge(FakeTurnRunner runner) =>
+    private static A2ATurnBridgeAgent CreateBridge(IPodTurnRunner runner) =>
         new(new NoOpInnerAgent(), runner, NullLogger<A2ATurnBridgeAgent>.Instance);
 
     private sealed class CancellableTurnRunner : IPodTurnRunner
@@ -127,6 +127,101 @@ public sealed class A2ATurnBridgeAgentTests
             _completion.TrySetResult("");
             return Task.CompletedTask;
         }
+    }
+
+    /// <summary>Runner that optionally emits a RunEvent, then aborts by throwing.</summary>
+    private sealed class ThrowingTurnRunner : IPodTurnRunner
+    {
+        private ChannelWriter<RunEvent>? _writer;
+        public RunEvent? PreFailureEvent { get; init; }
+        public Exception Failure { get; init; } = new InvalidOperationException("boom");
+
+        public void SetTurnStreamWriter(ChannelWriter<RunEvent>? streamWriter) => _writer = streamWriter;
+
+        public async Task<string> RunTurnAsync(string task, bool isRevision, CancellationToken cancellationToken)
+        {
+            if (PreFailureEvent is not null)
+            {
+                await _writer!.WriteAsync(PreFailureEvent, cancellationToken);
+            }
+
+            throw Failure;
+        }
+
+        public Task ForceStopTurnAsync() => Task.CompletedTask;
+    }
+
+    private static List<RunEvent> DecodeRunFailedEvents(IEnumerable<AgentResponseUpdate> updates) =>
+        updates
+            .SelectMany(u => u.Contents)
+            .OfType<DataContent>()
+            .Where(d => string.Equals(d.MediaType, RunEventDataPartCodec.MediaType, StringComparison.OrdinalIgnoreCase))
+            .Select(RunEventDataPartCodec.TryDecodeRunEvent)
+            .Where(e => e is not null && string.Equals(e.Type, EventTypes.RunFailed, StringComparison.Ordinal))
+            .Select(e => e!)
+            .ToList();
+
+    [Fact]
+    public async Task StreamTurnAsync_TurnAbortsWithoutStructuredFailure_EmitsSyntheticRunFailed()
+    {
+        // #267 regression: a pod turn that aborts WITHOUT emitting a structured RunFailed must still
+        // hand the worker a structured terminal (agent_turn_internal_error) so the worker recovers a
+        // real errorCode from the stream instead of a bare, context-free "Received: None".
+        var runner = new ThrowingTurnRunner { Failure = new InvalidOperationException("internal boom") };
+        var bridge = CreateBridge(runner);
+
+        var updates = new List<AgentResponseUpdate>();
+        Func<Task> act = async () =>
+        {
+            await foreach (var update in bridge.StreamTurnAsync(BuildTurnMessage("go", isRevision: false), default))
+            {
+                updates.Add(update);
+            }
+        };
+
+        (await act.Should().ThrowAsync<InvalidOperationException>())
+            .WithMessage("internal boom", "the original turn exception must still propagate");
+
+        var runFailed = DecodeRunFailedEvents(updates);
+        runFailed.Should().ContainSingle("a synthetic structured terminal must be emitted");
+        JsonSerializer.Serialize(runFailed[0].Payload).Should().Contain("agent_turn_internal_error");
+    }
+
+    [Fact]
+    public async Task StreamTurnAsync_TurnAbortsAfterStructuredFailure_DoesNotDoubleEmit()
+    {
+        // If the pod already emitted its own structured RunFailed, the bridge must NOT overwrite it
+        // with a generic agent_turn_internal_error — the worker's last-seen structured reason must
+        // remain the specific one the pod reported.
+        var structured = new RunEvent(1, EventTypes.RunFailed, new
+        {
+            message = "shell hard deadline",
+            errorCode = "shell_execution_timeout",
+            retryable = true,
+        });
+        var runner = new ThrowingTurnRunner
+        {
+            PreFailureEvent = structured,
+            Failure = new InvalidOperationException("internal boom"),
+        };
+        var bridge = CreateBridge(runner);
+
+        var updates = new List<AgentResponseUpdate>();
+        Func<Task> act = async () =>
+        {
+            await foreach (var update in bridge.StreamTurnAsync(BuildTurnMessage("go", isRevision: false), default))
+            {
+                updates.Add(update);
+            }
+        };
+
+        await act.Should().ThrowAsync<InvalidOperationException>();
+
+        var runFailed = DecodeRunFailedEvents(updates);
+        runFailed.Should().ContainSingle("the pod's own structured RunFailed must not be duplicated");
+        var payload = JsonSerializer.Serialize(runFailed[0].Payload);
+        payload.Should().Contain("shell_execution_timeout");
+        payload.Should().NotContain("agent_turn_internal_error");
     }
 
     [Fact]

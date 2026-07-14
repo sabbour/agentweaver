@@ -1,4 +1,49 @@
 import type { AgentMessageItem, TimelineItem, TurnGroupItem } from './types';
+
+/**
+ * The outcome-spec drafting turn (coordinator.outcome_spec) streams the drafting agent's raw JSON
+ * object onto the run stream before it is confirmed (e.g. `{"desired_outcome":"...","scope":"..."}`).
+ * Rendered verbatim this is an illegible JSON blob; once confirmed, the SAME shape gets a friendly
+ * "### Outcome plan" rendering (see formatOutcomeSpecMessage below). This recognizes that interim
+ * JSON shape wherever a message body might contain it (coordinator scope AND any child/subtask scope
+ * that drafts an outcome spec) so it is never shown as raw JSON, matching the confirmed rendering.
+ */
+export interface OutcomeSpecMessage {
+  desiredOutcome?: string;
+  scope?: string;
+}
+
+function readOutcomeField(payload: Record<string, unknown>, keys: string[]): string | undefined {
+  for (const key of keys) {
+    const value = payload[key];
+    if (value != null && String(value).trim() !== '') return String(value);
+  }
+  return undefined;
+}
+
+/** True/parsed when a message body is the outcome-spec drafting agent's raw JSON object. */
+export function parseOutcomeSpecMessage(content: string): OutcomeSpecMessage | null {
+  const trimmed = content.trim();
+  if (!trimmed.startsWith('{') || !/"desired_outcome"|"desiredOutcome"/.test(trimmed)) return null;
+  try {
+    const parsed = JSON.parse(trimmed) as Record<string, unknown>;
+    const desiredOutcome = readOutcomeField(parsed, ['desiredOutcome', 'desired_outcome']);
+    const scope = readOutcomeField(parsed, ['scope']);
+    if (!desiredOutcome && !scope) return null;
+    return { desiredOutcome, scope };
+  } catch {
+    return null;
+  }
+}
+
+/** Render an outcome spec as the same friendly Markdown used once the spec is confirmed. */
+export function formatOutcomeSpecMessage(spec: OutcomeSpecMessage): string {
+  return [
+    '### Outcome plan',
+    spec.desiredOutcome ? `**Desired outcome:**\n\n${spec.desiredOutcome}` : null,
+    spec.scope ? `**Scope:**\n\n${spec.scope}` : null,
+  ].filter(Boolean).join('\n\n');
+}
 /**
  * The coordinator decomposition turn streams the planning agent's final assistant message onto the
  * coordinator run stream (CoordinatorOrchestratorExecutor.DecomposeWithModelAsync). That message is

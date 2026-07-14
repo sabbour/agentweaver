@@ -250,16 +250,24 @@ public sealed class RemoteAgentProxy : IWorkflowTurnAgent, IPreparedWritebackSou
         _preparedWriteback = null;
         StructuredRunFailure? lastStructuredFailure = null;
 
+        // #242 defense-in-depth (AgentHost terminal-emission gap): track whether the pod streamed
+        // its definitive per-turn completion marker (agent.turn.end). If the A2A stream ends cleanly
+        // WITHOUT it, the pod was torn down / the transport truncated mid-turn — the turn did NOT
+        // finish, and returning a phantom success here would let the workflow complete with NO
+        // terminal WorkflowOutputEvent, which the coordinator misreads as a false-positive stall.
+        var sawTurnEnd = false;
+
         // Rolling trail of the last few update "shapes" seen on this turn. The A2A SDK
         // (Microsoft.Agents.AI.A2A.A2AAgent.RunCoreStreamingAsync) throws NotSupportedException
-        // ("Received: None") when it receives a wire StreamResponse where NONE of its four
-        // known fields (Task/Message/StatusUpdate/ArtifactUpdate) are populated — see #267.
-        // Our own server-side emission (AgentEventQueue.EnqueueMessageAsync in A2ATurnBridgeAgent's
-        // A2AAgentHandler) always sets the Message field, so this can't originate from a null
-        // AgentResponseUpdate on our side; it is a transport/serialization-level artifact whose
-        // exact trigger is still unconfirmed (see decisions/inbox/tank2-267-a2a-regression.md).
-        // Capturing this trail lets the *next* occurrence be correlated with what content
-        // immediately preceded it, instead of surfacing only "Received: None" with no context.
+        // ("Received: None") when it dequeues a wire StreamResponse whose oneof payload is unset
+        // (StreamResponseCase.None) — see #267. Empirically (see A2ARoundTripIntegrationTests) this
+        // frame is emitted ONLY when the pod's A2A stream terminates abnormally / is truncated
+        // (e.g. the pod turn threw); a normally-completing turn never produces it. It is therefore
+        // an abnormal-stream-termination signal, NOT an "unsupported event kind" and NOT the
+        // original 1.9.0-vs-1.11.1 version skew (that pin alignment already shipped in v0.9.43-rc1).
+        // The pod bridge (A2ATurnBridgeAgent) now emits a synthetic structured RunFailed on any
+        // otherwise-unstructured turn abort so this path carries a real errorCode; the trail below
+        // still correlates the *next* bare occurrence with the content that immediately preceded it.
         var recentUpdateTrail = new Queue<string>();
         const int recentUpdateTrailCapacity = 5;
 
@@ -312,6 +320,9 @@ public sealed class RemoteAgentProxy : IWorkflowTurnAgent, IPreparedWritebackSou
                         if (runEvent is not null)
                         {
                             RecordUpdateTrail($"runEvent:{runEvent.Type}:{EstimatePayloadSize(runEvent.Payload)}b");
+
+                            if (string.Equals(runEvent.Type, EventTypes.AgentTurnEnd, StringComparison.Ordinal))
+                                sawTurnEnd = true;
 
                             if (TryReadStructuredFailure(runEvent) is { } structuredFailure)
                                 lastStructuredFailure = structuredFailure;
@@ -369,6 +380,38 @@ public sealed class RemoteAgentProxy : IWorkflowTurnAgent, IPreparedWritebackSou
                 $"RemoteAgentProxy: A2A turn failed for run '{_runId}': {ex.Message}",
                 ex,
                 isRetryable: IsTransientA2aTransportFailure(ex, ct));
+        }
+
+        // The A2A stream ended WITHOUT the pod ever faulting. Two residual seams must be closed here
+        // so a pod-teardown / transport truncation cannot masquerade as a clean success and silently
+        // drop the child's terminal WorkflowOutputEvent (issue #242 — false-positive stall root cause).
+        //
+        // (1) A structured run.failed was streamed but the stream then closed cleanly instead of
+        //     faulting: surface it as the authoritative terminal failure rather than a phantom success.
+        if (lastStructuredFailure is not null)
+        {
+            throw new WorkflowAgentInfrastructureException(
+                lastStructuredFailure.ErrorCode,
+                lastStructuredFailure.Message,
+                innerException: null,
+                lastStructuredFailure.IsRetryable);
+        }
+
+        // (2) The definitive per-turn completion marker (agent.turn.end) never arrived: the pod A2A
+        //     stream ended (clean EOF) before the turn finished — a pod-teardown / checkpoint-resume /
+        //     transport-truncation race. Fail RETRYABLY so the graph terminalizes VISIBLY (routed to
+        //     the child-turn-failed terminal via emitTerminalFailureOutput) and the coordinator can
+        //     consciously redispatch, instead of the workflow completing with no terminal event and
+        //     the coordinator's stall detector firing a 5-minute false positive.
+        if (!sawTurnEnd)
+        {
+            throw new WorkflowAgentInfrastructureException(
+                "agent_host_turn_incomplete",
+                $"RemoteAgentProxy: the pod A2A stream for run '{_runId}' completed without the terminal " +
+                "'agent.turn.end' marker — the turn did not finish (pod teardown / transport truncation); " +
+                "refusing to report a phantom success that would strand the run without a terminal event.",
+                innerException: null,
+                isRetryable: true);
         }
 
         var responseText = textAccumulator.ToString();

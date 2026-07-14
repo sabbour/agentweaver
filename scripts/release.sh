@@ -255,6 +255,32 @@ image_changed_since_tag() {
   return 0  # changed
 }
 
+# Returns 0 if IMAGE:TAG exists in the ACR, non-zero otherwise.
+# Used to guard the retag path: after an ACR/environment recreation the
+# registry is empty, so a "${LAST_TAG}" source may not exist to import from.
+acr_source_tag_exists() {
+  local image="$1" tag="$2"
+  [[ -z "${tag}" ]] && return 1
+  az acr repository show \
+    --name "${ACR_NAME}" \
+    --image "${image}:${tag}" \
+    >/dev/null 2>&1
+}
+
+# Decides whether an image must be built (0) or can be retagged (1).
+# Build when: no baseline tag, sources changed since the baseline, OR the
+# retag source image is absent from the ACR (empty/recreated registry).
+image_needs_build() {
+  local image="$1" paths_str="$2"
+  if [[ -z "${LAST_TAG}" ]] || image_changed_since_tag "${paths_str}"; then
+    return 0
+  fi
+  if ! acr_source_tag_exists "${image}" "${LAST_TAG}"; then
+    return 0
+  fi
+  return 1
+}
+
 frontend_npm_password_b64() {
   if [[ -n "${AZURE_ARTIFACTS_NPM_PASSWORD_B64:-}" ]]; then
     printf '%s' "${AZURE_ARTIFACTS_NPM_PASSWORD_B64}"
@@ -353,7 +379,7 @@ echo "==> Processing images for ${NEW_TAG} (previous: ${LAST_TAG:-none})..."
 PIDS=()
 JOBS=()
 
-if [[ "${DRY_RUN}" != "true" ]] && { [[ -z "${LAST_TAG}" ]] || image_changed_since_tag "${IMAGE_PATHS[agentweaver-frontend]}"; }; then
+if [[ "${DRY_RUN}" != "true" ]] && image_needs_build "agentweaver-frontend" "${IMAGE_PATHS[agentweaver-frontend]}"; then
   # All images share the repo root as the ACR build context, so move frontend
   # node_modules out of that context before any parallel az acr build starts.
   prepare_frontend_dist
@@ -365,6 +391,18 @@ for IMAGE in "agentweaver-api" "agentweaver-frontend" "agentweaver-mcp" "agentwe
 
   if [[ -z "${LAST_TAG}" ]] || image_changed_since_tag "${PATHS}"; then
     echo "  [build]  ${IMAGE} (changed)"
+    run az acr build \
+      --registry "${ACR_NAME}" \
+      --resource-group "${RESOURCE_GROUP}" \
+      --image "${IMAGE}:${NEW_TAG}" \
+      --file "${DOCKERFILE}" \
+      --build-arg "IMAGE_TAG=${NEW_TAG}" \
+      --build-arg "GIT_SHA=$(git rev-parse HEAD)" \
+      . &
+    PIDS+=("$!")
+    JOBS+=("build:${IMAGE}:${NEW_TAG}")
+  elif ! acr_source_tag_exists "${IMAGE}" "${LAST_TAG}"; then
+    echo "  [build]  ${IMAGE} (unchanged, but source ${LAST_TAG} missing from ACR — building fresh)"
     run az acr build \
       --registry "${ACR_NAME}" \
       --resource-group "${RESOURCE_GROUP}" \

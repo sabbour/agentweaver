@@ -37,6 +37,37 @@ public sealed class RunStreamStoreTests
     }
 
     [Fact]
+    public void Record_StampsNonDefaultMonotonicUtcTimestamp_OnEveryEvent()
+    {
+        // Regression test for the "just now" / resetting-timestamp bug: RunEvent previously had no
+        // timestamp field at all, so most events (e.g. coordinator.work_plan) never carried one and
+        // the frontend fell back to Date.now() at render time. RunStreamStore must now stamp a real
+        // server-side UTC time on every event at the moment it is appended, regardless of whether
+        // the caller supplied one via Record(RunEvent) or RecordNext(type, payload).
+        var store = new RunStreamStore();
+        var runId = Guid.NewGuid().ToString();
+        var entry = store.Create(runId, "user-a");
+
+        var before = DateTimeOffset.UtcNow;
+        entry.Record(new RunEvent(1, "coordinator.work_plan", new { plan = "build" })); // no timestamp supplied
+        entry.RecordNext("agent.message", new { content = "hi" });
+        var after = DateTimeOffset.UtcNow;
+
+        var events = entry.GetSnapshotSince(0).Events;
+        events.Should().HaveCount(2);
+
+        foreach (var evt in events)
+        {
+            evt.TimestampUtc.Should().NotBe(default);
+            evt.TimestampUtc.Should().BeOnOrAfter(before);
+            evt.TimestampUtc.Should().BeOnOrBefore(after);
+        }
+
+        // Monotonic (or equal, given clock resolution): later-appended events never precede earlier ones.
+        events[1].TimestampUtc.Should().BeOnOrAfter(events[0].TimestampUtc);
+    }
+
+    [Fact]
     public void GetSnapshotSince_ReplaysOnlyEventsAfterLastSeen()
     {
         var store = new RunStreamStore();
