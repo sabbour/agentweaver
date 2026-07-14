@@ -270,6 +270,36 @@ want zero new deps. **Recommendation: (a)** — using the real MCP SDK client me
 harness exercises the same framing/negotiation an actual MCP host uses, catching
 protocol-level regressions a hand-rolled client would paper over.
 
+**Driver performance / interaction model (applies to all three harnesses).** The MCP
+driver is **headless-first, low-touch, and parallel by design** — built to run **many
+personas/scenarios concurrently**, not one at a time, and to operate **autonomously
+without requiring user interaction**. Ahmed should be able to **observe** a run if he
+wants — an **optional** live transcript tail, streaming turn-by-turn stdout, or a status
+view — but observation is never a required interactive step; the default is unattended
+fan-out (the coordinator dispatches N persona sessions as background agents, mirroring
+the E2E plan's "use Fleet to parallelize as much as possible" rule). Concretely: each
+run owns an isolated harness `sessionId`, its own transcript file, and its own MCP
+client instance, so runs never share mutable state.
+
+**Transport choice ↔ parallel-run feasibility.** The two targets differ on how many
+sessions can run concurrently:
+
+- **`--target http`** (staging): N persona sessions **can** run concurrently against
+  the **same** base URL without state collision, because the hosted `/mcp` is
+  **stateless** (`WithHttpTransport(o => o.Stateless = true)`) — each `tools/call`
+  carries its own bearer and executes in its own HTTP scope, with no server-side
+  session affinity to collide on. The only shared-state caveats are *backend* resources
+  the personas create (projects/runs) — so each concurrent session must create its
+  **own** project (unique name) rather than reusing a shared one, keeping run/project
+  IDs disjoint. This is the recommended path for large concurrent fan-out. One auth
+  caveat: interactive `github_signin` device flow is per-identity and human-gated, so
+  concurrent unattended runs should share a **pre-provisioned bearer** (one `gh auth
+  token`) rather than each triggering a device flow.
+- **`--target stdio`** (local/CI): each session spawns its **own** `--stdio` server
+  process, so parallelism is process-level (N processes) and naturally collision-free,
+  but heavier per-session (one server process each). Best for a bounded CI matrix and
+  the #131 smoke test; the HTTP target scales further for big concurrent sweeps.
+
 ### 3. Driver-only evidence capture (the hard constraint)
 
 Same rule as the other two harnesses: **the driver captures and executes; it never
@@ -577,6 +607,31 @@ evidence.
 - the shared `assemble.mjs` gains a small `surface` parameter (`api|ui|mcp`) so the
   prompt preamble names the surface, but the **method, schema, and taxonomy are
   identical**.
+
+**Evidence Sources (applies to the shared judge, not just the UI harness).** The judge
+must not reason from the raw tool-call transcript **alone** — it cross-references what
+an MCP tool call *claimed* happened against what *actually* happened server-side. The
+shared judge relies on **all** of:
+- **Visuals** — screenshots/DOM (available only when a scenario also drives the UI in
+  the same run; **N/A for pure-MCP runs**, present for hybrid MCP+UI scenarios).
+- **API / MCP responses** — the protocol-level evidence this harness already captures
+  verbatim (tool name, args, structured result, `isError`, `protocolErrorCode`, timing,
+  tool-loop trace).
+- **Server-side logs — Application Insights + cluster (`kubectl`)** — the ground-truth
+  of what the backend actually did, correlated to the transcript by **`run_id` and
+  `trace_id`** (the transcript already records `traceId` from the MCP result `_meta` /
+  response headers, and `run_id` from `run_submit`/`coordinator_start` results). The MCP
+  **evidence adapter** (`lib/evidence-adapter.mjs`) should therefore pull the relevant
+  AppInsights transactions and `kubectl logs` slices keyed by those IDs and attach them
+  to the assembled judge prompt alongside the transcript — reusing the proven correlation
+  queries from `docs/e2e-harness-plan.md` (App Insights transaction search on the run's
+  correlation/session ID; `kubectl logs -n agentweaver <pod>`). This lets the judge catch
+  **claim-vs-reality drift** — e.g. a tool call returned success but the backend logged a
+  silent failure, or a `start_preview` reported a URL that never served traffic — which
+  the transcript alone cannot show. Log pulls are **best-effort**: if AppInsights/kubectl
+  are unavailable, the judge proceeds on transcript + protocol evidence and marks the
+  unverifiable claims `CANNOT_DETERMINE` rather than guessing. Consistent with driver-only:
+  the **adapter gathers** this correlated evidence; the **judge interprets** it.
 
 **Rejected alternative (b) — a fully separate MCP judge** — because it would fork the
 prompt library and verdict schema, guarantee drift between the three harnesses' quality
