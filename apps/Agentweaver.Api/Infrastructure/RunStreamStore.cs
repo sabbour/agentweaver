@@ -99,32 +99,39 @@ public sealed class RunStreamEntry
         TaskCompletionSource? previous;
         int seq;
         object payload;
+        RunEvent stamped;
         lock (_lock)
         {
             seq = _history.Count == 0 ? 1 : _history[^1].Sequence + 1;
             payload = payloadFactory(seq);
-            _history.Add(new RunEvent(seq, type, payload));
+            // Stamp the server-side append time here — the single source of truth for "when this
+            // event happened" — rather than requiring every emitter to embed its own timestamp.
+            stamped = new RunEvent(seq, type, payload, DateTimeOffset.UtcNow);
+            _history.Add(stamped);
             previous = Interlocked.Exchange(ref _eventSignal, new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously));
         }
         previous.TrySetResult();
-        PersistBestEffort(new RunEvent(seq, type, payload));
+        PersistBestEffort(stamped);
         return seq;
     }
 
     /// <summary>
     /// Records an event into the history and wakes all clients currently blocked in
     /// <see cref="WaitForChangeAsync"/>. Called by the orchestrator's recording writer.
+    /// Always re-stamps <see cref="RunEvent.TimestampUtc"/> to the moment of append — the correct
+    /// "when it happened" semantic — so callers do not need to set it themselves.
     /// </summary>
     public void Record(RunEvent evt)
     {
         TaskCompletionSource? previous;
+        var stamped = evt with { TimestampUtc = DateTimeOffset.UtcNow };
         lock (_lock)
         {
-            _history.Add(evt);
+            _history.Add(stamped);
             previous = Interlocked.Exchange(ref _eventSignal, new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously));
         }
         previous.TrySetResult();
-        PersistBestEffort(evt);
+        PersistBestEffort(stamped);
     }
 
     /// <summary>

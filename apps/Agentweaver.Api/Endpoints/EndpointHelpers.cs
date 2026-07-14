@@ -171,10 +171,28 @@ internal static bool IsOwnerOrServiceCaller(HttpContext context, Run run, IConfi
 
 internal static async Task WriteSseEventAsync(HttpResponse response, RunEvent evt, CancellationToken ct)
 {
-    var json = System.Text.Json.JsonSerializer.Serialize(evt.Payload,
+    var json = System.Text.Json.JsonSerializer.Serialize(StampTimestamp(evt),
         new System.Text.Json.JsonSerializerOptions { PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase });
     await response.WriteAsync($"id: {evt.Sequence}\nevent: {evt.Type}\ndata: {json}\n\n", ct);
     await response.Body.FlushAsync(ct);
+}
+
+/// <summary>
+/// Ensures the wire payload carries a `timestamp_utc` key sourced from <see cref="RunEvent.TimestampUtc"/>
+/// (stamped centrally by RunStreamStore.RecordNext/Record — see RunEvent.cs) so the frontend's
+/// `readTimestamp()` (apps/web/src/components/AgentSessionPanel.tsx) never has to fall back to
+/// `Date.now()` at render time. Individual emitters that already embed their own `timestamp_utc`/
+/// `timestampUtc`/`timestamp` field in the payload are left untouched — this only fills the gap.
+/// </summary>
+internal static System.Text.Json.Nodes.JsonObject StampTimestamp(RunEvent evt)
+{
+    var node = System.Text.Json.JsonSerializer.SerializeToNode(evt.Payload) as System.Text.Json.Nodes.JsonObject
+        ?? new System.Text.Json.Nodes.JsonObject();
+    if (!node.ContainsKey("timestamp_utc") && !node.ContainsKey("timestampUtc") && !node.ContainsKey("timestamp"))
+        node["timestamp_utc"] = evt.TimestampUtc == default
+            ? DateTimeOffset.UtcNow.ToString("O")
+            : evt.TimestampUtc.ToString("O");
+    return node;
 }
 
 internal static async Task WriteSseDoneAsync(HttpResponse response, CancellationToken ct)

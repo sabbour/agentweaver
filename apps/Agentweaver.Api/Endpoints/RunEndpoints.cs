@@ -535,7 +535,10 @@ app.MapGet("/api/runs/{id}/events", async (
         object payload;
         try { payload = System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement>(rec.PayloadJson); }
         catch { payload = new { }; }
-        return new { sequence = rec.Sequence, type = rec.EventType, payload };
+        // Use the row's persisted CreatedAt (server append time) as the timestamp source so a
+        // replayed/finished run's timeline reflects when each event actually happened, not "now".
+        var evt = new RunEvent(rec.Sequence, rec.EventType, payload, new DateTimeOffset(DateTime.SpecifyKind(rec.CreatedAt, DateTimeKind.Utc)));
+        return new { sequence = rec.Sequence, type = rec.EventType, payload = EndpointHelpers.StampTimestamp(evt) };
     });
 
     return Results.Ok(result);
