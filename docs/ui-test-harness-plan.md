@@ -18,6 +18,14 @@ It is the **frontend track of issue #1** — the original spike explicitly named
 Playwright — kept deliberately complementary to, not competing with, the API track
 that already became the primary E2E method (`decisions.md:953`).
 
+Together with the API and MCP harnesses it is part of a **self-improvement feedback
+loop** meant to replace manual bug-hunting (Ahmed launching the app and reporting
+bugs by hand, or the coordinator running ad hoc API calls). Within that loop this
+harness owns the **experience layer**: its primary question is not "did the network
+call succeed" but "is this findable, understandable, and not frustrating in the
+browser." All three pipeline stages — persona generation, persona behavior, and
+judging — are model-driven (see "Cross-Harness Shared Layer").
+
 This harness obeys the **same discipline** as the API harness:
 
 1. It is a **DRIVER, not a JUDGE.** It captures deterministic, objective UI-state
@@ -97,6 +105,43 @@ Ahmed's requirement: the three harnesses (API, UI, MCP) **share common personas*
 and are **judgeable through a common model** — and he explicitly asked whether this
 should be **three judges or one**. Below are the two decisions, stated explicitly.
 
+### The full vision: a self-improvement feedback loop, not three test suites
+
+The three harnesses together are meant to **replace manual bug-hunting** — Ahmed
+launching the app and reporting bugs by hand, or the coordinator running ad hoc API
+calls he has to describe each session. The loop closes only if **all three pipeline
+stages are LLM/model-driven**, not just the middle one:
+
+1. **Persona generation is itself model-driven.** Personas are not limited to the
+   hand-authored jordan/maya/priya set — an LLM can generate **new** persona cores
+   (new jobs-to-be-done variations) on demand. `scripts/persona-briefs/` is a
+   generator-and-store, not just a store (see §1).
+2. **Persona behavior is model-driven.** The LLM-in-the-loop driver already decides
+   each click/type/navigation live from real rendered state (covered throughout this
+   spec — no change).
+3. **Judging is model-driven and emotional, not just pass/fail.** The shared judge
+   core renders P0/P1 **and a frustration-level assessment** from the transcript
+   evidence — how frustrating/confusing the experience was, not merely whether calls
+   succeeded (see §2).
+
+**Division of responsibility across the three harnesses** (make this explicit so the
+harnesses don't overlap or contradict):
+
+- **API harness = ground-truth / backend layer.** Tests core backend functionality
+  in isolation via JSON. Answers "does the platform actually work."
+- **UI harness (this spec) = experience layer.** Its **primary** focus is
+  *usability, discoverability, and frustration in the browser* — "is this findable,
+  understandable, and not maddening," not just "did the network call return 2xx." A
+  UI-surfaced problem **may** trace back to an API/backend defect; the harness
+  **cross-references its findings against the API harness's findings for the same
+  persona/scenario** via the shared `meta-aggregate.mjs` (a P1/frustration issue that
+  co-occurs with an API-harness P0 fail is a backend root cause surfacing as bad UX;
+  a UI frustration with a clean API run is a genuine experience-layer defect). The
+  driver's objective network/console P0 checks exist mainly to *attribute* an
+  experience problem to a layer, not as the point of the harness.
+- **MCP harness (Morpheus) = protocol/agent-integration layer.** Same shared
+  persona + judge, different surface.
+
 ### 1. Shared persona / brief format — one definition, per-surface adapters
 
 **Recommendation: define each persona ONCE in a new shared package
@@ -119,6 +164,11 @@ scripts/persona-briefs/
     priya.ui.md                the surface's actions ONLY (e.g. UI: "the messy batch is
     priya.mcp.md               pasted into the coordinator composer"; API: "submit-goal";
     ...                        MCP: "the tool the persona would reach for"). Additive, thin.
+  generate-core.mjs            LLM PROMPT ASSEMBLER — packages constraints (target JTBD/domain,
+                               exclusion list of existing archetypes) so an LLM proposes a NEW
+                               persona core in the personas/*.md shape. Does not call an LLM itself.
+  generate-adapter.mjs         LLM PROMPT ASSEMBLER — given a persona core + a target surface,
+                               assembles a prompt for an LLM to propose that surface's adapter.
   index.mjs                    Resolves persona core + optional surface adapter for a harness
 ```
 
@@ -129,13 +179,24 @@ scripts/persona-briefs/
 - The **surface adapter** is thin and additive: it only says how that persona's
   intent expresses itself on that surface (a UI action vs an API call vs an MCP tool
   invocation). A persona with no adapter for a surface simply isn't run there.
-- **Migration:** the existing `scripts/persona-harness/briefs/*.md` and the repo's
-  `specs/personas/*.md` are the seed content. They are lifted into
-  `scripts/persona-briefs/personas/` (core) once, with the API-specific phrasing
-  peeled into `surfaces/*.api.md`. This is a coordinated extraction handed to the
-  API-track owner / coordinator (not an out-of-band edit to Tank's in-flight files),
-  the same way the judge extraction below is handled. Until it lands, the UI harness
-  reads the existing briefs read-only and layers its UI adapter locally.
+- **Personas are LLM-generatable on demand, not only hand-authored.**
+  `scripts/persona-briefs/` is a **generator-and-store**, not just a store. Following
+  the same architect-not-caller pattern as the API harness's `generate-brief.mjs`
+  (assemble a prompt, never call a model, no keys/network), `generate-core.mjs`
+  packages a target JTBD/domain + an exclusion list of already-run archetypes so an
+  LLM proposes a **new** persona core in the canonical `personas/*.md` shape, and
+  `generate-adapter.mjs` does the same for a per-surface adapter. This is what makes
+  stage 1 of the self-improvement loop model-driven: the harness can invent new
+  operator personas (new JTBD variations) rather than replaying jordan/maya/priya.
+- **Migration is a SEED, not a ceiling.** The existing
+  `scripts/persona-harness/briefs/*.md` and the repo's `specs/personas/*.md` are
+  lifted **once** into `scripts/persona-briefs/personas/` (core) with the
+  API-specific phrasing peeled into `surfaces/*.api.md` — a coordinated extraction
+  handed to the API-track owner / coordinator (not an out-of-band edit to Tank's
+  in-flight files). But the store is **not limited to migrated cores**: new cores are
+  expected to arrive LLM-generated via `generate-core.mjs`, so the hand-authored set
+  is the starting point, not the full population. Until the extraction lands, the UI
+  harness reads the existing briefs read-only and layers its UI adapter locally.
 
 This directly satisfies "personas should be defined once in a surface-agnostic way
 and each harness drives that SAME persona through its own surface."
@@ -155,7 +216,8 @@ scripts/harness-judge/
                                + short per-surface appendices (JUDGE.api.md / JUDGE.ui.md / JUDGE.mcp.md).
   core.mjs                     Assembles the judge prompt from: persona core + authored criteria +
                                run metadata + a normalized EVIDENCE bundle. Emits the canonical
-                               verdict schema `agentweaver.persona-judge-verdict/v1`.
+                               verdict schema `agentweaver.persona-judge-verdict/v1` (P0 + P1 +
+                               REQUIRED frustration dimension).
   meta-aggregate.mjs           Cross-run + CROSS-SURFACE rollup (moved here from the API harness).
   adapters/
     api.mjs                    API transcript  -> normalized evidence (calls, bodies, outcome spec)
@@ -206,7 +268,66 @@ schema, one meta-aggregator.** The `lib/judge.mjs` already in the API harness is
 seed for `core.mjs`; extracting it (with the UI evidence adapter added) is Phase 2 of
 the rollout below.
 
-### 3. How this UI harness consumes the shared layer
+### 3. Verdict schema — P0, P1, AND a required frustration dimension
+
+Judging is not just pass/fail. Per Ahmed's clarification, the canonical verdict
+schema `agentweaver.persona-judge-verdict/v1` gains a **required `frustration`
+dimension** — an emotional/UX assessment the judge renders **from the transcript
+evidence**, alongside the existing P0 (objective mechanics) and P1 (subjective
+quality) blocks. It is shared across all three surfaces so frustration is comparable
+API-vs-UI-vs-MCP in meta-aggregation.
+
+```jsonc
+{
+  "schema": "agentweaver.persona-judge-verdict/v1",
+  "persona": "jordan",
+  "surface": "ui",                       // api | ui | mcp — which harness produced the evidence
+  "p0": { "verdict": "PASS | FAIL", "evidence": "..." },
+  "p1": { "verdict": "PASS | PARTIAL | FAIL", "evidence": "...", "criteriaCoverage": [ ] },
+  "frustration": {                        // REQUIRED — emotional/UX assessment from evidence
+    "level": "none | low | moderate | high | abandoned",   // ordinal; "abandoned" = persona gave up
+    "score": 0,                          // 0-4 mirror of level, for meta-aggregate trend math
+    "signals": [                         // the OBSERVED evidence the level is grounded in (never invented)
+      { "kind": "<signal>", "evidence": "<transcript turn refs / quote>" }
+    ],
+    "rationale": "<one line: why this level, tied to the signals above>"
+  },
+  "pushback": { "count": 0, "requirementMet": true, "each": [ ] },
+  "cannotDetermine": [ ],
+  "findings": [ ]
+}
+```
+
+- **`frustration` is REQUIRED** (never omitted); if the evidence genuinely can't
+  support a read, the judge emits `level: "none"` with an empty `signals` array and
+  says so in `rationale` — it is never guessed.
+- **It is the judge's call from evidence, not a driver heuristic.** The driver does
+  NOT compute a frustration score (that would be exactly the embedded subjective
+  heuristic the driver/judge split forbids). The driver only **captures the raw
+  signals** into the transcript; the judge reads them and assigns the level.
+- **UI-specific frustration signals** the UI evidence adapter surfaces for the judge
+  to weigh (illustrative, not a scoring formula):
+  - **repeated failed click attempts** on the same target (clicked, nothing happened,
+    clicked again),
+  - **dead-end navigation loops** / bouncing between the same two screens,
+  - the persona **giving up / abandoning** a flow before its goal (→ `abandoned`),
+  - **excessive back-and-forth on the same screen** without progress,
+  - **visible confusion in the persona's own `--thought` reasoning trace** ("I can't
+    find where to…", "this isn't what I expected", "why did that not do anything"),
+  - long **unexplained waits** where no affordance appeared,
+  - having to use a workaround because the obvious path was missing/broken.
+- **This is the UI harness's primary output, not a footnote.** Because the UI
+  harness's job is the experience layer, `frustration` (with P1) is what it most
+  cares about; its P0 network/console checks mainly serve to **attribute** a
+  frustration finding to a layer (backend vs pure-UX) when cross-referenced against
+  the API harness's verdict for the same persona/scenario.
+- **Meta-aggregation uses it cross-surface.** `meta-aggregate.mjs` can trend
+  frustration by persona and by surface — e.g. "Jordan is `abandoned` via UI but
+  `low` via API for the same scenario" pinpoints a browser-experience defect with a
+  working backend; a persona frustrated on **every** surface points at a core
+  product/model problem.
+
+### 4. How this UI harness consumes the shared layer
 
 The directory layout below is written to **consume** these shared packages, never
 duplicate them:
@@ -325,13 +446,15 @@ Evidence capture per turn (lib/browser.mjs + lib/evidence.mjs)
    • screenshot (PNG, judge evidence only)
    • console log (errors/warnings)  ← objective P0 signal
    • network log (requests + statuses the page made)
+   • persona --thought reasoning trace  ← frustration signal (judge reads it)
+   • frustration RAW signals (repeated failed clicks, nav loops, abandonment)  ← captured, not scored
    • cross-reference: kubectl logs + App Insights for the run_id/time window
         │
         ▼
 Transcript (transcripts-ui/*.json)  — verbatim, lossless, screenshot paths embedded
         │
         ├── Driver verdict (objective P0 UI facts only) → reporter banner
-        └── Judge prompt (shared lib/judge.mjs, extended) → LLM/human P1 verdict
+        └── Judge (shared harness-judge/core.mjs + ui adapter) → P1 + frustration verdict
                         │
                         ▼
               Cross-run meta-aggregation (shared lib/meta-aggregate.mjs)
@@ -399,9 +522,11 @@ turn the raw UI transcript into the normalized evidence shape by embedding, per 
 - the **DOM snapshot** (keyed elements + roles + visible text — structured, not raw
   HTML dumps),
 - the **console log** and **network log** for that turn,
+- the persona's **`--thought` reasoning trace** and the captured **raw frustration
+  signals** (repeated failed clicks, nav loops, abandonment, dwell without progress),
 - and the **kubectl/App Insights cross-reference** block for the run's time window.
 
-The judge is asked the same two-layer question:
+The judge is asked a three-part question (P0 / P1 / frustration):
 
 - **P0 (objective, already decided by the driver):** did each UI action succeed, did
   required elements appear, were there zero uncaught console errors, did no
@@ -409,9 +534,14 @@ The judge is asked the same two-layer question:
 - **P1 (subjective, the judge's job):** compared to the persona's authored "Success
   looks like" criteria, was the UI actually clear/usable/correct — e.g. for #319,
   looking at the screenshot, can a user tell Human Review from Tool Approval at a
-  glance? The judge quotes visible text and references the screenshot, and emits the
-  same machine-readable `agentweaver.persona-judge-verdict/v1` block so
-  `meta-aggregate.mjs` rolls UI and API verdicts together.
+  glance? The judge quotes visible text and references the screenshot.
+- **Frustration (required, the judge's job):** from the evidence — the `--thought`
+  trace, the raw signals, the screenshots — how frustrating was the experience
+  (`none`→`abandoned`)? The judge assigns the level, grounds it in observed signals,
+  and never invents it (see §3 of the shared layer). The judge emits the single
+  machine-readable `agentweaver.persona-judge-verdict/v1` block (P0 + P1 +
+  `frustration`) so `meta-aggregate.mjs` rolls UI, API, and MCP verdicts together —
+  including cross-surface frustration trends.
 
 > **Why not a separate visual mechanism?** We deliberately reuse the LLM-judge
 > pattern rather than inventing a pixel/visual-diff judge, because (a) modern judging
