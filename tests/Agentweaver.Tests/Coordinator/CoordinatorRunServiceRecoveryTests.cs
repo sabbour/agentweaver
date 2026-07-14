@@ -292,8 +292,181 @@ public sealed class CoordinatorRunServiceRecoveryTests : IAsyncDisposable
     }
 
     // =========================================================================
+    // #240: cross-pod / restart recovery must ADOPT already-completed children,
+    // not re-run them. A mid-flight subtask whose child run reached a durable
+    // SUCCESS terminal (assemble_ready / completed / merged) but whose subtask
+    // row never advanced (the dispatch loop died in the ApplyChildResult window)
+    // must be LEFT in place (dispatched/running + ChildRunId intact) so the
+    // recovery-aware re-arm resolves and adopts it. Only genuinely-incomplete
+    // children (still in progress, or terminal in a FAILURE state) are reset.
+    // =========================================================================
+    [Fact]
+    public async Task ResetInFlightSubtasks_AdoptsCompletedChildren_ResetsOnlyIncompleteOnes()
+    {
+        var coord = RunId.New().ToString();
+        await SeedCoordinatorRunAsync(coord);
+
+        // Children in every relevant terminal / non-terminal state.
+        var assembleReady = await SeedChildRunAsync(RunStatus.AssembleReady);
+        var completed = await SeedChildRunAsync(RunStatus.Completed);
+        var merged = await SeedChildRunAsync(RunStatus.Merged);
+        var inProgress = await SeedChildRunAsync(RunStatus.InProgress);
+        var failed = await SeedChildRunAsync(RunStatus.Failed);
+
+        var (planId, ids) = await SeedPlanAsync(coord, new[]
+        {
+            (SubtaskStatus.Running, (string?)assembleReady),   // 0 → adopt
+            (SubtaskStatus.Dispatched, (string?)completed),    // 1 → adopt
+            (SubtaskStatus.Running, (string?)merged),          // 2 → adopt
+            (SubtaskStatus.Dispatched, (string?)inProgress),   // 3 → reset (still running)
+            (SubtaskStatus.Running, (string?)failed),          // 4 → reset (failure terminal)
+            (SubtaskStatus.Running, (string?)null),            // 5 → reset (no child)
+            (SubtaskStatus.AssembleReady, (string?)null),      // 6 → untouched (already terminal)
+        });
+
+        var svc = BuildCoordinatorRunService(_runStore, new RunStreamStore());
+        await svc.ResetInFlightSubtasksAsync(planId, CancellationToken.None);
+
+        // Adopted: left in-flight with ChildRunId intact so the re-arm resolves the completed child.
+        var s0 = await GetSubtaskAsync(ids[0]);
+        s0.Status.Should().Be(SubtaskStatus.Running, "an assemble_ready child must be adopted, not re-run");
+        s0.ChildRunId.Should().Be(assembleReady);
+
+        var s1 = await GetSubtaskAsync(ids[1]);
+        s1.Status.Should().Be(SubtaskStatus.Dispatched, "a completed child must be adopted, not re-run");
+        s1.ChildRunId.Should().Be(completed);
+
+        var s2 = await GetSubtaskAsync(ids[2]);
+        s2.Status.Should().Be(SubtaskStatus.Running, "a merged child must be adopted, not re-run");
+        s2.ChildRunId.Should().Be(merged);
+
+        // Reset: genuinely-incomplete work redispatched with a fresh child.
+        var s3 = await GetSubtaskAsync(ids[3]);
+        s3.Status.Should().Be(SubtaskStatus.Pending, "an in-progress child crashed and must redispatch");
+        s3.ChildRunId.Should().BeNull();
+
+        var s4 = await GetSubtaskAsync(ids[4]);
+        s4.Status.Should().Be(SubtaskStatus.Pending, "a failed child must redispatch a fresh attempt");
+        s4.ChildRunId.Should().BeNull();
+
+        var s5 = await GetSubtaskAsync(ids[5]);
+        s5.Status.Should().Be(SubtaskStatus.Pending, "a mid-flight subtask with no child must redispatch");
+        s5.ChildRunId.Should().BeNull();
+
+        // Already-terminal subtask is never touched by the reset.
+        var s6 = await GetSubtaskAsync(ids[6]);
+        s6.Status.Should().Be(SubtaskStatus.AssembleReady, "a terminal subtask keeps its completed status");
+    }
+
+    // =========================================================================
     // Helpers
     // =========================================================================
+
+    private async Task SeedCoordinatorRunAsync(string coordinatorRunId)
+    {
+        await _runStore.InsertAsync(new Run
+        {
+            Id = RunId.Parse(coordinatorRunId),
+            AgentName = "Coordinator",
+            ParentRunId = null,
+            Status = RunStatus.InProgress,
+            RepositoryPath = _checkpointsPath,
+            OriginatingBranch = "main",
+            ModelSource = ModelSource.GitHubCopilot,
+            Task = "coordinate the work",
+            SubmittingUser = "owner",
+            StartedAt = DateTimeOffset.UtcNow,
+            Origin = RunOrigin.Interactive,
+        });
+    }
+
+    private async Task<string> SeedChildRunAsync(RunStatus status)
+    {
+        var id = RunId.New();
+        await _runStore.InsertAsync(new Run
+        {
+            Id = id,
+            RepositoryPath = _checkpointsPath,
+            OriginatingBranch = "main",
+            ModelSource = ModelSource.GitHubCopilot,
+            Task = "child subtask",
+            SubmittingUser = "owner",
+            Status = RunStatus.InProgress,
+            StartedAt = DateTimeOffset.UtcNow,
+            AgentName = "morpheus",
+            ParentRunId = RunId.New().ToString(),
+            SubtaskId = "0",
+        });
+        if (status != RunStatus.InProgress)
+            await _runStore.UpdateStatusAsync(id, status, DateTimeOffset.UtcNow);
+        return id.ToString();
+    }
+
+    private async Task<(int PlanId, List<int> SubtaskIds)> SeedPlanAsync(
+        string coordinatorRunId,
+        (string Status, string? ChildRunId)[] subtasks)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+
+        var spec = new OutcomeSpec
+        {
+            ProjectId = "proj-1",
+            CoordinatorRunId = coordinatorRunId,
+            Goal = "g",
+            DesiredOutcome = "o",
+            Scope = "s",
+            Assumptions = "a",
+            Status = "confirmed",
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow,
+        };
+        db.OutcomeSpecs.Add(spec);
+        await db.SaveChangesAsync();
+
+        var plan = new WorkPlan
+        {
+            OutcomeSpecId = spec.Id,
+            ProjectId = "proj-1",
+            CoordinatorRunId = coordinatorRunId,
+            Status = WorkPlanStatus.Dispatching,
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow,
+        };
+        db.WorkPlans.Add(plan);
+        await db.SaveChangesAsync();
+
+        var ids = new List<int>();
+        foreach (var (status, childRunId) in subtasks)
+        {
+            var subtask = new Subtask
+            {
+                WorkPlanId = plan.Id,
+                Title = "t",
+                Scope = "s",
+                AssignedAgent = "morpheus",
+                SelectedModelId = "gpt",
+                Phase = "execution",
+                IsolationStrategy = "worktree",
+                Status = status,
+                ChildRunId = childRunId,
+                CreatedAt = DateTimeOffset.UtcNow,
+                UpdatedAt = DateTimeOffset.UtcNow,
+            };
+            db.Subtasks.Add(subtask);
+            await db.SaveChangesAsync();
+            ids.Add(subtask.Id);
+        }
+
+        return (plan.Id, ids);
+    }
+
+    private async Task<Subtask> GetSubtaskAsync(int id)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        return await db.Subtasks.AsNoTracking().FirstAsync(s => s.Id == id);
+    }
 
     private CoordinatorRunService BuildCoordinatorRunService(
         IRunStore runStore,
