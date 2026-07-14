@@ -140,6 +140,10 @@ spec:
             # PoC plain-http path; the pod reads the shared RWX token store (UseSharedTokenStore).
             - name: Sandbox__AgentExecutionMode
               value: pod-per-run
+            # Run implementation subtasks from verified pod-local checkouts. This prevents
+            # package-manager writes and native postinstall chmod operations from hitting Azure Files SMB.
+            - name: Sandbox__PodLocalWorkspace__ImplementationEnabled
+              value: "true"
             - name: Sandbox__AgentHost__RequireMtls
               value: "false"
             - name: Auth__GitHub__AllowedOrg

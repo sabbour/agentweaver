@@ -142,6 +142,9 @@ spec:
             # AgentHost pods via warm pool + /configure, not in-process on the Worker pod.
             - name: Sandbox__AgentExecutionMode
               value: pod-per-run
+            # Keep implementation turns on AgentHost execution-scratch rather than the Azure Files worktree.
+            - name: Sandbox__PodLocalWorkspace__ImplementationEnabled
+              value: "true"
             - name: Sandbox__Kubernetes__Namespace
               value: agentweaver
             # Mirror api-deployment.yaml: worker launches Phase-3 Build/Test AgentHost pods and must use the same plain-http healthz scheme.
