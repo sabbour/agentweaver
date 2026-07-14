@@ -139,3 +139,14 @@ The built-in priya-ticket-triage API scenario's deterministic driver (run-person
 - status: open
 
 scripts/api-harness/scenarios/*.mjs (fixed per-persona step sequences) and agent-driver/tools.mjs (curated named subcommands like submit-goal/revise-spec/get-spec) were both retired. Do NOT re-add either pattern. Every persona scenario (Priya, Jordan, ...) is now driven via scripts/api-harness/drive.mjs: init (session/auth), spec (fetch live OpenAPI doc, /openapi/v1.json), call --method/--path/--body/--thought (the one generic action primitive), check-approvals/resolve-approval (kept as named commands ONLY because they encode a safety invariant -- never blind-approve -- not because approvals are curated business logic), finish. This exists because a fixed script structurally cannot issue grounded pushback/objections or poll-then-adapt behavior -- exactly what personas like Priya require, and what caused a P1 FAIL when Ahmed ran the old fixed priya-ticket-triage scenario. run-persona.mjs now ONLY drives generated-artifacts-seam (a deterministic structural generator-conformance check with no persona/pushback dimension -- intentionally still fixed). See decision Morpheus-harness-dropped-fixed-per-scenario-scripts-entirely for full rationale.
+
+---
+
+## Persona driving is now dispatched to a fresh PersonaActor sub-agent, not driven inline by Harness
+
+- date: 2026-07-14
+- category: scenario-design-note
+- surface: api
+- status: open
+
+Harness no longer reasons inline as if it were the persona while driving drive.mjs. It resolves the persona brief + target/token, then dispatches a fresh, isolated PersonaActor sub-agent (.github/agents/persona-actor.agent.md, tools: [execute]) via task (mode: sync) with the persona brief/adapter text, target/token, session path, and OpenAPI spec injected into the per-invocation prompt -- mirroring how judge.agent.md bakes in shared methodology while evidence comes from the prompt. PersonaActor decides one action at a time from the persona brief + the REAL previous API response (never pre-writing both sides of the exchange), calls it for real via drive.mjs, grounds every pushback in real response content, stops at its brief's gate, then finishes and returns the transcript to Harness for judging. drive.mjs itself is unchanged -- this is purely about WHO calls it. Known caveat: unlike Judge (tools: [], structurally isolated), PersonaActor holds a real execute tool -- its isolation from the rest of the repo is a documented prompt restriction, not a structural sandbox. Do not re-fold persona driving back into Harness reasoning inline, and do not assume PersonaActor's isolation is tool-enforced the way Judge's is.

@@ -12,12 +12,16 @@ newer. It resolves an access token from `--token`, then `AGENTWEAVER_TOKEN`, the
 ## Driving a persona scenario (the only way — dynamic, no fixed scripts)
 
 There is no curated list of named scenario subcommands and no per-persona fixed
-step sequence. A driving LLM (Harness itself, or a sub-agent it dispatches) is
-handed ONLY a persona brief — `scripts/persona-briefs/personas/<id>.md` +
-`scripts/persona-briefs/surfaces/<id>.api.md` — and decides every next action live
-by issuing raw method/path/body calls against the real API, guided by the API's
-OpenAPI/Swagger document. This is what lets the driver push back, poll events, and
-adapt — a fixed script structurally cannot.
+step sequence. Harness dispatches a fresh **`PersonaActor`** sub-agent
+(`.github/agents/persona-actor.agent.md`) to fully impersonate the persona in an
+isolated context — handed ONLY that persona's brief — `scripts/persona-briefs/
+personas/<id>.md` + `scripts/persona-briefs/surfaces/<id>.api.md` — and it decides
+every next action live by issuing raw method/path/body calls against the real API
+(one turn at a time, reacting only to the real response it gets back), guided by
+the API's OpenAPI/Swagger document. This is what lets the actor push back, poll
+events, and adapt — a fixed script structurally cannot. The commands below are
+what PersonaActor drives internally; run them directly yourself only when
+manually exercising/debugging the driver outside of a Harness-dispatched run.
 
 ```powershell
 $session = "scripts/api-harness/priya-live.session.json"
