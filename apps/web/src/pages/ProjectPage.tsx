@@ -57,6 +57,34 @@ function coordinatorStatusLabel(status: string | undefined): string | undefined 
   return status;
 }
 
+// Terminal labels coordinatorStatusLabel can legitimately produce. If a run is terminal
+// at the run-status level but coordinator_status never advanced to one of these (e.g. it
+// was cancelled/abandoned mid-'dispatching'), the badge must fall back to the run-level
+// status instead of showing a stale in-flight label (#304).
+const TERMINAL_COORD_LABELS = new Set(['Complete', 'Failed', 'Blocked', 'Declined']);
+const RUN_TERMINAL_STATUSES = new Set(['completed', 'merged', 'failed', 'merge_failed', 'declined']);
+
+function runStatusFallbackLabel(run: WorkflowRunDto): string {
+  const result = run.result?.toLowerCase() ?? '';
+  if (result.includes('abandon')) return 'Cancelled';
+  const status = run.status?.toLowerCase() ?? '';
+  if (status === 'declined') return 'Declined';
+  if (status === 'merge_failed') return 'Merge failed';
+  if (status === 'merged' || status === 'completed') return 'Complete';
+  if (status === 'failed') return 'Failed';
+  return run.status ?? 'Unknown';
+}
+
+// Resolves the label to display for a run's status badge, correcting for a stale
+// coordinator_status when the run has already terminated (#304).
+function resolveRunStatusLabel(run: WorkflowRunDto): string | undefined {
+  const coordLabel = coordinatorStatusLabel(run.coordinator_status);
+  if (RUN_TERMINAL_STATUSES.has(run.status?.toLowerCase() ?? '') && (!coordLabel || !TERMINAL_COORD_LABELS.has(coordLabel))) {
+    return runStatusFallbackLabel(run);
+  }
+  return coordLabel;
+}
+
 const useStyles = makeStyles({
   root: {
     display: 'flex',
@@ -227,7 +255,7 @@ function RunRow({ run, projectId, onDeleted }: { run: WorkflowRunDto; projectId:
   const isTerminal = ['completed', 'merged', 'failed', 'merge_failed', 'declined'].includes(run.status);
   const isAbandonable = !isTerminal;
   const isCoord = isCoordinatorRun(run);
-  const coordLabel = isCoord ? coordinatorStatusLabel(run.coordinator_status) : undefined;
+  const coordLabel = isCoord ? resolveRunStatusLabel(run) : undefined;
   const coordReason = run.coordinator_status_reason;
 
   const handleConfirmed = async () => {
@@ -250,7 +278,7 @@ function RunRow({ run, projectId, onDeleted }: { run: WorkflowRunDto; projectId:
           <div className={styles.runStatusStack}>
             <Badge appearance="tint" size="small" color={
               coordLabel === 'Complete' ? 'success' :
-              coordLabel === 'Failed' || coordLabel === 'Blocked' || coordLabel === 'Declined' ? 'danger' :
+              coordLabel === 'Failed' || coordLabel === 'Blocked' || coordLabel === 'Declined' || coordLabel === 'Merge failed' ? 'danger' :
               coordLabel === 'In review' ? 'warning' :
               'subtle'
             }>

@@ -51,10 +51,38 @@ function coordinatorStatusLabel(status: string | undefined): string | undefined 
   return status;
 }
 
+// Terminal labels coordinatorStatusLabel can legitimately produce. If a run is terminal
+// at the run-status level but coordinator_status never advanced to one of these (e.g. it
+// was cancelled/abandoned mid-'dispatching'), the badge must fall back to the run-level
+// status instead of showing a stale in-flight label (#304).
+const TERMINAL_COORD_LABELS = new Set(['Complete', 'Failed', 'Blocked', 'Declined']);
+
+function runStatusFallbackLabel(run: WorkflowRunDto): string {
+  const result = run.result?.toLowerCase() ?? '';
+  if (result.includes('abandon')) return 'Cancelled';
+  const status = run.status?.toLowerCase() ?? '';
+  if (status === 'declined') return 'Declined';
+  if (status === 'merge_failed') return 'Merge failed';
+  if (status === 'merged' || status === 'completed') return 'Complete';
+  if (status === 'failed') return 'Failed';
+  return run.status ?? 'Unknown';
+}
+
+// Resolves the label to display for a run's status badge, correcting for a stale
+// coordinator_status when the run has already terminated (#304).
+function resolveRunStatusLabel(run: WorkflowRunDto): string | undefined {
+  const coordLabel = coordinatorStatusLabel(run.coordinator_status);
+  if (isRunTerminal(run.status) && (!coordLabel || !TERMINAL_COORD_LABELS.has(coordLabel))) {
+    return runStatusFallbackLabel(run);
+  }
+  return coordLabel;
+}
+
 function badgeColor(label: string | undefined): 'success' | 'danger' | 'warning' | 'subtle' {
   if (label === 'Complete') return 'success';
-  if (label === 'Failed' || label === 'Blocked' || label === 'Declined') return 'danger';
+  if (label === 'Failed' || label === 'Blocked' || label === 'Declined' || label === 'Merge failed') return 'danger';
   if (label === 'In review') return 'warning';
+  if (label === 'Cancelled') return 'subtle';
   return 'subtle';
 }
 
@@ -441,7 +469,7 @@ export function OrchestrationsPage() {
               <div className={styles.list}>
                 {section.items.map((run) => {
                   const runId = run.workflow_run_id ?? run.execution_id;
-                  const coordLabel = coordinatorStatusLabel(run.coordinator_status);
+                  const coordLabel = resolveRunStatusLabel(run);
                   const terminal = isRunTerminal(run.status);
                   const busy = busyId === runId;
                   return (
