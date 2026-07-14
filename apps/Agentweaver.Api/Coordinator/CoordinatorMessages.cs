@@ -4,6 +4,10 @@ namespace Agentweaver.Api.Coordinator;
 /// Workflow entry input for a coordinator run. Carries the human's goal plus the context the
 /// drafting executor needs to produce an outcome spec. <see cref="ReviseFeedback"/> is null on
 /// the first draft and set when the human requested changes, so the executor re-drafts.
+/// <see cref="PriorDraft"/> carries the already-reviewed previous draft forward on a revision so the
+/// drafter can treat its established requirements as locked invariants (preserved verbatim or
+/// stronger) and change only what the feedback targets, instead of silently regressing unrelated
+/// constraints when it re-drafts (issue #315). It is null on the first draft.
 /// </summary>
 public sealed record CoordinatorDraftInput(
     string RunId,
@@ -14,7 +18,8 @@ public sealed record CoordinatorDraftInput(
     string? ModelId,
     string? WorkflowOverrideId = null,
     string? ReviseFeedback = null,
-    string? OutcomeSpecGenerationModel = null);
+    string? OutcomeSpecGenerationModel = null,
+    OutcomeSpecDraft? PriorDraft = null);
 
 /// <summary>
 /// Data surfaced to the external caller (the confirm/revise endpoints) through the

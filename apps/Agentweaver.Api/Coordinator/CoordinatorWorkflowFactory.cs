@@ -311,6 +311,17 @@ public sealed class CoordinatorWorkflowFactory
     private async Task<CoordinatorOutcomeSpecRequest> DraftAndPersistAsync(
         CoordinatorDraftInput input, CancellationToken ct)
     {
+        // On a revision, carry the already-reviewed previous draft forward so the drafter preserves
+        // its established requirements as invariants instead of silently regressing unrelated
+        // constraints while re-drafting to address the feedback (issue #315). Read it BEFORE
+        // MarkDraftingAsync so the prior spec text is captured cleanly.
+        if (!string.IsNullOrWhiteSpace(input.ReviseFeedback) && input.PriorDraft is null)
+        {
+            var priorDraft = await LoadPriorDraftAsync(input.RunId, ct).ConfigureAwait(false);
+            if (priorDraft is not null)
+                input = input with { PriorDraft = priorDraft };
+        }
+
         await MarkDraftingAsync(input, ct).ConfigureAwait(false);
 
         var memoryContext = await CompileMemoryContextAsync(input.ProjectId, ct).ConfigureAwait(false);
@@ -338,6 +349,32 @@ public sealed class CoordinatorWorkflowFactory
         return new CoordinatorOutcomeSpecRequest(
             input.RunId, specId, input.Goal,
             draft.DesiredOutcome, draft.Scope, draft.Assumptions, draft.ClarifyingQuestions, status);
+    }
+
+    /// <summary>
+    /// Loads the current persisted outcome spec for a run and projects it into an
+    /// <see cref="OutcomeSpecDraft"/> to seed a revision's invariant-preservation context (issue
+    /// #315). Returns <c>null</c> when there is no spec yet or the prior draft has no established
+    /// content (empty desired-outcome AND scope), so the first draft path is unaffected.
+    /// </summary>
+    private async Task<OutcomeSpecDraft?> LoadPriorDraftAsync(string runId, CancellationToken ct)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+
+        var spec = await db.OutcomeSpecs
+            .FirstOrDefaultAsync(s => s.CoordinatorRunId == runId, ct)
+            .ConfigureAwait(false);
+
+        if (spec is null
+            || (string.IsNullOrWhiteSpace(spec.DesiredOutcome) && string.IsNullOrWhiteSpace(spec.Scope)))
+            return null;
+
+        return new OutcomeSpecDraft(
+            spec.DesiredOutcome ?? string.Empty,
+            spec.Scope ?? string.Empty,
+            spec.Assumptions ?? string.Empty,
+            spec.ClarifyingQuestions);
     }
 
     private async Task MarkDraftingAsync(CoordinatorDraftInput input, CancellationToken ct)

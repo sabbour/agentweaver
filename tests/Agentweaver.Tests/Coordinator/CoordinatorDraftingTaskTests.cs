@@ -111,6 +111,89 @@ public sealed class CoordinatorDraftingTaskTests : IDisposable
         endFenceIndex.Should().BeGreaterThan(fenceIndex);
     }
 
+    // =====================================================================
+    // Revision-feedback block (#315): a revision must carry the already-reviewed prior draft
+    // forward as a locked invariant so unrelated, already-established requirements are preserved
+    // (verbatim or stronger) instead of being silently regressed when the model re-drafts to
+    // address feedback that never mentioned them.
+    // =====================================================================
+    private const string EstablishedSpecHeader = "ESTABLISHED OUTCOME SPEC";
+    private const string EstablishedSpecOpenFence = "<<<ESTABLISHED_SPEC>>>";
+    private const string EstablishedSpecCloseFence = "<<<END_ESTABLISHED_SPEC>>>";
+    private const string ReviseFeedbackOpenFence = "<<<USER_REVISE_FEEDBACK>>>";
+    private const string LockedInvariantClause = "LOCKED INVARIANT";
+
+    [Fact]
+    public void BuildRevisionFeedbackBlock_ReturnsEmpty_OnFirstDraft_WhenNoFeedback()
+    {
+        CopilotCoordinatorSpecDrafter.BuildRevisionFeedbackBlock(priorDraft: null, feedback: null)
+            .Should().BeEmpty();
+        CopilotCoordinatorSpecDrafter.BuildRevisionFeedbackBlock(priorDraft: null, feedback: string.Empty)
+            .Should().BeEmpty();
+    }
+
+    [Fact]
+    public void BuildRevisionFeedbackBlock_FencesFeedback_ButOmitsEstablishedBlock_WhenNoPriorDraft()
+    {
+        var block = CopilotCoordinatorSpecDrafter.BuildRevisionFeedbackBlock(
+            priorDraft: null, feedback: "Tighten the smoke-test proof");
+
+        block.Should().Contain(ReviseFeedbackOpenFence);
+        block.Should().Contain("Tighten the smoke-test proof");
+        block.Should().NotContain(EstablishedSpecHeader);
+        block.Should().NotContain(EstablishedSpecOpenFence);
+    }
+
+    [Fact]
+    public void BuildRevisionFeedbackBlock_CarriesPriorDraftForward_AsLockedInvariant()
+    {
+        var prior = new OutcomeSpecDraft(
+            DesiredOutcome: "Live smoke test passes against the deployed app.",
+            Scope: "build and publish the image to an Azure-accessible registry; deploy to AKS Automatic",
+            Assumptions: "The project targets AKS Automatic.",
+            ClarifyingQuestions: null);
+
+        var block = CopilotCoordinatorSpecDrafter.BuildRevisionFeedbackBlock(
+            prior, feedback: "The smoke-test proof is too vague; require a concrete verification command");
+
+        // The prior draft's established constraints are carried forward verbatim...
+        block.Should().Contain(EstablishedSpecHeader);
+        block.Should().Contain(LockedInvariantClause);
+        block.Should().Contain("build and publish the image to an Azure-accessible registry");
+        block.Should().Contain("Live smoke test passes against the deployed app.");
+        block.Should().Contain("The project targets AKS Automatic.");
+        // ...and the untrusted feedback is still fenced.
+        block.Should().Contain(ReviseFeedbackOpenFence);
+        block.Should().Contain("require a concrete verification command");
+    }
+
+    [Fact]
+    public void BuildRevisionFeedbackBlock_PlacesEstablishedSpec_OutsideAndBeforeUntrustedFeedbackFence()
+    {
+        var prior = new OutcomeSpecDraft(
+            DesiredOutcome: "desired-X",
+            Scope: "scope-Y publish to an Azure-accessible registry",
+            Assumptions: "assume-Z",
+            ClarifyingQuestions: null);
+
+        var block = CopilotCoordinatorSpecDrafter.BuildRevisionFeedbackBlock(prior, feedback: "only-change-this");
+
+        var establishedOpen = block.IndexOf(EstablishedSpecOpenFence, StringComparison.Ordinal);
+        var establishedClose = block.IndexOf(EstablishedSpecCloseFence, StringComparison.Ordinal);
+        var feedbackOpen = block.IndexOf(ReviseFeedbackOpenFence, StringComparison.Ordinal);
+
+        establishedOpen.Should().BeGreaterThanOrEqualTo(0);
+        establishedClose.Should().BeGreaterThan(establishedOpen);
+        feedbackOpen.Should().BeGreaterThan(establishedClose,
+            "the trusted established-spec block must be fully closed before the untrusted feedback fence opens");
+
+        // The established (trusted) scope text must NOT sit inside the untrusted feedback fences.
+        var scopeIndex = block.IndexOf("publish to an Azure-accessible registry", StringComparison.Ordinal);
+        scopeIndex.Should().BeGreaterThanOrEqualTo(0);
+        scopeIndex.Should().BeLessThan(feedbackOpen,
+            "established constraints are trusted drafter-authored context and must live outside the untrusted feedback fence");
+    }
+
     [Fact]
     public void FormatCapabilities_UsesTerseRoleLineFormat_AndIsEmptyForNoMembers()
     {
