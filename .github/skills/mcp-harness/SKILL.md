@@ -1,6 +1,6 @@
 ---
 name: mcp-harness
-description: Run Agentweaver's MCP protocol smoke harness for end-to-end MCP tool-surface validation, contract-regression checks, or investigation of MCP-reported issues. Use this whenever a user asks to test an MCP tool flow or validate the Agentweaver MCP integration; use the real harness CLI rather than recreating MCP calls manually.
+description: Run Agentweaver's MCP protocol harness for tool-surface validation, repro reruns, or plain-English scenario exploration. Use for MCP flows/issues; use combined harness for cross-surface sweeps.
 domain: testing
 confidence: high
 source: scripts/mcp-harness/SKILL.md

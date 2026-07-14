@@ -1,6 +1,6 @@
 ---
 name: "ui-harness"
-description: "Run Agentweaver's persona-driven Playwright UI evidence harness for deployed browser-flow validation. Use whenever asked to run or validate the real web UI end-to-end, test a named persona's browser flow, capture UI evidence, or investigate a UI-reported issue; do not use for unit-only UI tests or a cross-surface full harness sweep."
+description: "Run Agentweaver's deployed-UI harness for browser evidence, repros, or plain-English scenarios. For Agentweaver UI only, not generic Playwright automation; use combined harness for full sweeps."
 domain: "testing"
 confidence: "high"
 source: "scripts/ui-harness/SKILL.md"

@@ -1,6 +1,6 @@
 ---
 name: api-harness
-description: Run Agentweaver's persona-driven REST API harness for backend end-to-end validation, reproducible verification reruns, or investigation of an API persona/scenario failure. Use this whenever asked to run, validate, retest, reproduce, or investigate the API/backend harness—even when the request only mentions a persona, a scenario, a repro manifest, or a backend workflow. Capture and report the generated JSON verdict or exploratory transcript rather than recreating API calls by hand.
+description: Run Agentweaver's REST API harness for backend validation, repro reruns, or plain-English scenario exploration. Use for API/persona failures; use combined harness for cross-surface sweeps.
 domain: testing
 confidence: high
 source: scripts/api-harness/SKILL.md

@@ -1,6 +1,6 @@
 ---
 name: agentweaver-harness
-description: Run Agentweaver's complete cross-surface persona harness sweep (API, UI, and MCP), collect independently produced verdicts, and create a single batch/scenario rollup. Use for a full persona validation, cross-surface regression pass, or self-improvement pass; use the individual harness skills for one-surface diagnosis.
+description: Run Agentweaver's complete cross-surface persona harness (API, UI, MCP) for full validation, regression, or exploratory passes. Collect one rollup; use single-surface skills for focused diagnosis.
 domain: testing
 confidence: high
 source: scripts/combined-harness/launch.mjs
