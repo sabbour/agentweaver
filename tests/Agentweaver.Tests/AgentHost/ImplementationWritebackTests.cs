@@ -121,12 +121,14 @@ public sealed class ImplementationWritebackTests : IDisposable
     {
         var fixture = CreateFixture();
         var local = CreateLocalManager();
+        var agentScratch = local.PrepareAgentScratchDirectory(fixture.RunId.ToString());
         var prepared = await local.PrepareAsync(
             fixture.LocalSpec,
             CancellationToken.None);
         File.WriteAllText(
             Path.Combine(prepared.WorkspacePath, "deliverable.txt"),
             "published from pod-local execution");
+        File.WriteAllText(Path.Combine(agentScratch, "session-note.txt"), "not a deliverable");
 
         var writeback = await local.PrepareWritebackAsync();
 
@@ -146,6 +148,7 @@ public sealed class ImplementationWritebackTests : IDisposable
 
         File.ReadAllText(Path.Combine(fixture.Worktree.WorktreePath, "deliverable.txt"))
             .Should().Be("published from pod-local execution");
+        File.Exists(Path.Combine(fixture.Worktree.WorktreePath, "session-note.txt")).Should().BeFalse();
         Git(fixture.Repository, "rev-parse", fixture.Worktree.BranchName)
             .Should().Be(writeback.ResultCommitSha);
         Git(fixture.Repository, "show", "-s", "--format=%s", writeback.ResultCommitSha)

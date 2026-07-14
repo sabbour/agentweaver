@@ -488,7 +488,7 @@ public sealed class AppInsightsMetricsService
         var result = await QueryAsync(workspaceId, query, timeFrom, timeTo, ct).ConfigureAwait(false);
         if (result is null) return [];
 
-        return result.Table.Rows
+        return AggregateRunAgentBreakdown(result.Table.Rows
             .Select(row =>
             {
                 var agentName = row[0]?.ToString();
@@ -510,8 +510,14 @@ public sealed class AppInsightsMetricsService
                     TotalTokens = 0,
                     TotalNanoAiu = Convert.ToInt64(row[3] ?? 0),
                 };
-            })
-            .GroupBy(entry => entry.AgentName, StringComparer.Ordinal)
+            }));
+    }
+
+    internal static IReadOnlyList<AgentUsageBreakdownDto> AggregateRunAgentBreakdown(
+        IEnumerable<AgentUsageBreakdownDto> entries)
+    {
+        return entries
+            .GroupBy(entry => entry.AgentName, StringComparer.OrdinalIgnoreCase)
             .Select(group => new AgentUsageBreakdownDto
             {
                 AgentName = group.Key,

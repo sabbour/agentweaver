@@ -70,9 +70,9 @@ public sealed class DurableToolApprovalGate(
 
         if (scope != ApprovalScope.Once)
         {
-            var policy = scope == ApprovalScope.Tool
-                ? PolicyKey(context.ToolName, null)
-                : PolicyKey(context.ToolName, context.Url);
+            // Approval policies apply to the tool rather than one URL, because web_fetch
+            // normally uses a different path or query string for each request.
+            var policy = PolicyKey(context.ToolName, null);
             var targetRunId = scope == ApprovalScope.Always ? GlobalRunId : runId;
             _state.Append(targetRunId, PolicyGranted, new PolicyGrant(policy));
 

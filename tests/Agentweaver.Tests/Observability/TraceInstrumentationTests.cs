@@ -16,6 +16,32 @@ namespace Agentweaver.Tests.Observability;
 public sealed class TraceInstrumentationTests
 {
     [Fact]
+    public void AggregateRunAgentBreakdown_MergesAgentNamesIgnoringCase()
+    {
+        var breakdown = AppInsightsMetricsService.AggregateRunAgentBreakdown([
+            new AgentUsageBreakdownDto
+            {
+                AgentName = "coordinator",
+                InvocationCount = 2,
+                TotalTokens = 0,
+                TotalNanoAiu = 120,
+            },
+            new AgentUsageBreakdownDto
+            {
+                AgentName = "Coordinator",
+                InvocationCount = 3,
+                TotalTokens = 0,
+                TotalNanoAiu = 180,
+            },
+        ]);
+
+        breakdown.Should().ContainSingle();
+        breakdown[0].AgentName.Should().Be("coordinator");
+        breakdown[0].InvocationCount.Should().Be(5);
+        breakdown[0].TotalNanoAiu.Should().Be(300);
+    }
+
+    [Fact]
     public void ConfigureToolSpanTags_StampsGenAiToolAttributes()
     {
         using var activity = new Activity("execute_tool mock_search");

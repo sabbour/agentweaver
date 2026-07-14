@@ -62,7 +62,7 @@ public sealed class ToolApprovalGateTests
     }
 
     [Fact]
-    public async Task Run_Scope_DifferentUrl_IsNotAutoApproved()
+    public async Task Run_Scope_DifferentUrl_IsAutoApproved()
     {
         var gate = CreateGate();
         const string runId = "run-3";
@@ -71,14 +71,14 @@ public sealed class ToolApprovalGateTests
         await gate.GrantAsync(runId, "req-1", ApprovalScope.Run);
         (await firstTask).Should().BeTrue();
 
-        // A different URL is not covered by the run-scoped policy.
-        gate.IsAutoApproved(runId, "web_fetch", "https://other.com").Should().BeFalse();
+        // Run scope applies to this tool for the run, regardless of URL.
+        gate.IsAutoApproved(runId, "web_fetch", "https://other.com").Should().BeTrue();
     }
 
     // ── Always scope ────────────────────────────────────────────────────────────
 
     [Fact]
-    public async Task Always_Scope_SecondRequest_DifferentRun_IsAutoApproved()
+    public async Task Always_Scope_DifferentUrlAndRun_IsAutoApproved()
     {
         var gate = CreateGate();
         const string url = "https://example.com";
@@ -88,8 +88,8 @@ public sealed class ToolApprovalGateTests
         await gate.GrantAsync("run-A", "req-1", ApprovalScope.Always);
         (await firstTask).Should().BeTrue();
 
-        // A completely different run should see the always-allowed policy.
-        gate.IsAutoApproved("run-B", "web_fetch", url).Should().BeTrue();
+        // A completely different run and URL should see the tool-wide policy.
+        gate.IsAutoApproved("run-B", "web_fetch", "https://other.com?next=1").Should().BeTrue();
     }
 
     [Fact]
@@ -115,7 +115,7 @@ public sealed class ToolApprovalGateTests
         const string url = "https://example.com";
 
         // Run-scoped policy on run-A.
-        var runTask = Register(gate, "run-A", "req-run", url: url);
+        var runTask = Register(gate, "run-A", "req-run", toolName: "shell", url: url);
         await gate.GrantAsync("run-A", "req-run", ApprovalScope.Run);
         (await runTask).Should().BeTrue();
 
@@ -125,18 +125,18 @@ public sealed class ToolApprovalGateTests
         (await alwaysTask).Should().BeTrue();
 
         // Sanity: both are active before Clear.
-        gate.IsAutoApproved("run-A", "web_fetch", url).Should().BeTrue();
-        gate.IsAutoApproved("run-A", "web_fetch", "https://always.com").Should().BeTrue();
+        gate.IsAutoApproved("run-A", "shell", url).Should().BeTrue();
+        gate.IsAutoApproved("run-A", "web_fetch", "https://always.com/another-path").Should().BeTrue();
 
         // Clear the run.
         gate.Clear("run-A");
 
         // Run-scoped entry gone.
-        gate.IsAutoApproved("run-A", "web_fetch", url).Should().BeFalse();
+        gate.IsAutoApproved("run-A", "shell", url).Should().BeFalse();
 
         // Always-allowed entry survives.
-        gate.IsAutoApproved("run-A", "web_fetch", "https://always.com").Should().BeTrue();
-        gate.IsAutoApproved("run-B", "web_fetch", "https://always.com").Should().BeTrue();
+        gate.IsAutoApproved("run-A", "web_fetch", "https://always.com/another-path").Should().BeTrue();
+        gate.IsAutoApproved("run-B", "web_fetch", "https://always.com/another-path").Should().BeTrue();
     }
 
     [Fact]
@@ -187,15 +187,13 @@ public sealed class ToolApprovalGateTests
         gate.RegisterParentRun(childA, parent);
         gate.RegisterParentRun(childB, parent);
 
-        // Run scope is URL-specific: grant for example.com in child A.
+        // Run scope applies to this tool across URLs: grant in child A.
         var runTask = Register(gate, childA, "req-run", toolName: "web_fetch", url: "https://example.com");
         await gate.GrantAsync(childA, "req-run", ApprovalScope.Run);
         (await runTask).Should().BeTrue();
 
-        // Run-scoped grant does NOT propagate to a sibling for a DIFFERENT URL.
-        gate.IsAutoApproved(childB, "web_fetch", "https://other.com").Should().BeFalse();
-        // It does cover the sibling for the SAME URL (stored under the parent).
-        gate.IsAutoApproved(childB, "web_fetch", "https://example.com").Should().BeTrue();
+        // The propagated run-scoped grant covers the tool for every URL.
+        gate.IsAutoApproved(childB, "web_fetch", "https://other.com").Should().BeTrue();
 
         // Tool scope is URL-agnostic: grant for a different tool in child A.
         var toolTask = Register(gate, childA, "req-tool", toolName: "shell", url: "https://anything.com");

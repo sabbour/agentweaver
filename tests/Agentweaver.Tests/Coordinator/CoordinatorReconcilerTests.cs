@@ -455,9 +455,70 @@ public sealed class CoordinatorReconcilerTests : IAsyncDisposable
         _assembly.Started.Should().ContainSingle().Which.CoordinatorRunId.Should().Be(coord);
     }
 
-    // -----------------------------------------------------------------------
-    // Harness
-    // -----------------------------------------------------------------------
+    /// <summary>
+    /// FitTrackE2E-v11 wedge (run 41eb1aa4): a RETRYABLE collective Build/Test infrastructure failure
+    /// (<c>build_test_infra_shell_execution_timeout</c>) parks the plan at <c>assembly_blocked</c>
+    /// (ParkBuildTestInfrastructureFailureAsync only uses AssemblyBlocked for retryable infra failures).
+    /// After a steering re-dispatch wave every subtask is <c>assemble_ready</c> again, so the reconciler
+    /// MUST re-arm assembly. Before the fix the recovery guard used a hardcoded per-reason allowlist that
+    /// omitted <c>shell_execution_timeout</c>, so the run sat at <c>assembly_blocked</c> forever and never
+    /// advanced to RAI/merge/preview. The fix recognizes any <c>build_test_infra_*</c> reason as a
+    /// bounded-retry candidate (re-arm still capped at MaxAssemblyReArmAttempts).
+    /// </summary>
+    [Fact]
+    public async Task Sweep_AssemblyBlockedRetryableBuildTestInfra_ShellExecutionTimeout_ReArmsAssembly()
+    {
+        var coord = RunId.New().ToString();
+        await SeedCoordinatorRunAsync(coord);
+        // All subtasks green (the redirect-driven re-dispatch wave already made them assemble_ready).
+        var (planId, _) = await SeedPlanAsync(coord, new[] { (SubtaskStatus.AssembleReady, (string?)null) });
+        await SetPlanStatusAsync(
+            planId,
+            WorkPlanStatus.AssemblyBlocked,
+            assemblyStatusReason: "build_test_infra_shell_execution_timeout");
+
+        var reconciler = new CoordinatorReconciler(
+            _scopeFactory, _runStore, _streamStore, new RecordingDispatch(),
+            NullLogger<CoordinatorReconciler>.Instance, configuration: null, assembly: _assembly);
+
+        (await reconciler.SweepAsync(default)).Should().Be(1,
+            "a retryable build_test_infra_* assembly_blocked with all subtasks eligible must re-arm, not wedge");
+        _assembly.Started.Should().ContainSingle().Which.CoordinatorRunId.Should().Be(coord);
+    }
+
+    /// <summary>
+    /// Bound proof for the widened retryable-infra recovery: even a retryable Build/Test infra block
+    /// re-arms only up to <see cref="CoordinatorReconciler.MaxAssemblyReArmAttempts"/> before the run is
+    /// failed — so a persistently failing build/test can never loop forever.
+    /// </summary>
+    [Fact]
+    public async Task Sweep_AssemblyBlockedRetryableBuildTestInfra_ReArmsUpToCap_ThenFailsRun()
+    {
+        var coord = RunId.New().ToString();
+        await SeedCoordinatorRunAsync(coord);
+        var (planId, _) = await SeedPlanAsync(coord, new[] { (SubtaskStatus.AssembleReady, (string?)null) });
+        await SetPlanStatusAsync(
+            planId,
+            WorkPlanStatus.AssemblyBlocked,
+            assemblyStatusReason: "build_test_infra_shell_execution_timeout");
+
+        var reconciler = new CoordinatorReconciler(
+            _scopeFactory, _runStore, _streamStore, new RecordingDispatch(),
+            NullLogger<CoordinatorReconciler>.Instance, configuration: null, assembly: _assembly);
+
+        for (var i = 0; i < CoordinatorReconciler.MaxAssemblyReArmAttempts; i++)
+            (await reconciler.SweepAsync(default)).Should().Be(1);
+
+        _assembly.Started.Should().HaveCount(CoordinatorReconciler.MaxAssemblyReArmAttempts,
+            "a retryable build/test infra block is re-armed up to the cap");
+        _assembly.Failed.Should().BeEmpty("the run is not failed until the cap is exceeded");
+
+        // The next sweep exceeds the cap → terminal fail, no further re-arm.
+        (await reconciler.SweepAsync(default)).Should().Be(1);
+        _assembly.Started.Should().HaveCount(CoordinatorReconciler.MaxAssemblyReArmAttempts,
+            "no re-arm happens once the cap is exceeded");
+        _assembly.Failed.Should().ContainSingle("an exhausted retryable build/test block terminalizes rather than looping");
+    }
 
     private CoordinatorDispatchService BuildDispatch(double stallTimeoutMinutes = 15)
     {

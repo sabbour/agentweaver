@@ -31,6 +31,7 @@ internal sealed class PodLocalWorkspaceManager
     private readonly AgentHostOptions _options;
     private readonly ILogger<PodLocalWorkspaceManager> _logger;
     private PreparedWorkspace? _preparedWorkspace;
+    private string? _agentScratchPath;
 
     public PodLocalWorkspaceManager(
         IOptions<AgentHostOptions> options,
@@ -159,6 +160,34 @@ internal sealed class PodLocalWorkspaceManager
             TryDeleteDirectory(runRoot);
             throw;
         }
+    }
+
+    /// <summary>
+    /// Creates an empty run-scoped directory for non-deliverable agent working files.
+    /// It is outside every worktree and is removed with the AgentHost lifecycle.
+    /// </summary>
+    public string PrepareAgentScratchDirectory(string runId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(runId);
+        if (_agentScratchPath is not null)
+        {
+            throw new AgentHostConfigurationException(
+                "agent_scratch_already_prepared",
+                "A run-scoped agent scratch directory has already been prepared for this AgentHost.");
+        }
+
+        var scratchRoot = Path.GetFullPath(_options.ExecutionScratchRoot);
+        var scratchPath = PodLocalExecutionWorkspace.GetAgentScratchPath(scratchRoot, runId);
+        Directory.CreateDirectory(scratchPath);
+        if (Directory.EnumerateFileSystemEntries(scratchPath).Any())
+        {
+            throw new AgentHostConfigurationException(
+                "agent_scratch_not_empty",
+                "The run-scoped agent scratch directory was not empty.");
+        }
+
+        _agentScratchPath = scratchPath;
+        return scratchPath;
     }
 
     /// <summary>
@@ -339,12 +368,17 @@ internal sealed class PodLocalWorkspaceManager
         ct.ThrowIfCancellationRequested();
         var workspace = _preparedWorkspace;
         _preparedWorkspace = null;
-        if (workspace is null)
-            return Task.CompletedTask;
+        if (workspace is not null)
+        {
+            var runRoot = Directory.GetParent(workspace.WorkspacePath)?.FullName;
+            if (!string.IsNullOrWhiteSpace(runRoot))
+                TryDeleteDirectory(runRoot);
+        }
 
-        var runRoot = Directory.GetParent(workspace.WorkspacePath)?.FullName;
-        if (!string.IsNullOrWhiteSpace(runRoot))
-            TryDeleteDirectory(runRoot);
+        var agentScratchPath = _agentScratchPath;
+        _agentScratchPath = null;
+        if (!string.IsNullOrWhiteSpace(agentScratchPath))
+            TryDeleteDirectory(agentScratchPath);
         return Task.CompletedTask;
     }
 

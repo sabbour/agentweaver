@@ -164,6 +164,30 @@ public sealed class PodLocalWorkspaceManagerTests : IDisposable
     }
 
     [Fact]
+    public async Task Agent_scratch_is_outside_the_worktree_and_removed_during_cleanup()
+    {
+        var repository = CreateRepository();
+        var commitSha = Git(repository, "rev-parse", "integration");
+        var treeHash = Git(repository, "rev-parse", "integration^{tree}");
+        var manager = Manager();
+        var agentScratch = manager.PrepareAgentScratchDirectory("run-with-agent-scratch");
+        var prepared = await manager.PrepareAsync(
+            Spec(repository, commitSha, treeHash),
+            CancellationToken.None);
+
+        agentScratch.StartsWith(
+            prepared.WorkspacePath + Path.DirectorySeparatorChar,
+            OperatingSystem.IsWindows()
+                ? StringComparison.OrdinalIgnoreCase
+                : StringComparison.Ordinal).Should().BeFalse();
+        File.WriteAllText(Path.Combine(agentScratch, "session-note.txt"), "not a deliverable");
+
+        await manager.CleanupAsync();
+
+        Directory.Exists(agentScratch).Should().BeFalse();
+    }
+
+    [Fact]
     public async Task PrepareAsync_rejects_tree_mismatch_with_typed_reason()
     {
         var repository = CreateRepository();

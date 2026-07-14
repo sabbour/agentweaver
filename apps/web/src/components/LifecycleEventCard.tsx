@@ -868,14 +868,19 @@ function ToolApprovalCard({ styles, requestId, displayId, toolName, url, intenti
           >
             Allow once
           </Button>
-          <Button
-            appearance="outline"
-            size="small"
-            disabled={busy || !runId}
-            onClick={() => void handleAllow('run')}
+          <Tooltip
+            content="Allows all calls to this tool (any URL) for the rest of this run."
+            relationship="description"
           >
-            Allow this run
-          </Button>
+            <Button
+              appearance="outline"
+              size="small"
+              disabled={busy || !runId}
+              onClick={() => void handleAllow('run')}
+            >
+              Allow this run
+            </Button>
+          </Tooltip>
           <Tooltip
             content="Allows all calls to this tool (any URL) for the rest of this run."
             relationship="description"
@@ -890,7 +895,7 @@ function ToolApprovalCard({ styles, requestId, displayId, toolName, url, intenti
             </Button>
           </Tooltip>
           <Tooltip
-            content="Allows this tool+URL for all future requests this session. Resets when the server restarts."
+            content="Allows all calls to this tool (any URL) for this session. Resets when the server restarts."
             relationship="description"
           >
             <Button

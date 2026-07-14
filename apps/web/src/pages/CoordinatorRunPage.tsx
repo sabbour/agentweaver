@@ -206,8 +206,61 @@ function routeGridEdges(edges: Edge[], nodes: Node[]): Edge[] {
     // vertical-dominant → top/bottom handles.
     const dx = targetCenter.x - sourceCenter.x;
     const dy = targetCenter.y - sourceCenter.y;
+
+    // A spine edge that skips over a rank (e.g. an upper sibling → a shared fan-in target two rows
+    // below) is normally drawn as a straight bottom→top (or right→left) segment. When another,
+    // UNRELATED node happens to sit in that straight corridor — as when same-rank siblings are
+    // stacked in one column above their common downstream target — the segment is drawn directly
+    // through that intermediate card, making a real edge look like a dependency on the occluded
+    // node (see GH: misleading Skyler→RAI edge drawn through Hank). Detect that occlusion and route
+    // the edge out to a perpendicular side handle so React Flow bows it AROUND the stack instead of
+    // through it. Non-occluded edges (the overwhelming majority) keep their original handles.
+    const corridorObstacles = (axis: 'vertical' | 'horizontal') => {
+      const result: Array<{ cx: number; cy: number }> = [];
+      for (const peer of nodes) {
+        if (peer.id === edge.source || peer.id === edge.target) continue;
+        const size = graphNodeSize(peer);
+        const x0 = peer.position.x;
+        const x1 = peer.position.x + size.width;
+        const y0 = peer.position.y;
+        const y1 = peer.position.y + size.height;
+        if (axis === 'vertical') {
+          const loY = Math.min(sourceCenter.y, targetCenter.y);
+          const hiY = Math.max(sourceCenter.y, targetCenter.y);
+          const corridorX = (sourceCenter.x + targetCenter.x) / 2;
+          const peerCy = (y0 + y1) / 2;
+          if (corridorX >= x0 && corridorX <= x1 && peerCy > loY && peerCy < hiY) {
+            result.push({ cx: (x0 + x1) / 2, cy: peerCy });
+          }
+        } else {
+          const loX = Math.min(sourceCenter.x, targetCenter.x);
+          const hiX = Math.max(sourceCenter.x, targetCenter.x);
+          const corridorY = (sourceCenter.y + targetCenter.y) / 2;
+          const peerCx = (x0 + x1) / 2;
+          if (corridorY >= y0 && corridorY <= y1 && peerCx > loX && peerCx < hiX) {
+            result.push({ cx: peerCx, cy: (y0 + y1) / 2 });
+          }
+        }
+      }
+      return result;
+    };
+
     if (Math.abs(dx) >= Math.abs(dy)) {
       const forward = dx >= 0;
+      // Horizontal-dominant edge blocked by a node in the horizontal corridor → bow vertically.
+      const blockers = corridorObstacles('horizontal');
+      if (blockers.length > 0) {
+        const corridorY = (sourceCenter.y + targetCenter.y) / 2;
+        const above = blockers.filter((b) => b.cy < corridorY).length;
+        const below = blockers.length - above;
+        const side = below <= above ? 'bottom' : 'top';
+        return {
+          ...edge,
+          sourceHandle: `source-${side}`,
+          targetHandle: `target-${side}`,
+          data: { ...(edge.data ?? {}), flowDirection: 'horizontal', reroutedAround: side },
+        };
+      }
       return {
         ...edge,
         sourceHandle: forward ? 'source-right' : 'source-left',
@@ -216,6 +269,20 @@ function routeGridEdges(edges: Edge[], nodes: Node[]): Edge[] {
       };
     }
     const down = dy >= 0;
+    // Vertical-dominant edge blocked by a node in the vertical corridor → bow horizontally.
+    const blockers = corridorObstacles('vertical');
+    if (blockers.length > 0) {
+      const corridorX = (sourceCenter.x + targetCenter.x) / 2;
+      const left = blockers.filter((b) => b.cx < corridorX).length;
+      const right = blockers.length - left;
+      const side = right <= left ? 'right' : 'left';
+      return {
+        ...edge,
+        sourceHandle: `source-${side}`,
+        targetHandle: `target-${side}`,
+        data: { ...(edge.data ?? {}), flowDirection: 'vertical', reroutedAround: side },
+      };
+    }
     return {
       ...edge,
       sourceHandle: down ? 'source-bottom' : 'source-top',
@@ -2131,6 +2198,7 @@ export function CoordinatorRunPage() {
   const [retryError, setRetryError] = useState<string | null>(null);
   const [stopping, setStopping] = useState(false);
   const [stopError, setStopError] = useState<string | null>(null);
+  const [stopConfirmationOpen, setStopConfirmationOpen] = useState(false);
   // Per-run option toggles (autopilot + auto-approve-tools). Seeded once from the run detail,
   // then driven by user toggles (optimistic). Both cascade to the coordinator's children.
   const [autopilot, setAutopilot] = useState(false);
@@ -4140,7 +4208,7 @@ export function CoordinatorRunPage() {
                   size="small"
                   icon={stopping ? <Spinner size="extra-tiny" /> : <DismissRegular />}
                   disabled={!viewState.canStop || stopping}
-                  onClick={() => void handleStopRun()}
+                  onClick={() => setStopConfirmationOpen(true)}
                   data-testid="coordinator-stop-button"
                   aria-label={stopAriaLabel}
                   title={stopHint}
@@ -4486,6 +4554,31 @@ export function CoordinatorRunPage() {
                   <Button appearance="secondary" onClick={() => setPreviewDialogOpen(false)}>Close</Button>
                 </>
               )}
+            </DialogActions>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
+      <Dialog open={stopConfirmationOpen} onOpenChange={(_, d) => setStopConfirmationOpen(d.open)}>
+        <DialogSurface>
+          <DialogBody>
+            <DialogTitle>Stop this run?</DialogTitle>
+            <DialogContent>
+              Are you sure you want to stop this run?
+            </DialogContent>
+            <DialogActions>
+              <Button appearance="secondary" onClick={() => setStopConfirmationOpen(false)} disabled={stopping}>
+                Cancel
+              </Button>
+              <Button
+                appearance="primary"
+                onClick={() => {
+                  setStopConfirmationOpen(false);
+                  void handleStopRun();
+                }}
+                disabled={stopping}
+              >
+                Stop run
+              </Button>
             </DialogActions>
           </DialogBody>
         </DialogSurface>

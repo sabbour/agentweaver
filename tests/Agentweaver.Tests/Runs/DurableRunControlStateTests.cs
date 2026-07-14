@@ -52,7 +52,7 @@ public sealed class DurableRunControlStateTests : IDisposable
         await WaitUntilAsync(() => secondary.GrantAsync("run-2", "req-1", ApprovalScope.Run));
 
         (await wait).Should().BeTrue();
-        secondary.IsAutoApproved("run-2", "web_fetch", "https://example.test").Should().BeTrue();
+        secondary.IsAutoApproved("run-2", "web_fetch", "https://example.test/another-path").Should().BeTrue();
     }
 
     [Fact]
@@ -110,7 +110,7 @@ public sealed class DurableRunControlStateTests : IDisposable
 
         (await wait).Should().BeTrue();
         secondary.Clear("run-5");
-        owner.IsAutoApproved("another-run", "web_fetch", "https://example.test").Should().BeTrue();
+        owner.IsAutoApproved("another-run", "web_fetch", "https://example.test/another-path").Should().BeTrue();
     }
 
     [Fact]

@@ -146,6 +146,8 @@ internal sealed class AgentHostStartupService : IHostedService
     {
         var opts = _options;
         var runId = configuration.RunId;
+        var agentScratchDirectory = _workspaceManager.PrepareAgentScratchDirectory(runId);
+        Environment.SetEnvironmentVariable("AGENTWEAVER_SCRATCH_DIR", agentScratchDirectory);
         var workingDirectoryOverride = configuration.SharedWorkingDirectory;
 
         // Warm pods carry a static AgentHost__WorkingDirectory env (the /workspace mount root). The
@@ -185,8 +187,8 @@ internal sealed class AgentHostStartupService : IHostedService
             configuration.Purpose);
 
         _logger.LogInformation(
-            "AgentHostStartupService: calling SetupAsync for run {RunId}, workingDir={WorkingDir} (override={HasOverride}), manifestAttached={ManifestAttached}",
-            runId, workingDirectory, !string.IsNullOrWhiteSpace(workingDirectoryOverride), SandboxManifestJson is not null);
+            "AgentHostStartupService: calling SetupAsync for run {RunId}, workingDir={WorkingDir}, agentScratchDir={AgentScratchDir} (override={HasOverride}), manifestAttached={ManifestAttached}",
+            runId, workingDirectory, agentScratchDirectory, !string.IsNullOrWhiteSpace(workingDirectoryOverride), SandboxManifestJson is not null);
 
         await _agent.SetupAsync(
             workingDirectory: workingDirectory,
@@ -254,6 +256,9 @@ internal sealed class AgentHostStartupService : IHostedService
         return sections.Count == 0 ? null : string.Join("\n\n", sections);
     }
 
-    public Task StopAsync(CancellationToken cancellationToken) =>
-        _workspaceManager.CleanupAsync(cancellationToken);
+    public async Task StopAsync(CancellationToken cancellationToken)
+    {
+        await _workspaceManager.CleanupAsync(cancellationToken).ConfigureAwait(false);
+        Environment.SetEnvironmentVariable("AGENTWEAVER_SCRATCH_DIR", null);
+    }
 }

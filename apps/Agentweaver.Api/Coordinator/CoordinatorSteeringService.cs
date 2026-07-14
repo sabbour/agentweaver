@@ -88,6 +88,14 @@ public static class SteeringStatus
 
     public const string Applied = "applied";
 
+    /// <summary>#227: a redirect/amend that reached the assembly human-review gate but found the gate
+    /// had already moved past the pending decision — the concurrent-decision RACE-LOSER (the winner
+    /// already drove <c>RouteAssemblyGateThroughSteeringAsync</c>) or the razor-thin ARM WINDOW between
+    /// <c>run.Status = AwaitingReview</c> and the review request being armed. The directive is redundant,
+    /// so it settles here as a TERMINAL no-op instead of falling through to <c>queued</c> (the #227 ghost
+    /// row that nothing drains). Distinct from <c>applied</c> (which did drive an effect).</summary>
+    public const string Superseded = "superseded";
+
     /// <summary>UNIFIED STEERING (rev8 §6, execution loop-bound) — a Decision-A directive whose bounded
     /// EXECUTION retries were exhausted (e.g. the resumed revision never wrote a checkpoint) is parked
     /// here (a visible terminal for the directive) instead of being re-driven forever. The plan is
@@ -867,11 +875,44 @@ public sealed class CoordinatorSteeringService
                 return null;
 
             default:
-                // NotPending / AlreadySubmitted: the run says AwaitingReview but no review is actually
-                // awaiting a decision (already consumed, or not fully at the gate). Fall through to the
-                // normal resume/queue fork.
-                return null;
+                // #227 ROOT CAUSE FIX. NotPending / AlreadySubmitted: the run still says AwaitingReview
+                // but the gate has already moved PAST the pending decision — the concurrent-decision
+                // RACE-LOSER (a winner already delivered request_changes and drove RouteAssemblyGate...),
+                // or the razor-thin ARM WINDOW between setting run.Status = AwaitingReview and arming the
+                // review request. Previously this returned null and fell through to QueueNextBoundaryAsync,
+                // which persisted a `queued` directive that NOTHING drains (the assembly loop polls the
+                // review gate, not the steering queue) — the #227 ghost row. The winner already carries the
+                // human's intent (request_changes), so this loser is redundant: settle it as the TERMINAL
+                // `superseded` no-op rather than leaving it queued-into-void. B3 still holds — we never run
+                // RouteAssembly from this HTTP thread; we only mark our own directive terminal.
+                return await SettleSupersededAtReviewGateAsync(
+                    coordinatorRunId, directiveId, kind, targetChildRunId, instruction,
+                    createdBy, createdAt, delivery, ct).ConfigureAwait(false);
         }
+    }
+
+    /// <summary>
+    /// #227: settle a redirect/amend that reached the assembly review gate but lost the delivery race (or
+    /// landed in the arm window) as a TERMINAL <c>superseded</c> no-op. The winning decision already carries
+    /// the human's request-changes intent and drives the single RouteAssembly pass, so this directive is
+    /// redundant. Emitting a terminal marker (never <c>queued</c>) closes the "never leave a directive
+    /// queued-into-void" invariant for every path. Does not wake the gate, reset any subtask, or touch budget.
+    /// </summary>
+    private async Task<SteeringDirectiveView> SettleSupersededAtReviewGateAsync(
+        string coordinatorRunId, int directiveId, string kind, string? targetChildRunId, string instruction,
+        string createdBy, DateTimeOffset createdAt, AssemblyReviewDeliveryResult delivery, CancellationToken ct)
+    {
+        var settledAt = DateTimeOffset.UtcNow;
+        await UpdateDirectiveAsync(directiveId, SteeringStatus.Superseded, settledAt, ct).ConfigureAwait(false);
+        await EmitSteeringAsync(
+            coordinatorRunId, directiveId, kind, targetChildRunId, SteeringStatus.Superseded, instruction, ct)
+            .ConfigureAwait(false);
+        _logger.LogInformation(
+            "Steering {Kind} (directive {DirectiveId}) reached the assembly review gate for coordinator {RunId} but the gate had already moved past pending ({Delivery}); settled terminal as superseded (no-op, #227) instead of queuing a ghost row",
+            kind, directiveId, coordinatorRunId, delivery);
+        return new SteeringDirectiveView(
+            directiveId, coordinatorRunId, targetChildRunId, kind, instruction,
+            SteeringStatus.Superseded, createdBy, createdAt, settledAt);
     }
 
     /// <summary>
@@ -1133,52 +1174,70 @@ public sealed class CoordinatorSteeringService
             .ToListAsync(ct).ConfigureAwait(false);
 
         // Distinct behavior per verb:
-        //   redirect: override — resets rai_flagged + failed subtasks so the coordinator re-dispatches
-        //     with the new instruction. Falls back to assembly-ready and then all subtasks for pure
-        //     assembly-conflict recovery.
+        //   redirect: SURGICAL override (#309) — re-dispatches ONLY the genuinely-incomplete subtasks
+        //     (failed / rai_flagged / blocked). Subtasks already assemble_ready/completed are PRESERVED
+        //     and never re-run. When EVERY subtask already succeeded the park is an assembly-PHASE
+        //     issue: a build/test-infra failure re-arms ASSEMBLY against the existing children (no
+        //     re-dispatch), while an integration conflict regenerates the conflicting assemble_ready
+        //     children — never a full-workplan restart (the pre-#309 bug).
         //   amend: additive — only unblocks hard RAI gates (rai_flagged) without discarding failed
         //     work. If there are no RAI-blocked subtasks to unblock, falls through to queue so the
         //     instruction is applied at the next natural boundary (no completed work is discarded).
-        List<Subtask> affected;
+        var now = DateTimeOffset.UtcNow;
+        var resetIds = new List<int>();
+        var reArmAssemblyOnly = false;
+
         if (kind == SteeringKind.Amend)
         {
-            affected = subtasks.Where(s => s.Status == SubtaskStatus.RaiFlagged).ToList();
-            if (affected.Count == 0)
+            var flagged = subtasks.Where(s => s.Status == SubtaskStatus.RaiFlagged).ToList();
+            if (flagged.Count == 0)
                 return null; // amend never discards completed/failed work; fall through to queue
+            ResetSubtasksForRedispatch(flagged, instruction, now, resetIds);
         }
         else // redirect (and any future override verbs)
         {
-            affected = subtasks
-                .Where(s => s.Status is SubtaskStatus.RaiFlagged or SubtaskStatus.Failed)
+            // SURGICAL re-dispatch (#309). A redirect on a parked coordinator re-runs ONLY the subtasks
+            // that reached a terminal-but-UNSATISFIED state (failed / rai_flagged / blocked). Subtasks
+            // that succeeded (assemble_ready / completed) are PRESERVED — never a full-workplan restart.
+            var terminalUnsatisfied = subtasks
+                .Where(s => SubtaskStatus.IsTerminal(s.Status) && !SubtaskStatus.Satisfies(s.Status))
                 .ToList();
-            if (affected.Count == 0)
-                affected = subtasks.Where(s => s.Status == SubtaskStatus.AssembleReady).ToList();
-            if (affected.Count == 0)
-                affected = subtasks;
+            var allSatisfied = subtasks.All(s => SubtaskStatus.Satisfies(s.Status));
+
+            if (terminalUnsatisfied.Count > 0)
+            {
+                // Scoped retry: reset only the failed/flagged/blocked children (e.g. Skyler+Hank),
+                // leaving already-successful ones (Walt+Jesse) untouched.
+                ResetSubtasksForRedispatch(terminalUnsatisfied, instruction, now, resetIds);
+            }
+            else if (allSatisfied && AssemblyPlanning.IsRetryableBuildTestInfraReason(plan.AssemblyStatusReason))
+            {
+                // Every subtask already succeeded and the park was an assembly-PHASE infrastructure
+                // failure (build/test-infra timeout, etc.) — the children are fine. Retry ASSEMBLY
+                // against them; re-running any subtask would only discard completed work (#309 — the
+                // FitTrack wedge where a redirect re-ran all 4 green subtasks then never advanced).
+                reArmAssemblyOnly = true;
+            }
+            else if (allSatisfied)
+            {
+                // All children assemble_ready but their OUTPUTS conflicted during collective assembly
+                // (integration conflict). Re-arming assembly alone re-hits the same conflict, so the
+                // conflicting subtasks must regenerate against the latest integration branch. Only
+                // assemble_ready children are reset; a completed no-change subtask is left intact.
+                var ready = subtasks.Where(s => s.Status == SubtaskStatus.AssembleReady).ToList();
+                if (ready.Count > 0)
+                    ResetSubtasksForRedispatch(ready, instruction, now, resetIds);
+                else
+                    reArmAssemblyOnly = true; // every child completed no-change — nothing to regenerate
+            }
+            // else: only pending / in-flight children remain (no terminal failure) — reset nothing and
+            // just re-arm dispatch below so the loop picks up the existing frontier.
         }
 
-        var eligible = affected.Where(s => s.RecoveryAttempts < MaxRecoveryAttempts).ToList();
-        if (eligible.Count == 0)
-            throw new SteeringRecoveryExhaustedException(
-                $"Recovery attempt cap ({MaxRecoveryAttempts}) reached for every affected subtask " +
-                $"[{string.Join(", ", affected.Select(s => s.Id))}]; the coordinator stays parked. " +
-                "Use run retry to re-run the whole coordinator.");
-
-        var now = DateTimeOffset.UtcNow;
-        var resetIds = new List<int>();
-        foreach (var subtask in eligible)
-        {
-            subtask.RecoveryGuidance = BuildRecoveryGuidance(subtask.Status, instruction, subtask.RecoveryAttempts + 1);
-            subtask.Status = SubtaskStatus.Pending;
-            subtask.RecoveryAttempts += 1;
-            subtask.ChildRunId = null;
-            subtask.UpdatedAt = now;
-            resetIds.Add(subtask.Id);
-        }
-
-        // Move the plan back to dispatching (mirrors request-changes) so the synchronous state is
-        // coherent before the loop spins up.
-        plan.Status = WorkPlanStatus.Dispatching;
+        // Move the plan to the correct phase before the loop spins up (single-writer safe: dispatch is
+        // confirmed not running above). A scoped re-dispatch returns to dispatching; an assembly-only
+        // re-arm goes straight back to awaiting_assembly so StartAssembly's CAS can re-claim it.
+        plan.Status = reArmAssemblyOnly ? WorkPlanStatus.AwaitingAssembly : WorkPlanStatus.Dispatching;
         plan.AssemblyStage = null;
         plan.AssemblyTerminalStage = null;
         plan.AssemblyStatusReason = null;
@@ -1195,7 +1254,7 @@ public sealed class CoordinatorSteeringService
         var entry = _streamStore.Create(coordinatorRunId, run.SubmittingUser);
         entry.RecordNext(EventTypes.CoordinatorRecovered, new
         {
-            reason = "steering_resume",
+            reason = reArmAssemblyOnly ? "steering_resume_assembly" : "steering_resume",
             directiveId,
             resetSubtaskIds = resetIds,
             instruction,
@@ -1206,23 +1265,66 @@ public sealed class CoordinatorSteeringService
         await EmitSteeringAsync(coordinatorRunId, directiveId, kind, targetChildRunId: null, SteeringStatus.Applied, instruction, ct).ConfigureAwait(false);
         _waitRegistry.Signal(coordinatorRunId);
 
-        // Re-arm dispatch (idempotent). The loop re-dispatches the reset frontier; when those children
-        // finish it returns to awaiting_assembly and re-triggers assembly (DB CAS guards exactly-once).
+        // Re-arm the correct engine (idempotent). For a scoped re-dispatch the loop re-runs ONLY the
+        // reset frontier; when those children finish it returns to awaiting_assembly and re-triggers
+        // assembly (DB CAS guards exactly-once). For an assembly-only re-arm (every child already
+        // assemble_ready) we drive assembly directly against the preserved children — completed work
+        // is never re-run, and the plan advances past the block to RAI/review/merge.
         var context = new CoordinatorDispatchContext(
             CoordinatorRunId: coordinatorRunId,
             RepositoryPath: run.RepositoryPath,
             OriginatingBranch: run.OriginatingBranch,
             SubmittingUser: run.SubmittingUser,
             ProjectId: run.ProjectId);
-        dispatch.StartDispatch(context);
+        if (reArmAssemblyOnly)
+        {
+            var assembly = sp.GetRequiredService<ICoordinatorAssembly>();
+            assembly.StartAssembly(context);
+        }
+        else
+        {
+            dispatch.StartDispatch(context);
+        }
 
         _logger.LogInformation(
-            "Steering {Kind} resumed parked coordinator {RunId} (directive {DirectiveId}); reset subtasks [{Ids}] to pending and re-armed dispatch",
-            kind, coordinatorRunId, directiveId, string.Join(",", resetIds));
+            "Steering {Kind} resumed parked coordinator {RunId} (directive {DirectiveId}); {Action}",
+            kind, coordinatorRunId, directiveId,
+            reArmAssemblyOnly
+                ? "preserved all completed subtasks and re-armed assembly"
+                : $"reset subtasks [{string.Join(",", resetIds)}] to pending and re-armed dispatch");
 
         return new SteeringDirectiveView(
             directiveId, coordinatorRunId, TargetChildRunId: null, kind, instruction,
             SteeringStatus.Applied, createdBy, createdAt, RelayedAt: now);
+    }
+
+    /// <summary>
+    /// Resets the given genuinely-incomplete subtasks to <c>pending</c> for a scoped re-dispatch:
+    /// stamps recovery guidance, bumps each subtask's recovery-attempt counter, clears its child-run
+    /// id, and records the reset id. Enforces the per-subtask <see cref="MaxRecoveryAttempts"/> cap —
+    /// throws <see cref="SteeringRecoveryExhaustedException"/> when EVERY affected subtask is already
+    /// over the cap so the coordinator stays parked rather than looping forever. Only subtasks under
+    /// the cap are reset; already-satisfied subtasks are never passed here (caller filters them out).
+    /// </summary>
+    private static void ResetSubtasksForRedispatch(
+        List<Subtask> affected, string instruction, DateTimeOffset now, List<int> resetIds)
+    {
+        var eligible = affected.Where(s => s.RecoveryAttempts < MaxRecoveryAttempts).ToList();
+        if (eligible.Count == 0)
+            throw new SteeringRecoveryExhaustedException(
+                $"Recovery attempt cap ({MaxRecoveryAttempts}) reached for every affected subtask " +
+                $"[{string.Join(", ", affected.Select(s => s.Id))}]; the coordinator stays parked. " +
+                "Use run retry to re-run the whole coordinator.");
+
+        foreach (var subtask in eligible)
+        {
+            subtask.RecoveryGuidance = BuildRecoveryGuidance(subtask.Status, instruction, subtask.RecoveryAttempts + 1);
+            subtask.Status = SubtaskStatus.Pending;
+            subtask.RecoveryAttempts += 1;
+            subtask.ChildRunId = null;
+            subtask.UpdatedAt = now;
+            resetIds.Add(subtask.Id);
+        }
     }
 
     /// <summary>

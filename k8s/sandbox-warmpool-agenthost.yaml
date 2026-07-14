@@ -13,6 +13,11 @@
 # starts cleanly in standby (no RunId) and waits for /configure — no CrashLoop. Pre-warming the
 # .NET runtime + Copilot SDK init shaves cold-start latency off the run-launch critical path.
 # Cluster autoscaling/NAP still handles burst capacity beyond the 2 warm spares.
+#
+# Recreate is deliberate: it makes the controller replace warm pods when the referenced
+# SandboxTemplate changes (including an AgentHost image tag). OnReplenish retains old
+# template pods indefinitely while the desired replica count remains satisfied, allowing
+# a new run to bind a stale-image pod after deploy.
 apiVersion: extensions.agents.x-k8s.io/v1beta1
 kind: SandboxWarmPool
 metadata:
@@ -26,4 +31,4 @@ spec:
     name: agentweaver-agent-host
   replicas: 2
   updateStrategy:
-    type: OnReplenish
+    type: Recreate

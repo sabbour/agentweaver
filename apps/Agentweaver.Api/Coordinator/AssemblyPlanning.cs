@@ -44,6 +44,29 @@ public static class AssemblyPlanning
     public static bool AllEligible(IReadOnlyDictionary<int, string> statusById) =>
         statusById.Values.All(IsEligible);
 
+    /// <summary>
+    /// Marker prefix stamped on the work-plan <c>AssemblyStatusReason</c> for a collective Build/Test
+    /// infrastructure failure (see <c>CoordinatorAssemblyService.ParkBuildTestInfrastructureFailureAsync</c>,
+    /// which writes <c>build_test_infra_{reason}</c>).
+    /// </summary>
+    public const string BuildTestInfraReasonPrefix = "build_test_infra_";
+
+    /// <summary>
+    /// True when an <see cref="SubtaskStatus"/>-blocked plan's reason denotes a RETRYABLE collective
+    /// Build/Test infrastructure failure. By construction a plan is only left in
+    /// <see cref="WorkPlanStatus.AssemblyBlocked"/> with a <see cref="BuildTestInfraReasonPrefix"/> reason
+    /// when the underlying <c>CollectiveBuildTestInfrastructureException.Retryable</c> was <c>true</c> — a
+    /// non-retryable infra failure is terminalized as <see cref="WorkPlanStatus.AssemblyFailed"/> instead.
+    /// So EVERY <c>build_test_infra_*</c> reason observed on an assembly-blocked plan is a bounded-retry
+    /// candidate (re-arm is capped at <c>MaxAssemblyReArmAttempts</c>). This replaces a hardcoded per-reason
+    /// allowlist that silently wedged newer retryable reasons (e.g. <c>shell_execution_timeout</c>,
+    /// <c>build_test_gate_wall_clock_timeout</c>) that were never added to the list — the run then sat at
+    /// <c>assembly_blocked</c> forever even after a steering re-dispatch made every subtask eligible again.
+    /// </summary>
+    public static bool IsRetryableBuildTestInfraReason(string? reason) =>
+        !string.IsNullOrWhiteSpace(reason)
+        && reason.Contains(BuildTestInfraReasonPrefix, StringComparison.Ordinal);
+
     /// <summary>An eligible subtask is one that reached assemble_ready or completed.</summary>
     public static bool IsEligible(string status) =>
         status is SubtaskStatus.AssembleReady or SubtaskStatus.Completed;

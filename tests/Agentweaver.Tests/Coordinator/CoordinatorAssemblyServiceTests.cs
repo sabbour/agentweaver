@@ -1631,6 +1631,58 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
     }
 
     /// <summary>
+    /// #227 (follow-up to #226): the concurrent-decision RACE-LOSER / ARM-WINDOW case. The run still says
+    /// <c>AwaitingReview</c>, but a decision has ALREADY been submitted to the durable review record (the
+    /// winner delivered request-changes and will drive the single RouteAssembly pass), so
+    /// <c>DeliverDecisionAsync</c> returns <c>NotPending</c>/<c>AlreadySubmitted</c>. Before the fix the
+    /// review-gate branch returned <c>null</c> here and the redirect fell through to
+    /// <c>QueueNextBoundaryAsync</c>, persisting a ghost <c>queued</c> directive that nothing drains. The
+    /// fix settles the redundant loser as the TERMINAL <c>superseded</c> no-op: NEVER left <c>queued</c>.
+    /// </summary>
+    [Fact]
+    public async Task Steer_Redirect_AtReviewGate_RaceLoserAfterDecisionSubmitted_SettlesSuperseded_NotQueued()
+    {
+        var coordinatorRunId = RunId.New().ToString();
+        await SeedCoordinatorRunAsync(coordinatorRunId);
+        var (workPlanId, _) = await SeedPlanAsync(
+            coordinatorRunId, new[] { SubtaskStatus.Completed, SubtaskStatus.AssembleReady });
+        _streamStore.Create(coordinatorRunId, "alice");
+
+        // Park the run at the review gate (AwaitingReview + work plan InReview/Review) but WITHOUT arming a
+        // live gate — this is the settled state the arm-window / race-loser observes on this HTTP thread.
+        await _runStore.UpdateStatusAsync(
+            RunId.Parse(coordinatorRunId), RunStatus.AwaitingReview, null, CancellationToken.None);
+        await SetPlanReviewStateAsync(workPlanId);
+        await CoordinatorAssemblyReviewPersistence.UpsertReviewRequestAsync(
+            _scopeFactory, coordinatorRunId, "alice", "agentweaver/integration/recover", "agg-tree",
+            CancellationToken.None);
+        // The RACE WINNER already submitted its decision to the durable record → the loser's redirect
+        // resolves as NotPending/AlreadySubmitted (redundant).
+        await SeedDeferredAssemblyDecisionAsync(coordinatorRunId,
+            new AssemblyReviewDecision(Approved: false, RequestChanges: true, Feedback: "winner already asked for changes",
+                TargetFiles: null, Reviewer: "alice"));
+
+        var steering = NewSteeringWithReviewGate();
+        var view = await steering.SteerAsync(
+            coordinatorRunId, "redirect", null, "Please also fix the signup validation.", "alice");
+
+        view.Kind.Should().Be("redirect");
+        view.Status.Should().Be(SteeringStatus.Superseded,
+            "a redirect that loses the review-gate delivery race is redundant (the winner drives request-changes) " +
+            "and must settle as a terminal no-op, never a queued directive that nothing drains (#227)");
+        view.RelayedAt.Should().NotBeNull("a superseded directive records when it was settled");
+
+        using var scope = _provider.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        (await db.SteeringDirectives.CountAsync(d =>
+                d.CoordinatorRunId == coordinatorRunId && d.Status == SteeringStatus.Queued))
+            .Should().Be(0, "#227: the race-loser / arm-window redirect must NOT persist a ghost queued directive");
+        (await db.SteeringDirectives.CountAsync(d =>
+                d.CoordinatorRunId == coordinatorRunId && d.Status == SteeringStatus.Superseded))
+            .Should().Be(1, "the race-loser directive reaches the terminal superseded state exactly once");
+    }
+
+    /// <summary>
     /// Builds a <see cref="CoordinatorSteeringService"/> wired WITH the shared <see cref="_reviewGate"/>
     /// so the #226 AwaitingReview interception is active (the class-level <c>_steering</c> is intentionally
     /// constructed without it to preserve the pre-#226 unit-test behavior).

@@ -180,6 +180,20 @@ describe('CoordinatorRunPage — unified coordinator graph view', () => {
     expect((screen.getByRole('button', { name: /Stop run/i }) as HTMLButtonElement).disabled).toBe(true);
   });
 
+  it('requires confirmation before stopping an active run', async () => {
+    render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    const stopButton = await screen.findByRole('button', { name: 'Stop run' }, { timeout: 4000 });
+    fireEvent.click(stopButton);
+
+    const dialog = await screen.findByRole('dialog');
+    expect(dialog.textContent).toContain('Are you sure you want to stop this run?');
+    expect(apiClient.steerCoordinator).not.toHaveBeenCalled();
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Stop run' }));
+    await waitFor(() => expect(apiClient.steerCoordinator).toHaveBeenCalledWith('coord-run-1', { kind: 'stop' }));
+  });
+
   it('surfaces stream errors and dropped events in a health banner', async () => {
     mockRunStreamState.current = {
       events: [],

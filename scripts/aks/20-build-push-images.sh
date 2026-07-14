@@ -14,6 +14,9 @@
 # Usage:
 #   source scripts/aks/00-variables.sh
 #   bash scripts/aks/20-build-push-images.sh
+#
+# Optional:
+#   DRY_RUN=true PREVIOUS_IMAGE_TAG=vX.Y.Z bash scripts/aks/20-build-push-images.sh
 
 set -euo pipefail
 
@@ -60,6 +63,7 @@ source "${SCRIPT_DIR}/00-variables.sh"
 trap cleanup_frontend_build_artifacts EXIT
 
 TARGET_GIT_REF="${TARGET_GIT_REF:-${IMAGE_TAG}}"
+DRY_RUN="${DRY_RUN:-false}"
 
 echo ""
 echo "=== Building, retagging, and pushing Agentweaver images ==="
@@ -72,6 +76,7 @@ echo "    - If PREVIOUS_IMAGE_TAG or a current cluster image tag is available, u
 echo "      images are retagged with 'az acr import' instead of rebuilt."
 echo "    - Changed images are built in parallel with 'az acr build'."
 echo "    - Set FORCE_REBUILD=true to rebuild every image."
+echo "    - Set DRY_RUN=true to print the build/retag plan without invoking ACR or npm."
 echo ""
 
 cd "${REPO_ROOT}"
@@ -95,21 +100,45 @@ current_agenthost_tag() {
   fi
 }
 
-can_diff_refs() {
-  local old_ref="$1"
-  local new_ref="$2"
-  git rev-parse --verify "${old_ref}^{commit}" >/dev/null 2>&1 &&
-    git rev-parse --verify "${new_ref}^{commit}" >/dev/null 2>&1
+# Resolves a release image tag to the commit which wrote that version to VERSION.
+# Releases before v0.9.36 were tagged, but later deploys deliberately only updated VERSION.
+# Looking up the version-bump commit preserves safe selective builds for both histories.
+release_ref_for_tag() {
+  local tag="$1"
+  local version="${tag#v}"
+  local commit
+
+  if git rev-parse --verify "${tag}^{commit}" >/dev/null 2>&1; then
+    git rev-parse --verify "${tag}^{commit}"
+    return 0
+  fi
+
+  while IFS= read -r commit; do
+    if [[ "$(git show "${commit}:VERSION" 2>/dev/null | tr -d '[:space:]')" == "${version}" ]]; then
+      printf '%s\n' "${commit}"
+      return 0
+    fi
+  done < <(git log --format=%H --all -- VERSION)
+
+  return 1
 }
 
 paths_changed() {
   local old_ref="$1"
   local new_ref="$2"
   shift 2
-  if ! can_diff_refs "${old_ref}" "${new_ref}"; then
+  if [[ -z "${old_ref}" || -z "${new_ref}" ]]; then
     return 0
   fi
   ! git diff --quiet "${old_ref}" "${new_ref}" -- "$@"
+}
+
+TARGET_COMMIT="$(git rev-parse --verify "${TARGET_GIT_REF}^{commit}" 2>/dev/null || \
+  release_ref_for_tag "${IMAGE_TAG}" 2>/dev/null || git rev-parse HEAD)"
+
+source_commit_for_tag() {
+  local tag="$1"
+  release_ref_for_tag "${tag}" 2>/dev/null || true
 }
 
 frontend_npm_password_b64() {
@@ -199,6 +228,11 @@ run_frontend_npm_credential_provider() {
 }
 
 prepare_frontend_dist() {
+  if [[ "${DRY_RUN}" == "true" ]]; then
+    echo "  [dry-run] Would build local frontend assets before ACR build"
+    return 0
+  fi
+
   if ! command -v npm >/dev/null 2>&1; then
     echo "ERROR: npm is required to build apps/web before az acr build." >&2
     return 1
@@ -236,6 +270,10 @@ build_image() {
   local dockerfile="$3"
 
   echo "--- Building ${image}:${tag} (${dockerfile}) ---"
+  if [[ "${DRY_RUN}" == "true" ]]; then
+    echo "  [dry-run] Would run az acr build for ${image}:${tag}"
+    return 0
+  fi
   az acr build \
     --registry "${ACR_NAME}" \
     --resource-group "${RESOURCE_GROUP}" \
@@ -257,6 +295,10 @@ retag_image() {
     return 0
   fi
   echo "--- Retagging ${image}:${source_tag} -> ${image}:${target_tag} ---"
+  if [[ "${DRY_RUN}" == "true" ]]; then
+    echo "  [dry-run] Would run az acr import for ${image}:${source_tag} -> ${target_tag}"
+    return 0
+  fi
   az acr import \
     --name "${ACR_NAME}" \
     --resource-group "${RESOURCE_GROUP}" \
@@ -275,12 +317,20 @@ schedule_image() {
   shift 4
   local paths=("$@")
   local source_tag="${PREVIOUS_IMAGE_TAG:-${deployed_tag}}"
+  local source_commit
+  source_commit="$(source_commit_for_tag "${source_tag}")"
 
   if [[ "${FORCE_REBUILD:-false}" == "true" || -z "${source_tag}" ]]; then
+    echo "  [build]  ${image} (forced or no previous image tag)"
     build_image "${image}" "${target_tag}" "${dockerfile}" &
-  elif paths_changed "${source_tag}" "${TARGET_GIT_REF}" "${paths[@]}"; then
+  elif [[ -z "${source_commit}" ]]; then
+    echo "  [build]  ${image} (previous tag ${source_tag} has no resolvable VERSION commit)"
+    build_image "${image}" "${target_tag}" "${dockerfile}" &
+  elif paths_changed "${source_commit}" "${TARGET_COMMIT}" "${paths[@]}"; then
+    echo "  [build]  ${image} (changed since ${source_tag} at ${source_commit:0:12})"
     build_image "${image}" "${target_tag}" "${dockerfile}" &
   else
+    echo "  [retag]  ${image} (unchanged since ${source_tag} at ${source_commit:0:12})"
     retag_image "${image}" "${source_tag}" "${target_tag}" &
   fi
   PIDS+=("$!")
@@ -305,8 +355,10 @@ MCP_DEPLOYED_TAG="$(current_deployment_tag agentweaver-mcp)"
 AGENTHOST_DEPLOYED_TAG="$(current_agenthost_tag)"
 
 FRONTEND_SOURCE_TAG="${PREVIOUS_IMAGE_TAG:-${FRONTEND_DEPLOYED_TAG}}"
+FRONTEND_SOURCE_COMMIT="$(source_commit_for_tag "${FRONTEND_SOURCE_TAG}")"
 if [[ "${FORCE_REBUILD:-false}" == "true" || -z "${FRONTEND_SOURCE_TAG}" ]] || \
-  paths_changed "${FRONTEND_SOURCE_TAG}" "${TARGET_GIT_REF}" "apps/web" "apps/Agentweaver.Web"; then
+  [[ -z "${FRONTEND_SOURCE_COMMIT}" ]] || \
+  paths_changed "${FRONTEND_SOURCE_COMMIT}" "${TARGET_COMMIT}" "apps/web" "apps/Agentweaver.Web"; then
   # All images share the repo root as the ACR build context, so move frontend
   # node_modules out of that context before any parallel az acr build starts.
   prepare_frontend_dist

@@ -42,6 +42,7 @@ public sealed class CoordinatorSteeringRecoveryTests : IAsyncDisposable
     private readonly SqliteRunStore _runStore;
     private readonly RunStreamStore _streamStore = new();
     private readonly RecordingDispatch _dispatch = new();
+    private readonly RecordingAssembly _assembly = new();
     private readonly CoordinatorSteeringService _sut;
 
     public CoordinatorSteeringRecoveryTests()
@@ -56,6 +57,7 @@ public sealed class CoordinatorSteeringRecoveryTests : IAsyncDisposable
         services.AddSingleton(_runStore);
         services.AddSingleton<IRunStore>(_runStore);
         services.AddSingleton<ICoordinatorDispatch>(_dispatch);
+        services.AddSingleton<ICoordinatorAssembly>(_assembly);
         _provider = services.BuildServiceProvider();
 
         using (var scope = _provider.CreateScope())
@@ -135,6 +137,81 @@ public sealed class CoordinatorSteeringRecoveryTests : IAsyncDisposable
         s0.RecoveryGuidance.Should().Contain("conflicted during collective assembly");
 
         _dispatch.StartDispatchCalls.Should().ContainSingle();
+        _assembly.StartAssemblyCalls.Should().BeEmpty("a genuine integration conflict regenerates subtasks, not a bare assembly retry");
+    }
+
+    [Fact]
+    public async Task Redirect_OnBuildTestInfraBlock_AllSubtasksReady_ReArmsAssembly_WithoutReDispatch()
+    {
+        // #309: the FitTrack wedge. A retryable build/test-infra failure (e.g. a shell-execution
+        // timeout during the integration build) parks the plan assembly_blocked with EVERY subtask
+        // already assemble_ready. A redirect here must NOT re-run any subtask (that discards completed
+        // work and, pre-fix, re-ran the entire workplan then never advanced) — it re-arms ASSEMBLY so
+        // the plan retries the build/test phase and progresses to review/merge.
+        var coord = RunId.New().ToString();
+        await SeedTerminalCoordinatorRunAsync(coord, RunStatus.Failed, "assembly_blocked: build_test_infra_shell_execution_timeout");
+        var (planId, ids) = await SeedPlanAsync(coord, WorkPlanStatus.AssemblyBlocked, new[]
+        {
+            SubtaskStatus.AssembleReady,
+            SubtaskStatus.AssembleReady,
+            SubtaskStatus.AssembleReady,
+            SubtaskStatus.AssembleReady,
+        }, assemblyStatusReason: "build_test_infra_shell_execution_timeout");
+        _dispatch.Active = false;
+
+        var view = await _sut.SteerAsync(coord, "redirect", null, "Retry the integration build.", "owner", default);
+
+        view.Status.Should().Be(SteeringStatus.Applied, "a parked coordinator resumes immediately");
+
+        // NOT ONE subtask is re-run — all four stay assemble_ready with a zero recovery counter.
+        foreach (var id in ids)
+        {
+            var s = await GetSubtaskAsync(id);
+            s.Status.Should().Be(SubtaskStatus.AssembleReady, "completed children are preserved, never re-dispatched");
+            s.RecoveryAttempts.Should().Be(0, "no subtask consumed a recovery attempt");
+        }
+
+        // Assembly is re-armed (not dispatch) and the plan returns to awaiting_assembly so the CAS re-claims it.
+        _assembly.StartAssemblyCalls.Should().ContainSingle().Which.CoordinatorRunId.Should().Be(coord);
+        _dispatch.StartDispatchCalls.Should().BeEmpty("an infra-only park retries assembly, not the dispatch loop");
+        (await GetPlanStatusAsync(planId)).Should().Be(WorkPlanStatus.AwaitingAssembly);
+
+        // The run is un-terminalized and a recovery event is emitted for the assembly resume.
+        (await _runStore.GetAsync(RunId.Parse(coord)))!.Status.Should().Be(RunStatus.InProgress);
+        var events = _streamStore.Get(coord)!.GetSnapshotSince(0).Events;
+        events.Should().Contain(e => e.Type == EventTypes.CoordinatorRecovered);
+    }
+
+    [Fact]
+    public async Task Redirect_OnParkedCoordinator_WithMixedFailedAndReady_ReDispatchesOnlyFailed()
+    {
+        // Scoped retry: two subtasks failed (Skyler+Hank) while two already succeeded (Walt+Jesse).
+        // A redirect must re-dispatch ONLY the failed pair and PRESERVE the completed pair — never a
+        // full-workplan restart (#309).
+        var coord = RunId.New().ToString();
+        await SeedTerminalCoordinatorRunAsync(coord, RunStatus.Failed, "failed: subtask_failed");
+        var (_, ids) = await SeedPlanAsync(coord, WorkPlanStatus.AssemblyFailed, new[]
+        {
+            SubtaskStatus.Failed,        // Skyler
+            SubtaskStatus.AssembleReady, // Walt — done, must be preserved
+            SubtaskStatus.RaiFlagged,    // Hank
+            SubtaskStatus.AssembleReady, // Jesse — done, must be preserved
+        });
+        _dispatch.Active = false;
+
+        var view = await _sut.SteerAsync(coord, "redirect", null, "Take a different approach on the two that failed.", "owner", default);
+
+        view.Status.Should().Be(SteeringStatus.Applied);
+
+        (await GetSubtaskAsync(ids[0])).Status.Should().Be(SubtaskStatus.Pending, "the failed subtask is re-dispatched");
+        (await GetSubtaskAsync(ids[2])).Status.Should().Be(SubtaskStatus.Pending, "the rai-flagged subtask is re-dispatched");
+        (await GetSubtaskAsync(ids[1])).Status.Should().Be(SubtaskStatus.AssembleReady, "a completed subtask is NOT re-run");
+        (await GetSubtaskAsync(ids[3])).Status.Should().Be(SubtaskStatus.AssembleReady, "a completed subtask is NOT re-run");
+        (await GetSubtaskAsync(ids[1])).RecoveryAttempts.Should().Be(0);
+        (await GetSubtaskAsync(ids[3])).RecoveryAttempts.Should().Be(0);
+
+        _dispatch.StartDispatchCalls.Should().ContainSingle("only the failed pair re-dispatches");
+        _assembly.StartAssemblyCalls.Should().BeEmpty();
     }
 
     [Fact]
@@ -380,7 +457,8 @@ public sealed class CoordinatorSteeringRecoveryTests : IAsyncDisposable
     }
 
     private async Task<(int PlanId, List<int> SubtaskIds)> SeedPlanAsync(
-        string coordinatorRunId, string planStatus, string[] subtaskStatuses, (int Dependent, int DependsOn)? dependency = null)
+        string coordinatorRunId, string planStatus, string[] subtaskStatuses,
+        (int Dependent, int DependsOn)? dependency = null, string? assemblyStatusReason = null)
     {
         using var scope = _provider.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
@@ -406,6 +484,7 @@ public sealed class CoordinatorSteeringRecoveryTests : IAsyncDisposable
             ProjectId = "proj-1",
             CoordinatorRunId = coordinatorRunId,
             Status = planStatus,
+            AssemblyStatusReason = assemblyStatusReason,
             CreatedAt = DateTimeOffset.UtcNow,
             UpdatedAt = DateTimeOffset.UtcNow,
         };
@@ -503,5 +582,20 @@ public sealed class CoordinatorSteeringRecoveryTests : IAsyncDisposable
         public bool Active { get; set; }
         public void StartDispatch(CoordinatorDispatchContext context) => StartDispatchCalls.Add(context);
         public bool IsDispatchActive(string coordinatorRunId) => Active;
+    }
+
+    /// <summary>
+    /// Records <see cref="ICoordinatorAssembly.StartAssembly"/> hand-offs so the assembly-only re-arm
+    /// path (redirect on a build/test-infra park with every child already assemble_ready) can be
+    /// asserted without running the real collective-assembly pipeline.
+    /// </summary>
+    private sealed class RecordingAssembly : ICoordinatorAssembly
+    {
+        public List<CoordinatorDispatchContext> StartAssemblyCalls { get; } = [];
+        public void StartAssembly(CoordinatorDispatchContext context) => StartAssemblyCalls.Add(context);
+        public void EnsureFinalScribe(Run coordinatorRun) { }
+        public bool IsAssemblyActive(string coordinatorRunId) => false;
+        public void AbandonStaleReview(CoordinatorDispatchContext context) { }
+        public void FailAssembly(CoordinatorDispatchContext context, string reason) { }
     }
 }

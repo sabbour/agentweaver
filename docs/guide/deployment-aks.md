@@ -90,7 +90,11 @@ Before running `20-build-push-images.sh`, make sure the frontend can authenticat
 - Azure Database for PostgreSQL Flexible Server using FQDN `<server>.postgres.database.azure.com`; private connectivity comes from the VNet-linked `privatelink.postgres.database.azure.com` zone.
 - Agent-sandbox CRDs/controller plus one AgentHost `SandboxTemplate` and one `SandboxWarmPool`, both named `agentweaver-agent-host`.
 
-`20-build-push-images.sh` is redeploy-efficient: with a known previous/current tag it rebuilds changed images in parallel and retags unchanged images with `az acr import`.
+`20-build-push-images.sh` is redeploy-efficient: it resolves the prior deployed image tag to
+its Git tag or the commit that wrote its value to `VERSION`, rebuilds only components whose
+relevant paths changed, and retags unchanged images with `az acr import`. Preview the plan
+without invoking npm or ACR with `DRY_RUN=true PREVIOUS_IMAGE_TAG=vX.Y.Z bash
+scripts/aks/20-build-push-images.sh`.
 
 ## Deploy-order invariants
 

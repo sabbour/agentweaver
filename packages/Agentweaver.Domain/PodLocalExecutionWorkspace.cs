@@ -37,6 +37,7 @@ public enum ExecutionWorkspaceMode
 public static partial class PodLocalExecutionWorkspace
 {
     public const string DefaultScratchRoot = "/local-workspace";
+    public const string AgentScratchDirectoryName = "agent-scratch";
     public const string WritebackRefPrefix = "refs/agentweaver/writeback/";
 
     public static string GetRunHash(string runId)
@@ -56,6 +57,21 @@ public static partial class PodLocalExecutionWorkspace
             scratchRoot,
             GetRunHash(runId),
             treeHash.ToLowerInvariant()));
+    }
+
+    /// <summary>
+    /// Gets the per-run non-deliverable working directory. This is deliberately a sibling of
+    /// execution workspaces rather than a child, so it can never be included in a worktree write-back.
+    /// </summary>
+    public static string GetAgentScratchPath(string scratchRoot, string runId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(scratchRoot);
+        ArgumentException.ThrowIfNullOrWhiteSpace(runId);
+
+        return Path.GetFullPath(Path.Combine(
+            scratchRoot,
+            AgentScratchDirectoryName,
+            GetRunHash(runId)));
     }
 
     public static bool IsGitObjectId(string? value) =>

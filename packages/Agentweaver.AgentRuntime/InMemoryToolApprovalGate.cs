@@ -19,10 +19,10 @@ public sealed class InMemoryToolApprovalGate : IToolApprovalGate
     // runId → requestId → terminal state
     private readonly ConcurrentDictionary<string, ConcurrentDictionary<string, ToolApprovalRequestState>> _resolved = new();
 
-    // Run-scoped allowlist: runId → set of "toolName:url" policy keys
+    // Run-scoped allowlist: runId → set of tool-scoped policy keys.
     private readonly ConcurrentDictionary<string, HashSet<string>> _runScopedAllowlist = new();
 
-    // Always-allowed policies: set of "toolName:url" keys that survive across runs.
+    // Always-allowed policies: set of tool-scoped keys that survive across runs.
     // TODO: persist this to the database so always-allowed policies survive process restarts.
     private readonly HashSet<string> _alwaysAllowedPolicies = [];
     private readonly object _alwaysLock = new();
@@ -88,7 +88,9 @@ public sealed class InMemoryToolApprovalGate : IToolApprovalGate
             if (_requestContext.TryGetValue(runId, out var runCtx) &&
                 runCtx.TryGetValue(requestId, out var ctx))
             {
-                var policyKey = PolicyKey(ctx.ToolName, ctx.Url);
+                // Approval policies deliberately apply to the tool, not one URL. Fetch
+                // requests commonly vary their path and query string within a single run.
+                var policyKey = PolicyKey(ctx.ToolName, null);
 
                 if (scope == ApprovalScope.Run)
                 {
@@ -100,10 +102,9 @@ public sealed class InMemoryToolApprovalGate : IToolApprovalGate
                 else if (scope == ApprovalScope.Tool)
                 {
                     // Tool-scoped: approve this tool for any URL this run.
-                    var toolKey = PolicyKey(ctx.ToolName, null);
-                    AddRunPolicy(runId, toolKey);
+                    AddRunPolicy(runId, policyKey);
                     if (_parentRuns.TryGetValue(runId, out var parentId))
-                        AddRunPolicy(parentId, toolKey);
+                        AddRunPolicy(parentId, policyKey);
                 }
                 else if (scope == ApprovalScope.Always)
                 {

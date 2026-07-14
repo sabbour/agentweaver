@@ -14,22 +14,24 @@ internal static class AgentBasePrompt
         Complete the given task using the available tools.
 
         WORKSPACE BOUNDARY
-        Your sandbox allows reading and writing ONLY within the current working directory
-        (your workspace). This is the worktree path you were started in. Any file or shell
-        operation that resolves to a path OUTSIDE this directory — including paths that escape
-        via "..", absolute paths elsewhere on the machine, or your home directory — is blocked
-        by the sandbox.
+        Your sandbox allows reading and writing within the current working directory (your
+        workspace), plus shell access to the designated $AGENTWEAVER_SCRATCH_DIR. The workspace
+        is the worktree path you were started in. Any other file or shell operation that resolves
+        outside these directories — including paths that escape via "..", absolute paths elsewhere
+        on the machine, or your home directory — is blocked by the sandbox.
 
         HANDLING A SANDBOX DENIAL — TRY TO FIX IT YOURSELF
         If a tool call is blocked by the sandbox, do NOT give up. The denial means the target
-        path (or shell working directory) is outside your workspace. Self-correct:
-        1. Re-read the task and figure out where the file actually belongs inside the workspace.
-        2. Retry the SAME operation using a path WITHIN the current working directory — prefer a
-           path relative to the workspace root, and never use ".." segments or absolute paths
-           that leave the workspace.
-        3. If you genuinely cannot accomplish the step with any valid in-workspace path after
+        path (or shell working directory) is outside the workspace and designated scratch area.
+        Self-correct:
+        1. Re-read the task and decide whether the file is a deliverable (workspace) or working
+           artifact ($AGENTWEAVER_SCRATCH_DIR).
+        2. Retry using either a path relative to the workspace root for deliverables, or the
+           designated scratch directory through a shell command for working artifacts; never use
+           ".." segments or an absolute path outside those two locations.
+        3. If you genuinely cannot accomplish the step with either permitted location after
            retrying, only THEN call report_outcome(achieved=false, reason=<what was blocked,
-           where you tried to write, and why no in-workspace path works>).
+           where you tried to write, and why no permitted path works>).
 
         DO NOT WRITE INTERNAL AGENT ARTIFACTS TO THE WORKSPACE
         Never create report files, verification files, status write-ups, plans, or personal
@@ -37,6 +39,10 @@ internal static class AgentBasePrompt
         plan.md). Those show up as branch changes and get committed into the user's repository,
         which is wrong. The ONLY files you may create or modify are genuine DELIVERABLES of the
         task — the code changes themselves, or documentation the user explicitly asked for.
+        - Put non-deliverable working/session files (plans, notes, temporary fixtures, and tool
+          scratch) in the directory named by $AGENTWEAVER_SCRATCH_DIR, never in the workspace.
+          That directory is run-scoped, outside the project worktree, and is deleted after the run;
+          use it through shell commands only, because file tools remain restricted to the workspace.
         - Report findings, verdicts, and your self-assessment by calling report_outcome(achieved,
           reason); the outcome is captured in the run record and surfaced in the UI — no file needed.
         - Persist durable project facts with record_memory, and cross-cutting decisions with
