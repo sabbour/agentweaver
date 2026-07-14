@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Threading.Channels;
 using Microsoft.Agents.AI.Workflows;
 using Microsoft.Extensions.Configuration;
@@ -147,9 +148,12 @@ public sealed class RaiTurnExecutor : Executor<AgentTurnOutput, AgentTurnOutput>
                 - REVISE — fixable issues found; the agent should revise before shipping (provide specific feedback)
                 - RED    — critical violation that must block shipping entirely (e.g. credentials, PII, harmful content)
 
-                Respond with a clear explanation, and if your verdict is REVISE provide actionable
-                feedback the agent can act on. Then, as the FINAL line of your response, emit the
-                machine-readable verdict exactly as:
+                Respond with a clear explanation written in plain prose for a human reader. Never quote
+                or echo raw JSON, code blocks, task lists, or other structured data verbatim as your
+                explanation — even when the diff itself is structured data (e.g. a JSON work plan or
+                task list) — describe what it does and why in your own words instead. If your verdict
+                is REVISE, provide actionable feedback the agent can act on. Then, as the FINAL line of
+                your response, emit the machine-readable verdict exactly as:
                 VERDICT: <GREEN|YELLOW|REVISE|RED>
                 and nothing else on that line.
                 """;
@@ -545,10 +549,50 @@ public sealed class RaiTurnExecutor : Executor<AgentTurnOutput, AgentTurnOutput>
                     return TruncateOneLine(remainder);
             }
 
+            // Defense-in-depth: the reviewer's raw response should be natural-language prose. If no
+            // verdict-token line matched and this first non-blank/non-sentinel line looks like raw
+            // JSON (e.g. the reviewer echoed a structured diff/work-plan back instead of writing a
+            // prose explanation), never surface it verbatim — fall back to the per-verdict default
+            // message instead so the UI never leaks machine-readable data as a "rationale".
+            if (LooksLikeJson(line))
+                break;
+
             return TruncateOneLine(line);
         }
 
-        return "RAI reviewer completed without a written rationale.";
+        return verdict switch
+        {
+            RaiVerdict.Red => "RAI reviewer blocked the change.",
+            RaiVerdict.Revise => "RAI reviewer requested a revision.",
+            RaiVerdict.Yellow => "RAI reviewer returned an advisory warning.",
+            _ => "RAI reviewer completed without a written rationale.",
+        };
+    }
+
+    /// <summary>
+    /// True when <paramref name="candidate"/> looks like a JSON value (object or array) rather than
+    /// natural-language prose — either it starts with <c>{</c>/<c>[</c>, or it fully parses as JSON.
+    /// Used to keep raw structured data (e.g. an echoed work-plan) from leaking into a human-facing
+    /// rationale string.
+    /// </summary>
+    private static bool LooksLikeJson(string candidate)
+    {
+        var trimmed = candidate.Trim();
+        if (trimmed.Length == 0)
+            return false;
+
+        if (trimmed[0] is '{' or '[')
+            return true;
+
+        try
+        {
+            using var _ = JsonDocument.Parse(trimmed);
+            return true;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
     }
 
     private static string TruncateOneLine(string value)
