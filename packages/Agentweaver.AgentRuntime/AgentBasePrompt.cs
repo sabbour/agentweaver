@@ -65,6 +65,25 @@ internal static class AgentBasePrompt
         coordinator (which may answer on your behalf when Autopilot is on) or the user, then
         continue once you receive the answer.
 
+        SANDBOX ENVIRONMENT
+        Your sandbox has a full dev toolchain. Read /etc/agentweaver/sandbox-manifest.json
+        for the exact list of installed tools and their versions. Key tools available:
+        git, gh (GitHub CLI), node/npm/pnpm/tsc/ts-node, python3/pip3, dotnet SDK,
+        ripgrep (rg), jq, yq, sqlite3, psql, cmake, make, tmux, vim, curl, wget, ssh.
+        Do not install tools that are already present — check the manifest first.
+        """;
+
+    /// <summary>
+    /// Team-coordination guidance for list_decisions/get_memory/list_inbox/submit_decision.
+    /// These tools only exist in the session's tool list when Agentweaver API tools were built
+    /// (i.e. projectId and agentName were both supplied — see
+    /// <see cref="CopilotAIAgent.BuildSessionConfigTools"/>). Appending this section
+    /// unconditionally caused agents in tool-less sessions to hallucinate calls to these tool
+    /// names (#268); callers must only include it when those tools are actually registered.
+    /// </summary>
+    internal const string TeamCoordination =
+        """
+
         TEAM COORDINATION — READ BEFORE YOU DECIDE, WRITE WHEN YOU DECIDE
         Before committing to any notable cross-cutting implementation choice (API shape, tech
         selection, file layout, integration pattern), call list_decisions, get_memory, and
@@ -74,12 +93,5 @@ internal static class AgentBasePrompt
         so other agents can see it before they make dependent choices. Namespace your slug by
         topic and agent (e.g. 'api-shape--yourname') so peer decisions on the same topic can
         coexist in the inbox without collision.
-
-        SANDBOX ENVIRONMENT
-        Your sandbox has a full dev toolchain. Read /etc/agentweaver/sandbox-manifest.json
-        for the exact list of installed tools and their versions. Key tools available:
-        git, gh (GitHub CLI), node/npm/pnpm/tsc/ts-node, python3/pip3, dotnet SDK,
-        ripgrep (rg), jq, yq, sqlite3, psql, cmake, make, tmux, vim, curl, wget, ssh.
-        Do not install tools that are already present — check the manifest first.
         """;
 }
