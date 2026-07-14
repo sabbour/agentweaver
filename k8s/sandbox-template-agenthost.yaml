@@ -138,12 +138,29 @@ spec:
                   name: agentweaver-secrets
                   key: appinsights-connection-string
                   optional: true
+          # Capacity right-sizing (fix: agent-host resource-pressure eviction churn under concurrent
+          # wave load). The katapool nodes are small kata hosts (4 vCPU / 16Gi, ~3860m/~11.7Gi
+          # allocatable, plus per-pod Kata-VM overhead). The previous requests (500m / 1Gi) let the
+          # scheduler pack ~7-11 agent-host pods onto a single node while each pod's limit allows a
+          # 2000m / 4Gi build burst (npm install/build/test). Under a complex-app wave-1 (several
+          # concurrent build subtasks) the node's REAL memory (16Gi) was blown well before the
+          # request-based "allocatable" was exhausted -> kubelet MemoryPressure evictions + OOM-kills
+          # + FailedScheduling (Insufficient cpu/memory). Those mid-turn pod teardowns close the A2A
+          # watch stream before AgentHost flushes its terminal WorkflowOutputEvent, so a genuinely
+          # successful subtask surfaces as `watch_stream_completed_without_terminal_event` (the
+          # false-stall family). Raising REQUESTS to reflect a build's true working set makes the
+          # scheduler honest: CPU (1000m) becomes the binding constraint at ~3 pods/node, which also
+          # caps concurrent memory burst to ~3x4Gi=12Gi (<= 16Gi real), and forces the
+          # cluster-autoscaler (katapool minSize 1 / maxSize 5) to add kata nodes under load instead
+          # of overpacking one node into eviction. Limits are unchanged so a single heavy build can
+          # still burst. The terminal-event emission-robustness half (flush-before-teardown / durable
+          # terminal publication) is tracked separately as defense-in-depth under #242.
           resources:
             requests:
-              memory: "1Gi"
-              cpu: "500m"
-              # Warm replicas reserve modest capacity; active workspaces can grow to the 8Gi limit.
-              ephemeral-storage: "1Gi"
+              memory: "2Gi"
+              cpu: "1000m"
+              # Reserve real build headroom (checkout + node_modules/.next + package caches).
+              ephemeral-storage: "2Gi"
             limits:
               memory: "4Gi"
               cpu: "2000m"
