@@ -1,0 +1,6 @@
+.auth/
+sessions/
+transcripts-ui/
+verdicts/
+test-results/
+playwright-report/

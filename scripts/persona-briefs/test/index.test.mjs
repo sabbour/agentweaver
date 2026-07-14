@@ -7,7 +7,7 @@ import { assembleAdapterGenerationPrompt } from '../generate-adapter.mjs';
 test('lists shared cores and filters them by available adapter', async () => {
   assert.deepEqual(await listPersonas(), ['jordan', 'maya', 'priya']);
   assert.deepEqual(await listPersonas({ surface: 'api' }), ['jordan', 'maya', 'priya']);
-  assert.deepEqual(await listPersonas({ surface: 'ui' }), []);
+  assert.deepEqual(await listPersonas({ surface: 'ui' }), ['jordan', 'maya', 'priya']);
 });
 
 test('loads and combines a validated core and API adapter', async () => {
@@ -20,8 +20,9 @@ test('loads and combines a validated core and API adapter', async () => {
   assert.match(persona.text, /Persona surface adapter: Jordan Lee — api/);
 });
 
-test('reports unavailable adapters and invalid persona names clearly', async () => {
-  await assert.rejects(() => loadSurfaceAdapter('jordan', 'ui'), /was not found/);
+test('loads UI adapters and reports invalid persona names clearly', async () => {
+  const adapter = await loadSurfaceAdapter('jordan', 'ui');
+  assert.equal(adapter.surface, 'ui');
   await assert.rejects(() => loadPersonaCore('../jordan'), /Invalid persona name/);
 });
 

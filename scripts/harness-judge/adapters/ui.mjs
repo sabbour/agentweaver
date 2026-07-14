@@ -13,6 +13,10 @@
  */
 export function adaptUiEvidence(raw = {}) {
   const steps = Array.isArray(raw.steps) ? raw.steps : [];
+  const untrusted = (kind, value) => ({
+    kind,
+    evidence: `--- BEGIN UNTRUSTED_UI_DATA (${kind}) ---\n${typeof value === 'string' ? value : JSON.stringify(value ?? null)}\n--- END UNTRUSTED_UI_DATA ---`,
+  });
   return {
     metadata: { ...raw.metadata, surface: 'ui' },
     persona: raw.persona ?? {},
@@ -24,10 +28,15 @@ export function adaptUiEvidence(raw = {}) {
         url: step.url ?? null,
         consoleCount: Array.isArray(step.console) ? step.console.length : 0,
         networkCount: Array.isArray(step.network) ? step.network.length : 0,
+        assertions: step.assertions ?? [],
       },
       evidence: [
-        { kind: 'dom', evidence: typeof step.domSnapshot === 'string' ? step.domSnapshot : JSON.stringify(step.domSnapshot ?? null) },
-        { kind: 'screenshot', evidence: step.screenshotPath ?? '(no screenshot)' },
+        untrusted('dom', step.domSnapshot),
+        untrusted('screenshot-reference', { path: step.screenshotPath ?? null, hash: step.screenshotHash ?? null }),
+        untrusted('console', step.console ?? []),
+        untrusted('network', step.network ?? []),
+        untrusted('cross-reference', step.crossReference ?? null),
+        untrusted('persona-thought', step.intent ?? null),
       ],
       frustrationSignals: Array.isArray(step.frustrationSignals) ? step.frustrationSignals : [],
     })),

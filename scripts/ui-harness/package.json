@@ -1,0 +1,16 @@
+{
+  "name": "agentweaver-ui-harness",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Persona-driven Playwright UI evidence harness for Agentweaver.",
+  "engines": { "node": ">=18" },
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "login": "node agent-driver-ui/tools.mjs login",
+    "run": "node agent-driver-ui/tools.mjs"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.55.0"
+  }
+}
