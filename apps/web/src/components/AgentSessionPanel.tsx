@@ -26,7 +26,7 @@ import type { EventType, RunStreamEvent } from '../api/sse';
 import type { RaiVerdictEventPayload, RaiVerdictToken } from '../api/types';
 import { useArtifactBrowser } from '../hooks/useArtifactBrowser';
 import type { ArtifactBrowserAdapter } from '../hooks/useArtifactBrowser';
-import { mergeRunEvents as sharedMergeRunEvents, SEED_STATUSES } from '../timeline/mergeRunEvents';
+import { mergeRunEvents as sharedMergeRunEvents } from '../timeline/mergeRunEvents';
 import { isSerializedWorkPlan } from '../timeline/coordinatorPlanFilter';
 import { deriveHumanTitle } from '../timeline/reducer';
 import { buildRunTimeline } from '../timeline/runTimelineSteps';
@@ -1932,11 +1932,6 @@ export function AgentSessionPanel({
       .then((detail) => {
         if (cancelled) return;
         setRunDetail(detail);
-        if (!SEED_STATUSES.has(detail.status)) {
-          setSeedEvents([]);
-          settledRunIdRef.current = selectedRunId;
-          return;
-        }
         return apiClient.getRunEvents(selectedRunId)
           .then((persisted) => {
             if (cancelled) return;
@@ -2005,6 +2000,17 @@ export function AgentSessionPanel({
           ? { target_child_run_id: selectedItem.childRunId }
           : {}),
       });
+      try {
+        const persisted = await apiClient.getRunEvents(selectedRunId || coordinatorRunId);
+        setSeedEvents(persisted.map((event) => ({
+          sequence: event.sequence,
+          type: event.type as EventType,
+          payload: event.payload,
+        })));
+      } catch {
+        // Best-effort: the live SSE stream may still surface the message even if the durable
+        // events endpoint is briefly unavailable.
+      }
       setFollowUp('');
       setFollowUpNotice('Message sent to coordinator.');
       onCoordinatorFollowUp?.();
@@ -2013,7 +2019,7 @@ export function AgentSessionPanel({
     } finally {
       setFollowUpBusy(false);
     }
-  }, [coordinatorRunId, followUp, followUpBusy, onCoordinatorFollowUp, selectedItem]);
+  }, [coordinatorRunId, followUp, followUpBusy, onCoordinatorFollowUp, selectedItem, selectedRunId]);
 
   if (!selectedItem || !isVisible) return null;
 

@@ -1098,6 +1098,52 @@ describe('AgentSessionPanel', () => {
     expect(screen.getByPlaceholderText('Message coordinator...')).toHaveProperty('disabled', true);
   });
 
+  it('seeds and refreshes persisted coordinator steering messages for active runs', async () => {
+    const user = userEvent.setup();
+    let persistedEvents: RunStreamEvent[] = [
+      {
+        sequence: 1,
+        type: 'coordinator.steering',
+        payload: { instruction: 'Seeded before the panel mounted.' },
+      },
+    ];
+    vi.mocked(apiClient.getRunEvents).mockImplementation(() => Promise.resolve(persistedEvents));
+    vi.mocked(apiClient.steerCoordinator).mockImplementation(async () => {
+      persistedEvents = [
+        ...persistedEvents,
+        {
+          sequence: 2,
+          type: 'coordinator.steering',
+          payload: { instruction: 'Refresh from durable events after send.' },
+        },
+      ];
+      return { status: 'applied' };
+    });
+
+    render(
+      <Wrapper>
+        <AgentSessionPanel
+          open
+          onClose={vi.fn()}
+          tree={tree}
+          selectedNodeId="coordinator"
+          onSelectNode={vi.fn()}
+          coordinatorRunId="coord-run-1"
+          projectId="p1"
+          coordinatorActive
+        />
+      </Wrapper>,
+    );
+
+    expect(await screen.findByText('Coordinator steering applied: Seeded before the panel mounted.')).toBeDefined();
+
+    const input = await screen.findByPlaceholderText('Message coordinator...', undefined, { timeout: 4000 });
+    await user.type(input, 'Refresh from durable events after send.');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    expect(await screen.findByText('Coordinator steering applied: Refresh from durable events after send.')).toBeDefined();
+  });
+
   it('makes the composer read-only when viewing a non-coordinator agent (steer via the Coordinator)', async () => {
     render(
       <Wrapper>
