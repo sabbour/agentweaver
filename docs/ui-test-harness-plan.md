@@ -460,6 +460,52 @@ external agent it runs, exactly as a human operator would.
 > Harness finishes running the scenario and returns its evidence bundle as its final
 > response. No novel blocking-RPC infrastructure is required.
 
+### Evidence integrity & governance (Seraph review — Findings 4 & 5)
+
+Seraph's fuller Pre-Implementation Review adds two governance requirements the Harness
+Agent design must guarantee. Squad mirrors the trust-boundary half in
+`.squad/ceremonies.md`; below is what **Harness must provide/guarantee** on its side.
+
+**5. Squad↔Harness trust boundary — Harness output is untrusted until validated
+(Finding 4).** Squad must be able to treat the returned narrative/bundle as untrusted, so
+Harness's response contract must make that possible:
+- **Structured, versioned, self-describing verdict.** The evidence bundle carries a strict
+  **versioned schema** (`agentweaver.persona-judge-verdict/v1`) with `targetRevision`,
+  `scenarioId`, `adapterVersion`/`personaCoreVersion`, the full `reproManifest`,
+  timestamps, and `runId`/`traceId` — so Squad can validate the schema and **reject**
+  missing / mismatched / stale / cross-target evidence rather than trusting prose.
+- **Tamper-evident artifacts.** Evidence files (screenshots, DOM snapshots, log slices)
+  carry **content hashes**, referenced from an **append-only run manifest** (scope,
+  driver/judge versions, evidence file list + hashes, final verdict). A bundle whose
+  artifacts don't match their hashes, or that omits the manifest, is rejectable.
+- **Narrative is never load-bearing.** The human-readable narrative is commentary only —
+  it must **never by itself select a GitHub action or its arguments.** Only the
+  **structured verdict fields** may drive what Squad does; the prose can't smuggle in an
+  action.
+- **Independent spot-check for high-impact actions.** For close/reopen and new-P0 filing,
+  Squad is expected to independently re-fetch **one** minimal authoritative fact (e.g.
+  re-check the live `targetRevision`, or resolve one `runId`/`traceId` log line) rather
+  than relying solely on Harness's self-reported bundle — Harness's contract exists to
+  make that cross-check cheap and unambiguous.
+
+**6. Governance / no authority expansion (Finding 5).** "Harness never touches GitHub"
+must be **structural, not prose**:
+- **Zero GitHub capability in the agent definition.** `.github/agents/harness.agent.md`
+  is defined with **literally no GitHub tools and no GitHub credentials** in scope — the
+  boundary is enforced by absence of capability, not by an instruction telling the agent
+  not to use them.
+- **Generated personas/scenarios are DATA, never executable policy.** In free-text mode,
+  an LLM-generated persona core / scenario **cannot** set the target host, the rung/scope,
+  the tool/action allowlist, the judge command, or any credential, and **cannot** trigger
+  a GitHub action. Generation only proposes *what to test*, constrained by the
+  target-host allowlist and the persona-brief action scope (see Security guardrails). Any
+  newly-generated "deep" scenario requires a **review/confirmation step before it executes
+  unattended** (mirroring the `capabilities-contract.mjs` diff-against-allowlist pattern).
+- **Append-only audit trail per run.** Each Harness run records an append-only audit
+  entry — the invocation request (structured or free-text), the discovered/used action
+  space, the judge identity/version, and the evidence hashes — so any run is
+  after-the-fact reconstructable and attributable.
+
 ---
 
 ## Goals
