@@ -767,3 +767,70 @@ doubles as their acceptance suite.
    bearer CI may hold.
 4. **`run_task` (#130) dependency:** the one-call scenario is stubbed until #130 ships;
    the harness measures the multi-call baseline meanwhile.
+
+---
+
+## GitHub Copilot CLI Skill
+
+So a Copilot session can say *"run the MCP harness against persona Jordan"* and have it
+routed to the real CLI command — capturing the JSON verdict and reporting it back — the
+MCP harness ships as a **Copilot-CLI-discoverable skill**. This section is **spec-only**;
+authoring the actual `SKILL.md` content is a follow-on implementation task (same tier as
+the harness build-out itself, done once the harness exists).
+
+### Discovery mechanism matters
+
+Copilot CLI **auto-discovers skills only from specific canonical directories**:
+
+- `.github/skills/` &nbsp;— official Copilot CLI path
+- `.claude/skills/` &nbsp;— official Copilot CLI path
+- `.agents/skills/` &nbsp;— official Copilot CLI path
+- `.squad/skills/` &nbsp;— this repo's own Squad convention
+- `.copilot/skills/` &nbsp;— this repo's own Squad convention
+
+It does **not** scan arbitrary `scripts/` subfolders. Therefore a `SKILL.md` living inside
+`scripts/mcp-harness/` alone is **not** auto-discoverable by Copilot CLI — on its own it is
+just a README for humans and other agents. Discoverability requires a file under one of the
+canonical directories above.
+
+### Design for TWO files, not one
+
+1. **`scripts/mcp-harness/SKILL.md`** — the harness's own detailed operator / CLI-contract
+   doc: the exact commands, flags (`--target http|stdio`, `--persona <name>`, `--scenario`,
+   the smoke/`--smoke` P0-only rung, etc.), the expected JSON output shape (the canonical
+   `agentweaver.persona-judge-verdict/v1` block with its `p0` / `p1` / `frustration`
+   fields), and the exit codes (0 = drive+capture OK, non-zero = driver P0 fail). It lives
+   with the code and is versioned alongside it, so the contract never drifts from the driver.
+
+2. **A thin pointer skill at `.github/skills/mcp-harness/SKILL.md`** — the actual
+   Copilot-CLI-discoverable entry point. Its job is to:
+   - describe **when to invoke** this skill — e.g. *"use when asked to validate the MCP
+     tool surface end-to-end, test a specific persona's tool-call flow, or investigate an
+     MCP-reported issue"*; and
+   - **delegate to the real harness by shelling out to its CLI** (e.g.
+     `node scripts/mcp-harness/... --target stdio --persona <name>`), rather than
+     duplicating the command contract.
+
+   It follows this repo's existing skill-authoring convention — mirror the frontmatter and
+   structure of an existing entry such as
+   [`.copilot/skills/docs-feature/SKILL.md`](../.copilot/skills/docs-feature/SKILL.md)
+   (`name` / `description` with trigger phrases / `domain` / `confidence` / `source`
+   frontmatter, then a Markdown body). The pointer stays thin; the detailed contract stays in
+   `scripts/mcp-harness/SKILL.md`.
+
+### Same two-file treatment across all three harnesses
+
+All three harnesses — **API**, **UI**, and **MCP** — get this identical two-file treatment
+(a code-adjacent `scripts/<harness>/SKILL.md` contract plus a thin discoverable pointer under
+`.github/skills/<harness>/SKILL.md`). This keeps the harnesses in lockstep and lets a single
+Copilot session route *"run the MCP harness against persona X"* to the actual CLI command,
+capture the canonical JSON verdict, and report the result back — the same way it would for the
+API or UI surface.
+
+**The special value for the MCP surface:** because this harness **authenticates and
+transports exactly the way GitHub Copilot CLI itself does** (streamable-HTTP JSON-RPC with a
+`gh auth token` bearer via the RFC 9728 discovery dance on `--target http`, or a launched
+`--stdio` server on `--target stdio`), the pointer skill effectively lets **Copilot CLI test
+its own MCP integration path** — a Copilot session invoking the skill drives Agentweaver's MCP
+surface through the same seam Copilot CLI uses in production, so the harness doubles as a
+self-test of that seam.
