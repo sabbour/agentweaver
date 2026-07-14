@@ -766,6 +766,10 @@ would have been for the persona regardless of whether the run mechanically succe
 run can be **P0-green and P1-PASS yet deeply frustrating** (the persona got there, but
 only after fighting the surface) — that frustration is precisely the usability signal
 the MCP and UI harnesses exist to surface, and it must not be lost in a binary verdict.
+The scale distinguishes **`none`** ("frustration *was* assessed and there was none")
+from **`not_assessed`** ("insufficient evidence to judge") — the latter carries
+`score: null` and is **excluded from aggregate/trend math**, so a "couldn't tell" is
+never silently averaged in as an observed zero.
 The canonical `agentweaver.persona-judge-verdict/v1` schema therefore extends to:
 
 ```jsonc
@@ -773,7 +777,11 @@ The canonical `agentweaver.persona-judge-verdict/v1` schema therefore extends to
   "p0": { "verdict": "PASS | FAIL", ... },     // objective mechanics (unchanged)
   "p1": { "verdict": "PASS | PARTIAL | FAIL", ... },  // content quality (unchanged)
   "frustration": {                              // REQUIRED — emotional/UX assessment
-    "level": "none | low | moderate | high | abandoned",  // ordinal, judge-assigned
+    "level": "not_assessed | none | low | moderate | high | abandoned",  // judge-assigned
+    // "none".."abandoned" is the ORDINAL scale (none = observed AND no frustration).
+    // "not_assessed" = insufficient evidence to judge; carries "score": null and is
+    //   EXCLUDED from aggregate/trend math (never conflated with an observed "none").
+    "score": 0,                                 // ordinal rank (none=0 … abandoned=4); null when not_assessed
     "evidence": "<transcript turn refs + one-line rationale>",
     "signals": [ "<the specific frustration signals observed>" ]
   },
