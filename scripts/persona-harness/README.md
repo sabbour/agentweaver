@@ -168,6 +168,34 @@ Verdict blocks live in `verdicts/` (git-ignored run artifacts, like `transcripts
 and `findings/`). The prompt-assembly and rollup logic is unit-tested in
 `test/judge.test.mjs`; the actual judging is not tested (it requires a real LLM).
 
+## Prompt-assembling NEW persona briefs (without calling an LLM)
+
+The checked-in briefs in `briefs/*.md` are still the canonical input to the
+LLM-in-the-loop driver, but the harness can now also assemble a **brief-generation
+prompt** for a real LLM to consume. This follows the same architect-not-caller
+pattern as `lib/judge.mjs`: `lib/generate-brief.mjs` does **not** invent the
+scenario itself and does **not** call a model (no keys, no network). It only
+packages the constraints so an external LLM can propose a **new** persona +
+scenario brief in the exact hand-authored markdown shape the existing
+`agent-driver/` already understands.
+
+This is useful when you want novelty/diversity rather than repeating already-run
+archetypes (FitTrack / BookClub / TrailMix / LinkVault / HabitLoop / ForumHub,
+etc.). You can hint a target blueprint or blueprint category — or leave it open as
+`any` — and pass an exclusion list of scenario names/archetypes to avoid.
+
+```bash
+# print the brief-generation prompt to stdout, then feed it to a real LLM
+node lib/generate-brief.mjs --category forum --exclude fittrack,bookclub,trailmix,linkvault,habitloop,forumhub
+
+# or write the assembled prompt to a file
+node lib/generate-brief.mjs --blueprint blueprint-content-authoring --out brief-prompt.txt
+```
+
+The external LLM's output should be the final `briefs/*.md`-shaped markdown only;
+the harness does not currently auto-save or auto-judge that generated brief for
+you. The prompt-assembly logic is unit-tested in `test/generate-brief.test.mjs`.
+
 ## Layout
 
 ```
@@ -182,6 +210,7 @@ scripts/persona-harness/
     seams.mjs                Generated-artifact seam driver (blueprint/workflow generation)
     generation-checks.mjs    Pure validators: reserved-role denylist + workflow YAML validation
     judge.mjs                LLM-judge PROMPT ASSEMBLER — packages transcript + JUDGE.md + criteria (no LLM call)
+    generate-brief.mjs       Persona-brief PROMPT ASSEMBLER — asks a real LLM for a new brief in briefs/*.md shape (no LLM call)
     meta-aggregate.mjs       Layer-2 cross-run rollup over LLM verdict blocks (invariants/divergences/recurring)
     metrics.mjs              Token/cost summary via GET /api/projects/{id}/metrics
     reporter.mjs             Structured finding writer + console report
@@ -200,6 +229,7 @@ scripts/persona-harness/
     generation-checks.test.mjs    Unit tests for the seam validators (with #311 + structural negatives)
     agent-driver-tools.test.mjs   Unit tests for the driver's deterministic P0 computation
     judge.test.mjs                Unit tests for the judge prompt assembler + meta-aggregation rollup
+    generate-brief.test.mjs       Unit tests for brief-generation prompt assembly + CLI output
   findings/                  Emitted JSON findings from fixed-script runs (git-ignored)
   transcripts/               Emitted turn-by-turn transcripts from LLM-in-the-loop runs (git-ignored)
   verdicts/                  LLM-judge verdict blocks consumed by meta-aggregate.mjs (git-ignored)
@@ -407,6 +437,7 @@ spend regressions are visible over time, not just pass/fail.
 | Token / cost metrics (via `/api/projects/{id}/metrics`) | ✅ live in finding `performance` |
 | LLM-in-the-loop driving (persona brief, live turn-by-turn, ≥2 pushbacks) | ✅ prototyped + live (Priya **and** Jordan) — `agent-driver/` + `briefs/*.md` |
 | Two-layer judge methodology (per-run + cross-run meta-aggregation) | ✅ documented (`JUDGE.md`) |
+| LLM prompt assembly for NEW persona+scenario briefs | ✅ live (`node lib/generate-brief.mjs ...` assembles the prompt; an external LLM still writes the brief) |
 | LLM-in-the-loop for more personas (beyond Priya + Jordan) | ⏳ pending (fixed-script scenarios kept as fallback) |
 | Automated meta-aggregation pass over a transcript batch | ✅ live (`node lib/meta-aggregate.mjs verdicts/` mechanically rolls up judge verdict JSON; external human/LLM judgment is still separate) |
 | Automated LLM-judge-calling pass (consumes findings/transcripts) | ⏳ pending (format ready, caller not built) |
