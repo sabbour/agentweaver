@@ -285,8 +285,8 @@ API-vs-UI-vs-MCP in meta-aggregation.
   "p0": { "verdict": "PASS | FAIL", "evidence": "..." },
   "p1": { "verdict": "PASS | PARTIAL | FAIL", "evidence": "...", "criteriaCoverage": [ ] },
   "frustration": {                        // REQUIRED — emotional/UX assessment from evidence
-    "level": "none | low | moderate | high | abandoned",   // ordinal; "abandoned" = persona gave up
-    "score": 0,                          // 0-4 mirror of level, for meta-aggregate trend math
+    "level": "none | low | moderate | high | abandoned | not_assessed",   // ordinal; "abandoned" = persona gave up; "not_assessed" = insufficient evidence to judge
+    "score": 0,                          // 0-4 mirror of level for meta-aggregate trend math; null for "not_assessed" (excluded from aggregate stats)
     "signals": [                         // the OBSERVED evidence the level is grounded in (never invented)
       { "kind": "<signal>", "evidence": "<transcript turn refs / quote>" }
     ],
@@ -298,9 +298,13 @@ API-vs-UI-vs-MCP in meta-aggregation.
 }
 ```
 
-- **`frustration` is REQUIRED** (never omitted); if the evidence genuinely can't
-  support a read, the judge emits `level: "none"` with an empty `signals` array and
-  says so in `rationale` — it is never guessed.
+- **`frustration` is REQUIRED** (never omitted). `none` means the judge **genuinely
+  observed no frustration**; if the evidence genuinely **can't support a read**, the
+  judge emits `level: "not_assessed"` (with `score: null` and an empty `signals` array,
+  saying so in `rationale`) — **never** `none`. Keeping these two distinct matters:
+  conflating "no frustration observed" with "no evidence collected" corrupts trend math,
+  so `not_assessed` is **excluded from aggregate frustration stats** rather than counted
+  as a `0`.
 - **It is the judge's call from evidence, not a driver heuristic.** The driver does
   NOT compute a frustration score (that would be exactly the embedded subjective
   heuristic the driver/judge split forbids). The driver only **captures the raw
@@ -409,27 +413,48 @@ labels, triages, or closes GitHub issues at all**. All GitHub issue authority �
 labeling, dispatching fixers, closing — stays **exclusively with Squad**, using Squad's
 own existing GitHub Issues Mode/intake, based on the evidence Harness hands back.
 
-**3. Scoped re-test — the direct call-and-wait interface.** The Harness agent's entrypoint
-**must** support a targeted mode — e.g. `--persona {name} --scenario {name}
---run-id {original}` (exact flag names at Trinity's discretion, consistent with the
-existing CLI-contract style) — to run just **one** specific persona/scenario combo rather
-than a full three-harness pass. This is the direct call interface Squad's **"Post-Fix
-Harness Verification"** ceremony (`.squad/ceremonies.md`) uses: after a fix lands and
-deploys, Squad **directly invokes Harness** scoped to the originating issue's persona +
-scenario, passing the original `run_id`/trace context, and **waits synchronously** for
-the evidence. Harness re-runs the exact repro and returns fresh evidence; **Squad** then
-interprets it and decides what to do (close, reopen, route back through triage) — all
-issue actions are Squad's. Documented explicitly here because that ceremony depends on
-this mode existing.
+**3. Two invocation modes — structured and free-text.** The Harness agent accepts a test
+request in either of two forms, and runs the same drivers/judge and returns the same
+evidence bundle from both:
+- **Structured mode (exact repro).** A targeted invocation — e.g. `--persona {name}
+  --scenario {name} --run-id {original}` (exact flag names at Trinity's discretion,
+  consistent with the existing CLI-contract style) — runs just **one** specific
+  persona/scenario combo rather than a full three-harness pass. This is the direct call
+  interface Squad's **"Post-Fix Harness Verification"** ceremony (`.squad/ceremonies.md`)
+  uses: after a fix lands and deploys, Squad **directly invokes Harness** scoped to the
+  originating issue's persona + scenario, passing the original `run_id`/trace context, so
+  Harness re-runs the **exact** repro and returns fresh evidence before the issue is
+  touched.
+- **Free-text mode (exploratory / ad-hoc).** Squad or Ahmed can also invoke Harness with
+  **plain prose** describing what to test (e.g. *"check whether the approval gate still
+  shows a notification when a run has 3+ dependent tasks"*). Because Harness is a real
+  LLM-backed agent — not just a CLI wrapper — it **interprets** the request and either
+  selects the closest matching existing persona/scenario **or generates a new one on the
+  fly** (via the existing `generate-core.mjs` / `generate-adapter.mjs` tooling already in
+  `scripts/persona-briefs/` per the shared-layer spec) to match what was described, then
+  runs it and returns the **same evidence bundle** as structured mode. This serves
+  "go check on X" requests that don't map to an existing persona/scenario.
+
+In both modes, Harness only produces evidence; **Squad** interprets it and decides what to
+do (close, reopen, file, route back through triage) — all issue actions are Squad's.
 
 **4. Interaction model.** This is a **direct call/response** relationship (like Squad
 calling a reviewer agent), **not** a GitHub-issue-mediated one. Squad calls the Harness
 agent directly via the platform's agent-to-agent dispatch — the same way it spawns any
-other agent — tells it the exact scenario/persona, and waits for the returned evidence.
-**Squad discovers and decides everything issue-related**; **Harness only executes tests on
-request and hands back evidence.** Neither agent reaches into the other's internal
-tools/drivers/judge processes directly — Squad treats Harness as an external agent it
-runs, exactly as a human operator would.
+other agent — tells it the exact scenario/persona (or the prose request), and waits for
+the returned evidence. **Squad discovers and decides everything issue-related**; **Harness
+only executes tests on request and hands back evidence.** Neither agent reaches into the
+other's internal tools/drivers/judge processes directly — Squad treats Harness as an
+external agent it runs, exactly as a human operator would.
+
+> **On "waits synchronously" — this is not new infrastructure.** "Squad directly invokes
+> Harness and waits" does **not** imply a bespoke blocking-RPC channel between independent
+> long-running processes. It is the **same mechanism Squad already uses to call any other
+> agent synchronously** — e.g. Squad's own rubber-duck / code-review dispatches run with
+> `mode: sync` and block until the sub-agent completes and returns its result. Harness is
+> invoked exactly the same way: an ordinary **sync agent spawn/call** that blocks until
+> Harness finishes running the scenario and returns its evidence bundle as its final
+> response. No novel blocking-RPC infrastructure is required.
 
 ---
 
@@ -734,7 +759,8 @@ The judge is asked a three-part question (P0 / P1 / frustration):
   glance? The judge quotes visible text and references the screenshot.
 - **Frustration (required, the judge's job):** from the evidence — the `--thought`
   trace, the raw signals, the screenshots — how frustrating was the experience
-  (`none`→`abandoned`)? The judge assigns the level, grounds it in observed signals,
+  (`none`→`abandoned`, or `not_assessed` when evidence is insufficient)? The judge
+  assigns the level, grounds it in observed signals,
   and never invents it (see §3 of the shared layer). The judge emits the single
   machine-readable `agentweaver.persona-judge-verdict/v1` block (P0 + P1 +
   `frustration`) so `meta-aggregate.mjs` rolls UI, API, and MCP verdicts together —
