@@ -926,3 +926,58 @@ brief end-to-end against staging."_
 - **Storage-state is a credential.** Never commit, log, or attach it to a finding.
 - **Do not embed heuristic UI-quality pass/fail in the driver.** Only deterministic
   UI facts gate; everything else is deferred.
+
+---
+
+## GitHub Copilot CLI Skill
+
+So a Copilot session can say *"run the UI harness against persona Priya"* and have it
+routed to the real CLI command — capturing the JSON verdict and reporting it back — the
+UI harness ships as a **Copilot-CLI-discoverable skill**. This section is **spec-only**;
+authoring the actual `SKILL.md` content is a follow-on implementation task (same tier as
+the harness build-out itself, done once the harness exists).
+
+### Discovery mechanism matters
+
+Copilot CLI **auto-discovers skills only from specific canonical directories**:
+
+- `.github/skills/` &nbsp;— official Copilot CLI path
+- `.claude/skills/` &nbsp;— official Copilot CLI path
+- `.agents/skills/` &nbsp;— official Copilot CLI path
+- `.squad/skills/` &nbsp;— this repo's own Squad convention
+- `.copilot/skills/` &nbsp;— this repo's own Squad convention
+
+It does **not** scan arbitrary `scripts/` subfolders. Therefore a `SKILL.md` living inside
+`scripts/ui-harness/` alone is **not** auto-discoverable by Copilot CLI — on its own it is
+just a README for humans and other agents. Discoverability requires a file under one of the
+canonical directories above.
+
+### Design for TWO files, not one
+
+1. **`scripts/ui-harness/SKILL.md`** — the harness's own detailed operator / CLI-contract
+   doc: the exact commands, flags, expected JSON output shape, and exit codes. It lives with
+   the code and is versioned alongside it, so the contract never drifts from the driver.
+
+2. **A thin pointer skill at `.github/skills/ui-harness/SKILL.md`** — the actual
+   Copilot-CLI-discoverable entry point. Its job is to:
+   - describe **when to invoke** this skill — e.g. *"use when asked to run/validate the web
+     UI end-to-end, test a specific persona's browser flow, or investigate a UI-reported
+     issue"*; and
+   - **delegate to the real harness by shelling out to its CLI**, rather than duplicating the
+     command contract.
+
+   It follows this repo's existing skill-authoring convention — mirror the frontmatter and
+   structure of an existing entry such as
+   [`.copilot/skills/docs-feature/SKILL.md`](../.copilot/skills/docs-feature/SKILL.md)
+   (`name` / `description` with trigger phrases / `domain` / `confidence` / `source`
+   frontmatter, then a Markdown body). The pointer stays thin; the detailed contract stays in
+   `scripts/ui-harness/SKILL.md`.
+
+### Same two-file treatment across all three harnesses
+
+All three harnesses — **API**, **UI**, and **MCP** — get this identical two-file treatment
+(a code-adjacent `scripts/<harness>/SKILL.md` contract plus a thin discoverable pointer under
+`.github/skills/<harness>/SKILL.md`). This keeps the harnesses in lockstep and lets a single
+Copilot session route *"run the UI harness against persona X"* to the actual CLI command,
+capture the canonical JSON verdict, and report the result back — the same way it would for the
+API or MCP surface.
