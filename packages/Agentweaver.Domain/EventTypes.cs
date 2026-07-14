@@ -104,6 +104,17 @@ public static class EventTypes
     /// </summary>
     public const string AgentTurnUsage = "agent.turn.usage";
 
+    /// <summary>
+    /// Definitive per-turn completion marker emitted by every pod/agent runner AFTER the streaming
+    /// loop finishes cleanly (CopilotAIAgent / GitHubCopilotAgentRunner / FoundryAgentRunner). It is
+    /// the authoritative "the agent finished its turn" signal on the AgentHost→worker A2A seam: the
+    /// worker (<c>RemoteAgentProxy</c>) requires this marker before treating a completed A2A stream
+    /// as a real success, so a pod-teardown / transport truncation that ends the stream mid-turn
+    /// cannot masquerade as a phantom success and silently drop the terminal WorkflowOutputEvent
+    /// (issue #242 — false-positive stall root cause). Payload: { turnId: string }.
+    /// </summary>
+    public const string AgentTurnEnd = "agent.turn.end";
+
     public const string ReviewChangesRequested = "review.changes_requested";
     public const string RevisionStarted        = "revision.started";
     public const string RunCancelled           = "run.cancelled";

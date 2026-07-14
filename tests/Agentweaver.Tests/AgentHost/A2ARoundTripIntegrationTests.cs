@@ -137,10 +137,12 @@ public sealed class A2ARoundTripIntegrationTests
             textB.Should().Be("revised:second task");
 
             // ── Assertions: RunEvents emitted pod-side arrive decoded at the worker ──
-            // Two turns × two events each, all forwarded through the real A2A DataPart codec.
-            received.Should().HaveCount(4, "each turn emits agent.task + agent.message.delta");
+            // Two turns × three events each (agent.task, agent.message.delta, agent.turn.end),
+            // all forwarded through the real A2A DataPart codec.
+            received.Should().HaveCount(6, "each turn emits agent.task + agent.message.delta + agent.turn.end");
             received.Select(r => r.Type).Should().Contain("agent.task")
-                .And.Contain("agent.message.delta");
+                .And.Contain("agent.message.delta")
+                .And.Contain(EventTypes.AgentTurnEnd);
 
             // The anonymous-typed payload must survive serialization (reflection codec path).
             var delta = received.First(r => r.Type == "agent.message.delta");
@@ -221,6 +223,78 @@ public sealed class A2ARoundTripIntegrationTests
         }
     }
 
+    [Fact]
+    public async Task RemoteAgentProxy_CleanStreamWithoutTurnEnd_FailsRetryably_InsteadOfPhantomSuccess()
+    {
+        // #242 regression: the pod streams progress (deltas) and then its A2A stream ends CLEANLY
+        // (no fault) WITHOUT ever emitting the definitive `agent.turn.end` completion marker — the
+        // signature of a pod-teardown / transport truncation mid-turn. The worker must NOT return a
+        // phantom success (which would let the child workflow complete with no terminal
+        // WorkflowOutputEvent and trip the coordinator's false-positive stall detector). It must
+        // instead fail RETRYABLY so the graph terminalizes visibly and the coordinator can redispatch.
+        var port = GetFreeTcpPort();
+        var runner = new TruncatedTurnRunner();
+        var builder = WebApplication.CreateBuilder();
+        builder.Logging.ClearProviders();
+        builder.WebHost.UseUrls($"http://localhost:{port}");
+        var agentHostedBuilder = builder.AddAIAgent(
+            A2ATurnBridgeAgent.AgentName,
+            (sp, _) => new A2ATurnBridgeAgent(
+                new MinimalInnerAgent(),
+                runner,
+                NullLogger<A2ATurnBridgeAgent>.Instance),
+            ServiceLifetime.Singleton);
+#pragma warning disable MEAI001
+        agentHostedBuilder.AddA2AServer(options => options.AgentRunMode = AgentRunMode.DisallowBackground);
+#pragma warning restore MEAI001
+
+        await using var app = builder.Build();
+        app.MapA2AHttpJson(agentHostedBuilder, "/a2a/agent");
+        await app.StartAsync();
+
+        try
+        {
+            using var clientServices = new ServiceCollection().AddHttpClient().BuildServiceProvider();
+            var httpFactory = clientServices.GetRequiredService<IHttpClientFactory>();
+            var resolver = new FixedEndpointResolver(new Uri($"http://localhost:{port}/a2a/agent"));
+            await using var proxy = new RemoteAgentProxy(resolver, httpFactory, NullLoggerFactory.Instance);
+            var workerEvents = Channel.CreateUnbounded<RunEvent>();
+            await proxy.SetupAsync(
+                "/workspace",
+                "/workspace",
+                "run-truncated-242",
+                modelId: null,
+                systemPromptContext: null,
+                workerEvents.Writer,
+                projectId: null,
+                agentName: null,
+                apiBaseUrl: null,
+                apiKey: null,
+                TestCt,
+                userId: null);
+
+            var act = () => proxy.RunTurnAsync("do work", isRevision: false, TestCt);
+
+            var ex = await act.Should().ThrowAsync<WorkflowAgentInfrastructureException>();
+            ex.Which.Reason.Should().Be("agent_host_turn_incomplete",
+                "a clean stream that never delivered agent.turn.end must not be treated as success");
+            ex.Which.IsRetryable.Should().BeTrue(
+                "a truncated turn is redispatchable — the coordinator should redispatch, not falsely stall");
+
+            // The pod's real progress was still forwarded before the truncation — no data loss.
+            workerEvents.Writer.Complete();
+            var received = new List<RunEvent>();
+            await foreach (var evt in workerEvents.Reader.ReadAllAsync(TestCt))
+                received.Add(evt);
+            received.Select(r => r.Type).Should().Contain("agent.message.delta")
+                .And.NotContain(EventTypes.AgentTurnEnd);
+        }
+        finally
+        {
+            await app.StopAsync();
+        }
+    }
+
     private static CancellationToken TestCt =>
         new CancellationTokenSource(TimeSpan.FromSeconds(60)).Token;
 
@@ -261,8 +335,38 @@ public sealed class A2ARoundTripIntegrationTests
             await writer.WriteAsync(
                 new RunEvent(2, "agent.message.delta", new { delta = "Hello from pod", messageId = "m1" }),
                 cancellationToken).ConfigureAwait(false);
+            // Definitive per-turn completion marker every real pod runner emits (CopilotAIAgent) —
+            // the worker requires it to distinguish a finished turn from a truncated stream (#242).
+            await writer.WriteAsync(
+                new RunEvent(3, EventTypes.AgentTurnEnd, new { turnId = "0" }),
+                cancellationToken).ConfigureAwait(false);
 
             return isRevision ? $"revised:{task}" : $"fresh:{task}";
+        }
+    }
+
+    /// <summary>
+    /// A pod runner that streams progress (a delta) and then completes its turn WITHOUT ever
+    /// emitting the definitive `agent.turn.end` completion marker — simulating a pod-teardown /
+    /// transport truncation mid-turn where the A2A stream ends cleanly but the turn never finished.
+    /// </summary>
+    private sealed class TruncatedTurnRunner : IPodTurnRunner
+    {
+        private ChannelWriter<RunEvent>? _writer;
+
+        public void SetTurnStreamWriter(ChannelWriter<RunEvent>? streamWriter) => _writer = streamWriter;
+
+        public async Task<string> RunTurnAsync(string task, bool isRevision, CancellationToken cancellationToken)
+        {
+            var writer = _writer ?? throw new InvalidOperationException("Stream writer not attached.");
+            await writer.WriteAsync(
+                new RunEvent(1, "agent.message.delta", new { delta = "partial progress", messageId = "m1" }),
+                cancellationToken).ConfigureAwait(false);
+
+            // NOTE: intentionally NO agent.turn.end — the turn is cut off. The stream still closes
+            // cleanly (the runner returns normally), so only the missing marker distinguishes this
+            // from a real success.
+            return "partial";
         }
     }
 
