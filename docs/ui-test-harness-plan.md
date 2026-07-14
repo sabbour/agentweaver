@@ -393,6 +393,16 @@ the target end-state is the shared packages above.
 Mirrors the API harness's correction (`decisions.md:1319`, README "Driver / judge
 separation"). The split, applied to the browser:
 
+- **The driver's LLM-in-the-loop role is to ACT AS THE PERSONA, never to diagnose.**
+  The driving LLM's only job is choosing the persona's next action from the brief +
+  what it observes in the browser (i.e. simulating the user). It must **never** debug
+  or interpret an issue — not diagnose *why* something failed, not classify a root
+  cause, not decide whether a failure is "real," "a backend problem," or "just slow."
+  All interpretation, diagnosis, root-cause attribution, and real-vs-not judgment is
+  **exclusively the judge's job**, working from the evidence bundle
+  (DOM/screenshots/network/console + App Insights/kubectl logs) the driver hands off.
+  If the persona hits a wall, the driver records what the persona observed and does
+  (including giving up) — it does not opine on the cause.
 - **Driver (this code) hard-fails ONLY on deterministic UI facts (P0).**
   Objective, unambiguous browser truths:
   - A **keyed** element that the scenario asserts must exist is present/absent
