@@ -88,6 +88,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     psmisc \
     htop \
     tmux \
+    # Sandboxed command execution (RunCommandTool / SandboxExecutorFactory
+    # requires bwrap on PATH; without it, execution silently falls back to
+    # PassthroughExecutor with no isolation, or fails outright — see #269)
+    bubblewrap \
     # Text editors
     vim \
     nano \
