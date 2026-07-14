@@ -2531,6 +2531,57 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         persisted.Result.Should().Be("assembly_complete");
     }
 
+    [Fact]
+    public async Task RunAssembly_RaiRevise_RoutesFeedbackThroughBoundedSteering()
+    {
+        var coordinatorRunId = RunId.New().ToString();
+        await SeedCoordinatorRunAsync(coordinatorRunId);
+        var (workPlanId, _) = await SeedPlanAsync(
+            coordinatorRunId, new[] { SubtaskStatus.AssembleReady });
+        _streamStore.Create(coordinatorRunId, "alice");
+        _pipeline.RaiResult = new CollectiveRaiResult(
+            SafetyFlagged: false,
+            RevisionRequested: true,
+            Feedback: "Remove the unsafe data handling.");
+
+        await _sut.RunAssemblyAsync(Context(coordinatorRunId), default);
+
+        using var scope = _provider.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var directive = await db.SteeringDirectives.SingleAsync(d =>
+            d.CoordinatorRunId == coordinatorRunId && d.Source == SteeringSource.Rai);
+        directive.Instruction.Should().Be("Remove the unsafe data handling.");
+        (await _assemblyStore.GetAsync(workPlanId, default))!.Status
+            .Should().NotBe(WorkPlanStatus.RaiBlocked);
+    }
+
+    [Fact]
+    public async Task RunAssembly_RaiRed_ParksAtHumanReview_InsteadOfTerminallyFailing()
+    {
+        var coordinatorRunId = RunId.New().ToString();
+        await SeedCoordinatorRunAsync(coordinatorRunId);
+        var (workPlanId, _) = await SeedPlanAsync(
+            coordinatorRunId, new[] { SubtaskStatus.AssembleReady });
+        _streamStore.Create(coordinatorRunId, "alice");
+        _pipeline.RaiResult = new CollectiveRaiResult(
+            SafetyFlagged: true,
+            Feedback: "Potential credential disclosure.");
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        var assembly = _sut.RunAssemblyAsync(Context(coordinatorRunId), cts.Token);
+        await WaitUntilArmedAsync(coordinatorRunId);
+
+        var plan = await _assemblyStore.GetAsync(workPlanId, default);
+        plan!.Status.Should().Be(WorkPlanStatus.InReview);
+        var run = await _runStore.GetAsync(RunId.Parse(coordinatorRunId), default);
+        run!.Status.Should().Be(RunStatus.AwaitingReview);
+        EventTypes_(coordinatorRunId).Should().Contain(EventTypes.CoordinatorAssemblyReviewRequested);
+        EventTypes_(coordinatorRunId).Should().NotContain("run.rai_blocked");
+
+        cts.Cancel();
+        await assembly;
+    }
+
     // ── coordinator decision promotion ──────────────────────────────────────────────────────────
 
     [Fact]
@@ -3222,6 +3273,7 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         public IntegrationBranchResult? IntegrationResult;
         public int IntegrationBuildThrowsRemaining;
         public CollectiveGateDecision? BuildTestDecision;
+        public CollectiveRaiResult? RaiResult;
         public Action<CollectiveBuildTestRequest>? OnBuildTest;
 
         /// <summary>When set, <see cref="MergeAsync"/> returns this result instead of a clean merge.</summary>
@@ -3251,7 +3303,7 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         public Task<CollectiveRaiResult> RunRaiAsync(CollectiveRaiRequest request, CancellationToken ct)
         {
             LastRaiRequest = request;
-            return Task.FromResult(new CollectiveRaiResult(SafetyFlagged: false));
+            return Task.FromResult(RaiResult ?? new CollectiveRaiResult(SafetyFlagged: false));
         }
 
         public Task<CollectiveGateDecision> RunRubberduckAsync(CollectiveRubberduckRequest request, CancellationToken ct)

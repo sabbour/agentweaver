@@ -82,7 +82,10 @@ public sealed record CollectiveRaiRequest(
     string WorktreePath = "");
 
 /// <summary>Outcome of the collective RAI review.</summary>
-public sealed record CollectiveRaiResult(bool SafetyFlagged);
+public sealed record CollectiveRaiResult(
+    bool SafetyFlagged,
+    bool RevisionRequested = false,
+    string? Feedback = null);
 
 /// <summary>Inputs to the collective rubber-duck review of the aggregate diff.</summary>
 /// <param name="WorktreePath">

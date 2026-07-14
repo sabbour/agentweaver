@@ -106,7 +106,8 @@ public sealed class CollectiveAssemblyPipeline : ICollectiveAssemblyPipeline
             _workflowFactory.GetRecordingWriter,
             name: "assembly-rai",
             createSubStream: _workflowFactory.CreateSubStreamWriter,
-            completeSubStream: _workflowFactory.CompleteSubStream);
+            completeSubStream: _workflowFactory.CompleteSubStream,
+            agentFactory: _workflowFactory.AgentFactory);
 
         // The aggregate is already-assembled git state, so we feed the integration diff straight in
         // (no agent turn). RunId = coordinatorRunId routes RAI events onto the coordinator stream.
@@ -125,7 +126,10 @@ public sealed class CollectiveAssemblyPipeline : ICollectiveAssemblyPipeline
             SubmittingUser: request.SubmittingUser);
 
         var output = await rai.HandleAsync(input, NoOpWorkflowContext.Instance, ct).ConfigureAwait(false);
-        return new CollectiveRaiResult(SafetyFlagged: output.ContentSafetyFlagged);
+        return new CollectiveRaiResult(
+            SafetyFlagged: output.ContentSafetyFlagged,
+            RevisionRequested: output.RaiRevisionRequired,
+            Feedback: output.RaiFeedback);
     }
 
     public async Task<CollectiveGateDecision> RunRubberduckAsync(CollectiveRubberduckRequest request, CancellationToken ct)
@@ -141,7 +145,8 @@ public sealed class CollectiveAssemblyPipeline : ICollectiveAssemblyPipeline
             logicalNodeId: request.GateNodeId ?? "assembly-rubberduck",
             displayLabel: request.DisplayLabel ?? "Rubber-duck review",
             createSubStream: _workflowFactory.CreateSubStreamWriter,
-            completeSubStream: _workflowFactory.CompleteSubStream);
+            completeSubStream: _workflowFactory.CompleteSubStream,
+            agentFactory: _workflowFactory.AgentFactory);
 
         var input = new AgentTurnOutput(
             RunId: request.CoordinatorRunId,
@@ -437,7 +442,8 @@ public sealed class CollectiveAssemblyPipeline : ICollectiveAssemblyPipeline
             createSubStream: _workflowFactory.CreateSubStreamWriter,
             completeSubStream: _workflowFactory.CompleteSubStream,
             apiBaseUrl: _workflowFactory.ApiBaseUrl,
-            apiKey: _workflowFactory.ApiKey);
+            apiKey: _workflowFactory.ApiKey,
+            agentFactory: _workflowFactory.AgentFactory);
 
         var input = new ScribeTurnInput(
             RunId: request.CoordinatorRunId,

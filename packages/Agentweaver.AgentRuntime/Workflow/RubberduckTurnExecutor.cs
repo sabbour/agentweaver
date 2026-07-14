@@ -138,7 +138,8 @@ public sealed class RubberduckTurnExecutor : Executor<AgentTurnOutput, WorkflowR
             await agent.SetupAsync(
                 workingDirectory: reviewPath,
                 repositoryPath: input.RepositoryPath,
-                runId: subRunId,
+                // Remote endpoint lookup is keyed by the owning run, not this event substream.
+                runId: input.RunId,
                 modelId: null,
                 systemPromptContext: charter,
                 streamWriter: subWriter,

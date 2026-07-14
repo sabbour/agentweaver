@@ -189,7 +189,9 @@ public sealed class ScribeTurnExecutor : Executor<ScribeTurnInput, ScribeTurnInp
             await agent.SetupAsync(
                 workingDirectory: input.RepositoryPath,
                 repositoryPath: input.RepositoryPath,
-                runId: subRunId,
+                // The coordinator's AgentHost endpoint is keyed by the parent run; the
+                // "-scribe" suffix is only the event stream identity.
+                runId: input.RunId,
                 modelId: input.ModelId,
                 systemPromptContext: charter,
                 streamWriter: subWriter,

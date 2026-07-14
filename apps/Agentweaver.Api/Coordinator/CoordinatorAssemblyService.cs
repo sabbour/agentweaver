@@ -1093,12 +1093,25 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
                     workPlanId,
                     gateId = gate.Id,
                     raiSafetyFlagged = rai.SafetyFlagged,
+                    raiRevisionRequested = rai.RevisionRequested,
+                    feedback = rai.Feedback,
                 });
 
                 if (rai.SafetyFlagged)
                 {
-                    await RaiBlockAsync(context, workPlanId, edges, integrationBranch, ct).ConfigureAwait(false);
+                    await ParkRaiRedAtHumanReviewAsync(
+                        context, workPlanId, edges, aggregateTreeHash, touchedFilesBySubtask,
+                        rai.Feedback, ct).ConfigureAwait(false);
                     return;
+                }
+
+                if (rai.RevisionRequested)
+                {
+                    if (await RouteAssemblyGateThroughSteeringAsync(
+                            context, workPlanId, edges, SteeringSource.Rai, rai.Feedback,
+                            targetFiles: null, touchedFilesBySubtask, aggregateTreeHash, ct)
+                        .ConfigureAwait(false))
+                        return;
                 }
 
                 continue;
@@ -3592,37 +3605,50 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
             context.CoordinatorRunId, string.Join(",", notReady));
     }
 
-    private async Task RaiBlockAsync(
+    /// <summary>
+    /// A RED RAI verdict is a safety stop, but not a terminal dead-end. Park the coordinator at the
+    /// durable human-review gate so an accountable operator can approve, decline, or request a
+    /// revision; recovery uses the ordinary InReview path.
+    /// </summary>
+    private async Task ParkRaiRedAtHumanReviewAsync(
         CoordinatorDispatchContext context,
         int workPlanId,
         IReadOnlyCollection<(int, int)> edges,
-        string integrationBranch,
+        string aggregateTreeHash,
+        IReadOnlyDictionary<int, IReadOnlySet<string>> touchedFilesBySubtask,
+        string? feedback,
         CancellationToken ct)
     {
-        var payload = new
+        var won = await _assemblyStore.TryEscalateToInReviewAsync(workPlanId, ct).ConfigureAwait(false);
+        if (!won)
+            return;
+
+        var integrationBranch = IntegrationBranchName(context.CoordinatorRunId);
+        await CoordinatorAssemblyReviewPersistence.UpsertReviewRequestAsync(
+            _scopeFactory, context.CoordinatorRunId, context.SubmittingUser,
+            integrationBranch, aggregateTreeHash, ct).ConfigureAwait(false);
+        await MarkCoordinatorAwaitingReviewAsync(context.CoordinatorRunId, ct).ConfigureAwait(false);
+        await EmitGraphAsync(context.CoordinatorRunId, workPlanId, ct).ConfigureAwait(false);
+        await EmitTopologyAsync(context.CoordinatorRunId, workPlanId, WorkPlanStatus.InReview, edges, ct)
+            .ConfigureAwait(false);
+        Emit(context.CoordinatorRunId, EventTypes.CoordinatorAssemblyReviewRequested, new
         {
             workPlanId,
-            reason = "rai_blocked",
             integrationBranch,
-            requiresHumanOverride = true,
-        };
-        const string statusReason = "rai_blocked";
-        await _assemblyStore.SetTerminalStatusAsync(
-            workPlanId, WorkPlanStatus.RaiBlocked, statusReason, ct).ConfigureAwait(false);
-        Emit(context.CoordinatorRunId, "run.rai_blocked", payload);
-        await EmitGraphAsync(context.CoordinatorRunId, workPlanId, ct).ConfigureAwait(false);
-        await EmitTopologyAsync(context.CoordinatorRunId, workPlanId, WorkPlanStatus.RaiBlocked, edges, ct)
-            .ConfigureAwait(false);
-        await TerminalizeCoordinatorRunAsync(
-            context.CoordinatorRunId, RunStatus.Failed, statusReason, ct).ConfigureAwait(false);
-        await RunCoordinatorScribeAsync(
-            context,
-            workPlanId,
-            terminalStatus: RunStatus.Failed.ToApiString(),
-            mergeResult: statusReason,
-            ct).ConfigureAwait(false);
-        await PersistAndCompleteStreamAsync(context.CoordinatorRunId).ConfigureAwait(false);
-        _logger.LogWarning("Collective assembly RAI-blocked run {RunId}", context.CoordinatorRunId);
+            treeHash = aggregateTreeHash,
+            gateKind = "human-review",
+            escalated = true,
+            reason = "rai_red",
+            feedback,
+        });
+
+        var decision = await AwaitReviewDecisionAsync(context, workPlanId, edges, ct).ConfigureAwait(false);
+        if (decision is not null)
+        {
+            await ApplyReviewDecisionAsync(
+                context, workPlanId, edges, integrationBranch, aggregateTreeHash,
+                touchedFilesBySubtask, decision, ct).ConfigureAwait(false);
+        }
     }
 
     private async Task NeedsResolutionAsync(

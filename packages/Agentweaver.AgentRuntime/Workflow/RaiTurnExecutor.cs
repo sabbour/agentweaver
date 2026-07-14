@@ -167,7 +167,9 @@ public sealed class RaiTurnExecutor : Executor<AgentTurnOutput, AgentTurnOutput>
             await agent.SetupAsync(
                 workingDirectory: reviewPath,
                 repositoryPath: input.RepositoryPath,
-                runId: subRunId,
+                // A remote AgentHost is registered for the coordinator/parent run, not its
+                // event-only RAI substream. The local implementation is unaffected.
+                runId: input.RunId,
                 modelId: null,
                 systemPromptContext: charter,
                 streamWriter: subWriter,
