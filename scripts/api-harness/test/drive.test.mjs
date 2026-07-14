@@ -11,7 +11,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { computeDeterministicP0 } from '../drive.mjs';
+import { computeDeterministicP0, resolveOperation } from '../drive.mjs';
 
 test('computeDeterministicP0 passes when every recorded call succeeded', () => {
   const turns = [
@@ -55,4 +55,47 @@ test('computeDeterministicP0 with no recorded calls does not falsely pass', () =
   const result = computeDeterministicP0([]);
   assert.equal(result.objectivePass, false);
   assert.equal(result.totalCalls, 0);
+});
+
+// resolveOperation: the "dynamic client built from swagger" path. It must resolve
+// purely from whatever the spec declares — no persona/business-specific knowledge
+// of what an operationId "means".
+const SAMPLE_CACHED_SPEC = {
+  endpoints: [
+    {
+      method: 'GET',
+      path: '/api/projects/{projectId}/runs',
+      operationId: 'listRuns',
+      parameters: [
+        { name: 'projectId', in: 'path', required: true },
+        { name: 'status', in: 'query', required: false },
+      ],
+    },
+    {
+      method: 'POST',
+      path: '/api/blueprints',
+      operationId: 'createBlueprint',
+      parameters: [],
+    },
+  ],
+};
+
+test('resolveOperation substitutes path params and appends query params', () => {
+  const resolved = resolveOperation(SAMPLE_CACHED_SPEC, 'listRuns', { projectId: 'proj-1', status: 'active' });
+  assert.equal(resolved.method, 'GET');
+  assert.equal(resolved.path, '/api/projects/proj-1/runs?status=active');
+});
+
+test('resolveOperation works with no params for operations that need none', () => {
+  const resolved = resolveOperation(SAMPLE_CACHED_SPEC, 'createBlueprint', {});
+  assert.equal(resolved.method, 'POST');
+  assert.equal(resolved.path, '/api/blueprints');
+});
+
+test('resolveOperation throws on unknown operationId (never guesses)', () => {
+  assert.throws(() => resolveOperation(SAMPLE_CACHED_SPEC, 'doesNotExist', {}), /not found in the cached spec/);
+});
+
+test('resolveOperation throws when a required path param is missing', () => {
+  assert.throws(() => resolveOperation(SAMPLE_CACHED_SPEC, 'listRuns', {}), /requires path param "projectId"/);
 });

@@ -11,6 +11,7 @@
 //   node drive.mjs init   --brief <persona> --base-url <url> [--insecure]
 //   node drive.mjs spec   [--refresh]                              # read the API surface
 //   node drive.mjs call   --method GET|POST|PUT|DELETE --path "/api/..." [--body '<json>'] --thought "..."
+//   node drive.mjs call   --operation-id <opId> [--params '{"id":"..."}'] [--body '<json>'] --thought "..."
 //   node drive.mjs check-approvals  --thought "..."
 //   node drive.mjs resolve-approval --thought "..." [--request-id <id> | --command-hash <h>] [--all]
 //                                   [--decision approve|deny|defer|request-changes] [--scope once|run|tool|always]
@@ -18,14 +19,22 @@
 //   node drive.mjs finish --summary "..." [--keep]
 //
 // WHY NOT A CURATED LIST OF NAMED BUSINESS ACTIONS (submit-goal, revise-spec,
-// get-spec, ...)? Per @sabbour's explicit direction: "I don't want subcommands, I
-// want direct curl calls to the API... exactly like a normal Copilot session would
-// explore and call any API dynamically." `call` is a raw method/path/body
-// passthrough — the LLM decides which endpoint to hit by reading the OpenAPI spec
-// (via `spec`) and the persona-brief intent, not by picking from a pre-baked menu
-// of what "submitting a goal" or "pushing back" means. That menu WAS the rigidity
-// bug: a fixed submit-goal/revise-spec/get-spec vocabulary structurally cannot
-// express "poll /api/runs/{id}/events three times, notice X, then call a
+// get-spec, ...)? Per @sabbour's explicit direction, refined over two rounds of
+// feedback: first "I don't want subcommands, I want direct curl calls to the
+// API... you probably need a Swagger endpoint", then clarified further —
+// "doesn't have to be curl, could be a dynamic client created from swagger" — the
+// mechanism doesn't matter (raw method/path/body vs. a spec-resolved
+// operationId), what matters is that the SET OF CALLABLE OPERATIONS comes
+// dynamically from the OpenAPI/Swagger spec (whatever the API serves), never from
+// a fixed list this file writes per persona/scenario. `call` supports BOTH: a raw
+// `--method`/`--path` (curl-equivalent) and a `--operation-id` resolved against
+// the cached spec (a minimal "dynamic client built from swagger" — method+path
+// template looked up, `{param}` path placeholders and query params filled from
+// `--params`). Either way the LLM decides which endpoint to hit by reading the
+// spec (via `spec`) and the persona-brief intent, not by picking from a pre-baked
+// menu of what "submitting a goal" or "pushing back" means. That menu WAS the
+// rigidity bug: a fixed submit-goal/revise-spec/get-spec vocabulary structurally
+// cannot express "poll /api/runs/{id}/events three times, notice X, then call a
 // completely different endpoint Y" — exactly the kind of grounded, adaptive
 // behavior personas like Priya require.
 //
@@ -177,6 +186,29 @@ export function computeDeterministicP0(turns = []) {
   };
 }
 
+// Minimal "dynamic client built from swagger": given the cached OpenAPI endpoint
+// list (from `spec`) and an operationId, resolve the concrete method + path to
+// call, substituting `{param}` path placeholders and appending declared query
+// params — both from a single `--params` map. Pure/no I/O so it's unit-testable
+// without a live API. Throws on any operationId/param the spec doesn't declare;
+// never guesses.
+export function resolveOperation(cachedSpec, operationId, params = {}) {
+  const endpoint = (cachedSpec?.endpoints ?? []).find((e) => e.operationId === operationId);
+  if (!endpoint) throw new Error(`operationId "${operationId}" not found in the cached spec`);
+  const pathParamNames = (endpoint.parameters ?? []).filter((p) => p.in === 'path').map((p) => p.name);
+  const queryParamNames = (endpoint.parameters ?? []).filter((p) => p.in === 'query').map((p) => p.name);
+  let path = endpoint.path.replace(/\{([^}]+)\}/g, (_, name) => {
+    if (!(name in params)) throw new Error(`operation "${operationId}" requires path param "${name}" in --params`);
+    return encodeURIComponent(params[name]);
+  });
+  const query = queryParamNames
+    .filter((name) => params[name] !== undefined)
+    .map((name) => `${encodeURIComponent(name)}=${encodeURIComponent(params[name])}`)
+    .join('&');
+  if (query) path += `?${query}`;
+  return { method: endpoint.method, path, pathParamNames, queryParamNames };
+}
+
 const COMMANDS = {
   async init(args) {
     if (!args.brief) throw new Error('--brief is required');
@@ -242,10 +274,19 @@ const COMMANDS = {
       if (res.status === 200 && res.responseBody && typeof res.responseBody === 'object') {
         const paths = res.responseBody.paths ?? {};
         const endpoints = Object.entries(paths).flatMap(([path, ops]) =>
-          Object.keys(ops ?? {}).map((method) => ({
+          Object.entries(ops ?? {}).map(([method, op]) => ({
             method: method.toUpperCase(),
             path,
-            summary: ops[method]?.summary ?? ops[method]?.operationId ?? null,
+            operationId: op?.operationId ?? null,
+            summary: op?.summary ?? op?.operationId ?? null,
+            // Path/query parameter names — lets `call --operation-id` substitute
+            // {param} placeholders and build the query string dynamically, i.e. a
+            // minimal dynamic client built FROM the spec rather than a fixed list
+            // of named actions per persona.
+            parameters: Array.isArray(op?.parameters)
+              ? op.parameters.map((prm) => ({ name: prm?.name, in: prm?.in, required: !!prm?.required }))
+              : [],
+            hasRequestBody: !!op?.requestBody,
           })),
         );
         const result = { available: true, source: p, endpointCount: endpoints.length, endpoints };
@@ -266,12 +307,48 @@ const COMMANDS = {
   // API — the driving LLM chooses these from the OpenAPI spec (`spec`) and the
   // persona-brief intent, turn by turn. This never interprets, curates, or limits
   // which endpoint may be called; it only records what happened, verbatim.
+  //
+  // Two equivalent ways to address an endpoint, BOTH fully spec/response-driven
+  // (never a fixed per-persona action list):
+  //   --method <M> --path <P>                      raw method/path (curl-equivalent)
+  //   --operation-id <id> [--params '{"id":"x"}']   resolved dynamically against the
+  //                                                  cached OpenAPI doc (`spec` output) —
+  //                                                  a minimal "dynamic client built
+  //                                                  from swagger": method+path template
+  //                                                  are looked up, {param} placeholders
+  //                                                  in the path are substituted from
+  //                                                  --params, and any remaining params
+  //                                                  declared `in: query` are appended
+  //                                                  as a query string. Requires `spec`
+  //                                                  to have been called first this
+  //                                                  session (or --refresh via `spec`).
   async call(args) {
     const session = await loadSession();
-    if (!args.method) throw new Error('--method is required (GET|POST|PUT|DELETE)');
-    if (!args.path) throw new Error('--path is required, e.g. /api/projects');
-    const method = String(args.method).toUpperCase();
     const client = newClient(session, resolveToken(args.token));
+    let method;
+    let path;
+    let params = {};
+    if (args.params !== undefined) {
+      try {
+        params = JSON.parse(String(args.params));
+      } catch (err) {
+        throw new Error(`--params is not valid JSON: ${err.message}`);
+      }
+    }
+    if (args['operation-id']) {
+      const cachePath = join(HERE, 'openapi.cache.json');
+      if (!existsSync(cachePath)) throw new Error('no cached OpenAPI spec — run `spec` first, then retry with --operation-id');
+      const cached = JSON.parse(await readFile(cachePath, 'utf8'));
+      const resolved = resolveOperation(cached, args['operation-id'], params);
+      method = resolved.method;
+      path = resolved.path;
+    } else {
+      if (!args.method) throw new Error('--method is required (GET|POST|PUT|DELETE), or use --operation-id');
+      if (!args.path) throw new Error('--path is required, e.g. /api/projects, or use --operation-id');
+      method = String(args.method).toUpperCase();
+      path = String(args.path);
+    }
+
     let body;
     if (args.body !== undefined && args.body !== true) {
       try {
@@ -280,20 +357,20 @@ const COMMANDS = {
         throw new Error(`--body is not valid JSON: ${err.message}`);
       }
     }
-    const res = await client.call(method, String(args.path), body);
+    const res = await client.call(method, path, body);
 
     // Best-effort bookkeeping so later commands (check-approvals, finish cleanup)
     // know which project/run this session is currently driving, without requiring
     // the LLM to track ids itself. Purely observational — never gates anything.
-    if (method === 'POST' && /^\/api\/projects\/?$/.test(args.path) && res.responseBody?.project_id) {
+    if (method === 'POST' && /^\/api\/projects\/?$/.test(path) && res.responseBody?.project_id) {
       session.projectId = res.responseBody.project_id;
     }
-    const orchMatch = /^\/api\/projects\/[^/]+\/orchestrations\/?$/.test(args.path);
+    const orchMatch = /^\/api\/projects\/[^/]+\/orchestrations\/?$/.test(path);
     if (method === 'POST' && orchMatch && res.responseBody?.runId) {
       session.runId = res.responseBody.runId;
     }
 
-    await recordTurn(session, { actor: 'persona', thought: args.thought, action: `${method} ${args.path}`, apiCall: res });
+    await recordTurn(session, { actor: 'persona', thought: args.thought, action: `${method} ${path}`, apiCall: res });
     print({ status: res.status, ok: res.ok, body: res.responseBody, projectId: session.projectId, runId: session.runId });
   },
 

@@ -45,9 +45,15 @@ never to a hardcoded JS function.
    OpenAPI/Swagger document so you know what endpoints/shapes exist; `drive.mjs
    call --method <M> --path <P> [--body '<json>'] --thought "..."` is the one
    generic action primitive — arbitrary method/path/body, exactly like exploring
-   any API dynamically. `check-approvals`/`resolve-approval` remain distinct named
-   commands ONLY because they encode a safety invariant (never blind-approve a
-   gate), not because approvals are curated business logic.
+   any API dynamically. `call` also accepts `--operation-id <opId> [--params
+   '{"name":"value"}']` as a spec-resolved alternative (a minimal dynamic client
+   built from the OpenAPI doc: it looks up the method/path template by
+   operationId and fills `{param}` placeholders/query params from `--params`) —
+   use whichever is more convenient; both are still driven purely by what the
+   spec declares, never a fixed per-persona list. `check-approvals`/
+   `resolve-approval` remain distinct named commands ONLY because they encode a
+   safety invariant (never blind-approve a gate), not because approvals are
+   curated business logic.
 4. `reproManifest`-based structured re-verification still applies for comparability
    across target revisions — but "comparability" now means: same persona-brief
    version + same seed + same target-revision, **re-driven fresh** (you still

@@ -34,10 +34,11 @@ node scripts/api-harness/drive.mjs finish --summary "Persona investigation compl
 caches) the live OpenAPI document at `/openapi/v1.json` (falling back to
 `/swagger/v1/swagger.json`, then reporting plainly if neither is served) so the
 driving LLM knows what endpoints/shapes exist instead of guessing. `call` is the
-one generic action primitive — arbitrary method/path/body — and records every
-turn (with `--thought`, the persona's live reasoning) verbatim into the session
-transcript. Two commands remain distinct, NAMED actions rather than folded into
-`call`, because they encode a safety invariant rather than curated business logic:
+one generic action primitive — arbitrary method/path/body, OR a spec-resolved
+`--operation-id` (see below) — and records every turn (with `--thought`, the
+persona's live reasoning) verbatim into the session transcript. Two commands
+remain distinct, NAMED actions rather than folded into `call`, because they
+encode a safety invariant rather than curated business logic:
 
 - `check-approvals --thought "..."` — detect pending approval gates (tool/shell/
   coordinator-child) from the real events feed. Pure detection, no judgment.
@@ -45,6 +46,16 @@ transcript. Two commands remain distinct, NAMED actions rather than folded into
   [--decision approve|deny|defer|request-changes] [--scope once|run|tool|always]
   [--reason "..."] [--feedback "..."] [--judge-cmd "<llm cli>"]` — DETECT -> JUDGE ->
   EXECUTE. Do not blindly approve a gate; the default judge always defers.
+
+`call` also accepts `--operation-id <opId> [--params '{"name":"value"}']` as an
+alternative to `--method`/`--path` — a minimal "dynamic client built from swagger":
+it resolves the method + path template from the cached spec (`spec` must have run
+first), substitutes `{param}` path placeholders and appends declared query params
+from `--params`. This is NOT a curated business action — `opId` comes straight from
+whatever the API's OpenAPI doc declares, so the set of callable operations is
+still fully spec-driven, never a fixed per-persona list. Use raw `--method`/`--path`
+or `--operation-id`, whichever is more convenient in the moment; both record
+identically.
 
 `finish` prints a transcript path under `scripts/api-harness/transcripts/`, computes
 a generic P0 mechanics check (did every recorded call succeed — no
