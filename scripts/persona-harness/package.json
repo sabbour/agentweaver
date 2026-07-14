@@ -1,0 +1,16 @@
+{
+  "name": "agentweaver-persona-harness",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Persona-driven API E2E + generated-artifact seam testing harness for Agentweaver (issue #1).",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "test": "node --test"
+  },
+  "dependencies": {
+    "yaml": "^2.9.0"
+  }
+}
