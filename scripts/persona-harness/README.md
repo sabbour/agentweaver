@@ -116,13 +116,57 @@ anticipate every valid variation and risk silently masking regressions. The spli
   generator's model provider was down). **Never guessed** — excluded from scoring
   and reported distinctly (exit `3` when a run is otherwise clean but has gaps).
 
-> An automated LLM-judge-*calling* mechanism is intentionally **not built yet**.
-> The finding schema (`agentweaver.persona-finding/v2`) is designed so a fresh
-> agent (or the coordinator) can be handed the JSON + persona criteria and produce
-> the verdict without re-running anything.
+> The harness now **assembles** the judge prompt for you (it still does not *call*
+> an LLM itself — no keys, no network): `lib/judge.mjs` packages a captured
+> transcript + `JUDGE.md` + the persona's authored criteria into a single prompt a
+> real LLM consumes, and `lib/meta-aggregate.mjs` rolls up the resulting verdicts
+> across a batch (invariants / divergences / recurring findings). See
+> **[Automated judging](#automated-judging-prompt-assembly--meta-aggregation)**.
+> The actual P0/P1 verdict is still rendered by a fresh LLM (this conversation, the
+> coordinator, or a future automated step) — the harness only drives and formats.
 
 The reporter's console banner reflects the **driver** verdict only — `DRIVE+CAPTURE
 OK` / `DRIVER P0 FAIL` — and prints "P1 — output quality: ⧗ DEFERRED to LLM judge".
+
+## Automated judging: prompt assembly + meta-aggregation
+
+The judging is a **two-layer LLM pass**, and the harness now provides the plumbing
+for both — while still never *calling* an LLM itself (no keys, no network; it only
+assembles the prompt and rolls up whatever verdicts an LLM returns):
+
+**Layer 1 — per-run verdict.** `lib/judge.mjs` takes one captured transcript and
+packages it — together with `JUDGE.md` and the persona's authored
+`specs/personas/*.md` criteria (resolved automatically from the brief) — into a
+single prompt. Feed that prompt to any LLM (this conversation, the coordinator, a
+future automated step). It handles both transcript shapes (v1 where the spec *is*
+`response.body`, and v1.1 where it is `response.body.spec` with a deterministic
+`p0Objective` block), surfaces every drafted spec verbatim and each pushback's
+before/after, and asks the judge to emit a machine-readable verdict block
+(`agentweaver.persona-judge-verdict/v1`).
+
+```bash
+# assemble a judge prompt from a captured transcript, then hand it to an LLM
+node lib/judge.mjs transcripts/priya-live-2026-07-14T11-20-37-407Z.json > judge-prompt-priya.txt
+#  ...feed judge-prompt-priya.txt to an LLM; save its ```json``` verdict block to verdicts/priya.json
+node lib/judge.mjs transcripts/jordan-live-....json --out judge-prompt-jordan.txt
+```
+
+**Layer 2 — cross-run meta-aggregation.** `lib/meta-aggregate.mjs` consumes the
+verdict blocks from a whole batch and cross-references them (JUDGE.md "Layer 2"):
+invariants (P0 mechanics that held in *every* run → candidate platform guarantees),
+divergences (P1 verdicts that varied → judgment-call space / inconsistency signal),
+recurring findings (the same issue surfaced by ≥2 personas — e.g. the #315
+revision-regression reproduced by Jordan **and** Maya), capability gaps, drift, and
+pushback compliance. It makes no subjective call of its own — it only tallies.
+
+```bash
+# roll up all the LLM verdicts from a batch (a dir of *.json, or explicit files)
+node lib/meta-aggregate.mjs verdicts/ --json rollup.json
+```
+
+Verdict blocks live in `verdicts/` (git-ignored run artifacts, like `transcripts/`
+and `findings/`). The prompt-assembly and rollup logic is unit-tested in
+`test/judge.test.mjs`; the actual judging is not tested (it requires a real LLM).
 
 ## Layout
 
@@ -137,11 +181,14 @@ scripts/persona-harness/
     runner.mjs               Generic persona DRIVER + evidence capturer (objective P0 only)
     seams.mjs                Generated-artifact seam driver (blueprint/workflow generation)
     generation-checks.mjs    Pure validators: reserved-role denylist + workflow YAML validation
+    judge.mjs                LLM-judge PROMPT ASSEMBLER — packages transcript + JUDGE.md + criteria (no LLM call)
+    meta-aggregate.mjs       Layer-2 cross-run rollup over LLM verdict blocks (invariants/divergences/recurring)
     metrics.mjs              Token/cost summary via GET /api/projects/{id}/metrics
     reporter.mjs             Structured finding writer + console report
   briefs/
     priya.md                 Persona BRIEF — support triage (goals/voice/constraints + mandatory ≥2 pushback)
     jordan.md                Persona BRIEF — greenfield idea → AKS Automatic plan (2nd persona; proves the pattern repeats)
+    maya.md                  Persona BRIEF — market strategist / Q3 competitive brief (3rd persona; content domain)
   agent-driver/
     tools.mjs                Persona-agnostic discrete tool surface over the real API for an LLM to drive live (records transcript)
   scenarios/                 Fixed-script fallback (one-shot, deterministic)
@@ -151,8 +198,11 @@ scripts/persona-harness/
   test/
     priya-checks.test.mjs         Unit tests for Priya's non-gating judgeContext + TLS guard
     generation-checks.test.mjs    Unit tests for the seam validators (with #311 + structural negatives)
+    agent-driver-tools.test.mjs   Unit tests for the driver's deterministic P0 computation
+    judge.test.mjs                Unit tests for the judge prompt assembler + meta-aggregation rollup
   findings/                  Emitted JSON findings from fixed-script runs (git-ignored)
   transcripts/               Emitted turn-by-turn transcripts from LLM-in-the-loop runs (git-ignored)
+  verdicts/                  LLM-judge verdict blocks consumed by meta-aggregate.mjs (git-ignored)
 ```
 
 ## Running the LLM-in-the-loop driver (persona brief)
@@ -358,7 +408,7 @@ spend regressions are visible over time, not just pass/fail.
 | LLM-in-the-loop driving (persona brief, live turn-by-turn, ≥2 pushbacks) | ✅ prototyped + live (Priya **and** Jordan) — `agent-driver/` + `briefs/*.md` |
 | Two-layer judge methodology (per-run + cross-run meta-aggregation) | ✅ documented (`JUDGE.md`) |
 | LLM-in-the-loop for more personas (beyond Priya + Jordan) | ⏳ pending (fixed-script scenarios kept as fallback) |
-| Automated meta-aggregation pass over a transcript batch | ⏳ pending (specified in `JUDGE.md`, run manually) |
+| Automated meta-aggregation pass over a transcript batch | ✅ live (`node lib/meta-aggregate.mjs verdicts/` mechanically rolls up judge verdict JSON; external human/LLM judgment is still separate) |
 | Automated LLM-judge-calling pass (consumes findings/transcripts) | ⏳ pending (format ready, caller not built) |
 | Deeper rungs (confirm → run → review → outcome) | ⏳ pending (opt-in `--deep`) |
 | Draft-blueprint testbed mode | ⏳ pending |

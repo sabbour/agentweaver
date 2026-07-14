@@ -160,8 +160,16 @@ checks can't anticipate every valid variation and silently mask regressions. So 
 driver hard-fails only on deterministic facts (HTTP status, structural/schema
 validation like `WorkflowDefinitionLoader.Load` and the issue-#311 reserved-role
 denylist), captures everything else verbatim, and leaves the quality call to you.
-An automated LLM-judge-*calling* mechanism is not built yet; for now a fresh agent
-(or the coordinator) is handed the evidence + this playbook and produces the verdict.
+
+The harness now **assembles** the judge prompt but still does not *call* an LLM
+(no keys, no network): `lib/judge.mjs <transcript>` packages the captured evidence
++ this playbook + the persona's authored `specs/personas/*.md` criteria into a
+single prompt you (a real LLM — this conversation, the coordinator, or a future
+automated step) consume to render the Layer-1 verdict; it asks you to emit a
+machine-readable verdict block (`agentweaver.persona-judge-verdict/v1`).
+`lib/meta-aggregate.mjs verdicts/` then performs the Layer-2 cross-run synthesis
+over a batch of those verdict blocks. An automated LLM-*calling* step (piping the
+assembled prompt to a model and capturing its verdict) is still future work.
 
 ---
 
