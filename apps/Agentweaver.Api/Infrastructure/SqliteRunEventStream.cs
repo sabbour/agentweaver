@@ -101,7 +101,7 @@ public sealed class SqliteRunEventStream : IRunEventStream
 
         // Layer 2: publish to the live channel. TryWrite never blocks; if the bounded channel is
         // full (slow/absent consumer) the live copy is dropped — it stays durable in SQLite.
-        var stamped = evt.Sequence == sequence ? evt : new RunEvent(sequence, evt.Type, evt.Payload);
+        var stamped = evt.Sequence == sequence ? evt : new RunEvent(sequence, evt.Type, evt.Payload, evt.TimestampUtc);
         lock (_channelsGate)
         {
             if (_completedRuns.ContainsKey(runId))
@@ -215,7 +215,12 @@ public sealed class SqliteRunEventStream : IRunEventStream
         }
 
         var payloadJson = JsonSerializer.Serialize(evt.Payload);
-        var createdAt = DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss.fffffff", CultureInfo.InvariantCulture);
+        // Prefer the event's own TimestampUtc (stamped by RunStreamStore.RecordNext/Record at the
+        // moment of append) over DateTime.UtcNow here, so the durable CreatedAt column reflects
+        // "when it happened" rather than "when it was persisted" for callers that route through
+        // the stream store. Falls back to now for events constructed without a timestamp.
+        var timestampUtc = evt.TimestampUtc == default ? DateTimeOffset.UtcNow : evt.TimestampUtc;
+        var createdAt = timestampUtc.UtcDateTime.ToString("yyyy-MM-dd HH:mm:ss.fffffff", CultureInfo.InvariantCulture);
 
         if (evt.Sequence > 0)
         {
@@ -265,7 +270,7 @@ public sealed class SqliteRunEventStream : IRunEventStream
 
         using var cmd = connection.CreateCommand();
         cmd.CommandText = """
-            SELECT "Sequence", "EventType", "PayloadJson"
+            SELECT "Sequence", "EventType", "PayloadJson", "CreatedAt"
             FROM "RunEvents"
             WHERE "RunId" = $runId AND "Sequence" > $from
             ORDER BY "Sequence";
@@ -280,7 +285,10 @@ public sealed class SqliteRunEventStream : IRunEventStream
             var type = reader.GetString(1);
             var payloadJson = reader.GetString(2);
             var payload = DeserializePayload(runId, sequence, type, payloadJson);
-            events.Add(new RunEvent(sequence, type, payload));
+            // Restore the persisted append-time timestamp so a replayed run's timeline matches
+            // when the event actually happened, not the moment of replay.
+            var createdAt = DateTime.SpecifyKind(reader.GetDateTime(3), DateTimeKind.Utc);
+            events.Add(new RunEvent(sequence, type, payload, new DateTimeOffset(createdAt)));
         }
 
         return events;
