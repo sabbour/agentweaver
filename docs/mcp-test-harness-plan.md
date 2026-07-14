@@ -80,6 +80,12 @@ traces) rather than HTTP request/response or DOM snapshots.
    streamable and/or stdio), authenticated exactly the way Copilot CLI authenticates
    (OAuth AS-minted bearer or GitHub-token passthrough — see
    [Auth & session model](#auth--session-model)), not by calling `/api/*` directly.
+   The tool surface itself is **discovered at runtime via `tools/list`**, exactly as
+   Copilot CLI discovers it — the harness never hardcodes tool names or reads a
+   pre-generated tool index. This means a renamed/removed/added tool is experienced by
+   the harness exactly as a real Copilot CLI user would experience it (discovered
+   fresh), so **schema drift is caught as a first-class signal** rather than silently
+   worked around.
 2. **Validate the MCP contract, not just the backend behind it.** Regressions
    unique to the MCP layer — tool schema drift, non-actionable error strings
    (#129), missing `run_task` one-call path (#130), `agentweaver.agent.md` driver
@@ -145,12 +151,27 @@ index (`docs/reference/mcp-tools.md`), and epic **#295** + children.
   errors are raised as `McpApiException(statusCode, message)`, surfaced to the client
   as MCP tool errors. Long-running tools (`run_watch`, `github_signin`) stream
   `ProgressNotificationValue` progress notifications.
-- **90 tools across 14 categories** are published today (authoritative list:
-  `docs/reference/mcp-tools.md`, generated from source). The categories the harness
+- **90 tools across 14 categories** are published today (authoritative *point-in-time*
+  list: `docs/reference/mcp-tools.md`, generated from source). The categories the harness
   must cover: **GitHub Auth, Project, Blueprint, Catalog, Coordinator, Run, Backlog,
   Team, Workflow, Memory, Diagnostics, Workspace, Skill, Sandbox Policy.**
+  > **This static index is investigation/reference material only — NOT a runtime input.**
+  > It is a snapshot generated from source at doc-build time, useful for a human (or for
+  > writing this spec) to skim what exists. The **running harness never reads this file
+  > and never hardcodes tool names**: it discovers the live tool surface at runtime via an
+  > MCP `tools/list` request (see [Architecture](#1-how-a-persona-brief-drives-mcp-tool-calls-turn-by-turn)).
+  > The live `tools/list` response is the **only** source of truth for what tools exist,
+  > their JSON schemas, and their descriptions.
 
 ### The tools that matter for the common operator workflow
+
+> The table below is **illustrative of what the driver is expected to discover**, drawn
+> from investigating the source as of this writing — it is **not** a menu handed to the
+> running harness. At runtime the persona's LLM is given the **live `tools/list`
+> result** as its action space (names, JSON schemas, descriptions), so if a tool here is
+> renamed/removed/added the driver simply sees the new reality. The specific tool names
+> below (e.g. `coordinator_outcome_spec_revise`) are therefore **examples of what today's
+> discovery call returns**, not identifiers the driver hardcodes.
 
 | Category | Tools the harness drives | API-harness analog |
 |---|---|---|
@@ -232,22 +253,38 @@ MCP. It is a **new, sibling** harness, not a modification of the API harness
 
 ### 1. How a persona brief drives MCP tool calls, turn by turn
 
+- **Live tool discovery at session start (the driver's action space is discovered, not
+  hardcoded).** Before the persona takes any turn, the harness issues a real MCP
+  `tools/list` request against the **live server** (staging on `--target http`, the
+  launched `--stdio` server on `--target stdio`) — exactly what GitHub Copilot CLI does
+  when it connects to any MCP server. The **names, JSON input schemas, and descriptions**
+  from that `tools/list` response become the persona LLM's entire available action space.
+  The driver **does not** read `docs/reference/mcp-tools.md` or any pre-generated tool
+  list, and it **does not** hardcode tool names — the live discovery response is the only
+  source of truth for what tools exist and how to call them. (This makes **schema drift a
+  first-class captured signal**: if a tool has been added, removed, or renamed since the
+  static index was generated, the harness sees the live reality and its transcript records
+  it, rather than silently working around a stale reference — precisely the experience a
+  real Copilot CLI user would have.)
 - A fresh-context LLM (a sub-agent, or any model with shell access) is handed **only**
   a persona **brief** (goals, constraints, voice, the mandatory-pushback instruction —
   the exact same brief the API and UI harnesses use) plus a short "you are driving
-  Agentweaver via its MCP tools" preamble that lists the available tools and the MCP
-  result shapes it will see.
+  Agentweaver via its MCP tools" preamble. The concrete tool menu in that preamble is
+  the **live `tools/list` result discovered above**, not a static list — the LLM chooses
+  from the tools the server actually advertises this session, and learns each tool's
+  arguments from the discovered JSON schema.
 - Each **turn** = the driving LLM choosing the next **MCP tool call** and its
   arguments, based on the persona brief + the **real MCP tool results** seen so far —
   never a pre-written both-sides script. This mirrors `agent-driver/tools.mjs`'s
   turn-by-turn model, but the discrete tools the LLM invokes are thin wrappers that
   perform an **MCP JSON-RPC `tools/call`** instead of an HTTP request.
 - **Pushback** = the LLM, having read a real MCP result (a drafted outcome spec from
-  `coordinator_outcome_spec_get`, a work plan, a review diff), decides the persona
-  would object and issues a real `coordinator_outcome_spec_revise` (scoping rung) or
-  `coordinator_steer` (deeper rung) tool call carrying the objection — not free-text
-  chat, not a scripted complaint. Mandatory **≥2 grounded pushbacks** per run, decided
-  in the moment.
+  the discovered spec-get tool, a work plan, a review diff), decides the persona
+  would object and issues a real revise call (the tool it identifies from the
+  discovered surface for revising the scope — today `coordinator_outcome_spec_revise`)
+  or a steer call (the deeper-rung tool, today `coordinator_steer`) carrying the
+  objection — not free-text chat, not a scripted complaint. Mandatory **≥2 grounded
+  pushbacks** per run, decided in the moment.
 - **Two rungs**, matching the API harness's safety model:
   - **Scoping rung (default, safe):** drive to the `coordinator_outcome_spec_confirm`
     gate and **stop** — never confirm. Nothing is scaffolded/containerized/deployed.
@@ -437,18 +474,19 @@ scripts/mcp-harness/
   #   see Cross-Harness Shared Layer. This harness ships no copied judge/verdict logic.
   mcp-client/
     client.mjs                 # thin wrapper over @modelcontextprotocol/sdk: initialize,
-                               #   RFC9728 discovery, tools/call, progress handling
+                               #   RFC9728 discovery, tools/list (LIVE tool-surface discovery
+                               #   -> driver action space), tools/call, progress handling
     transport-http.mjs         # streamable-HTTP transport + bearer auth (staging)
     transport-stdio.mjs        # stdio transport (local/CI, launches server --stdio)
   agent-driver/
     tools.mjs                  # LLM-in-the-loop DRIVER tool surface — MCP analog of the
-                               #   API harness's agent-driver/tools.mjs. Discrete tools:
-                               #   init / list-blueprints / create-project / submit-goal /
-                               #   get-spec / revise-spec (pushback) / steer /
-                               #   check-approvals / resolve-approval / finish.
-                               #   Each performs an MCP tools/call and records a turn.
+                               #   API harness's agent-driver/tools.mjs. Issues tools/list at
+                               #   session start to DISCOVER the live tool surface, then lets the
+                               #   persona LLM call the discovered tools (each performs an MCP
+                               #   tools/call and records a turn). Tool names are NOT hardcoded.
     AGENT.md                   # the driving-LLM preamble: "you drive Agentweaver via MCP
-                               #   tools; here are the tools + result shapes; obey the brief"
+                               #   tools; your tool menu is the LIVE tools/list result discovered
+                               #   this session (names + JSON schemas + descriptions); obey the brief"
   lib/
     transcript.mjs             # MCP transcript writer (agentweaver.mcp-transcript/v1)
     mcp-p0.mjs                 # deterministic P0 block (isError/error-code/schema/pushback)
