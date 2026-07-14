@@ -23,27 +23,35 @@
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dirname, join } from 'node:path';
-import { readdir } from 'node:fs/promises';
+import { readdir, writeFile } from 'node:fs/promises';
 
 import { AgentweaverClient } from './lib/client.mjs';
-import { loadPersona } from './lib/persona.mjs';
 import { driveScenario } from './lib/runner.mjs';
 import { runGenerationSeams } from './lib/seams.mjs';
 import { summarizeProjectMetrics } from './lib/metrics.mjs';
 import { writeFinding, printReport } from './lib/reporter.mjs';
+import { loadPersona } from '../persona-briefs/index.mjs';
+import { adaptApiEvidence } from '../harness-judge/adapters/api.mjs';
+import { judgeEvidence } from '../harness-judge/core.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const PERSONAS_DIR = join(HERE, '..', '..', 'specs', 'personas');
-
 function parseArgs(argv) {
-  const out = { insecure: false, keep: false, allowInsecureProd: false };
+  const out = { insecure: false, keep: false, allowInsecureProd: false, rung: 'scoping' };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--insecure') out.insecure = true;
     else if (a === '--allow-insecure-prod') out.allowInsecureProd = true;
     else if (a === '--keep') out.keep = true;
     else if (a === '--scenario') out.scenario = argv[++i];
-    else if (a === '--base-url') out.baseUrl = argv[++i];
+    else if (a === '--base-url' || a === '--target') out.baseUrl = argv[++i];
+    else if (a === '--persona') out.persona = argv[++i];
+    else if (a === '--seed') out.seed = argv[++i];
+    else if (a === '--batch-id') out.batchId = argv[++i];
+    else if (a === '--target-revision') out.targetRevision = argv[++i];
+    else if (a === '--rung') out.rung = argv[++i];
+    else if (a === '--out') out.out = argv[++i];
+    else if (a === '--allow-prod') out.allowProd = true;
+    else if (a === '--i-understand-this-targets-production') out.confirmProduction = true;
     else if (a === '--token') out.token = argv[++i];
     else if (a === '--timeout') out.timeoutMs = Number(argv[++i]) * 1000;
     else if (a === '--list') out.list = true;
@@ -129,7 +137,14 @@ async function main() {
     return 2;
   }
 
-  const persona = await loadPersona(join(PERSONAS_DIR, scenario.personaFile));
+  const personaId = args.persona ?? scenario.id.split('-')[0];
+  const sharedPersona = await loadPersona(personaId, 'api');
+  const persona = {
+    title: sharedPersona.name,
+    raw: sharedPersona.text,
+    scenarios: [],
+    failureSignals: [],
+  };
   const kind = scenario.kind ?? 'persona-scoping';
 
   console.log(`Driving "${scenario.title}"`);
@@ -141,7 +156,9 @@ async function main() {
       : 'API-only (no browser), start_mode=defineOutcome'}`,
   );
 
-  const client = new AgentweaverClient({ baseUrl, token, insecure: args.insecure });
+  const client = new AgentweaverClient({
+    baseUrl, token, insecure: args.insecure, allowProd: args.allowProd, confirmProduction: args.confirmProduction,
+  });
 
   let result;
   try {
@@ -203,8 +220,6 @@ async function main() {
 
   // The matching persona scenario's authored acceptance criteria + failure signals,
   // surfaced verbatim so a judge can render the P1 verdict from this file alone.
-  const matchedScenario = persona.scenarios.find((s) => s.name === scenario.personaScenario) ?? null;
-
   const finding = {
     schema: 'agentweaver.persona-finding/v2',
     generatedAt: new Date().toISOString(),
@@ -212,7 +227,8 @@ async function main() {
     kind,
     persona: {
       title: persona.title,
-      file: `specs/personas/${scenario.personaFile}`,
+      coreVersion: sharedPersona.version,
+      adapterVersion: sharedPersona.adapter.version,
     },
     scenario: {
       id: scenario.id,
@@ -236,12 +252,13 @@ async function main() {
     // Everything a downstream judge needs to render the verdict WITHOUT re-running.
     judgeInputs: {
       personaTitle: persona.title,
-      personaFile: `specs/personas/${scenario.personaFile}`,
+      personaCore: sharedPersona.content,
+      surfaceAdapter: sharedPersona.adapter.content,
       scenarioName: scenario.personaScenario,
       submittedGoal: result.evidence.submittedGoal ?? null,
-      successCriteria: matchedScenario?.fields?.['success looks like'] ?? null,
-      scenarioSpec: matchedScenario?.raw ?? null,
-      failureSignals: persona.failureSignals,
+      successCriteria: sharedPersona.content,
+      scenarioSpec: sharedPersona.adapter.content,
+      failureSignals: [],
       judgeContext: result.judgeContext ?? null,
       taxonomy: {
         P0: 'Platform-correctness (orchestration mechanics). Already computed in driver.platformChecks — objective/deterministic.',
@@ -262,8 +279,47 @@ async function main() {
   const outPath = join(HERE, 'findings', `${scenario.id}-${stamp}.json`);
   await writeFinding(finding, outPath);
 
+  const metadata = {
+    batchId: args.batchId ?? `api-${stamp}`,
+    scenarioId: args.scenario,
+    inputSeed: args.seed ?? args.scenario,
+    adapterVersion: sharedPersona.adapter.version,
+    personaCoreVersion: sharedPersona.version,
+    targetRevision: args.targetRevision ?? baseUrl,
+    runId: result.evidence.runId ?? `harness-${stamp}`,
+    timestamp: finding.generatedAt,
+    persona: sharedPersona.name,
+  };
+  const normalizedEvidence = adaptApiEvidence({
+    metadata,
+    persona: {
+      name: sharedPersona.name,
+      briefText: sharedPersona.content,
+      surfaceAdapterText: sharedPersona.adapter.content,
+      authoredCriteriaText: sharedPersona.content,
+    },
+    turns: client.calls.map((call, n) => ({
+      n: n + 1,
+      action: `${call.method} ${call.path}`,
+      request: { method: call.method, path: call.path, body: call.requestBody },
+      response: { status: call.status, body: call.responseBody },
+      latencyMs: call.ms,
+      upstreamMs: call.upstreamMs,
+      outcome: { ok: call.ok, status: call.status },
+    })),
+    findingsContext: [finding.driver],
+    attachments: [{ kind: 'finding', evidence: JSON.stringify(finding.evidence) }],
+    summary: `API harness ${scenario.id}`,
+  });
+  const judged = await judgeEvidence(normalizedEvidence, {
+    timeoutMs: args.timeoutMs,
+  });
+  const verdictPath = args.out ?? join(HERE, 'verdicts', `${scenario.id}-${stamp}.json`);
+  await writeFile(verdictPath, `${JSON.stringify(judged.verdict, null, 2)}\n`, 'utf8');
+
   printReport(finding);
   console.log(`Finding written: ${outPath.replace(join(HERE, '..', '..') + '\\', '')}`);
+  console.log(`Verdict written: ${verdictPath.replace(join(HERE, '..', '..') + '\\', '')}`);
 
   await result.cleanup();
   if (!args.keep) {

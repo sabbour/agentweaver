@@ -30,6 +30,8 @@
  *                              round-trip `ms`. null if the header is absent.
  */
 
+import { assertTargetAllowed } from '../../harness-shared/target-guard.mjs';
+
 // Response headers, in priority order, that carry a backend correlation id we can
 // pin each turn to. traceparent (W3C) first — that's what App Insights ingests.
 const CORRELATION_HEADERS = ['traceparent', 'request-id', 'x-request-id', 'x-correlation-id'];
@@ -41,7 +43,8 @@ export class AgentweaverClient {
    * @param {string} opts.token     bearer token
    * @param {boolean} [opts.insecure] skip TLS verification (staging self-signed / SAN drift)
    */
-  constructor({ baseUrl, token, insecure = false }) {
+  constructor({ baseUrl, token, insecure = false, allowProd = false, confirmProduction = false }) {
+    assertTargetAllowed(baseUrl, { allowProd, confirmProduction });
     this.baseUrl = baseUrl.replace(/\/+$/, '');
     this.token = token;
     /** @type {ApiCall[]} */
