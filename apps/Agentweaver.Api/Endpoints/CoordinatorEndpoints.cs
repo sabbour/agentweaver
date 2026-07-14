@@ -336,9 +336,12 @@ app.MapPost("/api/runs/{coordinatorRunId}/assembly/review", async (
 
 // GET /api/runs/{id}/assembly/files — the COLLECTIVE changed-file set for a coordinator run.
 // The coordinator owns no worktree; the assembled output lives on the integration branch
-// (agentweaver/integration/{id}). We diff that branch vs the originating branch and parse the
-// unified diff into file entries, so the standard Changes/Files rail can review the collective
-// output. Returns [] (never 409) before assembly has built the integration branch.
+// (agentweaver/integration/{id}). Once the collective review gate is armed, the coordinator run
+// persists the aggregate diff as an immutable review artifact; after approval/merge the originating
+// branch may advance to INCLUDE those same commits, so recomputing a live branch-vs-branch diff can
+// collapse to empty even though the assembled workspace is still populated (#320). Prefer the
+// persisted aggregate diff when it exists, and only fall back to a live diff before assembly has
+// produced one. Returns [] (never 409) before assembly has built the integration branch.
 app.MapGet("/api/runs/{id}/assembly/files", async (
     HttpContext httpContext,
     string id,
@@ -358,16 +361,14 @@ app.MapGet("/api/runs/{id}/assembly/files", async (
         logger.LogError(ex, "Failed to fetch run {RunId} for assembly files", runId);
         return Results.Problem("Failed to retrieve the run.", statusCode: 500);
     }
-
     if (run is null) return NotFoundError("run_not_found", "The coordinator run was not found.");
     if (!EndpointHelpers.IsOwner(httpContext, run))
         return NotFoundError("run_not_found", "The coordinator run was not found.");
 
-    var integrationBranch = CoordinatorAssemblyService.IntegrationBranchName(id);
     string? aggregateDiff;
     try
     {
-        aggregateDiff = worktreeManager.TryGetBranchDiff(run.RepositoryPath, run.OriginatingBranch, integrationBranch);
+        aggregateDiff = ResolveAssemblyDiff(run, worktreeManager);
     }
     catch (Exception ex)
     {
@@ -404,16 +405,14 @@ app.MapGet("/api/runs/{id}/assembly/files/{**path}", async (
     if (run is null) return NotFoundError("run_not_found", "The coordinator run was not found.");
     if (!EndpointHelpers.IsOwner(httpContext, run))
         return NotFoundError("run_not_found", "The coordinator run was not found.");
-
     var normalizedPath = path.Replace('\\', '/').TrimEnd('/');
     if (string.IsNullOrEmpty(normalizedPath))
         return BadRequestError("invalid_file_path", "Invalid file path.");
 
-    var integrationBranch = CoordinatorAssemblyService.IntegrationBranchName(id);
     string? aggregateDiff;
     try
     {
-        aggregateDiff = worktreeManager.TryGetBranchDiff(run.RepositoryPath, run.OriginatingBranch, integrationBranch);
+        aggregateDiff = ResolveAssemblyDiff(run, worktreeManager);
     }
     catch (Exception ex)
     {
@@ -574,6 +573,25 @@ static void EnumerateAssemblyTree(Tree tree, string prefix, List<WorkspaceNode> 
         }
     }
 }
+
+static string? ResolveAssemblyDiff(Run run, WorktreeManager worktreeManager)
+{
+    if (ShouldUsePersistedAssemblyDiff(run))
+        return run.Diff;
+
+    var integrationBranch = CoordinatorAssemblyService.IntegrationBranchName(run.Id.ToString());
+    return worktreeManager.TryGetBranchDiff(run.RepositoryPath, run.OriginatingBranch, integrationBranch);
+}
+
+static bool ShouldUsePersistedAssemblyDiff(Run run) =>
+    !string.IsNullOrEmpty(run.Diff)
+    && run.Status is RunStatus.AwaitingReview
+        or RunStatus.Committing
+        or RunStatus.Merging
+        or RunStatus.Merged
+        or RunStatus.MergeFailed
+        or RunStatus.Declined
+        or RunStatus.Completed;
 
 static IResult BadRequestError(string error, string message) =>
     Results.Json(new { error, message }, statusCode: StatusCodes.Status400BadRequest);
