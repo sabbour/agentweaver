@@ -373,8 +373,10 @@ harnesses and their individual Copilot CLI skills exist.
   - After all three complete — **or a configurable subset** (e.g. *"just API + MCP"* for
     a backend-only pass) — it feeds their outputs into the shared
     `scripts/harness-judge/meta-aggregate.mjs` (already in the architecture) to produce
-    **one combined cross-surface verdict**, correlating findings by
-    persona / scenario / `run_id`. This is where cross-surface reasoning lives — e.g.
+    **one combined cross-surface verdict**, correlating findings strictly by the canonical
+    `(batchId, scenarioId)` join-key tuple defined in the API doc's §3a (the source of
+    truth; the launcher stamps one `batchId` per sweep, and `runId` is diagnostic-only,
+    **not** a join key). This is where cross-surface reasoning lives — e.g.
     *"API clean + UI frustration = pure UX issue"*; *"API P0 fail + UI frustration =
     backend root cause surfacing as bad UX."*
   - It is a **thin orchestrator only**: it process-spawns the three existing CLIs and
@@ -416,15 +418,17 @@ own existing GitHub Issues Mode/intake, based on the evidence Harness hands back
 **3. Two invocation modes — structured and free-text.** The Harness agent accepts a test
 request in either of two forms, and runs the same drivers/judge and returns the same
 evidence bundle from both:
-- **Structured mode (exact repro).** A targeted invocation — e.g. `--persona {name}
-  --scenario {name} --run-id {original}` (exact flag names at Trinity's discretion,
-  consistent with the existing CLI-contract style) — runs just **one** specific
-  persona/scenario combo rather than a full three-harness pass. This is the direct call
-  interface Squad's **"Post-Fix Harness Verification"** ceremony (`.squad/ceremonies.md`)
-  uses: after a fix lands and deploys, Squad **directly invokes Harness** scoped to the
-  originating issue's persona + scenario, passing the original `run_id`/trace context, so
-  Harness re-runs the **exact** repro and returns fresh evidence before the issue is
-  touched.
+- **Structured mode (exact repro).** A targeted invocation that replays a stored
+  **`reproManifest`** (the immutable tuple the API doc defines: `scenarioId`, `inputSeed`,
+  `adapterVersion`, `personaCoreVersion`, `targetRevision`, plus fixture/config state) —
+  runs just **one** specific persona/scenario combo rather than a full three-harness pass.
+  This is the direct call interface Squad's **"Post-Fix Harness Verification"** ceremony
+  (`.squad/ceremonies.md`) uses: after a fix lands and deploys, Squad **directly invokes
+  Harness** passing the originating finding's stored `reproManifest`, so Harness launches
+  a **fresh, truly-comparable** run from the same `scenarioId` + `inputSeed` + persona /
+  adapter versions on the new `targetRevision`, and returns fresh evidence before the
+  issue is touched. The original `run_id`/`trace_id` is carried **only** for log/trace
+  correlation in the evidence bundle — it is diagnostic, never something you replay from.
 - **Free-text mode (exploratory / ad-hoc).** Squad or Ahmed can also invoke Harness with
   **plain prose** describing what to test (e.g. *"check whether the approval gate still
   shows a notification when a run has 3+ dependent tasks"*). Because Harness is a real
