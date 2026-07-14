@@ -7,7 +7,7 @@ _Last updated: 2026-07-14_
 Add a **parallel, browser-driven validation track** to Agentweaver's continuous
 autopilot testing — one that drives the real Web UI with Playwright to exercise,
 fix, and regression-guard the **UI-facing** behavior the API-only persona harness
-(`scripts/persona-harness/`) cannot see. The API harness proves the backend
+(`scripts/api-harness/`) cannot see. The API harness proves the backend
 lifecycle is correct (project → run → outcome spec → events → approvals) by reading
 JSON. This harness proves the operator actually experiences that correctness in the
 browser: the right affordance appears at the right time, the right node lights up,
@@ -47,7 +47,7 @@ the same product through a different surface:
 
 | Harness | Surface | Drives via | Directory |
 |---|---|---|---|
-| **API harness** (exists) | Backend REST lifecycle | bearer-token HTTP calls | `scripts/persona-harness/` |
+| **API harness** (exists) | Backend REST lifecycle | bearer-token HTTP calls | `scripts/api-harness/` |
 | **UI harness** (this spec) | Web UI | Playwright browser | `scripts/ui-harness/` |
 | **MCP harness** (Morpheus, in parallel) | MCP protocol / tool-call surface | MCP client | `scripts/mcp-harness/` (Morpheus's spec) |
 
@@ -69,7 +69,7 @@ Rationale:
 
 - **Different runtime, same contracts.** The API harness is dependency-light
   (Node + `yaml`, no browser). Adding Playwright (a large native browser dependency
-  and a headful, human-gated login step) into `scripts/persona-harness/` would make
+  and a headful, human-gated login step) into `scripts/api-harness/` would make
   the fast, deterministic, CI-friendly API track heavier and would couple two
   independently useful tools. A sibling directory keeps each installable and
   runnable on its own.
@@ -80,11 +80,11 @@ Rationale:
   are surface-agnostic and must become the **shared layer** all three harnesses
   import, not code each harness copies. The migration path is in "Cross-Harness
   Shared Layer" below.
-- **Avoids the active-edit collision.** `scripts/persona-harness/` is under active
+- **Avoids the active-edit collision.** `scripts/api-harness/` is under active
   modification (Tank's approval-driving work, `harness/wip-persona-v1`). A separate
   directory lets the UI track proceed in parallel without touching files another
   agent is mid-edit on. Until the shared layer is extracted, shared modules are
-  consumed **read-only** as a local import from `scripts/persona-harness/`; the
+  consumed **read-only** as a local import from `scripts/api-harness/`; the
   target end-state is the extracted shared packages below.
 
 What is **shared** (all three harnesses) vs **new** (UI-specific):
@@ -189,7 +189,7 @@ scripts/persona-briefs/
   stage 1 of the self-improvement loop model-driven: the harness can invent new
   operator personas (new JTBD variations) rather than replaying jordan/maya/priya.
 - **Migration is a SEED, not a ceiling.** The existing
-  `scripts/persona-harness/briefs/*.md` and the repo's `specs/personas/*.md` are
+  `scripts/api-harness/briefs/*.md` and the repo's `specs/personas/*.md` are
   lifted **once** into `scripts/persona-briefs/personas/` (core) with the
   API-specific phrasing peeled into `surfaces/*.api.md` — a coordinated extraction
   handed to the API-track owner / coordinator (not an out-of-band edit to Tank's
@@ -342,7 +342,7 @@ duplicate them:
 
 Until the shared packages are extracted (a coordinated step, not an out-of-band edit
 to actively-edited API-harness files), the UI harness imports the equivalent modules
-read-only from `scripts/persona-harness/` and carries a thin local UI evidence shim;
+read-only from `scripts/api-harness/` and carries a thin local UI evidence shim;
 the target end-state is the shared packages above.
 
 ### Combined Launcher Skill
@@ -752,7 +752,7 @@ assuming it away.
 
 ## Directory / file layout
 
-A sibling of `scripts/persona-harness/` that **consumes the shared persona and judge
+A sibling of `scripts/api-harness/` that **consumes the shared persona and judge
 packages** (it ships no copied personas and no copied judge logic):
 
 ```
@@ -794,7 +794,7 @@ The UI-specific `JUDGE.ui.md` appendix (what a screenshot/DOM snapshot can and c
 prove) lives in the **shared** `scripts/harness-judge/` alongside `JUDGE.api.md` and
 `JUDGE.mcp.md`, not here — so the methodology stays in one place.
 
-Note the deliberate parallels to `scripts/persona-harness/`: `agent-driver-ui/`
+Note the deliberate parallels to `scripts/api-harness/`: `agent-driver-ui/`
 mirrors `agent-driver/`, `reporter-ui.mjs` mirrors `reporter.mjs`. But personas and
 judge logic are **imported from the shared packages**, never copied — a reader who
 knows the API harness can navigate this one immediately, and the same Priya/Jordan
@@ -836,7 +836,7 @@ case.
 ## Rollout plan (built in parallel, without blocking the API track)
 
 The harness is designed so multiple agents can build it concurrently, and so that
-**no one touches `scripts/persona-harness/` files** while Tank is mid-edit there
+**no one touches `scripts/api-harness/` files** while Tank is mid-edit there
 (read-only import reference only until that track stabilizes).
 
 **Phase 0 — scaffolding + auth (Trinity, first).**
@@ -930,16 +930,16 @@ Reasoning:
   are proven on the API side, but the **browser** driving loop this document
   specifies is not built yet.
 - Therefore: **re-scope #1 to the UI track** (this plan), keep it open, and
-  cross-reference it to the API harness (`scripts/persona-harness/`) as the already-
+  cross-reference it to the API harness (`scripts/api-harness/`) as the already-
   delivered API half. Once Phase 0-4 above land and at least one UI persona brief
   drives → captures → is judged → is meta-aggregated end-to-end against staging,
   **#1 can close as fully satisfied** (both tracks delivered, loop documented across
   both). Filing a fresh narrower issue is unnecessary — #1's own text is already the
   right scope for the UI track; it just needs a comment re-pointing it at this plan
-  and noting the API half is done under the separate persona-harness.
+  and noting the API half is done under the separate API harness.
 
 Concretely, the recommended comment on #1: _"API-driven half delivered as
-`scripts/persona-harness/` (primary track, per decision 2026-07-14). This issue now
+`scripts/api-harness/` (primary track, per decision 2026-07-14). This issue now
 tracks the remaining Playwright/UI half, specified in `docs/ui-test-harness-plan.md`.
 Close when the UI harness drives → captures → is judged → meta-aggregates one persona
 brief end-to-end against staging."_
