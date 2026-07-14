@@ -409,7 +409,7 @@ export function BrowserConsole() {
       case 'clear':
         return { text: '', clear: true };
       case 'projects': {
-        const projects = await apiClient.listProjects();
+        const { items: projects } = await apiClient.listProjects({ pageSize: 100 });
         if (!projects.length) return { text: 'No projects yet.', links: [{ label: 'Open Projects', to: '/projects' }], tools: [commandTool('List projects')] };
         return {
           text: `${projects.length} project(s). Use /use <name or id> to pin one when you are outside a project route.`,
@@ -419,7 +419,7 @@ export function BrowserConsole() {
       }
       case 'use': {
         if (!arg) return { kind: 'clarification', text: 'Which project should I use? Try /projects, then /use <name or id>.' };
-        const projects = await apiClient.listProjects();
+        const { items: projects } = await apiClient.listProjects({ pageSize: 100 });
         const { project, candidates } = resolveProject(projects, arg);
         if (project) {
           return {
@@ -475,7 +475,7 @@ export function BrowserConsole() {
       }
       case 'runs': {
         if (!projectId) return { kind: 'clarification', text: 'Choose a project first with /use <project>, or navigate to a project.' };
-        const runs = await apiClient.listProjectRuns(projectId);
+        const { items: runs } = await apiClient.listProjectRuns(projectId, { pageSize: 100 });
         return {
           text: runs.length ? `${runs.length} run(s). Use /monitor <runId> or open a run.` : 'No orchestration runs yet.',
           links: runs.slice(0, 25).map((r) => {

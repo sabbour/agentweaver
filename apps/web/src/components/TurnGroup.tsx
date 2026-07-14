@@ -263,6 +263,7 @@ const HeaderedClusterRow = memo(function HeaderedClusterRow({
           content={msg.content}
           streaming={msg.streaming}
           isLiveRun={isLiveRun}
+          timestamp={msg.receivedAt}
         />
         <button
           className={styles.toolsHeader}
@@ -344,6 +345,7 @@ export const TurnGroup = memo(function TurnGroup({ item, isLiveRun, streamStatus
                 content={step.content}
                 streaming={step.streaming}
                 isLiveRun={isLiveRun}
+                timestamp={step.receivedAt}
               />
             );
           }

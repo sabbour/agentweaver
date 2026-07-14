@@ -40,6 +40,7 @@ import { ErrorState, MetricRow } from '../components/ui';
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import type { Project, WorkflowRunDto } from '../api/types';
+import { isTerminalRunStatus, normalizeRunStatus } from '../utils/runStatus';
 // Map a coordinator orchestration status (Feature 008) to a human label. Optional —
 // the backend adds coordinator_status concurrently, so callers fall back to the bare
 // RunStatus when it is absent.
@@ -62,12 +63,11 @@ function coordinatorStatusLabel(status: string | undefined): string | undefined 
 // was cancelled/abandoned mid-'dispatching'), the badge must fall back to the run-level
 // status instead of showing a stale in-flight label (#304).
 const TERMINAL_COORD_LABELS = new Set(['Complete', 'Failed', 'Blocked', 'Declined']);
-const RUN_TERMINAL_STATUSES = new Set(['completed', 'merged', 'failed', 'merge_failed', 'declined']);
-
 function runStatusFallbackLabel(run: WorkflowRunDto): string {
   const result = run.result?.toLowerCase() ?? '';
   if (result.includes('abandon')) return 'Cancelled';
-  const status = run.status?.toLowerCase() ?? '';
+  const status = normalizeRunStatus(run.status);
+  if (status === 'assemble_ready') return 'Ready for assembly';
   if (status === 'declined') return 'Declined';
   if (status === 'merge_failed') return 'Merge failed';
   if (status === 'merged' || status === 'completed') return 'Complete';
@@ -79,7 +79,7 @@ function runStatusFallbackLabel(run: WorkflowRunDto): string {
 // coordinator_status when the run has already terminated (#304).
 function resolveRunStatusLabel(run: WorkflowRunDto): string | undefined {
   const coordLabel = coordinatorStatusLabel(run.coordinator_status);
-  if (RUN_TERMINAL_STATUSES.has(run.status?.toLowerCase() ?? '') && (!coordLabel || !TERMINAL_COORD_LABELS.has(coordLabel))) {
+  if (isTerminalRunStatus(run.status) && (!coordLabel || !TERMINAL_COORD_LABELS.has(coordLabel))) {
     return runStatusFallbackLabel(run);
   }
   return coordLabel;
@@ -252,7 +252,7 @@ function RunRow({ run, projectId, onDeleted }: { run: WorkflowRunDto; projectId:
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const isTerminal = ['completed', 'merged', 'failed', 'merge_failed', 'declined'].includes(run.status);
+  const isTerminal = isTerminalRunStatus(run.status);
   const isAbandonable = !isTerminal;
   const isCoord = isCoordinatorRun(run);
   const coordLabel = isCoord ? resolveRunStatusLabel(run) : undefined;
@@ -291,12 +291,14 @@ function RunRow({ run, projectId, onDeleted }: { run: WorkflowRunDto; projectId:
             run.status === 'merged' ? 'success' :
             run.status === 'completed' && run.result === 'no_changes' ? 'subtle' :
             run.status === 'completed' ? 'success' :
+            run.status === 'assemble_ready' ? 'success' :
             run.status === 'failed' || run.status === 'merge_failed' ? 'danger' :
             run.status === 'in_progress' ? 'subtle' : 'subtle'
           }>
             {run.status === 'completed' && run.result === 'no_changes' ? 'No Changes' :
              run.status === 'completed' ? 'Completed' :
              run.status === 'merged' ? 'Merged' :
+             run.status === 'assemble_ready' ? 'Ready for assembly' :
              run.status === 'failed' ? 'Failed' :
              run.status === 'merge_failed' ? 'Merge Failed' :
              run.status === 'declined' ? 'Declined' :
@@ -399,12 +401,11 @@ export function ProjectPage() {
   useEffect(() => {
     if (!projectId) return;
     let cancelled = false;
-
-    const TERMINAL = ['completed', 'merged', 'failed', 'merge_failed', 'declined'];
+    let intervalId: ReturnType<typeof setInterval> | null = null;
 
     const fetchRuns = async () => {
       try {
-        const runList = await apiClient.listProjectRuns(projectId);
+        const { items: runList } = await apiClient.listProjectRuns(projectId, { pageSize: 100 });
         if (!cancelled) setRuns([...runList].reverse());
         return runList;
       } catch {
@@ -422,18 +423,20 @@ export function ProjectPage() {
         }
         // Kick off polling while any run is non-terminal
         if (!runList) return;
-        const hasLive = runList.some(r => !TERMINAL.includes(r.status));
+        const hasLive = runList.some((run) => !isTerminalRunStatus(run.status));
         if (!hasLive) return;
-        const iv = setInterval(() => {
-          if (cancelled) { clearInterval(iv); return; }
-          void fetchRuns().then(latest => {
-            if (latest && latest.every(r => TERMINAL.includes(r.status))) {
-              clearInterval(iv);
+        intervalId = setInterval(() => {
+          if (cancelled && intervalId) {
+            clearInterval(intervalId);
+            return;
+          }
+          void fetchRuns().then((latest) => {
+            if (latest && latest.every((run) => isTerminalRunStatus(run.status)) && intervalId) {
+              clearInterval(intervalId);
+              intervalId = null;
             }
           });
         }, 5000);
-        // Store interval id via closure — cleaned up when cancelled
-        return () => clearInterval(iv);
       })
       .catch((err) => {
         if (!cancelled) setError(
@@ -444,11 +447,14 @@ export function ProjectPage() {
       })
       .finally(() => { if (!cancelled) setLoading(false); });
 
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+      if (intervalId) clearInterval(intervalId);
+    };
   }, [projectId]);
 
   if (!projectId) return null;
-  const liveRuns = runs.filter((run) => !['completed', 'merged', 'failed', 'merge_failed', 'declined'].includes(run.status));
+  const liveRuns = runs.filter((run) => !isTerminalRunStatus(run.status));
   const completedRuns = runs.length - liveRuns.length;
 
   return (

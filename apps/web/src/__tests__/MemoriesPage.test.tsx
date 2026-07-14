@@ -1,7 +1,7 @@
 import { apiClient } from '../api/apiClient';
 import { AzureFluentProvider } from '../copilot-fluent-system';
 import { MemoriesPage } from '../pages/MemoriesPage';
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import {
   afterEach,
@@ -18,8 +18,27 @@ vi.mock('../api/apiClient', () => ({
     getDecisions: vi.fn(),
     getDecisionsInbox: vi.fn(),
     getProjectMemory: vi.fn(),
+    mergeDecisionInboxEntry: vi.fn(),
+    promoteDecisionInboxEntry: vi.fn(),
+    rejectDecisionInboxEntry: vi.fn(),
   },
 }));
+
+// Pagination contract (`.squad/decisions/inbox/niobe-pagination-contract.md`): these client
+// methods now resolve a `{ items, page, page_size, total_count, total_pages }` envelope.
+function page<T>(items: T[]) {
+  return { items, page: 1, page_size: 25, total_count: items.length, total_pages: 1 } as never;
+}
+
+function pagedResult<T>(items: T[], pageNumber: number, pageSize: number, totalCount: number) {
+  return {
+    items,
+    page: pageNumber,
+    page_size: pageSize,
+    total_count: totalCount,
+    total_pages: Math.max(1, Math.ceil(totalCount / Math.max(1, pageSize))),
+  } as never;
+}
 
 function Wrapper({ children }: { children: ReactNode }) {
   return <AzureFluentProvider density="compact">{children}</AzureFluentProvider>;
@@ -66,6 +85,23 @@ function makePending(id: string): DecisionInboxEntryDto {
   };
 }
 
+// Like makePending, but with a unique title per id so pagination tests can assert exactly
+// which entries are visible on a given page.
+function makeNumberedPending(id: string, index: number): DecisionInboxEntryDto {
+  return {
+    id,
+    agent_name: 'Architect',
+    slug: `scope-cut-${index}`,
+    type: 'scope',
+    title: `Proposal ${index}`,
+    content: `Pending proposal number ${index}.`,
+    rationale: undefined,
+    status: 'pending',
+    created_at: '2026-02-02T00:00:00Z',
+    updated_at: '2026-02-02T00:00:00Z',
+  };
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
 });
@@ -76,8 +112,8 @@ afterEach(() => {
 
 describe('MemoriesPage — Decisions tab', () => {
   it('renders a Proposed section for pending inbox entries', async () => {
-    vi.mocked(apiClient.getDecisions).mockResolvedValue([makeActive('d1')]);
-    vi.mocked(apiClient.getDecisionsInbox).mockResolvedValue([makePending('p1')]);
+    vi.mocked(apiClient.getDecisions).mockResolvedValue(page([makeActive('d1')]));
+    vi.mocked(apiClient.getDecisionsInbox).mockResolvedValue(page([makePending('p1')]));
 
     renderPage();
 
@@ -90,8 +126,8 @@ describe('MemoriesPage — Decisions tab', () => {
   });
 
   it('does not render a Proposed section when the inbox is empty', async () => {
-    vi.mocked(apiClient.getDecisions).mockResolvedValue([makeActive('d1')]);
-    vi.mocked(apiClient.getDecisionsInbox).mockResolvedValue([]);
+    vi.mocked(apiClient.getDecisions).mockResolvedValue(page([makeActive('d1')]));
+    vi.mocked(apiClient.getDecisionsInbox).mockResolvedValue(page([]));
 
     renderPage();
 
@@ -100,10 +136,10 @@ describe('MemoriesPage — Decisions tab', () => {
   });
 
   it('ignores non-pending inbox entries', async () => {
-    vi.mocked(apiClient.getDecisions).mockResolvedValue([makeActive('d1')]);
-    vi.mocked(apiClient.getDecisionsInbox).mockResolvedValue([
+    vi.mocked(apiClient.getDecisions).mockResolvedValue(page([makeActive('d1')]));
+    vi.mocked(apiClient.getDecisionsInbox).mockResolvedValue(page([
       { ...makePending('p1'), status: 'merged' },
-    ]);
+    ]));
 
     renderPage();
 
@@ -112,11 +148,97 @@ describe('MemoriesPage — Decisions tab', () => {
   });
 
   it('shows the combined empty state when both active and pending are empty', async () => {
-    vi.mocked(apiClient.getDecisions).mockResolvedValue([]);
-    vi.mocked(apiClient.getDecisionsInbox).mockResolvedValue([]);
+    vi.mocked(apiClient.getDecisions).mockResolvedValue(page([]));
+    vi.mocked(apiClient.getDecisionsInbox).mockResolvedValue(page([]));
 
     renderPage();
 
     await waitFor(() => expect(screen.getByText('No decisions recorded yet')).toBeTruthy());
+  });
+
+  it('pages pending proposals from the server instead of capping at a fixed snapshot', async () => {
+    vi.mocked(apiClient.getDecisions).mockResolvedValue(page([]));
+    const allPending = Array.from({ length: 30 }, (_, i) => makeNumberedPending(`p${i + 1}`, i + 1));
+    vi.mocked(apiClient.getDecisionsInbox).mockImplementation(async (_projectId, options) => {
+      const pageNumber = options?.page ?? 1;
+      const pageSize = options?.pageSize ?? 25;
+      const start = (pageNumber - 1) * pageSize;
+      return pagedResult(allPending.slice(start, start + pageSize), pageNumber, pageSize, allPending.length);
+    });
+
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText('Proposal 1')).toBeTruthy());
+    expect(screen.queryByText('Proposal 26')).toBeNull();
+    // Total pending shown in the metric row reflects the full server-side count, not just
+    // the current page's item count.
+    expect(screen.getByText('30')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+
+    await waitFor(() => expect(screen.getByText('Proposal 26')).toBeTruthy());
+    expect(screen.queryByText('Proposal 1')).toBeNull();
+    expect(
+      vi.mocked(apiClient.getDecisionsInbox).mock.calls.some(([, options]) => options?.page === 2 && options?.pageSize === 25),
+    ).toBe(true);
+  });
+
+  it('resets to page 1 and refetches when the pending-proposals page size changes', async () => {
+    vi.mocked(apiClient.getDecisions).mockResolvedValue(page([]));
+    const allPending = Array.from({ length: 30 }, (_, i) => makeNumberedPending(`p${i + 1}`, i + 1));
+    vi.mocked(apiClient.getDecisionsInbox).mockImplementation(async (_projectId, options) => {
+      const pageNumber = options?.page ?? 1;
+      const pageSize = options?.pageSize ?? 25;
+      const start = (pageNumber - 1) * pageSize;
+      return pagedResult(allPending.slice(start, start + pageSize), pageNumber, pageSize, allPending.length);
+    });
+
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText('Proposal 1')).toBeTruthy());
+
+    fireEvent.click(screen.getByRole('combobox', { name: 'Rows per page' }));
+    fireEvent.click(await screen.findByRole('option', { name: '10 / page' }));
+
+    await waitFor(() =>
+      expect(
+        vi.mocked(apiClient.getDecisionsInbox).mock.calls.some(([, options]) => options?.page === 1 && options?.pageSize === 10),
+      ).toBe(true),
+    );
+    // Only 10 items should render on the reset first page at the new page size.
+    expect(screen.getByText('Proposal 10')).toBeTruthy();
+    expect(screen.queryByText('Proposal 11')).toBeNull();
+  });
+
+  it('falls back to the last valid pending-proposals page after removing the only item on page 2', async () => {
+    vi.mocked(apiClient.getDecisions).mockResolvedValue(page([]));
+    let allPending = Array.from({ length: 26 }, (_, i) => makeNumberedPending(`p${i + 1}`, i + 1));
+    vi.mocked(apiClient.getDecisionsInbox).mockImplementation(async (_projectId, options) => {
+      const pageNumber = options?.page ?? 1;
+      const pageSize = options?.pageSize ?? 25;
+      const start = (pageNumber - 1) * pageSize;
+      return pagedResult(allPending.slice(start, start + pageSize), pageNumber, pageSize, allPending.length);
+    });
+    vi.mocked(apiClient.rejectDecisionInboxEntry).mockImplementation(async (_projectId, entryId) => {
+      allPending = allPending.filter(entry => entry.id !== entryId);
+    });
+
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText('Proposal 1')).toBeTruthy());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+
+    await waitFor(() => expect(screen.getByText('Proposal 26')).toBeTruthy());
+    expect(screen.queryByText('Proposal 1')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Reject' }));
+
+    await waitFor(() => expect(screen.getByText('Proposal 1')).toBeTruthy());
+    expect(screen.queryByText('Proposal 26')).toBeNull();
+    expect(screen.getByText('Pending proposals')).toBeTruthy();
+    expect(
+      vi.mocked(apiClient.getDecisionsInbox).mock.calls.some(([, options]) => options?.page === 1 && options?.pageSize === 25),
+    ).toBe(true);
   });
 });

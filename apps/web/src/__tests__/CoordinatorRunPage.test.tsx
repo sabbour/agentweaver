@@ -180,6 +180,34 @@ describe('CoordinatorRunPage — unified coordinator graph view', () => {
     expect((screen.getByRole('button', { name: /Stop run/i }) as HTMLButtonElement).disabled).toBe(true);
   });
 
+  it('treats assemble_ready as a terminal run status in the detail view', async () => {
+    vi.mocked(apiClient.getRunGraph).mockRejectedValue(new ApiError(404, 'not found'));
+    vi.mocked(apiClient.getRun).mockResolvedValue({ run_id: 'coord-run-1', status: 'assemble_ready' } as never);
+    vi.mocked(apiClient.getWorkPlan).mockRejectedValue(new ApiError(404, 'not found'));
+
+    render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    await waitFor(
+      () => expect(document.body.textContent).toContain('Finished'),
+      { timeout: 4000 },
+    );
+    expect(document.body.textContent).toContain('Ready for assembly');
+  });
+
+  it('does not incorrectly terminalize blocked run status without a terminal orchestration phase', async () => {
+    vi.mocked(apiClient.getRunGraph).mockRejectedValue(new ApiError(404, 'not found'));
+    vi.mocked(apiClient.getRun).mockResolvedValue({ run_id: 'coord-run-1', status: 'blocked' } as never);
+    vi.mocked(apiClient.getWorkPlan).mockRejectedValue(new ApiError(404, 'not found'));
+
+    render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    await waitFor(
+      () => expect(document.body.textContent).toContain('Coordinator is still shaping the run'),
+      { timeout: 4000 },
+    );
+    expect(document.body.textContent).not.toContain('Finished');
+  });
+
   it('requires confirmation before stopping an active run', async () => {
     render(<Wrapper><CoordinatorRunPage /></Wrapper>);
 
@@ -192,6 +220,21 @@ describe('CoordinatorRunPage — unified coordinator graph view', () => {
 
     fireEvent.click(within(dialog).getByRole('button', { name: 'Stop run' }));
     await waitFor(() => expect(apiClient.steerCoordinator).toHaveBeenCalledWith('coord-run-1', { kind: 'stop' }));
+  });
+
+  it('cancelling the stop confirmation dialog leaves the run running (true no-op)', async () => {
+    render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    const stopButton = await screen.findByRole('button', { name: 'Stop run' }, { timeout: 4000 });
+    fireEvent.click(stopButton);
+
+    const dialog = await screen.findByRole('dialog');
+    expect(dialog.textContent).toContain('Are you sure you want to stop this run?');
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(apiClient.steerCoordinator).not.toHaveBeenCalled();
   });
 
   it('surfaces stream errors and dropped events in a health banner', async () => {
@@ -616,6 +659,23 @@ describe('CoordinatorRunPage — unified coordinator graph view', () => {
     // SubtaskNode renders data-node-type="subtask" on its card div.
     const html = inspector.innerHTML;
     expect(html).toContain('data-node-type="subtask"');
+  });
+
+  it('surfaces coordinator model badges from the graph descriptor into the session panel header', async () => {
+    vi.mocked(apiClient.getRunGraph).mockResolvedValue({
+      ...COORDINATOR_GRAPH_DESCRIPTOR,
+      nodes: COORDINATOR_GRAPH_DESCRIPTOR.nodes.map((node) =>
+        node.id === 'coordinator'
+          ? { ...node, model: 'claude-sonnet-4.6' }
+          : node),
+    });
+
+    render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    await waitFor(
+      () => expect(document.querySelector('[title="claude-sonnet-4.6"]')?.textContent).toContain('Claude Sonnet 4.6'),
+      { timeout: 4000 },
+    );
   });
 
   it('removes background minimap graph nodes while the topology panel is open so the first subtask click targets the visible graph', async () => {

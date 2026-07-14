@@ -171,6 +171,13 @@ internal sealed class PreviewRunnerToolProvider(IPreviewRunner runner) : IAgentR
 
 internal sealed class PreviewRunner : BackgroundService, IPreviewRunner
 {
+    /// <summary>
+    /// Host header used when health-probing the app, matching the Host the preview gateway rewrites
+    /// external traffic to (see SandboxPreviewService.PreviewUpstreamHost). Keeping the probe and the
+    /// gateway on the same Host means readiness reflects real browser reachability (#312).
+    /// </summary>
+    private const string PreviewUpstreamHost = "localhost";
+
     private static readonly Regex[] PortPatterns =
     [
         new(@"\bLISTENING\s+ON\s+PORT\s+(?<port>\d{2,5})\b", RegexOptions.IgnoreCase | RegexOptions.Compiled),
@@ -449,7 +456,14 @@ internal sealed class PreviewRunner : BackgroundService, IPreviewRunner
         var url = $"http://127.0.0.1:{port}{normalizedPath}";
         try
         {
-            using var response = await http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, ct)
+            using var request = new HttpRequestMessage(HttpMethod.Get, url);
+            // Send the SAME Host the preview gateway rewrites external traffic to (#312). Connecting
+            // to 127.0.0.1 keeps the probe pod-local and fast, but the app must see the production
+            // Host so readiness reflects what a real browser request (Host -> "localhost" at the
+            // gateway) will get. Without this, the probe's implicit "127.0.0.1" Host is an IP that
+            // dev-server host allowlists (Vite/CRA/Angular) always accept, masking a host block.
+            request.Headers.Host = PreviewUpstreamHost;
+            using var response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct)
                 .ConfigureAwait(false);
             var healthy = (int)response.StatusCode < 500;
             return new PreviewHealthResult(
@@ -995,6 +1009,14 @@ internal sealed class PreviewRunner : BackgroundService, IPreviewRunner
         ulong? startTime,
         CancellationToken ct)
         => SnapshotProcessTreeListeningPortsAsync(new ProcessIdentity(pid, startTime), ct);
+
+    /// <summary>
+    /// Test seam: probe an app on <paramref name="port"/> directly, bypassing process-tree
+    /// attribution. Exercises the real <see cref="ProbeHealthAsync"/> path, including the Host
+    /// header the gateway rewrites external traffic to (#312).
+    /// </summary>
+    internal Task<PreviewHealthResult> ProbeHealthForTestAsync(int port, string path, CancellationToken ct)
+        => ProbeHealthAsync("test-session", port, path, ct);
 
     private static bool TryParseSocketInode(string? linkTarget, out ulong inode)
     {

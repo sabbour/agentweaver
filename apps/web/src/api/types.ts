@@ -289,6 +289,27 @@ export interface WorkflowRunDto {
   archived_at?: string | null;
 }
 
+// Shared paging envelope returned by list endpoints per the pagination contract
+// (`.squad/decisions/inbox/niobe-pagination-contract.md`): `GET /api/projects`,
+// `GET /api/projects/{id}/runs`, `GET /api/projects/{id}/decisions`,
+// `GET /api/projects/{id}/decisions/inbox`, `GET /api/projects/{id}/memory`, and
+// `GET /api/projects/{id}/agents/{name}/memory`. Field names are snake_case to match
+// the rest of the API's JSON contract.
+export interface PagedResult<T> {
+  items: T[];
+  page: number;
+  page_size: number;
+  total_count: number;
+  total_pages: number;
+}
+
+/** Request options for paged list endpoints. `page` is 1-based; `pageSize` maps to the `page_size` query param. */
+export interface PagedRequestOptions {
+  page?: number;
+  pageSize?: number;
+  signal?: AbortSignal;
+}
+
 export interface DecisionDto {
   id: string;
   agent_name: string;
@@ -1363,6 +1384,28 @@ export interface OverviewDto {
   active_workflow_runs: ActiveWorkflowRunDto[];
   active_projects: ActiveProjectDto[];
   recent_activity: RecentActivityDto[];
+}
+
+// ── #247 — Global notification center ─────────────────────────────────────────
+// GET /api/notifications — the signed-in user's pending Human Review requests across every
+// project/run they own. Tool Approval aggregation is a documented fast-follow (see
+// apps/Agentweaver.Api/Notifications/NotificationsService.cs), so `type` is currently always
+// "human_review", but the field is kept open-ended for that future addition.
+export interface NotificationDto {
+  id: string;
+  type: 'human_review' | 'tool_approval';
+  run_id: string;
+  project_id: string | null;
+  project_name: string | null;
+  agent_name: string | null;
+  title: string;
+  created_utc: string;
+  cta_path: string;
+}
+
+export interface NotificationsResponseDto {
+  generated_utc: string;
+  notifications: NotificationDto[];
 }
 
 // ── Feature 014 — Spec-to-Backlog decomposition ───────────────────────────────

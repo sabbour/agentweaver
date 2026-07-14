@@ -250,6 +250,26 @@ public sealed class RemoteAgentProxy : IWorkflowTurnAgent, IPreparedWritebackSou
         _preparedWriteback = null;
         StructuredRunFailure? lastStructuredFailure = null;
 
+        // Rolling trail of the last few update "shapes" seen on this turn. The A2A SDK
+        // (Microsoft.Agents.AI.A2A.A2AAgent.RunCoreStreamingAsync) throws NotSupportedException
+        // ("Received: None") when it receives a wire StreamResponse where NONE of its four
+        // known fields (Task/Message/StatusUpdate/ArtifactUpdate) are populated — see #267.
+        // Our own server-side emission (AgentEventQueue.EnqueueMessageAsync in A2ATurnBridgeAgent's
+        // A2AAgentHandler) always sets the Message field, so this can't originate from a null
+        // AgentResponseUpdate on our side; it is a transport/serialization-level artifact whose
+        // exact trigger is still unconfirmed (see decisions/inbox/tank2-267-a2a-regression.md).
+        // Capturing this trail lets the *next* occurrence be correlated with what content
+        // immediately preceded it, instead of surfacing only "Received: None" with no context.
+        var recentUpdateTrail = new Queue<string>();
+        const int recentUpdateTrailCapacity = 5;
+
+        void RecordUpdateTrail(string shape)
+        {
+            recentUpdateTrail.Enqueue(shape);
+            while (recentUpdateTrail.Count > recentUpdateTrailCapacity)
+                recentUpdateTrail.Dequeue();
+        }
+
         _logger.LogDebug(
             "RemoteAgentProxy: RunTurnAsync starting — run={RunId}, isRevision={IsRevision}",
             _runId, isRevision);
@@ -264,17 +284,26 @@ public sealed class RemoteAgentProxy : IWorkflowTurnAgent, IPreparedWritebackSou
                 ct)
                 .ConfigureAwait(false))
             {
+                if (update.Contents.Count == 0)
+                {
+                    RecordUpdateTrail("empty-update");
+                }
+
                 foreach (var content in update.Contents)
                 {
                     if (content is TextContent textContent &&
                         !string.IsNullOrEmpty(textContent.Text))
                     {
                         textAccumulator.Append(textContent.Text);
+                        RecordUpdateTrail($"text:{textContent.Text.Length}");
                     }
                     else if (content is DataContent dataContent)
                     {
                         if (TryCapturePreparedWritebackEnvelope(dataContent))
+                        {
+                            RecordUpdateTrail("writeback-envelope");
                             continue;
+                        }
 
                         // Decode RunEvent DataPart and forward to the worker's stream.
                         // Sequence is reassigned by RecordingChannelWriter, preserving total
@@ -282,12 +311,22 @@ public sealed class RemoteAgentProxy : IWorkflowTurnAgent, IPreparedWritebackSou
                         var runEvent = RunEventDataPartCodec.TryDecodeRunEvent(dataContent);
                         if (runEvent is not null)
                         {
+                            RecordUpdateTrail($"runEvent:{runEvent.Type}:{EstimatePayloadSize(runEvent.Payload)}b");
+
                             if (TryReadStructuredFailure(runEvent) is { } structuredFailure)
                                 lastStructuredFailure = structuredFailure;
 
                             if (_streamWriter is not null)
                                 await _streamWriter.WriteAsync(runEvent, ct).ConfigureAwait(false);
                         }
+                        else
+                        {
+                            RecordUpdateTrail($"data:{dataContent.MediaType}:{dataContent.Data.Length}b");
+                        }
+                    }
+                    else
+                    {
+                        RecordUpdateTrail($"content:{content.GetType().Name}");
                     }
                 }
             }
@@ -307,9 +346,20 @@ public sealed class RemoteAgentProxy : IWorkflowTurnAgent, IPreparedWritebackSou
 
             if (IsUnsupportedA2aEvent(ex))
             {
+                var trail = recentUpdateTrail.Count > 0
+                    ? string.Join(" -> ", recentUpdateTrail)
+                    : "(no prior updates observed this turn)";
+
+                _logger.LogWarning(
+                    ex,
+                    "RemoteAgentProxy: A2A SDK rejected an unsupported stream event for run '{RunId}'. " +
+                    "Recent update trail leading up to this frame: {Trail}",
+                    _runId, trail);
+
                 throw new WorkflowAgentInfrastructureException(
                     "a2a_protocol_event_unsupported",
-                    $"RemoteAgentProxy: the A2A SDK rejected an unsupported stream event for run '{_runId}': {ex.Message}",
+                    $"RemoteAgentProxy: the A2A SDK rejected an unsupported stream event for run '{_runId}': " +
+                    $"{ex.Message} (recent update trail: {trail})",
                     ex,
                     isRetryable: true);
             }
@@ -577,6 +627,28 @@ public sealed class RemoteAgentProxy : IWorkflowTurnAgent, IPreparedWritebackSou
     internal static bool IsUnsupportedA2aEvent(Exception exception) =>
         exception is NotSupportedException &&
         exception.Message.Contains("Only message, task, task update events are supported", StringComparison.Ordinal);
+
+    /// <summary>
+    /// Cheap, best-effort size estimate for a <see cref="RunEvent"/> payload, used only for the
+    /// diagnostic update-trail captured around #267 ("Received: None") failures. Never throws.
+    /// </summary>
+    internal static int EstimatePayloadSize(object payload)
+    {
+        try
+        {
+            return payload switch
+            {
+                null => 0,
+                string s => s.Length,
+                JsonElement je => je.GetRawText().Length,
+                _ => JsonSerializer.Serialize(payload).Length,
+            };
+        }
+        catch
+        {
+            return -1;
+        }
+    }
 
     internal static bool IsTransientA2aTransportFailure(Exception exception, CancellationToken callerCancellation)
     {

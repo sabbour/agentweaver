@@ -22,6 +22,7 @@ import {
   PageHeader,
   PageSection,
 } from '../components/ui';
+import { Pager } from '../copilot-fluent-system';
 import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import type { AgentMemoryDto, DecisionDto, DecisionInboxEntryDto } from '../api/types';
@@ -118,8 +119,17 @@ export function MemoriesPage() {
 
   const [selectedTab, setSelectedTab] = useState<'decisions' | 'memory'>('decisions');
   const [decisions,   setDecisions]   = useState<DecisionDto[] | null>(null);
+  const [decisionsTotalCount, setDecisionsTotalCount] = useState(0);
+  const [decisionsPage, setDecisionsPage] = useState(1);
+  const [decisionsPageSize, setDecisionsPageSize] = useState(25);
   const [inbox,       setInbox]       = useState<DecisionInboxEntryDto[] | null>(null);
+  const [inboxTotalCount, setInboxTotalCount] = useState(0);
+  const [inboxPage, setInboxPage] = useState(1);
+  const [inboxPageSize, setInboxPageSize] = useState(25);
   const [memory,      setMemory]      = useState<AgentMemoryDto[] | null>(null);
+  const [memoryTotalCount, setMemoryTotalCount] = useState(0);
+  const [memoryPage, setMemoryPage] = useState(1);
+  const [memoryPageSize, setMemoryPageSize] = useState(25);
   const [loading,     setLoading]     = useState(false);
   const [loadError,   setLoadError]   = useState<string | null>(null);
   const [mutationError, setMutationError] = useState<string | null>(null);
@@ -132,6 +142,28 @@ export function MemoriesPage() {
   const [editType, setEditType] = useState('');
   const [editContent, setEditContent] = useState('');
 
+  const loadDecisionsPage = async () => {
+    if (!projectId) return;
+    const [d, initialInbox] = await Promise.all([
+      apiClient.getDecisions(projectId, { page: decisionsPage, pageSize: decisionsPageSize }),
+      apiClient.getDecisionsInbox(projectId, { page: inboxPage, pageSize: inboxPageSize }),
+    ]);
+
+    let nextInbox = initialInbox;
+    if (initialInbox.items.length === 0 && inboxPage > 1) {
+      const lastValidPage = Math.max(1, Math.ceil(initialInbox.total_count / Math.max(1, inboxPageSize)));
+      if (lastValidPage !== inboxPage) {
+        nextInbox = await apiClient.getDecisionsInbox(projectId, { page: lastValidPage, pageSize: inboxPageSize });
+        setInboxPage(lastValidPage);
+      }
+    }
+
+    setDecisions(d.items);
+    setDecisionsTotalCount(d.total_count);
+    setInbox(nextInbox.items);
+    setInboxTotalCount(nextInbox.total_count);
+  };
+
   useEffect(() => {
     if (!projectId) return;
     setLoading(true);
@@ -139,21 +171,17 @@ export function MemoriesPage() {
 
     if (selectedTab === 'decisions') {
       if (decisions !== null && inbox !== null) { setLoading(false); return; }
-      Promise.all([
-        apiClient.getDecisions(projectId),
-        apiClient.getDecisionsInbox(projectId),
-      ])
-        .then(([d, i]) => { setDecisions(d); setInbox(i); })
-        .catch((err: unknown) => { setDecisions([]); setInbox([]); setLoadError(formatApiError(err)); })
+      loadDecisionsPage()
+        .catch((err: unknown) => { setDecisions([]); setDecisionsTotalCount(0); setInbox([]); setInboxTotalCount(0); setLoadError(formatApiError(err)); })
         .finally(() => setLoading(false));
     } else {
       if (memory !== null) { setLoading(false); return; }
-      apiClient.getProjectMemory(projectId)
-        .then(m => setMemory(m))
-        .catch((err: unknown) => { setMemory([]); setLoadError(formatApiError(err)); })
+      apiClient.getProjectMemory(projectId, { page: memoryPage, pageSize: memoryPageSize })
+        .then(m => { setMemory(m.items); setMemoryTotalCount(m.total_count); })
+        .catch((err: unknown) => { setMemory([]); setMemoryTotalCount(0); setLoadError(formatApiError(err)); })
         .finally(() => setLoading(false));
     }
-  }, [projectId, selectedTab, decisions, inbox, memory, reloadKey]);
+  }, [projectId, selectedTab, decisions, inbox, memory, reloadKey, decisionsPage, decisionsPageSize, inboxPage, inboxPageSize, memoryPage, memoryPageSize]);
 
   const retryLoad = () => {
     if (selectedTab === 'decisions') {
@@ -229,11 +257,14 @@ export function MemoriesPage() {
     }
   };
 
+  // The `/decisions/inbox` endpoint defaults to `status=pending` server-side, so `inbox` is
+  // already just the pending page — this filter is a defensive no-op guarding against a future
+  // caller passing an explicit `status` param.
   const pending = (inbox ?? []).filter(e => e.status === 'pending');
   const hasActiveDecisions = decisions !== null && decisions.length > 0;
   const busy = busyAction !== null;
-  const decisionCount = decisions?.length ?? 0;
-  const memoryCount = memory?.length ?? 0;
+  const decisionCount = decisionsTotalCount;
+  const memoryCount = memoryTotalCount;
 
   return (
     <PageContainer>
@@ -252,7 +283,7 @@ export function MemoriesPage() {
       />
 
       <MetricRow items={[
-        { label: 'Pending', value: pending.length },
+        { label: 'Pending', value: inboxTotalCount },
         { label: 'Decisions', value: decisionCount },
         { label: 'Memories', value: memoryCount },
       ]} />
@@ -275,7 +306,7 @@ export function MemoriesPage() {
         )}
 
         {!loading && !loadError && selectedTab === 'decisions' && (
-          !hasActiveDecisions && pending.length === 0
+          !hasActiveDecisions && inboxTotalCount === 0
             ? (
               <EmptyState
                 title="No decisions recorded yet"
@@ -302,6 +333,16 @@ export function MemoriesPage() {
                         </div>
                       ))}
                     </div>
+                    {decisionsTotalCount > decisionsPageSize && (
+                      <Pager
+                        page={decisionsPage}
+                        pageSize={decisionsPageSize}
+                        totalItems={decisionsTotalCount}
+                        pageSizeOptions={[10, 25, 50]}
+                        onPageChange={(p) => { setDecisionsPage(p); setDecisions(null); }}
+                        onPageSizeChange={(size) => { setDecisionsPageSize(size); setDecisionsPage(1); setDecisions(null); }}
+                      />
+                    )}
                   </PageSection>
                 )}
 
@@ -332,6 +373,16 @@ export function MemoriesPage() {
                         </div>
                       ))}
                     </div>
+                    {inboxTotalCount > inboxPageSize && (
+                      <Pager
+                        page={inboxPage}
+                        pageSize={inboxPageSize}
+                        totalItems={inboxTotalCount}
+                        pageSizeOptions={[10, 25, 50]}
+                        onPageChange={(p) => { setInboxPage(p); setInbox(null); }}
+                        onPageSizeChange={(size) => { setInboxPageSize(size); setInboxPage(1); setInbox(null); }}
+                      />
+                    )}
                   </PageSection>
                 )}
               </>
@@ -405,6 +456,16 @@ export function MemoriesPage() {
                       )}
                     </div>
                   ))}
+                  {memoryTotalCount > memoryPageSize && (
+                    <Pager
+                      page={memoryPage}
+                      pageSize={memoryPageSize}
+                      totalItems={memoryTotalCount}
+                      pageSizeOptions={[10, 25, 50]}
+                      onPageChange={(p) => { setMemoryPage(p); setMemory(null); }}
+                      onPageSizeChange={(size) => { setMemoryPageSize(size); setMemoryPage(1); setMemory(null); }}
+                    />
+                  )}
                 </div>
               )}
           </>

@@ -31,6 +31,7 @@ import { DecomposePreviewDialog } from './DecomposePreviewDialog';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { RunStreamEvent, StreamStatus } from '../api/sse';
 import type { OutcomeSpec, OutcomeSpecStatus, ProposedBacklogItem } from '../api/types';
+import { isTerminalRunStatus, normalizeRunStatus } from '../utils/runStatus';
 const useStyles = makeStyles({
   panel: {
     display: 'flex',
@@ -182,7 +183,6 @@ function SpecSection({ label, value }: { label: string; value?: string | string[
 }
 
 const OUTCOME_SPEC_POLL_MS = 2_000;
-const RUN_TERMINAL_STATUSES = new Set(['completed', 'failed', 'declined', 'merged', 'merge_failed']);
 const RUN_FAILURE_STATUSES = new Set(['failed', 'declined', 'merge_failed']);
 
 const STATUS_META: Record<OutcomeSpecStatus, { label: string; tone: 'info' | 'warning' | 'success' | 'danger' }> = {
@@ -350,7 +350,8 @@ export function OutcomePlanPanel({ runId, projectId, events, streamStatus, runSt
     return merged;
   }, [specFromApi, events]);
 
-  const runTerminal = runStatus != null && RUN_TERMINAL_STATUSES.has(runStatus);
+  const normalizedRunStatus = normalizeRunStatus(runStatus);
+  const runTerminal = isTerminalRunStatus(runStatus);
 
   // A 404 means the coordinator has not drafted the spec yet, not that the gate is absent.
   // Keep the panel visible and poll until REST returns the drafted spec, unless the run ends.
@@ -431,7 +432,8 @@ export function OutcomePlanPanel({ runId, projectId, events, streamStatus, runSt
   const runInterrupted = actionError?.includes('no longer active') ?? false;
 
   const hasContent = spec != null && (spec.goal || spec.desiredOutcome || toLines(spec.scope).length > 0 || toLines(spec.assumptions).length > 0);
-  const failedBeforeDraft = !hasContent && !revising && runStatus != null && RUN_FAILURE_STATUSES.has(runStatus);
+  const failedBeforeDraft = !hasContent && !revising && normalizedRunStatus !== '' && RUN_FAILURE_STATUSES.has(normalizedRunStatus);
+  const terminalBeforeDraft = !hasContent && !revising && runTerminal && !failedBeforeDraft;
   const clarifying = useMemo(() => splitQuestions(toLines(spec?.clarifyingQuestions)), [spec?.clarifyingQuestions]);
 
   // Compose the revise feedback from the per-question answers plus any free-form feedback.
@@ -579,6 +581,10 @@ export function OutcomePlanPanel({ runId, projectId, events, streamStatus, runSt
       {failedBeforeDraft ? (
         <MessageBar intent="error">
           <MessageBarBody>The run failed before the Outcome plan could be drafted.</MessageBarBody>
+        </MessageBar>
+      ) : terminalBeforeDraft ? (
+        <MessageBar intent="info">
+          <MessageBarBody>The run finished before the Outcome plan could be drafted.</MessageBarBody>
         </MessageBar>
       ) : !hasContent && !revising ? (
         <AgentStepList

@@ -5,6 +5,7 @@ import { SlidePanel } from '../SlidePanel';
 import { StartOrchestrationFab } from '../StartOrchestrationFab';
 import { ConsolePanelProvider } from './ConsolePanelContext';
 import { LeftNav } from './LeftNav';
+import { NotificationsProvider } from '../../notifications/NotificationsProvider';
 import { resolveActiveKey } from './navConfig';
 import { projectIdFromPath } from './projectIdFromPath';
 import { clearLastActiveProjectId, getLastActiveProjectId, setLastActiveProjectId } from './projectContext';
@@ -74,51 +75,53 @@ export function AppShell({ children }: AppShellProps) {
 
   return (
     <ProjectListProvider>
-      <ConsolePanelProvider value={consoleContext}>
-        <>
-          <div className="aw-app-shell">
-            <LeftNav
-              projectId={effectiveProjectId}
-              activeKey={activeKey}
-              pathname={location.pathname}
-              isFallbackProject={isFallbackProject}
-              onFallbackProjectMissing={clearFallbackProject}
-            />
-            <div className="aw-shell-canvas">
-              {/* key remounts the content area when the active project changes,
-                  clearing stale page state the same way the old bodyKey did. */}
-              <main
-                key={routeProjectId ?? '__global__'}
-                className="aw-shell-content"
-                aria-label="Main content"
-              >
-                <div className="aw-floating-actions">
-                  <StartOrchestrationFab currentProjectId={effectiveProjectId} />
-                </div>
-                <div className="aw-shell-scroll">
-                  {children}
-                </div>
-              </main>
+      <NotificationsProvider>
+        <ConsolePanelProvider value={consoleContext}>
+          <>
+            <div className="aw-app-shell">
+              <LeftNav
+                projectId={effectiveProjectId}
+                activeKey={activeKey}
+                pathname={location.pathname}
+                isFallbackProject={isFallbackProject}
+                onFallbackProjectMissing={clearFallbackProject}
+              />
+              <div className="aw-shell-canvas">
+                {/* key remounts the content area when the active project changes,
+                    clearing stale page state the same way the old bodyKey did. */}
+                <main
+                  key={routeProjectId ?? '__global__'}
+                  className="aw-shell-content"
+                  aria-label="Main content"
+                >
+                  <div className="aw-floating-actions">
+                    <StartOrchestrationFab currentProjectId={effectiveProjectId} />
+                  </div>
+                  <div className="aw-shell-scroll">
+                    {children}
+                  </div>
+                </main>
+              </div>
             </div>
-          </div>
-          {/* Console panel — NOT migrated this slice; SlidePanel + BrowserConsole
-              stay untouched and mount outside the shell grid so they overlay the
-              full viewport correctly. */}
-          <SlidePanel
-            id="app-console-panel"
-            open={consoleOpen}
-            ariaLabel="Agentweaver Copilot dock"
-            onClose={closeConsole}
-            title="Operator dock"
-            width="min(920px, calc(100vw - 24px))"
-            keepMounted
-            flushBody
-            variant="copilotDock"
-          >
-            <BrowserConsole />
-          </SlidePanel>
-        </>
-      </ConsolePanelProvider>
+            {/* Console panel — NOT migrated this slice; SlidePanel + BrowserConsole
+                stay untouched and mount outside the shell grid so they overlay the
+                full viewport correctly. */}
+            <SlidePanel
+              id="app-console-panel"
+              open={consoleOpen}
+              ariaLabel="Agentweaver Copilot dock"
+              onClose={closeConsole}
+              title="Operator dock"
+              width="min(920px, calc(100vw - 24px))"
+              keepMounted
+              flushBody
+              variant="copilotDock"
+            >
+              <BrowserConsole />
+            </SlidePanel>
+          </>
+        </ConsolePanelProvider>
+      </NotificationsProvider>
     </ProjectListProvider>
   );
 }

@@ -17,6 +17,7 @@ public static class MetricsEndpoints
             AppInsightsMetricsService metrics,
             string? from,
             string? to,
+            bool? includeMetrics,
             IProjectStore projectStore,
             CancellationToken ct) =>
         {
@@ -32,6 +33,16 @@ public static class MetricsEndpoints
             var metricsFrom = ParseDateTimeOffset(from);
             var metricsTo = ParseDateTimeOffset(to);
             var summary = await dashboard.GetProjectDashboardAsync(project, ct).ConfigureAwait(false);
+
+            // #208 point 4: callers that already fetch the full metrics DTO from
+            // `/api/projects/{id}/metrics` separately (e.g. DashboardPage.tsx) can pass
+            // `includeMetrics=false` so this endpoint skips its own internal 8-way
+            // `GetProjectMetricsAsync` fan-out, instead of both endpoints triggering it concurrently for
+            // the same page load. Defaults to `true` to preserve the existing response shape/behavior
+            // for any other caller.
+            if (includeMetrics == false)
+                return Results.Ok(summary);
+
             var metricDto = await metrics.GetProjectMetricsAsync(
                 projectId.ToString(),
                 metricsFrom,

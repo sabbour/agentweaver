@@ -154,3 +154,24 @@ Fixed two frontend-only run-panel defects for the staging wave: RAI Reviewer pan
 
 ## 2026-07-13T23:59:00-07:00 — #215 validation
 Validated #215 as stale and closed.
+
+## 2026-07-14T02:35:00-07:00 — Batch merge: #176 probes, #250 fix, #307 capacity overrun
+Scribe merged inbox notes: #176 workflow editor probes underway; #250 fixed locally but staging E2E is blocked pending separate infra issue; #307 AgentHost capacity overrun filed as distinct from #242.
+
+## 2026-07-14T02:35:00-07:00 — #250 live E2E validation, recommend closing
+Fresh-session revalidation confirms #250 (token-breakdown case-insensitive grouping) fix is deployed in v0.9.49-rc1 and live-reachable; prior 401 was a stale/expired bearer token, not a deploy or endpoint issue. Unit test + 6 live run checks confirm no duplicate-cased agent buckets. Recommend closing #250.
+
+## 2026-07-14T03:05:00-07:00 — #186 workflow editor gate palette already implemented, hardened tests added
+Found #186's full acceptance criteria already shipped via commit 8dd8dbb3 (PR #190, merged 2026-07-06) bundled with #187; the GitHub issue was never closed despite the code satisfying every box. Added 3 new component tests covering the add-menu, unrouted-gate warning banner, and read-only legacy tail-node notice. Build and 692/693 tests pass (1 pre-existing unrelated flake). Recommend closing #186 pending peer review.
+
+## 2026-07-14T10:15:00-07:00
+No new Trinity (base, non-2 instance) write-up landed this batch; #186 gate-palette work from pass 2 remains the most recent status. Flagging for size-gate check this pass.
+
+
+## 2026-07-14T10:15:00-07:00 (late arrival)
+#306 phantom-edge fix confirmed already on main (commit ea090ab7) with passing regression test; no code change needed, recommends a final live click-through before closing.
+
+
+## 2026-07-14T11:05:00-07:00
+Investigated #271 retry-resume gap; confirmed real, deferred fixing it (existing epic-#293 architecture proposal, active file overlap with Tank's #242 work). No code changes.
+

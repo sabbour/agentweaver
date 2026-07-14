@@ -77,6 +77,11 @@ echo "      images are retagged with 'az acr import' instead of rebuilt."
 echo "    - Changed images are built in parallel with 'az acr build'."
 echo "    - Set FORCE_REBUILD=true to rebuild every image."
 echo "    - Set DRY_RUN=true to print the build/retag plan without invoking ACR or npm."
+echo "    - Every build/retag is also stamped with a 'prov-<fullsha>' ACR tag recording"
+echo "      the commit its content actually corresponds to (verify with"
+echo "      scripts/aks/25-verify-image-provenance.sh after 30-deploy.sh)."
+echo "    - Provenance stamping is REQUIRED: if the extra prov tag cannot be written,"
+echo "      the image job fails rather than shipping an unverifiable release artifact."
 echo ""
 
 cd "${REPO_ROOT}"
@@ -103,24 +108,58 @@ current_agenthost_tag() {
 # Resolves a release image tag to the commit which wrote that version to VERSION.
 # Releases before v0.9.36 were tagged, but later deploys deliberately only updated VERSION.
 # Looking up the version-bump commit preserves safe selective builds for both histories.
+#
+# Hardening (#251): more than one commit can end up writing the same VERSION
+# value -- e.g. an out-of-band/poisoned build attempt that was superseded
+# without a VERSION bump (see the v0.9.48-rc1 incident). If that happens we
+# only trust the match when:
+#   1) the repository is NOT shallow for the VERSION-history fallback, and
+#   2) every commit that wrote this version is an ancestor of the selected
+#      newest match (pairwise linear-history validation).
+# If any match sits off that line we have no reliable way to know which commit
+# actually produced the currently-deployed image, so we refuse to guess and
+# return failure -- the caller (paths_changed/schedule_image) treats an
+# unresolved source commit as "changed" and takes the safe full-rebuild path
+# instead of risking a stale retag-forward.
 release_ref_for_tag() {
   local tag="$1"
   local version="${tag#v}"
   local commit
+  local -a matches=()
 
   if git rev-parse --verify "${tag}^{commit}" >/dev/null 2>&1; then
     git rev-parse --verify "${tag}^{commit}"
     return 0
   fi
 
+  if [[ "$(git rev-parse --is-shallow-repository 2>/dev/null || echo false)" == "true" ]]; then
+    echo "  [WARN] tag ${tag}: repository is shallow; refusing VERSION-based source resolution (forcing rebuild)" >&2
+    return 1
+  fi
+
   while IFS= read -r commit; do
     if [[ "$(git show "${commit}:VERSION" 2>/dev/null | tr -d '[:space:]')" == "${version}" ]]; then
-      printf '%s\n' "${commit}"
-      return 0
+      matches+=("${commit}")
     fi
   done < <(git log --format=%H --all -- VERSION)
 
-  return 1
+  if [[ "${#matches[@]}" -eq 0 ]]; then
+    return 1
+  fi
+
+  # git log --all lists newest-first, so matches[0] is the newest match. Every
+  # other VERSION-writing commit must be an ancestor of that newest commit; if
+  # any are not, VERSION history is ambiguous/diverged and we must rebuild.
+  local newest="${matches[0]}"
+  local candidate
+  for candidate in "${matches[@]:1}"; do
+    if ! git merge-base --is-ancestor "${candidate}" "${newest}" 2>/dev/null; then
+      echo "  [WARN] tag ${tag}: multiple diverged commits wrote VERSION=${version}; refusing to guess source commit (forcing rebuild)" >&2
+      return 1
+    fi
+  done
+
+  printf '%s\n' "${newest}"
 }
 
 paths_changed() {
@@ -264,6 +303,50 @@ prepare_frontend_dist() {
   stash_frontend_node_modules_outside_acr_context
 }
 
+# Records, as an extra immutable ACR tag pointing at the same digest, which
+# commit this image tag's content actually corresponds to (#251 ask #3:
+# "stamp build SHA into image label"). This is deliberately independent of
+# the build/retag decision above it, so a later, out-of-band check
+# (25-verify-image-provenance.sh) can answer "what commit does the image
+# currently deployed actually correspond to?" without re-trusting whatever
+# paths_changed() decided at build time -- it protects against script bugs,
+# manual 'az acr import' outside this script, or deploying an unexpected tag.
+# Stamping is mandatory: shipping an image we cannot independently map back to
+# source would recreate #251's blind spot, so any stamping failure fails the job.
+# The prov tag uses the full 40-char commit SHA to avoid short-tag collisions.
+stamp_provenance() {
+  local image="$1"
+  local tag="$2"
+  local commit="$3"
+  local resolved_commit=""
+  if [[ -z "${commit}" ]]; then
+    echo "ERROR: no resolvable commit for ${image}:${tag}; refusing to ship unstamped image" >&2
+    return 1
+  fi
+  resolved_commit="$(git rev-parse --verify "${commit}^{commit}" 2>/dev/null || true)"
+  if [[ -z "${resolved_commit}" ]]; then
+    echo "ERROR: provenance commit '${commit}' for ${image}:${tag} is not resolvable in local git history" >&2
+    return 1
+  fi
+  local prov_tag="prov-${resolved_commit}"
+  echo "--- Stamping provenance ${image}:${tag} -> ${image}:${prov_tag} ---"
+  if [[ "${DRY_RUN}" == "true" ]]; then
+    echo "  [dry-run] Would run az acr import for ${image}:${tag} -> ${prov_tag}"
+    return 0
+  fi
+  if ! az acr import \
+    --name "${ACR_NAME}" \
+    --resource-group "${RESOURCE_GROUP}" \
+    --source "${ACR_LOGIN_SERVER}/${image}:${tag}" \
+    --image "${image}:${prov_tag}" \
+    --force \
+    --output none; then
+    echo "ERROR: failed to stamp provenance tag ${image}:${prov_tag}; refusing to ship unstamped image" >&2
+    return 1
+  fi
+  echo "  [prov]   ${ACR_LOGIN_SERVER}/${image}:${prov_tag} (commit ${resolved_commit})"
+}
+
 build_image() {
   local image="$1"
   local tag="$2"
@@ -272,6 +355,7 @@ build_image() {
   echo "--- Building ${image}:${tag} (${dockerfile}) ---"
   if [[ "${DRY_RUN}" == "true" ]]; then
     echo "  [dry-run] Would run az acr build for ${image}:${tag}"
+    stamp_provenance "${image}" "${tag}" "${TARGET_COMMIT}"
     return 0
   fi
   az acr build \
@@ -284,6 +368,7 @@ build_image() {
   echo "  [built]  ${ACR_LOGIN_SERVER}/${image}:${tag}"
   # Also tag as latest-release so it always points at the most recently built version
   retag_image "${image}" "${tag}" "latest-release"
+  stamp_provenance "${image}" "${tag}" "${TARGET_COMMIT}"
 }
 
 retag_image() {
@@ -331,7 +416,8 @@ schedule_image() {
     build_image "${image}" "${target_tag}" "${dockerfile}" &
   else
     echo "  [retag]  ${image} (unchanged since ${source_tag} at ${source_commit:0:12})"
-    retag_image "${image}" "${source_tag}" "${target_tag}" &
+    ( retag_image "${image}" "${source_tag}" "${target_tag}" && \
+      stamp_provenance "${image}" "${target_tag}" "${source_commit}" ) &
   fi
   PIDS+=("$!")
   JOBS+=("${image}:${target_tag}")

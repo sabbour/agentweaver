@@ -13,10 +13,69 @@ public sealed class AppInsightsMetricsService
     private LogsQueryClient? _client;
     private readonly object _clientLock = new();
 
+    /// <summary>
+    /// Process-wide concurrency budget for <c>LogsQueryClient.QueryWorkspaceAsync</c> calls (#208 point
+    /// 3). This service is registered as a singleton (see <c>Program.cs</c>), so a single semaphore here
+    /// bounds the total number of simultaneous Azure Monitor workspace queries across every concurrent
+    /// HTTP request/subquery fan-out, not just the ~8 subqueries of one <see cref="GetProjectMetricsAsync"/>
+    /// call. This does not implement caching or single-flight de-duplication (a larger follow-up); it
+    /// only prevents unbounded fan-out (e.g. an Overview page loading 4 projects x 2 ranges x 8
+    /// subqueries = 64 simultaneous queries) from all reaching Azure Monitor at once.
+    /// </summary>
+    private const int MaxConcurrentWorkspaceQueries = 16;
+    private readonly SemaphoreSlim _queryConcurrency = new(MaxConcurrentWorkspaceQueries, MaxConcurrentWorkspaceQueries);
+
     public AppInsightsMetricsService(IConfiguration configuration, ILogger<AppInsightsMetricsService> logger)
     {
         _configuration = configuration;
         _logger = logger;
+    }
+
+    /// <summary>
+    /// Test-only seam: lets unit tests inject a fake/mock <see cref="LogsQueryClient"/> subclass so
+    /// <see cref="QueryAsync"/>'s cancellation-vs-genuine-failure classification (#208) can be exercised
+    /// without a real Application Insights workspace or credential. Production code paths always go
+    /// through <see cref="GetClient"/>'s lazy <see cref="DefaultAzureCredential"/>-based construction.
+    /// </summary>
+    internal void SetClientForTesting(LogsQueryClient client) => _client = client;
+
+    /// <summary>
+    /// Accumulates genuine (non-cancellation) Application Insights query failures across the parallel
+    /// subqueries of a single top-level metrics batch (e.g. one <see cref="GetProjectMetricsAsync"/>
+    /// call), so the caller logs one Warning per batch — with the count and distinct query contexts —
+    /// instead of one per subquery (#208 point 2, "failure aggregation").
+    /// </summary>
+    private sealed class QueryFailureSink
+    {
+        private readonly object _gate = new();
+        private readonly List<(string Context, Exception Exception)> _failures = [];
+
+        public void Record(string context, Exception exception)
+        {
+            lock (_gate) { _failures.Add((context, exception)); }
+        }
+
+        public IReadOnlyList<(string Context, Exception Exception)> Snapshot()
+        {
+            lock (_gate) { return _failures.ToList(); }
+        }
+    }
+
+    /// <summary>Logs the failures accumulated in <paramref name="sink"/> once, with one line per batch
+    /// (not per subquery), including the distinct failing contexts and total count.</summary>
+    private void LogAggregatedFailures(QueryFailureSink sink, string batchName)
+    {
+        var failures = sink.Snapshot();
+        if (failures.Count == 0) return;
+
+        var contexts = string.Join(", ", failures.Select(f => f.Context).Distinct(StringComparer.Ordinal));
+        _logger.LogError(
+            failures[0].Exception,
+            "Application Insights query batch {BatchName} had {FailureCount} genuine (non-cancellation) " +
+            "subquery failure(s) across contexts [{Contexts}]. Logging once per batch; first exception attached.",
+            batchName,
+            failures.Count,
+            contexts);
     }
 
     private LogsQueryClient? GetClient()
@@ -61,14 +120,20 @@ public sealed class AppInsightsMetricsService
 
         // TODO(issue-106): this endpoint depends on PR #111 landing so the AgentWeaverMetrics
         // counters and GenAI semantic-convention dimensions exist in Application Insights.
-        var throughputTask = QueryThroughputAsync(workspaceId, projectId, start, end, ct);
-        var leaderboardTask = QueryLeaderboardAsync(workspaceId, projectId, start, end, ct);
-        var invocationTrendTask = QueryInvocationTrendAsync(workspaceId, projectId, start, end, ct);
-        var modelUsageTask = QueryModelUsageAsync(workspaceId, projectId, start, end, ct);
-        var responseDurationTask = QueryResponseDurationAsync(workspaceId, projectId, start, end, ct);
-        var ttftTask = QueryTtftAsync(workspaceId, projectId, start, end, ct);
-        var agentBreakdownTask = QueryProjectAgentBreakdownAsync(workspaceId, projectId, start, end, ct);
-        var aiCreditTrendTask = QueryAiCreditUsageTrendAsync(workspaceId, projectId, start, end, ct);
+        //
+        // #208 point 2: one shared failure sink for this entire 8-way batch, so genuine (non-
+        // cancellation) Azure Monitor failures are logged once for the whole batch instead of once per
+        // subquery. Caller-requested cancellation (#208 point 1) is NOT recorded here — it propagates
+        // as an exception out of Task.WhenAll below and is not a "failure" for aggregation purposes.
+        var failures = new QueryFailureSink();
+        var throughputTask = QueryThroughputAsync(workspaceId, projectId, start, end, ct, failures);
+        var leaderboardTask = QueryLeaderboardAsync(workspaceId, projectId, start, end, ct, failures);
+        var invocationTrendTask = QueryInvocationTrendAsync(workspaceId, projectId, start, end, ct, failures);
+        var modelUsageTask = QueryModelUsageAsync(workspaceId, projectId, start, end, ct, failures);
+        var responseDurationTask = QueryResponseDurationAsync(workspaceId, projectId, start, end, ct, failures);
+        var ttftTask = QueryTtftAsync(workspaceId, projectId, start, end, ct, failures);
+        var agentBreakdownTask = QueryProjectAgentBreakdownAsync(workspaceId, projectId, start, end, ct, failures);
+        var aiCreditTrendTask = QueryAiCreditUsageTrendAsync(workspaceId, projectId, start, end, ct, failures);
         await Task.WhenAll(
             throughputTask,
             leaderboardTask,
@@ -78,6 +143,7 @@ public sealed class AppInsightsMetricsService
             ttftTask,
             agentBreakdownTask,
             aiCreditTrendTask).ConfigureAwait(false);
+        LogAggregatedFailures(failures, nameof(GetProjectMetricsAsync));
 
         return new ProjectMetricsDto
         {
@@ -154,7 +220,8 @@ public sealed class AppInsightsMetricsService
         string projectId,
         DateTimeOffset from,
         DateTimeOffset to,
-        CancellationToken ct)
+        CancellationToken ct,
+        QueryFailureSink? failures = null)
     {
         var query =
             $"""
@@ -166,7 +233,7 @@ public sealed class AppInsightsMetricsService
             | order by TimeGenerated asc
             """;
 
-        var result = await QueryAsync(workspaceId, query, from, to, ct).ConfigureAwait(false);
+        var result = await QueryAsync(workspaceId, query, from, to, ct, failures: failures).ConfigureAwait(false);
         if (result is null) return [];
 
         var created = new Dictionary<string, int>(StringComparer.Ordinal);
@@ -203,7 +270,8 @@ public sealed class AppInsightsMetricsService
         string projectId,
         DateTimeOffset from,
         DateTimeOffset to,
-        CancellationToken ct)
+        CancellationToken ct,
+        QueryFailureSink? failures = null)
     {
         var query =
             $"""
@@ -235,7 +303,7 @@ public sealed class AppInsightsMetricsService
             | order by runs_total desc, agent_name asc
             """;
 
-        var result = await QueryAsync(workspaceId, query, from, to, ct).ConfigureAwait(false);
+        var result = await QueryAsync(workspaceId, query, from, to, ct, failures: failures).ConfigureAwait(false);
         if (result is null) return [];
 
         return result.Table.Rows.Select(row => new AgentLeaderboardEntryDto
@@ -257,7 +325,8 @@ public sealed class AppInsightsMetricsService
         string projectId,
         DateTimeOffset from,
         DateTimeOffset to,
-        CancellationToken ct)
+        CancellationToken ct,
+        QueryFailureSink? failures = null)
     {
         var query =
             $"""
@@ -269,7 +338,7 @@ public sealed class AppInsightsMetricsService
             | order by TimeGenerated asc
             """;
 
-        var result = await QueryAsync(workspaceId, query, from, to, ct).ConfigureAwait(false);
+        var result = await QueryAsync(workspaceId, query, from, to, ct, failures: failures).ConfigureAwait(false);
         if (result is null) return [];
 
         var counts = result.Table.Rows.ToDictionary(
@@ -296,7 +365,8 @@ public sealed class AppInsightsMetricsService
         string projectId,
         DateTimeOffset from,
         DateTimeOffset to,
-        CancellationToken ct)
+        CancellationToken ct,
+        QueryFailureSink? failures = null)
     {
         var query =
             $"""
@@ -314,7 +384,7 @@ public sealed class AppInsightsMetricsService
             | order by total_nano_aiu desc, model_name asc
             """;
 
-        var result = await QueryAsync(workspaceId, query, from, to, ct).ConfigureAwait(false);
+        var result = await QueryAsync(workspaceId, query, from, to, ct, failures: failures).ConfigureAwait(false);
         if (result is null) return [];
 
         return result.Table.Rows.Select(row => new ModelUsageBreakdownDto
@@ -330,7 +400,8 @@ public sealed class AppInsightsMetricsService
         string projectId,
         DateTimeOffset from,
         DateTimeOffset to,
-        CancellationToken ct)
+        CancellationToken ct,
+        QueryFailureSink? failures = null)
     {
         var query =
             $"""
@@ -356,7 +427,7 @@ public sealed class AppInsightsMetricsService
             | order by model_name asc
             """;
 
-        var result = await QueryAsync(workspaceId, query, from, to, ct).ConfigureAwait(false);
+        var result = await QueryAsync(workspaceId, query, from, to, ct, failures: failures).ConfigureAwait(false);
         if (result is null) return [];
 
         return result.Table.Rows.Select(row => new MetricPercentilesDto
@@ -372,7 +443,8 @@ public sealed class AppInsightsMetricsService
         string projectId,
         DateTimeOffset from,
         DateTimeOffset to,
-        CancellationToken ct)
+        CancellationToken ct,
+        QueryFailureSink? failures = null)
     {
         var query =
             $"""
@@ -405,7 +477,7 @@ public sealed class AppInsightsMetricsService
             | order by model_name asc
             """;
 
-        var result = await QueryAsync(workspaceId, query, from, to, ct).ConfigureAwait(false);
+        var result = await QueryAsync(workspaceId, query, from, to, ct, failures: failures).ConfigureAwait(false);
         if (result is null) return [];
 
         return result.Table.Rows.Select(row => new MetricPercentilesDto
@@ -421,7 +493,8 @@ public sealed class AppInsightsMetricsService
         string projectId,
         DateTimeOffset from,
         DateTimeOffset to,
-        CancellationToken ct)
+        CancellationToken ct,
+        QueryFailureSink? failures = null)
     {
         var query =
             $"""
@@ -437,7 +510,7 @@ public sealed class AppInsightsMetricsService
             | order by total_nano_aiu desc, agent_name asc
             """;
 
-        var result = await QueryAsync(workspaceId, query, from, to, ct).ConfigureAwait(false);
+        var result = await QueryAsync(workspaceId, query, from, to, ct, failures: failures).ConfigureAwait(false);
         if (result is null) return [];
 
         return result.Table.Rows.Select(row => new AgentUsageBreakdownDto
@@ -535,7 +608,8 @@ public sealed class AppInsightsMetricsService
         string projectId,
         DateTimeOffset from,
         DateTimeOffset to,
-        CancellationToken ct)
+        CancellationToken ct,
+        QueryFailureSink? failures = null)
     {
         var query =
             $"""
@@ -547,7 +621,7 @@ public sealed class AppInsightsMetricsService
             | order by TimeGenerated asc
             """;
 
-        var result = await QueryAsync(workspaceId, query, from, to, ct).ConfigureAwait(false);
+        var result = await QueryAsync(workspaceId, query, from, to, ct, failures: failures).ConfigureAwait(false);
         if (result is null) return [];
 
         var totals = result.Table.Rows.ToDictionary(
@@ -704,10 +778,19 @@ public sealed class AppInsightsMetricsService
         DateTimeOffset to,
         CancellationToken ct,
         Action<Exception>? onError = null,
+        QueryFailureSink? failures = null,
         [CallerMemberName] string context = "")
     {
         var client = GetClient();
         if (client is null) return null;
+
+        // #208 point 3: bound the total number of simultaneous workspace queries across every
+        // concurrent request this (singleton) service is handling, not just the ~8 subqueries of one
+        // batch. This wait is intentionally OUTSIDE the try/finally below: if `ct` is canceled while
+        // queued behind the budget, WaitAsync throws before any permit is acquired, so there is nothing
+        // to release. That cancellation still surfaces as a plain OperationCanceledException to the
+        // caller (no permit was taken, no query issued) — control flow, not a dependency failure.
+        await _queryConcurrency.WaitAsync(ct).ConfigureAwait(false);
         try
         {
             var response = await client.QueryWorkspaceAsync(
@@ -717,15 +800,38 @@ public sealed class AppInsightsMetricsService
                 cancellationToken: ct).ConfigureAwait(false);
             return response.Value;
         }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            // #208 point 1: caller-requested cancellation is normal request-abort control flow, not a
+            // genuine Azure Monitor dependency failure. Propagate quietly — no Warning/exception
+            // telemetry, no failure-sink recording. ASP.NET Core's hosting diagnostics recognize an
+            // OperationCanceledException tied to the request's own RequestAborted token and do not log
+            // it as an unhandled error either.
+            throw;
+        }
         catch (Exception ex)
         {
             onError?.Invoke(ex);
-            _logger.LogError(
-                ex,
-                "Application Insights query failed in {QueryContext}. KQL (truncated): {Query}",
-                context,
-                TruncateQuery(query));
+            if (failures is not null)
+            {
+                // #208 point 2: part of a top-level batch — record for a single aggregated log line
+                // instead of logging once per subquery.
+                failures.Record(context, ex);
+            }
+            else
+            {
+                // Standalone call site (no batch sink supplied): keep prior per-call logging.
+                _logger.LogError(
+                    ex,
+                    "Application Insights query failed in {QueryContext}. KQL (truncated): {Query}",
+                    context,
+                    TruncateQuery(query));
+            }
             return null;
+        }
+        finally
+        {
+            _queryConcurrency.Release();
         }
     }
 

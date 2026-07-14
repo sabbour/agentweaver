@@ -32,6 +32,17 @@ public sealed class ProjectEndpointsTests : IClassFixture<ProjectsWebApplication
 
     private string NewWorkingDir() => _factory.NewWorkingDirectory();
 
+    /// <summary>
+    /// Reads the paginated <c>{ items, page, page_size, total_count, total_pages }</c> envelope
+    /// (see <see cref="Agentweaver.Api.Contracts.PagedResult{T}"/>) and returns just the <c>items</c>
+    /// array, so existing array-shaped test assertions keep working against the new contract.
+    /// </summary>
+    private static async Task<JsonElement[]> GetItemsAsync(HttpResponseMessage response)
+    {
+        var envelope = await response.Content.ReadFromJsonAsync<JsonElement>();
+        return envelope.GetProperty("items").EnumerateArray().ToArray();
+    }
+
     private async Task<string> CreateBlankProjectAsync(string? name = null, string? dir = null)
     {
         dir ??= NewWorkingDir();
@@ -85,7 +96,7 @@ public sealed class ProjectEndpointsTests : IClassFixture<ProjectsWebApplication
         var response = await _client.GetAsync("/api/projects");
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
-        var list = await response.Content.ReadFromJsonAsync<JsonElement[]>();
+        var list = await GetItemsAsync(response);
         list.Should().NotBeNull();
         list!.Any(p => p.GetProperty("name").GetString() == name).Should().BeTrue();
     }
@@ -221,7 +232,7 @@ public sealed class ProjectEndpointsTests : IClassFixture<ProjectsWebApplication
         var response = await _client.GetAsync($"/api/projects/{id}/runs");
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
-        var runs = await response.Content.ReadFromJsonAsync<JsonElement[]>();
+        var runs = await GetItemsAsync(response);
         runs.Should().NotBeNull();
         runs.Should().BeEmpty();
     }
@@ -255,7 +266,7 @@ public sealed class ProjectEndpointsTests : IClassFixture<ProjectsWebApplication
         var response = await _client.GetAsync($"/api/projects/{id}/runs");
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
-        var runs = await response.Content.ReadFromJsonAsync<JsonElement[]>();
+        var runs = await GetItemsAsync(response);
         runs.Should().NotBeNull();
         runs!.Any(r => r.GetProperty("execution_id").GetString() == run.Id.ToString())
              .Should().BeTrue();
@@ -348,9 +359,9 @@ public sealed class ProjectEndpointsTests : IClassFixture<ProjectsWebApplication
         var response = await _client.GetAsync($"/api/projects/{id}/runs?agent=Ada&terminal_only=true&include_children=true");
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
-        var runs = await response.Content.ReadFromJsonAsync<JsonElement[]>();
+        var runs = await GetItemsAsync(response);
         runs.Should().ContainSingle();
-        runs![0].GetProperty("execution_id").GetString().Should().Be(adaChild.Id.ToString());
+        runs[0].GetProperty("execution_id").GetString().Should().Be(adaChild.Id.ToString());
         runs[0].GetProperty("status").GetString().Should().Be("completed");
         runs[0].GetProperty("agent_name").GetString().Should().Be("Ada");
     }

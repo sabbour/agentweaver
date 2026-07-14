@@ -3,7 +3,7 @@ import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
 import { AzureFluentProvider } from '../copilot-fluent-system';
 import { OutcomePlanPanel } from '../components/OutcomePlanPanel';
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import {
   afterEach,
   beforeEach,
@@ -252,6 +252,29 @@ describe('OutcomePlanPanel drafting state and polling', () => {
     await waitFor(() => expect(screen.getByText(/failed before the Outcome plan could be drafted/i)).toBeTruthy());
     expect(screen.queryByText(/Drafting the Outcome plan/i)).toBeNull();
   });
+
+  it('treats assemble_ready as terminal and stops polling instead of spinning forever', async () => {
+    vi.useFakeTimers();
+    vi.mocked(apiClient.getOutcomeSpec).mockRejectedValue(new ApiError(404, 'not found'));
+
+    render(
+      <Wrapper>
+        <OutcomePlanPanel runId="run-1" events={[]} streamStatus="done" runStatus="assemble_ready" />
+      </Wrapper>,
+    );
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(screen.getByText(/finished before the Outcome plan could be drafted/i)).toBeTruthy();
+    const initialCalls = vi.mocked(apiClient.getOutcomeSpec).mock.calls.length;
+
+    await vi.advanceTimersByTimeAsync(6_000);
+    expect(vi.mocked(apiClient.getOutcomeSpec)).toHaveBeenCalledTimes(initialCalls);
+    expect(screen.queryByText(/Drafting the Outcome plan/i)).toBeNull();
+  });
 });
 
 describe('OutcomePlanPanel terminal REST status precedence', () => {
@@ -297,4 +320,3 @@ describe('OutcomePlanPanel Break into tasks visibility', () => {
     expect(screen.getByText('Ship the feature')).toBeTruthy();
   });
 });
-

@@ -143,22 +143,25 @@ public sealed class WorktreeManager
         var branchName = BranchNameFor(runId);
         var worktreePath = Path.Combine(_basePath, runId.ToString());
         bool branchExists;
-        string startSha;
+        string? startSha = null;
 
         using (repo)
         {
-            var origin = repo.Branches[originatingBranch]
-                ?? throw new RunSubmissionValidationException(
-                    $"Originating branch '{Truncate(originatingBranch, 200)}' was not found.");
-
             branchExists = repo.Branches[branchName] is not null;
 
-            // Resolve the originating branch to a concrete commit SHA while the repo handle is open.
-            // Passing the resolved SHA (NOT the raw branch string) to `git worktree add` preserves the
-            // case-insensitive branch resolution LibGit2Sharp gives us (e.g. originatingBranch="main"
-            // resolving against a HEAD named "Main"), which callers/tests rely on and which the
-            // case-sensitive git CLI would otherwise fail to reproduce.
-            startSha = branchExists ? string.Empty : origin.Tip.Sha;
+            if (!branchExists)
+            {
+                var origin = repo.Branches[originatingBranch]
+                    ?? throw new RunSubmissionValidationException(
+                        $"Originating branch '{Truncate(originatingBranch, 200)}' was not found.");
+
+                // Resolve the originating branch to a concrete commit SHA while the repo handle is open.
+                // Passing the resolved SHA (NOT the raw branch string) to `git worktree add` preserves the
+                // case-insensitive branch resolution LibGit2Sharp gives us (e.g. originatingBranch="main"
+                // resolving against a HEAD named "Main"), which callers/tests rely on and which the
+                // case-sensitive git CLI would otherwise fail to reproduce.
+                startSha = origin.Tip.Sha;
+            }
         }
         // Dispose the LibGit2Sharp repo handle (exit the using block) BEFORE invoking the git CLI to
         // avoid Windows file-handle contention on the .git directory.
@@ -171,7 +174,7 @@ public sealed class WorktreeManager
             // agentweaver/<runId>), whose step 2 aborted with CheckoutConflictException when the
             // integration tip diverged from HEAD in a checkout-unsafe way (e.g. a file<->directory
             // typechange). Dependent subtasks base on the integration branch and hit exactly that.
-            RunGit(repositoryPath, "worktree", "add", "-b", branchName, worktreePath, startSha);
+            RunGit(repositoryPath, "worktree", "add", "-b", branchName, worktreePath, startSha!);
         }
         else
         {

@@ -32,6 +32,12 @@ vi.mock('../../api/apiClient', () => ({
   },
 }));
 
+// Pagination contract (`.squad/decisions/inbox/niobe-pagination-contract.md`): `listProjects`
+// now resolves a `{ items, page, page_size, total_count, total_pages }` envelope.
+function projectsPage(items: Project[]) {
+  return { items, page: 1, page_size: 100, total_count: items.length, total_pages: 1 } as never;
+}
+
 function makeProject(id: string, name: string): Project {
   return {
     project_id: id,
@@ -195,7 +201,7 @@ describe('BrowserConsole operator dock', () => {
   });
 
   it('keeps slash commands as secondary shortcuts and does not present gate-bypass copy', async () => {
-    vi.mocked(apiClient.listProjects).mockResolvedValue([makeProject('p1', 'Alpha')]);
+    vi.mocked(apiClient.listProjects).mockResolvedValue(projectsPage([makeProject('p1', 'Alpha')]));
 
     render(<Wrapper><BrowserConsole /></Wrapper>);
     fireEvent.click(screen.getByRole('button', { name: '/projects' }));

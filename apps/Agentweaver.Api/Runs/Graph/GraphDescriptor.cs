@@ -24,8 +24,9 @@ public sealed record GraphDescriptor(
 /// A single rendered node. <see cref="Id"/> equals the executor's LogicalNodeId for per-run
 /// graphs. <see cref="NodeType"/> is the self-declared category (<c>agent</c> | <c>action</c> |
 /// <c>gate</c> | <c>terminal</c> | <c>subtask</c>) that drives the frontend's rendered shape.
-/// The trailing optional fields are populated ONLY by the <c>coordinator</c> variant's subtask
-/// nodes (they are omitted from JSON when null); per-run nodes never carry them.
+/// The trailing optional fields are populated only by the <c>coordinator</c> variant (subtask
+/// nodes, plus coordinator/assembly agent nodes when the backend knows the concrete model or
+/// assignment). Per-run nodes never carry them.
 /// </summary>
 public sealed record GraphNode(
     [property: JsonPropertyName("id")] string Id,

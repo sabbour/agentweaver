@@ -1,5 +1,5 @@
 import { act, cleanup, render, screen } from '@testing-library/react';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ReactNode } from 'react';
 import { AzureFluentProvider } from '../copilot-fluent-system';
 import { RunTimeline } from '../components/RunTimeline';
@@ -86,5 +86,67 @@ describe('RunTimeline default expansion', () => {
 
     // The newly-streamed second step must already be expanded — no click required.
     expect(screen.getByText('Build finished.')).toBeTruthy();
+  });
+
+  it('renders relative timestamps in the production message stream with an absolute-time tooltip', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-07-14T03:58:00-07:00'));
+    try {
+      const knownTime = new Date('2026-07-14T03:55:00-07:00');
+      const model = buildRunTimeline([
+        evt(1, 'agent.intent', { intent: 'Explain' }),
+        evt(2, 'agent.message', {
+          messageId: 'm1',
+          content: 'Finished reading.',
+          timestamp_utc: knownTime.toISOString(),
+        }),
+        evt(3, 'agent.turn.end', {}),
+      ]);
+
+      render(
+        <Wrapper>
+          <RunTimeline embedded steps={model.steps} running={false} />
+        </Wrapper>,
+      );
+
+      const ts = screen.getByText('3m ago');
+      expect(ts).toBeTruthy();
+      expect(ts.getAttribute('title')).toBe(knownTime.toLocaleString());
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('refreshes relative timestamps while the timeline is mounted', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-07-14T03:58:00-07:00'));
+    try {
+      const knownTime = new Date(Date.now() - 2_000);
+      const model = buildRunTimeline([
+        evt(1, 'agent.intent', { intent: 'Explain' }),
+        evt(2, 'agent.message', {
+          messageId: 'm1',
+          content: 'Fresh update',
+          timestamp_utc: knownTime.toISOString(),
+        }),
+        evt(3, 'agent.turn.end', {}),
+      ]);
+
+      render(
+        <Wrapper>
+          <RunTimeline embedded steps={model.steps} running={false} />
+        </Wrapper>,
+      );
+
+      expect(screen.getByText('just now')).toBeTruthy();
+
+      act(() => {
+        vi.advanceTimersByTime(5_000);
+      });
+
+      expect(screen.getByText('7s ago')).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

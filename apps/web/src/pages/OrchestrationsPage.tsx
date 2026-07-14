@@ -17,24 +17,22 @@ import {
   tokens,
   Tooltip,
 } from '@fluentui/react-components';
+import { collectPagedItems } from '../api/pagedResults';
 import { ArrowSyncRegular, DeleteRegular, DismissCircleRegular } from '@fluentui/react-icons';
 import { PageHeader } from '../components/PageHeader';
 import { isCoordinatorRun } from '../utils/runKind';
 import { ErrorState, MetricRow } from '../components/ui';
+import { Pager } from '../copilot-fluent-system';
 import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import type { Project, WorkflowRunDto } from '../api/types';
+import { isTerminalRunStatus } from '../utils/runStatus';
 // Orchestrations — a project-level list of coordinator orchestration runs. Each
 // row opens the existing coordinator topology view. Data comes from the project's
 // runs API (real data); coordinator runs are detected via isCoordinatorRun.
 
-// A run in any of these states has finished its lifecycle: there is no live workflow
-// to stop. Stop is only offered for non-terminal (running) orchestrations.
-const RUN_TERMINAL_STATUSES = new Set(['completed', 'failed', 'declined', 'merged', 'merge_failed']);
-
 function isRunTerminal(status: string | undefined): boolean {
-  if (!status) return false;
-  return RUN_TERMINAL_STATUSES.has(status.toLowerCase().replace(/[^a-z_]/g, ''));
+  return isTerminalRunStatus(status);
 }
 
 function coordinatorStatusLabel(status: string | undefined): string | undefined {
@@ -61,6 +59,7 @@ function runStatusFallbackLabel(run: WorkflowRunDto): string {
   const result = run.result?.toLowerCase() ?? '';
   if (result.includes('abandon')) return 'Cancelled';
   const status = run.status?.toLowerCase() ?? '';
+  if (status === 'assemble_ready') return 'Ready for assembly';
   if (status === 'declined') return 'Declined';
   if (status === 'merge_failed') return 'Merge failed';
   if (status === 'merged' || status === 'completed') return 'Complete';
@@ -284,6 +283,11 @@ export function OrchestrationsPage() {
   const { projectId } = useParams<{ projectId: string }>();
 
   const [runs, setRuns] = useState<WorkflowRunDto[]>([]);
+  const [activeRuns, setActiveRuns] = useState<WorkflowRunDto[]>([]);
+  const [recentRuns, setRecentRuns] = useState<WorkflowRunDto[]>([]);
+  const [recentTotalCount, setRecentTotalCount] = useState(0);
+  const [recentPage, setRecentPage] = useState(1);
+  const [recentPageSize, setRecentPageSize] = useState(10);
   const [project, setProject] = useState<Project | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -302,11 +306,26 @@ export function OrchestrationsPage() {
     if (!projectId) return Promise.resolve();
     if (showSpinner) setLoading(true);
     return Promise.all([
-      apiClient.listProjectRuns(projectId),
+      collectPagedItems((options) => apiClient.getProjectRuns(projectId, {
+        agentName: 'Coordinator',
+        page: options.page,
+        pageSize: options.pageSize,
+        signal: options.signal,
+      })),
+      apiClient.getProjectRuns(projectId, {
+        agentName: 'Coordinator',
+        terminalOnly: true,
+        page: recentPage,
+        pageSize: recentPageSize,
+      }),
       apiClient.getProject(projectId).catch(() => null as Project | null),
     ])
-      .then(([runList, proj]) => {
-        setRuns([...runList].reverse().filter(isCoordinatorRun));
+      .then(([allCoordinatorRuns, recentRunPage, proj]) => {
+        const coordinatorRuns = allCoordinatorRuns.filter(isCoordinatorRun);
+        setRuns(coordinatorRuns);
+        setActiveRuns(coordinatorRuns.filter((run) => !isRunTerminal(run.status)));
+        setRecentRuns(recentRunPage.items.filter(isCoordinatorRun));
+        setRecentTotalCount(recentRunPage.total_count);
         setProject(proj);
         setError(null);
       })
@@ -315,16 +334,12 @@ export function OrchestrationsPage() {
   };
 
   useEffect(() => {
-    let cancelled = false;
     if (!projectId) return;
     void load(true);
-    return () => { cancelled = true; void cancelled; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectId]);
+  }, [projectId, recentPage, recentPageSize]);
 
   const runIdOf = (run: WorkflowRunDto) => run.workflow_run_id ?? run.execution_id;
-  const activeRuns = runs.filter((run) => !isRunTerminal(run.status));
-  const recentRuns = runs.filter((run) => isRunTerminal(run.status));
   const statusCounts = runs.reduce<Record<string, number>>((acc, run) => {
     const label = coordinatorStatusLabel(run.coordinator_status) ?? run.status ?? 'Unknown';
     acc[label] = (acc[label] ?? 0) + 1;
@@ -335,13 +350,34 @@ export function OrchestrationsPage() {
       title: 'Active',
       description: 'Running, blocked, review, and assembly work that may still need operator attention.',
       items: activeRuns,
+      totalCount: activeRuns.length,
+      pager: null as {
+        page: number;
+        pageSize: number;
+        totalItems: number;
+        totalPages: number;
+        setPage: (page: number) => void;
+        setPageSize: (pageSize: number) => void;
+      } | null,
     },
     {
       title: 'Recent',
       description: 'Completed or stopped coordinator runs kept for inspection and cleanup.',
       items: recentRuns,
+      totalCount: recentTotalCount,
+      pager: {
+        page: recentPage,
+        pageSize: recentPageSize,
+        totalItems: recentTotalCount,
+        totalPages: Math.max(1, Math.ceil(recentTotalCount / Math.max(1, recentPageSize))),
+        setPage: setRecentPage,
+        setPageSize: (nextPageSize: number) => {
+          setRecentPageSize(nextPageSize);
+          setRecentPage(1);
+        },
+      },
     },
-  ].filter((section) => section.items.length > 0);
+  ].filter((section) => section.totalCount > 0);
 
   const handleStop = (run: WorkflowRunDto) => {
     setStopTarget(run);
@@ -363,12 +399,10 @@ export function OrchestrationsPage() {
     if (!deleteTarget) return;
     const runId = runIdOf(deleteTarget);
     setBusyId(runId);
+    setDeleteTarget(null);
     apiClient
       .deleteRun(runId)
-      .then(() => {
-        setRuns((prev) => prev.filter((r) => runIdOf(r) !== runId));
-        setDeleteTarget(null);
-      })
+      .then(() => load(false))
       .catch((err) => setError(formatError(err)))
       .finally(() => setBusyId(null));
   };
@@ -418,7 +452,7 @@ export function OrchestrationsPage() {
               <span className={styles.statusPillValue}>{activeRuns.length}</span> active
             </span>
             <span className={styles.statusPill}>
-              <span className={styles.statusPillValue}>{recentRuns.length}</span> recent
+              <span className={styles.statusPillValue}>{recentTotalCount}</span> recent
             </span>
             {Object.entries(statusCounts).map(([label, count]) => (
               <span key={label} className={styles.statusPill}>
@@ -430,7 +464,7 @@ export function OrchestrationsPage() {
             items={[
               { label: 'Project', value: project?.name ?? projectId },
               { label: 'Active', value: activeRuns.length, hint: 'in-flight' },
-              { label: 'Retained', value: recentRuns.length, hint: 'terminal' },
+              { label: 'Retained', value: recentTotalCount, hint: 'terminal' },
             ]}
           />
         </div>
@@ -464,7 +498,7 @@ export function OrchestrationsPage() {
                   <Text className={styles.sectionTitle}>{section.title}</Text>
                   <Text className={styles.sectionDescription}>{section.description}</Text>
                 </div>
-                <Badge appearance="outline">{section.items.length} runs</Badge>
+                <Badge appearance="outline">{section.totalCount} runs</Badge>
               </div>
               <div className={styles.list}>
                 {section.items.map((run) => {
@@ -518,6 +552,16 @@ export function OrchestrationsPage() {
                   );
                 })}
               </div>
+              {section.pager && section.pager.totalPages > 1 && (
+                <Pager
+                  page={section.pager.page}
+                  pageSize={section.pager.pageSize}
+                  totalItems={section.pager.totalItems}
+                  pageSizeOptions={[10, 25, 50]}
+                  onPageChange={section.pager.setPage}
+                  onPageSizeChange={section.pager.setPageSize}
+                />
+              )}
             </section>
           ))}
         </>

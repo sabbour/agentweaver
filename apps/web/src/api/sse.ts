@@ -2,6 +2,7 @@ import { API_URL, getSessionToken } from '../config';
 import { AgentweaverApiClient } from './client';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { RunDetail } from './types';
+import { isTerminalRunStatus } from '../utils/runStatus';
 export type PollStatus = 'polling' | 'done' | 'error';
 
 interface PollState {
@@ -10,7 +11,6 @@ interface PollState {
   error: string | null;
 }
 
-const TERMINAL = new Set(['completed', 'failed', 'merged', 'declined', 'merge_failed']);
 const POLL_INTERVAL_MS = 2000;
 const TERMINAL_EVENT_TYPES = new Set([
   'run.completed',
@@ -50,7 +50,7 @@ export function useRunPoll(runId: string, baseUrl: string = API_URL): PollState 
         try {
           const detail = await client.getRun(runId);
           setRun(detail);
-          if (TERMINAL.has(detail.status)) {
+          if (isTerminalRunStatus(detail.status)) {
             setStatus('done');
             return;
           }

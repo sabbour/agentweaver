@@ -2,7 +2,7 @@ import { apiClient } from '../api/apiClient';
 import { AzureFluentProvider } from '../copilot-fluent-system';
 import { ProjectPage } from '../pages/ProjectPage';
 import { makeBoard } from './fixtures/board';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import {
   afterEach,
@@ -18,11 +18,18 @@ vi.mock('../api/apiClient', () => ({
   apiClient: {
     getProject: vi.fn(),
     listProjectRuns: vi.fn(),
+    deleteRun: vi.fn(),
     getBoard: vi.fn(),
     getBacklogSettings: vi.fn(),
     getTeam: vi.fn(),
   },
 }));
+
+// Pagination contract (`.squad/decisions/inbox/niobe-pagination-contract.md`): `listProjectRuns`
+// now resolves a `{ items, page, page_size, total_count, total_pages }` envelope.
+function runsPage<T>(items: T[]) {
+  return { items, page: 1, page_size: 100, total_count: items.length, total_pages: 1 } as never;
+}
 
 function Wrapper({ children }: { children: ReactNode }) {
   return <AzureFluentProvider density="compact">{children}</AzureFluentProvider>;
@@ -54,7 +61,7 @@ const project: Project = {
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(apiClient.getProject).mockResolvedValue(project);
-  vi.mocked(apiClient.listProjectRuns).mockResolvedValue([]);
+  vi.mocked(apiClient.listProjectRuns).mockResolvedValue(runsPage([]));
   vi.mocked(apiClient.getBoard).mockResolvedValue(makeBoard({}));
   vi.mocked(apiClient.getBacklogSettings).mockResolvedValue({
     max_ready_per_heartbeat: 3,
@@ -65,6 +72,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   cleanup();
 });
 
@@ -111,7 +119,7 @@ describe('ProjectPage board (board-dedupe)', () => {
   });
 
   it('shows coordinator assembly handoff as automatic preparation in the run audit trail', async () => {
-    vi.mocked(apiClient.listProjectRuns).mockResolvedValue([
+    vi.mocked(apiClient.listProjectRuns).mockResolvedValue(runsPage([
       {
         workflow_run_id: 'coord-1',
         execution_id: 'coord-1',
@@ -121,14 +129,44 @@ describe('ProjectPage board (board-dedupe)', () => {
         coordinator_status: 'awaiting_assembly',
         started_at: new Date().toISOString(),
       },
-    ] as never);
+    ]) as never);
+
+    renderPage();
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /Run audit trail/i }));
+
+    expect(screen.getByText('Preparing assembly')).toBeTruthy();
+    expect(screen.queryByText('Awaiting assembly')).toBeNull();
+  });
+
+  it('treats assemble_ready runs as terminal history and does not keep polling them', async () => {
+    const setIntervalSpy = vi.spyOn(globalThis, 'setInterval');
+    vi.mocked(apiClient.listProjectRuns).mockResolvedValue(runsPage([
+      {
+        workflow_run_id: 'coord-1',
+        execution_id: 'coord-1',
+        agent_name: 'Coordinator',
+        task: 'Assembly ready handoff',
+        status: 'assemble_ready',
+        coordinator_status: 'complete',
+        started_at: new Date().toISOString(),
+      },
+    ]) as never);
 
     renderPage();
 
     await waitFor(() => expect(screen.getByRole('button', { name: /Run audit trail/i })).toBeTruthy());
     fireEvent.click(screen.getByRole('button', { name: /Run audit trail/i }));
 
-    expect(screen.getByText('Preparing assembly')).toBeTruthy();
-    expect(screen.queryByText('Awaiting assembly')).toBeNull();
+    expect(screen.getByText('Assembly ready handoff')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Abandon run' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Delete run' })).toBeTruthy();
+    expect(vi.mocked(apiClient.listProjectRuns)).toHaveBeenCalledTimes(1);
+    expect(setIntervalSpy).not.toHaveBeenCalledWith(expect.any(Function), 5000);
   });
 });

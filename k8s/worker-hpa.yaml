@@ -4,8 +4,19 @@
 # This is the fallback per platform-deployment.md §2.3: "if KEDA is unavailable,
 # fall back to an HPA on a custom 'queued runs' metric exported via OTEL/Prometheus".
 #
+# issue #108 status (see decisions/inbox/niobe-108-hpa-investigation.md): the
+# `agentweaver_run_queued` OTel gauge (count of ACTIVE-project Ready backlog tasks still awaiting
+# coordinator pickup: `backlog_tasks.state='ready' AND run_id IS NULL`, sampled every 15s) is now
+# emitted by the API and visible in the AKS Managed Prometheus workspace — see
+# docs/guide/operations.md "Worker autoscaling". This HPA has NOT yet been switched to consume it:
+# doing so requires either (a) KEDA with a Prometheus scaler using `max(agentweaver_run_queued)`
+# (NOT sum — every replica exports the same global count), or (b) provisioning a Kubernetes
+# External Metrics API adapter, neither of which is currently deployed in scripts/aks/. CPU remains
+# the active scaling signal until one path is chosen.
+#
 # RECOMMENDED UPGRADE PATH (when KEDA is confirmed available on the cluster):
-# Replace this HPA with a KEDA ScaledObject using a PostgreSQL scaler:
+# Replace this HPA with a KEDA ScaledObject using a Prometheus scaler (preferred with the current
+# exported gauge), or a direct PostgreSQL query over the same Ready backlog semantics:
 #
 #   apiVersion: keda.sh/v1alpha1
 #   kind: ScaledObject
@@ -20,16 +31,19 @@
 #     pollingInterval: 15
 #     cooldownPeriod: 60
 #     triggers:
-#       - type: postgresql
+#       - type: prometheus
 #         metadata:
-#           targetQueryValue: "5"         # scale out when >5 unleased queued runs per replica
+#           targetQueryValue: "5"         # scale out when >5 ready backlog tasks per replica
 #           activationTargetQueryValue: "1"
-#           query: >
-#             SELECT count(*) FROM runs
-#             WHERE state = 'queued' AND lease_id IS NULL
-#           connectionFromEnv: ConnectionStrings__Postgres
+#           serverAddress: https://<managed-prometheus-endpoint>
+#           metricName: agentweaver_run_queued
+#           query: max(agentweaver_run_queued)
 #
-# The exact query/threshold is a contract with Tank's lease schema (data-postgres-migration.md §3).
+# If a future direct Postgres scaler is preferred instead, query the same semantic contract:
+#   SELECT count(*) FROM backlog_tasks bt
+#   JOIN projects p ON p.project_id = bt.project_id
+#   WHERE bt.state = 'ready' AND bt.run_id IS NULL AND bt.archived_at IS NULL
+#     AND p.state = 'active'
 # Coordinate with Tank before enabling KEDA scaling.
 ---
 apiVersion: autoscaling/v2

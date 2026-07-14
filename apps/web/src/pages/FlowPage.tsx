@@ -390,10 +390,10 @@ export function FlowPage() {
         agentName: selectedAgent,
         terminalOnly: true,
         includeChildren: true,
-        limit: 20,
+        pageSize: 20,
       })
-      .then((runs) => {
-        if (!cancelled) setHistory(runs);
+      .then((result) => {
+        if (!cancelled) setHistory(result.items);
       })
       .catch((err) => {
         if (!cancelled) setHistoryError(formatError(err));

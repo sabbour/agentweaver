@@ -71,6 +71,12 @@ export interface RunTimelineMessage {
   messageId: string;
   text: string;
   streaming: boolean;
+  /**
+   * Best-known message time in epoch-ms for relative-time rendering in the production
+   * RunTimeline surface. Prefer a server/event payload timestamp when available;
+   * otherwise fall back to the client-side receipt time captured while folding.
+   */
+  timestamp: number;
 }
 
 /**
@@ -331,6 +337,17 @@ function deriveResultMeta(category: RunTimelineToolCategory, content: string): s
  */
 const RUN_TERMINAL_TYPES = new Set<string>(['run.completed', 'run.failed', 'run.error']);
 
+function readEventTimestamp(evt: RunStreamEvent): number | undefined {
+  const raw = evt.payload?.['timestamp_utc'] ?? evt.payload?.['timestampUtc'] ?? evt.payload?.['timestamp'];
+  if (raw == null) return undefined;
+  const ms = new Date(String(raw)).getTime();
+  return Number.isNaN(ms) ? undefined : ms;
+}
+
+function captureMessageTimestamp(evt: RunStreamEvent): number {
+  return readEventTimestamp(evt) ?? Date.now();
+}
+
 /**
  * Close a step: mark it inactive and settle any still-running tool calls to `complete`
  * (unless they errored) — mirroring the reducer's settlePendingCallsInTurn so a missing
@@ -346,7 +363,8 @@ function closeStep(step: RunTimelineStep): void {
 /**
  * Fold a scope's event stream into intent-grouped Timeline steps.
  * `events` may arrive out of order across reconnects — we sort by `sequence`
- * (there is no timestamp on the wire) before grouping.
+ * before grouping. Message timestamps prefer any wire timestamp that does exist on the
+ * payload, else fall back to the client-side receipt time captured during folding.
  */
 export function buildRunTimeline(
   events: readonly RunStreamEvent[],
@@ -520,7 +538,12 @@ export function buildRunTimeline(
           if (existing) {
             existing.text += delta;
           } else {
-            const msg: RunTimelineMessage = { messageId: rawId, text: delta, streaming: true };
+            const msg: RunTimelineMessage = {
+              messageId: rawId,
+              text: delta,
+              streaming: true,
+              timestamp: captureMessageTimestamp(evt),
+            };
             byId.set(rawId, msg);
             step.messages.push(msg);
             step.children.push({ kind: 'message', message: msg });
@@ -532,7 +555,12 @@ export function buildRunTimeline(
           if (current && current.streaming) {
             current.text += delta;
           } else {
-            const msg: RunTimelineMessage = { messageId: `msg-${evt.sequence}`, text: delta, streaming: true };
+            const msg: RunTimelineMessage = {
+              messageId: `msg-${evt.sequence}`,
+              text: delta,
+              streaming: true,
+              timestamp: captureMessageTimestamp(evt),
+            };
             streamingNoIdByStep.set(step.id, msg);
             step.messages.push(msg);
             step.children.push({ kind: 'message', message: msg });
@@ -552,7 +580,12 @@ export function buildRunTimeline(
             existing.text = content;
             existing.streaming = false;
           } else {
-            const msg: RunTimelineMessage = { messageId: rawId, text: content, streaming: false };
+            const msg: RunTimelineMessage = {
+              messageId: rawId,
+              text: content,
+              streaming: false,
+              timestamp: captureMessageTimestamp(evt),
+            };
             byId.set(rawId, msg);
             step.messages.push(msg);
             step.children.push({ kind: 'message', message: msg });
@@ -566,7 +599,12 @@ export function buildRunTimeline(
             current.streaming = false;
             streamingNoIdByStep.delete(step.id);
           } else {
-            const msg: RunTimelineMessage = { messageId: `msg-${evt.sequence}`, text: content, streaming: false };
+            const msg: RunTimelineMessage = {
+              messageId: `msg-${evt.sequence}`,
+              text: content,
+              streaming: false,
+              timestamp: captureMessageTimestamp(evt),
+            };
             step.messages.push(msg);
             step.children.push({ kind: 'message', message: msg });
           }

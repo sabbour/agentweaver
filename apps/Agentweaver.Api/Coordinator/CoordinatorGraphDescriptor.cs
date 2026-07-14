@@ -83,7 +83,8 @@ public static class CoordinatorGraphDescriptor
         string? assemblyTerminalStage = null,
         string? assemblyStatusReason = null,
         IPodNameRegistry? podRegistry = null,
-        IReadOnlyList<AssemblyGateNode>? assemblyGates = null)
+        IReadOnlyList<AssemblyGateNode>? assemblyGates = null,
+        string? coordinatorModel = null)
     {
         var projected = subtasks
             .Select(s => new SubtaskNode(
@@ -98,7 +99,8 @@ public static class CoordinatorGraphDescriptor
             assemblyTerminalStage,
             assemblyStatusReason,
             podRegistry,
-            assemblyGates);
+            assemblyGates,
+            coordinatorModel);
     }
 
     /// <summary>
@@ -108,7 +110,7 @@ public static class CoordinatorGraphDescriptor
     /// view on the coordinator graph (not the misleading single-agent per-run pipeline) until
     /// decomposition produces subtasks.
     /// </summary>
-    public static GraphDescriptor BuildEmpty(string coordinatorRunId) =>
+    public static GraphDescriptor BuildEmpty(string coordinatorRunId, string? coordinatorModel = null) =>
         BuildCore(
             coordinatorRunId,
             Array.Empty<SubtaskNode>(),
@@ -116,13 +118,15 @@ public static class CoordinatorGraphDescriptor
             assemblyStage: null,
             workPlanStatus: null,
             assemblyTerminalStage: null,
-            assemblyStatusReason: null);
+            assemblyStatusReason: null,
+            coordinatorModel: coordinatorModel);
 
     /// <summary>Builds the descriptor from the <see cref="CoordinatorWorkPlanView"/> projection.</summary>
     public static GraphDescriptor Build(
         CoordinatorWorkPlanView plan,
         IPodNameRegistry? podRegistry = null,
-        IReadOnlyList<AssemblyGateNode>? assemblyGates = null)
+        IReadOnlyList<AssemblyGateNode>? assemblyGates = null,
+        string? coordinatorModel = null)
     {
         var projected = plan.Subtasks
             .Select(s => new SubtaskNode(
@@ -140,7 +144,8 @@ public static class CoordinatorGraphDescriptor
             plan.AssemblyTerminalStage,
             plan.StatusReason,
             podRegistry,
-            assemblyGates);
+            assemblyGates,
+            coordinatorModel);
     }
 
     private static GraphDescriptor BuildCore(
@@ -152,7 +157,8 @@ public static class CoordinatorGraphDescriptor
         string? assemblyTerminalStage,
         string? assemblyStatusReason,
         IPodNameRegistry? podRegistry = null,
-        IReadOnlyList<AssemblyGateNode>? assemblyGates = null)
+        IReadOnlyList<AssemblyGateNode>? assemblyGates = null,
+        string? coordinatorModel = null)
     {
         var gates = assemblyGates ?? DefaultAssemblyGates;
         var nodes = new List<GraphNode>(subtasks.Count + 5)
@@ -164,6 +170,7 @@ public static class CoordinatorGraphDescriptor
                 "live",
                 "agent",
                 ChildGraphRef: null,
+                Model: coordinatorModel,
                 Status: workPlanStatus,
                 StatusReason: assemblyStatusReason,
                 TerminalStage: assemblyTerminalStage),
@@ -228,6 +235,7 @@ public static class CoordinatorGraphDescriptor
             Kind(gates.Count + 2),
             "agent",
             ChildGraphRef: null,
+            Model: coordinatorModel,
             Status: scribeTerminal ? workPlanStatus : null,
             StatusReason: scribeTerminal ? assemblyStatusReason : null,
             TerminalStage: scribeTerminal ? assemblyTerminalStage : null));

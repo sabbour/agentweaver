@@ -43,6 +43,9 @@ public sealed class CoordinatorOrchestratorExecutor
     private const string CoordinatorAgentName = "Coordinator";
     private const int DecompositionModelLimitTokens = 120_000;
     private const double DecompositionPromptBudgetRatio = 0.80;
+    private static readonly Regex WindowsDriveQualifiedPathPrefix = new(
+        @"^[A-Za-z]:",
+        RegexOptions.Compiled);
     internal const string PlanningPhaseGuidance =
         """Research, market-analysis, business-plan, launch-marketing/marketing-plan, user-stories, PRD/product-requirements, and design-spec subtasks MUST use "phase": "planning".""";
     internal const string DeclaredOutputPathsGuidance =
@@ -759,13 +762,28 @@ public sealed class CoordinatorOrchestratorExecutor
         IEnumerable<string>? paths,
         string? phase)
     {
-        var outputs = new List<string>();
+        TryCanonicalizeDeclaredOutputPaths(paths, phase, rejectOnInvalidEntry: false, out var outputs);
+        return outputs;
+    }
+
+    private static bool TryCanonicalizeDeclaredOutputPaths(
+        IEnumerable<string>? paths,
+        string? phase,
+        bool rejectOnInvalidEntry,
+        out List<string> outputs)
+    {
+        outputs = new List<string>();
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var rawPath in paths ?? [])
         {
-            var path = rawPath.Trim().Replace('\\', '/').TrimStart('/');
-            if (path.Length == 0)
+            var path = NormalizeDeclaredOutputPath(rawPath);
+            if (string.IsNullOrEmpty(path))
+            {
+                if (rejectOnInvalidEntry)
+                    return false;
+
                 continue;
+            }
 
             if (string.Equals(phase, "planning", StringComparison.OrdinalIgnoreCase)
                 && !path.Contains('/')
@@ -777,29 +795,184 @@ public sealed class CoordinatorOrchestratorExecutor
                 outputs.Add(path);
         }
 
-        return outputs;
+        return true;
+    }
+
+    private static string? NormalizeDeclaredOutputPath(string rawPath)
+    {
+        var path = rawPath.Trim().Replace('\\', '/');
+        if (path.Length == 0)
+            return null;
+
+        // declared_output_paths are repository-relative only; absolute/rooted inputs are invalid.
+        if (path.StartsWith("/", StringComparison.Ordinal)
+            || WindowsDriveQualifiedPathPrefix.IsMatch(path))
+            return null;
+
+        var preserveTrailingSlash = path.EndsWith("/", StringComparison.Ordinal);
+        var normalizedSegments = new List<string>();
+        foreach (var segment in path.Split('/', StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (segment == ".")
+                continue;
+
+            if (segment == "..")
+            {
+                // Fail closed on any traversal that would escape the repository root. This is
+                // equivalent to rejecting a final normalized path of ".." or "../...".
+                if (normalizedSegments.Count == 0)
+                    return null;
+
+                normalizedSegments.RemoveAt(normalizedSegments.Count - 1);
+                continue;
+            }
+
+            normalizedSegments.Add(segment);
+        }
+
+        if (normalizedSegments.Count == 0)
+            return null;
+
+        var normalized = string.Join('/', normalizedSegments);
+
+        if (preserveTrailingSlash && !normalized.EndsWith("/", StringComparison.Ordinal))
+            normalized += "/";
+
+        return normalized;
+    }
+
+    /// <summary>
+    /// The SINGLE shared declared-output-path matcher (#261 secondary gap fix). Two paths conflict
+    /// when they are exactly equal, or one is a path-separator-bounded suffix of the other (e.g.
+    /// <c>foo.cs</c> vs <c>src/foo.cs</c>), or a bare filename token (no separator) matches the other
+    /// path's own filename. Both inputs are expected to already be normalized (see
+    /// <see cref="CanonicalizeDeclaredOutputPaths"/> / <see cref="ParseDeclaredOutputPaths"/>) — this
+    /// method does not itself trim or convert separators. Used by BOTH the runtime scheduling check
+    /// (<see cref="CoordinatorAssemblyService.DoSubtasksConflict"/>) and the persisted
+    /// dependency-edge builder (<see cref="CoordinatorDispatchService.FindDeclaredOutputConflictEdges"/>)
+    /// so the two call sites can never diverge again.
+    /// </summary>
+    internal static bool DeclaredOutputPathsMatch(string a, string b)
+    {
+        if (string.Equals(a, b, StringComparison.OrdinalIgnoreCase)) return true;
+        if (a.EndsWith("/" + b, StringComparison.OrdinalIgnoreCase)) return true;
+        if (b.EndsWith("/" + a, StringComparison.OrdinalIgnoreCase)) return true;
+        // Bare filename token (no separator) matches the other path's filename.
+        if (!b.Contains('/') && string.Equals(DeclaredOutputPathFileName(a), b, StringComparison.OrdinalIgnoreCase)) return true;
+        if (!a.Contains('/') && string.Equals(DeclaredOutputPathFileName(b), a, StringComparison.OrdinalIgnoreCase)) return true;
+        return false;
+    }
+
+    private static string DeclaredOutputPathFileName(string path)
+    {
+        var idx = path.LastIndexOf('/');
+        return idx >= 0 ? path[(idx + 1)..] : path;
     }
 
     internal static string SerializeDeclaredOutputPaths(IEnumerable<string>? paths) =>
         JsonSerializer.Serialize(paths ?? []);
 
-    internal static IReadOnlyList<string> DeserializeDeclaredOutputPaths(string? json)
+    /// <summary>
+    /// Convenience wrapper over <see cref="ParseDeclaredOutputPaths"/> for callers that only need the
+    /// path list and don't need to distinguish "genuinely declared as empty" from "malformed/invalid"
+    /// (both surface here as an empty list). Callers that make scheduling/conflict decisions based on
+    /// whether a subtask declared ANY outputs (e.g. <see cref="CoordinatorAssemblyService.DoSubtasksConflict"/>)
+    /// MUST use <see cref="ParseDeclaredOutputPaths"/> instead so that distinction is preserved (#261).
+    /// </summary>
+    internal static IReadOnlyList<string> DeserializeDeclaredOutputPaths(string? json) =>
+        ParseDeclaredOutputPaths(json).Paths;
+
+    /// <summary>
+    /// Tri-state result of parsing a persisted <c>declared_output_paths</c> JSON column. See
+    /// <see cref="DeclaredOutputPathsParseState"/> for what each state means and how callers should
+    /// treat it.
+    /// </summary>
+    internal readonly record struct DeclaredOutputPathsParseResult(
+        DeclaredOutputPathsParseState State,
+        IReadOnlyList<string> Paths);
+
+    /// <summary>
+    /// Distinguishes a genuinely empty declared-outputs declaration (<c>[]</c> — "this subtask
+    /// produces no file outputs", e.g. a read-only investigation/research subtask) from malformed or
+    /// missing metadata (parse failure, wrong JSON shape, or an array whose entries are all
+    /// null/blank/non-string). Introduced for #261: prior to this, both cases collapsed to the same
+    /// empty <see cref="IReadOnlyList{T}"/>, which forced <see cref="CoordinatorAssemblyService.DoSubtasksConflict"/>
+    /// to treat a legitimate "no outputs" declaration the same as untrustworthy metadata (conflict
+    /// with everything), unnecessarily serializing read-only subtask frontiers.
+    /// </summary>
+    internal enum DeclaredOutputPathsParseState
+    {
+        /// <summary>
+        /// Malformed/missing/wrong-shape metadata: null/blank JSON, a JSON parse failure, a non-array
+        /// top-level value, or a non-empty array whose entries are ALL null/blank/non-string (so
+        /// nothing usable survived). Callers MUST fail closed (e.g. treat as "conflicts with
+        /// everything") since nothing reliable was declared.
+        /// </summary>
+        Invalid,
+
+        /// <summary>
+        /// The declaration was a literal, genuinely empty JSON array (<c>[]</c>) — a valid statement
+        /// that this subtask writes no files. Callers MAY treat this as "no conflict" since there is
+        /// nothing for another subtask's outputs to collide with.
+        /// </summary>
+        ValidEmpty,
+
+        /// <summary>One or more valid, normalized repository-relative output paths were declared.</summary>
+        ValidWithPaths,
+    }
+
+    /// <summary>
+    /// Parses a persisted <c>declared_output_paths</c> JSON column into a tri-state
+    /// <see cref="DeclaredOutputPathsParseResult"/> (see <see cref="DeclaredOutputPathsParseState"/>).
+    /// Surviving path strings are normalized (trimmed, backslashes converted to forward slashes,
+    /// absolute/rooted paths rejected, root-equivalent/traversal dot-segment aliases rejected, and
+    /// case-insensitively de-duplicated) via
+    /// <see cref="CanonicalizeDeclaredOutputPaths"/> so this parsing boundary can never hand back a
+    /// path string that could evade a normalized matcher elsewhere (e.g. a surviving
+    /// <c>" docs/a.md "</c>).
+    /// </summary>
+    internal static DeclaredOutputPathsParseResult ParseDeclaredOutputPaths(string? json)
     {
         if (string.IsNullOrWhiteSpace(json))
-            return [];
+            return new DeclaredOutputPathsParseResult(DeclaredOutputPathsParseState.Invalid, []);
+
+        List<string?>? rawEntries;
         try
         {
-            var paths = JsonSerializer.Deserialize<List<string?>>(json);
-            return paths?
-                .Where(static path => !string.IsNullOrWhiteSpace(path))
-                .Select(static path => path!)
-                .ToList()
-                ?? [];
+            rawEntries = JsonSerializer.Deserialize<List<string?>>(json);
         }
         catch (JsonException)
         {
-            return [];
+            return new DeclaredOutputPathsParseResult(DeclaredOutputPathsParseState.Invalid, []);
         }
+
+        // "null" (or any non-array JSON value the converter tolerates without throwing) is not a
+        // literal empty array — treat it the same as a parse failure.
+        if (rawEntries is null)
+            return new DeclaredOutputPathsParseResult(DeclaredOutputPathsParseState.Invalid, []);
+
+        if (rawEntries.Count == 0)
+            return new DeclaredOutputPathsParseResult(DeclaredOutputPathsParseState.ValidEmpty, []);
+
+        var validEntries = rawEntries
+            .Where(static path => !string.IsNullOrWhiteSpace(path))
+            .Select(static path => path!)
+            .ToList();
+
+        // The array had entries, but every single one was null/blank — nothing usable survived, so
+        // this is untrustworthy metadata, not a genuine empty declaration.
+        if (validEntries.Count == 0)
+            return new DeclaredOutputPathsParseResult(DeclaredOutputPathsParseState.Invalid, []);
+
+        if (!TryCanonicalizeDeclaredOutputPaths(
+                validEntries,
+                phase: null,
+                rejectOnInvalidEntry: true,
+                out var normalized)
+            || normalized.Count == 0)
+            return new DeclaredOutputPathsParseResult(DeclaredOutputPathsParseState.Invalid, []);
+
+        return new DeclaredOutputPathsParseResult(DeclaredOutputPathsParseState.ValidWithPaths, normalized);
     }
 
     // -----------------------------------------------------------------------

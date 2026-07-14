@@ -1,4 +1,5 @@
 import { apiClient } from '../api/apiClient';
+import { collectPagedItems } from '../api/pagedResults';
 import { ApiError } from '../api/client';
 import { createContext, useCallback, useContext, useEffect, useState } from 'react';
 import type { Project } from '../api/types';
@@ -29,11 +30,10 @@ export function ProjectListProvider({ children }: { children: ReactNode }) {
     setAuthError(false);
     setLoadError(false);
     setErrorMessage(null);
-    apiClient
-      .listProjects()
-      .then((list) => {
+    collectPagedItems((options) => apiClient.listProjects(options))
+      .then((result) => {
         if (!cancelled) {
-          setProjects(list);
+          setProjects(result);
           setLoading(false);
         }
       })

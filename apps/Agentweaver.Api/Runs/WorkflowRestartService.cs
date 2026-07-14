@@ -115,8 +115,11 @@ public sealed class WorkflowRestartService
 
         // 4. Resume AwaitingReview runs from checkpoint.
         var awaiting = await _runStore.GetByStatusAsync(RunStatus.AwaitingReview, ct).ConfigureAwait(false);
-        foreach (var run in awaiting)
+        foreach (var awaitingRun in awaiting)
         {
+            // Mutable local shadow: reattach (P0-A, #246) may swap in a corrected WorktreePath/
+            // WorktreeBranch mid-iteration; the foreach iteration variable itself can't be reassigned.
+            var run = awaitingRun;
             var runIdStr = run.Id.ToString();
             var entry = _streamStore.Create(runIdStr, run.SubmittingUser);
             entry.MarkAwaitingReview();
@@ -142,12 +145,20 @@ public sealed class WorkflowRestartService
 
                 if (run.WorktreePath is null || !_worktreeOps.WorktreeExists(run.WorktreePath))
                 {
-                    _logger.LogError(
-                        "Worktree missing for recovered AwaitingReview run {RunId} at {Path}; failing run",
-                        run.Id, run.WorktreePath);
-                    await FailRecoveredRunAsync(run, "recovered_worktree_missing", entry, cleanupWorktree: false, ct: CancellationToken.None)
-                        .ConfigureAwait(false);
-                    continue;
+                    var reattached = await TryReattachWorktreeAsync(run, ct).ConfigureAwait(false);
+                    if (reattached is not null)
+                    {
+                        run = reattached;
+                    }
+                    else
+                    {
+                        _logger.LogError(
+                            "Worktree missing for recovered AwaitingReview run {RunId} at {Path}; failing run",
+                            run.Id, run.WorktreePath);
+                        await FailRecoveredRunAsync(run, "recovered_worktree_missing", entry, cleanupWorktree: false, ct: CancellationToken.None)
+                            .ConfigureAwait(false);
+                        continue;
+                    }
                 }
 
                 if (run.WorktreeBranch is null)
@@ -171,7 +182,7 @@ public sealed class WorkflowRestartService
                 }
 
                 // Fail-closed: null means the worktree is unreadable/corrupt.
-                var currentNoCheckpointHash = _worktreeOps.GetTreeHash(run.WorktreePath);
+                var currentNoCheckpointHash = _worktreeOps.GetTreeHash(run.WorktreePath!);
                 if (currentNoCheckpointHash is null || !string.Equals(currentNoCheckpointHash, run.TreeHash, StringComparison.Ordinal))
                 {
                     _logger.LogError(
@@ -197,15 +208,23 @@ public sealed class WorkflowRestartService
             // Guardrail 1: Validate worktree before resuming.
             if (run.WorktreePath is null || !_worktreeOps.WorktreeExists(run.WorktreePath))
             {
-                _logger.LogError("Worktree missing for run {RunId} at {Path}; failing run", run.Id, run.WorktreePath);
-                await FailRecoveredRunAsync(run, "recovered_worktree_missing", entry, cleanupWorktree: false, ct: CancellationToken.None)
-                    .ConfigureAwait(false);
-                continue;
+                var reattached = await TryReattachWorktreeAsync(run, ct).ConfigureAwait(false);
+                if (reattached is not null)
+                {
+                    run = reattached;
+                }
+                else
+                {
+                    _logger.LogError("Worktree missing for run {RunId} at {Path}; failing run", run.Id, run.WorktreePath);
+                    await FailRecoveredRunAsync(run, "recovered_worktree_missing", entry, cleanupWorktree: false, ct: CancellationToken.None)
+                        .ConfigureAwait(false);
+                    continue;
+                }
             }
 
             if (run.TreeHash is not null)
             {
-                var currentTreeHash = _worktreeOps.GetTreeHash(run.WorktreePath);
+                var currentTreeHash = _worktreeOps.GetTreeHash(run.WorktreePath!);
                 // Fail-closed: null means the worktree is unreadable/corrupt (FIX 2).
                 if (currentTreeHash is null || !string.Equals(currentTreeHash, run.TreeHash, StringComparison.Ordinal))
                 {
@@ -248,6 +267,45 @@ public sealed class WorkflowRestartService
                     .ConfigureAwait(false);
             }
         }
+    }
+
+    /// <summary>
+    /// P0-A (GH #246): before terminalizing a recovered run purely because its worktree DIRECTORY is
+    /// missing, attempt to reconstruct it from the durable run branch. A missing directory does not
+    /// by itself mean lost work — a worker rollout/eviction wipes ephemeral PVC-backed worktree
+    /// storage while the git branch (<c>agentweaver/&lt;runId&gt;</c>) and the DB run row persist.
+    /// Delegates to <see cref="IWorktreeOperations.TryReattachWorktree"/>, which prunes any stale git
+    /// admin entry and recreates the worktree checked out at the existing branch tip (idempotent —
+    /// safe to call even if a concurrent recovery attempt already ran it). Since the reconstructed
+    /// path is always derived deterministically from the run id and the configured worktree root, it
+    /// matches the originally persisted <c>Run.WorktreePath</c> in the overwhelmingly common case; the
+    /// best-effort <see cref="IRunStore.UpdateWorktreeAsync"/> call below only actually writes when the
+    /// column was NULL to begin with (its guard is designed for first-time provisioning, e.g. the
+    /// coordinator shared-orchestration worktree) — it is not a general path-correction primitive.
+    /// Returns an updated <see cref="Run"/> reflecting the reattached path/branch for the CALLER to
+    /// keep using for the rest of this recovery pass regardless of whether the DB write took effect.
+    /// Existing tree-hash verification callers already perform is UNCHANGED — this only supplies a
+    /// valid directory for that verification to run against; it never bypasses it. Returns null when
+    /// reconstruction is impossible (e.g. the branch itself is gone), in which case the caller should
+    /// proceed with its existing "recovered_worktree_missing" terminal-failure path.
+    /// </summary>
+    private async Task<DomainRun?> TryReattachWorktreeAsync(DomainRun run, CancellationToken ct)
+    {
+        var reattached = _worktreeOps.TryReattachWorktree(run.RepositoryPath, run.OriginatingBranch, run.Id.ToString());
+        if (reattached is null) return null;
+
+        var (worktreePath, branchName) = reattached.Value;
+        _logger.LogWarning(
+            "Reattached missing worktree for run {RunId} at '{Path}' from durable branch '{Branch}' (#246 P0-A)",
+            run.Id, worktreePath, branchName);
+
+        if (!string.Equals(worktreePath, run.WorktreePath, StringComparison.Ordinal)
+            || !string.Equals(branchName, run.WorktreeBranch, StringComparison.Ordinal))
+        {
+            await _runStore.UpdateWorktreeAsync(run.Id, worktreePath, branchName, ct).ConfigureAwait(false);
+        }
+
+        return run with { WorktreePath = worktreePath, WorktreeBranch = branchName };
     }
 
     private async Task FailRecoveredRunAsync(

@@ -79,6 +79,11 @@ internal sealed class RunCommandTool : ISandboxTool
                 var timeout = timeout_ms ?? ctx.Options.DefaultTimeoutMs;
                 if (timeout <= 0)
                     timeout = ctx.Options.DefaultTimeoutMs;
+                // #313: floor a sub-minimum caller timeout up to the policy floor BEFORE capping,
+                // so an optimistically short model timeout_ms (e.g. 3 min) can't set a window that
+                // kills a legitimate long Build/Test command under scheduling contention.
+                if (ctx.Options.MinimumTimeoutMs > 0 && timeout < ctx.Options.MinimumTimeoutMs)
+                    timeout = ctx.Options.MinimumTimeoutMs;
                 if (ctx.Options.MaximumTimeoutMs > 0)
                     timeout = Math.Min(timeout, ctx.Options.MaximumTimeoutMs);
                 var cmd = new SandboxCommand(command, ctx.WorkingDirectory, null, fsPolicy,
@@ -92,9 +97,13 @@ internal sealed class RunCommandTool : ISandboxTool
                 {
                     if (ctx.ShellExecutionTracker is not null)
                     {
+                        // #313: the watchdog deadline is the executor's own timeout PLUS a grace
+                        // margin, so the executor's CancelAfter fires first (graceful timed_out:true)
+                        // and the watchdog only backstops a hung/unkillable process. Arming both at
+                        // the same value made the watchdog win the race and fatally abort the turn.
                         executionLease = await ctx.ShellExecutionTracker.EnterAsync(
                             commandHash,
-                            TimeSpan.FromMilliseconds(timeout),
+                            TimeSpan.FromMilliseconds(timeout) + SandboxToolOptions.WatchdogTimeoutGrace,
                             ct).ConfigureAwait(false);
                     }
                     result = await ctx.Executor.ExecuteAsync(cmd, ct).ConfigureAwait(false);

@@ -75,10 +75,10 @@ export function StartOrchestrationFab({ currentProjectId }: StartOrchestrationFa
     setSelectedProjectId(currentProjectId);
     let cancelled = false;
     apiClient
-      .listProjects()
-      .then((list) => {
+      .listProjects({ pageSize: 100 })
+      .then((result) => {
         if (cancelled) return;
-        setProjects(list);
+        setProjects(result.items);
         setLoadError(false);
       })
       .catch(() => {

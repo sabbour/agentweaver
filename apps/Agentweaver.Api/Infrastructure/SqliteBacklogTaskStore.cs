@@ -84,6 +84,28 @@ public sealed class SqliteBacklogTaskStore : IBacklogTaskStore
         return await ReadAllAsync(command, ct).ConfigureAwait(false);
     }
 
+    public async Task<int> CountReadyForPickupAsync(CancellationToken ct = default)
+    {
+        await using var connection = await _db.OpenConnectionAsync(ct).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            SELECT COUNT(*)
+              FROM backlog_tasks bt
+              JOIN projects p ON p.project_id = bt.project_id
+             WHERE bt.state = 'ready' AND bt.run_id IS NULL AND bt.archived_at IS NULL
+               AND p.state = 'active';
+            """;
+
+        var value = await command.ExecuteScalarAsync(ct).ConfigureAwait(false);
+        return value switch
+        {
+            long count => checked((int)count),
+            int count => count,
+            _ => 0,
+        };
+    }
+
     public async Task<bool> UpdateContentAsync(
         ProjectId projectId, BacklogTaskId id, string title, string? description, CancellationToken ct = default)
     {

@@ -1177,9 +1177,10 @@ public sealed class CoordinatorSteeringService
         //   redirect: SURGICAL override (#309) — re-dispatches ONLY the genuinely-incomplete subtasks
         //     (failed / rai_flagged / blocked). Subtasks already assemble_ready/completed are PRESERVED
         //     and never re-run. When EVERY subtask already succeeded the park is an assembly-PHASE
-        //     issue: a build/test-infra failure re-arms ASSEMBLY against the existing children (no
-        //     re-dispatch), while an integration conflict regenerates the conflicting assemble_ready
-        //     children — never a full-workplan restart (the pre-#309 bug).
+        //     issue: a build/test-infra failure OR a now-stale ineligible_subtasks eligibility-gate block
+        //     (#309 follow-up — FitTrackE2E-v12) re-arms ASSEMBLY against the existing children (no
+        //     re-dispatch), while a genuine integration conflict regenerates the conflicting
+        //     assemble_ready children — never a full-workplan restart (the pre-#309 bug).
         //   amend: additive — only unblocks hard RAI gates (rai_flagged) without discarding failed
         //     work. If there are no RAI-blocked subtasks to unblock, falls through to queue so the
         //     instruction is applied at the next natural boundary (no completed work is discarded).
@@ -1210,12 +1211,19 @@ public sealed class CoordinatorSteeringService
                 // leaving already-successful ones (Walt+Jesse) untouched.
                 ResetSubtasksForRedispatch(terminalUnsatisfied, instruction, now, resetIds);
             }
-            else if (allSatisfied && AssemblyPlanning.IsRetryableBuildTestInfraReason(plan.AssemblyStatusReason))
+            else if (allSatisfied
+                && (AssemblyPlanning.IsRetryableBuildTestInfraReason(plan.AssemblyStatusReason)
+                    || AssemblyPlanning.IsStaleIneligibleSubtasksReason(plan.AssemblyStatusReason)))
             {
-                // Every subtask already succeeded and the park was an assembly-PHASE infrastructure
-                // failure (build/test-infra timeout, etc.) — the children are fine. Retry ASSEMBLY
-                // against them; re-running any subtask would only discard completed work (#309 — the
-                // FitTrack wedge where a redirect re-ran all 4 green subtasks then never advanced).
+                // Every subtask already succeeded and the park reason is either an assembly-PHASE
+                // infrastructure failure (build/test-infra timeout, etc.) or a STALE eligibility-gate
+                // block (ineligible_subtasks) whose named subtasks have since gone green — the children
+                // are fine either way. Retry ASSEMBLY against them; re-running any subtask would only
+                // discard completed work (#309 — the FitTrack wedge where a redirect re-ran all green
+                // subtasks then never advanced). The ineligible_subtasks branch specifically closes the
+                // #309 follow-up gap (FitTrackE2E-v12): without it, a stale ineligible_subtasks reason
+                // fell through to the "integration conflict" branch below and reset every assemble_ready
+                // subtask a second time even though nothing actually conflicted.
                 reArmAssemblyOnly = true;
             }
             else if (allSatisfied)

@@ -223,9 +223,39 @@ Business metrics emitted by `AgentWeaverMetrics` are exported to the AKS Managed
 | `agentweaver_run_duration` | Histogram | Run duration in milliseconds |
 | `agentweaver_run_errors_total` | Counter | Run errors by type |
 | `agentweaver_run_active` | UpDownCounter | Currently active runs |
+| `agentweaver_run_queued` | Gauge | Active-project Ready backlog tasks awaiting coordinator pickup (`backlog_tasks.state='ready' AND run_id IS NULL`), sampled every 15s. Legacy name retained; aggregate with `max`, not `sum`, because every replica exports the same global snapshot. |
 
 To query in Azure Managed Grafana (linked to the Prometheus workspace), use standard PromQL:
 
 ```promql
 rate(agentweaver_token_usage_total[5m])
 ```
+
+### Worker autoscaling (queue depth vs. CPU)
+
+`k8s/worker-hpa.yaml` currently scales `agentweaver-worker` on **CPU utilization** (70% target),
+which is a poor proxy for actual backlog — the worker is I/O-bound, not CPU-bound.
+
+The `agentweaver_run_queued` gauge above (issue #108) exists specifically to provide a real
+queue-depth signal for this HPA. In the current system that signal is **not**
+`runs.status='pending'` — backlog pickup creates coordinator runs directly as `in_progress`. The
+durable queue is the set of active-project backlog tasks still in **Ready** with no bound `run_id`
+yet, which is what the gauge now publishes every 15 seconds. Because each replica exports the same
+shared-store total, Prometheus/KEDA queries must use `max(agentweaver_run_queued)` (or the
+equivalent single-series selector), not `sum(...)`.
+
+The HPA itself has **not yet been switched over** — wiring an `external` metric type into a plain
+`HorizontalPodAutoscaler` requires a Kubernetes External Metrics API adapter capable of serving
+Azure Monitor managed-Prometheus-backed queries, and no such adapter is currently provisioned in
+`scripts/aks/`. The two realistic paths forward (tracked against #108 — see
+`decisions/inbox/niobe-108-hpa-investigation.md` for the full analysis) are:
+
+1. **KEDA with a Prometheus scaler** (Microsoft's supported pattern for scaling on Azure Monitor
+   managed Prometheus metrics) — query `agentweaver_run_queued` via the workspace's Prometheus
+   query endpoint using `max(...)`, not `sum(...)`.
+2. Provision a `k8s-prometheus-adapter`-style External Metrics API adapter and wire `worker-hpa.yaml`
+   with a `type: External` metric block pointing at it.
+
+Until one of these is chosen and the supporting cluster component is provisioned, the worker
+continues to scale on CPU (with the gauge available for manual/Grafana-based capacity monitoring
+in the meantime).

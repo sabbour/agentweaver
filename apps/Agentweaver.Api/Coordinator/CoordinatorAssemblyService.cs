@@ -250,13 +250,19 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
     /// Returns true when two subtasks are likely to conflict in the shared orchestration worktree
     /// and must therefore run serially rather than in parallel.
     ///
-    /// <para>Conflict rules (conservative-by-default):</para>
+    /// <para>Conflict rules (tri-state, #261):</para>
     /// <list type="bullet">
-    /// <item>If either subtask has no structured <see cref="Subtask.DeclaredOutputPathsJson"/>
-    ///   entries, its outputs are undeclared and the pair is assumed to conflict (safe default).</item>
+    /// <item>If either subtask's <see cref="Subtask.DeclaredOutputPathsJson"/> is malformed/missing/
+    ///   wrong-shape (<see cref="CoordinatorOrchestratorExecutor.DeclaredOutputPathsParseState.Invalid"/>),
+    ///   the pair is conservatively assumed to conflict (safe default — nothing reliable was
+    ///   declared).</item>
+    /// <item>If either subtask genuinely declared NO outputs
+    ///   (<see cref="CoordinatorOrchestratorExecutor.DeclaredOutputPathsParseState.ValidEmpty"/>, a
+    ///   literal <c>[]</c>), the pair does NOT conflict — that subtask writes nothing, so there is
+    ///   nothing for the other side's outputs to collide with.</item>
     /// <item>If both declare file-path tokens, they conflict when any token from one subtask
     ///   suffix-matches or filename-matches a token from the other (see
-    ///   <see cref="FilesMatchPublic"/>).</item>
+    ///   <see cref="CoordinatorOrchestratorExecutor.DeclaredOutputPathsMatch"/>).</item>
     /// </list>
     ///
     /// Called by the dispatch loop to decide parallel vs serial scheduling before dispatching a
@@ -269,40 +275,30 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         // "shared" can therefore still write files and clobber a sibling. We deliberately do NOT
         // short-circuit on isolation here; every pair flows through structured output matching so
         // mislabeled writers are still scheduled serially when their declared outputs overlap.
-        var files1 = CoordinatorOrchestratorExecutor.DeserializeDeclaredOutputPaths(
-            subtask1.DeclaredOutputPathsJson);
-        var files2 = CoordinatorOrchestratorExecutor.DeserializeDeclaredOutputPaths(
-            subtask2.DeclaredOutputPathsJson);
+        var parsed1 = CoordinatorOrchestratorExecutor.ParseDeclaredOutputPaths(subtask1.DeclaredOutputPathsJson);
+        var parsed2 = CoordinatorOrchestratorExecutor.ParseDeclaredOutputPaths(subtask2.DeclaredOutputPathsJson);
 
-        // Either subtask has no declared paths → conservatively treat as conflicting.
-        if (files1.Count == 0 || files2.Count == 0)
+        // Either side's declaration is untrustworthy (malformed/missing/wrong-shape) → conservatively
+        // conflict, since we cannot rely on what it did or didn't declare (#261).
+        if (parsed1.State == CoordinatorOrchestratorExecutor.DeclaredOutputPathsParseState.Invalid
+            || parsed2.State == CoordinatorOrchestratorExecutor.DeclaredOutputPathsParseState.Invalid)
             return true;
 
-        // Check for file-path overlap using the same matching rules as D6 rejection routing.
-        foreach (var f1 in files1)
-            foreach (var f2 in files2)
-                if (FilesMatchPublic(f1, f2))
+        // A genuinely empty declaration (`[]`) means that subtask writes no files, so it cannot
+        // collide with anything the other subtask writes — even if the other side declares paths
+        // (#261: previously this collapsed into the same "conflict with everything" bucket as Invalid).
+        if (parsed1.State == CoordinatorOrchestratorExecutor.DeclaredOutputPathsParseState.ValidEmpty
+            || parsed2.State == CoordinatorOrchestratorExecutor.DeclaredOutputPathsParseState.ValidEmpty)
+            return false;
+
+        // Both sides declared concrete paths — check for file-path overlap using the shared matcher
+        // (also used by D6 rejection routing and the persisted dependency-edge builder).
+        foreach (var f1 in parsed1.Paths)
+            foreach (var f2 in parsed2.Paths)
+                if (CoordinatorOrchestratorExecutor.DeclaredOutputPathsMatch(f1, f2))
                     return true;
 
         return false;
-    }
-
-    // Mirrors AssemblyPlanning.FilesMatch (private static there) for use in DoSubtasksConflict.
-    private static bool FilesMatchPublic(string a, string b)
-    {
-        if (string.Equals(a, b, StringComparison.OrdinalIgnoreCase)) return true;
-        if (a.EndsWith("/" + b, StringComparison.OrdinalIgnoreCase)) return true;
-        if (b.EndsWith("/" + a, StringComparison.OrdinalIgnoreCase)) return true;
-        // Bare filename token (no separator) matches the other path's filename.
-        if (!b.Contains('/') && string.Equals(FileNameOf(a), b, StringComparison.OrdinalIgnoreCase)) return true;
-        if (!a.Contains('/') && string.Equals(FileNameOf(b), a, StringComparison.OrdinalIgnoreCase)) return true;
-        return false;
-    }
-
-    private static string FileNameOf(string path)
-    {
-        var idx = path.LastIndexOf('/');
-        return idx >= 0 ? path[(idx + 1)..] : path;
     }
 
     /// <summary>
@@ -4158,6 +4154,7 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
             })
             .FirstOrDefaultAsync(ct).ConfigureAwait(false);
 
+        var coordinatorModel = (await TryGetCoordinatorRunAsync(coordinatorRunId, ct).ConfigureAwait(false))?.ModelId;
         var gates = await ResolveAssemblyGatesAsync(workPlanId, ct).ConfigureAwait(false);
         entry.RecordNext(EventTypes.CoordinatorGraph,
             CoordinatorGraphDescriptor.Build(
@@ -4168,7 +4165,8 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
                 state?.Status,
                 state?.AssemblyTerminalStage,
                 state?.AssemblyStatusReason,
-                assemblyGates: gates));
+                assemblyGates: gates,
+                coordinatorModel: coordinatorModel));
     }
 
     private async Task EmitTopologyAsync(
@@ -4387,7 +4385,6 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
     {
         var waitUntil = DateTimeOffset.UtcNow + _steeringWaitTimeout;
         var waitVersion = _steeringWaits.GetVersion(coordinatorRunId);
-        var recoverOnEligibility = CanRecoverBlockedAssemblyOnEligibility(reason);
 
         while (!ct.IsCancellationRequested)
         {
@@ -4399,7 +4396,21 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
             if (planStatus != WorkPlanStatus.AssemblyBlocked)
                 return BlockedAssemblyOutcome.DispatchResumed;
 
-            if (recoverOnEligibility && await AreSubtasksAssemblyEligibleAsync(workPlanId, ct).ConfigureAwait(false))
+            // #242 defense-in-depth: re-resolve the persisted block reason FRESH on every tick instead
+            // of trusting the value captured once when this wait began (the previous behavior). Smith's
+            // live FitTrackE2E-v12 wedge (decisions/inbox/smith-fittrack-priority1.md) showed a run
+            // parked with a stale cached reason that did not match the "ineligible_subtasks" class at
+            // the moment the wait started, which permanently disabled eligibility polling for the WHOLE
+            // steering-wait window (default 10 min, Coordinator:AssemblyBlockedSteeringTimeoutMinutes)
+            // even though every subtask subsequently went assembly-eligible — the run then silently
+            // timed out and auto-terminalized despite being, in fact, recoverable. Re-reading the
+            // persisted reason each iteration (same cadence as the existing run/plan-status reads just
+            // above) lets a plan whose reason is later corrected/updated to ineligible_subtasks recover
+            // normally instead of blindly waiting out the full timeout on a snapshot taken at entry.
+            var currentReason = await ResolveBlockedAssemblyReasonAsync(coordinatorRunId, fallback: null, ct)
+                .ConfigureAwait(false);
+            if (CanRecoverBlockedAssemblyOnEligibility(currentReason)
+                && await AreSubtasksAssemblyEligibleAsync(workPlanId, ct).ConfigureAwait(false))
                 return BlockedAssemblyOutcome.EligibilityRecovered;
 
             var send = await _steeringQueue.TryTakeAssemblySendAsync(coordinatorRunId, ct).ConfigureAwait(false);

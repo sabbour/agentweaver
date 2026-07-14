@@ -123,6 +123,26 @@ public sealed class CoordinatorGraphDescriptorTests
     }
 
     [Fact]
+    public void Build_KnownCoordinatorModel_IsSurfacedOnlyOnCoordinatorOwnedAgentNodes()
+    {
+        var (subtasks, deps) = SamplePlan();
+
+        var d = CoordinatorGraphDescriptor.Build(
+            "coord_run",
+            subtasks,
+            deps,
+            coordinatorModel: "claude-sonnet-4.6");
+
+        d.Nodes.Single(n => n.Id == "coordinator").Model.Should().Be("claude-sonnet-4.6");
+        d.Nodes.Single(n => n.Id == "planned:assembly-scribe").Model.Should().Be("claude-sonnet-4.6");
+
+        d.Nodes.Single(n => n.Id == "planned:assembly-rai").Model.Should().BeNull(
+            "collective RAI does not persist a concrete model id today");
+        d.Nodes.Single(n => n.Id == "planned:assembly-review").Model.Should().BeNull();
+        d.Nodes.Single(n => n.Id == "planned:assembly-merge").Model.Should().BeNull();
+    }
+
+    [Fact]
     public void Build_WiresCoordinatorRootsDependenciesAndAssemblyChain()
     {
         var (subtasks, deps) = SamplePlan();
@@ -311,5 +331,14 @@ public sealed class CoordinatorGraphDescriptorTests
         edges.Should().Contain(("coordinator", "planned:assembly-rai"));
         edges.Should().Contain(("planned:assembly-rai", "planned:assembly-review"));
         edges.Should().Contain(("planned:assembly-review", "coordinator"));
+    }
+
+    [Fact]
+    public void BuildEmpty_PreservesCoordinatorAndScribeModel_WhenKnownBeforePlanning()
+    {
+        var d = CoordinatorGraphDescriptor.BuildEmpty("coord_run", "gpt-5.6");
+
+        d.Nodes.Single(n => n.Id == "coordinator").Model.Should().Be("gpt-5.6");
+        d.Nodes.Single(n => n.Id == "planned:assembly-scribe").Model.Should().Be("gpt-5.6");
     }
 }

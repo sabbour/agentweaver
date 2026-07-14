@@ -2,6 +2,58 @@
 
 These personas define goal-directed behaviors and scenarios for persona-driven self-improvement testing. Each persona can later be converted into an agent definition that drives the running Agentweaver UI dynamically with Playwright.
 
+> **Primary E2E track is now API-driven.** Personas drive Agentweaver through its
+> REST API (bearer token) rather than a browser — see
+> [`scripts/persona-harness/`](../../scripts/persona-harness/README.md) for the
+> working harness, the self-improvement loop mapped to API calls, and how to add
+> scenarios.
+>
+> **Two driving models** (both API-only, both stop at the confirmation gate):
+> - **LLM-in-the-loop (primary going forward).** A fresh-context LLM is handed only
+>   a persona **brief** (goals/voice/constraints — *not* a script) and drives the
+>   run turn-by-turn, deciding each action from what the API actually returns, and
+>   **must push back at least twice** grounded in real responses. This surfaces
+>   emergent behaviour (e.g. the coordinator revising a plan in response to targeted
+>   feedback) that a fixed script can't. Prototyped + live-verified for Priya
+>   (`scripts/persona-harness/briefs/priya.md` + `agent-driver/`).
+> - **Fixed-script (fallback / fast regression).** One-shot deterministic scenarios
+>   in `scripts/persona-harness/scenarios/*.mjs`, kept as references.
+>
+> In BOTH models the harness is a **driver only** — it drives and captures evidence
+> verbatim; it does **not** self-certify whether the produced content is *good*. A
+> separate LLM/human **judge** renders that verdict from the captured evidence + the
+> "Success looks like" criteria below, using a two-layer method (per-run verdict +
+> cross-run meta-aggregation of invariants/divergences/gaps/drift) documented in
+> [`scripts/persona-harness/JUDGE.md`](../../scripts/persona-harness/JUDGE.md).
+>
+> **Scope of what it proves today:** two rungs, under a strict **driver/judge
+> separation** — the harness *drives* Agentweaver and *captures evidence*; it does
+> **not** self-certify whether the produced content is *good* (that subjective
+> verdict is deferred to a separate LLM/human judge that reads the finding JSON +
+> the persona's authored "Success looks like" criteria).
+> 1. **Scoping rung** — from a plain-language goal through project creation,
+>    multi-agent team assembly, and a coordinator-drafted plan that settles at the
+>    **outcome-spec confirmation gate** (Priya, Jordan scenarios). The driver's
+>    only verdict here is deterministic **platform-correctness** (calls succeeded,
+>    a team assembled, the spec left `drafting`, no `run.failed`); it captures the
+>    full drafted outcome spec verbatim for the judge to assess against the
+>    persona's success criteria.
+> 2. **Generation-seam rung** — the harness drives the blueprint/workflow
+>    generators and asserts the GENERATED artifacts are *structurally* correct.
+>    Structural/schema validation IS legitimate deterministic driver checking (not
+>    a subjective heuristic), so it stays a hard pass/fail: the roster excludes
+>    reserved system roles (Scribe/Work Monitor/Rai/Coordinator — the class of bug
+>    in issue #311), and generated workflows pass the same structural validation
+>    the backend enforces (`WorkflowDefinitionLoader.Load`). Per-phase latency and
+>    token/cost are recorded in each finding.
+>
+> It does **not** yet exercise the downstream `confirm → run → review → merge`
+> rungs; those remain covered by manual/curl validation until the deeper (opt-in,
+> non-deploying-by-default) rung is built. An automated LLM-judge-*calling* pass,
+> dynamic LLM-driven scenario generation, and draft-blueprint testbed mode are also
+> still pending. The Playwright/browser approach below stays a secondary track for
+> frontend-specific UX findings.
+
 ## Self-improvement loop
 
 1. **Load a persona + scenario** as the test agent's identity, domain context, goals, and behavioral profile.

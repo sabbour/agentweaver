@@ -94,3 +94,21 @@ Removed project relink end-to-end to close arbitrary server-path exposure: front
 ## 2026-07-06 v0.9.0 staging wave
 - Re-reviewed the skills-import SSRF fix and cleared it green for release.
 📌 Team update (2026-07-10T05:55:00-07:00): #207 redesign remains YELLOW until fenced claims, tenant-scoped capabilities, fail-closed remote execution, fair bounded recovery, deletion cancellation/idempotency, audit redaction, and mTLS are mandatory. — decided by Seraph
+
+## 2026-07-14T02:35:00-07:00 — Batch merge: triage batch (#216/#224/#226/#227/#266), #253/#255 reviews
+Scribe merged inbox notes: staleness re-verification triage across #216 (still open, run/always approvals remain tool-scoped), #224 (still open, no separate agent scratch root), #226 (stale human-review gate steering now drained), #227 (still open, non-pending review delivery superseded), #266 (partially fixed, /proc observation exists). #253/#255 review rounds approved/rejected across revisions; #258 rev5 and #264 v2/v3 reviews completed.
+
+## 2026-07-14T03:05:00-07:00 — Continuous triage pass 2, #307 tagged-release confirmation
+Ran triage pass #2 and a dedicated tagged-release check for #307: confirmed the AgentHost pod right-sizing fix is live on 0.9.49-rc1 (not an ad hoc manifest), with a real triggered run observed autoscaling out correctly under scheduling pressure and zero evictions/OOM kills. Evidence posted to #307; recommend closing with both load-test and tagged-release evidence.
+
+## 2026-07-14T10:15:00-07:00
+Continuous triage pass #2 findings folded into decisions.md this batch (see #216/#227 validation notes from prior pass carried forward as context).
+
+
+## 2026-07-14T10:15:00-07:00 (late arrival)
+Triage pass #3: backlog 55 open (down from 67). Filed #314 (#309 follow-up). Flagged process finding re: #312/#247 closed on review-tests-only while fixes remain uncommitted diffs — recommended reopen or new closure tier, no unilateral action.
+
+
+## 2026-07-14T11:05:00-07:00
+Coordinator acted on the pass-3 closure-discipline finding: #311/#208/#312/#247/#310 reopened. Vindicates the process flag raised without unilateral action.
+

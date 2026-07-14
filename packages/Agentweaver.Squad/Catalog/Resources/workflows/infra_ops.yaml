@@ -1,0 +1,148 @@
+# Infrastructure & Operations Workflow (#310, epic #296)
+# Ops/DevOps delivery pipeline: plan -> implement -> validate (dry-run/policy) gate -> RAI check ->
+# infra/config peer review -> human review (deployment sign-off) -> done. Merge and scribe are
+# platform-appended, same as every other catalog workflow.
+#
+# This exists to close the catalog gap identified by the generation-quality harness (#310): prompts
+# describing CI/CD pipeline, IaC, or monitoring/alerting work with no application code were falling
+# back to `software-delivery`, which carries a `rubberduck` code-critique gate that is a poor fit when
+# there is no application code artifact to critique. Here the equivalent step is `infra-review`, a
+# peer_review gate framed around IaC/config/blast-radius review instead of code critique.
+
+id: infra-ops
+name: Infrastructure & Operations
+description: Infrastructure and operations delivery pipeline for CI/CD pipeline changes, infrastructure-as-code, and monitoring/alerting setup, with a dry-run/policy validation gate, RAI safety check, an infra/config peer review, and human sign-off before deployment. Use for DevOps, platform, and SRE work where there is no application code to build/test — not for feature or application-code delivery (use software-delivery for that).
+version: "1.0"
+
+start: plan
+
+nodes:
+  - id: plan
+    type: prompt
+    label: Plan
+    role: agent
+    kind: live
+    prompt: Scope the infrastructure/operations change - the environments and systems affected, the blast radius, rollback plan, and the validation approach (e.g. terraform plan, dry-run, policy-as-code checks) before any change is made.
+
+  - id: implement
+    type: prompt
+    label: Implement
+    role: agent
+    kind: live
+    prompt: Implement the infrastructure-as-code, pipeline, or observability/monitoring change per the plan. Prefer declarative, reviewable diffs (IaC, pipeline YAML, alert/dashboard config) over manual/imperative changes.
+
+  - id: validate-gate
+    type: peer_review
+    label: Validate
+    role: review
+    kind: live
+    agent: devops-engineer
+    prompt: Act as the validation gate for this infrastructure/operations change. Run and inspect the dry-run/plan output (e.g. terraform plan, pipeline lint/dry-run, policy-as-code checks) and confirm the change matches the stated intent with no unexpected resource drift, deletions, or policy violations. Provide your verdict and findings inline through your review decision; they are captured in the run record and shown in the UI. Do NOT write a validation report file into the workspace.
+
+  - id: rai-check
+    type: check
+    label: RAI Check
+    role: review
+    kind: gate
+    gate_kind: rai
+    branches:
+      - revise
+      - safety-failed
+      - no-changes
+      - review
+
+  - id: infra-review
+    type: peer_review
+    label: Infra & Config Review
+    role: review
+    kind: live
+    agent: security-engineer
+    prompt: Review the infrastructure-as-code/pipeline/monitoring diff for security posture, least-privilege access, blast radius, and operational risk (e.g. availability, cost, rollback safety). This is a config/IaC review, not a code-quality critique - focus on what changes in the running environment, not code style. Provide your verdict (approved, request-changes, or declined) and findings inline through your review decision.
+
+  - id: human-review
+    type: check
+    label: Human Review
+    role: review
+    kind: gate
+    gate_kind: human-review
+    branches:
+      - approved
+      - request-changes
+      - declined
+
+  - id: terminal-safety-failed
+    type: terminal
+    label: Safety Failed
+    role: plumbing
+    kind: terminal
+
+  - id: terminal-declined
+    type: terminal
+    label: Declined
+    role: plumbing
+    kind: terminal
+
+  - id: done
+    type: terminal
+    label: Done
+    role: plumbing
+    kind: terminal
+
+edges:
+  - from: plan
+    to: implement
+
+  - from: implement
+    to: validate-gate
+
+  # Validation gate: pass advances to the RAI check; fail loops back to implement.
+  - from: validate-gate
+    to: rai-check
+    when: pass
+
+  - from: validate-gate
+    to: implement
+    when: fail
+
+  # RAI verdict routing.
+  - from: rai-check
+    to: implement
+    when: revise
+
+  - from: rai-check
+    to: terminal-safety-failed
+    when: safety-failed
+
+  - from: rai-check
+    to: done
+    when: no-changes
+
+  - from: rai-check
+    to: infra-review
+    when: review
+
+  # Infra/config review routing.
+  - from: infra-review
+    to: human-review
+    when: approved
+
+  - from: infra-review
+    to: implement
+    when: request-changes
+
+  - from: infra-review
+    to: terminal-declined
+    when: declined
+
+  # Human review gate routing (deployment sign-off).
+  - from: human-review
+    to: done
+    when: approved
+
+  - from: human-review
+    to: implement
+    when: request-changes
+
+  - from: human-review
+    to: terminal-declined
+    when: declined

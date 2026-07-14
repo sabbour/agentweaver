@@ -72,6 +72,30 @@ public sealed class WorkflowGeneratorTests
     }
 
     [Fact]
+    public async Task GenerateAsync_CreatePrompt_ExcludesReservedOrchestrationRoles()
+    {
+        // Regression for #311: Scribe, Work Monitor, Rai, and Coordinator are platform-owned
+        // orchestration roles provisioned automatically for every team. They must never be offered
+        // to the workflow generator as an assignable `role`/`agent` for a `prompt`/`peer_review` node.
+        var runner = new ScriptedAgentRunner(ValidWorkflowYaml);
+        var generator = CreateGenerator(runner);
+
+        await generator.GenerateAsync(new WorkflowGenerationRequest("A simple manual workflow."));
+
+        runner.LastTask.Should().NotBeNull();
+        var task = runner.LastTask!;
+        var rolesSectionStart = task.IndexOf("Available roles for the", StringComparison.Ordinal);
+        rolesSectionStart.Should().BeGreaterThan(-1, "the roles list section must be present in the prompt");
+        var rolesSectionEnd = task.IndexOf("BESPOKE ROLES:", rolesSectionStart, StringComparison.Ordinal);
+        rolesSectionEnd.Should().BeGreaterThan(rolesSectionStart);
+        var rolesSection = task[rolesSectionStart..rolesSectionEnd];
+
+        foreach (var reservedId in new[] { "scribe", "work-monitor", "coordinator", "rai" })
+            rolesSection.Should().NotMatchRegex($@"(?im)^- {reservedId}:",
+                $"reserved role '{reservedId}' must not appear in the catalog roles offered to the workflow generator");
+    }
+
+    [Fact]
     public async Task GenerateAsync_UsesGpt54GenerationModelByDefault()
     {
         var runner = new ScriptedAgentRunner(ValidWorkflowYaml);
@@ -278,6 +302,49 @@ public sealed class WorkflowGeneratorTests
     }
 
     // ── Endpoint integration (stub generator) ────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task GenerateEndpoint_WithConfirmedTeam_ExcludesReservedRolesFromTeamRoles()
+    {
+        // Regression for #311: CastingService.ConfirmProposalAsync writes the built-in orchestration
+        // agents (Scribe, Ralph/Work Monitor, Rai, Coordinator) into every confirmed team.md, with
+        // role ids "scribe", "work-monitor", "rai-reviewer", "coordinator". TryReadTeamRoles must strip
+        // those before they reach the workflow generator as assignable roles.
+        await using var factory = new StubWorkflowGeneratorFactory();
+        var client = factory.CreateAuthenticatedClient();
+
+        var dir = factory.NewWorkingDirectory();
+        var create = await client.PostAsJsonAsync("/api/projects", new
+        {
+            name = $"WfGen ReservedRoles Test {Guid.NewGuid():N}",
+            origin = "blank",
+            working_directory = dir,
+        });
+        create.StatusCode.Should().Be(HttpStatusCode.Created);
+        var projectId = (await create.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("project_id").GetString()!;
+
+        var propose = await client.PostAsJsonAsync(
+            $"/api/projects/{projectId}/casting/proposals",
+            new { mode = "scenario", template_id = "quick-software-development" });
+        propose.StatusCode.Should().Be(HttpStatusCode.OK, await propose.Content.ReadAsStringAsync());
+        var proposalId = (await propose.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("proposal_id").GetString()!;
+
+        var confirm = await client.PostAsJsonAsync(
+            $"/api/projects/{projectId}/casting/proposals/{proposalId}/confirm", new { });
+        confirm.StatusCode.Should().Be(HttpStatusCode.OK, await confirm.Content.ReadAsStringAsync());
+
+        var resp = await client.PostAsJsonAsync(
+            $"/api/projects/{projectId}/workflows/generate",
+            new { description = "A manual review-and-merge workflow." });
+        resp.StatusCode.Should().Be(HttpStatusCode.OK, await resp.Content.ReadAsStringAsync());
+
+        var generator = factory.Services.GetRequiredService<IWorkflowGenerator>()
+            .Should().BeOfType<StubWorkflowGenerator>().Subject;
+        generator.LastRequest.Should().NotBeNull();
+        generator.LastRequest!.TeamRoles.Should().NotBeNull();
+        generator.LastRequest.TeamRoles.Should().NotContain(
+            new[] { "scribe", "work-monitor", "ralph", "rai", "rai-reviewer", "coordinator" });
+    }
 
     [Fact]
     public async Task GenerateEndpoint_Returns200_WithYamlAndWorkflowId()

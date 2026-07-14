@@ -22,7 +22,7 @@ import {
   WrenchRegular,
 } from '@fluentui/react-icons';
 import { SafeMarkdown } from './SafeMarkdown';
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { AgentweaverCopilotProvider } from './ui/copilot/AgentweaverCopilotProvider';
 import { Body, EmptyState, Label } from './ui';
@@ -33,6 +33,7 @@ import type {
   RunTimelineTool,
   RunTimelineToolCategory,
 } from '../timeline/runTimelineSteps';
+import { formatAbsoluteTime, formatRelativeTime } from '../utils/relativeTime';
 
 /** Single place to rename the surface. */
 export const TIMELINE_LABEL = 'Messages';
@@ -288,6 +289,12 @@ const useStyles = makeStyles({
     fontSize: tokens.fontSizeBase300,
     lineHeight: tokens.lineHeightBase300,
   },
+  messageTimestamp: {
+    display: 'block',
+    color: tokens.colorNeutralForeground3,
+    fontSize: tokens.fontSizeBase100,
+    marginBottom: tokens.spacingVerticalXXS,
+  },
   empty: {
     color: tokens.colorNeutralForeground3,
     fontSize: tokens.fontSizeBase200,
@@ -507,16 +514,28 @@ function ToolGroup({ tools }: { tools: RunTimelineTool[] }) {
 
 function MessageBlock({ message }: { message: RunTimelineMessage }) {
   const styles = useStyles();
+  const timestamp = (
+    <span
+      className={styles.messageTimestamp}
+      title={formatAbsoluteTime(message.timestamp)}
+    >
+      {formatRelativeTime(message.timestamp)}
+    </span>
+  );
   if (message.streaming || message.text.length === 0) {
     return (
-      <div className={styles.messageStreaming} data-testid="timeline-message">
-        {message.text}
+      <div data-testid="timeline-message">
+        {timestamp}
+        <div className={styles.messageStreaming}>{message.text}</div>
       </div>
     );
   }
   return (
-    <div className={styles.message} data-testid="timeline-message">
-      <SafeMarkdown>{message.text}</SafeMarkdown>
+    <div data-testid="timeline-message">
+      {timestamp}
+      <div className={styles.message}>
+        <SafeMarkdown>{message.text}</SafeMarkdown>
+      </div>
     </div>
   );
 }
@@ -567,6 +586,12 @@ export interface RunTimelineProps {
 export function RunTimeline({ steps, running, emptyHint, embedded = false }: RunTimelineProps) {
   const styles = useStyles();
   const stepLabel = `${steps.length} ${steps.length === 1 ? 'step' : 'steps'}`;
+  const [, setRelativeTimeTick] = useState(0);
+
+  useEffect(() => {
+    const intervalId = window.setInterval(() => setRelativeTimeTick((tick) => tick + 1), 5_000);
+    return () => window.clearInterval(intervalId);
+  }, []);
 
   // `defaultOpenItems` on the underlying Accordion only applies at first mount. Steps stream in
   // asynchronously (SSE / history load), so by the time later steps arrive the Accordion has

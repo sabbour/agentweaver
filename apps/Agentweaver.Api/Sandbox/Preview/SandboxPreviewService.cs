@@ -82,6 +82,14 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
     private const string HttpRouteVersion = "v1";
     private const string HttpRoutePlural = "httproutes";
 
+    /// <summary>
+    /// Host header the gateway rewrites every preview request to before forwarding it to the run's
+    /// dev server. Dev-server host allowlists (Vite/CRA/Angular) permit "localhost" by default, so
+    /// rewriting to it makes the dynamic per-preview hostname reachable without per-framework config
+    /// patching. See <see cref="BuildHttpRoute"/> for the full rationale (#312).
+    /// </summary>
+    private const string PreviewUpstreamHost = "localhost";
+
     /// <summary>Minimum age before a route-less preview Service is treated as a leaked orphan.</summary>
     private static readonly TimeSpan OrphanGrace = TimeSpan.FromMinutes(2);
 
@@ -700,6 +708,24 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
                 {
                     new
                     {
+                        // Rewrite the upstream Host header to "localhost" before the request reaches
+                        // the run's dev server. Modern dev servers (Vite 5+/6, CRA, Angular) ship a
+                        // DNS-rebinding host allowlist that rejects any Host they weren't explicitly
+                        // told about with HTTP 403 "Blocked request ... add to server.allowedHosts".
+                        // The dynamic per-preview hostname ({token}-preview.{zone}) is never in that
+                        // allowlist, so without this rewrite a healthy, correctly-bound app would be
+                        // unreachable through the gateway even though preview readiness (a pod-local
+                        // 127.0.0.1 probe) reports "ready". "localhost" is allowed by default across
+                        // these frameworks, making this a single framework-agnostic fix. The preview
+                        // token stays the browser-facing secret; the app just never sees it. (#312)
+                        filters = new[]
+                        {
+                            new
+                            {
+                                type = "URLRewrite",
+                                urlRewrite = new { hostname = PreviewUpstreamHost },
+                            },
+                        },
                         backendRefs = new[]
                         {
                             new { name = serviceName, port = 80 },

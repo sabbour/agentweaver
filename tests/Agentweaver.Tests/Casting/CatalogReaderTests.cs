@@ -30,6 +30,26 @@ public sealed class CatalogReaderTests
     }
 
     [Fact]
+    public void LoadAllRoles_ExcludesReservedOrchestrationRoles()
+    {
+        // Regression for #311: scribe.json and work_monitor.json exist as catalog role resources so
+        // their built-in charters can be compiled by CharterCompiler, but they must never be offered
+        // as a castable/domain role via LoadAllRoles (used to list manual-casting options and to build
+        // the blueprint/workflow generation prompts).
+        var roles = _reader.LoadAllRoles();
+        var ids = roles.Select(r => r.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        Assert.DoesNotContain("scribe", ids);
+        Assert.DoesNotContain("work-monitor", ids);
+        Assert.DoesNotContain("coordinator", ids);
+        Assert.DoesNotContain("rai", ids);
+
+        // The role still resolves directly by id (used internally to compile the built-in charter).
+        Assert.NotNull(_reader.LoadRole("scribe"));
+        Assert.NotNull(_reader.LoadRole("work-monitor"));
+    }
+
+    [Fact]
     public void LoadTemplates_EachTemplateHasRolesWithNonEmptyIdsAndTitles()
     {
         var templates = _reader.LoadTemplates();

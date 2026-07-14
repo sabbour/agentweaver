@@ -25,6 +25,12 @@ vi.mock('../api/apiClient', () => ({
   },
 }));
 
+// Pagination contract (`.squad/decisions/inbox/niobe-pagination-contract.md`): `listProjects`
+// now resolves a `{ items, page, page_size, total_count, total_pages }` envelope.
+function projectsPage(items: Project[]) {
+  return { items, page: 1, page_size: 100, total_count: items.length, total_pages: 1 } as never;
+}
+
 function makeProject(id: string, name: string): Project {
   return {
     project_id: id,
@@ -95,7 +101,7 @@ function Wrapper({ children }: { children: ReactNode }) {
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(apiClient.getServerInfo).mockResolvedValue({ data_directory: '/data', workspace_auto_assigned: false } as never);
-  vi.mocked(apiClient.listProjects).mockResolvedValue([]);
+  vi.mocked(apiClient.listProjects).mockResolvedValue(projectsPage([]));
   vi.mocked(apiClient.listBlueprints).mockResolvedValue([BP_BACKEND, BP_DOCS]);
   vi.mocked(apiClient.suggestBlueprint).mockResolvedValue({
     recommended_blueprint: BP_BACKEND,
@@ -121,6 +127,108 @@ function fillNameAndFolder() {
 }
 
 describe('ProjectGalleryPage — blueprint selection', () => {
+  it('pages project tiles from the server when the catalog exceeds 100 projects', async () => {
+    const manyProjects = Array.from({ length: 101 }, (_, index) =>
+      makeProject(`p-${index + 1}`, `Project ${index + 1}`),
+    );
+    vi.mocked(apiClient.listProjects).mockImplementation(async (options) => {
+      const pageNumber = options?.page ?? 1;
+      const pageSize = options?.pageSize ?? 100;
+      const start = (pageNumber - 1) * pageSize;
+      return {
+        items: manyProjects.slice(start, start + pageSize),
+        page: pageNumber,
+        page_size: pageSize,
+        total_count: manyProjects.length,
+        total_pages: Math.ceil(manyProjects.length / pageSize),
+      } as never;
+    });
+
+    render(<Wrapper><ProjectGalleryPage /></Wrapper>);
+
+    await waitFor(() => expect(screen.getByText('Project 1')).toBeDefined());
+    expect(screen.getByText('1-12 of 101')).toBeDefined();
+    expect(screen.queryByText('Project 13')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+
+    await waitFor(() => expect(screen.getByText('Project 13')).toBeDefined());
+    expect(screen.queryByText('Project 1')).toBeNull();
+    expect(
+      vi.mocked(apiClient.listProjects).mock.calls.some(([options]) => options?.page === 2 && options?.pageSize === 12),
+    ).toBe(true);
+  });
+
+  it('resets to page 1 and refetches when the project-gallery page size changes', async () => {
+    const manyProjects = Array.from({ length: 101 }, (_, index) =>
+      makeProject(`p-${index + 1}`, `Project ${index + 1}`),
+    );
+    vi.mocked(apiClient.listProjects).mockImplementation(async (options) => {
+      const pageNumber = options?.page ?? 1;
+      const pageSize = options?.pageSize ?? 100;
+      const start = (pageNumber - 1) * pageSize;
+      return {
+        items: manyProjects.slice(start, start + pageSize),
+        page: pageNumber,
+        page_size: pageSize,
+        total_count: manyProjects.length,
+        total_pages: Math.ceil(manyProjects.length / pageSize),
+      } as never;
+    });
+
+    render(<Wrapper><ProjectGalleryPage /></Wrapper>);
+
+    await waitFor(() => expect(screen.getByText('Project 1')).toBeDefined());
+
+    fireEvent.click(screen.getByRole('combobox', { name: 'Rows per page' }));
+    fireEvent.click(await screen.findByRole('option', { name: '24 / page' }));
+
+    await waitFor(() =>
+      expect(
+        vi.mocked(apiClient.listProjects).mock.calls.some(([options]) => options?.page === 1 && options?.pageSize === 24),
+      ).toBe(true),
+    );
+    await waitFor(() => expect(screen.getByText('Project 24')).toBeDefined());
+    expect(screen.queryByText('Project 25')).toBeNull();
+  });
+
+  it('returns an empty (not erroring) tile grid when requesting a page beyond the available data', async () => {
+    const manyProjects = Array.from({ length: 15 }, (_, index) =>
+      makeProject(`p-${index + 1}`, `Project ${index + 1}`),
+    );
+    // Simulates the backend's overflow-safe `Paging.Of` behaviour: an out-of-range page
+    // returns an empty `items` array (HTTP 200) while echoing back the requested page number,
+    // rather than erroring or silently wrapping back to page 1's data.
+    vi.mocked(apiClient.listProjects).mockImplementation(async (options) => {
+      const pageNumber = options?.page ?? 1;
+      const pageSize = options?.pageSize ?? 12;
+      const start = (pageNumber - 1) * pageSize;
+      return {
+        items: manyProjects.slice(start, start + pageSize),
+        page: pageNumber,
+        page_size: pageSize,
+        total_count: manyProjects.length,
+        total_pages: Math.ceil(manyProjects.length / pageSize),
+      } as never;
+    });
+
+    render(<Wrapper><ProjectGalleryPage /></Wrapper>);
+
+    await waitFor(() => expect(screen.getByText('Project 1')).toBeDefined());
+
+    // Navigate to the last real page, then confirm Next is disabled there (the pager clamps
+    // navigation client-side so a beyond-data request is never actually issued from the UI —
+    // the boundary guarantee is exercised end-to-end by the backend `PaginationTests`).
+    const totalPages = Math.ceil(manyProjects.length / 12);
+    for (let i = 1; i < totalPages; i += 1) {
+      fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+      // eslint-disable-next-line no-await-in-loop
+      await waitFor(() => expect(vi.mocked(apiClient.listProjects).mock.calls.some(([o]) => o?.page === i + 1)).toBe(true));
+    }
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Next' })).toHaveProperty('disabled', true));
+  });
+
   it('lists predefined blueprints in the picker', async () => {
     await openBlankDialog();
     await waitFor(() => expect(screen.getByText('Backend Squad')).toBeDefined());

@@ -19,6 +19,12 @@ vi.mock('../api/apiClient', () => ({
   },
 }));
 
+// Pagination contract (`.squad/decisions/inbox/niobe-pagination-contract.md`): `getProjectRuns`
+// now resolves a `{ items, page, page_size, total_count, total_pages }` envelope.
+function runsPage<T>(items: T[]) {
+  return { items, page: 1, page_size: 100, total_count: items.length, total_pages: 1 } as never;
+}
+
 function renderPage(initialEntry = '/projects/p1/flow') {
   return render(
     <AzureFluentProvider density="compact">
@@ -34,7 +40,7 @@ function renderPage(initialEntry = '/projects/p1/flow') {
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(apiClient.getProject).mockResolvedValue({ name: 'Demo' } as never);
-  vi.mocked(apiClient.getProjectRuns).mockResolvedValue([]);
+  vi.mocked(apiClient.getProjectRuns).mockResolvedValue(runsPage([]));
 });
 
 afterEach(() => cleanup());
@@ -137,7 +143,7 @@ describe('FlowPage', () => {
         { agent_name: 'Neo', active: 1, queued: 0, blocked: 0, done: 0, run_ids: ['r2'], sample_titles: ['Refactor parser'] },
       ],
     } as never);
-    vi.mocked(apiClient.getProjectRuns).mockResolvedValue([
+    vi.mocked(apiClient.getProjectRuns).mockResolvedValue(runsPage([
       {
         workflow_run_id: 'wr-1',
         execution_id: 'child-1',
@@ -148,7 +154,7 @@ describe('FlowPage', () => {
         ended_at: '2026-06-23T01:10:00Z',
         model_id: 'gpt-4o',
       },
-    ] as never);
+    ]));
 
     renderPage('/projects/p1/flow?agent=Ada');
 
@@ -162,7 +168,7 @@ describe('FlowPage', () => {
       agentName: 'Ada',
       terminalOnly: true,
       includeChildren: true,
-      limit: 20,
+      pageSize: 20,
     });
   });
 });

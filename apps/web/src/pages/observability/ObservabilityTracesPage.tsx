@@ -103,12 +103,12 @@ export function ObservabilityTracesPage() {
     void Promise.resolve().then(() => { if (!cancelled) setLoading(true); });
     Promise.all([
       apiClient.getProject(projectId).catch(() => null as Project | null),
-      apiClient.listProjectRuns(projectId),
+      apiClient.listProjectRuns(projectId, { pageSize: 100 }),
     ])
-      .then(([projectDto, runList]) => {
+      .then(([projectDto, runPage]) => {
         if (cancelled) return;
         setProject(projectDto);
-        setRuns([...runList].reverse().filter(isCoordinatorRun).slice(0, 10));
+        setRuns([...runPage.items].reverse().filter(isCoordinatorRun).slice(0, 10));
         setError(null);
       })
       .catch((err) => { if (!cancelled) setError(formatError(err)); })

@@ -580,8 +580,8 @@ app.MapGet("/api/runs/{id}/graph", async (
     {
         var plan = await coordinator.GetWorkPlanAsync(id, ct);
         return Results.Ok(plan is not null
-            ? CoordinatorGraphDescriptor.Build(plan, podRegistry)
-            : CoordinatorGraphDescriptor.BuildEmpty(id));
+            ? CoordinatorGraphDescriptor.Build(plan, podRegistry, coordinatorModel: run.ModelId)
+            : CoordinatorGraphDescriptor.BuildEmpty(id, run.ModelId));
     }
 
     try

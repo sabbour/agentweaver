@@ -38,6 +38,8 @@ import type {
   OutcomeSpec,
   PersistedRunEvent,
   PortForwardSessionDto,
+  PagedRequestOptions,
+  PagedResult,
   Project,
   RequestChangesResponse,
   ReroleRequest,
@@ -97,6 +99,18 @@ function isBlueprint(value: unknown): value is Blueprint {
     && typeof value.workflow === 'string'
     && typeof value.review_policy === 'string'
     && typeof value.sandbox_profile === 'string';
+}
+
+// Pagination contract (`.squad/decisions/inbox/niobe-pagination-contract.md`): `page`/`page_size`
+// query params, 1-based page, page_size default 25 / max 100 (server-clamped). Builds the query
+// string for a paged list request; returns '' when no paging options were supplied so callers that
+// haven't opted into paging get the server's own default page/page_size.
+function pagingQuery(options?: PagedRequestOptions): string {
+  const query = new URLSearchParams();
+  if (options?.page != null) query.set('page', String(options.page));
+  if (options?.pageSize != null) query.set('page_size', String(options.pageSize));
+  const qs = query.toString();
+  return qs ? `?${qs}` : '';
 }
 
 export function normalizeBlueprintList(payload: unknown): Blueprint[] {
@@ -234,8 +248,10 @@ export class AgentweaverApiClient {
   }
 
   // Projects
-  listProjects(): Promise<Project[]> {
-    return this.request<Project[]>('GET', '/projects');
+  // Paginated per the pagination contract (`.squad/decisions/inbox/niobe-pagination-contract.md`):
+  // the server always returns the `{ items, page, page_size, total_count, total_pages }` envelope.
+  listProjects(options?: PagedRequestOptions): Promise<PagedResult<Project>> {
+    return this.request<PagedResult<Project>>('GET', `/projects${pagingQuery(options)}`, undefined, options?.signal);
   }
 
   getProject(projectId: string): Promise<Project> {
@@ -278,8 +294,14 @@ export class AgentweaverApiClient {
     return this.request<SubmitRunResponse>('POST', `/projects/${encodeURIComponent(projectId)}/runs`, req);
   }
 
-  listProjectRuns(projectId: string): Promise<WorkflowRunDto[]> {
-    return this.request<WorkflowRunDto[]>('GET', `/projects/${encodeURIComponent(projectId)}/runs`);
+  // Paginated per the pagination contract — server always returns the paged envelope.
+  listProjectRuns(projectId: string, options?: PagedRequestOptions): Promise<PagedResult<WorkflowRunDto>> {
+    return this.request<PagedResult<WorkflowRunDto>>(
+      'GET',
+      `/projects/${encodeURIComponent(projectId)}/runs${pagingQuery(options)}`,
+      undefined,
+      options?.signal,
+    );
   }
 
   getProjectRuns(projectId: string, options?: {
@@ -287,15 +309,27 @@ export class AgentweaverApiClient {
     terminalOnly?: boolean;
     includeChildren?: boolean;
     limit?: number;
-  }): Promise<WorkflowRunDto[]> {
+    page?: number;
+    pageSize?: number;
+    signal?: AbortSignal;
+  }): Promise<PagedResult<WorkflowRunDto>> {
     const query = new URLSearchParams();
     if (options?.agentName) query.set('agent', options.agentName);
     if (options?.terminalOnly) query.set('terminal_only', 'true');
     if (options?.includeChildren) query.set('include_children', 'true');
-    if (options?.limit != null) query.set('limit', String(options.limit));
+    // `limit` (legacy alias for `page_size`, deprecated per the pagination contract) is kept for
+    // existing callers; `page`/`pageSize` take precedence when both are supplied.
+    if (options?.pageSize != null) query.set('page_size', String(options.pageSize));
+    else if (options?.limit != null) query.set('limit', String(options.limit));
+    if (options?.page != null) query.set('page', String(options.page));
     const queryString = query.toString();
     const suffix = queryString ? `?${queryString}` : '';
-    return this.request<WorkflowRunDto[]>('GET', `/projects/${encodeURIComponent(projectId)}/runs${suffix}`);
+    return this.request<PagedResult<WorkflowRunDto>>(
+      'GET',
+      `/projects/${encodeURIComponent(projectId)}/runs${suffix}`,
+      undefined,
+      options?.signal,
+    );
   }
 
   deleteRun(runId: string): Promise<void> {
@@ -403,12 +437,24 @@ export class AgentweaverApiClient {
     return this.request<HistoryDto>('GET', `/projects/${encodeURIComponent(projectId)}/team/members/${encodeURIComponent(memberName)}/history`);
   }
 
-  getDecisions(projectId: string): Promise<import('./types').DecisionDto[]> {
-    return this.request<import('./types').DecisionDto[]>('GET', `/projects/${encodeURIComponent(projectId)}/decisions`);
+  // Paginated per the pagination contract — existing `status`/`type`/`agent` filters (if any)
+  // are applied server-side before paging.
+  getDecisions(projectId: string, options?: PagedRequestOptions): Promise<PagedResult<import('./types').DecisionDto>> {
+    return this.request<PagedResult<import('./types').DecisionDto>>(
+      'GET',
+      `/projects/${encodeURIComponent(projectId)}/decisions${pagingQuery(options)}`,
+      undefined,
+      options?.signal,
+    );
   }
 
-  getDecisionsInbox(projectId: string): Promise<import('./types').DecisionInboxEntryDto[]> {
-    return this.request<import('./types').DecisionInboxEntryDto[]>('GET', `/projects/${encodeURIComponent(projectId)}/decisions/inbox`);
+  getDecisionsInbox(projectId: string, options?: PagedRequestOptions): Promise<PagedResult<import('./types').DecisionInboxEntryDto>> {
+    return this.request<PagedResult<import('./types').DecisionInboxEntryDto>>(
+      'GET',
+      `/projects/${encodeURIComponent(projectId)}/decisions/inbox${pagingQuery(options)}`,
+      undefined,
+      options?.signal,
+    );
   }
 
   mergeDecisionInboxEntry(projectId: string, entryId: string): Promise<void> {
@@ -423,12 +469,22 @@ export class AgentweaverApiClient {
     return this.request<void>('POST', `/projects/${encodeURIComponent(projectId)}/decisions/inbox/${encodeURIComponent(entryId)}/reject`, {});
   }
 
-  getAgentMemory(projectId: string, agentName: string): Promise<import('./types').AgentMemoryDto[]> {
-    return this.request<import('./types').AgentMemoryDto[]>('GET', `/projects/${encodeURIComponent(projectId)}/agents/${encodeURIComponent(agentName)}/memory`);
+  getAgentMemory(projectId: string, agentName: string, options?: PagedRequestOptions): Promise<PagedResult<import('./types').AgentMemoryDto>> {
+    return this.request<PagedResult<import('./types').AgentMemoryDto>>(
+      'GET',
+      `/projects/${encodeURIComponent(projectId)}/agents/${encodeURIComponent(agentName)}/memory${pagingQuery(options)}`,
+      undefined,
+      options?.signal,
+    );
   }
 
-  getProjectMemory(projectId: string): Promise<import('./types').AgentMemoryDto[]> {
-    return this.request<import('./types').AgentMemoryDto[]>('GET', `/projects/${encodeURIComponent(projectId)}/memory`);
+  getProjectMemory(projectId: string, options?: PagedRequestOptions): Promise<PagedResult<import('./types').AgentMemoryDto>> {
+    return this.request<PagedResult<import('./types').AgentMemoryDto>>(
+      'GET',
+      `/projects/${encodeURIComponent(projectId)}/memory${pagingQuery(options)}`,
+      undefined,
+      options?.signal,
+    );
   }
 
   createAgentMemory(
@@ -866,20 +922,42 @@ export class AgentweaverApiClient {
   // SetActive selects the active policy by name (null clears to the built-in
   // default); Sync re-reads .agentweaver/review-policies/ and returns the set.
   // Metrics (web IA reorg) — per-project dashboard + global "Now" overview.
-  getProjectDashboard(projectId: string): Promise<import('./types').ProjectDashboardDto> {
-    return this.request<import('./types').ProjectDashboardDto>('GET', `/projects/${encodeURIComponent(projectId)}/dashboard`);
+  // `includeMetrics=false` (#208 point 4): skip the server's own internal metrics fan-out when the
+  // caller (e.g. DashboardPage) already fetches the full metrics DTO separately via `getProjectMetrics`.
+  // `signal` (#208 point 5): forwarded to `fetch` so callers can abort in-flight requests on
+  // unmount/range-change instead of leaving them to complete and update unmounted state.
+  getProjectDashboard(projectId: string, options?: { includeMetrics?: boolean; signal?: AbortSignal }): Promise<import('./types').ProjectDashboardDto> {
+    const query = new URLSearchParams();
+    if (options?.includeMetrics === false) query.set('includeMetrics', 'false');
+    const qs = query.toString();
+    return this.request<import('./types').ProjectDashboardDto>(
+      'GET',
+      `/projects/${encodeURIComponent(projectId)}/dashboard${qs ? `?${qs}` : ''}`,
+      undefined,
+      options?.signal,
+    );
   }
 
-  getProjectMetrics(projectId: string, from?: string, to?: string): Promise<import('./types').ProjectMetricsDto> {
+  getProjectMetrics(projectId: string, from?: string, to?: string, signal?: AbortSignal): Promise<import('./types').ProjectMetricsDto> {
     const query = new URLSearchParams();
     if (from) query.set('from', from);
     if (to) query.set('to', to);
     const qs = query.toString();
-    return this.request<import('./types').ProjectMetricsDto>('GET', `/projects/${encodeURIComponent(projectId)}/metrics${qs ? `?${qs}` : ''}`);
+    return this.request<import('./types').ProjectMetricsDto>(
+      'GET',
+      `/projects/${encodeURIComponent(projectId)}/metrics${qs ? `?${qs}` : ''}`,
+      undefined,
+      signal,
+    );
   }
 
-  getOverview(): Promise<import('./types').OverviewDto> {
-    return this.request<import('./types').OverviewDto>('GET', '/overview');
+  getOverview(signal?: AbortSignal): Promise<import('./types').OverviewDto> {
+    return this.request<import('./types').OverviewDto>('GET', '/overview', undefined, signal);
+  }
+
+  // #247 — global notification center: pending Human Review (+ future Tool Approval) requests.
+  getNotifications(signal?: AbortSignal): Promise<import('./types').NotificationsResponseDto> {
+    return this.request<import('./types').NotificationsResponseDto>('GET', '/notifications', undefined, signal);
   }
 
   // Workspace file tree scoped to the project sandbox (Feature 014, FR-001).
@@ -920,7 +998,7 @@ export class AgentweaverApiClient {
     return this.request<RuntimeInfo>('GET', '/system/runtime');
   }
 
-  private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
+  private async request<T>(method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
     const headers: Record<string, string> = {
       ...this.authHeaders(),
     };
@@ -931,6 +1009,7 @@ export class AgentweaverApiClient {
       headers,
       credentials: 'include',
       body: body !== undefined ? JSON.stringify(body) : undefined,
+      signal,
     });
 
     const text = typeof response.text === 'function' ? await response.text() : '';

@@ -1,6 +1,9 @@
 extern alias agenthost;
 
 using System.Diagnostics;
+using System.Net;
+using System.Net.Sockets;
+using System.Text;
 using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
@@ -88,6 +91,50 @@ public sealed class PreviewRunnerObserveTests
     }
 
     // ── PART B: legible unhealthy observation (never throw / opaque 500) ──────────
+
+    [Fact]
+    public async Task ProbeHealth_SendsLocalhostHostHeader_MatchingGatewayRewrite()
+    {
+        // The preview gateway rewrites external traffic's Host to "localhost" (#312). The pod-local
+        // readiness probe must send the SAME Host so readiness reflects real browser reachability
+        // (a dev-server host allowlist block is caught here rather than only in the user's browser).
+        var runner = NewRunner();
+        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+
+        string? capturedHost = null;
+        var serve = Task.Run(async () =>
+        {
+            using var client = await listener.AcceptTcpClientAsync();
+            using var stream = client.GetStream();
+            var buffer = new byte[4096];
+            var sb = new StringBuilder();
+            // Read until the end of the HTTP request headers (loopback GET arrives quickly).
+            while (!sb.ToString().Contains("\r\n\r\n", StringComparison.Ordinal))
+            {
+                var read = await stream.ReadAsync(buffer);
+                if (read == 0) break;
+                sb.Append(Encoding.ASCII.GetString(buffer, 0, read));
+            }
+            foreach (var line in sb.ToString().Split("\r\n"))
+                if (line.StartsWith("Host:", StringComparison.OrdinalIgnoreCase))
+                    capturedHost = line["Host:".Length..].Trim();
+
+            var responseBytes = Encoding.ASCII.GetBytes(
+                "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok");
+            await stream.WriteAsync(responseBytes);
+            await stream.FlushAsync();
+        });
+
+        var result = await runner.ProbeHealthForTestAsync(port, "/", CancellationToken.None);
+        await serve.WaitAsync(TimeSpan.FromSeconds(5));
+
+        result.Healthy.Should().BeTrue();
+        result.StatusCode.Should().Be(200);
+        capturedHost.Should().Be("localhost",
+            "the probe must send the same Host the preview gateway rewrites external traffic to");
+    }
 
     [Fact]
     public async Task ObserveBoundPort_NoListeningPort_ReturnsUnhealthyWithPreciseReason()

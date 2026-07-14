@@ -3,7 +3,7 @@ import { apiClient } from '../api/apiClient';
 import { AzureFluentProvider } from '../copilot-fluent-system';
 import { ArtifactBrowser, FilesTabPanel } from '../components/ArtifactBrowser';
 import { useArtifactBrowser } from '../hooks/useArtifactBrowser';
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, render, renderHook, screen, waitFor } from '@testing-library/react';
 import {
   afterEach,
   beforeEach,
@@ -303,6 +303,32 @@ describe('ArtifactBrowser', () => {
       ).toBeDefined();
     });
   });
+
+  it.each(['completed', 'assemble_ready'] as const)(
+    'treats %s as a historical terminal run in useArtifactBrowser',
+    async (runStatus) => {
+      getRunFilesMock().mockResolvedValue([
+        makeEntry({ path: 'src/app.ts', status: 'modified' }),
+      ]);
+
+      const { result } = renderHook(() => useArtifactBrowser(`run-${runStatus}`, runStatus));
+
+      await waitFor(() => {
+        expect(getRunFilesMock()).toHaveBeenCalledWith(`run-${runStatus}`, 'all');
+      });
+
+      expect(result.current.isHistorical).toBe(true);
+      expect(result.current.activeFilter).toBe('all');
+
+      await act(async () => {
+        result.current.handleFilterChange('committed');
+      });
+
+      expect(result.current.filter).toBe('all');
+      expect(result.current.activeFilter).toBe('all');
+      expect(getRunFilesMock()).toHaveBeenCalledTimes(1);
+    },
+  );
 
   // AB-08: Request change flow — clicking "Request change" reveals a textarea;
   // submitting calls apiClient.requestChanges with the comment text.

@@ -28,6 +28,12 @@ vi.mock('../api/apiClient', () => ({
   },
 }));
 
+// Pagination contract (`.squad/decisions/inbox/niobe-pagination-contract.md`): `listProjects`
+// now resolves a `{ items, page, page_size, total_count, total_pages }` envelope.
+function projectsPage(items: Project[]) {
+  return { items, page: 1, page_size: 100, total_count: items.length, total_pages: 1 } as never;
+}
+
 function makeProject(id: string, name: string): Project {
   return {
     project_id: id,
@@ -70,7 +76,7 @@ function Wrapper({ children }: { children: ReactNode }) {
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(apiClient.getServerInfo).mockResolvedValue({ data_directory: '/data', workspace_auto_assigned: false } as never);
-  vi.mocked(apiClient.listProjects).mockResolvedValue([]);
+  vi.mocked(apiClient.listProjects).mockResolvedValue(projectsPage([]));
   vi.mocked(apiClient.listBlueprints).mockResolvedValue([]);
   vi.mocked(apiClient.suggestBlueprint).mockResolvedValue({
     recommended_blueprint: null,
@@ -210,7 +216,7 @@ describe('ProjectGalleryPage — listProjects 401', () => {
   });
 
   it('still shows "No projects yet" when listProjects succeeds with an empty list', async () => {
-    vi.mocked(apiClient.listProjects).mockResolvedValue([]);
+    vi.mocked(apiClient.listProjects).mockResolvedValue(projectsPage([]));
 
     render(<Wrapper><ProjectGalleryPage /></Wrapper>);
 

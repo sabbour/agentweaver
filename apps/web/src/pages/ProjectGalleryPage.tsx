@@ -36,11 +36,12 @@ import {
 import { applyBlueprintToRequest, BlueprintPanel, NO_BLUEPRINT, useBlueprintGeneration } from '../components/BlueprintPicker';
 import { GitHubIcon } from '../components/GitHubIcon';
 import { AppDialog, EmptyState, LoadingState, PageContainer, PageHeader, Tile, TileGrid } from '../components/ui';
+import { Pager } from '../copilot-fluent-system';
 import { GITHUB_AUTHORIZE_URL } from '../config';
 import { useProjectList } from '../hooks/useProjectList';
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import type { CreateProjectRequest, GitHubAccount, GitHubRepo, Project } from '../api/types';
+import type { CreateProjectRequest, GitHubAccount, GitHubRepo, PagedResult, Project } from '../api/types';
 import type { BlueprintSelection } from '../components/BlueprintPicker';
 import type { ReactElement, ReactNode } from 'react';
 /** Normalizes an owner/repo string or existing https URL to a full GitHub HTTPS URL. */
@@ -802,12 +803,54 @@ function ProjectCard({ project, onOpen, highlight }: { project: Project; onOpen:
 
 export function ProjectGalleryPage() {
   const navigate = useNavigate();
-  const { projects, loading, authError, loadError, errorMessage, appendProject, refetch } = useProjectList();
+  const { appendProject, refetch } = useProjectList();
+  const [projectPage, setProjectPage] = useState<PagedResult<Project> | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [authError, setAuthError] = useState(false);
+  const [loadError, setLoadError] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(12);
+  const [reloadKey, setReloadKey] = useState(0);
   const [dataDir, setDataDir] = useState<string | null>(null);
   const [workspaceAutoAssigned, setWorkspaceAutoAssigned] = useState(false);
   const [highlightId, setHighlightId] = useState<string | null>(null);
   const toasterId = useId('project-gallery-toaster');
   const { dispatchToast } = useToastController(toasterId);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    setLoading(true);
+    setAuthError(false);
+    setLoadError(false);
+    setErrorMessage(null);
+
+    apiClient
+      .listProjects({ page, pageSize, signal: controller.signal })
+      .then((result) => {
+        if (!controller.signal.aborted) setProjectPage(result);
+      })
+      .catch((err) => {
+        if (controller.signal.aborted) return;
+        if (err instanceof ApiError && err.status === 401) {
+          setAuthError(true);
+          return;
+        }
+        setLoadError(true);
+        setErrorMessage(
+          err instanceof ApiError
+            ? `API error ${err.status}: ${err.body}`
+            : err instanceof Error
+              ? err.message
+              : String(err),
+        );
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLoading(false);
+      });
+
+    return () => controller.abort();
+  }, [page, pageSize, reloadKey]);
 
   useEffect(() => {
     let cancelled = false;
@@ -823,8 +866,37 @@ export function ProjectGalleryPage() {
   }, []);
 
   const handleCreated = (project: Project) => {
-    const isFirstProject = projects.length === 0;
+    const isFirstProject = (projectPage?.total_count ?? 0) === 0;
     appendProject(project);
+    refetch();
+    setProjectPage((current) => {
+      const currentPageSize = current?.page_size ?? pageSize;
+      const nextTotalCount = (current?.total_count ?? 0) + 1;
+      if (!current) {
+        return {
+          items: [project],
+          page: 1,
+          page_size: currentPageSize,
+          total_count: 1,
+          total_pages: 1,
+        };
+      }
+      if (current.page !== 1) {
+        return {
+          ...current,
+          total_count: nextTotalCount,
+          total_pages: Math.max(1, Math.ceil(nextTotalCount / currentPageSize)),
+        };
+      }
+      return {
+        ...current,
+        items: [project, ...current.items.filter((p) => p.project_id !== project.project_id)].slice(0, currentPageSize),
+        total_count: nextTotalCount,
+        total_pages: Math.max(1, Math.ceil(nextTotalCount / currentPageSize)),
+      };
+    });
+    setPage(1);
+    setReloadKey((key) => key + 1);
     setHighlightId(project.project_id);
     dispatchToast(
       <Toast>
@@ -844,7 +916,10 @@ export function ProjectGalleryPage() {
     }, 1400);
   };
 
-  const showGalleryActions = !loading && !authError && projects.length > 0;
+  const projects = projectPage?.items ?? [];
+  const totalProjects = projectPage?.total_count ?? 0;
+  const totalProjectPages = projectPage?.total_pages ?? 1;
+  const showGalleryActions = !loading && !authError && totalProjects > 0;
 
   return (
     <PageContainer>
@@ -882,12 +957,12 @@ export function ProjectGalleryPage() {
         <MessageBar intent="error">
           <MessageBarBody>{errorMessage ?? 'Failed to load projects.'}</MessageBarBody>
           <MessageBarActions>
-            <Button size="small" onClick={refetch}>Retry</Button>
+            <Button size="small" onClick={() => setReloadKey((key) => key + 1)}>Retry</Button>
           </MessageBarActions>
         </MessageBar>
       )}
 
-      {!loading && !loadError && !authError && projects.length === 0 && (
+      {!loading && !loadError && !authError && totalProjects === 0 && (
         <EmptyState
           title="No projects yet"
           description="A project pairs a working directory with a squad and workflow so agents can start real work right away. Import an existing GitHub repository, or start blank and describe a goal for a tailored blueprint."
@@ -900,17 +975,32 @@ export function ProjectGalleryPage() {
         />
       )}
 
-      {!loading && projects.length > 0 && (
-        <TileGrid aria-label="Projects">
-          {projects.map((p) => (
-            <ProjectCard
-              key={p.project_id}
-              project={p}
-              onOpen={() => navigate(`/projects/${p.project_id}`)}
-              highlight={p.project_id === highlightId}
+      {!loading && !loadError && !authError && totalProjects > 0 && (
+        <>
+          <TileGrid aria-label="Projects">
+            {projects.map((p) => (
+              <ProjectCard
+                key={p.project_id}
+                project={p}
+                onOpen={() => navigate(`/projects/${p.project_id}`)}
+                highlight={p.project_id === highlightId}
+              />
+            ))}
+          </TileGrid>
+          {totalProjectPages > 1 && (
+            <Pager
+              page={page}
+              pageSize={pageSize}
+              totalItems={totalProjects}
+              pageSizeOptions={[12, 24, 48]}
+              onPageChange={setPage}
+              onPageSizeChange={(nextPageSize) => {
+                setPageSize(nextPageSize);
+                setPage(1);
+              }}
             />
-          ))}
-        </TileGrid>
+          )}
+        </>
       )}
     </PageContainer>
   );

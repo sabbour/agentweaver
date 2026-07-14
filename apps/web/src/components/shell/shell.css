@@ -47,6 +47,13 @@
   min-width: 0;
 }
 
+.aw-rail-chrome__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--spacingHorizontalXS);
+  flex-shrink: 0;
+}
+
 /* Brand link */
 .aw-rail-brand {
   display: flex;

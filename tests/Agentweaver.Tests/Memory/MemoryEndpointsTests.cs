@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using System.Linq;
 using Agentweaver.Api.Memory;
 using Agentweaver.Domain;
 using Agentweaver.Tests.Helpers;
@@ -24,6 +25,17 @@ public sealed class MemoryEndpointsTests : IClassFixture<ProjectsWebApplicationF
             GitHubTokenScope.Installation,
             new GitHubToken("access-token", null, null, "sabbour", null, Array.Empty<string>()))
             .GetAwaiter().GetResult();
+    }
+
+    /// <summary>
+    /// Reads the paginated <c>{ items, page, page_size, total_count, total_pages }</c> envelope
+    /// (see <see cref="Agentweaver.Api.Contracts.PagedResult{T}"/>) and returns just the <c>items</c>
+    /// array, so existing array-shaped test assertions keep working against the new contract.
+    /// </summary>
+    private static async Task<JsonElement[]> GetItemsAsync(HttpResponseMessage response)
+    {
+        var envelope = await response.Content.ReadFromJsonAsync<JsonElement>();
+        return envelope.GetProperty("items").EnumerateArray().ToArray();
     }
 
     [Fact]
@@ -97,7 +109,7 @@ public sealed class MemoryEndpointsTests : IClassFixture<ProjectsWebApplicationF
 
         var decisionsResp = await _client.GetAsync($"/api/projects/{projectId}/decisions");
         decisionsResp.StatusCode.Should().Be(HttpStatusCode.OK);
-        var decisions = await decisionsResp.Content.ReadFromJsonAsync<JsonElement[]>();
+        var decisions = await GetItemsAsync(decisionsResp);
         var decision = decisions!.Single(d => d.GetProperty("id").GetInt32() == decisionId);
         decision.GetProperty("type").GetString().Should().Be("architectural");
         decision.GetProperty("content").GetString().Should().Be("atomic content");
@@ -144,7 +156,7 @@ public sealed class MemoryEndpointsTests : IClassFixture<ProjectsWebApplicationF
 
         var decisionsResp = await _client.GetAsync($"/api/projects/{projectId}/decisions");
         decisionsResp.StatusCode.Should().Be(HttpStatusCode.OK);
-        var decisions = await decisionsResp.Content.ReadFromJsonAsync<JsonElement[]>();
+        var decisions = await GetItemsAsync(decisionsResp);
         decisions.Should().NotContain(d => d.GetProperty("content").GetString() == "no decision");
     }
 
@@ -159,7 +171,7 @@ public sealed class MemoryEndpointsTests : IClassFixture<ProjectsWebApplicationF
         var response = await _client.GetAsync($"/api/projects/{projectId}/decisions/inbox");
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
-        var entries = await response.Content.ReadFromJsonAsync<JsonElement[]>();
+        var entries = await GetItemsAsync(response);
         entries.Should().ContainSingle();
         entries![0].GetProperty("slug").GetString().Should().Be("pending-only");
     }
@@ -175,21 +187,21 @@ public sealed class MemoryEndpointsTests : IClassFixture<ProjectsWebApplicationF
 
         var mergedResp = await _client.GetAsync($"/api/projects/{projectId}/decisions/inbox?status=merged");
         mergedResp.StatusCode.Should().Be(HttpStatusCode.OK);
-        var merged = await mergedResp.Content.ReadFromJsonAsync<JsonElement[]>();
+        var merged = await GetItemsAsync(mergedResp);
         merged.Should().NotBeNull();
         merged!.Select(e => e.GetProperty("slug").GetString()).Should().BeEquivalentTo("merged-a", "merged-b", "merged-process");
         merged.Should().OnlyContain(e => e.GetProperty("status").GetString() == "merged");
 
         var agentResp = await _client.GetAsync($"/api/projects/{projectId}/decisions/inbox?status=merged&agent=agent-a");
         agentResp.StatusCode.Should().Be(HttpStatusCode.OK);
-        var agentEntries = await agentResp.Content.ReadFromJsonAsync<JsonElement[]>();
+        var agentEntries = await GetItemsAsync(agentResp);
         agentEntries.Should().NotBeNull();
         agentEntries!.Select(e => e.GetProperty("slug").GetString()).Should().BeEquivalentTo("merged-a", "merged-process");
         agentEntries.Should().OnlyContain(e => e.GetProperty("agentName").GetString() == "agent-a");
 
         var typeResp = await _client.GetAsync($"/api/projects/{projectId}/decisions/inbox?status=merged&type=process");
         typeResp.StatusCode.Should().Be(HttpStatusCode.OK);
-        var typeEntries = await typeResp.Content.ReadFromJsonAsync<JsonElement[]>();
+        var typeEntries = await GetItemsAsync(typeResp);
         typeEntries.Should().ContainSingle();
         typeEntries![0].GetProperty("slug").GetString().Should().Be("merged-process");
         typeEntries[0].GetProperty("type").GetString().Should().Be("process");
@@ -206,7 +218,7 @@ public sealed class MemoryEndpointsTests : IClassFixture<ProjectsWebApplicationF
         var response = await _client.GetAsync($"/api/projects/{projectId}/decisions");
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
-        var decisions = await response.Content.ReadFromJsonAsync<JsonElement[]>();
+        var decisions = await GetItemsAsync(response);
         decisions.Should().ContainSingle();
         decisions![0].GetProperty("title").GetString().Should().Be("Active");
     }
@@ -248,7 +260,7 @@ public sealed class MemoryEndpointsTests : IClassFixture<ProjectsWebApplicationF
         var response = await _client.GetAsync($"/api/projects/{projectId}/agents/smith/memory");
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
-        var memories = await response.Content.ReadFromJsonAsync<JsonElement[]>();
+        var memories = await GetItemsAsync(response);
         memories.Should().ContainSingle();
         var memory = memories![0];
         memory.GetProperty("type").GetString().Should().Be("learning");
@@ -268,7 +280,7 @@ public sealed class MemoryEndpointsTests : IClassFixture<ProjectsWebApplicationF
         var response = await _client.GetAsync($"/api/projects/{projectId}/agents/smith/memory?type=learning&importance=high");
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
-        var memories = await response.Content.ReadFromJsonAsync<JsonElement[]>();
+        var memories = await GetItemsAsync(response);
         memories.Should().ContainSingle();
         memories![0].GetProperty("content").GetString().Should().Be("one");
     }
@@ -297,7 +309,7 @@ public sealed class MemoryEndpointsTests : IClassFixture<ProjectsWebApplicationF
         var response = await _client.GetAsync($"/api/projects/{projectId}/memory?tags=database");
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
-        var memories = await response.Content.ReadFromJsonAsync<JsonElement[]>();
+        var memories = await GetItemsAsync(response);
         memories.Should().ContainSingle();
         var memory = memories![0];
         memory.GetProperty("agentName").GetString().Should().Be("agent-a");
@@ -365,7 +377,7 @@ public sealed class MemoryEndpointsTests : IClassFixture<ProjectsWebApplicationF
 
         var sessionsResp = await _client.GetAsync($"/api/projects/{projectId}/sessions");
         sessionsResp.StatusCode.Should().Be(HttpStatusCode.OK);
-        var sessions = await sessionsResp.Content.ReadFromJsonAsync<JsonElement[]>();
+        var sessions = await GetItemsAsync(sessionsResp);
         sessions.Should().ContainSingle();
         var persisted = sessions![0];
         persisted.GetProperty("sessionId").GetString().Should().Be("sess-end");

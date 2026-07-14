@@ -138,6 +138,13 @@ public sealed class BlueprintService
                     errors.Add("roster contains an empty role id.");
                     continue;
                 }
+                if (ReservedRoles.IsReserved(roleId))
+                {
+                    errors.Add($"role '{roleId}' is a reserved orchestration role (Scribe, Work Monitor, " +
+                               "Rai, Coordinator) and cannot be rostered. These roles are provisioned " +
+                               "automatically for every team.");
+                    continue;
+                }
                 if (_catalog.HasRole(roleId)) continue;
                 if (bespokeIds.Contains(roleId)) continue;
                 errors.Add($"role '{roleId}' is not in the catalog and has no bespoke definition. " +
@@ -166,6 +173,9 @@ public sealed class BlueprintService
                     errors.Add($"bespoke role '{b.Id}' is missing its 'charter'.");
                 if (_catalog.HasRole(b.Id))
                     errors.Add($"bespoke role '{b.Id}' collides with an existing catalog role id.");
+                if (ReservedRoles.IsReserved(b.Id) || ReservedRoles.IsReserved(b.Title))
+                    errors.Add($"bespoke role '{b.Id}' collides with a reserved orchestration role name " +
+                               "(Scribe, Work Monitor, Rai, Coordinator).");
                 if (!rosterSet.Contains(b.Id))
                     errors.Add($"bespoke role '{b.Id}' is not referenced in the roster.");
             }

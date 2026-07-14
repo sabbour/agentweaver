@@ -1415,6 +1415,79 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         await run;
     }
 
+    // #242 follow-up: reproduces the FitTrackE2E-v12 wedge from decisions/inbox/smith-fittrack-priority1.md
+    // — a run parks assembly_blocked under a STALE reason that is NOT "ineligible_subtasks" (here:
+    // integration_build_error), so the steering-wait loop's `recoverOnEligibility` gate — previously
+    // captured ONCE from the reason at loop entry — silently disabled eligibility polling for the whole
+    // wait, even after the persisted reason is corrected/updated to an ineligible_subtasks-class value
+    // and every subtask is actually assembly-eligible. Before the fix, this ALWAYS timed out and
+    // auto-terminalized (matching "redirect recovers once, wedge recurs identically, then
+    // auto-terminalizes"); after the fix, the loop re-resolves the reason each tick and recovers.
+    [Fact]
+    public async Task RunAssembly_BlockedOnNonEligibilityReason_ThenReasonCorrectedToIneligibleSubtasks_RecoversInsteadOfTimingOut()
+    {
+        var coordinatorRunId = RunId.New().ToString();
+        await SeedCoordinatorRunAsync(coordinatorRunId);
+        var (workPlanId, _) = await SeedPlanAsync(coordinatorRunId,
+            new[] { SubtaskStatus.Completed, SubtaskStatus.AssembleReady });
+        _streamStore.Create(coordinatorRunId, "alice");
+        _pipeline.IntegrationBuildThrowsRemaining = 3;
+
+        var shortSteeringWaitConfig = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Coordinator:AssemblyBlockedSteeringTimeoutSeconds"] = "5",
+            })
+            .Build();
+        var sut = new CoordinatorAssemblyService(
+            _runStore,
+            _streamStore,
+            _assemblyStore,
+            _reviewGate,
+            _pipeline,
+            _scopeFactory,
+            _provider,
+            new TestHostApplicationLifetime(),
+            NullLogger<CoordinatorAssemblyService>.Instance,
+            configuration: shortSteeringWaitConfig,
+            steeringWaits: _steeringWaits);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        var run = sut.RunAssemblyAsync(Context(coordinatorRunId), cts.Token);
+
+        await WaitForEventAsync(coordinatorRunId, EventTypes.CoordinatorAssemblyBlocked, cts.Token);
+        (await _assemblyStore.GetAsync(workPlanId, default))!.AssemblyStatusReason
+            .Should().Be("assembly_blocked: integration_build_error");
+
+        // Simulate the reason being corrected/updated mid-wait to an ineligible_subtasks-class value
+        // (the exact shape Smith observed: a persisted reason that no longer matches the actual, now
+        // fully-eligible, subtask state) — this must NOT require a human steering directive to recover.
+        using (var scope = _provider.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var plan = await db.WorkPlans.FirstAsync(w => w.Id == workPlanId);
+            plan.AssemblyStatusReason = "assembly_blocked: ineligible_subtasks [stale-corrected-for-test]";
+            await db.SaveChangesAsync();
+        }
+        // The build/test infra issue behind the original block is also resolved by the time the reason
+        // is corrected, so the retry that recovery triggers should now succeed.
+        _pipeline.IntegrationBuildThrowsRemaining = 0;
+
+        await WaitUntilArmedAsync(coordinatorRunId);
+        _reviewGate.TrySubmit(coordinatorRunId, "alice",
+            new AssemblyReviewDecision(Approved: true, RequestChanges: false, Feedback: null,
+                TargetFiles: null, Reviewer: "alice"))
+            .Should().Be(AssemblyReviewSubmitResult.Accepted);
+        await run;
+
+        (await _assemblyStore.GetAsync(workPlanId, default))!.Status.Should().Be(WorkPlanStatus.Complete,
+            "the corrected reason should let the loop recover well before the 5s steering-wait timeout elapses");
+        EventTypes_(coordinatorRunId).Should().Contain(EventTypes.CoordinatorRecovered,
+            "eligibility recovery must fire once the persisted reason is re-read as ineligible_subtasks-class");
+        EventTypes_(coordinatorRunId).Should().NotContain(EventTypes.CoordinatorAssemblyFailed,
+            "the run must not auto-terminalize once subtasks are eligible and the reason has been corrected");
+    }
+
     [Fact]
     public async Task RunAssembly_BlockedRedirect_ReEntersDispatch()
     {

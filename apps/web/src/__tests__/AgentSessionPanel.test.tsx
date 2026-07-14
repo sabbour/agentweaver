@@ -90,6 +90,68 @@ beforeEach(() => {
 afterEach(() => cleanup());
 
 describe('AgentSessionPanel', () => {
+  it('shows a subtle model badge next to the agent name when the selected node has a model (#282)', async () => {
+    const modelTree: RunSessionTree[] = [
+      {
+        nodeId: 'coordinator',
+        label: 'Coordinator',
+        status: 'running',
+        depth: 0,
+        children: [
+          {
+            nodeId: 'subtask-1',
+            label: 'Subtask 1',
+            agentName: 'Worker',
+            agentRole: 'Researcher',
+            status: 'running',
+            childRunId: 'child-run-1',
+            model: 'gpt-4o',
+            depth: 1,
+            children: [],
+          },
+        ],
+      },
+    ];
+
+    render(
+      <Wrapper>
+        <AgentSessionPanel
+          open
+          onClose={vi.fn()}
+          tree={modelTree}
+          selectedNodeId="subtask-1"
+          onSelectNode={vi.fn()}
+          coordinatorRunId="coord-run-1"
+          projectId="p1"
+        />
+      </Wrapper>,
+    );
+
+    await waitFor(() => expect(screen.getAllByText('Subtask 1').length).toBeGreaterThan(0), { timeout: 4000 });
+    const badge = document.querySelector('[title="gpt-4o"]');
+    expect(badge).toBeDefined();
+    expect(badge?.textContent).toContain('GPT 4O');
+  });
+
+  it('does not render a model badge when the selected node has no model', async () => {
+    render(
+      <Wrapper>
+        <AgentSessionPanel
+          open
+          onClose={vi.fn()}
+          tree={tree}
+          selectedNodeId="subtask-1"
+          onSelectNode={vi.fn()}
+          coordinatorRunId="coord-run-1"
+          projectId="p1"
+        />
+      </Wrapper>,
+    );
+
+    await waitFor(() => expect(screen.getAllByText('Subtask 1').length).toBeGreaterThan(0), { timeout: 4000 });
+    expect(screen.queryByText('GPT 4O')).toBeNull();
+  });
+
   it('renders a child run tool approval card in the session slide-up and posts to the child run', async () => {
     currentEvents = [
       {

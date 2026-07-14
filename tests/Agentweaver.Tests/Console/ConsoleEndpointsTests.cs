@@ -89,7 +89,8 @@ public sealed class ConsoleEndpointsTests : IDisposable
 
         var runs = await _owner.GetAsync($"/api/projects/{projectId}/runs");
         runs.StatusCode.Should().Be(HttpStatusCode.OK);
-        var runList = await runs.Content.ReadFromJsonAsync<JsonElement[]>();
+        var runEnvelope = await runs.Content.ReadFromJsonAsync<JsonElement>();
+        var runList = runEnvelope.GetProperty("items").EnumerateArray().ToArray();
         runList.Should().BeEmpty("the console facade must not start a run without explicit confirmation");
     }
 

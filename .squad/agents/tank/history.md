@@ -103,3 +103,21 @@ Delivered `files/design-187.md`, proposing a shared gate runner for consistent B
 
 ## 2026-07-13T23:59:00-07:00 — E2E validation
 #213 was confirmed stale and closed. Run `18cdc7ce-6649-4b60-b001-17c317bcd281` confirmed parallelism works; stale outcome-plan UI behavior maps to #290. Filed #305 for revision children inheriting a prior sibling worktree branch instead of their own authoritative branch.
+
+## 2026-07-14T02:35:00-07:00 — Batch merge: #270 revalidation, #175 workflow save, live-run diagnoses
+Scribe merged inbox notes: #270 revalidation confirms Kata bwrap root-cause fix holds; #175 workflow editor save-path fix; Hank/Skyler run-order and arrow-occlusion UI findings closed as non-bugs; #211 AgentHost sandbox fix live-validated; #226 human-steer redirect drop at assembly review fixed.
+
+## 2026-07-14T03:05:00-07:00 — #1 API-driven persona harness pivot, Priya + Jordan playbooks
+Prioritized an API-driven persona harness as the primary E2E track for #1; Playwright is secondary. Built scripts/persona-harness/ and two scenario playbooks (Priya ticket-triage, Jordan blank-to-plan) — both PASS against staging, proving the drive+judge engine generalizes across personas via data alone.
+
+## 2026-07-14T10:15:00-07:00
+Batch: landed #208 cancellation-telemetry (needs peer review), #309 steer-redirect validation (ready for review), continuing #242 investigation. Persona-harness (#1) API-driven redesign now at increments 1-3 of 5.
+
+
+## 2026-07-14T10:15:00-07:00 (late arrival, tank-2 instance)
+#267 A2A regression investigation: root cause not pinpointed, diagnostic instrumentation added only (no masking). Staging repro still needed. Needs peer review.
+
+
+## 2026-07-14T11:05:00-07:00
+Process note: #311, #208, #310 (among Tank's recent items) reopened by coordinator pending live v0.9.50-rc1 deploy validation, per Seraph's pass-3 closure-discipline finding. No new Tank work landed this pass.
+

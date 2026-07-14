@@ -33,7 +33,7 @@ import { MetricEmptyState,
 import { PageHeader } from '../components/PageHeader';
 import { RefreshCountdown } from '../hooks/useRefreshCountdown';
 import { ErrorState } from '../components/ui';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import type { AgentLeaderboardEntryDto, ProjectDashboardDto, ProjectMetricsDto, ThroughputPointDto } from '../api/types';
 // Dashboard — the project HOME (/projects/:projectId). Consumes the live
@@ -754,37 +754,58 @@ export function DashboardPage() {
         ? err.message
         : String(err);
 
-  const load = useCallback(async (signal: { cancelled: boolean }) => {
+  const mountedRef = useRef(true);
+  const inFlightRef = useRef<AbortController | null>(null);
+
+  const load = useCallback(async (abortSignal?: AbortSignal) => {
     if (!projectId) return;
     const rangeDates = timeRangeDates(selectedRange);
     try {
       const [dashboardDto, metricsDto] = await Promise.all([
-        apiClient.getProjectDashboard(projectId),
-        apiClient.getProjectMetrics(projectId, rangeDates.from, rangeDates.to),
+        // #208 point 4: this page already fetches the full metrics DTO below, so skip the
+        // dashboard endpoint's own internal 8-way metrics fan-out (its Throughput/AgentLeaderboard
+        // fields are unused here — this page reads those from `metrics` instead).
+        apiClient.getProjectDashboard(projectId, { includeMetrics: false, signal: abortSignal }),
+        apiClient.getProjectMetrics(projectId, rangeDates.from, rangeDates.to, abortSignal),
       ]);
-      if (!signal.cancelled) {
+      if (mountedRef.current) {
         setData(dashboardDto);
         setMetrics(metricsDto);
         setError(null);
       }
     } catch (err) {
-      if (!signal.cancelled) setError(formatError(err));
+      // #208 point 5: an aborted fetch (unmount/range change/overlapping-poll guard) is expected
+      // control flow, not a user-facing error — don't surface it.
+      if (err instanceof DOMException && err.name === 'AbortError') return;
+      if (mountedRef.current) setError(formatError(err));
     } finally {
-      if (!signal.cancelled) setLoading(false);
+      if (mountedRef.current) setLoading(false);
     }
   }, [projectId, selectedRange]);
 
+  // #208 point 5: single shared entry point for the poll tick AND manual refresh/retry clicks —
+  // aborts whatever request is still in flight before starting a new one, so overlapping fan-outs
+  // (interval firing while a manual refresh is pending, or vice versa) can't stack.
+  const runLoad = useCallback(() => {
+    if (!projectId) return;
+    inFlightRef.current?.abort();
+    const controller = new AbortController();
+    inFlightRef.current = controller;
+    void load(controller.signal);
+  }, [projectId, load]);
+
   useEffect(() => {
     if (!projectId) return;
-    const signal = { cancelled: false };
+    mountedRef.current = true;
     setLoading(true);
-    void load(signal);
-    const iv = setInterval(() => { void load(signal); }, REFRESH_MS);
+    runLoad();
+    const iv = setInterval(runLoad, REFRESH_MS);
     return () => {
-      signal.cancelled = true;
+      mountedRef.current = false;
+      inFlightRef.current?.abort();
       clearInterval(iv);
     };
-  }, [projectId, load]);
+  }, [projectId, runLoad]);
 
   const dashboardModel = useMemo(() => {
     if (!data) return null;
@@ -852,7 +873,7 @@ export function DashboardPage() {
               appearance="secondary"
               icon={<ArrowSyncRegular />}
               disabled={loading}
-              onClick={() => { setLoading(true); void load({ cancelled: false }); }}
+              onClick={() => { setLoading(true); runLoad(); }}
             >
               Refresh
             </Button>
@@ -864,7 +885,7 @@ export function DashboardPage() {
         <ErrorState
           title="Couldn't load dashboard"
           message={error}
-          onRetry={() => { setLoading(true); void load({ cancelled: false }); }}
+          onRetry={() => { setLoading(true); runLoad(); }}
         />
       )}
 

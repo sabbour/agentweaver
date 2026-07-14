@@ -203,16 +203,20 @@ app.MapGet("/api/server/info", (IProjectWorkspaceProvider workspaceProvider) => 
     workspace_auto_assigned = workspaceProvider.AutoAssignsPath,
 })).AllowAnonymous();
 
-// GET /api/projects — list all projects
+// GET /api/projects — list all projects (paginated; see Contracts.PagedResult<T>)
 app.MapGet("/api/projects", async (
     HttpContext httpContext,
     ProjectService projectService,
+    int? page,
+    int? page_size,
     CancellationToken ct) =>
 {
     var views = await projectService.ListViewsAsync(ct);
-    return Results.Ok(views
+    var projects = views
         .Where(v => IsProjectOwner(httpContext, v.Project))
-        .Select(v => MapProject(v.Project, v.Available)));
+        .Select(v => MapProject(v.Project, v.Available))
+        .ToList();
+    return Results.Ok(Paging.Of(projects, page, page_size));
 });
 
 // GET /api/projects/{id} — get a single project
@@ -327,7 +331,7 @@ app.MapDelete("/api/projects/{id}", async (
     return deleted ? Results.NoContent() : Results.NotFound();
 });
 
-// GET /api/projects/{id}/runs — list runs for a project
+// GET /api/projects/{id}/runs — list runs for a project (paginated; see Contracts.PagedResult<T>)
 app.MapGet("/api/projects/{id}/runs", async (
     HttpContext httpContext,
     string id,
@@ -335,6 +339,8 @@ app.MapGet("/api/projects/{id}/runs", async (
     bool? terminal_only,
     bool? include_children,
     int? limit,
+    int? page,
+    int? page_size,
     IProjectStore projectStore,
     IRunStore runStore,
     CoordinatorStatusReader coordinator,
@@ -352,8 +358,13 @@ app.MapGet("/api/projects/{id}/runs", async (
         runs = runs.Where(r => string.Equals(r.AgentName, agent, StringComparison.Ordinal)).ToList();
     if (terminal_only == true)
         runs = runs.Where(r => IsTerminalHistoryStatus(r.Status)).ToList();
-    if (limit is > 0)
-        runs = runs.Take(Math.Min(limit.Value, 100)).ToList();
+    // Deterministic, newest-first order so pages are stable across requests.
+    runs = runs.OrderByDescending(r => r.StartedAt).ToList();
+
+    // Legacy `limit` param (pre-pagination) is honored as a page_size alias for one release so
+    // existing callers that only pass `limit` keep getting a bounded, single-page result. New
+    // callers should use `page`/`page_size` — see decisions/inbox/niobe-pagination-contract.md.
+    var effectivePageSize = page_size ?? (limit is > 0 ? limit : null);
 
     // For coordinator runs, surface the work-plan orchestration status so the list can render
     // "Dispatching" / "Awaiting assembly" / "Failed: <reason>" instead of the bare run status.
@@ -363,7 +374,7 @@ app.MapGet("/api/projects/{id}/runs", async (
         .ToList();
     var coordinatorStatuses = await coordinator.GetCoordinatorStatusesAsync(coordinatorRunIds, ct);
 
-    return Results.Ok(runs.Select(r =>
+    var summaries = runs.Select(r =>
     {
         var isCoordinator = r.ParentRunId is null && string.Equals(r.AgentName, "Coordinator", StringComparison.Ordinal);
         return new WorkflowRunSummary
@@ -382,7 +393,9 @@ app.MapGet("/api/projects/{id}/runs", async (
         CoordinatorStatusReason = isCoordinator ? r.Result : null,
         ArchivedAt = r.ArchivedAt,
         };
-    }));
+    }).ToList();
+
+    return Results.Ok(Paging.Of(summaries, page, effectivePageSize));
 });
 
 static bool IsTerminalHistoryStatus(RunStatus status) =>

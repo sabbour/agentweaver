@@ -128,12 +128,14 @@ app.MapPost("/api/projects/{id}/decisions/inbox", async (
     });
 });
 
-// GET /api/projects/{id}/decisions/inbox
+// GET /api/projects/{id}/decisions/inbox (paginated; see Contracts.PagedResult<T>)
 app.MapGet("/api/projects/{id}/decisions/inbox", async (
     string id,
     string? status,
     string? type,
     string? agent,
+    int? page,
+    int? page_size,
     IProjectStore projectStore,
     MemoryDbContext memoryDb,
     CancellationToken ct) =>
@@ -150,13 +152,14 @@ app.MapGet("/api/projects/{id}/decisions/inbox", async (
         .Where(e => agent == null || e.AgentName == agent)
         .ToListAsync(ct))
         .OrderByDescending(e => e.CreatedAt)
+        .Select(e => new
+        {
+            e.Id, e.AgentName, e.Slug, e.Type, e.Title, e.Content, e.Rationale, e.Status,
+            decision_id = e.DecisionId, merged_at = e.MergedAt,
+            created_at = e.CreatedAt, updated_at = e.UpdatedAt,
+        })
         .ToList();
-    return Results.Ok(entries.Select(e => new
-    {
-        e.Id, e.AgentName, e.Slug, e.Type, e.Title, e.Content, e.Rationale, e.Status,
-        decision_id = e.DecisionId, merged_at = e.MergedAt,
-        created_at = e.CreatedAt, updated_at = e.UpdatedAt,
-    }));
+    return Results.Ok(Paging.Of(entries, page, page_size));
 });
 
 // POST /api/projects/{id}/decisions/inbox/{entryId}/merge
@@ -250,12 +253,14 @@ app.MapPost("/api/projects/{id}/decisions/inbox/{entryId}/reject", async (
     return Results.Ok(new { entry.Id, entry.Status });
 });
 
-// GET /api/projects/{id}/decisions
+// GET /api/projects/{id}/decisions (paginated; see Contracts.PagedResult<T>)
 app.MapGet("/api/projects/{id}/decisions", async (
     string id,
     string? status,
     string? type,
     string? agent,
+    int? page,
+    int? page_size,
     IProjectStore projectStore,
     MemoryDbContext memoryDb,
     CancellationToken ct) =>
@@ -272,13 +277,14 @@ app.MapGet("/api/projects/{id}/decisions", async (
         .Where(d => agent == null || d.AgentName == agent)
         .ToListAsync(ct))
         .OrderByDescending(d => d.CreatedAt)
+        .Select(d => new
+        {
+            d.Id, d.AgentName, d.Type, d.Status, d.Title, d.Content, d.Rationale, d.Tags,
+            superseded_by_id = d.SupersededById,
+            created_at = d.CreatedAt, updated_at = d.UpdatedAt,
+        })
         .ToList();
-    return Results.Ok(decisions.Select(d => new
-    {
-        d.Id, d.AgentName, d.Type, d.Status, d.Title, d.Content, d.Rationale, d.Tags,
-        superseded_by_id = d.SupersededById,
-        created_at = d.CreatedAt, updated_at = d.UpdatedAt,
-    }));
+    return Results.Ok(Paging.Of(decisions, page, page_size));
 });
 
 // GET /api/projects/{id}/decisions/{decisionId}

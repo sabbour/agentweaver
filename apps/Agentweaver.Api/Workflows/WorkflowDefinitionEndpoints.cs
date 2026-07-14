@@ -3,6 +3,7 @@ using Agentweaver.Api.Generation;
 using Agentweaver.Api.Security;
 using Agentweaver.Domain;
 using Microsoft.Extensions.Options;
+using Agentweaver.Squad.Catalog;
 using Agentweaver.Squad.Squad;
 using Microsoft.Extensions.Logging;
 using YamlDotNet.Core;
@@ -475,7 +476,9 @@ public static class WorkflowDefinitionEndpoints
         };
 
     /// <summary>Reads the project's cast role ids from its squad team, or null when none can be read.
-    /// Used to constrain generated workflow nodes to roles the project can cast (FR-061).</summary>
+    /// Used to constrain generated workflow nodes to roles the project can cast (FR-061). Reserved
+    /// orchestration roles (Scribe, Work Monitor, Rai, Coordinator) are always present on every team's
+    /// squad file but must never be offered to the generator as an assignable domain role.</summary>
     private static IReadOnlyList<string>? TryReadTeamRoles(Project project)
     {
         try
@@ -484,7 +487,7 @@ public static class WorkflowDefinitionEndpoints
             if (team is null) return null;
             var roles = team.Members
                 .Select(m => m.Role.Id)
-                .Where(r => !string.IsNullOrWhiteSpace(r))
+                .Where(r => !string.IsNullOrWhiteSpace(r) && !ReservedRoles.IsReserved(r))
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToList();
             return roles.Count == 0 ? null : roles;

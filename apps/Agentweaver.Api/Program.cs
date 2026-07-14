@@ -327,6 +327,9 @@ builder.Services.AddSingleton<Agentweaver.Api.Diagnostics.DiagnosticsService>();
 builder.Services.AddSingleton<Agentweaver.Api.Metrics.DashboardReadService>();
 builder.Services.AddSingleton<Agentweaver.Api.Metrics.AppInsightsMetricsService>();
 
+// Global notification center (#247) — stateless DB-backed aggregation, no per-instance state to register.
+builder.Services.AddScoped<Agentweaver.Api.Notifications.NotificationsService>();
+
 // Agent runtime
 builder.Services.AddAgentRuntime();
 builder.Services.AddSingleton<DurableRunControlState>();
@@ -727,6 +730,11 @@ builder.Services.AddSingleton<Agentweaver.Api.Projects.ProjectWorkspaceService>(
 // Checkpoint GC background service (Guardrail 8)
 builder.Services.AddHostedService<CheckpointGcService>();
 
+// Queued-runs gauge poller (issue #108) — publishes the GLOBAL Ready-backlog depth
+// (legacy instrument name: agentweaver.run.queued). Every replica emits the same shared-store
+// snapshot, so downstream Prometheus/KEDA queries must aggregate with max(), not sum().
+builder.Services.AddHostedService<Agentweaver.Api.Runs.QueuedRunsMetricService>();
+
 // Casting
 // Provider-aware: Postgres uses EfCastProposalStore; SQLite uses CastProposalStore.
 // Both implement ICastProposalStore.
@@ -924,6 +932,7 @@ else
     app.MapWorkflowDefinitionEndpoints();
     app.MapDiagnosticsEndpoints();
     app.MapMetricsEndpoints();
+    app.MapNotificationsEndpoints();
     app.MapSandboxEndpoints();
     app.MapSystemEndpoints();
     app.MapVersionEndpoints();

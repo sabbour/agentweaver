@@ -143,6 +143,16 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
     // turn span (gen_ai.* semantic conventions) so the transaction trace tree can render it.
     private readonly ConcurrentDictionary<string, Activity> _activeToolSpans = new(StringComparer.Ordinal);
 
+    // The current turn's span, captured explicitly so tool spans (and the usage-event model
+    // tag) can be parented/targeted to it deterministically regardless of what Activity.Current
+    // happens to be at the moment a tool call starts. Overlapping tool executions keep their own
+    // span open (from ToolExecutionStart to the matching ToolExecutionComplete) via
+    // _activeToolSpans above; while one is open it *is* Activity.Current, so relying on ambient
+    // parenting would nest a second, concurrently-started tool span under the first instead of
+    // under the turn. Marked volatile because tool-execution callbacks can arrive on SDK
+    // callback threads distinct from the thread running RunStreamingAsync.
+    private volatile Activity? _turnActivity;
+
     // Sandbox-degradation tracking. The permission handler (which fires on SDK callback
     // threads) records that at least one tool call was denied, plus the first deny reason.
     // run.degraded is emitted exactly once via EmitRunDegradedOnce; _runDegradedEmitted is
@@ -379,6 +389,12 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
             RejectDestructiveCommands = controlledBuildTestShell,
             RejectBackgroundCommands = controlledBuildTestShell,
             MaximumTimeoutMs = controlledBuildTestShell
+                ? (int)TimeSpan.FromMinutes(10).TotalMilliseconds
+                : 0,
+            // #313: floor Build/Test command timeouts at 10 min so an optimistically short
+            // model-supplied timeout_ms (e.g. 3 min) can't kill a legitimate long build under
+            // scheduling contention. Only applied in the controlled Build/Test tool context.
+            MinimumTimeoutMs = controlledBuildTestShell
                 ? (int)TimeSpan.FromMinutes(10).TotalMilliseconds
                 : 0,
         };
@@ -694,6 +710,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         }
 
         using var turnActivity = StartModelTurnActivity();
+        _turnActivity = turnActivity;
         var turnStarted = Stopwatch.GetTimestamp();
         var turnStartedAt = DateTimeOffset.UtcNow;
         using var totalTurnCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -801,6 +818,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
             foreach (var callId in _activeToolSpans.Keys.ToArray())
                 CompleteToolSpan(callId, success: false, error: "Tool execution did not report completion.");
             CompleteModelTurnTelemetry(turnActivity);
+            _turnActivity = null;
         }
 
         // Guaranteed flush: if the sandbox denied any tool call this turn, ensure run.degraded
@@ -911,8 +929,11 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
                         _turnOutputTokens += usageEvent.Data.OutputTokens ?? 0;
                         _turnNanoAiu += (long)(usageEvent.Data.CopilotUsage?.TotalNanoAiu ?? 0.0);
                         _turnModelId ??= usageEvent.Data.Model;
-                        Activity.Current?.SetTag("gen_ai.response.model", usageEvent.Data.Model);
-                        Activity.Current?.SetTag("model", usageEvent.Data.Model);
+                        // Target the turn span explicitly (not Activity.Current) — if a tool
+                        // span is open concurrently, Activity.Current would be the tool span,
+                        // misplacing this model tag onto it instead of the turn.
+                        _turnActivity?.SetTag("gen_ai.response.model", usageEvent.Data.Model);
+                        _turnActivity?.SetTag("model", usageEvent.Data.Model);
                     }
                 }
             }
@@ -1256,14 +1277,35 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
     /// current agent-turn span. Tags follow the gen AI semantic conventions
     /// (<c>gen_ai.tool.name</c>, <c>gen_ai.operation.name = execute_tool</c>) plus the
     /// Agentweaver span-kind marker so the transaction-trace tree can classify it as a tool node.
+    /// The parent is the turn span's captured <see cref="ActivityContext"/> (<see cref="_turnActivity"/>),
+    /// passed explicitly rather than relying on ambient <c>Activity.Current</c> — if a different
+    /// tool call's span is still open when this one starts (overlapping tool calls), ambient
+    /// parenting would nest this span under that other tool span instead of under the turn.
     /// </summary>
     private void StartToolSpan(string callId, string toolName)
     {
-        var activity = ActivitySource.StartActivity($"execute_tool {toolName}", ActivityKind.Internal);
+        var activity = StartToolSpanCore(_turnActivity, toolName);
         if (activity is null) return;
         ConfigureToolSpanTags(activity, toolName, callId, _agentName, _runId);
         if (!_activeToolSpans.TryAdd(callId, activity))
             activity.Dispose();
+    }
+
+    /// <summary>
+    /// Starts the <c>execute_tool</c> <see cref="Activity"/>, parented explicitly to
+    /// <paramref name="turnActivity"/>'s <see cref="ActivityContext"/> when available, rather
+    /// than relying on ambient <c>Activity.Current</c>. This is the core of the overlapping
+    /// tool-call fix (issue #200): if a different tool call's span is still open when this one
+    /// starts, <c>Activity.Current</c> would be that other tool span, and ambient parenting
+    /// would incorrectly nest this new span under it instead of under the turn. Extracted as an
+    /// internal static helper (mirroring <see cref="ConfigureToolSpanTags"/>) so the parenting
+    /// behavior can be unit-tested without constructing the heavyweight <see cref="CopilotAIAgent"/>.
+    /// </summary>
+    internal static Activity? StartToolSpanCore(Activity? turnActivity, string toolName)
+    {
+        return turnActivity is not null
+            ? ActivitySource.StartActivity($"execute_tool {toolName}", ActivityKind.Internal, turnActivity.Context)
+            : ActivitySource.StartActivity($"execute_tool {toolName}", ActivityKind.Internal);
     }
 
     /// <summary>

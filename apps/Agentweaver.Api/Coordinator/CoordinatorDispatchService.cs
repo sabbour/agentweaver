@@ -2171,24 +2171,45 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         return edges;
     }
 
+    /// <summary>
+    /// Builds deterministic <c>SubtaskDependency</c> edges from declared-output overlaps so a later
+    /// subtask that writes the same (or a suffix/filename-matching, per
+    /// <see cref="CoordinatorOrchestratorExecutor.DeclaredOutputPathsMatch"/>) path as an earlier one
+    /// is forced to depend on it. Uses the SAME matcher as the runtime scheduling check
+    /// (<see cref="CoordinatorAssemblyService.DoSubtasksConflict"/>) so the two can never diverge
+    /// again (#261 secondary gap: previously this used exact dictionary-key matching only, so e.g.
+    /// <c>foo.cs</c> and <c>src/foo.cs</c> conflicted at runtime but got no deterministic edge here).
+    /// Subtasks whose declared-output metadata is <see cref="CoordinatorOrchestratorExecutor.DeclaredOutputPathsParseState.Invalid"/>
+    /// or genuinely empty (<see cref="CoordinatorOrchestratorExecutor.DeclaredOutputPathsParseState.ValidEmpty"/>)
+    /// contribute no output tokens here — the runtime conflict check (which fails closed on Invalid)
+    /// is what protects those.
+    /// </summary>
     internal static List<(int SubtaskId, int DependsOnSubtaskId)> FindDeclaredOutputConflictEdges(
         IReadOnlyList<Subtask> subtasks,
         IReadOnlySet<(int, int)> existing)
     {
         var additions = new List<(int SubtaskId, int DependsOnSubtaskId)>();
-        var byOutput = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        // Ordered (output, owningSubtaskId) pairs seen so far. A list (not a dictionary) is required
+        // because ownership lookup uses the shared suffix/filename-aware matcher, not exact equality.
+        var seen = new List<(string Output, int SubtaskId)>();
 
         foreach (var subtask in subtasks.OrderBy(s => s.Id))
         {
-            foreach (var output in CoordinatorOrchestratorExecutor.DeserializeDeclaredOutputPaths(
-                         subtask.DeclaredOutputPathsJson))
+            var parsed = CoordinatorOrchestratorExecutor.ParseDeclaredOutputPaths(subtask.DeclaredOutputPathsJson);
+            if (parsed.State != CoordinatorOrchestratorExecutor.DeclaredOutputPathsParseState.ValidWithPaths)
+                continue;
+
+            foreach (var output in parsed.Paths)
             {
-                if (!byOutput.TryGetValue(output, out var owner))
+                var ownerIndex = seen.FindIndex(entry =>
+                    CoordinatorOrchestratorExecutor.DeclaredOutputPathsMatch(entry.Output, output));
+                if (ownerIndex < 0)
                 {
-                    byOutput[output] = subtask.Id;
+                    seen.Add((output, subtask.Id));
                     continue;
                 }
 
+                var owner = seen[ownerIndex].SubtaskId;
                 var edge = (subtask.Id, owner);
                 if (subtask.Id != owner && !existing.Contains(edge) && !additions.Contains(edge))
                     additions.Add(edge);
@@ -2355,6 +2376,10 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
             })
             .FirstOrDefaultAsync(ct).ConfigureAwait(false);
 
+        string? coordinatorModel = null;
+        if (RunId.TryParse(coordinatorRunId, out var coordinatorRun))
+            coordinatorModel = (await _runStore.GetAsync(coordinatorRun, ct).ConfigureAwait(false))?.ModelId;
+
         var descriptor = CoordinatorGraphDescriptor.Build(
             coordinatorRunId,
             subtasks,
@@ -2362,7 +2387,8 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
             state?.AssemblyStage,
             state?.Status,
             state?.AssemblyTerminalStage,
-            state?.AssemblyStatusReason);
+            state?.AssemblyStatusReason,
+            coordinatorModel: coordinatorModel);
         entry.RecordNext(EventTypes.CoordinatorGraph, descriptor);
     }
 

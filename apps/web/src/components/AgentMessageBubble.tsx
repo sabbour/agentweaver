@@ -10,6 +10,7 @@ import remarkGfm from 'remark-gfm';
 import { BotRegular } from '@fluentui/react-icons';
 import { memo } from 'react';
 import { defaultSchema } from 'rehype-sanitize';
+import { formatAbsoluteTime, formatRelativeTime } from '../utils/relativeTime';
 import type { ComponentProps } from 'react';
 // SECURITY: sanitize with the default schema (no raw HTML passthrough).
 // rehype-raw is intentionally NOT included — raw HTML in agent text is neutralised.
@@ -77,6 +78,14 @@ const useStyles = makeStyles({
     color: tokens.colorNeutralForeground3,
     fontSize: tokens.fontSizeBase100,
     marginTop: tokens.spacingVerticalXS,
+  },
+  // Subtle, secondary timestamp (issue #302) — must not compete visually with the
+  // message content, so it uses the lowest-emphasis foreground token and smallest size.
+  timestamp: {
+    display: 'block',
+    color: tokens.colorNeutralForeground3,
+    fontSize: tokens.fontSizeBase100,
+    marginBottom: tokens.spacingVerticalXXS,
   },
   // Markdown body — resets margins so the bubble padding alone controls spacing.
   markdownBody: {
@@ -204,12 +213,18 @@ interface AgentMessageBubbleProps {
   content: string;
   streaming: boolean;
   isLiveRun: boolean;
+  /**
+   * Client-side epoch-ms receipt timestamp (see `AgentMessageItem.receivedAt`). Optional so
+   * existing/older callers don't break; when omitted no timestamp is rendered.
+   */
+  timestamp?: number;
 }
 
 export const AgentMessageBubble = memo(function AgentMessageBubble({
   content,
   streaming,
   isLiveRun,
+  timestamp,
 }: AgentMessageBubbleProps) {
   const styles = useStyles();
   // Cursor shown only while actively streaming a live run (§4.2).
@@ -249,6 +264,15 @@ export const AgentMessageBubble = memo(function AgentMessageBubble({
         className={mergeClasses(styles.bubble, showCursor && styles.cursorAfter, !renderMarkdown && styles.plainText)}
         data-author="assistant"
       >
+        {timestamp != null && (
+          <Text
+            as="span"
+            className={styles.timestamp}
+            title={formatAbsoluteTime(timestamp)}
+          >
+            {formatRelativeTime(timestamp)}
+          </Text>
+        )}
         {renderMarkdown ? (
           // SECURITY: react-markdown builds a React element tree — no dangerouslySetInnerHTML.
           // rehype-sanitize (defaultSchema) strips <script>, onerror, and all non-allowlisted HTML.

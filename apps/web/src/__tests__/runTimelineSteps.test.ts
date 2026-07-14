@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { buildRunTimeline } from '../timeline/runTimelineSteps';
 import type { RunStreamEvent } from '../api/sse';
 
@@ -59,6 +59,23 @@ describe('buildRunTimeline', () => {
     expect(model.steps[0].messages).toHaveLength(1);
     expect(model.steps[0].messages[0].text).toBe('Hello world');
     expect(model.steps[0].messages[0].streaming).toBe(false);
+  });
+
+  it('stores a message timestamp for relative-time rendering', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-07-14T12:45:00.000Z'));
+    try {
+      const eventTime = '2026-07-14T12:42:00.000Z';
+      const model = buildRunTimeline([
+        evt(1, 'agent.intent', { intent: 'Explain' }),
+        evt(2, 'agent.message', { messageId: 'm1', content: 'Hello world', timestamp_utc: eventTime }),
+        evt(3, 'agent.turn.end', {}),
+      ]);
+
+      expect(model.steps[0].messages[0].timestamp).toBe(new Date(eventTime).getTime());
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('does not duplicate report_intent as a tool row', () => {

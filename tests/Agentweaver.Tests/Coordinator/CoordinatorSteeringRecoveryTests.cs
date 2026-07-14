@@ -183,6 +183,55 @@ public sealed class CoordinatorSteeringRecoveryTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task Redirect_OnStaleIneligibleSubtasksBlock_AllSubtasksNowReady_ReArmsAssembly_WithoutReDispatch()
+    {
+        // #309 follow-up (Smith's FitTrackE2E-v12 report). The plan blocked with
+        // "ineligible_subtasks [369,370]" while those two subtasks were genuinely failed. A FIRST
+        // redirect correctly re-dispatched only the failed pair (covered by
+        // Redirect_OnParkedCoordinator_WithMixedFailedAndReady_ReDispatchesOnlyFailed) and BOTH went on
+        // to reach assemble_ready. But the plan's AssemblyStatusReason column is a write-once SNAPSHOT
+        // that is never re-evaluated — so when the plan re-blocked (e.g. the reconciler/dispatch loop
+        // observed the stale reason before the eligibility gate re-ran), a SECOND redirect sees the
+        // exact same "ineligible_subtasks [369,370]" string even though every subtask is now
+        // assemble_ready. Pre-fix, this reason didn't match IsRetryableBuildTestInfraReason, so the
+        // redirect fell through to the "integration conflict" branch and reset ALL FOUR already-green
+        // subtasks — needlessly discarding a full wave of completed work a second time, exactly what
+        // Smith observed. The fix must recognize a stale ineligible_subtasks reason (all subtasks
+        // already satisfy) as re-arm-only, just like a build/test-infra reason.
+        var coord = RunId.New().ToString();
+        await SeedTerminalCoordinatorRunAsync(coord, RunStatus.Failed, "assembly_blocked: ineligible_subtasks [369,370]");
+        var (planId, ids) = await SeedPlanAsync(coord, WorkPlanStatus.AssemblyBlocked, new[]
+        {
+            SubtaskStatus.AssembleReady,
+            SubtaskStatus.AssembleReady,
+            SubtaskStatus.AssembleReady, // formerly failed (369) — now green after the first redirect
+            SubtaskStatus.AssembleReady, // formerly rai-flagged (370) — now green after the first redirect
+        }, assemblyStatusReason: "ineligible_subtasks [369,370]");
+        _dispatch.Active = false;
+
+        var view = await _sut.SteerAsync(coord, "redirect", null, "Re-check assembly now that both subtasks are green.", "owner", default);
+
+        view.Status.Should().Be(SteeringStatus.Applied, "a parked coordinator resumes immediately");
+
+        // NOT ONE subtask is re-run — all four stay assemble_ready with a zero recovery counter.
+        foreach (var id in ids)
+        {
+            var s = await GetSubtaskAsync(id);
+            s.Status.Should().Be(SubtaskStatus.AssembleReady, "a stale ineligible_subtasks reason must not discard already-green subtasks");
+            s.RecoveryAttempts.Should().Be(0, "no subtask consumed a recovery attempt");
+        }
+
+        // Assembly is re-armed (not dispatch) and the plan returns to awaiting_assembly so the CAS re-claims it.
+        _assembly.StartAssemblyCalls.Should().ContainSingle().Which.CoordinatorRunId.Should().Be(coord);
+        _dispatch.StartDispatchCalls.Should().BeEmpty("a stale eligibility-gate park retries assembly, not the dispatch loop");
+        (await GetPlanStatusAsync(planId)).Should().Be(WorkPlanStatus.AwaitingAssembly);
+
+        (await _runStore.GetAsync(RunId.Parse(coord)))!.Status.Should().Be(RunStatus.InProgress);
+        var events = _streamStore.Get(coord)!.GetSnapshotSince(0).Events;
+        events.Should().Contain(e => e.Type == EventTypes.CoordinatorRecovered);
+    }
+
+    [Fact]
     public async Task Redirect_OnParkedCoordinator_WithMixedFailedAndReady_ReDispatchesOnlyFailed()
     {
         // Scoped retry: two subtasks failed (Skyler+Hank) while two already succeeded (Walt+Jesse).

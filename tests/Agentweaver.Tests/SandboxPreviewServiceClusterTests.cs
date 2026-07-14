@@ -67,6 +67,39 @@ public sealed class SandboxPreviewServiceClusterTests
             "StartPreview must read the SandboxClaim from the cluster (replica-safe)");
     }
 
+    [Fact]
+    public async Task StartPreview_httproute_rewrites_host_to_localhost_for_dev_server_allowlists()
+    {
+        // #312: dev servers (Vite 5+/6, etc.) reject the dynamic *-preview.<zone> Host with HTTP 403
+        // unless it's in server.allowedHosts. The HTTPRoute must carry a URLRewrite filter that
+        // rewrites the upstream Host to "localhost" (which frameworks allow by default), so the
+        // browser-facing preview URL is reachable without patching each app's config.
+        const string runId = "run-host-rewrite";
+        var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
+        using var listener = StartListener(out var targetPort);
+
+        var handler = new FakeKubeHandler();
+        handler.OnGet(
+            $"/apis/{SandboxClaimConventions.ApiGroup}/{SandboxClaimConventions.ApiVersion}/namespaces/agentweaver/sandboxclaims/{claimName}",
+            """{"status":{"conditions":[{"type":"Ready","status":"True"}],"sandbox":{"name":"agenthost-pod-rw"}}}""");
+        handler.OnGet(
+            "/api/v1/namespaces/agentweaver/pods/agenthost-pod-rw",
+            """{"apiVersion":"v1","kind":"Pod","metadata":{"name":"agenthost-pod-rw"},"status":{"podIP":"127.0.0.1"}}""");
+        handler.OnEcho("POST", "/api/v1/namespaces/agentweaver/services");
+        handler.OnEcho("POST", "/apis/gateway.networking.k8s.io/v1/namespaces/agentweaver/httproutes");
+
+        var svc = NewService(handler);
+
+        await svc.StartPreviewAsync(runId, targetPort, "user-1");
+
+        var routePost = handler.Requests.Should().ContainSingle(r =>
+            r.Method == "POST" && r.Path.EndsWith("/httproutes")).Subject;
+        routePost.Body.Should().Contain("URLRewrite",
+            "the preview route must rewrite the Host so dev-server allowlists don't 403 the external hostname (#312)");
+        routePost.Body.Should().Contain("localhost",
+            "the upstream Host must be rewritten to localhost, which frameworks allow by default");
+    }
+
 
     [Fact]
     public async Task StartPreview_resolves_pod_from_retained_run_command_claim_status()

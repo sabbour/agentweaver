@@ -1,12 +1,14 @@
 import { AzureFluentProvider } from '../copilot-fluent-system';
 import { AgentMessageBubble } from '../components/AgentMessageBubble';
-import { render, screen } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { cleanup, render, screen } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ReactNode } from 'react';
 // Wrap in FluentProvider to satisfy Fluent style context
 function Wrapper({ children }: { children: ReactNode }) {
   return <AzureFluentProvider density="compact">{children}</AzureFluentProvider>;
 }
+
+afterEach(cleanup);
 
 describe('AgentMessageBubble', () => {
   // B-01: streaming=true, isLiveRun=true → content visible
@@ -220,8 +222,44 @@ describe('AgentMessageBubble', () => {
         <AgentMessageBubble content={specJson} streaming={false} isLiveRun={false} />
       </Wrapper>,
     );
+    expect(screen.getByText('Drafted the outcome plan — see the Outcome plan panel.')).toBeDefined();
+    expect(screen.queryByText('Two new endpoints')).toBeNull();
     expect(screen.getByText(/see the Outcome plan panel/i)).toBeDefined();
     // The raw JSON keys must not be dumped into the timeline.
     expect(screen.queryByText(/desired_outcome/)).toBeNull();
+  });
+
+  // TS-01: message with a known timestamp shows relative time + absolute-time title (issue #302)
+  it('renders a subtle relative timestamp with an absolute-time title', () => {
+    const knownTime = new Date('2026-07-14T03:55:00-07:00'); // 3 minutes before CURRENT_DATETIME
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-07-14T03:58:00-07:00'));
+    try {
+      render(
+        <Wrapper>
+          <AgentMessageBubble
+            content="hello with a timestamp"
+            streaming={false}
+            isLiveRun={false}
+            timestamp={knownTime.getTime()}
+          />
+        </Wrapper>,
+      );
+      const ts = screen.getByText('3m ago');
+      expect(ts).toBeDefined();
+      expect(ts.getAttribute('title')).toBe(knownTime.toLocaleString());
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // TS-02: no timestamp prop → no relative-time text rendered (back-compat for older callers)
+  it('renders no timestamp when the timestamp prop is omitted', () => {
+    const { container } = render(
+      <Wrapper>
+        <AgentMessageBubble content="no timestamp here" streaming={false} isLiveRun={false} />
+      </Wrapper>,
+    );
+    expect(container.textContent).not.toMatch(/\b\d+[smhd] ago\b/);
   });
 });

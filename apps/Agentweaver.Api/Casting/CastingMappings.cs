@@ -1,4 +1,5 @@
 using Agentweaver.Api.Contracts;
+using Agentweaver.Squad.Catalog;
 using Agentweaver.Squad.Model;
 using Agentweaver.Squad.Squad;
 
@@ -61,7 +62,7 @@ public static class CastingMappings
     };
 
     private static readonly HashSet<string> BuiltInAgents =
-        new(StringComparer.OrdinalIgnoreCase) { "Scribe", "Ralph", "Rai", "Coordinator" };
+        new(ReservedRoles.ReservedNames, StringComparer.OrdinalIgnoreCase);
 
     public static TeamDto ToDto(Team team, SquadLayoutInfo layout) => new()
     {

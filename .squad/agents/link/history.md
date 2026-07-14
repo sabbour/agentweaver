@@ -112,3 +112,24 @@ Published the dependency-base propagation and UI fixes to staging as local-only 
 
 ## 2026-07-13T23:59:00-07:00 — BookClub regression
 The v0.9.46-rc1 BookClub regression encountered `agenthost_launch_failed`, matching #305's branch-mismatch failure class. No preview URL was produced; retry after #305 is fixed.
+
+## 2026-07-14T02:35:00-07:00 — Batch merge: #266/#270/#303/#305 fixes, #216/#278 policy work
+Scribe merged inbox notes: #266 fixed and deployed to staging (v0.9.48-rc1), live run had not yet reached preview at merge time; #270 preview module failures traced to shared Kata nested-bwrap root cause, not a workspace sync race; #303 resolves deployed image tags through VERSION history before selective ACR builds; #305 re-verified already fixed on main (commit 1e54aab6), pending live E2E harness confirmation; #216 run/always tool approval policies made tool-wide; #278 requires confirmation before stopping a coordinator run.
+
+## 2026-07-14T03:05:00-07:00 — #305 evidence, #180 wiring + live-data confirmation
+#305 re-verified already fixed on main, pending one live harness-driven confirmation run. #180 App Insights workspace-id wiring re-verified fixed and live-validated for config/permissions; follow-up same batch closed the runtime gap, confirming real telemetry flows through the AppInsights query path (not DB fallback). Evidence posted to #180; not closed, left for sign-off.
+
+## 2026-07-14T03:20:00-07:00 — #186 backend cross-check, clean bill of health
+Cross-checked Trinity's #186 frontend gate-palette work at the API layer: confirmed two independent backend validation layers already reject dangling gate branches even when the frontend is bypassed. No fix needed, not blocking PR #190 / rubber-duck-186 review.
+
+## 2026-07-14T10:15:00-07:00
+#305 evidence writeup followup-cleanup pass; surface-check confirming #311 reserved-roles fix has no adjacent-surface regressions.
+
+
+## 2026-07-14T10:15:00-07:00 (late arrival)
+Shipped #313 fix: watchdog/executor-timeout race decoupled via WatchdogTimeoutGrace (60s) + 10-min floor scoped to Build/Test gate. 26 tests pass. Code complete, uncommitted, pending peer review + staging validation.
+
+
+## 2026-07-14T11:05:00-07:00
+Process note: #312 (Link2's fix) reopened by coordinator pending live v0.9.50-rc1 deploy validation, per Seraph's pass-3 closure-discipline finding.
+

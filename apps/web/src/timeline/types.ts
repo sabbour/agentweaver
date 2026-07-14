@@ -37,6 +37,15 @@ export interface AgentMessageItem {
   content: string;
   /** true while deltas are still arriving (no settled agent.message yet). */
   streaming: boolean;
+  /**
+   * Client-side epoch-ms captured when this message's first delta/settled event was
+   * processed. There is no timestamp on the event wire today (see `runTimelineSteps.ts`),
+   * so this reflects local receipt time rather than a server-authoritative timestamp —
+   * accurate for live runs, but replayed/completed runs will cluster around page-load
+   * time. Tracked as a follow-up: expose the persisted `RunEvents.CreatedAt` column via
+   * the API/event payload for a fully accurate timestamp (issue #302, decision doc).
+   */
+  receivedAt: number;
 }
 
 export interface ToolCallItem {

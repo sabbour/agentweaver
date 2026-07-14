@@ -53,6 +53,7 @@ function makeAgentMessage(id: string, content: string): TurnStep {
     messageId: id,
     content,
     streaming: false,
+    receivedAt: Date.now(),
   };
 }
 

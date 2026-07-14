@@ -256,4 +256,54 @@ describe('DashboardPage', () => {
     expect(updatedMetricsArgs[0]).toBe('p1');
     expect(updatedMetricsArgs[1]).not.toBe(initialMetricsArgs[1]);
   });
+
+  // #208 point 5 regression coverage: a scheduled refresh must carry an AbortSignal, and starting a
+  // new refresh (poll tick) must abort the previous request's signal instead of letting both
+  // in-flight requests race to update state.
+  it('passes an AbortSignal to getProjectDashboard/getProjectMetrics and aborts the previous poll on the next tick', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.mocked(apiClient.getProjectDashboard).mockResolvedValue(dto);
+
+      renderPage();
+
+      await vi.waitFor(() => expect(apiClient.getProjectMetrics).toHaveBeenCalled());
+
+      const firstDashboardCall = vi.mocked(apiClient.getProjectDashboard).mock.calls.at(-1)!;
+      const firstMetricsCall = vi.mocked(apiClient.getProjectMetrics).mock.calls.at(-1)!;
+      const firstDashboardOptions = firstDashboardCall[1] as { includeMetrics?: boolean; signal?: AbortSignal } | undefined;
+      const firstSignal = firstMetricsCall[3] as AbortSignal | undefined;
+
+      expect(firstDashboardOptions?.signal).toBeInstanceOf(AbortSignal);
+      expect(firstSignal).toBeInstanceOf(AbortSignal);
+      expect(firstSignal!.aborted).toBe(false);
+
+      // Advance past the 30s refresh interval to trigger the next scheduled poll.
+      await vi.advanceTimersByTimeAsync(30000);
+
+      expect(firstSignal!.aborted).toBe(true);
+
+      const secondMetricsCall = vi.mocked(apiClient.getProjectMetrics).mock.calls.at(-1)!;
+      const secondSignal = secondMetricsCall[3] as AbortSignal | undefined;
+      expect(secondSignal).toBeInstanceOf(AbortSignal);
+      expect(secondSignal).not.toBe(firstSignal);
+      expect(secondSignal!.aborted).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // #208 point 4 regression coverage: DashboardPage never reads Throughput/AgentLeaderboard off the
+  // `/dashboard` response (it uses the separately-fetched full metrics DTO instead), so it should opt
+  // out of the dashboard endpoint's own internal metrics fan-out.
+  it('requests the dashboard endpoint with includeMetrics disabled', async () => {
+    vi.mocked(apiClient.getProjectDashboard).mockResolvedValue(dto);
+
+    renderPage();
+
+    await waitFor(() => expect(apiClient.getProjectDashboard).toHaveBeenCalled());
+
+    const dashboardArgs = vi.mocked(apiClient.getProjectDashboard).mock.calls.at(-1)!;
+    expect(dashboardArgs[1]).toMatchObject({ includeMetrics: false });
+  });
 });

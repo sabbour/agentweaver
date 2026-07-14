@@ -26,6 +26,14 @@ public interface IBacklogTaskStore
     Task<IReadOnlyList<BacklogTask>> ListReadyForClaimAsync(
         ProjectId projectId, int limit, CancellationToken ct = default);
 
+    /// <summary>
+    /// Global count of claimable Ready backlog tasks across ACTIVE projects only
+    /// (<c>state='ready' AND run_id IS NULL AND archived_at IS NULL</c>). This is the durable
+    /// worker-pickup backlog observed by the coordinator heartbeat.
+    /// Reservation-only <see cref="RunStatus.Pending"/> rows are intentionally excluded.
+    /// </summary>
+    Task<int> CountReadyForPickupAsync(CancellationToken ct = default);
+
     /// <summary>Updates title/description only, gated on project_id. Returns false if not found in project.</summary>
     Task<bool> UpdateContentAsync(
         ProjectId projectId, BacklogTaskId id, string title, string? description, CancellationToken ct = default);

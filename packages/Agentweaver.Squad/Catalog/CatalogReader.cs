@@ -84,6 +84,13 @@ public sealed class CatalogReader
             dto.Boundaries ?? []);
     }
 
+    /// <summary>
+    /// Loads every castable role in the catalog. Reserved, platform-owned orchestration roles
+    /// (Scribe, Work Monitor, Rai, Coordinator -- see <see cref="ReservedRoles"/>) exist as catalog
+    /// entries only so their built-in charters can be compiled by <c>CharterCompiler</c>; they are
+    /// excluded here so they are never offered as a castable/domain role to a blueprint or workflow
+    /// generator, or listed as a manual-casting option.
+    /// </summary>
     public IReadOnlyList<Role> LoadAllRoles()
     {
         var prefix = $"{ResourcePrefix}.roles.";
@@ -94,6 +101,7 @@ public sealed class CatalogReader
         foreach (var resourceName in roleNames)
         {
             var id = resourceName[prefix.Length..^".json".Length].Replace('_', '-');
+            if (ReservedRoles.IsReserved(id)) continue;
             var role = LoadRole(id);
             if (role is not null) byId[role.Id] = role;
         }

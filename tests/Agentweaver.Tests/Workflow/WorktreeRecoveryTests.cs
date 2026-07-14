@@ -2,7 +2,9 @@ using FluentAssertions;
 using LibGit2Sharp;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
+using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Git;
+using Agentweaver.Api.Runs;
 using Agentweaver.Domain;
 
 namespace Agentweaver.Tests.Workflow;
@@ -134,6 +136,45 @@ public sealed class WorktreeRecoveryTests : IDisposable
             c.WorktreePath.Should().Be(a.WorktreePath);
         };
         act.Should().NotThrow();
+    }
+
+    // -------------------------------------------------------------------------
+    // Test 5: reattach recovers from durable run branch even if originating
+    // branch was deleted after the run started
+    // -------------------------------------------------------------------------
+    [Fact]
+    public void TryReattachWorktree_WhenOriginatingBranchMissingButRunBranchExists_Reattaches()
+    {
+        var (repoPath, basePath, manager) = CreateTestEnvironment();
+        var adapter = new WorktreeOperationsAdapter(
+            manager,
+            new RunStreamStore(),
+            NullLogger<WorktreeOperationsAdapter>.Instance);
+        var runId = RunId.New();
+
+        var original = manager.AddWorktree(repoPath, "main", runId);
+        Directory.Exists(original.WorktreePath).Should().BeTrue("pre-condition: original worktree created");
+
+        using (var repo = new Repository(repoPath))
+        {
+            var survivor = repo.CreateBranch("survivor", repo.Head.Tip);
+            Commands.Checkout(repo, survivor);
+            repo.Branches.Remove("main");
+            repo.Branches["main"].Should().BeNull("pre-condition: originating branch removed");
+        }
+
+        Directory.Delete(original.WorktreePath, recursive: true);
+        Directory.Exists(original.WorktreePath).Should().BeFalse("pre-condition: worktree directory wiped");
+
+        var recovered = adapter.TryReattachWorktree(repoPath, "main", runId.ToString());
+
+        recovered.Should().NotBeNull("the durable run branch is still enough to recreate the worktree");
+        recovered!.Value.WorktreePath.Should().Be(original.WorktreePath);
+        recovered.Value.BranchName.Should().Be(original.BranchName);
+        Directory.Exists(recovered.Value.WorktreePath).Should().BeTrue("reattach must recreate the physical directory");
+
+        using var reattachedRepo = new Repository(recovered.Value.WorktreePath);
+        reattachedRepo.Head.FriendlyName.Should().Be(original.BranchName);
     }
 
     // -------------------------------------------------------------------------

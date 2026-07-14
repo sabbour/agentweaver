@@ -40,7 +40,8 @@ import {
   Pulse24Regular,
   WarningRegular,
 } from '@fluentui/react-icons';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { collectPagedItems } from '../api/pagedResults';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import type {
   BoardDto,
@@ -279,25 +280,52 @@ export function OverviewPage() {
   const [lastUpdated, setLastUpdated] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const load = useCallback(async (signal: { cancelled: boolean }) => {
-    if (!signal.cancelled) setRefreshing(true);
+  const mountedRef = useRef(true);
+  const inFlightRef = useRef<AbortController | null>(null);
+
+  const load = useCallback(async (abortSignal?: AbortSignal) => {
+    if (mountedRef.current) setRefreshing(true);
     try {
-      const [overviewDto, projectList] = await Promise.all([apiClient.getOverview(), apiClient.listProjects()]);
+      const [overviewDto, projectList] = await Promise.all([
+        apiClient.getOverview(abortSignal),
+        collectPagedItems((options) => apiClient.listProjects(options), { signal: abortSignal }),
+      ]);
       const activeById = new Map(overviewDto.active_projects.map((project) => [project.project_id, project]));
       const recent = [...projectList].sort((a, b) => new Date(activeById.get(b.project_id)?.last_activity_utc ?? b.updated_at).getTime() - new Date(activeById.get(a.project_id)?.last_activity_utc ?? a.updated_at).getTime()).slice(0, 4);
       const currentRange = timeRangeDates(range); const previousRange = timeRangeDates(range, true);
       const rollupResults = await Promise.all(recent.map(async (project): Promise<ProjectRollup> => {
-        const [teamResult, runsResult, boardResult] = await Promise.allSettled([apiClient.getTeam(project.project_id), apiClient.getProjectRuns(project.project_id, { includeChildren: true, limit: 100 }), apiClient.getBoard(project.project_id)]);
+        const [teamResult, runsResult, boardResult] = await Promise.allSettled([apiClient.getTeam(project.project_id), apiClient.getProjectRuns(project.project_id, { includeChildren: true, pageSize: 100 }), apiClient.getBoard(project.project_id)]);
         const board = boardResult.status === 'fulfilled' ? boardResult.value : null; const active = activeById.get(project.project_id);
-        return { project, activeCount: active?.active_count ?? 0, queuedCount: active?.queued_count ?? 0, lastActivityUtc: active?.last_activity_utc ?? project.updated_at, agentCount: teamResult.status === 'fulfilled' ? teamResult.value.members.length : null, runCount: runsResult.status === 'fulfilled' ? Math.max(runsResult.value.length, boardRunCount(board) ?? 0) : boardRunCount(board), issueCount: boardIssueCount(board) };
+        return { project, activeCount: active?.active_count ?? 0, queuedCount: active?.queued_count ?? 0, lastActivityUtc: active?.last_activity_utc ?? project.updated_at, agentCount: teamResult.status === 'fulfilled' ? teamResult.value.members.length : null, runCount: runsResult.status === 'fulfilled' ? Math.max(runsResult.value.items.length, boardRunCount(board) ?? 0) : boardRunCount(board), issueCount: boardIssueCount(board) };
       }));
-      const [metricResults, previousMetricResults] = await Promise.all([Promise.allSettled(recent.map((project) => apiClient.getProjectMetrics(project.project_id, currentRange.from, currentRange.to))), Promise.allSettled(recent.map((project) => apiClient.getProjectMetrics(project.project_id, previousRange.from, previousRange.to)))]);
-      if (!signal.cancelled) { setOverview(overviewDto); setProjects(projectList); setRollups(rollupResults); setMetrics(metricResults.flatMap((result) => result.status === 'fulfilled' ? [result.value] : [])); setPreviousMetrics(previousMetricResults.flatMap((result) => result.status === 'fulfilled' ? [result.value] : [])); setLastUpdated(new Date().toISOString()); setError(null); }
-    } catch (err) { if (!signal.cancelled) setError(formatError(err)); }
-    finally { if (!signal.cancelled) { setLoading(false); setRefreshing(false); } }
+      const [metricResults, previousMetricResults] = await Promise.all([Promise.allSettled(recent.map((project) => apiClient.getProjectMetrics(project.project_id, currentRange.from, currentRange.to, abortSignal))), Promise.allSettled(recent.map((project) => apiClient.getProjectMetrics(project.project_id, previousRange.from, previousRange.to, abortSignal)))]);
+      if (mountedRef.current) { setOverview(overviewDto); setProjects(projectList); setRollups(rollupResults); setMetrics(metricResults.flatMap((result) => result.status === 'fulfilled' ? [result.value] : [])); setPreviousMetrics(previousMetricResults.flatMap((result) => result.status === 'fulfilled' ? [result.value] : [])); setLastUpdated(new Date().toISOString()); setError(null); }
+    } catch (err) {
+      // #208 point 5: an aborted fetch (unmount/range change/overlapping-poll guard) is expected
+      // control flow, not a user-facing error — don't surface it.
+      if (err instanceof DOMException && err.name === 'AbortError') return;
+      if (mountedRef.current) setError(formatError(err));
+    }
+    finally { if (mountedRef.current) { setLoading(false); setRefreshing(false); } }
   }, [range]);
 
-  useEffect(() => { const signal = { cancelled: false }; setLoading(true); void load(signal); const iv = setInterval(() => { void load(signal); }, REFRESH_MS); return () => { signal.cancelled = true; clearInterval(iv); }; }, [load]);
+  // #208 point 5: single shared entry point for the poll tick AND manual refresh/retry clicks —
+  // aborts whatever request is still in flight before starting a new one, so overlapping fan-outs
+  // (interval firing while a manual refresh is pending, or vice versa) can't stack.
+  const runLoad = useCallback(() => {
+    inFlightRef.current?.abort();
+    const controller = new AbortController();
+    inFlightRef.current = controller;
+    void load(controller.signal);
+  }, [load]);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    setLoading(true);
+    runLoad();
+    const iv = setInterval(runLoad, REFRESH_MS);
+    return () => { mountedRef.current = false; inFlightRef.current?.abort(); clearInterval(iv); };
+  }, [runLoad]);
 
   const attention = useMemo<AttentionItem[]>(() => {
     const items: AttentionItem[] = [];
@@ -310,8 +338,8 @@ export function OverviewPage() {
   const focusRollup = rollups[0];
   const health = overview?.at_a_glance.health === 'healthy' ? 'healthy' : 'degraded';
   return <PageContainer className={styles.root}>
-    <PageHeader title="Overview" actions={<div className={styles.headerActions}>{lastUpdated && <RefreshCountdown className={styles.generated} intervalMs={REFRESH_MS} lastRefreshedAt={new Date(lastUpdated)} refreshing={refreshing} />}{refreshing && overview && <Spinner size="extra-tiny" aria-label="Refreshing overview" />}<Button appearance="subtle" icon={<ArrowSyncRegular />} disabled={loading} onClick={() => { setLoading(true); void load({ cancelled: false }); }}>Refresh</Button></div>} />
-    {error && <MessageBar intent="error"><MessageBarBody>{error}</MessageBarBody><MessageBarActions><Button appearance="transparent" onClick={() => { setLoading(true); void load({ cancelled: false }); }}>Try again</Button></MessageBarActions></MessageBar>}
+    <PageHeader title="Overview" actions={<div className={styles.headerActions}>{lastUpdated && <RefreshCountdown className={styles.generated} intervalMs={REFRESH_MS} lastRefreshedAt={new Date(lastUpdated)} refreshing={refreshing} />}{refreshing && overview && <Spinner size="extra-tiny" aria-label="Refreshing overview" />}<Button appearance="subtle" icon={<ArrowSyncRegular />} disabled={loading} onClick={() => { setLoading(true); runLoad(); }}>Refresh</Button></div>} />
+    {error && <MessageBar intent="error"><MessageBarBody>{error}</MessageBarBody><MessageBarActions><Button appearance="transparent" onClick={() => { setLoading(true); runLoad(); }}>Try again</Button></MessageBarActions></MessageBar>}
     {loading && !overview && <LoadingOverview />}
     {overview ? <>
       <section className={styles.opsCard} aria-labelledby="overview-operations">

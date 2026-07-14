@@ -375,6 +375,7 @@ function processEvent(
         messageId,
         content: cap(delta),
         streaming: true,
+        receivedAt: Date.now(),
       };
       return addStepToCurrentTurn(s, msg);
     }
@@ -392,6 +393,7 @@ function processEvent(
         messageId,
         content,
         streaming: false,
+        receivedAt: Date.now(),
       };
       return addStepToCurrentTurn(state, msg);
     }

@@ -1,4 +1,5 @@
 using LibGit2Sharp;
+using Microsoft.Extensions.Logging;
 using Agentweaver.AgentRuntime.Workflow;
 using Agentweaver.Api.Git;
 using Agentweaver.Api.Infrastructure;
@@ -15,11 +16,16 @@ public sealed class WorktreeOperationsAdapter : IWorktreeOperations
 {
     private readonly WorktreeManager _worktreeManager;
     private readonly RunStreamStore _streamStore;
+    private readonly ILogger<WorktreeOperationsAdapter> _logger;
 
-    public WorktreeOperationsAdapter(WorktreeManager worktreeManager, RunStreamStore streamStore)
+    public WorktreeOperationsAdapter(
+        WorktreeManager worktreeManager,
+        RunStreamStore streamStore,
+        ILogger<WorktreeOperationsAdapter> logger)
     {
         _worktreeManager = worktreeManager;
         _streamStore = streamStore;
+        _logger = logger;
     }
 
     public void ApplyPreparedWriteback(
@@ -106,6 +112,33 @@ public sealed class WorktreeOperationsAdapter : IWorktreeOperations
         }
         catch
         {
+            return null;
+        }
+    }
+
+    public (string WorktreePath, string BranchName)? TryReattachWorktree(
+        string repositoryPath, string originatingBranch, string runId)
+    {
+        if (!RunId.TryParse(runId, out var parsedRunId)) return null;
+
+        var branchName = WorktreeManager.BranchNameFor(parsedRunId);
+        try
+        {
+            // Reconstruction requires the durable run branch to still exist — if the branch itself is
+            // gone (not just the ephemeral worktree directory), there is nothing to recreate from and
+            // this is genuinely unrecoverable.
+            if (!_worktreeManager.BranchExists(repositoryPath, branchName)) return null;
+
+            var info = _worktreeManager.EnsureWorktree(repositoryPath, originatingBranch, parsedRunId);
+            return (info.WorktreePath, info.BranchName);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Failed to reattach worktree for run {RunId} in repository '{RepositoryPath}'",
+                runId,
+                repositoryPath);
             return null;
         }
     }

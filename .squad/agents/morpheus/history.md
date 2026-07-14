@@ -38,3 +38,14 @@ Evaluated all five shipped blueprints and live default-run behavior. Found moder
 
 ## 2026-07-13T23:59:00-07:00 — #269 Kata passthrough and #305 follow-up
 Implemented the #269 conditional AgentHost passthrough override only for in-cluster Kata mode, retaining bubblewrap elsewhere. Build was clean; staging validation remains pending. A follow-up Morpheus task is fixing #305's steering revision-child authoritative-branch mismatch.
+
+## 2026-07-14T02:35:00-07:00 — Batch merge: #269 live E2E validation, #227/#308/#309 steering fixes
+Scribe merged inbox notes: #269 Kata bwrap passthrough fix confirmed deployed and live-E2E validated on staging (no bwrap/mount-proc errors, build/test gate passed). #227 race-loser/arm-window redirect at review gate now settles terminal superseded instead of ghost queued. #308 coordinator assembly-recovery wedge and #309 human-steer redirect at parked assembly both fixed.
+
+## 2026-07-14T10:15:00-07:00
+Flakiness-recheck pass completed; confirmed BookClub/TrailMix regression tied to #267, evidence used to justify reopening #267.
+
+
+## 2026-07-14T10:15:00-07:00 (late arrival)
+#251 retag-forward residual risk found in the #303 fix; hardened release_ref_for_tag() with linear-ancestry guard + added ACR provenance stamping/verification script. Release-pipeline-critical, flagged for peer review.
+

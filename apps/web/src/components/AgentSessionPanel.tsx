@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import {
+  Badge,
   Button,
   MessageBar,
   MessageBarBody,
@@ -31,6 +32,8 @@ import { isSerializedWorkPlan } from '../timeline/coordinatorPlanFilter';
 import { deriveHumanTitle } from '../timeline/reducer';
 import { buildRunTimeline } from '../timeline/runTimelineSteps';
 import type { RunTimelineModel, RunTimelineStep } from '../timeline/runTimelineSteps';
+import { formatModelLabel } from '../utils/agentIdentity';
+import { isTerminalRunStatus } from '../utils/runStatus';
 import { AgentAvatar } from './AgentAvatar';
 import { AiCredits } from './AiCredits';
 import { AutomationToggle } from './AutomationToggle';
@@ -294,6 +297,10 @@ const useStyles = makeStyles({
     overflow: 'hidden',
     textOverflow: 'ellipsis',
     whiteSpace: 'nowrap',
+  },
+  modelBadge: {
+    flexShrink: 0,
+    color: tokens.colorNeutralForeground3,
   },
   metaText: {
     fontSize: tokens.fontSizeBase100,
@@ -747,6 +754,10 @@ export interface RunSessionTree {
   startedAt?: number;
   completedAt?: number;
   pendingApprovalCount?: number;
+  /** Model id/name assigned to this node's agent (subtask agent, coordinator, or assembly
+   *  stage), when known. Resolved from the run topology on the CoordinatorRunPage side.
+   *  Rendered as a subtle badge next to the agent name/avatar in the panel header (#282). */
+  model?: string;
   children: RunSessionTree[];
   depth: number;
 }
@@ -836,9 +847,6 @@ function mergeRunEvents(seed: RunStreamEvent[], live: RunStreamEvent[]): RunStre
 // Background run-status refresh cadence (#280) and the statuses at which it's safe to
 // stop polling — these are genuinely final and cannot transition back to an active state.
 const RUN_DETAIL_POLL_INTERVAL_MS = 4000;
-const RUN_DETAIL_POLL_TERMINAL_STATUSES = new Set([
-  'completed', 'failed', 'merged', 'declined', 'merge_failed', 'assemble_ready',
-]);
 const LAST_KNOWN_RUN_CACHE_LIMIT = 20;
 
 function readString(payload: Record<string, unknown>, keys: string[]): string | undefined {
@@ -1029,7 +1037,9 @@ function StatusGlyph({ status, className }: { status: string; className?: string
   return <CircleRegular className={className} />;
 }
 
-const TERMINAL_EMPTY_STATUSES = new Set(['completed', 'merged', 'confirmed', 'assemble_ready', 'failed', 'merge_failed', 'declined']);
+function isTerminalEmptyStatus(status: string): boolean {
+  return status === 'confirmed' || isTerminalRunStatus(status);
+}
 
 interface RaiVerdict {
   verdict?: RaiVerdictToken;
@@ -1180,7 +1190,7 @@ function EmptySessionStatusFallback({ item }: { item: RunSessionTree }) {
   const styles = useStyles();
   const label = statusLabel(item.status);
   const duration = formatNodeDuration(item.startedAt, item.completedAt);
-  const isTerminal = TERMINAL_EMPTY_STATUSES.has(item.status);
+  const isTerminal = isTerminalEmptyStatus(item.status);
 
   if (!isTerminal) {
     return <Text className={styles.emptyState}>No streamed messages yet for this session.</Text>;
@@ -1599,6 +1609,7 @@ function turnsToTimelineModel(turns: ConversationTurn[], eventCount: number): Ru
         messageId: row.key || `${turn.key}-row-${rowIndex}`,
         text: row.content,
         streaming: Boolean(turn.open && row.role === 'agent'),
+        timestamp: row.timestamp ?? Date.now(),
       }));
     return {
       id: turn.key || `turn-${index}`,
@@ -1744,7 +1755,12 @@ function coordinatorNarrationSteps(turns: ConversationTurn[]): RunTimelineStep[]
       if (row.role !== 'activity' || !row.key.startsWith('activity-')) continue;
       const sequenceMatch = /-(\d+)$/.exec(row.key);
       const sequence = sequenceMatch ? Number(sequenceMatch[1]) : 0;
-      const message = { messageId: row.key, text: row.content, streaming: false };
+      const message = {
+        messageId: row.key,
+        text: row.content,
+        streaming: false,
+        timestamp: row.timestamp ?? Date.now(),
+      };
       steps.push({
         id: `coord-narration-${row.key}`,
         intent: 'Coordinator',
@@ -2059,13 +2075,13 @@ export function AgentSessionPanel({
     const cached = lastKnownByRunRef.current.get(selectedRunId);
 
     const startRunDetailPolling = (initialStatus?: string | null) => {
-      if (initialStatus && RUN_DETAIL_POLL_TERMINAL_STATUSES.has(initialStatus)) return;
+      if (initialStatus && isTerminalRunStatus(initialStatus)) return;
       intervalId = setInterval(() => {
         apiClient.getRun(selectedRunId)
           .then((detail) => {
             if (cancelled) return;
             setRunDetail(detail);
-            if (RUN_DETAIL_POLL_TERMINAL_STATUSES.has(detail.status)) {
+            if (isTerminalRunStatus(detail.status)) {
               clearInterval(intervalId);
             }
           })
@@ -2304,6 +2320,16 @@ export function AgentSessionPanel({
                       <Text className={styles.agentName}>{selectedItem.label}</Text>
                       <Text className={styles.agentRole}>{selectedIdentity.displayName}</Text>
                     </div>
+                    {selectedItem.model && (
+                      <Badge
+                        appearance="outline"
+                        size="small"
+                        className={styles.modelBadge}
+                        title={selectedItem.model}
+                      >
+                        {formatModelLabel(selectedItem.model)}
+                      </Badge>
+                    )}
                   </div>
                   <Text className={styles.metaText}>
                     {formatStartedMeta(runDetail?.started_at ?? undefined, runDetail?.status ?? selectedItem.status)}

@@ -20,6 +20,12 @@ vi.mock('../api/apiClient', () => ({
   },
 }));
 
+// Pagination contract (`.squad/decisions/inbox/niobe-pagination-contract.md`): `listProjects`
+// now resolves a `{ items, page, page_size, total_count, total_pages }` envelope.
+function projectsPage(items: Project[]) {
+  return { items, page: 1, page_size: 100, total_count: items.length, total_pages: 1 } as never;
+}
+
 function makeProject(id: string, name: string): Project {
   return {
     project_id: id,
@@ -102,10 +108,10 @@ function renderSwitcherAt(pathname: string, projectId: string) {
 
 describe('ProjectSwitcher — switching navigates to the equivalent page', () => {
   it('navigates to the same category under the selected project', async () => {
-    vi.mocked(apiClient.listProjects).mockResolvedValue([
+    vi.mocked(apiClient.listProjects).mockResolvedValue(projectsPage([
       makeProject('A', 'Alpha'),
       makeProject('B', 'Bravo'),
-    ]);
+    ]));
 
     renderSwitcherAt('/projects/A/flow', 'A');
 
@@ -121,10 +127,10 @@ describe('ProjectSwitcher — switching navigates to the equivalent page', () =>
   });
 
   it('maps a removed run page route to the selected project home', async () => {
-    vi.mocked(apiClient.listProjects).mockResolvedValue([
+    vi.mocked(apiClient.listProjects).mockResolvedValue(projectsPage([
       makeProject('A', 'Alpha'),
       makeProject('B', 'Bravo'),
-    ]);
+    ]));
 
     renderSwitcherAt('/projects/A/runs/run-9/execution/ex-1', 'A');
 

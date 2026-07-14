@@ -1,6 +1,7 @@
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
 import { formatApiErrorMessage } from '../api/errors';
+import { isTerminalRunStatus, normalizeRunStatus } from '../utils/runStatus';
 import { useEffect, useState } from 'react';
 import type {
   CommitResponse,
@@ -21,8 +22,6 @@ export const FILTERS = [
 ] as const;
 
 export type FilterValue = (typeof FILTERS)[number]['value'];
-
-export const HISTORICAL_STATUSES = new Set(['merged', 'declined', 'merge_failed', 'failed']);
 
 /**
  * Optional adapter that redirects the artifact browser at a non-standard run's artifacts and review
@@ -97,8 +96,9 @@ export function useArtifactBrowser(
   adapter?: ArtifactBrowserAdapter,
   initialTab: 'changes' | 'files' = 'changes',
 ): ArtifactBrowserState {
-  const isHistorical = HISTORICAL_STATUSES.has(runStatus);
-  const isLive = runStatus === 'in_progress';
+  const normalizedRunStatus = normalizeRunStatus(runStatus);
+  const isHistorical = isTerminalRunStatus(normalizedRunStatus);
+  const isLive = normalizedRunStatus === 'in_progress';
 
   const [filter, setFilter] = useState<FilterValue>('all');
   const [files, setFiles] = useState<WorkspaceFileEntry[]>([]);
@@ -134,10 +134,10 @@ export function useArtifactBrowser(
   // in_progress again. Clear any stale requestChangesResult so it does not
   // suppress the review bar when the second review gate arrives.
   useEffect(() => {
-    if (runStatus === 'in_progress') {
+    if (normalizedRunStatus === 'in_progress') {
       setRequestChangesResult(null); // eslint-disable-line react-hooks/set-state-in-effect
     }
-  }, [runStatus]);
+  }, [normalizedRunStatus]);
 
   // Clear all local state when runId changes so stale data from the previous run
   // is never visible while the new fetch is in flight.

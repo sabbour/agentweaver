@@ -103,6 +103,7 @@ import type { ExecutorDef, ExecutorState, NodeDetailRow, StepStatus, WorkflowNod
 import type { ArtifactBrowserAdapter } from '../hooks/useArtifactBrowser';
 import type { CoordinatorTopologyState, TopologyNodeState } from '../state/topologyReducer';
 import type { NodeSizeHint } from '../utils/dagLayout';
+import { isTerminalRunStatus } from '../utils/runStatus';
 import type { Edge, Node, NodeProps } from '@xyflow/react';
 // ---------------------------------------------------------------------------
 // Subtask-card clicks open the docked agent-session panel instead of navigating away.
@@ -385,7 +386,6 @@ interface CoordinatorRunViewState {
   canToggleAutomation: boolean;
 }
 
-const RUN_LEVEL_TERMINAL = new Set<string>(['completed', 'failed', 'blocked', 'declined', 'merged', 'merge_failed']);
 const RUN_LEVEL_RETRYABLE = new Set<string>(['failed', 'merge_failed']);
 
 // coordinator.assembly_* event type -> phase. These event types may not be emitted
@@ -820,15 +820,16 @@ function deriveCoordinatorRunViewState(
   }
 
   const status = runLevelStatus ? String(runLevelStatus) : undefined;
-  if (status && RUN_LEVEL_TERMINAL.has(status)) {
+  if (isTerminalRunStatus(status)) {
+    const terminalStatus = status ?? 'failed';
     const reviewPreserved = orch.sourceLabel.includes('coordinator.assembly_review_preserved');
     return {
-      bucket: bucketForRunStatus(status),
-      label: reviewPreserved ? 'Review preserved' : runStatusLabel(status),
+      bucket: bucketForRunStatus(terminalStatus),
+      label: reviewPreserved ? 'Review preserved' : runStatusLabel(terminalStatus),
       reason: orch.reason ?? (reviewPreserved ? 'The run ended, but the assembly review artifact is still available to inspect.' : undefined),
       sourceLabel: reviewPreserved ? orch.sourceLabel : 'run status field',
       terminal: true,
-      canRetry: RUN_LEVEL_RETRYABLE.has(status),
+      canRetry: RUN_LEVEL_RETRYABLE.has(terminalStatus),
       canStop: false,
       canToggleAutomation: false,
     };
@@ -2407,7 +2408,7 @@ export function CoordinatorRunPage() {
       }
       // Stop polling when the run-level status is already terminal even if the orchestration
       // coordinator_status field is absent (e.g., a run interrupted before emitting a terminal status).
-      if (detail?.status && RUN_LEVEL_TERMINAL.has(String(detail.status))) return;
+      if (isTerminalRunStatus(detail?.status ? String(detail.status) : undefined)) return;
       const phase = normalizePhase(statusField) !== 'unknown'
         ? normalizePhase(statusField)
         : normalizePhase(wpStatus);
@@ -3110,6 +3111,7 @@ export function CoordinatorRunPage() {
       isCoordinator: boolean;
       isSubtask: boolean;
       roleKey?: string;
+      model?: string;
     }>();
 
     for (const node of candidates) {
@@ -3132,6 +3134,7 @@ export function CoordinatorRunPage() {
           isCoordinator: false,
           isSubtask: true,
           roleKey: 'subtask',
+          model: data.model,
         });
       } else {
         const data = node.data as WorkflowNodeData;
@@ -3171,6 +3174,7 @@ export function CoordinatorRunPage() {
           isCoordinator: isCoordinatorNode,
           isSubtask: false,
           roleKey,
+          model: data.modelId,
         });
       }
     }
@@ -3214,6 +3218,7 @@ export function CoordinatorRunPage() {
         roleKey: meta.roleKey,
         isSubtask: meta.isSubtask,
         isCoordinator: meta.isCoordinator,
+        model: meta.model,
         // Row indent depth is recomputed from real nesting by flattenRunTree; this seed is unused.
         depth: 0,
       };

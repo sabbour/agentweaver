@@ -22,8 +22,15 @@ vi.mock('../api/apiClient', () => ({
     getProject: vi.fn(),
     checkHealth: vi.fn(),
     getGitHubAuthStatus: vi.fn(),
+    getNotifications: vi.fn(),
   },
 }));
+
+// Pagination contract (`.squad/decisions/inbox/niobe-pagination-contract.md`): `listProjects`
+// now resolves a `{ items, page, page_size, total_count, total_pages }` envelope.
+function projectsPage(items: Project[]) {
+  return { items, page: 1, page_size: 100, total_count: items.length, total_pages: 1 } as never;
+}
 
 const LAST_ACTIVE_KEY = 'agentweaver:last-active-project-id';
 
@@ -74,7 +81,7 @@ function renderShellAt(path: string) {
 beforeEach(() => {
   vi.clearAllMocks();
   localStorage.clear();
-  vi.mocked(apiClient.listProjects).mockResolvedValue([]);
+  vi.mocked(apiClient.listProjects).mockResolvedValue(projectsPage([]));
   vi.mocked(apiClient.getProject).mockResolvedValue(makeProject('proj-1', 'Project One'));
   vi.mocked(apiClient.checkHealth).mockResolvedValue(true);
   vi.mocked(apiClient.getGitHubAuthStatus).mockResolvedValue({ status: 'signed_in' } as never);
@@ -178,7 +185,7 @@ describe('AppShell navigation', () => {
   });
 
   it('keeps the persisted project in context on the global Overview route', async () => {
-    vi.mocked(apiClient.listProjects).mockResolvedValue([makeProject('proj-9', 'Persisted Proj')]);
+    vi.mocked(apiClient.listProjects).mockResolvedValue(projectsPage([makeProject('proj-9', 'Persisted Proj')]));
     localStorage.setItem(LAST_ACTIVE_KEY, 'proj-9');
 
     renderShellAt('/overview');
@@ -197,7 +204,7 @@ describe('AppShell navigation', () => {
   });
 
   it('clears a deleted persisted project gracefully on a global route', async () => {
-    vi.mocked(apiClient.listProjects).mockResolvedValue([]);
+    vi.mocked(apiClient.listProjects).mockResolvedValue(projectsPage([]));
     localStorage.setItem(LAST_ACTIVE_KEY, 'gone');
 
     renderShellAt('/overview');

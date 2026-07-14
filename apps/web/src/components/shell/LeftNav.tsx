@@ -7,6 +7,7 @@ import {
 import { GLOBAL_NAV_ITEMS, NAV_SECTIONS, navItemPath } from './navConfig';
 import { useAppVersion } from '../../hooks/useAppVersion';
 import { GitHubSignIn } from '../GitHubSignIn';
+import { NotificationBell } from './NotificationBell';
 import { ProjectSwitcher } from './ProjectSwitcher';
 import { StatusDot } from './StatusDot';
 import { useConsolePanel } from './ConsolePanelContext';
@@ -147,14 +148,17 @@ export function LeftNav({ projectId, activeKey, pathname, isFallbackProject, onF
           <img src="/agentweaver.png" alt="" className="aw-rail-brand__icon" />
           {!collapsed && <span className="aw-rail-brand__label">Agentweaver</span>}
         </Link>
-        <Button
-          appearance="subtle"
-          icon={collapsed ? <PanelLeftExpand24Regular /> : <PanelLeftContract24Regular />}
-          aria-label={collapsed ? 'Expand navigation' : 'Collapse navigation'}
-          aria-expanded={!collapsed}
-          onClick={toggleCollapsed}
-          className="aw-rail-collapse-btn"
-        />
+        <div className="aw-rail-chrome__actions">
+          <NotificationBell />
+          <Button
+            appearance="subtle"
+            icon={collapsed ? <PanelLeftExpand24Regular /> : <PanelLeftContract24Regular />}
+            aria-label={collapsed ? 'Expand navigation' : 'Collapse navigation'}
+            aria-expanded={!collapsed}
+            onClick={toggleCollapsed}
+            className="aw-rail-collapse-btn"
+          />
+        </div>
       </div>
 
       {/* Header slot: project switcher + operator dock trigger (hidden when collapsed) */}

@@ -131,9 +131,12 @@ public sealed class CoordinatorSubtaskTaskTests
     }
 
     [Fact]
-    public void DoSubtasksConflict_EmptyStructuredOutputsConflictWithDeclaredWriter()
+    public void DoSubtasksConflict_ValidEmptyStructuredOutputs_DoesNotConflictWithDeclaredWriter()
     {
-        var undeclared = CreateSubtask(
+        // #261: a literal `[]` is a genuine declaration that this subtask writes no files (e.g. a
+        // read-only investigation subtask) — it must NOT be treated the same as untrustworthy
+        // (Invalid) metadata, so it should not conflict with a sibling that declares real outputs.
+        var readOnly = CreateSubtask(
             "execution",
             "Scope prose mentions unrelated.cs but declares no outputs.",
             declaredOutputPaths: []);
@@ -142,7 +145,18 @@ public sealed class CoordinatorSubtaskTaskTests
             "Update declared.cs.",
             declaredOutputPaths: ["declared.cs"]);
 
-        CoordinatorAssemblyService.DoSubtasksConflict(undeclared, declared).Should().BeTrue();
+        CoordinatorOrchestratorExecutor.ParseDeclaredOutputPaths(readOnly.DeclaredOutputPathsJson).State
+            .Should().Be(CoordinatorOrchestratorExecutor.DeclaredOutputPathsParseState.ValidEmpty);
+        CoordinatorAssemblyService.DoSubtasksConflict(readOnly, declared).Should().BeFalse();
+    }
+
+    [Fact]
+    public void DoSubtasksConflict_ValidEmptyStructuredOutputs_DoesNotConflictWithAnotherEmpty()
+    {
+        var readOnly1 = CreateSubtask("execution", declaredOutputPaths: []);
+        var readOnly2 = CreateSubtask("execution", declaredOutputPaths: []);
+
+        CoordinatorAssemblyService.DoSubtasksConflict(readOnly1, readOnly2).Should().BeFalse();
     }
 
     [Theory]
@@ -150,7 +164,7 @@ public sealed class CoordinatorSubtaskTaskTests
     [InlineData("[\"\", \"  \"]")]
     [InlineData("[null]")]
     [InlineData("[123]")]
-    public void DoSubtasksConflict_InvalidStructuredOutputsBehaveLikeEmptyList(string json)
+    public void DoSubtasksConflict_InvalidStructuredOutputsFailClosed(string json)
     {
         var invalid = CreateSubtask("execution");
         invalid.DeclaredOutputPathsJson = json;
@@ -159,7 +173,25 @@ public sealed class CoordinatorSubtaskTaskTests
             declaredOutputPaths: ["docs/real.md"]);
 
         CoordinatorOrchestratorExecutor.DeserializeDeclaredOutputPaths(json).Should().BeEmpty();
+        CoordinatorOrchestratorExecutor.ParseDeclaredOutputPaths(json).State
+            .Should().Be(CoordinatorOrchestratorExecutor.DeclaredOutputPathsParseState.Invalid);
         CoordinatorAssemblyService.DoSubtasksConflict(invalid, declared).Should().BeTrue();
+    }
+
+    [Theory]
+    [InlineData("{")]
+    [InlineData("[\"\", \"  \"]")]
+    [InlineData("[null]")]
+    [InlineData("[123]")]
+    public void DoSubtasksConflict_InvalidStructuredOutputs_StillConflictsWithGenuinelyEmptyOutputs(string json)
+    {
+        // Invalid metadata is untrustworthy and must fail closed even against a subtask that
+        // genuinely declared no outputs — Invalid always wins over ValidEmpty (#261).
+        var invalid = CreateSubtask("execution");
+        invalid.DeclaredOutputPathsJson = json;
+        var readOnly = CreateSubtask("execution", declaredOutputPaths: []);
+
+        CoordinatorAssemblyService.DoSubtasksConflict(invalid, readOnly).Should().BeTrue();
     }
 
     [Fact]
@@ -178,6 +210,221 @@ public sealed class CoordinatorSubtaskTaskTests
             .Should().Equal("docs/real.md");
         CoordinatorAssemblyService.DoSubtasksConflict(mixed, matching).Should().BeTrue();
         CoordinatorAssemblyService.DoSubtasksConflict(mixed, unrelated).Should().BeFalse();
+    }
+
+    // =========================================================================
+    // #261: ParseDeclaredOutputPaths tri-state coverage
+    // =========================================================================
+
+    [Fact]
+    public void ParseDeclaredOutputPaths_LiteralEmptyArray_IsValidEmpty()
+    {
+        var result = CoordinatorOrchestratorExecutor.ParseDeclaredOutputPaths("[]");
+
+        result.State.Should().Be(CoordinatorOrchestratorExecutor.DeclaredOutputPathsParseState.ValidEmpty);
+        result.Paths.Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData("null")]
+    [InlineData("{")]
+    [InlineData("{}")]
+    [InlineData("[\"\", \"  \"]")]
+    [InlineData("[null]")]
+    [InlineData("[123]")]
+    [InlineData("[\"/\"]")]
+    [InlineData("[\"///\"]")]
+    [InlineData("[\"\\\\\"]")]
+    [InlineData("[\"/docs/a.md\"]")]
+    [InlineData("[\".\"]")]
+    [InlineData("[\"./\"]")]
+    [InlineData("[\"/.\"]")]
+    [InlineData("[\"..\"]")]
+    [InlineData("[\"src/..\"]")]
+    [InlineData("[\"../outside.txt\"]")]
+    [InlineData("[\"a/b/../../../outside.txt\"]")]
+    [InlineData("[\"foo/../../bar\"]")]
+    [InlineData("[\"C:\\\\outside.txt\"]")]
+    [InlineData("[\"C:/outside.txt\"]")]
+    public void ParseDeclaredOutputPaths_MalformedOrAllInvalidEntries_IsInvalid(string? json)
+    {
+        var result = CoordinatorOrchestratorExecutor.ParseDeclaredOutputPaths(json);
+
+        result.State.Should().Be(CoordinatorOrchestratorExecutor.DeclaredOutputPathsParseState.Invalid);
+        result.Paths.Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData("[\"/\"]")]
+    [InlineData("[\"///\"]")]
+    [InlineData("[\"\\\\\"]")]
+    [InlineData("[\"/docs/a.md\"]")]
+    [InlineData("[\".\"]")]
+    [InlineData("[\"./\"]")]
+    [InlineData("[\"/.\"]")]
+    [InlineData("[\"..\"]")]
+    [InlineData("[\"src/..\"]")]
+    [InlineData("[\"../outside.txt\"]")]
+    [InlineData("[\"a/b/../../../outside.txt\"]")]
+    [InlineData("[\"foo/../../bar\"]")]
+    [InlineData("[\"C:\\\\outside.txt\"]")]
+    [InlineData("[\"C:/outside.txt\"]")]
+    public void DoSubtasksConflict_NormalizationToNoConcretePaths_FailsClosed(string json)
+    {
+        var invalid = CreateSubtask("execution");
+        invalid.DeclaredOutputPathsJson = json;
+        var declared = CreateSubtask(
+            "execution",
+            declaredOutputPaths: ["docs/real.md"]);
+
+        CoordinatorOrchestratorExecutor.DeserializeDeclaredOutputPaths(json).Should().BeEmpty();
+        CoordinatorOrchestratorExecutor.ParseDeclaredOutputPaths(json).State
+            .Should().Be(CoordinatorOrchestratorExecutor.DeclaredOutputPathsParseState.Invalid);
+        CoordinatorAssemblyService.DoSubtasksConflict(invalid, declared).Should().BeTrue();
+    }
+
+    [Fact]
+    public void ParseDeclaredOutputPaths_ValidNonEmptyArray_IsValidWithPaths()
+    {
+        var result = CoordinatorOrchestratorExecutor.ParseDeclaredOutputPaths("[\"docs/a.md\", \"src/b.cs\"]");
+
+        result.State.Should().Be(CoordinatorOrchestratorExecutor.DeclaredOutputPathsParseState.ValidWithPaths);
+        result.Paths.Should().Equal("docs/a.md", "src/b.cs");
+    }
+
+    [Fact]
+    public void ParseDeclaredOutputPaths_MixedNullAndValidEntry_IsValidWithPaths_NotInvalid()
+    {
+        // At least one entry survived filtering, so this must NOT be treated the same as fully
+        // malformed metadata (#261 preserves rev8's partial-recovery behavior for mixed arrays).
+        var result = CoordinatorOrchestratorExecutor.ParseDeclaredOutputPaths("[null, \"docs/real.md\"]");
+
+        result.State.Should().Be(CoordinatorOrchestratorExecutor.DeclaredOutputPathsParseState.ValidWithPaths);
+        result.Paths.Should().Equal("docs/real.md");
+    }
+
+    // =========================================================================
+    // #261: unified path normalization at the parsing boundary
+    // =========================================================================
+
+    [Theory]
+    [InlineData("[\"src\\\\foo.cs\"]", "src/foo.cs")] // backslash -> forward slash
+    [InlineData("[\" docs/a.md \"]", "docs/a.md")]     // surrounding whitespace trimmed
+    [InlineData("[\"src/./foo.txt\"]", "src/foo.txt")] // dot segments normalized without rejecting nested paths
+    [InlineData("[\"src/../foo.txt\"]", "foo.txt")]     // parent segment collapses to a real repo-relative file
+    [InlineData("[\"docs/a.md/\"]", "docs/a.md/")]      // trailing slash is left as-is (not a path segment concern here)
+    [InlineData("[\"foo..bar\"]", "foo..bar")]          // literal dot characters are preserved
+    [InlineData("[\"...\"]", "...")]                    // literal triple-dot name is preserved
+    public void ParseDeclaredOutputPaths_NormalizesSurvivingPaths(string json, string expected)
+    {
+        var result = CoordinatorOrchestratorExecutor.ParseDeclaredOutputPaths(json);
+
+        result.State.Should().Be(CoordinatorOrchestratorExecutor.DeclaredOutputPathsParseState.ValidWithPaths);
+        result.Paths.Should().Equal(expected);
+    }
+
+    [Fact]
+    public void ParseDeclaredOutputPaths_DeduplicatesCaseInsensitivelyAfterNormalization()
+    {
+        var result = CoordinatorOrchestratorExecutor.ParseDeclaredOutputPaths(
+            "[\"docs\\\\A.MD\", \" docs/a.md \", \"DOCS/a.md\"]");
+
+        result.State.Should().Be(CoordinatorOrchestratorExecutor.DeclaredOutputPathsParseState.ValidWithPaths);
+        result.Paths.Should().ContainSingle();
+    }
+
+    [Theory]
+    [InlineData("[\"docs/real.md\", \"../outside.txt\"]")]
+    [InlineData("[\"a.txt\", \"C:/outside.txt\"]")]
+    [InlineData("[\"a.txt\", \"\\\\\\\\server\\\\share\\\\x\"]")]
+    [InlineData("[\".\", \"src/./foo.txt\", \"./\"]")]
+    public void ParseDeclaredOutputPaths_MixedValidAndRejectedEntry_IsInvalid(string json)
+    {
+        var result = CoordinatorOrchestratorExecutor.ParseDeclaredOutputPaths(json);
+
+        result.State.Should().Be(CoordinatorOrchestratorExecutor.DeclaredOutputPathsParseState.Invalid);
+        result.Paths.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void DoSubtasksConflict_BackslashAndWhitespaceVariantsStillMatchAfterNormalization()
+    {
+        var subtask1 = CreateSubtask("execution");
+        subtask1.DeclaredOutputPathsJson = "[\"src\\\\foo.cs\"]";
+        var subtask2 = CreateSubtask("execution");
+        subtask2.DeclaredOutputPathsJson = "[\" src/foo.cs \"]";
+
+        CoordinatorAssemblyService.DoSubtasksConflict(subtask1, subtask2).Should().BeTrue();
+    }
+
+    [Theory]
+    [InlineData("[\"docs/real.md\", \"../outside.txt\"]")]
+    [InlineData("[\"a.txt\", \"C:/outside.txt\"]")]
+    [InlineData("[\"a.txt\", \"\\\\\\\\server\\\\share\\\\x\"]")]
+    [InlineData("[\".\", \"src/./foo.txt\"]")]
+    public void DoSubtasksConflict_MixedValidAndRejectedEntry_FailsClosed(string json)
+    {
+        var mixed = CreateSubtask("execution");
+        mixed.DeclaredOutputPathsJson = json;
+        var matching = CreateSubtask(
+            "execution",
+            declaredOutputPaths: ["docs/real.md"]);
+
+        CoordinatorOrchestratorExecutor.ParseDeclaredOutputPaths(mixed.DeclaredOutputPathsJson).State
+            .Should().Be(CoordinatorOrchestratorExecutor.DeclaredOutputPathsParseState.Invalid);
+        CoordinatorAssemblyService.DoSubtasksConflict(mixed, matching).Should().BeTrue();
+    }
+
+    // =========================================================================
+    // #261: shared matcher unification between runtime conflict detection and the persisted
+    // dependency-edge builder (suffix/bare-filename matches now produce a deterministic edge too).
+    // =========================================================================
+
+    [Fact]
+    public void FindDeclaredOutputConflictEdges_SuffixMatchingPaths_ProduceDeterministicEdge()
+    {
+        var bare = CreateSubtask("execution", declaredOutputPaths: ["foo.cs"], id: 20);
+        var nested = CreateSubtask("execution", declaredOutputPaths: ["src/foo.cs"], id: 21);
+
+        var edges = CoordinatorDispatchService.FindDeclaredOutputConflictEdges(
+            [bare, nested],
+            new HashSet<(int, int)>());
+
+        edges.Should().ContainSingle().Which.Should().Be((21, 20));
+        // The same pair must also be flagged as conflicting at runtime — this is the exact scenario
+        // #261 called out as inconsistent (edge builder used exact match only; runtime used
+        // suffix/filename matching too).
+        CoordinatorAssemblyService.DoSubtasksConflict(bare, nested).Should().BeTrue();
+    }
+
+    [Fact]
+    public void FindDeclaredOutputConflictEdges_InvalidStructuredOutputs_ContributeNoEdges()
+    {
+        var invalid = CreateSubtask("execution", id: 30);
+        invalid.DeclaredOutputPathsJson = "[null]";
+        var declared = CreateSubtask("execution", declaredOutputPaths: ["docs/real.md"], id: 31);
+
+        var edges = CoordinatorDispatchService.FindDeclaredOutputConflictEdges(
+            [invalid, declared],
+            new HashSet<(int, int)>());
+
+        edges.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void FindDeclaredOutputConflictEdges_ValidEmptyStructuredOutputs_ContributeNoEdges()
+    {
+        var readOnly = CreateSubtask("execution", declaredOutputPaths: [], id: 40);
+        var declared = CreateSubtask("execution", declaredOutputPaths: ["docs/real.md"], id: 41);
+
+        var edges = CoordinatorDispatchService.FindDeclaredOutputConflictEdges(
+            [readOnly, declared],
+            new HashSet<(int, int)>());
+
+        edges.Should().BeEmpty();
     }
 
     [Fact]

@@ -23,6 +23,18 @@ vi.mock('../api/apiClient', () => ({
   },
 }));
 
+// Pagination contract (`.squad/decisions/inbox/niobe-pagination-contract.md`): `listProjects` and
+// `getProjectRuns` now resolve a `{ items, page, page_size, total_count, total_pages }` envelope.
+function page<T>(items: T[], pageNumber = 1, pageSize = 100, totalCount = items.length) {
+  return {
+    items,
+    page: pageNumber,
+    page_size: pageSize,
+    total_count: totalCount,
+    total_pages: Math.max(1, Math.ceil(totalCount / Math.max(1, pageSize))),
+  } as never;
+}
+
 const dto: OverviewDto = {
   generated_utc: new Date().toISOString(),
   at_a_glance: { in_flight: 2, queued_work: 5, done_today: 3, active_projects: 1, health: 'healthy' },
@@ -85,9 +97,9 @@ afterEach(() => cleanup());
 describe('OverviewPage', () => {
   it('renders redesigned overview sections with real data', async () => {
     vi.mocked(apiClient.getOverview).mockResolvedValue(dto);
-    vi.mocked(apiClient.listProjects).mockResolvedValue([project]);
+    vi.mocked(apiClient.listProjects).mockResolvedValue(page([project]));
     vi.mocked(apiClient.getTeam).mockResolvedValue({ project_name: 'Demo', universe: 'main', members: [{ name: 'Ada', role_title: 'Engineer', charter_path: '', status: 'active', default_model: 'gpt-5', is_named: true, is_built_in: false }], layout: 'canonical', migration_available: false });
-    vi.mocked(apiClient.getProjectRuns).mockResolvedValue([{ workflow_run_id: 'wr1', execution_id: 'r1', task: 'Run completed', status: 'completed', started_at: new Date().toISOString() }]);
+    vi.mocked(apiClient.getProjectRuns).mockResolvedValue(page([{ workflow_run_id: 'wr1', execution_id: 'r1', task: 'Run completed', status: 'completed', started_at: new Date().toISOString() }]));
     vi.mocked(apiClient.getBoard).mockResolvedValue({ project_id: 'p1', workflow_stages_available: true, columns: [{ id: 'backlog', kind: 'intake', label: 'Backlog', cards: [{ kind: 'task', task_id: 't1', title: 'Issue', description: null, state: 'backlog', order_key: '1', captured_by: 'Ada', created_at: new Date().toISOString() }] }] });
     vi.mocked(apiClient.getProjectMetrics).mockResolvedValue(metrics);
 
@@ -113,9 +125,9 @@ describe('OverviewPage', () => {
         { project_id: 'p1', project_name: 'Demo', label: 'Run failed', kind: 'failed', timestamp_utc: new Date().toISOString() },
       ],
     });
-    vi.mocked(apiClient.listProjects).mockResolvedValue([project]);
+    vi.mocked(apiClient.listProjects).mockResolvedValue(page([project]));
     vi.mocked(apiClient.getTeam).mockResolvedValue({ project_name: 'Demo', universe: 'main', members: [], layout: 'canonical', migration_available: false });
-    vi.mocked(apiClient.getProjectRuns).mockResolvedValue([]);
+    vi.mocked(apiClient.getProjectRuns).mockResolvedValue(page([]));
     vi.mocked(apiClient.getBoard).mockResolvedValue({ project_id: 'p1', workflow_stages_available: true, columns: [] });
     vi.mocked(apiClient.getProjectMetrics).mockResolvedValue(metrics);
 
@@ -128,5 +140,46 @@ describe('OverviewPage', () => {
       expect(hrefs).toContain('/projects');
       expect(hrefs).not.toContain('/diagnostics');
     });
+  });
+
+  it('pages through projects so recent selection still considers items beyond the first 100', async () => {
+    const olderProjects = Array.from({ length: 100 }, (_, index) => ({
+      ...project,
+      project_id: `p${index + 1}`,
+      name: `Project ${index + 1}`,
+      updated_at: '2026-01-01T00:00:00Z',
+    }));
+    const newestProject = {
+      ...project,
+      project_id: 'p101',
+      name: 'Project 101',
+      updated_at: '2026-07-10T00:00:00Z',
+    };
+
+    vi.mocked(apiClient.getOverview).mockResolvedValue({
+      ...dto,
+      active_projects: [],
+      recent_activity: [],
+    });
+    vi.mocked(apiClient.listProjects).mockImplementation(async (options) => {
+      const pageNumber = options?.page ?? 1;
+      return page(
+        pageNumber === 1 ? olderProjects : [newestProject],
+        pageNumber,
+        options?.pageSize ?? 100,
+        101,
+      );
+    });
+    vi.mocked(apiClient.getTeam).mockResolvedValue({ project_name: 'Demo', universe: 'main', members: [], layout: 'canonical', migration_available: false });
+    vi.mocked(apiClient.getProjectRuns).mockResolvedValue(page([]));
+    vi.mocked(apiClient.getBoard).mockResolvedValue({ project_id: 'p1', workflow_stages_available: true, columns: [] });
+    vi.mocked(apiClient.getProjectMetrics).mockResolvedValue(metrics);
+
+    renderPage();
+
+    await waitFor(() => expect(screen.getAllByText('Project 101').length).toBeGreaterThan(0));
+    expect(
+      vi.mocked(apiClient.listProjects).mock.calls.some(([options]) => options?.page === 2),
+    ).toBe(true);
   });
 });

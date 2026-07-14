@@ -117,6 +117,104 @@ public sealed class AssemblyBuildTestShellGuardTests : IDisposable
     }
 
     [Fact]
+    public async Task Controlled_run_command_arms_watchdog_deadline_above_executor_timeout_by_grace()
+    {
+        // #313: the streaming watchdog's shell hard-deadline must be armed strictly LATER than the
+        // executor's own command timeout so PassthroughExecutor.CancelAfter fires first and returns
+        // a graceful timed_out:true; the watchdog only backstops a genuinely hung process. Arming
+        // both at the same value made the watchdog win the race and fatally abort the build/test turn.
+        using var tracker = new ShellExecutionTracker();
+        int observedCommandTimeoutMs = 0;
+        ShellExecutionSnapshot? observedSnapshot = null;
+        var executor = new CapturingExecutor(cmd =>
+        {
+            observedCommandTimeoutMs = cmd.TimeoutMs;
+            observedSnapshot = tracker.ActiveExecution;
+        });
+        var tool = CopilotAIAgent.BuildSessionConfigTools(
+            BuildContext(executor, tracker),
+            includeControlledRunCommand: true).Single(t => t.Name == "run_command");
+
+        const int requestedMs = 120_000; // 2 min — below the 10-min cap, no floor in this context
+        await tool.InvokeAsync(new AIFunctionArguments(new Dictionary<string, object?>
+        {
+            ["command"] = "dotnet test",
+            ["timeout_ms"] = requestedMs,
+        }));
+
+        observedCommandTimeoutMs.Should().Be(requestedMs,
+            "the executor's own timeout stays exactly what the caller asked for");
+        observedSnapshot.Should().NotBeNull();
+        (observedSnapshot!.Deadline - observedSnapshot.StartedAt).Should().Be(
+            TimeSpan.FromMilliseconds(requestedMs) + SandboxToolOptions.WatchdogTimeoutGrace,
+            "the watchdog deadline must exceed the executor timeout by exactly the grace period");
+    }
+
+    [Fact]
+    public async Task Controlled_run_command_lets_executor_timeout_win_before_watchdog_grace()
+    {
+        // #313 end-to-end: a command that runs LONGER than the caller-supplied timeout but well
+        // within the watchdog grace must surface the executor's recoverable timed_out:true, never a
+        // fatal shell_execution_timeout. (Direct tool invocation returns the executor result; the
+        // watchdog deadline is proven separately to sit past this point.)
+        var executor = SandboxExecutorFactory.CreatePassthrough();
+        using var tracker = new ShellExecutionTracker();
+        var tool = CopilotAIAgent.BuildSessionConfigTools(
+            BuildContext(executor, tracker),
+            includeControlledRunCommand: true).Single(t => t.Name == "run_command");
+
+        var sleepLongerThanTimeout = OperatingSystem.IsWindows()
+            ? "ping -n 4 127.0.0.1 >NUL"   // ~3s, exceeds the 300ms timeout
+            : "sleep 3";
+        var result = await tool.InvokeAsync(new AIFunctionArguments(new Dictionary<string, object?>
+        {
+            ["command"] = sleepLongerThanTimeout,
+            ["timeout_ms"] = 300, // executor expires at 300ms; watchdog grace is 60s away
+        }));
+
+        result?.ToString().Should().Contain("timed_out: true",
+            "the executor's own timeout must win and return a recoverable result, not throw");
+        tracker.ActiveExecution.Should().BeNull("the lease is released after the command returns");
+    }
+
+    [Fact]
+    public async Task Controlled_run_command_floors_caller_timeout_to_the_build_test_minimum()
+    {
+        // #313 floor: the model's optimistic 3-min timeout_ms is the observed trigger. In the
+        // Build/Test context (MinimumTimeoutMs = 10 min) a sub-floor caller timeout must be clamped
+        // up so a legitimate build isn't killed at 3 minutes.
+        using var tracker = new ShellExecutionTracker();
+        int observedCommandTimeoutMs = 0;
+        var executor = new CapturingExecutor(cmd => observedCommandTimeoutMs = cmd.TimeoutMs);
+        var context = new SandboxToolContext(
+            AgentId: "agent",
+            WorkingDirectory: _root,
+            SandboxRoot: _root,
+            Executor: executor,
+            FileTools: new SandboxedFileTools(_root),
+            SearchTools: new SandboxedSearchTools(_root),
+            Redactor: SandboxOutputRedactor.Default,
+            Options: new SandboxToolOptions(ShellEnabled: true, DefaultTimeoutMs: 600_000)
+            {
+                MinimumTimeoutMs = 600_000,
+                MaximumTimeoutMs = 600_000,
+            },
+            Logger: NullLogger.Instance,
+            ShellExecutionTracker: tracker);
+        var tool = CopilotAIAgent.BuildSessionConfigTools(
+            context, includeControlledRunCommand: true).Single(t => t.Name == "run_command");
+
+        await tool.InvokeAsync(new AIFunctionArguments(new Dictionary<string, object?>
+        {
+            ["command"] = "dotnet test",
+            ["timeout_ms"] = 180_000, // the #313 trigger value (3 min)
+        }));
+
+        observedCommandTimeoutMs.Should().Be(600_000,
+            "a sub-floor model timeout must be clamped up to the Build/Test minimum (10 min)");
+    }
+
+    [Fact]
     public async Task Controlled_run_command_serializes_concurrent_invocations()
     {
         var executor = new CountingExecutor(blockFirstCall: true);
@@ -314,6 +412,32 @@ public sealed class AssemblyBuildTestShellGuardTests : IDisposable
         {
             LastCommand = command;
             return inner.StreamAsync(command, ct);
+        }
+    }
+
+    private sealed class CapturingExecutor(Action<SandboxCommand> onExecute) : ISandboxExecutor
+    {
+        public bool IsRealIsolation => false;
+        public string BackendName => "direct";
+        public string SelectionReason => "test";
+        public bool HasNetworkWarning => false;
+        public string? NetworkWarningMessage => null;
+
+        public Task<SandboxExecResult> ExecuteAsync(
+            SandboxCommand command,
+            CancellationToken ct = default)
+        {
+            onExecute(command);
+            return Task.FromResult(
+                new SandboxExecResult(0, "ok", "", TimedOut: false, OutputTruncated: false));
+        }
+
+        public async IAsyncEnumerable<SandboxOutputChunk> StreamAsync(
+            SandboxCommand command,
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+        {
+            var result = await ExecuteAsync(command, ct);
+            yield return new SandboxOutputChunk(SandboxOutputStream.Stdout, result.Stdout);
         }
     }
 

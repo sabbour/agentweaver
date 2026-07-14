@@ -66,6 +66,19 @@ public sealed class EfBacklogTaskStore : IBacklogTaskStore
         return recs.Select(FromRecord).ToList();
     }
 
+    public async Task<int> CountReadyForPickupAsync(CancellationToken ct = default)
+    {
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        return await db.BacklogTasks.AsNoTracking()
+            .Where(t => t.State == "ready" && t.RunId == null && t.ArchivedAt == null)
+            .Join(
+                db.Projects.AsNoTracking().Where(p => p.State == "active"),
+                task => task.ProjectId,
+                project => project.ProjectId,
+                (task, _) => task.TaskId)
+            .CountAsync(ct);
+    }
+
     public async Task<bool> UpdateContentAsync(
         ProjectId projectId, BacklogTaskId id, string title, string? description, CancellationToken ct = default)
     {

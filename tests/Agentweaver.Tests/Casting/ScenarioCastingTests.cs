@@ -85,6 +85,46 @@ public sealed class ScenarioCastingTests : IClassFixture<CastingWebApplicationFa
             ".squad/ directory should not exist after reject.");
     }
 
+    [Fact]
+    public async Task GetRoles_ExcludesReservedOrchestrationRoles()
+    {
+        using var client = _factory.CreateAuthenticatedClient();
+
+        var response = await client.GetAsync("/api/catalog/roles");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var body = await response.Content.ReadAsStringAsync();
+
+        Assert.DoesNotContain("\"id\":\"scribe\"", body, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("\"id\":\"work-monitor\"", body, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("\"id\":\"coordinator\"", body, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("\"id\":\"rai\"", body, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Theory]
+    [InlineData("scribe")]
+    [InlineData("work-monitor")]
+    [InlineData("coordinator")]
+    [InlineData("rai")]
+    public async Task ManualCast_WithReservedRoleId_IsRejected(string reservedRoleId)
+    {
+        // Regression for #311: manual casting must never allow rostering the reserved orchestration
+        // roles, even though "scribe"/"work-monitor" resolve as real catalog roles.
+        var workingDir = _factory.NewProjectWorkingDirectory();
+        using var client = _factory.CreateAuthenticatedClient();
+
+        var (projectId, _) = await CreateProjectAsync(client, workingDir);
+
+        using var proposeResponse = await client.PostAsJsonAsync(
+            $"/api/projects/{projectId}/casting/proposals",
+            new { mode = "manual", role_ids = new[] { "backend-engineer", reservedRoleId } });
+
+        Assert.Equal(HttpStatusCode.BadRequest, proposeResponse.StatusCode);
+        var body = await proposeResponse.Content.ReadAsStringAsync();
+        Assert.Contains(reservedRoleId, body, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("reserved", body, StringComparison.OrdinalIgnoreCase);
+    }
+
     private async Task<(string ProjectId, string WorkingDirectory)> CreateProjectAsync(HttpClient client, string workingDir)
     {
         var response = await client.PostAsJsonAsync("/api/projects", new

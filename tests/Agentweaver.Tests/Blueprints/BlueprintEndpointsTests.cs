@@ -192,6 +192,70 @@ public sealed class BlueprintEndpointsTests : IClassFixture<BlueprintsWebApplica
         errors.Should().Contain(e => e!.Contains("totally-unknown-role"));
     }
 
+    [Theory]
+    [InlineData("scribe")]
+    [InlineData("work-monitor")]
+    [InlineData("coordinator")]
+    [InlineData("rai")]
+    public async Task ValidateBlueprint_ReservedOrchestrationRole_IsRejected(string reservedRoleId)
+    {
+        // Regression for #311: Scribe, Work Monitor, Coordinator, and Rai are platform-owned
+        // orchestration roles provisioned automatically for every team. A generated blueprint must
+        // never be able to roster them, even though "scribe"/"work-monitor" resolve as real catalog
+        // roles (their catalog entries exist only so the built-in charters can be compiled).
+        var request = new ValidateBlueprintRequest
+        {
+            Blueprint = new BlueprintDto
+            {
+                Id = "blueprint-reserved-role",
+                Name = "Reserved Role",
+                Description = "Attempts to roster a reserved orchestration role.",
+                Roster = ["backend-engineer", reservedRoleId],
+                Workflow = "default",
+                ReviewPolicy = "default",
+                SandboxProfile = "default",
+            },
+        };
+
+        var response = await _client.PostAsJsonAsync("/api/blueprints/validate", request);
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("valid").GetBoolean().Should().BeFalse();
+        var errors = body.GetProperty("errors").EnumerateArray().Select(e => e.GetString()).ToList();
+        errors.Should().Contain(e => e!.Contains(reservedRoleId) && e.Contains("reserved"));
+    }
+
+    [Fact]
+    public async Task CreateProject_InlineBlueprintWithReservedRole_IsRejected()
+    {
+        var dir = _factory.NewWorkingDirectory();
+        var request = new CreateProjectRequest
+        {
+            Name = "Reserved Role Blueprint Project",
+            Origin = "blank",
+            WorkingDirectory = dir,
+            Blueprint = new BlueprintDto
+            {
+                Id = "blueprint-with-reserved-role",
+                Name = "With Reserved Role",
+                Description = "References the Scribe orchestration role.",
+                Roster = ["backend-engineer", "scribe"],
+                Workflow = "default",
+                ReviewPolicy = "default",
+                SandboxProfile = "default",
+            },
+        };
+
+        var response = await _client.PostAsJsonAsync("/api/projects", request);
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("error").GetString().Should().Be("invalid_blueprint");
+        var details = body.GetProperty("details").EnumerateArray().Select(e => e.GetString()).ToList();
+        details.Should().Contain(e => e!.Contains("scribe") && e.Contains("reserved"));
+    }
+
     [Fact]
     public async Task CreateProject_InlineBlueprintWithUnknownRole_IsRejected()
     {

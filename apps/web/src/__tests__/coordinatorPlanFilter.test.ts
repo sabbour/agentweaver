@@ -40,7 +40,7 @@ describe('stripSerializedWorkPlanMessages', () => {
         turnIndex: 1,
         active: false,
         steps: [
-          { kind: 'agent-message', messageId: 'm1', content: '[{"title":"A","scope":"x"}]', streaming: false },
+          { kind: 'agent-message', messageId: 'm1', content: '[{"title":"A","scope":"x"}]', streaming: false, receivedAt: Date.now() },
         ],
       },
     ];
@@ -55,8 +55,8 @@ describe('stripSerializedWorkPlanMessages', () => {
         turnIndex: 1,
         active: false,
         steps: [
-          { kind: 'agent-message', messageId: 'm1', content: 'Planning now.', streaming: false },
-          { kind: 'agent-message', messageId: 'm2', content: '[{"title":"A","scope":"x"}]', streaming: false },
+          { kind: 'agent-message', messageId: 'm1', content: 'Planning now.', streaming: false, receivedAt: Date.now() },
+          { kind: 'agent-message', messageId: 'm2', content: '[{"title":"A","scope":"x"}]', streaming: false, receivedAt: Date.now() },
         ],
       },
     ];

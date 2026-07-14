@@ -67,6 +67,32 @@ public static class AssemblyPlanning
         !string.IsNullOrWhiteSpace(reason)
         && reason.Contains(BuildTestInfraReasonPrefix, StringComparison.Ordinal);
 
+    /// <summary>
+    /// Marker substring stamped on <c>AssemblyStatusReason</c> by the D2 eligibility gate (see
+    /// <c>CoordinatorAssemblyService</c>'s <c>ineligible_subtasks [id,...]</c> block), e.g.
+    /// <c>"ineligible_subtasks [369,370]"</c>.
+    /// </summary>
+    public const string IneligibleSubtasksReasonMarker = "ineligible_subtasks";
+
+    /// <summary>
+    /// True when a blocked plan's stamped reason is an <see cref="IneligibleSubtasksReasonMarker"/> gate
+    /// (names specific subtask ids that were NOT eligible at block time). This reason is a SNAPSHOT: it is
+    /// never re-evaluated once written, so if the caller has independently confirmed every subtask is now
+    /// assembly-eligible (e.g. a since-failed subtask was individually retried and now reached
+    /// <c>assemble_ready</c>), the ids named in this reason are stale by construction — the block itself
+    /// has already resolved. <see cref="CoordinatorReconciler"/>'s autonomous recovery already treats this
+    /// combination (stale <c>ineligible_subtasks</c> reason + <see cref="AllEligible"/> now true) as
+    /// re-armable without any subtask reset; callers computing an "all satisfied" case (e.g. a human
+    /// <c>redirect</c> steer) MUST apply the same check, or they will mis-classify a resolved eligibility
+    /// gate as a genuine integration conflict and needlessly reset every already-successful subtask
+    /// (issue #309 follow-up: the FitTrackE2E-v12 wedge, where a redirect on an `ineligible_subtasks` park
+    /// — by then stale, since the previously-failed subtasks had gone green — reset ALL assemble_ready
+    /// children instead of re-arming assembly against them).
+    /// </summary>
+    public static bool IsStaleIneligibleSubtasksReason(string? reason) =>
+        !string.IsNullOrWhiteSpace(reason)
+        && reason.Contains(IneligibleSubtasksReasonMarker, StringComparison.Ordinal);
+
     /// <summary>An eligible subtask is one that reached assemble_ready or completed.</summary>
     public static bool IsEligible(string status) =>
         status is SubtaskStatus.AssembleReady or SubtaskStatus.Completed;

@@ -132,6 +132,59 @@ public sealed class RemoteAgentProxyDeadlineTests
         RemoteAgentProxy.IsUnsupportedA2aEvent(exception).Should().BeTrue();
     }
 
+    [Fact]
+    public void UnsupportedSdkEvent_WithOtherReceivedKind_IsStillClassifiedForRetry()
+    {
+        // #267 regression guard: only "Received: None" is understood as the field-presence
+        // artifact investigated for this issue, but the classifier itself must keep treating
+        // ANY "Only message, task, task update events are supported..." rejection as the same
+        // retryable a2a_protocol_event_unsupported reason — including "Received: <other>" — so a
+        // genuinely new/future unhandled A2A event kind still gets re-armed (per #308) rather than
+        // silently swallowed or misclassified as a generic transport failure.
+        var exception = new NotSupportedException(
+            "Only message, task, task update events are supported from A2A agents. Received: Heartbeat");
+
+        RemoteAgentProxy.IsUnsupportedA2aEvent(exception).Should().BeTrue();
+    }
+
+    [Theory]
+    [InlineData(null, 0)]
+    [InlineData("hello", 5)]
+    public void EstimatePayloadSize_HandlesNullAndStringPayloads(object? payload, int expected)
+    {
+        RemoteAgentProxy.EstimatePayloadSize(payload!).Should().Be(expected);
+    }
+
+    [Fact]
+    public void EstimatePayloadSize_SerializesPlainObjectPayloads()
+    {
+        var payload = new { message = "build failed", exitCode = 1 };
+
+        var size = RemoteAgentProxy.EstimatePayloadSize(payload);
+
+        size.Should().BeGreaterThan(0,
+            "a POCO payload must be estimated via JSON serialization, not silently reported as empty");
+    }
+
+    [Fact]
+    public void EstimatePayloadSize_NeverThrows_OnUnserializablePayload()
+    {
+        // A self-referencing object cannot be JSON-serialized; the diagnostic estimator used in the
+        // #267 "Received: None" trail must degrade gracefully (-1) rather than throwing and masking
+        // the original A2A protocol exception it is meant to help diagnose.
+        var cyclic = new CyclicNode();
+        cyclic.Self = cyclic;
+
+        var size = RemoteAgentProxy.EstimatePayloadSize(cyclic);
+
+        size.Should().Be(-1);
+    }
+
+    private sealed class CyclicNode
+    {
+        public CyclicNode? Self { get; set; }
+    }
+
     private static async IAsyncEnumerable<int> QuietProgressingStream(
         TimeSpan perUpdateGap,
         [EnumeratorCancellation] CancellationToken ct)

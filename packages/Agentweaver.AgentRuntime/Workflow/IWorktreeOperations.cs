@@ -24,6 +24,18 @@ public interface IWorktreeOperations
     string? GetTreeHash(string worktreePath);
 
     /// <summary>
+    /// Attempts to reconstruct a missing worktree directory from the durable run branch
+    /// (P0-A, GH #246: a worker rollout/eviction wipes ephemeral PVC-backed worktree storage while
+    /// the git branch and DB row persist). Returns the reattached worktree path and branch name
+    /// when the durable branch exists and reconstruction succeeds, or null when reconstruction is
+    /// impossible (e.g. the branch itself is gone, or the repository path is invalid) — callers
+    /// must treat null as still-unrecoverable and fall back to their existing terminal-failure
+    /// handling. Default no-op for implementations that don't back a real git worktree (test fakes).
+    /// </summary>
+    (string WorktreePath, string BranchName)? TryReattachWorktree(
+        string repositoryPath, string originatingBranch, string runId) => null;
+
+    /// <summary>
     /// CONSERVATIVELY clears a STALE <c>index.lock</c> for the given worktree between post-turn
     /// commit retries (the in-place-revision wedge root cause: a crashed/lingering process left the
     /// index locked). Resolves the ACTUAL gitdir (linked worktrees use a <c>.git</c> pointer file),

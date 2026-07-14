@@ -111,6 +111,20 @@ public sealed class CastingService
         if (template is null)
             throw new ArgumentException($"Unknown team template '{templateId}'.", nameof(templateId));
 
+        // Defense-in-depth: scenario templates are curated JSON and should never reference a
+        // reserved orchestration role, but guard here too in case a future grouping edit
+        // reintroduces one (mirrors the check in ProposeManualCastAsync).
+        var reservedTemplateRoleIds = template.Roles
+            .Where(r => ReservedRoles.IsReserved(r.Id))
+            .Select(r => r.Id)
+            .ToList();
+        if (reservedTemplateRoleIds.Count > 0)
+            throw new ArgumentException(
+                $"Team template '{templateId}' references reserved orchestration role id(s): " +
+                $"{string.Join(", ", reservedTemplateRoleIds)}. " +
+                "Scribe, Work Monitor, Rai, and Coordinator are provisioned automatically for every team.",
+                nameof(templateId));
+
         var reader = new SquadReader(project.WorkingDirectory);
 
         SquadLayoutInfo layout;
@@ -246,10 +260,21 @@ public sealed class CastingService
         var proposedMembers = new List<ProposedMember>();
 
         var unknownRoleIds = new List<string>();
+        var reservedRoleIds = new List<string>();
 
         for (var i = 0; i < roleIds.Count; i++)
         {
             var roleId = roleIds[i];
+
+            // Reserved orchestration roles (Scribe, Work Monitor, Rai, Coordinator) are provisioned
+            // automatically for every team and must never be castable via manual/blueprint selection,
+            // even though "scribe"/"work-monitor" resolve as real catalog roles.
+            if (ReservedRoles.IsReserved(roleId))
+            {
+                reservedRoleIds.Add(roleId);
+                continue;
+            }
+
             var role = _catalog.LoadRole(roleId);
             if (role is null)
             {
@@ -258,6 +283,17 @@ public sealed class CastingService
                 // written verbatim at confirm time, so no catalog template is required.
                 if (bespokeRoles is not null && bespokeRoles.TryGetValue(roleId, out var bespoke))
                 {
+                    var reservedBespokeValue = ReservedRoles.IsReserved(bespoke.Id)
+                        ? bespoke.Id
+                        : ReservedRoles.IsReserved(bespoke.Title)
+                            ? bespoke.Title
+                            : null;
+                    if (!string.IsNullOrWhiteSpace(reservedBespokeValue))
+                    {
+                        reservedRoleIds.Add(reservedBespokeValue);
+                        continue;
+                    }
+
                     var (bname, bIsNamed) = allocations[i];
                     var bespokeRole = new Role(
                         Id: bespoke.Id,
@@ -303,6 +339,12 @@ public sealed class CastingService
                 DefaultModel: role.DefaultModel,
                 Justification: $"Manually selected role: {role.Title}"));
         }
+
+        if (reservedRoleIds.Count > 0)
+            throw new ArgumentException(
+                $"Reserved orchestration role id(s) cannot be rostered: {string.Join(", ", reservedRoleIds)}. " +
+                "Scribe, Work Monitor, Rai, and Coordinator are provisioned automatically for every team.",
+                nameof(roleIds));
 
         if (unknownRoleIds.Count > 0)
             throw new ArgumentException(
@@ -1120,7 +1162,7 @@ public sealed class CastingService
             var memoryDb = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
 
             var builtinNames = new HashSet<string>(
-                new[] { "Scribe", "Ralph", "Rai", "Coordinator" }, StringComparer.OrdinalIgnoreCase);
+                ReservedRoles.ReservedNames, StringComparer.OrdinalIgnoreCase);
 
             foreach (var member in team.Members
                 .Where(m => addedNames.Contains(m.Name)
@@ -1228,7 +1270,7 @@ public sealed class CastingService
 
         // Emit one row per active non-builtin member with a signal derived from the role definition.
         // Signal derivation order: Responsibilities (first 2 items) → Summary → Title.
-        var builtins = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "Scribe", "Ralph", "Rai", "Coordinator" };
+        var builtins = new HashSet<string>(ReservedRoles.ReservedNames, StringComparer.OrdinalIgnoreCase);
         foreach (var member in team.Members.Where(m => m.Status == CastMemberStatus.Active && !builtins.Contains(m.Name)))
         {
             var signal = member.Role.Responsibilities.Count > 0

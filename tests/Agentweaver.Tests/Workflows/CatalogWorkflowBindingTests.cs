@@ -14,6 +14,7 @@ public sealed class CatalogWorkflowBindingTests
     [InlineData("bug-fix")]
     [InlineData("content-authoring")]
     [InlineData("incident-response")]
+    [InlineData("infra-ops")]
     [InlineData("pm-discovery")]
     [InlineData("software-delivery")]
     public void CatalogWorkflow_LoadsAndIsBindableForCoordinatorSelection(string workflowId)
@@ -30,6 +31,7 @@ public sealed class CatalogWorkflowBindingTests
     [InlineData("bug-fix", new[] { "rai", "build-test", "human-review" })]
     [InlineData("content-authoring", new[] { "rai", "human-review" })]
     [InlineData("incident-response", new[] { "human-review" })]
+    [InlineData("infra-ops", new[] { "rai", "human-review" })]
     [InlineData("pm-discovery", new[] { "human-review" })]
     [InlineData("agent-evaluation", new[] { "rai" })]
     public void CatalogWorkflow_DeclaresExpectedAuthorableGates_WithoutMergeOrScribe(

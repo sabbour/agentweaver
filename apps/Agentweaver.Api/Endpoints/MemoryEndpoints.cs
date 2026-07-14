@@ -28,10 +28,13 @@ public static class MemoryEndpoints
     public static void MapMemoryEndpoints(this WebApplication app)
     {
 // GET /api/projects/{id}/memory — cross-agent search across all memories for a project
+// (paginated; see Contracts.PagedResult<T>)
 app.MapGet("/api/projects/{id}/memory", async (
     string id,
     string? type,
     string? tags,
+    int? page,
+    int? page_size,
     IProjectStore projectStore,
     MemoryDbContext memoryDb,
     CancellationToken ct) =>
@@ -53,20 +56,23 @@ app.MapGet("/api/projects/{id}/memory", async (
     var memories = (await query.ToListAsync(ct))
         .Where(m => requestedTags.Count == 0 || (m.Tags is not null && requestedTags.Any(tag => m.Tags.Contains($",{tag},"))))
         .OrderByDescending(m => m.CreatedAt)
+        .Select(m => new
+        {
+            m.Id, m.AgentName, m.SessionId, m.Type, m.Importance, m.Content, m.Tags,
+            created_at = m.CreatedAt, updated_at = m.UpdatedAt,
+        })
         .ToList();
-    return Results.Ok(memories.Select(m => new
-    {
-        m.Id, m.AgentName, m.SessionId, m.Type, m.Importance, m.Content, m.Tags,
-        created_at = m.CreatedAt, updated_at = m.UpdatedAt,
-    }));
+    return Results.Ok(Paging.Of(memories, page, page_size));
 });
 
-// GET /api/projects/{id}/agents/{name}/memory
+// GET /api/projects/{id}/agents/{name}/memory (paginated; see Contracts.PagedResult<T>)
 app.MapGet("/api/projects/{id}/agents/{name}/memory", async (
     string id,
     string name,
     string? type,
     string? importance,
+    int? page,
+    int? page_size,
     IProjectStore projectStore,
     MemoryDbContext memoryDb,
     CancellationToken ct) =>
@@ -81,12 +87,13 @@ app.MapGet("/api/projects/{id}/agents/{name}/memory", async (
         .Where(m => importance == null || m.Importance == importance)
         .ToListAsync(ct))
         .OrderByDescending(m => m.CreatedAt)
+        .Select(m => new
+        {
+            m.Id, m.AgentName, m.SessionId, m.Type, m.Importance, m.Content, m.Tags,
+            created_at = m.CreatedAt, updated_at = m.UpdatedAt,
+        })
         .ToList();
-    return Results.Ok(memories.Select(m => new
-    {
-        m.Id, m.AgentName, m.SessionId, m.Type, m.Importance, m.Content, m.Tags,
-        created_at = m.CreatedAt, updated_at = m.UpdatedAt,
-    }));
+    return Results.Ok(Paging.Of(memories, page, page_size));
 });
 
 // POST /api/projects/{id}/agents/{name}/memory
@@ -273,9 +280,11 @@ app.MapPut("/api/projects/{id}/sessions/current", async (
     });
 });
 
-// GET /api/projects/{id}/sessions
+// GET /api/projects/{id}/sessions (paginated; see Contracts.PagedResult<T>)
 app.MapGet("/api/projects/{id}/sessions", async (
     string id,
+    int? page,
+    int? page_size,
     IProjectStore projectStore,
     MemoryDbContext memoryDb,
     CancellationToken ct) =>
@@ -288,13 +297,14 @@ app.MapGet("/api/projects/{id}/sessions", async (
         .Where(s => s.ProjectId == id)
         .ToListAsync(ct))
         .OrderByDescending(s => s.StartedAt)
+        .Select(s => new
+        {
+            s.Id, s.SessionId, s.FocusArea, s.ActiveIssues, s.Summary,
+            serialized_state = s.SerializedState,
+            started_at = s.StartedAt, ended_at = s.EndedAt,
+        })
         .ToList();
-    return Results.Ok(sessions.Select(s => new
-    {
-        s.Id, s.SessionId, s.FocusArea, s.ActiveIssues, s.Summary,
-        serialized_state = s.SerializedState,
-        started_at = s.StartedAt, ended_at = s.EndedAt,
-    }));
+    return Results.Ok(Paging.Of(sessions, page, page_size));
 });
 
 // GET /api/projects/{id}/sessions/{sessionId}
