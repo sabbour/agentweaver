@@ -49,6 +49,27 @@ The coordinator (Squad) approves issue closure, priority, and scope changes only
 
 **Not yet done:** `v0.9.50-rc1` batch commit/release (waiting on the in-flight items above to clear peer review), Scribe decisions-inbox merge pass 3 (dispatched, pending), SQL todos resync.
 
+### Status update — v0.9.50-rc1 shipped (2026-07-14)
+
+**Deployed & live (confirmed):** `v0.9.50-rc1` on staging AKS — all 4 workloads (api, frontend, mcp, worker) + 8 AgentHost warm-pool pods Running, `/api/version` = `0.9.50-rc1`, `40-verify.sh` = **23/23 checks passed**.
+
+**Review wave fully cleared before this release** (Reviewer Rejection Protocol chains, locked-out-author-per-round enforced throughout):
+- **#261** — 5 rounds (Niobe→Switch→Roy→Neo→Trinity), final APPROVE. Coordinator declared-output-path parsing now fails the WHOLE array closed on any invalid entry (traversal escape, drive-qualified, UNC), not just the bad entry.
+- **Pagination-frontend** — 5 rounds (Dozer→Apoc→Neo→Mouse→Sentinel), final APPROVE. Migrated `useArtifactBrowser.ts` onto shared `isTerminalRunStatus()`/`normalizeRunStatus()`.
+- **MemoriesPage pagination** — 2 rounds (Niobe→Iris), final APPROVE WITH NON-BLOCKING. Fixed a mutation-on-last-page stranding bug.
+- **#108** — 2 rounds (Niobe→Link), APPROVE WITH NON-BLOCKING. Worker HPA now scales on the true unclaimed-backlog signal (`CountReadyForPickupAsync`), not the `RunStatus.Pending` proxy.
+
+**Closed with live staging evidence this release:** #261, #108, #311 (non-castable system roles excluded from generated casts — live-verified via a real team roster showing 6 domain members cleanly separated from 4 `is_built_in:true` system roles), #312, #313, #208, #247 (live-verified `/api/notifications` responding), #200, #310, #302, #246, #282. Pagination contract live-verified on `/api/projects`, `/api/projects/{id}/runs`, `/api/projects/{id}/decisions/inbox`, `/api/projects/{id}/memory` — all return the `{items, page, page_size, total_count, total_pages}` envelope correctly.
+
+**New issue filed:** **#318** — pre-existing (not a regression) `DataMigratorTests` schema-drift bug: hardcoded 30-value `INSERT INTO runs` vs. the table's actual 34 columns. Confirmed via git history unrelated to this batch; doesn't block releases but should be fixed so `dotnet test` runs fully clean.
+
+**Persona harness (issue #1) progress this release cycle:**
+- Now checkpointed on branch `harness/wip-persona-v1` (not yet merged to main — still a spike/prototype under active iteration), safely committed via a temp-index technique that never touches the shared working tree.
+- Tank added automated LLM-judge invocation support: `lib/judge.mjs` (pure prompt ASSEMBLER — resolves persona brief + criteria + JUDGE.md + full transcript into one prompt for an external LLM call; does **not** call any LLM API itself) and `lib/meta-aggregate.mjs` (mechanical cross-run verdict rollup). This first version got **REQUEST_CHANGES** (transcript evidence was lossy for non-spec API calls; verdict aggregator accepted unvalidated JSON) — Tank locked out, Oracle fixed both issues in round 2, 32/32 tests passing, re-pushed to the WIP branch. Re-review pending.
+- **Smith** drove three more full-lifecycle scenario attempts this cycle: FitTrackE2E-v12 (reproduced the #308-family assembly wedge via a distinct trigger), LinkVaultE2E-v1 (surfaced a genuinely new root cause — filed as **#317**, a coordinator stall-timeout/completion-signal race where a child finishes work but the 5-min watchdog fires before learning of it), and **HabitLoopE2E-v1 — the harness's first full-lifecycle success this session** (dispatch → 6/6 subtasks → RAI → Rubberduck → Build&Test → live preview URL → human-review → complete, ~52 min end-to-end). Also flagged a harness/API-contract gap: `auto_approve_tools` doesn't propagate to child runs/gates (noted, not filed as a bug — plausibly intentional safety gating).
+
+**Not yet done:** merge `harness/wip-persona-v1` to main once it stabilizes and passes design review cleanly; re-review Oracle's judge-automation round 2; continue Smith's scenario coverage on the new v0.9.50-rc1 baseline; Scribe inbox-drain pass (dispatched, pending); SQL todos resync against actual GitHub issue state.
+
 ---
 
 ## Operating Rules (standing, apply to all workstreams)
