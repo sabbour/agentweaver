@@ -1,33 +1,37 @@
-/**
- * MCP evidence adapter contract.
- *
- * Expected future raw input:
- * {
- *   metadata: { ...required join-key fields..., persona? },
- *   persona: { ... },
- *   exchanges: [{
- *     id?, intent?, toolName?, request?, response?, isError?, errorCode?, errorMessage?, frustrationSignals?
- *   }]
- * }
- */
+import { delimitUntrusted } from '../../mcp-harness/mcp-client/prompt-safety.mjs';
+
+function evidence(value) {
+  return delimitUntrusted('mcp_evidence', value);
+}
+
+function facts(exchange) {
+  const mcp = exchange.mcp ?? exchange;
+  return {
+    isError: mcp.isError ?? exchange.isError ?? false,
+    protocolErrorCode: mcp.protocolErrorCode ?? exchange.errorCode ?? null,
+    latencyMs: exchange.latencyMs ?? null,
+    requestId: mcp.requestId ?? exchange.requestId ?? null,
+    traceId: exchange.traceId ?? null,
+  };
+}
+
+/** Normalize a lossless MCP transcript or exchanges list for the shared judge. */
 export function adaptMcpEvidence(raw = {}) {
-  const exchanges = Array.isArray(raw.exchanges) ? raw.exchanges : [];
+  const exchanges = Array.isArray(raw.turns) ? raw.turns : (Array.isArray(raw.exchanges) ? raw.exchanges : []);
   return {
     metadata: { ...raw.metadata, surface: 'mcp' },
     persona: raw.persona ?? {},
     turns: exchanges.map((exchange, index) => ({
-      id: exchange.id ?? index + 1,
-      intent: exchange.intent ?? null,
+      id: exchange.n ?? exchange.id ?? index + 1,
+      intent: exchange.thought ?? exchange.intent ?? null,
       action: exchange.toolName ?? null,
-      objectiveFacts: {
-        isError: exchange.isError ?? false,
-        errorCode: exchange.errorCode ?? null,
-      },
+      objectiveFacts: facts(exchange),
       evidence: [
-        { kind: 'request', evidence: JSON.stringify(exchange.request ?? null) },
-        { kind: 'response', evidence: JSON.stringify(exchange.response ?? null) },
-        { kind: 'error', evidence: exchange.errorMessage ?? '' },
-      ].filter((item) => item.evidence !== ''),
+        { kind: 'request', evidence: evidence(exchange.toolArguments ?? exchange.request ?? null) },
+        { kind: 'response', evidence: evidence(exchange.mcp?.structuredContent ?? exchange.response ?? null) },
+        { kind: 'raw-content', evidence: evidence(exchange.mcp?.rawContent ?? null) },
+        { kind: 'error', evidence: evidence(exchange.mcp?.error ?? exchange.errorMessage ?? null) },
+      ],
       frustrationSignals: Array.isArray(exchange.frustrationSignals) ? exchange.frustrationSignals : [],
     })),
     findingsContext: raw.findingsContext ?? [],

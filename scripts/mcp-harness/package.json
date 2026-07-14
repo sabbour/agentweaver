@@ -1,0 +1,14 @@
+{
+  "name": "agentweaver-mcp-harness",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "MCP-protocol persona and smoke test harness for Agentweaver.",
+  "engines": { "node": ">=18" },
+  "scripts": {
+    "test": "node --test",
+    "smoke": "node smoke/mcp-cli-smoke.mjs",
+    "judge": "node ../harness-judge/core.mjs"
+  },
+  "dependencies": { "@modelcontextprotocol/sdk": "^1.12.1" }
+}
