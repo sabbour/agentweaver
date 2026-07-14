@@ -2551,3 +2551,187 @@ Standing rules for the Coordinator when deciding how to ship completed fixes via
 **Applied example:** 2026-07-14 bugfix batch (issues 314, 315, 317, 267, 242, 240, 318) — all independent same-day bugfixes with no behavior contract changes, judged as a single patch release once merged to main.
 
 
+
+
+---
+
+## 2026-07-14T20-26-41: Staging environment (agentweaver-rg) recreated end-to-end; infra steps 00,10,15,15-mon,16,17 complete and verified via Option (a) vault recovery
+
+**Merged from inbox file:** `Link-staging-environment-agentweaver-rg-recreated-end-t.md`
+
+### 2026-07-14T20-26-41: Staging environment (agentweaver-rg) recreated end-to-end; infra steps 00,10,15,15-mon,16,17 complete and verified via Option (a) vault recovery
+**By:** Link
+**What:** Staging environment (agentweaver-rg) recreated end-to-end; infra steps 00,10,15,15-mon,16,17 complete and verified via Option (a) vault recovery
+**References:** docs/guide/deployment-aks.md, scripts/aks/10-create-cluster.sh, scripts/aks/15-setup-identity.sh
+**Why:** TRIGGER: agentweaver-rg confirmed deleted (ephemeral staging cleanup) on subscription "AKS INT/Staging Test" (26fe00f8-9173-4872-9134-bb1d2e00343a). Recreated under standing authority.
+
+STATUS — COMPLETE:
+- 00-variables.sh: sources cleanly (IMAGE_TAG=v0.9.52 from VERSION).
+- 10-create-cluster.sh: RG + ACR + AKS agentweaver-aks-2 with 3 pools (nodepool1 System, apppool User, katapool KataVmIsolation), ACR attached, agent-sandbox CRDs, kata-vm-isolation RuntimeClass.
+- 15-setup-identity.sh: managed identity agentweaver-api-identity (clientId a05e36d5-0842-4c01-8ea0-5e82eb9d2ab5), KV roles, 2 federated creds (agentweaver-api-fedcred, agentweaver-agenthost-fedcred). TENANT_ID 72f988bf-....
+- 15-provision-monitoring.sh: Log Analytics agentweaver-logs + App Insights agentweaver-insights + AKS Managed Prometheus; appinsights-connection-string stored in KV.
+- 16-provision-oauth-signing-key.sh: mcp-oauth-signing-key + mcp-api-key already present in recovered vault (skipped).
+- 17-provision-postgres.sh: Flexible Server agentweaver-pg (PG16, ZoneRedundant, private/VNet, no public endpoint), DB agentweaver, A record agentweaver-pg.privatelink.postgres.database.azure.com -> 10.225.0.5, K8s secret agentweaver-postgres in ns agentweaver.
+
+ISSUE 1 (Git Bash MSYS path mangling): running scripts/aks/*.sh under Git Bash rewrote az resource-ID args starting with '/' (e.g. --attach-acr /subscriptions/... became C:/Program Files/Git/subscriptions/...), failing 10-create-cluster after the cluster was already created. FIX (correct invocation, not a hack): export MSYS_NO_PATHCONV=1 and MSYS2_ARG_CONV_EXCL='*' for all these scripts. Remediation: attached ACR out-of-band via 'az aks update --attach-acr' (idempotent equivalent), then re-ran step 10 with the flags to add apppool+katapool and CRDs.
+
+ISSUE 2 / DECISION (secrets): 15-setup-identity requires operator GITHUB_CLIENT_ID/SECRET. Ahmed chose Option (a): recover the soft-deleted agentweaver-kv (purge 2026-10-12). Recovered via 'az keyvault recover'; vault is RBAC-mode so granted caller Key Vault Secrets Officer and waited for propagation. GITHUB_CLIENT_ID=Ov23liDx3W5jbG4KxA8l matched the vault's github-client-id; GITHUB_CLIENT_SECRET read from the vault via command substitution and never echoed/logged. All 5 required KV secrets verified present.
+
+MANUAL FOLLOW-UP FOR AHMED: update the GitHub OAuth App callback URL to the new cluster's default domain (app-routing/gateway) for browser login. Does not block infra.
+
+NOT RUN (per instructions — coordinator triggers the release deploy later): 20-build-push-images.sh, 25-verify-image-provenance.sh, 30-deploy.sh, 40-verify.sh.
+
+No secrets/keys/tokens were printed in any output.
+
+---
+
+## 2026-07-14T20-31-33: Patch release v0.9.53 halted pre-mutation: release.sh will fail on frontend retag because the recreated ACR is empty (no v0.9.52 source image)
+
+**Merged from inbox file:** `Link-patch-release-v0-9-53-halted-pre-mutation-release-.md`
+
+### 2026-07-14T20-31-33: Patch release v0.9.53 halted pre-mutation: release.sh will fail on frontend retag because the recreated ACR is empty (no v0.9.52 source image)
+**By:** Link
+**What:** Patch release v0.9.53 halted pre-mutation: release.sh will fail on frontend retag because the recreated ACR is empty (no v0.9.52 source image)
+**References:** scripts/release.sh, scripts/aks/30-deploy.sh, apps/web/Dockerfile
+**Why:** CONTEXT: Asked to ship batched patch release (7 bugfixes: #314,#315,#317,#267,#242,#240,#318) merged at origin/main f211cd37, via 'bash scripts/release.sh patch' from clean worktree C:\Users\asabbour\Git\agentweaver-release-scratch (verified clean, at f211cd37, VERSION 0.9.52).
+
+BLOCKER (identified BEFORE running — nothing mutated): scripts/release.sh classifies each of the 4 images as build-vs-retag by diffing since the last git tag (v0.9.52). Changed images build via 'az acr build'; UNCHANGED images are retagged via 'az acr import --source ACR/IMAGE:v0.9.52'. Result of diff v0.9.52..f211cd37:
+  - agentweaver-api: CHANGED -> build (ok)
+  - agentweaver-mcp: CHANGED (shared 'packages' path) -> build (ok)
+  - agentweaver-agent-host: CHANGED -> build (ok)
+  - agentweaver-frontend: UNCHANGED (apps/web, apps/Agentweaver.Web untouched) -> RETAG
+The registry 'agentweaverregistry' was RECREATED EMPTY during today's staging rebuild, so there is no agentweaver-frontend:v0.9.52 to import from. The 'az acr import' will fail; release.sh's wait_for_image_jobs then calls terminate_remaining_jobs and kills the in-progress builds. Critically, this failure occurs AFTER the script has already: bumped VERSION, committed, created+pushed tag v0.9.53, and created the GitHub release — leaving a corrupted half-release. Therefore I did NOT run it.
+
+FEASIBILITY (everything else is green): 3 images build fresh fine; ~/.npmrc holds a valid 1JS Azure Artifacts npm token so a fresh frontend build is possible on Windows (Git Bash, not WSL); envsubst/gh/az all present; IDENTITY_CLIENT_ID=a05e36d5-0842-4c01-8ea0-5e82eb9d2ab5 and TENANT_ID=72f988bf-... available for the deploy step. Reminder: run with MSYS_NO_PATHCONV=1.
+
+RECOMMENDED OPTIONS (need Ahmed's decision — not hacking around a failure autonomously):
+  A) One-time full build of all 4 images into the empty ACR (frontend code is unchanged but its image must still be built fresh after ACR recreation). Cleanest is a principled release.sh fallback: when a retag source is absent in ACR, build instead.
+  B) Pre-seed ACR by building the (unchanged) current frontend and pushing it as agentweaver-frontend:v0.9.52, so release.sh's import v0.9.52->v0.9.53 succeeds unmodified. Content-accurate since frontend==v0.9.52.
+  C) Run the pipeline manually out-of-band (bump/tag/push/release + az acr build all 4 + 30-deploy), skipping the retag optimization for this recreate scenario.
+
+STATE: no git mutation, no tag, no GitHub release, no images built. Safe to proceed once approach chosen.
+
+---
+
+## 2026-07-14T20-38-54: release.sh root-cause fix (e2322372, merged to main): build image when retag source tag is absent from ACR; guards against corrupted half-releases after registry recreation
+
+**Merged from inbox file:** `Link-release-sh-root-cause-fix-e2322372-merged-to-main-.md`
+
+### 2026-07-14T20-38-54: release.sh root-cause fix (e2322372, merged to main): build image when retag source tag is absent from ACR; guards against corrupted half-releases after registry recreation
+**By:** Link
+**What:** release.sh root-cause fix (e2322372, merged to main): build image when retag source tag is absent from ACR; guards against corrupted half-releases after registry recreation
+**References:** scripts/release.sh
+**Why:** DECISION: Fix a latent bug in scripts/release.sh (Option A / root-cause, chosen by Ahmed over workaround/manual).
+
+BUG: The build-vs-retag optimizer classifies an image as 'unchanged' via git diff since LAST_TAG and then retags it with 'az acr import --source ACR/IMAGE:LAST_TAG'. This assumes the LAST_TAG image still exists in the registry. After an ACR/environment recreation (e.g. today's staging rebuild that recreated agentweaverregistry empty), the source tag is absent, so 'az acr import' fails partway — AFTER release.sh has already bumped VERSION, committed, pushed tag vX.Y.Z, and created the GitHub release — then terminate_remaining_jobs kills the in-flight builds. Result: a corrupted half-release. This will recur on every future recreation.
+
+FIX (branch fix/release-script-missing-retag-source, commit e2322372, merged to main via 'git push origin <branch>:main' on top of f211cd37):
+- Added acr_source_tag_exists() using 'az acr repository show --name ACR --image IMAGE:TAG' (exit 0 = exists).
+- Added image_needs_build() = build when (no baseline tag) OR (sources changed) OR (retag source missing from ACR).
+- Loop now: changed -> build; unchanged+source-missing -> build fresh (new elif); unchanged+source-present -> retag (unchanged behavior).
+- Extended the prepare_frontend_dist guard so the frontend dist/ is built when the frontend must be built due to a missing source tag (otherwise the Dockerfile's COPY apps/web/dist would fail).
+
+VERIFICATION: bash -n syntax OK. Manually verified the check against real ACR agentweaverregistry: nonexistent tag agentweaver-frontend:v0.9.52 -> exit 3 (build); seeded throwaway relfix-probe:v1 via az acr import -> 'az acr repository show' exit 0 (retag); cleaned up probe; ACR empty again. Optimization preserved for the normal (source-present) case.
+
+NEXT: re-run 'bash scripts/release.sh patch' from clean worktree at new main tip (e2322372) with MSYS_NO_PATHCONV=1, IDENTITY_CLIENT_ID=a05e36d5-0842-4c01-8ea0-5e82eb9d2ab5, TENANT_ID=72f988bf-...; ~/.npmrc holds the 1JS npm token needed for the fresh frontend build. Expect all 4 images to build fresh (api/mcp/agent-host changed; frontend built because v0.9.52 source is absent from the recreated ACR), then deploy v0.9.53.
+
+---
+
+## 2026-07-14T20-39-48: Removed target-guard URL validation from stdio MCP transport (bug fix)
+
+**Merged from inbox file:** `Morpheus-removed-target-guard-url-validation-from-stdio-mcp.md`
+
+### 2026-07-14T20-39-48: Removed target-guard URL validation from stdio MCP transport (bug fix)
+**By:** Morpheus
+**What:** Removed target-guard URL validation from stdio MCP transport (bug fix)
+**References:** scripts/mcp-harness/mcp-client/transport-stdio.mjs, scripts/mcp-harness/mcp-client/transport-http.mjs, scripts/mcp-harness/mcp-client/client.mjs, scripts/harness-shared/target-guard.mjs, scripts/mcp-harness/README.md, scripts/mcp-harness/SKILL.md
+**Why:** **Bug found**: A real session run hit `target "stdio" is not a valid URL` when following the mcp-harness README's documented stdio smoke command. Root cause: `client.mjs` uses the string `'stdio'` purely as a transport-selector sentinel (`options.target === 'stdio'` picks stdio transport), but then forwarded the full `options` object — including that same `target: 'stdio'` literal — into `createStdioTransport(options)`. `transport-stdio.mjs` destructured `target` and called `assertTargetAllowed(target, ...)`, which unconditionally does `new URL(baseUrl)` and throws on any non-URL string.
+
+**Decision**: Stdio transport spawns a local subprocess and has no network target to validate. `target-guard` exists solely to stop the HTTP transport from silently hitting non-local/non-staging hosts; it has no meaning for a spawned local process. Rather than special-casing the literal `'stdio'` string inside target-guard (which would weaken/complicate a security-relevant guard for an unrelated transport), the cleanest fix is to remove the `assertTargetAllowed()` call from `transport-stdio.mjs` entirely, along with the now-unused `target`/`allowProd`/`iUnderstandProd` parameters on `createStdioTransport`. The HTTP transport path (`transport-http.mjs`) is untouched — `target-guard`'s allowlist and prod-confirmation logic still fully applies there.
+
+**Verification**:
+- Added `scripts/mcp-harness/test/transport-stdio.test.mjs` — asserts constructing a stdio transport with `target: 'stdio'` (and with target omitted) no longer throws, and that a missing/empty command still throws its own clear error.
+- Ran the documented smoke flow end-to-end against a throwaway stub stdio MCP server (a minimal `McpServer` + `StdioServerTransport` with one `ping` tool) via `McpHarnessClient.connect({ target: 'stdio', command: 'node', args: [...] })` — connect, `tools/list` discovery, and `callTool('ping')` all succeeded where they previously threw immediately at connect time.
+- `npm --prefix scripts/mcp-harness test` — all 11 tests pass (8 pre-existing + 3 new).
+- Confirmed `node_modules/@modelcontextprotocol` was missing locally (companion bug); `package-lock.json` already had correct entries, so `npm --prefix scripts/mcp-harness install` restored it with zero lockfile diff (nothing to commit for that half).
+
+**Docs**: Added a terse "Quickstart contract" section to `scripts/mcp-harness/README.md` and mirrored the stdio-vs-http / target-guard-scope bullets into `scripts/mcp-harness/SKILL.md`, so a future agent doesn't need to read client.mjs/transport-stdio.mjs/transport-http.mjs/target-guard.mjs (the 4 files a prior real run burned ~50s reading) just to understand the transport/target model.
+
+**Commit**: 80bf0121 on main — "fix(mcp-harness): stop applying target-guard URL validation to stdio transport; document quickstart contract".
+
+---
+
+**Follow-up (same task, Ahmed's additional detail on Task 2):** Updated the Quickstart contract doc further per explicit instruction:
+- The Agentweaver MCP server's http endpoint is at the `/mcp`-suffixed path (`https://<host>/mcp`), not the bare origin — the example URL and prose now say this explicitly.
+- http transport requires OAuth: a valid, authenticated bearer token via `--token`/`AGENTWEAVER_TOKEN`, not an arbitrary string. Verified in `transport-http.mjs` that the token (when supplied) is attached as the request's `Authorization` header via `StreamableHTTPClientTransport`'s `requestInit.headers`, and is omitted entirely when no token is given — an unauthenticated request is then rejected server-side. Note: the exact literal header-value expression in `transport-http.mjs` (e.g. the `****** prefix formatting) is masked by this org's content-exclusion policy in every tool used to inspect it (view, grep, `git show`, raw file read all returned identical masked output) — I did not attempt further workarounds per policy. The doc states the standard OAuth ****** consistent with the code's conditional-header structure, without claiming to have read the literal masked line.
+- Documented how to obtain a token: the app's own OAuth sign-in flow, or `gh auth token` where that identity is what the server trusts.
+- stdio transport has neither an endpoint-path nor an OAuth requirement, since it never leaves the local subprocess — called out explicitly for contrast.
+
+Commit: 9d90103e on main — "docs(mcp-harness): add /mcp endpoint suffix and OAuth token requirement to quickstart".
+
+---
+
+## 2026-07-14T20-32-45: Expose harness scenario discovery/generation through one new cross-surface skill plus minimal per-surface list commands
+
+**Merged from inbox file:** `smith-expose-harness-scenario-discovery-generation-throu.md`
+
+### 2026-07-14T20-32-45: Expose harness scenario discovery/generation through one new cross-surface skill plus minimal per-surface list commands
+**By:** smith
+**What:** Expose harness scenario discovery/generation through one new cross-surface skill plus minimal per-surface list commands
+**References:** .github/skills/harness-scenarios/SKILL.md, scripts/persona-briefs/SKILL.md, scripts/ui-harness/agent-driver-ui/tools.mjs, scripts/mcp-harness/smoke/mcp-cli-smoke.mjs, .github/agents/harness.agent.md
+**Why:** Added a new discoverable skill, `harness-scenarios`, as the single cross-surface entry point for scenario cataloging and persona-driven scenario generation. Kept the existing `api-harness`/`ui-harness`/`mcp-harness` execution skills focused on running harnesses, and added only minimal list support to surfaces that lacked it (`ui-harness` gets `list-scenarios`; `mcp-harness` smoke CLI gets `--list`). The authoritative contract lives in `scripts/persona-briefs/SKILL.md`, which documents exact retrieval commands, the reviewed generate-core/generate-adapter workflow, and the existing safety rule that generated deep scenarios require review/confirmation before unattended runs.
+
+---
+
+## Decision: generate-blueprint / validate-blueprint tools in API harness driver
+
+**Merged from inbox file:** `tank-blueprint-harness-tools.md`
+
+# Decision: generate-blueprint / validate-blueprint tools in API harness driver
+
+**Author:** Tank (Backend Engineer)
+**Date:** 2026-07-14
+**Context:** Harness audit found scripts/api-harness/agent-driver/tools.mjs was missing
+tools for `POST /api/blueprints/generate` and `POST /api/blueprints/validate`, even
+though the real endpoints exist and are already wrapped by the MCP driver
+(apps/Agentweaver.Mcp/Tools/BlueprintTools.cs: list_blueprints, validate_blueprint,
+blueprint_generate).
+
+## Decisions made
+
+1. **Session-linked blueprint handoff.** `generate-blueprint` stashes the returned
+   `blueprint` object on the session JSON (`session.lastGeneratedBlueprint`). A
+   subsequent `validate-blueprint` call with no `--blueprint`/`--blueprint-file` arg
+   automatically validates that stashed blueprint. This mirrors the existing
+   `create-project` -> `get-team` pattern (session.projectId flows implicitly to the
+   next tool) rather than requiring the LLM driver to re-paste JSON between calls.
+
+2. **Blueprint input flexibility for validate-blueprint.** Accepts three input modes,
+   in priority order: `--blueprint-file <path>` (JSON file), `--blueprint '<json>'`
+   (inline JSON string), or the last generated blueprint from session state. This
+   keeps the tool usable both standalone (validating a hand-authored file blueprint)
+   and as a natural follow-up to generate-blueprint.
+
+3. **No new CLI wiring needed.** The driver's `main()` dispatch and help text
+   (`Object.keys(COMMANDS)`) are already dynamic, so adding the two entries to the
+   `COMMANDS` object was sufficient — no separate dispatch/help edit required.
+
+4. **Response field passthrough kept minimal and consistent with existing tools**
+   (e.g. `list-blueprints`): print `status`, plus the meaningful response fields
+   (`blueprint`, `generatedWorkflowYaml`, `warnings` for generate; `valid`, `errors`
+   for validate) rather than the raw envelope, matching how `list-blueprints` and
+   `create-project` already trim their printed output.
+
+## Verification
+- `npm test` in scripts/api-harness: 46/46 existing tests pass (no test regressions).
+- `node tools.mjs` (no args) confirms both new commands appear in the dynamic help/
+  command list.
+- Dry-run invocations of both new commands (no active session) fail with the same
+  clean `no active session — run 'init' first` error as all other tools, confirming
+  argument parsing doesn't crash.
+- Did not attempt a live staging smoke call; staging reachability was not required
+  per task scope and static/dry-run verification was deemed sufficient.
+
+## Out of scope (left untouched)
+- Persona scenario files (lena.md, lena.api.md) — Harness's artifacts.
+- No PR opened; committed locally on `main` at 8ec8fb31, not pushed.
