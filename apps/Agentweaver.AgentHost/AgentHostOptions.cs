@@ -7,6 +7,13 @@ namespace Agentweaver.AgentHost;
 /// </summary>
 public sealed class AgentHostOptions
 {
+    /// <summary>
+    /// Deployment isolation mode. Set to <c>kata</c> only for in-cluster AgentHost pods that already
+    /// run inside a per-run Kata VM; this selects direct in-pod command execution instead of nesting
+    /// bubblewrap. Native Linux and local development leave this unset.
+    /// </summary>
+    public string? SandboxMode { get; init; }
+
     // ── A2A endpoint ──────────────────────────────────────────────────────────
 
     /// <summary>

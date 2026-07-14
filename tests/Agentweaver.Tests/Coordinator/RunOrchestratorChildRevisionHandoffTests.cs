@@ -20,7 +20,8 @@ namespace Agentweaver.Tests.Coordinator;
 /// itself cannot complete here (no real workflow factory), so these tests assert the pre-launch
 /// invariants that make the hand-off lockout-correct and context-complete:
 /// <list type="bullet">
-/// <item>REUSES the prior child's worktree/branch when it is present and unlocked (preserves prior work).</item>
+/// <item>REUSES the prior child's worktree when it is present and unlocked (preserves prior work),
+///       re-branded onto the NEW child's OWN authoritative branch (#305).</item>
 /// <item>Falls back to a FRESH worktree branched from the prior branch when the prior worktree is missing.</item>
 /// <item>Mints a NEW run identity (distinct from the locked-out author) → a distinct deterministic
 ///       SDK session id, and threads the accumulated review guidance into the new agent's task prompt.</item>
@@ -97,9 +98,17 @@ public sealed class RunOrchestratorChildRevisionHandoffTests : IAsyncDisposable
         persisted.Should().NotBeNull("the hand-off run row must be persisted under the new run id");
         persisted!.Status.Should().Be(RunStatus.InProgress);
 
-        // Prior WORK is preserved: the prior worktree/branch is REUSED (no fresh worktree branched).
+        // Prior WORK is preserved: the prior worktree is REUSED (no fresh worktree branched)...
         persisted.WorktreePath.Should().Be(priorInfo.WorktreePath);
-        persisted.WorktreeBranch.Should().Be(priorInfo.BranchName);
+        // ...but RE-BRANDED onto the NEW child's OWN authoritative branch (#305): the child must NOT
+        // retain the prior child's branch, or RunAgentHostContextResolver rejects the AgentHost launch.
+        var expectedAuthoritativeBranch = WorktreeManager.BranchNameFor(newAgentRun.Id);
+        persisted.WorktreeBranch.Should().Be(expectedAuthoritativeBranch);
+        persisted.WorktreeBranch.Should().NotBe(priorInfo.BranchName,
+            "#305: the reused worktree must be re-branded to the new child's authoritative branch");
+        // The authoritative branch was actually CREATED in the repo (a naming fix alone is insufficient).
+        manager.BranchExists(repoPath, expectedAuthoritativeBranch).Should().BeTrue(
+            "the new child's authoritative branch must exist before launch is attempted");
 
         // The accumulated guidance is threaded into the new agent's task prompt (full prior context).
         persisted.Task.Should().Contain("Original subtask: build the widget.");

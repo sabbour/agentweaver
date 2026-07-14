@@ -99,3 +99,7 @@ Implemented the backend dependency-base propagation fix after rubber-duck GO-WIT
 ## 2026-07-12T06:33:29-07:00 — #187 Build & Test gate design
 
 Delivered `files/design-187.md`, proposing a shared gate runner for consistent Build & Test gate execution and policy handling. Preserved an unresolved design conflict for rubber-duck: approved-only preview activation contradicts the North Star requirement that preview be available at `awaiting_review`. Preview timing is not final until that criterion is resolved.
+
+
+## 2026-07-13T23:59:00-07:00 — E2E validation
+#213 was confirmed stale and closed. Run `18cdc7ce-6649-4b60-b001-17c317bcd281` confirmed parallelism works; stale outcome-plan UI behavior maps to #290. Filed #305 for revision children inheriting a prior sibling worktree branch instead of their own authoritative branch.

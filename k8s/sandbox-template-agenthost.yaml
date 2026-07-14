@@ -126,6 +126,10 @@ spec:
               value: "/workspace"
             - name: AgentHost__RepositoryPath
               value: "/workspace"
+            # The pod's Kata VM is the command isolation boundary. Avoid a redundant nested bwrap
+            # layer, which cannot mount its private /proc under this hardened security context.
+            - name: AgentHost__SandboxMode
+              value: "kata"
             - name: AgentHost__KeyVaultUri
               value: "${AGENTHOST_KEYVAULT_URI}"
             - name: APPLICATIONINSIGHTS_CONNECTION_STRING

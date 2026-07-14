@@ -189,6 +189,34 @@ public sealed class WorktreeManager
     }
 
     /// <summary>
+    /// Re-brands an existing (reused) worktree onto the authoritative branch for
+    /// <paramref name="runId"/> (<c>agentweaver/&lt;runId&gt;</c>), creating that branch at the
+    /// worktree's current HEAD and checking it out IN PLACE. Preserves all committed and
+    /// staged/uncommitted prior work — this is a same-commit branch switch, so no file content
+    /// changes and no checkout conflict occur.
+    /// </summary>
+    /// <remarks>
+    /// Used by the child-revision handoff reuse path (<see cref="RunOrchestrator"/>
+    /// <c>StartChildRevisionHandoffAsync</c>): a newly minted revision child that physically reuses
+    /// a prior child's worktree MUST own an authoritative branch derived from ITS OWN run id, not
+    /// inherit the prior child's branch — otherwise the launch context invariant enforced by
+    /// <see cref="Agentweaver.Api.Sandbox.RunAgentHostContextResolver"/> rejects the launch with
+    /// "Implementation child '&lt;id&gt;' must use its authoritative branch 'agentweaver/&lt;id&gt;'"
+    /// and the AgentHost launch fails. <c>checkout -B</c> is idempotent: it creates the branch when
+    /// absent (the normal new-child case) and resets it to HEAD when already present (crash re-drive).
+    /// </remarks>
+    /// <returns>The authoritative branch name now checked out in the worktree.</returns>
+    public string RebrandWorktreeToAuthoritativeBranch(string worktreePath, RunId runId)
+    {
+        var branchName = BranchNameFor(runId);
+        // `git -C <worktree> checkout -B agentweaver/<runId> HEAD` creates (or resets) the
+        // authoritative branch at the worktree's current commit and switches the worktree onto it,
+        // carrying staged/uncommitted changes across the (same-commit) switch.
+        RunGit(worktreePath, "checkout", "-B", branchName, "HEAD");
+        return branchName;
+    }
+
+    /// <summary>
     /// Creates a short-lived detached worktree at <paramref name="sourceBranch"/> for read-only gates
     /// (for example collective Build/Test). The source branch is never checked out in the primary
     /// repository, so later headless ref resets can delete/recreate it safely.

@@ -4,6 +4,7 @@ using Agentweaver.AgentHost;
 using Agentweaver.AgentRuntime;
 using Agentweaver.AgentRuntime.Providers;
 using Agentweaver.Domain;
+using Agentweaver.SandboxExec;
 using Azure.Identity;
 using Azure.Security.KeyVault.Secrets;
 using Microsoft.Agents.AI.Hosting;
@@ -135,6 +136,24 @@ builder.Services.AddSingleton<IPreviewRunner>(sp => sp.GetRequiredService<Previe
 builder.Services.AddHostedService(sp => sp.GetRequiredService<PreviewRunner>());
 builder.Services.AddSingleton<IAgentRuntimeToolProvider, PreviewRunnerToolProvider>();
 builder.Services.AddAgentRuntime();
+
+// The production AgentHost runs inside a per-run Kata VM. Do not nest bubblewrap inside that
+// boundary: the hardened pod cannot mount bwrap's private /proc. This registration intentionally
+// comes after AddAgentRuntime so it overrides only this host's shared factory registration.
+var useKataPassthrough =
+    SandboxExecutorFactory.IsInCluster &&
+    string.Equals(
+        builder.Configuration["AgentHost:SandboxMode"],
+        "kata",
+        StringComparison.OrdinalIgnoreCase);
+if (useKataPassthrough)
+{
+    builder.Services.AddSingleton<ISandboxExecutor>(sp =>
+        new PassthroughExecutor(
+            "AgentHost executes inside a per-run Kata VM; nested bwrap is disabled.",
+            sp.GetRequiredService<ILoggerFactory>()
+                .CreateLogger(nameof(PassthroughExecutor))));
+}
 
 // ── CopilotAIAgent (singleton per pod — one run per pod lifetime) ──────────────
 builder.Services.AddSingleton<CopilotAIAgent>();

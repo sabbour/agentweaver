@@ -193,16 +193,25 @@ Three things are deliberately distinct:
 - **A2A agent-turn remoting** (the [A2A bridge](./a2a-bridge.md)) moves an entire *agent turn* — the SDK
   session and its tool loop — out to the per-run pod. That is the pod-per-run story above. It is
   **orthogonal** to backend selection: the in-pod AgentHost still runs each `run_command` through *its
-  own* `ISandboxExecutor`, which in-cluster is the Kata-pod backend the pod itself lives in.
+  own* `ISandboxExecutor`. When `AgentHost:SandboxMode=kata`, that executor is direct passthrough
+  because the AgentHost process already lives inside the per-run Kata VM; nesting bubblewrap would
+  require mount privileges deliberately withheld by the pod security context.
 
 Read the whole isolation stack top-down: pod-per-run decides *which process hosts the agent turn* (worker
 vs. per-run pod, via A2A); the executor abstraction decides *how each command inside that turn is
 isolated* (MXC / bwrap / Kata-pod claim); and the governance gate decides *whether the command may run at
 all* given the selected backend's `IsRealIsolation`. On a laptop these collapse onto one host — the agent
 turn runs in-process and commands isolate via MXC or bubblewrap; in-cluster they fan out — the agent turn
-runs in its own pod and commands isolate via the Kata-pod claim. The contract a reader has to remember is
+runs in its own Kata VM and commands execute directly within that VM. The contract a reader has to remember is
 single: *one command in, one uniform result out, isolation chosen per host and announced by
 `sandbox.selected`.*
+
+This Kata passthrough is an explicit deployment-level security tradeoff. `RunCommandTool` constructs
+`SandboxCommand` with `Environment: null`, so it does not add credentials to the child environment.
+The child still inherits the AgentHost process environment, however, and direct execution removes
+bubblewrap's PID/filesystem view. A same-UID adversarial command may therefore inspect in-pod process
+metadata or projected credentials through `/proc`; that residual risk is accepted because the
+disposable per-run Kata VM is the primary isolation boundary.
 
 ## The agent-sandbox controller (MXC vs. the controller)
 

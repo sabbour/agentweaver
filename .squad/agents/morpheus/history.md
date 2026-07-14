@@ -34,3 +34,7 @@
 ## 2026-07-12T06:33:29-07:00 — Shipped blueprint catalog evaluation
 
 Evaluated all five shipped blueprints and live default-run behavior. Found moderate-to-high composition redundancy: coordinator decomposition currently supplies lifecycle completeness beyond the selected workflow, so the default blueprint does not encode the advertised lifecycle itself. Proposed a purpose-built lifecycle DAG, eight-role core roster, conditional specialist casting, centralized platform gates, explicit PM/AI workflows, and canonical team-profile derivation. Artifact: `files/eval-shipped-blueprints.md`. Proposal is recorded in `decisions.md` and remains pending coordinator acceptance.
+
+
+## 2026-07-13T23:59:00-07:00 — #269 Kata passthrough and #305 follow-up
+Implemented the #269 conditional AgentHost passthrough override only for in-cluster Kata mode, retaining bubblewrap elsewhere. Build was clean; staging validation remains pending. A follow-up Morpheus task is fixing #305's steering revision-child authoritative-branch mismatch.

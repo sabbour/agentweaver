@@ -150,3 +150,7 @@ Trinity shipped the frontend Review now fix (`388b993`): the Assembly and review
 ## 2026-07-11T00:00:00Z — RAI session panel and coordinator activity UI fixes
 
 Fixed two frontend-only run-panel defects for the staging wave: RAI Reviewer panels filter serialized coordinator work-plan JSON, and coordinator activity updates coalesce into one collapsed activity control instead of many empty rows. The changes rode with Link's local-only v0.9.19-rc1 staging release.
+
+
+## 2026-07-13T23:59:00-07:00 — #215 validation
+Validated #215 as stale and closed.

@@ -496,8 +496,16 @@ public sealed class RunOrchestrator
         if (priorWorktreeUsable)
         {
             worktreePath = priorChild.WorktreePath!;
-            worktreeBranch = priorChild.WorktreeBranch ?? feedback.PriorWorktreeBranch;
+            // ROOT-CAUSE FIX (#305): the reused prior worktree is checked out on the PRIOR child's
+            // branch (agentweaver/<priorChild.Id>). The new revision child MUST launch on ITS OWN
+            // authoritative branch (agentweaver/<newAgentRun.Id>) or RunAgentHostContextResolver
+            // rejects the launch ("must use its authoritative branch") and AgentHost launch fails.
+            // Re-brand the reused worktree onto the new child's own branch at its current HEAD,
+            // preserving all committed + staged prior work (same-commit branch switch).
+            worktreeBranch = _worktreeManager.RebrandWorktreeToAuthoritativeBranch(
+                priorChild.WorktreePath!, newAgentRun.Id);
             evidence["worktree_strategy"] = "reused_prior";
+            evidence["authoritative_branch"] = worktreeBranch;
         }
         else
         {

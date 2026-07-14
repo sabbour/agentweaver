@@ -12,3 +12,7 @@ Produced the black-box acceptance oracle and coverage matrix for the `blueprint-
 - 8 items documented as CANNOT_DETERMINE through allowed surfaces (kernel isolation, LLM model, checkpoint backend, KV store, RAI policy specifics, lockout DB record, A2A timing, HPA events).
 - 10 conditional regression tests (R-01–R-10): add only after observed defects, not preemptively.
 - Seed prompt: "I want to build a personal expense tracker web app. Research what people actually want from expense tracking tools, figure out the key problems users face, design a product plan for it, then build the application."
+
+
+## 2026-07-13T23:59:00-07:00 — Priority-1 E2E
+The FitTrack-style priority-1 complex E2E rerun was still progressing through the full lifecycle toward a preview URL at handoff.
