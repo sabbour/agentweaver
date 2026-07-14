@@ -10,12 +10,13 @@
 #   2. Reads current version from VERSION file, bumps per argument
 #   3. Writes new VERSION, commits: "chore(release): bump version to vX.Y.Z"
 #   4. Creates annotated git tag vX.Y.Z
-#   5. Generates changelog from merged PRs since last tag
-#   6. Creates GitHub Release via gh
-#   7. Determines which images changed since last tag
-#   8. Builds changed images via az acr build
-#   9. Retags unchanged images server-side via az acr import
-#  10. Deploys with IMAGE_TAG=vX.Y.Z
+#   5. Pushes the release commit and tag to origin
+#   6. Generates changelog from merged PRs since last tag
+#   7. Creates GitHub Release via gh
+#   8. Determines which images changed since last tag
+#   9. Builds changed images via az acr build
+#  10. Retags unchanged images server-side via az acr import
+#  11. Deploys with IMAGE_TAG=vX.Y.Z
 
 set -euo pipefail
 
@@ -23,6 +24,35 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 FRONTEND_NODE_MODULES_DIR="${REPO_ROOT}/apps/web/node_modules"
 FRONTEND_NODE_MODULES_BACKUP_DIR="${REPO_ROOT}.frontend-node_modules.$$"
+
+cleanup_frontend_npmrc_build() {
+  rm -f "${REPO_ROOT}/apps/web/.npmrc.build"
+}
+
+stash_frontend_node_modules_outside_acr_context() {
+  if [[ ! -d "${FRONTEND_NODE_MODULES_DIR}" ]]; then
+    return 0
+  fi
+
+  rm -rf "${FRONTEND_NODE_MODULES_BACKUP_DIR}"
+  mv "${FRONTEND_NODE_MODULES_DIR}" "${FRONTEND_NODE_MODULES_BACKUP_DIR}"
+  echo "  [frontend] Temporarily moved node_modules out of the ACR build context"
+}
+
+restore_frontend_node_modules() {
+  if [[ ! -e "${FRONTEND_NODE_MODULES_BACKUP_DIR}" ]]; then
+    return 0
+  fi
+
+  rm -rf "${FRONTEND_NODE_MODULES_DIR}"
+  mv "${FRONTEND_NODE_MODULES_BACKUP_DIR}" "${FRONTEND_NODE_MODULES_DIR}"
+}
+
+cleanup_frontend_build_artifacts() {
+  cleanup_frontend_npmrc_build
+  restore_frontend_node_modules
+}
+
 trap cleanup_frontend_build_artifacts EXIT
 
 # ---------------------------------------------------------------------------
@@ -56,12 +86,13 @@ What the script does:
   2.  Reads current version from VERSION file, bumps per argument
   3.  Writes new VERSION, commits: "chore(release): bump version to vX.Y.Z"
   4.  Creates annotated git tag vX.Y.Z
-  5.  Generates changelog from merged PRs since last tag
-  6.  Creates GitHub Release via gh release create
-  7.  Determines which images changed since last tag (git diff --name-only)
-  8.  Builds changed images via az acr build
-  9.  Retags unchanged images server-side via az acr import
-  10. Deploys: IMAGE_TAG=vX.Y.Z bash scripts/aks/30-deploy.sh
+  5.  Pushes the release commit and tag to origin
+  6.  Generates changelog from merged PRs since last tag
+  7.  Creates GitHub Release via gh release create
+  8.  Determines which images changed since last tag (git diff --name-only)
+  9.  Builds changed images via az acr build
+  10. Retags unchanged images server-side via az acr import
+  11. Deploys: IMAGE_TAG=vX.Y.Z bash scripts/aks/30-deploy.sh
 
 To verify what version is deployed:
   kubectl get deployment agentweaver-api -n agentweaver \
@@ -155,7 +186,14 @@ echo "==> Creating annotated tag ${NEW_TAG}..."
 run git tag -a "${NEW_TAG}" -m "Release ${NEW_TAG}"
 
 # ---------------------------------------------------------------------------
-# 5. Generate changelog
+# 5. Push release commit and tag
+# ---------------------------------------------------------------------------
+echo "==> Pushing release commit and tag to origin..."
+run git push origin HEAD
+run git push origin "${NEW_TAG}"
+
+# ---------------------------------------------------------------------------
+# 6. Generate changelog
 # ---------------------------------------------------------------------------
 echo "==> Generating changelog from merged PRs since ${LAST_TAG_DATE}..."
 CHANGELOG=""
@@ -173,7 +211,7 @@ fi
 echo "${CHANGELOG}"
 
 # ---------------------------------------------------------------------------
-# 6. Create GitHub Release
+# 7. Create GitHub Release
 # ---------------------------------------------------------------------------
 echo "==> Creating GitHub release ${NEW_TAG}..."
 run gh release create "${NEW_TAG}" \
@@ -181,7 +219,7 @@ run gh release create "${NEW_TAG}" \
   --notes "${CHANGELOG}"
 
 # ---------------------------------------------------------------------------
-# 7. Determine changed images
+# 8. Determine changed images
 # ---------------------------------------------------------------------------
 COMMON_DOTNET_PATHS=(
   "agentweaver.sln"
@@ -259,34 +297,6 @@ frontend_npm_userconfig() {
   return 1
 }
 
-cleanup_frontend_npmrc_build() {
-  rm -f "${REPO_ROOT}/apps/web/.npmrc.build"
-}
-
-stash_frontend_node_modules_outside_acr_context() {
-  if [[ ! -d "${FRONTEND_NODE_MODULES_DIR}" ]]; then
-    return 0
-  fi
-
-  rm -rf "${FRONTEND_NODE_MODULES_BACKUP_DIR}"
-  mv "${FRONTEND_NODE_MODULES_DIR}" "${FRONTEND_NODE_MODULES_BACKUP_DIR}"
-  echo "  [frontend] Temporarily moved node_modules out of the ACR build context"
-}
-
-restore_frontend_node_modules() {
-  if [[ ! -e "${FRONTEND_NODE_MODULES_BACKUP_DIR}" ]]; then
-    return 0
-  fi
-
-  rm -rf "${FRONTEND_NODE_MODULES_DIR}"
-  mv "${FRONTEND_NODE_MODULES_BACKUP_DIR}" "${FRONTEND_NODE_MODULES_DIR}"
-}
-
-cleanup_frontend_build_artifacts() {
-  cleanup_frontend_npmrc_build
-  restore_frontend_node_modules
-}
-
 run_frontend_npm_credential_provider() {
   local uname_s
   uname_s="$(uname -s 2>/dev/null || echo unknown)"
@@ -336,7 +346,7 @@ prepare_frontend_dist() {
 }
 
 # ---------------------------------------------------------------------------
-# 8 & 9. Build changed images / retag unchanged images
+# 9 & 10. Build changed images / retag unchanged images
 # ---------------------------------------------------------------------------
 echo ""
 echo "==> Processing images for ${NEW_TAG} (previous: ${LAST_TAG:-none})..."
@@ -455,13 +465,8 @@ run env \
   bash "${SCRIPT_DIR}/aks/30-deploy.sh"
 
 # ---------------------------------------------------------------------------
-# Push tag and summary
+# Summary
 # ---------------------------------------------------------------------------
-echo ""
-echo "==> Pushing commit and tag to origin..."
-run git push origin HEAD
-run git push origin "${NEW_TAG}"
-
 echo ""
 echo "==================================================="
 echo " RELEASE ${NEW_TAG} COMPLETE"
