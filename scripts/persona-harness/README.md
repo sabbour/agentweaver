@@ -210,6 +210,8 @@ scripts/persona-harness/
     seams.mjs                Generated-artifact seam driver (blueprint/workflow generation)
     generation-checks.mjs    Pure validators: reserved-role denylist + workflow YAML validation
     judge.mjs                LLM-judge PROMPT ASSEMBLER — packages transcript + JUDGE.md + criteria (no LLM call)
+    approvals.mjs            Deterministic approval-gate DETECTION from the run events feed (driver-only, no judgment)
+    approval-judge.mjs       In-the-loop approval judge CONTRACT — packages gate evidence, calls a pluggable judge, executes the decision
     generate-brief.mjs       Persona-brief PROMPT ASSEMBLER — asks a real LLM for a new brief in briefs/*.md shape (no LLM call)
     meta-aggregate.mjs       Layer-2 cross-run rollup over LLM verdict blocks (invariants/divergences/recurring)
     metrics.mjs              Token/cost summary via GET /api/projects/{id}/metrics
@@ -228,6 +230,9 @@ scripts/persona-harness/
     priya-checks.test.mjs         Unit tests for Priya's non-gating judgeContext + TLS guard
     generation-checks.test.mjs    Unit tests for the seam validators (with #311 + structural negatives)
     agent-driver-tools.test.mjs   Unit tests for the driver's deterministic P0 computation
+    approvals.test.mjs            Unit tests for approval-gate detection (tool/shell/coordinator-child, pending vs resolved)
+    approval-judge.test.mjs       Unit tests for the in-the-loop judge contract (decision -> correct real endpoint)
+    runner-approvals.test.mjs     Wiring test: the runner detects+judges+executes a gate and records the audit trail
     judge.test.mjs                Unit tests for the judge prompt assembler + meta-aggregation rollup
     generate-brief.test.mjs       Unit tests for brief-generation prompt assembly + CLI output
   findings/                  Emitted JSON findings from fixed-script runs (git-ignored)
@@ -252,8 +257,26 @@ node tools.mjs submit-goal --goal "<the persona's plain-language ask>" --thought
 node tools.mjs get-spec --thought "..."
 node tools.mjs revise-spec --feedback "<pushback grounded in what you just read>" --thought "..."   # ≥2 required
 node tools.mjs get-spec --thought "..."     # read the re-draft, decide if addressed
+node tools.mjs check-approvals --thought "..."   # detect any pending tool/shell approval gate
+node tools.mjs resolve-approval --thought "..." --decision approve --scope once --reason "<judge verdict>"
+                                             # detect -> JUDGE -> execute one gate the human way
 node tools.mjs finish --summary "..."       # stops at the gate (no confirm), writes transcript, cleans up
 ```
+
+**Driving approval gates (deeper rungs).** Once a run proceeds past the
+confirmation gate it can block on a tool-approval (e.g. `web_fetch`) or a
+shell-command gate. `check-approvals` reports what is pending (deterministic, from
+the real events feed — not `/api/notifications`, which only surfaces `human_review`
+today). `resolve-approval` closes the driver/judge loop: it DETECTS the gate,
+packages its evidence for the **judge**, and executes EXACTLY the judge's decision
+against the real endpoints (`tool-approvals`/`tool-denials`,
+`shell-approvals`/`shell-denials`). The decision comes from the judge, never the
+driver: pass an explicit `--decision approve|deny|defer` (a human/operator acting
+as judge), or wire an LLM via `--judge-cmd "<cli>"` / `$AGENTWEAVER_APPROVAL_JUDGE_CMD`
+(prompt on stdin, `agentweaver.persona-approval-decision/v1` JSON on stdout). With
+no judge wired it **defers** — it never blind-approves. Every decision (gate, judge
+prompt, decision, executed API call) is recorded on the transcript turn's
+`approval` field for audit.
 
 Each command prints the REAL API response so the driving LLM reacts to actual
 state. `finish` records both raw `pushbackAttemptCount` and objectively successful
@@ -486,6 +509,14 @@ effects). To go further, reuse the same `client` in a scenario/engine extension:
 - Poll `GET /api/runs/{id}` for `reviewing` (HITL gate) / `completed`.
 - `POST /api/runs/{id}/assembly/review` `{ approve: true }` / `{ request_changes: true }`.
 - `GET /api/runs/{id}/files` + run detail to inspect produced artifacts.
+
+Deeper rungs can also block on **tool/shell approval gates** mid-run. The scenario
+runner drives these automatically when you pass `driveApprovals: true` (and a
+`judge`) to `driveScenario` — on each poll it detects pending gates, hands each to
+the judge, and executes the decision, recording the full audit into
+`evidence.approvalDecisions`. It defaults OFF, so scoping-rung runs (which suspend
+before any gate) are unaffected; with the default DEFER judge nothing is ever
+blind-approved.
 
 Keep deployment-triggering scenarios (e.g. Jordan's full "deploy to AKS
 Automatic") behind an explicit opt-in flag so default runs never deploy.

@@ -177,6 +177,9 @@ async function main() {
           // judge can see everything that happened, plus a convenience count.
           events: result.evidence.events,
           eventTypeCounts: countBy(result.evidence.eventTypes ?? [], (e) => e.type),
+          // Audit trail of any judged approval gate driven during the run (empty on
+          // scoping-rung runs, which suspend before any tool/shell gate is raised).
+          approvalDecisions: result.evidence.approvalDecisions ?? [],
         };
 
   // Performance/cost metrics (requirement 4) — reuse the dashboard's own endpoint.

@@ -105,6 +105,22 @@ export function printReport(finding) {
     console.log('');
   }
 
+  const approvals = finding.evidence?.approvalDecisions ?? [];
+  if (approvals.length) {
+    console.log(`${BOLD}Approval gates driven (judge-gated)${RESET}`);
+    for (const a of approvals) {
+      if (a.error) {
+        console.log(`  ${RED}!${RESET} ${a.error}`);
+        continue;
+      }
+      const d = a.judge?.decision?.decision ?? 'defer';
+      const mark = d === 'approve' ? `${GREEN}approve${RESET}` : d === 'deny' ? `${RED}deny${RESET}` : `${YELLOW}defer${RESET}`;
+      const src = a.judge?.source ?? a.judge?.decision?.source ?? 'judge';
+      console.log(`  ${mark} ${DIM}${a.gate?.description ?? a.gate?.key ?? ''}${RESET}  ${DIM}(${src}${a.apiCall ? `, api ${a.apiCall.status}` : ', not executed'})${RESET}`);
+    }
+    console.log('');
+  }
+
   console.log(`${BOLD}API call trace${RESET}`);
   for (const call of finding.apiCalls) {
     const ok = call.status >= 200 && call.status < 300;

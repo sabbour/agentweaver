@@ -96,6 +96,34 @@ run was bounded before it). Mark explicitly — do NOT force a pass/fail.
 
 ---
 
+## Layer 1b — In-the-loop approval decisions (a narrow, separate judge call)
+
+Distinct from the end-of-run P0/P1 verdict above, the harness now also drives
+**approval gates in the loop**: when a live run blocks on a tool-approval or a
+shell-command gate, the driver detects it, **packages that one gated action's
+evidence, and asks you (the judge) a single question: approve, deny, or defer?**
+This is deliberately a *narrow* judge call, not a re-run of full scenario judging.
+
+- The driver does zero subjective reasoning here too. `lib/approvals.mjs` only
+  detects, structurally, which gates are pending from the real events feed
+  (`tool.approval_required`, `coordinator.child_approval_required`,
+  `shell.approval_required` with no matching `*_resolved`). `lib/approval-judge.mjs`
+  assembles the decision prompt and executes **exactly** your decision against the
+  real endpoints (`POST /api/runs/{id}/tool-approvals|tool-denials` with
+  `{request_id, scope}`, or `/shell-approvals|shell-denials` with `{command_hash}`).
+- Your job is the decision: approve only an action that is safe AND in-scope for
+  the persona's goal AND clearly what the persona would consent to. If you cannot
+  responsibly decide from the evidence, choose **defer** — the harness leaves the
+  gate for a human rather than blind-approving. Never approve just to unblock a run.
+- Return the `agentweaver.persona-approval-decision/v1` block
+  (`{decision, scope, reason}`). The driver records your prompt + decision + the
+  API call it executed into the transcript (`turn.approval`) and the v2 finding
+  (`evidence.approvalDecisions`), so every gated decision is auditable after the
+  fact — what was gated, what you saw, what you decided, why, and what ran.
+
+This keeps the same contract as the rest of the harness: the driver captures and
+executes; **you** own every subjective call, whether at end-of-run or in the loop.
+
 ## Layer 2 — Meta-aggregation (across a BATCH of runs)
 
 Per-run judgment in isolation is noisy: one draft may be good or bad by luck of the

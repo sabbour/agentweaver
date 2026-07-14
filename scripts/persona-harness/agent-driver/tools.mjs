@@ -31,7 +31,11 @@
 //   node tools.mjs get-spec        --thought "..."
 //   node tools.mjs revise-spec     --feedback "<pushback>" --thought "..."   # the pushback lever
 //   node tools.mjs get-events      --thought "..."
-//   node tools.mjs finish          --summary "..." [--keep]
+//   node tools.mjs check-approvals  --thought "..."                      # detect pending approval gates
+//   node tools.mjs resolve-approval --thought "..." [--request-id <id> | --command-hash <h>] [--all]
+//                                   [--decision approve|deny|defer] [--scope once|run|tool|always]
+//                                   [--reason "..."] [--judge-cmd "<llm cli>"]   # DETECT -> JUDGE -> EXECUTE
+//   node tools.mjs finish         --summary "..." [--keep]
 //
 // Every command prints the REAL API response to stdout so the LLM can react to it.
 
@@ -43,6 +47,8 @@ import { existsSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 
 import { AgentweaverClient } from '../lib/client.mjs';
+import { detectPendingApprovals, describeGate } from '../lib/approvals.mjs';
+import { decideApproval, executeApprovalDecision, makeDefaultJudge } from '../lib/approval-judge.mjs';
 
 /**
  * @typedef {Object} TranscriptTurn
@@ -72,6 +78,8 @@ import { AgentweaverClient } from '../lib/client.mjs';
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SESSION_PATH = join(HERE, 'session.current.json');
 const TRANSCRIPTS_DIR = join(HERE, '..', 'transcripts');
+const BRIEFS_DIR = join(HERE, '..', 'briefs');
+const JUDGE_MD_PATH = join(HERE, '..', 'JUDGE.md');
 const DEFAULT_SPEC_TIMEOUT_MS = 120_000;
 const DEFAULT_SPEC_POLL_MS = 4_000;
 const REQUIRED_SUCCESSFUL_PUSHBACKS = 2;
@@ -263,6 +271,48 @@ export function computeDeterministicP0(turns = []) {
   };
 }
 
+async function loadBriefText(brief) {
+  const p = join(BRIEFS_DIR, `${brief}.md`);
+  if (!existsSync(p)) return null;
+  try {
+    return await readFile(p, 'utf8');
+  } catch {
+    return null;
+  }
+}
+
+async function loadJudgeMd() {
+  if (!existsSync(JUDGE_MD_PATH)) return null;
+  try {
+    return await readFile(JUDGE_MD_PATH, 'utf8');
+  } catch {
+    return null;
+  }
+}
+
+// Build the (objective) evidence context handed to the approval judge: the persona
+// brief, the JUDGE.md playbook, the recent transcript turns, and the recent raw
+// events around the gate. No judgment — just packaging.
+async function buildApprovalContext(session, gate, events) {
+  const recentTurns = (session.turns ?? []).slice(-6).map((t) => ({
+    n: t.n, actor: t.actor, action: t.action, thought: t.thought, note: t.note,
+    status: t.response?.status ?? null,
+  }));
+  let recentEvents = Array.isArray(events) ? events : [];
+  if (gate?.sequence != null) {
+    recentEvents = recentEvents.filter((e) => typeof e?.sequence !== 'number' || e.sequence <= gate.sequence + 2);
+  }
+  recentEvents = recentEvents.slice(-15);
+  return {
+    briefText: await loadBriefText(session.brief),
+    judgeMd: await loadJudgeMd(),
+    recentTurns,
+    recentEvents,
+    runId: session.runId ?? null,
+    persona: session.brief ?? null,
+  };
+}
+
 const COMMANDS = {
   async init(args) {
     if (!args.brief) throw new Error('--brief is required');
@@ -278,6 +328,7 @@ const COMMANDS = {
       runId: null,
       pushbackAttemptCount: 0,
       pushbackCount: 0,
+      resolvedApprovalKeys: [],
       turns: [],
     };
     // Verify auth up front so the LLM knows the identity it is driving as.
@@ -438,6 +489,94 @@ const COMMANDS = {
       note: `${events.length} events`,
     });
     print({ status: res.status, count: events.length, typeCounts, events });
+  },
+
+  // Detect whether the run is currently BLOCKED on an approval gate (tool / shell /
+  // coordinator-child). Pure structural detection over the real events feed — it
+  // makes NO approve/deny judgment; it only reports what is pending so the LLM/judge
+  // can act. Signal choice is documented in lib/approvals.mjs (the events feed, not
+  // /api/notifications, which only surfaces human_review today).
+  async 'check-approvals'(args) {
+    const session = await loadSession();
+    if (!session.runId) throw new Error('no run yet');
+    const client = newClient(session, resolveToken(args.token));
+    const res = await client.get(`/api/runs/${session.runId}/events`);
+    const events = Array.isArray(res.responseBody) ? res.responseBody : [];
+    const { pending } = detectPendingApprovals(events, { alreadyResolvedKeys: session.resolvedApprovalKeys ?? [] });
+    const summary = pending.map((g) => ({ key: g.key, kind: g.kind, requestId: g.requestId, commandHash: g.commandHash, toolName: g.toolName, url: g.url, description: describeGate(g) }));
+    await recordTurn(session, {
+      actor: 'system',
+      thought: args.thought,
+      action: 'check-approvals',
+      apiCall: { method: 'GET', path: `/api/runs/${session.runId}/events`, requestBody: null, status: res.status, ms: res.ms, ok: res.ok, traceId: res.traceId, upstreamMs: res.upstreamMs, responseBody: { pendingApprovals: summary } },
+      note: `${pending.length} pending approval gate(s)`,
+    });
+    print({ status: res.status, pendingCount: pending.length, pending: summary });
+  },
+
+  // Drive an approval gate the human way: DETECT -> JUDGE -> EXECUTE. The driver
+  // performs zero subjective reasoning: it packages the gate evidence, hands it to
+  // the judge (lib/approval-judge.mjs), and executes EXACTLY the judge's decision
+  // against the real approval endpoints. Judge resolution: an explicit judged
+  // decision passed via --decision (a human/operator acting as judge) > an external
+  // judge command (--judge-cmd or $AGENTWEAVER_APPROVAL_JUDGE_CMD) > default DEFER
+  // (never blind-approve). Targets one gate via --request-id / --command-hash, else
+  // the first pending gate (or every pending gate with --all).
+  async 'resolve-approval'(args) {
+    const session = await loadSession();
+    if (!session.runId) throw new Error('no run yet');
+    const client = newClient(session, resolveToken(args.token));
+    const evRes = await client.get(`/api/runs/${session.runId}/events`);
+    const events = Array.isArray(evRes.responseBody) ? evRes.responseBody : [];
+    let { pending } = detectPendingApprovals(events, { alreadyResolvedKeys: session.resolvedApprovalKeys ?? [] });
+
+    if (args['request-id']) pending = pending.filter((g) => g.requestId === args['request-id']);
+    if (args['command-hash']) pending = pending.filter((g) => g.commandHash === args['command-hash']);
+    if (pending.length === 0) {
+      print({ status: evRes.status, resolved: [], note: 'no matching pending approval gate' });
+      return;
+    }
+    const targets = args.all ? pending : [pending[0]];
+
+    // The judge. An explicit --decision is treated as the JUDGE'S verdict passed
+    // through (operator/human-as-judge), NOT the driver reasoning. Otherwise defer
+    // to a wired judge command, else safe-defer.
+    const explicitDecision = args.decision
+      ? { decision: String(args.decision), scope: args.scope ? String(args.scope) : 'once', reason: args.reason ? String(args.reason) : '(operator-supplied judged decision)', source: 'operator' }
+      : null;
+    const judge = makeDefaultJudge({ explicitDecision, judgeCmd: args['judge-cmd'] ? String(args['judge-cmd']) : null });
+
+    session.resolvedApprovalKeys = session.resolvedApprovalKeys ?? [];
+    const results = [];
+    for (const gate of targets) {
+      const context = await buildApprovalContext(session, gate, events);
+      const { prompt, decision } = await decideApproval(gate, context, { judge });
+      const outcome = await executeApprovalDecision(client, session.runId, gate, decision);
+      if (outcome.executed && outcome.apiCall?.ok) session.resolvedApprovalKeys.push(gate.key);
+
+      // Full audit turn: WHAT was gated, WHAT the judge saw + decided + why, and
+      // WHICH API call executed the decision (or that it was deferred). Visible to a
+      // human/meta reviewer after the fact — never a silent side effect.
+      await recordTurn(session, {
+        actor: 'persona',
+        thought: args.thought ?? `approval gate detected: ${describeGate(gate)}`,
+        action: `resolve-approval (${decision.decision})`,
+        apiCall: outcome.apiCall
+          ? outcome.apiCall
+          : { method: 'NONE', path: `/api/runs/${session.runId} (deferred — no API call)`, requestBody: null, status: 0, ms: 0, ok: false, responseBody: null },
+        note: `gate=${describeGate(gate)} | judge=${decision.decision}/${decision.scope} (${decision.source ?? 'judge'}) reason="${decision.reason}"`,
+      });
+      // Attach the packaged judge evidence to the just-recorded turn for the audit trail.
+      const recorded = session.turns[session.turns.length - 1];
+      recorded.approval = {
+        gate: { key: gate.key, kind: gate.kind, requestId: gate.requestId, commandHash: gate.commandHash, toolName: gate.toolName, url: gate.url, command: gate.command, evidenceEvent: gate.evidenceEvent },
+        judge: { prompt, decision, source: decision.source ?? null },
+        executed: outcome.executed,
+      };
+      await saveSession(session);
+      results.push({ key: gate.key, decision: decision.decision, scope: decision.scope, reason: decision.reason, executed: outcome.executed, apiStatus: outcome.apiCall?.status ?? null });
+    }
+    print({ status: evRes.status, resolved: results });
   },
 
   async finish(args) {

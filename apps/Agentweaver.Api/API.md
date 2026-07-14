@@ -196,6 +196,38 @@ Request:
 { "approved": true }
 ```
 
+### Approval gates (tool + shell)
+
+While a run is `in_progress` it can suspend on an approval gate. Two gate kinds are
+surfaced on `GET /api/runs/{id}/events` and resolved through the endpoints below.
+Owner-only; a non-owner receives `403`, an invalid id `400`, and a run that is not
+active `409`.
+
+**Tool-approval gate** — raised by the sandbox when a tool call (e.g. `web_fetch`,
+the preview gate) needs consent. Detect via a `tool.approval_required` event
+(`{ requestId, displayId?, toolName, url?, intention?, message }`); for a
+coordinator child it is re-projected onto the coordinator stream as
+`coordinator.child_approval_required` (`{ childRunId, subtaskId, requestId, ... }`).
+Resolve on the run itself, or on the coordinator run — the server resolves the
+owning child run automatically.
+
+- `POST /api/runs/{id}/tool-approvals` — body `{ "request_id": "...", "scope": "once" }`
+  where `scope` is `once` (default), `run`, `tool`, or `always`. Response `200`:
+  `{ "run_id": "...", "request_id": "...", "approved": true }`.
+- `POST /api/runs/{id}/tool-denials` — same body; response `{ ..., "denied": true }`.
+
+**Shell-command gate** — raised when policy requires approval for a shell command
+(`RequireApprovalForAllShell`, or a destructive command). Detect via a
+`shell.approval_required` event (`{ requestId, commandHash, command, commandLength, message }`).
+
+- `POST /api/runs/{id}/shell-approvals` — body `{ "command_hash": "..." }`. Response
+  `200`: `{ "run_id": "...", "command_hash": "...", "approved": true }`.
+- `POST /api/runs/{id}/shell-denials` — same body; response `{ ..., "denied": true }`.
+
+A resolved tool gate emits `tool.approval_resolved`
+(`{ requestId, runId, approved, expired }`); the coordinator mirror is
+`coordinator.child_approval_resolved`.
+
 ---
 
 ## Spec-to-Backlog (Feature 014)

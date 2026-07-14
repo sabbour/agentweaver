@@ -25,6 +25,9 @@
 // Statuses that mean the run will never reach the confirmation gate — short-circuit
 // the poll instead of burning the whole timeout. `bounded` is intentionally excluded
 // (a bounded run may still have drafted a spec before hitting its step budget).
+import { detectPendingApprovals, describeGate } from './approvals.mjs';
+import { decideApproval, executeApprovalDecision, makeDefaultJudge } from './approval-judge.mjs';
+
 const TERMINAL_FAIL = new Set(['failed', 'cancelled', 'canceled', 'errored', 'error']);
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -37,11 +40,22 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
  * @param {number} [opts.timeoutMs]
  * @param {number} [opts.pollMs]
  * @param {boolean} [opts.keep]  keep the project/run instead of cleaning up
+ * @param {boolean} [opts.driveApprovals]  when true, detect + judge + drive approval gates
+ *        that appear during the run (deeper rungs). Default false — the scoping rung
+ *        suspends at the confirmation gate and never raises tool/shell gates.
+ * @param {(input:{prompt:string,gate:object,context:object})=>Promise<object>} [opts.judge]
+ *        the in-the-loop approval judge. The driver executes EXACTLY what it returns; it
+ *        never decides approve/deny itself. Defaults to a safe DEFER judge (see
+ *        lib/approval-judge.mjs makeDefaultJudge), so enabling driveApprovals without a
+ *        real judge never blind-approves anything.
  */
 export async function driveScenario(client, scenario, persona, opts = {}) {
   const timeoutMs = opts.timeoutMs ?? 240_000;
   const pollMs = opts.pollMs ?? 4_000;
   const started = Date.now();
+  const driveApprovals = opts.driveApprovals ?? scenario.driveApprovals ?? false;
+  const approvalJudge = opts.judge ?? makeDefaultJudge();
+  const resolvedApprovalKeys = new Set();
 
   // Per-phase latency — wall-clock ms for each milestone so speed regressions are
   // visible in the finding over time.
@@ -64,6 +78,10 @@ export async function driveScenario(client, scenario, persona, opts = {}) {
     events: [],
     eventTypes: [],
     runStatus: null,
+    // Audit trail of every judged approval gate driven during the run (requirement
+    // 5): what was gated, what the judge saw + decided + why, and the API call that
+    // executed the decision. Empty for scoping-rung runs (no gates raised).
+    approvalDecisions: [],
   };
   // ONLY deterministic platform-correctness (P0) checks live here. No subjective
   // content judgment — that is the LLM judge's job, from the captured evidence.
@@ -162,6 +180,14 @@ export async function driveScenario(client, scenario, persona, opts = {}) {
       sawFailure = true;
       break;
     }
+
+    // Drive any approval gate that appeared this tick so the run does not stall
+    // waiting on an approval that never comes. Detection is deterministic; the
+    // approve/deny/defer decision is the injected judge's, and the driver executes
+    // exactly that. Only active when opts.driveApprovals is enabled (deeper rungs).
+    if (driveApprovals) {
+      await driveApprovalsOnce();
+    }
     await sleep(pollMs);
   }
   timings.outcomeSpecSettleMs = Date.now() - pollStarted;
@@ -204,6 +230,41 @@ export async function driveScenario(client, scenario, persona, opts = {}) {
   }
 
   return finalize(judgeContext);
+
+  // Detect + judge + execute every currently-pending approval gate on the run. The
+  // driver contributes no judgment: it packages evidence, calls the judge, executes
+  // exactly the decision, and records the full audit trail into
+  // evidence.approvalDecisions. Best-effort — a transport error never fails the run.
+  async function driveApprovalsOnce() {
+    try {
+      const evRes = await client.get(`/api/runs/${evidence.runId}/events`);
+      const events = Array.isArray(evRes.responseBody) ? evRes.responseBody : [];
+      const { pending } = detectPendingApprovals(events, { alreadyResolvedKeys: resolvedApprovalKeys });
+      for (const gate of pending) {
+        const context = {
+          briefText: persona?.raw ?? null,
+          recentTurns: [],
+          recentEvents: events.slice(-15),
+          runId: evidence.runId,
+          persona: persona?.title ?? null,
+        };
+        const { prompt, decision } = await decideApproval(gate, context, { judge: approvalJudge });
+        const outcome = await executeApprovalDecision(client, evidence.runId, gate, decision);
+        if (outcome.executed && outcome.apiCall?.ok) resolvedApprovalKeys.add(gate.key);
+        evidence.approvalDecisions.push({
+          detectedAt: new Date().toISOString(),
+          gate: { key: gate.key, kind: gate.kind, requestId: gate.requestId, commandHash: gate.commandHash, toolName: gate.toolName, url: gate.url, command: gate.command, description: describeGate(gate), evidenceEvent: gate.evidenceEvent },
+          judge: { prompt, decision, source: decision.source ?? null },
+          executed: outcome.executed,
+          apiCall: outcome.apiCall
+            ? { method: outcome.apiCall.method, path: outcome.apiCall.path, status: outcome.apiCall.status, ok: outcome.apiCall.ok, responseBody: outcome.apiCall.responseBody }
+            : null,
+        });
+      }
+    } catch (err) {
+      evidence.approvalDecisions.push({ detectedAt: new Date().toISOString(), error: `driveApprovalsOnce threw: ${err?.message ?? err}` });
+    }
+  }
 
   function finalize(jctx = null) {
     // The driver's verdict is ONLY objective platform-correctness (P0). Subjective
