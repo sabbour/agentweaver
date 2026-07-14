@@ -763,3 +763,75 @@ shared-package extraction to a **coordinated checkpoint**, not a concurrent edit
   gate; everything else is deferred.
 - **Never approve a human-review/preview gate without live-testing the `preview_url`
   first** (hard rule from `e2e-harness-plan.md`).
+
+---
+
+## GitHub Copilot CLI Skill
+
+The combined three-harness set must be **drivable from GitHub Copilot CLI as a first-class
+skill** — not just a script whose flags Ahmed happens to remember. A Copilot session (like
+this one) should be able to say *"run the API harness against persona Priya"* and have a
+discoverable skill route that to the real CLI command, capture the JSON verdict, and report
+the result back — closing the loop between "Ahmed/Copilot asks a question" and "the harness
+runs and answers it." This section is a **spec of that skill's two-file design** — same
+addition Trinity and Morpheus are making to their docs.
+
+### Why discovery mechanism forces a specific layout
+
+Copilot CLI **auto-discovers** skills only from a fixed set of canonical directories — the
+official Copilot CLI paths `.github/skills/`, `.claude/skills/`, `.agents/skills/`, plus
+this repo's own Squad conventions `.squad/skills/` and `.copilot/skills/`. It does **not**
+scan arbitrary `scripts/` subfolders. Consequently a `SKILL.md` that lives only inside
+`scripts/api-harness/` is **not auto-discoverable** — to Copilot CLI it is just a human
+README. Discoverability must come from a `SKILL.md` placed in one of the canonical
+directories above.
+
+### Two-file design (NOT one)
+
+| File | Location | Role |
+|---|---|---|
+| **Harness CLI-contract doc** | `scripts/api-harness/SKILL.md` | The harness's own detailed operator/CLI contract — exact commands, every flag (`--persona`, `--target`, `--rung`, `--out`, …), the expected JSON output shape (the canonical verdict schema `agentweaver.persona-judge-verdict/v1`), and exit codes. Lives with the code, versioned alongside it, updated whenever the CLI surface changes. This is the source of truth for *how to invoke the harness*. |
+| **Discoverable pointer skill** | `.github/skills/api-harness/SKILL.md` | The actual Copilot-CLI-discoverable entry point. Thin: it (a) declares in its frontmatter/description **when to invoke** — e.g. *"use when asked to run/validate the API harness, test backend functionality end-to-end, or investigate a specific persona/scenario failure"* — and (b) **delegates** by shelling out to the `scripts/api-harness/` CLI, then surfaces the captured JSON verdict. It carries no harness logic of its own; it points at `scripts/api-harness/SKILL.md` for the exact command/flag contract. |
+
+The split exists because the two files answer different questions: the `scripts/api-harness/SKILL.md`
+answers *"what are the exact commands/flags/output?"* (co-located with the code so it can't
+drift), while `.github/skills/api-harness/SKILL.md` answers *"when should Copilot reach for
+this, and how does it hand off?"* (in a canonical directory so Copilot can find it at all).
+
+### Frontmatter / format convention
+
+The pointer skill must follow this repo's **existing skill-authoring convention** — the same
+YAML-frontmatter + markdown-body format used by the entries under `.copilot/skills/` (e.g.
+`.copilot/skills/docs-feature/SKILL.md` for a full playbook with `name` / `description` /
+`domain` / `confidence` / `source` frontmatter, and `.copilot/skills/playwright-cli/SKILL.md`
+for the `name` / `description` / `allowed-tools` shell-delegation pattern). When authoring
+the pointer skill, mirror those (a `name`, a trigger-rich `description`, and — because it
+shells out — an `allowed-tools` entry scoped to the harness CLI, following the
+`playwright-cli` precedent). Confirm the exact expected frontmatter against the
+`extensions_manage` guide and the existing `.copilot/skills/` / `.github/skills/` entries
+before authoring.
+
+### Applies to all three harnesses
+
+**Each of the three harnesses gets this same two-file treatment**, in lockstep:
+
+| Harness | Co-located CLI-contract doc | Discoverable pointer skill |
+|---|---|---|
+| API (this spec) | `scripts/api-harness/SKILL.md` | `.github/skills/api-harness/SKILL.md` |
+| UI (Trinity) | `scripts/ui-harness/SKILL.md` | `.github/skills/ui-harness/SKILL.md` |
+| MCP (Morpheus) | `scripts/mcp-harness/SKILL.md` | `.github/skills/mcp-harness/SKILL.md` |
+
+So a Copilot session can invoke any surface's harness by name, the pointer skill routes to
+the corresponding `scripts/{surface}-harness/` CLI, and the JSON verdict flows back to the
+session for reporting.
+
+### Spec-only — authoring is a follow-on task
+
+This section **specifies** the two-file design and what goes in each file; it does **not**
+author them. Actually writing `scripts/api-harness/SKILL.md` and
+`.github/skills/api-harness/SKILL.md` is a **follow-on implementation task**, the **same
+tier** as the rewrite/extraction work in [Rollout](#rollout--migration-plan) — to be done
+**once the harness itself is built/renamed** (the CLI surface must be final before its
+skill contract can be written), with the scoped-implementation model, coordinated with
+Trinity's and Morpheus's equivalent skill authoring so the three pointer skills land
+consistently.
