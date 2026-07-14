@@ -57,6 +57,16 @@ still fully spec-driven, never a fixed per-persona list. Use raw `--method`/`--p
 or `--operation-id`, whichever is more convenient in the moment; both record
 identically.
 
+**Known coverage gap (verified against a live instance on 2026-07-14):** as of
+Tank's `/openapi/v1.json` (commit `0b80b41b`), only endpoints the backend
+explicitly named via `.WithName(...)` carry an `operationId` — currently just
+`GET /api/version` (`GetVersion`), out of 169 routes. `--operation-id` therefore
+only works for that one route today; raw `--method`/`--path` is the reliable
+primary mechanism until/unless the backend adds `.WithName()` more broadly. This
+is a backend-naming gap, not a driver limitation — flag it to Tank if broader
+`--operation-id` coverage becomes worth the churn; it is not required, since raw
+method/path already covers every operation the spec declares.
+
 `finish` prints a transcript path under `scripts/api-harness/transcripts/`, computes
 a generic P0 mechanics check (did every recorded call succeed — no
 pushback-counting or other business-specific heuristics), and cleans up the
