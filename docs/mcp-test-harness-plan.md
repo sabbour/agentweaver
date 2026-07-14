@@ -225,8 +225,8 @@ Investigated in `McpBearerTokenMiddleware.cs` + `AgentweaverApiClient.cs` +
 
 ## Architecture
 
-The MCP harness reuses the API harness's proven shape (`briefs/` → LLM-in-the-loop
-driver → verbatim transcript → separate judge) with the surface swapped from REST to
+The MCP harness reuses the API harness's proven shape (shared persona cores →
+LLM-in-the-loop driver → verbatim transcript → separate judge) with the surface swapped from REST to
 MCP. It is a **new, sibling** harness, not a modification of the API harness
 (`scripts/persona-harness/`, renaming to `scripts/api-harness/`).
 
@@ -432,11 +432,9 @@ A **new sibling** package — nothing under the API harness's current
 scripts/mcp-harness/
   package.json                 # Node ESM, "type":"module"; dep: @modelcontextprotocol/sdk
   README.md                    # what it is, how to run, the two rungs, the two targets
-  JUDGE.md                     # MCP-specific judge ADDENDUM only — points at the SHARED
-                               #   JUDGE playbook; documents the MCP evidence taxonomy
-                               #   (isError, JSON-RPC error codes, tool-loop traces) and
-                               #   the #129 actionable-error rubric. Does NOT fork the
-                               #   P0/P1/CANNOT_DETERMINE method.
+  # NOTE: the MCP judge addendum (JUDGE.mcp.md) and the MCP evidence adapter
+  #   (adapters/mcp.mjs) live in the SHARED scripts/harness-judge/ package, NOT here —
+  #   see Cross-Harness Shared Layer. This harness ships no copied judge/verdict logic.
   mcp-client/
     client.mjs                 # thin wrapper over @modelcontextprotocol/sdk: initialize,
                                #   RFC9728 discovery, tools/call, progress handling
@@ -453,9 +451,12 @@ scripts/mcp-harness/
                                #   tools; here are the tools + result shapes; obey the brief"
   lib/
     transcript.mjs             # MCP transcript writer (agentweaver.mcp-transcript/v1)
-    evidence-adapter.mjs       # normalizes MCP turns -> the SHARED judge digest shape
     mcp-p0.mjs                 # deterministic P0 block (isError/error-code/schema/pushback)
     reporter.mjs               # DRIVE+CAPTURE OK / DRIVER P0 FAIL banner (never PASS/FAIL)
+    (contributes) ../../harness-judge/adapters/mcp.mjs   # SHARED — MCP transcript -> normalized judge evidence
+    (imports)     ../../harness-judge/core.mjs           # SHARED judge core (canonical verdict schema)
+    (imports)     ../../harness-judge/meta-aggregate.mjs # SHARED — verdict rollup (API+UI+MCP mixed)
+    (imports)     ../../persona-briefs/index.mjs         # SHARED — resolve persona core + MCP surface adapter
   smoke/
     mcp-cli-smoke.mjs          # #131 deterministic smoke test (P0-only, stdio target):
                                #   signin/token -> project -> submit -> poll -> artifacts -> cleanup
@@ -464,9 +465,12 @@ scripts/mcp-harness/
   findings/     .gitignore
 ```
 
-**Shared, not copied:** `briefs/` and the judge core are **not** duplicated here — they
-live in the shared package (below) and are imported by all three harnesses. This
-harness's `JUDGE.md` is a thin **addendum** documenting only the MCP evidence taxonomy.
+**Shared, not copied:** persona **cores** + **surface adapters** and the judge core are
+**not** duplicated here — the personas live in the shared `scripts/persona-briefs/`
+package and the judge in the shared `scripts/harness-judge/` package (both below),
+imported by all three harnesses. The MCP judge **addendum** (`JUDGE.mcp.md`) and the MCP
+evidence adapter (`adapters/mcp.mjs`) are authored **into** `scripts/harness-judge/`, not
+forked here.
 
 `package.json` scripts (mirroring the API harness's `node --test` convention):
 
@@ -475,7 +479,7 @@ harness's `JUDGE.md` is a thin **addendum** documenting only the MCP evidence ta
   "scripts": {
     "test": "node --test",
     "smoke": "node smoke/mcp-cli-smoke.mjs",   // #131, wireable as npm run test:mcp-smoke at repo root
-    "judge": "node ../persona-briefs/judge/assemble.mjs"  // shared judge assembler
+    "judge": "node ../harness-judge/core.mjs"  // shared judge core
   }
 }
 ```
@@ -512,42 +516,66 @@ spirit** (Jordan's brief talks about "get idea → app → container → deploy"
 back ≥2 times", never about REST specifically) — but they physically live inside the
 API harness and reference "the real Agentweaver API".
 
-**Recommendation:** extract the briefs into a **shared package all three harnesses
-import**:
+**Recommendation:** extract personas into a **shared package all three harnesses
+import**, split into surface-agnostic **cores** and thin per-surface **adapters**:
 
 ```
 scripts/persona-briefs/            # shared, surface-agnostic — the single source of truth
-  briefs/
-    jordan.md   maya.md   priya.md   …   # goals, constraints, voice, MANDATORY ≥2 pushback
+  personas/
+    jordan.md   maya.md   priya.md   …   # persona CORES — goals, constraints, voice,
+                                         #   MANDATORY ≥2 pushback, authored criteria.
+                                         #   NOTHING surface-specific (no tool name, no "curl").
+  surfaces/
+    jordan.mcp.md  jordan.api.md  jordan.ui.md  …  # per-surface ADAPTERS — map a persona's
+                                                   #   intent onto ONE surface's actions. The MCP
+                                                   #   harness authors the .mcp.md adapters.
   generate/
-    generate-brief.mjs       # LLM-driven brief GENERATOR — synthesize a new brief on demand
-    brief-schema.mjs         # the surface-agnostic brief contract every generated brief must satisfy
-  judge/
-    JUDGE.md                 # the shared P0 / P1 / CANNOT_DETERMINE + FRUSTRATION playbook (surface-neutral core)
-    verdict-schema.mjs       # agentweaver.persona-judge-verdict/v1 (canonical, shared)
-    assemble.mjs             # judge-prompt assembler core (surface-agnostic)
-    meta-aggregate.mjs       # cross-run + CROSS-SURFACE aggregation
+    generate-core.mjs        # LLM-driven persona-CORE generator — synthesize a new core on demand
+    generate-adapter.mjs     # LLM-driven per-surface ADAPTER generator (core + target surface -> adapter)
+    persona-schema.mjs       # the surface-agnostic core contract every generated core must satisfy
+  index.mjs                  # resolves a persona core + optional surface adapter for a harness
   package.json               # imported by api-harness, ui-harness, mcp-harness
 ```
 
-Each brief is written **surface-neutrally**: it states *what the persona wants* and
-*that they must push back ≥2 times grounded in real responses*, and leaves *how a turn
-is taken* to the harness. The MCP harness reads `jordan.md` and drives it via
-`coordinator_outcome_spec_revise` tool calls; the API harness drives the same
-`jordan.md` via `revise-spec` REST calls; the UI harness drives it via browser DOM
-actions. A tiny **surface adapter** in each harness maps the abstract levers
-("propose", "inspect draft", "push back", "confirm") onto its concrete surface.
+The judge is a **separate** top-level shared package (see §2), kept decoupled from
+persona storage/generation — the same "orthogonal concern" principle behind the
+`{surface}-harness` rename:
 
-**The shared package must support LLM-generated briefs, not just store hand-written
-ones** (pipeline stage 1 of the self-improvement loop). `generate/generate-brief.mjs` is
+```
+scripts/harness-judge/             # shared, surface-agnostic — the single judge for all three surfaces
+  JUDGE.md                 # shared P0 / P1 / CANNOT_DETERMINE + FRUSTRATION playbook (surface-neutral core)
+  JUDGE.mcp.md             # MCP evidence ADDENDUM (isError, JSON-RPC error codes, tool-loop trace, #129 rubric)
+  verdict-schema.mjs       # agentweaver.persona-judge-verdict/v1 (canonical, shared)
+  core.mjs                 # judge-prompt assembler + verdict core (surface-agnostic)
+  meta-aggregate.mjs       # cross-run + CROSS-SURFACE aggregation
+  adapters/
+    mcp.mjs                # MCP transcript -> normalized shared judge evidence (this harness contributes it)
+    api.mjs   ui.mjs       # the sibling harnesses' evidence adapters
+  package.json             # imported by api-harness, ui-harness, mcp-harness
+```
+
+Each persona **core** (`personas/*.md`) is written **surface-neutrally**: it states
+*what the persona wants* and *that they must push back ≥2 times grounded in real
+responses*, and leaves *how a turn is taken* to a thin per-surface adapter
+(`surfaces/*.mcp.md` / `*.api.md` / `*.ui.md`). The MCP harness reads
+`personas/jordan.md` plus its `surfaces/jordan.mcp.md` adapter and drives it via
+`coordinator_outcome_spec_revise` tool calls; the API harness drives the same
+`personas/jordan.md` via `surfaces/jordan.api.md` → `revise-spec` REST calls; the UI
+harness via `surfaces/jordan.ui.md` → browser DOM actions. Each **surface adapter** maps
+the abstract levers ("propose", "inspect draft", "push back", "confirm") onto its
+concrete surface.
+
+**The shared package must support LLM-generated personas, not just store hand-written
+ones** (pipeline stage 1 of the self-improvement loop). `generate/generate-core.mjs` is
 an **LLM-driven generator**: given a seed (a JTBD theme, a target discipline, a
 capability/seam to stress, or "a plausible new-user variation of Jordan"), it prompts a
-model to synthesize a **new surface-agnostic brief** — a fresh persona with its own
-goals, constraints, voice, and the mandatory ≥2-pushback instruction — conforming to
-`brief-schema.mjs`. Generated briefs are the same shape as the hand-authored ones, so
-**all three harnesses drive them with zero code changes**; the hand-authored
-jordan/maya/priya set becomes the seed/exemplar corpus, not the ceiling. Generated
-briefs may be persisted into `briefs/` (promoted after they prove useful) or driven
+model to synthesize a **new surface-agnostic persona core** — a fresh persona with its
+own goals, constraints, voice, and the mandatory ≥2-pushback instruction — conforming to
+`persona-schema.mjs`; `generate/generate-adapter.mjs` then assembles a prompt to propose
+that core's per-surface adapter. Generated cores are the same shape as the hand-authored
+ones, so **all three harnesses drive them with zero code changes**; the hand-authored
+jordan/maya/priya set becomes the seed/exemplar corpus, not the ceiling. Generated cores
+may be persisted into `personas/` (promoted after they prove useful) or driven
 ephemerally for a single exploratory session. This keeps the harness fleet from
 replaying the same three personas forever and lets it **probe the space of realistic
 user intents autonomously** — the whole point of replacing manual bug-hunting. (An
@@ -555,13 +583,15 @@ existing `lib/generate-brief.mjs` already lives in the API harness as a starting
 Phase 2 folds/generalizes it into the shared `generate/` module.)
 
 - The authored `specs/personas/*.md` criteria stay where they are; the shared
-  `assemble.mjs` resolves them exactly as `lib/judge.mjs` does today (parse the
-  `specs/personas/<name>.md` link out of the brief).
-- **Convergence note for Trinity:** this is the same location and the same brief files
-  we both already cite; adopt `scripts/persona-briefs/` as the shared home so the UI
-  and MCP harnesses import identical persona definitions rather than each forking a
-  copy. Migration is a **move + re-point imports**, done without editing the API
-  harness's driver logic (see Rollout).
+  `harness-judge/core.mjs` resolves them exactly as `lib/judge.mjs` does today (parse
+  the `specs/personas/<name>.md` link out of the persona core).
+- **Convergence note for Trinity:** this matches the shared layout Trinity and Tank
+  adopted — persona **cores** in `scripts/persona-briefs/personas/` + per-surface
+  **adapters** in `scripts/persona-briefs/surfaces/*.{mcp,api,ui}.md`, and the judge as a
+  **separate** `scripts/harness-judge/` package — so all three harnesses import identical
+  persona definitions and one judge rather than each forking a copy. Migration is a
+  **move + re-point imports**, done without editing the API harness's driver logic
+  (see Rollout).
 
 ### 2. Judge architecture — RECOMMENDATION: **one shared judge core + thin MCP evidence adapter** (option a)
 
@@ -643,20 +673,20 @@ ratio of `isError:true` turns or non-actionable errors (#129) forcing guesswork;
 where one path should exist (the multi-call baseline #130's `run_task` is meant to
 collapse). The API-harness adapter maps the equivalent signals from HTTP evidence and
 the UI adapter from DOM/interaction evidence, so the ordinal is meaningfully comparable
-across surfaces. The `JUDGE.md` core documents the frustration rubric; the MCP `JUDGE.md`
+across surfaces. The `JUDGE.md` core documents the frustration rubric; the MCP `JUDGE.mcp.md`
 addendum lists the MCP-specific signal catalog above. The driver still assigns **no**
 frustration itself — like P1, it is a subjective call the judge renders from captured
 evidence.
 
 **What's MCP-specific (the thin adapter), and only this:**
-- `lib/evidence-adapter.mjs` maps `agentweaver.mcp-transcript/v1` turns →
+- `harness-judge/adapters/mcp.mjs` maps `agentweaver.mcp-transcript/v1` turns →
   the shared digest (`{kind, intent, composition, httpStatus→protocolStatus, …}`), and
   surfaces the MCP frustration signals (retry loops, abandonment, `isError` ratio) for
   the judge to weigh;
-- the MCP `JUDGE.md` **addendum** documents the extra evidence fields (`isError`,
-  `protocolErrorCode`, tool-loop trace), the #129 actionable-error rubric, and the
-  MCP-specific frustration-signal catalog;
-- the shared `assemble.mjs` gains a small `surface` parameter (`api|ui|mcp`) so the
+- the MCP `JUDGE.mcp.md` **addendum** (in the shared `harness-judge/` package) documents
+  the extra evidence fields (`isError`, `protocolErrorCode`, tool-loop trace), the #129
+  actionable-error rubric, and the MCP-specific frustration-signal catalog;
+- the shared `harness-judge/core.mjs` gains a small `surface` parameter (`api|ui|mcp`) so the
   prompt preamble names the surface, but the **method, schema, and taxonomy are
   identical**.
 
@@ -673,7 +703,7 @@ shared judge relies on **all** of:
   of what the backend actually did, correlated to the transcript by **`run_id` and
   `trace_id`** (the transcript already records `traceId` from the MCP result `_meta` /
   response headers, and `run_id` from `run_submit`/`coordinator_start` results). The MCP
-  **evidence adapter** (`lib/evidence-adapter.mjs`) should therefore pull the relevant
+  **evidence adapter** (`harness-judge/adapters/mcp.mjs`) should therefore pull the relevant
   AppInsights transactions and `kubectl logs` slices keyed by those IDs and attach them
   to the assembled judge prompt alongside the transcript — reusing the proven correlation
   queries from `docs/e2e-harness-plan.md` (App Insights transaction search on the run's
@@ -718,26 +748,29 @@ Record the judge-architecture recommendation as a decision so it can be reconcil
 Trinity's parallel UI recommendation **before** anyone extracts the shared package.
 
 **Phase 1 — new sibling scaffold, zero shared-file edits.** Create
-`scripts/mcp-persona-harness/` with the MCP client (`mcp-client/`), the driver tool
+`scripts/mcp-harness/` with the MCP client (`mcp-client/`), the driver tool
 surface (`agent-driver/tools.mjs`), the transcript writer, the P0 block, and the
-reporter. At this phase it can **temporarily read** the API harness's `briefs/*.md`
-**read-only** (import path, no edits) so it can run before the shared package exists.
+reporter. At this phase it can **temporarily read** the API harness's persona files
+**read-only** (import path, no edits) so it can run before the shared packages exist.
 Deliver the **#131 stdio smoke test** first — it's the highest-value, most
 deterministic piece and unblocks CI.
 
-**Phase 2 — shared `scripts/persona-briefs/` extraction (coordinated, gated on
-Phase 0 convergence).** Once Trinity and I have reconciled the judge recommendation,
-one coordinated change **moves** `briefs/*.md` + the judge core (`JUDGE.md`,
-`verdict-schema`, `assemble`, `meta-aggregate`) into `scripts/persona-briefs/` and
-re-points imports. This is done as a **single, sequenced step when the API harness is
+**Phase 2 — shared `scripts/persona-briefs/` + `scripts/harness-judge/` extraction
+(coordinated, gated on Phase 0 convergence).** Once Trinity and I have reconciled the
+judge recommendation, one coordinated change **moves** the persona **cores** into
+`scripts/persona-briefs/personas/` (with API-specific phrasing peeled into
+`surfaces/*.api.md`) **and** the judge core (`JUDGE.md`, `verdict-schema.mjs`, `core.mjs`,
+`meta-aggregate.mjs`, `adapters/`) into the **separate** `scripts/harness-judge/` package,
+then re-points imports. This is done as a **single, sequenced step when the API harness is
 at a safe checkpoint** (Tank's `harness/wip-persona-v1` merged or paused) — never as a
-concurrent edit to Tank's live files. Until then, the MCP harness imports briefs
-read-only and carries its own thin judge addendum.
+concurrent edit to Tank's live files. Until then, the MCP harness imports personas
+read-only and carries its own thin MCP judge addendum (`JUDGE.mcp.md`) for later
+contribution to `scripts/harness-judge/`.
 
 **Phase 3 — LLM-driven scenarios + cross-surface meta-aggregation.** Add the
-brief-driven scoping-rung scenarios (Jordan/Maya/Priya over MCP), the #129 error-probe
-scenario, and wire MCP verdicts into the shared `meta-aggregate.mjs` so API-vs-MCP
-comparisons for the same persona become possible. Add the opt-in `--deep` rung
+persona-driven scoping-rung scenarios (Jordan/Maya/Priya over MCP), the #129 error-probe
+scenario, and wire MCP verdicts into the shared `harness-judge/meta-aggregate.mjs` so
+API-vs-MCP comparisons for the same persona become possible. Add the opt-in `--deep` rung
 (confirm → dispatch → approvals → preview → completion) behind a flag, reusing the E2E
 plan's **live-`curl`-preview-before-approve** rule.
 
@@ -746,9 +779,9 @@ the repo root (#131 AC), and grow the harness's assertions as #129/#130/#128 lan
 doubles as their acceptance suite.
 
 **Non-interference guarantees:**
-- New top-level dir `scripts/mcp-persona-harness/` — no path overlap with
+- New top-level dir `scripts/mcp-harness/` — no path overlap with
   `scripts/persona-harness/` or `docs/ui-test-harness-plan.md`.
-- Phase 1 only **reads** the API harness's briefs; it never writes them.
+- Phase 1 only **reads** the API harness's persona files; it never writes them.
 - The shared-package extraction (Phase 2) is explicitly deferred to a coordinated
   checkpoint, not raced against Tank's edits.
 - No release-pipeline actions; the coordinator ships.
@@ -757,8 +790,11 @@ doubles as their acceptance suite.
 
 ## Open Questions (to reconcile with Trinity + coordinator)
 
-1. **Shared-package name/location:** `scripts/persona-briefs/` proposed here. Trinity
-   is asked the same — converge on one name before Phase 2.
+1. **Shared-package name/location:** **RESOLVED** — two shared packages, matching
+   Trinity's and Tank's docs: `scripts/persona-briefs/` (persona cores in `personas/` +
+   per-surface adapters in `surfaces/*.{mcp,api,ui}.md`) and a **separate**
+   `scripts/harness-judge/` (judge `core.mjs`, `verdict-schema.mjs`, `meta-aggregate.mjs`,
+   `adapters/`). All three specs now agree.
 2. **MCP client dependency:** adopt `@modelcontextprotocol/sdk` (recommended) vs a
    hand-rolled JSON-RPC client (zero-dep). Recommendation: the real SDK, to exercise
    real protocol framing.
