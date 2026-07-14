@@ -317,8 +317,29 @@ platform internals or root-causing a bug.
 Beyond binary approve/reject, the persona should also exercise **human-review-style
 feedback** where the gate supports it — e.g. request changes with a short note ("this
 also needs to handle X") via `coordinator_steer` / the review request-changes path —
-because that is a real interaction pattern Agentweaver supports and the harness should
-drive it, not just the two-button path.
+because that is a real interaction pattern Agentweaver should support and the harness
+should drive it, not just the two-button path.
+
+> **REQUIRED PREREQUISITE — `request-changes` is a blocking dependency, not yet a usable
+> path (verified against the shared driver code).** The MCP gate-review flow above lists
+> **approve / request-changes / defer**, but the shipped approval driver Tank built
+> (`lib/approval-judge.mjs`, commit `b4ac1104`) supports **only `approve | deny | defer`**
+> (`APPROVAL_DECISIONS = ['approve','deny','defer']`): a deny is a hard denial and the
+> judge's `reason` is captured **for audit only** — it is **not** transmitted to the
+> backend as review feedback, and there is **no `run_review`-style request-changes call
+> that loops the run back to the implementation node**. So the request-changes path this
+> section describes **does not exist yet in any harness**. Implementing it — a new
+> decision in the shared approval driver (`approve | deny | defer | request-changes`)
+> **plus** the backend/decision-schema support that carries the persona's reason into a
+> `run_review`-style request-changes endpoint and loops the run back — is a **hard
+> prerequisite that must be sequenced BEFORE any deep gate-review scenario depending on it
+> can run in ANY of the three harnesses** (API, UI, and MCP all assume it). Until it
+> lands, **request-changes-dependent MCP scenarios are blocked, not merely degraded**; the
+> [Rollout Plan](#rollout-plan-build-in-parallel-without-touching-in-flight-files) lists
+> this as an explicit upstream dependency. It is owned on the shared-driver side and must
+> be reconciled across all three specs. The **scoping rung** (drive to
+> `coordinator_outcome_spec_confirm`, never confirm) and the **approve/deny/defer** gate
+> paths are unaffected and proceed independently.
 
 > **Scope boundary — do NOT over-index on this (functional correctness, not output
 > grading).** The point of persona gate-review is to exercise the **mechanism** end to
@@ -326,8 +347,8 @@ drive it, not just the two-button path.
 > correctly through the DAG afterward, do notifications fire, does a requested change
 > re-enter the right stage — **not** to make the persona a quality bar for the agents'
 > generated code/design. The persona's review feedback stays **realistic-but-lightweight**
-> (enough to meaningfully drive the request-changes path once or twice), never an
-> elaborate code-review rubric demanding perfect output. Correspondingly, the **judge**
+> (enough to meaningfully drive the request-changes path once or twice **once it exists**),
+> never an elaborate code-review rubric demanding perfect output. Correspondingly, the **judge**
 > criteria for these turns stay on **"did the platform mechanics work"** (P0) — *not*
 > "was the AI's output good." (Output quality is still judged as P1 for the drafted
 > spec, but gate-review turns specifically test functional correctness of the gating
@@ -900,7 +921,22 @@ persona-driven scoping-rung scenarios (Jordan/Maya/Priya over MCP), the #129 err
 scenario, and wire MCP verdicts into the shared `harness-judge/meta-aggregate.mjs` so
 API-vs-MCP comparisons for the same persona become possible. Add the opt-in `--deep` rung
 (confirm → dispatch → approvals → preview → completion) behind a flag, reusing the E2E
-plan's **live-`curl`-preview-before-approve** rule.
+plan's **live-`curl`-preview-before-approve** rule. The deep rung's **approve/deny/defer**
+gate scenarios ship here; its **request-changes** gate scenarios are **gated on the
+upstream dependency below** and are scheduled only after it lands.
+
+> **Blocking upstream dependency — `request-changes` support gates the deep gate-review
+> scenarios.** Per the [gate-review section](#1-how-a-persona-brief-drives-mcp-tool-calls-turn-by-turn),
+> the shipped shared approval driver (`lib/approval-judge.mjs`, `b4ac1104`) only does
+> `approve | deny | defer`; the deep-rung gate-review scenarios (API, UI, and MCP) that
+> exercise the **request-changes loop cannot run** until the shared driver gains a
+> `request-changes` decision **and** the backend/decision-schema support that carries the
+> persona's reason into a `run_review`-style request-changes endpoint and loops the run
+> back to the implementation node. This is a **hard prerequisite**, sequenced **before**
+> those specific scenarios in **all three** harnesses — not a nice-to-have. It is owned on
+> the shared-driver side and must be reconciled across the three specs; the scoping-rung,
+> the approve/deny/defer gate paths, and all non-gate scenarios are unaffected and proceed
+> independently.
 
 **Phase 4 — CI + acceptance-test-for-#295-children.** Wire `npm run test:mcp-smoke` at
 the repo root (#131 AC), and grow the harness's assertions as #129/#130/#128 land so it
@@ -912,6 +948,8 @@ doubles as their acceptance suite.
 - Phase 1 only **reads** the API harness's persona files; it never writes them.
 - The shared-package extraction (Phase 2) is explicitly deferred to a coordinated
   checkpoint, not raced against Tank's edits.
+- The **`request-changes` backend/decision-schema support is a hard upstream prerequisite**
+  (above) that gates the request-changes deep gate-review scenarios in all three harnesses.
 - No release-pipeline actions; the coordinator ships.
 
 ---
