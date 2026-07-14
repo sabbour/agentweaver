@@ -1,0 +1,13 @@
+{
+  "name": "agentweaver-persona-briefs",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Shared, surface-agnostic persona cores and thin surface adapters for Agentweaver harnesses.",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "test": "node --test"
+  }
+}
