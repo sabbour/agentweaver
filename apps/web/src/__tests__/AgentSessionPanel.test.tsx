@@ -416,6 +416,67 @@ describe('AgentSessionPanel', () => {
     expect(document.body.textContent).not.toContain('Activity 2');
   });
 
+  it('renders the topology thumbnail beneath the Work Plan step content but not on other scopes (#UI-bug-3)', async () => {
+    currentEvents = [
+      {
+        sequence: 1,
+        type: 'coordinator.work_plan',
+        payload: {
+          status: 'planned',
+          subtasks: [{ id: '1', title: 'Build the focused activity feed', assignedAgent: 'Trinity' }],
+        },
+      },
+    ];
+    const workPlanTree: RunSessionTree[] = [{
+      ...tree[0],
+      children: [{
+        nodeId: 'work-plan',
+        label: 'Work Plan',
+        roleKey: 'work_plan',
+        status: 'completed',
+        depth: 1,
+        children: [],
+      }],
+    }];
+
+    const { rerender } = render(
+      <Wrapper>
+        <AgentSessionPanel
+          open
+          onClose={vi.fn()}
+          tree={workPlanTree}
+          selectedNodeId="work-plan"
+          onSelectNode={vi.fn()}
+          coordinatorRunId="coord-run-1"
+          projectId="p1"
+          workPlanTopologyThumbnail={<button data-testid="topology-thumbnail-stub">Topology</button>}
+        />
+      </Wrapper>,
+    );
+
+    await waitFor(() => expect(document.body.textContent).toContain('Build the focused activity feed'), { timeout: 4000 });
+    expect(screen.getByTestId('topology-thumbnail-stub')).toBeDefined();
+
+    // The same thumbnail node must NOT render on a non-work-plan scope (e.g. the coordinator
+    // activity timeline) even when the prop is passed — it is scoped to the Work Plan step only.
+    rerender(
+      <Wrapper>
+        <AgentSessionPanel
+          open
+          onClose={vi.fn()}
+          tree={tree}
+          selectedNodeId="coordinator"
+          onSelectNode={vi.fn()}
+          coordinatorRunId="coord-run-1"
+          projectId="p1"
+          workPlanTopologyThumbnail={<button data-testid="topology-thumbnail-stub">Topology</button>}
+        />
+      </Wrapper>,
+    );
+    await screen.findByTestId('run-timeline', undefined, { timeout: 4000 });
+    expect(screen.queryByTestId('topology-thumbnail-stub')).toBeNull();
+  });
+
   it('renders a red RAI verdict as an error state for a completed RAI gate', async () => {
     currentEvents = [
       {
@@ -618,6 +679,45 @@ describe('AgentSessionPanel', () => {
     expect(screen.queryByText(/Ship a minimal preview app/i)).toBeNull();
     expect(screen.queryByText(/Implement only the web preview path/i)).toBeNull();
     expect(document.body.textContent).not.toContain('desired_outcome');
+  });
+
+  it('formats an interim outcome-spec drafting message as friendly Markdown instead of dumping raw JSON on a subtask scope (#UI-bug-2)', async () => {
+    currentEvents = [
+      { sequence: 1, type: 'agent.turn.start', payload: { turnId: 'draft-turn' } },
+      {
+        sequence: 2,
+        type: 'agent.message',
+        payload: {
+          content: JSON.stringify({
+            desired_outcome: 'Ship a minimal preview app',
+            scope: 'Implement only the web preview path.',
+          }),
+        },
+      },
+      { sequence: 3, type: 'agent.turn.end', payload: {} },
+    ];
+
+    render(
+      <Wrapper>
+        <AgentSessionPanel
+          open
+          onClose={vi.fn()}
+          tree={tree}
+          selectedNodeId="subtask-1"
+          onSelectNode={vi.fn()}
+          coordinatorRunId="coord-run-1"
+          projectId="p1"
+        />
+      </Wrapper>,
+    );
+
+    // Rendered via the same friendly "### Outcome plan" Markdown used once the spec is
+    // confirmed — never the raw, illegible JSON object.
+    await waitFor(() => expect(screen.getByText('Outcome plan')).toBeDefined(), { timeout: 4000 });
+    expect(screen.getByText('Ship a minimal preview app')).toBeDefined();
+    expect(screen.getByText('Implement only the web preview path.')).toBeDefined();
+    expect(document.body.textContent).not.toContain('desired_outcome');
+    expect(document.body.textContent).not.toContain('{"desired_outcome"');
   });
 
   it('explains assembly-requested revision cycles in the coordinator timeline with feedback', async () => {
@@ -916,6 +1016,46 @@ describe('AgentSessionPanel', () => {
     // Raw system-prompt scaffolding is technical and is never dumped as a visible bubble.
     expect(screen.queryByText('Coordinator system prompt v1')).toBeNull();
     expect(screen.queryByText('System prompt')).toBeNull();
+  });
+
+  it('gives coordinator lifecycle narration steps varied, event-specific headers instead of a repeated literal "Coordinator" (#UI-bug-1)', async () => {
+    currentEvents = [
+      // An intent-driven step so buildRunTimeline yields at least one step and the
+      // coordinator lifecycle narration steps get merged in alongside it (see
+      // coordinatorNarrationSteps in AgentSessionPanel.tsx).
+      { sequence: 1, type: 'agent.intent', payload: { intent: 'Plan the work' } },
+      { sequence: 2, type: 'coordinator.started', payload: { goal: 'Ship the preview polish updates.' } },
+      {
+        sequence: 3,
+        type: 'coordinator.work_plan',
+        payload: { subtasks: [{ id: '1', title: 'Build the feed', assignedAgent: 'Trinity' }] },
+      },
+      { sequence: 4, type: 'subtask.dispatched', payload: { subtaskId: '1' } },
+      { sequence: 5, type: 'subtask.completed', payload: { subtaskId: '1' } },
+    ];
+
+    render(
+      <Wrapper>
+        <AgentSessionPanel
+          open
+          variant="docked"
+          onClose={vi.fn()}
+          tree={tree}
+          selectedNodeId="coordinator"
+          onSelectNode={vi.fn()}
+          coordinatorRunId="coord-run-1"
+          projectId="p1"
+        />
+      </Wrapper>,
+    );
+
+    const timeline = await screen.findByTestId('run-timeline', undefined, { timeout: 4000 });
+    // Each lifecycle event gets its own specific header — not every step repeating "Coordinator".
+    expect(within(timeline).getByText('Coordinator started')).toBeDefined();
+    expect(within(timeline).getByText('Dispatched subtask')).toBeDefined();
+    expect(within(timeline).getByText('Subtask completed')).toBeDefined();
+    // The generic literal 'Coordinator' header must not be repeated across these steps.
+    expect(within(timeline).queryAllByText('Coordinator').length).toBe(0);
   });
 
   it('renders reported intents as ordered Timeline steps for a coordinator scope', async () => {

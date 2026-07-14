@@ -1,6 +1,6 @@
 import type { RunStreamEvent } from '../api/sse';
 import { deriveHumanTitle, extractCallId, stripPathPrefix } from './reducer';
-import { isSerializedWorkPlan } from './coordinatorPlanFilter';
+import { isSerializedWorkPlan, parseOutcomeSpecMessage, formatOutcomeSpecMessage } from './coordinatorPlanFilter';
 
 /**
  * Count the subtask drafts inside the decompose agent's serialized work-plan JSON array, so the
@@ -659,6 +659,18 @@ export function buildRunTimeline(
             : 'Decomposed the work into subtasks.';
         }
       }
+    }
+  }
+
+  // Reformat the outcome-spec drafting agent's interim raw JSON (e.g.
+  // {"desired_outcome":...,"scope":...}) into the same friendly "### Outcome plan" Markdown
+  // used once the spec is confirmed (see AgentSessionPanel's buildTurns). Unlike the
+  // serialized-work-plan strip above this always applies — the raw JSON is illegible on
+  // ANY scope (coordinator or child/subtask) that streams it (#UI-bug-2).
+  for (const step of steps) {
+    for (const msg of step.messages) {
+      const outcomeSpec = parseOutcomeSpecMessage(msg.text);
+      if (outcomeSpec) msg.text = formatOutcomeSpecMessage(outcomeSpec);
     }
   }
 

@@ -1590,6 +1590,10 @@ const useStyles = makeStyles({
     fontSize: tokens.fontSizeBase200,
     color: tokens.colorNeutralForeground3,
   },
+  workPlanTopologyThumbnail: {
+    maxWidth: '260px',
+    marginTop: tokens.spacingVerticalM,
+  },
   centerTabBody: {
     display: 'flex',
     flexDirection: 'column',
@@ -3557,6 +3561,75 @@ export function CoordinatorRunPage() {
   const isConnecting    = streamStatus === 'connecting';
   const isStreaming     = streamStatus === 'streaming';
   const hasGraph        = rfNodes.length > 0;
+  // Reused by both the left-rail minimap AND the Work Plan detail thumbnail (#UI-bug-3) so the
+  // graph-rendering ReactFlow/MiniMap markup exists in exactly one place.
+  const renderTopologyThumbnail = (variant: 'rail' | 'workplan') => (
+    <div
+      role="button"
+      tabIndex={0}
+      className={variant === 'rail' ? styles.minimapButton : mergeClasses(styles.minimapButton, styles.workPlanTopologyThumbnail)}
+      aria-label="Open full topology graph"
+      onClick={() => setTopologyPanelOpen(true)}
+      onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setTopologyPanelOpen(true); } }}
+      data-testid={variant === 'rail' ? 'open-topology-minimap' : 'open-topology-thumbnail-workplan'}
+    >
+      <span className={styles.minimapCaption}>Topology</span>
+      <div className={styles.minimapCanvas} aria-hidden="true">
+        {!topologyPanelOpen && hasGraph ? (
+        <ExecutionModalContext.Provider value={viewAssemblyExecution}>
+        <BrowseFilesContext.Provider value={browseAssemblyFiles}>
+        <ActiveEdgeContext.Provider value={activeLoopbackId}>
+        <CoordinatorSessionContext.Provider value={(opts) => openPanelForNode('coordinator', opts)}>
+        <CoordPanelContext.Provider value={openPanelForNode}>
+          <ReactFlow
+            nodes={linkedDisplayNodes}
+            edges={displayEdges2}
+            nodeTypes={coordinatorNodeTypes}
+            edgeTypes={workflowEdgeTypes}
+            fitView
+            fitViewOptions={{ padding: 0.12 }}
+            nodesDraggable={false}
+            nodesConnectable={false}
+            nodesFocusable={false}
+            edgesFocusable={false}
+            elementsSelectable={false}
+            panOnDrag={false}
+            panOnScroll={false}
+            zoomOnScroll={false}
+            zoomOnPinch={false}
+            zoomOnDoubleClick={false}
+            preventScrolling={false}
+            proOptions={{ hideAttribution: true }}
+            style={{ width: '100%', height: '100%' }}
+          >
+            <MiniMap
+              nodeStrokeWidth={0}
+              nodeBorderRadius={2}
+              pannable={false}
+              zoomable={false}
+              bgColor="var(--colorNeutralBackground2)"
+              maskColor="transparent"
+              nodeColor={(n) => {
+                const s = (n.data as SubtaskNodeData | undefined)?.topoStatus as string | undefined;
+                if (s === 'completed' || s === 'assemble_ready') return '#107c41';
+                if (s === 'running' || s === 'dispatching' || s === 'awaiting_assembly' || s === 'assembling') return '#8c837c';
+                if (s === 'waiting') return '#d47c00';
+                if (s === 'failed' || s === 'declined') return '#c50f1f';
+                return '#b8afa8';
+              }}
+            />
+          </ReactFlow>
+        </CoordPanelContext.Provider>
+        </CoordinatorSessionContext.Provider>
+        </ActiveEdgeContext.Provider>
+        </BrowseFilesContext.Provider>
+        </ExecutionModalContext.Provider>
+        ) : (
+          <span className={styles.minimapEmpty}>No graph yet</span>
+        )}
+      </div>
+    </div>
+  );
   const isRetryable     = viewState.canRetry;
   // Stop/toggle endpoints still require an active run, but coordinator messaging uses the backend's
   // explicit steerability bit so review-gated runs can receive operator instructions.
@@ -4269,71 +4342,7 @@ export function CoordinatorRunPage() {
               </span>
             </div>
             <div className={styles.treeRailFooter}>
-                <div
-                  role="button"
-                  tabIndex={0}
-                  className={styles.minimapButton}
-                  aria-label="Open full topology graph"
-                  onClick={() => setTopologyPanelOpen(true)}
-                  onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setTopologyPanelOpen(true); } }}
-                  data-testid="open-topology-minimap"
-                >
-                  <span className={styles.minimapCaption}>Topology</span>
-                  <div className={styles.minimapCanvas} aria-hidden="true">
-                    {!topologyPanelOpen && hasGraph ? (
-                    <ExecutionModalContext.Provider value={viewAssemblyExecution}>
-                    <BrowseFilesContext.Provider value={browseAssemblyFiles}>
-                    <ActiveEdgeContext.Provider value={activeLoopbackId}>
-                    <CoordinatorSessionContext.Provider value={(opts) => openPanelForNode('coordinator', opts)}>
-                    <CoordPanelContext.Provider value={openPanelForNode}>
-                      <ReactFlow
-                        nodes={linkedDisplayNodes}
-                        edges={displayEdges2}
-                        nodeTypes={coordinatorNodeTypes}
-                        edgeTypes={workflowEdgeTypes}
-                        fitView
-                        fitViewOptions={{ padding: 0.12 }}
-                        nodesDraggable={false}
-                        nodesConnectable={false}
-                        nodesFocusable={false}
-                        edgesFocusable={false}
-                        elementsSelectable={false}
-                        panOnDrag={false}
-                        panOnScroll={false}
-                        zoomOnScroll={false}
-                        zoomOnPinch={false}
-                        zoomOnDoubleClick={false}
-                        preventScrolling={false}
-                        proOptions={{ hideAttribution: true }}
-                        style={{ width: '100%', height: '100%' }}
-                      >
-                        <MiniMap
-                          nodeStrokeWidth={0}
-                          nodeBorderRadius={2}
-                          pannable={false}
-                          zoomable={false}
-                          bgColor="var(--colorNeutralBackground2)"
-                          maskColor="transparent"
-                          nodeColor={(n) => {
-                            const s = (n.data as SubtaskNodeData | undefined)?.topoStatus as string | undefined;
-                            if (s === 'completed' || s === 'assemble_ready') return '#107c41';
-                            if (s === 'running' || s === 'dispatching' || s === 'awaiting_assembly' || s === 'assembling') return '#8c837c';
-                            if (s === 'waiting') return '#d47c00';
-                            if (s === 'failed' || s === 'declined') return '#c50f1f';
-                            return '#b8afa8';
-                          }}
-                        />
-                      </ReactFlow>
-                    </CoordPanelContext.Provider>
-                    </CoordinatorSessionContext.Provider>
-                    </ActiveEdgeContext.Provider>
-                    </BrowseFilesContext.Provider>
-                    </ExecutionModalContext.Provider>
-                    ) : (
-                      <span className={styles.minimapEmpty}>No graph yet</span>
-                    )}
-                  </div>
-                </div>
+              {renderTopologyThumbnail('rail')}
               </div>
           </aside>
           )}
@@ -4379,6 +4388,7 @@ export function CoordinatorRunPage() {
                   artifactAdapter={coordAdapter}
                   runChips={runSummaryChips}
                   outcomePlanDispatched={hasSubtaskNodes || viewState.terminal}
+                  workPlanTopologyThumbnail={renderTopologyThumbnail('workplan')}
                   credits={{
                     totalNanoAiu: tokenBreakdown?.totalNanoAiu ?? null,
                     detail: <AgentTokenBreakdown data={tokenBreakdown} roleByAgent={roleByAgent} plain showHeader={false} />,

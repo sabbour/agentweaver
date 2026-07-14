@@ -339,4 +339,26 @@ describe('buildRunTimeline', () => {
     expect(step.messages[0].text).toBe(legitArray);
     expect(step.messages[0].text).not.toContain('Decomposed the work into');
   });
+
+  it('formats an interim outcome-spec JSON message into friendly Markdown on ANY scope, including a child/subtask scope (#UI-bug-2)', () => {
+    const outcomeSpecJson = JSON.stringify({
+      desired_outcome: 'Ship a minimal preview app',
+      scope: 'Implement only the web preview path.',
+    });
+    // stripSerializedWorkPlan: false mirrors a child/subtask scope (e.g. the "Working" step in
+    // Ahmed's screenshot) — the outcome-spec reformat must still apply there, unlike the
+    // coordinator-only serialized-work-plan strip above.
+    const model = buildRunTimeline([
+      evt(1, 'agent.intent', { intent: 'Drafting the outcome plan' }),
+      evt(2, 'agent.message', { messageId: 'm1', content: outcomeSpecJson }),
+      evt(3, 'agent.turn.end', {}),
+    ], { stripSerializedWorkPlan: false });
+
+    const step = model.steps[0];
+    expect(step.messages[0].text).not.toContain('"desired_outcome"');
+    expect(step.messages[0].text).toContain('### Outcome plan');
+    expect(step.messages[0].text).toContain('Ship a minimal preview app');
+    expect(step.messages[0].text).toContain('Implement only the web preview path.');
+  });
 });
+
