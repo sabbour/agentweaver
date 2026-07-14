@@ -117,6 +117,8 @@ If you encounter **weird/unexplainable DNS resolution errors or catastrophic-loo
 
 **Design principle:** the harness itself should be LLM-driven — generating scenario prompts, launching runs, interpreting events/logs, and judging suitability — not a static script of fixed inputs.
 
+> **Harness architecture moved.** The harness-architecture design (the three-harness split — API/UI/MCP — the shared `scripts/persona-briefs/` + `scripts/harness-judge/` packages, the canonical `agentweaver.persona-judge-verdict/v1` schema, and the driver/judge separation) now lives in dedicated sibling specs and supersedes the architecture description here: **`docs/api-test-harness-plan.md`** (API, ground-truth), `docs/ui-test-harness-plan.md` (UI), `docs/mcp-test-harness-plan.md` (MCP). The autopilot/Squad-dispatch operating rules, release cadence, and methodology in this file are unchanged.
+
 ### Priority 1 (bring-forward)
 
 Re-run the **moderately complex app scenario** that previously failed/stalled (e.g. `FitTrackE2E-v10`, stuck ~4hrs) — a genuinely complex generated/selected workflow with a real build+test gate, ending in a live preview URL.
