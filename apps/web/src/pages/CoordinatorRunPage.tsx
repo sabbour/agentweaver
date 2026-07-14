@@ -1871,6 +1871,34 @@ const WAITING_TASK_STATUSES = new Set(['waiting', 'awaiting_confirmation', 'revi
 const PENDING_TASK_STATUSES = new Set(['pending']);
 const EXECUTING_TASK_STATUSES = new Set(['drafting_outcome', 'planning', 'running', 'dispatched', 'dispatching', 'in_progress', 'awaiting_assembly', 'assembling']);
 
+function summarizeCoordinatorChildren(nodes: RunSessionTree[]): string | null {
+  if (nodes.length === 0) return null;
+  const counts = nodes.reduce(
+    (acc, node) => {
+      if (FAILED_TASK_STATUSES.has(node.status)) acc.failed += 1;
+      else if (node.status === 'assemble_ready') acc.ready += 1;
+      else if (node.status === 'completed' || node.status === 'merged') acc.done += 1;
+      else if (BLOCKED_TASK_STATUSES.has(node.status)) acc.blocked += 1;
+      else if (WAITING_TASK_STATUSES.has(node.status)) acc.waiting += 1;
+      else if (PENDING_TASK_STATUSES.has(node.status)) acc.pending += 1;
+      else if (EXECUTING_TASK_STATUSES.has(node.status)) acc.running += 1;
+      else acc.pending += 1;
+      return acc;
+    },
+    { running: 0, ready: 0, blocked: 0, waiting: 0, failed: 0, done: 0, pending: 0 },
+  );
+  const parts = [
+    counts.running > 0 ? `${counts.running} running` : null,
+    counts.ready > 0 ? `${counts.ready} ready` : null,
+    counts.blocked > 0 ? `${counts.blocked} blocked` : null,
+    counts.waiting > 0 ? `${counts.waiting} waiting` : null,
+    counts.failed > 0 ? `${counts.failed} failed` : null,
+    counts.done > 0 ? `${counts.done} done` : null,
+    counts.pending > 0 ? `${counts.pending} pending` : null,
+  ].filter((part): part is string => part !== null);
+  return parts.length > 0 ? parts.join(' · ') : `${nodes.length} child agents`;
+}
+
 function graphEmptyCopy(
   isConnecting: boolean,
   noWorkPlan: boolean,
@@ -3115,6 +3143,9 @@ export function CoordinatorRunPage() {
         completedAt: meta.completedAt,
         pendingApprovalCount: meta.pendingApprovalCount,
         children,
+        roleKey: meta.roleKey,
+        isSubtask: meta.isSubtask,
+        isCoordinator: meta.isCoordinator,
         // Row indent depth is recomputed from real nesting by flattenRunTree; this seed is unused.
         depth: 0,
       };
@@ -3129,6 +3160,10 @@ export function CoordinatorRunPage() {
 
   const flatSessionTree = useMemo(() => flattenRunTree(sessionTree), [sessionTree]);
   const taskRows = flatSessionTree.filter((node) => node.nodeId !== defaultSessionNodeId);
+  const coordinatorChildSummary = useMemo(
+    () => summarizeCoordinatorChildren(taskRows.filter((node) => node.isSubtask)),
+    [taskRows],
+  );
   const taskStatusSummary = taskRows.reduce(
     (acc, node) => {
       const status = node.status;
@@ -3432,6 +3467,8 @@ export function CoordinatorRunPage() {
   };
 
   const isKubernetesSandbox = sandboxBackend === 'kubernetes-sandbox-claim';
+  const showPreviewSandboxButton = isKubernetesSandbox
+    && (runPreviewState.status !== 'none' || Boolean(activePreviewSession));
   const previewUrl = activePreviewUrl ?? previewUrlFromSession(activePreviewSession);
   const keepaliveUrl = activePreviewSession?.keepalive_url ?? activePreviewSession?.keepaliveUrl ?? null;
 
@@ -3631,15 +3668,7 @@ export function CoordinatorRunPage() {
         onClick: () => setArtifactsPanelOpen(true),
         testId: 'coordinator-review-changes',
       }
-    : latestOutcomePlanEvent && !specConfirmed
-      ? {
-          label: 'Review outcome plan',
-          icon: <DocumentRegular />,
-          disabled: false,
-          onClick: () => setPlanPanelOpen(true),
-          testId: 'coordinator-review-outcome-plan',
-        }
-      : null;
+    : null;
 
   const handleAssemblyApproval = useCallback(async (decision: 'approve' | 'decline') => {
     if (!runId) return;
@@ -3883,7 +3912,9 @@ export function CoordinatorRunPage() {
                 <span className={styles.treeStatusDot} aria-hidden="true" />
                 {statusLabel}
               </span>
-              {identityText ? (
+              {isRootNode && coordinatorChildSummary ? (
+                <span className={styles.treeIdentity} title={coordinatorChildSummary}>{`\u00b7 ${coordinatorChildSummary}`}</span>
+              ) : identityText ? (
                 <span className={styles.treeIdentity} title={identityText}>{`\u00b7 ${identityText}`}</span>
               ) : null}
               {(item.pendingApprovalCount ?? 0) > 0 && (
@@ -4114,7 +4145,7 @@ export function CoordinatorRunPage() {
                   aria-label={stopAriaLabel}
                   title={stopHint}
                 />
-                {isKubernetesSandbox && (
+                {showPreviewSandboxButton && (
                   <Button
                     appearance="transparent"
                     size="small"

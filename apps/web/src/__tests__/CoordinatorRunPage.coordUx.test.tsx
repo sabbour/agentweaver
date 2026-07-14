@@ -525,6 +525,8 @@ describe('CoordinatorRunPage operator console redesign', () => {
     expect(within(assemblyRow).getByTestId('run-tree-status-icon').getAttribute('data-state-color')).toBe('success');
     expect(runningRow.textContent).not.toMatch(/\bQueued\b/);
     expect(assemblyRow.textContent).not.toMatch(/\bQueued\b/);
+    const coordinatorRow = await screen.findByRole('treeitem', { name: /Select Coordinator/i }, { timeout: 4000 });
+    expect(coordinatorRow.textContent).toContain('1 running · 1 ready');
     const indicator = screen.getByTestId('rail-status-block');
     expect(indicator.textContent).not.toContain('Task:');
     expect(indicator.textContent).not.toMatch(/\bQueued\b/);
@@ -819,6 +821,23 @@ describe('CoordinatorRunPage operator console redesign', () => {
     expect(filesChip.getAttribute('aria-disabled')).toBe('true');
     expect(changesChip.tagName).toBe('SPAN');
     expect(filesChip.tagName).toBe('SPAN');
+  });
+
+  it('uses the Goal chip instead of a duplicate header button for outcome-plan review', async () => {
+    currentEvents = [
+      {
+        sequence: 1,
+        type: 'coordinator.outcome_spec',
+        payload: { desiredOutcome: 'Polish the coordinator run detail UI.' },
+      },
+    ];
+
+    render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    const chipRow = await screen.findByTestId('run-summary-chips', undefined, { timeout: 4000 });
+    expect(within(chipRow).getByTestId('run-summary-chip-goal')).toBeTruthy();
+    expect(screen.queryByTestId('compact-primary-run-action')).toBeNull();
+    expect(screen.queryByRole('button', { name: /review outcome plan/i })).toBeNull();
   });
 
   it('keeps all three run-wide chips pinned when a child agent scope is selected', async () => {

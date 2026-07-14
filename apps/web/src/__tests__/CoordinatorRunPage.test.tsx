@@ -651,6 +651,30 @@ describe('CoordinatorRunPage — unified coordinator graph view', () => {
     expect(document.body.querySelector('[aria-label^="Executing in pod agentweaver-api-pod-1"]')).toBeNull();
   });
 
+  it('hides the header preview button until a preview lifecycle event exists', async () => {
+    vi.mocked(apiClient.getSystemRuntime).mockResolvedValue({ kubernetes: true, podName: 'agentweaver-api-pod-1' });
+
+    render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    await waitFor(() => expect(screen.getByTestId('run-operator-console')).toBeTruthy(), { timeout: 4000 });
+    expect(screen.queryByRole('button', { name: 'Preview Sandbox' })).toBeNull();
+  });
+
+  it('shows the header preview button once the preview lifecycle has started', async () => {
+    vi.mocked(apiClient.getSystemRuntime).mockResolvedValue({ kubernetes: true, podName: 'agentweaver-api-pod-1' });
+    mockRunStreamState.current = {
+      ...mockRunStreamState.current,
+      events: [
+        { sequence: 1, type: 'sandbox.selected', payload: { backend: 'kubernetes-sandbox-claim' } },
+        { sequence: 2, type: 'sandbox.preview_pending', payload: { target_port: 5173 } },
+      ],
+    };
+
+    render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    expect(await screen.findByRole('button', { name: 'Preview Sandbox' }, { timeout: 4000 })).toBeTruthy();
+  });
+
   it('renders the persistent coordinator composer inline in the Messages surface', async () => {
     const { container } = render(<Wrapper><CoordinatorRunPage /></Wrapper>);
 

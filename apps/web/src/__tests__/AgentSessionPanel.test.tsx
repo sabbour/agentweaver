@@ -30,6 +30,15 @@ vi.mock('../api/apiClient', () => ({
     getRunWorkspace: vi.fn().mockResolvedValue([]),
     getRunFileContent: vi.fn().mockResolvedValue({ path: 'file.txt', content: '', is_binary: false, language: 'text' }),
     getRunFileDiff: vi.fn().mockResolvedValue(null),
+    getOutcomeSpec: vi.fn().mockResolvedValue({
+      status: 'confirmed',
+      desiredOutcome: 'Ship the preview polish updates.',
+      scope: ['UI-only fixes'],
+      confirmedBy: 'Ahmed',
+    }),
+    confirmOutcomeSpec: vi.fn(),
+    reviseOutcomeSpec: vi.fn(),
+    decomposeSpec: vi.fn(),
     steerCoordinator: vi.fn().mockResolvedValue({ status: 'applied' }),
     approveTool: vi.fn().mockResolvedValue(undefined),
     denyTool: vi.fn().mockResolvedValue(undefined),
@@ -466,6 +475,44 @@ describe('AgentSessionPanel', () => {
 
     await waitFor(() => expect(document.body.textContent).toContain('🔁 Build & Test requested changes → revising 2 subtasks'), { timeout: 4000 });
     expect(document.body.textContent).toContain('Feedback: The preview server did not start.');
+  });
+
+  it('removes duplicate outer chrome when the outcome-plan scope is selected', async () => {
+    const outcomeTree: RunSessionTree[] = [
+      {
+        ...tree[0],
+        children: [
+          {
+            nodeId: 'outcome-plan',
+            label: 'Outcome plan',
+            agentName: 'Coordinator',
+            agentRole: 'Planning gate',
+            roleKey: 'outcome_plan',
+            status: 'confirmed',
+            depth: 1,
+            children: [],
+          },
+        ],
+      },
+    ];
+
+    render(
+      <Wrapper>
+        <AgentSessionPanel
+          open
+          onClose={vi.fn()}
+          tree={outcomeTree}
+          selectedNodeId="outcome-plan"
+          onSelectNode={vi.fn()}
+          coordinatorRunId="coord-run-1"
+          projectId="p1"
+        />
+      </Wrapper>,
+    );
+
+    await waitFor(() => expect(screen.getByText('Outcome plan confirmed by Ahmed. Dispatch is unblocked.')).toBeDefined(), { timeout: 4000 });
+    expect(screen.queryByText('Outcome plan (Planning gate)')).toBeNull();
+    expect(screen.queryByText('Context: Outcome plan')).toBeNull();
   });
 
   it('does not invent a just-started timestamp when restored run metadata lacks timing', async () => {
@@ -1307,5 +1354,71 @@ describe('AgentSessionPanel', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('reuses cached session data when revisiting a previously opened child run', async () => {
+    const twoRunTree: RunSessionTree[] = [{
+      ...tree[0],
+      children: [
+        tree[0].children[0],
+        {
+          nodeId: 'subtask-2',
+          label: 'Subtask 2',
+          agentName: 'Worker',
+          agentRole: 'Researcher',
+          status: 'running',
+          childRunId: 'child-run-2',
+          depth: 1,
+          children: [],
+        },
+      ],
+    }];
+    const makeRunDetail = (runId: string, status: RunDetail['status']): RunDetail => ({
+      run_id: runId,
+      status,
+      model_source: 'github-copilot',
+      started_at: new Date().toISOString(),
+      ended_at: null,
+      result: null,
+      diff: null,
+      step_count: 0,
+      tree_hash: null,
+    });
+    vi.mocked(apiClient.getRun).mockImplementation((runId) => Promise.resolve(
+      runId === 'child-run-2'
+        ? makeRunDetail('child-run-2', 'completed')
+        : makeRunDetail('child-run-1', 'completed'),
+    ));
+    vi.mocked(apiClient.getRunEvents).mockImplementation((runId) => Promise.resolve(
+      runId === 'child-run-2'
+        ? [{ sequence: 2, type: 'agent.message', payload: { content: 'Second run only' } }]
+        : [{ sequence: 1, type: 'agent.message', payload: { content: 'First run only' } }],
+    ));
+
+    const props = {
+      open: true,
+      onClose: vi.fn(),
+      tree: twoRunTree,
+      onSelectNode: vi.fn(),
+      coordinatorRunId: 'coord-run-1',
+      projectId: 'p1',
+    };
+    const { rerender } = render(
+      <Wrapper><AgentSessionPanel {...props} selectedNodeId="subtask-1" /></Wrapper>,
+    );
+    expect(await screen.findByText('First run only')).toBeDefined();
+
+    rerender(<Wrapper><AgentSessionPanel {...props} selectedNodeId="subtask-2" /></Wrapper>);
+    expect(await screen.findByText('Second run only')).toBeDefined();
+
+    vi.mocked(apiClient.getRun).mockClear();
+    vi.mocked(apiClient.getRunEvents).mockClear();
+
+    rerender(<Wrapper><AgentSessionPanel {...props} selectedNodeId="subtask-1" /></Wrapper>);
+
+    expect(await screen.findByText('First run only')).toBeDefined();
+    expect(screen.queryByText('Loading session details...')).toBeNull();
+    expect(vi.mocked(apiClient.getRunEvents)).not.toHaveBeenCalled();
+    expect(vi.mocked(apiClient.getRun)).not.toHaveBeenCalled();
   });
 });

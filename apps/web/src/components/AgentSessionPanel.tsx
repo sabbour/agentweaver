@@ -739,6 +739,9 @@ export interface RunSessionTree {
   label: string;
   agentName?: string;
   agentRole?: string;
+  roleKey?: string;
+  isSubtask?: boolean;
+  isCoordinator?: boolean;
   status: string;
   childRunId?: string;
   startedAt?: number;
@@ -1926,8 +1929,35 @@ export function AgentSessionPanel({
     }
     let cancelled = false;
     let intervalId: ReturnType<typeof setInterval> | undefined;
-    setRunDetailLoading(true);
     setRunDetailError(null);
+    const cached = lastKnownByRunRef.current.get(selectedRunId);
+
+    const startRunDetailPolling = (initialStatus?: string | null) => {
+      if (initialStatus && RUN_DETAIL_POLL_TERMINAL_STATUSES.has(initialStatus)) return;
+      intervalId = setInterval(() => {
+        apiClient.getRun(selectedRunId)
+          .then((detail) => {
+            if (cancelled) return;
+            setRunDetail(detail);
+            if (RUN_DETAIL_POLL_TERMINAL_STATUSES.has(detail.status)) {
+              clearInterval(intervalId);
+            }
+          })
+          .catch(() => {});
+      }, RUN_DETAIL_POLL_INTERVAL_MS);
+    };
+
+    if (cached?.runDetail) {
+      settledRunIdRef.current = selectedRunId;
+      setRunDetailLoading(false);
+      startRunDetailPolling(cached.runDetail.status);
+      return () => {
+        cancelled = true;
+        clearInterval(intervalId);
+      };
+    }
+
+    setRunDetailLoading(true);
     apiClient.getRun(selectedRunId)
       .then((detail) => {
         if (cancelled) return;
@@ -1963,18 +1993,7 @@ export function AgentSessionPanel({
     // polling via the `isLive` gate) never advances from e.g. "queued" to "in_progress",
     // so Changes/Files can show "None" for the whole lifetime of an actively-running
     // subtask. Polling stops once the run reaches a truly terminal status.
-    // eslint-disable-next-line prefer-const
-    intervalId = setInterval(() => {
-      apiClient.getRun(selectedRunId)
-        .then((detail) => {
-          if (cancelled) return;
-          setRunDetail(detail);
-          if (RUN_DETAIL_POLL_TERMINAL_STATUSES.has(detail.status)) {
-            clearInterval(intervalId);
-          }
-        })
-        .catch(() => {});
-    }, RUN_DETAIL_POLL_INTERVAL_MS);
+    startRunDetailPolling();
 
     return () => {
       cancelled = true;
@@ -2032,8 +2051,9 @@ export function AgentSessionPanel({
   ).length;
   // A turn "streams" while its run is still live — the coordinator scope tracks coordinatorActive,
   // a dispatched child tracks its own run status.
+  const showOutcomePlanChrome = selectedItem.nodeId !== 'outcome-plan';
   const composerContext = selectedItem.nodeId === 'outcome-plan'
-    ? 'Context: Outcome plan'
+    ? null
     : selectedItem.isCoordinator
       ? 'Context: Whole run'
       : `Context: ${selectedItem.label}${selectedItem.agentName ? ` with ${selectedItem.agentName}` : ''}`;
@@ -2144,35 +2164,37 @@ export function AgentSessionPanel({
 
           <section className={styles.main}>
             <div className={styles.mainHeader}>
-              <div className={styles.mainHeaderInfo}>
-                <div className={styles.badgeRow}>
-                  <span className={styles.statusChip}>
-                    <StatusGlyph status={selectedItem.status} />
-                    {statusLabel(selectedItem.status)}
-                  </span>
-                </div>
-                <div className={styles.identityRow}>
-                  <AgentAvatar name={selectedIdentity.avatarName} size={28} circle />
-                  <div className={styles.identityText}>
-                    <Text className={styles.agentName}>{selectedItem.label}</Text>
-                    <Text className={styles.agentRole}>{selectedIdentity.displayName}</Text>
+              {showOutcomePlanChrome && (
+                <div className={styles.mainHeaderInfo}>
+                  <div className={styles.badgeRow}>
+                    <span className={styles.statusChip}>
+                      <StatusGlyph status={selectedItem.status} />
+                      {statusLabel(selectedItem.status)}
+                    </span>
                   </div>
+                  <div className={styles.identityRow}>
+                    <AgentAvatar name={selectedIdentity.avatarName} size={28} circle />
+                    <div className={styles.identityText}>
+                      <Text className={styles.agentName}>{selectedItem.label}</Text>
+                      <Text className={styles.agentRole}>{selectedIdentity.displayName}</Text>
+                    </div>
+                  </div>
+                  <Text className={styles.metaText}>
+                    {formatStartedMeta(runDetail?.started_at ?? undefined, runDetail?.status ?? selectedItem.status)}
+                    {runDetailError ? ' · Metadata unavailable' : ''}
+                  </Text>
+                  {isFailedRunStatus && !runDetailLoading && (
+                    <MessageBar intent="error" className={styles.failureBanner}>
+                      <MessageBarBody>
+                        <MessageBarTitle>
+                          {failureReason || 'No failure detail was recorded for this run.'}
+                        </MessageBarTitle>
+                        {failureRetryHint}
+                      </MessageBarBody>
+                    </MessageBar>
+                  )}
                 </div>
-                <Text className={styles.metaText}>
-                  {formatStartedMeta(runDetail?.started_at ?? undefined, runDetail?.status ?? selectedItem.status)}
-                  {runDetailError ? ' · Metadata unavailable' : ''}
-                </Text>
-                {isFailedRunStatus && !runDetailLoading && (
-                  <MessageBar intent="error" className={styles.failureBanner}>
-                    <MessageBarBody>
-                      <MessageBarTitle>
-                        {failureReason || 'No failure detail was recorded for this run.'}
-                      </MessageBarTitle>
-                      {failureRetryHint}
-                    </MessageBarBody>
-                  </MessageBar>
-                )}
-              </div>
+              )}
               <div className={styles.headerActions}>
                 {/* Docked (merged single-surface) layout always has a selection, so there is no
                     empty center to close to — only the modal variant shows a close affordance. */}
@@ -2280,7 +2302,7 @@ export function AgentSessionPanel({
                   <MessageBarBody>{followUpError}</MessageBarBody>
                 </MessageBar>
               )}
-              <Text className={styles.composerContext}>{composerContext}</Text>
+              {composerContext && <Text className={styles.composerContext}>{composerContext}</Text>}
               <div className={styles.stickyComposer} ref={composerRef}>
                 <Composer
                   value={followUp}
