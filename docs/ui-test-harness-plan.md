@@ -32,14 +32,30 @@ This harness obeys the **same discipline** as the API harness:
 
 ---
 
-## Relationship to the API persona harness (read this first)
+## Relationship to the shared persona / judge layer used by all three harnesses (read this first)
 
-This is an **extension of the same idea**, not a rewrite. The decision below is
-deliberate and load-bearing for the whole plan.
+Agentweaver is now building **three** persona harnesses in parallel, each driving
+the same product through a different surface:
 
-**Decision: a new sibling directory `scripts/ui-persona-harness/` that imports
-shared pieces from `scripts/persona-harness/`, rather than folding Playwright into
-the existing harness or forking it.**
+| Harness | Surface | Drives via | Directory |
+|---|---|---|---|
+| **API harness** (exists) | Backend REST lifecycle | bearer-token HTTP calls | `scripts/persona-harness/` |
+| **UI harness** (this spec) | Web UI | Playwright browser | `scripts/ui-persona-harness/` |
+| **MCP harness** (Morpheus, in parallel) | MCP protocol / tool-call surface | MCP client | `scripts/mcp-persona-harness/` (Morpheus's spec) |
+
+Per Ahmed's explicit requirement, **all three must share common personas and must be
+judgeable through a common judging model** — a persona (Jordan, Maya, Priya, …) is
+defined **once**, surface-agnostically, and each harness drives that same persona
+through its own surface, so the same scenario can be compared across surfaces. This
+section, and the dedicated **"Cross-Harness Shared Layer"** section below, specify
+that shared layer; Morpheus's MCP spec references the same layer.
+
+This UI harness is therefore **one of three consumers of a shared persona + judge
+layer**, not a standalone extension of the API harness.
+
+**Decision: a new sibling directory `scripts/ui-persona-harness/` that consumes a
+shared persona-brief package and a shared judge core (below), rather than folding
+Playwright into the API harness or forking its briefs/judge.**
 
 Rationale:
 
@@ -49,29 +65,164 @@ Rationale:
   the fast, deterministic, CI-friendly API track heavier and would couple two
   independently useful tools. A sibling directory keeps each installable and
   runnable on its own.
-- **Reuse, don't duplicate, the parts that are already right.** The concepts that
-  the API harness got right — the persona **brief** format, the **driver/judge
+- **Reuse, don't duplicate, the parts that are already right.** The concepts the
+  API harness got right — the persona **brief** format, the **driver/judge
   separation**, the **judge prompt assembler** (`lib/judge.mjs`), the **cross-run
   meta-aggregation** (`lib/meta-aggregate.mjs`), and the **JUDGE.md** methodology —
-  are surface-agnostic and must be shared, not copied. The UI harness imports them.
+  are surface-agnostic and must become the **shared layer** all three harnesses
+  import, not code each harness copies. The migration path is in "Cross-Harness
+  Shared Layer" below.
 - **Avoids the active-edit collision.** `scripts/persona-harness/` is under active
   modification (Tank's approval-driving work, `harness/wip-persona-v1`). A separate
   directory lets the UI track proceed in parallel without touching files another
-  agent is mid-edit on. Shared modules are consumed **read-only** as an npm/local
-  import until the API track stabilizes; only then do we consider promoting the
-  shared code into a small `scripts/harness-common/` package.
+  agent is mid-edit on. Until the shared layer is extracted, shared modules are
+  consumed **read-only** as a local import from `scripts/persona-harness/`; the
+  target end-state is the extracted shared packages below.
 
-What is **shared** vs **new**:
+What is **shared** (all three harnesses) vs **new** (UI-specific):
 
-| Concern | Source | UI harness action |
+| Concern | Target home | UI harness action |
 |---|---|---|
-| Persona brief format (`briefs/*.md`) | `scripts/persona-harness/briefs/` | **Reuse the format**; add UI-specific briefs; a brief can drive either track |
-| Authored persona criteria (`specs/personas/*.md`) | repo `specs/personas/` | **Reuse verbatim** — same "Success looks like" criteria feed both judges |
-| Judge prompt assembler (`lib/judge.mjs`) | API harness | **Extend** to accept screenshot + DOM-snapshot + console/network evidence blocks (see "Judge integration") |
-| Meta-aggregation (`lib/meta-aggregate.mjs`) | API harness | **Reuse as-is** — verdict blocks share the schema, so a batch can mix API and UI runs |
-| JUDGE.md methodology | API harness | **Reuse + append** a UI-evidence section (what a screenshot/DOM snapshot can and cannot prove) |
-| Driver / evidence capture | — | **New** — Playwright-based (`lib/browser.mjs`, `agent-driver-ui/tools.mjs`) |
-| Auth / storageState | — | **New** — headful manual login + stored session reuse |
+| Persona definitions (Jordan/Maya/Priya/…) — goals, voice, constraints, ≥2-pushback rule, authored "Success looks like" | **`scripts/persona-briefs/`** (new shared package) — surface-agnostic | **Consume** the shared persona; add a UI **surface adapter** per persona, not a copied brief |
+| Judge core: prompt library + canonical verdict schema + JUDGE.md methodology | **`scripts/harness-judge/`** (new shared package, extracted from `lib/judge.mjs`) | **Consume** the shared judge core; register a **UI evidence adapter** |
+| Meta-aggregation (`lib/meta-aggregate.mjs`) | **`scripts/harness-judge/`** (shared) | **Reuse as-is** — one verdict schema, so a batch can mix API + UI + MCP runs |
+| Driver / evidence capture | — | **New, UI-specific** — Playwright (`lib/browser.mjs`, `agent-driver-ui/tools.mjs`) |
+| Auth / storageState | — | **New, UI-specific** — headful manual login + stored session reuse |
+
+---
+
+## Cross-Harness Shared Layer
+
+Ahmed's requirement: the three harnesses (API, UI, MCP) **share common personas**
+and are **judgeable through a common model** — and he explicitly asked whether this
+should be **three judges or one**. Below are the two decisions, stated explicitly.
+
+### 1. Shared persona / brief format — one definition, per-surface adapters
+
+**Recommendation: define each persona ONCE in a new shared package
+`scripts/persona-briefs/`, surface-agnostic, and have each harness drive that same
+persona through a thin per-surface adapter. Do NOT duplicate or re-adapt briefs
+per harness.**
+
+Layout of the shared package:
+
+```
+scripts/persona-briefs/
+  package.json                 Zero heavy deps; imported by all three harnesses
+  personas/
+    priya.md                   Persona CORE — identity, goal, voice, constraints,
+    jordan.md                  the mandatory ≥2-pushback rule, and the authored
+    maya.md                    "Success looks like" / "Failure signals" criteria.
+    ...                        NOTHING surface-specific (no "click", no "curl", no tool name).
+  surfaces/
+    priya.api.md               Per-surface ADAPTER — how THIS persona's intent maps to
+    priya.ui.md                the surface's actions ONLY (e.g. UI: "the messy batch is
+    priya.mcp.md               pasted into the coordinator composer"; API: "submit-goal";
+    ...                        MCP: "the tool the persona would reach for"). Additive, thin.
+  index.mjs                    Resolves persona core + optional surface adapter for a harness
+```
+
+- The **persona core** carries everything that must be identical across surfaces —
+  who they are, what they want, their voice, their low-tolerance triggers, and the
+  ≥2-pushback requirement. This is what makes "Jordan via API" and "Jordan via UI"
+  the **same Jordan**.
+- The **surface adapter** is thin and additive: it only says how that persona's
+  intent expresses itself on that surface (a UI action vs an API call vs an MCP tool
+  invocation). A persona with no adapter for a surface simply isn't run there.
+- **Migration:** the existing `scripts/persona-harness/briefs/*.md` and the repo's
+  `specs/personas/*.md` are the seed content. They are lifted into
+  `scripts/persona-briefs/personas/` (core) once, with the API-specific phrasing
+  peeled into `surfaces/*.api.md`. This is a coordinated extraction handed to the
+  API-track owner / coordinator (not an out-of-band edit to Tank's in-flight files),
+  the same way the judge extraction below is handled. Until it lands, the UI harness
+  reads the existing briefs read-only and layers its UI adapter locally.
+
+This directly satisfies "personas should be defined once in a surface-agnostic way
+and each harness drives that SAME persona through its own surface."
+
+### 2. Judge architecture — ONE shared judge core with per-surface evidence adapters (option a)
+
+**Recommendation: option (a) — a single shared judge core (prompt library + one
+canonical verdict schema + the JUDGE.md methodology) with three thin per-surface
+evidence adapters (API call/response, UI DOM/screenshot/console/network, MCP
+protocol/tool-call). NOT three separate judges.**
+
+```
+scripts/harness-judge/
+  package.json
+  JUDGE.md                     Canonical methodology: P0 objective / P1 subjective / CANNOT_DETERMINE,
+                               pushback rules, two-layer (per-run + meta-aggregation). Surface-neutral core
+                               + short per-surface appendices (JUDGE.api.md / JUDGE.ui.md / JUDGE.mcp.md).
+  core.mjs                     Assembles the judge prompt from: persona core + authored criteria +
+                               run metadata + a normalized EVIDENCE bundle. Emits the canonical
+                               verdict schema `agentweaver.persona-judge-verdict/v1`.
+  meta-aggregate.mjs           Cross-run + CROSS-SURFACE rollup (moved here from the API harness).
+  adapters/
+    api.mjs                    API transcript  -> normalized evidence (calls, bodies, outcome spec)
+    ui.mjs                     UI transcript   -> normalized evidence (DOM snapshot, screenshot ref, console, network, log cross-ref)
+    mcp.mjs                    MCP transcript  -> normalized evidence (tool calls, protocol frames)   [Morpheus]
+  test/
+    core.test.mjs              Verdict schema + prompt assembly
+    adapters.*.test.mjs        Each adapter's evidence normalization
+```
+
+Each adapter's only job is to turn its surface's raw transcript into the **same
+normalized evidence shape** (`{ turns:[{intent, action, objectiveFacts, evidence[]}],
+personaCriteria, metadata }`). `core.mjs` then does the identical judging regardless
+of surface, and always emits the **one** canonical verdict schema.
+
+**Why (a) over (b) three separate judges:**
+
+- **Consistent P0/P1 meaning across surfaces.** "P0 = objective mechanics succeeded"
+  and "P1 = subjective quality vs the persona's authored criteria" must mean the same
+  thing whether the evidence is a JSON body, a screenshot, or an MCP frame. A single
+  core guarantees this by construction; three judges would drift — one might grade a
+  P1 as PARTIAL that another would call FAIL for equivalent evidence, making verdicts
+  incomparable.
+- **Cross-surface meta-aggregation is the whole point and REQUIRES one schema.**
+  Ahmed's example question — "did Jordan behave consistently whether driven via API
+  vs UI vs MCP for the same scenario" — is only answerable if all three emit the
+  identical `agentweaver.persona-judge-verdict/v1` block into one `verdicts/` pool
+  that `meta-aggregate.mjs` rolls up. It can then report **cross-surface invariants**
+  (a P0 mechanic that held on every surface), **cross-surface divergences** (the
+  persona got a good plan via API but a confusing one via UI — a surface-specific
+  defect), and **recurring findings** across surfaces. Three separate schemas would
+  make this rollup impossible without a translation shim — which is just the shared
+  core, arrived at the hard way.
+- **Lower maintenance.** The judging methodology (pushback grading, CANNOT_DETERMINE
+  discipline, the #315 regression-detection rule) is written and tested once. A
+  methodology change (e.g. tightening what counts as grounded pushback) lands in one
+  place, not three. Adding a fourth surface later = one new adapter, zero judge-core
+  changes.
+- **Surface nuance is preserved without forking the judge.** Genuinely
+  surface-specific guidance (e.g. "a screenshot can show layout clarity but cannot
+  prove a network call succeeded — read the network log for that") lives in a short
+  per-surface **appendix** (`JUDGE.ui.md`) that the core includes alongside the
+  neutral methodology. This gets option (b)'s tuning benefit without its consistency
+  and maintenance costs.
+
+So: **not "maybe 3 judges" — one judge core, three evidence adapters, one verdict
+schema, one meta-aggregator.** The `lib/judge.mjs` already in the API harness is the
+seed for `core.mjs`; extracting it (with the UI evidence adapter added) is Phase 2 of
+the rollout below.
+
+### 3. How this UI harness consumes the shared layer
+
+The directory layout below is written to **consume** these shared packages, never
+duplicate them:
+
+- Personas come from `scripts/persona-briefs/` (core) + a local `surfaces/*.ui.md`
+  adapter — the UI harness ships **no** copied persona definitions.
+- Judging goes through `scripts/harness-judge/core.mjs` with the UI evidence adapter
+  (`adapters/ui.mjs`); the UI harness ships **no** copied prompt/verdict logic —
+  only the code that produces the raw UI transcript the adapter normalizes.
+- Verdicts land in the **shared** `verdicts/` pool and are rolled up by the shared
+  `meta-aggregate.mjs`, so UI runs meta-aggregate together with API and MCP runs.
+
+Until the shared packages are extracted (a coordinated step, not an out-of-band edit
+to actively-edited API-harness files), the UI harness imports the equivalent modules
+read-only from `scripts/persona-harness/` and carries a thin local UI evidence shim;
+the target end-state is the shared packages above.
 
 ---
 
@@ -222,22 +373,27 @@ the API driver decides from what the API actually returned.
   a real corrective UI action — e.g. sends a "actually change X" message to the
   coordinator (issue #272), clicks Clarify plan, or re-opens a panel that showed
   stale data — grounded in what was on screen, never pre-decided.
-- Briefs are **surface-tagged**. A brief declares which surfaces it needs
-  (`surfaces: [notification-center, coordinator-graph, session-panel]`) so the same
-  persona can be routed to the API track, the UI track, or both. UI-only briefs
-  (e.g. a persona whose whole job is "scan the notification center and act on the
-  right thing") live in the UI harness; shared briefs live in the common set.
-- **Dynamically generated, not fixed.** The same `lib/generate-brief.mjs`
-  prompt-assembler pattern is reused to have an LLM propose **new** UI persona briefs
-  (targeting a surface/issue class, with an exclusion list), so the harness probes
-  the space of operator intents rather than replaying a fixed handful.
+- **Persona core is shared; the surface adapter is UI-specific.** The persona core
+  lives once in `scripts/persona-briefs/personas/` (identity, goal, voice,
+  constraints, ≥2-pushback, authored criteria) and is the **same** definition the API
+  and MCP harnesses drive. The UI harness adds only a thin `surfaces-ui/<persona>.ui.md`
+  adapter mapping that persona's intent to UI actions (composer, notification center,
+  node click, panel). A persona with no UI adapter simply isn't driven here. This is
+  what makes "Jordan via API/UI/MCP" the same Jordan (see "Cross-Harness Shared
+  Layer").
+- **Dynamically generated, not fixed.** The shared brief-generation prompt-assembler
+  pattern (from the API harness's `generate-brief.mjs`) is reused to have an LLM
+  propose **new** persona cores + UI adapters (targeting a surface/issue class, with
+  an exclusion list), so the harness probes the space of operator intents rather than
+  replaying a fixed handful.
 
 ### How the judge integrates
 
-The judge is the **shared** `lib/judge.mjs`, **extended** to understand UI evidence.
-Today it assembles a text prompt from an API transcript (per-turn intent,
-composition, verbatim spec, pushback before/after). For the UI track it additionally
-embeds, per turn:
+The judge is the **shared judge core** (`scripts/harness-judge/core.mjs`, extracted
+from the API harness's `lib/judge.mjs` — see "Cross-Harness Shared Layer"), invoked
+through the **UI evidence adapter** (`adapters/ui.mjs`). The core assembles the
+prompt and emits the one canonical verdict schema; the UI adapter's only job is to
+turn the raw UI transcript into the normalized evidence shape by embedding, per turn:
 
 - the **screenshot** (as an image reference / attachment the judging LLM can view),
 - the **DOM snapshot** (keyed elements + roles + visible text — structured, not raw
@@ -323,41 +479,53 @@ assuming it away.
 A sibling of `scripts/persona-harness/`, reusing its shared modules:
 
 ```
-scripts/ui-persona-harness/
+A sibling of `scripts/persona-harness/` that **consumes the shared persona and judge
+packages** (it ships no copied personas and no copied judge logic):
+
+```
+scripts/persona-briefs/          SHARED — persona cores + per-surface adapters (all three harnesses)
+scripts/harness-judge/           SHARED — judge core + canonical verdict schema + meta-aggregate + evidence adapters
+scripts/ui-persona-harness/      THIS harness (UI-specific driver + evidence only)
   README.md                    Mirrors the API harness README: why UI-driven, driver/judge split, auth flow
-  package.json                 Declares @playwright/test (+ shared-module imports); `npm test`
+  package.json                 Declares @playwright/test; depends on ../persona-briefs + ../harness-judge; `npm test`
   playwright.config.ts         Chromium project, storageState wiring, headless default, headful `login` override
-  JUDGE-UI.md                  UI-evidence appendix to the shared JUDGE.md (what a screenshot/DOM snapshot can/can't prove)
   lib/
     browser.mjs                Launch/attach Chromium with storageState; keyed-selector helpers; bounded waits
     evidence.mjs               Per-turn DOM snapshot + screenshot + console/network capture; lossless turn record
     crossref.mjs               kubectl logs + App Insights slice for a run_id/time-window (evidence, not verdict)
     reporter-ui.mjs            UI driver verdict + console banner (UI DRIVE+CAPTURE OK / UI DRIVER P0 FAIL)
     auth.mjs                   storageState load/validate; AUTH_EXPIRED detection; never re-auths
-    (imports) judge.mjs        SHARED from ../persona-harness/lib — extended for image/DOM evidence
-    (imports) meta-aggregate.mjs   SHARED from ../persona-harness/lib — verdict rollup (API+UI mixed)
-    (imports) generate-brief.mjs   SHARED pattern — assemble a NEW UI-persona brief prompt
+    (imports) ../../harness-judge/core.mjs           SHARED judge core (canonical verdict schema)
+    (imports) ../../harness-judge/adapters/ui.mjs    SHARED — UI transcript -> normalized evidence
+    (imports) ../../harness-judge/meta-aggregate.mjs SHARED — verdict rollup (API+UI+MCP mixed)
+    (imports) ../../persona-briefs/index.mjs         SHARED — resolve persona core + UI surface adapter
+  surfaces-ui/                   UI SURFACE ADAPTERS for shared personas (thin; NOT copied persona cores)
+    priya.ui.md                  How Priya's intent maps to UI actions only (composer, notification center, ...)
+    jordan.ui.md                 ...
   agent-driver-ui/
     tools.mjs                  Persona-agnostic discrete Playwright tools for an LLM to drive live:
                                login | goto | list-notifications | open-notification | click | type-coordinator |
                                open-session-panel | read-graph | read-tree | screenshot | check-approvals |
                                resolve-approval | capture | finish   (records a UI transcript; NO auto-confirm-to-deploy)
-  briefs/                      UI-surface-tagged persona briefs (shared format; can also route to API track)
-    (examples below, authored per issue class — not fixed click scripts)
   transcripts-ui/              Emitted UI transcripts + screenshots (git-ignored)
-  verdicts/                    LLM-judge verdict blocks, shared schema (git-ignored)
+  verdicts/                    -> symlink/points at the SHARED verdict pool so meta-aggregate mixes surfaces (git-ignored)
   .auth/                       storageState credential store (git-ignored; never committed/logged)
   test/
     evidence.test.mjs          Unit: DOM-snapshot shaping, console/network capture, redaction
     auth.test.mjs              Unit: storageState load/validate + AUTH_EXPIRED detection
     reporter-ui.test.mjs       Unit: deterministic P0 computation from a captured transcript
-    judge-ui.test.mjs          Unit: judge prompt assembly WITH image/DOM evidence blocks
+    ui-adapter.test.mjs        Unit: UI transcript -> normalized evidence (feeds the shared judge core)
 ```
 
+The UI-specific `JUDGE.ui.md` appendix (what a screenshot/DOM snapshot can and cannot
+prove) lives in the **shared** `scripts/harness-judge/` alongside `JUDGE.api.md` and
+`JUDGE.mcp.md`, not here — so the methodology stays in one place.
+
 Note the deliberate parallels to `scripts/persona-harness/`: `agent-driver-ui/`
-mirrors `agent-driver/`, `reporter-ui.mjs` mirrors `reporter.mjs`, briefs and
-verdicts keep the same shapes. A reader who knows the API harness can navigate this
-one immediately.
+mirrors `agent-driver/`, `reporter-ui.mjs` mirrors `reporter.mjs`. But personas and
+judge logic are **imported from the shared packages**, never copied — a reader who
+knows the API harness can navigate this one immediately, and the same Priya/Jordan
+persona is provably the one both harnesses drive.
 
 ---
 
@@ -411,21 +579,30 @@ staging. This unblocks everyone else.
   `reporter-ui.mjs`, and `agent-driver-ui/tools.mjs` (the discrete Playwright tool
   surface an LLM drives), with unit tests for the deterministic P0 computation and
   the redaction of the storageState credential from all output.
-- Smith (test-scenario design): author the **briefs** for the issue table above —
-  persona identity, goal, `surfaces:`, and authored "Success looks like" criteria —
-  reusing the existing `specs/personas/*.md` criteria where a persona already exists,
-  and using the shared `generate-brief.mjs` pattern to propose new UI personas.
-  Smith owns scenario **design**; Trinity owns the **driver** they run on. These are
-  independent and proceed at the same time.
+- Smith (test-scenario design): author the **persona cores + UI surface adapters**
+  for the issue table above — persona identity, goal, and authored "Success looks
+  like" criteria in the surface-agnostic `scripts/persona-briefs/` core, plus the
+  thin `surfaces-ui/*.ui.md` adapter — reusing the existing `specs/personas/*.md`
+  criteria where a persona already exists, coordinating with the API/MCP tracks so a
+  new persona core is authored **once** and shared. Smith owns scenario **design**;
+  Trinity owns the **driver** they run on. These are independent and proceed at the
+  same time.
 
-**Phase 2 — judge extension (Trinity, coordinated with the API-track owner,
-read-only).**
-Extend the **shared** `lib/judge.mjs` to embed image + DOM + console/network +
-cross-ref evidence blocks, and append `JUDGE-UI.md`. Because `judge.mjs` lives in
-the actively-edited API harness, this is done as a **proposed diff handed to the API
-track owner / coordinator to land**, not an out-of-band edit to another agent's
-in-flight files. Until it lands, the UI harness carries a thin local shim that
-formats UI evidence and delegates text assembly to the shared module.
+**Phase 2 — shared-layer extraction + UI judge adapter (Trinity + API-track owner +
+Morpheus, coordinated).**
+This is the phase that turns "the UI harness reads the API harness read-only" into
+the real shared packages, and it is **cross-harness**, so it is coordinated with the
+API-track owner and Morpheus (MCP), not done out-of-band on Tank's in-flight files:
+- Extract `scripts/persona-briefs/` (persona cores + surface adapters) and
+  `scripts/harness-judge/` (judge `core.mjs` from `lib/judge.mjs`, the canonical
+  verdict schema, `meta-aggregate.mjs`, and the `adapters/` folder) as a **proposed
+  diff handed to the API-track owner / coordinator to land**.
+- Trinity contributes the **UI evidence adapter** (`adapters/ui.mjs`) and the
+  `JUDGE.ui.md` appendix (image + DOM + console/network + cross-ref evidence);
+  Morpheus contributes `adapters/mcp.mjs` and `JUDGE.mcp.md` in parallel — both plug
+  into the same core without changing it.
+- Until the extraction lands, each harness carries a thin local shim that formats its
+  surface's evidence and delegates prompt assembly to the shared module read-only.
 
 **Phase 3 — backend/frontend seams (Tank / Morpheus / frontend, only if needed).**
 Two kinds of seam may surface; both are small, additive, and **do not block** the
@@ -442,16 +619,19 @@ These are handed to backend/frontend agents as discrete tickets; the harness
 degrades gracefully without them.
 
 **Phase 4 — first coverage runs + regression adoption.**
-Run the Phase-1 briefs against staging, capture transcripts, assemble judge prompts,
-render verdicts, and meta-aggregate across the batch (shared `meta-aggregate.mjs`,
-mixing API + UI verdicts). File any P0 driver fails and any judge-confirmed P1 issues
-with the standing discipline (re-confirm still-reproduces, cross-ref logs, fix →
-deploy → live-validate before closing).
+Run the Phase-1 briefs against staging, capture transcripts, normalize them through
+the shared UI evidence adapter, render verdicts via the shared judge core, and
+meta-aggregate across the batch (shared `meta-aggregate.mjs`, mixing API + UI + MCP
+verdicts — including the cross-surface "did Jordan behave consistently across
+surfaces" rollup). File any P0 driver fails and any judge-confirmed P1 issues with
+the standing discipline (re-confirm still-reproduces, cross-ref logs, fix → deploy →
+live-validate before closing).
 
 **Sequencing discipline (matches the standing autopilot rules):**
-- Trinity Phase 0 → then Trinity (driver) and Smith (briefs) fan out in parallel.
-- The `judge.mjs` extension is coordinated, not forced, to avoid colliding with the
-  API track's active edits.
+- Trinity Phase 0 → then Trinity (driver) and Smith (persona cores + UI adapters)
+  fan out in parallel.
+- The shared-layer extraction (Phase 2) is coordinated across all three tracks, not
+  forced, to avoid colliding with the API track's active edits.
 - Everything is a driver-only capture until a judge (LLM/human) renders quality —
   no UI issue is closed on "the screenshot looks fine to me" alone; it goes through
   the judge and the deploy+live-validate closure rule.
