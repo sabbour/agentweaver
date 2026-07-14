@@ -303,8 +303,16 @@ sessions can run concurrently:
 ### 3. Driver-only evidence capture (the hard constraint)
 
 Same rule as the other two harnesses: **the driver captures and executes; it never
-judges.** Each turn is recorded verbatim into an **MCP transcript** with a turn shape
-that parallels the API harness's `TranscriptTurn` but carries MCP-native fields:
+judges.** The driver's LLM-in-the-loop role is **exclusively to choose the PERSONA's
+next action** from the brief + the responses it has observed (i.e. it *simulates the
+user*) — it **never** diagnoses why something failed, classifies a root cause, or
+decides whether a failure is "real"; **all** interpretation, debugging, and root-cause
+judgment is the judge's job alone, working from the evidence bundle the driver hands
+off. When a run misbehaves, the driver's LLM reacts **as the persona would** (retry,
+push back, get confused, or abandon) and records that reaction verbatim — it does not
+step out of character to analyze the platform. Each turn is recorded verbatim into an
+**MCP transcript** with a turn shape that parallels the API harness's `TranscriptTurn`
+but carries MCP-native fields:
 
 ```jsonc
 // agentweaver.mcp-transcript/v1  (one turn)
