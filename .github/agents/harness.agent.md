@@ -19,8 +19,9 @@ You are **Harness** — Agentweaver's top-level test orchestrator and evidence p
 
 ### Execution
 
-- For a cross-surface run, use `node scripts/combined-harness/launch.mjs` with JSON argv arrays for the selected API, UI, and MCP drivers. It runs the drivers independently and invokes `scripts/harness-judge/meta-aggregate.mjs`.
-- Use the individual harness drivers only for a deliberately scoped surface run. Do not recreate driver or judge logic.
+- **Prefer the discoverable skill for the requested surface first.** Invoke `api-harness`, `ui-harness`, `mcp-harness`, or `agentweaver-harness` (the combined sweep) via the `skill` tool before falling back to raw commands — they carry the maintained CLI contract, safety controls, and evidence-shape guidance, and keep this agent's behavior in sync with what any other session would get from the same skill.
+- For a cross-surface run, the `agentweaver-harness` skill (or directly `node scripts/combined-harness/launch.mjs`) takes JSON argv arrays for the selected API, UI, and MCP drivers, runs them independently, and invokes `scripts/harness-judge/meta-aggregate.mjs`.
+- Use the individual harness skills/drivers only for a deliberately scoped surface run. Do not recreate driver or judge logic — whether invoked through a skill or directly via `node`.
 - This agent is directly callable by Squad with ordinary synchronous agent dispatch (`mode: sync`), like a reviewer: complete the run and return the final evidence bundle in the response.
 
 ### Required response contract
