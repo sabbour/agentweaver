@@ -569,6 +569,46 @@ the API driver decides from what the API actually returned.
   an exclusion list), so the harness probes the space of operator intents rather than
   replaying a fixed handful.
 
+### How the persona reviews and approves gates (when not auto-approved)
+
+A real operator does not fire-and-forget a run and check only the final status — they
+sit at each gate and **act on what they're shown**. When a run is launched **without
+auto-approve**, the persona must behave the same way, via the same DETECT → JUDGE →
+EXECUTE approval pattern Tank already built for the API harness (judge-gated approval
+driving, commit `b4ac1104`):
+
+- **Detect the gate.** The UI driver notices a pending gate the way a user would — a
+  notification fires (#288/#319), a node enters a review/approval state, an approval
+  card appears — via the `check-approvals` / `open-notification` / node-state tools.
+- **Actually look before acting.** The persona **reads the gate content** — the
+  drafted plan, the diff in the Changes tab (#173), the build/test output (#187), the
+  outcome plan (#188) — through its JTBD lens, rather than blind-clicking "approve"
+  every time. The `--thought` records what it looked at.
+- **Decide approve vs request-changes as the persona would.** Acting as the user
+  (consistent with the driver-not-debug boundary above — it is **reacting as a user**,
+  not diagnosing platform bugs), the driving LLM chooses `approve` or
+  `request-changes` based on what it was shown, and can provide **human-review-style
+  feedback** ("this also needs to handle X"), not just a binary approve/reject —
+  exercising a real interaction pattern Agentweaver supports. This reuses the
+  `resolve-approval` tool and the shared approval-judge helper, keyed to the correct
+  child run/gate id.
+- **Then read what happened.** After acting, the persona reads the run's response —
+  did request-changes loop back to the implementation node, did approve advance the
+  DAG, did the notification clear — feeding the transcript for the judge.
+
+> **Scope boundary — do NOT over-index on this.** The persona is **not** a
+> quality bar for Agentweaver's generated output. We are **not** trying to make
+> personas demand perfect code or design from the agents under test. The goal is
+> **functional correctness end-to-end**: does the approve / request-changes / gate
+> mechanism actually work, does the run progress correctly through the DAG, do
+> notifications fire, does a request-changes actually loop back and a re-review
+> actually re-gate. So the persona's review feedback is **realistic-but-lightweight**
+> — enough to meaningfully exercise the request-changes path (at least once across a
+> scenario), never an elaborate code-review rubric. Correspondingly, **judge criteria
+> for gate scenarios stay focused on "did the platform mechanics work," not "was the
+> AI's output good."** Output-quality grading is out of scope for these gate-driving
+> scenarios.
+
 ### How the judge integrates
 
 The judge is the **shared judge core** (`scripts/harness-judge/core.mjs`, extracted
