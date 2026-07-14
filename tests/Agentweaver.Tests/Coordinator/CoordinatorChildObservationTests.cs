@@ -140,6 +140,63 @@ public sealed class CoordinatorChildObservationTests : IAsyncDisposable
         subtask.RecoveryGuidance.Should().NotBeNull();
     }
 
+    // -----------------------------------------------------------------------
+    // #317: completion-signal race — a child whose terminal event was already
+    // durably recorded must NOT be declared agent_stall_timeout when the stall
+    // TTL fires before the live subscription delivered it and the Run row status
+    // still lags behind the durable event.
+    // -----------------------------------------------------------------------
+
+    [Fact]
+    public async Task ObserveChild_TerminalDurablyRecorded_ButNotDeliveredLive_BeforeStallTtl_ResolvesToRealOutcome_NotStalled()
+    {
+        // Reproduce the race precisely: the child has finished its real work and its terminal event
+        // (RunAssembleReady) is DURABLE in the RunEvents log, but (a) the live subscription never
+        // yielded it — it blocks until the stall TTL fires, modeling the ~250ms poll gap the real
+        // Ef/SqliteRunEventStream tail on — and (b) the Run row status still reads InProgress because
+        // that update lags the durable event append. Before the #317 fix the stall watchdog declared
+        // agent_stall_timeout and killed a child that had, in fact, already completed (burning a
+        // bounded #241 retry slot on finished work).
+        var childRunId = await SeedChildRunAsync(RunStatus.InProgress);
+
+        // Durably record the child's terminal completion signal (what IRunEventStream.AppendAsync
+        // writes to the durable log BEFORE it acknowledges) into the same RunEvents log the
+        // coordinator re-checks. Written to the coordinator's MemoryDbContext — the durable log
+        // EfRunEventStream targets in production.
+        using (var scope = _provider.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            db.RunEvents.Add(new RunEventRecord
+            {
+                RunId = childRunId,
+                Sequence = 1,
+                EventType = EventTypes.RunAssembleReady,
+                PayloadJson = JsonSerializer.Serialize(new { raiSafetyFlagged = false }),
+                CreatedAt = DateTime.UtcNow,
+            });
+            await db.SaveChangesAsync();
+        }
+
+        const string coord = "obs-completion-race-coord";
+        var (_, ids) = await SeedPlanAsync(coord, [(SubtaskStatus.Running, childRunId)]);
+        _streamStore.Create(coord, "owner");
+
+        // A stream whose live delivery never surfaces the durable terminal — it blocks until the
+        // stall TTL cancels the subscription, exactly reproducing the poll-gap race window.
+        var stream = new BlockingEventStream();
+        var sut = BuildDispatch(stream, stallTimeoutMinutes: 0.001); // ≈60 ms TTL
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await sut.RunDispatchLoopAsync(Context(coord), cts.Token);
+
+        (await GetSubtaskAsync(ids[0])).Status.Should().Be(SubtaskStatus.AssembleReady,
+            "a child whose terminal completion signal was already durably recorded must be resolved to " +
+            "its real outcome, not killed as agent_stall_timeout, when the stall TTL beats live delivery (#317)");
+
+        _streamStore.Get(coord)!.GetSnapshotSince(0).Events.Should().NotContain(
+            e => e.Type == EventTypes.CoordinatorChildStallDetected,
+            "the coordinator must not emit a false-positive stall signal for an already-completed child (#317)");
+    }
+
     [Fact]
     public async Task ObserveChild_ToolExecutionPendingHeartbeats_ResetStallWindow()
     {
@@ -814,9 +871,31 @@ public sealed class CoordinatorChildObservationTests : IAsyncDisposable
         catch { /* best effort */ }
     }
 
-    private sealed class RecordingAssembly : ICoordinatorAssembly
+    /// <summary>
+    /// #317 test double: an <see cref="IRunEventStream"/> whose live delivery never surfaces any
+    /// event — its <see cref="SubscribeAsync"/> blocks until the caller's stall-TTL token cancels it.
+    /// Models the race window where the child's terminal event is already durable in the RunEvents
+    /// log but has not yet been tailed by the live subscription when the stall timer fires.
+    /// </summary>
+    private sealed class BlockingEventStream : IRunEventStream
     {
-        public int Started { get; private set; }
+        public ValueTask AppendAsync(string runId, RunEvent evt, CancellationToken ct = default) =>
+            ValueTask.CompletedTask;
+
+        public async IAsyncEnumerable<RunEvent> SubscribeAsync(
+            string runId, int fromSequence = 0,
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+        {
+            await Task.Delay(Timeout.Infinite, ct).ConfigureAwait(false);
+            yield break;
+        }
+
+        public ValueTask CompleteAsync(string runId, CancellationToken ct = default) =>
+            ValueTask.CompletedTask;
+    }
+
+    private sealed class RecordingAssembly : ICoordinatorAssembly
+    {        public int Started { get; private set; }
         public void StartAssembly(CoordinatorDispatchContext context) => Started++;
         public void EnsureFinalScribe(Run coordinatorRun) { }
         public bool IsAssemblyActive(string coordinatorRunId) => false;
