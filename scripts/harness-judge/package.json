@@ -1,0 +1,13 @@
+{
+  "name": "agentweaver-harness-judge",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Shared cross-surface judge and meta-aggregation package for Agentweaver harnesses.",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  }
+}
