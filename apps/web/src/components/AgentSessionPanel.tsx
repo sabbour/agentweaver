@@ -28,7 +28,7 @@ import type { RaiVerdictEventPayload, RaiVerdictToken } from '../api/types';
 import { useArtifactBrowser } from '../hooks/useArtifactBrowser';
 import type { ArtifactBrowserAdapter } from '../hooks/useArtifactBrowser';
 import { mergeRunEvents as sharedMergeRunEvents } from '../timeline/mergeRunEvents';
-import { isSerializedWorkPlan } from '../timeline/coordinatorPlanFilter';
+import { isSerializedWorkPlan, parseOutcomeSpecMessage, formatOutcomeSpecMessage } from '../timeline/coordinatorPlanFilter';
 import { deriveHumanTitle } from '../timeline/reducer';
 import { buildRunTimeline } from '../timeline/runTimelineSteps';
 import type { RunTimelineModel, RunTimelineStep } from '../timeline/runTimelineSteps';
@@ -793,6 +793,10 @@ export interface AgentSessionPanelProps {
    *  coordinator scope. Hidden for non-coordinator (child) scopes, whose per-scope changes
    *  live in the Activity | Changes segmented control instead. */
   runChips?: ReactNode;
+  /** Small clickable topology-graph thumbnail rendered beneath the Work Plan step's numbered
+   *  subtask list (reuses CoordinatorRunPage's minimap rendering) — opens the same full topology
+   *  dialog as the left-rail minimap. Only shown when the Work Plan node is selected (#UI-bug-3). */
+  workPlanTopologyThumbnail?: ReactNode;
   /** Run-level AI-credits indicator, rendered immediately left of the composer send button as the
    *  shared hoverable AiCredits control (Session credits + USD estimate). */
   credits?: {
@@ -810,6 +814,9 @@ interface ConversationRow {
   content: string;
   timestamp?: number;
   authorOverride?: { displayName: string; avatarName: string; roleLabel: string; collapsedLabel?: string };
+  /** Short, event-specific label for activity rows (e.g. "Dispatched subtask") — used as the
+   *  synthetic Timeline step's header instead of a generic repeated "Coordinator" (#UI-bug-1). */
+  intent?: string;
 }
 
 interface ConversationTool {
@@ -855,33 +862,6 @@ function readString(payload: Record<string, unknown>, keys: string[]): string | 
     if (value != null && String(value).trim() !== '') return String(value);
   }
   return undefined;
-}
-
-interface OutcomeSpecMessage {
-  desiredOutcome?: string;
-  scope?: string;
-}
-
-function parseOutcomeSpecMessage(content: string): OutcomeSpecMessage | null {
-  const trimmed = content.trim();
-  if (!trimmed.startsWith('{') || !/"desired_outcome"|"desiredOutcome"/.test(trimmed)) return null;
-  try {
-    const parsed = JSON.parse(trimmed) as Record<string, unknown>;
-    const desiredOutcome = readString(parsed, ['desiredOutcome', 'desired_outcome']);
-    const scope = readString(parsed, ['scope']);
-    if (!desiredOutcome && !scope) return null;
-    return { desiredOutcome, scope };
-  } catch {
-    return null;
-  }
-}
-
-function formatOutcomeSpecMessage(spec: OutcomeSpecMessage): string {
-  return [
-    '### Outcome plan',
-    spec.desiredOutcome ? `**Desired outcome:**\n\n${spec.desiredOutcome}` : null,
-    spec.scope ? `**Scope:**\n\n${spec.scope}` : null,
-  ].filter(Boolean).join('\n\n');
 }
 
 function normalizeRaiRationale(value: string | undefined): string | undefined {
@@ -1601,6 +1581,55 @@ function coordinatorActivityLine(evt: RunStreamEvent, subtasks: Map<string, Subt
 }
 
 
+/**
+ * Short, specific header label for a coordinator-lifecycle narration step, keyed off the event
+ * type that produced its `coordinatorActivityLine()` text. Replaces the previous hardcoded literal
+ * 'Coordinator' repeated on every single synthetic step — see coordinatorNarrationSteps (#UI-bug-1).
+ */
+function coordinatorEventIntent(evt: RunStreamEvent): string {
+  switch (evt.type) {
+    case 'coordinator.started': return 'Coordinator started';
+    case 'coordinator.recovered': return 'Coordinator recovered';
+    case 'coordinator.outcome_spec': return 'Outcome plan drafted';
+    case 'coordinator.workflow_selected': return 'Workflow selected';
+    case 'coordinator.work_plan': return 'Work plan created';
+    case 'coordinator.steering': return 'Steering applied';
+    case 'coordinator.child_stall_detected': return 'Child stalled';
+    case 'coordinator.children_complete': return 'Subtasks complete';
+    case 'subtask.dispatched': return 'Dispatched subtask';
+    case 'subtask.pending_capacity': return 'Waiting for capacity';
+    case 'subtask.running': return 'Subtask running';
+    case 'subtask.assemble_ready': return 'Ready for assembly';
+    case 'subtask.rai_flagged': return 'RAI flagged';
+    case 'subtask.completed': return 'Subtask completed';
+    case 'subtask.failed': return 'Subtask failed';
+    case 'coordinator.assembly_started': return 'Assembly started';
+    case 'coordinator.integration_conflict_auto_resolved': return 'Conflict auto-resolved';
+    case 'coordinator.assembly_rai_started': return 'Assembly RAI check';
+    case 'coordinator.assembly_rai_completed': return 'Assembly RAI check';
+    case 'coordinator.assembly_review_requested': return 'Review requested';
+    case 'coordinator.assembly_review_approved': return 'Review approved';
+    case 'coordinator.assembly_review_preserved': return 'Review preserved';
+    case 'coordinator.assembly_changes_requested': return 'Changes requested';
+    case 'coordinator.assembly_merge_started': return 'Merge started';
+    case 'coordinator.assembly_merge_completed': return 'Merge completed';
+    case 'coordinator.assembly_merge_failed': return 'Merge failed';
+    case 'coordinator.assembly_scribe_started': return 'Scribe started';
+    case 'coordinator.assembly_scribe_completed': return 'Scribe completed';
+    case 'coordinator.assembly_completed': return 'Assembly completed';
+    case 'coordinator.assembly_blocked': return 'Assembly blocked';
+    case 'coordinator.assembly_declined': return 'Assembly declined';
+    case 'coordinator.assembly_failed': return 'Assembly failed';
+    case 'coordinator.child_question': return 'Question from child';
+    case 'coordinator.child_approval_required':
+    case 'tool.approval_required':
+    case 'shell.approval_required': return 'Approval required';
+    case 'coordinator.child_approval_resolved': return 'Approval resolved';
+    case 'coordinator.autopilot_answered': return 'Autopilot answered';
+    default: return 'Coordinator';
+  }
+}
+
 function turnsToTimelineModel(turns: ConversationTurn[], eventCount: number): RunTimelineModel {
   const steps: RunTimelineStep[] = turns.map((turn, index) => {
     const messages = turn.rows
@@ -1694,7 +1723,13 @@ function buildCoordinatorTurns(events: RunStreamEvent[]): ConversationTurn[] {
       };
       turns.push(activityTurn);
     }
-    activityTurn.rows.push({ key: `activity-${evt.sequence}`, role: 'activity', content: line, timestamp: readTimestamp(evt) });
+    activityTurn.rows.push({
+      key: `activity-${evt.sequence}`,
+      role: 'activity',
+      content: line,
+      timestamp: readTimestamp(evt),
+      intent: coordinatorEventIntent(evt),
+    });
     activityTurn.approvals.push(...approvals);
   }
 
@@ -1763,7 +1798,7 @@ function coordinatorNarrationSteps(turns: ConversationTurn[]): RunTimelineStep[]
       };
       steps.push({
         id: `coord-narration-${row.key}`,
-        intent: 'Coordinator',
+        intent: row.intent ?? 'Coordinator',
         status: 'complete',
         active: false,
         synthetic: true,
@@ -1813,6 +1848,7 @@ export function AgentSessionPanel({
   runChips,
   credits,
   outcomePlanDispatched = false,
+  workPlanTopologyThumbnail,
 }: AgentSessionPanelProps) {
   const styles = useStyles();
   const composerRef = useRef<HTMLDivElement>(null);
@@ -2404,6 +2440,7 @@ export function AgentSessionPanel({
                       running={timelineModel.running}
                       emptyHint="Messages, tool calls, and activity will appear here as the run emits events."
                     />
+                    {selectedItem.nodeId === 'work-plan' && workPlanTopologyThumbnail}
                     {timelineApprovals.length > 0 && (
                       <div className={styles.timelineApprovals}>
                         {timelineApprovals.map((approval) => (
