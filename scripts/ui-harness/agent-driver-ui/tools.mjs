@@ -69,6 +69,13 @@ export function approvalInScope(adapterText, gate) {
   return declared === String(gate?.type ?? '').toLowerCase() && gate?.safe === true;
 }
 
+export function assertApprovalAllowed({ adapterText, decision, gate }) {
+  if (decision !== 'approve') return;
+  if (!approvalInScope(adapterText, gate)) {
+    throw new Error(`refusing out-of-scope approve for ${gate?.type ?? 'unknown'} gate`);
+  }
+}
+
 async function login(args) {
   const baseUrl = args['base-url'];
   if (!baseUrl) throw new Error('--base-url is required');
@@ -106,6 +113,15 @@ async function action(args) {
     if (command === 'goto') await runtime.goto(args.path ?? '/');
     else if (command === 'click') await keyedLocator(runtime.page, { testId: args['test-id'], role: args.role, name: args.name }).click({ timeout: Number(args.timeout ?? 10_000) });
     else if (command === 'type-coordinator') await keyedLocator(runtime.page, { testId: args['test-id'] ?? 'coordinator-composer', role: args.role, name: args.name }).fill(args.text ?? '');
+    else if (command === 'resolve-approval') {
+      // The adapter is checked independently from any judge/DOM recommendation.
+      assertApprovalAllowed({
+        adapterText: session.persona.text,
+        decision: args.decision ?? 'defer',
+        gate: { type: args['gate-type'], safe: true },
+      });
+      await keyedLocator(runtime.page, { testId: args['test-id'], role: args.role, name: args.name }).click({ timeout: Number(args.timeout ?? 10_000) });
+    }
     else if (command === 'capture') await runtime.goto(args.path ?? '/');
     else throw new Error(`unsupported command "${command}"`);
     const step = await captureTurn({
