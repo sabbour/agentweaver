@@ -110,6 +110,28 @@ public sealed class RemoteAgentProxyDeadlineTests
             "no per-update idle or total timer may remain armed after the stream completes");
     }
 
+    [Fact]
+    public void TransportReset_IsClassifiedRetryable_UnlessCallerCancelled()
+    {
+        var reset = new HttpRequestException(
+            "Connection reset by peer",
+            new IOException("Connection reset by peer"));
+
+        RemoteAgentProxy.IsTransientA2aTransportFailure(reset, CancellationToken.None).Should().BeTrue();
+        using var cancelled = new CancellationTokenSource();
+        cancelled.Cancel();
+        RemoteAgentProxy.IsTransientA2aTransportFailure(reset, cancelled.Token).Should().BeFalse();
+    }
+
+    [Fact]
+    public void UnsupportedSdkEvent_IsClassifiedForRetry()
+    {
+        var exception = new NotSupportedException(
+            "Only message, task, task update events are supported from A2A agents. Received: None");
+
+        RemoteAgentProxy.IsUnsupportedA2aEvent(exception).Should().BeTrue();
+    }
+
     private static async IAsyncEnumerable<int> QuietProgressingStream(
         TimeSpan perUpdateGap,
         [EnumeratorCancellation] CancellationToken ct)

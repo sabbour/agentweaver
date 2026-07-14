@@ -279,6 +279,40 @@ public sealed class WorkflowRestartServiceTests : IAsyncDisposable
             "the generic sweep must defer coordinator runs to coordinator restart recovery, not fail them");
     }
 
+    [Fact]
+    public async Task RecoverAsync_StrandedChildRun_EmitsRetryableTransportFailure()
+    {
+        var runStore = new SqliteRunStore(_db.Db);
+        var streamStore = new RunStreamStore();
+        var runId = RunId.New();
+        await runStore.InsertAsync(new Run
+        {
+            Id = runId,
+            RepositoryPath = _worktreePath,
+            OriginatingBranch = "main",
+            ModelSource = ModelSource.GitHubCopilot,
+            Task = "implement",
+            SubmittingUser = "test-user",
+            Status = RunStatus.InProgress,
+            StartedAt = DateTimeOffset.UtcNow,
+            ParentRunId = RunId.New().ToString(),
+            SubtaskId = "42",
+        });
+
+        await BuildService(
+                runStore,
+                streamStore,
+                new TestWorktreeOps(worktreeExists: true, worktreePath: _worktreePath, treeHash: null))
+            .RecoverAsync(CancellationToken.None);
+
+        (await runStore.GetAsync(runId))!.Status.Should().Be(RunStatus.Failed);
+        var failure = streamStore.Get(runId.ToString())!.GetSnapshotSince(0).Events
+            .Single(e => e.Type == EventTypes.RunFailed);
+        var payload = System.Text.Json.JsonSerializer.SerializeToElement(failure.Payload);
+        payload.GetProperty("reason").GetString().Should().Be("a2a_transport_interrupted");
+        payload.GetProperty("retryable").GetBoolean().Should().BeTrue();
+    }
+
     // =========================================================================
     // Helpers
     // =========================================================================

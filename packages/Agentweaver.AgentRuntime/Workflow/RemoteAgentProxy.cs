@@ -305,10 +305,20 @@ public sealed class RemoteAgentProxy : IWorkflowTurnAgent, IPreparedWritebackSou
                     lastStructuredFailure.IsRetryable);
             }
 
+            if (IsUnsupportedA2aEvent(ex))
+            {
+                throw new WorkflowAgentInfrastructureException(
+                    "a2a_protocol_event_unsupported",
+                    $"RemoteAgentProxy: the A2A SDK rejected an unsupported stream event for run '{_runId}': {ex.Message}",
+                    ex,
+                    isRetryable: true);
+            }
+
             throw new WorkflowAgentInfrastructureException(
                 "a2a_transport_failure",
                 $"RemoteAgentProxy: A2A turn failed for run '{_runId}': {ex.Message}",
-                ex);
+                ex,
+                isRetryable: IsTransientA2aTransportFailure(ex, ct));
         }
 
         var responseText = textAccumulator.ToString();
@@ -562,6 +572,26 @@ public sealed class RemoteAgentProxy : IWorkflowTurnAgent, IPreparedWritebackSou
         {
             return null;
         }
+    }
+
+    internal static bool IsUnsupportedA2aEvent(Exception exception) =>
+        exception is NotSupportedException &&
+        exception.Message.Contains("Only message, task, task update events are supported", StringComparison.Ordinal);
+
+    internal static bool IsTransientA2aTransportFailure(Exception exception, CancellationToken callerCancellation)
+    {
+        if (callerCancellation.IsCancellationRequested)
+            return false;
+
+        for (Exception? current = exception; current is not null; current = current.InnerException)
+        {
+            if (current is HttpRequestException or IOException or System.Net.Sockets.SocketException)
+                return true;
+            if (current is OperationCanceledException)
+                return true;
+        }
+
+        return false;
     }
 
     /// <inheritdoc />

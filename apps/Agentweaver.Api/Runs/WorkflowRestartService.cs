@@ -54,7 +54,9 @@ public sealed class WorkflowRestartService
 
     public async Task RecoverAsync(CancellationToken ct)
     {
-        // 1. Fail stranded InProgress runs (agent was mid-execution; non-replayable).
+        // 1. Fail stranded InProgress runs. Child turns stranded by a worker restart are safe to
+        // redispatch as a fresh child: the coordinator owns their retry budget and will release
+        // the old pod before dispatching. Root turns remain non-replayable.
         var inProgress = await _runStore.GetByStatusAsync(RunStatus.InProgress, ct).ConfigureAwait(false);
         foreach (var run in inProgress)
         {
@@ -71,8 +73,20 @@ public sealed class WorkflowRestartService
                 continue;
             }
 
-            _logger.LogWarning("Failing stranded InProgress run {RunId}", run.Id);
-            await FailRecoveredRunAsync(run, "stranded_in_progress", entry: null, cleanupWorktree: true, ct: ct)
+            var retryableChildTransportFailure = run.ParentRunId is not null;
+            var reason = retryableChildTransportFailure
+                ? "a2a_transport_interrupted"
+                : "stranded_in_progress";
+            _logger.LogWarning(
+                "Failing stranded InProgress run {RunId} (reason={Reason}, retryable={Retryable})",
+                run.Id, reason, retryableChildTransportFailure);
+            await FailRecoveredRunAsync(
+                    run,
+                    reason,
+                    entry: null,
+                    cleanupWorktree: true,
+                    retryable: retryableChildTransportFailure,
+                    ct: ct)
                 .ConfigureAwait(false);
         }
 
@@ -241,7 +255,8 @@ public sealed class WorkflowRestartService
         string reason,
         RunStreamEntry? entry,
         bool cleanupWorktree,
-        CancellationToken ct)
+        CancellationToken ct,
+        bool retryable = false)
     {
         var runId = run.Id.ToString();
         var changed = await _runStore.TrySetTerminalStatusAsync(
@@ -255,7 +270,7 @@ public sealed class WorkflowRestartService
         }
 
         entry ??= _streamStore.Get(runId) ?? _streamStore.Create(runId, run.SubmittingUser);
-        await RecordRecoveryEventAsync(runId, entry, EventTypes.RunFailed, new { reason }, ct)
+        await RecordRecoveryEventAsync(runId, entry, EventTypes.RunFailed, new { reason, retryable }, ct)
             .ConfigureAwait(false);
         _streamStore.Complete(runId);
         _ = FirePostRunScribeAsync(runId);

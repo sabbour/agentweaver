@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using k8s;
+using k8s.Autorest;
 using Microsoft.Extensions.Logging;
 using Agentweaver.AgentRuntime.Workflow;
 using Agentweaver.Api.Infrastructure;
@@ -118,6 +119,26 @@ internal sealed class KubernetesPodAgentEndpointResolver : ISandboxAgentEndpoint
 
             return endpoint;
         }
+        catch (HttpOperationException ex) when (ex.Response?.StatusCode == System.Net.HttpStatusCode.NotFound)
+        {
+            var run = _runStore is not null && RunId.TryParse(runId, out var parsedRunId)
+                ? await _runStore.GetAsync(parsedRunId, ct).ConfigureAwait(false)
+                : null;
+            if (run is not null && IsTerminal(run.Status))
+            {
+                _logger.LogInformation(
+                    "KubernetesPodAgentEndpointResolver: AgentHost pod {PodName} for terminal run {RunId} was reaped.",
+                    podName, runId);
+                return null;
+            }
+
+            _podRegistry.Unregister(runId);
+            throw new WorkflowAgentInfrastructureException(
+                "agenthost_pod_reaped",
+                $"AgentHost pod '{podName}' for non-terminal run '{runId}' was reaped; redispatch is required.",
+                ex,
+                isRetryable: true);
+        }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             if (ex is WorkflowAgentInfrastructureException)
@@ -129,6 +150,10 @@ internal sealed class KubernetesPodAgentEndpointResolver : ISandboxAgentEndpoint
             return null;
         }
     }
+
+    private static bool IsTerminal(RunStatus status) => status is
+        RunStatus.Completed or RunStatus.Failed or RunStatus.Merged or RunStatus.Declined or
+        RunStatus.MergeFailed or RunStatus.AssembleReady;
 
     /// <inheritdoc />
     public async Task<bool> RequiresPreparedWritebackAsync(string runId, CancellationToken ct)
