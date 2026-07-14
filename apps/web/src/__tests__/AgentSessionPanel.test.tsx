@@ -233,6 +233,127 @@ describe('AgentSessionPanel', () => {
     expect(document.body.textContent).not.toContain('Implement the task');
   });
 
+  it.each([
+    {
+      nodeId: 'planned:assembly-review',
+      label: 'Human Review',
+      roleKey: 'review',
+      ownType: 'coordinator.assembly_review_requested',
+      ownText: 'Human review requested for collective assembly.',
+      unrelatedType: 'coordinator.assembly_merge_completed',
+      unrelatedText: 'Collective assembly: merge completed',
+    },
+    {
+      nodeId: 'planned:assembly-merge',
+      label: 'Merge',
+      roleKey: 'merge',
+      ownType: 'coordinator.assembly_merge_completed',
+      ownText: 'Collective assembly: merge completed',
+      unrelatedType: 'coordinator.assembly_scribe_completed',
+      unrelatedText: 'Collective assembly: scribe completed.',
+    },
+    {
+      nodeId: 'planned:assembly-scribe',
+      label: 'Scribe',
+      roleKey: 'scribe',
+      ownType: 'coordinator.assembly_scribe_completed',
+      ownText: 'Collective assembly: scribe completed.',
+      unrelatedType: 'subtask.running',
+      unrelatedText: 'Subtask running:',
+    },
+  ])('scopes $label activity to that assembly stage', async ({
+    nodeId,
+    label,
+    roleKey,
+    ownType,
+    ownText,
+    unrelatedType,
+    unrelatedText,
+  }) => {
+    currentEvents = [
+      { sequence: 1, type: unrelatedType as RunStreamEvent['type'], payload: { subtaskId: '1', commitHash: '1234567890' } },
+      { sequence: 2, type: ownType as RunStreamEvent['type'], payload: { gateKind: 'human-review', commitHash: 'abcdef123456' } },
+    ];
+    const gateTree: RunSessionTree[] = [{
+      ...tree[0],
+      children: [{
+        nodeId,
+        label,
+        roleKey,
+        status: 'completed',
+        depth: 1,
+        children: [],
+      }],
+    }];
+
+    render(
+      <Wrapper>
+        <AgentSessionPanel
+          open
+          onClose={vi.fn()}
+          tree={gateTree}
+          selectedNodeId={nodeId}
+          onSelectNode={vi.fn()}
+          coordinatorRunId="coord-run-1"
+          projectId="p1"
+        />
+      </Wrapper>,
+    );
+
+    await waitFor(() => expect(document.body.textContent).toContain(ownText), { timeout: 4000 });
+    expect(document.body.textContent).not.toContain(unrelatedText);
+    expect(document.body.textContent).not.toContain('Activity 2');
+  });
+
+  it('shows the work plan contents instead of the coordinator activity timeline', async () => {
+    currentEvents = [
+      { sequence: 1, type: 'subtask.running', payload: { subtaskId: '1' } },
+      {
+        sequence: 2,
+        type: 'coordinator.work_plan',
+        payload: {
+          status: 'planned',
+          workflowId: 'ship-flow',
+          subtasks: [
+            { id: '1', title: 'Build the focused activity feed', assignedAgent: 'Trinity', phase: 'implementation' },
+            { id: '2', title: 'Validate the coordinator UX', assignedAgent: 'Trinity', dependsOn: [1] },
+          ],
+        },
+      },
+    ];
+    const workPlanTree: RunSessionTree[] = [{
+      ...tree[0],
+      children: [{
+        nodeId: 'work-plan',
+        label: 'Work Plan',
+        roleKey: 'work_plan',
+        status: 'completed',
+        depth: 1,
+        children: [],
+      }],
+    }];
+
+    render(
+      <Wrapper>
+        <AgentSessionPanel
+          open
+          onClose={vi.fn()}
+          tree={workPlanTree}
+          selectedNodeId="work-plan"
+          onSelectNode={vi.fn()}
+          coordinatorRunId="coord-run-1"
+          projectId="p1"
+        />
+      </Wrapper>,
+    );
+
+    await waitFor(() => expect(document.body.textContent).toContain('Build the focused activity feed'), { timeout: 4000 });
+    expect(document.body.textContent).toContain('Validate the coordinator UX');
+    expect(document.body.textContent).toContain('depends on: 1');
+    expect(document.body.textContent).not.toContain('Subtask running:');
+    expect(document.body.textContent).not.toContain('Activity 2');
+  });
+
   it('renders a red RAI verdict as an error state for a completed RAI gate', async () => {
     currentEvents = [
       {
@@ -384,7 +505,7 @@ describe('AgentSessionPanel', () => {
     expect(document.body.textContent).not.toContain('Internal RAI reviewer system prompt');
   });
 
-  it('renders outcome-spec JSON as an outcome-plan message instead of a RAI reviewer response', async () => {
+  it('does not leak outcome-plan content into the RAI reviewer activity', async () => {
     currentEvents = [
       { sequence: 1, type: 'agent.turn.start', payload: { turnId: 'outcome-turn' } },
       {
@@ -430,15 +551,11 @@ describe('AgentSessionPanel', () => {
       </Wrapper>,
     );
 
-    await waitFor(() => expect(screen.getByText('Outcome plan')).toBeDefined(), { timeout: 4000 });
-    expect(screen.getByText(/Desired outcome/i)).toBeDefined();
-    expect(screen.getByText(/Ship a minimal preview app/i)).toBeDefined();
-    expect(screen.getByText(/Scope/i)).toBeDefined();
-    expect(screen.getByText(/Implement only the web preview path/i)).toBeDefined();
+    await waitFor(() => expect(document.body.textContent).toContain('RAI Review completed'), { timeout: 4000 });
+    expect(screen.queryByText('Outcome plan')).toBeNull();
+    expect(screen.queryByText(/Ship a minimal preview app/i)).toBeNull();
+    expect(screen.queryByText(/Implement only the web preview path/i)).toBeNull();
     expect(document.body.textContent).not.toContain('desired_outcome');
-    const timelineMessage = screen.getByText(/Ship a minimal preview app/i).closest('[data-testid="timeline-message"]') as HTMLElement;
-    expect(timelineMessage).toBeTruthy();
-    expect(timelineMessage.textContent).not.toContain('Coordinator (RAI Reviewer)');
   });
 
   it('explains assembly-requested revision cycles in the coordinator timeline with feedback', async () => {

@@ -1079,6 +1079,72 @@ function isRaiNode(item: RunSessionTree | FlatTreeNode | null | undefined): bool
   return key.includes('assembly-rai') || /\brai\b/.test(key);
 }
 
+type AssemblyActivityScope = 'rai' | 'review' | 'merge' | 'scribe';
+
+function assemblyActivityScope(item: RunSessionTree | FlatTreeNode | null | undefined): AssemblyActivityScope | null {
+  if (!item) return null;
+  const key = `${item.roleKey ?? ''} ${item.nodeId} ${item.label}`.toLowerCase();
+  if (key.includes('assembly-rai') || /\brai\b/.test(key)) return 'rai';
+  if (key.includes('assembly-review') || key.includes('human review') || /\breview\b/.test(key)) return 'review';
+  if (key.includes('assembly-merge') || /\bmerge\b/.test(key)) return 'merge';
+  if (key.includes('assembly-scribe') || /\bscribe\b/.test(key)) return 'scribe';
+  return null;
+}
+
+function assemblyEventsForScope(
+  events: RunStreamEvent[],
+  scope: AssemblyActivityScope,
+): RunStreamEvent[] {
+  const scoped: RunStreamEvent[] = [];
+  let activeScope: AssemblyActivityScope | null = null;
+
+  for (const event of events) {
+    const eventType = event.type as string;
+    const gateKind = readGateKind(event.payload);
+    if (eventType === 'coordinator.assembly_rai_started') activeScope = 'rai';
+    else if (eventType === 'coordinator.assembly_review_requested') {
+      activeScope = gateKind === undefined || gateKind === 'human-review' ? 'review' : null;
+    } else if (eventType === 'coordinator.assembly_merge_started') activeScope = 'merge';
+    else if (eventType === 'coordinator.assembly_scribe_started') activeScope = 'scribe';
+
+    const belongsToScope =
+      (scope === 'rai' && (
+        eventType === 'coordinator.assembly_rai_started'
+        || eventType === 'coordinator.assembly_rai_completed'
+        || eventType === 'rai.verdict'
+        || eventType === 'run.rai_error'
+      ))
+      || (scope === 'review' && (
+        (eventType === 'coordinator.assembly_review_requested'
+          && (gateKind === undefined || gateKind === 'human-review'))
+        || eventType === 'coordinator.assembly_review_approved'
+        || eventType === 'coordinator.assembly_review_preserved'
+      ))
+      || (scope === 'merge' && (
+        eventType === 'coordinator.assembly_merge_started'
+        || eventType === 'coordinator.assembly_merge_completed'
+        || eventType === 'coordinator.assembly_merge_failed'
+        || eventType === 'coordinator.integration_conflict_auto_resolved'
+        || eventType === 'merge.conflicted'
+      ))
+      || (scope === 'scribe' && (
+        eventType === 'coordinator.assembly_scribe_started'
+        || eventType === 'coordinator.assembly_scribe_completed'
+        || eventType === 'run.scribe_failed'
+      ))
+      || (activeScope === scope && (
+        eventType === 'coordinator.assembly_changes_requested'
+        || eventType === 'coordinator.assembly_blocked'
+        || eventType === 'coordinator.assembly_declined'
+        || eventType === 'coordinator.assembly_failed'
+      ));
+
+    if (belongsToScope) scoped.push(event);
+  }
+
+  return scoped;
+}
+
 function latestRaiVerdict(events: RunStreamEvent[]): RaiVerdict | null {
   for (let i = events.length - 1; i >= 0; i -= 1) {
     const evt = events[i];
@@ -1440,9 +1506,14 @@ function coordinatorActivityLine(evt: RunStreamEvent, subtasks: Map<string, Subt
     case 'coordinator.assembly_rai_started':
       return 'Collective assembly: RAI check started.';
     case 'coordinator.assembly_rai_completed':
-      return Boolean(p['raiSafetyFlagged'] ?? p['rai_safety_flagged'])
-        ? 'Collective assembly: RAI check completed with safety flags.'
-        : 'Collective assembly: RAI check completed.';
+      if (Boolean(p['raiSafetyFlagged'] ?? p['rai_safety_flagged'])) {
+        return 'Collective assembly: RAI check completed with safety flags.';
+      }
+      if (Boolean(p['raiRevisionRequested'] ?? p['rai_revision_requested'])) {
+        const feedback = readString(p, ['feedback']);
+        return `Collective assembly: RAI check requested revisions${feedback ? ` — ${feedback}` : '.'}`;
+      }
+      return 'Collective assembly: RAI check completed.';
     case 'coordinator.assembly_review_requested':
       return 'Human review requested for collective assembly.';
     case 'coordinator.assembly_review_approved': {
@@ -1619,6 +1690,44 @@ function buildCoordinatorTurns(events: RunStreamEvent[]): ConversationTurn[] {
   return turns.length > 0 ? turns : buildTurns(events);
 }
 
+function buildWorkPlanTurns(events: RunStreamEvent[]): ConversationTurn[] {
+  const event = [...events].reverse().find((candidate) => candidate.type === 'coordinator.work_plan');
+  if (!event) return [];
+
+  const subtasks = readArray(event.payload, ['subtasks', 'tasks']) ?? [];
+  const status = readString(event.payload, ['status']);
+  const workflow = readString(event.payload, ['workflowId', 'workflow_id']);
+  const lines = [
+    `Work plan${status ? ` · ${status}` : ''}${workflow ? ` · workflow ${workflow}` : ''}`,
+    ...subtasks.map((raw, index) => {
+      const task = typeof raw === 'object' && raw !== null ? raw as Record<string, unknown> : {};
+      const title = readString(task, ['title', 'description']) ?? `Task ${index + 1}`;
+      const agent = readString(task, ['assignedAgent', 'assigned_agent', 'agent']);
+      const phase = readString(task, ['phase']);
+      const dependsOn = readArray(task, ['dependsOn', 'depends_on']) ?? [];
+      const detail = [
+        agent ? `owner: ${agent}` : null,
+        phase ? `phase: ${phase}` : null,
+        dependsOn.length > 0 ? `depends on: ${dependsOn.join(', ')}` : null,
+      ].filter((part): part is string => part !== null);
+      return `${index + 1}. ${title}${detail.length > 0 ? ` — ${detail.join(' · ')}` : ''}`;
+    }),
+  ];
+
+  return [{
+    key: `work-plan-${event.sequence}`,
+    rows: [{
+      key: `work-plan-content-${event.sequence}`,
+      role: 'activity',
+      content: lines.join('\n'),
+      timestamp: readTimestamp(event),
+    }],
+    toolCalls: [],
+    approvals: [],
+    filePaths: [],
+  }];
+}
+
 /**
  * Project the coordinator's narrated activity rows (dispatch/completion/block decisions,
  * built by buildCoordinatorTurns above) into standalone synthetic Timeline steps so they can
@@ -1727,6 +1836,7 @@ export function AgentSessionPanel({
     [flatTree, selectedNodeId],
   );
   const selectedIsAssemblyAggregate = isAssemblyAggregateNode(selectedItem);
+  const selectedAssemblyScope = assemblyActivityScope(selectedItem);
   const selectedRunId = selectedItem
     ? (selectedItem.isCoordinator || selectedItem.nodeId === 'outcome-plan' || selectedItem.nodeId === 'work-plan' || selectedIsAssemblyAggregate ? coordinatorRunId : (selectedItem.childRunId ?? ''))
     : '';
@@ -1782,6 +1892,10 @@ export function AgentSessionPanel({
 
   const { events: liveEvents } = useRunStream(open && canBrowseSelectedRun ? selectedRunId : '');
   const events = useMemo(() => mergeRunEvents(seedEvents, liveEvents), [seedEvents, liveEvents]);
+  const displayEvents = useMemo(
+    () => selectedAssemblyScope ? assemblyEventsForScope(events, selectedAssemblyScope) : events,
+    [events, selectedAssemblyScope],
+  );
 
   useEffect(() => {
     settledRunIdRef.current = '';
@@ -1799,14 +1913,16 @@ export function AgentSessionPanel({
     }
   }, [selectedRunId, events, runDetail]);
   const selectedRaiVerdict = useMemo(
-    () => (isRaiNode(selectedItem) ? latestRaiVerdict(events) : null),
-    [events, selectedItem],
+    () => (isRaiNode(selectedItem) ? latestRaiVerdict(displayEvents) : null),
+    [displayEvents, selectedItem],
   );
   const turns = useMemo(
-    () => (selectedItem?.isCoordinator || selectedItem?.nodeId === 'work-plan' || selectedIsAssemblyAggregate)
-      ? buildCoordinatorTurns(events)
-      : buildTurns(events),
-    [events, selectedItem?.isCoordinator, selectedItem?.nodeId, selectedIsAssemblyAggregate],
+    () => selectedItem?.nodeId === 'work-plan'
+      ? buildWorkPlanTurns(displayEvents)
+      : (selectedItem?.isCoordinator || selectedIsAssemblyAggregate)
+        ? buildCoordinatorTurns(displayEvents)
+        : buildTurns(displayEvents),
+    [displayEvents, selectedItem?.isCoordinator, selectedItem?.nodeId, selectedIsAssemblyAggregate],
   );
   // The Messages surface renders the intent-driven Timeline (ChainOfThought steps) from
   // the same scope-aware event stream. `turns` is still used for approvals, file
@@ -1822,14 +1938,24 @@ export function AgentSessionPanel({
   const timelineModel = useMemo(
     () => {
       if (selectedIsAssemblyAggregate) {
-        return turnsToTimelineModel(turns, events.length);
+        return turnsToTimelineModel(turns, displayEvents.length);
       }
-      if (selectedItem?.isCoordinator || selectedItem?.nodeId === 'work-plan') {
-        const model = buildRunTimeline(events, {
+      if (selectedItem?.nodeId === 'work-plan') {
+        const model = turnsToTimelineModel(turns, displayEvents.length);
+        return {
+          ...model,
+          steps: model.steps.map((step, index) => ({
+            ...step,
+            intent: index === 0 ? 'Work plan' : step.intent,
+          })),
+        };
+      }
+      if (selectedItem?.isCoordinator) {
+        const model = buildRunTimeline(displayEvents, {
           stripSerializedWorkPlan: true,
           forceCloseIfInactive: isRunTimelineInactive,
         });
-        if (model.steps.length === 0) return turnsToTimelineModel(turns, events.length);
+        if (model.steps.length === 0) return turnsToTimelineModel(turns, displayEvents.length);
         // Interleave the coordinator's dispatch/completion/block narration (from
         // buildCoordinatorTurns, already computed as `turns` for this scope) alongside the
         // intent-driven steps instead of dropping it whenever buildRunTimeline has ANY
@@ -1841,12 +1967,12 @@ export function AgentSessionPanel({
           steps: [...model.steps, ...narrationSteps].sort((a, b) => a.sequence - b.sequence),
         };
       }
-      return buildRunTimeline(events, {
+      return buildRunTimeline(displayEvents, {
         stripSerializedWorkPlan: false,
         forceCloseIfInactive: isRunTimelineInactive,
       });
     },
-    [events, selectedItem?.isCoordinator, selectedItem?.nodeId, selectedIsAssemblyAggregate, turns, isRunTimelineInactive],
+    [displayEvents, selectedItem?.isCoordinator, selectedItem?.nodeId, selectedIsAssemblyAggregate, turns, isRunTimelineInactive],
   );
   const timelineApprovals = useMemo(
     () => turns.flatMap((turn) => turn.approvals),
@@ -2046,7 +2172,7 @@ export function AgentSessionPanel({
     (sum, turn) => sum + turn.approvals.filter((approval) => !approval.isResolved).length,
     0,
   );
-  const pendingQuestionCount = events.filter((evt) =>
+  const pendingQuestionCount = displayEvents.filter((evt) =>
     evt.type === 'agent.question_asked' || evt.type === 'coordinator.child_question'
   ).length;
   // A turn "streams" while its run is still live — the coordinator scope tracks coordinatorActive,

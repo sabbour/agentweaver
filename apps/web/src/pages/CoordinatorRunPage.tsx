@@ -1896,7 +1896,7 @@ function summarizeCoordinatorChildren(nodes: RunSessionTree[]): string | null {
     counts.done > 0 ? `${counts.done} done` : null,
     counts.pending > 0 ? `${counts.pending} pending` : null,
   ].filter((part): part is string => part !== null);
-  return parts.length > 0 ? parts.join(' · ') : `${nodes.length} child agents`;
+  return parts.length > 0 ? parts.join(', ') : `${nodes.length} agents`;
 }
 
 function graphEmptyCopy(
@@ -2907,9 +2907,9 @@ export function CoordinatorRunPage() {
           agentRoleTitle: wfAgent ? roleByAgent[wfAgent] : undefined,
           modelId:        wfModel,
           executionPodName: wfPod,
-          // Assembly/workflow stages (RAI / Human Review / Merge / Scribe) have their own
-          // persisted sub-run streams — carry the child run id so selecting the node in the
-          // session tree scopes Activity to that sub-run instead of an empty stream.
+          // Carry a child run id only when the descriptor supplies one. Coordinator assembly
+          // stages currently report lifecycle/results on the parent stream, so their session
+          // activity is scoped by event type in AgentSessionPanel rather than by a fake run id.
           childRunId:    readChildRunId(node),
           childGraphRef: node.child_graph_ref,
           dir:         'GRID',
@@ -3091,8 +3091,8 @@ export function CoordinatorRunPage() {
           agentName: data.agentName ?? (isCoordinatorNode ? 'Coordinator' : undefined),
           agentRole: data.agentRoleTitle ?? data.def.roleDescription,
           status,
-          // Assembly/workflow stages carry their own sub-run id so selecting RAI / Human Review /
-          // Scribe streams the real sub-run instead of falling through to an empty scope.
+          // Preserve a real descriptor-provided sub-run id; otherwise assembly stages intentionally
+          // stay on the coordinator stream and AgentSessionPanel filters it to the selected stage.
           childRunId: isCoordinatorNode ? undefined : data.childRunId,
           startedAt: data.state.startedAt,
           completedAt: data.state.completedAt,

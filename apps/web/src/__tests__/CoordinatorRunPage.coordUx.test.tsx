@@ -526,7 +526,7 @@ describe('CoordinatorRunPage operator console redesign', () => {
     expect(runningRow.textContent).not.toMatch(/\bQueued\b/);
     expect(assemblyRow.textContent).not.toMatch(/\bQueued\b/);
     const coordinatorRow = await screen.findByRole('treeitem', { name: /Select Coordinator/i }, { timeout: 4000 });
-    expect(coordinatorRow.textContent).toContain('1 running · 1 ready');
+    expect(coordinatorRow.textContent).toContain('1 running, 1 ready');
     const indicator = screen.getByTestId('rail-status-block');
     expect(indicator.textContent).not.toContain('Task:');
     expect(indicator.textContent).not.toMatch(/\bQueued\b/);
