@@ -3,13 +3,21 @@
 _Last updated: 2026-07-14 — author: Tank (Backend Engineer)_
 
 > **Status: design spec.** Unlike the UI and MCP specs, the harness this document
-> describes **already exists and runs** — it is `scripts/persona-harness/`, the
+> describes **already exists and runs** — it is `scripts/api-harness/` (renamed from
+> `scripts/persona-harness/` under the naming convention below), the
 > primary API-driven E2E track for issue #1, live-verified across three personas
 > (Priya, Jordan, Maya) against staging. This spec brings that harness into the
 > **three-harness shared architecture** that Trinity (`docs/ui-test-harness-plan.md`)
 > and Morpheus (`docs/mcp-test-harness-plan.md`) converged on, and specifies the
 > migration from today's local `briefs/` + `lib/judge.mjs` to the shared
 > `scripts/persona-briefs/` + `scripts/harness-judge/` packages.
+>
+> **Naming convention:** harnesses are named `{surface}-harness` (`api-harness`,
+> `ui-harness`, `mcp-harness`) — by the **surface** they test, not by the fact that
+> they use personas. Persona generation/authoring is an orthogonal concern that lives
+> **exclusively** in the shared `scripts/persona-briefs/` package all three consume.
+> This is why this harness is `scripts/api-harness/` (formerly `scripts/persona-harness/`),
+> matching Trinity's `scripts/ui-harness/` and Morpheus's `scripts/mcp-harness/`.
 >
 > **This document supersedes the harness-architecture description in
 > `docs/e2e-harness-plan.md`.** That older plan predates the three-harness split and
@@ -53,9 +61,9 @@ Make this explicit so the harnesses don't overlap or contradict:
 
 | Harness | Surface | Drives via | Directory | Layer |
 |---|---|---|---|---|
-| **API harness** (this spec, **exists**) | Backend REST lifecycle | bearer-token HTTP calls | `scripts/persona-harness/` | **ground truth** |
-| **UI harness** (Trinity) | Web UI | Playwright browser | `scripts/ui-persona-harness/` | experience |
-| **MCP harness** (Morpheus) | MCP protocol / tool-call surface | MCP client | `scripts/mcp-persona-harness/` | experience |
+| **API harness** (this spec, **exists**) | Backend REST lifecycle | bearer-token HTTP calls | `scripts/api-harness/` | **ground truth** |
+| **UI harness** (Trinity) | Web UI | Playwright browser | `scripts/ui-harness/` | experience |
+| **MCP harness** (Morpheus) | MCP protocol / tool-call surface | MCP client | `scripts/mcp-harness/` | experience |
 
 **The API harness is the ground-truth layer.** It tests **core backend functionality in
 isolation**, through JSON, with **no UX/usability layer**. Its question is *"does the
@@ -147,7 +155,7 @@ scripts/persona-briefs/            SHARED — surface-agnostic single source of 
   ceiling. This is what makes pipeline stage 1 model-driven.
 
 **Migration of the API harness's existing briefs (specific plan).** The API harness owns
-three hand-authored briefs today — `scripts/persona-harness/briefs/{jordan,maya,priya}.md`
+three hand-authored briefs today — `scripts/api-harness/briefs/{jordan,maya,priya}.md`
 — each already **surface-agnostic in spirit** (Jordan's brief talks about "get idea → app
 → container → deploy" and "push back ≥2 times", never about REST specifically) but
 physically living inside the API harness and referencing "the real Agentweaver API". They
@@ -206,7 +214,7 @@ evidence shape**; `core.mjs` then does the identical judging regardless of surfa
 always emits the **one** canonical verdict schema.
 
 **The API harness already built most of this — it is promoted, not thrown away.** The
-existing `scripts/persona-harness/lib/judge.mjs` is already:
+existing `scripts/api-harness/lib/judge.mjs` is already:
 
 - a **prompt assembler that never calls a model itself** (no keys, no network — it
   packages a captured transcript + `JUDGE.md` + the persona's authored criteria into one
@@ -475,6 +483,53 @@ so **no backend change is required for the harness to work** — but emitting th
 `tool_approval` notification type would let the notification surface (and the UI harness)
 see these gates too. #321 tracks that gap.
 
+### 4. Human-like gate review behavior (persona acts like a real operator)
+
+Personas must interact with an Agentweaver run the way a **real human operator** would. If
+a run is launched **without** auto-approve, the persona does **not** blind-approve every
+gate — it **validates the gate content first** (reads the diff / plan / build-test output /
+outcome spec at that gate, through its JTBD lens) and only then decides. This is exactly the
+principle the API harness **already implements** via the judge-gated **DETECT → JUDGE →
+EXECUTE** approval-driving loop (commit `b4ac1104`, [§3 above](#3-approval-driving-already-implemented-commit-b4ac1104)):
+`lib/approvals.mjs` structurally **detects** the pending gate off the authoritative events
+feed and packages that one gate's evidence; the pluggable **LLM judge (acting as the
+persona)** decides from what it was shown; the driver then **executes exactly** that
+decision against the real API. **Default = DEFER**, never blind-approve. Because it is the
+first and only working instance of this pattern, **this API-harness implementation is the
+reference implementation of human-like gate review for all three harnesses** — Trinity's UI
+and Morpheus's MCP gate-review sections cite this same `b4ac1104` DETECT → JUDGE → EXECUTE
+pattern and reuse the shared approval-judge helper.
+
+**Request-changes / feedback path — current state is a GAP (verified against the code).**
+When a gate calls for it, a real operator gives **human-review-style feedback** — a
+*request-changes with a reason* that loops the run back — not just a binary
+approve/reject. Checking the existing implementation (`lib/approval-judge.mjs`), the
+current approval-driving loop supports **only `approve | deny | defer`**
+(`APPROVAL_DECISIONS = ['approve','deny','defer']`): a deny POSTs to `/tool-denials` /
+`/shell-denials` (a hard denial), and the judge's `reason` is captured **for audit only**
+— it is **not** transmitted to the backend as review feedback, and there is **no
+`run_review`-style request-changes call that loops back to the implementation node.** So a
+genuine request-changes/feedback path is **not yet supported by `b4ac1104`** and is an
+explicit **gap to close in the rewrite** (add a `request-changes` decision that carries the
+persona's reason into the review request-changes endpoint so the run re-enters the correct
+stage). This must be reconciled with Trinity's and Morpheus's docs, whose gate-review
+sections already describe `approve / request-changes` (UI) and `approve / request-changes /
+defer` (MCP) — i.e., their specs assume a request-changes path the shared driver layer does
+not yet have.
+
+> **Scope boundary — do NOT over-index on this (functional correctness, not output
+> grading).** The goal of persona gate-review is **not** to make the persona a **quality
+> bar** for Agentweaver's generated output — we are **not** demanding perfect code or design
+> from the agents under test. The goal is testing **functional correctness end-to-end**:
+> does approve / request-changes / gate progression actually work **mechanically**, do
+> **notifications fire**, does the **DAG advance** correctly (and does a request-changes
+> actually loop back and re-gate on re-review). Persona review feedback stays
+> **realistic-but-lightweight** — enough to meaningfully exercise the request-changes path
+> at least once across a scenario — never an elaborate code-review rubric. Correspondingly,
+> **judge criteria for gate scenarios stay focused on "did the platform mechanics work,"
+> not "was the AI's output good."** This matches the identical scope-boundary note in
+> Trinity's and Morpheus's specs.
+
 ---
 
 ## Directory / File Layout (as-built, with the shared-layer target)
@@ -482,7 +537,7 @@ see these gates too. #321 tracks that gap.
 ```
 scripts/persona-briefs/            SHARED (target) — persona cores + per-surface adapters
 scripts/harness-judge/             SHARED (target) — judge core + canonical schema + meta-aggregate + adapters
-scripts/persona-harness/           THIS harness (API-specific driver + evidence) — EXISTS TODAY
+scripts/api-harness/               THIS harness (API-specific driver + evidence) — EXISTS TODAY (renamed from scripts/persona-harness/)
   README.md                        why API-driven first, driver/judge split, the two rungs
   package.json                     Node ESM; dep: yaml (dependency-light, no browser)
   agent-driver/
@@ -587,10 +642,51 @@ draft-and-pushback defect that never needs execution.
 
 ## Rollout / migration plan
 
-**Concretely, what changes to `scripts/persona-harness/` to move from "today's local
+**This is a rewrite/refactor, NOT an incremental relocation.** Ahmed's guidance is explicit:
+the API harness "likely needs a rewrite to be coherent, and refactor to extract the persona
+generation and judging parts." So this section does **not** describe a light edit that shuffles
+files around — it describes **genuinely rewriting** `scripts/api-harness/` down to a thin,
+API-specific driver by **extracting** two responsibilities out of it entirely:
+
+- **Persona-authoring logic is extracted OUT** into the shared `scripts/persona-briefs/`
+  package. No persona-authoring/brief-generation logic remains in the API package.
+- **Judging logic is extracted OUT** into the shared `scripts/harness-judge/` package. No
+  verdict-schema / judging logic remains in the API package.
+
+After the rewrite, `scripts/api-harness/` is a **thin API-specific driver layer only** — it
+knows how to make bearer-token API calls, capture evidence, and hand off to the shared judge.
+It knows nothing about how personas are authored/generated or how verdicts are shaped.
+
+**What gets extracted vs. what survives in `scripts/api-harness/` (concrete file-level split):**
+
+| Existing file (in the API package today) | Fate | Destination / role |
+|---|---|---|
+| `briefs/jordan.md`, `briefs/maya.md`, `briefs/priya.md` | **EXTRACTED OUT** | migrate into `scripts/persona-briefs/` as surface-agnostic cores (`personas/*.md`) + thin `surfaces/*.api.md` adapters |
+| `lib/judge.mjs` | **EXTRACTED OUT** | becomes the **seed** for `scripts/harness-judge/core.mjs` (+ `verdict-schema.mjs`) |
+| `lib/meta-aggregate.mjs` | **EXTRACTED OUT** | → `scripts/harness-judge/meta-aggregate.mjs` |
+| `lib/generate-brief.mjs` | **EXTRACTED OUT** | → `scripts/persona-briefs/` generator (persona authoring is orthogonal, lives only there) |
+| `JUDGE.md` | **EXTRACTED OUT** | surface-neutral core moves to `harness-judge/`; only a thin `JUDGE.api.md` appendix stays |
+| `agent-driver/tools.mjs` (the discrete API tools) | **SURVIVES** | the API-specific driver surface — makes API calls, hands off to the shared judge |
+| `runner.mjs`, `reporter.mjs`, `lib/client.mjs`, `persona.mjs`, `metrics.mjs`, `seams.mjs` | **SURVIVES** | API-specific run/reporting/HTTP plumbing |
+| `lib/approvals.mjs`, `lib/approval-judge.mjs` (approval-driving from commit `b4ac1104`) | **SURVIVES** | the API-specific gate-driving layer (detects gates off the events feed, hands the gate to the shared judge) |
+
+Everything in the "SURVIVES" rows is the **surviving API-specific driver layer**; everything in
+"EXTRACTED OUT" leaves the API package for a shared package. This is the coherence rewrite Ahmed
+asked for: the API package stops being a persona+judge+driver monolith and becomes just the driver.
+
+**This rewrite is a distinct FOLLOW-ON IMPLEMENTATION task — not part of this spec-only doc.**
+This document is a **spec of the rewrite**; the rewrite itself is **not** performed here. When
+scheduled, it should be done with the **scoped-implementation model (`gpt-5.6-terra` /
+`claude-sonnet-5`), not the design model**, and only **once all three specs (API, UI, MCP) are
+locked** so the shared package shapes are final before any extraction. It must be
+**sequenced/coordinated with Trinity's and Morpheus's own new-harness build-out** so nobody
+collides extracting the same shared `scripts/persona-briefs/` + `scripts/harness-judge/` packages
+simultaneously (see the coordination note at the end of this section).
+
+**Concretely, what changes to `scripts/api-harness/` to move from "today's local
 `briefs/` + `lib/judge.mjs`" to "consumes shared `scripts/persona-briefs/` +
-`scripts/harness-judge/`".** This is a **spec of the migration** — the refactor itself is
-NOT performed in this task.
+`scripts/harness-judge/`".** This is a **spec of the rewrite/migration** — the refactor
+itself is NOT performed in this task.
 
 **Phase 0 — spec + convergence (this document).** Land `docs/api-test-harness-plan.md`.
 Record the shared-layer recommendation and the flagged inconsistencies (judge package
@@ -602,8 +698,9 @@ anyone extracts the shared package.
 `briefs/` + `lib/judge.mjs` unchanged (it is the live production track). No shared-file
 edits yet. This phase is purely "don't break what works while the others scaffold."
 
-**Phase 2 — shared-package extraction (coordinated, single sequenced step).** Once the
-inconsistencies are reconciled, one coordinated change:
+**Phase 2 — shared-package extraction = the coherence rewrite (coordinated, single sequenced step).**
+Once the inconsistencies are reconciled, one coordinated change that **extracts** persona-authoring
+and judging out of the API package and rewrites what remains into a thin API driver:
 
 1. **Move personas.** `briefs/{jordan,maya,priya}.md` → `scripts/persona-briefs/personas/`
    (core) + `scripts/persona-briefs/surfaces/{jordan,maya,priya}.api.md` (adapters); peel
@@ -633,7 +730,7 @@ logs, fix → deploy → live-validate before closing).
 
 **Coordination with Trinity's and Morpheus's rollouts (so the three don't collide when the
 shared packages are extracted).** All three rollout plans independently reached the same
-constraint — **do not touch `scripts/persona-harness/` while Tank is mid-edit**, and defer
+constraint — **do not touch `scripts/api-harness/` (today `scripts/persona-harness/`) while Tank is mid-edit**, and defer
 shared-package extraction to a **coordinated checkpoint**, not a concurrent edit:
 
 - Trinity's Phase 2 ("shared-layer extraction + UI judge adapter") is explicitly
@@ -644,10 +741,10 @@ shared-package extraction to a **coordinated checkpoint**, not a concurrent edit
   a safe checkpoint (Tank's `harness/wip-persona-v1` merged or paused) — never a concurrent
   edit to Tank's live files."
 - **This spec confirms that sequencing from the API side:** I (Tank, the file owner)
-  perform — or explicitly sanction — the extraction at a safe checkpoint of
-  `scripts/persona-harness/`, in one sequenced change, after the coordinator reconciles the
+  perform — or explicitly sanction — the extraction/rewrite at a safe checkpoint of
+  `scripts/api-harness/`, in one sequenced change, after the coordinator reconciles the
   flagged inconsistencies. Until then, the UI and MCP harnesses consume the equivalent
-  modules **read-only** from `scripts/persona-harness/` and carry thin local shims; the API
+  modules **read-only** from `scripts/api-harness/` and carry thin local shims; the API
   harness keeps running on its local copies. This is the single hand-off point where all
   three tracks meet, and it is deliberately serialized to avoid a three-way edit collision.
 
