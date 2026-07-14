@@ -67,6 +67,49 @@ public sealed class AssemblyPlanningTests
         AssemblyPlanning.AllEligible(statusById).Should().BeTrue();
     }
 
+    // ── stale ineligible_subtasks eligibility-gate reason (#309 follow-up / #314) ────────────────
+
+    [Theory]
+    [InlineData("ineligible_subtasks [369,370]", true)]              // the D2 gate's stamped form
+    [InlineData("assembly_blocked: ineligible_subtasks [369,370]", true)] // coordinator-run-result form
+    [InlineData("ineligible_subtasks", true)]                        // bare marker (no id list)
+    [InlineData("build_test_infra_shell_execution_timeout", false)] // a DIFFERENT retryable phase reason
+    [InlineData("integration_conflict", false)]                     // a genuine output conflict
+    [InlineData("", false)]
+    [InlineData("   ", false)]
+    [InlineData(null, false)]
+    public void IsStaleIneligibleSubtasksReason_MatchesTheEligibilityGateMarkerOnly(string? reason, bool expected) =>
+        AssemblyPlanning.IsStaleIneligibleSubtasksReason(reason).Should().Be(expected);
+
+    [Fact]
+    public void StaleIneligible_And_RetryableBuildTestInfra_DoNotMisclassifyEachOther_314()
+    {
+        // #314: CoordinatorSteeringService's redirect branch ORs these two predicates to decide
+        // "re-arm assembly only (no subtask reset)". Each reason must match ONLY its own predicate —
+        // if a stale ineligible_subtasks reason leaked into the infra predicate (or vice-versa) the
+        // classification would still work by luck, but a future edit to either could silently swap
+        // behavior. Pin the disjointness so the two phases stay independently recognizable.
+        const string ineligible = "ineligible_subtasks [369,370]";
+        const string infra = "build_test_infra_shell_execution_timeout";
+
+        AssemblyPlanning.IsStaleIneligibleSubtasksReason(ineligible).Should().BeTrue();
+        AssemblyPlanning.IsRetryableBuildTestInfraReason(ineligible).Should().BeFalse();
+
+        AssemblyPlanning.IsRetryableBuildTestInfraReason(infra).Should().BeTrue();
+        AssemblyPlanning.IsStaleIneligibleSubtasksReason(infra).Should().BeFalse();
+    }
+
+    [Fact]
+    public void IneligibleSubtasksReasonMarker_IsTheSubstringTheD2GateStamps()
+    {
+        // Guards the marker constant against drifting away from what CoordinatorAssemblyService's
+        // eligibility gate actually writes ("ineligible_subtasks [...]"). If these diverge, the
+        // #314 redirect re-arm would silently stop recognizing stale parks and reset green subtasks.
+        AssemblyPlanning.IneligibleSubtasksReasonMarker.Should().Be("ineligible_subtasks");
+        AssemblyPlanning.IsStaleIneligibleSubtasksReason(
+            $"{AssemblyPlanning.IneligibleSubtasksReasonMarker} [1,2]").Should().BeTrue();
+    }
+
     // ── D1 topological merge order ─────────────────────────────────────────────────────────────
 
     [Fact]

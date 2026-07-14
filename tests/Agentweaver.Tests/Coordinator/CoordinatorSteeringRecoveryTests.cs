@@ -232,6 +232,43 @@ public sealed class CoordinatorSteeringRecoveryTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task Redirect_OnStaleIneligibleSubtasksBlock_MixedAssembleReadyAndCompleted_ReArmsAssembly_PreservingAll()
+    {
+        // #314 hardening for the FitTrackE2E-v12 race. Same stale-eligibility-gate park as the sibling
+        // test, but the plan mixes a Completed (no-change) child with assemble_ready ones, and the
+        // reason carries the coordinator-run-result "assembly_blocked:" prefix. Both facets must still
+        // classify as re-arm-only: `Satisfies` counts Completed, and IsStaleIneligibleSubtasksReason
+        // is a substring match. Pre-fix, the run fell through to the integration-conflict branch, which
+        // resets assemble_ready children — the exact "reset-everything" symptom #309/#314 eliminate.
+        var coord = RunId.New().ToString();
+        await SeedTerminalCoordinatorRunAsync(coord, RunStatus.Failed, "assembly_blocked: ineligible_subtasks [370]");
+        var (planId, ids) = await SeedPlanAsync(coord, WorkPlanStatus.AssemblyBlocked, new[]
+        {
+            SubtaskStatus.Completed,     // no-change child — must NOT be reset
+            SubtaskStatus.AssembleReady, // formerly-failed 370, now green after the first redirect
+            SubtaskStatus.AssembleReady,
+        }, assemblyStatusReason: "assembly_blocked: ineligible_subtasks [370]");
+        _dispatch.Active = false;
+
+        var view = await _sut.SteerAsync(coord, "redirect", null, "Re-check assembly; the ineligible subtask is green now.", "owner", default);
+
+        view.Status.Should().Be(SteeringStatus.Applied);
+
+        var s0 = await GetSubtaskAsync(ids[0]);
+        var s1 = await GetSubtaskAsync(ids[1]);
+        var s2 = await GetSubtaskAsync(ids[2]);
+        s0.Status.Should().Be(SubtaskStatus.Completed, "a completed no-change child is preserved under a stale eligibility park");
+        s1.Status.Should().Be(SubtaskStatus.AssembleReady, "a since-green child must not be discarded a second time");
+        s2.Status.Should().Be(SubtaskStatus.AssembleReady);
+        foreach (var id in ids)
+            (await GetSubtaskAsync(id)).RecoveryAttempts.Should().Be(0, "no subtask consumed a recovery attempt");
+
+        _assembly.StartAssemblyCalls.Should().ContainSingle().Which.CoordinatorRunId.Should().Be(coord);
+        _dispatch.StartDispatchCalls.Should().BeEmpty("a stale eligibility-gate park retries assembly, not the dispatch loop");
+        (await GetPlanStatusAsync(planId)).Should().Be(WorkPlanStatus.AwaitingAssembly);
+    }
+
+    [Fact]
     public async Task Redirect_OnParkedCoordinator_WithMixedFailedAndReady_ReDispatchesOnlyFailed()
     {
         // Scoped retry: two subtasks failed (Skyler+Hank) while two already succeeded (Walt+Jesse).
