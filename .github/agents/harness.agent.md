@@ -1,7 +1,7 @@
 ---
 name: Harness
 description: "Run structured or exploratory cross-surface harness verification and return integrity-protected evidence."
-tools: ['bash']
+tools: ['execute']
 credentials: []
 ---
 
