@@ -479,6 +479,55 @@ Transcript (transcripts-ui/*.json)  — verbatim, lossless, screenshot paths emb
   `affordance-never-reachable` P0 fact, with the screenshot + network log attached
   so the judge/human can see whether it was a real defect or a slow backend.
 
+### How the driver runs: parallel, autonomous, optionally observable
+
+The driver is built for **throughput and unattended operation**, not one hand-held
+run at a time:
+
+- **Parallel by design.** The harness runs **many personas/scenarios concurrently**
+  — multiple Playwright **browser contexts** (and pages) in parallel within one or a
+  few browser processes — so a batch of personas exercises the app at once rather
+  than serially. Each context is fully isolated (its own cookies, storage, DOM,
+  console/network capture, transcript), so concurrent runs don't cross-contaminate
+  evidence. Concurrency is bounded by a configurable worker pool to stay within the
+  staging backend's capacity.
+- **Autonomous / headless-first.** After the **one-time manual auth capture**
+  (below), every run is **headless and unattended** — no per-run human interaction.
+  This is what lets the self-improvement loop run a whole persona batch on a schedule
+  without Ahmed present.
+- **Optional observability, never required.** Ahmed can **watch if he wants to** —
+  Playwright **trace viewer** (`trace: 'on'` → a zip inspectable after the run),
+  **video capture** per context, and a **live status view** (a simple console/HTML
+  roll-up of which personas are running/passed/frustrated). All of these are
+  **opt-in flags**, off by default; a normal run needs none of them and no live
+  attention. Traces/videos are treated as judge/human evidence artifacts (git-ignored,
+  like screenshots), not as a gate.
+
+**Auth reuse across concurrent contexts (a real constraint on the parallelism
+story).** All parallel contexts start from the **same captured `storageState`**
+(the git-ignored `.auth/staging.storageState.json`). Playwright supports this
+directly: `storageState` is read **by value** when each `browser.newContext({
+storageState })` is created, so N concurrent contexts can all seed from the one file
+without locking or a live shared session — the file is opened read-only at context
+creation and not written back. Constraints to respect:
+
+- **The token/cookies are shared identity, not shared session state.** Every context
+  authenticates as the same GitHub user; that's intended (the harness has one human
+  operator). Do **not** attempt per-context distinct logins — OAuth is manual and
+  single-identity here.
+- **storageState is read-only at runtime.** The harness never writes storageState
+  back from a running context (a context that refreshed a token in-memory must not
+  clobber the shared file mid-batch); re-capture is only ever done by the explicit
+  `login` step, never as a side effect of a parallel run.
+- **Server-side rate/concurrency limits, not the auth file, are the real ceiling.**
+  Because all contexts share one identity, the practical parallelism cap is the
+  staging backend's per-user rate/concurrency limits and pod capacity — the worker
+  pool size is tuned to that, and a wave of 429/503s is captured as evidence (and
+  attributed via the log cross-reference) rather than misread as a UI defect.
+- **Expiry is batch-wide.** If the shared session expires, it expires for every
+  concurrent context at once; the `AUTH_EXPIRED` stop (below) halts the batch cleanly
+  and tells the operator to re-run `login` — it never tries to re-auth mid-batch.
+
 ### How personas / briefs work
 
 Same **brief, not script** model as the API harness (`briefs/priya.md` is the
@@ -525,6 +574,18 @@ turn the raw UI transcript into the normalized evidence shape by embedding, per 
 - the persona's **`--thought` reasoning trace** and the captured **raw frustration
   signals** (repeated failed clicks, nav loops, abandonment, dwell without progress),
 - and the **kubectl/App Insights cross-reference** block for the run's time window.
+
+**The shared judge relies on all four evidence sources, correlated — not just
+visuals.** The UI adapter feeds the shared judge core: **(1) visuals** (screenshots +
+DOM snapshots), **(2) API responses** (the network calls the page actually made,
+captured during the browser session), **(3) Application Insights logs**, and **(4)
+cluster/`kubectl` logs** — cross-referencing what the UI *showed* against what
+actually happened server-side, correlated by `run_id`/`trace_id` for the same time
+window. This is the same "log cross-reference" capture step described below, framed
+explicitly as **first-class input to the shared judge's evidence bundle, not a
+side-channel**: the judge reasons over UI + API + logs together (e.g. the browser
+showed "preview unavailable" while App Insights logged a port-discovery race → an
+attributable backend cause, not a pure-UX defect).
 
 The judge is asked a three-part question (P0 / P1 / frustration):
 
