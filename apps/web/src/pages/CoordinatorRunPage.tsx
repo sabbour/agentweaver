@@ -27,7 +27,7 @@ import {
 } from '@fluentui/react-components';
 import { Display, EmptyState, TitleText } from '../components/ui';
 import { AgentStepList } from '../components/ui/agentic';
-import type { AgentArtifact, AgentStep } from '../components/ui/agentic';
+import type { AgentStep } from '../components/ui/agentic';
 import { AgentAvatar } from '../components/AgentAvatar';
 import { AgentSessionPanel } from '../components/AgentSessionPanel';
 import { CoordinatorArtifactsPanel } from '../components/CoordinatorArtifactsPanel';
@@ -68,7 +68,6 @@ import {
   DismissRegular,
   DocumentRegular,
   FlowchartRegular,
-  FolderRegular,
   InfoRegular,
   OpenRegular,
   PanelLeftContractRegular,
@@ -3754,27 +3753,6 @@ export function CoordinatorRunPage() {
     }
   }, [reconnectStream, runId]);
 
-  // Assembly review artifacts surfaced inside the approval gate (open the matching center tab).
-  const assemblyArtifacts = useMemo<AgentArtifact[]>(() => {
-    if (isChildRun) return [];
-    return [
-      {
-        id: 'outcome-plan',
-        title: 'Outcome plan',
-        type: latestOutcomePlanEvent || specConfirmed ? 'Review artifact' : 'Pending artifact',
-        icon: <DocumentRegular />,
-        onOpen: () => setPlanPanelOpen(true),
-      },
-      {
-        id: 'assembly-artifacts',
-        title: 'Assembly artifacts',
-        type: reviewActionable ? 'Review gate' : 'Files',
-        icon: <FolderRegular />,
-        onOpen: () => setArtifactsPanelOpen(true),
-      },
-    ];
-  }, [isChildRun, latestOutcomePlanEvent, reviewActionable, specConfirmed]);
-
   // Nested agentic progress tree: coordinator/agents and their tasks with live status.
   const approvalSteps = useMemo<AgentStep[]>(() => reviewActionable
     ? [{
@@ -3788,10 +3766,9 @@ export function CoordinatorRunPage() {
         disclaimer: 'You can request changes from the Artifacts tab.',
         approveLabel: 'Approve & merge',
         denyLabel: 'Decline',
-        artifacts: assemblyArtifacts,
         defaultOpen: true,
       }]
-    : [], [reviewActionable, assemblyArtifacts]);
+    : [], [reviewActionable]);
 
   // ---------------------------------------------------------------------------
   // Messages — the intent-grouped Timeline now lives inside AgentSessionPanel,

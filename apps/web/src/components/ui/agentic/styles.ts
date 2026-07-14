@@ -52,9 +52,9 @@ export const useAgenticStyles = makeStyles({
     flexDirection: 'column',
     gap: tokens.spacingVerticalS,
     padding: tokens.spacingVerticalM,
-    border: `1px solid ${tokens.colorNeutralStroke1}`,
+    border: `1px solid ${tokens.colorStatusWarningBorder1}`,
     borderRadius: tokens.borderRadiusMedium,
-    backgroundColor: tokens.colorNeutralBackground1,
+    backgroundColor: tokens.colorStatusWarningBackground2,
   },
   approvalRiskText: {
     fontSize: tokens.fontSizeBase300,

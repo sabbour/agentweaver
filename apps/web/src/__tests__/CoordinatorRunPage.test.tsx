@@ -327,6 +327,9 @@ describe('CoordinatorRunPage — unified coordinator graph view', () => {
 
     const approvalGate = await screen.findByLabelText('Approvals and gates', undefined, { timeout: 4000 });
     expect(approvalGate.textContent).toContain('Approve & merge');
+    expect(approvalGate.textContent).toContain('You can request changes from the Artifacts tab.');
+    expect(within(approvalGate).queryByRole('button', { name: /open outcome plan/i })).toBeNull();
+    expect(within(approvalGate).queryByRole('button', { name: /open assembly artifacts/i })).toBeNull();
   });
 
   it('labels Build & Test as a build/test gate and surfaces the active preview there', async () => {
