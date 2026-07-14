@@ -49,3 +49,5 @@ Flakiness-recheck pass completed; confirmed BookClub/TrailMix regression tied to
 ## 2026-07-14T10:15:00-07:00 (late arrival)
 #251 retag-forward residual risk found in the #303 fix; hardened release_ref_for_tag() with linear-ancestry guard + added ACR provenance stamping/verification script. Release-pipeline-critical, flagged for peer review.
 
+## 2026-07-14T15:15:00Z — Release-wave confirmations
+Morpheus's #175 investigation confirmed the workflow-save bug was already fixed/live, #240 stayed deferred to the bigger resilience architecture, and the #311 fast-follow consolidation note fed the reserved-role ship record.

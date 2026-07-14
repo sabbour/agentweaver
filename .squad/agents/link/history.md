@@ -133,3 +133,5 @@ Shipped #313 fix: watchdog/executor-timeout race decoupled via WatchdogTimeoutGr
 ## 2026-07-14T11:05:00-07:00
 Process note: #312 (Link2's fix) reopened by coordinator pending live v0.9.50-rc1 deploy validation, per Seraph's pass-3 closure-discipline finding.
 
+## 2026-07-14T15:15:00Z — Queue-depth metric + deploy-path validation
+Link's durable backlog-ready metric for #108 was rubber-duck approved and shipped in v0.9.50-rc1. Separate release-path verification also confirmed the #251/#303 tag-resolution/provenance chain still holds on the shipped build.

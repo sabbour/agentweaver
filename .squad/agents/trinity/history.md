@@ -175,3 +175,5 @@ No new Trinity (base, non-2 instance) write-up landed this batch; #186 gate-pale
 ## 2026-07-14T11:05:00-07:00
 Investigated #271 retry-resume gap; confirmed real, deferred fixing it (existing epic-#293 architecture proposal, active file overlap with Tank's #242 work). No code changes.
 
+## 2026-07-14T15:15:00Z — #246 / #261 / #97 release-wave closeout
+Trinity supplied the P0-A worktree reattach for #246, the final mixed-array fail-closed #261 fix, and the #97 code+live verification summary, then closed the loop with a full validation sweep and a fresh release-readiness snapshot.

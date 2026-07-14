@@ -56,3 +56,6 @@ Observability section), and placement ("reachable from the run view") is itself 
 (coordinator run? child run? `AgentSessionPanel`?). Same judgment call Trinity made on #201:
 did not force an implementation, reported back with analysis + recommendation instead. No code
 changed. Findings in `.squad/decisions/inbox/dozer-283-investigation.md`.
+
+## 2026-07-14T15:15:00Z — #282 / #302 shipped, #283 deferred
+Dozer's model-badge and subtle-timestamp work landed in the release wave after follow-up passes, while the broader #283 observability-panel idea was correctly deferred as design-sized work rather than squeezed into the batch.

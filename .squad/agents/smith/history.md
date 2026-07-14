@@ -23,3 +23,5 @@ Scribe merged inbox notes: FitTrackE2E v10 historical baseline and v11 final bui
 ## 2026-07-14T10:15:00-07:00
 Reproduced FitTrack priority-1 wedge scenario end-to-end; failure evidence captured for triage/fix assignment.
 
+## 2026-07-14T15:15:00Z — LinkVault stall finding + HabitLoop success
+Smith's LinkVaultE2E-v1 run produced enough evidence to file #317 around child `agent_stall_timeout` after real work completed, while HabitLoopE2E-v1 became the first full lifecycle success of the session and reached a live preview plus final completion.

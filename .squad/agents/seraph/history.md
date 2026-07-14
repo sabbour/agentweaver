@@ -112,3 +112,5 @@ Triage pass #3: backlog 55 open (down from 67). Filed #314 (#309 follow-up). Fla
 ## 2026-07-14T11:05:00-07:00
 Coordinator acted on the pass-3 closure-discipline finding: #311/#208/#312/#247/#310 reopened. Vindicates the process flag raised without unilateral action.
 
+## 2026-07-14T15:15:00Z — Release-readiness + pass-4 triage folded into ship
+Seraph's release compile and triage pass #4 became part of the v0.9.50-rc1 ship record: #314 was treated as a P2 bundle item, while #97/#108/#200/#246/#271 stayed explicitly open as architecture-level work.

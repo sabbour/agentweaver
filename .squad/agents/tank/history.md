@@ -121,3 +121,5 @@ Batch: landed #208 cancellation-telemetry (needs peer review), #309 steer-redire
 ## 2026-07-14T11:05:00-07:00
 Process note: #311, #208, #310 (among Tank's recent items) reopened by coordinator pending live v0.9.50-rc1 deploy validation, per Seraph's pass-3 closure-discipline finding. No new Tank work landed this pass.
 
+## 2026-07-14T15:15:00Z — Persona harness pivot + bounded reliability follow-ups
+Tank's brief-driven persona harness pivot was validated across Priya/Jordan/Maya, with #315 filed for revision regressions and a WIP safety branch created for the harness directory. The same batch also recorded the bounded #242 fix and the final #267 escalation to packet-capture follow-up.

@@ -107,3 +107,6 @@ Processed Tank + Link batch: health check confirmed FSStorageProvider, Tank inbo
 - Feature 019 deployed and functional
 - Post-deployment assessment: PASSED
 - Background docs tasks: IN_PROGRESS (trinity-docs, tank-docs)
+
+## 2026-07-14T15:15:00Z — v0.9.50-rc1 release documentation pass
+Merged a 57-file decisions inbox, wrote the release/session/orchestration logs, and updated cross-agent histories for the v0.9.50-rc1 staging ship. Archive and history summarization gates were checked; no additional summarization was needed this pass.
