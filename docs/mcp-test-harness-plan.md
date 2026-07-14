@@ -578,32 +578,53 @@ same digest shape the shared judge consumes. No MCP-specific verdict schema.
 
 ### 1. Target-host allowlist guardrail (Finding 1)
 
+> **Scope clarification (per Ahmed).** Agentweaver itself runs its agent workloads
+> **inside Kubernetes sandboxes**. When a persona's judge approves a gate / tool / shell
+> action that **Agentweaver executes on behalf of one of its own coding/triage agent
+> runs** (anything routed through Agentweaver's API/MCP/UI), that action is already
+> **contained inside Agentweaver's own sandbox** — it is **not** a bare host-shell escape.
+> **Approving those in-sandbox actions is acceptable and must NOT be denied by default** —
+> the persona *needs* to approve them to test real approval-gate scenarios end to end.
+> This finding is therefore **not** about restricting which sandboxed tool/shell/gate
+> actions the judge may approve. It is **solely** about **which Agentweaver deployment the
+> harness process itself points at** — the outbound target host/environment — because that
+> is the real blast-radius control: a harness run (and any approval it drives) must never
+> land against a **production** Agentweaver deployment.
+
 **Risk.** Every "run against staging" statement in this spec is *prose intent*, not an
 enforced boundary. The only host guard that exists today — `checkInsecureAllowed`
 (`scripts/persona-harness/run-persona.mjs:56-74`) — **only** blocks disabling TLS
 (`--insecure`) against a non-staging host; it does **not** stop a valid, TLS-good
-`--target https://<prod-host>/mcp` from running. Because the deeper rung has the persona
-**approve real gates and advance the real DAG** (`run_review`, tool/shell approvals), an
-operator typo, a bad `AGENTWEAVER_BASE_URL`/`--target` default, or a compromised CI
-variable pointing at prod would let an LLM judge approve/deny **real gated actions against
-production** with no host check stopping it. The deny-by-default judge protects against
+`--target https://<prod-host>/mcp` from running. The exposure is **environment
+blast-radius, not sandbox escape**: because the deeper rung has the persona drive real
+gates (`run_review`, tool/shell approvals) that Agentweaver then acts on, an operator
+typo, a bad `AGENTWEAVER_BASE_URL`/`--target` default, or a compromised CI variable
+pointing at **prod** would cause those approvals to advance a **production** Agentweaver
+deployment's real DAG — with no host check stopping it. (Approving the same actions
+against a **staging** deployment is exactly what we want; the sandboxed execution itself
+is fine — see the scope clarification above.) The deny-by-default judge protects against
 *judge* failure, not against *target-selection* failure.
 
-**Guardrail (mandatory, shared, unconditional).**
+**Guardrail (mandatory, shared, unconditional) — a HOST/ENVIRONMENT allowlist, not a
+tool-action denier.**
 - Add a shared **`scripts/harness-shared/target-guard.mjs`** (consumed by all three
   harnesses) exporting an `assertTargetAllowed(target)` check that **refuses to run — full
-  stop** against any host that is not `localhost`/`127.0.0.1`/`*.staging.*`/`*.staging`.
-  It applies **unconditionally**, independent of `--insecure` (which stays a *separate*
-  TLS-bypass concern).
-- **Escape hatch:** production is reachable **only** with an explicit `--allow-prod` flag
-  that itself requires a second, distinct confirmation flag (e.g. `--i-understand-prod`)
-  — deliberately *not* the same flag as `--allow-insecure-prod`, so neither implies the
-  other.
+  stop** against any Agentweaver **deployment host** that is not
+  `localhost`/`127.0.0.1`/`*.staging.*`/`*.staging`. It applies **unconditionally**,
+  independent of `--insecure` (which stays a *separate* TLS-bypass concern). It gates the
+  **harness's own outbound target only** — it does **not** inspect, filter, or deny
+  individual tool/shell/gate actions the judge approves (those run sandboxed inside
+  whichever allowed Agentweaver deployment was targeted).
+- **Escape hatch:** a **production Agentweaver deployment** is reachable **only** with an
+  explicit `--allow-prod` flag that itself requires a second, distinct confirmation flag
+  (e.g. `--i-understand-prod`) — deliberately *not* the same flag as
+  `--allow-insecure-prod`, so neither implies the other.
 - **Enforced at client/transport construction, not at arg-parse.** The check runs inside
   the MCP HTTP transport constructor and the `--stdio` server-launch path (and, for the
   sibling harnesses, the REST client / Playwright `browser.newContext({baseURL})`), so a
-  scenario/adapter bug **cannot route around it** — no `tools/call`, no persona turn, no
-  approval-gate execution can occur before `assertTargetAllowed` has passed.
+  scenario/adapter bug **cannot route around it** — no `tools/call` and no persona turn can
+  reach a disallowed deployment before `assertTargetAllowed` has passed. (Once a target is
+  allowed, in-sandbox approval-gate execution proceeds normally.)
 - **Testable named guardrail.** Ships with a unit test mirroring the existing
   `checkInsecureAllowed` test (`test/priya-checks.test.mjs`): assert staging/localhost
   pass, a prod host throws without `--allow-prod`, and the prod path requires the second
@@ -647,15 +668,18 @@ was shown.
   rule, or an approval decision. The MCP driver's `AGENT.md` preamble and the shared
   `JUDGE.md` carry this rule; the MCP `JUDGE.mcp.md` addendum notes the MCP-specific
   vectors (tool `description`, `isError` bodies, `-32001` error text).
-- **Defense-in-depth: the judge is not solely authoritative for gate execution.** Before
-  the harness *executes* any state-mutating approval (`run_review` approve, tool/shell
-  approval), it cross-checks the judge's `approve` against an **independently-computed
-  in-scope expectation** derived from the persona brief + the required-capabilities
-  contract (§1a) — e.g. "is this gate's action within the tool/action categories this
-  persona's scenario is allowed to drive?" An `approve` that contradicts the independent
-  check is **downgraded to `defer`** and recorded as evidence, so injected text that
-  flips the judge cannot by itself advance the real DAG. (This composes with the
-  deny-by-default judge posture, which we preserve.)
+- **Defense-in-depth: the judge is not solely authoritative for gate execution.** This is
+  an **injection safeguard, not a sandbox-action denier** — it does **not** block the
+  persona from approving the in-sandbox tool/shell/gate actions Agentweaver runs (those are
+  fine to approve; see §1's scope clarification). It only catches an approval that looks
+  **steered off the persona's own scenario**: before the harness *executes* a persona
+  `approve`, it cross-checks it against an **independently-computed in-scope expectation**
+  derived from the persona brief + the required-capabilities contract (§1a) — e.g. "is this
+  gate's action within the tool/action categories **this persona's scenario** set out to
+  drive?" An `approve` that **contradicts the persona's own intended scope** (a classic
+  injection tell) is **downgraded to `defer`** and recorded as evidence, so injected text
+  that flips the judge cannot by itself advance the run. In-scope approvals proceed
+  normally. (This composes with the deny-by-default judge posture, which we preserve.)
 - **Hostile-content self-test (the harness tests itself).** Add at least one scenario that
   seeds a **hostile MCP tool `description`** (and a hostile tool-result/error body)
   containing an injection attempt — e.g. a stub/mock MCP server advertising a tool whose
