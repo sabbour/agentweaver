@@ -285,13 +285,14 @@ the judge:
 - **Explicit fallback — never a silent gap.** If the judge call fails, times out, retries
   out, or returns an invalid verdict, the wrapper **emits a well-formed verdict marked
   unresolved** rather than dropping the run: `p0.verdict` and `p1.verdict` = `CANNOT_DETERMINE`,
-  `frustration.level = "unknown"` (with an empty `signals` array), and a `judgeError`
+  `frustration.level = "not_assessed"` (with `score: null` and an empty `signals` array — the
+  same "insufficient evidence to judge" value defined in
+  [§3](#3-verdict-schema--p0-p1-and-a-required-frustration-dimension), so a judge failure is
+  excluded from aggregate frustration stats rather than counted as `0`), and a `judgeError`
   block capturing the cause (`timeout | nonzero_exit | unparseable | schema_invalid`), the
   exit code, and a stderr tail. This verdict still carries the full join-key tuple so
   meta-aggregate counts it as an **explicit non-verdict** (surfaced in the rollup), never an
-  absent row that silently shrinks the batch. (`frustration.level` therefore gains
-  `"unknown"` as an allowed value **only** for this judge-error path; a real judged run never
-  uses it.)
+  absent row that silently shrinks the batch.
 
 This makes "core.mjs is invoked automatically" concrete: `run-judge.mjs` assembles the
 prompt via `core.mjs`, executes the pluggable judge command under timeout/retry, validates
@@ -327,8 +328,8 @@ API-vs-UI-vs-MCP for the same persona in meta-aggregation.
   "p0": { "verdict": "PASS | FAIL", "evidence": "..." },
   "p1": { "verdict": "PASS | PARTIAL | FAIL", "evidence": "...", "criteriaCoverage": [ ] },
   "frustration": {                         // REQUIRED — emotional/UX assessment from evidence
-    "level": "none | low | moderate | high | abandoned",   // ordinal; "abandoned" = persona gave up
-    "score": 0,                            // 0-4 mirror of level, for meta-aggregate trend math
+    "level": "none | low | moderate | high | abandoned | not_assessed",   // ordinal; "abandoned" = persona gave up; "not_assessed" = insufficient evidence to judge
+    "score": 0,                            // 0-4 mirror of level for meta-aggregate trend math; null for "not_assessed" (excluded from aggregate stats)
     "signals": [                           // OBSERVED evidence the level is grounded in (never invented)
       { "kind": "<signal>", "evidence": "<transcript turn refs / quote>" }
     ],
@@ -340,9 +341,12 @@ API-vs-UI-vs-MCP for the same persona in meta-aggregation.
 }
 ```
 
-- **`frustration` is REQUIRED** (never omitted). If the evidence genuinely can't support a
-  read, the judge emits `level: "none"` with an empty `signals` array and says so in
-  `rationale` — it is never guessed.
+- **`frustration` is REQUIRED** (never omitted). `none` means the judge **genuinely
+  observed no frustration**; if the evidence genuinely **can't support a read**, the judge
+  emits `level: "not_assessed"` (with `score: null` and an empty `signals` array, saying so
+  in `rationale`) — **never** `none`. Keeping these two distinct matters: conflating "no
+  frustration observed" with "no evidence collected" corrupts trend math, so `not_assessed`
+  is **excluded from aggregate frustration stats** rather than counted as a `0`.
 - **It is the judge's call from evidence, not a driver heuristic.** The API driver does
   NOT compute a frustration score (that would be exactly the embedded subjective heuristic
   the driver/judge split forbids). The driver only **captures the raw signals** into the
@@ -548,7 +552,8 @@ extraction:
    trend math, and `{kind,evidence}` signals are more auditable). **Reconcile the signal
    shape and the `score` field** so all three emit byte-comparable frustration blocks.
 
-The `level` ordinal (`none | low | moderate | high | abandoned`), the schema id
+The `level` ordinal (`none | low | moderate | high | abandoned`, plus `not_assessed` for
+insufficient evidence — `score: null`, excluded from aggregate stats), the schema id
 (`agentweaver.persona-judge-verdict/v1`), the P0/P1 semantics, and the driver-only rule are
 **consistent** across all three specs — no conflict there.
 
