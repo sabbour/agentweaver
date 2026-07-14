@@ -50,6 +50,7 @@ public sealed class PreviewStepTests : IDisposable
 
         await h.Step.RunAsync(Request(), CancellationToken.None);
 
+        h.PreviewRunner.LastObserveTimeoutSeconds.Should().Be(105);
         h.TerminalKinds().Should().ContainSingle().Which.Should().Be(EventTypes.SandboxPreviewReady);
         var ready = h.Single(EventTypes.SandboxPreviewReady);
         // BLOCKER B: token and preview-runner session id are distinct and both present.
@@ -489,6 +490,7 @@ public sealed class PreviewStepTests : IDisposable
         public string? LastStopReason;
         public string? LastCommand;
         public string? LastCwd;
+        public int? LastObserveTimeoutSeconds;
         public Func<PreviewRunnerStartResult>? StartBehavior;
         public Func<PreviewRunnerPortResult>? ObserveBehavior;
         public PreviewRunnerPortResult PortResult = new("proc-sess-1", 3000, Healthy: true, "ok");
@@ -506,6 +508,7 @@ public sealed class PreviewStepTests : IDisposable
         public Task<PreviewRunnerPortResult> ObserveBoundPortAsync(
             string runId, string? bearer, string sessionId, int timeoutSeconds, string healthPath, CancellationToken ct)
         {
+            LastObserveTimeoutSeconds = timeoutSeconds;
             if (ObserveBehavior is not null) return Task.FromResult(ObserveBehavior());
             return Task.FromResult(PortResult);
         }

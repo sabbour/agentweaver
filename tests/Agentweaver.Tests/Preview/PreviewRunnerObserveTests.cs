@@ -207,6 +207,55 @@ public sealed class PreviewRunnerObserveTests
             "fds must not be trusted after the captured process identity exits or its PID is reused");
     }
 
+    [LinuxFact]
+    public async Task ObserveBoundPort_LinuxPrivateSession_FindsReparentedServer()
+    {
+        await RequireNodeAsync();
+
+        var fixtureDirectory = Path.Combine(
+            AppContext.BaseDirectory,
+            $"preview-proc-session-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(fixtureDirectory);
+        var serverScript = Path.Combine(fixtureDirectory, "server.js");
+        var bootstrapScript = Path.Combine(fixtureDirectory, "bootstrap.js");
+        await File.WriteAllTextAsync(serverScript, """
+            const http = require('http');
+            const server = http.createServer((request, response) => response.end('ok'));
+            server.listen(0, '127.0.0.1');
+            """);
+        await File.WriteAllTextAsync(bootstrapScript, """
+            const { spawn } = require('child_process');
+            const child = spawn(process.execPath, [process.argv[2]], {
+              detached: false,
+              stdio: 'ignore',
+            });
+            child.unref();
+            setTimeout(() => process.exit(0), 100);
+            """);
+
+        var runner = NewRunner();
+        // The bootstrap exits after launching the server. The server is reparented out of the
+        // shell's PPID tree but remains in the private setsid session established by PreviewRunner.
+        var command = $"node {QuoteForPosixShell(bootstrapScript)} {QuoteForPosixShell(serverScript)} & tail -f /dev/null";
+        var started = await runner.StartPreviewProcessAsync(
+            command, fixtureDirectory, "run-linux-private-session", null, null, CancellationToken.None);
+
+        try
+        {
+            var observation = await runner.ObserveBoundPortAsync(
+                started.SessionId, TimeSpan.FromSeconds(10), "/", CancellationToken.None);
+
+            observation.Healthy.Should().BeTrue();
+            observation.AppPort.Should().BePositive();
+        }
+        finally
+        {
+            await runner.StopPreviewProcessAsync(
+                started.SessionId, "test_cleanup", CancellationToken.None);
+            Directory.Delete(fixtureDirectory, recursive: true);
+        }
+    }
+
     private static async Task RequireNodeAsync()
     {
         using var process = new Process

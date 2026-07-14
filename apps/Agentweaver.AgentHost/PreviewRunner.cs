@@ -801,33 +801,7 @@ internal sealed class PreviewRunner : BackgroundService, IPreviewRunner
             }
 
             var processSocketInodes = new HashSet<ulong>();
-            try
-            {
-                var fdDirectory = $"/proc/{identity.Pid}/fd";
-                if (!Directory.Exists(fdDirectory))
-                    continue;
-
-                foreach (var fdPath in Directory.EnumerateFileSystemEntries(fdDirectory))
-                {
-                    ct.ThrowIfCancellationRequested();
-                    string? target;
-                    try
-                    {
-                        target = new FileInfo(fdPath).LinkTarget;
-                    }
-                    catch
-                    {
-                        continue;
-                    }
-
-                    if (TryParseSocketInode(target, out var inode))
-                        processSocketInodes.Add(inode);
-                }
-            }
-            catch (Exception) when (!ct.IsCancellationRequested)
-            {
-                // File descriptors are inherently racy; a later poll observes stable sockets.
-            }
+            await CollectSocketInodesAsync(identity, processSocketInodes, ct).ConfigureAwait(false);
 
             // Re-check after reading children and fds. If the process exited and Linux recycled its
             // PID during either enumeration, none of that data belongs to the supervised process.
@@ -839,7 +813,89 @@ internal sealed class PreviewRunner : BackgroundService, IPreviewRunner
                 pending.Enqueue(childIdentity);
         }
 
+        // Preview commands normally start through `setsid`, making the root process the leader of a
+        // private session. A dev-server wrapper can double-fork (or otherwise reparent) Vite after
+        // launch, which makes it disappear from the PPID tree while it remains safely in that private
+        // session. Include those same-session sockets only when the root is its own session leader;
+        // this preserves isolation and never attributes AgentHost or another preview's sockets.
+        if (TryGetProcessSessionId(rootIdentity.Pid, out var rootSessionId) &&
+            rootSessionId == rootIdentity.Pid &&
+            IsCurrentProcessIdentity(rootIdentity))
+        {
+            await CollectPrivateSessionSocketInodesAsync(
+                rootIdentity, rootSessionId, visited, socketInodes, ct).ConfigureAwait(false);
+        }
+
         return socketInodes;
+    }
+
+    private static async Task CollectPrivateSessionSocketInodesAsync(
+        ProcessIdentity rootIdentity,
+        int sessionId,
+        ISet<ProcessIdentity> knownTreeMembers,
+        ISet<ulong> socketInodes,
+        CancellationToken ct)
+    {
+        try
+        {
+            foreach (var processDirectory in Directory.EnumerateDirectories("/proc"))
+            {
+                ct.ThrowIfCancellationRequested();
+                var name = Path.GetFileName(processDirectory);
+                if (!int.TryParse(name, NumberStyles.None, CultureInfo.InvariantCulture, out var pid) ||
+                    pid == rootIdentity.Pid ||
+                    !TryCaptureProcessIdentity(pid, out var identity) ||
+                    knownTreeMembers.Contains(identity) ||
+                    !TryGetProcessSessionId(pid, out var candidateSessionId) ||
+                    candidateSessionId != sessionId)
+                {
+                    continue;
+                }
+
+                var processSocketInodes = new HashSet<ulong>();
+                await CollectSocketInodesAsync(identity, processSocketInodes, ct).ConfigureAwait(false);
+                if (IsCurrentProcessIdentity(identity))
+                    socketInodes.UnionWith(processSocketInodes);
+            }
+        }
+        catch (Exception) when (!ct.IsCancellationRequested)
+        {
+            // /proc is inherently racy; normal tree attribution remains available and the next poll retries.
+        }
+    }
+
+    private static async Task CollectSocketInodesAsync(
+        ProcessIdentity identity,
+        ISet<ulong> socketInodes,
+        CancellationToken ct)
+    {
+        try
+        {
+            var fdDirectory = $"/proc/{identity.Pid}/fd";
+            if (!Directory.Exists(fdDirectory))
+                return;
+
+            foreach (var fdPath in Directory.EnumerateFileSystemEntries(fdDirectory))
+            {
+                ct.ThrowIfCancellationRequested();
+                string? target;
+                try
+                {
+                    target = new FileInfo(fdPath).LinkTarget;
+                }
+                catch
+                {
+                    continue;
+                }
+
+                if (TryParseSocketInode(target, out var inode))
+                    socketInodes.Add(inode);
+            }
+        }
+        catch (Exception) when (!ct.IsCancellationRequested)
+        {
+            // File descriptors are inherently racy; a later poll observes stable sockets.
+        }
     }
 
     private static ProcessIdentity CaptureProcessIdentity(int pid)
@@ -885,6 +941,28 @@ internal sealed class PreviewRunner : BackgroundService, IPreviewRunner
             var stat = File.ReadAllText($"/proc/{identity.Pid}/stat");
             return TryParseProcessStartTime(stat, out var currentStartTime)
                 && currentStartTime == expectedStartTime;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static bool TryGetProcessSessionId(int pid, out int sessionId)
+    {
+        sessionId = 0;
+        try
+        {
+            var stat = File.ReadAllText($"/proc/{pid}/stat");
+            var commandEnd = stat.LastIndexOf(')');
+            if (commandEnd < 0 || commandEnd + 2 >= stat.Length)
+                return false;
+
+            // After "(comm)", tokens begin at field 3 (state); session is field 6.
+            var fields = stat[(commandEnd + 1)..]
+                .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+            return fields.Length > 3 &&
+                int.TryParse(fields[3], NumberStyles.None, CultureInfo.InvariantCulture, out sessionId);
         }
         catch
         {

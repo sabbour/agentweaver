@@ -29,7 +29,9 @@ public sealed record PreviewStepRequest(
 /// </summary>
 public sealed class PreviewStep
 {
-    private const int ObserveTimeoutSeconds = 60;
+    // Vite can take longer than one minute while optimizing a cold dependency graph. Keep below the
+    // two-minute AgentHost control-plane timeout while giving the pod-local observer a real retry window.
+    private const int ObserveTimeoutSeconds = 105;
     private const string HealthPath = "/";
 
     private readonly ISandboxPreviewService _previewService;
