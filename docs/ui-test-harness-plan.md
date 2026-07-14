@@ -380,6 +380,56 @@ harnesses and their individual Copilot CLI skills exist.
   independently useful: the individual skills for targeted single-surface debugging,
   the combined skill for a full cross-surface self-improvement pass.
 
+### Harness Agent (Top-Level Orchestrator)
+
+Ahmed has confirmed the top-level architecture. The **per-run judge stays an embedded
+deterministic script** (`scripts/harness-judge/core.mjs`, invoked automatically at the
+end of each harness run — no change). The **top-level orchestrator**, by contrast, is a
+real, selectable **GitHub Copilot CLI custom agent**: `.github/agents/harness.agent.md`
+(same mechanism as `.github/agents/squad.agent.md`). This subsection is still spec-only;
+the agent definition itself is a follow-on task.
+
+**1. What it is.** A real custom agent Ahmed can pick and run directly in Copilot CLI —
+not a script, and not only a skill invocation. When run, it:
+- (a) invokes the **Combined Launcher Skill** above to spawn all three harness driver
+  CLIs as parallel, independent processes;
+- (b) waits for their JSON verdicts;
+- (c) runs `scripts/harness-judge/meta-aggregate.mjs` for the cross-surface verdict;
+- (d) **synthesizes a human-readable narrative** — cross-surface root-cause attribution
+  and recommendations for Ahmed — the part a deterministic script can't do well but an
+  LLM agent can.
+
+**2. GitHub issue-filing capability.** The Harness agent has its own skill to file
+GitHub issues carrying the structured outcome: verdict JSON, screenshot/evidence links,
+frustration level, `run_id`/`trace_id`, and AppInsights/kubectl correlation (attached or
+linked). **Scope boundary (critical):** Harness **only files plain issues** (or comments
+on existing ones). It **never** applies `squad:{member}` labels, never triages, never
+dispatches a fixer, never touches releases — it behaves exactly like a very observant
+human tester filing a bug report, nothing more. All triage/dispatch/fix/release authority
+stays **exclusively** with the separate Squad coordinator agent
+(`.github/agents/squad.agent.md`), which already owns the GitHub issue
+intake/triage/routing pipeline. A Harness-filed issue looks like any other new issue to
+Squad — **zero new integration work** on Squad's side.
+
+**3. Scoped re-test mode (the loop-closing contract).** The Harness agent's CLI/skill
+entrypoint **must** support a targeted mode — e.g.
+`--persona {name} --scenario {name} --run-id {original}` (exact flag names at Trinity's
+discretion, consistent with the existing CLI-contract style) — to re-run just **one**
+specific persona/scenario combo rather than a full three-harness pass. This is the
+contract Squad's **"Post-Fix Harness Verification"** ceremony (`.squad/ceremonies.md`)
+depends on: after a fix lands and deploys, the ceremony invokes Harness scoped to the
+originating issue's persona + scenario, passing the original `run_id`/trace context, so
+Harness re-runs the exact repro and reports pass/fail with fresh evidence before the
+issue is closed. Documented explicitly here because that ceremony requires this mode to
+exist.
+
+**4. Interaction model.** Harness and Squad are two **independent, loosely-coupled**
+agents that communicate **only through GitHub issues**: Harness files → Squad
+triages/fixes/ships → Squad's ceremony calls back into Harness's scoped re-test mode →
+Harness verifies → Squad closes (or reopens on fail). Neither agent invokes the other's
+internal tools/drivers/judge directly — Squad treats Harness as an external CLI/agent it
+runs, exactly as a human operator would.
+
 ---
 
 ## Goals
