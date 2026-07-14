@@ -108,124 +108,28 @@ public sealed class DataMigratorTests : IDisposable
             NullLogger<SqliteToPostgresMigrator>.Instance);
     }
 
-    /// <summary>Seeds a minimal agentweaver.db schema + test data via raw ADO.NET.</summary>
+    /// <summary>
+    /// Seeds an agentweaver.db with test data via raw ADO.NET.
+    ///
+    /// The schema is created by calling the real <see cref="SqliteDb.EnsureCreatedAsync"/>
+    /// (the same code path production uses) instead of a hand-copied CREATE TABLE script.
+    /// This is deliberate: a duplicated schema definition here previously drifted out of sync
+    /// with the growing "runs" table (34 columns vs. a hardcoded 30-value INSERT) and broke
+    /// this fixture — see issue #318. Reusing the production schema-creation logic means the
+    /// fixture can never again fall behind an ALTER TABLE added elsewhere. All INSERT
+    /// statements below also use explicit column-name lists rather than positional VALUES, so
+    /// future nullable/defaulted columns added via migration don't require touching this file.
+    /// </summary>
     private static void SeedSqliteDb(string dbPath)
     {
+        var schemaConfig = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?> { ["Database:Path"] = dbPath })
+            .Build();
+        new SqliteDb(schemaConfig).EnsureCreatedAsync().GetAwaiter().GetResult();
+
         var cs = new SqliteConnectionStringBuilder { DataSource = dbPath }.ToString();
         using var conn = new SqliteConnection(cs);
         conn.Open();
-
-        using var schema = conn.CreateCommand();
-        schema.CommandText = """
-            CREATE TABLE IF NOT EXISTS projects (
-                project_id TEXT PRIMARY KEY,
-                name TEXT NOT NULL,
-                origin_kind TEXT NOT NULL DEFAULT 'blank',
-                source_repository TEXT,
-                working_directory TEXT NOT NULL DEFAULT '',
-                default_branch TEXT NOT NULL DEFAULT 'main',
-                owner TEXT NOT NULL DEFAULT '',
-                default_provider TEXT NOT NULL DEFAULT 'github_copilot',
-                default_model_copilot TEXT,
-                default_model_foundry TEXT,
-                state TEXT NOT NULL DEFAULT 'active',
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL,
-                max_ready_per_heartbeat INTEGER NOT NULL DEFAULT 3,
-                pickup_autopilot INTEGER NOT NULL DEFAULT 1,
-                pickup_auto_approve_tools INTEGER NOT NULL DEFAULT 0,
-                default_workflow_id TEXT,
-                active_review_policy_name TEXT,
-                sandbox_profile TEXT,
-                source_blueprint_id TEXT,
-                source_blueprint_type TEXT,
-                allowed_workflow_ids TEXT
-            );
-
-            CREATE TABLE IF NOT EXISTS runs (
-                run_id TEXT PRIMARY KEY,
-                repository_path TEXT NOT NULL,
-                originating_branch TEXT NOT NULL,
-                model_source TEXT NOT NULL DEFAULT 'github_copilot',
-                task TEXT NOT NULL,
-                submitting_user TEXT NOT NULL,
-                status TEXT NOT NULL,
-                started_at TEXT NOT NULL,
-                ended_at TEXT,
-                result TEXT,
-                worktree_path TEXT,
-                worktree_branch TEXT,
-                tree_hash TEXT,
-                step_count INTEGER NOT NULL DEFAULT 0,
-                diff TEXT,
-                merge_conflicts TEXT,
-                project_id TEXT,
-                model_id TEXT,
-                agent_name TEXT,
-                agent_charter TEXT,
-                reviewed_by TEXT,
-                workflow_run_id TEXT,
-                merged_commit_hash TEXT,
-                parent_run_id TEXT,
-                subtask_id TEXT,
-                origin TEXT NOT NULL DEFAULT 'interactive',
-                retried_from TEXT,
-                review_ready_at TEXT,
-                review_wait_ms INTEGER NOT NULL DEFAULT 0,
-                archived_at TEXT,
-                sandbox_backend TEXT,
-                sandbox_claim_name TEXT,
-                sandbox_pod_name TEXT,
-                sandbox_namespace TEXT
-            );
-
-            CREATE TABLE IF NOT EXISTS run_revisions (
-                run_id TEXT NOT NULL,
-                revision_number INTEGER NOT NULL,
-                reviewer_user TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                raw_comment TEXT NOT NULL,
-                sanitized_comment TEXT NOT NULL,
-                previous_tree_hash TEXT NOT NULL,
-                PRIMARY KEY (run_id, revision_number)
-            );
-
-            CREATE TABLE IF NOT EXISTS workflow_runs (
-                workflow_run_id TEXT PRIMARY KEY,
-                project_id TEXT NOT NULL,
-                task TEXT NOT NULL,
-                submitting_user TEXT NOT NULL,
-                started_at TEXT NOT NULL,
-                orchestration_worktree_path TEXT
-            );
-
-            CREATE TABLE IF NOT EXISTS backlog_tasks (
-                task_id TEXT PRIMARY KEY,
-                project_id TEXT NOT NULL,
-                title TEXT NOT NULL,
-                description TEXT,
-                state TEXT NOT NULL DEFAULT 'backlog',
-                order_key TEXT NOT NULL,
-                captured_by TEXT NOT NULL DEFAULT '',
-                created_at TEXT NOT NULL,
-                committed_at TEXT,
-                claimed_at TEXT,
-                run_id TEXT,
-                workflow_override_id TEXT,
-                archived_at TEXT,
-                source_file_path TEXT
-            );
-
-            CREATE TABLE IF NOT EXISTS cast_proposals (
-                id TEXT PRIMARY KEY,
-                project_id TEXT NOT NULL,
-                owner TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                expires_at TEXT NOT NULL,
-                proposal_json TEXT NOT NULL
-            );
-            """;
-        schema.ExecuteNonQuery();
 
         var now = DateTimeOffset.UtcNow.ToString("O");
         var pid1 = "proj-" + Guid.NewGuid().ToString("N")[..8];
@@ -239,16 +143,30 @@ public sealed class DataMigratorTests : IDisposable
 
         using var data = conn.CreateCommand();
         data.CommandText = $"""
-            INSERT INTO projects VALUES ('{pid1}','Project A','blank',NULL,'/a','main','alice','github_copilot',NULL,NULL,'active','{now}','{now}',3,1,0,NULL,NULL,NULL,NULL,NULL,NULL);
-            INSERT INTO projects VALUES ('{pid2}','Project B','blank',NULL,'/b','main','bob','github_copilot',NULL,NULL,'active','{now}','{now}',3,1,0,NULL,NULL,NULL,NULL,NULL,NULL);
-            INSERT INTO runs VALUES ('{rid1}','/repo','main','github_copilot','task1','alice','completed','{now}','{now}','ok',NULL,NULL,NULL,0,NULL,NULL,'{pid1}',NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,'interactive',NULL,NULL,0,NULL);
-            INSERT INTO runs VALUES ('{rid2}','/repo','main','github_copilot','task2','bob','in_progress','{now}',NULL,NULL,NULL,NULL,NULL,0,NULL,NULL,'{pid1}',NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,'interactive',NULL,NULL,0,NULL);
-            INSERT INTO runs VALUES ('{rid3}','/repo','main','github_copilot','task3','alice','failed','{now}','{now}','err',NULL,NULL,NULL,0,NULL,NULL,'{pid2}',NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,'interactive',NULL,NULL,0,NULL);
-            INSERT INTO run_revisions VALUES ('{rid1}',1,'alice','{now}','raw1','sanitized1','hash0');
-            INSERT INTO run_revisions VALUES ('{rid1}',2,'alice','{now}','raw2','sanitized2','hash1');
-            INSERT INTO workflow_runs VALUES ('{wid1}','{pid1}','wf task','alice','{now}',NULL);
-            INSERT INTO backlog_tasks VALUES ('{tid1}','{pid1}','Task A',NULL,'ready','key-a','alice','{now}','{now}',NULL,NULL,NULL,NULL,NULL);
-            INSERT INTO backlog_tasks VALUES ('{tid2}','{pid1}','Task B',NULL,'backlog','key-b','alice','{now}',NULL,NULL,NULL,NULL,NULL,NULL);
+            INSERT INTO projects (project_id, name, origin_kind, working_directory, default_branch, owner, default_provider, state, created_at, updated_at)
+                VALUES ('{pid1}','Project A','blank','/a','main','alice','github_copilot','active','{now}','{now}');
+            INSERT INTO projects (project_id, name, origin_kind, working_directory, default_branch, owner, default_provider, state, created_at, updated_at)
+                VALUES ('{pid2}','Project B','blank','/b','main','bob','github_copilot','active','{now}','{now}');
+
+            INSERT INTO runs (run_id, repository_path, originating_branch, model_source, task, submitting_user, status, started_at, ended_at, result, project_id)
+                VALUES ('{rid1}','/repo','main','github_copilot','task1','alice','completed','{now}','{now}','ok','{pid1}');
+            INSERT INTO runs (run_id, repository_path, originating_branch, model_source, task, submitting_user, status, started_at, project_id)
+                VALUES ('{rid2}','/repo','main','github_copilot','task2','bob','in_progress','{now}','{pid1}');
+            INSERT INTO runs (run_id, repository_path, originating_branch, model_source, task, submitting_user, status, started_at, ended_at, result, project_id)
+                VALUES ('{rid3}','/repo','main','github_copilot','task3','alice','failed','{now}','{now}','err','{pid2}');
+
+            INSERT INTO run_revisions (run_id, revision_number, reviewer_user, created_at, raw_comment, sanitized_comment, previous_tree_hash)
+                VALUES ('{rid1}',1,'alice','{now}','raw1','sanitized1','hash0');
+            INSERT INTO run_revisions (run_id, revision_number, reviewer_user, created_at, raw_comment, sanitized_comment, previous_tree_hash)
+                VALUES ('{rid1}',2,'alice','{now}','raw2','sanitized2','hash1');
+
+            INSERT INTO workflow_runs (workflow_run_id, project_id, task, submitting_user, started_at)
+                VALUES ('{wid1}','{pid1}','wf task','alice','{now}');
+
+            INSERT INTO backlog_tasks (task_id, project_id, title, state, order_key, captured_by, created_at, committed_at)
+                VALUES ('{tid1}','{pid1}','Task A','ready','key-a','alice','{now}','{now}');
+            INSERT INTO backlog_tasks (task_id, project_id, title, state, order_key, captured_by, created_at)
+                VALUES ('{tid2}','{pid1}','Task B','backlog','key-b','alice','{now}');
             """;
         data.ExecuteNonQuery();
     }
