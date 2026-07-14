@@ -345,6 +345,41 @@ to actively-edited API-harness files), the UI harness imports the equivalent mod
 read-only from `scripts/persona-harness/` and carries a thin local UI evidence shim;
 the target end-state is the shared packages above.
 
+### Combined Launcher Skill
+
+The three harnesses will also need to launch as **independent processes**, and Ahmed
+asked for **one combined skill that launches all three**. This belongs to the shared
+layer (not to any single harness), because it orchestrates across all three surfaces.
+Like the per-harness skill sections, this is **spec-only** — the actual
+`SKILL.md`/orchestrator is a follow-on task, sequenced *after* all three individual
+harnesses and their individual Copilot CLI skills exist.
+
+- **Each harness still runs as its own independent process.** `scripts/api-harness/`,
+  `scripts/ui-harness/`, and `scripts/mcp-harness/` each keep their own CLI entrypoint
+  and remain invocable standalone (already established by each harness's own SKILL.md /
+  Copilot CLI Skill section). This addition changes nothing about that — it is purely
+  additive.
+- **A fourth, combined pointer skill** — proposed path
+  `.github/skills/agentweaver-harness/SKILL.md` (top-level; name TBD but propose this):
+  - **Discoverable** for requests like *"run the full test harness,"* *"run all three
+    harnesses against persona X,"* or *"do a full self-improvement pass."*
+  - **Launches all three harness processes as independent, parallel child processes**
+    (not sequentially). Each child still produces its **own** JSON verdict independently,
+    exactly as if it had been invoked standalone.
+  - After all three complete — **or a configurable subset** (e.g. *"just API + MCP"* for
+    a backend-only pass) — it feeds their outputs into the shared
+    `scripts/harness-judge/meta-aggregate.mjs` (already in the architecture) to produce
+    **one combined cross-surface verdict**, correlating findings by
+    persona / scenario / `run_id`. This is where cross-surface reasoning lives — e.g.
+    *"API clean + UI frustration = pure UX issue"*; *"API P0 fail + UI frustration =
+    backend root cause surfacing as bad UX."*
+  - It is a **thin orchestrator only**: it process-spawns the three existing CLIs and
+    calls the existing `meta-aggregate.mjs`. It reimplements **no** harness logic, **no**
+    new judging logic, and **no** persona logic.
+- **The combined skill does not supersede the per-harness skills.** Both remain
+  independently useful: the individual skills for targeted single-surface debugging,
+  the combined skill for a full cross-surface self-improvement pass.
+
 ---
 
 ## Goals
