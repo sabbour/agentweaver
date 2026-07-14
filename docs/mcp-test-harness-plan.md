@@ -84,8 +84,8 @@ traces) rather than HTTP request/response or DOM snapshots.
    Copilot CLI discovers it — the harness never hardcodes tool names or reads a
    pre-generated tool index. This means a renamed/removed/added tool is experienced by
    the harness exactly as a real Copilot CLI user would experience it (discovered
-   fresh), so **schema drift is caught as a first-class signal** rather than silently
-   worked around.
+   fresh), so **schema drift is caught as a first-class signal** (enforced for required
+   tools by the §1a required-capabilities contract) rather than silently worked around.
 2. **Validate the MCP contract, not just the backend behind it.** Regressions
    unique to the MCP layer — tool schema drift, non-actionable error strings
    (#129), missing `run_task` one-call path (#130), `agentweaver.agent.md` driver
@@ -265,7 +265,9 @@ MCP. It is a **new, sibling** harness, not a modification of the API harness
   first-class captured signal**: if a tool has been added, removed, or renamed since the
   static index was generated, the harness sees the live reality and its transcript records
   it, rather than silently working around a stale reference — precisely the experience a
-  real Copilot CLI user would have.)
+  real Copilot CLI user would have. For **persona driving** this is pure adaptation; the
+  **regression *failure*** on a missing/incompatible *required* tool is enforced separately
+  by the [required-capabilities contract (§1a)](#1a-required-capabilities-contract-the-regression-tripwire--additive-to-not-a-replacement-for-live-discovery), so drift in a critical tool cannot silently pass.)
 - A fresh-context LLM (a sub-agent, or any model with shell access) is handed **only**
   a persona **brief** (goals, constraints, voice, the mandatory-pushback instruction —
   the exact same brief the API and UI harnesses use) plus a short "you are driving
@@ -330,6 +332,79 @@ drive it, not just the two-button path.
 > "was the AI's output good." (Output quality is still judged as P1 for the drafted
 > spec, but gate-review turns specifically test functional correctness of the gating
 > machinery.)
+
+### 1a. Required-capabilities contract (the regression tripwire — additive to, NOT a replacement for, live discovery)
+
+Live `tools/list` discovery (§1) is the **only** source of truth for the **persona's
+action space** — that must not change. But pure runtime adaptation has a blind spot for
+**smoke / acceptance testing**: if a critical tool is **renamed, removed, or given an
+incompatible schema**, a persona-driving LLM would simply *adapt* — pick a different
+tool, or route around the gap — and the run could **silently pass** even though a
+required capability regressed. That silent pass is exactly the failure this harness
+exists to prevent. The coverage rows below (#131 smoke, #130/#128 acceptance) name
+specific tools and behaviors that **must exist**; discovery alone gives us no mechanism
+to actually **fail** when one disappears.
+
+**Fix: a separate, versioned required-capabilities contract**, checked in parallel with
+(never fed into) persona driving:
+
+- **`scripts/mcp-harness/required-capabilities.json`** — a small, **versioned**
+  manifest, committed alongside the harness, listing the capabilities the smoke /
+  acceptance tests depend on. Each entry declares:
+  - a **capability identity** — a stable `capability` tag plus the current tool
+    `name`(s) that satisfy it (so a rename is expressed as a contract update, not an
+    invisible drift), e.g. `submit-run` → `run_submit`;
+  - the **expected schema shape** — the input arguments the harness relies on and the
+    output fields it asserts (a *subset/shape* contract, not the tool's full schema),
+    e.g. `run_submit` must accept `{ projectId, goal }` and its result must carry
+    `run_id` + `status`; `run_show_artifacts` must return an artifact list;
+  - a **compatibility policy** — semver-style: **additive changes are OK** (new optional
+    args, new result fields → still compatible), while **removal, a rename with no
+    contract update, a required-arg addition, or a type change on a depended-on field =
+    BREAKING → smoke failure**.
+
+```jsonc
+// scripts/mcp-harness/required-capabilities.json  (versioned; illustrative)
+{
+  "contractVersion": "1.0.0",
+  "policy": "additive-ok; removal|rename|required-arg-add|depended-field-type-change = BREAKING",
+  "capabilities": [
+    { "capability": "submit-run",     "tools": ["run_submit"],
+      "in": { "requires": ["projectId", "goal"] }, "out": { "requires": ["run_id", "status"] } },
+    { "capability": "poll-run",        "tools": ["run_status"],        "out": { "requires": ["status"] } },
+    { "capability": "list-artifacts",  "tools": ["run_show_artifacts"],"out": { "requires": ["artifacts"] } },
+    { "capability": "cleanup-run",     "tools": ["run_archive"] },
+    { "capability": "auth-status",     "tools": ["github_status"] },
+    { "capability": "auth-signin",     "tools": ["github_signin"] },
+    { "capability": "diagnostics",     "tools": ["diagnostics_get"] },
+    { "capability": "one-call-run",    "tools": ["run_task"], "optional": true,
+      "note": "#130 — not yet shipped; when present, must return run_id+status+artifacts" }
+  ]
+}
+```
+
+- **The check (session start, right after `tools/list`).** `lib/capabilities-contract.mjs`
+  diffs the **live** discovered tool set against `required-capabilities.json`:
+  - a **required capability whose tool is missing** (removed / renamed without a contract
+    update) → **`CONTRACT FAIL`**, a **first-class captured P0 failure** with the missing
+    capability + expected-vs-live tool names in the reporter banner;
+  - a **present-but-incompatible schema** (a depended-on input arg or output field gone,
+    or its type changed) → **`CONTRACT FAIL`** with the offending field diff;
+  - additive-only differences → **pass** (recorded as an informational `contract-drift`
+    note, not a failure);
+  - an `optional` capability that is absent (e.g. `run_task` pre-#130) → **skip**, not a
+    failure.
+- **Strictly parallel, never merged into the action space.** This contract is consumed
+  **only** by the smoke/acceptance path and the reporter — it is **not** handed to the
+  persona LLM and does **not** constrain or pre-populate the persona's tool menu. Persona
+  driving still selects **exclusively** from the live-discovered tools (§1, d6a987f5).
+  The contract runs *beside* the persona run as a regression tripwire, so a
+  renamed/removed/schema-incompatible required tool becomes a **loud, first-class failure**
+  instead of being silently absorbed into "the persona adapted and moved on."
+- **Keeping the contract honest.** Because it is versioned and committed, an *intended*
+  tool rename/removal is a **deliberate contract edit in the same change** — which is the
+  point: the diff review surfaces the breaking change, rather than letting it slip through
+  as invisible runtime drift.
 
 ### 2. MCP transport client
 
@@ -469,6 +544,11 @@ A **new sibling** package — nothing under the API harness's current
 scripts/mcp-harness/
   package.json                 # Node ESM, "type":"module"; dep: @modelcontextprotocol/sdk
   README.md                    # what it is, how to run, the two rungs, the two targets
+  required-capabilities.json   # VERSIONED contract (§1a): capabilities smoke/acceptance
+                               #   tests require to exist + expected schema shape + semver
+                               #   compatibility policy. Diffed against LIVE tools/list; a
+                               #   missing/incompatible required tool = first-class CONTRACT
+                               #   FAIL. NOT fed to the persona (does not shape the action space).
   # NOTE: the MCP judge addendum (JUDGE.mcp.md) and the MCP evidence adapter
   #   (adapters/mcp.mjs) live in the SHARED scripts/harness-judge/ package, NOT here —
   #   see Cross-Harness Shared Layer. This harness ships no copied judge/verdict logic.
@@ -489,6 +569,8 @@ scripts/mcp-harness/
                                #   this session (names + JSON schemas + descriptions); obey the brief"
   lib/
     transcript.mjs             # MCP transcript writer (agentweaver.mcp-transcript/v1)
+    capabilities-contract.mjs  # §1a — diff LIVE tools/list vs required-capabilities.json;
+                               #   emit CONTRACT FAIL (P0) on missing/incompatible required tool
     mcp-p0.mjs                 # deterministic P0 block (isError/error-code/schema/pushback)
     reporter.mjs               # DRIVE+CAPTURE OK / DRIVER P0 FAIL banner (never PASS/FAIL)
     (contributes) ../../harness-judge/adapters/mcp.mjs   # SHARED — MCP transcript -> normalized judge evidence
@@ -529,10 +611,10 @@ forked here.
 | Issue | How the MCP harness validates it |
 |---|---|
 | **#295** (epic) | End-to-end guard for the whole "reliable CLI + conversational operator" epic. The deterministic smoke rung proves the happy path stays working release-over-release; the LLM-driven rung proves quality/actionability across varied personas. Meta-aggregation across MCP runs surfaces invariants (candidate P0 guarantees) and divergences (P1 signal) for the epic. |
-| **#131** (CLI→MCP smoke test) | **Directly implemented** by `smoke/mcp-cli-smoke.mjs`: signin/token → create/reuse project → `run_submit` (smallest task, fast blueprint) → `run_status` poll to terminal (≤5 min) → `run_show_artifacts` asserts ≥1 artifact → `run_archive` cleanup. Runs on `--target stdio` in CI, `--target http` against staging. Failure output names the failing step + tool + raw error — satisfying #131's "actionable failure output" AC. |
+| **#131** (CLI→MCP smoke test) | **Directly implemented** by `smoke/mcp-cli-smoke.mjs`: **first runs the §1a required-capabilities contract check** (live `tools/list` vs `required-capabilities.json`) so a renamed/removed/schema-incompatible required tool fails loudly up front, then signin/token → create/reuse project → `run_submit` (smallest task, fast blueprint) → `run_status` poll to terminal (≤5 min) → `run_show_artifacts` asserts ≥1 artifact → `run_archive` cleanup. Runs on `--target stdio` in CI, `--target http` against staging. Failure output names the failing step + tool + raw error (or the missing/incompatible capability) — satisfying #131's "actionable failure output" AC. |
 | **#129** (actionable errors) | A dedicated **error-probe scenario** deliberately triggers each error class from #129's table — signed-out call, `project_get` on a bad id (404), `run_review` on a not-reviewable run (409), submit a workflow not in `allowed_workflow_ids` (400), induce `-32001` timeout, hit a sandbox-not-bound 409 — and captures each raw error result verbatim. The judge scores each against the #129 target ("does it say what went wrong, why, and the next tool to call; is there a `hint`?"). Because the driver embeds no heuristics, this becomes a living acceptance test for #129 as it's implemented. |
-| **#130** (`run_task` one-call path) | Until shipped: the harness documents/measures the multi-call baseline (turn count from goal→results) as the regression `run_task` must beat. After shipped: a scenario drives `run_task` directly and the driver asserts it (a) returns `run_id`+`status`+`artifacts` in one call, (b) **surfaces** review gates / steering questions (`awaiting_review`) rather than silently skipping, (c) respects the timeout returning partial state — all structural/deterministic driver checks; the judge assesses whether the one-call result is actually usable. |
-| **#128** (hardened `agentweaver.agent.md` driver instructions) | The harness drives the exact sequences #128 documents and asserts they're navigable **from the tools + agent.md alone**: auth-first recovery (force a 401 → `github_status` → `github_signin` → retry), `run_watch` long-poll behavior (assert it streams progress and doesn't look like a hang without explanation), timeout retry (`-32001` → `diagnostics_get` → idempotent retry), the full submit→poll→review→artifacts sequence, and the backlog→ready→run flow. Gaps the driving LLM hits (it got stuck, guessed an id, couldn't recover) are captured as evidence that the driver instructions need hardening. |
+| **#130** (`run_task` one-call path) | Until shipped: the harness documents/measures the multi-call baseline (turn count from goal→results) as the regression `run_task` must beat, and `run_task` is an **`optional` capability** in the §1a contract (absent = skip, not fail). After shipped: it is promoted to a **required capability** (removal/schema-break then trips CONTRACT FAIL), and a scenario drives `run_task` directly and the driver asserts it (a) returns `run_id`+`status`+`artifacts` in one call, (b) **surfaces** review gates / steering questions (`awaiting_review`) rather than silently skipping, (c) respects the timeout returning partial state — all structural/deterministic driver checks; the judge assesses whether the one-call result is actually usable. |
+| **#128** (hardened `agentweaver.agent.md` driver instructions) | The harness drives the exact sequences #128 documents and asserts they're navigable **from the tools + agent.md alone** — with the §1a contract guaranteeing the tools those sequences depend on (`github_status`, `github_signin`, `diagnostics_get`, `run_watch`, …) actually exist and keep a compatible shape, so a rename/removal fails loudly instead of manifesting as an unexplained "the persona got stuck": auth-first recovery (force a 401 → `github_status` → `github_signin` → retry), `run_watch` long-poll behavior (assert it streams progress and doesn't look like a hang without explanation), timeout retry (`-32001` → `diagnostics_get` → idempotent retry), the full submit→poll→review→artifacts sequence, and the backlog→ready→run flow. Gaps the driving LLM hits (it got stuck, guessed an id, couldn't recover) are captured as evidence that the driver instructions need hardening. |
 | **#201** (conversational operator-agent run type) | Forward-looking. When #201 ships a natural-language operator run, the same brief/pushback loop drives real conversational turns through that run type (text-in/text-out) instead of typed tool calls — the judge taxonomy carries over unchanged. Explicitly out of current scope (Trinity's investigation recommended deferring #201). |
 
 ---
