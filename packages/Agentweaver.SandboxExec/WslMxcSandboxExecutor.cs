@@ -88,12 +88,15 @@ internal sealed class WslMxcSandboxExecutor : ISandboxExecutor
     public async Task<SandboxExecResult> ExecuteAsync(
         SandboxCommand command, CancellationToken ct = default)
     {
+        var commandLine = SandboxCommandEnvironment.PrefixPosixExports(
+            command.CommandLine,
+            command.Environment);
         _logger.LogDebug(
             "Executing sandbox command via {Backend}, length={Length}",
             BackendName, command.CommandLine.Length);
 
         if (_backend == ContainmentBackend.WslBubblewrap)
-            return await ExecuteBwrapAsync(command, ct).ConfigureAwait(false);
+            return await ExecuteBwrapAsync(command with { CommandLine = commandLine }, ct).ConfigureAwait(false);
 
         var policy = new SandboxPolicy
         {
@@ -108,7 +111,7 @@ internal sealed class WslMxcSandboxExecutor : ISandboxExecutor
         try
         {
             result = await MxcSdk.SpawnWsl2SandboxAsync(
-                command.CommandLine,
+                commandLine,
                 policy,
                 workingDirectory: command.WorkingDirectory,
                 backend: _backend,

@@ -415,7 +415,9 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
             IsCommandApproved: hash => _approvalStore.IsApproved(runId, hash),
             IsCommandDenied: hash => _approvalStore.IsDenied(runId, hash),
             QuestionGate: _questionGate,
-            ShellExecutionTracker: _shellExecutionTracker);
+            ShellExecutionTracker: _shellExecutionTracker,
+            ScratchDirectory: Environment.GetEnvironmentVariable("AGENTWEAVER_SCRATCH")
+                ?? Environment.GetEnvironmentVariable("AGENTWEAVER_SCRATCH_DIR"));
         _toolContext = toolContext;
 
         var sessionTools = BuildSessionConfigTools(

@@ -41,4 +41,10 @@ public sealed record SandboxToolContext(
     /// Optional single-flight shell tracker. Assembly Build/Test supplies one so concurrent model
     /// tool calls cannot overlap and future heartbeat/deadline policies can observe active timing.
     /// </summary>
-    ShellExecutionTracker? ShellExecutionTracker = null);
+    ShellExecutionTracker? ShellExecutionTracker = null,
+    /// <summary>
+    /// Optional run-scoped scratch directory that is outside the git worktree and therefore never a
+    /// commit candidate. Shell tools may use it for ephemeral artifacts; file tools remain rooted at
+    /// <see cref="SandboxRoot"/>.
+    /// </summary>
+    string? ScratchDirectory = null);

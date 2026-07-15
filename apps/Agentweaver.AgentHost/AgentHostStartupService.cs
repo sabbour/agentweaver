@@ -147,6 +147,7 @@ internal sealed class AgentHostStartupService : IHostedService
         var opts = _options;
         var runId = configuration.RunId;
         var agentScratchDirectory = _workspaceManager.PrepareAgentScratchDirectory(runId);
+        Environment.SetEnvironmentVariable("AGENTWEAVER_SCRATCH", agentScratchDirectory);
         Environment.SetEnvironmentVariable("AGENTWEAVER_SCRATCH_DIR", agentScratchDirectory);
         var workingDirectoryOverride = configuration.SharedWorkingDirectory;
 
@@ -259,6 +260,7 @@ internal sealed class AgentHostStartupService : IHostedService
     public async Task StopAsync(CancellationToken cancellationToken)
     {
         await _workspaceManager.CleanupAsync(cancellationToken).ConfigureAwait(false);
+        Environment.SetEnvironmentVariable("AGENTWEAVER_SCRATCH", null);
         Environment.SetEnvironmentVariable("AGENTWEAVER_SCRATCH_DIR", null);
     }
 }

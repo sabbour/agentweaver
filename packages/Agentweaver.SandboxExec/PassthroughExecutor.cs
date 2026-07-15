@@ -56,6 +56,7 @@ public sealed class PassthroughExecutor : ISandboxExecutor
                 psi.ArgumentList.Add("-c");
                 psi.ArgumentList.Add(command.CommandLine);
             }
+            SandboxCommandEnvironment.ApplyToProcessStartInfo(psi, command.Environment);
 
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             if (command.TimeoutMs > 0)
@@ -130,4 +131,3 @@ public sealed class PassthroughExecutor : ISandboxExecutor
         return (sb.ToString(), truncated);
     }
 }
-
