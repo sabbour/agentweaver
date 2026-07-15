@@ -122,6 +122,21 @@ public sealed class McpApiException : McpException
         if (segments.Length >= 3 && segments[0] == "api" && segments[1] == "projects")
         {
             var projectId = Uri.UnescapeDataString(segments[2]);
+
+            // Team/casting sub-resource 404s mean the workspace isn't initialized yet, not that
+            // the project is missing. Surfacing "Project not found" here misleads callers into
+            // thinking the project ID is wrong when it genuinely exists but has no team cast.
+            if (segments.Length >= 4 && segments[3] is "team" or "casting")
+            {
+                payload = new McpErrorPayload(
+                    404,
+                    $"No team configured for project '{projectId}'. Cast a team first with team_cast.",
+                    "Use team_cast to initialize the team, then retry team_get.",
+                    message,
+                    path);
+                return true;
+            }
+
             payload = new McpErrorPayload(
                 404,
                 $"Project '{projectId}' not found.",
