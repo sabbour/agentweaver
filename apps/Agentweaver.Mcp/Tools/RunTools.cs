@@ -15,19 +15,75 @@ internal sealed record RetryRunResponse(
 internal sealed record StartCoordinatorRunResponse(
     [property: JsonPropertyName("runId")] string RunId);
 
+/// <summary>Structured output for <c>run_submit</c>. Declares the output schema surfaced in tools/list.</summary>
+public sealed record RunSubmitResult(
+    [property: JsonPropertyName("run_id")]     string RunId,
+    [property: JsonPropertyName("status")]     string Status,
+    [property: JsonPropertyName("start_mode")] string StartMode);
+
+/// <summary>
+/// Structured output for <c>run_status</c>. Declares <c>status</c> in the output schema while
+/// preserving the full run object at runtime via extension data (no fields are dropped).
+/// </summary>
+public sealed record RunStatusResult
+{
+    [JsonPropertyName("status")]
+    public string? Status { get; init; }
+
+    [JsonExtensionData]
+    public IDictionary<string, JsonElement>? Additional { get; init; }
+}
+
+/// <summary>Structured output for <c>run_show_artifacts</c>: an object whose <c>artifacts</c> field is the file array.</summary>
+public sealed record RunArtifactsResult(
+    [property: JsonPropertyName("artifacts")] IReadOnlyList<JsonElement> Artifacts);
+
+/// <summary>
+/// Structured output for <c>run_task</c>. Covers every response variant (completed, gated,
+/// failed, timed out); optional fields are omitted when null so each variant stays clean.
+/// </summary>
+public sealed record RunTaskResult
+{
+    [JsonPropertyName("run_id")]
+    public string RunId { get; init; } = string.Empty;
+
+    [JsonPropertyName("status")]
+    public string Status { get; init; } = string.Empty;
+
+    [JsonPropertyName("artifacts")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<JsonElement>? Artifacts { get; init; }
+
+    [JsonPropertyName("run")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public JsonElement? Run { get; init; }
+
+    [JsonPropertyName("error")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Error { get; init; }
+
+    [JsonPropertyName("hint")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Hint { get; init; }
+
+    [JsonPropertyName("review_prompt")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ReviewPrompt { get; init; }
+}
+
 [McpServerToolType]
 public sealed class RunTools(AgentweaverApiClient api)
 {
     private static readonly JsonSerializerOptions JsonOpts = new() { WriteIndented = true };
 
-    [McpServerTool(Name = "run_submit"), Description("Legacy compatibility alias that starts a coordinator run directly in direct mode. Prefer run_task for the common one-call flow, or coordinator_start for full manual control.")]
-    public async Task<string> RunSubmitAsync(
+    [McpServerTool(Name = "run_submit", UseStructuredContent = true), Description("Legacy compatibility alias that starts a coordinator run directly in direct mode. Prefer run_task for the common one-call flow, or coordinator_start for full manual control.")]
+    public async Task<RunSubmitResult> RunSubmitAsync(
         [Description("Project ID")] string project_id,
         [Description("Task description for the agent")] string task,
-        [Description("Agent name (optional)")] string? agent_name,
-        [Description("Branch to base the run on (optional)")] string? base_branch,
-        [Description("Model id override (optional)")] string? model_source,
-        CancellationToken ct)
+        [Description("Agent name (optional)")] string? agent_name = null,
+        [Description("Branch to base the run on (optional)")] string? base_branch = null,
+        [Description("Model id override (optional)")] string? model_source = null,
+        CancellationToken ct = default)
     {
         try
         {
@@ -41,28 +97,22 @@ public sealed class RunTools(AgentweaverApiClient api)
             }
 
             var runId = await StartCoordinatorRunAsync(project_id, task, model_source, workflow_id: null, start_mode: "direct", ct);
-            var result = new JsonObject
-            {
-                ["run_id"] = runId,
-                ["status"] = "submitted",
-                ["start_mode"] = "direct"
-            };
-            return result.ToJsonString(JsonOpts);
+            return new RunSubmitResult(runId, "submitted", "direct");
         }
         catch (McpApiException) { throw; }
         catch (Exception ex) { throw new McpApiException(0, ex.Message); }
     }
 
-    [McpServerTool(Name = "run_task"), Description("Run the common coordinator workflow in one call: start the run, poll status until it completes or hits a gate, and return the artifacts or next action.")]
-    public async Task<string> RunTaskAsync(
+    [McpServerTool(Name = "run_task", UseStructuredContent = true), Description("Run the common coordinator workflow in one call: start the run, poll status until it completes or hits a gate, and return the artifacts or next action.")]
+    public async Task<RunTaskResult> RunTaskAsync(
         [Description("Project ID")] string project_id,
         [Description("Task or goal for the coordinator")] string task,
-        [Description("Workflow id override (optional)")] string? workflow_id,
-        [Description("Model id override (optional)")] string? model_id,
-        [Description("Coordinator start mode: 'direct' (default) or 'defineOutcome'")] string? start_mode,
-        [Description("Maximum seconds to wait before returning partial state (default: 600)")] int? timeout_seconds,
-        [Description("Polling interval in seconds while waiting for completion (default: 2)")] int? poll_interval_seconds,
-        CancellationToken ct)
+        [Description("Workflow id override (optional)")] string? workflow_id = null,
+        [Description("Model id override (optional)")] string? model_id = null,
+        [Description("Coordinator start mode: 'direct' (default) or 'defineOutcome'")] string? start_mode = null,
+        [Description("Maximum seconds to wait before returning partial state (default: 600)")] int? timeout_seconds = null,
+        [Description("Polling interval in seconds while waiting for completion (default: 2)")] int? poll_interval_seconds = null,
+        CancellationToken ct = default)
     {
         try
         {
@@ -72,7 +122,7 @@ public sealed class RunTools(AgentweaverApiClient api)
 
             var runId = await StartCoordinatorRunAsync(project_id, task, model_id, workflow_id, effectiveStartMode, ct);
             var deadline = DateTimeOffset.UtcNow.AddSeconds(effectiveTimeout);
-            JsonElement latestRun = default;
+            JsonElement latestRun;
 
             while (true)
             {
@@ -84,40 +134,40 @@ public sealed class RunTools(AgentweaverApiClient api)
                 var status = GetString(latestRun, "status");
                 if (IsSuccessfulTerminalStatus(status))
                 {
-                    var artifacts = await api.GetAsync<JsonElement>($"/api/runs/{Uri.EscapeDataString(runId)}/files", ct);
-                    var response = new JsonObject
+                    var artifacts = await api.GetAsync<IReadOnlyList<JsonElement>>($"/api/runs/{Uri.EscapeDataString(runId)}/files", ct);
+                    return new RunTaskResult
                     {
-                        ["run_id"] = runId,
-                        ["status"] = status,
-                        ["artifacts"] = JsonNode.Parse(artifacts.GetRawText()),
-                        ["run"] = JsonNode.Parse(latestRun.GetRawText())
+                        RunId = runId,
+                        Status = status!,
+                        Artifacts = artifacts,
+                        Run = latestRun
                     };
-                    return response.ToJsonString(JsonOpts);
                 }
 
                 if (IsFailedTerminalStatus(status))
                 {
-                    var response = new JsonObject
+                    return new RunTaskResult
                     {
-                        ["run_id"] = runId,
-                        ["status"] = "failed",
-                        ["error"] = GetString(latestRun, "result") ?? $"Run ended in status '{status}'.",
-                        ["hint"] = GetFailureHint(status),
-                        ["run"] = JsonNode.Parse(latestRun.GetRawText())
+                        RunId = runId,
+                        Status = "failed",
+                        Error = GetString(latestRun, "result") ?? $"Run ended in status '{status}'.",
+                        Hint = GetFailureHint(status),
+                        Run = latestRun
                     };
-                    return response.ToJsonString(JsonOpts);
                 }
 
                 if (DateTimeOffset.UtcNow >= deadline)
                 {
-                    var response = new JsonObject
+                    return new RunTaskResult
                     {
-                        ["run_id"] = runId,
-                        ["status"] = "timed_out",
-                        ["hint"] = "Call run_status for a quick snapshot or run_watch if you want to follow the live stream.",
-                        ["run"] = JsonNode.Parse(latestRun.GetRawText())
+                        RunId = runId,
+                        Status = "timed_out",
+                        // The required-capabilities contract expects artifacts as an array on every
+                        // one-call-run response; emit an empty array rather than omitting it on timeout.
+                        Artifacts = Array.Empty<JsonElement>(),
+                        Hint = "Call run_status for a quick snapshot or run_watch if you want to follow the live stream.",
+                        Run = latestRun
                     };
-                    return response.ToJsonString(JsonOpts);
                 }
 
                 await Task.Delay(TimeSpan.FromSeconds(effectivePollInterval), ct);
@@ -128,15 +178,14 @@ public sealed class RunTools(AgentweaverApiClient api)
         catch (Exception ex) { throw new McpApiException(0, ex.Message); }
     }
 
-    [McpServerTool(Name = "run_status"), Description("Get the current status of a run.")]
-    public async Task<string> RunStatusAsync(
+    [McpServerTool(Name = "run_status", UseStructuredContent = true), Description("Get the current status of a run.")]
+    public async Task<RunStatusResult> RunStatusAsync(
         [Description("Run ID")] string run_id,
-        CancellationToken ct)
+        CancellationToken ct = default)
     {
         try
         {
-            var result = await api.GetAsync<JsonElement>($"/api/runs/{Uri.EscapeDataString(run_id)}", ct);
-            return JsonSerializer.Serialize(result, JsonOpts);
+            return await api.GetAsync<RunStatusResult>($"/api/runs/{Uri.EscapeDataString(run_id)}", ct);
         }
         catch (McpApiException) { throw; }
         catch (Exception ex) { throw new McpApiException(0, ex.Message); }
@@ -221,15 +270,15 @@ public sealed class RunTools(AgentweaverApiClient api)
         catch (Exception ex) { throw new McpApiException(0, ex.Message); }
     }
 
-    [McpServerTool(Name = "run_show_artifacts"), Description("List the files changed by a run.")]
-    public async Task<string> RunShowArtifactsAsync(
+    [McpServerTool(Name = "run_show_artifacts", UseStructuredContent = true), Description("List the files changed by a run.")]
+    public async Task<RunArtifactsResult> RunShowArtifactsAsync(
         [Description("Run ID")] string run_id,
-        CancellationToken ct)
+        CancellationToken ct = default)
     {
         try
         {
-            var result = await api.GetAsync<JsonElement>($"/api/runs/{Uri.EscapeDataString(run_id)}/files", ct);
-            return JsonSerializer.Serialize(result, JsonOpts);
+            var files = await api.GetAsync<IReadOnlyList<JsonElement>>($"/api/runs/{Uri.EscapeDataString(run_id)}/files", ct);
+            return new RunArtifactsResult(files);
         }
         catch (McpApiException) { throw; }
         catch (Exception ex) { throw new McpApiException(0, ex.Message); }
@@ -307,34 +356,32 @@ public sealed class RunTools(AgentweaverApiClient api)
         return result.RunId;
     }
 
-    private static bool TryBuildGateResponse(JsonElement run, string runId, out string? response)
+    private static bool TryBuildGateResponse(JsonElement run, string runId, out RunTaskResult? response)
     {
         var status = GetString(run, "status");
         var coordinatorStatus = GetString(run, "coordinator_status");
 
         if (string.Equals(status, "awaiting_review", StringComparison.OrdinalIgnoreCase))
         {
-            var payload = new JsonObject
+            response = new RunTaskResult
             {
-                ["run_id"] = runId,
-                ["status"] = "awaiting_review",
-                ["review_prompt"] = "Run is awaiting human review. Call run_review, then rerun run_task or poll with run_status.",
-                ["run"] = JsonNode.Parse(run.GetRawText())
+                RunId = runId,
+                Status = "awaiting_review",
+                ReviewPrompt = "Run is awaiting human review. Call run_review, then rerun run_task or poll with run_status.",
+                Run = run
             };
-            response = payload.ToJsonString(JsonOpts);
             return true;
         }
 
         if (string.Equals(coordinatorStatus, "awaiting_confirmation", StringComparison.OrdinalIgnoreCase))
         {
-            var payload = new JsonObject
+            response = new RunTaskResult
             {
-                ["run_id"] = runId,
-                ["status"] = "awaiting_confirmation",
-                ["review_prompt"] = "Coordinator drafted an outcome spec. Call coordinator_outcome_spec_get to inspect it, then coordinator_outcome_spec_confirm or coordinator_outcome_spec_revise.",
-                ["run"] = JsonNode.Parse(run.GetRawText())
+                RunId = runId,
+                Status = "awaiting_confirmation",
+                ReviewPrompt = "Coordinator drafted an outcome spec. Call coordinator_outcome_spec_get to inspect it, then coordinator_outcome_spec_confirm or coordinator_outcome_spec_revise.",
+                Run = run
             };
-            response = payload.ToJsonString(JsonOpts);
             return true;
         }
 
@@ -362,3 +409,4 @@ public sealed class RunTools(AgentweaverApiClient api)
             _ => "Call run_status for details before retrying."
         };
 }
+
