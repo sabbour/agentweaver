@@ -121,13 +121,24 @@ Each dispatch supplies, in the task prompt:
         [-d '<json body>']
       ```
    c. Read the actual response. Do not proceed until you have it.
-   d. Append the turn to the transcript file you were given, verbatim, as soon as
+   d. Before writing the turn, use `thought` for two things, not just one: your
+      forward-looking rationale for the action you're about to take (as
+      before), AND your own actual reasoning about what the PREVIOUS turn's
+      response contained — e.g. "The spec confirms /api/projects requires a
+      blueprint_id and optional working_directory; no auth endpoints beyond
+      bearer token needed, so I'll list blueprints next" rather than leaving a
+      human to reconstruct that from a huge raw body. This matters because
+      `response.body` below is now capped in size (see next paragraph) — the
+      `thought` you write is what makes the transcript actually readable
+      turn-by-turn without a human or Judge needing to open a giant response to
+      understand what you learned from it.
+   e. Append the turn to the transcript file you were given, verbatim, as soon as
       you have the real response — never batch this up or reconstruct it after
       the fact from memory. A plain JSON-lines append works well, one line per
       turn, e.g.:
       ```
       cat >> "$TRANSCRIPT_PATH" <<'EOF'
-      {"turn": <n>, "ts": "<ISO 8601 timestamp of right now, e.g. 2026-07-14T19:03:11Z>", "thought": "<why you, the persona, are doing this>", "request": {"method": "<M>", "path": "<P>", "body": <json-or-null>}, "response": {"status": <code>, "body": <raw-response-text-or-json>}}
+      {"turn": <n>, "ts": "<ISO 8601 timestamp of right now, e.g. 2026-07-14T19:03:11Z>", "thought": "<your reasoning about the PREVIOUS response's real content, plus why you, the persona, are about to do this next>", "request": {"method": "<M>", "path": "<P>", "body": <json-or-null>}, "response": {"status": <code>, "body": "<first ~1500 characters of the REAL response text/JSON, verbatim, no paraphrasing>", "bodyTruncated": <true-if-you-cut-it-short-else-omit-this-field>, "bodyBytes": <total-byte-length-of-the-real-response-if-truncated>}}
       EOF
       ```
       Include `ts` every time — it's the one honest timestamp of when you
@@ -135,11 +146,26 @@ Each dispatch supplies, in the task prompt:
       per-turn/per-run timing after the fact without any separate instrumentation.
       It is not a new subsystem, just one more plain field in the write you're
       already doing.
+
+      **Cap `response.body` at roughly 1500 characters of the REAL response,
+      verbatim** (e.g. pipe the captured body through something like `cut -c1-1500`
+      or your own truncation of the string you already have — no new tool
+      required). Most responses in this API are small JSON objects and won't
+      need truncation at all; this only kicks in for the genuinely huge ones
+      (the full OpenAPI spec dump, large run-events payloads, big file
+      listings/contents). When you do truncate, set `"bodyTruncated": true` and
+      `"bodyBytes"` to the real total length, so it's visible that this is a cut,
+      not the whole thing. **Never fabricate or paraphrase inside `response.body`
+      itself** — whatever you keep, keep verbatim; all paraphrasing/reasoning
+      about the full content belongs in `thought` (previous bullet), not here.
+      The truncated body still exists specifically so a human or Judge can
+      spot-check that your `thought` wasn't invented — it's a verifiable anchor,
+      not decoration, so don't drop it to zero even for huge responses.
       The exact shape is not schema-enforced — Harness reads whatever you wrote
       when it builds the judged evidence — but it must always be the REAL request
-      you issued and the REAL response you received, never a paraphrase or an
-      invented one.
-   e. If your persona brief requires pushback/objections (e.g. Priya's mandatory
+      you issued and the REAL response you received (or a verbatim, clearly-marked
+      truncation of it), never a paraphrase or an invented one.
+   f. If your persona brief requires pushback/objections (e.g. Priya's mandatory
       grounded pushback via a spec-revision-type call), only push back when the
       REAL content you just received actually warrants it — quote or paraphrase
       the specific thing that triggered the objection. Never issue a pre-written
@@ -148,7 +174,7 @@ Each dispatch supplies, in the task prompt:
       objections and the real content genuinely doesn't warrant one on a given
       turn, keep going rather than manufacturing friction — but do not stop early
       and call the requirement satisfied if it was never genuinely met.
-   f. If your persona brief calls for observing state before deciding (polling
+   g. If your persona brief calls for observing state before deciding (polling
       run/task events, checking pending approvals, etc.), find the relevant
       endpoint(s) from the spec — these are ordinary discoverable operations, not
       special named commands — and `curl` them like anything else. Never assume
