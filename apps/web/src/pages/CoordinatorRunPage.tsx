@@ -361,6 +361,7 @@ interface OrchState {
   conflictBranch?: string;
   revisionGateLabel?: string;
   revisionSubtaskCount?: number;
+  ineligibleSubtasks?: IneligibleSubtaskInfo[];
   sourceLabel: string;
   updatedAt?: string;
 }
@@ -476,6 +477,79 @@ function readSubtaskIdsFromPayload(payload: Record<string, unknown>): string[] {
 function normalizeSubtaskId(value: string): string {
   return value.trim().replace(/^plan:/i, '').replace(/^subtask-/i, '');
 }
+
+// #97 — a single ineligible (assembly-blocking) subtask surfaced from the enriched
+// coordinator.assembly_blocked payload (id + title + status + agent), so the UI can name WHICH
+// subtasks blocked assembly and WHY (their actual status) instead of an opaque error code.
+export interface IneligibleSubtaskInfo {
+  id: string;
+  title?: string;
+  status?: string;
+  agent?: string;
+}
+
+// #97 — parse the enriched `ineligibleSubtasks` array (fallback: the id-only `ineligibleSubtaskIds`,
+// or the `[59,60,61,62]` ids embedded in the reason string) out of an assembly-blocked payload.
+// Returns [] when the payload carries no ineligible-subtask hint at all.
+export function readIneligibleSubtasks(payload: Record<string, unknown>): IneligibleSubtaskInfo[] {
+  const enriched = payload['ineligibleSubtasks'] ?? payload['ineligible_subtasks'];
+  if (Array.isArray(enriched)) {
+    const parsed = enriched
+      .map((raw): IneligibleSubtaskInfo | null => {
+        if (raw == null || typeof raw !== 'object') {
+          const id = String(raw ?? '').trim();
+          return id ? { id } : null;
+        }
+        const obj = raw as Record<string, unknown>;
+        const id = readStr(obj, ['id', 'subtaskId', 'subtask_id']);
+        if (!id) return null;
+        return {
+          id,
+          title: readStr(obj, ['title', 'name']),
+          status: readStr(obj, ['status']),
+          agent: readStr(obj, ['agent', 'assignedAgent', 'assigned_agent']),
+        };
+      })
+      .filter((x): x is IneligibleSubtaskInfo => x !== null);
+    if (parsed.length > 0) return parsed;
+  }
+  const ids = payload['ineligibleSubtaskIds'] ?? payload['ineligible_subtask_ids'];
+  if (Array.isArray(ids)) {
+    return ids.map((id) => ({ id: String(id).trim() })).filter((x) => x.id !== '');
+  }
+  // Last resort: recover the ids from the `ineligible_subtasks [59,60,61,62]` reason text.
+  const reason = readStr(payload, ['reason']);
+  return reason ? parseIneligibleIdsFromReason(reason).map((id) => ({ id })) : [];
+}
+
+// #97 — pull the bracketed subtask ids out of an `ineligible_subtasks [59,60,61,62]` reason string
+// (tolerating an `assembly_blocked: ` prefix). Returns [] when the reason is not that class.
+export function parseIneligibleIdsFromReason(reason: string | undefined | null): string[] {
+  if (!reason) return [];
+  const match = /ineligible_subtasks\s*\[([^\]]*)\]/i.exec(reason);
+  if (!match) return [];
+  return match[1]
+    .split(',')
+    .map((s) => s.trim())
+    .filter((s) => s !== '');
+}
+
+// #97 — turn a raw assembly-blocked reason code into readable prose instead of surfacing the opaque
+// `ineligible_subtasks [59,60,61,62]` (or the generic "could not complete" fallback). Non-ineligible
+// reasons are humanized (strip the `assembly_blocked:` prefix, underscores → spaces).
+export function normalizeAssemblyBlockedReason(reason: string | undefined | null): string | undefined {
+  if (!reason || reason.trim() === '') return undefined;
+  const stripped = reason.replace(/^assembly_blocked:\s*/i, '').trim();
+  const ids = parseIneligibleIdsFromReason(stripped);
+  if (ids.length > 0) {
+    const list = ids.map((id) => `#${id}`).join(', ');
+    return ids.length === 1
+      ? `Waiting on 1 subtask that isn't ready to assemble (${list}).`
+      : `Waiting on ${ids.length} subtasks that aren't ready to assemble (${list}).`;
+  }
+  return stripped.replace(/_/g, ' ');
+}
+
 
 function isHumanReviewGateEvent(evt: RunStreamEvent): boolean {
   const gateKind = readGateKind(evt.payload);
@@ -622,14 +696,28 @@ function deriveOrchState(
     const conflictFiles = Array.isArray(rawFiles)
       ? rawFiles.map((f) => String(f)).filter((f) => f.trim() !== '')
       : undefined;
+    const isBlocked = winner.type === 'coordinator.assembly_blocked';
+    // #97: name WHICH subtasks blocked assembly (id/title/status/agent) and normalize the opaque
+    // `ineligible_subtasks [ids]` reason into readable prose instead of a bare code / generic fallback.
+    // The live blocked event's payload.reason is just "ineligible_subtasks" (the ids live in the
+    // structured array), so synthesize a bracketed reason from those ids to drive the readable copy.
+    const ineligibleSubtasks = isBlocked ? readIneligibleSubtasks(winner.payload) : [];
+    const rawReason = readStr(winner.payload, ['reason', 'message', 'error', 'detail', 'feedback']);
+    const blockedReasonSource = isBlocked
+      && rawReason
+      && parseIneligibleIdsFromReason(rawReason).length === 0
+      && ineligibleSubtasks.length > 0
+        ? `ineligible_subtasks [${ineligibleSubtasks.map((s) => s.id).join(',')}]`
+        : rawReason;
     return {
       phase: winner.phase,
-      reason: readStr(winner.payload, ['reason', 'message', 'error', 'detail', 'feedback']),
+      reason: isBlocked ? normalizeAssemblyBlockedReason(blockedReasonSource) : rawReason,
       diff: readStr(winner.payload, ['diff', 'summary', 'integrationDiff', 'integration_diff', 'treeHash', 'tree_hash']),
       conflictFiles: conflictFiles && conflictFiles.length > 0 ? conflictFiles : undefined,
       conflictBranch: readStr(winner.payload, ['conflictingBranch', 'conflicting_branch']),
       revisionGateLabel: winner.type === 'coordinator.assembly_changes_requested' ? winner.gateLabel : undefined,
       revisionSubtaskCount: winner.type === 'coordinator.assembly_changes_requested' ? readSubtaskIdsFromPayload(winner.payload).length : undefined,
+      ineligibleSubtasks: ineligibleSubtasks.length > 0 ? ineligibleSubtasks : undefined,
       sourceLabel: `${winner.type} event #${winner.sequence}`,
       updatedAt: readEventTimestamp(winner.payload),
     };
@@ -644,7 +732,20 @@ function deriveOrchState(
   }
   const fieldPhase = normalizePhase(statusField);
   if (fieldPhase !== 'unknown') {
-    return { phase: fieldPhase, reason: reasonField ?? undefined, sourceLabel: 'run status field' };
+    // #97: when the live blocked stream event was evicted (reload/reconnect) the only surviving signal
+    // is the persisted status/reason field — normalize the `ineligible_subtasks [ids]` code here too so
+    // the reason line never degrades back to the opaque raw code.
+    const normalizedFieldReason = fieldPhase === 'blocked'
+      ? normalizeAssemblyBlockedReason(reasonField)
+      : reasonField ?? undefined;
+    return {
+      phase: fieldPhase,
+      reason: normalizedFieldReason,
+      ineligibleSubtasks: fieldPhase === 'blocked' && reasonField
+        ? (parseIneligibleIdsFromReason(reasonField).map((id) => ({ id })) || undefined)
+        : undefined,
+      sourceLabel: 'run status field',
+    };
   }
   const wpPhase = normalizePhase(workPlanStatus);
   if (wpPhase !== 'unknown') return { phase: wpPhase, sourceLabel: 'work plan status' };
@@ -1441,6 +1542,40 @@ const useStyles = makeStyles({
   railStatusReasonShort: {
     marginLeft: tokens.spacingHorizontalXS,
     color: tokens.colorNeutralForeground2,
+  },
+  railStatusIneligible: {
+    marginTop: tokens.spacingVerticalXS,
+    display: 'flex',
+    flexDirection: 'column',
+    rowGap: tokens.spacingVerticalXXS,
+  },
+  railStatusIneligibleCaption: {
+    fontSize: tokens.fontSizeBase200,
+    lineHeight: tokens.lineHeightBase200,
+    color: tokens.colorNeutralForeground2,
+    overflowWrap: 'anywhere',
+  },
+  railStatusIneligibleList: {
+    margin: 0,
+    paddingLeft: 0,
+    listStyleType: 'none',
+    display: 'flex',
+    flexDirection: 'column',
+    rowGap: tokens.spacingVerticalXXS,
+  },
+  railStatusIneligibleId: {
+    fontWeight: tokens.fontWeightSemibold,
+    marginRight: tokens.spacingHorizontalXS,
+    color: tokens.colorNeutralForeground1,
+  },
+  railStatusIneligibleTitle: {
+    marginRight: tokens.spacingHorizontalXS,
+    color: tokens.colorNeutralForeground2,
+  },
+  railStatusIneligibleState: {
+    fontSize: tokens.fontSizeBase100,
+    color: tokens.colorNeutralForeground3,
+    textTransform: 'capitalize',
   },
   treeEmpty: {
     padding: tokens.spacingVerticalS,
@@ -4340,6 +4475,24 @@ export function CoordinatorRunPage() {
                 <span className={mergeClasses(styles.railStatusState, stateTextClass(executionDisplayStateColor))}>{executionKickerLabel}</span>
                 {executionReasonShort && <span className={styles.railStatusReasonShort}>{executionReasonShort}</span>}
               </span>
+              {orch.phase === 'blocked' && orch.ineligibleSubtasks && orch.ineligibleSubtasks.length > 0 && (
+                <div className={styles.railStatusIneligible} data-testid="assembly-ineligible-subtasks">
+                  <span className={styles.railStatusIneligibleCaption}>
+                    {orch.reason ?? 'Assembly is waiting on subtasks that aren\u2019t ready.'}
+                  </span>
+                  <ul className={styles.railStatusIneligibleList}>
+                    {orch.ineligibleSubtasks.map((sub) => (
+                      <li key={sub.id} data-testid="assembly-ineligible-subtask">
+                        <span className={styles.railStatusIneligibleId}>#{sub.id}</span>
+                        {sub.title ? <span className={styles.railStatusIneligibleTitle}>{sub.title}</span> : null}
+                        {sub.status ? (
+                          <span className={styles.railStatusIneligibleState}>{sub.status.replace(/_/g, ' ')}</span>
+                        ) : null}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
             </div>
             <div className={styles.treeRailFooter}>
               {renderTopologyThumbnail('rail')}

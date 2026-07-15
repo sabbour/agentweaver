@@ -1099,4 +1099,64 @@ describe('CoordinatorRunPage — child run (non-coordinator) skips coordinator a
     const runCalls = vi.mocked(apiClient.getRun).mock.calls.length;
     expect(runCalls).toBeLessThan(4);
   });
+
+  // #97 — an assembly_blocked run must name WHICH subtasks blocked assembly (id/title/status) and a
+  // readable reason, never the opaque `ineligible_subtasks [ids]` code / "could not complete" fallback.
+  it('surfaces structured ineligible subtasks when assembly is blocked', async () => {
+    mockRunStreamState.current = {
+      events: [
+        { sequence: 1, type: 'coordinator.outcome_spec.confirmed', payload: {} },
+        {
+          sequence: 2,
+          type: 'coordinator.assembly_blocked',
+          payload: {
+            reason: 'ineligible_subtasks',
+            ineligibleSubtaskIds: [59, 60],
+            ineligibleSubtasks: [
+              { id: 59, title: 'Auth API', status: 'failed', agent: 'morpheus' },
+              { id: 60, title: 'DB layer', status: 'running', agent: 'trinity' },
+            ],
+            timestamp_utc: '2026-07-08T00:00:00.000Z',
+          },
+        },
+      ],
+      droppedEventCount: 0,
+      status: 'done',
+      error: null,
+      reconnect: vi.fn(),
+    };
+
+    render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    const panel = await screen.findByTestId('assembly-ineligible-subtasks', undefined, { timeout: 4000 });
+    // Readable, normalized reason — not the raw `ineligible_subtasks [59,60]` code.
+    expect(panel.textContent).toContain("Waiting on 2 subtasks that aren't ready to assemble");
+    expect(panel.textContent).not.toContain('ineligible_subtasks [');
+    // Names WHICH subtasks blocked, with their actual status.
+    const rows = screen.getAllByTestId('assembly-ineligible-subtask');
+    expect(rows).toHaveLength(2);
+    expect(panel.textContent).toContain('#59');
+    expect(panel.textContent).toContain('Auth API');
+    expect(panel.textContent).toContain('failed');
+    expect(panel.textContent).toContain('#60');
+    expect(panel.textContent).toContain('DB layer');
+  });
+
+  // #97 — fallback: after a reload the enriched event may be gone, leaving only the persisted
+  // status/reason field. The reason must STILL normalize and the ids must still surface.
+  it('normalizes the blocked reason from the persisted status field after reload', async () => {
+    vi.mocked(apiClient.getRun).mockResolvedValue({
+      run_id: 'coord-run-1',
+      status: 'in_progress',
+      coordinator_status: 'assembly_blocked',
+      coordinator_status_reason: 'assembly_blocked: ineligible_subtasks [59,60,61,62]',
+    } as never);
+
+    render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    const panel = await screen.findByTestId('assembly-ineligible-subtasks', undefined, { timeout: 4000 });
+    expect(panel.textContent).toContain("Waiting on 4 subtasks that aren't ready to assemble");
+    expect(panel.textContent).toContain('#61');
+    expect(document.body.textContent).not.toContain('The collective assembly could not complete');
+  });
 });
