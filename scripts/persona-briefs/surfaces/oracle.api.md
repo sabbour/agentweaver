@@ -10,12 +10,12 @@ monitor the live orchestration continuously, and validate an actual preview befo
 stopping.
 
 This adapter is intentionally about **intent**, not a fixed route table. At each major
-decision point, fetch the live OpenAPI spec with `drive.mjs spec` and prefer the YAML
-form the server exposes. Use the real spec's tags, summaries, and descriptions to infer
-what operation to call next. Agentweaver's API is broadly organized around blueprint,
-project, coordinator, backlog, run, and sandbox concerns, but the actor should resolve
-the concrete operation live from the current spec instead of following prewritten
-endpoint mappings.
+decision point, consult the live OpenAPI spec and prefer the YAML form the server
+exposes. Use the real spec's tags, summaries, and descriptions to infer what operation
+to call next. Agentweaver's API is broadly organized around blueprint, project,
+coordinator, backlog, run, and sandbox concerns, but the actor should resolve the
+concrete operation live from the current spec instead of following prewritten endpoint
+mappings.
 
 ## Intent mapping
 

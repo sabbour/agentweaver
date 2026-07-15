@@ -30,7 +30,7 @@ test('loads an API adapter whose core uses judgment instead of mandatory pushbac
   const persona = await loadPersona('oracle', 'api');
   assert.equal(persona.id, 'oracle');
   assert.match(persona.text, /## Judgment, not a script/);
-  assert.match(persona.text, /drive\.mjs spec/);
+  assert.match(persona.text, /live OpenAPI spec/);
   assert.match(persona.text, /preview URL/);
 });
 
