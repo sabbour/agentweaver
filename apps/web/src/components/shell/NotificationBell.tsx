@@ -15,6 +15,7 @@ import { Alert24Regular } from '@fluentui/react-icons';
 import { useNotifications } from '../../notifications/notificationsContext';
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { NotificationTypeBadge } from './NotificationTypeBadge';
 // #247 — persistent bell + unread badge, rendered in the left-nav chrome (this app has no
 // separate top bar — see LeftNav.tsx's own header comment), so it is visible on every page
 // regardless of collapsed state.
@@ -133,6 +134,7 @@ export function NotificationBell() {
                 }
               }}
             >
+              <NotificationTypeBadge type={notification.type} />
               <Text weight="semibold">{notification.title}</Text>
               <Caption1>{notification.project_name ?? 'Unknown project'}</Caption1>
             </div>

@@ -162,5 +162,57 @@ describe('NotificationBell + NotificationsProvider', () => {
 
     expect(await screen.findByText('Nothing needs your attention right now.')).toBeTruthy();
   });
+
+  // #319 — dropdown entries must surface a type badge so users can tell Human Review from
+  // Tool Approval (and any future/unknown type) apart at a glance.
+  describe('notification type badge', () => {
+    it('renders the Human Review badge for a human_review notification', async () => {
+      vi.mocked(apiClient.getNotifications).mockResolvedValue(
+        respond([makeNotification({ type: 'human_review' })]),
+      );
+      const user = userEvent.setup();
+
+      renderBell();
+
+      await waitFor(() => expect(apiClient.getNotifications).toHaveBeenCalled());
+      await user.click(screen.getByTestId('notification-bell'));
+
+      const badge = await screen.findByTestId('notification-type-badge');
+      expect(badge.textContent).toContain('Human Review');
+      expect(badge.getAttribute('data-notification-type')).toBe('human_review');
+    });
+
+    it('renders the Tool Approval badge for a tool_approval notification (backend #321, not yet live)', async () => {
+      vi.mocked(apiClient.getNotifications).mockResolvedValue(
+        respond([makeNotification({ type: 'tool_approval' })]),
+      );
+      const user = userEvent.setup();
+
+      renderBell();
+
+      await waitFor(() => expect(apiClient.getNotifications).toHaveBeenCalled());
+      await user.click(screen.getByTestId('notification-bell'));
+
+      const badge = await screen.findByTestId('notification-type-badge');
+      expect(badge.textContent).toContain('Tool Approval');
+      expect(badge.getAttribute('data-notification-type')).toBe('tool_approval');
+    });
+
+    it('renders a generic fallback badge for an unrecognized type without crashing', async () => {
+      vi.mocked(apiClient.getNotifications).mockResolvedValue(
+        respond([makeNotification({ type: 'some_future_type' })]),
+      );
+      const user = userEvent.setup();
+
+      renderBell();
+
+      await waitFor(() => expect(apiClient.getNotifications).toHaveBeenCalled());
+      await user.click(screen.getByTestId('notification-bell'));
+
+      const badge = await screen.findByTestId('notification-type-badge');
+      expect(badge.textContent).toContain('Action Needed');
+      expect(badge.getAttribute('data-notification-type')).toBe('some_future_type');
+    });
+  });
 });
 

@@ -1393,7 +1393,10 @@ export interface OverviewDto {
 // "human_review", but the field is kept open-ended for that future addition.
 export interface NotificationDto {
   id: string;
-  type: 'human_review' | 'tool_approval';
+  // Widened with `(string & {})` so the union still autocompletes known values while
+  // remaining forward-compatible with any new/unrecognized type the backend may emit
+  // (see #319 — the UI must never break on an unknown value).
+  type: 'human_review' | 'tool_approval' | (string & {});
   run_id: string;
   project_id: string | null;
   project_name: string | null;
