@@ -71,12 +71,12 @@ internal static class AgentweaverApiTools
                 [Description("Optional rationale explaining the trade-offs considered")] string? rationale = null,
                 CancellationToken ct = default) =>
             {
-                var response = await http.PostAsJsonAsync(
-                    $"api/projects/{projectId}/decisions/inbox",
-                    new { agent_name = agentName, slug, type, title, content, rationale },
-                    ct).ConfigureAwait(false);
-                return await HandleWriteResponseAsync(
-                    "submit_decision", response,
+                return await SendWriteAsync(
+                    "submit_decision",
+                    c => http.PostAsJsonAsync(
+                        $"api/projects/{projectId}/decisions/inbox",
+                        new { agent_name = agentName, slug, type, title, content, rationale },
+                        c),
                     successMessage: $"Decision submitted to inbox: {title}",
                     conflictMessage: $"Decision '{slug}' already recorded (already merged or rejected — no changes).",
                     ct).ConfigureAwait(false);
@@ -93,12 +93,13 @@ internal static class AgentweaverApiTools
                 [Description("Comma-separated tags for future retrieval (optional)")] string? tags = null,
                 CancellationToken ct = default) =>
             {
-                var response = await http.PostAsJsonAsync(
-                    $"api/projects/{projectId}/agents/{agentName}/memory",
-                    new { type, importance, content, tags },
-                    ct).ConfigureAwait(false);
-                return await HandleWriteResponseAsync(
-                    "record_memory", response, "Memory recorded.", null, ct).ConfigureAwait(false);
+                return await SendWriteAsync(
+                    "record_memory",
+                    c => http.PostAsJsonAsync(
+                        $"api/projects/{projectId}/agents/{agentName}/memory",
+                        new { type, importance, content, tags },
+                        c),
+                    "Memory recorded.", null, ct).ConfigureAwait(false);
             },
             "record_memory",
             "Record a learning, pattern, or insight into agent memory for future reference. " +
@@ -109,12 +110,13 @@ internal static class AgentweaverApiTools
                 [Description("Progress note or summary text to append to the current session log")] string summary,
                 CancellationToken ct = default) =>
             {
-                var response = await http.PutAsJsonAsync(
-                    $"api/projects/{projectId}/sessions/current",
-                    new { summary },
-                    ct).ConfigureAwait(false);
-                return await HandleWriteResponseAsync(
-                    "update_session", response, "Session updated.", null, ct).ConfigureAwait(false);
+                return await SendWriteAsync(
+                    "update_session",
+                    c => http.PutAsJsonAsync(
+                        $"api/projects/{projectId}/sessions/current",
+                        new { summary },
+                        c),
+                    "Session updated.", null, ct).ConfigureAwait(false);
             },
             "update_session",
             "Append a progress note or completion summary to the current project session log. " +
@@ -128,12 +130,12 @@ internal static class AgentweaverApiTools
                 [Description("Full entry content")] string content,
                 CancellationToken ct = default) =>
             {
-                var response = await http.PostAsJsonAsync(
-                    $"api/projects/{projectId}/decisions/inbox",
-                    new { agent_name = agentName, slug, type, title, content },
-                    ct).ConfigureAwait(false);
-                return await HandleWriteResponseAsync(
-                    "submit_inbox_entry", response,
+                return await SendWriteAsync(
+                    "submit_inbox_entry",
+                    c => http.PostAsJsonAsync(
+                        $"api/projects/{projectId}/decisions/inbox",
+                        new { agent_name = agentName, slug, type, title, content },
+                        c),
                     successMessage: $"Inbox entry submitted: {title}",
                     conflictMessage: $"Inbox entry '{slug}' already recorded (already merged or rejected — no changes).",
                     ct).ConfigureAwait(false);
@@ -166,12 +168,12 @@ internal static class AgentweaverApiTools
                 [Description("The numeric id of the inbox entry to merge (from list_inbox)")] int entryId,
                 CancellationToken ct = default) =>
             {
-                var response = await http.PostAsJsonAsync(
-                    $"api/projects/{projectId}/decisions/inbox/{entryId}/merge",
-                    new { },
-                    ct).ConfigureAwait(false);
-                return await HandleWriteResponseAsync(
-                    "merge_inbox_entry", response,
+                return await SendWriteAsync(
+                    "merge_inbox_entry",
+                    c => http.PostAsJsonAsync(
+                        $"api/projects/{projectId}/decisions/inbox/{entryId}/merge",
+                        new { },
+                        c),
                     successMessage: $"Inbox entry {entryId} merged into decisions.",
                     conflictMessage: $"Inbox entry {entryId} is not pending or does not exist.",
                     ct).ConfigureAwait(false);
@@ -184,12 +186,12 @@ internal static class AgentweaverApiTools
         yield return AIFunctionFactory.Create(
             async (CancellationToken ct = default) =>
             {
-                var response = await http.PostAsJsonAsync(
-                    $"api/projects/{projectId}/memory/export",
-                    new { },
-                    ct).ConfigureAwait(false);
-                return await HandleWriteResponseAsync(
-                    "export_memory", response,
+                return await SendWriteAsync(
+                    "export_memory",
+                    c => http.PostAsJsonAsync(
+                        $"api/projects/{projectId}/memory/export",
+                        new { },
+                        c),
                     "Memory exported to .squad/ and .agentweaver/context/.", null, ct).ConfigureAwait(false);
             },
             "export_memory",
@@ -407,6 +409,31 @@ internal static class AgentweaverApiTools
         return $"{toolName} failed: HTTP {(int)response.StatusCode} — {body}";
     }
 
+    /// <summary>
+    /// Sends a write request and maps the outcome to a non-throwing tool-result string. Wraps the
+    /// HTTP send so a transport failure (e.g. the loopback base URL is unreachable from inside an
+    /// AgentHost pod — #335 P1) surfaces as a readable error the agent/operator can act on, instead
+    /// of bubbling up as an opaque "Tool execution failed" from the SDK's tool-invocation wrapper.
+    /// </summary>
+    private static async Task<string> SendWriteAsync(
+        string toolName,
+        Func<CancellationToken, Task<HttpResponseMessage>> send,
+        string successMessage,
+        string? conflictMessage,
+        CancellationToken ct)
+    {
+        HttpResponseMessage response;
+        try
+        {
+            response = await send(ct).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or OperationCanceledException && !ct.IsCancellationRequested)
+        {
+            return $"{toolName} failed: could not reach the Agentweaver API — {ex.Message}";
+        }
+        return await HandleWriteResponseAsync(toolName, response, successMessage, conflictMessage, ct).ConfigureAwait(false);
+    }
+
     private static HttpClient CreateHttpClient(string apiBaseUrl, string? apiKey)
     {
         var http = new HttpClient { BaseAddress = new Uri(apiBaseUrl.TrimEnd('/') + '/') };
@@ -459,7 +486,17 @@ internal static class AgentweaverApiTools
 
     private static async Task<string> GetJsonAsync(HttpClient http, string path, CancellationToken ct)
     {
-        var response = await http.GetAsync(path, ct).ConfigureAwait(false);
+        HttpResponseMessage response;
+        try
+        {
+            response = await http.GetAsync(path, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or OperationCanceledException && !ct.IsCancellationRequested)
+        {
+            // Transport failure (e.g. unreachable loopback base URL inside an AgentHost pod, #335 P1).
+            // Return a readable message instead of throwing an opaque "Tool execution failed".
+            return $"GET {path} failed: could not reach the Agentweaver API — {ex.Message}";
+        }
         var content = string.Empty;
         try { content = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false); } catch { }
         return response.IsSuccessStatusCode

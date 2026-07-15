@@ -417,13 +417,15 @@ internal sealed class A2ATurnBridgeAgent : DelegatingAIAgent
             _runtimeState?.PodBaseSystemPromptContext,
             setup.SystemPromptContext);
 
-        var applied = _runner.ApplyPerTurnContext(merged, setup.ProjectId, setup.AgentName);
+        var applied = _runner.ApplyPerTurnContext(
+            merged, setup.ProjectId, setup.AgentName, setup.ApiBaseUrl, setup.ApiKey);
         if (applied)
         {
             _logger.LogInformation(
                 "A2ATurnBridgeAgent: applied per-turn context — projectId={ProjectId}, agentName={AgentName}, " +
-                "skillsIncluded={SkillsIncluded}, systemPromptChars={Chars}",
+                "apiBaseUrlSet={ApiBaseUrlSet}, skillsIncluded={SkillsIncluded}, systemPromptChars={Chars}",
                 setup.ProjectId, setup.AgentName,
+                !string.IsNullOrWhiteSpace(setup.ApiBaseUrl),
                 Agentweaver.Domain.Skills.SkillPromptMarkers.ContainsSkillContext(setup.SystemPromptContext),
                 merged?.Length ?? 0);
         }

@@ -23,7 +23,7 @@ public sealed class AgentweaverApiToolsTests
     // =========================================================================
 
     /// <summary>Builds a single named AIFunction from AgentweaverApiTools using a stub handler.</summary>
-    private static AIFunction GetTool(string toolName, FakeHttpHandler handler)
+    private static AIFunction GetTool(string toolName, HttpMessageHandler handler)
     {
         var http = new HttpClient(handler) { BaseAddress = new Uri("http://localhost/") };
         var tools = AgentweaverApiTools.Build(ProjectId, AgentName, "http://localhost", null, http);
@@ -282,6 +282,66 @@ public sealed class AgentweaverApiToolsTests
         var result = await InvokeAsync(tool, new());
         result.Should().Contain("500");
     }
+
+    // =========================================================================
+    // #335 P1 regression: transport failure (unreachable API base URL, e.g. the
+    // localhost:5000 default inside an AgentHost pod) must surface as a readable
+    // tool-result string, NOT bubble out as an opaque "Tool execution failed".
+    // =========================================================================
+    [Fact]
+    public async Task RecordMemory_OnTransportFailure_ReturnsReadableErrorWithoutThrowing()
+    {
+        var handler = new ThrowingHttpHandler(
+            new HttpRequestException("Connection refused (localhost:5000)"));
+        var tool = GetTool("record_memory", handler);
+
+        var act = async () => await InvokeAsync(tool, new()
+        {
+            ["type"]       = "core_context",
+            ["importance"] = "high",
+            ["content"]    = "QUINN-VERIFY-20260715",
+        });
+
+        await act.Should().NotThrowAsync(
+            because: "a transport failure must be caught and returned as a tool result, not thrown");
+        var result = await InvokeAsync(tool, new()
+        {
+            ["type"]       = "core_context",
+            ["importance"] = "high",
+            ["content"]    = "QUINN-VERIFY-20260715",
+        });
+        result.Should().Contain("record_memory failed:");
+        result.Should().Contain("could not reach the Agentweaver API");
+        result.Should().NotContain("Tool execution failed",
+            because: "the opaque SDK message is exactly what #335 P1 needed to eliminate");
+    }
+
+    [Fact]
+    public async Task GetMemory_OnTransportFailure_ReturnsReadableErrorWithoutThrowing()
+    {
+        var handler = new ThrowingHttpHandler(
+            new HttpRequestException("Connection refused (localhost:5000)"));
+        var tool = GetTool("get_memory", handler);
+
+        var act = async () => await InvokeAsync(tool, new());
+        await act.Should().NotThrowAsync();
+
+        var result = await InvokeAsync(tool, new());
+        result.Should().Contain("could not reach the Agentweaver API");
+    }
+}
+
+/// <summary>Fake HttpMessageHandler that throws a fixed exception on every send, simulating a
+/// transport failure (e.g. connection refused to an unreachable loopback base URL).</summary>
+internal sealed class ThrowingHttpHandler : HttpMessageHandler
+{
+    private readonly Exception _toThrow;
+
+    public ThrowingHttpHandler(Exception toThrow) => _toThrow = toThrow;
+
+    protected override Task<HttpResponseMessage> SendAsync(
+        HttpRequestMessage request, CancellationToken cancellationToken) =>
+        throw _toThrow;
 }
 
 /// <summary>Fake HttpMessageHandler returning a fixed status code and body for every request.</summary>
